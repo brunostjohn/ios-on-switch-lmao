@@ -47,7 +47,7 @@ struct Job {
     std::vector<TegraGM20BAbiSurfaceUse> uses;
     std::vector<TegraGM20BAbiPush> pushes;  // a SubmitJob's GP entries
     std::vector<uint32_t> words;
-    bool hostWritten = false;               // the kernel drops the GPU L2's lines before the job (gpu_exec.c)
+    bool hostWritten = false;  // the kernel drops the GPU L2's lines before the job (gpu_exec.c)
 };
 
 struct Slot {
@@ -63,7 +63,7 @@ struct Model {
     std::map<uint32_t, std::vector<uint8_t>> memory;
     std::map<uint64_t, BoState> bos;
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
-    std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
+    std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;    // va: the BO bound there and its bytes
 
     // Where the host holds the BO bound at `va` (its allocation, or the pages an import named), null: none bound there
     uint8_t *host(uint64_t va)
@@ -81,6 +81,7 @@ struct Model {
             return reinterpret_cast<uint8_t *>(uintptr_t(pages->second.first)) + offset;
         return nullptr;
     }
+
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
     std::map<uint32_t, std::pair<uint64_t, std::vector<uint64_t>>> admitted;  // channel: cookie, its uses' BOs
@@ -100,18 +101,19 @@ struct Model {
         cpuLocked.push_back(bo);
         return KERN_SUCCESS;
     }
+
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
     // A test's GPU: each job is in flight until it ran, and a WaitFence on it waits up to then (false: it timed out)
     std::function<void()> jobAdded;
     std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
-    unsigned refuse = 0;    // submissions refused from now, with `refusal`
+    unsigned refuse = 0;           // submissions refused from now, with `refusal`
     uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     unsigned creates = 0, destroys = 0, staleReads = 0;
-    std::vector<uint64_t> freed;  // BoFree's handles, in order
+    std::vector<uint64_t> freed;             // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
     // Kernel events (EventImport, EventWord): off, the kernel answers neither, as one without them does
     bool kernelEvents = false;
@@ -451,8 +453,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
-                     TegraGM20BInfoCpuAccess;
+        info.flags =
+            TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord | TegraGM20BInfoCpuAccess;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
@@ -543,7 +545,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     }
     case TegraGM20BMethodEventRelease:
         return model.events.erase(static_cast<const TegraGM20BAbiEventRelease *>(input)->handle) ? KERN_SUCCESS
-                                                                                                : kIOReturnBadArgument;
+                                                                                                 : kIOReturnBadArgument;
     case TegraGM20BMethodEventWord: {
         const auto &in = *static_cast<const TegraGM20BAbiEventWord *>(input);
         if (!model.kernelEvents)

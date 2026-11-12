@@ -61,7 +61,7 @@ class AppleD5500UserClient : public IOUserClient {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleD5500UserClient)
 
-    using Buffer = SwitchNVDECBuffer;
+        using Buffer = SwitchNVDECBuffer;
 
     IOLock *lock_ = nullptr;
     SwitchNVDECCompletions *completions_ = nullptr;
@@ -251,7 +251,7 @@ IOReturn AppleD5500UserClient::bufferStats(uint32_t inSize, void *out, uint32_t 
     if (inSize || !out || *outSize < sizeof(SwitchNVDECBufferStats))
         return kIOReturnBadArgument;
     *static_cast<SwitchNVDECBufferStats *>(out) = {recycles_, park_.recycled, park_.taken, park_.allocated,
-                                                    exports_, exportObjects_, park_.most, 0};
+                                                   exports_,  exportObjects_, park_.most,  0};
     *outSize = sizeof(SwitchNVDECBufferStats);
     return kIOReturnSuccess;
 }
@@ -421,11 +421,11 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
 #if SWITCH_NVDEC_PROBES
         ++recycles_;
 #endif
-        ret = !buffer || request->reserved ? kIOReturnBadArgument :
-            ioreturn(switch_nvdec_output_recycle(buffer, current_task(), &park_));
+        ret = !buffer || request->reserved ? kIOReturnBadArgument
+                                           : ioreturn(switch_nvdec_output_recycle(buffer, current_task(), &park_));
         if (!ret)
-            *static_cast<TegraNVDECBufferReply *>(out) =
-                {buffer->handle, 0, buffer->block.size, buffer->map->getAddress()};
+            *static_cast<TegraNVDECBufferReply *>(out) = {buffer->handle, 0, buffer->block.size,
+                                                          buffer->map->getAddress()};
         break;
     }
     case SwitchNVDECMethodExport: {

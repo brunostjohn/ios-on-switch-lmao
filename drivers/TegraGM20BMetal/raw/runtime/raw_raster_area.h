@@ -33,4 +33,4 @@ inline uint64_t rasterPixelLimit(const RasterState &state, uint32_t width, uint3
     return uint64_t(std::max(0.0, x1 - x0)) * uint64_t(std::max(0.0, y1 - y0));
 }
 
-} // namespace raw
+}  // namespace raw

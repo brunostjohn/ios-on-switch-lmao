@@ -174,4 +174,3 @@ TEST(PresentPromiseDirect, UnkeptIsDroppedAtOneSecondKeepingThePreviousFrame)
 	EXPECT_EQ(d.failed, 1u);
 	EXPECT_EQ(d.panel, 1);
 }
-

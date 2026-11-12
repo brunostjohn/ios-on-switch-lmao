@@ -5,12 +5,17 @@
 #include "switch_vic_backing_stubs.h"
 #undef IONewZero
 #undef IODelete
-#define IONewZero(type, count) static_cast<type *>(std::calloc(count, sizeof(type)))
+#define IONewZero(type, count)         static_cast<type *>(std::calloc(count, sizeof(type)))
 #define IODelete(pointer, type, count) std::free(pointer)
 #include "../SwitchVICScanoutConvert.cpp"
 
-struct SwitchVICMapping { switch_gpu_backing *backing; uint64_t address; };
+struct SwitchVICMapping {
+    switch_gpu_backing *backing;
+    uint64_t address;
+};
+
 struct switch_gpu_cpu_lease {};
+
 namespace {
 switch_gpu_backing sourceBacking, logicalBacking, targetBacking;
 switch_gpu_cpu_lease sourceLease, targetLease;
@@ -25,11 +30,32 @@ std::vector<switch_gpu_backing_use> uses;
 std::vector<switch_gpu_backing_guard> guards;
 constexpr uint64_t kFence = (uint64_t(7) << 32) + 53;
 }
-extern "C" bool tegra_vic_ready() { return ready; }
-extern "C" const TegraVICTraits *tegra_vic_traits() { return missingTraits ? nullptr : &kTegraVICTraits; }
-extern "C" uint64_t tegra_vic_config_address() { return 0x80001000; }
-extern "C" uint64_t tegra_vic_filter_address() { return 0x80002000; }
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing) { ++backing->refs; }
+
+extern "C" bool tegra_vic_ready()
+{
+    return ready;
+}
+
+extern "C" const TegraVICTraits *tegra_vic_traits()
+{
+    return missingTraits ? nullptr : &kTegraVICTraits;
+}
+
+extern "C" uint64_t tegra_vic_config_address()
+{
+    return 0x80001000;
+}
+
+extern "C" uint64_t tegra_vic_filter_address()
+{
+    return 0x80002000;
+}
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
+{
+    ++backing->refs;
+}
+
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
 {
     EXPECT_EQ(backing, &targetBacking);
@@ -38,8 +64,9 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
     info->allocation_id = 35;
     info->allocation_generation = 4;
 }
+
 extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing, switch_gpu_backing_token *token,
-                                               switch_gpu_cpu_lease **lease)
+                                              switch_gpu_cpu_lease **lease)
 {
     EXPECT_EQ(backing, &targetBacking);
     EXPECT_EQ(submissions, 1u);
@@ -50,6 +77,7 @@ extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing, switc
     *lease = &targetLease;
     return 0;
 }
+
 SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool writable)
 {
     EXPECT_EQ(writable, backing == &targetBacking);
@@ -60,6 +88,7 @@ SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool w
     ++backing->refs;
     return new SwitchVICMapping{backing, writable ? 0x40000000u : 0x30000000u};
 }
+
 void switch_vic_mapping_release(SwitchVICMapping *mapping)
 {
     if (!mapping)
@@ -68,10 +97,15 @@ void switch_vic_mapping_release(SwitchVICMapping *mapping)
     --mapping->backing->refs;
     delete mapping;
 }
-uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping) { return mapping->address; }
+
+uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
+{
+    return mapping->address;
+}
+
 int switch_vic_submit_checked(const TegraVICJob *job, uint32_t count, const TegraVICAcquire *acquire,
-                              const SwitchVICOwnership &ownership, void (*done)(void *, int),
-                              void *context, uint32_t *legacyFence, SwitchVICEvents *)
+                              const SwitchVICOwnership &ownership, void (*done)(void *, int), void *context,
+                              uint32_t *legacyFence, SwitchVICEvents *)
 {
     EXPECT_EQ(count, 1u);
     EXPECT_GT(job->count, 0u);
@@ -98,6 +132,7 @@ protected:
     SwitchNativeScanout source = {}, output = {};
     TegraVICImage image = {};
     TegraVICOp operation = {};
+
     void SetUp() override
     {
         mappings = submissions = exports = mapCalls = 0;
@@ -131,10 +166,12 @@ protected:
         operation.dstW = 128;
         operation.dstH = 64;
     }
+
     int submit()
     {
         return switch_vic_scanout_convert(&source, &image, &targetBacking, 128, 64, 512, &operation, &output);
     }
+
     void finish()
     {
         if (callback) {
@@ -143,6 +180,7 @@ protected:
             done(callbackContext, 0);
         }
     }
+
     void TearDown() override
     {
         finish();
@@ -255,7 +293,7 @@ TEST_F(SwitchVICScanoutConvert, UnsupportedTransformCannotPublishDestination)
     EXPECT_EQ(submissions, 0u);
     EXPECT_EQ(exports, 0u);
 }
-} // namespace
+}  // namespace
 
 class SwitchVICScanoutPlace : public SwitchVICScanoutConvert {
 protected:

@@ -119,7 +119,8 @@ protected:
 
 	void SetUp() override
 	{
-		statusEngine = 0; statusOverride = physicalOverride = nullptr;
+		statusEngine = 0;
+		statusOverride = physicalOverride = nullptr;
 		native = new NativeEvent;
 		port = nextPort++;
 		{
@@ -182,7 +183,8 @@ protected:
 	switch_gpu_event_watch *observe(uint64_t value, Notices &n, bool terminal = false)
 	{
 		switch_gpu_event_watch *w = nullptr;
-		EXPECT_EQ((terminal ? switch_gpu_event_observe_terminal : switch_gpu_event_observe)(event, value, 0x123456789ULL, notice, &n, &w),
+		EXPECT_EQ((terminal ? switch_gpu_event_observe_terminal : switch_gpu_event_observe)(
+				  event, value, 0x123456789ULL, notice, &n, &w),
 			  0);
 		if (w)
 			watches.push_back(w);
@@ -320,7 +322,8 @@ extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token 
 
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *t)
 {
-	if (t->engine == statusEngine && statusOverride) return statusOverride(t);
+	if (t->engine == statusEngine && statusOverride)
+		return statusOverride(t);
 	std::lock_guard held(tokensLock);
 	return tokens[key(*t)].execution;
 }
@@ -334,7 +337,8 @@ extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing
 extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *t,
 							int external)
 {
-	if (t->engine == statusEngine && physicalOverride) return physicalOverride(t);
+	if (t->engine == statusEngine && physicalOverride)
+		return physicalOverride(t);
 	return external ? switch_gpu_backing_token_external_status(t)
 			: switch_gpu_backing_token_status(t);
 }

@@ -12,7 +12,7 @@ extern "C" bool switch_native_surface_display_ready(void) __attribute__((weak));
 bool switch_nvdec_native_output_ready()
 {
     return tegra_vic_present_ready() && switch_native_surface_gpu_ready && switch_native_surface_gpu_ready() &&
-        switch_native_surface_display_ready && switch_native_surface_display_ready();
+           switch_native_surface_display_ready && switch_native_surface_display_ready();
 }
 
 // A buffer is reused in place unless a CPU owner holds it (an exported picture's read lease, which a decode job may not
@@ -63,7 +63,7 @@ int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task, SwitchNV
 }
 
 int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPresent *request,
-                                 TegraVICPicture *picture)
+                                TegraVICPicture *picture)
 {
     if (!block || !request || !picture)
         return -22;
@@ -76,10 +76,11 @@ int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPr
         (uint64_t(request->crop_x) + request->width) * request->sample_bytes > request->pitch ||
         uint64_t(request->crop_y) + request->height > request->rows)
         return -22;
-    *picture = {block->backing, block->pages.pages, block->pages.count, bytes, request->pitch, request->rows,
-                request->chroma_offset, request->block_height_log2, request->crop_x, request->crop_y,
-                request->width, request->height, request->dst_x, request->dst_y, request->surface_id,
-                request->sample_bytes, request->plane};
+    *picture = {block->backing,  block->pages.pages, block->pages.count,     bytes,
+                request->pitch,  request->rows,      request->chroma_offset, request->block_height_log2,
+                request->crop_x, request->crop_y,    request->width,         request->height,
+                request->dst_x,  request->dst_y,     request->surface_id,    request->sample_bytes,
+                request->plane};
     return 0;
 }
 

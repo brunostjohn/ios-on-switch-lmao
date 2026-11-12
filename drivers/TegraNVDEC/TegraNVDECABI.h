@@ -46,18 +46,18 @@
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
 
 enum TegraNVDECMethod {
-    TegraNVDECMethodGetInfo = 1,      // -> TegraNVDECInfo
-    TegraNVDECMethodBufferAlloc = 2,  // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
-    TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the connection's jobs while one uses it)
-    TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
-    TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
-    TegraNVDECMethodPresent = 6,      // TegraNVDECPresent -> (the picture is in the IOSurface)
-    SwitchNVDECMethodBufferRecycle = 7, // TegraNVDECBuffer -> TegraNVDECBufferReply
-    SwitchNVDECMethodExport = 8,       // TegraNVDECPresent -> (leased native NV12 backing)
+    TegraNVDECMethodGetInfo = 1,         // -> TegraNVDECInfo
+    TegraNVDECMethodBufferAlloc = 2,     // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
+    TegraNVDECMethodBufferFree = 3,      // TegraNVDECBuffer -> (waits for the connection's jobs while one uses it)
+    TegraNVDECMethodSubmit = 4,          // TegraNVDECSubmit -> TegraNVDECFence
+    TegraNVDECMethodWait = 5,            // TegraNVDECWait ->
+    TegraNVDECMethodPresent = 6,         // TegraNVDECPresent -> (the picture is in the IOSurface)
+    SwitchNVDECMethodBufferRecycle = 7,  // TegraNVDECBuffer -> TegraNVDECBufferReply
+    SwitchNVDECMethodExport = 8,         // TegraNVDECPresent -> (leased native NV12 backing)
 };
 
 #define SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT (1u << 1)
-#define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
+#define TEGRA_NVDEC_FEATURE_PRESENT        (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
 #define TEGRA_NVDEC_FEATURE_COMPLETION     (1u << 2)
 #define SWITCH_NVDEC_COMPLETION_PORT       0x4e43  // 'NC': IOConnectSetNotificationPort's type for job completions
 #define SWITCH_NVDEC_COMPLETION_ARGS       3       // fence, error_status, mbs_correctly_decoded

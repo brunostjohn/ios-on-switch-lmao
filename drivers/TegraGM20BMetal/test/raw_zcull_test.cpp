@@ -22,8 +22,8 @@ TEST(Zcull, RegionsAreNilsReferenceOnes)
 {
     // (width, height, aliquot count, normalized aliquots, adaptive, a static row's aliquots and format per subregion)
     const Row rows[] = {
-        {224, 32, 64, 16, 0, 4, 8},       {448, 256, 128, 32, 0, 8, 8},     {896, 512, 512, 128, 0, 32, 8},
-        {1792, 1024, 2048, 512, 0, 128, 8}, {3584, 1024, 4096, 1024, 0, 256, 8}, {448, 16384, 5120, 2048, 1, 0, 0},
+        {224, 32, 64, 16, 0, 4, 8},          {448, 256, 128, 32, 0, 8, 8},        {896, 512, 512, 128, 0, 32, 8},
+        {1792, 1024, 2048, 512, 0, 128, 8},  {3584, 1024, 4096, 1024, 0, 256, 8}, {448, 16384, 5120, 2048, 1, 0, 0},
         {7168, 16384, 5120, 32768, 1, 0, 0},
     };
     for (const Row &r : rows) {
@@ -97,8 +97,13 @@ TEST(Zcull, TrackableDepthStatesKeepTheRegion)
 {
     raw::ZcullPass z;
     z.candidate = true;
-    for (auto [compare, write] : {std::pair{kLess, true}, {kLessEqual, true}, {kEqual, true}, {kLess, false},
-                                  {kAlways, false}, {kNever, true}, {kEqual, false}})
+    for (auto [compare, write] : {std::pair{kLess, true},
+                                  {kLessEqual, true},
+                                  {kEqual, true},
+                                  {kLess, false},
+                                  {kAlways, false},
+                                  {kNever, true},
+                                  {kEqual, false}})
         EXPECT_FALSE(raw::zcullInvalidates(z, depth(compare, write), true, false, false, false)) << int(compare);
     EXPECT_EQ(z.dir, raw::kZcullLess);
     raw::ZcullPass reverse;

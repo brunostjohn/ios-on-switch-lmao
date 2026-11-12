@@ -65,4 +65,4 @@ TEST(DirtyRanges, RandomOverlapsCoverExactlyTheRequestedCacheLines)
     for (size_t i = 0; i < expected.size(); ++i)
         EXPECT_EQ(visits[i], expected[i] != 0);
 }
-} // namespace
+}  // namespace

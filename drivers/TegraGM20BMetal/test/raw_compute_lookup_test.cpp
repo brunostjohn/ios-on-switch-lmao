@@ -448,7 +448,10 @@ TEST(RawComputeLookup, TransientBuildFailuresStayRetryableBeyondThreeAttempts)
     uint64_t now = 100, clocks = 0;
     unsigned produces = 0, places = 0;
     int state = 7;
-    const auto clock = [&] { ++clocks; return now; };
+    const auto clock = [&] {
+        ++clocks;
+        return now;
+    };
     const auto produce = [&](int &record) {
         record = 42;
         ++produces;
@@ -488,10 +491,19 @@ TEST(RawComputeLookup, SemanticBuildRefusalNeverRetriesOrAttemptsPlacement)
     Build build;
     unsigned produces = 0, places = 0, clocks = 0;
     for (unsigned i = 0; i < 8; ++i) {
-        const auto result = build.make([&] { ++clocks; return UINT64_MAX; }, [&](int &) {
-            ++produces;
-            return Build::Outcome::Refused;
-        }, [&](const int &) -> const int * { ++places; return nullptr; });
+        const auto result = build.make(
+            [&] {
+                ++clocks;
+                return UINT64_MAX;
+            },
+            [&](int &) {
+                ++produces;
+                return Build::Outcome::Refused;
+            },
+            [&](const int &) -> const int * {
+                ++places;
+                return nullptr;
+            });
         EXPECT_EQ(result.state, nullptr);
         EXPECT_FALSE(result.retry);
         EXPECT_EQ(result.retryAtUs, 0u);

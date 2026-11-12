@@ -7,9 +7,10 @@ extern "C" void mock_iokit_pause(uint32_t channel, bool pause);
 
 namespace raw {
 struct DeviceHarness {
-    template<class Expect> static void computeRetry(Device &device, Expect expect);
-    template<class Expect> static void ranges(Device &device, Expect expect);
-    template<class Expect> static void wrap(Device &device, Pipeline &pipeline, Expect expect)
+    template <class Expect> static void computeRetry(Device &device, Expect expect);
+    template <class Expect> static void ranges(Device &device, Expect expect);
+
+    template <class Expect> static void wrap(Device &device, Pipeline &pipeline, Expect expect)
     {
         expect(device.wait(device.submitted()), "pre-wrap work physically retires");
         expect(mock_iokit_seed_sequence(device.channel_, UINT32_MAX), "idle channel accepts deterministic wrap seed");
@@ -88,11 +89,13 @@ struct DeviceHarness {
                    "completed zero ring space reuses the allocation without growth");
             ring->head = ring->since;
         }
+
         struct FenceState {
             TegraGM20BAbiFence physical;
             TegraGM20BAbiFenceSemantic semantic;
             TegraGM20BAbiFenceIdentity identity;
         } state{{UINT32_MAX, 0, 0, 0}, {2, 0, 0, TegraGM20BFenceSemanticPending}, {(uint64_t(5) << 48) | 19}};
+
         static_assert(offsetof(FenceState, semantic) == sizeof(TegraGM20BAbiFence));
         const auto *originalFence = device.fence_;
         auto &flags = const_cast<TegraGM20BAbiInfo &>(device.k_.info()).flags;
@@ -114,16 +117,17 @@ struct DeviceHarness {
         alias.length = 128;
         Buffer hidden = cached;
         hidden.hostVisible = false;
-        const auto snapshot = device.captureCpuCompletion(0, device.channelGeneration(), {&alias, &cached, &wc, &hidden});
+        const auto snapshot =
+            device.captureCpuCompletion(0, device.channelGeneration(), {&alias, &cached, &wc, &hidden});
         expect(snapshot.valid && snapshot.channelUid == state.identity.channel_uid &&
-               snapshot.channel == device.channel_ && snapshot.seqno == 0,
+                   snapshot.channel == device.channel_ && snapshot.seqno == 0,
                "accepted cached snapshot retains full kernel identity and valid zero prefix");
         expect(snapshot.ranges.size() == 1 && snapshot.ranges[0].bytes == cached.length,
                "cached buffer aliases coalesce while WC and private inputs are excluded");
         const auto subrange = device.captureCpuCompletion(0, device.channelGeneration(), {&alias});
         expect(subrange.valid && subrange.ranges.size() == 1 &&
-               subrange.ranges[0].handle == snapshot.ranges[0].handle &&
-               subrange.ranges[0].offset == snapshot.ranges[0].offset + 64 && subrange.ranges[0].bytes == 128,
+                   subrange.ranges[0].handle == snapshot.ranges[0].handle &&
+                   subrange.ranges[0].offset == snapshot.ranges[0].offset + 64 && subrange.ranges[0].bytes == 128,
                "cached alias snapshot retains exact BO offset and extent");
         state.identity.channel_uid += uint64_t(1) << 40;
         expect(snapshot.channelUid != state.identity.channel_uid,
@@ -143,4 +147,4 @@ struct DeviceHarness {
         device.destroyTexture(transient);
     }
 };
-} // namespace raw
+}  // namespace raw

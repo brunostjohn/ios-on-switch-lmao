@@ -64,8 +64,8 @@ struct tgm_coh {
 	uint32_t npages;
 	int writable;  // some import lets the GPU write it
 	int gpuWrites;  // atomic: an import or a SurfaceWrites says the GPU may write it, so submissions mark it
-	int cleaned;   // atomic: an import of it finished its own clean
-	int gpuDirty;  // atomic: the GPU may have written it since the last CPU lock
+	int cleaned;       // atomic: an import of it finished its own clean
+	int gpuDirty;      // atomic: the GPU may have written it since the last CPU lock
 	uint64_t written;  // atomic: submissions that may have written it
 	// atomic: the surface's layout once decided (TegraGM20BTiled.cpp), null before
 	tgm_tiled *tiled;
@@ -91,7 +91,8 @@ constexpr uint32_t kBatch = 4;
 IOLock *gRegistryLock;
 tgm_coh *gByPage[kBuckets], *gById[kBuckets];
 uint32_t gWithId;  // atomic: entries reachable by surface ID; 0 lets every trap return at once
-uint32_t gDeferred;  // atomic: entries deferred on their records; 0 lets every import and engine go on at once
+uint32_t
+	gDeferred;  // atomic: entries deferred on their records; 0 lets every import and engine go on at once
 
 #if TGM_STATS
 struct {
@@ -303,8 +304,9 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 			if (tiledNow(found[i]))
 				continue;
 			const bool maintained =
-				(unlock && !readOnly) || (!unlock && __atomic_exchange_n(&found[i]->gpuDirty, 0,
-							       __ATOMIC_ACQ_REL) != 0);
+				(unlock && !readOnly) ||
+				(!unlock && __atomic_exchange_n(&found[i]->gpuDirty, 0,
+								__ATOMIC_ACQ_REL) != 0);
 			auto *backing = switch_gpu_backing_find_pa(found[i]->pa);
 			if (maintained && !backing) {
 				bytes += maintain(found[i]);

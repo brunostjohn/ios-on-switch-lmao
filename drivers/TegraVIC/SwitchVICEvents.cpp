@@ -221,10 +221,12 @@ void switch_vic_events_commit(SwitchVICEvents *work)
 void switch_vic_events_submission(SwitchVICEvents *work, bool final, switch_gpu_event_submission *out)
 {
     *out = {};
-    if (!work) return;
+    if (!work)
+        return;
     out->dependencies = work->tokens;
     out->dependency_count = work->tokenCount;
-    if (!final) return;
+    if (!final)
+        return;
     out->waits = work->batch;
     if (!work->signals[0]) {
         work->signals[0] = work->signals[1];
@@ -237,14 +239,22 @@ void switch_vic_events_submission(SwitchVICEvents *work, bool final, switch_gpu_
 int switch_vic_events_stage(SwitchVICEvents *source, SwitchVICEvents **out)
 {
     *out = nullptr;
-    if (!source) return 0;
+    if (!source)
+        return 0;
     auto *work = IONewZero(SwitchVICEvents, 1);
-    if (!work) return -12;
+    if (!work)
+        return -12;
     work->refs = 1;
     work->lock = IOLockAlloc();
-    if (!work->lock) { IODelete(work, SwitchVICEvents, 1); return -12; }
+    if (!work->lock) {
+        IODelete(work, SwitchVICEvents, 1);
+        return -12;
+    }
     const int error = switch_gpu_event_waits_prepare(source->uses, source->tokenCount, &work->batch);
-    if (error) { drop(work); return error; }
+    if (error) {
+        drop(work);
+        return error;
+    }
     work->prepared = true;
     work->tokenCount = source->tokenCount;
     memcpy(work->tokens, source->tokens, sizeof(work->tokens));

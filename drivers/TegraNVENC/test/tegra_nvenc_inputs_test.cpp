@@ -68,7 +68,9 @@ struct NVENCInputs : testing::Test {
     // NVENC's bounded syncpoint wait, answering each round in turn.
     int wait(uint32_t reached, uint32_t fence, std::vector<int> answers)
     {
-        return inputs.wait(reached, fence, kTimedOut, [&] { return answers.at(rounds++); });
+        return inputs.wait(reached, fence, kTimedOut, [&] {
+            return answers.at(rounds++);
+        });
     }
 };
 

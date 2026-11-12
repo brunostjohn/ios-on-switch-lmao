@@ -14,6 +14,7 @@ struct Pll {
     uint32_t base, misc0, misc1, misc2, misc3;
     const char *name, *engines;
 };
+
 constexpr Pll kPllC2 = {0x4e8, 0x4ec, 0x4f0, 0x4f4, 0x4f8, "PLLC2", "NVJPG"};
 constexpr Pll kPllC3 = {0x4fc, 0x500, 0x504, 0x508, 0x50c, "PLLC3", "NVDEC and NVENC"};
 
@@ -29,11 +30,20 @@ enum : uint32_t {
     PLLCX_MISC2_DEFAULT = 0x1f720f05,
     PLLCX_MISC3_DEFAULT = 0x000000c4,
 };
+
 constexpr uint32_t kLockUs = 600;
 
 IOLock *gLock;
 const volatile uint8_t *gFuse, *gApbMisc;
-enum Outcome { kRate, kPllp, kBusy, kNoLock, kOutcomes };
+
+enum Outcome {
+    kRate,
+    kPllp,
+    kBusy,
+    kNoLock,
+    kOutcomes
+};
+
 bool gLogged[4][kOutcomes];
 
 IOLock *lock()

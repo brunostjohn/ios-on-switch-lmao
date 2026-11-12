@@ -22,6 +22,7 @@
 
 namespace {
 thread_call_t gCancel;
+
 struct Stall {
     uint32_t syncpt;
     uint64_t fence;

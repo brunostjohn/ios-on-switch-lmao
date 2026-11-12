@@ -74,7 +74,9 @@ final class BenchWorker: @unchecked Sendable {
             at: root.appendingPathComponent("outbox"), withIntermediateDirectories: true)
         let fd = open(inbox.path, O_EVTONLY)
         guard fd >= 0 else {
-            logger.error("BENCH root \(root.path, privacy: .public) unreachable: \(String(cString: strerror(errno)), privacy: .public)")
+            logger.error(
+                "BENCH root \(root.path, privacy: .public) unreachable: \(String(cString: strerror(errno)), privacy: .public)"
+            )
             return nil
         }
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write], queue: queue)
@@ -166,13 +168,17 @@ final class BenchWorker: @unchecked Sendable {
     private func finish(_ root: URL, _ file: URL, name: String, summary: [String: Any]) {
         let outbox = root.appendingPathComponent("outbox").appendingPathComponent(name)
         try? FileManager.default.createDirectory(at: outbox, withIntermediateDirectories: true)
-        let fields = summary.merging(["protocol": BenchProtocol.version, "batch": name, "device": status.device]) { a, _ in a }
+        let fields = summary.merging(["protocol": BenchProtocol.version, "batch": name, "device": status.device]) {
+            a, _ in a
+        }
         if let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) {
             try? DurableFile.write(data + Data("\n".utf8), to: outbox.appendingPathComponent("done.json"))
         }
         let kept = outbox.appendingPathComponent("batch.json")
         try? FileManager.default.removeItem(at: kept)
-        if (try? FileManager.default.moveItem(at: file, to: kept)) == nil { try? FileManager.default.removeItem(at: file) }
+        if (try? FileManager.default.moveItem(at: file, to: kept)) == nil {
+            try? FileManager.default.removeItem(at: file)
+        }
         logger.notice("BENCH \(name, privacy: .public) done")
     }
 }

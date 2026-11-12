@@ -37,14 +37,17 @@ struct PredicationLoops {
         marks = try gpu.buffer(4 * 64)
     }
 
-    func one(_ e: MTLComputeCommandEncoder, _ state: MTLComputePipelineState, _ buffer: MTLBuffer, _ at: Int,
-             _ value: UInt32) {
+    func one(
+        _ e: MTLComputeCommandEncoder, _ state: MTLComputePipelineState, _ buffer: MTLBuffer, _ at: Int,
+        _ value: UInt32
+    ) {
         var pair = SIMD2<UInt32>(UInt32(at), value)
         e.setComputePipelineState(state)
         e.setBuffer(buffer, offset: 0, index: 0)
         e.setBytes(&pair, length: 8, index: 1)
-        e.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
-                               threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        e.dispatchThreadgroups(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
         e.memoryBarrier(scope: .buffers)
     }
 
@@ -76,8 +79,9 @@ struct PredicationLoops {
         let o = e as AnyObject
         unsafeBitCast(o.method(for: Self.startDoWhile), to: Plain.self)(o, Self.startDoWhile)
         one(e, count, marks, doMark, 1)
-        ends.append(unsafeBitCast(o.method(for: Self.endDoWhile), to: EndDoWhile.self)(
-            o, Self.endDoWhile, words, 4 * doWord, Self.notEqual, 0))
+        ends.append(
+            unsafeBitCast(o.method(for: Self.endDoWhile), to: EndDoWhile.self)(
+                o, Self.endDoWhile, words, 4 * doWord, Self.notEqual, 0))
         let outerWord = doWord + 1, innerWord = doWord + 2, nestedMark = doMark + 1
         one(e, store, words, outerWord, Self.nestedOuter)
         startWhile(e, word: outerWord)

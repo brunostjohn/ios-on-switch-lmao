@@ -8,8 +8,7 @@ void reportCpuReleaseFailure();
 inline bool hostRangeContains(const void *base, uint64_t extent, const void *cpu, uint64_t bytes)
 {
     const uintptr_t start = uintptr_t(base), address = uintptr_t(cpu);
-    return base && cpu && bytes && address >= start && address - start <= extent &&
-           bytes <= extent - (address - start);
+    return base && cpu && bytes && address >= start && address - start <= extent && bytes <= extent - (address - start);
 }
 
 class HostAccess {
@@ -17,6 +16,7 @@ public:
     HostAccess() = default;
     HostAccess(const HostAccess &) = delete;
     HostAccess &operator=(const HostAccess &) = delete;
+
     ~HostAccess()
     {
         if (!finish())
@@ -54,4 +54,4 @@ private:
     uint64_t offset_ = 0, bytes_ = 0;
     uint32_t access_ = 0;
 };
-} // namespace raw
+}  // namespace raw

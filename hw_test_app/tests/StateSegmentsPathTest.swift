@@ -45,20 +45,21 @@ struct StateSegmentsPathTest: HWTest {
         for frame in 0..<Self.frames {
             let target = try gpu.texture(.rgba8Unorm, Self.width, Self.height)
             targets.append(target)
-            committed.append(try gpu.commit { commands in
-                for pass in 0..<2 {
-                    let descriptor = MTLRenderPassDescriptor()
-                    descriptor.colorAttachments[0].texture = target
-                    descriptor.colorAttachments[0].loadAction = pass == 0 ? .clear : .load
-                    descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-                    descriptor.colorAttachments[0].storeAction = .store
-                    let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
-                    Self.quad(encoder, a, Self.opaque(frame), x: 0)
-                    Self.quad(encoder, b, Self.added, x: 0)
-                    Self.quad(encoder, a, Self.opaque(frame), x: Self.width / 2)
-                    encoder.endEncoding()
-                }
-            })
+            committed.append(
+                try gpu.commit { commands in
+                    for pass in 0..<2 {
+                        let descriptor = MTLRenderPassDescriptor()
+                        descriptor.colorAttachments[0].texture = target
+                        descriptor.colorAttachments[0].loadAction = pass == 0 ? .clear : .load
+                        descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+                        descriptor.colorAttachments[0].storeAction = .store
+                        let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
+                        Self.quad(encoder, a, Self.opaque(frame), x: 0)
+                        Self.quad(encoder, b, Self.added, x: 0)
+                        Self.quad(encoder, a, Self.opaque(frame), x: Self.width / 2)
+                        encoder.endEncoding()
+                    }
+                })
         }
         try gpu.finish(committed)
         var wrong = 0
@@ -96,7 +97,9 @@ struct StateSegmentsPathTest: HWTest {
             ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof)
     }
 
-    func compare(_ gpu: GPU, _ a: MTLRenderPipelineState, _ b: MTLRenderPipelineState, _ metrics: inout Metrics)
+    func compare(
+        _ gpu: GPU, _ a: MTLRenderPipelineState, _ b: MTLRenderPipelineState, _ metrics: inout Metrics
+    )
         async throws -> [String]
     {
         var encodeUs = [0.0, 0.0], gpuUs = [0.0, 0.0], execUs = [0.0, 0.0], encodes = [0, 0], pushes = [0, 0]
@@ -109,18 +112,19 @@ struct StateSegmentsPathTest: HWTest {
             for _ in 0..<Self.perBatch {
                 let drawn = try gpu.texture(.rgba8Unorm, Self.width, Self.height)
                 target = drawn
-                buffers.append(try gpu.commit { commands in
-                    if arm == 0 { _ = RawFacade.inlineStates(in: commands) }
-                    let descriptor = MTLRenderPassDescriptor()
-                    descriptor.colorAttachments[0].texture = drawn
-                    descriptor.colorAttachments[0].loadAction = .clear
-                    descriptor.colorAttachments[0].storeAction = .store
-                    let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
-                    for i in 0..<Self.switches {
-                        Self.quad(encoder, i % 2 == 0 ? a : b, i % 2 == 0 ? Self.opaque(i % 16) : Self.added, x: 0)
-                    }
-                    encoder.endEncoding()
-                })
+                buffers.append(
+                    try gpu.commit { commands in
+                        if arm == 0 { _ = RawFacade.inlineStates(in: commands) }
+                        let descriptor = MTLRenderPassDescriptor()
+                        descriptor.colorAttachments[0].texture = drawn
+                        descriptor.colorAttachments[0].loadAction = .clear
+                        descriptor.colorAttachments[0].storeAction = .store
+                        let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
+                        for i in 0..<Self.switches {
+                            Self.quad(encoder, i % 2 == 0 ? a : b, i % 2 == 0 ? Self.opaque(i % 16) : Self.added, x: 0)
+                        }
+                        encoder.endEncoding()
+                    })
             }
             try gpu.finish(buffers)
             let after = RawFacade.counters(of: gpu.device)

@@ -31,17 +31,26 @@ int tegra_gm20b_surface_tiled(uint64_t)
 }
 
 int switch_gpu_surface_prepare(uint32_t, void *, uint32_t, switch_gpu_backing **out,
-        switch_gpu_cpu_lease **owned, void **descriptor)
+			       switch_gpu_cpu_lease **owned, void **descriptor)
 {
-    *out = nullptr;
-    *owned = nullptr;
-    *descriptor = nullptr;
-    return 0;
+	*out = nullptr;
+	*owned = nullptr;
+	*descriptor = nullptr;
+	return 0;
 }
-void switch_gpu_surface_finish(void *) {}
-uint32_t switch_gpu_surface_users(void *) { return 0; }
-void switch_gpu_surface_descriptor_hold(void *, int) {}
 
+void switch_gpu_surface_finish(void *)
+{
+}
+
+uint32_t switch_gpu_surface_users(void *)
+{
+	return 0;
+}
+
+void switch_gpu_surface_descriptor_hold(void *, int)
+{
+}
 
 int switch_gpu_backing_prepare_retirement()
 {

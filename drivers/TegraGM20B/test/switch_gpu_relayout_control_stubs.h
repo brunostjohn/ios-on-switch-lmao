@@ -17,6 +17,7 @@ public:
 	{
 		return 0;
 	}
+
 	void release()
 	{
 	}

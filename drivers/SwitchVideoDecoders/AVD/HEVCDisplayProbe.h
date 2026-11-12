@@ -21,10 +21,10 @@ enum {
 };
 
 typedef struct {
-    int status;                       // 0, or the submit/wait error
-    uint32_t layout;                  // HEVC_DISPLAY_*: the closest reading of the luma plane
-    uint32_t max_diff;                // over the visible luma: |display - (ref10 >> 2)|
-    uint32_t mean_milli;              // its mean, x1000
+    int status;                         // 0, or the submit/wait error
+    uint32_t layout;                    // HEVC_DISPLAY_*: the closest reading of the luma plane
+    uint32_t max_diff;                  // over the visible luma: |display - (ref10 >> 2)|
+    uint32_t mean_milli;                // its mean, x1000
     uint32_t trunc_milli, round_milli;  // per mille equal to ref10 >> 2 and to (ref10 + 2) >> 2 (clamped)
 } HEVCDisplayProbeResult;
 

@@ -28,22 +28,24 @@ struct SubmitJobPathTest: GPUPathTest {
         for frame in 0..<Self.frames {
             let target = try gpu.texture(.rgba8Unorm, Self.width, Self.height)
             targets.append(target)
-            committed.append(try gpu.commit { commands in
-                let pass = MTLRenderPassDescriptor()
-                let c = Self.clear(frame).map { Double($0) / 255 }
-                pass.colorAttachments[0].texture = target
-                pass.colorAttachments[0].loadAction = .clear
-                pass.colorAttachments[0].clearColor = MTLClearColor(red: c[0], green: c[1], blue: c[2], alpha: c[3])
-                pass.colorAttachments[0].storeAction = .store
-                let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
-                encoder.setRenderPipelineState(pipeline)
-                var colour = Self.drawn(frame).map { Float($0) / 255 }
-                var corners = GPU.pixelQuad(0, 0, Self.width / 2, Self.height, width: Self.width, height: Self.height)
-                encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
-                encoder.setFragmentBytes(&colour, length: MemoryLayout<Float>.stride * 4, index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                encoder.endEncoding()
-            })
+            committed.append(
+                try gpu.commit { commands in
+                    let pass = MTLRenderPassDescriptor()
+                    let c = Self.clear(frame).map { Double($0) / 255 }
+                    pass.colorAttachments[0].texture = target
+                    pass.colorAttachments[0].loadAction = .clear
+                    pass.colorAttachments[0].clearColor = MTLClearColor(red: c[0], green: c[1], blue: c[2], alpha: c[3])
+                    pass.colorAttachments[0].storeAction = .store
+                    let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
+                    encoder.setRenderPipelineState(pipeline)
+                    var colour = Self.drawn(frame).map { Float($0) / 255 }
+                    var corners = GPU.pixelQuad(
+                        0, 0, Self.width / 2, Self.height, width: Self.width, height: Self.height)
+                    encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+                    encoder.setFragmentBytes(&colour, length: MemoryLayout<Float>.stride * 4, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    encoder.endEncoding()
+                })
         }
         try gpu.finish(committed)
         var wrong = 0

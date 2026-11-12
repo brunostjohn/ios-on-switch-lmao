@@ -450,8 +450,8 @@ static void testDecodeOrder(void)
     for (int k = 0; order && k < f.outCount; k++)
         order = f.out[k] == k;
     CHECK(reordered, "decode order: clip %c has no B pictures to hold", clip->name);
-    CHECK(!held && order, "decode order: clip %c held a picture past its decode (%d out of %d)", clip->name,
-          f.outCount, aus);
+    CHECK(!held && order, "decode order: clip %c held a picture past its decode (%d out of %d)", clip->name, f.outCount,
+          aus);
     CHECK(!hevc_decoder_missing_refs(d), "decode order: %u references missing", hevc_decoder_missing_refs(d));
     hevc_decoder_destroy(d);
     printf("decode order: clip %c, %d pictures each out before its decode call returned\n", clip->name, aus);
@@ -461,7 +461,12 @@ static void testDecodeOrder(void)
 // is found as that layout, exact; a buffer left poisoned is "not written".
 static void testDisplayProbeCompare(void)
 {
-    enum { W = 64, H = 32, PITCH16 = 128 };
+    enum {
+        W = 64,
+        H = 32,
+        PITCH16 = 128
+    };
+
     static uint8_t ref[PITCH16 * H], display[PITCH16 * H * 3 / 2];
     for (uint32_t y = 0; y < H; y++)
         for (uint32_t x = 0; x < W; x++) {

@@ -60,7 +60,8 @@ struct CPUAsyncTimersTest: HWTest {
             let milliseconds = await waiter.wait(timeout: 2)
             task.cancel()
             metrics.set("\(clock.rawValue)_ms", milliseconds ?? -1)
-            checks.append(("\(clock.rawValue) 50 ms sleep completes within 500 ms", (40...500).contains(milliseconds ?? -1)))
+            checks.append(
+                ("\(clock.rawValue) 50 ms sleep completes within 500 ms", (40...500).contains(milliseconds ?? -1)))
         }
 
         let cancelled = Waiter<Bool>()

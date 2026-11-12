@@ -23,7 +23,8 @@ TEST(GM20BSpanNotes, TheLineGivesTheJobAndTheNotesOldestFirstThenStartsAgain)
 	add(n, "backboardd", "31000 us PBGRAXmw_A3Xghfc k64ed02fd5d7a1865 50401 instr x1 921k");
 	add(n, "backboardd", "6000 us pass prologue k0000000000000000 0 instr x1 3686km");
 	EXPECT_EQ(take(n, 680'400'000),
-		  "job_max_us=680400 sync_subs=0 spans=2; backboardd: 31000 us PBGRAXmw_A3Xghfc k64ed02fd5d7a1865 50401 instr x1 921k; "
+		  "job_max_us=680400 sync_subs=0 spans=2; backboardd: 31000 us PBGRAXmw_A3Xghfc "
+		  "k64ed02fd5d7a1865 50401 instr x1 921k; "
 		  "backboardd: 6000 us pass prologue k0000000000000000 0 instr x1 3686km");
 	EXPECT_EQ(take(n, 0), "job_max_us=0 sync_subs=0 spans=0");
 }
@@ -56,5 +57,6 @@ TEST(GM20BSpanNotes, ALongOwnerOrTextIsCut)
 	add(n, "anownernamelongerthansixteen", std::string(200, 'x').c_str());
 	const std::string line = take(n, 0);
 	EXPECT_NE(line.find("; anownernamelonge: "), std::string::npos);
-	EXPECT_EQ(line.size(), std::string("job_max_us=0 sync_subs=0 spans=1; anownernamelonge: ").size() + 111);
+	EXPECT_EQ(line.size(),
+		  std::string("job_max_us=0 sync_subs=0 spans=1; anownernamelonge: ").size() + 111);
 }

@@ -135,14 +135,15 @@ enum X1RawProbes {
             ("rotate_180", { (size - 1 - $0, size - 1 - $1) }), ("rotate_90", { ($1, size - 1 - $0) }),
             ("rotate_270", { (size - 1 - $1, $0) }),
         ]
-        let matched = transforms.first { _, map in
-            (0..<size).allSatisfy { y in
-                (0..<size).allSatisfy { x in
-                    let (sx, sy) = map(x, y)
-                    return pictures[1].pixel(x, y, width: size) == pictures[0].pixel(sx, sy, width: size)
+        let matched =
+            transforms.first { _, map in
+                (0..<size).allSatisfy { y in
+                    (0..<size).allSatisfy { x in
+                        let (sx, sy) = map(x, y)
+                        return pictures[1].pixel(x, y, width: size) == pictures[0].pixel(sx, sy, width: size)
+                    }
                 }
-            }
-        }?.0 ?? "none"
+            }?.0 ?? "none"
         var metrics = Metrics()
         metrics.set("matched", matched)
         let exchanged = matched == "transpose" || matched == "anti_transpose"

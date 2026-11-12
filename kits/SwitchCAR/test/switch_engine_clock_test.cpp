@@ -79,7 +79,8 @@ extern "C" uint32_t switch_mmio_model_read32(uintptr_t address)
 {
     std::lock_guard<std::mutex> hold(gModel.mutex);
     uint32_t value = gModel.registers[address];
-    for (auto [pllBase, misc0, misc1] : {std::tuple{kC2Base, kC2Misc0, kC2Misc1}, std::tuple{kC3Base, kC3Misc0, kC3Misc1}}) {
+    for (auto [pllBase, misc0, misc1] :
+         {std::tuple{kC2Base, kC2Misc0, kC2Misc1}, std::tuple{kC3Base, kC3Misc0, kC3Misc1}}) {
         if (address == pllBase && (value & kEnable) && !(gModel.registers[misc0] & kReset) &&
             !(gModel.registers[misc1] & kIddq) && gModel.locks)
             value |= kLock;
@@ -193,9 +194,9 @@ TEST(SwitchEngineClock, BringsPllc3UpInL4TsOrderOnce)
     EXPECT_EQ(switch_engine_clock_source(SWITCH_ENGINE_BUS_C3, &khz), SWITCH_ENGINE_SOURCE_PLLC3);
     EXPECT_EQ(khz, 460800u);
     const std::vector<std::pair<uintptr_t, uint32_t>> expected = {
-        {kC3Base + 0x4, 0x40080000}, {kC3Base + 0x8, 0x08000000}, {kC3Base + 0xc, 0x1f720f05},
-        {kC3Base + 0x10, 0x000000c4}, {kC3Base, base(1, 48)},      {kC3Base + 0x8, 0x00000000},
-        {kC3Base + 0x4, 0x00080000}, {kC3Base, base(1, 48) | kEnable}};
+        {kC3Base + 0x4, 0x40080000},  {kC3Base + 0x8, 0x08000000},     {kC3Base + 0xc, 0x1f720f05},
+        {kC3Base + 0x10, 0x000000c4}, {kC3Base, base(1, 48)},          {kC3Base + 0x8, 0x00000000},
+        {kC3Base + 0x4, 0x00080000},  {kC3Base, base(1, 48) | kEnable}};
     EXPECT_EQ(pllWrites(kC3Base, kC3Base + 0x10), expected);
     EXPECT_NE(lines().find("PLLC3 for NVDEC and NVENC: 460800 kHz, L4T's 637 mV point (BASE 0 as found"),
               std::string::npos)
@@ -255,7 +256,8 @@ TEST(SwitchEngineClock, NoLockPutsThePllBackOff)
 
 TEST(SwitchEngineClock, ProcessZeroAndOtherChipsStayOnPllp)
 {
-    for (auto [speedo, hidrev] : {std::pair{1500, kB01}, std::pair{1698, (0x21u << 8) | (1u << 4)}, std::pair{0, kB01}}) {
+    for (auto [speedo, hidrev] :
+         {std::pair{1500, kB01}, std::pair{1698, (0x21u << 8) | (1u << 4)}, std::pair{0, kB01}}) {
         reset(speedo, hidrev);
         uint32_t khz = 0;
         EXPECT_EQ(switch_engine_clock_source(SWITCH_ENGINE_BUS_C3, &khz), SWITCH_ENGINE_SOURCE_PLLP);

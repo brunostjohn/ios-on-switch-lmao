@@ -29,8 +29,9 @@ struct switch_gpu_preempt_counts {
 	uint32_t bucket[SWITCH_GPU_PREEMPT_BUCKETS];
 };
 
-static inline enum switch_gpu_landing switch_gpu_preempt_landing(const struct switch_gpu_batch_release *last,
-								 uint64_t asked_pt, uint64_t start_pt)
+static inline enum switch_gpu_landing
+switch_gpu_preempt_landing(const struct switch_gpu_batch_release *last, uint64_t asked_pt,
+			   uint64_t start_pt)
 {
 	if (!last->end_pt || last->end_pt < asked_pt || last->end_pt > start_pt)
 		return SWITCH_GPU_LANDED_UNKNOWN;

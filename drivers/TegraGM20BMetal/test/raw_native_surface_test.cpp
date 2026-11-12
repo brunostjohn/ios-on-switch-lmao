@@ -13,10 +13,20 @@
 #include <vector>
 
 namespace raw {
-namespace fx { constexpr unsigned kTexTwoD = 2; }
+namespace fx {
+constexpr unsigned kTexTwoD = 2;
+}
 struct NativeSurface;
-struct Bo { uint64_t handle = 0, va = 0, bytes = 0; };
-struct Import { Bo bo; NativeSurface *native = nullptr; };
+
+struct Bo {
+    uint64_t handle = 0, va = 0, bytes = 0;
+};
+
+struct Import {
+    Bo bo;
+    NativeSurface *native = nullptr;
+};
+
 struct Texture {
     Import *import = nullptr;
     void *chain = nullptr;
@@ -27,6 +37,7 @@ struct Texture {
     bool blockLinear = false, renderable = false;
     uint8_t swizzle[4] = {2, 3, 4, 5};
 };
+
 struct NativeSurface {
     Bo bo;
     TegraGM20BAbiNativeSurfaceViewReply layout = {};
@@ -36,6 +47,7 @@ struct NativeSurface {
     uint32_t lastUse = 0, encodingReferences = 0;
     bool cached = true;
 };
+
 struct Kernel {
     TegraGM20BAbiNativeSurfaceViewReply next = {};
     int result = KERN_SUCCESS;
@@ -46,6 +58,7 @@ struct Kernel {
     {
         return views;
     }
+
     int nativeSurfaceView(const Bo &, Bo &bo, TegraGM20BAbiNativeSurfaceViewReply &layout)
     {
         ++queries;
@@ -53,8 +66,14 @@ struct Kernel {
         bo = {next.handle, next.handle << 24, next.bytes};
         return result;
     }
-    void free(Bo &bo) { ++frees; bo = {}; }
+
+    void free(Bo &bo)
+    {
+        ++frees;
+        bo = {};
+    }
 };
+
 bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &out)
 {
     out = {};
@@ -64,6 +83,7 @@ bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &out)
     out.bpp = format == 30 ? 2 : 1;
     return true;
 }
+
 struct Device {
     Kernel k_;
     raw::Mutex lock_;
@@ -72,14 +92,36 @@ struct Device {
     std::map<unsigned, Import *> surfaces_;
     uint64_t nativeGeneration_ = 0, currentGeneration = 1;
     uint32_t completed = 0, nextTic = 0, freedTics = 0, writes = 0;
-    uint32_t allocTic() { return ++nextTic; }
-    void freeTic(uint32_t) { ++freedTics; }
-    void writeTic(const Texture &) { ++writes; }
-    bool done(uint32_t sequence) const { return !sequence || int32_t(completed - sequence) >= 0; }
-    uint64_t channelGeneration() const { return currentGeneration; }
+
+    uint32_t allocTic()
+    {
+        return ++nextTic;
+    }
+
+    void freeTic(uint32_t)
+    {
+        ++freedTics;
+    }
+
+    void writeTic(const Texture &)
+    {
+        ++writes;
+    }
+
+    bool done(uint32_t sequence) const
+    {
+        return !sequence || int32_t(completed - sequence) >= 0;
+    }
+
+    uint64_t channelGeneration() const
+    {
+        return currentGeneration;
+    }
+
     const Texture *nativeRead(const Texture &, NativeSurface *&, int &);
     void reapNativeSurfaces(bool = false);
 };
+
 struct CommandBuffer {
     Device *dev_ = nullptr;
     int nativeError = 0;
@@ -91,11 +133,17 @@ struct CommandBuffer {
     void invalidateNativeReads();
     void releaseNativeReads();
 };
+
 struct RenderEncoder {
     CommandBuffer *cb_ = nullptr;
     const Texture *textures_[16] = {};
     unsigned dirties = 0;
-    void invalidateDescriptors() { ++dirties; }
+
+    void invalidateDescriptors()
+    {
+        ++dirties;
+    }
+
     void setTexture(uint32_t, const Texture *);
 };
 }  // namespace raw
@@ -117,12 +165,14 @@ TegraGM20BAbiNativeSurfaceViewReply layout(uint32_t kind = TGM_LAYOUT_KIND)
     out.bytes = out.planes[0].bytes + out.planes[1].bytes;
     return out;
 }
+
 class RawNativeSurface : public ::testing::Test {
 protected:
     raw::Device device;
     raw::Import source;
     raw::Texture y;
     raw::CommandBuffer cb;
+
     void SetUp() override
     {
         device.k_.next = layout();

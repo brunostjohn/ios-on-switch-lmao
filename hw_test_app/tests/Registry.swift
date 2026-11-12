@@ -15,7 +15,8 @@ public enum Registry {
         BlendKillTest(), Float32FilterTest(), SurfaceBufferTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(),
         MipCandidatesTest(),
         VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(),
-        CompileSharedTest(), CompileFirstDrawTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(), ResolveCostTest(),
+        CompileSharedTest(), CompileFirstDrawTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(),
+        ResolveCostTest(),
         MsaaFirstUseTest(), StoredDepthTest(),
         ResolveTwodTest(), FillTextureTest(), StorageCompressedTest(), PredicationTest(), MPSControlFlowTest(),
         EventReleaseTest(), CoherenceRewriteTest(),
@@ -39,11 +40,12 @@ public enum Registry {
         HeadsetTest(), MicrophoneTest(),
     ]
 
-    static let display: [any HWTest] = [
-        DisplayModeTest(), DisplayPacingTest(), CompletionFlipTest(), MediaCompletionFlipTest(), BrightnessTest(),
-        ColourPipelineTest(), PlanesTest(), SmallDrawableTest(), PresentAtTimeTest(), PlaneInUseTest(),
-        ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
-    ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
+    static let display: [any HWTest] =
+        [
+            DisplayModeTest(), DisplayPacingTest(), CompletionFlipTest(), MediaCompletionFlipTest(), BrightnessTest(),
+            ColourPipelineTest(), PlanesTest(), SmallDrawableTest(), PresentAtTimeTest(), PlaneInUseTest(),
+            ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
+        ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),

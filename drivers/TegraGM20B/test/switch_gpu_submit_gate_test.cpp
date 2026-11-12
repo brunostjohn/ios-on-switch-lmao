@@ -119,54 +119,55 @@ TEST(SubmitGate, ConcurrentChannelsCannotOverlapMutations)
 
 TEST(SubmitGate, MutationReservationSurvivesDroppingConnectionLock)
 {
-    IOLock lock;
-    SwitchGpuSubmitGate gate;
-    IOLockLock(&lock);
-    ASSERT_TRUE(gate.beginMutation(&lock));
-    IOLockUnlock(&lock);
-    std::atomic<unsigned> admitted{0};
-    auto submit = std::async(std::launch::async, [&] {
-        IOLockLock(&lock);
-        REQUIRE(gate.enter(&lock));
-        ++admitted;
-        gate.leave(&lock);
-        IOLockUnlock(&lock);
-    });
-    auto mutation = std::async(std::launch::async, [&] {
-        IOLockLock(&lock);
-        REQUIRE(gate.beginMutation(&lock));
-        ++admitted;
-        gate.endMutation(&lock);
-        IOLockUnlock(&lock);
-    });
-    EXPECT_EQ(submit.wait_for(10ms), std::future_status::timeout);
-    EXPECT_EQ(mutation.wait_for(10ms), std::future_status::timeout);
-    EXPECT_EQ(admitted.load(), 0u);
-    IOLockLock(&lock);
-    gate.endMutation(&lock);
-    IOLockUnlock(&lock);
-    submit.get(); mutation.get();
-    EXPECT_EQ(admitted.load(), 2u);
+	IOLock lock;
+	SwitchGpuSubmitGate gate;
+	IOLockLock(&lock);
+	ASSERT_TRUE(gate.beginMutation(&lock));
+	IOLockUnlock(&lock);
+	std::atomic<unsigned> admitted{0};
+	auto submit = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		REQUIRE(gate.enter(&lock));
+		++admitted;
+		gate.leave(&lock);
+		IOLockUnlock(&lock);
+	});
+	auto mutation = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		REQUIRE(gate.beginMutation(&lock));
+		++admitted;
+		gate.endMutation(&lock);
+		IOLockUnlock(&lock);
+	});
+	EXPECT_EQ(submit.wait_for(10ms), std::future_status::timeout);
+	EXPECT_EQ(mutation.wait_for(10ms), std::future_status::timeout);
+	EXPECT_EQ(admitted.load(), 0u);
+	IOLockLock(&lock);
+	gate.endMutation(&lock);
+	IOLockUnlock(&lock);
+	submit.get();
+	mutation.get();
+	EXPECT_EQ(admitted.load(), 2u);
 }
 
 TEST(SubmitGate, CloseWaitsForAnUnlockedMutationToFinish)
 {
-    IOLock lock;
-    SwitchGpuSubmitGate gate;
-    IOLockLock(&lock);
-    ASSERT_TRUE(gate.beginMutation(&lock));
-    IOLockUnlock(&lock);
-    auto closing = std::async(std::launch::async, [&] {
-        IOLockLock(&lock);
-        gate.close(&lock);
-        IOLockUnlock(&lock);
-    });
-    EXPECT_EQ(closing.wait_for(10ms), std::future_status::timeout);
-    IOLockLock(&lock);
-    gate.endMutation(&lock);
-    IOLockUnlock(&lock);
-    EXPECT_EQ(closing.wait_for(2s), std::future_status::ready);
-    closing.get();
+	IOLock lock;
+	SwitchGpuSubmitGate gate;
+	IOLockLock(&lock);
+	ASSERT_TRUE(gate.beginMutation(&lock));
+	IOLockUnlock(&lock);
+	auto closing = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		gate.close(&lock);
+		IOLockUnlock(&lock);
+	});
+	EXPECT_EQ(closing.wait_for(10ms), std::future_status::timeout);
+	IOLockLock(&lock);
+	gate.endMutation(&lock);
+	IOLockUnlock(&lock);
+	EXPECT_EQ(closing.wait_for(2s), std::future_status::ready);
+	closing.get();
 }
 
 // SubmitJob's entry takes no lock: a mutation still waits for every submission inside, and wakes when the last leaves.
@@ -250,7 +251,8 @@ TEST(SubmitGate, ARefusedFastEntryWakesTheMutationItHeldAsleep)
 		std::this_thread::sleep_for(5ms);
 	}
 	IOLockLock(&lock);
-	EXPECT_GE(sleeps, 3) << "the mutation looked again (and the refused submitter slept behind it)";
+	EXPECT_GE(sleeps, 3)
+		<< "the mutation looked again (and the refused submitter slept behind it)";
 	IOLockUnlock(&lock);
 	gate.leaveFast(&lock);
 	ASSERT_EQ(mutation.wait_for(2s), std::future_status::ready);

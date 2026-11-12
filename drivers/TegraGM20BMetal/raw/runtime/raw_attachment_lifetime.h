@@ -20,8 +20,8 @@ inline std::array<uint32_t, 8> transientColorTags(uint8_t scratch)
 
 template <class Texture> bool fusionTargetEligible(const Texture &texture, uint64_t level)
 {
-    return texture.va && !texture.memoryless && !texture.sampled && !texture.standIn &&
-           !texture.planarStandIn && !texture.converted() && !level;
+    return texture.va && !texture.memoryless && !texture.sampled && !texture.standIn && !texture.planarStandIn &&
+           !texture.converted() && !level;
 }
 
 template <class Texture> uint64_t fusionImageBytes(const Texture &texture)
@@ -37,17 +37,17 @@ template <class Texture> uint64_t fusionImageBytes(const Texture &texture)
 
 // A CE shadow cannot use a compressed binding left by a prior memoryless pass.
 inline bool backingCompressionMatches(bool compressed, const void *memory, const void *latest,
-                                       bool compressionRequested)
+                                      bool compressionRequested)
 {
     return compressionRequested ? compressed && memory == latest : !compressed;
 }
 
-template <class Clears> bool attachmentStartsCleared(uint32_t target, uint32_t width, uint32_t height,
-                                                     const Clears &clears)
+template <class Clears>
+bool attachmentStartsCleared(uint32_t target, uint32_t width, uint32_t height, const Clears &clears)
 {
     return std::any_of(clears.begin(), clears.end(), [&](const auto &clear) {
         return clear.target == target && !clear.x0 && !clear.y0 && clear.x1 >= width && clear.y1 >= height;
     });
 }
 
-} // namespace raw
+}  // namespace raw

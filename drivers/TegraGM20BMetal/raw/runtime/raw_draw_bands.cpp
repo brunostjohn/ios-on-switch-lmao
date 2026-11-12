@@ -39,7 +39,11 @@ bool RenderEncoder::measureDraw(uint64_t units, DrawTiming &t)
         !measure(emitted_->bandRate, units))
         return false;
     const uint32_t n = dev_->drawStamps_.fetch_add(1, std::memory_order_relaxed);
-    t = {&emitted_->bandRate, units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, emitted_->rec ? emitted_->rec->keyHash : 0,
+    t = {&emitted_->bandRate,
+         units,
+         n % kDrawStampSlots,
+         n + 1 ? n + 1 : 1,
+         emitted_->rec ? emitted_->rec->keyHash : 0,
          emitted_->fragmentInstructions};
     return true;
 }

@@ -171,7 +171,8 @@ TEST_F(Events, VicSemanticAdapterKeepsIndependentJobOutcomes)
     auto *ra = Results::allocate(), *rb = Results::allocate();
     ASSERT_EQ(Results::prepare(ra, 1, 1, &first), 0);
     ASSERT_EQ(Results::prepare(rb, 2, 2, &second), 0);
-    tokens[key(first)] = {}; tokens[key(second)] = {};
+    tokens[key(first)] = {};
+    tokens[key(second)] = {};
     auto *a = batch(nullptr, first), *b = batch(nullptr, second);
     SwitchVICSemantic *node = nullptr;
     ASSERT_EQ(switch_vic_semantics_bind(a, &first, &node), 0);
@@ -196,7 +197,8 @@ TEST_F(Events, VicSemanticAdapterKeepsIndependentJobOutcomes)
     EXPECT_EQ(std::count(retired.begin(), retired.end(), b), 1);
     EXPECT_FALSE(registered.pending());
     EXPECT_EQ(registered.snapshot(&second, &captured), 0);
-    Results::complete(&ra, 0); Results::complete(&rb, 0);
+    Results::complete(&ra, 0);
+    Results::complete(&rb, 0);
     switch_gpu_event_waits_release(&a);
     switch_gpu_event_waits_release(&b);
     pump();
@@ -207,7 +209,9 @@ TEST_F(Events, IntermediateVicStageWaitsWithoutPublishingFinalRequestSignal)
     auto source = token(), vic = token(), copyback = token();
     signal(3, source);
     TegraVICRequest request = {};
-    request.src_event_port = port; request.src_wait = 3; request.src_signal = 4;
+    request.src_event_port = port;
+    request.src_wait = 3;
+    request.src_signal = 4;
     auto &notice = makeNotices();
     SwitchVICEvents *work = nullptr, *stage = nullptr;
     ASSERT_EQ(switch_vic_events_create(this, request, ready, &notice, &work), 0);
@@ -217,7 +221,8 @@ TEST_F(Events, IntermediateVicStageWaitsWithoutPublishingFinalRequestSignal)
     auto *intermediate = switch_vic_events_batch(stage);
     ASSERT_EQ(switch_gpu_event_waits_bind(intermediate, &vic), 0);
     ASSERT_EQ(switch_vic_events_bind(stage, &vic), 0);
-    commit(intermediate); switch_vic_events_commit(stage);
+    commit(intermediate);
+    switch_vic_events_commit(stage);
     finish(vic);
     EXPECT_EQ(native->value, 0u);
     finish(source);

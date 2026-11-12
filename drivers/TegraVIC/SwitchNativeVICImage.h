@@ -16,15 +16,16 @@ static inline const char *switch_native_vic_image(const SwitchNativeSurfaceView 
     result.width = layout.planes[0].width;
     result.height = layout.planes[0].height;
     result.standard = layout.color_matrix ? layout.color_matrix - 1 : TEGRA_VIC_YCC_601;
-    result.transfer = layout.transfer; result.primaries = layout.primaries;
+    result.transfer = layout.transfer;
+    result.primaries = layout.primaries;
     if (!switch_surface_chroma_site(layout.chroma_top, layout.chroma_bottom, &result.chromaSite))
         return "native VIC chroma location";
     result.blockLinear = 1;
     result.blockHeightLog2 = layout.planes[0].block_height_log2;
     for (uint32_t plane = 0; plane < 2; ++plane) {
         const auto &source = layout.planes[plane];
-        if (source.layout != SWITCH_GPU_BACKING_BLOCK_LINEAR ||
-            source.block_height_log2 != result.blockHeightLog2 || source.offset > UINT64_MAX - address)
+        if (source.layout != SWITCH_GPU_BACKING_BLOCK_LINEAR || source.block_height_log2 != result.blockHeightLog2 ||
+            source.offset > UINT64_MAX - address)
             return "native VIC plane layout";
         result.base[plane] = address + source.offset;
         result.pitch[plane] = source.pitch;

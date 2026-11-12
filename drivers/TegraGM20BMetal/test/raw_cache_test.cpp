@@ -52,10 +52,10 @@ TEST(RenderCacheKey, LinkedStageAndDescriptorOrderRemainSignificant)
     const std::vector<raw::LinkedStageAir> linked{{'v', first}, {'f', second}};
     const auto key = raw::renderCacheKey(0x53, "descriptor", vertex, fragment, linked, false);
     EXPECT_EQ(key.key, "descriptor | linked v0000000000000001 f0000000000000002");
-    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment,
-                                              {{'f', second}, {'v', first}}, false).name());
-    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment,
-                                              {{'f', first}, {'f', second}}, false).name());
+    EXPECT_NE(key.name(),
+              raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {{'f', second}, {'v', first}}, false).name());
+    EXPECT_NE(key.name(),
+              raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {{'f', first}, {'f', second}}, false).name());
 }
 
 TEST(RenderCacheKey, ConstructionDoesNotAppendSuffixesToTheInput)
@@ -363,7 +363,9 @@ TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
         maximum = std::max(maximum, ++active);
         ++entered;
         changed.notify_all();
-        changed.wait(guard, [&] { return release; });
+        changed.wait(guard, [&] {
+            return release;
+        });
         --active;
     };
     raw::Compiler compiler(nullptr, [&](const raw::CacheKey &, raw::RuntimeRecord &record, std::string &) {
@@ -375,7 +377,9 @@ TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
     compiler.enqueue(work);
     {
         std::unique_lock<std::mutex> guard(lock);
-        EXPECT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] { return entered == 2; }));
+        EXPECT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return entered == 2;
+        }));
     }
     raw::CacheKey key;
     key.key = "render-after-compute";
@@ -383,7 +387,9 @@ TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
     compiler.enqueue(work);
     {
         std::unique_lock<std::mutex> guard(lock);
-        EXPECT_FALSE(changed.wait_for(guard, std::chrono::milliseconds(50), [&] { return entered > 2; }));
+        EXPECT_FALSE(changed.wait_for(guard, std::chrono::milliseconds(50), [&] {
+            return entered > 2;
+        }));
         release = true;
         changed.notify_all();
     }
@@ -541,8 +547,8 @@ TEST(RawCompiler, AFixedPriorityCreationDoesNotWaitForASlot)
     std::thread creation([&] {
         sched_param param = {};
         param.sched_priority = 47;
-        fixedPriority = pthread_setschedparam(pthread_self(), SCHED_RR, &param) == 0 &&
-                        qos_class_self() == QOS_CLASS_UNSPECIFIED;
+        fixedPriority =
+            pthread_setschedparam(pthread_self(), SCHED_RR, &param) == 0 && qos_class_self() == QOS_CLASS_UNSPECIFIED;
         if (!fixedPriority)
             return;
         raw::RuntimeRecord record;

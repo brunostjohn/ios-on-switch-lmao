@@ -5,6 +5,7 @@ struct SourceWait {
     SwitchNativeScanout read;
     int status;
 };
+
 SourceWait *sourceWait = nullptr;
 bool sourceWaitQueued = false;
 
@@ -60,7 +61,8 @@ int waitCopySource()
 {
     if (sourceWait->read.lease && switch_gpu_backing_promised(sourceWait->read.view.native))
         switch_native_scanout_release(&sourceWait->read);
-    const int error = sourceWait->read.lease ? 0 : switch_native_scanout_pitch_cpu(sourceWait->surface, &sourceWait->read);
+    const int error =
+        sourceWait->read.lease ? 0 : switch_native_scanout_pitch_cpu(sourceWait->surface, &sourceWait->read);
     if (error)
         return error;
     const auto &producer = sourceWait->read.view.producer;
@@ -116,5 +118,6 @@ void sourceWaitWork()
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             static_cast<NativeLegacyDisplay *>(owner)->sourceWaitFinished();
             return kIOReturnSuccess;
-        }, this);
+        },
+        this);
 }

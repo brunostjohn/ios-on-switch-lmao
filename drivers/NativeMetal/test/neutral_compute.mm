@@ -35,7 +35,9 @@ static bool record(const NmbDirectKernel *kernel, void *context)
         const unsigned offset = layout.offset + write.element * layout.stride;
         const auto *begin = result.kernel.entry, *end = begin + result.kernel.entries;
         auto entry = [&](unsigned kind) {
-            return std::find_if(begin, end, [&](const auto &e) { return e.offset == offset && e.kind == kind; });
+            return std::find_if(begin, end, [&](const auto &e) {
+                return e.offset == offset && e.kind == kind;
+            });
         };
         if (write.type == raw::SampledImage || write.type == raw::StorageImage ||
             write.type == raw::CombinedImageSampler) {
@@ -50,8 +52,7 @@ static bool record(const NmbDirectKernel *kernel, void *context)
         if (write.type == raw::Sampler || write.type == raw::CombinedImageSampler) {
             ++samplers;
             const auto *sampler = entry(raw::KernelSampler);
-            if (sampler == end || !(sampler->slot & 0x80) ||
-                (sampler->slot & 0x7f) >= result.samplers.size())
+            if (sampler == end || !(sampler->slot & 0x80) || (sampler->slot & 0x7f) >= result.samplers.size())
                 return false;
         }
     }
@@ -77,8 +78,13 @@ int main(int argc, char **argv)
                 auto *descriptor = [MTLComputePipelineDescriptor new];
                 descriptor.computeFunction = [library newFunctionWithName:@(name)];
                 bool depth = !strcmp(name, "neutral_compare");
-                NmbDirectBoundTexture texture = {0, depth ? MTLPixelFormatDepth32Float : MTLPixelFormatRGBA32Float,
-                    MTLTextureType2D, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite, 1, 1, 1};
+                NmbDirectBoundTexture texture = {0,
+                                                 depth ? MTLPixelFormatDepth32Float : MTLPixelFormatRGBA32Float,
+                                                 MTLTextureType2D,
+                                                 MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite,
+                                                 1,
+                                                 1,
+                                                 1};
                 NmbDirectDispatch dispatch = {};
                 dispatch.threads[0] = 32;
                 dispatch.threads[1] = dispatch.threads[2] = 1;
@@ -87,8 +93,8 @@ int main(int argc, char **argv)
                 Case test = {name, bound, depth || !strcmp(name, "neutral_sample")};
                 const char *why = nullptr;
                 bool made = native_bridge_metal_compute_direct(descriptor, &dispatch, record, &test, &why);
-                printf("%s %s texture=%s sampler=unbound%s%s\n", made && test.called ? "PASS" : "FAIL",
-                       name, bound ? "bound" : "unbound", why ? " reason=" : "", why ?: "");
+                printf("%s %s texture=%s sampler=unbound%s%s\n", made && test.called ? "PASS" : "FAIL", name,
+                       bound ? "bound" : "unbound", why ? " reason=" : "", why ?: "");
                 failures += !made || !test.called;
             }
         }

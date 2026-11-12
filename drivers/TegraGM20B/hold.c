@@ -53,7 +53,8 @@ static struct {
 	int pid[HOLD_CHIDS];
 	u32 n[HOLD_CHIDS];
 	u64 max_ns[HOLD_CHIDS];
-	struct switch_gpu_batch_release last[HOLD_CHIDS]; /* each app channel's last batch release (hold.lock) */
+	struct switch_gpu_batch_release
+		last[HOLD_CHIDS]; /* each app channel's last batch release (hold.lock) */
 	struct switch_gpu_preempt_counts counts[HOLD_CHIDS];
 } sampled;
 #endif
@@ -353,7 +354,8 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 		__atomic_fetch_add(&sampled.n[chid], 1, __ATOMIC_RELAXED);
 		if (sample > __atomic_load_n(&sampled.max_ns[chid], __ATOMIC_RELAXED))
 			__atomic_store_n(&sampled.max_ns[chid], sample, __ATOMIC_RELAXED);
-		sampled.counts[chid].landed[switch_gpu_preempt_landing(&sampled.last[chid], asked_pt, start_pt)]++;
+		sampled.counts[chid].landed[switch_gpu_preempt_landing(&sampled.last[chid],
+								       asked_pt, start_pt)]++;
 		sampled.counts[chid].bucket[switch_gpu_preempt_bucket(sample)]++;
 #endif
 	}
@@ -361,7 +363,8 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 }
 
 #if TGM_STATS
-void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns, struct switch_gpu_preempt_counts *counts)
+void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns,
+			   struct switch_gpu_preempt_counts *counts)
 {
 	unsigned long flags = 0;
 	unsigned int i = 0;

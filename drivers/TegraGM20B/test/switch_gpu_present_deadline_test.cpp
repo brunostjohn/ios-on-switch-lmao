@@ -56,7 +56,8 @@ TEST(PresentDeadline, AWakeQueuedBehindALongJobIsWaitedFor)
 	EXPECT_EQ(a.channel.fence, 41u);
 	EXPECT_EQ(d.deadline(0), Deadline::Follows);
 	EXPECT_EQ(d.followed, longEnd);
-	EXPECT_EQ(d.deadline(10 * kWakeGraceNs), Deadline::Follows) << "no grace while the GPU is short of it";
+	EXPECT_EQ(d.deadline(10 * kWakeGraceNs), Deadline::Follows)
+		<< "no grace while the GPU is short of it";
 	EXPECT_EQ(d.presented, 0u);
 	a.channel.run();
 	EXPECT_EQ(a.channel.interrupts, 1u);

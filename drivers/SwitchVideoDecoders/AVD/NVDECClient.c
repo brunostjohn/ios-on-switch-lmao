@@ -191,8 +191,8 @@ int switch_nvdec_recycle(void *context, uint32_t handle, uint64_t bytes, void **
         return 0;
     const TegraNVDECBuffer request = {handle, 0};
     TegraNVDECBufferReply reply = {0};
-    const int error = call(client, client->selector, SwitchNVDECMethodBufferRecycle,
-                            &request, sizeof(request), &reply, sizeof(reply));
+    const int error = call(client, client->selector, SwitchNVDECMethodBufferRecycle, &request, sizeof(request), &reply,
+                           sizeof(reply));
     if (error || reply.handle != handle || reply.reserved || reply.size < bytes || !reply.address)
         return -1;
     *address = (void *)(uintptr_t)reply.address;
@@ -281,8 +281,8 @@ bool nvdec_completions_on_port(const NVDECClient *c)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 bool nvdec_buffer_stats(const NVDECClient *c, SwitchNVDECBufferStats *stats)
 {
-    return c && nvdec_tunnel(c->connection, c->selector, SwitchNVDECMethodBufferStats, NULL, 0, stats, sizeof(*stats)) ==
-                    KERN_SUCCESS;
+    return c && nvdec_tunnel(c->connection, c->selector, SwitchNVDECMethodBufferStats, NULL, 0, stats,
+                             sizeof(*stats)) == KERN_SUCCESS;
 }
 #endif
 

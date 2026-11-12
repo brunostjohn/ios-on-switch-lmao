@@ -51,9 +51,10 @@ extension ResolveTwodTest {
         let timing = try await gpu.run { commands in
             draw(commands, pass(ms, into: into, load: .clear, store: .multisampleResolve), state)
             let blit = commands.makeBlitCommandEncoder()!
-            blit.copy(from: into, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                      sourceSize: MTLSize(width: Self.width, height: Self.height, depth: 1), to: out,
-                      destinationOffset: 0, destinationBytesPerRow: row, destinationBytesPerImage: row * Self.height)
+            blit.copy(
+                from: into, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: Self.width, height: Self.height, depth: 1), to: out,
+                destinationOffset: 0, destinationBytesPerRow: row, destinationBytesPerImage: row * Self.height)
             blit.endEncoding()
         }
         let after = RawFacade.counters(of: gpu.device)

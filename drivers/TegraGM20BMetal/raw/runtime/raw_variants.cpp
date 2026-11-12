@@ -49,8 +49,7 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
                                f < pl.variantCount[1] ? pl.variants[1][f].program : pp.fs};
     PlacedProgram placed[2];
     bool placedBoth = placePackProgram(index[0], placed[0]) && placePackProgram(index[1], placed[1]);
-    if (placedBoth &&
-        !slmNeed(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header)))) {
+    if (placedBoth && !slmNeed(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header)))) {
         stats.heapFull++;
         placedBoth = false;
     }

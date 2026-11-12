@@ -6,7 +6,10 @@
 #include "../SwitchVICTransform.cpp"
 #include "../SwitchVICTurn.cpp"
 
-struct SwitchVICMapping { uint64_t address; };
+struct SwitchVICMapping {
+    uint64_t address;
+};
+
 namespace {
 OSObject inputObject, outputObject;
 IOMemoryDescriptor inputMemory, outputMemory;
@@ -20,10 +23,27 @@ TegraVICJob submittedJob;
 std::vector<switch_gpu_backing_use> declaredUses;
 std::vector<switch_gpu_backing_guard> declaredGuards;
 }
-extern "C" const TegraVICTraits *tegra_vic_traits() { return &kTegraVICTraits; }
-extern "C" uint64_t tegra_vic_config_address() { return 0x80001000; }
-extern "C" uint64_t tegra_vic_filter_address() { return 0x80002000; }
-extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *) { return 0; }
+
+extern "C" const TegraVICTraits *tegra_vic_traits()
+{
+    return &kTegraVICTraits;
+}
+
+extern "C" uint64_t tegra_vic_config_address()
+{
+    return 0x80001000;
+}
+
+extern "C" uint64_t tegra_vic_filter_address()
+{
+    return 0x80002000;
+}
+
+extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *)
+{
+    return 0;
+}
+
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info)
 {
     static uint64_t pages[1] = {0x100000};
@@ -31,6 +51,7 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_bac
     info->pages = pages;
     info->page_count = 1024;
 }
+
 int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool)
 {
     ++gates;
@@ -41,12 +62,14 @@ int switch_vic_surface_access(const TegraVICSurface *surface, bool write, Switch
     access->guard = {access->backing, write ? &outputGeneration : &inputGeneration, 1};
     return 0;
 }
+
 void switch_vic_surface_unreserve(SwitchVICSurfaceAccess *access)
 {
     if (access->descriptor)
         --gates;
     access->descriptor = nullptr;
 }
+
 void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
 {
     switch_vic_surface_unreserve(access);
@@ -54,6 +77,7 @@ void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
         --access->backing->refs;
     *access = {};
 }
+
 int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool, bool)
 {
     if (!nativeInput)
@@ -77,6 +101,7 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
     ++inputPitch.refs;
     return 0;
 }
+
 void switch_native_surface_release(SwitchNativeSurfaceView *view)
 {
     if (view->owner) {
@@ -85,11 +110,13 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view)
     }
     *view = {};
 }
+
 SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *, bool write)
 {
     ++mappings;
     return new SwitchVICMapping{write ? 0x50000000u : 0x40000000u};
 }
+
 void switch_vic_mapping_release(SwitchVICMapping *mapping)
 {
     if (mapping) {
@@ -97,10 +124,15 @@ void switch_vic_mapping_release(SwitchVICMapping *mapping)
         delete mapping;
     }
 }
-uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping) { return mapping->address; }
+
+uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
+{
+    return mapping->address;
+}
+
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *,
-                               const SwitchVICOwnership &ownership,
-                               void (*completion)(void *, int), void *context, uint32_t *, SwitchVICEvents *)
+                              const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
+                              uint32_t *, SwitchVICEvents *)
 {
     EXPECT_EQ(count, 1u);
     EXPECT_GT(gates, 0);
@@ -117,6 +149,7 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
     }
     return 0;
 }
+
 namespace {
 unsigned publishedTurns = 0;
 }
@@ -158,6 +191,7 @@ class SwitchVICTransformTest : public testing::Test {
 protected:
     TegraVICSurface source = {}, destination = {};
     TegraVICPlan plan = {};
+
     void SetUp() override
     {
         nativeInput = true;
@@ -193,8 +227,18 @@ protected:
         plan.op[0].dstW = 1280;
         plan.op[0].dstH = 720;
     }
-    static void done(void *, int status) { EXPECT_EQ(status, 0); ++notifications; }
-    int submit() { return switch_vic_transform(&source, &destination, &plan, 0, done, nullptr); }
+
+    static void done(void *, int status)
+    {
+        EXPECT_EQ(status, 0);
+        ++notifications;
+    }
+
+    int submit()
+    {
+        return switch_vic_transform(&source, &destination, &plan, 0, done, nullptr);
+    }
+
     void TearDown() override
     {
         EXPECT_EQ(mappings, 0);
@@ -231,8 +275,12 @@ TEST_F(SwitchVICTransformTest, ACancelledJobsFailureReachesTheTransformsCaller)
 {
     static int heard;
     heard = 1;
-    ASSERT_EQ(switch_vic_transform(&source, &destination, &plan, 0,
-                                   [](void *, int status) { heard = status; }, nullptr),
+    ASSERT_EQ(switch_vic_transform(
+                  &source, &destination, &plan, 0,
+                  [](void *, int status) {
+                      heard = status;
+                  },
+                  nullptr),
               1);
     ASSERT_NE(pending, nullptr);
     pending(pendingContext, -5);

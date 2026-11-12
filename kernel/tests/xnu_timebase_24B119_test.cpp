@@ -28,8 +28,8 @@ std::array<uint8_t, SWITCH_TB_CHUNK_SIZE> StockChunk()
 TEST(XnuTimebase24B119, MappingRequiresThePinnedFileRangeAndAnAvailablePagerSlot)
 {
     EXPECT_TRUE(switch_tb_mapping(0x180400000, 0x7d34000, 0, 0));
-    EXPECT_TRUE(switch_tb_mapping(SWITCH_TB_PAGE_VMADDR, SWITCH_TB_PAGE_SIZE, SWITCH_TB_PAGE_FILEOFF,
-                                 SWITCH_TB_PAGE_FILEOFF));
+    EXPECT_TRUE(
+        switch_tb_mapping(SWITCH_TB_PAGE_VMADDR, SWITCH_TB_PAGE_SIZE, SWITCH_TB_PAGE_FILEOFF, SWITCH_TB_PAGE_FILEOFF));
     EXPECT_FALSE(switch_tb_mapping(0x180400000, 0x7d34000, 1, 0));
     EXPECT_FALSE(switch_tb_mapping(SWITCH_TB_PAGE_VMADDR + 1, SWITCH_TB_PAGE_SIZE, SWITCH_TB_PAGE_FILEOFF, 0));
     EXPECT_FALSE(switch_tb_mapping(SWITCH_TB_PAGE_VMADDR, SWITCH_TB_PAGE_SIZE - 1, SWITCH_TB_PAGE_FILEOFF, 0));
@@ -91,8 +91,8 @@ TEST(XnuTimebase24B119, OnlyTheConversionChangesAndAnyGuardMismatchLeavesTheWhol
 TEST(XnuTimebase24B119, ActualReplacementInstructionsMatchWideArithmeticAtBoundariesAndRandomUptimes)
 {
     constexpr size_t pageSize = 0x4000;
-    auto *code = static_cast<uint32_t *>(mmap(nullptr, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC,
-                                            MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0));
+    auto *code = static_cast<uint32_t *>(
+        mmap(nullptr, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0));
     ASSERT_NE(code, MAP_FAILED);
     pthread_jit_write_protect_np(0);
     std::memset(code, 0, pageSize);
@@ -115,8 +115,8 @@ TEST(XnuTimebase24B119, ActualReplacementInstructionsMatchWideArithmeticAtBounda
     for (uint64_t ns = 0; ns < 12500; ++ns) {
         check(ns);
     }
-    for (uint64_t ns : {UINT64_C(60'050'000'000), UINT64_C(3'600'050'000'000), UINT64_MAX / 3,
-                       UINT64_MAX / 3 + 1, UINT64_MAX / 2 - 1, UINT64_MAX / 2, UINT64_MAX}) {
+    for (uint64_t ns : {UINT64_C(60'050'000'000), UINT64_C(3'600'050'000'000), UINT64_MAX / 3, UINT64_MAX / 3 + 1,
+                        UINT64_MAX / 2 - 1, UINT64_MAX / 2, UINT64_MAX}) {
         check(ns);
     }
     std::mt19937_64 random(0x19200000);

@@ -74,8 +74,8 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
         variants += std::string(i ? ", " : "") + "{\"stage\": " + (i < rec.pipeline.variantCount[0] ? "0" : "1") +
                     ", \"assume\": " + std::to_string(v.assume) + ", \"gprs\": " + std::to_string(v.program.gprs) +
-                    ", \"bound_textures\": " + std::to_string(v.program.boundTextures) +
-                    ", \"code\": \"" + hexOf(v.program.image) + "\"}";
+                    ", \"bound_textures\": " + std::to_string(v.program.boundTextures) + ", \"code\": \"" +
+                    hexOf(v.program.image) + "\"}";
     }
     fprintf(f,
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "

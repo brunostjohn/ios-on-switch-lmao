@@ -235,13 +235,11 @@ void signalBetweenPasses()
     const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
     ASSERT_TRUE(device != nil && library != nil);
     NSError *error = nil;
-    id<MTLRenderPipelineState> state = [device newRenderPipelineStateWithDescriptor:descriptor(library, kPacked)
-                                                                              error:&error];
+    id<MTLRenderPipelineState> state =
+        [device newRenderPipelineStateWithDescriptor:descriptor(library, kPacked) error:&error];
     ASSERT_TRUE(state != nil) << text(error);
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kPacked
-                                                                                  width:64
-                                                                                 height:64
-                                                                              mipmapped:NO];
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kPacked width:64 height:64 mipmapped:NO];
     td.storageMode = MTLStorageModePrivate;
     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     id<MTLTexture> target = [device newTextureWithDescriptor:td];
@@ -292,8 +290,8 @@ void fenceAndArchive()
     EXPECT_STREQ(object_getClassName(fence), "RMFence");
     EXPECT_EQ(fence.device, device);
     NSError *error = nil;
-    id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new]
-                                                                    error:&error];
+    id<MTLBinaryArchive> archive =
+        [device newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new] error:&error];
     ASSERT_TRUE(archive != nil) << error.localizedDescription.UTF8String;
     EXPECT_STREQ(object_getClassName(archive), "RMBinaryArchive");
     EXPECT_EQ(archive.device, device);

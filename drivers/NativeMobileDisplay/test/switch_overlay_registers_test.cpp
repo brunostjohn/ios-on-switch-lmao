@@ -123,9 +123,16 @@ struct Display {
 
 #include "../SwitchLandscapeState.h"
 
-    bool landscapeHolds(PlaneSet &) { return false; }
-    void landscapeLeaveNow(const char *) {}
-    void landscapeAbandonWant() {}
+    bool landscapeHolds(PlaneSet &)
+    {
+        return false;
+    }
+
+    void landscapeLeaveNow(const char *)
+    {}
+
+    void landscapeAbandonWant()
+    {}
 
     void withdrawCompletionFlip()
     {
@@ -646,10 +653,11 @@ TEST(OverlayRegisters, ResumeRewritesBothAcceptedWindowsBeforeRestart)
     display.planesResume();
     EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], native_planes::kWinEnable);
     EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kOptions], native_planes::kWinEnable);
-    EXPECT_EQ(display.dc[Display::kDcStateControl], Display::kGeneralActReq | Display::kWinAActReq |
-              Display::kWinBActReq | Display::kWinCActReq);
+    EXPECT_EQ(display.dc[Display::kDcStateControl],
+              Display::kGeneralActReq | Display::kWinAActReq | Display::kWinBActReq | Display::kWinCActReq);
     EXPECT_TRUE(display.planeRegistersMatch(display.planeSetOf(display.planeLatch.active)));
 }
+
 TEST(OverlayRegisters, ResumeReservationFailureResumesTheOverlaysOffAndTheUiAlone)
 {
     Display display;
@@ -690,13 +698,16 @@ TEST(OverlayRegisters, SuspendDuringRecoveryRestoresTargetWithoutAnOffOnlyFirstF
     display.latch();
     EXPECT_TRUE(display.planeLatch.uses(1));
 }
+
 TEST(OverlayRegisters, ResumeFailureDuringRecoveryKeepsItsSwapsAndArmsTheOffTarget)
 {
     Display display;
     ASSERT_TRUE(display.stage(video(native_planes::kBt709)));
-    display.latch(); display.beginPlaneRecovery("test");
+    display.latch();
+    display.beginPlaneRecovery("test");
     display.planeRecoveryTarget.pendingSeq = 7;
-    display.registers.fill(0); display.displayMemory.invalidate();
+    display.registers.fill(0);
+    display.displayMemory.invalidate();
     EXPECT_NO_THROW(display.planesResume());
     EXPECT_FALSE(display.planeRecovering);
     ASSERT_TRUE(display.planeLatch.requested());

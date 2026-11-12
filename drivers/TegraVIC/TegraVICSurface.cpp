@@ -51,7 +51,8 @@ const OSSymbol *gTransferKey, *gPrimariesKey, *gChromaTopKey, *gChromaBottomKey;
 
 uint32_t colorTag(OSObject *surface, const OSSymbol *key, uint32_t (*parse)(const char *))
 {
-    if (!key) return UINT32_MAX;
+    if (!key)
+        return UINT32_MAX;
     uint32_t seed = 0;
     OSObject *value = switch_surface_copy_value(surface, key, &seed);
     auto *name = OSDynamicCast(OSString, value);
@@ -67,8 +68,8 @@ uint32_t colorMatrix(OSObject *surface)
     uint32_t seed = 0;
     OSObject *value = switch_surface_copy_value(surface, gMatrixKey, &seed);
     auto *name = OSDynamicCast(OSString, value);
-    const uint32_t matrix = value && !name ? uint32_t(SWITCH_VIC_MATRIX_UNSUPPORTED) :
-                            switch_vic_matrix_tag(name ? name->getCStringNoCopy() : nullptr);
+    const uint32_t matrix = value && !name ? uint32_t(SWITCH_VIC_MATRIX_UNSUPPORTED)
+                                           : switch_vic_matrix_tag(name ? name->getCStringNoCopy() : nullptr);
     OSSafeReleaseNULL(value);
     return matrix;
 }
@@ -104,8 +105,11 @@ extern "C" bool tegra_vic_surface_start(void)
         gChromaTopKey = OSSymbol::withCStringNoCopy("IOSurfaceChromaLocationTopField");
         gChromaBottomKey = OSSymbol::withCStringNoCopy("IOSurfaceChromaLocationBottomField");
         if (!gMatrixKey || !gTransferKey || !gPrimariesKey || !gChromaTopKey || !gChromaBottomKey) {
-            OSSafeReleaseNULL(gMatrixKey); OSSafeReleaseNULL(gTransferKey); OSSafeReleaseNULL(gPrimariesKey);
-            OSSafeReleaseNULL(gChromaTopKey); OSSafeReleaseNULL(gChromaBottomKey);
+            OSSafeReleaseNULL(gMatrixKey);
+            OSSafeReleaseNULL(gTransferKey);
+            OSSafeReleaseNULL(gPrimariesKey);
+            OSSafeReleaseNULL(gChromaTopKey);
+            OSSafeReleaseNULL(gChromaBottomKey);
             root->release();
             return false;
         }

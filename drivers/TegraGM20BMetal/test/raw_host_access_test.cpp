@@ -11,15 +11,21 @@ struct Call {
     uint32_t access;
     bool acquire;
 };
+
 std::vector<Call> calls;
 bool acquireFails, releaseFails;
 uint32_t reports;
 std::array<uint8_t, 128> cpu, memory;
-} // namespace
+}  // namespace
 
 namespace raw {
 Kernel::~Kernel() = default;
-void reportCpuReleaseFailure() { ++reports; }
+
+void reportCpuReleaseFailure()
+{
+    ++reports;
+}
+
 bool Kernel::cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire)
 {
     calls.push_back({bo.handle, offset, bytes, access, acquire});
@@ -32,12 +38,13 @@ bool Kernel::cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t a
         std::memcpy(memory.data() + begin, cpu.data() + begin, end - begin);
     return true;
 }
-} // namespace raw
+}  // namespace raw
 
 class RawHostAccess : public testing::Test {
 protected:
     raw::Kernel kernel;
     raw::Bo bo;
+
     void SetUp() override
     {
         calls.clear();

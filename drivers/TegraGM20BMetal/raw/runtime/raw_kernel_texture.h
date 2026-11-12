@@ -6,8 +6,7 @@
 
 namespace raw {
 
-template <typename Texture>
-constexpr bool kernelSamplesInPlace(const Texture &x)
+template <typename Texture> constexpr bool kernelSamplesInPlace(const Texture &x)
 {
     return x.tic && !x.converted() && !x.standIn && (!x.sampled || x.surfaceView) && !x.memoryless;
 }

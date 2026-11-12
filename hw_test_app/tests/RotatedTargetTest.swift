@@ -56,7 +56,11 @@ struct RotatedTargetTest: HWTest {
                         let required = raw && (cell != .fetch || result.referencePath == "raw")
                         if required {
                             native += 1
-                            if result.path == "raw" { nativeRaw += 1 } else { failures.append("\(name) ran \(result.path)") }
+                            if result.path == "raw" {
+                                nativeRaw += 1
+                            } else {
+                                failures.append("\(name) ran \(result.path)")
+                            }
                         }
                         if result.wrong != 0 { failures.append("\(name): \(result.wrong) pixels off Metal's store") }
                     case .residual:
@@ -237,7 +241,10 @@ struct RotatedCells {
         case .derivative:
             return [encode(load: .clear) { e in shapes(e, rect(0, 0, 96, 64), [1, 1, 1, 1], states.derivative) }]
         case .tie:
-            return [encode(load: .clear) { e in shapes(e, halfPixelRect(10.5, 5.5, 30.5, 20.5), [1, 1, 1, 1], states.plain) }]
+            return [
+                encode(load: .clear) { e in shapes(e, halfPixelRect(10.5, 5.5, 30.5, 20.5), [1, 1, 1, 1], states.plain)
+                }
+            ]
         }
     }
 

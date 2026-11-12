@@ -44,7 +44,9 @@ public:
                 });
             };
         }
-        thread_ = std::thread([this] { loop(); });
+        thread_ = std::thread([this] {
+            loop();
+        });
     }
 
     ~Gpu()
@@ -86,7 +88,9 @@ public:
     bool submittedBy(size_t count, std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> g(lock_);
-        return wake_.wait_for(g, timeout, [&] { return submitted_ - first_ >= count; });
+        return wake_.wait_for(g, timeout, [&] {
+            return submitted_ - first_ >= count;
+        });
     }
 
     // GP entries of the jobs run so far that their fetcher reads without prefetch: copies of a laid-down loop
@@ -104,7 +108,9 @@ private:
             size_t at;
             {
                 std::unique_lock<std::mutex> g(lock_);
-                wake_.wait(g, [&] { return stopping_ || (!held_ && next_ < submitted_); });
+                wake_.wait(g, [&] {
+                    return stopping_ || (!held_ && next_ < submitted_);
+                });
                 if (stopping_)
                     return;
                 at = next_;

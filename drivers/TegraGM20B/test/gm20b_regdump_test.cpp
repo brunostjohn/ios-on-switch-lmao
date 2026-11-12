@@ -31,7 +31,9 @@ List Load()
 	List list;
 	for (std::string line; std::getline(file, line);) {
 		std::smatch m;
-		if (std::regex_search(line, m, std::regex(R"(^# GM20B register list v1 list=([0-9a-f]{16}))"))) {
+		if (std::regex_search(
+			    line, m,
+			    std::regex(R"(^# GM20B register list v1 list=([0-9a-f]{16}))"))) {
 			list.id = m[1].str();
 			continue;
 		}
@@ -71,7 +73,8 @@ TEST(Gm20bRegdump, EachLineIsOneRegisterInListOrder)
 {
 	std::vector<char> buf(TGM_REGDUMP_BYTES);
 	const std::vector<uint32_t> values = Values();
-	const tgm_regdump_how how = {2, 0x142028, 0x80002000, 0x80002000, 0x40000123, 0x40000123, 3456};
+	const tgm_regdump_how how = {2,          0x142028,   0x80002000, 0x80002000,
+				     0x40000123, 0x40000123, 3456};
 	const size_t len = tgm_regdump_format(buf.data(), buf.size(), values.data(), &how);
 	ASSERT_GT(len, 0u);
 	ASSERT_LT(len, buf.size());
@@ -81,10 +84,12 @@ TEST(Gm20bRegdump, EachLineIsOneRegisterInListOrder)
 	ASSERT_TRUE(std::getline(text, line));
 	char header[96];
 	snprintf(header, sizeof(header), "# regdump v1 list=%016llx count=%u",
-		 static_cast<unsigned long long>(TGM_REGDUMP_LIST_ID), static_cast<unsigned>(TGM_REGDUMP_COUNT));
+		 static_cast<unsigned long long>(TGM_REGDUMP_LIST_ID),
+		 static_cast<unsigned>(TGM_REGDUMP_COUNT));
 	EXPECT_EQ(line, header);
 	ASSERT_TRUE(std::getline(text, line));
-	EXPECT_EQ(line, "# read badf=2 bus_fault=142028 engine0=80002000/80002000 fecs_ctx=40000123/40000123 "
+	EXPECT_EQ(line, "# read badf=2 bus_fault=142028 engine0=80002000/80002000 "
+			"fecs_ctx=40000123/40000123 "
 			"read_us=3456");
 	const std::regex form(R"(^0x([0-9a-f]{6}) 0x([0-9a-f]{8})$)");
 	size_t i = 0;
@@ -120,14 +125,16 @@ uint32_t Fnv1a(const std::vector<uint32_t> &values)
 TEST(Gm20bRegdump, TheLogLinesCarryEveryValueOnceInListOrder)
 {
 	const std::vector<uint32_t> values = Values();
-	const std::regex form(R"(^tegra-gm20b: regdump v1 list=([0-9a-f]{16}) tag=hot_states chunk=(\d+)/(\d+) )"
-			      R"(first=(\d+) n=(\d+)((?: [0-9a-f]{8})*)$)");
+	const std::regex form(
+		R"(^tegra-gm20b: regdump v1 list=([0-9a-f]{16}) tag=hot_states chunk=(\d+)/(\d+) )"
+		R"(first=(\d+) n=(\d+)((?: [0-9a-f]{8})*)$)");
 	char id[17];
 	snprintf(id, sizeof(id), "%016llx", static_cast<unsigned long long>(TGM_REGDUMP_LIST_ID));
 	std::vector<uint32_t> logged;
 	for (size_t chunk = 0; chunk < TGM_REGDUMP_CHUNKS; chunk++) {
 		char line[TGM_REGDUMP_LOG_LINE];
-		const size_t len = tgm_regdump_chunk_line(line, sizeof(line), values.data(), "hot_states", chunk);
+		const size_t len = tgm_regdump_chunk_line(line, sizeof(line), values.data(),
+							  "hot_states", chunk);
 		ASSERT_LT(len, sizeof(line)) << chunk;
 		std::cmatch m;
 		ASSERT_TRUE(std::regex_match(line, m, form)) << line;
@@ -151,13 +158,17 @@ TEST(Gm20bRegdump, TheDoneLineCarriesTheCountAndTheSum)
 	std::vector<uint32_t> values = Values();
 	const tgm_regdump_how how = {1, 0, 0x00002000, 0x80002000, 0x40000123, 0x40000124, 812};
 	char line[TGM_REGDUMP_LOG_LINE];
-	ASSERT_LT(tgm_regdump_done_line(line, sizeof(line), values.data(), "quiet", &how), sizeof(line));
+	ASSERT_LT(tgm_regdump_done_line(line, sizeof(line), values.data(), "quiet", &how),
+		  sizeof(line));
 	char want[TGM_REGDUMP_LOG_LINE];
-	snprintf(want, sizeof(want),
-		 "tegra-gm20b: regdump v1 list=%016llx tag=quiet done count=%u chunks=%u sum=%08x badf=1 "
-		 "bus_fault=000000 engine0=00002000/80002000 fecs_ctx=40000123/40000124 read_us=812",
-		 static_cast<unsigned long long>(TGM_REGDUMP_LIST_ID), static_cast<unsigned>(TGM_REGDUMP_COUNT),
-		 static_cast<unsigned>(TGM_REGDUMP_CHUNKS), Fnv1a(values));
+	snprintf(
+		want, sizeof(want),
+		"tegra-gm20b: regdump v1 list=%016llx tag=quiet done count=%u chunks=%u sum=%08x "
+		"badf=1 "
+		"bus_fault=000000 engine0=00002000/80002000 fecs_ctx=40000123/40000124 read_us=812",
+		static_cast<unsigned long long>(TGM_REGDUMP_LIST_ID),
+		static_cast<unsigned>(TGM_REGDUMP_COUNT), static_cast<unsigned>(TGM_REGDUMP_CHUNKS),
+		Fnv1a(values));
 	EXPECT_STREQ(line, want);
 
 	const uint32_t sum = tgm_regdump_sum(values.data());
@@ -170,7 +181,8 @@ TEST(Gm20bRegdump, AShortLineBufferStaysTerminated)
 	const std::vector<uint32_t> values = Values();
 	char line[48];
 	memset(line, 'x', sizeof(line));
-	EXPECT_GE(tgm_regdump_chunk_line(line, sizeof(line), values.data(), "quiet", 0), sizeof(line));
+	EXPECT_GE(tgm_regdump_chunk_line(line, sizeof(line), values.data(), "quiet", 0),
+		  sizeof(line));
 	EXPECT_EQ(strlen(line), sizeof(line) - 1);
 }
 
@@ -183,4 +195,4 @@ TEST(Gm20bRegdump, PriErrorsAreCounted)
 	EXPECT_EQ(tgm_regdump_badf(values.data()), 2u);
 }
 
-} // namespace
+}  // namespace

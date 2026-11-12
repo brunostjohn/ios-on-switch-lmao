@@ -21,7 +21,11 @@ constexpr bool twodStepProven(uint32_t s, uint32_t d)
     return d && (2 * s) % d == 0;
 }
 
-enum class MipEngine : uint8_t { None, TwoD, ThreeD };
+enum class MipEngine : uint8_t {
+    None,
+    TwoD,
+    ThreeD
+};
 
 // A step goes to the 2D engine where the format has a 2D surface format (twodFormat) and the step is proven, else to the
 // pack's 3D mip state (raw_mip.h). A format with no 3D state keeps its unproven steps on the 2D engine: BGRA8, RGBA8,

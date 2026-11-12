@@ -18,22 +18,35 @@ struct Allocation {
     IOMemoryMap map;
     switch_gpu_backing backing;
 };
+
 std::vector<std::unique_ptr<Allocation>> gAllocations;
 std::set<const switch_gpu_backing *> gHeld, gDecoding;
 uint32_t gFrees;
 task_t gTask = reinterpret_cast<task_t>(0x1234);
 }  // namespace
 
-extern "C" bool tegra_vic_present_ready() { return true; }
-extern "C" bool switch_native_surface_gpu_ready() { return true; }
-extern "C" bool switch_native_surface_display_ready() { return true; }
-extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t, uint32_t *engines,
-                                          uint32_t *cpuOwners)
+extern "C" bool tegra_vic_present_ready()
+{
+    return true;
+}
+
+extern "C" bool switch_native_surface_gpu_ready()
+{
+    return true;
+}
+
+extern "C" bool switch_native_surface_display_ready()
+{
+    return true;
+}
+
+extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t, uint32_t *engines, uint32_t *cpuOwners)
 {
     *cpuOwners = gHeld.count(backing) ? 1 : 0;
     *engines = gDecoding.count(backing) ? 1u << SWITCH_GPU_ENGINE_NVDEC : 0;
     return 0;
 }
+
 extern "C" int tegra_nvdec_buffer_alloc(uint64_t bytes, TegraNVDECBlock *block)
 {
     gAllocations.push_back(std::make_unique<Allocation>());
@@ -46,15 +59,26 @@ extern "C" int tegra_nvdec_buffer_alloc(uint64_t bytes, TegraNVDECBlock *block)
     block->backing = &a.backing;
     return 0;
 }
+
 extern "C" void tegra_nvdec_buffer_free(TegraNVDECBlock *block)
 {
     ++gFrees;
     --block->backing->refs;
     *block = {};
 }
-extern "C" IOReturn tegra_vic_surface_lookup(uint32_t, task_t, TegraVICSurface *) { return -22; }
-extern "C" void tegra_vic_surface_release(TegraVICSurface *) {}
-int switch_native_surface_publish(const TegraVICSurface *, const TegraVICPicture *, const char **, bool *) { return -22; }
+
+extern "C" IOReturn tegra_vic_surface_lookup(uint32_t, task_t, TegraVICSurface *)
+{
+    return -22;
+}
+
+extern "C" void tegra_vic_surface_release(TegraVICSurface *)
+{}
+
+int switch_native_surface_publish(const TegraVICSurface *, const TegraVICPicture *, const char **, bool *)
+{
+    return -22;
+}
 
 namespace {
 constexpr uint64_t kBytes = 3ULL << 20;
@@ -62,6 +86,7 @@ constexpr uint64_t kBytes = 3ULL << 20;
 class SwitchNVDECParkTest : public testing::Test {
 protected:
     SwitchNVDECPark park = {};
+
     void SetUp() override
     {
         gAllocations.clear();
@@ -69,6 +94,7 @@ protected:
         gDecoding.clear();
         gFrees = 0;
     }
+
     SwitchNVDECBuffer fresh(uint32_t handle, uint64_t bytes = kBytes)
     {
         SwitchNVDECBuffer b = {};

@@ -5,7 +5,8 @@
 #include "../SwitchGpuJobFences.h"
 #include "../TegraGM20BFences.h"
 
-namespace {
+namespace
+{
 std::vector<tgm_push> batches(std::initializer_list<uint32_t> sizes)
 {
 	std::vector<tgm_push> pushes;
@@ -47,7 +48,8 @@ TEST(JobFences, OneJobCarriesEveryBatchWithAFenceAtEachBatchEnd)
 	EXPECT_EQ(fences, 2u);
 	Stream stream;
 	EXPECT_EQ(emit(pushes, 40, stream), 43u);
-	const std::vector<std::string> expected = {"push 0", "fence 41", "push 1", "push 2", "fence 42", "push 3"};
+	const std::vector<std::string> expected = {"push 0", "fence 41", "push 1",
+						   "push 2", "fence 42", "push 3"};
 	EXPECT_EQ(stream.items, expected);
 }
 
@@ -67,7 +69,8 @@ TEST(JobFences, SeqnosWrapWithTheChannelsFence)
 	const auto pushes = batches({1, 1, 1});
 	Stream stream;
 	EXPECT_EQ(emit(pushes, 0xfffffffeu, stream), 1u);
-	const std::vector<std::string> expected = {"push 0", "fence 4294967295", "push 1", "fence 0", "push 2"};
+	const std::vector<std::string> expected = {"push 0", "fence 4294967295", "push 1",
+						   "fence 0", "push 2"};
 	EXPECT_EQ(stream.items, expected);
 }
 
@@ -80,7 +83,8 @@ TEST(JobFences, AFenceNeverSplitsAMethodOrFollowsTheJobsLastPush)
 
 	auto incomplete = batches({2, 1});
 	incomplete[1].incomplete = 1;
-	EXPECT_EQ(switch_gpu_job_fences(incomplete.data(), uint32_t(incomplete.size()), &fences), -22);
+	EXPECT_EQ(switch_gpu_job_fences(incomplete.data(), uint32_t(incomplete.size()), &fences),
+		  -22);
 
 	std::vector<uint32_t> sizes(TegraGM20BMaxJobFences + 2, 1);
 	std::vector<tgm_push> many;

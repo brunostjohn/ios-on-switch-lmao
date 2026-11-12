@@ -16,8 +16,8 @@ __attribute__((objc_externally_retained)) inline raw::FusionPass fusionPass(RMCo
     result.height = pass.height;
     result.layers = pass.layers;
     // a fused pass's draws take the first pass's sample layout; each Metal pass's hidden depth starts at 1.0
-    result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count &&
-                      (pass.depth || !pass.testsHiddenZeta);
+    result.bodySafe =
+        !cb->_sampledShadows && !cb->_standIns && !pass.positions.count && (pass.depth || !pass.testsHiddenZeta);
     std::array<__unsafe_unretained RMTexture *, 10> targets{};
     auto attachment = [&](size_t slot, __unsafe_unretained id object, NSUInteger level, NSUInteger slice,
                           MTLLoadAction load, MTLStoreAction store, bool resolve) {

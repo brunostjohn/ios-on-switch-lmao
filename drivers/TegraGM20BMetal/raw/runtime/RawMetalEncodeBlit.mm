@@ -255,20 +255,20 @@ bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::
     const raw::Texture::Chain &chain = *t->_raw.chain;
     const uint32_t fmt2d = probe2d ? probe2d : chain.fmt2d;
     bool ok = true;
-    const bool routed = raw::fx::eachMipRun(
-        chain.layout, fmt2d != 0, !probe2d && gRM->raw->mipPipeline(t->_raw.format) != nullptr,
-        [&](const raw::fx::MipRun &run) {
-            if (!ok)
-                return;
-            if (run.engine == raw::fx::MipEngine::TwoD) {
-                useTexture(rc, t, true);
-                be->access(memoryOf(t), memoryOf(t));
-                be->generate(t->_raw, fmt2d, run.first, run.last, run.unproven);
-                return;
-            }
-            be->end();
-            ok = mipPasses(rc, t, run.first, run.last, why);
-            be = rc->blit();
-        });
+    const bool routed =
+        raw::fx::eachMipRun(chain.layout, fmt2d != 0, !probe2d && gRM->raw->mipPipeline(t->_raw.format) != nullptr,
+                            [&](const raw::fx::MipRun &run) {
+                                if (!ok)
+                                    return;
+                                if (run.engine == raw::fx::MipEngine::TwoD) {
+                                    useTexture(rc, t, true);
+                                    be->access(memoryOf(t), memoryOf(t));
+                                    be->generate(t->_raw, fmt2d, run.first, run.last, run.unproven);
+                                    return;
+                                }
+                                be->end();
+                                ok = mipPasses(rc, t, run.first, run.last, why);
+                                be = rc->blit();
+                            });
     return routed && ok;
 }

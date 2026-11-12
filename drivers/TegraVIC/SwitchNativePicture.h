@@ -18,8 +18,7 @@ inline const char *switch_native_picture(const TegraVICPicture &picture, const T
     if (!picture.pitch || (picture.pitch & 63) || !picture.rows || (picture.rows & 31) ||
         picture.blockHeightLog2 != 1 || (picture.chromaOffset & 255))
         return "native decoder block geometry";
-    if (!picture.width || !picture.height ||
-        ((picture.cropX | picture.cropY | picture.width | picture.height) & 1))
+    if (!picture.width || !picture.height || ((picture.cropX | picture.cropY | picture.width | picture.height) & 1))
         return "native 4:2:0 crop geometry";
     const uint64_t right = uint64_t(picture.cropX) + picture.width;
     const uint64_t bottom = uint64_t(picture.cropY) + picture.height;
@@ -34,13 +33,27 @@ inline const char *switch_native_picture(const TegraVICPicture &picture, const T
     result.format = format;
     result.plane_count = 2;
     result.color_matrix = target.colorMatrix;
-    result.transfer = target.transfer; result.primaries = target.primaries;
-    result.chroma_top = target.chromaTop; result.chroma_bottom = target.chromaBottom;
+    result.transfer = target.transfer;
+    result.primaries = target.primaries;
+    result.chroma_top = target.chromaTop;
+    result.chroma_bottom = target.chromaBottom;
     result.color_range = format == nv12Full || format == p010Full ? 2 : 1;
-    result.planes[0] = {0, luma, picture.pitch / picture.sampleBytes, picture.rows,
-                        picture.pitch, picture.sampleBytes, SWITCH_GPU_BACKING_BLOCK_LINEAR, 1};
-    result.planes[1] = {picture.chromaOffset, chroma, picture.pitch / (2 * picture.sampleBytes), picture.rows / 2,
-                        picture.pitch, 2 * picture.sampleBytes, SWITCH_GPU_BACKING_BLOCK_LINEAR, 1};
+    result.planes[0] = {0,
+                        luma,
+                        picture.pitch / picture.sampleBytes,
+                        picture.rows,
+                        picture.pitch,
+                        picture.sampleBytes,
+                        SWITCH_GPU_BACKING_BLOCK_LINEAR,
+                        1};
+    result.planes[1] = {picture.chromaOffset,
+                        chroma,
+                        picture.pitch / (2 * picture.sampleBytes),
+                        picture.rows / 2,
+                        picture.pitch,
+                        2 * picture.sampleBytes,
+                        SWITCH_GPU_BACKING_BLOCK_LINEAR,
+                        1};
     layout = result;
     crop = {picture.cropX, picture.cropY, picture.width, picture.height};
     return nullptr;

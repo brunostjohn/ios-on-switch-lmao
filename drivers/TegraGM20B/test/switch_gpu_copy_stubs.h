@@ -31,7 +31,8 @@ inline void IOLockUnlock(IOLock *p) __attribute__((no_thread_safety_analysis))
 #define IODelete(p, t, n) ((void)(n), free(p))
 constexpr int kIOReturnSuccess = 0, kIOMemoryMapperNone = 0;
 
-class IOMemoryDescriptor {
+class IOMemoryDescriptor
+{
 public:
 	std::vector<uint64_t> pages;
 	uint64_t length = 0;

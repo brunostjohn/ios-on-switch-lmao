@@ -68,8 +68,9 @@ int main(int argc, char **argv)
             if (bytes.empty())
                 return 2;
             [[NSData dataWithBytes:bytes.data() length:bytes.size()]
-                writeToFile:[@(argv[2]) stringByAppendingPathComponent:[@(function) stringByAppendingString:@".artifact"]]
-                atomically:YES];
+                writeToFile:[@(argv[2])
+                                stringByAppendingPathComponent:[@(function) stringByAppendingString:@".artifact"]]
+                 atomically:YES];
             NmbComputeArtifactInfo before = {}, after = {};
             nmb_compute_artifact_info(original, &before);
             auto *imported = nmb_compute_artifact_import(gDevice, &input, true, bytes.data(), bytes.size());
@@ -92,10 +93,14 @@ int main(int argc, char **argv)
                 });
             for (auto &worker : workers)
                 worker.join();
-            check(std::all_of(concurrent.begin(), concurrent.end(), [](bool value) { return value; }),
+            check(std::all_of(concurrent.begin(), concurrent.end(),
+                              [](bool value) {
+                                  return value;
+                              }),
                   "concurrent immutable imports");
             auto rejected = [&](const std::vector<uint8_t> &payload, bool reflection) {
-                auto *artifact = nmb_compute_artifact_import(gDevice, &input, reflection, payload.data(), payload.size());
+                auto *artifact =
+                    nmb_compute_artifact_import(gDevice, &input, reflection, payload.data(), payload.size());
                 const bool refused = !artifact;
                 nmb_compute_artifact_release(artifact);
                 return refused;
@@ -104,15 +109,17 @@ int main(int argc, char **argv)
             auto *plain = nmb_compute_artifact_new(gDevice, &input, false);
             std::vector<uint8_t> plainBytes;
             const bool plainExported = plain && nmb_compute_artifact_serialize(plain, collectArtifact, &plainBytes);
-            auto *plainImported = plainExported ? nmb_compute_artifact_import(
-                gDevice, &input, false, plainBytes.data(), plainBytes.size()) : nullptr;
+            auto *plainImported = plainExported ? nmb_compute_artifact_import(gDevice, &input, false, plainBytes.data(),
+                                                                              plainBytes.size())
+                                                : nullptr;
             NmbComputeArtifactInfo plainInfo = {};
             check(plainImported && nmb_compute_artifact_info(plainImported, &plainInfo) && !plainInfo.bindings,
                   "unrequested reflection stays absent on import");
             nmb_compute_artifact_release(plainImported);
             nmb_compute_artifact_release(plain);
             input.max_threads = 64;
-            check(nmb_compute_artifact_key(gDevice, &input, true, other.data()) && key != other && rejected(bytes, true),
+            check(nmb_compute_artifact_key(gDevice, &input, true, other.data()) && key != other &&
+                      rejected(bytes, true),
                   "descriptor identity mismatch refused");
             input.max_threads = 128;
             auto damaged = bytes;
@@ -142,7 +149,9 @@ int main(int argc, char **argv)
             raw::KernelDispatch dispatch(threads, memory);
             if (!strcmp(function, "semantic_texture") || !strcmp(function, "artifact_probe")) {
                 auto *texture = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
-                                                                                 width:32 height:1 mipmapped:NO];
+                                                                                   width:32
+                                                                                  height:1
+                                                                               mipmapped:NO];
                 dispatch.texture(0, texture);
             }
             auto *holder = [NBNativeComputeArtifact new];
@@ -158,7 +167,8 @@ int main(int argc, char **argv)
             const auto b = direct.kernel(descriptor, dispatch.dispatch(), "artifact seed", restored, why);
             raw::CacheKey cacheKey;
             check(a == raw::CompileOutcome::Made && b == raw::CompileOutcome::Made &&
-                      raw::encodeKernelEntry(cacheKey, &compiled, "") == raw::encodeKernelEntry(cacheKey, &restored, ""),
+                      raw::encodeKernelEntry(cacheKey, &compiled, "") ==
+                          raw::encodeKernelEntry(cacheKey, &restored, ""),
                   "imported native dispatch exact after source payload is overwritten");
             objc_setAssociatedObject(descriptor, &computeArtifactKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }

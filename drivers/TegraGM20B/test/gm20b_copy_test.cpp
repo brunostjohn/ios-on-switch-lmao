@@ -206,10 +206,10 @@ TEST(Copy, NoSyncpointMethodsWhenNoneIsAsked)
 
 TEST(Copy, SyncpointReleaseFitsItsExactAdvertisedStorage)
 {
-    std::vector<uint32_t> words(TGM_SYNCPT_INCR_DWORDS);
-    EXPECT_EQ(tgm_syncpt_incr(words.data(), 22), words.size());
-    EXPECT_EQ(words[words.size() - 2], tgm_syncpt_header(0x0074));
-    EXPECT_EQ(words.back(), (22u << 8) | 1u);
+	std::vector<uint32_t> words(TGM_SYNCPT_INCR_DWORDS);
+	EXPECT_EQ(tgm_syncpt_incr(words.data(), 22), words.size());
+	EXPECT_EQ(words[words.size() - 2], tgm_syncpt_header(0x0074));
+	EXPECT_EQ(words.back(), (22u << 8) | 1u);
 }
 
 namespace
@@ -254,7 +254,8 @@ TEST(Copy, AllCopyAndRelayoutPacketsUseOnlyFifoMethodsAndCeSubchannel)
 	for (unsigned operation = TGM_RELAYOUT_TO_ROWS; operation <= TGM_RELAYOUT_UNTILE_IN_PLACE;
 	     ++operation) {
 		const tgm_relayout_move move = {
-			0x100000, 0x200000, 0x300000, 256, tgm_relayout_op(operation), 16384, 0x400000};
+			0x100000, 0x200000, 0x300000, 256, tgm_relayout_op(operation),
+			16384,    0x400000};
 		checkLeanChannel(words, tgm_relayout_push(words, &layout, &move, waits, 2));
 	}
 }

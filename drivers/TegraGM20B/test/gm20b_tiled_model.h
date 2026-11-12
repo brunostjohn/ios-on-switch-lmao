@@ -48,7 +48,8 @@ extern int gCpuMoves;
 extern bool gScratchFails;
 extern int gScratchesReclaimed;  // kept scratches a lock took back
 extern bool gScratchPurged;
-extern uint64_t gBackingContent;  // the pinned backing's recorded writes       // a kept scratch's pages come back empty
+extern uint64_t
+	gBackingContent;  // the pinned backing's recorded writes       // a kept scratch's pages come back empty
 // switch_refusal's (domain, reason) per call
 extern std::vector<std::pair<std::string, std::string>> gRefusals;
 

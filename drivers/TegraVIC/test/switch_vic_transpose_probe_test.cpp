@@ -48,7 +48,8 @@ std::vector<uint8_t> engine(const Case &c, const TegraVICJob &job, bool n422rHal
     const bool right = !transposed || c.source == k420v ||
                        format == (n422rHalvesDown ? TEGRA_VIC_T_Y8___U8V8_N422R : TEGRA_VIC_T_Y8___U8V8_N422);
     const uint32_t halves =
-        transposed ? (n422rHalvesDown ? OUT_FIELD(job, SURF_CHROMA_LOC_VERT) : OUT_FIELD(job, SURF_CHROMA_LOC_HORIZ)) : 0;
+        transposed ? (n422rHalvesDown ? OUT_FIELD(job, SURF_CHROMA_LOC_VERT) : OUT_FIELD(job, SURF_CHROMA_LOC_HORIZ))
+                   : 0;
     for (uint32_t row = 0; row < (right ? outputChromaRows(c) : kSize / 2); row++) {
         const uint32_t v = c.source == k420v || !right ? 2 * row : row;
         for (uint32_t k = 0; k < (right ? kSize / 2 : kSize); k++)
@@ -84,8 +85,8 @@ TEST(VicTransposeProbe, EveryCaseBuildsAndPatchesOnlyWhatItNames)
     for (const Case &c : kCases) {
         const TegraVICJob job = built(c);
         const bool fourTwoTwo = c.source == k422v && (c.transform & TEGRA_VIC_ROT90);
-        const uint32_t want = c.format >= 0 ? uint32_t(c.format)
-                              : fourTwoTwo  ? TEGRA_VIC_T_Y8___U8V8_N422R
+        const uint32_t want = c.format >= 0       ? uint32_t(c.format)
+                              : fourTwoTwo        ? TEGRA_VIC_T_Y8___U8V8_N422R
                               : c.source == k420v ? TEGRA_VIC_T_Y8___U8V8_N420
                                                   : TEGRA_VIC_T_Y8___U8V8_N422;
         EXPECT_EQ(OUT_FIELD(job, SURF_FORMAT), want) << c.variant;
@@ -100,7 +101,9 @@ TEST(VicTransposeProbe, EveryCaseBuildsAndPatchesOnlyWhatItNames)
 
 TEST(VicTransposeProbe, TheShippedReadingHoldsOnAnEngineThatHalvesDown)
 {
-    const auto reply = judge([](const Case &c, const TegraVICJob &job) { return engine(c, job, true); });
+    const auto reply = judge([](const Case &c, const TegraVICJob &job) {
+        return engine(c, job, true);
+    });
     EXPECT_TRUE(reply.controlsClean);
     EXPECT_EQ(reply.cleanCases, bits({kCopy420Turned, kCopy422, kShipped, kShippedLeft, kSitingKept, kShippedTurn4}));
     EXPECT_EQ(reply.results[kShipped].offsetHalves, 1u);
@@ -111,7 +114,9 @@ TEST(VicTransposeProbe, TheShippedReadingHoldsOnAnEngineThatHalvesDown)
 
 TEST(VicTransposeProbe, TheOtherReadingShowsAsTheN422Cases)
 {
-    const auto reply = judge([](const Case &c, const TegraVICJob &job) { return engine(c, job, false); });
+    const auto reply = judge([](const Case &c, const TegraVICJob &job) {
+        return engine(c, job, false);
+    });
     EXPECT_TRUE(reply.controlsClean);
     EXPECT_EQ(reply.cleanCases, bits({kCopy420Turned, kCopy422, kN422, kN422Kept}));
     EXPECT_EQ(reply.results[kN422Kept].offsetHalves, 1u);

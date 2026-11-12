@@ -197,8 +197,8 @@ void refused(IOReturn ret, const char *why, const TegraVICSurfaceDesc &src, cons
     } else if (ret == kIOReturnBadArgument) {
         kind = "bad request";
     }
-    const uint64_t key = switch_refusal_key_with(switch_refusal_key("TegraVIC", why),
-                                                 (uint64_t(src.fourcc) << 32) | dst.fourcc);
+    const uint64_t key =
+        switch_refusal_key_with(switch_refusal_key("TegraVIC", why), (uint64_t(src.fourcc) << 32) | dst.fourcc);
     switch_refusal_k(key, "TegraVIC", why,
                      "IOSurfaceAccelerator transform refused (%s), the caller falls back: '%c%c%c%c' %ux%u to "
                      "'%c%c%c%c' %ux%u",
@@ -247,7 +247,7 @@ struct Job {
     uint64_t info;
     IOReturn status;
     bool done, detached;  // detached: its synchronous caller was interrupted and finishJob frees it
-    TegraVICJob check;  // the submitting thread's check of each operation
+    TegraVICJob check;    // the submitting thread's check of each operation
 #if TEGRA_VIC_STATS
     uint64_t submittedUs;
     int pid;  // the transform caller's (the job runs on the engine thread)
@@ -329,12 +329,12 @@ bool runJob(Job *job, IOReturn *status)
                                (job->plan.readsSource ? tegra_vic_surface_extent(&job->src.desc) : 0);
 #endif
     if (!job->bounceSrc && !job->bounceDst)
-        submitted = switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite,
-                                          transformed, job, job->events);
+        submitted =
+            switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite, transformed, job, job->events);
     const bool bounced = !submitted;
     if (bounced)
-        submitted = switch_vic_bounce_submit(&job->src, &job->dst, &job->plan, job->chromaSite,
-                                              transformed, job, job->events);
+        submitted =
+            switch_vic_bounce_submit(&job->src, &job->dst, &job->plan, job->chromaSite, transformed, job, job->events);
     if (submitted <= 0) {
 #if TEGRA_VIC_STATS
         firstFailure(job, bounced ? "bounce submission" : "direct submission", submitted);
@@ -378,7 +378,8 @@ void engineThread(void *, wait_result_t)
         IOLockWakeup(gQueueLock, &gRequests, false);
         IOLockUnlock(gQueueLock);
         IOReturn status = kIOReturnSuccess;
-        if (runJob(job, &status)) finishJob(job, status);
+        if (runJob(job, &status))
+            finishJob(job, status);
     }
 }
 
@@ -484,6 +485,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
 #if TEGRA_VIC_STATS
     struct Charge {
         uint64_t at = mach_absolute_time();
+
         void stop()
         {
             if (at)
@@ -491,7 +493,11 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
                                       mach_absolute_time() - at);
             at = 0;
         }
-        ~Charge() { stop(); }
+
+        ~Charge()
+        {
+            stop();
+        }
     } charge;
 #endif
     if (size != sizeof(TegraVICRequest))
@@ -546,7 +552,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         if (!why && (tegra_vic_surface_extent(dstAs) > kTegraVICWindowBytes ||
                      (job->plan.readsSource && tegra_vic_surface_extent(srcAs) > kTegraVICWindowBytes)))
             why = "surface larger than a 128 MiB window";
-        if (TEGRA_VIC_REQ_CHROMA_SITE(r.flags)) dst.chromaSite = TEGRA_VIC_REQ_CHROMA_SITE(r.flags);
+        if (TEGRA_VIC_REQ_CHROMA_SITE(r.flags))
+            dst.chromaSite = TEGRA_VIC_REQ_CHROMA_SITE(r.flags);
         for (uint32_t i = 0; !why && i < job->plan.count; i++) {
             why = tegra_vic_build(job->plan.op[i].fill ? nullptr : &src, &dst, &job->plan.op[i], tegra_vic_traits(),
                                   tegra_vic_config_address(), tegra_vic_filter_address(), &job->check);
@@ -651,12 +658,12 @@ IOReturn tegra_vic_external_method(const IOUserClient *self, uint32_t selector, 
 #else
         return kIOReturnNotPermitted;
 #endif
-    case 0:                            // capture
-    case 2:                            // abort transfers
-    case 3:                            // abort captures
-    case 7:                            // histogram
-    case 8:                            // diagnostics
-    case 9:                            // transform estimation
+    case 0:  // capture
+    case 2:  // abort transfers
+    case 3:  // abort captures
+    case 7:  // histogram
+    case 8:  // diagnostics
+    case 9:  // transform estimation
         return kIOReturnUnsupported;
     default:
         return kIOReturnBadArgument;
@@ -847,6 +854,7 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogram", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogramValues", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesVERF", 0);
+
     // VIC 4.0 has no 10- or 16-bit YCbCr and no 8:10:10:10 layout (vic_ceb6_types.h adds them in VIC 5.1).
     const struct {
         const char *name;
@@ -857,6 +865,7 @@ OSDictionary *capabilities(const TegraVICTraits *t)
         {"LumaOnlyL010", 0}, {"LumaOnlyL012", 0}, {"LumaOnlyL016", 0}, {"ARGB8101010", 0},
         {"2Planes42010", 0}, {"2Planes42210", 0}, {"2Planes44410", 0}, {"1PlaneYCBCR10444", 0},
     };
+
     char key[64];
     for (const auto &f : kFormats) {
         snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f.name);
@@ -956,7 +965,8 @@ extern "C" int tegra_vic_publish(void)
         present = "off (no memory for its page lists)";
     }
     IOLog("TegraVIC: V3 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
-          "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f, 422v, 422f; transforms %#x; up to %ux%u, %ux up, %ux down); "
+          "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f, 422v, 422f; transforms %#x; up to %ux%u, %ux up, %ux "
+          "down); "
           "NVDEC present %s\n",
           s0, tegra_vic_traits()->rotations, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_UPSCALE,
           TEGRA_VIC_MAX_DOWNSCALE, present);

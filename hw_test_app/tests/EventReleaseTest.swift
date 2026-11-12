@@ -63,13 +63,16 @@ struct EventReleaseTest: HWTest {
         let gpu = try GPU.make()
         let kind = RawFacade.kind(of: gpu.device)
         guard kind == "raw" else { return .skip("the default device is not the raw facade (\(kind))") }
-        guard EventJobs.read(gpu.device)["jobs"] != nil else { return .skip("the facade counts no jobs (release runtime)") }
+        guard EventJobs.read(gpu.device)["jobs"] != nil else {
+            return .skip("the facade counts no jobs (release runtime)")
+        }
         guard let event = gpu.device.makeSharedEvent(), let other = gpu.device.makeCommandQueue() else {
             throw TestFailure("no shared event or second queue")
         }
         let work = Work(
             gpu: gpu, kernel: try gpu.compute("fma_loop"),
-            data: try gpu.buffer((0..<Self.threads * 4).map { Float($0 % 7) * 0.001 }), source: try gpu.buffer(Self.bytes))
+            data: try gpu.buffer((0..<Self.threads * 4).map { Float($0 % 7) * 0.001 }),
+            source: try gpu.buffer(Self.bytes))
         var metrics = Metrics()
         var wrong: [String] = []
 
@@ -86,7 +89,7 @@ struct EventReleaseTest: HWTest {
             rounds.append(try await signalled(work, event, value, iterations, waiter: round == 0 ? nil : other))
         }
         guard let privateData = gpu.device.makeBuffer(length: Self.threads * 4, options: .storageModePrivate),
-              let privateSource = gpu.device.makeBuffer(length: Self.bytes, options: .storageModePrivate)
+            let privateSource = gpu.device.makeBuffer(length: Self.bytes, options: .storageModePrivate)
         else { throw TestFailure("no private buffers") }
         let privateWork = Work(gpu: gpu, kernel: work.kernel, data: privateData, source: privateSource)
         let unflushedBefore = EventJobs.read(gpu.device)["unflushed_signals"] ?? 0
@@ -128,7 +131,9 @@ struct EventReleaseTest: HWTest {
         let counters = EventJobs.read(work.gpu.device)
         let heard = HandlerValue<Double>(0), ended = HandlerValue<Double>(0)
         let heardSignal = DispatchSemaphore(value: 0)
-        event.notify(MTLSharedEventListener(dispatchQueue: DispatchQueue(label: "hwtest.event_release")), atValue: value) {
+        event.notify(
+            MTLSharedEventListener(dispatchQueue: DispatchQueue(label: "hwtest.event_release")), atValue: value
+        ) {
             _, _ in
             heard.value = CFAbsoluteTimeGetCurrent()
             heardSignal.signal()

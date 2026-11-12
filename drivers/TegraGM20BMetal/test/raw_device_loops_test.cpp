@@ -40,7 +40,9 @@ protected:
         }
         ASSERT_NE(programs[0]->program, programs[1]->program);
         ASSERT_TRUE(dev.createBuffer(4096, words));
-        gpu.map = [](uint64_t va) { return kernel_model::model.host(va); };
+        gpu.map = [](uint64_t va) {
+            return kernel_model::model.host(va);
+        };
     }
 
     uint32_t &word(uint32_t i)
@@ -146,7 +148,9 @@ TEST_F(DeviceLoops, AnOutermostLoopPastItsCopiesLeavesContinue)
         e.end();
     }
     const uint32_t stamp = commit(cb);
-    run(first, [&](int) { --word(0); });
+    run(first, [&](int) {
+        --word(0);
+    });
     EXPECT_EQ(count(0), raw::LoopCopies::kOutermostCopies);
     EXPECT_EQ(word(0), 7u);
     EXPECT_EQ(qmdsBroken, 0u);

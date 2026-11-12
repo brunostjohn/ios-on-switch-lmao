@@ -17,30 +17,48 @@ struct Composition {
     // SwitchLandscapeWindows.h: overlay 0 is on window A and the UI on B.
     bool landscape = false;
 
-    bool on() const { return window[0].on || window[1].on; }
+    bool on() const
+    {
+        return window[0].on || window[1].on;
+    }
 
     bool uses(int slot) const
     {
-        return slot >= 0 && ((window[0].on && window[0].slot == slot) ||
-                            (window[1].on && window[1].slot == slot));
+        return slot >= 0 && ((window[0].on && window[0].slot == slot) || (window[1].on && window[1].slot == slot));
     }
 };
 
 // `armed` may be staged ahead of its request (armedRequested false): its registers are in the assembly copy and a
 // producer's completion writes the ACT_REQ (SwitchPlaneCompletionFlipDisplay.h). Until request(), no boundary can have
 // taken it, so a frame end reads it as a request still out, and requested() is about a superseded set alone.
-template<class State = Composition> class Compositions {
+template <class State = Composition> class Compositions {
 public:
     static constexpr unsigned kSlots = 4;
     static constexpr int kNone = -2, kOff = -1;
-    enum class Latch { Waiting, Taken, Replaced, Inconsistent };
+    enum class Latch {
+        Waiting,
+        Taken,
+        Replaced,
+        Inconsistent
+    };
     State *values = nullptr;
     int active = kOff, armed = kNone, superseded = kNone;
     bool armedRequested = true;
 
-    bool requested() const { return (armed != kNone && armedRequested) || superseded != kNone; }
-    bool mayWrite() const { return superseded == kNone; }
-    bool busy(int id) const { return id >= 0 && (id == active || id == armed || id == superseded); }
+    bool requested() const
+    {
+        return (armed != kNone && armedRequested) || superseded != kNone;
+    }
+
+    bool mayWrite() const
+    {
+        return superseded == kNone;
+    }
+
+    bool busy(int id) const
+    {
+        return id >= 0 && (id == active || id == armed || id == superseded);
+    }
 
     int write(const State &next)
     {
@@ -58,8 +76,15 @@ public:
         return armed;
     }
 
-    void deferRequest() { armedRequested = armed == kNone; }
-    void request() { armedRequested = true; }
+    void deferRequest()
+    {
+        armedRequested = armed == kNone;
+    }
+
+    void request()
+    {
+        armedRequested = true;
+    }
 
     // A staged set whose request never came: the latch is as it was before write().
     void withdraw()
@@ -171,8 +196,8 @@ inline Assignment assign(const Overlay wanted[2], const WindowState current[2])
     return best;
 }
 
-inline uint64_t transitionPeak(const Demand &ui, const Demand *first, unsigned firstCount,
-                               const Demand *second, unsigned secondCount)
+inline uint64_t transitionPeak(const Demand &ui, const Demand *first, unsigned firstCount, const Demand *second,
+                               unsigned secondCount)
 {
     if (!first || !second || !firstCount || !secondCount || firstCount > 4 || secondCount > 4)
         return UINT64_MAX;
@@ -186,4 +211,4 @@ inline uint64_t transitionPeak(const Demand &ui, const Demand *first, unsigned f
         }
     return maximum;
 }
-} // namespace switch_display
+}  // namespace switch_display

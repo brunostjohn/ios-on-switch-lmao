@@ -27,7 +27,12 @@ struct BandRate {
     std::atomic<uint32_t> asked{0};
 
     BandRate() = default;
-    BandRate(const BandRate &o) { *this = o; }
+
+    BandRate(const BandRate &o)
+    {
+        *this = o;
+    }
+
     BandRate &operator=(const BandRate &o)
     {
         psPerUnit.store(o.psPerUnit.load(std::memory_order_relaxed), std::memory_order_relaxed);

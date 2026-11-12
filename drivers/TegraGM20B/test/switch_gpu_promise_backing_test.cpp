@@ -122,7 +122,9 @@ TEST_F(Backing, ACpuLockWaitsForThePromisedJobAndAvoidingASyncIsBusy)
 	auto *b = promised();
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead | avoid), -16);
 	std::atomic<int> locked{1};
-	std::thread reader([&] { locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead); });
+	std::thread reader([&] {
+		locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead);
+	});
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	EXPECT_EQ(locked.load(), 1);
 	const auto job = token(3, 7);
@@ -142,7 +144,9 @@ TEST_F(Backing, TheCpusSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	std::atomic<int> result{1};
 	switch_gpu_backing_token producer = {};
 	switch_gpu_cpu_lease *lease = nullptr;
-	std::thread copy([&] { result = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease); });
+	std::thread copy([&] {
+		result = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease);
+	});
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	EXPECT_EQ(result.load(), 1);
 	ASSERT_EQ(publish(b, kWrite | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, token(3, 9)), 0);
@@ -165,8 +169,12 @@ TEST_F(Backing, CpuReadersAsleepOnAPromiseGivenUpOnGoOnAtItsWake)
 	std::atomic<int> copied{1}, locked{1};
 	switch_gpu_backing_token producer = {};
 	switch_gpu_cpu_lease *lease = nullptr;
-	std::thread copy([&] { copied = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease); });
-	std::thread lock([&] { locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead); });
+	std::thread copy([&] {
+		copied = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease);
+	});
+	std::thread lock([&] {
+		locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead);
+	});
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	EXPECT_EQ(copied.load(), 1);
 	EXPECT_EQ(locked.load(), 1);
@@ -207,7 +215,8 @@ TEST_F(Backing, AnEngineReadersWaitingSnapshotTakesThePromiseAsADependency)
 	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &vic, &transaction), 0);
 	switch_gpu_backing_token tokens[1] = {};
 	uint32_t needed = 0;
-	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 1, &needed, 0, 0), 0);
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 1, &needed, 0, 0),
+		  0);
 	EXPECT_EQ(tokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
 	switch_gpu_backing_abort(&transaction);
 	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
@@ -226,15 +235,19 @@ TEST_F(Backing, AJobTakesThePromisesUnderItsOwnTransaction)
 	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
 	switch_gpu_backing_token tokens[2] = {};
 	uint32_t needed = 1;
-	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, 0, 0), 0);
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, 0, 0),
+		  0);
 	EXPECT_EQ(needed, 2u);
 	EXPECT_EQ(tokens[1].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
 	EXPECT_EQ(tokens[1].queue, kOffset);
 	needed = 0;
-	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, kOffset, kOffset + 4), 0);
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, kOffset,
+							  kOffset + 4),
+		  0);
 	EXPECT_EQ(needed, 0u);
 	needed = 0;
-	EXPECT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 0, &needed, 0, 0), -28);
+	EXPECT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 0, &needed, 0, 0),
+		  -28);
 	EXPECT_EQ(needed, 1u);
 	switch_gpu_backing_abort(&transaction);
 	switch_gpu_backing_promise_drop(b, kOffset);
@@ -251,7 +264,8 @@ TEST_F(Backing, ASurfacesOwnPromiseReadInsideATransactionTakesItsLockTwice)
 	const auto job = token(9, 2);
 	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
 	switch_gpu_backing_token tokens[1] = {};
-	EXPECT_DEATH(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), "already holds this lock");
+	EXPECT_DEATH(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1),
+		     "already holds this lock");
 	switch_gpu_backing_abort(&transaction);
 	EXPECT_EQ(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), 1);
 	switch_gpu_backing_promise_drop(b, kOffset);
@@ -275,15 +289,17 @@ std::vector<uint32_t> waitedFor(switch_gpu_backing *b, const switch_gpu_backing_
 }
 
 // A read of `job` that acquires the surface's pending promises on the GPU, committed
-void readBehindPromises(switch_gpu_backing *b, const switch_gpu_backing_token &job, uint32_t own_first = 0,
-			uint32_t own_end = 0)
+void readBehindPromises(switch_gpu_backing *b, const switch_gpu_backing_token &job,
+			uint32_t own_first = 0, uint32_t own_end = 0)
 {
 	switch_gpu_backing_use read{b, kRead, 0};
 	switch_gpu_backing_transaction transaction = {};
 	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
 	switch_gpu_backing_token tokens[2] = {};
 	uint32_t needed = 0;
-	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, own_first, own_end), 0);
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed,
+							  own_first, own_end),
+		  0);
 	switch_gpu_backing_commit(&transaction);
 }
 
@@ -304,7 +320,8 @@ TEST_F(Backing, ThePromisedJobDoesNotWaitForReadersOrderedBehindItsPromise)
 	const auto promisedWrite = waitedFor(b, token(3, 4));
 	EXPECT_TRUE(has(promisedWrite, SWITCH_GPU_ENGINE_NVDEC));
 	EXPECT_FALSE(has(promisedWrite, SWITCH_GPU_ENGINE_VIC));
-	EXPECT_FALSE(has(promisedWrite, SWITCH_GPU_ENGINE_GM20B)) << "the other connection's reader";
+	EXPECT_FALSE(has(promisedWrite, SWITCH_GPU_ENGINE_GM20B))
+		<< "the other connection's reader";
 	switch_gpu_backing_promise_drop(b, kOffset);
 	const auto next = waitedFor(b, token(5, 1));
 	EXPECT_TRUE(has(next, SWITCH_GPU_ENGINE_VIC));
@@ -355,7 +372,8 @@ TEST_F(Backing, AnAbandonedPromiseFailsThePresentThatWaitedForIt)
 	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), -5);
 	EXPECT_EQ(switch_gpu_present_tokens_finish_ready(&present, nullptr), -5);
 	abandoned = 0;
-	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 1) << "a cancel's raise: nothing was promised after all";
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 1)
+		<< "a cancel's raise: nothing was promised after all";
 	switch_gpu_backing_promise_drop(b, kOffset);
 	switch_gpu_backing_release(b);
 }

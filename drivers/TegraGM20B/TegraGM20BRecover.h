@@ -314,7 +314,8 @@ static inline int tgm_pbdma_acquiring(uint32_t method0, uint32_t data0)
  * looked at as a present's is (TGM_PROMISE_FIRST_LOOK_NS, then TGM_STUCK_NS after its first strike): its promise is
  * given up at about 1 s. Any other wait keeps its period, hang_ns. Keyed on what the wait is on, never on how long it
  * has waited. */
-static inline uint64_t tgm_hang_check_interval(int waits_promise, uint32_t strikes, uint64_t hang_ns)
+static inline uint64_t tgm_hang_check_interval(int waits_promise, uint32_t strikes,
+					       uint64_t hang_ns)
 {
 	if (!waits_promise)
 		return hang_ns;
@@ -380,7 +381,12 @@ static inline int tgm_hang_last_resort(int reset, uint32_t completed_at_reset, u
 /* tgm_iso_deadline for a channel being killed past TGM_ISOLATE_NS: nvkm's recovery of its group still under way
  * (marked) is waited for up to nvkm's own bounded waits (its runlist update and preempt waits, 2 s each); a recovery
  * never scheduled is asked for once more; past that the kill is lost. */
-enum tgm_iso { TGM_ISO_WAIT, TGM_ISO_RETRY, TGM_ISO_LOST };
+enum tgm_iso {
+	TGM_ISO_WAIT,
+	TGM_ISO_RETRY,
+	TGM_ISO_LOST
+};
+
 #define TGM_ISOLATE_NVKM_NS (4500ull * 1000 * 1000)
 
 static inline enum tgm_iso tgm_iso_verdict(int marked, uint64_t since_ns, int retried)
@@ -404,14 +410,14 @@ enum tgm_hang {
 struct tgm_hang_candidate {
 	uint8_t live; /* a channel of the kernel's list */
 	uint8_t stuck; /* work pending and nothing completed for the stuck time (TGM_STUCK_NS, gpu_hang.c) */
-	uint8_t kernel; /* the present's or the scrubber's */
+	uint8_t kernel;   /* the present's or the scrubber's */
 	uint8_t resident; /* an engine or PBDMA is on it (tgm_recover_suspects) */
 	uint8_t moving; /* its fence, or its GPFIFO and pushbuffer GET, moved within the stuck time */
 	uint8_t waits; /* 1 + the candidate its pending acquire waits on; 0: none */
 	uint8_t victim; /* its acquire waits on what the kernel or a host1x engine releases, never on its own work */
 	uint8_t dead; /* not a live channel, or one killed already: an engine or PBDMA left on it is a recovery's residue */
 	uint8_t loading; /* an engine is stuck loading its context (tgm_engine_load_stuck): its work has not begun there */
-	uint8_t saving;  /* an engine is BUSY switching away from its context (tgm_engine_saving): the context-switch timeout
+	uint8_t saving; /* an engine is BUSY switching away from its context (tgm_engine_saving): the context-switch timeout
 			  * names it, and no channel waiting behind that engine is to blame meanwhile */
 };
 

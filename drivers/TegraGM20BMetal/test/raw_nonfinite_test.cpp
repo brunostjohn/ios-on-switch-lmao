@@ -18,7 +18,9 @@ TEST(RawNonFinite, StaleWhiteBgraIsNaNAsHalves)
     for (size_t i = 1024; i < 1088; ++i)
         memory[i] = 0xff;
     uint32_t lines = 0;
-    const uint32_t found = raw::sampledNonFinite(memory.data(), memory.size(), 2, 1024, [&](const uint8_t *) { ++lines; });
+    const uint32_t found = raw::sampledNonFinite(memory.data(), memory.size(), 2, 1024, [&](const uint8_t *) {
+        ++lines;
+    });
     EXPECT_EQ(lines, 4u);
     EXPECT_EQ(found, 32u);
     EXPECT_EQ(raw::sampledNonFinite(memory.data(), memory.size(), 2, 2048, [](const uint8_t *) {}), 0u);
@@ -27,13 +29,13 @@ TEST(RawNonFinite, StaleWhiteBgraIsNaNAsHalves)
 TEST(RawNonFinite, InfinityCountsAndFiniteExtremesDoNot)
 {
     const uint16_t halves[32] = {0x7c00, 0xfc00, 0x7bff, 0xfbff, 0x3c00};
-    EXPECT_EQ(raw::sampledNonFinite(reinterpret_cast<const uint8_t *>(halves), sizeof halves, 2, 64,
-                                    [](const uint8_t *) {}),
-              2u);
+    EXPECT_EQ(
+        raw::sampledNonFinite(reinterpret_cast<const uint8_t *>(halves), sizeof halves, 2, 64, [](const uint8_t *) {}),
+        2u);
     const uint32_t floats[16] = {0x7f800000, 0x7fc00000, 0x7f7fffff, 0x3f800000};
-    EXPECT_EQ(raw::sampledNonFinite(reinterpret_cast<const uint8_t *>(floats), sizeof floats, 4, 64,
-                                    [](const uint8_t *) {}),
-              2u);
+    EXPECT_EQ(
+        raw::sampledNonFinite(reinterpret_cast<const uint8_t *>(floats), sizeof floats, 4, 64, [](const uint8_t *) {}),
+        2u);
 }
 
 // Glass uniforms: a NaN float is counted as a word at its offset; a NaN half inside a finite float's low half only as a half

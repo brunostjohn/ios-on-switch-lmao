@@ -14,12 +14,23 @@ class SharedEvents;
 class SharedEventLease {
 public:
     ~SharedEventLease();
-    uint64_t handle() const { return handle_; }
-    std::shared_ptr<SharedEvents> owner() const { return owner_.lock(); }
+
+    uint64_t handle() const
+    {
+        return handle_;
+    }
+
+    std::shared_ptr<SharedEvents> owner() const
+    {
+        return owner_.lock();
+    }
 
 private:
     friend class SharedEvents;
-    SharedEventLease(std::shared_ptr<SharedEvents> owner, uint64_t handle) : owner_(owner), handle_(handle) {}
+
+    SharedEventLease(std::shared_ptr<SharedEvents> owner, uint64_t handle) : owner_(owner), handle_(handle)
+    {}
+
     std::weak_ptr<SharedEvents> owner_;
     uint64_t handle_;
 };
@@ -30,8 +41,14 @@ public:
 
 private:
     friend class SharedEvents;
-    SharedEventWatch(std::shared_ptr<SharedEventLease> event, uint64_t cookie) : event_(std::move(event)), cookie_(cookie) {}
-    SharedEventWatch(std::shared_ptr<SharedEvents> owner, uint64_t cookie) : owner_(owner), cookie_(cookie) {}
+
+    SharedEventWatch(std::shared_ptr<SharedEventLease> event, uint64_t cookie)
+        : event_(std::move(event)), cookie_(cookie)
+    {}
+
+    SharedEventWatch(std::shared_ptr<SharedEvents> owner, uint64_t cookie) : owner_(owner), cookie_(cookie)
+    {}
+
     std::shared_ptr<SharedEventLease> event_;
     std::weak_ptr<SharedEvents> owner_;
     uint64_t cookie_;
@@ -39,22 +56,34 @@ private:
 
 class SharedEventCompletion {
 public:
-    int result() const { return result_->load(std::memory_order_acquire); }
+    int result() const
+    {
+        return result_->load(std::memory_order_acquire);
+    }
 
 private:
     friend class SharedEvents;
-    explicit SharedEventCompletion(std::shared_ptr<std::atomic<int>> result) : result_(std::move(result)) {}
+
+    explicit SharedEventCompletion(std::shared_ptr<std::atomic<int>> result) : result_(std::move(result))
+    {}
+
     std::shared_ptr<std::atomic<int>> result_;
     std::shared_ptr<SharedEventWatch> watch_;
 };
 
 class ResourceReadyCompletion {
 public:
-    int result() const { return result_->load(std::memory_order_acquire); }
+    int result() const
+    {
+        return result_->load(std::memory_order_acquire);
+    }
 
 private:
     friend class SharedEvents;
-    explicit ResourceReadyCompletion(std::shared_ptr<std::atomic<int>> result) : result_(std::move(result)) {}
+
+    explicit ResourceReadyCompletion(std::shared_ptr<std::atomic<int>> result) : result_(std::move(result))
+    {}
+
     std::shared_ptr<std::atomic<int>> result_;
     std::shared_ptr<SharedEventWatch> watch_;
 };
@@ -66,9 +95,9 @@ public:
     std::shared_ptr<SharedEventLease> import(uint32_t port);
     int probe(const SharedEventLease &event, uint64_t value);
     std::shared_ptr<SharedEventWatch> observe(std::shared_ptr<SharedEventLease> event, uint64_t value,
-                                            std::function<void(int)> ready, int &result, bool terminal = false);
+                                              std::function<void(int)> ready, int &result, bool terminal = false);
     std::shared_ptr<SharedEventCompletion> completion(std::shared_ptr<SharedEventLease> event, uint64_t value,
-                                                     std::function<void()> ready, int &result);
+                                                      std::function<void()> ready, int &result);
     std::shared_ptr<ResourceReadyCompletion> resources(const std::vector<TegraGM20BAbiSurfaceUse> &uses,
                                                        std::function<void()> ready, int &result);
     void shutdown();
@@ -91,6 +120,10 @@ struct JobEvents {
     // One per signal (null: none): the payload the job's pushes release into the event's word for it, 0 where its job's end
     // signals it (TegraGM20BJobABI.h method 40)
     const uint32_t *releases = nullptr;
-    bool empty() const { return !waitCount && !signalCount; }
+
+    bool empty() const
+    {
+        return !waitCount && !signalCount;
+    }
 };
 }

@@ -179,7 +179,8 @@ extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes,
 }
 
 extern "C" int switch_gpu_vm_map(tgm_vm *vm, uint64_t va, uint64_t bytes, tgm_mem *mem,
-				 uint64_t offset, uint8_t kind, int readOnly, switch_gpu_mapping **out)
+				 uint64_t offset, uint8_t kind, int readOnly,
+				 switch_gpu_mapping **out)
 {
 	return switch_gpu_vm_map_volatile(vm, va, bytes, mem, offset, kind, readOnly, 0, out);
 }
@@ -573,9 +574,8 @@ protected:
 		tegra_gm20b_ce_plane src = {a.first, descriptorOffset, 256},
 				     dst = {b.first, 0, 256};
 		tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, callback, this};
-		return tegra_gm20b_ce_copy_plane_checked(&src, &dst, 256, 8, wait, &done,
-							 a.second, 0, b.second, 0, ownership,
-							 nullptr);
+		return tegra_gm20b_ce_copy_plane_checked(&src, &dst, 256, 8, wait, &done, a.second,
+							 0, b.second, 0, ownership, nullptr);
 	}
 };
 

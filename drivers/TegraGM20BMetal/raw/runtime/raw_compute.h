@@ -152,7 +152,8 @@ private:
 
         bool operator==(const Bound &b) const
         {
-            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset && resourceVa == b.resourceVa;
+            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset &&
+                   resourceVa == b.resourceVa;
         }
     };
 

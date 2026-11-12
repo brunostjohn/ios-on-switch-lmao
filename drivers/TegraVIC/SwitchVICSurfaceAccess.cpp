@@ -13,8 +13,8 @@ int switch_vic_surface_access(const TegraVICSurface *surface, bool write, Switch
     if (error)
         return error;
     access->descriptor = surface->memory;
-    error = switch_native_surface_prepare_gpu(surface->surface, surface->id, nullptr, (write ? 0u : 1u) | (avoid ? 2u : 0u),
-                                           &access->backing, &access->owned);
+    error = switch_native_surface_prepare_gpu(surface->surface, surface->id, nullptr,
+                                              (write ? 0u : 1u) | (avoid ? 2u : 0u), &access->backing, &access->owned);
     if (!error) {
         if (access->backing)
             access->offset = surface->baseOffset;

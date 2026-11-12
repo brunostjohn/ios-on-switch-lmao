@@ -17,8 +17,9 @@
 /* How one pass of reads went (regdump.c). A context switch can fall among the reads: FIFO engine 0's (GR's) status and
  * FECS's current context before and after them tell whether one did. */
 struct tgm_regdump_how {
-	uint32_t badf;      /* registers that read back a PRI error, 0xbadf.... */
-	uint32_t bus_fault; /* the first faulting address the bus latched during the reads; 0: none */
+	uint32_t badf; /* registers that read back a PRI error, 0xbadf.... */
+	uint32_t
+		bus_fault; /* the first faulting address the bus latched during the reads; 0: none */
 	uint32_t engine_before, engine_after;
 	uint32_t ctx_before, ctx_after;
 	uint32_t read_us;
@@ -42,14 +43,16 @@ static inline size_t tgm_regdump_format(char *buf, size_t cap, const uint32_t *v
 
 	if (cap < TGM_REGDUMP_BYTES)
 		return 0;
-	len = (size_t)snprintf(buf, cap,
-			       "# regdump v1 list=%016llx count=%u\n"
-			       "# read badf=%u bus_fault=%06x engine0=%08x/%08x fecs_ctx=%08x/%08x read_us=%u\n",
-			       (unsigned long long)TGM_REGDUMP_LIST_ID, (unsigned)TGM_REGDUMP_COUNT, how->badf,
-			       how->bus_fault, how->engine_before, how->engine_after, how->ctx_before, how->ctx_after,
-			       how->read_us);
+	len = (size_t)snprintf(
+		buf, cap,
+		"# regdump v1 list=%016llx count=%u\n"
+		"# read badf=%u bus_fault=%06x engine0=%08x/%08x fecs_ctx=%08x/%08x read_us=%u\n",
+		(unsigned long long)TGM_REGDUMP_LIST_ID, (unsigned)TGM_REGDUMP_COUNT, how->badf,
+		how->bus_fault, how->engine_before, how->engine_after, how->ctx_before,
+		how->ctx_after, how->read_us);
 	for (size_t i = 0; i < TGM_REGDUMP_COUNT; i++)
-		len += (size_t)snprintf(buf + len, cap - len, "0x%06x 0x%08x\n", tgm_regdump_offsets[i], values[i]);
+		len += (size_t)snprintf(buf + len, cap - len, "0x%06x 0x%08x\n",
+					tgm_regdump_offsets[i], values[i]);
 	return len;
 }
 
@@ -73,31 +76,34 @@ static inline uint32_t tgm_regdump_sum(const uint32_t *values)
 }
 
 /* Chunk `chunk` (< TGM_REGDUMP_CHUNKS) into buf, NUL-terminated; snprintf's length. */
-static inline size_t tgm_regdump_chunk_line(char *buf, size_t cap, const uint32_t *values, const char *tag,
-					    size_t chunk)
+static inline size_t tgm_regdump_chunk_line(char *buf, size_t cap, const uint32_t *values,
+					    const char *tag, size_t chunk)
 {
 	const size_t first = chunk * TGM_REGDUMP_CHUNK;
 	const size_t left = TGM_REGDUMP_COUNT - first;
 	const size_t n = left < TGM_REGDUMP_CHUNK ? left : TGM_REGDUMP_CHUNK;
-	size_t len = (size_t)snprintf(buf, cap,
-				      "tegra-gm20b: regdump v1 list=%016llx tag=%s chunk=%u/%u first=%u n=%u",
-				      (unsigned long long)TGM_REGDUMP_LIST_ID, tag, (unsigned)chunk,
-				      (unsigned)TGM_REGDUMP_CHUNKS, (unsigned)first, (unsigned)n);
+	size_t len = (size_t)snprintf(
+		buf, cap, "tegra-gm20b: regdump v1 list=%016llx tag=%s chunk=%u/%u first=%u n=%u",
+		(unsigned long long)TGM_REGDUMP_LIST_ID, tag, (unsigned)chunk,
+		(unsigned)TGM_REGDUMP_CHUNKS, (unsigned)first, (unsigned)n);
 
 	for (size_t i = 0; i < n && len < cap; i++)
 		len += (size_t)snprintf(buf + len, cap - len, " %08x", values[first + i]);
 	return len;
 }
 
-static inline size_t tgm_regdump_done_line(char *buf, size_t cap, const uint32_t *values, const char *tag,
-					   const struct tgm_regdump_how *how)
+static inline size_t tgm_regdump_done_line(char *buf, size_t cap, const uint32_t *values,
+					   const char *tag, const struct tgm_regdump_how *how)
 {
 	return (size_t)snprintf(buf, cap,
-				"tegra-gm20b: regdump v1 list=%016llx tag=%s done count=%u chunks=%u sum=%08x badf=%u "
+				"tegra-gm20b: regdump v1 list=%016llx tag=%s done count=%u "
+				"chunks=%u sum=%08x badf=%u "
 				"bus_fault=%06x engine0=%08x/%08x fecs_ctx=%08x/%08x read_us=%u",
-				(unsigned long long)TGM_REGDUMP_LIST_ID, tag, (unsigned)TGM_REGDUMP_COUNT,
-				(unsigned)TGM_REGDUMP_CHUNKS, tgm_regdump_sum(values), how->badf, how->bus_fault,
-				how->engine_before, how->engine_after, how->ctx_before, how->ctx_after, how->read_us);
+				(unsigned long long)TGM_REGDUMP_LIST_ID, tag,
+				(unsigned)TGM_REGDUMP_COUNT, (unsigned)TGM_REGDUMP_CHUNKS,
+				tgm_regdump_sum(values), how->badf, how->bus_fault,
+				how->engine_before, how->engine_after, how->ctx_before,
+				how->ctx_after, how->read_us);
 }
 
 #endif

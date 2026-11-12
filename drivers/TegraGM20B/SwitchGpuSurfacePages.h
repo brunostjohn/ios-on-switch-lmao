@@ -11,8 +11,10 @@ enum class SwitchGpuSurfaceMatch {
 };
 
 template <class ReadPhysical>
-SwitchGpuSurfaceMatch switch_gpu_surface_page_vector(uint64_t memoryBytes, uint64_t base, uint64_t bytes,
-	uint64_t nativePage, const uint64_t *pages, uint32_t count, ReadPhysical read)
+SwitchGpuSurfaceMatch switch_gpu_surface_page_vector(uint64_t memoryBytes, uint64_t base,
+						     uint64_t bytes, uint64_t nativePage,
+						     const uint64_t *pages, uint32_t count,
+						     ReadPhysical read)
 {
 	constexpr uint64_t gpuPage = 4096;
 	if (!pages || !count || !bytes || (base & (gpuPage - 1)) || nativePage < gpuPage ||
@@ -41,7 +43,8 @@ SwitchGpuSurfaceMatch switch_gpu_surface_page_vector(uint64_t memoryBytes, uint6
 		const uint64_t end = at + span;
 		const uint64_t start = at;
 		while (at < imported && at < end) {
-			if (physical > UINT64_MAX - (at - start) || pages[at / gpuPage] != physical + at - start)
+			if (physical > UINT64_MAX - (at - start) ||
+			    pages[at / gpuPage] != physical + at - start)
 				return SwitchGpuSurfaceMatch::Pages;
 			at += gpuPage;
 		}

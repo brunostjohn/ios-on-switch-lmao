@@ -18,7 +18,8 @@ int main(int argc, char **argv)
         NSError *error = nil;
         id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
         NSData *data = [NSData dataWithContentsOfFile:@(argv[4])];
-        NSArray<NSString *> *expected = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&error] : nil;
+        NSArray<NSString *> *expected =
+            data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&error] : nil;
         if (!library || ![expected isKindOfClass:NSArray.class] || !expected.count) {
             fprintf(stderr, "cannot load name fixture: %s\n", error.localizedDescription.UTF8String);
             return 1;
@@ -31,7 +32,8 @@ int main(int argc, char **argv)
         };
         NSArray<NSString *> *names = library.functionNames;
         check([NSSet setWithArray:names].count == expected.count &&
-              [[NSSet setWithArray:names] isEqual:[NSSet setWithArray:expected]], "complete function names");
+                  [[NSSet setWithArray:names] isEqual:[NSSet setWithArray:expected]],
+              "complete function names");
         for (NSString *name in expected) {
             id<MTLFunction> function = [library newFunctionWithName:name];
             check(function && [function.name isEqualToString:name], "lookup preserves exact function name");

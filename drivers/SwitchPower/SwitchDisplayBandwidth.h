@@ -39,11 +39,15 @@ inline uint64_t peak(const Demand *planes, unsigned count)
             if (!(mask & (1u << p)))
                 continue;
             const auto &d = planes[p];
-            if (left < d.x) left = d.x;
-            if (top < d.y) top = d.y;
+            if (left < d.x)
+                left = d.x;
+            if (top < d.y)
+                top = d.y;
             const uint64_t r = uint64_t(d.x) + d.width, b = uint64_t(d.y) + d.height;
-            if (right > r) right = r;
-            if (bottom > b) bottom = b;
+            if (right > r)
+                right = r;
+            if (bottom > b)
+                bottom = b;
             bytes = add(bytes, d.bytesPerSecond);
         }
         if (left < right && top < bottom && bytes > maximum)
@@ -85,17 +89,27 @@ inline unsigned row(const uint32_t *rates, unsigned count, uint64_t bytesPerSeco
             return r;
     return count;
 }
+
 class AdmissionEnvelope {
     uint64_t layer_[4] = {};
+
 public:
-    void clear() { for (auto &bytes : layer_) bytes = 0; }
-    template <class Reserve> bool admit(const uint64_t updated[4], const uint64_t active[2], uint64_t ui,
-                                        Reserve reserve)
+    void clear()
+    {
+        for (auto &bytes : layer_)
+            bytes = 0;
+    }
+
+    template <class Reserve>
+    bool admit(const uint64_t updated[4], const uint64_t active[2], uint64_t ui, Reserve reserve)
     {
         uint64_t next[4], largest = 0, second = 0;
         const auto include = [&](uint64_t bytes) {
-            if (bytes >= largest) { second = largest; largest = bytes; }
-            else if (bytes > second) second = bytes;
+            if (bytes >= largest) {
+                second = largest;
+                largest = bytes;
+            } else if (bytes > second)
+                second = bytes;
         };
         for (unsigned layer = 0; layer != 4; ++layer) {
             next[layer] = updated[layer] > layer_[layer] ? updated[layer] : layer_[layer];
@@ -113,8 +127,13 @@ public:
 
 class Reservation {
     uint64_t bytes_ = 0;
+
 public:
-    uint64_t bytes() const { return bytes_; }
+    uint64_t bytes() const
+    {
+        return bytes_;
+    }
+
     template <class Apply> bool raise(uint64_t demand, Apply apply)
     {
         if (demand <= bytes_)
@@ -124,6 +143,7 @@ public:
         bytes_ = demand;
         return true;
     }
+
     template <class Apply> bool retire(uint64_t demand, Apply apply)
     {
         if (demand == bytes_)
@@ -134,4 +154,4 @@ public:
         return true;
     }
 };
-} // namespace switch_display
+}  // namespace switch_display

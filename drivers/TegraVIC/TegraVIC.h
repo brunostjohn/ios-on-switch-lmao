@@ -42,6 +42,7 @@ extern "C" {
 bool tegra_vic_ready(void);
 const TegraVICTraits *tegra_vic_traits(void);
 int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out);  // from the kernel arena; never freed
+
 // Another engine's syncpoint threshold VIC's channel waits for on the hardware before the job starts.
 struct TegraVICAcquire {
     uint32_t syncpt, threshold;

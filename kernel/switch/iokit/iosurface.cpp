@@ -62,7 +62,7 @@ void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1,
 }
 
 void switch_iokit_iosurface_ownership_done(IOUserClient *client, uint32_t index, void *p1, void *p2,
-                                          kern_return_t result)
+                                           kern_return_t result)
 {
     if (index != kSwitchIOSurfaceTrapLock && index != kSwitchIOSurfaceTrapUnlock)
         return;

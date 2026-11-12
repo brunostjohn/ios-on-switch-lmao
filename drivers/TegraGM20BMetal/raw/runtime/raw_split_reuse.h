@@ -85,14 +85,22 @@ public:
         insert(inputs, inputs.hash(), frontier);
     }
 
-    size_t size() const { return size_; }
-    size_t capacity() const { return entries_.size(); }
+    size_t size() const
+    {
+        return size_;
+    }
+
+    size_t capacity() const
+    {
+        return entries_.size();
+    }
 
 private:
     struct Entry {
         SplitInputs inputs;
         uint64_t hash = 0, frontier = 0, generation = 0;
     };
+
     static constexpr size_t kLimit = 4096;
     std::vector<Entry> entries_;
     uint64_t generation_ = 1;

@@ -476,7 +476,6 @@ void switch_nvdec_semantics_commit(SwitchNVDECSemantic *)
 void switch_nvdec_semantics_physical(uint64_t)
 {}
 
-
 extern "C" {
 void switch_gpu_event_waits_retain(switch_gpu_event_waits *)
 {}
@@ -975,7 +974,8 @@ TEST_F(SwitchNVDECSubmitTest, AnIdleGatedEngineIsPoweredOnByTheNextDecode)
 {
     SwitchEngineGate<TestGatePlatform> gate;
     const SwitchEngineGateOps ops = {
-        "TegraNVDEC", nullptr,
+        "TegraNVDEC",
+        nullptr,
         [](void *) -> int {
             hardware += 2;
             switch_nvdec_jobs_resume(true, hardware);

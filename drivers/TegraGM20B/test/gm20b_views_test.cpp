@@ -37,9 +37,11 @@ struct Tiled {
 			rows[i] = uint8_t(i * 31 + surfaceId);
 		scatter(pages, rows);
 		int covered = 0;
-        coh = tgm_coherency_add(pas[0], id, pas.data(), kPages, 1, 1, &covered);
-        EXPECT_EQ(tgm_coherency_pin(coh, reinterpret_cast<switch_gpu_backing *>(1), nullptr, nullptr), 0);
-        EXPECT_EQ(tgm_coherency_layout(coh, kW, kH, kBpp, kRow, 1), 1);
+		coh = tgm_coherency_add(pas[0], id, pas.data(), kPages, 1, 1, &covered);
+		EXPECT_EQ(tgm_coherency_pin(coh, reinterpret_cast<switch_gpu_backing *>(1), nullptr,
+					    nullptr),
+			  0);
+		EXPECT_EQ(tgm_coherency_layout(coh, kW, kH, kBpp, kRow, 1), 1);
 		EXPECT_TRUE(tgm_layout_tiled(kW, kH, kBpp, &l));
 	}
 
@@ -242,7 +244,7 @@ TEST_F(Views, MovesTheCopyEngineCannotMakeAreTheCpus)
 	const std::vector<uint8_t> after = s.texels();
 	tgm_layout_read(&s.l, after.data(), 0, 0, kW, kH, back.data(), kRow);
 	EXPECT_TRUE(s.rowsAre(back, written));
-    gMoveFails = false;
+	gMoveFails = false;
 	tgm_coherency_put(s.coh);
 }
 

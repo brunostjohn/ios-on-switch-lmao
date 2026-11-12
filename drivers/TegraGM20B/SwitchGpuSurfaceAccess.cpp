@@ -36,7 +36,7 @@ struct Pending {
 
 IOLock *lock;
 Lease *leases, *free_leases;
-uint32_t lease_count; // leases' length, read without the lock by switch_gpu_surface_sweep
+uint32_t lease_count;  // leases' length, read without the lock by switch_gpu_surface_sweep
 Pending *pending, *free_pending;
 Association *associations;
 

@@ -45,8 +45,8 @@ void completed(void *context, int status)
     release(work);
 }
 
-int place(const TegraVICPicture *picture, task_t task, Present *work,
-          switch_gpu_cpu_lease *owned, const TegraVICSurface *surface, bool asynchronous, const char **why)
+int place(const TegraVICPicture *picture, task_t task, Present *work, switch_gpu_cpu_lease *owned,
+          const TegraVICSurface *surface, bool asynchronous, const char **why)
 {
     if (!picture || !picture->backing ||
         (surface && (!surface->surface || !surface->memory || surface->id != picture->surfaceID))) {
@@ -110,26 +110,26 @@ int place(const TegraVICPicture *picture, task_t task, Present *work,
     }
     TegraVICImage source = {}, destination = {};
     TegraVICOp operation = {};
-    switch_vic_picture_describe(&bytes, placement, switch_vic_mapping_address(work->sourceMap),
-                               0, &source, &destination, &operation);
+    switch_vic_picture_describe(&bytes, placement, switch_vic_mapping_address(work->sourceMap), 0, &source,
+                                &destination, &operation);
     for (uint32_t plane = 0; plane < planes; ++plane)
-        destination.base[plane] = switch_vic_mapping_address(work->destinationMaps[plane]) +
-                                  (placement.band[plane].start & 4095);
-    *why = tegra_vic_build(&source, &destination, &operation, tegra_vic_traits(),
-                           tegra_vic_config_address(), tegra_vic_filter_address(), &work->job);
+        destination.base[plane] =
+            switch_vic_mapping_address(work->destinationMaps[plane]) + (placement.band[plane].start & 4095);
+    *why = tegra_vic_build(&source, &destination, &operation, tegra_vic_traits(), tegra_vic_config_address(),
+                           tegra_vic_filter_address(), &work->job);
     if (*why)
         return -95;
     switch_gpu_backing_use uses[] = {{picture->backing, SWITCH_GPU_BACKING_READ, 0},
-                                      {work->destination, SWITCH_GPU_BACKING_WRITE, 0}};
+                                     {work->destination, SWITCH_GPU_BACKING_WRITE, 0}};
     uint32_t fence = 0;
     auto *lease = owned ? owned : work->access.owned;
-    const SwitchVICOwnership ownership = {uses, 2, owned ? nullptr : &work->access.guard,
-                                          owned ? 0u : 1u, lease ? &lease : nullptr, lease ? 1u : 0u};
+    const SwitchVICOwnership ownership = {
+        uses, 2, owned ? nullptr : &work->access.guard, owned ? 0u : 1u, lease ? &lease : nullptr, lease ? 1u : 0u};
     if (asynchronous)
         __atomic_add_fetch(&work->references, 1, __ATOMIC_RELAXED);
     work->publishSeed = asynchronous && !owned;
-    int error = switch_vic_submit_checked(&work->job, 1, nullptr, ownership,
-        asynchronous ? completed : nullptr, asynchronous ? work : nullptr, &fence);
+    int error = switch_vic_submit_checked(&work->job, 1, nullptr, ownership, asynchronous ? completed : nullptr,
+                                          asynchronous ? work : nullptr, &fence);
     if (error && asynchronous)
         release(work);
     switch_vic_surface_unreserve(&work->access);
@@ -185,8 +185,8 @@ extern "C" int tegra_vic_present(const TegraVICPicture *picture, task_t task, co
     return present(picture, task, nullptr, nullptr, true, why);
 }
 
-extern "C" int switch_vic_present_owned(const TegraVICPicture *picture, task_t task,
-                                        switch_gpu_cpu_lease *destination, const char **why)
+extern "C" int switch_vic_present_owned(const TegraVICPicture *picture, task_t task, switch_gpu_cpu_lease *destination,
+                                        const char **why)
 {
     if (!destination) {
         if (why)

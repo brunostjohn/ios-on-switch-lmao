@@ -13,7 +13,11 @@
 
 namespace {
 struct FakeGpu {
-    struct Job { uint64_t va; uint32_t words, sequence; };
+    struct Job {
+        uint64_t va;
+        uint32_t words, sequence;
+    };
+
     TegraGM20BAbiFence fence{};
     TegraGM20BAbiFenceSemantic semantic{};
     uint32_t sequence = 0, allocations = 0, waits = 0, submissions = 0, set = 0, registrations = 0;
@@ -54,15 +58,17 @@ struct FakeGpu {
                     const uint32_t blockRows = 8u << (state[base] >> 4 & 15);
                     const uint32_t blockPlanes = 1u << (state[base] >> 8 & 15);
                     const uint32_t plane = state[base + 4];
-                    const uint64_t block = (uint64_t(plane / blockPlanes) *
-                                               ((state[base + 2] + blockRows - 1) / blockRows) + row / blockRows) *
-                                              (rowBytes / 64) + xByte / 64;
+                    const uint64_t block =
+                        (uint64_t(plane / blockPlanes) * ((state[base + 2] + blockRows - 1) / blockRows) +
+                         row / blockRows) *
+                            (rowBytes / 64) +
+                        xByte / 64;
                     return block * blockRows * blockPlanes * 64 +
                            (uint64_t(plane % blockPlanes) * (blockRows / 8) + row % blockRows / 8) * 512 +
                            tgm_layout_gob_offset(xByte, row);
                 }
                 return tgm_layout_offset_of(state[base + 1] * bpp, uint8_t(state[base] >> 4 & 15),
-                                             ((origin & 0xffff) + x) * bpp, (origin >> 16) + y);
+                                            ((origin & 0xffff) + x) * bpp, (origin >> 16) + y);
             };
             for (uint32_t y = 0; y < state[0x041c / 4]; ++y)
                 for (uint32_t x = 0; x < state[0x0418 / 4]; ++x)
@@ -94,12 +100,14 @@ struct FakeGpu {
         }
     }
 };
+
 static_assert(offsetof(FakeGpu, semantic) == sizeof(TegraGM20BAbiFence));
 FakeGpu *fake;
-} // namespace
+}  // namespace
 
 namespace raw {
 Kernel::~Kernel() = default;
+
 bool Kernel::open(std::string &)
 {
     info_.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
@@ -122,11 +130,13 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bo
     ++fake->allocations;
     return true;
 }
+
 void Kernel::free(Bo &bo)
 {
     fake->memory.erase(bo.handle);
     bo = {};
 }
+
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)
 {
     EXPECT_EQ(engines, uint32_t(TegraGM20BEngineCopy));
@@ -136,6 +146,7 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
     fence = &fake->fence.completed;
     return true;
 }
+
 void Kernel::closeChannel(uint32_t)
 {
     if (fake->onClose)
@@ -145,6 +156,7 @@ void Kernel::closeChannel(uint32_t)
     else
         fake->complete(fake->sequence);
 }
+
 bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
 {
     EXPECT_TRUE(job.events.empty());
@@ -164,6 +176,7 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
         fake->complete(sequence);
     return true;
 }
+
 int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &set, uint32_t &generation,
                         const volatile uint32_t *&mirror)
 {
@@ -173,6 +186,7 @@ int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &set, u
     mirror = &word;
     return KERN_SUCCESS;
 }
+
 bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
 {
     ++fake->waits;
@@ -189,7 +203,7 @@ bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
     fake->semantic = {};
     return true;
 }
-} // namespace raw
+}  // namespace raw
 
 namespace {
 class RawTransfer : public ::testing::Test {
@@ -206,6 +220,7 @@ protected:
         std::string error;
         ASSERT_TRUE(kernel.open(error));
     }
+
     void TearDown() override
     {
         gpu.onWait = gpu.onClose = {};
@@ -309,7 +324,8 @@ TEST_F(RawTransfer, TiledSubregionRoundTripPreservesOtherTexels)
             for (uint32_t x = 0; x < 43; ++x)
                 if (x < 9 || x >= 32 || y < 13 || y >= 24)
                     for (uint32_t byte = 0; byte < bpp; ++byte)
-                        ASSERT_EQ(tiled[tgm_layout_offset_of(layout.row_bytes, layout.y_log2, x * bpp + byte, y)], 0x91);
+                        ASSERT_EQ(tiled[tgm_layout_offset_of(layout.row_bytes, layout.y_log2, x * bpp + byte, y)],
+                                  0x91);
     }
 }
 
@@ -332,8 +348,8 @@ TEST_F(RawTransfer, VolumePlanesPreserveTheirPhysicalBlockDepthAndCallerImageStr
         const auto &level = layout.level[0];
         std::vector<uint8_t> tiled(layout.bytes, 0xb3), input(128 * 7 * 4, 0xad), output(input.size(), 0x19);
         raw::TextureTransfer region;
-        region.texture = {reinterpret_cast<uint64_t>(tiled.data()), level.rowBytes, 5, 4, 13, true, level.yLog2, 9, 3,
-                          level.zLog2};
+        region.texture = {
+            reinterpret_cast<uint64_t>(tiled.data()), level.rowBytes, 5, 4, 13, true, level.yLog2, 9, 3, level.zLog2};
         region.width = 17;
         region.height = 5;
         region.planes = 4;
@@ -415,7 +431,9 @@ TEST_F(RawTransfer, PhysicallyCompleteFailedReadbackPreservesOutputAndOwner)
         EXPECT_EQ(gpu.waits, 0u);
         EXPECT_EQ(bytes, (std::array<uint8_t, 4>{9, 9, 9, 9}));
         EXPECT_FALSE(held.expired());
-        gpu.onClose = [&] { EXPECT_FALSE(held.expired()); };
+        gpu.onClose = [&] {
+            EXPECT_FALSE(held.expired());
+        };
         transfers.close(kernel, allocationLock);
         gpu.onClose = {};
         EXPECT_TRUE(held.expired());
@@ -584,4 +602,4 @@ TEST_F(RawTransfer, FailedUploadSlotDrainsChannelBeforeReuse)
     EXPECT_EQ(closes, 1u);
     EXPECT_TRUE(held.expired());
 }
-} // namespace
+}  // namespace

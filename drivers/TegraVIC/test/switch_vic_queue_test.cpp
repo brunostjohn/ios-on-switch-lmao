@@ -50,7 +50,9 @@ TEST(SwitchVICQueue, PublishedCallbacksStayWithTheirOwnFence)
 {
     SwitchVICQueue queue;
     int first = 0, second = 0;
-    auto completion = [](void *p, int value) { *static_cast<int *>(p) = value; };
+    auto completion = [](void *p, int value) {
+        *static_cast<int *>(p) = value;
+    };
     ASSERT_TRUE(queue.publish({0, 10, completion, &first}));
     ASSERT_TRUE(queue.publish({0, 30, completion, &second}));
     const auto job = queue.jobs[queue.head];

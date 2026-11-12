@@ -30,6 +30,7 @@ int switch_host1x_token_fence(const switch_gpu_backing_token *tokens, uint32_t c
 
 struct Display {
     static constexpr unsigned kPlaneDependencies = 2;
+
     struct PlaneSet {
         switch_gpu_backing_token producers[2];
         unsigned count;
@@ -103,7 +104,9 @@ TEST(MediaPlaneFenceSource, ThePlaneFenceTriesTheMediaFenceBeforeTheCopyThread)
 {
     using switch_ios::test::SourceText;
     const std::string fence = SourceText("../NativePlaneFenceDisplay.h");
-    const auto at = [&](const char *text) { return fence.find(text); };
+    const auto at = [&](const char *text) {
+        return fence.find(text);
+    };
     ASSERT_NE(at("if (!planeMediaFence(p)) {"), std::string::npos);
     EXPECT_LT(at("gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);"), at("if (!planeMediaFence(p)) {"));
     EXPECT_LT(at("if (!planeMediaFence(p)) {"), at("planeFenceQueued = true;"));

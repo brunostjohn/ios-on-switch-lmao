@@ -53,7 +53,7 @@ struct State {
 uint32_t decide(const State &s)
 {
     const std::vector<uint32_t> blob = {
-        0x153c, s.alphaControl, 0x1360, s.blending ? 1u : 0u, 0x1e04, s.rgb.op,   0x1e08, s.rgb.src,
+        0x153c, s.alphaControl, 0x1360, s.blending ? 1u : 0u, 0x1e04, s.rgb.op,    0x1e08, s.rgb.src,
         0x1e0c, s.rgb.dst,      0x1e10, s.alpha.op,           0x1e14, s.alpha.src, 0x1e18, s.alpha.dst,
     };
     const std::string key =
@@ -124,12 +124,18 @@ TEST(BlendKill, PremultipliedAndStraightSourceOverKill)
 TEST(BlendKill, KilledExactlyWhereTheBlendKeepsTheDestination)
 {
     const uint32_t ops[] = {kAdd, kSub, kRevSub, kMin, kMax};
-    const uint32_t coeffs[] = {kZero,       kOne,        kSrcColor,   kInvSrcColor, kSrcAlpha,   kInvSrcAlpha,
-                               kDstAlpha,   kInvDstAlpha, kDstColor,  kInvDstColor, kSaturate,   kConstColor,
-                               kSrc1Color,  kInvSrc1Alpha};
+    const uint32_t coeffs[] = {kZero,        kOne,        kSrcColor,    kInvSrcColor, kSrcAlpha,
+                               kInvSrcAlpha, kDstAlpha,   kInvDstAlpha, kDstColor,    kInvDstColor,
+                               kSaturate,    kConstColor, kSrc1Color,   kInvSrc1Alpha};
     const float unormValues[] = {0.0f, 1.0f, 0.25f, 0.5f, 1.0f / 255};
-    const float floatValues[] = {0.0f, -0.0f, 1.0f, -3.5f, 65504.0f, std::numeric_limits<float>::infinity(),
-                                 -std::numeric_limits<float>::infinity(), 6e-8f};
+    const float floatValues[] = {0.0f,
+                                 -0.0f,
+                                 1.0f,
+                                 -3.5f,
+                                 65504.0f,
+                                 std::numeric_limits<float>::infinity(),
+                                 -std::numeric_limits<float>::infinity(),
+                                 6e-8f};
     for (const bool normalized : {true, false})
         for (uint32_t op : ops)
             for (uint32_t src : coeffs)

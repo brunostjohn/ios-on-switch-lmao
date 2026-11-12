@@ -69,8 +69,8 @@ TEST(JobVisibility, OnlyCreatorMemoryEventSignalsOrTheRuntimeMakeAJobExternal)
 	EXPECT_FALSE(flushes(switch_gpu_job_visibility(kInternal, false, false, true)));
 	EXPECT_TRUE(flushes(switch_gpu_job_visibility(kInternal, false, true, false)));
 	EXPECT_TRUE(flushes(switch_gpu_job_visibility(kInternal, true, false, false)));
-	EXPECT_TRUE(flushes(
-		switch_gpu_job_visibility(kInternal | TegraGM20BSubmitExternalVisibility, false, false, false)));
+	EXPECT_TRUE(flushes(switch_gpu_job_visibility(
+		kInternal | TegraGM20BSubmitExternalVisibility, false, false, false)));
 }
 
 TEST(JobVisibility, ASubmitWithoutExplicitVisibilityIsExternal)
@@ -82,8 +82,8 @@ TEST(JobVisibility, ASubmitWithoutExplicitVisibilityIsExternal)
 
 TEST(JobVisibility, EventsAndHostWritesCarryOverToTheChannel)
 {
-	const uint32_t flags =
-		switch_gpu_job_visibility(kInternal | TegraGM20BSubmitHasEvents, false, false, true);
+	const uint32_t flags = switch_gpu_job_visibility(kInternal | TegraGM20BSubmitHasEvents,
+							 false, false, true);
 	EXPECT_TRUE(flags & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT);
 	EXPECT_TRUE(flags & SWITCH_GPU_SUBMIT_FORCE_FENCE);
 	EXPECT_TRUE(flags & SWITCH_GPU_SUBMIT_HOST_WRITTEN);

@@ -53,6 +53,7 @@ static inline uint32_t switch_engine_pllcx_base(uint32_t khz)
     static const struct {
         uint32_t divider, code;
     } kQlin[] = {{1, 0}, {2, 1}, {3, 2}, {4, 3}, {5, 4}, {6, 5}, {8, 6}, {9, 7}, {10, 8}, {12, 9}, {15, 10}, {16, 11}};
+
     const uint32_t kComparisonKHz = 19200;
     if (!khz)
         return 0;

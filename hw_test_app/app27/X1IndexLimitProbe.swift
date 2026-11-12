@@ -69,7 +69,8 @@ enum X1IndexLimitProbe {
             return ProbeFinding(.fail, metrics, note: "the fetch read the index in memory past its limit")
         case (false, false):
             metrics.set("past_limit", "stops")
-            return ProbeFinding(.fail, metrics, note: "the fetch stopped at its limit: the strip's last triangle dropped")
+            return ProbeFinding(
+                .fail, metrics, note: "the fetch stopped at its limit: the strip's last triangle dropped")
         case (true, true):
             metrics.set("past_limit", "both")
             return ProbeFinding(.inconclusive, metrics, note: "both probe pixels drawn")

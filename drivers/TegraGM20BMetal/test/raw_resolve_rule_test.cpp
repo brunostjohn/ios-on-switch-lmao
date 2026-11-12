@@ -114,8 +114,7 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesTheComplement)
         }
     for (uint8_t samples : {2, 4})
         EXPECT_EQ(raw::resolveRoute(screenBound(samples)),
-                  raw::twodResolveComplementProven() &&
-                          (samples == 2 || raw::twodResolveSingleRounding4x())
+                  raw::twodResolveComplementProven() && (samples == 2 || raw::twodResolveSingleRounding4x())
                       ? raw::ResolveByComplement
                       : raw::ResolveByTwod)
             << "a screen-bound target keeps the 2D engine's one code until the complement is proven";

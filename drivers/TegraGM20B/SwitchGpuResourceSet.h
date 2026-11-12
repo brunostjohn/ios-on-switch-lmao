@@ -37,8 +37,9 @@ int switch_gpu_set_create(volatile uint32_t *mirror, struct switch_gpu_resource_
  * outside or by the CPU, in no other set); on success the set has exactly these members and a new generation, and a
  * member it no longer lists keeps the set's pending jobs as its users. -EBUSY: a member is in another set; -EINVAL: one
  * is not private; either way `refused` (if given) names it and the set is as it was. */
-int switch_gpu_set_attach(struct switch_gpu_resource_set *set, const struct switch_gpu_set_member *members,
-			  uint32_t count, uint32_t *generation, struct switch_gpu_backing **refused);
+int switch_gpu_set_attach(struct switch_gpu_resource_set *set,
+			  const struct switch_gpu_set_member *members, uint32_t count,
+			  uint32_t *generation, struct switch_gpu_backing **refused);
 void switch_gpu_set_destroy(struct switch_gpu_resource_set *set);
 
 uint32_t switch_gpu_set_generation(const struct switch_gpu_resource_set *set);
@@ -53,15 +54,19 @@ void switch_gpu_set_note_job(struct switch_gpu_resource_set *set, uint32_t slot,
 			     const struct switch_gpu_backing_token *job);
 uint32_t switch_gpu_set_used(const struct switch_gpu_resource_set *set);
 /* Each used slot's latest job, whole: returns how many */
-uint32_t switch_gpu_set_jobs(const struct switch_gpu_resource_set *set, struct switch_gpu_backing_token *jobs);
+uint32_t switch_gpu_set_jobs(const struct switch_gpu_resource_set *set,
+			     struct switch_gpu_backing_token *jobs);
 uint32_t switch_gpu_set_seqno(const struct switch_gpu_resource_set *set, uint32_t slot);
+
 struct switch_gpu_set_wait {
 	uint32_t slot, seqno;
 };
+
 /* What a job of `slot` follows: each other slot's latest set job, for slots in `live` (a channel, not killed) whose
  * fence (completed[slot]) has not reached it. */
-uint32_t switch_gpu_set_waits(const struct switch_gpu_resource_set *set, uint32_t slot, uint32_t live,
-			      const uint32_t *completed, struct switch_gpu_set_wait *waits);
+uint32_t switch_gpu_set_waits(const struct switch_gpu_resource_set *set, uint32_t slot,
+			      uint32_t live, const uint32_t *completed,
+			      struct switch_gpu_set_wait *waits);
 /* A channel that ran the set's jobs was killed: what it wrote is undefined, so the generation ends. */
 void switch_gpu_set_killed(struct switch_gpu_resource_set *set, uint32_t slot);
 

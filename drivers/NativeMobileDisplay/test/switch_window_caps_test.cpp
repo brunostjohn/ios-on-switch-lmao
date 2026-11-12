@@ -30,10 +30,8 @@ uint32_t roundUp(uint32_t v, uint32_t a)
 
 Surface surface(uint32_t format, uint32_t width, uint32_t height)
 {
-    const switch_window_caps::Format *f = switch_window_caps::find(format, format == fourcc('4', '4', '4', 'v') ||
-                                                                               format == fourcc('4', '4', '4', 'f')
-                                                                           ? 2
-                                                                           : 0);
+    const switch_window_caps::Format *f = switch_window_caps::find(
+        format, format == fourcc('4', '4', '4', 'v') || format == fourcc('4', '4', '4', 'f') ? 2 : 0);
     Surface s;
     s.format = format;
     s.width = width;
@@ -91,6 +89,7 @@ TEST(SwitchWindowCaps, KindsAndRegisters)
     struct Want {
         uint32_t format, depth, swap;
     };
+
     const Want want[] = {{fourcc('4', '4', '4', 'v'), 49, 0},
                          {fourcc('4', '4', '4', 'f'), 49, 0},
                          {fourcc('2', 'v', 'u', 'y'), 16, 0},

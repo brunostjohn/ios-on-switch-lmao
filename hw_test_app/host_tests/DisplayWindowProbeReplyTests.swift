@@ -35,7 +35,8 @@ final class DisplayWindowProbeReplyTests: XCTestCase {
     }
 
     func testAPassCarriesEveryStepsCrcAndItsComparison() throws {
-        let bytes = reply(verdict: 0, steps: [("ref_hv", 0xabc, 0, 0), ("crop_hv", 0xabc, 1, 0), ("control", 0x123, 2, 1)])
+        let bytes = reply(
+            verdict: 0, steps: [("ref_hv", 0xabc, 0, 0), ("crop_hv", 0xabc, 1, 0), ("control", 0x123, 2, 1)])
         let parsed = try XCTUnwrap(DisplayWindowProbeReply(bytes))
         XCTAssertEqual(parsed.probe, 3)
         XCTAssertEqual(parsed.state, DisplayWindowProbeReply.done)
@@ -50,7 +51,8 @@ final class DisplayWindowProbeReplyTests: XCTestCase {
     }
 
     func testAFailCarriesTheKernelsReason() throws {
-        let bytes = reply(verdict: 1, steps: [("pitch", 1, 0, 0), ("block2", 2, 1, 0)], why: "a step's CRC is not its reference's")
+        let bytes = reply(
+            verdict: 1, steps: [("pitch", 1, 0, 0), ("block2", 2, 1, 0)], why: "a step's CRC is not its reference's")
         let finding = try XCTUnwrap(DisplayWindowProbeReply(bytes)).finding
         XCTAssertEqual(finding.verdict, .fail)
         XCTAssertEqual(finding.note, "a step's CRC is not its reference's")

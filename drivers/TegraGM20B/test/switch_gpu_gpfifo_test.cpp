@@ -5,7 +5,8 @@
 
 unsigned switch_gpu_test_delays, switch_gpu_test_warnings;
 
-namespace {
+namespace
+{
 struct Model {
 	std::array<u32, 1024> push = {};
 	std::array<u32, 2048> fifo = {};
@@ -19,8 +20,15 @@ Model &model(nvif_chan *channel)
 	return *static_cast<Model *>(channel->userd.map.ptr);
 }
 
-u32 pushGet(nvif_chan *channel) { return model(channel).completedPush; }
-u32 fifoGet(nvif_chan *channel) { return model(channel).completedFifo; }
+u32 pushGet(nvif_chan *channel)
+{
+	return model(channel).completedPush;
+}
+
+u32 fifoGet(nvif_chan *channel)
+{
+	return model(channel).completedFifo;
+}
 
 void pushEntry(nvif_chan *channel, bool, u64, u32, bool)
 {
@@ -69,10 +77,11 @@ void initialize(Model &state, u32 cursor)
 {
 	switch_gpu_test_delays = switch_gpu_test_warnings = 0;
 	nvif_chan_gpfifo_ctor(&operations, &state, state.fifo.data(), sizeof(state.fifo),
-		state.push.data(), 0x100000, sizeof(state.push), &state.channel);
-	state.channel.push.bgn = state.channel.push.cur = state.channel.push.end = state.push.data() + cursor;
+			      state.push.data(), 0x100000, sizeof(state.push), &state.channel);
+	state.channel.push.bgn = state.channel.push.cur = state.channel.push.end =
+		state.push.data() + cursor;
 }
-} // namespace
+}  // namespace
 
 TEST(Gpfifo, WrappedKernelPacketsAndUserEntriesPublishTogether)
 {

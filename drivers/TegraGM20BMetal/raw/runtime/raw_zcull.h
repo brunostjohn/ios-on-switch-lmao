@@ -103,18 +103,18 @@ inline uint32_t zcullZFormat(uint32_t metal)
 // nvk_CmdBeginRendering's zcull region (no storage: a cleared depth), its direction `dir`
 inline void zcullRegionWords(Push &p, const ZcullRegion &r, uint32_t zetaFormat, uint8_t dir)
 {
-    p.m(0x1590, 0);                                              // SET_ACTIVE_ZCULL_REGION
-    p.inc(0x07e0, {r.aliquotCount << 16, r.aliquotCount});      // SET_ZCULL_REGION_LOCATION, _ALIQUOTS
-    p.inc(0x07e8, {0, 0, 0, 0});                                 // SET_ZCULL_STORAGE_A..D
-    p.m(0x15c8, 0);                                              // SET_ZCULL_REGION_FORMAT Z_4X4
-    p.inc(0x07c0, {r.width, r.height, 1, 0});                    // SET_ZCULL_REGION_SIZE_A..C, _PIXEL_OFFSET_C
-    p.inc(0x15fc, {r.x, r.y});                                   // SET_ZCULL_REGION_PIXEL_OFFSET_A, _B
-    p.m(0x02e8, 1 | (r.normalizedAliquots & 0xffffff) << 4);     // SET_ZCULL_SUBREGION
-    p.m(0x0dd8, 0);                                              // SET_ZCULL_CRITERION: SFUNC_NEVER
+    p.m(0x1590, 0);                                           // SET_ACTIVE_ZCULL_REGION
+    p.inc(0x07e0, {r.aliquotCount << 16, r.aliquotCount});    // SET_ZCULL_REGION_LOCATION, _ALIQUOTS
+    p.inc(0x07e8, {0, 0, 0, 0});                              // SET_ZCULL_STORAGE_A..D
+    p.m(0x15c8, 0);                                           // SET_ZCULL_REGION_FORMAT Z_4X4
+    p.inc(0x07c0, {r.width, r.height, 1, 0});                 // SET_ZCULL_REGION_SIZE_A..C, _PIXEL_OFFSET_C
+    p.inc(0x15fc, {r.x, r.y});                                // SET_ZCULL_REGION_PIXEL_OFFSET_A, _B
+    p.m(0x02e8, 1 | (r.normalizedAliquots & 0xffffff) << 4);  // SET_ZCULL_SUBREGION
+    p.m(0x0dd8, 0);                                           // SET_ZCULL_CRITERION: SFUNC_NEVER
     p.m(0x0dbc, (dir == kZcullGreater ? 1u : 0u) | zcullZFormat(zetaFormat) << 16);  // SET_ZCULL_DIR_FORMAT
-    p.nonInc(0x02f8, r.subregions, r.subregionCount);            // SET_ZCULL_SUBREGION_ALLOCATION
-    p.m(0x02fc, r.algorithm);                                    // ASSIGN_ZCULL_SUBREGIONS
-    p.m(0x0370, 1);                                              // SET_ZCULL_SUBREGION_REPORT_TYPE: DEPTH_TEST
+    p.nonInc(0x02f8, r.subregions, r.subregionCount);                                // SET_ZCULL_SUBREGION_ALLOCATION
+    p.m(0x02fc, r.algorithm);                                                        // ASSIGN_ZCULL_SUBREGIONS
+    p.m(0x0370, 1);  // SET_ZCULL_SUBREGION_REPORT_TYPE: DEPTH_TEST
 }
 
 inline void zcullOffWords(Push &p)

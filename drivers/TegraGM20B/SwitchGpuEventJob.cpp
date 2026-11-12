@@ -23,8 +23,8 @@ int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbi
 		result = switch_gpu_event_resolve_use(events_[i], uses[i].value,
 						      &tokens_[tokenCount_], &uses_[tokenCount_]);
 		if (result == 2) {
-			onWord_[tokenCount_] =
-				switch_gpu_event_use_word(uses_[tokenCount_], uses[i].value, &words_[wordCount_]);
+			onWord_[tokenCount_] = switch_gpu_event_use_word(
+				uses_[tokenCount_], uses[i].value, &words_[wordCount_]);
 			wordCount_ += onWord_[tokenCount_];
 			++tokenCount_;
 		}
@@ -37,11 +37,13 @@ int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbi
 		if (result)
 			return result;
 		++signalCount_;
-		const TegraGM20BAbiSignalRelease *release = releases ? &releases[i - input->wait_count] : nullptr;
+		const TegraGM20BAbiSignalRelease *release =
+			releases ? &releases[i - input->wait_count] : nullptr;
 		if (release && (release->flags & ~uint32_t(TegraGM20BSignalReleased)))
 			return -22;
 		if (release && (release->flags & TegraGM20BSignalReleased))
-			if (const int refused = this->release(client, uses[i].handle, channel, release->payload))
+			if (const int refused = this->release(client, uses[i].handle, channel,
+							      release->payload))
 				return refused;
 	}
 	return 0;

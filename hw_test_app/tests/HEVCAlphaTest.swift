@@ -52,11 +52,15 @@ struct HEVCAlphaTest: HWTest {
             ("no MuxedAlphaDecoder timeout (-12911) or other error", played.errors.isEmpty),
             ("every frame out", played.frames == AlphaClip.frames),
             ("every frame within 100 ms of its decode call", played.worstLatency < 0.1),
-            ("colour and alpha decode to the pattern (\(played.firstMismatch ?? "ok"))",
-             played.matched == AlphaClip.frames),
+            (
+                "colour and alpha decode to the pattern (\(played.firstMismatch ?? "ok"))",
+                played.matched == AlphaClip.frames
+            ),
             ("a synchronous decode returns within 15 s", sync != nil),
-            ("synchronously, every frame out before its DecodeFrame returns",
-             sync.map { $0.frames == AlphaClip.frames && $0.returnedBeforeOutput == 0 && $0.errors.isEmpty } ?? false),
+            (
+                "synchronously, every frame out before its DecodeFrame returns",
+                sync.map { $0.frames == AlphaClip.frames && $0.returnedBeforeOutput == 0 && $0.errors.isEmpty } ?? false
+            ),
         ]
         let before = played.routesBefore ?? [:]
         let after = played.routesAfter ?? [:]
@@ -70,11 +74,15 @@ struct HEVCAlphaTest: HWTest {
         if context.ios >= 27 {
             checks += [
                 ("the decoder answers SwitchPictureRoutes (a debug AVD)", played.routesAfter != nil),
-                ("the colour layer goes into VideoToolbox's target from plane 0, by VIC",
-                 colour("first_plane") == 0 && colour("into_target") == AlphaClip.frames
-                    && colour("vic") == AlphaClip.frames && colour("cpu") == 0),
-                ("the alpha layer goes into plane 2 by VIC, none by the CPU",
-                 alpha("process_alpha_vic") == AlphaClip.frames && alpha("process_alpha_cpu") == 0),
+                (
+                    "the colour layer goes into VideoToolbox's target from plane 0, by VIC",
+                    colour("first_plane") == 0 && colour("into_target") == AlphaClip.frames
+                        && colour("vic") == AlphaClip.frames && colour("cpu") == 0
+                ),
+                (
+                    "the alpha layer goes into plane 2 by VIC, none by the CPU",
+                    alpha("process_alpha_vic") == AlphaClip.frames && alpha("process_alpha_cpu") == 0
+                ),
             ]
         }
         return .judged(checks, metrics, proof: played.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : "")

@@ -57,8 +57,9 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
     if (!kind)
         return 0;
     std::lock_guard<raw::Mutex> l(gPlainShapesLock);
-    return gPlainShapes.holds({uint64_t(d.pixelFormat), uint64_t(d.width), uint64_t(d.height), uint64_t(d.usage)}) ? 0
-                                                                                                                   : kind;
+    return gPlainShapes.holds({uint64_t(d.pixelFormat), uint64_t(d.width), uint64_t(d.height), uint64_t(d.usage)})
+               ? 0
+               : kind;
 }
 
 bool rmTexturePlain(RMTexture *t)

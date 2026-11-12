@@ -36,7 +36,8 @@ int SwitchGpuEventClient::import(void *task, uint32_t port, uint64_t *handle, ui
 	IOLockLock(lock_);
 	result = closed_ ? -19 : -28;
 	for (uint32_t i = 0; !closed_ && i < kHandles; ++i) {
-		if (entries_[i].event || (entries_[i].word && !switch_gpu_event_word_idle(entries_[i].word)))
+		if (entries_[i].event ||
+		    (entries_[i].word && !switch_gpu_event_word_idle(entries_[i].word)))
 			continue;
 		if (next_ > UINT64_MAX / kHandles)
 			break;

@@ -3,34 +3,33 @@
 #include "wrapcheck.h"
 
 namespace raw {
-template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
+template <class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
 {
     Texture pitch, view, mip, part, level, array, layer, bufferView;
     Buffer buffer;
     if (!device.createTexture(13, 9, 80, pitch) || !device.createView(pitch, 81, view) ||
         !device.createMipTexture(65, 33, 80, 4, mip) ||
-        !device.createPartView(mip, 80, fx::kTexTwoD, 2, 1, 0, 1, part) ||
-        !chainLevelImage(mip, 2, level) || !device.createArray(17, 9, 3, 80, fx::kTexTwoDArray, array) ||
+        !device.createPartView(mip, 80, fx::kTexTwoD, 2, 1, 0, 1, part) || !chainLevelImage(mip, 2, level) ||
+        !device.createArray(17, 9, 3, 80, fx::kTexTwoDArray, array) ||
         !device.createPartView(array, 80, fx::kTexTwoD, 0, 1, 1, 1, layer) ||
-        !device.createBuffer(1024, buffer, false) ||
-        !device.createBufferTexture(buffer, 128, 8, 4, 32, 80, bufferView))
+        !device.createBuffer(1024, buffer, false) || !device.createBufferTexture(buffer, 128, 8, 4, 32, 80, bufferView))
         std::abort();
     const auto same = [](const Texture::StorageRange &a, const Texture::StorageRange &b) {
         return a.va == b.va && a.bytes == b.bytes && a.hostVisible == b.hostVisible;
     };
     expect(pitch.storageRange().va == pitch.span.va && pitch.storageRange().bytes == pitch.span.bytes &&
-           pitch.storageRange().bytes >= uint64_t(pitch.pitch) * pitch.height,
+               pitch.storageRange().bytes >= uint64_t(pitch.pitch) * pitch.height,
            "pitch extent includes allocated row padding");
     expect(!view.span.valid() && !view.import && same(view.storageRange(), pitch.storageRange()),
            "format view keeps storage extent after dropping ownership fields");
     expect(same(mip.storageRange(), part.storageRange()) && same(mip.storageRange(), level.storageRange()) &&
-           mip.storageRange().bytes >= mip.chain->layout.bytes,
+               mip.storageRange().bytes >= mip.chain->layout.bytes,
            "mip views retain the complete padded chain allocation");
     expect(same(array.storageRange(), layer.storageRange()) && layer.va != array.va &&
-           array.storageRange().bytes >= array.layerBytes * array.layers,
+               array.storageRange().bytes >= array.layerBytes * array.layers,
            "layer view retains allocation including every padded layer");
     expect(bufferView.storageRange().va == buffer.va + 128 && bufferView.storageRange().bytes == 128 &&
-           bufferView.storageRange().hostVisible,
+               bufferView.storageRange().hostVisible,
            "buffer texture records only its bounded rows within the parent buffer");
     Texture bad;
     expect(!device.createBufferTexture(buffer, UINT64_MAX - 31, 8, 4, 32, 80, bad),
@@ -60,8 +59,7 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
     Texture importedTexture = bufferView;
     importedTexture.import = &imported;
     cb->use(importedTexture, true);
-    expect(exact(buffer.va + 128, 128, true),
-           "ordinary imported texture write keeps its exact storage range");
+    expect(exact(buffer.va + 128, 128, true), "ordinary imported texture write keeps its exact storage range");
     cb->surfaces_.clear();
     Texture converted = pitch;
     converted.planar = true;
@@ -69,14 +67,14 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
     converted.import = &imported;
     cb->use(converted, true);
     expect(cb->surfaces_.uses().size() == 2 && cb->surfaces_.uses()[0].handle == imported.bo.handle &&
-           cb->surfaces_.uses()[1].reserved == pitch.storageRange().bytes,
+               cb->surfaces_.uses()[1].reserved == pitch.storageRange().bytes,
            "converted image preserves distinct plane import and image ownership");
     cb->surfaces_.clear();
     Texture unknown;
     unknown.va = buffer.va;
     cb->use(unknown, true);
     expect(cb->surfaces_.uses().size() == 1 && cb->surfaces_.uses()[0].reserved == 0 &&
-           !(cb->surfaces_.uses()[0].access & TegraGM20BSurfaceRange),
+               !(cb->surfaces_.uses()[0].access & TegraGM20BSurfaceRange),
            "unknown texture extent never becomes a one-byte exact write");
     cb->surfaces_.clear();
     auto *blit = cb->blit();
@@ -103,4 +101,4 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
         device.destroyTexture(*texture);
     device.destroyBuffer(buffer);
 }
-} // namespace raw
+}  // namespace raw

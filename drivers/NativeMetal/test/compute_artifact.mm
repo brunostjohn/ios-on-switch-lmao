@@ -19,7 +19,8 @@ static void missing(const char *cls, const char *selector)
 static NSUInteger journalLines(const char *cache, NSString *prefix)
 {
     NSString *text = [NSString stringWithContentsOfFile:[@(cache) stringByAppendingPathComponent:@"pipelines.log"]
-                                              encoding:NSUTF8StringEncoding error:nil];
+                                               encoding:NSUTF8StringEncoding
+                                                  error:nil];
     NSUInteger count = 0;
     for (NSString *line in [text componentsSeparatedByString:@"\n"])
         count += [line hasPrefix:prefix];
@@ -156,8 +157,7 @@ int main(int argc, char **argv)
         dispatch.texture(0, texture);
         raw::ComputeRecord before, after;
         std::string why;
-        if (direct.kernel(descriptor, dispatch.dispatch(), "artifact test", before, why) !=
-            raw::CompileOutcome::Made) {
+        if (direct.kernel(descriptor, dispatch.dispatch(), "artifact test", before, why) != raw::CompileOutcome::Made) {
             fprintf(stderr, "baseline compile: %s\n", why.c_str());
             return 1;
         }

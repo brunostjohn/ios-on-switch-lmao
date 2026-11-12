@@ -35,8 +35,10 @@ void switch_diag_wl_touched(uint32_t command, uint32_t sfflags, uint64_t workloo
 #else
 static inline void switch_diag_proc_exit(__unused struct proc *p, __unused int rv)
 {}
+
 static inline void switch_diag_cpu_hog(__unused struct task *task, __unused const char *name, __unused int pid)
 {}
+
 static inline void switch_diag_wl_touched(__unused uint32_t command, __unused uint32_t sfflags,
                                           __unused uint64_t workloop, __unused uint64_t ident,
                                           __unused const void *waiter)

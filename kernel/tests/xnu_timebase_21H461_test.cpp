@@ -78,8 +78,8 @@ TEST(XnuTimebase21H461, OnlyTheConversionChangesAndAnyGuardMismatchLeavesTheWhol
 TEST(XnuTimebase21H461, ActualReplacementInstructionsMatchWideArithmeticAtBoundariesAndRandomUptimes)
 {
     constexpr size_t pageSize = 0x4000;
-    auto *code = static_cast<uint32_t *>(mmap(nullptr, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC,
-                                            MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0));
+    auto *code = static_cast<uint32_t *>(
+        mmap(nullptr, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0));
     ASSERT_NE(code, MAP_FAILED);
     pthread_jit_write_protect_np(0);
     std::memset(code, 0, pageSize);
@@ -93,19 +93,21 @@ TEST(XnuTimebase21H461, ActualReplacementInstructionsMatchWideArithmeticAtBounda
     code[0x65c / 4] = 0xd65f03c0;  // ret
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(code, pageSize);
-    const auto convert = reinterpret_cast<uint64_t (*)(uint64_t, uint64_t, uint64_t *, uint64_t, uint64_t *)>(code + 0x100 / 4);
+    const auto convert =
+        reinterpret_cast<uint64_t (*)(uint64_t, uint64_t, uint64_t *, uint64_t, uint64_t *)>(code + 0x100 / 4);
     auto check = [&](uint64_t nanoseconds) {
         const auto expected = static_cast<uint64_t>(static_cast<__uint128_t>(nanoseconds) * 12 / 625);
         uint64_t leeway = 0, queue = 0;
-        EXPECT_EQ(convert(nanoseconds, 1'000'000'000, &leeway, 0xcafe12345678, &queue), expected) << "nanoseconds=" << nanoseconds;
+        EXPECT_EQ(convert(nanoseconds, 1'000'000'000, &leeway, 0xcafe12345678, &queue), expected)
+            << "nanoseconds=" << nanoseconds;
         EXPECT_EQ(leeway, 1'000'000'000u);
         EXPECT_EQ(queue, 0xcafe12345678u);
     };
     for (uint64_t ns = 0; ns < 12500; ++ns) {
         check(ns);
     }
-    for (uint64_t ns : {UINT64_C(60'050'000'000), UINT64_C(3'600'050'000'000), UINT64_MAX / 3,
-                       UINT64_MAX / 3 + 1, UINT64_MAX / 2 - 1, UINT64_MAX / 2, UINT64_MAX}) {
+    for (uint64_t ns : {UINT64_C(60'050'000'000), UINT64_C(3'600'050'000'000), UINT64_MAX / 3, UINT64_MAX / 3 + 1,
+                        UINT64_MAX / 2 - 1, UINT64_MAX / 2, UINT64_MAX}) {
         check(ns);
     }
     std::mt19937_64 random(0x19200000);

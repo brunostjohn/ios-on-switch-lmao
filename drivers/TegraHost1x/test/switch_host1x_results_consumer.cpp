@@ -5,8 +5,7 @@
 using VIC = SwitchHost1xResults<SWITCH_GPU_ENGINE_VIC>;
 using NVDEC = SwitchHost1xResults<SWITCH_GPU_ENGINE_NVDEC>;
 
-template <typename Results>
-static SwitchHost1xResult *allocate(uint64_t sequence, switch_gpu_backing_token *token)
+template <typename Results> static SwitchHost1xResult *allocate(uint64_t sequence, switch_gpu_backing_token *token)
 {
     auto *record = Results::allocate();
     if (Results::prepare(record, sequence, sequence, token))
@@ -15,7 +14,7 @@ static SwitchHost1xResult *allocate(uint64_t sequence, switch_gpu_backing_token 
 }
 
 SwitchHost1xResult *switch_host1x_test_consumer_allocate(uint32_t engine, uint64_t sequence,
-                                                     switch_gpu_backing_token *token)
+                                                         switch_gpu_backing_token *token)
 {
     return engine == SWITCH_GPU_ENGINE_VIC ? allocate<VIC>(sequence, token) : allocate<NVDEC>(sequence, token);
 }

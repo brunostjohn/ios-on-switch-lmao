@@ -27,7 +27,7 @@ enum class ControlUse : uint8_t {
     ZeroPage,          // texture header 0 and unbound buffers read it, per pixel
     InterlockTickets,  // NAK's pixel interlock spins on and atomically increments its words, per 32-pixel group
     ColorTable,        // sRGB colour writes read it, per pixel
-    StateSegments,     // the CPU appends a state's methods at its creation, after the GPU fetched the chunk's earlier ones
+    StateSegments,  // the CPU appends a state's methods at its creation, after the GPU fetched the chunk's earlier ones
 };
 
 constexpr ControlMapping controlMapping(ControlUse use)

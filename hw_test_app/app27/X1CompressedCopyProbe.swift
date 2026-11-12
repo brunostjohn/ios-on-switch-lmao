@@ -110,7 +110,8 @@ enum X1CompressedCopyProbe {
             try await kit.gpu.run { commands in
                 let blit = commands.makeBlitCommandEncoder()!
                 blit.copy(
-                    from: staging, sourceOffset: 0, sourceBytesPerRow: width * kit.bytesPerTexel, sourceBytesPerImage: 0,
+                    from: staging, sourceOffset: 0, sourceBytesPerRow: width * kit.bytesPerTexel,
+                    sourceBytesPerImage: 0,
                     sourceSize: MTLSize(width: width, height: rows, depth: 1), to: t, destinationSlice: 0,
                     destinationLevel: 0, destinationOrigin: MTLOrigin())
                 blit.endEncoding()

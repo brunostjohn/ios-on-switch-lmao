@@ -141,8 +141,9 @@ inline std::string writePack(const std::string &key, std::vector<raw::PackKernel
         const std::vector<uint8_t> bytes = slot(k);
         memcpy(file.data() + kHeap + k * kSlot, bytes.data(), bytes.size());
     }
-    std::sort(kernels.begin(), kernels.end(),
-              [](const raw::PackKernel &a, const raw::PackKernel &b) { return a.keyHash < b.keyHash; });
+    std::sort(kernels.begin(), kernels.end(), [](const raw::PackKernel &a, const raw::PackKernel &b) {
+        return a.keyHash < b.keyHash;
+    });
     for (size_t i = 0; i < kernels.size(); i++) {
         kernels[i].program = uint16_t(2 + i);
         memcpy(file.data() + kKernels + i * sizeof(raw::PackKernel), &kernels[i], sizeof(raw::PackKernel));

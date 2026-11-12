@@ -41,7 +41,8 @@ struct TegraGM20BAbiResourceSetCreate {
 
 struct TegraGM20BAbiResourceSetCreateReply {
 	uint32_t set, generation;
-	uint32_t fence_token, generation_offset; /* the generation's mirror: byte offset in the fence page */
+	uint32_t fence_token,
+		generation_offset; /* the generation's mirror: byte offset in the fence page */
 };
 
 /* Method 32. Later SubmitJobs naming the set are refused; its members' GPU work is unaffected. */
@@ -51,20 +52,24 @@ struct TegraGM20BAbiResourceSetRelease {
 
 /* What ends a set's generation, the kernel's counter index for each */
 enum {
-	TegraGM20BSetCauseFree = 0,     /* a member's BO was freed */
-	TegraGM20BSetCauseLayout = 1,   /* a member's layout changed */
-	TegraGM20BSetCauseShared = 2,   /* a member's pages were reached from outside the set's connection */
-	TegraGM20BSetCauseKill = 3,     /* a channel that used the set was killed */
-	TegraGM20BSetCauseReplace = 4,  /* method 31 replaced the members */
-	TegraGM20BSetCauseCpu = 5,      /* a CPU lease or CpuComplete named a member */
+	TegraGM20BSetCauseFree = 0,   /* a member's BO was freed */
+	TegraGM20BSetCauseLayout = 1, /* a member's layout changed */
+	TegraGM20BSetCauseShared =
+		2, /* a member's pages were reached from outside the set's connection */
+	TegraGM20BSetCauseKill = 3,    /* a channel that used the set was killed */
+	TegraGM20BSetCauseReplace = 4, /* method 31 replaced the members */
+	TegraGM20BSetCauseCpu = 5,     /* a CPU lease or CpuComplete named a member */
 	TegraGM20BSetCauses = 6,
 };
 
 /* TegraGM20BAbiJob.flags */
 enum {
-	TegraGM20BJobExternal = 1u << 0,    /* the job's writes reach DRAM before its fence (CPU, display, other engines) */
-	TegraGM20BJobHostWritten = 1u << 1, /* the CPU wrote memory the job reads through the GPU L2 since the last job */
-	TegraGM20BJobHasEvents = 1u << 2,   /* a TegraGM20BAbiSubmitEvents and its uses follow the shared uses */
+	TegraGM20BJobExternal = 1u
+		<< 0, /* the job's writes reach DRAM before its fence (CPU, display, other engines) */
+	TegraGM20BJobHostWritten = 1u
+		<< 1, /* the CPU wrote memory the job reads through the GPU L2 since the last job */
+	TegraGM20BJobHasEvents = 1u
+		<< 2, /* a TegraGM20BAbiSubmitEvents and its uses follow the shared uses */
 	/* the job's end raises no interrupt unless a waiter asks for one: a wait then gets it at or after the seqno, behind
 	 * the channel's newest job. Ignored with HasEvents. */
 	TegraGM20BJobQuiet = 1u << 3,
@@ -77,7 +82,7 @@ enum {
 	TegraGM20BJobAdmissionEnd = 1u << 6,
 	TegraGM20BJobAdmissionCancel = 1u << 7,
 	TegraGM20BJobAdmission = TegraGM20BJobAdmissionBegin | TegraGM20BJobAdmissionContinue |
-				 TegraGM20BJobAdmissionEnd | TegraGM20BJobAdmissionCancel,
+		TegraGM20BJobAdmissionEnd | TegraGM20BJobAdmissionCancel,
 	/* the job keeps writer promises (method 34): a TegraGM20BAbiJobPromises follows the admission record (or the
 	 * shared uses), and the job's end releases them */
 	TegraGM20BJobFulfills = 1u << 8,
@@ -126,8 +131,9 @@ struct TegraGM20BAbiJob {
 
 enum {
 	TegraGM20BMethodEventWord = 40,
-	TegraGM20BSubmitEventReleases = 1u << 12, /* TegraGM20BAbiSubmit.surface_flags (SubmitAddress) */
-	TegraGM20BJobEventReleases = 1u << 12,    /* TegraGM20BAbiJob.flags */
+	TegraGM20BSubmitEventReleases = 1u
+		<< 12, /* TegraGM20BAbiSubmit.surface_flags (SubmitAddress) */
+	TegraGM20BJobEventReleases = 1u << 12, /* TegraGM20BAbiJob.flags */
 	TegraGM20BEventReleaseLimit = 1u << 31,
 	/* The connection's fence page holds the word of each imported event whose handle's slot is below
 	 * TegraGM20BEventWords at this word plus the slot: the words after the client bind epoch (256) and before the
@@ -156,7 +162,9 @@ struct TegraGM20BAbiEventWordReply {
 
 /* With SubmitEventReleases or JobEventReleases, one per signal after the signals. Released: the job's pushes release
  * payload into the event's word for it (method 40); the submission is refused if payload is not that signal's. */
-enum { TegraGM20BSignalReleased = 1u << 0 };
+enum {
+	TegraGM20BSignalReleased = 1u << 0
+};
 
 struct TegraGM20BAbiSignalRelease {
 	uint32_t payload, flags;

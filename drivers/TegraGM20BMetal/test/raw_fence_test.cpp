@@ -6,6 +6,7 @@
 
 namespace {
 unsigned checks;
+
 void check(bool value)
 {
     if (!value)
@@ -86,7 +87,9 @@ void interruptedPublication()
         check(result.status == S::Pending && reads == 5);
     }
     record = {2, 7, 7, TegraGM20BFenceSemanticFailed};
-    result = raw::readSemanticFence(7, [&](unsigned field) { return record[field]; });
+    result = raw::readSemanticFence(7, [&](unsigned field) {
+        return record[field];
+    });
     check(result.status == S::Failed && result.first == 7);
 }
 }

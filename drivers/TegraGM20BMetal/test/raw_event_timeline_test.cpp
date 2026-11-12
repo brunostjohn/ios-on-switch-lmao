@@ -130,7 +130,8 @@ TEST(EventTimeline, CompletionAndFailureSettleOnce)
             signal.settle(true);
         });
         std::thread failure([&] {
-            while (!start.load(std::memory_order_acquire)) {}
+            while (!start.load(std::memory_order_acquire)) {
+            }
             signal.settle(false);
         });
         producer.join();
@@ -141,4 +142,4 @@ TEST(EventTimeline, CompletionAndFailureSettleOnce)
         EXPECT_FALSE(signal.settle(outcome == EventOutcome::failed));
     }
 }
-} // namespace
+}  // namespace

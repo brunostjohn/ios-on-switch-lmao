@@ -53,7 +53,7 @@ public enum CAUniforms {
         "00000000 003ce270 000000c8 00440045 0000003c 003c0000 003800b8 000000b8 00b26642 0000333b 00380000 003c0000",
     ]
     static let glassExtensionWords = [
-        "cdcc4c3d 00000000 0000803f 74a1903f 6666263f 00010101 01000000",
+        "cdcc4c3d 00000000 0000803f 74a1903f 6666263f 00010101 01000000"
     ]
 
     static func glassBlock() -> UniformBlock { UniformBlock(hex: glassWords.joined(separator: " ")) }

@@ -15,7 +15,6 @@ host_test(
     ],
 )
 
-
 host_test(
     name = "switch_nvdec_display_probe_test",
     srcs = [
@@ -29,7 +28,6 @@ host_test(
         "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
     ],
 )
-
 
 host_shims(
     name = "output_kernel",
@@ -96,10 +94,14 @@ host_test(
     deps = [":output_kernel"],
 )
 
-
 host_shims(
     name = "completions_kernel",
-    headers = ["IOKit/IOUserClient.h", "IOKit/IOLib.h", "IOKit/IOLocks.h", "IOKit/IOBufferMemoryDescriptor.h"],
+    headers = [
+        "IOKit/IOUserClient.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOBufferMemoryDescriptor.h",
+    ],
     stubs = "switch_nvdec_completions_stubs.h",
 )
 
@@ -120,7 +122,6 @@ host_test(
     additional_compiler_inputs = ["//drivers/TegraNVDEC:SwitchNVDECCompletions.cpp"],
     deps = [":completions_kernel"],
 )
-
 
 host_shims(
     name = "submit_kernel",
@@ -173,7 +174,6 @@ host_test(
     deps = [":submit_kernel"],
 )
 
-
 host_library(
     name = "semantics",
     srcs = [
@@ -186,15 +186,23 @@ host_library(
         "//drivers/TegraHost1x:SwitchHost1xSemantics.h",
         "//drivers/TegraHost1x:SwitchHost1xResults.h",
     ],
-    deps = ["//drivers/TegraGM20B/test:switch_gpu_event", "//drivers/TegraGM20B/test:event_kernel"],
+    deps = [
+        "//drivers/TegraGM20B/test:switch_gpu_event",
+        "//drivers/TegraGM20B/test:event_kernel",
+    ],
 )
 
 host_test(
     name = "switch_nvdec_semantics_test",
-    srcs = ["switch_nvdec_semantics_test.cpp", "//drivers/TegraGM20B/test:switch_gpu_event_fixture.h"],
-    deps = [":semantics", "//drivers/TegraGM20B/test:event_kernel"],
+    srcs = [
+        "switch_nvdec_semantics_test.cpp",
+        "//drivers/TegraGM20B/test:switch_gpu_event_fixture.h",
+    ],
+    deps = [
+        ":semantics",
+        "//drivers/TegraGM20B/test:event_kernel",
+    ],
 )
-
 
 host_test(
     name = "switch_host1x_results_test",

@@ -79,8 +79,8 @@ constexpr uint64_t kVicPA = 0x54340000, kVicSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_VIC;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kPartition = 23;                           // TEGRA_POWERGATE_VIC
-constexpr unsigned kClock = 178;                              // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
+constexpr uint32_t kPartition = 23;  // TEGRA_POWERGATE_VIC
+constexpr unsigned kClock = 178;     // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
 constexpr uint64_t kArenaBytes = kSwitchVICConfigBytes + 0x3000 + SWITCH_HW_PAGE_SIZE;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
@@ -207,8 +207,7 @@ bool smmuSetUp()
         }
     }
     if (!gDomain.reserve(kMappingBase, kMappingBytes) ||
-        !gMappingSpace.init(kMappingBase, kMappingBytes, gMappingBitmap,
-                            TegraSMMUSpace::bitmapWords(kMappingBytes)))
+        !gMappingSpace.init(kMappingBase, kMappingBytes, gMappingBitmap, TegraSMMUSpace::bitmapWords(kMappingBytes)))
         return false;
     const bool identities = identity(gFirmware, false) && identity(gArena, true);
     switch_dcache_clean(gTables.va, gTables.size);
@@ -247,7 +246,7 @@ void smmuDetach()
 // THI SLCG overridden for the pulse (it needs host1x's clock, which the boot chain left on), then the module reset
 // again, as the kit's own workaround would. A partition the boot chain left on keeps its state; the engine is still
 // reset so the falcon starts from scratch.
-const SwitchEnginePower kPower = {kPartition, kClock, MC_HOTRESET_CTRL, MC_HOTRESET_STATUS, MC_HOTRESET_VIC, 0,
+const SwitchEnginePower kPower = {kPartition, kClock, MC_HOTRESET_CTRL,   MC_HOTRESET_STATUS, MC_HOTRESET_VIC, 0,
                                   nullptr,    0,      tegra_mc_hot_reset, tegra_smmu_read};
 
 void mbistWorkaround()
@@ -525,9 +524,9 @@ extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t co
     const uint64_t bytes = static_cast<uint64_t>(count + kTailPages) * SWITCH_HW_PAGE_SIZE;
     IOLockLock(gMappingLock);
     uint64_t address = gMappingSpace.alloc(bytes);
-    if (address && (!gDomain.map(address, pages, count, writable) ||
-                    !gDomain.map(address + static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE, gTailPages, kTailPages,
-                                 false))) {
+    if (address &&
+        (!gDomain.map(address, pages, count, writable) ||
+         !gDomain.map(address + static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE, gTailPages, kTailPages, false))) {
         gDomain.unmap(address, count + kTailPages);
         gMappingSpace.release(address, bytes);
         address = 0;

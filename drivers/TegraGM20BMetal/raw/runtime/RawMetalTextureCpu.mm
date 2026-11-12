@@ -2,25 +2,27 @@
 #import "RawMetalInternal.h"
 #include "../fx/fx_image.h"
 
-bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
-                     void *bytes, NSUInteger row, NSUInteger image, bool write)
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice, void *bytes,
+                     NSUInteger row, NSUInteger image, bool write)
 {
     if (!texture->_rawOk || texture->_kind == RMTextureBuffer || texture->_kind == RMTextureView ||
         (texture->_heap && texture->_heap->_descriptor.storageMode == MTLStorageModeShared))
         return false;
     if (!region.size.width || !region.size.height || !region.size.depth)
         return true;
-    for (const NSUInteger value : {region.origin.x, region.origin.y, region.origin.z,
-                                   region.size.width, region.size.height, region.size.depth, level, slice})
+    for (const NSUInteger value : {region.origin.x, region.origin.y, region.origin.z, region.size.width,
+                                   region.size.height, region.size.depth, level, slice})
         if (value > UINT32_MAX)
             return false;
     const uint32_t origin[] = {uint32_t(region.origin.x), uint32_t(region.origin.y), uint32_t(region.origin.z)};
     const uint32_t size[] = {uint32_t(region.size.width), uint32_t(region.size.height), uint32_t(region.size.depth)};
     if (write)
         declareGpuWrites(texture);
-    auto owner = std::shared_ptr<void>((__bridge_retained void *)texture, [](void *held) { CFRelease(held); });
-    const auto result = gRM->raw->transferTexture(texture->_raw, uint32_t(level), uint32_t(slice), origin, size,
-                                                 bytes, row, image, write, std::move(owner));
+    auto owner = std::shared_ptr<void>((__bridge_retained void *)texture, [](void *held) {
+        CFRelease(held);
+    });
+    const auto result = gRM->raw->transferTexture(texture->_raw, uint32_t(level), uint32_t(slice), origin, size, bytes,
+                                                  row, image, write, std::move(owner));
     // A failed write published nothing and a failed read touched only its staging: the CPU paths take either over
     if (result != raw::TextureTransferResult::Complete)
         return false;

@@ -20,7 +20,8 @@ TEST(GM20BCompositorSync, KicksBehindAnAppAreCountedApart)
 	switch_gpu_comp_sync_add(&s, 1, 6000, 0);
 	switch_gpu_comp_sync_add(&s, 1, 2620000, 1);
 	switch_gpu_comp_sync_add(&s, 2, 5000, 0);
-	EXPECT_EQ(text(s), "sync_subs=3 syncs=4 sync_us=2631 behind=1 behind_sync_us=2620 sync_max_us=2620");
+	EXPECT_EQ(text(s),
+		  "sync_subs=3 syncs=4 sync_us=2631 behind=1 behind_sync_us=2620 sync_max_us=2620");
 }
 
 TEST(GM20BCompositorSync, TakingStartsAgain)

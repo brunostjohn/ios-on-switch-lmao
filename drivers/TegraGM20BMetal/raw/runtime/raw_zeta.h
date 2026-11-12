@@ -95,23 +95,23 @@ struct DepthStencilDesc {
 constexpr uint32_t kDepthStencilRegs = 18;
 
 inline constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_TEST,
-                                                              NVB197_SET_DEPTH_WRITE,
-                                                              NVB197_SET_DEPTH_FUNC,
-                                                              NVB197_SET_STENCIL_TEST,
-                                                              NVB197_SET_STENCIL_OP_FAIL,
-                                                              NVB197_SET_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_STENCIL_FUNC,
-                                                              NVB197_SET_STENCIL_FUNC_REF,
-                                                              NVB197_SET_STENCIL_FUNC_MASK,
-                                                              NVB197_SET_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_OP_FAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_BACK_STENCIL_FUNC,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_REF,
-                                                              NVB197_SET_BACK_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_MASK};
+                                                                     NVB197_SET_DEPTH_WRITE,
+                                                                     NVB197_SET_DEPTH_FUNC,
+                                                                     NVB197_SET_STENCIL_TEST,
+                                                                     NVB197_SET_STENCIL_OP_FAIL,
+                                                                     NVB197_SET_STENCIL_OP_ZFAIL,
+                                                                     NVB197_SET_STENCIL_OP_ZPASS,
+                                                                     NVB197_SET_STENCIL_FUNC,
+                                                                     NVB197_SET_STENCIL_FUNC_REF,
+                                                                     NVB197_SET_STENCIL_FUNC_MASK,
+                                                                     NVB197_SET_STENCIL_MASK,
+                                                                     NVB197_SET_BACK_STENCIL_OP_FAIL,
+                                                                     NVB197_SET_BACK_STENCIL_OP_ZFAIL,
+                                                                     NVB197_SET_BACK_STENCIL_OP_ZPASS,
+                                                                     NVB197_SET_BACK_STENCIL_FUNC,
+                                                                     NVB197_SET_BACK_STENCIL_FUNC_REF,
+                                                                     NVB197_SET_BACK_STENCIL_MASK,
+                                                                     NVB197_SET_BACK_STENCIL_FUNC_MASK};
 
 struct DepthStencilRegs {
     uint32_t v[kDepthStencilRegs] = {};

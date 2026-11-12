@@ -126,7 +126,12 @@ private:
 
 template <typename Record, typename T> class ComputeKernelBuild {
 public:
-    enum class Outcome { Made, Refused, Failed };
+    enum class Outcome {
+        Made,
+        Refused,
+        Failed
+    };
+
     struct Result {
         const T *state = nullptr;
         bool retry = false;

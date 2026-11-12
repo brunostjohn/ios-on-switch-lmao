@@ -4,17 +4,35 @@
 
 namespace {
 constexpr int kIOReturnAborted = -14, kIOReturnSuccess = 0;
+
 struct Display {
     using PlaneSet = switch_display::Composition;
-    struct Job { uint64_t request = 7; int status = 0; } job;
-    struct Latch { int active = 0; } planeLatch;
+
+    struct Job {
+        uint64_t request = 7;
+        int status = 0;
+    } job;
+
+    struct Latch {
+        int active = 0;
+    } planeLatch;
+
     PlaneSet planeNext, planeTarget, planeHeld, active, fenced;
     bool planeNextSet = true, planeHeldSet = false, needsFence = true, accepted = true;
     unsigned completions = 0, fenceSubmissions = 0;
     int completedStatus = 0;
     bool joinedWhenCompleted = true;
-    uint64_t seqOf(uint64_t request) const { return request; }
-    bool planeFenced(const PlaneSet &) const { return needsFence; }
+
+    uint64_t seqOf(uint64_t request) const
+    {
+        return request;
+    }
+
+    bool planeFenced(const PlaneSet &) const
+    {
+        return needsFence;
+    }
+
     bool planeFence(const PlaneSet &set)
     {
         ++fenceSubmissions;
@@ -23,14 +41,21 @@ struct Display {
         fenced = planeTarget = set;
         return true;
     }
-    const PlaneSet &planeSetOf(int) const { return active; }
+
+    const PlaneSet &planeSetOf(int) const
+    {
+        return active;
+    }
+
     void completeCopiedJob()
     {
         ++completions;
         completedStatus = job.status;
         joinedWhenCompleted = copyPlaneJoined;
     }
+
 #include "../SwitchCopiedPlanes.h"
+
     Display()
     {
         planeNext.window[0].on = planeNext.window[1].on = true;
@@ -40,6 +65,7 @@ struct Display {
         active.window[0].slot = 3;
     }
 };
+
 TEST(CopiedPlanes, PixelsFirstRemainOwnedUntilBothOverlayProducersFinish)
 {
     Display display;
@@ -56,6 +82,7 @@ TEST(CopiedPlanes, PixelsFirstRemainOwnedUntilBothOverlayProducersFinish)
     EXPECT_FALSE(display.joinedWhenCompleted);
     EXPECT_TRUE(display.planeNextSet);
 }
+
 TEST(CopiedPlanes, HardwareFenceFirstDoesNotPublishUnfinishedCpuPixels)
 {
     Display display;
@@ -67,6 +94,7 @@ TEST(CopiedPlanes, HardwareFenceFirstDoesNotPublishUnfinishedCpuPixels)
     EXPECT_EQ(display.completions, 1u);
     EXPECT_FALSE(display.copyPlaneJoined);
 }
+
 TEST(CopiedPlanes, LostOverlayWaitsForCpuWriterToStopBeforeDiscardingFrame)
 {
     Display display;
@@ -81,6 +109,7 @@ TEST(CopiedPlanes, LostOverlayWaitsForCpuWriterToStopBeforeDiscardingFrame)
     EXPECT_TRUE(display.planeTarget.uses(3));
     EXPECT_FALSE(display.planeTarget.uses(1));
 }
+
 TEST(CopiedPlanes, CpuFailureKeepsItsStatusUntilHardwareRetirement)
 {
     Display display;
@@ -94,6 +123,7 @@ TEST(CopiedPlanes, CpuFailureKeepsItsStatusUntilHardwareRetirement)
     EXPECT_FALSE(display.planeNextSet);
     EXPECT_TRUE(display.planeTarget.uses(3));
 }
+
 TEST(CopiedPlanes, FailedProducerRestoresPendingVisibleComposition)
 {
     Display display;
@@ -106,6 +136,7 @@ TEST(CopiedPlanes, FailedProducerRestoresPendingVisibleComposition)
     EXPECT_TRUE(display.planeTarget.uses(4));
     EXPECT_FALSE(display.planeTarget.uses(3));
 }
+
 TEST(CopiedPlanes, AlreadyVisibleOrAbsentOverlayDoesNotSubmitHardwareWork)
 {
     Display display;
@@ -119,6 +150,7 @@ TEST(CopiedPlanes, AlreadyVisibleOrAbsentOverlayDoesNotSubmitHardwareWork)
     EXPECT_FALSE(display.copiedPixelsFinished());
     EXPECT_EQ(display.fenceSubmissions, 0u);
 }
+
 TEST(CopiedPlanes, AdmissionFailureLeavesNoCompletionJoin)
 {
     Display display;
@@ -128,4 +160,4 @@ TEST(CopiedPlanes, AdmissionFailureLeavesNoCompletionJoin)
     EXPECT_FALSE(display.copiedPixelsFinished());
     EXPECT_EQ(display.completions, 0u);
 }
-} // namespace
+}  // namespace

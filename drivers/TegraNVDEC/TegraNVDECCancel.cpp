@@ -24,6 +24,7 @@ extern "C" IOLock *tegra_nvdec_power_lock(void);
 
 namespace {
 thread_call_t gCancel;
+
 struct Stall {
     uint32_t syncpt, fence;
     int error;

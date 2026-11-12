@@ -4,8 +4,14 @@
 #include "../SwitchVICSurfaceAccess.cpp"
 #include "../../../kernel/switch/iokit/memory_attachment.cpp"
 
-struct switch_gpu_backing { uint32_t refs = 1; };
-struct switch_gpu_cpu_lease { bool live = false; };
+struct switch_gpu_backing {
+    uint32_t refs = 1;
+};
+
+struct switch_gpu_cpu_lease {
+    bool live = false;
+};
+
 namespace {
 switch_gpu_backing backing;
 switch_gpu_cpu_lease lease;
@@ -13,8 +19,9 @@ bool attached, backingAvailable;
 int prepareError;
 uint32_t prepareOptions, finishes, registrations, leaseReleases;
 }
+
 extern "C" int switch_native_surface_prepare_gpu(OSObject *, uint32_t, void *, uint32_t options,
-                                              switch_gpu_backing **out, switch_gpu_cpu_lease **owned)
+                                                 switch_gpu_backing **out, switch_gpu_cpu_lease **owned)
 {
     prepareOptions = options;
     *out = nullptr;
@@ -29,6 +36,7 @@ extern "C" int switch_native_surface_prepare_gpu(OSObject *, uint32_t, void *, u
     }
     return 0;
 }
+
 switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
 {
     ++registrations;
@@ -37,8 +45,15 @@ switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
     ++backing.refs;
     return &backing;
 }
-extern "C" void switch_gpu_backing_release(switch_gpu_backing *value) { --value->refs; }
-extern "C" void switch_gpu_admission_changed(void) {}
+
+extern "C" void switch_gpu_backing_release(switch_gpu_backing *value)
+{
+    --value->refs;
+}
+
+extern "C" void switch_gpu_admission_changed(void)
+{}
+
 extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **owned, int wrote)
 {
     EXPECT_EQ(*owned, &lease);
@@ -49,11 +64,13 @@ extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **owned
     ++leaseReleases;
     return 0;
 }
+
 extern "C" void switch_gpu_surface_finish(void *descriptor)
 {
     ++finishes;
     SwitchMemoryAttachment::leaveCpu(static_cast<IOMemoryDescriptor *>(descriptor));
 }
+
 namespace {
 class SwitchVICAccessTest : public testing::Test {
 protected:
@@ -61,6 +78,7 @@ protected:
     IOMemoryDescriptor *memory;
     TegraVICSurface surface;
     SwitchVICSurfaceAccess access;
+
     void SetUp() override
     {
         attached = false;
@@ -74,6 +92,7 @@ protected:
         surface = {object, memory, {}, 4096, 7, false};
         access = {};
     }
+
     void TearDown() override
     {
         switch_vic_surface_release_access(&access);
@@ -84,6 +103,7 @@ protected:
         memory->release();
     }
 };
+
 TEST_F(SwitchVICAccessTest, OrdinaryBackingStartsAtSurfaceBaseAndKeepsDescriptorGuard)
 {
     ASSERT_EQ(switch_vic_surface_access(&surface, false, &access), 0);
@@ -98,6 +118,7 @@ TEST_F(SwitchVICAccessTest, OrdinaryBackingStartsAtSurfaceBaseAndKeepsDescriptor
     EXPECT_EQ(finishes, 1u);
     EXPECT_EQ(backing.refs, 2u);
 }
+
 TEST_F(SwitchVICAccessTest, MaterializedAliasKeepsCanonicalOffsetAndOwnershipUntilPublication)
 {
     attached = true;
@@ -112,6 +133,7 @@ TEST_F(SwitchVICAccessTest, MaterializedAliasKeepsCanonicalOffsetAndOwnershipUnt
     EXPECT_EQ(finishes, 1u);
     EXPECT_EQ(backing.refs, 2u);
 }
+
 TEST_F(SwitchVICAccessTest, FailedMaterializationDropsDescriptorReservation)
 {
     prepareError = -5;
@@ -120,6 +142,7 @@ TEST_F(SwitchVICAccessTest, FailedMaterializationDropsDescriptorReservation)
     EXPECT_EQ(access.descriptor, nullptr);
     EXPECT_EQ(access.backing, nullptr);
 }
+
 TEST_F(SwitchVICAccessTest, FailedRegistrationDropsDescriptorReservation)
 {
     backingAvailable = false;
@@ -127,6 +150,7 @@ TEST_F(SwitchVICAccessTest, FailedRegistrationDropsDescriptorReservation)
     EXPECT_EQ(finishes, 1u);
     EXPECT_EQ(access.descriptor, nullptr);
 }
+
 TEST_F(SwitchVICAccessTest, AvoidSyncNeverWaitsForExclusivePublisher)
 {
     ASSERT_EQ(SwitchMemoryAttachment::enterExclusive(memory, false), 0);

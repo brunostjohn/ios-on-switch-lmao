@@ -99,8 +99,7 @@ static bool clearsWhole(RMTexture *t, MTLLoadAction load, const RMPass &pass)
     return width >= t->_raw.width && height >= t->_raw.height;
 }
 
-__attribute__((objc_externally_retained)) void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load,
-                                                                  const RMPass &pass)
+__attribute__((objc_externally_retained)) void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load, const RMPass &pass)
 {
     Entry *e = entry(t);
     if (!e)

@@ -61,7 +61,10 @@ static inline uint32_t tegra_host1x_op_imm(uint32_t offset, uint32_t value)
 }
 
 // T210 host1x05 methods 0x4e/0x50 load the full threshold and wait on it; the legacy method 8 truncates to 24 bits.
-enum { SWITCH_HOST1X_WAIT_WORDS = 3 };
+enum {
+    SWITCH_HOST1X_WAIT_WORDS = 3
+};
+
 static inline uint32_t tegra_host1x_op_wait_syncpt(uint32_t *w, uint32_t id, uint32_t threshold)
 {
     w[0] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5);

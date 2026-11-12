@@ -54,7 +54,7 @@ os_log_t gAVDLog;
 static const bool kReorder = false;  // see above
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-#define kSwitchPictureRoutesKey       CFSTR("SwitchPictureRoutes")
+#define kSwitchPictureRoutesKey      CFSTR("SwitchPictureRoutes")
 #define kSwitchDisplayBufferProbeKey CFSTR("SwitchDisplayBufferProbe")
 #endif
 
@@ -223,9 +223,9 @@ static void *decoded(void *ctx, const H264Picture *picture)
     if (picture->refused)
         avd_emitter_fail(d->emitter, out, kVTVideoDecoderBadDataErr);
     CVPixelBufferPoolRef pool = d->session && !d->intoTarget ? VTDecoderSessionGetPixelBufferPool(d->session) : NULL;
-    const bool made =
-        d->intoTarget ? d->session && !VTDecoderSessionCreatePixelBuffer(d->session, out->frame, &out->image)
-                      : pool && !CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image);
+    const bool made = d->intoTarget
+                          ? d->session && !VTDecoderSessionCreatePixelBuffer(d->session, out->frame, &out->image)
+                          : pool && !CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image);
     if (!made || !out->image) {
         avd_emitter_fail(d->emitter, out, kVTVideoDecoderMalfunctionErr);
         return out;
@@ -246,9 +246,11 @@ static void *decoded(void *ctx, const H264Picture *picture)
         CVBufferSetAttachment(out->image, kCVImageBufferTransferFunctionKey, d->transfer,
                               kCVAttachmentMode_ShouldPropagate);
     if (d->chromaTop)
-        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationTopFieldKey, d->chromaTop, kCVAttachmentMode_ShouldPropagate);
+        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationTopFieldKey, d->chromaTop,
+                              kCVAttachmentMode_ShouldPropagate);
     if (d->chromaBottom)
-        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationBottomFieldKey, d->chromaBottom, kCVAttachmentMode_ShouldPropagate);
+        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationBottomFieldKey, d->chromaBottom,
+                              kCVAttachmentMode_ShouldPropagate);
     if (picture->fields)
         avd_tag_fields(out->image, picture->fields);
     avd_place_picture(d, out, picture, out->image, 0, 0);
@@ -429,7 +431,8 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
     d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, v ? v[7] : 2, 1, 0);
     d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, v ? v[8] : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField, false, 0);
-    d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField, false, 0);
+    d->chromaBottom =
+        switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField, false, 0);
     OSStatus status;
     avd_set_attributes(d, session, fullRange, false, &status);
     if (!status)
@@ -472,7 +475,8 @@ int avd_load_hvcc(Decoder *d, CFDataRef hvcC)
 static bool eightBit420(CFTypeRef value)
 {
     OSType format = 0;
-    return value && CFGetTypeID(value) == CFNumberGetTypeID() && CFNumberGetValue(value, kCFNumberSInt32Type, &format) &&
+    return value && CFGetTypeID(value) == CFNumberGetTypeID() &&
+           CFNumberGetValue(value, kCFNumberSInt32Type, &format) &&
            (format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
             format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
 }
@@ -520,8 +524,8 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
     const bool vui = sps->colour_description;
     d->matrix =
         switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
-    d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries,
+                                          vui ? sps->colour_primaries : 2, 1, 0);
     d->transfer =
         switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
@@ -571,9 +575,8 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
         d->h264 = NULL;
         d->client = NULL;
         status = avd_start_software(d, session, format,
-                                    configured == -3
-                                        ? "no NVDEC memory for its buffers (see the AVD alloc/map line)"
-                                        : "not decodable on NVDEC (4:2:0 8-bit up to 4096x4096 is)");
+                                    configured == -3 ? "no NVDEC memory for its buffers (see the AVD alloc/map line)"
+                                                     : "not decodable on NVDEC (4:2:0 8-bit up to 4096x4096 is)");
         pthread_mutex_unlock(&d->lock);
         return status;
     }
@@ -584,8 +587,8 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
                                      : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     d->matrix =
         switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
-    d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries,
+                                          vui ? sps->colour_primaries : 2, 1, 0);
     d->transfer =
         switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
@@ -855,8 +858,10 @@ static void finalize(CMBaseObjectRef ref)
         CFRelease(d->primaries);
     if (d->transfer)
         CFRelease(d->transfer);
-    if (d->chromaTop) CFRelease(d->chromaTop);
-    if (d->chromaBottom) CFRelease(d->chromaBottom);
+    if (d->chromaTop)
+        CFRelease(d->chromaTop);
+    if (d->chromaBottom)
+        CFRelease(d->chromaBottom);
     pthread_mutex_destroy(&d->lock);
 }
 

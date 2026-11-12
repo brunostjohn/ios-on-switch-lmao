@@ -19,11 +19,11 @@
 
 typedef struct {
     uint32_t sourceWidth, sourceHeight, destination;  // destination: fourcc
-    int32_t status;              // 0, -95 refused by tegra_vic_build, else the job's error
-    uint32_t checked, wrong;     // interior output pixels (and '420v' CbCr pairs) checked, and off their value
-    uint32_t unwritten;          // output pixels still holding the poison
-    uint32_t outsideWritten;     // destination bytes changed outside the planes' pictures
-    uint32_t maxError;           // BGRA: the largest channel difference on interior pixels
+    int32_t status;                                   // 0, -95 refused by tegra_vic_build, else the job's error
+    uint32_t checked, wrong;  // interior output pixels (and '420v' CbCr pairs) checked, and off their value
+    uint32_t unwritten;       // output pixels still holding the poison
+    uint32_t outsideWritten;  // destination bytes changed outside the planes' pictures
+    uint32_t maxError;        // BGRA: the largest channel difference on interior pixels
     uint32_t firstX, firstY, firstGot;
 } SwitchVICLargeResult;
 
@@ -47,10 +47,8 @@ struct Case {
 };
 
 constexpr Case kCases[SWITCH_VIC_LARGE_PROBE_CASES] = {
-    {64, 64, kPitch, k420v, 64, 64, 0},
-    {3840, 2160, 1, k420v, 720, 1280, 4},
-    {3840, 2160, 1, kBGRA, 720, 1280, 4},
-    {4096, 2160, 1, k420v, 1024, 540, 0},
+    {64, 64, kPitch, k420v, 64, 64, 0},        {3840, 2160, 1, k420v, 720, 1280, 4},
+    {3840, 2160, 1, kBGRA, 720, 1280, 4},      {4096, 2160, 1, k420v, 1024, 540, 0},
     {4096, 2160, kPitch, k420v, 1024, 540, 0},
 };
 

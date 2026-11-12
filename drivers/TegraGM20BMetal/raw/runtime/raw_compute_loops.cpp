@@ -43,7 +43,7 @@ Predication::Answer ComputeEncoder::endLoop(uint64_t wordVa, const PredicateTest
 {
     room(LoopCopies::endRoom(cb_.predication_.depth()));
     const Predication::Answer answer = cb_.loops_.end(stream(), cb_.predication_, cb_.batchWork_, cb_.batchLimit(),
-                                                  dev_.loopRecordVa(cb_.stamp), cb_.stamp, tag, wordVa, test);
+                                                      dev_.loopRecordVa(cb_.stamp), cb_.stamp, tag, wordVa, test);
     cb_.loopsLaid |= answer == Predication::Answer::Done;
     return answer;
 }

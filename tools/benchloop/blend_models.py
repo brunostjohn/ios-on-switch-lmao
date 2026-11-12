@@ -41,13 +41,25 @@ def half(x: float | Fraction) -> float:
 
 
 def _code_factor(name: str, sa: int, da: int) -> int:
-    return {'zero': 0, 'one': 255, 'src_alpha': sa, 'one_minus_src_alpha': 255 - sa, 'dst_alpha': da,
-            'one_minus_dst_alpha': 255 - da}[name]
+    return {
+        'zero': 0,
+        'one': 255,
+        'src_alpha': sa,
+        'one_minus_src_alpha': 255 - sa,
+        'dst_alpha': da,
+        'one_minus_dst_alpha': 255 - da,
+    }[name]
 
 
 def _value_factor(name: str, sa: Fraction, da: Fraction, one_minus: Callable[[Fraction], Fraction]) -> Fraction:
-    return {'zero': Fraction(0), 'one': Fraction(1), 'src_alpha': sa, 'one_minus_src_alpha': one_minus(sa),
-            'dst_alpha': da, 'one_minus_dst_alpha': one_minus(da)}[name]
+    return {
+        'zero': Fraction(0),
+        'one': Fraction(1),
+        'src_alpha': sa,
+        'one_minus_src_alpha': one_minus(sa),
+        'dst_alpha': da,
+        'one_minus_dst_alpha': one_minus(da),
+    }[name]
 
 
 def chip(s: float, sa: float, dst: int, da: int, fs: str, fd: str, quantise: Callable[[float], int] = store) -> int:

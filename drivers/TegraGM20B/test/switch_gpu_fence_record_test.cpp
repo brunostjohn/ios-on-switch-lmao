@@ -8,7 +8,10 @@ namespace
 struct Slot {
 	alignas(8) uint32_t words[16] = {};
 
-	void identify(uint64_t uid) { memcpy(&words[8], &uid, sizeof(uid)); }
+	void identify(uint64_t uid)
+	{
+		memcpy(&words[8], &uid, sizeof(uid));
+	}
 };
 }  // namespace
 

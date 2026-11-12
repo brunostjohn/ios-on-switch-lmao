@@ -100,6 +100,7 @@ uint32_t tegra_gm20b_ios_element_height(OSObject *s)
 }
 
 uint32_t gSeed;
+
 uint32_t tegra_gm20b_ios_seed(OSObject *)
 {
 	return gSeed;
@@ -138,8 +139,8 @@ int switch_native_surface_prepare(OSObject *object, uint32_t, void *, uint32_t o
 	EXPECT_GT(surface->memory.cpuUsers, 0u);
 	EXPECT_GT(surface->refs, 1u);
 	++prepareCalls;
-    prepareOptions = options;
-    preparedObject = object;
+	prepareOptions = options;
+	preparedObject = object;
 	*backing = nullptr;
 	*owned = nullptr;
 	return prepareResult;
@@ -147,14 +148,14 @@ int switch_native_surface_prepare(OSObject *object, uint32_t, void *, uint32_t o
 
 int switch_native_surface_gpu_admission(OSObject *object, uint32_t, switch_gpu_backing *)
 {
-    EXPECT_GT(static_cast<Surface *>(object)->memory.cpuUsers, 0u);
-    return 1;
+	EXPECT_GT(static_cast<Surface *>(object)->memory.cpuUsers, 0u);
+	return 1;
 }
 
 int switch_native_surface_prepare_gpu(OSObject *object, uint32_t id, void *task, uint32_t options,
-        switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
+				      switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
 {
-    return switch_native_surface_prepare(object, id, task, options, backing, owned);
+	return switch_native_surface_prepare(object, id, task, options, backing, owned);
 }
 
 void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
@@ -370,66 +371,71 @@ TEST_F(SurfaceClient, AnInaccessibleOrUnpreparableSurfaceCannotAttestPages)
 
 TEST_F(SurfaceClient, CpuAccessUsesRetainedObjectAndPreservesAvoidSync)
 {
-    Surface actual(16384, 0x100000), unrelated(16384, 0x200000);
-    visible[4] = &unrelated;
-    actual.retain();
-    switch_gpu_backing *backing = nullptr;
-    switch_gpu_cpu_lease *owned = nullptr;
-    void *descriptor = nullptr;
-    ASSERT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr,
-        SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_AVOID_SYNC, &backing, &owned, &descriptor), 0);
-    EXPECT_EQ(preparedObject, &actual);
-    EXPECT_EQ(prepareOptions, 3u);
-    EXPECT_EQ(actual.memory.cpuUsers, 1u);
-    EXPECT_EQ(unrelated.memory.cpuUsers, 0u);
-    switch_gpu_surface_finish(descriptor);
-    EXPECT_EQ(actual.memory.cpuUsers, 0u);
-    actual.release();
+	Surface actual(16384, 0x100000), unrelated(16384, 0x200000);
+	visible[4] = &unrelated;
+	actual.retain();
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	ASSERT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr,
+						 SWITCH_GPU_BACKING_READ |
+							 SWITCH_GPU_BACKING_CPU_AVOID_SYNC,
+						 &backing, &owned, &descriptor),
+		  0);
+	EXPECT_EQ(preparedObject, &actual);
+	EXPECT_EQ(prepareOptions, 3u);
+	EXPECT_EQ(actual.memory.cpuUsers, 1u);
+	EXPECT_EQ(unrelated.memory.cpuUsers, 0u);
+	switch_gpu_surface_finish(descriptor);
+	EXPECT_EQ(actual.memory.cpuUsers, 0u);
+	actual.release();
 }
 
 TEST_F(SurfaceClient, MutableCpuAccessInvokesNativeDetachmentAndUnwindsFailure)
 {
-    Surface actual(16384, 0x100000);
-    actual.retain();
-    switch_gpu_backing *backing = nullptr;
-    switch_gpu_cpu_lease *owned = nullptr;
-    void *descriptor = nullptr;
-    prepareResult = -5;
-    EXPECT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr,
-        SWITCH_GPU_BACKING_WRITE, &backing, &owned, &descriptor), -5);
-    EXPECT_EQ(prepareOptions, 0u);
-    EXPECT_EQ(descriptor, nullptr);
-    EXPECT_EQ(actual.memory.cpuUsers, 0u);
-    actual.release();
+	Surface actual(16384, 0x100000);
+	actual.retain();
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	prepareResult = -5;
+	EXPECT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr, SWITCH_GPU_BACKING_WRITE,
+						 &backing, &owned, &descriptor),
+		  -5);
+	EXPECT_EQ(prepareOptions, 0u);
+	EXPECT_EQ(descriptor, nullptr);
+	EXPECT_EQ(actual.memory.cpuUsers, 0u);
+	actual.release();
 }
 
 TEST_F(SurfaceClient, GpuPrepareAlwaysUsesAvoidSyncAndRetainsDescriptorUntilFinish)
 {
-    Surface actual(32768, 0x44000000);
-    actual.retain();
-    switch_gpu_backing *backing = nullptr;
-    switch_gpu_cpu_lease *owned = nullptr;
-    void *descriptor = nullptr;
-    ASSERT_EQ(switch_gpu_surface_prepare_gpu(&actual, 4, nullptr, SWITCH_GPU_BACKING_READ,
-        &backing, &owned, &descriptor), 0);
-    EXPECT_EQ(prepareOptions, 3u);
-    EXPECT_EQ(actual.memory.cpuUsers, 1u);
-    switch_gpu_surface_finish(descriptor);
-    EXPECT_EQ(actual.memory.cpuUsers, 0u);
-    actual.release();
+	Surface actual(32768, 0x44000000);
+	actual.retain();
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	ASSERT_EQ(switch_gpu_surface_prepare_gpu(&actual, 4, nullptr, SWITCH_GPU_BACKING_READ,
+						 &backing, &owned, &descriptor),
+		  0);
+	EXPECT_EQ(prepareOptions, 3u);
+	EXPECT_EQ(actual.memory.cpuUsers, 1u);
+	switch_gpu_surface_finish(descriptor);
+	EXPECT_EQ(actual.memory.cpuUsers, 0u);
+	actual.release();
 }
 
 TEST_F(SurfaceClient, GpuAdmissionChecksPublicationGateWithoutPreparingPixels)
 {
-    Surface actual(32768, 0x44000000);
-    switch_gpu_backing backing;
-    actual.memory.exclusive = true;
-    EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 0);
-    EXPECT_EQ(actual.memory.cpuUsers, 0u);
-    actual.memory.exclusive = false;
-    EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 1);
-    EXPECT_EQ(actual.memory.cpuUsers, 0u);
-    EXPECT_EQ(prepareCalls, 0u);
+	Surface actual(32768, 0x44000000);
+	switch_gpu_backing backing;
+	actual.memory.exclusive = true;
+	EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(actual.memory.cpuUsers, 0u);
+	actual.memory.exclusive = false;
+	EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 1);
+	EXPECT_EQ(actual.memory.cpuUsers, 0u);
+	EXPECT_EQ(prepareCalls, 0u);
 }
 
 // A surface reads unwritten only at the seed its shared entry was made with and made over memory of its own
@@ -438,6 +444,7 @@ TEST(SurfaceUnwritten, OnlyTheFirstSeedOverItsOwnMemory)
 	struct Raw : OSObject {
 		uint8_t bytes[0x400] = {};
 	} raw;
+
 	auto set = [&](unsigned long offset, uint64_t value) {
 		memcpy(reinterpret_cast<uint8_t *>(&raw) + offset, &value, sizeof(value));
 	};
@@ -447,8 +454,9 @@ TEST(SurfaceUnwritten, OnlyTheFirstSeedOverItsOwnMemory)
 	gSeed = 1;
 	EXPECT_FALSE(tgm_surface_unwritten(&raw));
 	gSeed = 0;
-	for (const unsigned long field : {OriginalIOSurface::clientMemory, OriginalIOSurface::parent,
-					  OriginalIOSurface::memoryRegions}) {
+	for (const unsigned long field :
+	     {OriginalIOSurface::clientMemory, OriginalIOSurface::parent,
+	      OriginalIOSurface::memoryRegions}) {
 		set(field, 0x1000);
 		EXPECT_FALSE(tgm_surface_unwritten(&raw)) << std::hex << field;
 		set(field, 0);

@@ -8,31 +8,46 @@
 #include "../../TegraVIC/SwitchNativeVICImage.h"
 #include "../../TegraVIC/SwitchVICScanoutConvert.h"
 #include "../SwitchScanoutBuffer.h"
-#define IONewZero(type, count) static_cast<type *>(std::calloc(count, sizeof(type)))
+#define IONewZero(type, count)         static_cast<type *>(std::calloc(count, sizeof(type)))
 #define IODelete(pointer, type, count) std::free(pointer)
 
 struct switch_gpu_backing {
     uint64_t id, content, bytes;
     unsigned refs;
 };
+
 struct switch_gpu_cpu_lease {};
+
 struct OriginalLegacySwapRequest {};
+
 class OSObject {};
+
 using IOReturn = int;
 constexpr int kIOReturnSuccess = 0, kIOReturnNotReady = -10, kIOReturnAborted = -14;
 constexpr int TEGRA_SCANOUT_SOURCE_LOST = -5;
+
 namespace {
 unsigned allocations, conversions, leases, backingCount, observations;
 bool offGate;
 std::function<void()> duringAdmission;
-uint64_t mach_absolute_time() { return 100; }
-void native_legacy_transfer_observed(int, const OriginalLegacySwapRequest *, uint64_t) { ++observations; }
+
+uint64_t mach_absolute_time()
+{
+    return 100;
+}
+
+void native_legacy_transfer_observed(int, const OriginalLegacySwapRequest *, uint64_t)
+{
+    ++observations;
+}
+
 int convertError, exportError;
 TegraVICImage lastInput;
 TegraVICOp lastOperation;
 switch_gpu_cpu_lease lease;
 uint64_t pages[4096];
 }
+
 switch_gpu_backing *switch_display_scanout_buffer(size_t bytes)
 {
     EXPECT_TRUE(offGate);
@@ -40,7 +55,12 @@ switch_gpu_backing *switch_display_scanout_buffer(size_t bytes)
     ++backingCount;
     return new switch_gpu_backing{allocations + 10, 0, bytes, 1};
 }
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing) { ++backing->refs; }
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
+{
+    ++backing->refs;
+}
+
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 {
     if (!--backing->refs) {
@@ -48,6 +68,7 @@ extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
         delete backing;
     }
 }
+
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
 {
     *info = {};
@@ -57,8 +78,9 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
     info->pages = pages;
     info->page_count = uint32_t((backing->bytes + 4095) >> 12);
 }
+
 extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
-                                               switch_gpu_cpu_lease **out)
+                                              switch_gpu_cpu_lease **out)
 {
     if (exportError)
         return exportError;
@@ -67,6 +89,7 @@ extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing, switc
     ++leases;
     return 0;
 }
+
 void switch_native_scanout_release(SwitchNativeScanout *scanout)
 {
     if (scanout->lease)
@@ -75,12 +98,14 @@ void switch_native_scanout_release(SwitchNativeScanout *scanout)
         switch_gpu_backing_release(scanout->view.native);
     *scanout = {};
 }
+
 int switch_vic_scanout_convert(const SwitchNativeScanout *source, const TegraVICImage *input,
                                switch_gpu_backing *target, uint32_t width, uint32_t height, uint32_t pitch,
                                const TegraVICOp *operation, SwitchNativeScanout *output)
 {
     EXPECT_TRUE(offGate);
-    if (duringAdmission) duringAdmission();
+    if (duringAdmission)
+        duringAdmission();
     EXPECT_NE(source->lease, nullptr);
     EXPECT_EQ(width, operation->dstW);
     EXPECT_EQ(height, operation->dstH);
@@ -104,8 +129,13 @@ int switch_vic_scanout_convert(const SwitchNativeScanout *source, const TegraVIC
 namespace {
 struct Event {
     unsigned fires = 0;
-    void interruptOccurred(void *, void *, int) { ++fires; }
+
+    void interruptOccurred(void *, void *, int)
+    {
+        ++fires;
+    }
 };
+
 struct Loop {
     int runAction(int (*action)(OSObject *, void *, void *, void *, void *), OSObject *object)
     {
@@ -113,6 +143,7 @@ struct Loop {
         return action(object, nullptr, nullptr, nullptr, nullptr);
     }
 };
+
 struct NativeLegacyDisplay : OSObject {
     bool transferred = false, copyStopping = false, latchRetire = true, planeNextSet = true;
     unsigned kicks = 0, lost = 0, taken = 0;
@@ -121,32 +152,74 @@ struct NativeLegacyDisplay : OSObject {
     Event *copySource = &event;
     Loop loop;
     const OriginalLegacySwapRequest *request = nullptr;
-    Loop *getWorkLoop() { return &loop; }
-    const OriginalLegacySwapRequest *firstUntaken() { return request; }
-    const OriginalLegacySwapRequest *pendingSwapRequest() { return request; }
-    void kickSwapQueue() { ++kicks; }
-    void noteTaken(const OriginalLegacySwapRequest *, uint64_t) { ++taken; }
-    void dropLostFrame(const OriginalLegacySwapRequest *, int) { ++lost; }
+
+    Loop *getWorkLoop()
+    {
+        return &loop;
+    }
+
+    const OriginalLegacySwapRequest *firstUntaken()
+    {
+        return request;
+    }
+
+    const OriginalLegacySwapRequest *pendingSwapRequest()
+    {
+        return request;
+    }
+
+    void kickSwapQueue()
+    {
+        ++kicks;
+    }
+
+    void noteTaken(const OriginalLegacySwapRequest *, uint64_t)
+    {
+        ++taken;
+    }
+
+    void dropLostFrame(const OriginalLegacySwapRequest *, int)
+    {
+        ++lost;
+    }
+
     static constexpr unsigned kPlaneSlots = 8;
     static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20;
-    struct Slot { SwitchNativeScanout *native = nullptr; } planeSlots[kPlaneSlots];
+
+    struct Slot {
+        SwitchNativeScanout *native = nullptr;
+    } planeSlots[kPlaneSlots];
+
     SwitchNativeScanout snapshots[kPlaneSlots];
     bool busy[kPlaneSlots] = {};
     bool failMap = false;
     unsigned mappings = 0;
+
     NativeLegacyDisplay()
     {
         for (unsigned i = 0; i < kPlaneSlots; ++i)
             planeSlots[i].native = &snapshots[i];
     }
-    bool planeSlotBusy(int slot) const { return busy[slot] || planeConversionUses(slot); }
-    void planeDropSlot(unsigned slot) { switch_native_scanout_release(&snapshots[slot]); }
-    void planeReleaseLease(unsigned slot) { switch_native_scanout_release(&snapshots[slot]); }
+
+    bool planeSlotBusy(int slot) const
+    {
+        return busy[slot] || planeConversionUses(slot);
+    }
+
+    void planeDropSlot(unsigned slot)
+    {
+        switch_native_scanout_release(&snapshots[slot]);
+    }
+
+    void planeReleaseLease(unsigned slot)
+    {
+        switch_native_scanout_release(&snapshots[slot]);
+    }
+
     int planeMapSnapshot(SwitchNativeScanout &snapshot, const native_planes::Image &, int avoid)
     {
         for (unsigned slot = 0; slot < kPlaneSlots; ++slot) {
-            if (int(slot) != avoid && snapshots[slot].lease &&
-                snapshots[slot].view.native == snapshot.view.native &&
+            if (int(slot) != avoid && snapshots[slot].lease && snapshots[slot].view.native == snapshot.view.native &&
                 snapshots[slot].allocation.content_generation == snapshot.allocation.content_generation) {
                 switch_native_scanout_release(&snapshot);
                 return int(slot);
@@ -166,7 +239,9 @@ struct NativeLegacyDisplay : OSObject {
         switch_native_scanout_release(&snapshot);
         return -11;
     }
+
 #include "../SwitchPlaneConversionDisplay.h"
+
     ~NativeLegacyDisplay()
     {
         stopPlaneConversion();
@@ -175,13 +250,16 @@ struct NativeLegacyDisplay : OSObject {
         convertedStop();
     }
 };
+
 using Display = NativeLegacyDisplay;
+
 class PlaneConversion : public testing::Test {
 protected:
     Display *display;
     OriginalLegacySwapRequest request;
     native_planes::Layer layer;
     native_planes::Image image;
+
     void SetUp() override
     {
         allocations = conversions = leases = backingCount = observations = 0;
@@ -212,14 +290,26 @@ protected:
         layer.src = {0, 0, 128, 64};
         layer.dst = {100, 200, 256, 128};
     }
+
     void TearDown() override
     {
         delete display;
         EXPECT_EQ(leases, 0u);
         EXPECT_EQ(backingCount, 0u);
     }
-    int offer() { return display->planeConvertSlot(0, layer, 720, 1280, image, &request); }
-    void work() { offGate = true; display->planeConversionWork(); EXPECT_FALSE(offGate); }
+
+    int offer()
+    {
+        return display->planeConvertSlot(0, layer, 720, 1280, image, &request);
+    }
+
+    void work()
+    {
+        offGate = true;
+        display->planeConversionWork();
+        EXPECT_FALSE(offGate);
+    }
+
     int convert()
     {
         const int result = offer();
@@ -228,7 +318,11 @@ protected:
         work();
         return display->planeConversion->status ? display->planeConversion->status : offer();
     }
-    void advance() { ++display->snapshots[0].allocation.content_generation; }
+
+    void advance()
+    {
+        ++display->snapshots[0].allocation.content_generation;
+    }
 };
 
 TEST_F(PlaneConversion, ConvertsOnceAndReusesTheSameContentWithoutAllocatingOrSubmitting)
@@ -384,4 +478,4 @@ TEST_F(PlaneConversion, UnavailableWorkerDoesNotAllocateOrAdmit)
     EXPECT_EQ(allocations, 0u);
     EXPECT_EQ(conversions, 0u);
 }
-} // namespace
+}  // namespace

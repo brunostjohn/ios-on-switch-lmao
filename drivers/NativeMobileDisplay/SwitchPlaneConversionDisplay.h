@@ -8,8 +8,10 @@ struct ConvertedPlane {
     uint32_t stride[2] = {}, rows[2] = {};
     bool valid = false;
 };
+
 static constexpr unsigned kConvertedPlanes = 4;
 ConvertedPlane *convertedPlanes = nullptr;
+
 struct PlaneConversionJob {
     const OriginalLegacySwapRequest *request;
     ConvertedPlane value;
@@ -20,6 +22,7 @@ struct PlaneConversionJob {
     uint32_t pitch;
     uint64_t bytes;
 };
+
 PlaneConversionJob *planeConversion = nullptr;
 bool planeConversionQueued = false;
 
@@ -66,15 +69,18 @@ void planeConversionWork()
             work.value.backing = switch_display_scanout_buffer(size_t(work.bytes));
             work.value.bytes = work.value.backing ? work.bytes : 0;
         }
-        work.status = work.value.backing ? switch_vic_scanout_convert(planeSlots[work.sourceSlot].native,
-            &work.input, work.value.backing, work.value.width, work.value.height, work.pitch,
-            &work.operation, &work.output) : -12;
+        work.status = work.value.backing
+                          ? switch_vic_scanout_convert(planeSlots[work.sourceSlot].native, &work.input,
+                                                       work.value.backing, work.value.width, work.value.height,
+                                                       work.pitch, &work.operation, &work.output)
+                          : -12;
     }
     getWorkLoop()->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             static_cast<NativeLegacyDisplay *>(owner)->planeConversionFinished();
             return kIOReturnSuccess;
-        }, this);
+        },
+        this);
 }
 
 void stopPlaneConversion()
@@ -119,7 +125,7 @@ void convertedStop()
 }
 
 int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t width, uint32_t height,
-                      native_planes::Image &image, const OriginalLegacySwapRequest *request = nullptr)
+                     native_planes::Image &image, const OriginalLegacySwapRequest *request = nullptr)
 {
     const auto *source = planeSlots[sourceSlot].native;
     if (!source || !source->lease || !native_planes::isYuv(layer.kind))
@@ -146,14 +152,14 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         bool samePlanes = buffer.offset == source->pitchOffset;
         for (unsigned p = 0; p < 2; ++p)
             samePlanes = samePlanes && buffer.stride[p] == layer.surface.stride[p] &&
-                buffer.planeOffset[p] == layer.surface.offset[p] && buffer.rows[p] == layer.surface.planeHeight[p];
+                         buffer.planeOffset[p] == layer.surface.offset[p] &&
+                         buffer.rows[p] == layer.surface.planeHeight[p];
         if (samePlanes && buffer.valid && buffer.allocation == allocation.allocation_id &&
-            buffer.allocationGeneration == allocation.allocation_generation && buffer.content == allocation.content_generation &&
-            buffer.width == layer.surface.width && buffer.height == layer.surface.height &&
-            buffer.cropX == view.crop.x && buffer.cropY == view.crop.y &&
-            buffer.format == layer.surface.format && buffer.matrix == matrix &&
-            buffer.transfer == transfer && buffer.primaries == primaries &&
-            buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom) {
+            buffer.allocationGeneration == allocation.allocation_generation &&
+            buffer.content == allocation.content_generation && buffer.width == layer.surface.width &&
+            buffer.height == layer.surface.height && buffer.cropX == view.crop.x && buffer.cropY == view.crop.y &&
+            buffer.format == layer.surface.format && buffer.matrix == matrix && buffer.transfer == transfer &&
+            buffer.primaries == primaries && buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom) {
             selected = &buffer;
             cached = true;
             break;
@@ -191,8 +197,10 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
             desc.planes = 2;
             desc.length = layer.surface.descriptorBytes;
             desc.colorMatrix = layer.surface.colorMatrix;
-            desc.transfer = transfer; desc.primaries = primaries;
-            desc.chromaTop = chromaTop; desc.chromaBottom = chromaBottom;
+            desc.transfer = transfer;
+            desc.primaries = primaries;
+            desc.chromaTop = chromaTop;
+            desc.chromaBottom = chromaBottom;
             for (unsigned p = 0; p < 2; ++p) {
                 desc.planeOffset[p] = layer.surface.offset[p];
                 desc.planeBytesPerRow[p] = layer.surface.stride[p];
@@ -235,8 +243,10 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         value->cropY = view.crop.y;
         value->format = layer.surface.format;
         value->matrix = matrix;
-        value->transfer = transfer; value->primaries = primaries;
-        value->chromaTop = chromaTop; value->chromaBottom = chromaBottom;
+        value->transfer = transfer;
+        value->primaries = primaries;
+        value->chromaTop = chromaTop;
+        value->chromaBottom = chromaBottom;
         value->offset = source->pitchOffset;
         for (unsigned p = 0; p < 2; ++p) {
             value->stride[p] = layer.surface.stride[p];

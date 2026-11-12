@@ -92,36 +92,37 @@ size_t raw_metal_rates(char *out, size_t size)
                    m2vs = f + segs ? f + segs : 1;
     const raw::Compiler::Stats made = gRM->completion ? gRM->completion->stats() : raw::Compiler::Stats();
     char diag[1024];
-    snprintf(diag, sizeof diag,
-             " sp=%llu/%llu evsp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m "
-             "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
-             "atcreate=%llu/%.0fus/s%llu/o%llu swait=%.0fms comp=%llu/%lluKB/v%llu/m%llu/f%llu/x%llu bk=%llu/%lluMB/r%llu "
-             "tfree=%lluMB zbc=%llu/%llu "
-             "split=%llu rsv=t%llu/%llu,x%llu/%llu,p%llu/%llu/%llu why=%s",
-             (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits,
-             (unsigned long long)evWhole, (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
-             (s.replayUs.load() - gRates.replayUs) / double(m2vs),
-             (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
-             (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
-             k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
-             (unsigned long long)(k.levelPasses.load() - gRates.levelPasses), (unsigned long long)made.hits,
-             (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
-             made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
-             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0, (unsigned long long)made.seedHits,
-             (unsigned long long)made.ownHits, made.waitUs / 1000.0, (unsigned long long)k.compHeld.load(),
-             (unsigned long long)(k.compHeldBytes.load() >> 10), (unsigned long long)k.compViews.load(),
-             (unsigned long long)k.compMade.load(), (unsigned long long)k.compFailed.load(),
-             (unsigned long long)k.compMisses.load(), (unsigned long long)k.backings.load(), (unsigned long long)(k.backingBytes.load() >> 20),
-             (unsigned long long)k.retiredBackings.load(), (unsigned long long)(k.tiledFreeBytes.load() >> 20),
-             (unsigned long long)k.zbcHits.load(), (unsigned long long)k.zbcMisses.load(),
-             (unsigned long long)k.splitPrologues.exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByTwod][0].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByTwod][1].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByComplement][0].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByComplement][1].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByPass][0].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByPass][1].exchange(0),
-             (unsigned long long)k.resolveRoute[raw::ResolveByPass][2].exchange(0), *preds ? preds : "-");
+    snprintf(
+        diag, sizeof diag,
+        " sp=%llu/%llu evsp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m "
+        "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
+        "atcreate=%llu/%.0fus/s%llu/o%llu swait=%.0fms comp=%llu/%lluKB/v%llu/m%llu/f%llu/x%llu bk=%llu/%lluMB/r%llu "
+        "tfree=%lluMB zbc=%llu/%llu "
+        "split=%llu rsv=t%llu/%llu,x%llu/%llu,p%llu/%llu/%llu why=%s",
+        (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits, (unsigned long long)evWhole,
+        (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
+        (s.replayUs.load() - gRates.replayUs) / double(m2vs),
+        (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
+        (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
+        k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
+        (unsigned long long)(k.levelPasses.load() - gRates.levelPasses), (unsigned long long)made.hits,
+        (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
+        made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
+        made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0, (unsigned long long)made.seedHits,
+        (unsigned long long)made.ownHits, made.waitUs / 1000.0, (unsigned long long)k.compHeld.load(),
+        (unsigned long long)(k.compHeldBytes.load() >> 10), (unsigned long long)k.compViews.load(),
+        (unsigned long long)k.compMade.load(), (unsigned long long)k.compFailed.load(),
+        (unsigned long long)k.compMisses.load(), (unsigned long long)k.backings.load(),
+        (unsigned long long)(k.backingBytes.load() >> 20), (unsigned long long)k.retiredBackings.load(),
+        (unsigned long long)(k.tiledFreeBytes.load() >> 20), (unsigned long long)k.zbcHits.load(),
+        (unsigned long long)k.zbcMisses.load(), (unsigned long long)k.splitPrologues.exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByTwod][0].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByTwod][1].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByComplement][0].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByComplement][1].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByPass][0].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByPass][1].exchange(0),
+        (unsigned long long)k.resolveRoute[raw::ResolveByPass][2].exchange(0), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);
@@ -289,12 +290,12 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         counts[i] = double(n - lastCounts[i]) / double(encodes);
         lastCounts[i] = n;
     }
-    const double mallocs = mallocEncodes ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) /
-                                               double(mallocEncodes)
-                                         : -1.0,
-                 frees = mallocEncodes ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) /
-                                             double(mallocEncodes)
-                                       : -1.0;
+    const double mallocs = mallocEncodes
+                               ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) / double(mallocEncodes)
+                               : -1.0,
+                 frees = mallocEncodes
+                             ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) / double(mallocEncodes)
+                             : -1.0;
     const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed);
     const double wallUs = double(wall - lastWall) * usPerTick;
     lastWall = wall;
@@ -359,9 +360,8 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         count(EncodePart::GeometryAcquire), part(EncodePart::GeometryRelease), count(EncodePart::GeometryRelease),
         longestPrepareUs, part(EncodePart::Use), count(EncodePart::Use), part(EncodePart::Uniforms),
         count(EncodePart::Uniforms), part(EncodePart::Bind), part(EncodePart::Variant), part(EncodePart::PassPrologue),
-        slotsCompared, slotsInTables, spans, spanNs,
-        segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
-        (unsigned long long)fresh);
+        slotsCompared, slotsInTables, spans, spanNs, segBinds, segSkips, segWords, (unsigned long long)same,
+        (unsigned long long)recent, (unsigned long long)fresh);
     if (head <= 0 || size_t(head) >= size)
         return head > 0 ? size - 1 : 0;
     // self times: walk= the loop's own (the plan walk between its parts), res/tail= the phases', state/draw/prep/
@@ -377,9 +377,9 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
         part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
-        events(raw::EncodeCount::Locks),
-        events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
-        events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
+        events(raw::EncodeCount::Locks), events(raw::EncodeCount::Sends),
+        draws ? events(raw::EncodeCount::Applied) / draws : 0.0, events(raw::EncodeCount::UseAdds),
+        events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
         events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
     size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
     // the pooled encoders' blocks made and freed since the process began (raw_object_pool.h): with none freed, made is

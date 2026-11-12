@@ -275,8 +275,9 @@ bool drained()
 // A bounded wait for a fence, the bound counted from when the jobs up to it have their inputs (TegraNVENCInputs.h).
 int boundedWait(uint32_t fence)
 {
-    return gInputs.wait(tegra_host1x_syncpt_read(gSyncpt), fence, TEGRA_HOST1X_ETIMEDOUT,
-                        [fence] { return tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs); });
+    return gInputs.wait(tegra_host1x_syncpt_read(gSyncpt), fence, TEGRA_HOST1X_ETIMEDOUT, [fence] {
+        return tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
+    });
 }
 
 bool failedFence(uint32_t fence)

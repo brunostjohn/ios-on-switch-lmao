@@ -39,12 +39,12 @@ struct Producer {
 };
 
 enum class Deadline {
-	Idle,     // nothing armed: delivered, or its work item has it
-	Producer, // still running: the pending producer's hang path
-	Follows,  // its interrupt is queued: the hang path at the wake's position (`followed`)
-	Rearmed,  // its wake entry is owed by the channel's owner
-	Grace,    // its interrupt is due: the pass's grace
-	Panic,    // lost
+	Idle,      // nothing armed: delivered, or its work item has it
+	Producer,  // still running: the pending producer's hang path
+	Follows,   // its interrupt is queued: the hang path at the wake's position (`followed`)
+	Rearmed,   // its wake entry is owed by the channel's owner
+	Grace,     // its interrupt is due: the pass's grace
+	Panic,     // lost
 };
 
 class Display
@@ -56,7 +56,9 @@ public:
 	{
 		current_ = this;
 		for (auto *producer : producers_)
-			producer->channel.passed = [this, producer] { pass(*producer); };
+			producer->channel.passed = [this, producer] {
+				pass(*producer);
+			};
 	}
 
 	// tgm_present_watch_dependencies; 1: the caller queues the present job
@@ -71,7 +73,8 @@ public:
 		deadlineAt = clock + kPresentNs;
 		switch_gpu_backing_token watched = tokens[0];
 		for (const auto &k : keptJobs)
-			if (watched.engine == SWITCH_GPU_ENGINE_PROMISE && k.first == promise(watched))
+			if (watched.engine == SWITCH_GPU_ENGINE_PROMISE &&
+			    k.first == promise(watched))
 				watched = k.second;
 		if (watched.engine == SWITCH_GPU_ENGINE_PROMISE) {
 			switch_gpu_present_watch_promise(&watch, &watched);
@@ -127,7 +130,8 @@ public:
 	// writes window A once the watched producer is complete and visible, once per view
 	void filter()
 	{
-		if (!view || filterCalled || watch.token.engine != SWITCH_GPU_ENGINE_GM20B || physical(&watch.token) != 1)
+		if (!view || filterCalled || watch.token.engine != SWITCH_GPU_ENGINE_GM20B ||
+		    physical(&watch.token) != 1)
 			return;
 		filterCalled = true;
 		++filterFlips;
@@ -182,9 +186,11 @@ public:
 		followed = uint32_t(watch.token.value);
 		if (status > 0 && producer) {
 			int recorded = 0;
-			followed = switch_gpu_jobs_announced_by(&producer->channel.jobs, followed, &recorded);
-			where = switch_gpu_quiet_interrupt(&producer->channel.quiet, uint32_t(watch.token.value),
-							   producer->channel.fence, &followed, recorded);
+			followed = switch_gpu_jobs_announced_by(&producer->channel.jobs, followed,
+								&recorded);
+			where = switch_gpu_quiet_interrupt(
+				&producer->channel.quiet, uint32_t(watch.token.value),
+				producer->channel.fence, &followed, recorded);
 		}
 		if (where == SWITCH_GPU_QUIET_QUEUED)
 			return Deadline::Follows;
@@ -199,8 +205,10 @@ public:
 	std::vector<switch_gpu_backing_token> job;
 	uint32_t syncpoints[256] = {};
 	bool asks = true;
-	unsigned presented = 0, failed = 0, reported = 0, workItems = 0, jobInterrupts = 0, filterFlips = 0;
-	static constexpr uint64_t kPresentNs = 1000000000;  // TGM_PRESENT_NS: the watched offer's deadline
+	unsigned presented = 0, failed = 0, reported = 0, workItems = 0, jobInterrupts = 0,
+		 filterFlips = 0;
+	static constexpr uint64_t kPresentNs =
+		1000000000;  // TGM_PRESENT_NS: the watched offer's deadline
 	uint64_t clock = 0, deadlineAt = 0;
 	int offered = 2, panel = 1;
 	std::map<uint32_t, uint32_t> words;  // a writer promise's word by its fence-pool offset
@@ -232,11 +240,14 @@ private:
 		if (token->engine == SWITCH_GPU_ENGINE_PROMISE)
 			return current_->abandoned.count(promise(*token))
 				       ? -5
-				       : int32_t(current_->words[token->queue] - uint32_t(token->value)) >= 0;
+				       : int32_t(current_->words[token->queue] -
+						 uint32_t(token->value)) >= 0;
 		if (token->engine != SWITCH_GPU_ENGINE_GM20B)
-			return int32_t(current_->syncpoints[token->queue] - uint32_t(token->value)) >= 0;
+			return int32_t(current_->syncpoints[token->queue] -
+				       uint32_t(token->value)) >= 0;
 		const Producer *producer = named(token);
-		return producer ? int32_t(producer->channel.fence - uint32_t(token->value)) >= 0 : -19;
+		return producer ? int32_t(producer->channel.fence - uint32_t(token->value)) >= 0
+				: -19;
 	}
 
 	// present_watch_fenced in the producer's pass, then tgm_present_pass at its end

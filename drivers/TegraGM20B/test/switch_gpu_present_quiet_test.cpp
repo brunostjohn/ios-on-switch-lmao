@@ -13,13 +13,14 @@ TEST(QuietTokenOn, OnlyAGM20BSeqnoOfThatChannelAndResetGeneration)
 {
 	const switch_gpu_backing_token token = {40, 3, SWITCH_GPU_ENGINE_GM20B, 17};
 	EXPECT_TRUE(switch_gpu_quiet_token_on(&token, kA));
-	EXPECT_FALSE(switch_gpu_quiet_token_on(&token, kA + 1));                         // another uid
-	EXPECT_FALSE(switch_gpu_quiet_token_on(&token, (uint64_t(3) << 32) | 17u));     // reset since
+	EXPECT_FALSE(switch_gpu_quiet_token_on(&token, kA + 1));                     // another uid
+	EXPECT_FALSE(switch_gpu_quiet_token_on(&token, (uint64_t(3) << 32) | 17u));  // reset since
 	switch_gpu_backing_token wide = token;
 	wide.value = uint64_t(1) << 32;
 	EXPECT_FALSE(switch_gpu_quiet_token_on(&wide, kA));
-	for (const uint32_t engine : {SWITCH_GPU_ENGINE_CE, SWITCH_GPU_ENGINE_VIC, SWITCH_GPU_ENGINE_NVDEC,
-				      SWITCH_GPU_ENGINE_DISPLAY, SWITCH_GPU_ENGINE_NVENC}) {
+	for (const uint32_t engine :
+	     {SWITCH_GPU_ENGINE_CE, SWITCH_GPU_ENGINE_VIC, SWITCH_GPU_ENGINE_NVDEC,
+	      SWITCH_GPU_ENGINE_DISPLAY, SWITCH_GPU_ENGINE_NVENC}) {
 		switch_gpu_backing_token other = token;
 		other.engine = engine;
 		EXPECT_FALSE(switch_gpu_quiet_token_on(&other, kA)) << engine;
@@ -72,7 +73,11 @@ TEST(PresentQuiet, AProducerThatEndsBeforeTheAskIsTakenByTheLastLook)
 	Display d({&a});
 	const auto token = a.token(a.channel.submit(1, true));
 	const uint32_t wanted = a.channel.quiet.wanted;
-	ASSERT_EQ(d.offer(&token, 1, [&] { a.channel.run(); }), 0);
+	ASSERT_EQ(d.offer(&token, 1,
+			  [&] {
+				  a.channel.run();
+			  }),
+		  0);
 	EXPECT_FALSE(a.channel.asked);
 	EXPECT_EQ(a.channel.quiet.wanted, wanted);
 	d.ownerWakes();
@@ -197,13 +202,15 @@ TEST(PresentQuiet, AScanoutWriterIsPresentedAtItsOwnEnd)
 	for (const bool scanout : {true, false}) {
 		Producer a{kA, Channel(40)};
 		Display d({&a});
-		const auto token = a.token(a.channel.submit(1, switch_gpu_quiet_end(1, 0, scanout, 1)));
+		const auto token =
+			a.token(a.channel.submit(1, switch_gpu_quiet_end(1, 0, scanout, 1)));
 		a.channel.submit(30, switch_gpu_quiet_end(1, 0, 0, 1));
 		ASSERT_EQ(d.offer(&token, 1), 0);
 		EXPECT_EQ(a.channel.asked, !scanout);
 		d.ownerWakes();
 		a.channel.run(1);
-		EXPECT_EQ(a.channel.interrupts, scanout ? 1u : 0u) << "a single-job range closes its group";
+		EXPECT_EQ(a.channel.interrupts, scanout ? 1u : 0u)
+			<< "a single-job range closes its group";
 		EXPECT_EQ(d.presented, scanout ? 1u : 0u);
 		EXPECT_EQ(a.channel.wakeEntries, scanout ? 0u : 1u);
 		a.channel.run();
@@ -223,7 +230,8 @@ TEST(PresentQuiet, AFrameOfSeveralJobsInterruptsOnceAtItsClosingJob)
 		const uint32_t jobs[] = {9, 1, 6, 1};
 		uint32_t last = 0;
 		for (size_t i = 0; i < 4; ++i)
-			last = a.channel.submit(jobs[i], switch_gpu_quiet_end(1, 0, 1, closingOnly ? i == 3 : 1));
+			last = a.channel.submit(
+				jobs[i], switch_gpu_quiet_end(1, 0, 1, closingOnly ? i == 3 : 1));
 		const auto token = a.token(last);
 		ASSERT_EQ(d.offer(&token, 1), 0);
 		EXPECT_FALSE(a.channel.asked);

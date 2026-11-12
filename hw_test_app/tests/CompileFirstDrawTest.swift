@@ -1,10 +1,10 @@
 import Darwin
-import notify
 import Foundation
 import HWTestCore
 import HWTestGPU
 import Metal
 import SwitchCompilerProbe
+import notify
 
 /// A render state the pack lacks is usable when its creation returns: each salted state (no pack or store holds it before
 /// its run) is drawn by the first command buffer after its creation, on the raw path, every pixel its colour. Made once
@@ -67,8 +67,9 @@ struct CompileFirstDrawTest: HWTest {
     /// the compiler reads as it takes each request
     static func armCompilerDeath() -> Bool {
         var token: Int32 = 0
-        guard notify_register_check("com.brunostjohn.switch.debug.compiler-dies-at-next-request", &token)
-            == NOTIFY_STATUS_OK
+        guard
+            notify_register_check("com.brunostjohn.switch.debug.compiler-dies-at-next-request", &token)
+                == NOTIFY_STATUS_OK
         else { return false }
         defer { notify_cancel(token) }
         return notify_set_state(token, UInt64(getpid())) == NOTIFY_STATUS_OK

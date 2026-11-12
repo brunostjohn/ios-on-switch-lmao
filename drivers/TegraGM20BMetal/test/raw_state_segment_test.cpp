@@ -118,7 +118,8 @@ TEST(RawStateSegment, ABoundSegmentRunsTheWordsTheInlineStreamWrote)
     Memory memory;
     raw::StateSegmentHeap heap = heapOver(memory);
     const std::vector<uint32_t> a = stateWords(1), b = stateWords(2);
-    const raw::StateSegment sa = heap.place(a.data(), uint32_t(a.size())), sb = heap.place(b.data(), uint32_t(b.size()));
+    const raw::StateSegment sa = heap.place(a.data(), uint32_t(a.size())),
+                            sb = heap.place(b.data(), uint32_t(b.size()));
     ASSERT_TRUE(sa && sb);
 
     std::vector<uint32_t> inline_;
@@ -221,7 +222,9 @@ TEST(RawStateSegment, ShortStreamsAndAHeapWithoutMemoryStayInline)
     raw::StateSegmentHeap heap = heapOver(memory);
     const uint32_t few[raw::kSegmentBindWords] = {};
     EXPECT_FALSE(heap.place(few, raw::kSegmentBindWords));
-    raw::StateSegmentHeap empty([](uint64_t, raw::SegmentChunk &) { return false; });
+    raw::StateSegmentHeap empty([](uint64_t, raw::SegmentChunk &) {
+        return false;
+    });
     const std::vector<uint32_t> a = stateWords(0);
     EXPECT_FALSE(empty.place(a.data(), uint32_t(a.size())));
     EXPECT_EQ(empty.bytesPlaced(), 0u);
@@ -346,13 +349,26 @@ std::vector<uint32_t> passBoundaryWords()
     region.subregionCount = 2;
     raw::zcullRegionWords(p, region, 252, raw::kZcullGreater);
     raw::zcullOffWords(p);
-    for (uint32_t m : {NVB197_SET_POLY_OFFSET_POINT, NVB197_SET_POLY_OFFSET_LINE, NVB197_SET_POLY_OFFSET_FILL,
-                       NVB197_SET_DEPTH_BIAS, NVB197_SET_SLOPE_SCALE_DEPTH_BIAS, NVB197_SET_DEPTH_BIAS_CLAMP,
-                       NVB197_OGL_SET_CULL, NVB197_OGL_SET_CULL_FACE, NVB197_OGL_SET_FRONT_FACE,
-                       NVB197_SET_FRONT_POLYGON_MODE, NVB197_SET_BACK_POLYGON_MODE,
-                       NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX, NVB197_SET_GLOBAL_BASE_VERTEX_INDEX,
-                       NVB197_SET_VERTEX_ID_BASE, NVB197_SET_ZT_SELECT, NVB197_SET_ZT_LAYER, NVB197_SET_Z_COMPRESSION,
-                       NVB197_SET_STENCIL_COMPRESSION, NVB197_SET_ZT_SPARSE, NVB197_SET_Z_CLEAR_VALUE,
+    for (uint32_t m : {NVB197_SET_POLY_OFFSET_POINT,
+                       NVB197_SET_POLY_OFFSET_LINE,
+                       NVB197_SET_POLY_OFFSET_FILL,
+                       NVB197_SET_DEPTH_BIAS,
+                       NVB197_SET_SLOPE_SCALE_DEPTH_BIAS,
+                       NVB197_SET_DEPTH_BIAS_CLAMP,
+                       NVB197_OGL_SET_CULL,
+                       NVB197_OGL_SET_CULL_FACE,
+                       NVB197_OGL_SET_FRONT_FACE,
+                       NVB197_SET_FRONT_POLYGON_MODE,
+                       NVB197_SET_BACK_POLYGON_MODE,
+                       NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX,
+                       NVB197_SET_GLOBAL_BASE_VERTEX_INDEX,
+                       NVB197_SET_VERTEX_ID_BASE,
+                       NVB197_SET_ZT_SELECT,
+                       NVB197_SET_ZT_LAYER,
+                       NVB197_SET_Z_COMPRESSION,
+                       NVB197_SET_STENCIL_COMPRESSION,
+                       NVB197_SET_ZT_SPARSE,
+                       NVB197_SET_Z_CLEAR_VALUE,
                        NVB197_SET_STENCIL_CLEAR_VALUE})
         p.m(m, 0);
     words.resize(size_t(p.at - words.data()));

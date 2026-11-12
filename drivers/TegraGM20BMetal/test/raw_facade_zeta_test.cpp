@@ -71,7 +71,9 @@ uint32_t texelBytes(MTLPixelFormat format)
 
 uint32_t layersOf(MTLTextureDescriptor *d)
 {
-    return d.textureType == MTLTextureTypeCube ? 6 : d.textureType == MTLTextureType2DArray ? uint32_t(d.arrayLength) : 1;
+    return d.textureType == MTLTextureTypeCube      ? 6
+           : d.textureType == MTLTextureType2DArray ? uint32_t(d.arrayLength)
+                                                    : 1;
 }
 
 // An NVK image of `d` in a raw buffer: one-GOB-high blocks, rows of whole GOBs, its layers one after another
@@ -94,8 +96,8 @@ NSData *imageMemory(MTLTextureDescriptor *d)
 
 MTLTextureDescriptor *stored(MTLPixelFormat format, MTLTextureType type = MTLTextureType2D)
 {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:64 height:64
-                                                                             mipmapped:NO];
+    MTLTextureDescriptor *d =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:64 height:64 mipmapped:NO];
     d.textureType = type;
     if (type == MTLTextureType2DArray)
         d.arrayLength = 3;

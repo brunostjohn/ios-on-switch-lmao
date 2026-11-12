@@ -120,9 +120,9 @@ void RMCommandPlan::prepareRange(size_t from, size_t to)
         const auto &operation = operations_[at];
         if (operation.op == OpRender || operation.op == OpCompute || operation.op == OpBlit) {
             const size_t encoderEnd = this->encoderEnd(at);
-            const Range *cached =
-                encoderEnd > at && encoderEnd <= to && (at != from || encoderEnd != to) ? findRange(at, encoderEnd)
-                                                                                         : nullptr;
+            const Range *cached = encoderEnd > at && encoderEnd <= to && (at != from || encoderEnd != to)
+                                      ? findRange(at, encoderEnd)
+                                      : nullptr;
             if (cached) {
                 span(cached->uses);
                 for (void *object : cached->pipelines)

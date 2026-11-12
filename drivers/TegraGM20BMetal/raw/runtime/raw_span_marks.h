@@ -36,7 +36,11 @@ constexpr uint64_t kLongSpanNs = 5'000'000;
 
 using SpanMark = StampRelease;
 
-enum class SpanKind : uint8_t { Draws, Prologue, Tail };
+enum class SpanKind : uint8_t {
+    Draws,
+    Prologue,
+    Tail
+};
 
 struct SpanLabel {
     uint64_t key = 0;
@@ -71,8 +75,8 @@ inline void emitSpanMark(Push &p, uint64_t va, uint32_t stamp)
 // The spans of one command buffer from its start stamp, its marks in order and its end stamp, consecutive spans of one state
 // added up. A mark the GPU did not write (a pass refused after its prologue's mark was taken) or that runs backwards is
 // passed over: its time goes to the span after it.
-inline std::vector<StateSpan> spansOf(const volatile SpanMark *marks, const SpanLabel *labels, uint32_t count, uint32_t stamp,
-                                 uint64_t startPtimer, uint64_t endPtimer)
+inline std::vector<StateSpan> spansOf(const volatile SpanMark *marks, const SpanLabel *labels, uint32_t count,
+                                      uint32_t stamp, uint64_t startPtimer, uint64_t endPtimer)
 {
     std::vector<StateSpan> out;
     uint64_t prev = startPtimer;

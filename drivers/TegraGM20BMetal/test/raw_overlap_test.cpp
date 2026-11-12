@@ -44,7 +44,7 @@ TEST(RawOverlap, SequentialPlanPreservesEveryPrimitiveAndItsProvokingVertex)
             ASSERT_EQ(runs.size(), expected);
             for (uint32_t i = 0; i < expected; ++i) {
                 const uint32_t first = primitive == 3 ? i * 3 : i;
-                EXPECT_EQ(runs[i].first, first); // same first/provoking vertex; only raster winding changes
+                EXPECT_EQ(runs[i].first, first);  // same first/provoking vertex; only raster winding changes
                 EXPECT_EQ(runs[i].second, first + 3);
                 EXPECT_EQ(winding[i], primitive == 4 && (i & 1));
             }

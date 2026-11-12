@@ -15,12 +15,22 @@ constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_
 struct Set {
 	volatile uint32_t mirror = 0;
 	switch_gpu_resource_set *set = nullptr;
-	Set() { EXPECT_EQ(switch_gpu_set_create(&mirror, &set), 0); }
-	~Set() { switch_gpu_set_destroy(set); }
+
+	Set()
+	{
+		EXPECT_EQ(switch_gpu_set_create(&mirror, &set), 0);
+	}
+
+	~Set()
+	{
+		switch_gpu_set_destroy(set);
+	}
+
 	uint32_t attach(std::vector<switch_gpu_set_member> members, int expected = 0)
 	{
 		uint32_t generation = 0;
-		EXPECT_EQ(switch_gpu_set_attach(set, members.data(), uint32_t(members.size()), &generation, nullptr),
+		EXPECT_EQ(switch_gpu_set_attach(set, members.data(), uint32_t(members.size()),
+						&generation, nullptr),
 			  expected);
 		return generation;
 	}
@@ -47,7 +57,8 @@ uint64_t first_page(switch_gpu_backing *backing)
 	return info.pages[0];
 }
 
-class ResourceSet : public Backing {
+class ResourceSet : public Backing
+{
 protected:
 	void SetUp() override
 	{
@@ -55,7 +66,9 @@ protected:
 		static bool visible;
 		if (!visible) {
 			const switch_gpu_backing_visibility gm = {external_status, external_wait};
-			ASSERT_EQ(switch_gpu_backing_register_visibility(SWITCH_GPU_ENGINE_GM20B, &gm), 0);
+			ASSERT_EQ(switch_gpu_backing_register_visibility(SWITCH_GPU_ENGINE_GM20B,
+									 &gm),
+				  0);
 			visible = true;
 		}
 		external_completed.clear();
@@ -68,7 +81,8 @@ TEST_F(ResourceSet, RegistrationLinksMembersAndPublishesTheGeneration)
 	auto *a = backing(), *b = backing();
 	{
 		Set set;
-		const uint32_t generation = set.attach({{a, kRead, 0}, {b, kWrite, 0}, {a, kWrite, 0}});
+		const uint32_t generation =
+			set.attach({{a, kRead, 0}, {b, kWrite, 0}, {a, kWrite, 0}});
 		EXPECT_EQ(generation, 1u);
 		EXPECT_EQ(set.mirror, generation);
 		EXPECT_EQ(switch_gpu_set_generation(set.set), generation);
@@ -181,7 +195,9 @@ TEST_F(ResourceSet, AMemberReachedFromOutsideOrdersItsNewUserAfterTheSetsJobs)
 	ASSERT_EQ(waits.size(), 1u);
 	EXPECT_EQ(waits[0].queue, 5u);
 	uint32_t next = 0;
-	EXPECT_EQ(switch_gpu_set_attach(set.set, (switch_gpu_set_member[]){{member, kRead, 0}}, 1, &next, nullptr), -22);
+	EXPECT_EQ(switch_gpu_set_attach(set.set, (switch_gpu_set_member[]){{member, kRead, 0}}, 1,
+					&next, nullptr),
+		  -22);
 	switch_gpu_backing_release(member);
 	switch_gpu_backing_release(member);
 }
@@ -336,10 +352,16 @@ TEST_F(ResourceSet, ACpuLockOnASharedUseKeepsItsExclusion)
 	ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &job, &transaction), 0);
 	switch_gpu_backing_commit(&transaction);
 	ASSERT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kWrite), 0);
-	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096,
+						 kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC),
+		  -16);
 	complete(job);
-	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), 0);
-	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096,
+						 kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC),
+		  0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096,
+						 kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC),
+		  0);
 	switch_gpu_backing_release(surface);
 	switch_gpu_backing_release(member);
 }
@@ -380,7 +402,8 @@ TEST_F(ResourceSet, AMemberLetGoKeepsTheSetsPendingJobs)
 		switch_gpu_set_note_job(set.set, 1, &job);
 		set.attach({{kept, kWrite, 0}});
 		EXPECT_EQ(switch_gpu_backing_set(dropped), nullptr);
-		EXPECT_EQ(outside_waits(dropped, kRead).size(), 1u) << "the replace forgot the set's job";
+		EXPECT_EQ(outside_waits(dropped, kRead).size(), 1u)
+			<< "the replace forgot the set's job";
 	}
 	EXPECT_EQ(switch_gpu_backing_set(kept), nullptr);
 	EXPECT_EQ(outside_waits(kept, kRead).size(), 1u) << "the release forgot the set's job";
@@ -453,9 +476,11 @@ TEST_F(ResourceSet, ASlotsJobIsReadWhole)
 		readers.emplace_back([&] {
 			switch_gpu_backing_token jobs[SWITCH_GPU_SET_SLOTS];
 			while (!done.load(std::memory_order_relaxed))
-				for (uint32_t i = 0, n = switch_gpu_set_jobs(set.set, jobs); i < n; ++i) {
+				for (uint32_t i = 0, n = switch_gpu_set_jobs(set.set, jobs); i < n;
+				     ++i) {
 					reads.fetch_add(1, std::memory_order_relaxed);
-					if (jobs[i].value != jobs[i].queue || jobs[i].reset_generation != jobs[i].queue)
+					if (jobs[i].value != jobs[i].queue ||
+					    jobs[i].reset_generation != jobs[i].queue)
 						torn.fetch_add(1, std::memory_order_relaxed);
 				}
 		});
@@ -479,19 +504,24 @@ TEST_F(ResourceSet, TheJobsLineCountsEndedGenerationsByCause)
 		Set set;
 		set.attach({{member, kWrite, 0}});
 		set.attach({{member, kRead, 0}});
-		switch_gpu_set_note_job(set.set, 0, (const switch_gpu_backing_token[]){token(2, 1)});
+		switch_gpu_set_note_job(set.set, 0,
+					(const switch_gpu_backing_token[]){token(2, 1)});
 		switch_gpu_set_killed(set.set, 0);
 		switch_gpu_job_stale();
 		const uint64_t ns[4] = {1000, 2000, 30000, 4000};
 		switch_gpu_job_submitted(ns, 1, 3, 1);
 	}
 	switch_gpu_job_window(line, sizeof(line));
-	EXPECT_NE(std::string(line).find("SubmitJob 1 x mean 37 us (resolve 1, lock 2, exec 30, commit 4)"),
+	EXPECT_NE(std::string(line).find(
+			  "SubmitJob 1 x mean 37 us (resolve 1, lock 2, exec 30, commit 4)"),
 		  std::string::npos)
 		<< line;
-	EXPECT_NE(std::string(line).find("set 1 hit 1 stale, shared 3.0 per job max 3, siblings 1"), std::string::npos)
+	EXPECT_NE(std::string(line).find("set 1 hit 1 stale, shared 3.0 per job max 3, siblings 1"),
+		  std::string::npos)
 		<< line;
-	EXPECT_NE(std::string(line).find("free 0 layout 0 shared 0 kill 1 replace 1"), std::string::npos) << line;
+	EXPECT_NE(std::string(line).find("free 0 layout 0 shared 0 kill 1 replace 1"),
+		  std::string::npos)
+		<< line;
 	switch_gpu_job_window(line, sizeof(line));
 	EXPECT_EQ(line[0], 0);
 	switch_gpu_backing_release(member);

@@ -119,9 +119,8 @@ int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *
         why = buildTurn(picture, plan->op[0], chromaSite, destination, kTegraVICWindowBase,
                         kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &check);
     SwitchVICEvents *taken = events ? *events : nullptr;
-    const int error = why ? -95
-                          : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite, nullptr,
-                                                                 taken);
+    const int error =
+        why ? -95 : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite, nullptr, taken);
     switch_native_surface_release(&picture);
     if (error)
         return 0;

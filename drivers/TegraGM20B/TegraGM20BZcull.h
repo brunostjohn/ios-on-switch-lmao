@@ -18,8 +18,9 @@
  * (discover_zcull_image_size): 0 where the GPU reports no zcull RAM or a register read back 0xbadf (unimplemented).
  * GM20B has one GPC (proj_scal_litter_num_gpcs_v), which the header sizes are per. The X1 reads 0x00040002 (two TPCs, four
  * zcull banks) and 0x01ff0800 (2048 aliquots): x1-stacklog's register dumps. */
-static inline int tgm_zcull_layout(uint32_t gpcs, uint32_t tpcs, uint32_t gpc0_tpcs, uint32_t fs_gpc,
-				   uint32_t ram_size, uint32_t ctxsw_size, struct TegraGM20BAbiZcullInfo *out)
+static inline int tgm_zcull_layout(uint32_t gpcs, uint32_t tpcs, uint32_t gpc0_tpcs,
+				   uint32_t fs_gpc, uint32_t ram_size, uint32_t ctxsw_size,
+				   struct TegraGM20BAbiZcullInfo *out)
 {
 	const uint32_t zcbs = (fs_gpc >> 16) & 0x1f;
 	const uint32_t aliquots = ram_size & 0xffff;
@@ -32,12 +33,15 @@ static inline int tgm_zcull_layout(uint32_t gpcs, uint32_t tpcs, uint32_t gpc0_t
 	out->height_align_pixels = 32;
 	out->pixel_squares_by_aliquots = zcbs * 16 * 16 * tpcs / (gpcs * gpc0_tpcs);
 	out->aliquot_total = aliquots;
-	out->region_byte_multiplier = gpcs * 0x20;  /* gr_zcull_bytes_per_aliquot_per_gpu_v */
-	out->region_header_size = 1 * 0x20;         /* gr_zcull_save_restore_header_bytes_per_gpc_v */
-	out->subregion_header_size = 1 * 0xc0;      /* gr_zcull_save_restore_subregion_header_bytes_per_gpc_v */
-	out->subregion_count = 0x10;                /* gr_zcull_subregion_qty_v */
-	out->subregion_width_align_pixels = tpcs * 0x10; /* gr_gpc0_zcull_zcsize_width_subregion__multiple_v */
-	out->subregion_height_align_pixels = 0x40;  /* gr_gpc0_zcull_zcsize_height_subregion__multiple_v */
+	out->region_byte_multiplier = gpcs * 0x20; /* gr_zcull_bytes_per_aliquot_per_gpu_v */
+	out->region_header_size = 1 * 0x20; /* gr_zcull_save_restore_header_bytes_per_gpc_v */
+	out->subregion_header_size =
+		1 * 0xc0;            /* gr_zcull_save_restore_subregion_header_bytes_per_gpc_v */
+	out->subregion_count = 0x10; /* gr_zcull_subregion_qty_v */
+	out->subregion_width_align_pixels =
+		tpcs * 0x10; /* gr_gpc0_zcull_zcsize_width_subregion__multiple_v */
+	out->subregion_height_align_pixels =
+		0x40; /* gr_gpc0_zcull_zcsize_height_subregion__multiple_v */
 	out->ctxsw_size = ctxsw_size;
 	out->ctxsw_align = TGM_ZCULL_CTXSW_ALIGN;
 	return 1;

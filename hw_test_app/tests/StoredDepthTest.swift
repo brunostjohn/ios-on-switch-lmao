@@ -34,17 +34,22 @@ struct StoredDepthTest: HWTest {
 
     /// The drawn depth is 0.25, the clear 1; Depth16Unorm's 0.25 is 16383.75 units, so it reads 16383 or 16384
     static let cases: [Case] = [
-        Case(name: "d32f", format: .depth32Float, depth: true, stencil: false, depthBytes: 4,
-             left: bytes(0.25), right: bytes(1)),
-        Case(name: "d16", format: .depth16Unorm, depth: true, stencil: false, depthBytes: 2,
-             left: bytes16(16383), right: bytes16(65535)),
-        Case(name: "d32fs8", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
-             left: bytes(0.25), right: bytes(1)),
+        Case(
+            name: "d32f", format: .depth32Float, depth: true, stencil: false, depthBytes: 4,
+            left: bytes(0.25), right: bytes(1)),
+        Case(
+            name: "d16", format: .depth16Unorm, depth: true, stencil: false, depthBytes: 2,
+            left: bytes16(16383), right: bytes16(65535)),
+        Case(
+            name: "d32fs8", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
+            left: bytes(0.25), right: bytes(1)),
         Case(name: "s8", format: .stencil8, depth: false, stencil: true, depthBytes: 0, left: [], right: []),
-        Case(name: "d32fs8_array", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
-             left: bytes(0.25), right: bytes(1), type: .type2DArray, slice: 1),
-        Case(name: "d32fs8_cube", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
-             left: bytes(0.25), right: bytes(1), type: .typeCube, slice: 4),
+        Case(
+            name: "d32fs8_array", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
+            left: bytes(0.25), right: bytes(1), type: .type2DArray, slice: 1),
+        Case(
+            name: "d32fs8_cube", format: .depth32Float_stencil8, depth: true, stencil: true, depthBytes: 4,
+            left: bytes(0.25), right: bytes(1), type: .typeCube, slice: 4),
     ]
 
     func run(_ context: TestContext) async throws -> Outcome {

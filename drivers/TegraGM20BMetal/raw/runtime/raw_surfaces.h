@@ -9,7 +9,11 @@
 #include "TegraGM20BABI.h"
 
 namespace raw {
-enum class JobVisibility : uint8_t { Legacy, Internal, External };
+enum class JobVisibility : uint8_t {
+    Legacy,
+    Internal,
+    External
+};
 
 class SurfaceList {
 public:
@@ -30,13 +34,12 @@ public:
 
     void addAddress(uint64_t va, uint64_t bytes, bool write, uint32_t metadata = 0)
     {
-        if (!bytes || bytes > UINT64_MAX - va ||
-            ((metadata & TegraGM20BSurfaceRange) && bytes > UINT32_MAX)) {
+        if (!bytes || bytes > UINT64_MAX - va || ((metadata & TegraGM20BSurfaceRange) && bytes > UINT32_MAX)) {
             overflow_ = true;
             return;
         }
-        const uint32_t access = TegraGM20BSurfaceGpuAddress |
-                                (write ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead) | metadata;
+        const uint32_t access =
+            TegraGM20BSurfaceGpuAddress | (write ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead) | metadata;
         const size_t slot = findSlot(va, TegraGM20BSurfaceGpuAddress);
         if (index_[slot]) {
             last_ = index_[slot] - 1;
@@ -136,7 +139,8 @@ private:
         const bool oldExact = (use.access & TegraGM20BSurfaceRange) != 0;
         const bool addedExact = (access & TegraGM20BSurfaceRange) != 0;
         const bool exact = addedWrite ? addedExact && (!oldWrite || oldExact)
-                                     : oldWrite ? oldExact : oldExact || addedExact;
+                           : oldWrite ? oldExact
+                                      : oldExact || addedExact;
         extents_[index] = std::max(extents_[index], bytes);
         use.access = (use.access | access) & ~uint32_t(TegraGM20BSurfaceRange);
         use.reserved = 0;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include "TegraVICRequest.h"
+
 static inline bool switch_vic_overwrites(const TegraVICPlan &plan, const TegraVICSurfaceDesc &destination)
 {
     for (uint32_t i = 0; i < plan.count; ++i) {

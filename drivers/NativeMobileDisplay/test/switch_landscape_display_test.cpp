@@ -76,7 +76,11 @@ struct Display {
 
     struct Probe {
         bool on = false;
-        bool active() const { return on; }
+
+        bool active() const
+        {
+            return on;
+        }
     } probe, planeProbe;
 
     struct Panic {
@@ -119,34 +123,101 @@ struct Display {
 
     static constexpr uint32_t frontAddress = 0xc0000000;
 
-    uint32_t expectedStart() const { return frontAddress; }
+    uint32_t expectedStart() const
+    {
+        return frontAddress;
+    }
+
     uint32_t uiActive(uint32_t index) const
     {
         const uint32_t base = landscapeOn() ? kWinBBase : kWinABase;
         return dc[index >= 0x800 ? base + 0x40 + (index - 0x800) : base + (index - 0x700)];
     }
-    char uiName() const { return landscapeOn() ? 'B' : 'A'; }
-    static bool columnScanBusy() { return false; }
-    static bool windowProbeHolds() { return false; }
-    void withdrawCompletionFlip() { ++withdrawals; }
-    void mediaFlipFromGate() { ++mediaFromGate; }
-    static bool mediaFlipIdle() { return true; }
-    static bool planeWindowIdle() { return false; }
-    void scanoutMemoryBarrier() {}
-    void planeReleaseIdle() {}
-    void chainPanicHook() {}
-    void armFlipDeadline() { ++deadlines; }
-    void kickSwapQueue() { ++kicks; }
-    void retireUnshown(uint64_t seq) { retiredUnshown = seq; }
-    const void *firstUntaken() const { return nullptr; }
+
+    char uiName() const
+    {
+        return landscapeOn() ? 'B' : 'A';
+    }
+
+    static bool columnScanBusy()
+    {
+        return false;
+    }
+
+    static bool windowProbeHolds()
+    {
+        return false;
+    }
+
+    void withdrawCompletionFlip()
+    {
+        ++withdrawals;
+    }
+
+    void mediaFlipFromGate()
+    {
+        ++mediaFromGate;
+    }
+
+    static bool mediaFlipIdle()
+    {
+        return true;
+    }
+
+    static bool planeWindowIdle()
+    {
+        return false;
+    }
+
+    void scanoutMemoryBarrier()
+    {}
+
+    void planeReleaseIdle()
+    {}
+
+    void chainPanicHook()
+    {}
+
+    void armFlipDeadline()
+    {
+        ++deadlines;
+    }
+
+    void kickSwapQueue()
+    {
+        ++kicks;
+    }
+
+    void retireUnshown(uint64_t seq)
+    {
+        retiredUnshown = seq;
+    }
+
+    const void *firstUntaken() const
+    {
+        return nullptr;
+    }
+
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
     {
         *width = 720;
         *height = 1280;
     }
-    uint32_t planeSlotIova(int slot) const { return 0x10000000 + uint32_t(slot) * 0x100000; }
-    PlaneSet &planeSetOf(int id) { return sets[id >= 0 ? id : Commits::kSlots]; }
-    const PlaneSet &planeSetOf(int id) const { return sets[id >= 0 ? id : Commits::kSlots]; }
+
+    uint32_t planeSlotIova(int slot) const
+    {
+        return 0x10000000 + uint32_t(slot) * 0x100000;
+    }
+
+    PlaneSet &planeSetOf(int id)
+    {
+        return sets[id >= 0 ? id : Commits::kSlots];
+    }
+
+    const PlaneSet &planeSetOf(int id) const
+    {
+        return sets[id >= 0 ? id : Commits::kSlots];
+    }
 
 #include "../SwitchLandscapeState.h"
 #include "../SwitchDisplayBandwidthDisplay.h"

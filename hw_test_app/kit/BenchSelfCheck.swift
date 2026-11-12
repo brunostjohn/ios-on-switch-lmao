@@ -69,6 +69,7 @@ enum BenchSelfCheck {
 
     private static func matching(_ texels: Data, want: [UInt32]) -> Int {
         let texel = want.withUnsafeBytes { Data($0) }
-        return stride(from: 0, to: texels.count - 15, by: 16).filter { texels.subdata(in: $0..<($0 + 16)) == texel }.count
+        return stride(from: 0, to: texels.count - 15, by: 16).filter { texels.subdata(in: $0..<($0 + 16)) == texel }
+            .count
     }
 }

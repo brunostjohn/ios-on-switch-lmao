@@ -89,8 +89,8 @@ inline bool videoImage(const native_planes::Layer &picture, const switch_gpu_bac
 // visible at `cropX`, `cropY` in its buffer) turned by `transform` from source rectangle `turned`: window A scans the
 // picture itself onto the layer's destination. False when the layer shows part of the destination (or turns it again),
 // the picture is not 8-bit 4:2:0, or its chroma is sited where the window does not sample it (VIC resamples it).
-inline bool turnedVideoImage(const native_planes::Layer &layer, const switch_gpu_backing_layout &layout,
-                             uint32_t cropX, uint32_t cropY, uint32_t width, uint32_t height, uint32_t transform,
+inline bool turnedVideoImage(const native_planes::Layer &layer, const switch_gpu_backing_layout &layout, uint32_t cropX,
+                             uint32_t cropY, uint32_t width, uint32_t height, uint32_t transform,
                              native_planes::Rect turned, uint32_t panelWidth, uint32_t panelHeight,
                              native_planes::Image &image)
 {

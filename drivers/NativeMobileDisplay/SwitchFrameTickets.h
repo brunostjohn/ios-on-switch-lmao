@@ -6,6 +6,7 @@
 class SwitchFrameTickets {
 public:
     static constexpr unsigned kCapacity = 32;
+
     struct Ticket {
         const void *request = nullptr;
         uint64_t id = 0, take = 0, gpu = 0;
@@ -102,17 +103,35 @@ private:
     Ticket entries[kCapacity] = {};
     uint64_t next = 0, lastShown = 0;
 #else
-    Ticket *find(const void *) { return nullptr; }
-    Ticket *byTake(uint64_t) { return nullptr; }
-    uint64_t accept(const void *, uint32_t, uint64_t, uint64_t) { return 0; }
-    void take(const void *, uint64_t) {}
-    void gpu(uint64_t, uint64_t) {}
+    Ticket *find(const void *)
+    {
+        return nullptr;
+    }
+
+    Ticket *byTake(uint64_t)
+    {
+        return nullptr;
+    }
+
+    uint64_t accept(const void *, uint32_t, uint64_t, uint64_t)
+    {
+        return 0;
+    }
+
+    void take(const void *, uint64_t)
+    {}
+
+    void gpu(uint64_t, uint64_t)
+    {}
+
     Ticket shown(uint64_t, uint64_t, uint64_t = 0, bool *first = nullptr)
     {
         if (first)
             *first = false;
         return {};
     }
-    void retire(const void *) {}
+
+    void retire(const void *)
+    {}
 #endif
 };

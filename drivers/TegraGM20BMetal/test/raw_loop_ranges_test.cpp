@@ -19,8 +19,8 @@ struct Tape {
     raw::LoopTapeEntry operator()(uint32_t at) const
     {
         const char c = at < text.size() ? text[at] : '.';
-        const Records::Kind kinds[] = {Records::StartIf,    Records::StartElse,    Records::EndIf,
-                                       Records::StartWhile, Records::EndWhile,     Records::StartDoWhile,
+        const Records::Kind kinds[] = {Records::StartIf,    Records::StartElse, Records::EndIf,
+                                       Records::StartWhile, Records::EndWhile,  Records::StartDoWhile,
                                        Records::EndDoWhile};
         const std::string letters = "iefwWdD";
         if (c == 'C' || c == 'P')

@@ -48,10 +48,12 @@ TEST(PlanExecution, ClosedEncoderSummariesPreserveEventsAndLateRefusals)
     plan.record(cmd(OpInvocation), {});
     raw::ExecutionPlan result;
     std::vector<RMPlanEvent> observed;
-    ASSERT_EQ(makeExecutionPlan(plan, false, result, [&](const auto &value) {
-        observed.push_back(value);
-        return true;
-    }), RMPlanError::None);
+    ASSERT_EQ(makeExecutionPlan(plan, false, result,
+                                [&](const auto &value) {
+                                    observed.push_back(value);
+                                    return true;
+                                }),
+              RMPlanError::None);
     ASSERT_EQ(result.ranges().size(), 5u);
     EXPECT_EQ(result.ranges()[0].to, 10002u);
     EXPECT_EQ(result.ranges()[1].kind, raw::ExecutionKind::signal);
@@ -75,7 +77,11 @@ TEST(PlanExecution, WholeCompatibilityAndOpaqueEventsKeepTheirPositions)
     plan.record(cmd(OpCompute), {});
     plan.record(cmd(OpEnd), {});
     raw::ExecutionPlan result;
-    ASSERT_EQ(makeExecutionPlan(plan, true, result, [](const auto &) { return false; }), RMPlanError::None);
+    ASSERT_EQ(makeExecutionPlan(plan, true, result,
+                                [](const auto &) {
+                                    return false;
+                                }),
+              RMPlanError::None);
     ASSERT_EQ(result.ranges().size(), 1u);
     EXPECT_EQ(result.ranges()[0].kind, raw::ExecutionKind::compatibility);
     EXPECT_EQ(result.ranges()[0].from, 0u);
@@ -92,25 +98,36 @@ TEST(PlanExecution, RecordingErrorsCannotHideInsideSkippedEncoderBodies)
         plan.record(cmd(OpEnd), {});
         raw::ExecutionPlan result;
         unsigned callbacks = 0;
-        EXPECT_EQ(makeExecutionPlan(plan, false, result, [&](const auto &) {
-            ++callbacks;
-            return true;
-        }), invalid == OpCompute ? RMPlanError::NestedEncoder : RMPlanError::EventInsideEncoder);
+        EXPECT_EQ(makeExecutionPlan(plan, false, result,
+                                    [&](const auto &) {
+                                        ++callbacks;
+                                        return true;
+                                    }),
+                  invalid == OpCompute ? RMPlanError::NestedEncoder : RMPlanError::EventInsideEncoder);
         EXPECT_TRUE(result.ranges().empty());
         EXPECT_EQ(callbacks, 0u);
         plan.clear();
         plan.record(cmd(OpRender), {});
-        EXPECT_EQ(makeExecutionPlan(plan, false, result, [](const auto &) { return true; }),
+        EXPECT_EQ(makeExecutionPlan(plan, false, result,
+                                    [](const auto &) {
+                                        return true;
+                                    }),
                   RMPlanError::UnclosedEncoder);
         plan.record(cmd(OpEnd), {});
-        EXPECT_EQ(makeExecutionPlan(plan, false, result, [](const auto &) { return true; }), RMPlanError::None);
+        EXPECT_EQ(makeExecutionPlan(plan, false, result,
+                                    [](const auto &) {
+                                        return true;
+                                    }),
+                  RMPlanError::None);
     }
 }
 
 raw::RetirementWrites writes(const RMCommandPlan &plan, size_t from, size_t to)
 {
     return raw::RetirementWrites::capture(
-        [&](auto visit) { plan.forEachWritten(from, to, visit); },
+        [&](auto visit) {
+            plan.forEachWritten(from, to, visit);
+        },
         [](void *value) {
             const auto identity = reinterpret_cast<uintptr_t>(value);
             if (identity >= 100 && identity <= 102)
@@ -123,8 +140,10 @@ TEST(PlanCompletion, AliasedTexturesCleanTheirParentBufferOnce)
 {
     RMCommandPlan plan;
     plan.record(cmd(OpRender), {});
-    plan.addUses(0, {{object(9), raw::ResourceUse::Write}, {object(100), raw::ResourceUse::Write},
-                     {object(101), raw::ResourceUse::Write}, {object(102), raw::ResourceUse::Read},
+    plan.addUses(0, {{object(9), raw::ResourceUse::Write},
+                     {object(100), raw::ResourceUse::Write},
+                     {object(101), raw::ResourceUse::Write},
+                     {object(102), raw::ResourceUse::Read},
                      {object(10), raw::ResourceUse::Write}});
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, plan.size());
@@ -179,4 +198,4 @@ TEST(PlanCompletion, DistinctRangesAndEmptyWritesRemainSeparate)
     EXPECT_EQ(writes(plan, 2, 4).textures, (std::vector<void *>{object(101)}));
 }
 
-} // namespace
+}  // namespace

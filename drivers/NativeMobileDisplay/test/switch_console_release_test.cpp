@@ -21,7 +21,12 @@ using testing::HasSubstr;
 
 namespace {
 unsigned logs;
-uint64_t mach_absolute_time() { return 5; }
+
+uint64_t mach_absolute_time()
+{
+    return 5;
+}
+
 struct OriginalLegacySwapRequest {
     int id;
 };
@@ -32,11 +37,32 @@ struct NativeLegacyDisplay {
     std::set<const OriginalLegacySwapRequest *> taken, validated;
     unsigned kicks = 0;
     bool latchRetire = true;
-    void untake(const OriginalLegacySwapRequest *r) { taken.erase(r); }
-    void removeValidated(const OriginalLegacySwapRequest *r) { validated.erase(r); }
-    bool addValidated(const OriginalLegacySwapRequest *r, uint64_t) { return validated.insert(r).second; }
-    uint64_t seqOf(const OriginalLegacySwapRequest *r) const { return taken.count(r) ? 1 : 0; }
-    void kickSwapQueue() { ++kicks; }
+
+    void untake(const OriginalLegacySwapRequest *r)
+    {
+        taken.erase(r);
+    }
+
+    void removeValidated(const OriginalLegacySwapRequest *r)
+    {
+        validated.erase(r);
+    }
+
+    bool addValidated(const OriginalLegacySwapRequest *r, uint64_t)
+    {
+        return validated.insert(r).second;
+    }
+
+    uint64_t seqOf(const OriginalLegacySwapRequest *r) const
+    {
+        return taken.count(r) ? 1 : 0;
+    }
+
+    void kickSwapQueue()
+    {
+        ++kicks;
+    }
+
 #include "../SwitchConsoleReleaseDisplay.h"
 };
 
@@ -44,7 +70,11 @@ class ConsoleRelease : public testing::Test {
 protected:
     NativeLegacyDisplay display;
     OriginalLegacySwapRequest shown{1}, next{2};
-    void SetUp() override { logs = 0; }
+
+    void SetUp() override
+    {
+        logs = 0;
+    }
 };
 
 TEST_F(ConsoleRelease, WithoutAReleaseTheQueueIsUntouched)

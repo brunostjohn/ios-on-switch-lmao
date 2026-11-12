@@ -127,7 +127,9 @@ struct MPSControlFlowTest: HWTest {
                 body: { _, args in [graph.addition(args[0], int(graph, 1), name: nil)] }, name: nil)[0]
         }
         var shapes: [Nested] = []
-        func shape(_ name: String, _ start: Int32, _ expected: Int32, _ build: (MPSGraph, MPSGraphTensor) -> MPSGraphTensor)
+        func shape(
+            _ name: String, _ start: Int32, _ expected: Int32, _ build: (MPSGraph, MPSGraphTensor) -> MPSGraphTensor
+        )
             throws
         {
             let (result, path) = try runGraph(gpu, start: start, build)
@@ -136,7 +138,8 @@ struct MPSControlFlowTest: HWTest {
         try shape("while_in_if", Self.whileInIfCount, Self.whileInIfCount) { graph, start in
             let pick = graph.lessThan(start, int(graph, 1 << 20), name: nil)
             return graph.if(
-                pick, then: { [repeated(graph, start, int(graph, 0)) { graph.addition($0, int(graph, 1), name: nil) }] },
+                pick,
+                then: { [repeated(graph, start, int(graph, 0)) { graph.addition($0, int(graph, 1), name: nil) }] },
                 else: { [int(graph, -1)] }, name: nil)[0]
         }
         try shape("for_in_while", Self.forInWhileCount, 3 * Self.forInWhileCount) { graph, start in
@@ -163,7 +166,9 @@ struct MPSControlFlowTest: HWTest {
 
     /// The graph's one int32 output, encoded into one MPSCommandBuffer, and that command buffer's path. `start` comes
     /// in as a fed placeholder so MPSGraph cannot fold the control flow into a constant on the CPU.
-    func runGraph(_ gpu: GPU, start: Int32, _ build: (MPSGraph, MPSGraphTensor) -> MPSGraphTensor) throws -> (
+    func runGraph(
+        _ gpu: GPU, start: Int32, _ build: (MPSGraph, MPSGraphTensor) -> MPSGraphTensor
+    ) throws -> (
         Int32, String
     ) {
         let graph = MPSGraph()

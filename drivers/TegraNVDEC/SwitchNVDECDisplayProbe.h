@@ -9,7 +9,7 @@
 
 // `plain` and `plainAvail` are scratch for the job without its display buffer. NULL, or why the probe is refused.
 inline const char *switch_nvdec_check_display_probe(const TegraNVDECSubmit *s, const uint64_t *avail,
-                                                     TegraNVDECSubmit *plain, uint64_t *plainAvail)
+                                                    TegraNVDECSubmit *plain, uint64_t *plainAvail)
 {
     if (s->codec != TEGRA_NVDEC_CODEC_HEVC || s->setup_bytes != sizeof(nvdec_hevc_pic_s) ||
         s->entry_count > TEGRA_NVDEC_MAX_ENTRIES)

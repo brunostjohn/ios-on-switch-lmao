@@ -58,7 +58,8 @@ TEST_F(PresentWatch, TheProducersOwnChannelReachingItsSeqnoMakesItDue)
 	EXPECT_TRUE(switch_gpu_present_watch_armed(&watch));
 	EXPECT_FALSE(switch_gpu_present_watch_fenced(&watch, kUid, 39));
 	EXPECT_FALSE(switch_gpu_present_watch_fenced(&watch, kUid + 1, 40));  // another channel
-	EXPECT_FALSE(switch_gpu_present_watch_fenced(&watch, (uint64_t(3) << 32) | 17u, 40));  // reset since
+	EXPECT_FALSE(switch_gpu_present_watch_fenced(&watch, (uint64_t(3) << 32) | 17u,
+						     40));  // reset since
 	EXPECT_EQ(watch.state, uint32_t(SWITCH_GPU_PRESENT_WATCH_ARMED));
 	EXPECT_TRUE(switch_gpu_present_watch_fenced(&watch, kUid, 41));
 	EXPECT_EQ(watch.state, uint32_t(SWITCH_GPU_PRESENT_WATCH_DUE));
@@ -126,6 +127,7 @@ TEST_F(PresentWatch, ADueWatchIsClaimedOnceByTheWorkItem)
 	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external),
 		  SWITCH_GPU_PRESENT_WATCH_PENDING);
 }
+
 // A watch waiting for a promise: no pass looks at it; the job that keeps the promise becomes its producer, claimed while
 // it is handed over so neither the pass nor the work item acts on a half-written token.
 TEST(PromiseWatch, TheKeepingJobBecomesTheProducerAndOnlyItsOwnPromiseConverts)
@@ -142,7 +144,8 @@ TEST(PromiseWatch, TheKeepingJobBecomesTheProducerAndOnlyItsOwnPromiseConverts)
 	ASSERT_TRUE(switch_gpu_present_watch_kept(&watch, 2052, 9, &job));
 	EXPECT_EQ(watch.state, uint32_t(SWITCH_GPU_PRESENT_WATCH_CLAIMED));
 	completedStatus = externalStatus = 1;
-	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external), SWITCH_GPU_PRESENT_WATCH_PENDING);
+	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external),
+		  SWITCH_GPU_PRESENT_WATCH_PENDING);
 	switch_gpu_present_watch_rearm(&watch);
 	EXPECT_EQ(watch.token.engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
 	EXPECT_TRUE(switch_gpu_present_watch_fenced(&watch, kUid, 40));
@@ -156,7 +159,8 @@ TEST(PromiseWatch, AClaimedPromiseWatchIsNotConverted)
 	const switch_gpu_backing_token job = {40, 3, SWITCH_GPU_ENGINE_GM20B, 17};
 	switch_gpu_present_watch_promise(&watch, &promise);
 	completedStatus = -5;
-	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external), SWITCH_GPU_PRESENT_WATCH_FAILED);
+	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external),
+		  SWITCH_GPU_PRESENT_WATCH_FAILED);
 	EXPECT_FALSE(switch_gpu_present_watch_kept(&watch, 2052, 9, &job));
 	EXPECT_EQ(watch.token.engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
 }

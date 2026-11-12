@@ -41,7 +41,8 @@ static inline int switch_gpu_present_watchable(const struct switch_gpu_backing_t
 					       uint32_t count)
 {
 	return count == 1 && tokens &&
-	       (tokens[0].engine == SWITCH_GPU_ENGINE_GM20B || tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE);
+	       (tokens[0].engine == SWITCH_GPU_ENGINE_GM20B ||
+		tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE);
 }
 
 static inline void switch_gpu_present_watch_arm(struct switch_gpu_present_watch *watch,
@@ -60,24 +61,26 @@ static inline void switch_gpu_present_watch_promise(struct switch_gpu_present_wa
 }
 
 /* Waiting for the promise (its word's fence-pool offset and value) to be kept */
-static inline int switch_gpu_present_watch_promised(const struct switch_gpu_present_watch *watch, uint32_t offset,
-						    uint32_t value)
+static inline int switch_gpu_present_watch_promised(const struct switch_gpu_present_watch *watch,
+						    uint32_t offset, uint32_t value)
 {
-	return __atomic_load_n(&watch->state, __ATOMIC_ACQUIRE) == SWITCH_GPU_PRESENT_WATCH_PROMISED &&
+	return __atomic_load_n(&watch->state, __ATOMIC_ACQUIRE) ==
+		       SWITCH_GPU_PRESENT_WATCH_PROMISED &&
 	       watch->token.engine == SWITCH_GPU_ENGINE_PROMISE && watch->token.queue == offset &&
 	       (uint32_t)watch->token.value == value;
 }
 
 /* The promise is kept by the job `producer`: a watch waiting for it takes that job as its token, CLAIMED (so neither the
  * work item nor a pass acts on it) until switch_gpu_present_watch_rearm. 1: it was this watch's. */
-static inline int switch_gpu_present_watch_kept(struct switch_gpu_present_watch *watch, uint32_t offset,
-						uint32_t value, const struct switch_gpu_backing_token *producer)
+static inline int switch_gpu_present_watch_kept(struct switch_gpu_present_watch *watch,
+						uint32_t offset, uint32_t value,
+						const struct switch_gpu_backing_token *producer)
 {
 	uint32_t promised = SWITCH_GPU_PRESENT_WATCH_PROMISED;
 
 	if (!switch_gpu_present_watch_promised(watch, offset, value) ||
-	    !__atomic_compare_exchange_n(&watch->state, &promised, SWITCH_GPU_PRESENT_WATCH_CLAIMED, 0,
-					 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+	    !__atomic_compare_exchange_n(&watch->state, &promised, SWITCH_GPU_PRESENT_WATCH_CLAIMED,
+					 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 		return 0;
 	watch->token = *producer;
 	return 1;
@@ -140,9 +143,9 @@ static inline int switch_gpu_present_watch_claim(struct switch_gpu_present_watch
 		found = SWITCH_GPU_PRESENT_WATCH_FAILED;
 	} else {
 		const int visible = external(&watch->token);
-		found = visible < 0   ? SWITCH_GPU_PRESENT_WATCH_FAILED
-			: visible ? SWITCH_GPU_PRESENT_WATCH_VISIBLE
-				  : SWITCH_GPU_PRESENT_WATCH_HIDDEN;
+		found = visible < 0 ? SWITCH_GPU_PRESENT_WATCH_FAILED
+			: visible   ? SWITCH_GPU_PRESENT_WATCH_VISIBLE
+				    : SWITCH_GPU_PRESENT_WATCH_HIDDEN;
 	}
 	if (!__atomic_compare_exchange_n(&watch->state, &from, SWITCH_GPU_PRESENT_WATCH_CLAIMED, 0,
 					 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))

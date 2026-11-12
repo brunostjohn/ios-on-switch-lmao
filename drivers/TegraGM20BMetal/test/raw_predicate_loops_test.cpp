@@ -313,8 +313,8 @@ TEST(RawPredicateLoops, WhatTheLayoutCannotRunIsMisused)
 TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
 {
     static_assert(raw::LoopCopies::kStartRoom >= raw::Predication::kStartWords + 1);
-    static_assert(raw::LoopCopies::endRoom(2) >= raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments) +
-                                                     raw::Predication::kOverflowWords(1));
+    static_assert(raw::LoopCopies::endRoom(2) >=
+                  raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments) + raw::Predication::kOverflowWords(1));
     uint64_t heads[raw::LoopCopies::kMaxSegments];
     for (size_t i = 0; i < raw::LoopCopies::kMaxSegments; ++i)
         heads[i] = kPush + 0x100 * i;
@@ -336,7 +336,8 @@ TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
         EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords);
         before = prog.p.at;
         prog.startIf(6, PredicateCompare::LessEqual, 3);
-        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords) << "an If inside a copy, with its resets";
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords)
+            << "an If inside a copy, with its resets";
         before = prog.p.at;
         prog.startElse();
         EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords);

@@ -37,7 +37,9 @@ id rmRefuseUnsupported(const char *why, NSError **error)
     if (error)
         *error = [NSError errorWithDomain:MTLLibraryErrorDomain
                                      code:MTLLibraryErrorUnsupported
-                                 userInfo:@{NSLocalizedDescriptionKey : @(why)}];
+                                 userInfo:@{
+                                     NSLocalizedDescriptionKey : @(why)
+                                 }];
     return nil;
 }
 

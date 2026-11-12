@@ -15,7 +15,10 @@ raw::CpuCompletion completion()
 TEST(CpuCompletion, GpuOnlyWritesMakeNoCall)
 {
     unsigned calls = 0;
-    auto submit = [&](const auto &, auto &) { ++calls; return false; };
+    auto submit = [&](const auto &, auto &) {
+        ++calls;
+        return false;
+    };
     auto batch = completion();
     EXPECT_EQ(raw::completeCpuRanges(batch, submit), raw::CpuCompletionResult::Current);
     EXPECT_EQ(calls, 0u);
@@ -42,22 +45,25 @@ TEST(CpuCompletion, LogicalJobsKeepExactIdentityAcrossBoundedCallsIncludingWrapp
         batch.ranges.push_back({handle, handle * 64, 64});
     size_t observed = 0;
     unsigned calls = 0;
-    EXPECT_EQ(raw::completeCpuRanges(batch, [&](const auto &request, auto &reply) {
-        EXPECT_EQ(request.channel_uid, batch.channelUid);
-        EXPECT_EQ(request.channel, 9u);
-        EXPECT_EQ(request.seqno, 0u);
-        EXPECT_EQ(request.reserved, 0u);
-        EXPECT_LE(request.range_count, uint32_t(TegraGM20BMaxJobUses));
-        const auto *ranges = reinterpret_cast<const TegraGM20BAbiCpuRange *>(uintptr_t(request.ranges_address));
-        for (uint32_t i = 0; i < request.range_count; ++i) {
-            EXPECT_EQ(ranges[i].handle, observed + i + 1);
-            EXPECT_EQ(ranges[i].offset, (observed + i + 1) * 64);
-        }
-        observed += request.range_count;
-        ++calls;
-        reply.current_count = request.range_count;
-        return true;
-    }), raw::CpuCompletionResult::Current);
+    EXPECT_EQ(raw::completeCpuRanges(batch,
+                                     [&](const auto &request, auto &reply) {
+                                         EXPECT_EQ(request.channel_uid, batch.channelUid);
+                                         EXPECT_EQ(request.channel, 9u);
+                                         EXPECT_EQ(request.seqno, 0u);
+                                         EXPECT_EQ(request.reserved, 0u);
+                                         EXPECT_LE(request.range_count, uint32_t(TegraGM20BMaxJobUses));
+                                         const auto *ranges = reinterpret_cast<const TegraGM20BAbiCpuRange *>(
+                                             uintptr_t(request.ranges_address));
+                                         for (uint32_t i = 0; i < request.range_count; ++i) {
+                                             EXPECT_EQ(ranges[i].handle, observed + i + 1);
+                                             EXPECT_EQ(ranges[i].offset, (observed + i + 1) * 64);
+                                         }
+                                         observed += request.range_count;
+                                         ++calls;
+                                         reply.current_count = request.range_count;
+                                         return true;
+                                     }),
+              raw::CpuCompletionResult::Current);
     EXPECT_EQ(observed, batch.ranges.size());
     EXPECT_EQ(calls, 3u);
 }
@@ -66,11 +72,13 @@ TEST(CpuCompletion, NewerWritersNeverBecomeCpuCurrent)
 {
     auto batch = completion();
     batch.ranges = {{1, 0, 64}, {2, 0, 128}};
-    EXPECT_EQ(raw::completeCpuRanges(batch, [](const auto &, auto &reply) {
-        reply.current_count = 1;
-        reply.stale = 1;
-        return true;
-    }), raw::CpuCompletionResult::Stale);
+    EXPECT_EQ(raw::completeCpuRanges(batch,
+                                     [](const auto &, auto &reply) {
+                                         reply.current_count = 1;
+                                         reply.stale = 1;
+                                         return true;
+                                     }),
+              raw::CpuCompletionResult::Stale);
 }
 
 TEST(CpuCompletion, FailedPendingAndMalformedRepliesCannotPublishSuccess)
@@ -78,28 +86,37 @@ TEST(CpuCompletion, FailedPendingAndMalformedRepliesCannotPublishSuccess)
     auto batch = completion();
     batch.ranges = {{1, 0, 64}};
     const TegraGM20BAbiCpuCompleteReply replies[] = {
-        {0, 0, 1, 0, -16, 0}, {0, 0, 0, 1, -5, 0}, {},
-        {1, 1, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 1}, {1, 0, 0, 0, -12, 0},
-        {UINT32_MAX, 2, 0, 0, 0, 0},
+        {0, 0, 1, 0, -16, 0}, {0, 0, 0, 1, -5, 0},         {}, {1, 1, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 1},
+        {1, 0, 0, 0, -12, 0}, {UINT32_MAX, 2, 0, 0, 0, 0},
     };
     for (const auto expected : replies)
-        EXPECT_EQ(raw::completeCpuRanges(batch, [&](const auto &, auto &reply) {
-            reply = expected;
-            return true;
-        }), raw::CpuCompletionResult::Failed);
-    EXPECT_EQ(raw::completeCpuRanges(batch, [](const auto &, auto &) { return false; }),
+        EXPECT_EQ(raw::completeCpuRanges(batch,
+                                         [&](const auto &, auto &reply) {
+                                             reply = expected;
+                                             return true;
+                                         }),
+                  raw::CpuCompletionResult::Failed);
+    EXPECT_EQ(raw::completeCpuRanges(batch,
+                                     [](const auto &, auto &) {
+                                         return false;
+                                     }),
               raw::CpuCompletionResult::Failed);
 }
 
 TEST(CpuCompletion, InvalidTrailingRangesAreRefusedBeforeAnyMaintenance)
 {
-    for (const TegraGM20BAbiCpuRange invalid : {TegraGM20BAbiCpuRange{0, 0, 64},
-             TegraGM20BAbiCpuRange{1, UINT64_MAX - 31, 64}, TegraGM20BAbiCpuRange{1, 0, 0}}) {
+    for (const TegraGM20BAbiCpuRange invalid :
+         {TegraGM20BAbiCpuRange{0, 0, 64}, TegraGM20BAbiCpuRange{1, UINT64_MAX - 31, 64},
+          TegraGM20BAbiCpuRange{1, 0, 0}}) {
         auto batch = completion();
         batch.ranges.assign(TegraGM20BMaxJobUses, {1, 0, 64});
         batch.ranges.push_back(invalid);
         unsigned calls = 0;
-        EXPECT_EQ(raw::completeCpuRanges(batch, [&](const auto &, auto &) { ++calls; return true; }),
+        EXPECT_EQ(raw::completeCpuRanges(batch,
+                                         [&](const auto &, auto &) {
+                                             ++calls;
+                                             return true;
+                                         }),
                   raw::CpuCompletionResult::Failed);
         EXPECT_EQ(calls, 0u);
         batch.coalesce();
@@ -108,10 +125,16 @@ TEST(CpuCompletion, InvalidTrailingRangesAreRefusedBeforeAnyMaintenance)
     for (bool uid : {false, true}) {
         auto batch = completion();
         batch.ranges.push_back({1, 0, 64});
-        if (uid) batch.channelUid = 0;
-        else batch.channel = 0;
-        EXPECT_EQ(raw::completeCpuRanges(batch, [](const auto &, auto &) { ADD_FAILURE(); return true; }),
+        if (uid)
+            batch.channelUid = 0;
+        else
+            batch.channel = 0;
+        EXPECT_EQ(raw::completeCpuRanges(batch,
+                                         [](const auto &, auto &) {
+                                             ADD_FAILURE();
+                                             return true;
+                                         }),
                   raw::CpuCompletionResult::Failed);
     }
 }
-} // namespace
+}  // namespace

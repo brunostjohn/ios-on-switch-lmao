@@ -41,7 +41,10 @@ void execute(Images &images, const raw::ShaderTestTransfers &plan, size_t texels
 
 TEST(RawShaderTests, PhysicalSampleGridPreservesEverySample)
 {
-    struct Case { uint32_t samples, width, height; };
+    struct Case {
+        uint32_t samples, width, height;
+    };
+
     for (const auto &c : {Case{1, 37, 19}, Case{2, 74, 19}, Case{4, 74, 38}, Case{8, 148, 38}}) {
         raw::ShaderTestShape shape;
         ASSERT_TRUE(raw::shaderTestShape(260, c.samples, 37, 19, 3, shape));
@@ -71,8 +74,8 @@ void roundTrip(uint32_t format, uint8_t flags)
 {
     const size_t bpp = format == 260 ? 8 : format == 252 ? 4 : 1;
     for (const uint32_t samples : {1u, 2u, 4u, 8u}) {
-        SCOPED_TRACE(::testing::Message() << "format=" << format << " flags=" << unsigned(flags)
-                                        << " samples=" << samples);
+        SCOPED_TRACE(::testing::Message()
+                     << "format=" << format << " flags=" << unsigned(flags) << " samples=" << samples);
         raw::ShaderTestShape shape;
         ASSERT_TRUE(raw::shaderTestShape(format, samples, 13, 9, flags, shape));
         const size_t texels = size_t(shape.width) * shape.height;
@@ -118,8 +121,16 @@ void roundTrip(uint32_t format, uint8_t flags)
     }
 }
 
-TEST(RawShaderTests, DepthRoundTrip) { roundTrip(252, raw::kShaderTestDepth); }
-TEST(RawShaderTests, StencilRoundTrip) { roundTrip(253, raw::kShaderTestStencil); }
+TEST(RawShaderTests, DepthRoundTrip)
+{
+    roundTrip(252, raw::kShaderTestDepth);
+}
+
+TEST(RawShaderTests, StencilRoundTrip)
+{
+    roundTrip(253, raw::kShaderTestStencil);
+}
+
 TEST(RawShaderTests, PackedAspectsStayIndependent)
 {
     for (uint8_t flags : {1, 2, 3})
@@ -140,4 +151,4 @@ TEST(RawShaderTests, DependentTemporaryCopiesAreOrdered)
         }
     }
 }
-} // namespace
+}  // namespace

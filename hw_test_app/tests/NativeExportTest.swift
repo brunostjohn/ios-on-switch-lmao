@@ -83,9 +83,11 @@ struct NativeExportTest: HWTest {
             let broken = notNative != 0 || (routes["exported"] ?? 0) == 0 || wrong != 0 || pool?.isEmpty == false
             finding = ProbeFinding(
                 broken ? .fail : pool == nil ? .inconclusive : .pass, metrics,
-                note: notNative != 0 ? "\(notNative) pictures were copied, not exported"
-                    : wrong != 0 ? "\(wrong) pictures differ from the pattern"
-                    : pool ?? "the kernel does not count the session's buffers (a release kernel)")
+                note: notNative != 0
+                    ? "\(notNative) pictures were copied, not exported"
+                    : wrong != 0
+                        ? "\(wrong) pictures differ from the pattern"
+                        : pool ?? "the kernel does not count the session's buffers (a release kernel)")
         } else {
             finding = ProbeFinding(.inconclusive, metrics, note: "the decoder does not answer SwitchPictureRoutes")
         }

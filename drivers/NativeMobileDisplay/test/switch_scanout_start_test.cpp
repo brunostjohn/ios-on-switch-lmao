@@ -19,7 +19,8 @@ struct PanicRestore {
     throw std::runtime_error("display panic");
 }
 
-void IOLog(const char *, ...) {}
+void IOLog(const char *, ...)
+{}
 
 struct Display {
     static constexpr const char *kBlockScanName = "portrait";
@@ -32,18 +33,36 @@ struct Display {
     static constexpr uint32_t kGeneralActReq = 1, kWinAActReq = 2, kWinBActReq = 4;
     static constexpr uint32_t kWinAUnderflowInt = 1 << 8, kWinBUnderflowInt = 1 << 9;
     static constexpr unsigned kLatchFrames = 6, kDirectUnderflowFrames = 3, kUnderflowFrames = 12;
+
     enum Reg {
-        kDcRegActControl, kDcStateAccess, kDcWindowHeader, kWinLineStride, kWinbufSurfaceKind,
-        kWinbufHOffset, kWinOptions, kWinbufStartAddr, kDcIntStatus, kDcIntEnable,
-        kDcStateControl, kWinbufUnderflow, kRegCount
+        kDcRegActControl,
+        kDcStateAccess,
+        kDcWindowHeader,
+        kWinLineStride,
+        kWinbufSurfaceKind,
+        kWinbufHOffset,
+        kWinOptions,
+        kWinbufStartAddr,
+        kDcIntStatus,
+        kDcIntEnable,
+        kDcStateControl,
+        kWinbufUnderflow,
+        kRegCount
     };
+
     struct Registers {
         std::array<uint32_t, kRegCount> values{};
         std::vector<uint32_t> requests;
+
         struct Reference {
             Registers &registers;
             unsigned index;
-            operator uint32_t() const { return registers.values[index]; }
+
+            operator uint32_t() const
+            {
+                return registers.values[index];
+            }
+
             void operator=(uint32_t value)
             {
                 if (index == kDcStateControl)
@@ -51,14 +70,34 @@ struct Display {
                 registers.values[index] = index == kDcIntStatus ? registers.values[index] & ~value : value;
             }
         };
-        Reference operator[](unsigned index) { return {*this, index}; }
+
+        Reference operator[](unsigned index)
+        {
+            return {*this, index};
+        }
     } dc, windowB;
+
     std::array<uint32_t, kRegCount> active{}, activeB{};
     bool uiOnB = false;  // landscape: the UI's flips go to window B's own registers
-    struct Layout { uint32_t kind, stride, hOffset; };
+
+    struct Layout {
+        uint32_t kind, stride, hOffset;
+    };
+
     std::array<Layout, TegraScanoutRing::kMaxEntries> layouts{};
-    struct Plane { uint64_t seq = 0; uint32_t address = 0; };
-    struct Probe { bool active() const { return false; } } probe;
+
+    struct Plane {
+        uint64_t seq = 0;
+        uint32_t address = 0;
+    };
+
+    struct Probe {
+        bool active() const
+        {
+            return false;
+        }
+    } probe;
+
     TegraScanoutRing ring;
     std::array<uint64_t, TegraScanoutRing::kMaxEntries> entrySeq{}, entryPendingSeq{}, marks{};
     std::array<bool, TegraScanoutRing::kMaxEntries> entryPlaneSet{};
@@ -89,9 +128,10 @@ struct Display {
 
     uint32_t surfaceAddress(int i) const
     {
-        return i >= kSlot0 ? 0x10000000 + static_cast<uint32_t>(i - kSlot0) * 0x1000000 :
-                            0xc0000000 + static_cast<uint32_t>(i) * 0x1000000;
+        return i >= kSlot0 ? 0x10000000 + static_cast<uint32_t>(i - kSlot0) * 0x1000000
+                           : 0xc0000000 + static_cast<uint32_t>(i) * 0x1000000;
     }
+
     int surfaceIndex(uint32_t address) const
     {
         for (int i = 0; i < static_cast<int>(layouts.size()); ++i)
@@ -99,10 +139,12 @@ struct Display {
                 return i;
         return kNoBuffer;
     }
+
     uint32_t expectedStart() const
     {
         return surfaceAddress(doubleBuffer ? (ring.pending == kNoBuffer ? ring.front : ring.pending) : 0);
     }
+
     void layoutOf(int i, uint32_t &kind, uint32_t &stride, uint32_t &offset) const
     {
         const auto &layout = layouts.at(i);
@@ -110,24 +152,54 @@ struct Display {
         stride = layout.stride;
         offset = layout.hOffset;
     }
+
     bool sameLayout(int a, int b) const
     {
         const auto &x = layouts.at(a), &y = layouts.at(b);
         return x.kind == y.kind && x.stride == y.stride && x.hOffset == y.hOffset;
     }
-    uint64_t seqOf(uint64_t request) const { return request; }
-    void markFlip(int i) { marks.at(i) = flipRequest; ++marksWritten; }
+
+    uint64_t seqOf(uint64_t request) const
+    {
+        return request;
+    }
+
+    void markFlip(int i)
+    {
+        marks.at(i) = flipRequest;
+        ++marksWritten;
+    }
+
     void checkPitchWindow()
     {
         ++pitchChecks;
         if (active[kWinbufStartAddr] != surfaceAddress(0))
             panic("initial pitch window changed");
     }
-    void chainPanicHook() { ++hooks; }
-    void scanoutMemoryBarrier() { ++barriers; }
-    bool presentedByCompletion(int) { return false; }
-    void flipFromGate() {}
-    void armFlipDeadline() { ++deadlineArms; }
+
+    void chainPanicHook()
+    {
+        ++hooks;
+    }
+
+    void scanoutMemoryBarrier()
+    {
+        ++barriers;
+    }
+
+    bool presentedByCompletion(int)
+    {
+        return false;
+    }
+
+    void flipFromGate()
+    {}
+
+    void armFlipDeadline()
+    {
+        ++deadlineArms;
+    }
+
     void planeStage(const Plane &plane, uint32_t &update, uint32_t &request)
     {
         ++planeStages;
@@ -135,21 +207,79 @@ struct Display {
         update |= kWinBUpdate;
         request |= kWinBActReq;
     }
-    uint32_t windowActive(Reg reg) const { return active[reg]; }
-    Registers::Reference uiWord(unsigned index) { return uiOnB ? windowB[index] : dc[index]; }
-    uint32_t uiActive(unsigned index) const { return uiOnB ? activeB[index] : active[index]; }
-    uint32_t uiUpdate() const { return uiOnB ? kWinBUpdate : kWinAUpdate; }
-    uint32_t uiRequest() const { return uiOnB ? kWinBActReq : kWinAActReq; }
-    uint32_t uiUnderflow() const { return uiOnB ? kWinBUnderflowInt : kWinAUnderflowInt; }
-    char uiName() const { return uiOnB ? 'B' : 'A'; }
-    void landscapeRunUnderflow(uint32_t) {}
-    void stopConsoleTape() { ++tapeStops; }
-    void notePresent(uint64_t, uint64_t, uint64_t) { ++presents; }
-    void retireThrough(uint64_t seq, uint64_t stamp) { retired = seq; retiredAt = stamp; }
-    void flipLatched() { ++latched; }
-    void releaseIdleDirectReads() {}
-    void noteLatchedUnderflow(uint32_t latched) { notedUnderflow |= latched; }
-    void applyUiMemoryPlan() { ++memoryPlans; }
+
+    uint32_t windowActive(Reg reg) const
+    {
+        return active[reg];
+    }
+
+    Registers::Reference uiWord(unsigned index)
+    {
+        return uiOnB ? windowB[index] : dc[index];
+    }
+
+    uint32_t uiActive(unsigned index) const
+    {
+        return uiOnB ? activeB[index] : active[index];
+    }
+
+    uint32_t uiUpdate() const
+    {
+        return uiOnB ? kWinBUpdate : kWinAUpdate;
+    }
+
+    uint32_t uiRequest() const
+    {
+        return uiOnB ? kWinBActReq : kWinAActReq;
+    }
+
+    uint32_t uiUnderflow() const
+    {
+        return uiOnB ? kWinBUnderflowInt : kWinAUnderflowInt;
+    }
+
+    char uiName() const
+    {
+        return uiOnB ? 'B' : 'A';
+    }
+
+    void landscapeRunUnderflow(uint32_t)
+    {}
+
+    void stopConsoleTape()
+    {
+        ++tapeStops;
+    }
+
+    void notePresent(uint64_t, uint64_t, uint64_t)
+    {
+        ++presents;
+    }
+
+    void retireThrough(uint64_t seq, uint64_t stamp)
+    {
+        retired = seq;
+        retiredAt = stamp;
+    }
+
+    void flipLatched()
+    {
+        ++latched;
+    }
+
+    void releaseIdleDirectReads()
+    {}
+
+    void noteLatchedUnderflow(uint32_t latched)
+    {
+        notedUnderflow |= latched;
+    }
+
+    void applyUiMemoryPlan()
+    {
+        ++memoryPlans;
+    }
+
     void checkFlip(bool)
     {
         const int asked = ring.pending;
@@ -159,6 +289,7 @@ struct Display {
             flipLatched();
         }
     }
+
     void frameEnd(bool latch)
     {
         if (latch) {

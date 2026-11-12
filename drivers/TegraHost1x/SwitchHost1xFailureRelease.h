@@ -3,9 +3,9 @@
 #include <stdint.h>
 
 // The caller has stopped the sole hardware producer and published its failure before releasing any hardware waiter.
-template<class Registers>
-int switch_host1x_release_failed(Registers &registers, uint32_t id, uint32_t threshold,
-                                 uint32_t maxIncrements, uint32_t allocated)
+template <class Registers>
+int switch_host1x_release_failed(Registers &registers, uint32_t id, uint32_t threshold, uint32_t maxIncrements,
+                                 uint32_t allocated)
 {
     if (id < 160 || id >= 192 || id >= allocated || !maxIncrements || maxIncrements > 2)
         return -22;

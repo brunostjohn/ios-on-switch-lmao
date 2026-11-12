@@ -25,7 +25,7 @@ __attribute__((objc_externally_retained)) inline uint8_t passStorageMask(RMComma
 }
 
 __attribute__((objc_externally_retained)) inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin,
-                                                                       raw::RenderEncoder &encoder)
+                                                                        raw::RenderEncoder &encoder)
 {
     RAW_ENCODE_SPAN(SplitPlan);
     encoder.beginSplitPlan();

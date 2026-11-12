@@ -11,6 +11,7 @@ struct RetirementWrites {
         void *buffer = nullptr;
         void *texture = nullptr;
     };
+
     std::vector<void *> buffers, textures;
 
     template <class Visit, class Resolve> static RetirementWrites capture(Visit visit, Resolve resolve)
@@ -39,4 +40,4 @@ struct RetirementWrites {
     }
 };
 
-} // namespace raw
+}  // namespace raw

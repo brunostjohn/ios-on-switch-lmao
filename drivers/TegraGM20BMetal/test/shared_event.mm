@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 static unsigned checks;
+
 static void check(bool value, const char *message)
 {
     if (!value) {
@@ -46,18 +47,21 @@ int main()
         __block bool callbackCorrect = false;
         @autoreleasepool {
             MTLSharedEventListener *listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:queue];
-            [alias notifyListener:listener atValue:value + 2 block:^(id<MTLSharedEvent> received, uint64_t reached) {
-                ++calls;
-                callbackCorrect = received == alias && reached >= value + 2 &&
-                                  dispatch_get_specific(&queueKey) == &queueKey;
-                dispatch_semaphore_signal(notified);
-            }];
+            [alias notifyListener:listener
+                          atValue:value + 2
+                            block:^(id<MTLSharedEvent> received, uint64_t reached) {
+                                ++calls;
+                                callbackCorrect = received == alias && reached >= value + 2 &&
+                                                  dispatch_get_specific(&queueKey) == &queueKey;
+                                dispatch_semaphore_signal(notified);
+                            }];
         }
         check(dispatch_semaphore_wait(notified, DISPATCH_TIME_NOW) != 0, "notification waits for actual value");
         apple.signaledValue = value + 2;
         check(!dispatch_semaphore_wait(notified, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)),
               "notification survives listener owner release");
-        dispatch_sync(queue, ^{});
+        dispatch_sync(queue, ^{
+                      });
         check(callbackCorrect && calls == 1, "correct public event and callback queue");
         check([alias waitUntilSignaledValue:value + 2 timeoutMS:0], "satisfied native wait");
         SwitchSharedEvent *portAlias = [[SwitchSharedEvent alloc] initWithMachPort:event.eventPort];

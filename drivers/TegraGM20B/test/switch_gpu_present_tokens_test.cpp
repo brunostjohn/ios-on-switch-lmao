@@ -42,7 +42,8 @@ protected:
 		for (uint32_t i = 0; i < held.count; ++i) {
 			EXPECT_EQ(held.tokens[i].engine, previousHeld.tokens[i].engine);
 			EXPECT_EQ(held.tokens[i].queue, previousHeld.tokens[i].queue);
-			EXPECT_EQ(held.tokens[i].reset_generation, previousHeld.tokens[i].reset_generation);
+			EXPECT_EQ(held.tokens[i].reset_generation,
+				  previousHeld.tokens[i].reset_generation);
 			EXPECT_EQ(held.tokens[i].value, previousHeld.tokens[i].value);
 		}
 		return result;
@@ -78,7 +79,8 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *v
 	return states[value->queue];
 }
 
-extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *value, int external)
+extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *value,
+							int external)
 {
 	EXPECT_EQ(external, 0);
 	return physicalStates[value->queue];
@@ -219,7 +221,7 @@ TEST_F(PresentTokens, TimeoutAttributionHasNoProducerWhenEmptyOrComplete)
 {
 	EXPECT_EQ(pending().token.engine, 0u);
 	const auto producers = std::array{token(1), token(2, SWITCH_GPU_ENGINE_VIC),
-					 token(3, SWITCH_GPU_ENGINE_GM20B)};
+					  token(3, SWITCH_GPU_ENGINE_GM20B)};
 	states.fill(1);
 	physicalStates.fill(1);
 	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()), 0);
@@ -228,8 +230,9 @@ TEST_F(PresentTokens, TimeoutAttributionHasNoProducerWhenEmptyOrComplete)
 
 TEST_F(PresentTokens, TimeoutAttributionPrefersFirstPhysicallyPendingGpuOverVic)
 {
-	const auto producers = std::array{token(1, SWITCH_GPU_ENGINE_VIC),
-					 token(2, SWITCH_GPU_ENGINE_GM20B), token(3, SWITCH_GPU_ENGINE_GM20B)};
+	const auto producers =
+		std::array{token(1, SWITCH_GPU_ENGINE_VIC), token(2, SWITCH_GPU_ENGINE_GM20B),
+			   token(3, SWITCH_GPU_ENGINE_GM20B)};
 	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()), 0);
 	const auto result = pending();
 	EXPECT_EQ(result.token.queue, 2u);
@@ -240,7 +243,8 @@ TEST_F(PresentTokens, TimeoutAttributionPrefersFirstPhysicallyPendingGpuOverVic)
 
 TEST_F(PresentTokens, SemanticRetirementDoesNotHidePhysicallyPendingGpu)
 {
-	const auto producers = std::array{token(1, SWITCH_GPU_ENGINE_GM20B), token(2, SWITCH_GPU_ENGINE_GM20B)};
+	const auto producers =
+		std::array{token(1, SWITCH_GPU_ENGINE_GM20B), token(2, SWITCH_GPU_ENGINE_GM20B)};
 	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()), 0);
 	physicalStates[1] = 1;
 	EXPECT_EQ(pending().token.queue, 2u);
@@ -248,7 +252,8 @@ TEST_F(PresentTokens, SemanticRetirementDoesNotHidePhysicallyPendingGpu)
 
 TEST_F(PresentTokens, FailedGpuDoesNotHideRecoverablePendingGpu)
 {
-	const auto producers = std::array{token(1, SWITCH_GPU_ENGINE_GM20B), token(2, SWITCH_GPU_ENGINE_GM20B)};
+	const auto producers =
+		std::array{token(1, SWITCH_GPU_ENGINE_GM20B), token(2, SWITCH_GPU_ENGINE_GM20B)};
 	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()), 0);
 	states[1] = -5;
 	EXPECT_EQ(pending().token.queue, 2u);
@@ -300,7 +305,8 @@ TEST(PresentPending, RecoveryRequiresTheSameLiveUnfinishedProducer)
 	original.token.value = 17;
 	ASSERT_TRUE(switch_gpu_present_pending_matches(&original, channelId, 16));
 	EXPECT_FALSE(switch_gpu_present_pending_matches(&original, channelId + 1, 16));
-	EXPECT_FALSE(switch_gpu_present_pending_matches(&original, channelId + (uint64_t{1} << 32), 16));
+	EXPECT_FALSE(
+		switch_gpu_present_pending_matches(&original, channelId + (uint64_t{1} << 32), 16));
 	EXPECT_FALSE(switch_gpu_present_pending_matches(&original, channelId, 17));
 	EXPECT_FALSE(switch_gpu_present_pending_matches(&original, channelId, 18));
 	for (const int state : {-5, 1}) {

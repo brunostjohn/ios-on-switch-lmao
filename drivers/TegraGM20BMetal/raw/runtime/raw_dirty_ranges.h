@@ -35,7 +35,9 @@ public:
 
     const std::vector<Range> &merged()
     {
-        std::sort(ranges_.begin(), ranges_.end(), [](const Range &a, const Range &b) { return a.begin < b.begin; });
+        std::sort(ranges_.begin(), ranges_.end(), [](const Range &a, const Range &b) {
+            return a.begin < b.begin;
+        });
         std::size_t count = 0;
         for (const auto range : ranges_) {
             if (count && range.begin <= ranges_[count - 1].end) {
@@ -59,4 +61,4 @@ private:
     std::vector<Range> ranges_;
 };
 
-} // namespace raw
+}  // namespace raw

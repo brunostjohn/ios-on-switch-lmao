@@ -299,7 +299,6 @@ void RMCommandPlan::applyRenderUses(uint32_t state, uint32_t span)
     operations_.back().uses = drawUses(renderStates[state].uses, last.indices, last.arguments);
 }
 
-
 Cmd RMCommandPlan::legacy(size_t at) const
 {
     const auto &operation = operations_[at];

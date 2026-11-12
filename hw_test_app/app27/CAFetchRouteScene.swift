@@ -124,7 +124,8 @@ struct CAFetchRouteScene: GPUScene {
             if pass == .depth {
                 result.expect(
                     timing.path == "raw" && interlocked + moved("fetch_sequential") > 0,
-                    "depth: not ordered on the raw path: \(timing.path) \(RawFacade.fetchRoutes(before: before, after: after))")
+                    "depth: not ordered on the raw path: \(timing.path) \(RawFacade.fetchRoutes(before: before, after: after))"
+                )
             }
             if pass == .msaa || pass == .msaa2 {
                 result.expect(timing.path == "raw", "\(name): not drawn on the raw path: \(timing.path)")

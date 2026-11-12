@@ -4,7 +4,11 @@
 
 namespace raw {
 
-enum class AttachmentBarrier : uint8_t { None, Pixel, Shader };
+enum class AttachmentBarrier : uint8_t {
+    None,
+    Pixel,
+    Shader
+};
 
 struct AttachmentWrites {
     uint8_t rop = 0, storage = 0;

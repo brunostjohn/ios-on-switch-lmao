@@ -72,8 +72,8 @@ id<MTLTexture> makeArenaTexture(RMHeap *h, MTLTextureDescriptor *d, std::optiona
     t->_device = h->_device;
     t->_descriptor = [d copy];
     t->_kind = RMTexturePool;
-    if (!gRM->raw->arenaTexture(h->_arena - 1, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                              t->_raw, offset))
+    if (!gRM->raw->arenaTexture(h->_arena - 1, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+                                offset))
         return nil;
     t->_rawOk = true;
     t->_heap = h;

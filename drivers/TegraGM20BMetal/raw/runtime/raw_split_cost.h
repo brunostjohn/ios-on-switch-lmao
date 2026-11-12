@@ -57,7 +57,7 @@ class SplitPassPlan {
     {
         const auto &cost = split.cost;
         return cost.savedPixelCycles ? std::min<uint64_t>(cost.savedPixelInstructions,
-                                                        uint64_t(cost.savedPixelCycles) * parallelWarpEstimate)
+                                                          uint64_t(cost.savedPixelCycles) * parallelWarpEstimate)
                                      : cost.savedPixelInstructions;
     }
 
@@ -79,8 +79,7 @@ class SplitPassPlan {
     static uint64_t pixelsForCycles(const PackSplit &split, uint64_t cycles)
     {
         const uint64_t saved = savedWork(split);
-        return saved && cycles <= UINT64_MAX / lanesPerCycle ? ceilDiv(cycles * lanesPerCycle, saved)
-                                                            : UINT64_MAX;
+        return saved && cycles <= UINT64_MAX / lanesPerCycle ? ceilDiv(cycles * lanesPerCycle, saved) : UINT64_MAX;
     }
 
 public:
@@ -136,8 +135,9 @@ public:
             if (!candidate.admitted)
                 continue;
             const auto &split = *candidate.split;
-            const uint64_t amortized = plus(ceilDiv(plus(candidate.fixedCycles, candidate.variableCycles),
-                                                   candidate.draws), ceilDiv(drain, viableDraws));
+            const uint64_t amortized =
+                plus(ceilDiv(plus(candidate.fixedCycles, candidate.variableCycles), candidate.draws),
+                     ceilDiv(drain, viableDraws));
             const uint64_t marginal = plus(ceilDiv(split.cost.prologueWarpCycles, 32),
                                            ceilDiv(recordBytes + split.frontierBytes, bytesPerCycle));
             candidate.minimumPixels = pixelsForCycles(split, std::max(amortized, marginal));
@@ -158,10 +158,9 @@ public:
             const auto &candidate = candidates_[lastIndex_];
             return candidate.admitted && pixels >= candidate.minimumPixels;
         }
-        const uint64_t cycles = plus(plus(split.cost.launchCycles, split.cost.drainCycles),
-                                     variableCycles(split, 1));
+        const uint64_t cycles = plus(plus(split.cost.launchCycles, split.cost.drainCycles), variableCycles(split, 1));
         return pixels >= pixelsForCycles(split, cycles);
     }
 };
 
-} // namespace raw
+}  // namespace raw

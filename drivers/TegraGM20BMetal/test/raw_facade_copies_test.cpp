@@ -29,8 +29,8 @@ struct Layout {
     MTLSize size = {32, 32, 1};
     NSUInteger offset = 0, row = 0, image = 0;  // row 0: the size's tight row
     MTLBlitOption options = MTLBlitOptionNone;
-    NSUInteger texelBytes = 4, block = 1;       // the buffer's bytes per texel or block, the block's side
-    bool target = false;                        // made a render target too, as a depth or stencil texture is
+    NSUInteger texelBytes = 4, block = 1;  // the buffer's bytes per texel or block, the block's side
+    bool target = false;                   // made a render target too, as a depth or stencil texture is
     bool metalRefuses = false;
 };
 
@@ -39,8 +39,8 @@ const std::string kNotHeld = "not held";
 
 bool rawTakes(uint64_t preds)
 {
-    constexpr uint64_t refused = 1ull << PredBlitBufToTex | 1ull << PredBlitTexToBuf | 1ull << PredCallBlitOptions |
-                                 1ull << PredEncPlanarCopy;
+    constexpr uint64_t refused =
+        1ull << PredBlitBufToTex | 1ull << PredBlitTexToBuf | 1ull << PredCallBlitOptions | 1ull << PredEncPlanarCopy;
     return !(preds & refused);
 }
 
@@ -73,8 +73,8 @@ protected:
                          blocksHigh = (l.size.height + l.block - 1) / l.block;
         const NSUInteger row = l.row ? l.row : blocksWide * l.texelBytes;
         const NSUInteger image = l.image ? l.image : row * blocksHigh;
-        id<MTLBuffer> buffer = [gDevice newBufferWithLength:l.offset + image * l.size.depth + 4096
-                                                    options:MTLResourceStorageModeShared];
+        id<MTLBuffer> buffer =
+            [gDevice newBufferWithLength:l.offset + image * l.size.depth + 4096 options:MTLResourceStorageModeShared];
         std::string refused;
         id<MTLCommandQueue> queue = [gDevice newCommandQueue];
         for (bool intoTexture : {true, false}) {
@@ -128,11 +128,21 @@ std::vector<Layout> layouts()
         out.push_back(l);
     };
     add("tight", [](Layout &) {});
-    add("shared storage", [](Layout &l) { l.storage = MTLStorageModeShared; });
-    add("padded row", [](Layout &l) { l.row = 32 * 4 + 64; });
-    add("row padded by a texel", [](Layout &l) { l.row = 33 * 4; });
-    add("offset of a texel", [](Layout &l) { l.offset = 4; });
-    add("offset of 12", [](Layout &l) { l.offset = 12; });
+    add("shared storage", [](Layout &l) {
+        l.storage = MTLStorageModeShared;
+    });
+    add("padded row", [](Layout &l) {
+        l.row = 32 * 4 + 64;
+    });
+    add("row padded by a texel", [](Layout &l) {
+        l.row = 33 * 4;
+    });
+    add("offset of a texel", [](Layout &l) {
+        l.offset = 4;
+    });
+    add("offset of 12", [](Layout &l) {
+        l.offset = 12;
+    });
     add("one row, any row length", [](Layout &l) {
         l.size = {32, 1, 1};
         l.row = 0;
@@ -185,21 +195,33 @@ std::vector<Layout> layouts()
         l.size = {32, 32, 4};
         l.image = 32 * 4 * 32 + 256;
     });
+
     struct Format {
         const char *name;
         MTLPixelFormat format;
         NSUInteger bytes;
     };
-    for (const Format f : {Format{"r8", MTLPixelFormatR8Unorm, 1}, Format{"rg8", MTLPixelFormatRG8Unorm, 2},
-                           Format{"bgra8", MTLPixelFormatBGRA8Unorm, 4}, Format{"srgb", MTLPixelFormatRGBA8Unorm_sRGB, 4},
-                           Format{"r16f", MTLPixelFormatR16Float, 2}, Format{"rgba16f", MTLPixelFormatRGBA16Float, 8},
-                           Format{"r32uint", MTLPixelFormatR32Uint, 4}, Format{"r32f", MTLPixelFormatR32Float, 4},
-                           Format{"rg32f", MTLPixelFormatRG32Float, 8}, Format{"rgba32f", MTLPixelFormatRGBA32Float, 16},
-                           Format{"rgb10a2", MTLPixelFormatRGB10A2Unorm, 4}, Format{"bgr10a2", MTLPixelFormatBGR10A2Unorm, 4},
-                           Format{"rg11b10f", MTLPixelFormatRG11B10Float, 4}, Format{"rgb9e5", MTLPixelFormatRGB9E5Float, 4},
-                           Format{"b5g6r5", MTLPixelFormatB5G6R5Unorm, 2}, Format{"abgr4", MTLPixelFormatABGR4Unorm, 2},
-                           Format{"rgba8uint", MTLPixelFormatRGBA8Uint, 4}, Format{"rg16uint", MTLPixelFormatRG16Uint, 4},
-                           Format{"rgba16uint", MTLPixelFormatRGBA16Uint, 8}, Format{"rgba16", MTLPixelFormatRGBA16Unorm, 8}})
+
+    for (const Format f : {Format{"r8", MTLPixelFormatR8Unorm, 1},
+                           Format{"rg8", MTLPixelFormatRG8Unorm, 2},
+                           Format{"bgra8", MTLPixelFormatBGRA8Unorm, 4},
+                           Format{"srgb", MTLPixelFormatRGBA8Unorm_sRGB, 4},
+                           Format{"r16f", MTLPixelFormatR16Float, 2},
+                           Format{"rgba16f", MTLPixelFormatRGBA16Float, 8},
+                           Format{"r32uint", MTLPixelFormatR32Uint, 4},
+                           Format{"r32f", MTLPixelFormatR32Float, 4},
+                           Format{"rg32f", MTLPixelFormatRG32Float, 8},
+                           Format{"rgba32f", MTLPixelFormatRGBA32Float, 16},
+                           Format{"rgb10a2", MTLPixelFormatRGB10A2Unorm, 4},
+                           Format{"bgr10a2", MTLPixelFormatBGR10A2Unorm, 4},
+                           Format{"rg11b10f", MTLPixelFormatRG11B10Float, 4},
+                           Format{"rgb9e5", MTLPixelFormatRGB9E5Float, 4},
+                           Format{"b5g6r5", MTLPixelFormatB5G6R5Unorm, 2},
+                           Format{"abgr4", MTLPixelFormatABGR4Unorm, 2},
+                           Format{"rgba8uint", MTLPixelFormatRGBA8Uint, 4},
+                           Format{"rg16uint", MTLPixelFormatRG16Uint, 4},
+                           Format{"rgba16uint", MTLPixelFormatRGBA16Uint, 8},
+                           Format{"rgba16", MTLPixelFormatRGBA16Unorm, 8}})
         add(f.name, [&](Layout &l) {
             l.format = f.format;
             l.texelBytes = f.bytes;
@@ -222,7 +244,9 @@ std::vector<Layout> layouts()
         l.block = 4;
     });
     add("depth32f", [](Layout &l) {
-        l.target = true; l.format = MTLPixelFormatDepth32Float; });
+        l.target = true;
+        l.format = MTLPixelFormatDepth32Float;
+    });
     add("depth16", [](Layout &l) {
         l.target = true;
         l.format = MTLPixelFormatDepth16Unorm;

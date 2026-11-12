@@ -13,8 +13,9 @@ TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 	const uint32_t hashed[] = {TegraGM20BMethodGetInfo, TegraGM20BMethodCpuComplete,
 				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump,
 				   TegraGM20BMethodCopyReset};
-	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate, TegraGM20BMethodResourceSetRelease,
-				TegraGM20BMethodSubmitJob, TegraGM20BMethodWriterPromise, TegraGM20BMethodEventWord};
+	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate,
+				TegraGM20BMethodResourceSetRelease, TegraGM20BMethodSubmitJob,
+				TegraGM20BMethodWriterPromise, TegraGM20BMethodEventWord};
 	for (uint32_t method : job) {
 		EXPECT_GT(method, uint32_t(TegraGM20BMethodCpuComplete));
 		for (uint32_t other : hashed)
@@ -36,7 +37,8 @@ TEST(JobAbi, EventWordsLieBetweenTheBindEpochAndThePromises)
 {
 	constexpr uint32_t bindEpoch = 256;
 	EXPECT_GT(uint32_t(TegraGM20BEventWordFirst), bindEpoch);
-	EXPECT_EQ(uint32_t(TegraGM20BEventWordFirst + TegraGM20BEventWords), uint32_t(TegraGM20BPromiseWord));
+	EXPECT_EQ(uint32_t(TegraGM20BEventWordFirst + TegraGM20BEventWords),
+		  uint32_t(TegraGM20BPromiseWord));
 	EXPECT_GE(uint32_t(TegraGM20BEventWords), 128u);
 }
 
@@ -50,7 +52,8 @@ TEST(JobAbi, RecordsKeepTheirLayout)
 	EXPECT_EQ(offsetof(TegraGM20BAbiWriterPromise, channel), 20u);
 	EXPECT_EQ(sizeof(TegraGM20BAbiWriterPromise) % 8, 0u);
 	EXPECT_EQ(offsetof(TegraGM20BAbiJobPromises, promise), 8u);
-	EXPECT_LT(uint32_t(TegraGM20BPromiseWord + TegraGM20BMaxPromises), uint32_t(TegraGM20BSetGenerationWord));
+	EXPECT_LT(uint32_t(TegraGM20BPromiseWord + TegraGM20BMaxPromises),
+		  uint32_t(TegraGM20BSetGenerationWord));
 }
 
 TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)

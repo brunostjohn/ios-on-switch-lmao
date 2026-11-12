@@ -13,7 +13,8 @@ import UIKit
 /// deadline panicked.
 struct RecoverBusyEngineTest: HWTest {
     let id = "gpu.recover.busy_engine"
-    let name = "A job that leaves GR unable to save its context: only its channel dies, the compositor waits under the bound"
+    let name =
+        "A job that leaves GR unable to save its context: only its channel dies, the compositor waits under the bound"
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 90 }
 

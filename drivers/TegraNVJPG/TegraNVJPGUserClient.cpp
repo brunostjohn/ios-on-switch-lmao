@@ -101,11 +101,13 @@ IOReturn ioreturn(int err)
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
+
 // Decodes NVJPG finished for the processes that asked last, for HW Test's image.jpeg_* route: a selector 7 call with
 // kRouteMagic at +0xcac and no source surface answers the caller's count and the output formats those decodes wrote,
 // through the selector CMPhoto's own decodes use, which the app's sandbox admits where it may deny a registry or
 // sysctl read. gStatsLock.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
+
 struct {
     int pid;
     uint64_t decodes, formats;  // formats: bit n, a decode into TEGRA_NVJPG_OUT_n
@@ -195,6 +197,7 @@ struct Job {
     uint64_t engineUs;
     int pid;
     bool done;
+
     union {
         TegraNVJPGDecodeRequest base;
         TegraNVJPGDecodeRequestExt ext;
@@ -202,7 +205,11 @@ struct Job {
     } request;  // the caller's copy, in the job's one allocation
 };
 
-enum RequestKind { kSelector1, kSelector5, kSelector7 };
+enum RequestKind {
+    kSelector1,
+    kSelector5,
+    kSelector7
+};
 
 Job *gHead, *gTail;
 uint32_t gQueued;
@@ -695,8 +702,8 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
             return kIOReturnNotReady;
         uint32_t outSize = a->structureOutputSize;
         const RequestKind kind = selector == 1 ? kSelector1 : selector == 5 ? kSelector5 : kSelector7;
-        const IOReturn ret = decode(a->structureInput, a->structureInputSize, outSize ? a->structureOutput : nullptr,
-                                    &outSize, kind);
+        const IOReturn ret =
+            decode(a->structureInput, a->structureInputSize, outSize ? a->structureOutput : nullptr, &outSize, kind);
         a->structureOutputSize = outSize;
         return ret;
     }
@@ -765,7 +772,6 @@ OSDeclareDefaultStructors(AppleJPEGDriver)
         (void)properties;
         return kIOReturnUnsupported;
     }
-
 };
 
 OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)

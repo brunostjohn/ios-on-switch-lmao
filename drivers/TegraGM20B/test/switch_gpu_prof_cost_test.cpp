@@ -28,7 +28,8 @@ tgm_push push(bool fence, bool incomplete = false)
 // idle: the end of a batch (an internal fence) and its last push (the job's fence).
 TEST(ProfStamps, TheCompositorStampsOnlyWhereItsJobAlreadyWaitsForIdle)
 {
-	const tgm_push job[] = {push(false), push(true), push(false), push(false, true), push(false)};
+	const tgm_push job[] = {push(false), push(true), push(false), push(false, true),
+				push(false)};
 	const uint32_t count = 5;
 	int app = 0, compositor = 0;
 	for (uint32_t i = 0; i < count; ++i) {
@@ -41,7 +42,8 @@ TEST(ProfStamps, TheCompositorStampsOnlyWhereItsJobAlreadyWaitsForIdle)
 	EXPECT_TRUE(switch_gpu_prof_stamped(1, &job[1], 1, count, TGM_PC_DRAW));
 	EXPECT_TRUE(switch_gpu_prof_stamped(1, &job[4], 4, count, TGM_PC_DRAW));
 	EXPECT_FALSE(switch_gpu_prof_stamped(0, &job[0], 0, count, TGM_PC_SKIP));
-	EXPECT_FALSE(switch_gpu_prof_stamped(1, &job[3], 3, count, TGM_PC_DRAW)) << "incomplete: no stamp, last or not";
+	EXPECT_FALSE(switch_gpu_prof_stamped(1, &job[3], 3, count, TGM_PC_DRAW))
+		<< "incomplete: no stamp, last or not";
 }
 
 TEST(ProfCost, NothingStampedPrintsNothing)
@@ -68,5 +70,6 @@ TEST(ProfCost, ACompositorThatAddsNoDrainShowsNoCost)
 TEST(ProfCost, NoSpanToCompareGivesTheCountsAlone)
 {
 	EXPECT_EQ(cost({1, 7, 0, 5, 0, 5000000}), " 1 stamped (7 stamps), no span to compare");
-	EXPECT_EQ(cost({1, 7, 1, 1, 1000000, 1000000}), " 1 stamped (7 stamps), no span to compare");
+	EXPECT_EQ(cost({1, 7, 1, 1, 1000000, 1000000}),
+		  " 1 stamped (7 stamps), no span to compare");
 }

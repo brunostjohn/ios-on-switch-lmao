@@ -17,10 +17,10 @@ namespace raw::mme {
 constexpr uint32_t kAbi = 2, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWITCH_GM20B_MACRO_DRAW_INDEXED,
                    kIndirect = SWITCH_GM20B_MACRO_INDIRECT, kIndexedIndirect = SWITCH_GM20B_MACRO_INDEXED_INDIRECT,
                    kDrawParams = SWITCH_GM20B_MACRO_DRAW_PARAMS,
-                   kIndexedParams = SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS,
-                   kIcbRange = SWITCH_GM20B_MACRO_ICB_RANGE, kIcbDraw = SWITCH_GM20B_MACRO_ICB_DRAW,
-                   kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED, kIcbGate = SWITCH_GM20B_MACRO_ICB_GATE,
-                   kIcbBind = SWITCH_GM20B_MACRO_ICB_BIND, kClearLayers = SWITCH_GM20B_MACRO_CLEAR_LAYERS;
+                   kIndexedParams = SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, kIcbRange = SWITCH_GM20B_MACRO_ICB_RANGE,
+                   kIcbDraw = SWITCH_GM20B_MACRO_ICB_DRAW, kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,
+                   kIcbGate = SWITCH_GM20B_MACRO_ICB_GATE, kIcbBind = SWITCH_GM20B_MACRO_ICB_BIND,
+                   kClearLayers = SWITCH_GM20B_MACRO_CLEAR_LAYERS;
 // An indirect command buffer's draws (raw_icb.h) and dispatches (raw_icb_compute.h): a draw passes its index before an
 // indirect draw's arguments and draws only inside the range the shadow scratch words hold, which an execute writes (from the
 // CPU's range, or by kIcbRange from the range buffer the GPU reads); a dispatch passes its index to kIcbGate, which lets the
@@ -57,14 +57,13 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kIcbGateProgram = program(switch_gm20b_macro_icb_gate),
                   kIcbBindProgram = program(switch_gm20b_macro_icb_bind),
                   kClearLayersProgram = program(switch_gm20b_macro_clear_layers);
-constexpr size_t kContextWords = 12 * 5 + std::size(switch_gm20b_macro_draw) +
-                                 std::size(switch_gm20b_macro_draw_indexed) + std::size(switch_gm20b_macro_indirect) +
-                                 std::size(switch_gm20b_macro_indexed_indirect) +
-                                 std::size(switch_gm20b_macro_draw_params) +
-                                 std::size(switch_gm20b_macro_draw_indexed_params) +
-                                 std::size(switch_gm20b_macro_icb_range) + std::size(switch_gm20b_macro_icb_draw) +
-                                 std::size(switch_gm20b_macro_icb_draw_indexed) + std::size(switch_gm20b_macro_icb_gate) +
-                                 std::size(switch_gm20b_macro_icb_bind) + std::size(switch_gm20b_macro_clear_layers);
+constexpr size_t kContextWords =
+    12 * 5 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
+    std::size(switch_gm20b_macro_indirect) + std::size(switch_gm20b_macro_indexed_indirect) +
+    std::size(switch_gm20b_macro_draw_params) + std::size(switch_gm20b_macro_draw_indexed_params) +
+    std::size(switch_gm20b_macro_icb_range) + std::size(switch_gm20b_macro_icb_draw) +
+    std::size(switch_gm20b_macro_icb_draw_indexed) + std::size(switch_gm20b_macro_icb_gate) +
+    std::size(switch_gm20b_macro_icb_bind) + std::size(switch_gm20b_macro_clear_layers);
 constexpr size_t kCallWords = 4, kParamsCallWords = 6;
 
 inline void install(Push &push)

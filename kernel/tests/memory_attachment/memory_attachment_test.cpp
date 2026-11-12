@@ -5,13 +5,19 @@
 #include "memory_attachment_stubs.h"
 
 static std::atomic<unsigned> admissionNotifications;
-extern "C" void switch_gpu_admission_changed(void) { ++admissionNotifications; }
+
+extern "C" void switch_gpu_admission_changed(void)
+{
+    ++admissionNotifications;
+}
 
 TEST(SwitchMemoryAttachment, LifetimeFollowsDescriptorAndRetainedCopies)
 {
     unsigned freed = 0;
     auto *memory = new IOMemoryDescriptor;
-    auto *object = new OSObject([&] { ++freed; });
+    auto *object = new OSObject([&] {
+        ++freed;
+    });
     ASSERT_TRUE(SwitchMemoryAttachment::replace(memory, nullptr, object));
     object->release();
     auto *copy = SwitchMemoryAttachment::copy(memory);
@@ -34,7 +40,8 @@ TEST(SwitchMemoryAttachment, FailedReplacementPreservesBothReferences)
     EXPECT_EQ(first->refs, 2u);
     EXPECT_TRUE(SwitchMemoryAttachment::replace(&memory, first, nullptr));
     EXPECT_EQ(first->refs, 1u);
-    first->release(); second->release();
+    first->release();
+    second->release();
 }
 
 TEST(SwitchMemoryAttachment, DisplacedDestructionRunsOutsideLock)
@@ -44,7 +51,8 @@ TEST(SwitchMemoryAttachment, DisplacedDestructionRunsOutsideLock)
     auto *first = new OSObject([&] {
         auto *copy = SwitchMemoryAttachment::copy(&memory);
         EXPECT_NE(copy, nullptr);
-        if (copy) copy->release();
+        if (copy)
+            copy->release();
         destroyed = true;
     });
     auto *next = new OSObject;
@@ -61,17 +69,22 @@ TEST(SwitchMemoryAttachment, ConcurrentReadersAndReplacementsRetireExactlyOnce)
     {
         IOMemoryDescriptor memory;
         std::vector<std::thread> workers;
-        for (unsigned t = 0; t != 4; ++t) workers.emplace_back([&] {
-            for (unsigned i = 0; i != 10000; ++i) {
-                auto *old = SwitchMemoryAttachment::copy(&memory);
-                auto *next = new OSObject([&] { ++freed; });
-                ++made;
-                SwitchMemoryAttachment::replace(&memory, old, next);
-                next->release();
-                if (old) old->release();
-            }
-        });
-        for (auto &worker : workers) worker.join();
+        for (unsigned t = 0; t != 4; ++t)
+            workers.emplace_back([&] {
+                for (unsigned i = 0; i != 10000; ++i) {
+                    auto *old = SwitchMemoryAttachment::copy(&memory);
+                    auto *next = new OSObject([&] {
+                        ++freed;
+                    });
+                    ++made;
+                    SwitchMemoryAttachment::replace(&memory, old, next);
+                    next->release();
+                    if (old)
+                        old->release();
+                }
+            });
+        for (auto &worker : workers)
+            worker.join();
     }
     EXPECT_EQ(made, 40000u);
     EXPECT_EQ(freed, made.load());
@@ -94,14 +107,16 @@ TEST(SwitchMemoryAttachment, FirstPublicationPreservesAllConcurrentDescriptorUse
 {
     IOMemoryDescriptor memory;
     std::vector<std::thread> workers;
-    for (unsigned t = 0; t != 16; ++t) workers.emplace_back([&] {
-        for (unsigned i = 0; i != 10000; ++i) {
-            auto *reserved = SwitchMemoryAttachment::prepare(&memory);
-            ASSERT_NE(reserved, nullptr);
-            ++reserved->unrelatedState;
-        }
-    });
-    for (auto &worker : workers) worker.join();
+    for (unsigned t = 0; t != 16; ++t)
+        workers.emplace_back([&] {
+            for (unsigned i = 0; i != 10000; ++i) {
+                auto *reserved = SwitchMemoryAttachment::prepare(&memory);
+                ASSERT_NE(reserved, nullptr);
+                ++reserved->unrelatedState;
+            }
+        });
+    for (auto &worker : workers)
+        worker.join();
     EXPECT_EQ(SwitchMemoryAttachment::prepare(&memory)->unrelatedState, 160000u);
 }
 
@@ -133,7 +148,9 @@ unsigned sleepCount()
 bool awaitSleep(unsigned previous)
 {
     std::unique_lock held(switchSleepMutex);
-    return switchSleepChanged.wait_for(held, std::chrono::seconds(5), [&] { return switchSleeps > previous; });
+    return switchSleepChanged.wait_for(held, std::chrono::seconds(5), [&] {
+        return switchSleeps > previous;
+    });
 }
 }
 
@@ -213,7 +230,9 @@ TEST(SwitchMemoryAttachment, DescriptorDestructionWaitsForLastCpuReservation)
 {
     bool destroyed = false;
     auto *memory = new IOMemoryDescriptor;
-    auto *object = new OSObject([&] { destroyed = true; });
+    auto *object = new OSObject([&] {
+        destroyed = true;
+    });
     ASSERT_TRUE(SwitchMemoryAttachment::replace(memory, nullptr, object));
     object->release();
     ASSERT_EQ(SwitchMemoryAttachment::enterCpu(memory, false), 0);
@@ -303,14 +322,16 @@ TEST(SwitchMemoryAttachment, ConcurrentStampInitializationCannotResetAChangedGen
 {
     IOMemoryDescriptor memory;
     std::vector<std::thread> workers;
-    for (unsigned t = 0; t != 8; ++t) workers.emplace_back([&] {
-        for (unsigned i = 0; i != 10000; ++i) {
-            auto *stamp = SwitchMemoryAttachment::generation(&memory);
-            ASSERT_NE(stamp, nullptr);
-            __atomic_fetch_add(stamp, uint64_t(1), __ATOMIC_RELAXED);
-        }
-    });
-    for (auto &worker : workers) worker.join();
+    for (unsigned t = 0; t != 8; ++t)
+        workers.emplace_back([&] {
+            for (unsigned i = 0; i != 10000; ++i) {
+                auto *stamp = SwitchMemoryAttachment::generation(&memory);
+                ASSERT_NE(stamp, nullptr);
+                __atomic_fetch_add(stamp, uint64_t(1), __ATOMIC_RELAXED);
+            }
+        });
+    for (auto &worker : workers)
+        worker.join();
     EXPECT_EQ(__atomic_load_n(SwitchMemoryAttachment::generation(&memory), __ATOMIC_ACQUIRE), 80001u);
 }
 

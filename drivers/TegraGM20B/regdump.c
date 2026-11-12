@@ -48,7 +48,8 @@ static u32 regdump_read(struct nvkm_device *device, const struct regdump_pass *p
 		return pass->save1;
 	case PMU_MUTEX_ID:
 		value = nvkm_rd32(device, PMU_MUTEX_ID);
-		if ((value & PMU_MUTEX_ID_VALUE) && (value & PMU_MUTEX_ID_VALUE) != PMU_MUTEX_ID_NOT_AVAIL) {
+		if ((value & PMU_MUTEX_ID_VALUE) &&
+		    (value & PMU_MUTEX_ID_VALUE) != PMU_MUTEX_ID_NOT_AVAIL) {
 			nvkm_wr32(device, PMU_MUTEX_ID_RELEASE,
 				  (nvkm_rd32(device, PMU_MUTEX_ID_RELEASE) & ~PMU_MUTEX_ID_VALUE) |
 					  (value & PMU_MUTEX_ID_VALUE));
@@ -145,7 +146,8 @@ int tgm_regdump(char *buf, size_t cap, size_t *len)
 static const char *const regdump_tags[TegraGM20BRegdumpTags] = {"quiet", "hot_states"};
 static u32 regdump_logged; /* atomic: the tags whose dump is in this boot's log */
 
-static void regdump_emit(const u32 *values, const char *tag, const struct tgm_regdump_how *how, char *line)
+static void regdump_emit(const u32 *values, const char *tag, const struct tgm_regdump_how *how,
+			 char *line)
 {
 	for (size_t chunk = 0; chunk < TGM_REGDUMP_CHUNKS; chunk++) {
 		tgm_regdump_chunk_line(line, TGM_REGDUMP_LOG_LINE, values, tag, chunk);
@@ -178,7 +180,8 @@ int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiR
 	ret = values && line ? regdump_read_all(values, &how) : -ENOMEM;
 	if (ret) {
 		__atomic_fetch_and(&regdump_logged, ~bit, __ATOMIC_SEQ_CST);
-		reply->status = ret == -EBUSY ? TegraGM20BRegdumpNotReady : TegraGM20BRegdumpNoMemory;
+		reply->status =
+			ret == -EBUSY ? TegraGM20BRegdumpNotReady : TegraGM20BRegdumpNoMemory;
 	} else {
 		regdump_emit(values, regdump_tags[in->tag], &how, line);
 		reply->count = TGM_REGDUMP_COUNT;

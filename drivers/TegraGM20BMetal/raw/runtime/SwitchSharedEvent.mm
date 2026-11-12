@@ -123,15 +123,18 @@
             }
         }
     }
-    [_surfaceEvent notifyListener:nativeListener atValue:value block:^(id, uint64_t reached) {
-        // Registration keeps its listener and public event alive through delivery.
-        (void)nativeListener;
-        block(self, reached);
-    }];
+    [_surfaceEvent notifyListener:nativeListener
+                          atValue:value
+                            block:^(id, uint64_t reached) {
+                                // Registration keeps its listener and public event alive through delivery.
+                                (void)nativeListener;
+                                block(self, reached);
+                            }];
 }
 
 - (BOOL)waitUntilSignaledValue:(uint64_t)value timeoutMS:(uint64_t)milliseconds
 {
     return [_surfaceEvent waitUntilSignaledValue:value timeoutMS:milliseconds];
 }
+
 @end

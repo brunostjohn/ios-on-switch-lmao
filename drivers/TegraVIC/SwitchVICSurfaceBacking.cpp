@@ -10,12 +10,14 @@
 namespace {
 constexpr uint32_t kSurfaceCacheCount = 32;
 constexpr uint64_t kSurfaceCacheBytes = 128ULL << 20;
+
 struct CachedSurface {
     OSObject *surface = nullptr;
     IOMemoryDescriptor *memory = nullptr;
     switch_gpu_backing *backing = nullptr;
     uint64_t base = 0, length = 0, used = 0;
 };
+
 CachedSurface gSurfaces[kSurfaceCacheCount];
 IOLock *gLock;
 uint64_t gClock, gBytes;
@@ -74,8 +76,8 @@ switch_gpu_backing *adopt(const TegraVICSurface *surface, switch_gpu_backing *ba
 switch_gpu_backing *cached(const TegraVICSurface *surface)
 {
     for (auto &item : gSurfaces) {
-        if (item.surface == surface->surface && item.memory == surface->memory &&
-            item.base == surface->baseOffset && item.length == surface->desc.length) {
+        if (item.surface == surface->surface && item.memory == surface->memory && item.base == surface->baseOffset &&
+            item.length == surface->desc.length) {
             item.used = ++gClock;
             switch_gpu_backing_retain(item.backing);
             return item.backing;

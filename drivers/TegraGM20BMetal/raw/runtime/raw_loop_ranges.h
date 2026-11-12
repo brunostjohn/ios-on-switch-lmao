@@ -22,6 +22,7 @@ struct LoopTapeEntry {
         Other,      // any other encoder or an event
         Predicate,  // a predication record: `value` its PredicateRecords::Kind
     };
+
     Kind kind = Plain;
     uint32_t value = 0;
 };
@@ -145,8 +146,7 @@ template <class Tape> std::vector<uint32_t> loopSplits(const Tape &tape, uint32_
     LoopBlocks blocks(tape, from);
     for (uint32_t at = from; at < to; ++at)
         blocks.step(at, tape(at), [&](const LoopBlocks::Closed &c) {
-            if (!c.depth && c.block.holdsLoop && c.at > from && c.at < to &&
-                (splits.empty() || splits.back() != c.at))
+            if (!c.depth && c.block.holdsLoop && c.at > from && c.at < to && (splits.empty() || splits.back() != c.at))
                 splits.push_back(c.at);
         });
     return splits;

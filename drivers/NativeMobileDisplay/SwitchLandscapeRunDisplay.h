@@ -97,10 +97,10 @@ void landscapeRunFrameEnd()
     SwitchDisplayLandscapeReply &r = s.reply;
     const uint32_t at = r.frames;
     r.crc[at] = dc[kDcCrcLatched];
-    r.mode[at] = uint8_t((landscapeOn() ? SWITCH_DISPLAY_LANDSCAPE_FRAME_LANDSCAPE : 0) |
-                         (landscapeState.switching || landscapeState.wanted ? SWITCH_DISPLAY_LANDSCAPE_FRAME_SWITCHING
-                                                                            : 0) |
-                         (s.overlayLatched ? SWITCH_DISPLAY_LANDSCAPE_FRAME_OVERLAY : 0));
+    r.mode[at] =
+        uint8_t((landscapeOn() ? SWITCH_DISPLAY_LANDSCAPE_FRAME_LANDSCAPE : 0) |
+                (landscapeState.switching || landscapeState.wanted ? SWITCH_DISPLAY_LANDSCAPE_FRAME_SWITCHING : 0) |
+                (s.overlayLatched ? SWITCH_DISPLAY_LANDSCAPE_FRAME_OVERLAY : 0));
     s.overlayLatched = false;
     const SwitchDisplayTraits traits = switch_display_traits();
     r.traits = (traits.overlayBlockYuv ? SWITCH_DISPLAY_TRAIT_OVERLAY_BLOCK_YUV : 0) |
@@ -156,13 +156,23 @@ void landscapeRunCharge(uint64_t since)
         landscapeRun.displayTicks += mach_absolute_time() - since;
 }
 #else
-void landscapeRunFrameEnd() {}
-void landscapeRunAbort() {}
-void landscapeRunUnderflow(uint32_t) {}
-void landscapeRunLatched(bool, bool) {}
+void landscapeRunFrameEnd()
+{}
+
+void landscapeRunAbort()
+{}
+
+void landscapeRunUnderflow(uint32_t)
+{}
+
+void landscapeRunLatched(bool, bool)
+{}
+
 static uint64_t landscapeRunClock()
 {
     return 0;
 }
-void landscapeRunCharge(uint64_t) {}
+
+void landscapeRunCharge(uint64_t)
+{}
 #endif

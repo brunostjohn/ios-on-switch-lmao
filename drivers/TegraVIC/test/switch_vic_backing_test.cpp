@@ -22,8 +22,8 @@ extern "C" int switch_gpu_surface_adopt(void *descriptor, switch_gpu_backing *ba
     return adoptionError;
 }
 
-extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *, uint32_t, uint32_t,
-                                                            void *owner, void (*release)(void *))
+extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *, uint32_t, uint32_t, void *owner,
+                                                           void (*release)(void *))
 {
     ++registrations;
     auto *backing = new switch_gpu_backing;
@@ -31,7 +31,12 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *, uin
     backing->release = release;
     return backing;
 }
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing) { ++backing->refs; }
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
+{
+    ++backing->refs;
+}
+
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 {
     if (--backing->refs == 0) {
@@ -40,6 +45,7 @@ extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
         delete backing;
     }
 }
+
 extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *surface, uint64_t length, uint64_t *pages,
                                               uint32_t capacity, uint32_t *count)
 {
@@ -51,6 +57,7 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *surface, uint64_t
         pages[i] = surface->memory->address + surface->baseOffset + i * 4096;
     return kIOReturnSuccess;
 }
+
 extern "C" void tegra_vic_surface_release(TegraVICSurface *surface)
 {
     if (surface->prepared)
@@ -64,6 +71,7 @@ struct Surface {
     OSObject object;
     IOMemoryDescriptor memory;
     TegraVICSurface value = {};
+
     Surface()
     {
         value.surface = &object;
@@ -81,6 +89,7 @@ class SwitchVICBacking : public testing::Test {
         adoptionError = 0;
         adoptedDescriptor = nullptr;
     }
+
     void TearDown() override
     {
         for (auto &entry : gSurfaces)
@@ -168,6 +177,7 @@ TEST_F(SwitchVICBacking, ConcurrentWarmUsersShareOnePreparedAllocation)
     for (auto &entry : gSurfaces)
         evict(entry);
 }
+
 TEST_F(SwitchVICBacking, NewRegistrationAdoptsExistingDescriptorCpuLocks)
 {
     Surface surface;

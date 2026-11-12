@@ -6,12 +6,14 @@ namespace {
 struct Registers {
     uint32_t value = 0, id = 167, writes = 0, reads = 0, barriers = 0;
     bool failedProducerStopped = true, stuck = false;
+
     uint32_t read(uint32_t offset)
     {
         EXPECT_EQ(offset, 0xf80 + 4 * id);
         ++reads;
         return value;
     }
+
     void write(uint32_t offset, uint32_t bits)
     {
         EXPECT_TRUE(failedProducerStopped);
@@ -21,8 +23,13 @@ struct Registers {
         if (!stuck)
             ++value;
     }
-    void barrier() { ++barriers; }
+
+    void barrier()
+    {
+        ++barriers;
+    }
 };
+
 TEST(SwitchHost1xRelease, StoppedTwoIncrementProducerReleasesOnlyItsOwnedSyncpoint)
 {
     Registers registers;
@@ -33,6 +40,7 @@ TEST(SwitchHost1xRelease, StoppedTwoIncrementProducerReleasesOnlyItsOwnedSyncpoi
     EXPECT_EQ(registers.reads, 2u);
     EXPECT_EQ(registers.barriers, 1u);
 }
+
 TEST(SwitchHost1xRelease, PartialReleaseAndCounterWrapStayBounded)
 {
     Registers registers;
@@ -41,6 +49,7 @@ TEST(SwitchHost1xRelease, PartialReleaseAndCounterWrapStayBounded)
     EXPECT_EQ(registers.writes, 1u);
     EXPECT_EQ(registers.value, 0u);
 }
+
 TEST(SwitchHost1xRelease, AlreadyReachedDoesNotIncrement)
 {
     Registers registers;
@@ -49,6 +58,7 @@ TEST(SwitchHost1xRelease, AlreadyReachedDoesNotIncrement)
     EXPECT_EQ(registers.writes, 0u);
     EXPECT_EQ(registers.reads, 1u);
 }
+
 TEST(SwitchHost1xRelease, UnallocatedForeignOrExcessDistanceCannotRelease)
 {
     Registers registers;
@@ -58,6 +68,7 @@ TEST(SwitchHost1xRelease, UnallocatedForeignOrExcessDistanceCannotRelease)
     EXPECT_EQ(switch_host1x_release_failed(registers, registers.id, 1, 3, 168), -22);
     EXPECT_EQ(registers.writes, 0u);
 }
+
 TEST(SwitchHost1xRelease, FailedHardwareWriteReturnsErrorWithoutPolling)
 {
     Registers registers;

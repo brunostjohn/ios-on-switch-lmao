@@ -116,7 +116,8 @@ int physical_now(const switch_gpu_timeline *timeline, uint32_t value, bool exter
 	if (int32_t(completed - value) < 0)
 		return terminal || !fence ? -5 : 0;
 	return !external || int32_t(visible - value) >= 0 ||
-			       int32_t(__atomic_load_n(&timeline->promoted, __ATOMIC_ACQUIRE) - value) >= 0
+			       int32_t(__atomic_load_n(&timeline->promoted, __ATOMIC_ACQUIRE) -
+				       value) >= 0
 		       ? 1
 		       : 0;
 }

@@ -147,8 +147,10 @@ int main(int argc, char **argv)
             expect(owned, "a stored Depth32Float_Stencil8 render target is the raw path's own, with no twin", nil);
             struct switch_nvk_image_memory m = {};
             const bool moved = owned && [x rmTwin] && native_bridge_metal_texture_memory(x->_twin, &m) == 0 &&
-                               x->_raw.va == m.addr && x->_raw.pitch == m.row_stride_B && x->_raw.blockHeight == m.y_log2;
-            expect(moved, "its twin, asked for as a replay asks, is NVK's image, which the raw path is over from then on",
+                               x->_raw.va == m.addr && x->_raw.pitch == m.row_stride_B &&
+                               x->_raw.blockHeight == m.y_log2;
+            expect(moved,
+                   "its twin, asked for as a replay asks, is NVK's image, which the raw path is over from then on",
                    nil);
             if (!moved)
                 return 1;

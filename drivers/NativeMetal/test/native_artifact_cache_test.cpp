@@ -10,6 +10,7 @@
 
 namespace {
 namespace cache = native_artifact_cache;
+
 class ArtifactCache : public testing::Test {
 protected:
     std::string directory;
@@ -24,14 +25,28 @@ protected:
         for (unsigned i = 0; i < key.size(); ++i)
             key[i] = uint8_t(i * 7);
     }
-    void TearDown() override { std::filesystem::remove_all(directory); }
-    bool save() { return cache::store(directory, key, payload.data(), payload.size()); }
-    std::string path() const { return directory + "/" + cache::name(key); }
+
+    void TearDown() override
+    {
+        std::filesystem::remove_all(directory);
+    }
+
+    bool save()
+    {
+        return cache::store(directory, key, payload.data(), payload.size());
+    }
+
+    std::string path() const
+    {
+        return directory + "/" + cache::name(key);
+    }
+
     std::string contents()
     {
         std::ifstream input(path(), std::ios::binary);
         return {std::istreambuf_iterator<char>(input), {}};
     }
+
     void replace(const std::string &bytes)
     {
         std::ofstream output(path(), std::ios::binary | std::ios::trunc);
@@ -122,7 +137,9 @@ TEST_F(ArtifactCache, ConcurrentWritersPublishWholeRecords)
                 const auto *bytes = static_cast<const char *>(mapped.data());
                 if (mapped.size() < 2048 || mapped.size() > 2055 || bytes[0] < 'a' || bytes[0] > 'h' ||
                     mapped.size() != size_t(2048 + bytes[0] - 'a') ||
-                    !std::all_of(bytes, bytes + mapped.size(), [&](char c) { return c == bytes[0]; }))
+                    !std::all_of(bytes, bytes + mapped.size(), [&](char c) {
+                        return c == bytes[0];
+                    }))
                     ++failures;
             }
         });
@@ -131,4 +148,4 @@ TEST_F(ArtifactCache, ConcurrentWritersPublishWholeRecords)
     EXPECT_EQ(failures, 0u);
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory), std::filesystem::directory_iterator()), 1);
 }
-} // namespace
+}  // namespace

@@ -470,7 +470,10 @@ static bool threeDSteps(const raw::Texture &t)
 
 // fillTexture:level:slice:region:color: (SPI): level 0, slice 0 of a one-sample 2D texture the raw path renders, its
 // colour in the texture's own format; drawn at encode (fillTexturePass)
-- (void)fillTexture:(id<MTLTexture>)t level:(NSUInteger)level slice:(NSUInteger)slice region:(MTLRegion)region
+- (void)fillTexture:(id<MTLTexture>)t
+              level:(NSUInteger)level
+              slice:(NSUInteger)slice
+             region:(MTLRegion)region
               color:(MTLClearColor)color
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
@@ -496,8 +499,12 @@ static bool threeDSteps(const raw::Texture &t)
     [_cb record:m];
 }
 
-- (void)fillTexture:(id<MTLTexture>)t level:(NSUInteger)level slice:(NSUInteger)slice region:(MTLRegion)region
-              color:(MTLClearColor)color pixelFormat:(MTLPixelFormat)format
+- (void)fillTexture:(id<MTLTexture>)t
+              level:(NSUInteger)level
+              slice:(NSUInteger)slice
+             region:(MTLRegion)region
+              color:(MTLClearColor)color
+        pixelFormat:(MTLPixelFormat)format
 {
     if (format != t.pixelFormat) {
         [_cb takeReason:WhyTexture why:@"a texture fill through another pixel format"];

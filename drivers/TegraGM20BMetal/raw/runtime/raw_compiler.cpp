@@ -224,9 +224,7 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     if (found == RecordCache::Found::Record)
         record = *loaded;
     std::lock_guard<raw::Mutex> l(lock_);
-    RAW_DIAGNOSTIC(stats_.hits++;
-                   stats_.lookupHits++;
-                   (seeded ? stats_.seedHits : stats_.ownHits)++;
+    RAW_DIAGNOSTIC(stats_.hits++; stats_.lookupHits++; (seeded ? stats_.seedHits : stats_.ownHits)++;
                    stats_.lookupUs += nowUs() - began);
     // an ask that came in since keeps its own entry (its job finds the same entry on disk)
     if (const auto [it, first] = entries_.try_emplace(k.name()); first) {

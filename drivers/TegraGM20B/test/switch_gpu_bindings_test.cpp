@@ -4,8 +4,11 @@
 #include <cstdint>
 #include "../SwitchGpuBindings.h"
 
-namespace {
-struct Binding { uint64_t va, range; };
+namespace
+{
+struct Binding {
+	uint64_t va, range;
+};
 
 TEST(GpuBindings, EmptyAndGapsHaveNoResource)
 {
@@ -39,16 +42,24 @@ TEST(GpuBindings, UpperBoundPreservesInsertionOrder)
 
 TEST(GpuBindings, ExactAliasExtentResolvesToBackingOffsetWithoutOverflow)
 {
-	struct Bo { uint64_t bytes; } bo{0x8000};
-	struct Alias { uint64_t va, range; Bo *bo; uint64_t bo_offset; } alias{0x100000,0x1000,&bo,0x3000};
-	uint64_t offset=0;
-	EXPECT_TRUE(switch_gpu_binding_offset(alias,0x100080,64,offset));
-	EXPECT_EQ(offset,0x3080u);
-	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100fff,2,offset));
-	alias.bo_offset=0x7800;
-	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100800,1,offset));
-	alias.bo_offset=UINT64_MAX;
-	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100000,1,offset));
+	struct Bo {
+		uint64_t bytes;
+	} bo{0x8000};
+
+	struct Alias {
+		uint64_t va, range;
+		Bo *bo;
+		uint64_t bo_offset;
+	} alias{0x100000, 0x1000, &bo, 0x3000};
+
+	uint64_t offset = 0;
+	EXPECT_TRUE(switch_gpu_binding_offset(alias, 0x100080, 64, offset));
+	EXPECT_EQ(offset, 0x3080u);
+	EXPECT_FALSE(switch_gpu_binding_offset(alias, 0x100fff, 2, offset));
+	alias.bo_offset = 0x7800;
+	EXPECT_FALSE(switch_gpu_binding_offset(alias, 0x100800, 1, offset));
+	alias.bo_offset = UINT64_MAX;
+	EXPECT_FALSE(switch_gpu_binding_offset(alias, 0x100000, 1, offset));
 }
 
 TEST(GpuBindings, LargeBindingTableFindsEveryInteriorAndRejectsEveryGap)
@@ -58,8 +69,12 @@ TEST(GpuBindings, LargeBindingTableFindsEveryInteriorAndRejectsEveryGap)
 		bindings[i] = {0x100000 + i * 0x10000, 0x8000};
 	for (const auto &binding : bindings) {
 		for (uint64_t offset : {0ull, 1ull, 0x7000ull, 0x7fffull})
-			EXPECT_EQ(switch_gpu_binding_find(bindings.data(), bindings.size(), binding.va + offset, 1), &binding);
-		EXPECT_EQ(switch_gpu_binding_find(bindings.data(), bindings.size(), binding.va + 0x8000, 1), nullptr);
+			EXPECT_EQ(switch_gpu_binding_find(bindings.data(), bindings.size(),
+							  binding.va + offset, 1),
+				  &binding);
+		EXPECT_EQ(switch_gpu_binding_find(bindings.data(), bindings.size(),
+						  binding.va + 0x8000, 1),
+			  nullptr);
 	}
 }
 }  // namespace

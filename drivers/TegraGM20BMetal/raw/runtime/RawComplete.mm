@@ -125,7 +125,12 @@ struct Completion::Pending {
     {
         dispatch_group_enter(group);
     }
-    ~Pending() { dispatch_group_leave(group); }
+
+    ~Pending()
+    {
+        dispatch_group_leave(group);
+    }
+
     dispatch_group_t group;
     Ready ready;
     // a state's creation, which a failure ends (Metal's error) where a variant's ask tries again
@@ -391,57 +396,65 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     using Build = ComputeKernelBuild<ComputeRecord, ComputeState>;
     std::string why;
     bool attempted = false;
-    const auto result = job->build.make([] { return nowUs(); }, [&](ComputeRecord &record) {
-        attempted = true;
-        Compiler::Outcome outcome = Compiler::Outcome::Failed;
-        switch (cache_.loadKernel(k, record, why)) {
-        case RecordCache::Found::Record:
-            outcome = Compiler::Outcome::Made;
-            break;
-        case RecordCache::Found::Refusal:
-            outcome = Compiler::Outcome::Refused;
-            break;
-        case RecordCache::Found::None: {
-            bool taken = false;
-            if (remote_->serving())
-                outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
-            else
-                compiledHere(InProcess::NoCompiler);
-            if (taken)
+    const auto result = job->build.make(
+        [] {
+            return nowUs();
+        },
+        [&](ComputeRecord &record) {
+            attempted = true;
+            Compiler::Outcome outcome = Compiler::Outcome::Failed;
+            switch (cache_.loadKernel(k, record, why)) {
+            case RecordCache::Found::Record:
+                outcome = Compiler::Outcome::Made;
                 break;
+            case RecordCache::Found::Refusal:
+                outcome = Compiler::Outcome::Refused;
+                break;
+            case RecordCache::Found::None: {
+                bool taken = false;
+                if (remote_->serving())
+                    outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
+                else
+                    compiledHere(InProcess::NoCompiler);
+                if (taken)
+                    break;
 #if SWITCH_RAW_DIAGNOSTICS
-            const uint64_t began = nowUs();
+                const uint64_t began = nowUs();
 #endif
-            outcome = direct().kernel(descriptor, dispatch, key, record, why);
-            if (outcome != Compiler::Outcome::Failed) {
-                const auto saved = outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;
-                const CacheKey key = k;
-                const std::string refusal = why;
-                dispatch_async(persistenceQueue_, ^{
-                    cache_.storeKernel(key, saved.get(), refusal);
-                });
+                outcome = direct().kernel(descriptor, dispatch, key, record, why);
+                if (outcome != Compiler::Outcome::Failed) {
+                    const auto saved =
+                        outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;
+                    const CacheKey key = k;
+                    const std::string refusal = why;
+                    dispatch_async(persistenceQueue_, ^{
+                        cache_.storeKernel(key, saved.get(), refusal);
+                    });
+                }
+#if SWITCH_RAW_DIAGNOSTICS
+                if (outcome == Compiler::Outcome::Made)
+                    once([NSString
+                        stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
+                                         @"%llu us (%s): %s %s",
+                                         dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
+                                         (unsigned long long)(nowUs() - began), threadClass(),
+                                         descriptor.computeFunction.name.UTF8String ?: "-",
+                                         constantsLast(key).c_str()]);
+#endif
+                break;
             }
-#if SWITCH_RAW_DIAGNOSTICS
-            if (outcome == Compiler::Outcome::Made)
-                once([NSString
-                    stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
-                                     @"%llu us (%s): %s %s",
-                                     dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
-                                     (unsigned long long)(nowUs() - began), threadClass(),
-                                     descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
-#endif
-            break;
-        }
-        }
-        return outcome == Compiler::Outcome::Made ? Build::Outcome::Made
-               : outcome == Compiler::Outcome::Refused ? Build::Outcome::Refused : Build::Outcome::Failed;
-    }, [&](const ComputeRecord &record) {
-        attempted = true;
-        const auto *state = placeCompute(device_, record);
-        if (!state)
-            why = "no room for its program or samplers";
-        return state;
-    });
+            }
+            return outcome == Compiler::Outcome::Made      ? Build::Outcome::Made
+                   : outcome == Compiler::Outcome::Refused ? Build::Outcome::Refused
+                                                           : Build::Outcome::Failed;
+        },
+        [&](const ComputeRecord &record) {
+            attempted = true;
+            const auto *state = placeCompute(device_, record);
+            if (!state)
+                why = "no room for its program or samplers";
+            return state;
+        });
     if (retry)
         *retry = result.retry;
     if (retryAtUs)

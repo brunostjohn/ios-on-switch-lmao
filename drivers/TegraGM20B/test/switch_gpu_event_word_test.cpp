@@ -33,8 +33,8 @@ protected:
 		return base;
 	}
 
-	switch_gpu_event_signal *released(uint64_t value, const switch_gpu_backing_token &t, uint32_t payload,
-					  uint32_t channel = 1)
+	switch_gpu_event_signal *released(uint64_t value, const switch_gpu_backing_token &t,
+					  uint32_t payload, uint32_t channel = 1)
 	{
 		auto *s = prepare(value, t);
 		EXPECT_EQ(switch_gpu_event_signal_release(s, word, channel, payload), 0);

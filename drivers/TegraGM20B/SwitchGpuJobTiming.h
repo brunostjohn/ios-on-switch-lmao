@@ -7,7 +7,7 @@
 #define SWITCH_GPU_JOB_TIMING_H
 #include <stdint.h>
 
-#define SWITCH_GPU_JOB_BATCHES 64 /* the slowest job's batches listed */
+#define SWITCH_GPU_JOB_BATCHES 64  /* the slowest job's batches listed */
 #define SWITCH_GPU_BATCH_BUCKETS 8 /* under 25 us, then doubling up to 1.6 ms and over */
 
 /* A job whose batches are being read off its stamps, in seqno order */
@@ -38,8 +38,8 @@ static inline unsigned switch_gpu_batch_bucket(uint64_t ns)
 	return b;
 }
 
-static inline void switch_gpu_job_begin(struct switch_gpu_job_run *run, uint32_t first, uint32_t last,
-					uint64_t start_pt)
+static inline void switch_gpu_job_begin(struct switch_gpu_job_run *run, uint32_t first,
+					uint32_t last, uint64_t start_pt)
 {
 	run->first = first;
 	run->last = last;
@@ -50,8 +50,9 @@ static inline void switch_gpu_job_begin(struct switch_gpu_job_run *run, uint32_t
 }
 
 /* The batch whose end stamp is end_pt, its GPU time `ns` (the caller converts PTIMER units) */
-static inline void switch_gpu_job_batch(struct switch_gpu_job_window *w, struct switch_gpu_job_run *run,
-					uint64_t end_pt, uint64_t ns)
+static inline void switch_gpu_job_batch(struct switch_gpu_job_window *w,
+					struct switch_gpu_job_run *run, uint64_t end_pt,
+					uint64_t ns)
 {
 	const unsigned b = switch_gpu_batch_bucket(ns);
 
@@ -64,7 +65,8 @@ static inline void switch_gpu_job_batch(struct switch_gpu_job_window *w, struct 
 	run->prev_pt = end_pt;
 }
 
-static inline void switch_gpu_job_end(struct switch_gpu_job_window *w, struct switch_gpu_job_run *run)
+static inline void switch_gpu_job_end(struct switch_gpu_job_window *w,
+				      struct switch_gpu_job_run *run)
 {
 	uint64_t max = __atomic_load_n(&w->max_ns, __ATOMIC_RELAXED);
 	uint32_t n = run->batches < SWITCH_GPU_JOB_BATCHES ? run->batches : SWITCH_GPU_JOB_BATCHES;
@@ -73,8 +75,8 @@ static inline void switch_gpu_job_end(struct switch_gpu_job_window *w, struct sw
 	__atomic_fetch_add(&w->jobs, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&w->batches, run->batches, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&w->ns, run->ns, __ATOMIC_RELAXED);
-	while (run->ns > max &&
-	       !__atomic_compare_exchange_n(&w->max_ns, &max, run->ns, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+	while (run->ns > max && !__atomic_compare_exchange_n(&w->max_ns, &max, run->ns, 0,
+							     __ATOMIC_RELAXED, __ATOMIC_RELAXED))
 		;
 	if (run->ns <= __atomic_load_n(&w->slow_ns, __ATOMIC_RELAXED))
 		return;
@@ -90,7 +92,8 @@ static inline void switch_gpu_job_end(struct switch_gpu_job_window *w, struct sw
 
 /* Takes the window (zeroing it) into `out`; the slowest job's list is left out (slow_batches 0) if a job was writing
  * it meanwhile. */
-static inline void switch_gpu_job_take(struct switch_gpu_job_window *w, struct switch_gpu_job_window *out)
+static inline void switch_gpu_job_take(struct switch_gpu_job_window *w,
+				       struct switch_gpu_job_window *out)
 {
 	const uint32_t gen = __atomic_load_n(&w->slow_gen, __ATOMIC_ACQUIRE);
 
@@ -113,7 +116,8 @@ static inline void switch_gpu_job_take(struct switch_gpu_job_window *w, struct s
 }
 
 /* One process's channels' windows, taken, into one */
-static inline void switch_gpu_job_merge(struct switch_gpu_job_window *into, const struct switch_gpu_job_window *w)
+static inline void switch_gpu_job_merge(struct switch_gpu_job_window *into,
+					const struct switch_gpu_job_window *w)
 {
 	into->jobs += w->jobs;
 	into->batches += w->batches;
@@ -138,23 +142,27 @@ static inline void switch_gpu_job_merge(struct switch_gpu_job_window *into, cons
 static inline int switch_gpu_job_format(char *buf, unsigned long len, const char *owner,
 					const struct switch_gpu_job_window *w)
 {
-	static const char *const edge[SWITCH_GPU_BATCH_BUCKETS] = {"<25", "<50", "<100", "<200",
-								   "<400", "<800", "<1600", ">=1600"};
+	static const char *const edge[SWITCH_GPU_BATCH_BUCKETS] = {
+		"<25", "<50", "<100", "<200", "<400", "<800", "<1600", ">=1600"};
 	unsigned long at = 0;
-	uint32_t shown = w->slow_batches < SWITCH_GPU_JOB_BATCHES ? w->slow_batches : SWITCH_GPU_JOB_BATCHES;
+	uint32_t shown =
+		w->slow_batches < SWITCH_GPU_JOB_BATCHES ? w->slow_batches : SWITCH_GPU_JOB_BATCHES;
 
 	if (!w->jobs)
 		return 0;
-#define SWITCH_JOB_PUT(...)                                                    \
-	do {                                                                    \
-		if (at < len) {                                                 \
-			int put = snprintf(buf + at, len - at, __VA_ARGS__);    \
-			at += put > 0 ? (unsigned long)put : 0;                 \
-		}                                                               \
+#define SWITCH_JOB_PUT(...)                                                  \
+	do {                                                                 \
+		if (at < len) {                                              \
+			int put = snprintf(buf + at, len - at, __VA_ARGS__); \
+			at += put > 0 ? (unsigned long)put : 0;              \
+		}                                                            \
 	} while (0)
-	SWITCH_JOB_PUT("%s: %u jobs, %u batches (%u.%u a job), GPU mean %llu max %llu us a job; batches by GPU time:",
-		       owner, w->jobs, w->batches, w->batches / w->jobs, (w->batches * 10 / w->jobs) % 10,
-		       (unsigned long long)(w->ns / w->jobs / 1000), (unsigned long long)(w->max_ns / 1000));
+	SWITCH_JOB_PUT("%s: %u jobs, %u batches (%u.%u a job), GPU mean %llu max %llu us a job; "
+		       "batches by GPU time:",
+		       owner, w->jobs, w->batches, w->batches / w->jobs,
+		       (w->batches * 10 / w->jobs) % 10,
+		       (unsigned long long)(w->ns / w->jobs / 1000),
+		       (unsigned long long)(w->max_ns / 1000));
 	for (unsigned b = 0; b < SWITCH_GPU_BATCH_BUCKETS; b++)
 		if (w->bucket_n[b])
 			SWITCH_JOB_PUT(" %sus %u (%llu us)", edge[b], w->bucket_n[b],

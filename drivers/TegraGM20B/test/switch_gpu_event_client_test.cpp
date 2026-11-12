@@ -48,7 +48,7 @@ struct switch_gpu_event_watch {
 	void *context;
 	uint64_t cookie;
 	std::atomic<bool> delivered{false};
-    bool terminal = false;
+	bool terminal = false;
 };
 
 namespace
@@ -183,7 +183,7 @@ extern "C" int switch_gpu_event_resolve(switch_gpu_event *event, uint64_t value,
 
 extern "C" int switch_gpu_event_terminal(switch_gpu_event *event, uint64_t value)
 {
-    return event->terminalState ? event->terminalState : event->value >= value ? 1 : 0;
+	return event->terminalState ? event->terminalState : event->value >= value ? 1 : 0;
 }
 
 extern "C" int switch_gpu_backing_token_retain(const switch_gpu_backing_token *)
@@ -251,12 +251,15 @@ extern "C" int switch_gpu_event_observe(switch_gpu_event *event, uint64_t, uint6
 	return 0;
 }
 
-extern "C" int switch_gpu_event_observe_terminal(switch_gpu_event *event, uint64_t value, uint64_t cookie,
-    void (*callback)(void *, uint64_t, int), void *context, switch_gpu_event_watch **out)
+extern "C" int switch_gpu_event_observe_terminal(switch_gpu_event *event, uint64_t value,
+						 uint64_t cookie,
+						 void (*callback)(void *, uint64_t, int),
+						 void *context, switch_gpu_event_watch **out)
 {
-    const int result = switch_gpu_event_observe(event, value, cookie, callback, context, out);
-    if (!result) (*out)->terminal = true;
-    return result;
+	const int result = switch_gpu_event_observe(event, value, cookie, callback, context, out);
+	if (!result)
+		(*out)->terminal = true;
+	return result;
 }
 
 extern "C" void switch_gpu_event_observe_cancel(switch_gpu_event_watch **watch)
@@ -469,8 +472,8 @@ void switch_gpu_event_word_release(switch_gpu_event_word **word)
 	*word = nullptr;
 }
 
-int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *, uint32_t channel, uint64_t *base,
-			      uint32_t *floor)
+int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *, uint32_t channel,
+			      uint64_t *base, uint32_t *floor)
 {
 	if (word->pending && word->channel != channel)
 		return -16;
@@ -491,8 +494,8 @@ void switch_gpu_event_word_disarm(switch_gpu_event_word *word)
 	word->armed = false;
 }
 
-int switch_gpu_event_signal_release(switch_gpu_event_signal *, switch_gpu_event_word *word, uint32_t channel,
-				    uint32_t payload)
+int switch_gpu_event_signal_release(switch_gpu_event_signal *, switch_gpu_event_word *word,
+				    uint32_t channel, uint32_t payload)
 {
 	if (releaseError || !word->armed)
 		return releaseError ? releaseError : -22;
@@ -501,7 +504,8 @@ int switch_gpu_event_signal_release(switch_gpu_event_signal *, switch_gpu_event_
 	return 0;
 }
 
-bool switch_gpu_event_use_word(const switch_gpu_event_use *, uint64_t value, switch_gpu_word_wait *wait)
+bool switch_gpu_event_use_word(const switch_gpu_event_use *, uint64_t value,
+			       switch_gpu_word_wait *wait)
 {
 	if (!waitOnWord)
 		return false;
@@ -563,40 +567,40 @@ TEST_F(EventClient, ProbeDoesNotArmAndReleasesResolvedProducer)
 
 TEST_F(EventClient, TerminalProbeKeepsPublishedButUnfinishedProducerPending)
 {
-    source.state = 2;
-    EXPECT_EQ(client.probe(handle, 1), 0);
-    EXPECT_EQ(client.probe(handle, 1, true), -19);
-    source.terminalState = -5;
-    EXPECT_EQ(client.probe(handle, 1, true), -5);
-    source.terminalState = 1;
-    EXPECT_EQ(client.probe(handle, 1, true), 0);
-    EXPECT_EQ(tokenReferences, 0);
-    EXPECT_TRUE(watches.empty());
+	source.state = 2;
+	EXPECT_EQ(client.probe(handle, 1), 0);
+	EXPECT_EQ(client.probe(handle, 1, true), -19);
+	source.terminalState = -5;
+	EXPECT_EQ(client.probe(handle, 1, true), -5);
+	source.terminalState = 1;
+	EXPECT_EQ(client.probe(handle, 1, true), 0);
+	EXPECT_EQ(tokenReferences, 0);
+	EXPECT_TRUE(watches.empty());
 }
 
 TEST_F(EventClient, TerminalObserverDeliversLaterFailureAndReturnsCapacity)
 {
-    Notice notice;
-    source.state = 2;
-    ASSERT_EQ(client.observe(handle, 1, 42, notified, &notice, true), 0);
-    EXPECT_TRUE(watches.back()->terminal);
-    EXPECT_EQ(notice.count, 0u);
-    deliver(watches.back(), -5);
-    EXPECT_EQ(notice.count, 1u);
-    EXPECT_EQ(notice.result, -5);
-    EXPECT_EQ(client.cancel(handle, 42), 0);
-    EXPECT_EQ(notice.count, 1u);
+	Notice notice;
+	source.state = 2;
+	ASSERT_EQ(client.observe(handle, 1, 42, notified, &notice, true), 0);
+	EXPECT_TRUE(watches.back()->terminal);
+	EXPECT_EQ(notice.count, 0u);
+	deliver(watches.back(), -5);
+	EXPECT_EQ(notice.count, 1u);
+	EXPECT_EQ(notice.result, -5);
+	EXPECT_EQ(client.cancel(handle, 42), 0);
+	EXPECT_EQ(notice.count, 1u);
 }
 
 TEST_F(EventClient, TerminalObserverStopCancelsExactlyOnce)
 {
-    Notice notice;
-    ASSERT_EQ(client.observe(handle, 1, 42, notified, &notice, true), 0);
-    client.stop();
-    EXPECT_EQ(notice.count, 1u);
-    EXPECT_EQ(notice.result, -125);
-    deliver(watches.back(), -5);
-    EXPECT_EQ(notice.count, 1u);
+	Notice notice;
+	ASSERT_EQ(client.observe(handle, 1, 42, notified, &notice, true), 0);
+	client.stop();
+	EXPECT_EQ(notice.count, 1u);
+	EXPECT_EQ(notice.result, -125);
+	deliver(watches.back(), -5);
+	EXPECT_EQ(notice.count, 1u);
 }
 
 TEST_F(EventClient, InlineReadinessRetiresSlotAndOriginalCallbackExactlyOnce)
@@ -1040,10 +1044,12 @@ TEST_F(EventClient, JobReleasesItsSignalIntoTheWordAndWaitsOnAProducersWord)
 	uint64_t address = 0, base = 0;
 	uint32_t floor = 0;
 	ASSERT_EQ(client.word(handle, 2, &address, &base, &floor), 0);
+
 	struct {
 		TegraGM20BAbiSubmitEvents header;
 		TegraGM20BAbiEventUse uses[2];
 	} input = {{1, 1, 0}, {{handle, 45}, {handle, 47}}};
+
 	const TegraGM20BAbiSignalRelease release = {7, TegraGM20BSignalReleased};
 
 	wordReleases.clear();

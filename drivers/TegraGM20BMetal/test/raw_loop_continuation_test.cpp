@@ -26,7 +26,9 @@ struct Submitted {
 // The submission: each range laid down on a fresh command buffer over the same words, its record read once it ran
 Submitted submit(const Tape &tape, Words &words, bool sees)
 {
-    const auto tapeAt = [&](uint32_t at) { return entry(tape[at]); };
+    const auto tapeAt = [&](uint32_t at) {
+        return entry(tape[at]);
+    };
     Submitted out;
     std::deque<raw::TapeRange> queue;
     const auto enqueue = [&](raw::TapeRange r, std::deque<raw::TapeRange>::iterator at) {
@@ -126,8 +128,8 @@ void expectMetal(const Tape &tape, Words start, uint32_t continuations, const ch
 
 TEST(RawLoopContinuation, AWhileNoBlockHoldsRunsPastItsCopies)
 {
-    expectMetal({dispatch(1, 1), test(Op::While, 0), dispatch(0, -1), test(Op::EndWhile, 0), dispatch(1, 1)},
-                {2500}, 2, "while");
+    expectMetal({dispatch(1, 1), test(Op::While, 0), dispatch(0, -1), test(Op::EndWhile, 0), dispatch(1, 1)}, {2500}, 2,
+                "while");
 }
 
 TEST(RawLoopContinuation, AWhileInsideAnIfRunsPastItsCopiesAndTheElseStaysSkipped)
@@ -157,8 +159,8 @@ TEST(RawLoopContinuation, AnInnerLoopPastItsCopiesFinishesAndItsOuterLoopGoesOn)
 TEST(RawLoopContinuation, ADoWhileInsideAWhileInsideAnIfRunsPastItsCopies)
 {
     expectMetal({test(Op::If, 5, PredicateCompare::Equal, 0), test(Op::While, 0), dispatch(0, -1, 1, 200),
-                 test(Op::DoWhile, 0), dispatch(1, -1), test(Op::EndDoWhile, 1), dispatch(2, 1),
-                 test(Op::EndWhile, 0), test(Op::Else, 0), dispatch(4, 1), test(Op::EndIf, 0)},
+                 test(Op::DoWhile, 0), dispatch(1, -1), test(Op::EndDoWhile, 1), dispatch(2, 1), test(Op::EndWhile, 0),
+                 test(Op::Else, 0), dispatch(4, 1), test(Op::EndIf, 0)},
                 {2}, 2, "do-while inside while inside if");
 }
 

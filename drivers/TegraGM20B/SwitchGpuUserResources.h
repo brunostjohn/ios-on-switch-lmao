@@ -38,20 +38,23 @@ IOReturn AGXDeviceUserClient::resourceObserve(const TegraGM20BAbiResourceObserve
 		constexpr uint32_t mask = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
 		const bool ranged = use.access & TegraGM20BSurfaceRange;
 		if (!(use.access & mask) ||
-		    (ranged ? !(use.access & TegraGM20BSurfaceGpuAddress) || !use.reserved : use.reserved != 0) ||
-		    (use.access &
-		     ~(mask | TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange))) {
+		    (ranged ? !(use.access & TegraGM20BSurfaceGpuAddress) || !use.reserved
+			    : use.reserved != 0) ||
+		    (use.access & ~(mask | TegraGM20BSurfaceGpuAddress |
+				    TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange))) {
 			result = kIOReturnBadArgument;
 			break;
 		}
 		const bool addressed = use.access & TegraGM20BSurfaceGpuAddress;
-		const Binding *binding = addressed
-			? switch_gpu_binding_find(binds_, nbinds_, use.handle, ranged ? use.reserved : 1)
-			: nullptr;
+		const Binding *binding =
+			addressed ? switch_gpu_binding_find(binds_, nbinds_, use.handle,
+							    ranged ? use.reserved : 1)
+				  : nullptr;
 		const Bo *bo = addressed ? (binding ? binding->bo : nullptr) : findBo(use.handle);
 		uint64_t offset = 0;
 		if (!bo || !bo->backing ||
-		    (ranged && !switch_gpu_binding_offset(*binding, use.handle, use.reserved, offset)) ||
+		    (ranged &&
+		     !switch_gpu_binding_offset(*binding, use.handle, use.reserved, offset)) ||
 		    ((use.access & TegraGM20BSurfaceWrite) && bo->readOnly)) {
 			result = kIOReturnBadArgument;
 			break;

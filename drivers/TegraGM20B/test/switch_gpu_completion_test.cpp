@@ -10,7 +10,8 @@ struct nvif_event {};
 
 struct tgm_chan {
 	nvif_event nonstall;
-	uint32_t completed = 0, progress_done = 0, high = 0, chid = 1, kernel = 0, event_through = 0;
+	uint32_t completed = 0, progress_done = 0, high = 0, chid = 1, kernel = 0,
+		 event_through = 0;
 	uint64_t progress_held = 0, progress_ns = 0, irq_state = 0;
 	void (*fenced)(void *) = nullptr;
 	void *fenced_arg = nullptr;
@@ -21,8 +22,8 @@ struct tgm_chan {
 #define WRITE_ONCE(target, value) ((target) = (value))
 #define READ_ONCE(target) (target)
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
-unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, watchCalls, callbacks,
-	timestamps, eventPasses;
+unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, watchCalls,
+	callbacks, timestamps, eventPasses;
 int tgm_sc7_gate;
 bool diagnostic, suspended;
 

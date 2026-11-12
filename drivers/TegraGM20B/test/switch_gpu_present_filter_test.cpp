@@ -220,7 +220,8 @@ class PromisedPresentFilter : public PresentFilter
 {
 protected:
 	switch_gpu_present_watch watch{};
-	const switch_gpu_backing_token promise = {kPromiseValue, 0, SWITCH_GPU_ENGINE_PROMISE, kPromiseOffset};
+	const switch_gpu_backing_token promise = {kPromiseValue, 0, SWITCH_GPU_ENGINE_PROMISE,
+						  kPromiseOffset};
 
 	void SetUp() override
 	{
@@ -330,9 +331,12 @@ TEST(PresentFilterSource, TheWatchAttachesBeforeItsArmAndEachClaimDetachesFirst)
 	EXPECT_LT(work.find("switch_gpu_present_watch_claim("),
 		  work.find("tgm_present_filter_detach();"));
 	EXPECT_LT(work.find("tgm_present_filter_detach();"), work.find("present_watch_flush();"));
-	const std::string kept = Between(SourceText("../gpu_promise.c"), "void tgm_present_promise_kept(", "\n}\n");
-	EXPECT_LT(kept.find("switch_gpu_present_watch_kept("), kept.find("tgm_present_filter_attach(producer);"));
-	EXPECT_LT(kept.find("tgm_present_filter_attach(producer);"), kept.find("switch_gpu_present_watch_rearm("));
+	const std::string kept =
+		Between(SourceText("../gpu_promise.c"), "void tgm_present_promise_kept(", "\n}\n");
+	EXPECT_LT(kept.find("switch_gpu_present_watch_kept("),
+		  kept.find("tgm_present_filter_attach(producer);"));
+	EXPECT_LT(kept.find("tgm_present_filter_attach(producer);"),
+		  kept.find("switch_gpu_present_watch_rearm("));
 	EXPECT_NE(kept.find("tgm_present_filter_attach(producer);"), std::string::npos);
 	const std::string glue = SourceText("../shim/xnu_glue.cpp");
 	const std::string filterBody = Between(glue, "bool gpuNonstallFilter(", "\n}\n");

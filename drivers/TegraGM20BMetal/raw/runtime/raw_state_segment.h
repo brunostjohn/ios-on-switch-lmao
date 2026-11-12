@@ -100,7 +100,8 @@ struct PushBody {
 void bindSegment(std::vector<PushBody> &bodies, uint32_t *&start, uint32_t *at, const StateSegment &segment);
 
 // The bodies as the job's pushes, ring stretches at their GPU address (`ringCpu` maps `ringVa`). Returns the ring words.
-uint64_t appendBodies(PushBatches &pushes, const std::vector<PushBody> &bodies, const uint8_t *ringCpu, uint64_t ringVa);
+uint64_t appendBodies(PushBatches &pushes, const std::vector<PushBody> &bodies, const uint8_t *ringCpu,
+                      uint64_t ringVa);
 
 // The segment a channel's 3D registers hold from its last bind; binding it again writes nothing. Lost wherever something
 // other than a segment bind may have written one of its methods: a channel made again, a state's extras set back, an

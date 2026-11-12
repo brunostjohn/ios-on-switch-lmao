@@ -52,8 +52,8 @@ void switch_gpu_event_word_release(switch_gpu_event_word **owned)
 	IODelete(word, switch_gpu_event_word, 1);
 }
 
-int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *event, uint32_t channel,
-			      uint64_t *base, uint32_t *floor)
+int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *event,
+			      uint32_t channel, uint64_t *base, uint32_t *floor)
 {
 	auto *s = switch_gpu_events_state();
 	if (!s || !word || !event || !channel)
@@ -98,9 +98,9 @@ int switch_gpu_event_signal_release(switch_gpu_event_signal *signal, switch_gpu_
 		return -22;
 	IOLockLock(s->lock);
 	const uint64_t offset = signal->value - word->base;
-	const bool valid = word->armed && word->channel == channel && offset == payload && payload &&
-			   offset < TegraGM20BEventReleaseLimit && payload > word->last &&
-			   payload > word->poisoned;
+	const bool valid = word->armed && word->channel == channel && offset == payload &&
+			   payload && offset < TegraGM20BEventReleaseLimit &&
+			   payload > word->last && payload > word->poisoned;
 	if (valid) {
 		__atomic_add_fetch(&word->pending, 1u, __ATOMIC_RELAXED);
 		signal->wordPrevious = word->last;
@@ -114,7 +114,8 @@ int switch_gpu_event_signal_release(switch_gpu_event_signal *signal, switch_gpu_
 	return valid ? 0 : -22;
 }
 
-bool switch_gpu_event_use_word(const switch_gpu_event_use *use, uint64_t value, switch_gpu_word_wait *wait)
+bool switch_gpu_event_use_word(const switch_gpu_event_use *use, uint64_t value,
+			       switch_gpu_word_wait *wait)
 {
 	const switch_gpu_event_signal *signal = use ? use->authority : nullptr;
 	if (!signal || !signal->word)
@@ -132,7 +133,8 @@ int switch_gpu_event_word_result_locked(const switch_gpu_event_signal *signal)
 	const auto *word = signal->word;
 	if (signal->payload <= word->poisoned || wordValue(word) < signal->payload)
 		return 0;
-	return signal->dependencies ? switch_gpu_event_waits_producers_locked(signal->dependencies) : 1;
+	return signal->dependencies ? switch_gpu_event_waits_producers_locked(signal->dependencies)
+				    : 1;
 }
 
 void switch_gpu_event_word_settle_locked(switch_gpu_event_signal *signal, int result, bool released)
@@ -183,9 +185,10 @@ extern "C" void switch_gpu_event_stats_window(char *line, size_t size)
 		return;
 	// The kernel has no stdio.h: the builtin is the kernel's snprintf there and libc's on the host.
 	__builtin_snprintf(line, size,
-			   "%llu signals released mid-job: %llu completed from their word, %llu at their job's end; "
+			   "%llu signals released mid-job: %llu completed from their word, %llu at "
+			   "their job's end; "
 			   "%llu waits acquired on a word",
-			   (unsigned long long)released, (unsigned long long)byWord, (unsigned long long)atEnd,
-			   (unsigned long long)waits);
+			   (unsigned long long)released, (unsigned long long)byWord,
+			   (unsigned long long)atEnd, (unsigned long long)waits);
 }
 #endif

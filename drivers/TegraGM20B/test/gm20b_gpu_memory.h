@@ -37,9 +37,9 @@ struct Memory {
 		}
 	};
 
-	std::map<uint64_t, Pte> ptes;  // by GPU page number
+	std::map<uint64_t, Pte> ptes;                              // by GPU page number
 	std::map<const uint8_t *, std::array<uint8_t, kLine>> l2;  // by the line's first byte
-	std::map<const uint8_t *, uint64_t> dirty;                 // l2's written lines: their valid bytes
+	std::map<const uint8_t *, uint64_t> dirty;  // l2's written lines: their valid bytes
 	// One translation per direction: a copy alternates its reads and writes between two surfaces
 	uint64_t lastPage[2] = {~0ull, ~0ull};
 	const Pte *lastPte[2] = {};
@@ -50,11 +50,13 @@ struct Memory {
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = lastPte[0] = lastPte[1] = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
-			ptes[(va + at) / kPage] = {nullptr, bytes + at, 0,
-						   std::min(kPage, size - at), readOnly, cached};
+			ptes[(va + at) / kPage] = {nullptr,  bytes + at,
+						   0,        std::min(kPage, size - at),
+						   readOnly, cached};
 	}
 
-	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false, bool cached = false)
+	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false,
+		 bool cached = false)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = lastPte[0] = lastPte[1] = nullptr;
@@ -156,7 +158,8 @@ private:
 		auto line = l2.find(first);
 		if (line == l2.end()) {
 			line = l2.emplace(first, std::array<uint8_t, kLine>{}).first;
-			std::copy_n(first, std::min(kLine, last->valid() - (pageOffset - lineOffset)),
+			std::copy_n(first,
+				    std::min(kLine, last->valid() - (pageOffset - lineOffset)),
 				    line->second.begin());
 		}
 		return line->second.data() + lineOffset;

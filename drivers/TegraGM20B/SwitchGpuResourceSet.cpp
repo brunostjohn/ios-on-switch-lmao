@@ -7,11 +7,13 @@ struct switch_gpu_resource_set {
 	IOLock *lock;  // a leaving member's wait for the submissions inside
 	uint32_t refs, generation, used, host_written, inside, waiting;
 	volatile uint32_t *mirror;
+
 	// one writer per slot (its channel's submitter); readers retry while seq is odd or moved
 	struct {
 		uint32_t seq;
 		switch_gpu_backing_token job;
 	} slots[SWITCH_GPU_SET_SLOTS];
+
 	switch_gpu_set_member *members;
 	uint32_t count, capacity;
 };
@@ -37,10 +39,11 @@ uint32_t read_jobs(const switch_gpu_resource_set *set, switch_gpu_backing_token 
 		const auto &entry = set->slots[slot];
 		for (;;) {
 			const uint32_t seq = __atomic_load_n(&entry.seq, __ATOMIC_ACQUIRE);
-			jobs[count] = {__atomic_load_n(&entry.job.value, __ATOMIC_RELAXED),
-				       __atomic_load_n(&entry.job.reset_generation, __ATOMIC_RELAXED),
-				       __atomic_load_n(&entry.job.engine, __ATOMIC_RELAXED),
-				       __atomic_load_n(&entry.job.queue, __ATOMIC_RELAXED)};
+			jobs[count] = {
+				__atomic_load_n(&entry.job.value, __ATOMIC_RELAXED),
+				__atomic_load_n(&entry.job.reset_generation, __ATOMIC_RELAXED),
+				__atomic_load_n(&entry.job.engine, __ATOMIC_RELAXED),
+				__atomic_load_n(&entry.job.queue, __ATOMIC_RELAXED)};
 			__atomic_thread_fence(__ATOMIC_ACQUIRE);
 			if (!(seq & 1) && __atomic_load_n(&entry.seq, __ATOMIC_RELAXED) == seq)
 				break;
@@ -58,8 +61,8 @@ int adopt_locked(switch_gpu_backing *backing, const switch_gpu_resource_set *set
 	switch_gpu_backing_token jobs[SWITCH_GPU_SET_SLOTS];
 	const uint32_t count = read_jobs(set, jobs);
 	const bool writes = backing->set_access & SWITCH_GPU_BACKING_WRITE;
-	int result = switch_gpu_backing_adopt_locked(backing, jobs, count,
-						     writes ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ);
+	int result = switch_gpu_backing_adopt_locked(
+		backing, jobs, count, writes ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ);
 	for (uint32_t i = 0; !result && writes && backing->cpu_tracking && i < count; ++i) {
 		result = switch_gpu_backing_writer_prepare_locked(backing, jobs[i]);
 		if (!result)
@@ -118,7 +121,8 @@ bool listed(const switch_gpu_set_member *members, uint32_t count, const switch_g
 }
 
 // The caller's members by allocation id, a backing named twice once with both accesses; 0 when one is malformed.
-uint32_t sorted_members(const switch_gpu_set_member *members, uint32_t count, switch_gpu_backing_use *uses)
+uint32_t sorted_members(const switch_gpu_set_member *members, uint32_t count,
+			switch_gpu_backing_use *uses)
 {
 	constexpr uint32_t kAccess = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
 	for (uint32_t i = 0; i < count; ++i) {
@@ -191,8 +195,9 @@ extern "C" void switch_gpu_set_invalidate(switch_gpu_resource_set *set, uint32_t
 	switch_gpu_job_invalidated(cause);
 }
 
-extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_gpu_set_member *members,
-				     uint32_t count, uint32_t *generation, switch_gpu_backing **refused)
+extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set,
+				     const switch_gpu_set_member *members, uint32_t count,
+				     uint32_t *generation, switch_gpu_backing **refused)
 {
 	if (refused)
 		*refused = nullptr;
@@ -308,7 +313,8 @@ extern "C" void switch_gpu_set_note_job(switch_gpu_resource_set *set, uint32_t s
 		__atomic_fetch_or(&set->used, 1u << slot, __ATOMIC_RELEASE);
 }
 
-extern "C" uint32_t switch_gpu_set_jobs(const switch_gpu_resource_set *set, switch_gpu_backing_token *jobs)
+extern "C" uint32_t switch_gpu_set_jobs(const switch_gpu_resource_set *set,
+					switch_gpu_backing_token *jobs)
 {
 	return read_jobs(set, jobs);
 }
@@ -325,8 +331,9 @@ extern "C" uint32_t switch_gpu_set_seqno(const switch_gpu_resource_set *set, uin
 		       : 0;
 }
 
-extern "C" uint32_t switch_gpu_set_waits(const switch_gpu_resource_set *set, uint32_t slot, uint32_t live,
-				       const uint32_t *completed, switch_gpu_set_wait *waits)
+extern "C" uint32_t switch_gpu_set_waits(const switch_gpu_resource_set *set, uint32_t slot,
+					 uint32_t live, const uint32_t *completed,
+					 switch_gpu_set_wait *waits)
 {
 	const uint32_t others = switch_gpu_set_used(set) & live & ~(1u << slot);
 	uint32_t count = 0;
@@ -409,7 +416,8 @@ extern "C" void switch_gpu_backing_member_freed(switch_gpu_backing *backing)
 		++at;
 	if (at == set->count)
 		return;
-	memmove(&set->members[at], &set->members[at + 1], (set->count - at - 1) * sizeof(set->members[0]));
+	memmove(&set->members[at], &set->members[at + 1],
+		(set->count - at - 1) * sizeof(set->members[0]));
 	--set->count;
 	switch_gpu_backing_release(backing);
 }

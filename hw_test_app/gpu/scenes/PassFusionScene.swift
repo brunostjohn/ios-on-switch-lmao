@@ -33,7 +33,8 @@ struct PassFusionScene: GPUScene {
                     descriptor.storageMode = .shared
                     descriptor.usage = [.renderTarget, .shaderRead]
                     guard let buffer = gpu.device.makeBuffer(length: row * side, options: .storageModeShared),
-                          let image = buffer.makeTexture(descriptor: descriptor, offset: 0, bytesPerRow: row) else {
+                        let image = buffer.makeTexture(descriptor: descriptor, offset: 0, bytesPerRow: row)
+                    else {
                         throw TestFailure("linear pass-fusion target not made")
                     }
                     target = image
@@ -48,7 +49,8 @@ struct PassFusionScene: GPUScene {
                         pass.renderTargetHeight = renderHeight
                         pass.colorAttachments[0].texture = target
                         pass.colorAttachments[0].loadAction = clear ? .clear : .load
-                        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.125, green: 0.25, blue: 0.5, alpha: 1)
+                        pass.colorAttachments[0].clearColor = MTLClearColor(
+                            red: 0.125, green: 0.25, blue: 0.5, alpha: 1)
                         pass.colorAttachments[0].storeAction = .store
                         if let depth {
                             pass.depthAttachment.texture = depth
@@ -61,7 +63,9 @@ struct PassFusionScene: GPUScene {
                     func boundary() {
                         if separate { commands.makeBlitCommandEncoder()!.endEncoding() }
                     }
-                    func draw(_ encoder: MTLRenderCommandEncoder, _ pipeline: MTLRenderPipelineState, _ color: SIMD4<Float>) {
+                    func draw(
+                        _ encoder: MTLRenderCommandEncoder, _ pipeline: MTLRenderPipelineState, _ color: SIMD4<Float>
+                    ) {
                         var z: Float = 0.5
                         var color = color
                         encoder.setRenderPipelineState(pipeline)
@@ -72,7 +76,8 @@ struct PassFusionScene: GPUScene {
                     commands.makeRenderCommandEncoder(descriptor: pass(clear: true))!.endEncoding()
                     boundary()
                     let changed = commands.makeRenderCommandEncoder(descriptor: pass(clear: false))!
-                    changed.setViewport(MTLViewport(originX: 1, originY: 2, width: 16, height: 18, znear: 0.2, zfar: 0.8))
+                    changed.setViewport(
+                        MTLViewport(originX: 1, originY: 2, width: 16, height: 18, znear: 0.2, zfar: 0.8))
                     changed.setScissorRect(MTLScissorRect(x: 2, y: 3, width: 5, height: 7))
                     changed.setCullMode(.front)
                     changed.setTriangleFillMode(.lines)
@@ -90,7 +95,8 @@ struct PassFusionScene: GPUScene {
                     draw(fetched, fetch, SIMD4(0.125, 0.125, 0.125, 1))
                     fetched.endEncoding()
                 }
-                let key = "\(linear ? "linear" : "private")_\(withDepth ? "depth" : "color")_\(separate ? "separate" : "adjacent")"
+                let key =
+                    "\(linear ? "linear" : "private")_\(withDepth ? "depth" : "color")_\(separate ? "separate" : "adjacent")"
                 result.metrics.set("path_\(key)", timing.path)
                 if RawFacade.kind(of: gpu.device) == "raw" {
                     result.expect(timing.path == "raw", "\(key) did not remain raw: \(timing.path)")
@@ -111,12 +117,14 @@ struct PassFusionScene: GPUScene {
                             x < renderWidth && y < renderHeight ? [0.375, 0.375, 0.375, 1] : [0.125, 0.25, 0.5, 1])
                     }
                 }
-                result.compare(key, bytes: bytes, expected: expected, format: .rgba8Unorm,
-                               width: side, height: side, tolerance: 2.0 / 255)
+                result.compare(
+                    key, bytes: bytes, expected: expected, format: .rgba8Unorm,
+                    width: side, height: side, tolerance: 2.0 / 255)
                 images.append(bytes)
             }
-            result.compare("\(linear)_\(withDepth)_twins", bytes: images[0], expected: images[1], format: .rgba8Unorm,
-                           width: side, height: side, tolerance: 1.0 / 255)
+            result.compare(
+                "\(linear)_\(withDepth)_twins", bytes: images[0], expected: images[1], format: .rgba8Unorm,
+                width: side, height: side, tolerance: 1.0 / 255)
         }
         return result
     }

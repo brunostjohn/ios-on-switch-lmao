@@ -67,8 +67,8 @@ Built build(const TegraVICSurfaceDesc &s, const TegraVICSurfaceDesc &d, const Te
         b.why = tegra_vic_image_from(&s, kSrcIova, &src);
     dst.chromaSite = TEGRA_VIC_REQ_CHROMA_SITE(r.flags);
     for (uint32_t i = 0; !b.why && i < plan.count; i++)
-        b.why = tegra_vic_build(plan.op[i].fill ? nullptr : &src, &dst, &plan.op[i], &kTegraVICTraits, kConfig,
-                                kFilter, &b.job);
+        b.why = tegra_vic_build(plan.op[i].fill ? nullptr : &src, &dst, &plan.op[i], &kTegraVICTraits, kConfig, kFilter,
+                                &b.job);
     return b;
 }
 

@@ -19,6 +19,6 @@ inline bool switch_vic_surface_owns_descriptor(uint64_t memoryBytes, uint64_t ba
 
 inline bool switch_vic_surface_subrange(uint64_t allocationBytes, uint64_t offset, uint64_t bytes)
 {
-    return bytes && offset <= allocationBytes && bytes <= allocationBytes - offset &&
-           offset <= UINT64_MAX - 4095 && bytes <= UINT64_MAX - 4095 - offset;
+    return bytes && offset <= allocationBytes && bytes <= allocationBytes - offset && offset <= UINT64_MAX - 4095 &&
+           bytes <= UINT64_MAX - 4095 - offset;
 }

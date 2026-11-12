@@ -197,9 +197,8 @@ inline bool integerClearSlots(uint32_t format, const double in[4], float out[4])
     if (!f || (f->kind[0] != ClearChannel::Uint && f->kind[0] != ClearChannel::Sint))
         return false;
     for (int i = 0; i < 4; i++) {
-        const uint32_t word = f->kind[i] == ClearChannel::Unused
-                                  ? 0
-                                  : integerClear(in[i], f->kind[i] == ClearChannel::Sint, f->bits[i]);
+        const uint32_t word =
+            f->kind[i] == ClearChannel::Unused ? 0 : integerClear(in[i], f->kind[i] == ClearChannel::Sint, f->bits[i]);
         memcpy(&out[i], &word, 4);
     }
     return true;

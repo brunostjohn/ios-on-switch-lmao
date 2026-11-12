@@ -73,21 +73,29 @@ struct ZcullTest: HWTest {
         var wrong: [String] = []
         var paths: Set<String> = []
         let before = RawFacade.counters(of: gpu.device)
-        let less = encode(1, [
-            Draw(corners: left(0.25), colour: Self.red, state: state(.less), count: 1),
-            Draw(corners: all(0.75), colour: Self.green, state: state(.less), count: Self.farQuads),
-        ])
-        let reversed = encode(0, [
-            Draw(corners: left(0.75), colour: Self.red, state: state(.greater), count: 1),
-            Draw(corners: all(0.25), colour: Self.green, state: state(.greaterEqual), count: Self.farQuads),
-        ])
-        let flipped = encode(1, [
-            Draw(corners: left(0.25), colour: Self.red, state: state(.less), count: 1),
-            Draw(corners: all(0.75), colour: Self.green, state: state(.lessEqual), count: 1),
-            Draw(corners: all(0.5), colour: Self.blue, state: state(.greater), count: 1),
-        ])
-        for (label, pass, leftColour) in [("less", less, Self.red), ("reversed", reversed, Self.red),
-                                           ("flipped", flipped, Self.blue)] {
+        let less = encode(
+            1,
+            [
+                Draw(corners: left(0.25), colour: Self.red, state: state(.less), count: 1),
+                Draw(corners: all(0.75), colour: Self.green, state: state(.less), count: Self.farQuads),
+            ])
+        let reversed = encode(
+            0,
+            [
+                Draw(corners: left(0.75), colour: Self.red, state: state(.greater), count: 1),
+                Draw(corners: all(0.25), colour: Self.green, state: state(.greaterEqual), count: Self.farQuads),
+            ])
+        let flipped = encode(
+            1,
+            [
+                Draw(corners: left(0.25), colour: Self.red, state: state(.less), count: 1),
+                Draw(corners: all(0.75), colour: Self.green, state: state(.lessEqual), count: 1),
+                Draw(corners: all(0.5), colour: Self.blue, state: state(.greater), count: 1),
+            ])
+        for (label, pass, leftColour) in [
+            ("less", less, Self.red), ("reversed", reversed, Self.red),
+            ("flipped", flipped, Self.blue),
+        ] {
             paths.insert(try await gpu.run(pass).path)
             let raster = try await gpu.raster(target, .bgra8Unorm)
             var bad = 0

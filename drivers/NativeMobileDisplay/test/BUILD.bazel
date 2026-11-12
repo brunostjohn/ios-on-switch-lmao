@@ -151,7 +151,12 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchFrameTickets.h",
         "//drivers/TegraDisplayFlip:SwitchFrameTimeline.h",
     ],
-    copts = ["-UDEVELOPMENT", "-DDEVELOPMENT=0", "-UDEBUG", "-DDEBUG=0"],
+    copts = [
+        "-UDEVELOPMENT",
+        "-DDEVELOPMENT=0",
+        "-UDEBUG",
+        "-DDEBUG=0",
+    ],
 )
 
 host_test(
@@ -392,7 +397,6 @@ host_test(
     copts = ["-O1"],
 )
 
-
 host_test(
     name = "switch_scanout_start_test",
     srcs = [
@@ -471,7 +475,6 @@ host_test(
     ],
 )
 
-
 host_test(
     name = "switch_native_plane_test",
     srcs = [
@@ -487,10 +490,12 @@ host_test(
     ],
 )
 
-
 host_shims(
     name = "native_scanout_kernel",
-    headers = ["IOKit/IOTypes.h", "kern/task.h"],
+    headers = [
+        "IOKit/IOTypes.h",
+        "kern/task.h",
+    ],
     stubs = "switch_native_scanout_stubs.h",
 )
 
@@ -562,7 +567,6 @@ host_test(
     ],
 )
 
-
 host_test(
     name = "switch_source_wait_test",
     srcs = [
@@ -600,7 +604,6 @@ host_test(
     deps = [":native_scanout_kernel"],
 )
 
-
 host_test(
     name = "switch_composition_test",
     srcs = [
@@ -614,7 +617,6 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
 )
-
 
 host_test(
     name = "switch_composition_registers_test",
@@ -632,7 +634,6 @@ host_test(
     ],
 )
 
-
 host_test(
     name = "switch_display_retirement_test",
     srcs = [
@@ -641,7 +642,6 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchRetireDisplay.h",
     ],
 )
-
 
 host_test(
     name = "switch_plane_conversion_test",
@@ -904,7 +904,6 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
 )
-
 
 host_test(
     name = "switch_underflow_accounting_test",

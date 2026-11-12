@@ -8,6 +8,7 @@ struct Picture {
     uint64_t pages[2048] = {};
     TegraVICPicture source = {};
     TegraVICSurfaceDesc target = {};
+
     Picture(uint32_t sampleBytes = 1)
     {
         source.pages = pages;
@@ -21,7 +22,7 @@ struct Picture {
         source.width = 1920;
         source.height = 1080;
         source.sampleBytes = sampleBytes;
-        target.fourcc = sampleBytes == 1 ? TEGRA_VIC_FOURCC('4','2','0','v') : TEGRA_VIC_FOURCC('x','4','2','0');
+        target.fourcc = sampleBytes == 1 ? TEGRA_VIC_FOURCC('4', '2', '0', 'v') : TEGRA_VIC_FOURCC('x', '4', '2', '0');
         target.width = source.width;
         target.height = source.height;
         target.planes = 2;
@@ -93,7 +94,7 @@ TEST(SwitchVICPicture, P010PassThroughCopiesBytesWithoutQuantizingSamples)
     EXPECT_EQ(bytes.width, 3840u);
     EXPECT_EQ(bytes.pitch, 4096u);
     EXPECT_EQ(desc.planeOffset[1], image.target.planeOffset[1]);
-    EXPECT_EQ(desc.fourcc, TEGRA_VIC_FOURCC('4','2','0','v'));
+    EXPECT_EQ(desc.fourcc, TEGRA_VIC_FOURCC('4', '2', '0', 'v'));
     SwitchVICPlacement plan = {};
     ASSERT_EQ(switch_vic_picture_place(&bytes, &desc, &plan), nullptr);
     TegraVICImage src = {}, dst = {};

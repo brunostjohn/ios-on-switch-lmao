@@ -99,8 +99,8 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
             why = "a blended or channel-masked YCbCr code attachment";
         if (why) {
             SWITCH_REFUSE_DETAIL("raw", "state.ycbcr", format,
-                                 "a state of a format %u color attachment, left to m2v without a raw compile: %s", format,
-                                 why);
+                                 "a state of a format %u color attachment, left to m2v without a raw compile: %s",
+                                 format, why);
             RMPipeline *p = [RMPipeline new];
             p->_device = self;
             p.label = d.label;

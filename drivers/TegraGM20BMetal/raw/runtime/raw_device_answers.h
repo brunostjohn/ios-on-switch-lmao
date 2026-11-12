@@ -351,5 +351,4 @@ inline constexpr size_t kindIndex()
 static_assert(kindIndex() < std::size(kKinds), "no device answers for this kind (raw_device_answers.h)");
 inline constexpr const Kind &kThisKind = kKinds[kindIndex()];
 
-
 }  // namespace raw::answers

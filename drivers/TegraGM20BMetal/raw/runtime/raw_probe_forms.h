@@ -176,7 +176,7 @@ inline void probePassPrologue(Push &p, const ProbeForms &f, ProbeEngine before, 
         taken.switches++;
         if (f.switchForm != SwitchForm::None) {
             probe_forms_detail::barrier(p, switch_gm20b_invalidate_shader_caches_no_wfi,
-                uint32_t(SWITCH_GM20B_SHADER_DATA | SWITCH_GM20B_SHADER_CONSTANTS));
+                                        uint32_t(SWITCH_GM20B_SHADER_DATA | SWITCH_GM20B_SHADER_CONSTANTS));
             probe_forms_detail::barrier(p, switch_gm20b_invalidate_texture_data);
         }
         return;
@@ -208,7 +208,8 @@ inline void probeComputeOpening(Push &p, const ProbeForms &f, ProbeEngine before
                        dataNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
                        constantNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE);
     const bool first = before == ProbeEngine::None && f.entry != EntryForm::Today;
-    const bool switched = before != ProbeEngine::None && before != ProbeEngine::Compute && f.switchForm != SwitchForm::Today;
+    const bool switched =
+        before != ProbeEngine::None && before != ProbeEngine::Compute && f.switchForm != SwitchForm::Today;
     if (first) {
         taken.firsts++;
     } else if (switched) {

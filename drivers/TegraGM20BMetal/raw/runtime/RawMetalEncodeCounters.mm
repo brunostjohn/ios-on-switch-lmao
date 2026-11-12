@@ -5,15 +5,49 @@
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 namespace {
 
-constexpr const char *kPartNames[] = {
-    "resources", "loop", "state", "pass", "split_plan", "fusion", "pass_end", "draw", "prepare", "geometry",
-    "descriptors", "barriers", "split_launch", "blit", "compute", "tail", "commit", "prologues", "kernel", "exec",
-    "geometry_acquire", "geometry_release", "use", "uniforms", "bind", "variant", "pass_prologue", "apply", "textures",
-    "retire", "pass_begin"};
+constexpr const char *kPartNames[] = {"resources",
+                                      "loop",
+                                      "state",
+                                      "pass",
+                                      "split_plan",
+                                      "fusion",
+                                      "pass_end",
+                                      "draw",
+                                      "prepare",
+                                      "geometry",
+                                      "descriptors",
+                                      "barriers",
+                                      "split_launch",
+                                      "blit",
+                                      "compute",
+                                      "tail",
+                                      "commit",
+                                      "prologues",
+                                      "kernel",
+                                      "exec",
+                                      "geometry_acquire",
+                                      "geometry_release",
+                                      "use",
+                                      "uniforms",
+                                      "bind",
+                                      "variant",
+                                      "pass_prologue",
+                                      "apply",
+                                      "textures",
+                                      "retire",
+                                      "pass_begin"};
 static_assert(sizeof kPartNames / sizeof *kPartNames == raw::kEncodeParts);
 
-constexpr const char *kCountNames[] = {"mallocs", "frees", "locks", "sends", "applied", "uses", "use_adds",
-                                       "descriptor_builds", "descriptor_uploads", "geometry_vertices"};
+constexpr const char *kCountNames[] = {"mallocs",
+                                       "frees",
+                                       "locks",
+                                       "sends",
+                                       "applied",
+                                       "uses",
+                                       "use_adds",
+                                       "descriptor_builds",
+                                       "descriptor_uploads",
+                                       "geometry_vertices"};
 static_assert(sizeof kCountNames / sizeof *kCountNames == raw::kEncodeCounts);
 
 }  // namespace

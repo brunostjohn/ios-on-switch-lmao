@@ -72,6 +72,7 @@ void nested()
     check(totals.ticks[size_t(raw::EncodePart::Kernel)].load() == 11);
     check(totals.longestPrepare.load() == profile.longestPrepare);
 }
+
 // A part's self time leaves out the parts nested in it; counted events and locks land in the encoding thread's profile
 void selfTimesAndEvents()
 {

@@ -33,8 +33,7 @@ IOMemoryDescriptorReserved *SwitchMemoryAttachment::prepare(IOMemoryDescriptor *
     auto *made = IOMallocType(IOMemoryDescriptorReserved);
     if (!made)
         return nullptr;
-    if (__atomic_compare_exchange_n(&memory->reserved, &reserved, made, false,
-                                    __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+    if (__atomic_compare_exchange_n(&memory->reserved, &reserved, made, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
         return made;
     IOFreeType(made, IOMemoryDescriptorReserved);
     return reserved;
@@ -48,8 +47,8 @@ volatile uint64_t *SwitchMemoryAttachment::generation(IOMemoryDescriptor *memory
     if (!reserved)
         return nullptr;
     uint64_t expected = 0;
-    __atomic_compare_exchange_n(&reserved->switchGeneration, &expected, uint64_t(1), false,
-                                __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    __atomic_compare_exchange_n(&reserved->switchGeneration, &expected, uint64_t(1), false, __ATOMIC_RELEASE,
+                                __ATOMIC_RELAXED);
     return &reserved->switchGeneration;
 }
 

@@ -22,16 +22,34 @@ static bool compile(const NmbDirectKernel *kernel, void *context)
     const auto compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
     raw::SubgroupSize subgroup;
     subgroup.size = kernel->stage.subgroupSize;
-    raw::NvkStageInfo info = {kernel->stage.spirv, kernel->stage.spirvBytes, kernel->stage.entry,
-        kernel->stage.stage, kernel->stage.specialization, raw::handle(kernel->layout), 0, nullptr,
-        subgroup.size ? &subgroup : nullptr, false, false, 0, 0, {}, 0, kernel->stage.semantic,
-        kernel->stage.portableContext, kernel->stage.portable};
-    NSMutableDictionary *meta = [@{ @"regionWord": @(kernel->regionWord), @"pushMask": @(kernel->pushMask) } mutableCopy];
+    raw::NvkStageInfo info = {kernel->stage.spirv,
+                              kernel->stage.spirvBytes,
+                              kernel->stage.entry,
+                              kernel->stage.stage,
+                              kernel->stage.specialization,
+                              raw::handle(kernel->layout),
+                              0,
+                              nullptr,
+                              subgroup.size ? &subgroup : nullptr,
+                              false,
+                              false,
+                              0,
+                              0,
+                              {},
+                              0,
+                              kernel->stage.semantic,
+                              kernel->stage.portableContext,
+                              kernel->stage.portable};
+    NSMutableDictionary *meta =
+        [@{@"regionWord" : @(kernel->regionWord),
+           @"pushMask" : @(kernel->pushMask)} mutableCopy];
     NSMutableArray *push = [NSMutableArray new];
-    for (uint32_t word : kernel->push) [push addObject:@(word)];
+    for (uint32_t word : kernel->push)
+        [push addObject:@(word)];
     meta[@"push"] = push;
     for (const char *route : {"native", "portable"}) {
-        if (route[0] == 'p') info.semantic = nullptr;
+        if (route[0] == 'p')
+            info.semantic = nullptr;
         raw::NvkStage stage = {};
         fprintf(stderr, "compile %s_%u_%u %s\n", test.name, test.shape, test.mode, route);
         int result = raw::nvk::compileStage(compiler, raw::handle(kernel->device), info, stage);
@@ -40,19 +58,22 @@ static bool compile(const NmbDirectKernel *kernel, void *context)
             return false;
         }
         NSString *name = [NSString stringWithFormat:@"%s_%u_%u.%s.sass", test.name, test.shape, test.mode, route];
-        [[NSData dataWithBytes:stage.code length:stage.codeBytes]
-            writeToFile:[test.directory stringByAppendingPathComponent:name] atomically:YES];
+        [[NSData dataWithBytes:stage.code
+                        length:stage.codeBytes] writeToFile:[test.directory stringByAppendingPathComponent:name]
+                                                 atomically:YES];
         raw::nvk::stageFinish(compiler, raw::handle(kernel->device), stage);
     }
     NSString *name = [NSString stringWithFormat:@"%s_%u_%u.json", test.name, test.shape, test.mode];
-    [[NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingSortedKeys error:nil]
-        writeToFile:[test.directory stringByAppendingPathComponent:name] atomically:YES];
+    [[NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingSortedKeys
+                                       error:nil] writeToFile:[test.directory stringByAppendingPathComponent:name]
+                                                   atomically:YES];
     return kernel->regionWord >= 0;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 5) return 2;
+    if (argc != 5)
+        return 2;
     @autoreleasepool {
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0, nullptr);
@@ -64,8 +85,7 @@ int main(int argc, char **argv)
         }
         unsigned failures = 0;
         const uint32_t shapes[][3] = {
-            {8, 5, 3}, {3, 1, 1}, {8, 1, 3}, {3, 5, 1},
-            {3, 5, 3}, {8, 5, 1}, {3, 1, 3}, {8, 1, 1},
+            {8, 5, 3}, {3, 1, 1}, {8, 1, 3}, {3, 5, 1}, {3, 5, 3}, {8, 5, 1}, {3, 1, 3}, {8, 1, 1},
         };
         for (const char *name : {"semantic_edges", "semantic_edges_barrier"}) {
             for (unsigned shape = 0; shape < std::size(shapes); ++shape) {

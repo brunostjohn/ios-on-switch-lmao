@@ -13,9 +13,9 @@ inline bool switch_native_plane_planes(const native_planes::Layer &layer, const 
     const auto &luma = layout.planes[0], &chroma = layout.planes[1];
     if (luma.layout != SWITCH_GPU_BACKING_BLOCK_LINEAR || chroma.layout != SWITCH_GPU_BACKING_BLOCK_LINEAR ||
         luma.block_height_log2 > 5 || luma.block_height_log2 != chroma.block_height_log2 ||
-        luma.bytes_per_element != 1 || chroma.bytes_per_element != 2 ||
-        luma.width < layer.surface.width || luma.height < layer.surface.height ||
-        uint64_t(chroma.width) * 2 < layer.surface.width || uint64_t(chroma.height) * 2 < layer.surface.height)
+        luma.bytes_per_element != 1 || chroma.bytes_per_element != 2 || luma.width < layer.surface.width ||
+        luma.height < layer.surface.height || uint64_t(chroma.width) * 2 < layer.surface.width ||
+        uint64_t(chroma.height) * 2 < layer.surface.height)
         return false;
     uint64_t low = UINT64_MAX, high = 0;
     for (unsigned plane = 0; plane < 2; ++plane) {
@@ -27,8 +27,10 @@ inline bool switch_native_plane_planes(const native_planes::Layer &layer, const 
             p.offset > UINT64_MAX - p.bytes - 4095)
             return false;
         image.start[plane] = p.offset;
-        if (p.offset < low) low = p.offset;
-        if (p.offset + p.bytes > high) high = p.offset + p.bytes;
+        if (p.offset < low)
+            low = p.offset;
+        if (p.offset + p.bytes > high)
+            high = p.offset + p.bytes;
     }
     if (luma.offset + luma.bytes > chroma.offset && chroma.offset + chroma.bytes > luma.offset)
         return false;
@@ -82,7 +84,8 @@ inline bool switch_native_plane_offset_image(const native_planes::Layer &l, uint
 // offsets once V5a and V5c have passed.
 inline bool switch_native_plane_image(const native_planes::Layer &layer, uint32_t width, uint32_t height,
                                       const switch_gpu_backing_layout &layout, uint32_t cropX, uint32_t cropY,
-                                      native_planes::Image &image, const SwitchDisplayTraits &traits = kSwitchDisplayTraits)
+                                      native_planes::Image &image,
+                                      const SwitchDisplayTraits &traits = kSwitchDisplayTraits)
 {
     using namespace native_planes;
     if (!isNv12(layer.kind) || layout.format != layer.surface.format || layout.plane_count != 2 ||
@@ -90,8 +93,10 @@ inline bool switch_native_plane_image(const native_planes::Layer &layer, uint32_
         return false;
     Layer native = layer;
     native.surface.colorMatrix = layout.color_matrix;
-    native.surface.transfer = layout.transfer; native.surface.primaries = layout.primaries;
-    native.surface.chromaTop = layout.chroma_top; native.surface.chromaBottom = layout.chroma_bottom;
+    native.surface.transfer = layout.transfer;
+    native.surface.primaries = layout.primaries;
+    native.surface.chromaTop = layout.chroma_top;
+    native.surface.chromaBottom = layout.chroma_bottom;
     const bool whole = !cropX && !cropY && !layer.src.x && !layer.src.y &&
                        layer.src.w == int32_t(layer.surface.width) && layer.src.h == int32_t(layer.surface.height) &&
                        layer.dst.x >= 0 && layer.dst.y >= 0 && int64_t(layer.dst.x) + layer.dst.w <= width &&

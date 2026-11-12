@@ -1,10 +1,10 @@
-import Darwin
 import CoreVideo
+import Darwin
 import Foundation
 import HWTestCore
-import IOSurface
 import HWTestGPU
 import HWTestVideo
+import IOSurface
 import Metal
 import VideoToolbox
 
@@ -229,9 +229,10 @@ struct CpuCompletePathTest: GPUPathTest {
             throw TestFailure("aligned no-copy allocation failed")
         }
         memory.initializeMemory(as: UInt8.self, repeating: 0x11, count: length)
-        guard let buffer = gpu.device.makeBuffer(
-            bytesNoCopy: memory, length: length, options: .storageModeShared,
-            deallocator: { pointer, _ in free(pointer) })
+        guard
+            let buffer = gpu.device.makeBuffer(
+                bytesNoCopy: memory, length: length, options: .storageModeShared,
+                deallocator: { pointer, _ in free(pointer) })
         else {
             free(memory)
             throw TestFailure("no-copy buffer creation failed")
@@ -273,7 +274,8 @@ struct UseRangesPathTest: GPUPathTest {
                     blit.fill(buffer: buffer, range: 0..<length, value: UInt8(0x80 | index))
                     blit.endEncoding()
                 })
-            buffers[index + 1].contents().initializeMemory(as: UInt8.self, repeating: UInt8(0x40 | index), count: length)
+            buffers[index + 1].contents().initializeMemory(
+                as: UInt8.self, repeating: UInt8(0x40 | index), count: length)
         }
         try gpu.finish(committed)
         var wrong = 0
@@ -304,7 +306,8 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
         name: "Draws sample a decoded picture where the decoder put it, matching its CPU rows", codec: .h264)
     static let p010 = NativeSurfaceViewPathTest(
         id: "gpu.path.native_surface_view_p010",
-        name: "Draws sample a decoded Main 10 picture's 16-bit planes where the decoder put them, matching its CPU rows",
+        name:
+            "Draws sample a decoded Main 10 picture's 16-bit planes where the decoder put them, matching its CPU rows",
         codec: .hevc10)
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -324,9 +327,10 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
         var held: [CVMetalTexture] = []
         for (plane, shape) in planes.enumerated() {
             var texture: CVMetalTexture?
-            guard CVMetalTextureCacheCreateTextureFromImage(
-                nil, cache, frame, nil, shape.format, CVPixelBufferGetWidthOfPlane(frame, plane),
-                CVPixelBufferGetHeightOfPlane(frame, plane), plane, &texture) == kCVReturnSuccess,
+            guard
+                CVMetalTextureCacheCreateTextureFromImage(
+                    nil, cache, frame, nil, shape.format, CVPixelBufferGetWidthOfPlane(frame, plane),
+                    CVPixelBufferGetHeightOfPlane(frame, plane), plane, &texture) == kCVReturnSuccess,
                 let texture, let metal = CVMetalTextureGetTexture(texture)
             else { throw TestFailure("no Metal texture of plane \(plane)") }
             held.append(texture)
@@ -464,7 +468,9 @@ struct SharedEventsPathTest: GPUPathTest {
         var failures: [String] = []
         let waiterPath = RawFacade.path(of: waiter)
         metrics.set("waiter_path", waiterPath)
-        if waiterPath != "raw" && waiterPath != "device" { failures.append("the waiting command buffer went \(waiterPath)") }
+        if waiterPath != "raw" && waiterPath != "device" {
+            failures.append("the waiting command buffer went \(waiterPath)")
+        }
         if waiter.status != .completed { failures.append("the waiting command buffer ended \(waiter.status.rawValue)") }
         let wrong = UnsafeRawBufferPointer(start: target.contents(), count: length).filter { $0 != 0x3c }.count
         metrics.set("wrong_bytes", wrong)

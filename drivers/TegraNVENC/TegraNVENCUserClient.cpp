@@ -328,10 +328,11 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
             if (nativeWhy)
                 switch_refusal("TegraNVENC", nativeWhy, "the native picture goes through VIC: %s", nativeWhy);
             else if (direct == -11)
-                switch_refusal("TegraNVENC", "native picture not orderable",
-                               "the native picture goes through VIC: a GPU job still writes it, it changed since it was "
-                               "looked up, or more than %u engines wrote it",
-                               static_cast<unsigned>(TEGRA_NVENC_ORDER_WAITS));
+                switch_refusal(
+                    "TegraNVENC", "native picture not orderable",
+                    "the native picture goes through VIC: a GPU job still writes it, it changed since it was "
+                    "looked up, or more than %u engines wrote it",
+                    static_cast<unsigned>(TEGRA_NVENC_ORDER_WAITS));
             const int err = tegra_nvenc_source(submit, resolve, this, current_task(),
                                                submitted_ ? &lastFence_ : nullptr, &after, &route, &why);
             if (err) {

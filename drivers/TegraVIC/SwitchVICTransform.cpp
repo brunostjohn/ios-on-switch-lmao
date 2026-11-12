@@ -104,7 +104,8 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     TegraVICImage src = {}, dst = {};
     const char *why = tegra_vic_image_from(
         &destination->desc, switch_vic_mapping_address(work->mappings[1]) + work->access[1].offset, &dst);
-    if (chromaSite) dst.chromaSite = chromaSite;
+    if (chromaSite)
+        dst.chromaSite = chromaSite;
     if (!why && plan->readsSource) {
         const uint64_t address = switch_vic_mapping_address(work->mappings[0]);
         why = work->native.owner ? switch_native_vic_image(work->native, address, &src)

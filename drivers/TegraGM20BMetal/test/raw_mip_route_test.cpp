@@ -24,7 +24,9 @@ constexpr uint64_t kChainVa = 0x2000000000ull;
 std::vector<MipRun> runs(const MipChain &c, bool twod, bool threeD, bool *routed = nullptr)
 {
     std::vector<MipRun> out;
-    const bool ok = raw::fx::eachMipRun(c, twod, threeD, [&](const MipRun &r) { out.push_back(r); });
+    const bool ok = raw::fx::eachMipRun(c, twod, threeD, [&](const MipRun &r) {
+        out.push_back(r);
+    });
     if (routed)
         *routed = ok;
     return out;
@@ -98,6 +100,7 @@ TEST(MipRoute, TwoDFormatsAndTheirThreeDStates)
         bool threeD;
     } formats[] = {{80, 0xcf, false}, {70, 0xd5, false}, {115, 0xca, false}, {10, 0xf3, false},
                    {30, 0xea, false}, {81, 0xd0, true},  {71, 0xd6, true}};
+
     for (const auto &f : formats) {
         EXPECT_EQ(raw::fx::twodFormat(f.mtl), f.fmt2d) << f.mtl;
         EXPECT_EQ(raw::mipState(f.mtl) != nullptr, f.threeD) << f.mtl;
@@ -169,14 +172,15 @@ void checkRun(const MipChain &c, uint32_t first, uint32_t last)
         for (uint32_t l = 0; l < c.levels; l++) {
             const std::vector<uint8_t> got = level(mem, c, layer, l);
             if (l <= first || l > last) {
-                EXPECT_EQ(got, level(before, c, layer, l)) << "layer " << layer << " level " << l << " outside the run changed";
+                EXPECT_EQ(got, level(before, c, layer, l))
+                    << "layer " << layer << " level " << l << " outside the run changed";
                 continue;
             }
             const std::vector<uint8_t> above = level(mem, c, layer, l - 1);
             std::vector<uint8_t> want(got.size());
             raw::fx::referenceDownsample(above.data(), c.level[l - 1].width * c.bpp, c.level[l - 1].width,
-                                         c.level[l - 1].height, want.data(), c.level[l].width * c.bpp,
-                                         c.level[l].width, c.level[l].height, c.bpp);
+                                         c.level[l - 1].height, want.data(), c.level[l].width * c.bpp, c.level[l].width,
+                                         c.level[l].height, c.bpp);
             EXPECT_EQ(got, want) << "layer " << layer << " level " << l;
         }
 }

@@ -57,7 +57,11 @@ int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout
     return error;
 }
 
-enum class SnapshotWait { none, cpuWriters, cpuReader };
+enum class SnapshotWait {
+    none,
+    cpuWriters,
+    cpuReader
+};
 
 static int pitchSnapshot(OSObject *object, SwitchNativeScanout *scanout, SnapshotWait how)
 {

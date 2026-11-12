@@ -25,10 +25,12 @@ public:
 		    void *context, bool terminal = false);
 	int cancel(uint64_t handle, uint64_t cookie);
 	// The connection's fence page, as the kernel, the connection's GPU address space and the fence pool see it
-	void attachWords(volatile uint32_t *page, uint64_t gpu, uint64_t pool, void (*hold)(const volatile uint32_t *),
+	void attachWords(volatile uint32_t *page, uint64_t gpu, uint64_t pool,
+			 void (*hold)(const volatile uint32_t *),
 			 void (*put)(const volatile uint32_t *));
 	// TegraGM20BJobABI.h method 40
-	int word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base, uint32_t *floor);
+	int word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base,
+		 uint32_t *floor);
 	// The handle's word, retained, or null when method 40 never made it
 	switch_gpu_event_word *wordOf(uint64_t handle);
 
@@ -38,8 +40,10 @@ private:
 	struct Entry {
 		uint64_t handle;
 		switch_gpu_event *event;
-		switch_gpu_event_word *word;  // kept past the handle's release, for the slot's next handle
+		switch_gpu_event_word
+			*word;  // kept past the handle's release, for the slot's next handle
 	} entries_[kHandles] = {};
+
 	struct Words {
 		volatile uint32_t *page;
 		uint64_t gpu, pool;
@@ -119,5 +123,6 @@ private:
 	bool onWord_[TegraGM20BMaxJobEvents] = {};  // tokens_[i]'s wait acquires on a word instead
 	uint32_t eventCount_ = 0, signalCount_ = 0, tokenCount_ = 0, waitCount_ = 0, wordCount_ = 0;
 	bool released_ = false;
-	int release(SwitchGpuEventClient &client, uint64_t handle, uint32_t channel, uint32_t payload);
+	int release(SwitchGpuEventClient &client, uint64_t handle, uint32_t channel,
+		    uint32_t payload);
 };

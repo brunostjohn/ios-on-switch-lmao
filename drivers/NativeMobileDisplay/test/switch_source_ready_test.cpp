@@ -12,15 +12,15 @@
 
 using IOReturn = int;
 constexpr int kIOReturnSuccess = 0, kIOReturnAborted = -14;
-#define OSSafeReleaseNULL(object)                                                                                      \
-    do {                                                                                                               \
-        if (object)                                                                                                    \
-            (object)->release();                                                                                       \
-        (object) = nullptr;                                                                                            \
+#define OSSafeReleaseNULL(object) \
+    do {                          \
+        if (object)               \
+            (object)->release();  \
+        (object) = nullptr;       \
     } while (0)
-#define IOLog(...) (++logs)
-#define THREAD_UNINT 0
-#define THREAD_AWAKENED 0
+#define IOLog(...)           (++logs)
+#define THREAD_UNINT         0
+#define THREAD_AWAKENED      0
 #define THREAD_CONTINUE_NULL nullptr
 
 namespace {
@@ -40,6 +40,7 @@ public:
     OSObject *owner = nullptr;
     Action action = nullptr;
     unsigned fires = 0, released = 0;
+
     static IOInterruptEventSource *interruptEventSource(OSObject *owner, Action action)
     {
         auto *source = new IOInterruptEventSource;
@@ -47,18 +48,32 @@ public:
         source->action = action;
         return source;
     }
-    void interruptOccurred(void *, void *, int) { ++fires; }
-    void release() { ++released; }
-    void run() { action(owner, this, 0); }
+
+    void interruptOccurred(void *, void *, int)
+    {
+        ++fires;
+    }
+
+    void release()
+    {
+        ++released;
+    }
+
+    void run()
+    {
+        action(owner, this, 0);
+    }
 };
 
 struct IOWorkLoop {
     std::vector<IOInterruptEventSource *> sources;
+
     IOReturn addEventSource(IOInterruptEventSource *source)
     {
         sources.push_back(source);
         return kIOReturnSuccess;
     }
+
     void removeEventSource(IOInterruptEventSource *source)
     {
         for (auto at = sources.begin(); at != sources.end(); ++at) {
@@ -68,6 +83,7 @@ struct IOWorkLoop {
             }
         }
     }
+
     int runAction(int (*action)(OSObject *, void *, void *, void *, void *), OSObject *object)
     {
         return action(object, nullptr, nullptr, nullptr, nullptr);
@@ -81,6 +97,7 @@ struct switch_gpu_ready_watch {
     bool finished, cancelled, checking;
     unsigned references;
 };
+
 std::vector<switch_gpu_ready_watch *> watches;
 using switch_gpu_ready_query = int (*)(void *);
 using switch_gpu_ready_callback = void (*)(void *, int);
@@ -144,10 +161,21 @@ struct OriginalLegacySwapRequest {};
 
 struct NativeLegacyDisplay;
 NativeLegacyDisplay *blocked;
-void *current_thread() { return nullptr; }
-void assert_wait(void *, int) {}
-void clear_wait(void *, int) {}
-void thread_wakeup(void *) {}
+
+void *current_thread()
+{
+    return nullptr;
+}
+
+void assert_wait(void *, int)
+{}
+
+void clear_wait(void *, int)
+{}
+
+void thread_wakeup(void *)
+{}
+
 void thread_block(void *);
 
 struct NativeLegacyDisplay : OSObject {
@@ -157,6 +185,7 @@ struct NativeLegacyDisplay : OSObject {
         SwitchNativeScanout read;
         int status;
     };
+
     SourceWait storage = {};
     SourceWait *sourceWait = &storage;
     bool sourceWaitQueued = false, copyStopping = false;
@@ -165,12 +194,18 @@ struct NativeLegacyDisplay : OSObject {
     IOInterruptEventSource *copySource = &copyThread;
     std::vector<int> finished;
     std::function<void()> whileStopping;
-    IOWorkLoop *getWorkLoop() { return &loop; }
+
+    IOWorkLoop *getWorkLoop()
+    {
+        return &loop;
+    }
+
     void sourceWaitFinished()
     {
         sourceWaitQueued = false;
         finished.push_back(sourceWait->status);
     }
+
 #include "../SwitchSourceReadyDisplay.h"
 };
 
@@ -187,6 +222,7 @@ class SourceReady : public testing::Test {
 protected:
     NativeLegacyDisplay display;
     OSObject surface;
+
     void SetUp() override
     {
         logs = pitchCalls = blocks = 0;

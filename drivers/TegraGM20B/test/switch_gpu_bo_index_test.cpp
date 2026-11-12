@@ -6,7 +6,8 @@
 #include <vector>
 #include "../SwitchGpuBoIndex.h"
 
-namespace {
+namespace
+{
 struct Bo {
 	uint64_t handle;
 };
@@ -14,8 +15,7 @@ struct Bo {
 struct Memory {
 	static inline unsigned allocations, refusals;
 
-	template <typename T>
-	static T *allocate(uint32_t count)
+	template <typename T> static T *allocate(uint32_t count)
 	{
 		if (refusals) {
 			--refusals;
@@ -25,8 +25,7 @@ struct Memory {
 		return static_cast<T *>(malloc(sizeof(T) * count));
 	}
 
-	template <typename T>
-	static void release(T *items, uint32_t)
+	template <typename T> static void release(T *items, uint32_t)
 	{
 		free(items);
 	}

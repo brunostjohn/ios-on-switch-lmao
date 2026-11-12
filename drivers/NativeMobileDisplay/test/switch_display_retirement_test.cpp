@@ -5,15 +5,30 @@
 #include "../SwitchDisplayRetirement.h"
 
 namespace {
-struct OriginalLegacySwapRequest { uint64_t sequence; };
+struct OriginalLegacySwapRequest {
+    uint64_t sequence;
+};
+
 struct Display {
     static constexpr int kNoBuffer = -1;
-    struct Ring { int pending = -1, superseded = -1, held = -1; } ring;
-    struct PlaneSet { uint64_t seq = 0, pendingSeq = 0; } planeHeld, planeFencing;
+
+    struct Ring {
+        int pending = -1, superseded = -1, held = -1;
+    } ring;
+
+    struct PlaneSet {
+        uint64_t seq = 0, pendingSeq = 0;
+    } planeHeld, planeFencing;
+
     struct Latch {
         int armed = -1, superseded = -1;
-        bool requested() const { return armed >= 0; }
+
+        bool requested() const
+        {
+            return armed >= 0;
+        }
     } planeLatch;
+
     std::array<PlaneSet, 4> planes = {};
     std::array<uint64_t, 4> entryPendingSeq = {}, entrySeq = {};
     switch_display::Retirement scanoutRetirement;
@@ -24,9 +39,21 @@ struct Display {
     std::vector<uint64_t> retired;
     unsigned kicks = 0;
 
-    const PlaneSet &planeSetOf(int id) const { return planes.at(id); }
-    const OriginalLegacySwapRequest *pendingSwapRequest() const { return queue.empty() ? nullptr : &queue.front(); }
-    uint64_t seqOf(const OriginalLegacySwapRequest *request) const { return request->sequence; }
+    const PlaneSet &planeSetOf(int id) const
+    {
+        return planes.at(id);
+    }
+
+    const OriginalLegacySwapRequest *pendingSwapRequest() const
+    {
+        return queue.empty() ? nullptr : &queue.front();
+    }
+
+    uint64_t seqOf(const OriginalLegacySwapRequest *request) const
+    {
+        return request->sequence;
+    }
+
     bool retireSwap(const OriginalLegacySwapRequest *request, bool)
     {
         if (request != pendingSwapRequest())
@@ -35,16 +62,36 @@ struct Display {
         queue.erase(queue.begin());
         return true;
     }
-    void frameShown(uint64_t sequence, uint64_t at) { shown.push_back({sequence, at}); }
-    void kickSwapQueue() { ++kicks; }
+
+    void frameShown(uint64_t sequence, uint64_t at)
+    {
+        shown.push_back({sequence, at});
+    }
+
+    void kickSwapQueue()
+    {
+        ++kicks;
+    }
+
     bool planeRecovering = false, planesAbandoned = false;
     PlaneSet planeRecoveryTarget = {};
-    struct Probe { bool on = false; bool active() const { return on; } } probe, planeProbe;
+
+    struct Probe {
+        bool on = false;
+
+        bool active() const
+        {
+            return on;
+        }
+    } probe, planeProbe;
+
     bool kickDeferred = false, tapeSettle = false, probeRequest = false, hwSuspended = false, scanoutStopped = false;
+
     struct {
         bool wanted = false;
         PlaneSet held;
     } landscapeState;
+
 #include "../SwitchRetireDisplay.h"
 };
 
@@ -194,6 +241,7 @@ TEST(DisplayRetirement, DuplicateAndOutOfOrderNotificationsDoNotPublishAnotherFr
     EXPECT_EQ(display.shown.size(), 1u);
     EXPECT_EQ(display.kicks, 1u);
 }
+
 TEST(DisplayRetirement, RecoveryKeepsOriginalTicketUntilRestoredCompositionLatches)
 {
     Display display;
@@ -211,4 +259,4 @@ TEST(DisplayRetirement, RecoveryKeepsOriginalTicketUntilRestoredCompositionLatch
     display.retireThrough(3, 120);
     EXPECT_EQ(display.retired, (std::vector<uint64_t>{1, 2, 3}));
 }
-} // namespace
+}  // namespace

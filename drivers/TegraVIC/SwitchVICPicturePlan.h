@@ -33,8 +33,8 @@ inline const char *switch_vic_picture_planes(const TegraVICPicture *p, TegraVICS
 
 // A picture of 16-bit samples (P010 into 'x420'/'xf20') goes as an 8-bit one of twice the width: both layouts hold
 // the same bytes in the same places, and the 4:2:0 pass-through moves bytes untouched (kTegraVICTraits.blockLinearIn).
-inline const char *switch_vic_picture_bytes(const TegraVICPicture *wide, const TegraVICSurfaceDesc *d, TegraVICPicture *p,
-                     TegraVICSurfaceDesc *bytes)
+inline const char *switch_vic_picture_bytes(const TegraVICPicture *wide, const TegraVICSurfaceDesc *d,
+                                            TegraVICPicture *p, TegraVICSurfaceDesc *bytes)
 {
     *p = *wide;
     *bytes = *d;
@@ -67,7 +67,8 @@ struct SwitchVICPlacement {
     uint32_t pages[2];
 };
 
-inline const char *switch_vic_picture_place(const TegraVICPicture *p, const TegraVICSurfaceDesc *d, SwitchVICPlacement *pl)
+inline const char *switch_vic_picture_place(const TegraVICPicture *p, const TegraVICSurfaceDesc *d,
+                                            SwitchVICPlacement *pl)
 {
     const char *why = tegra_vic_image_from(d, 0, &pl->whole);
     if (why)
@@ -96,8 +97,8 @@ inline const char *switch_vic_picture_place(const TegraVICPicture *p, const Tegr
     for (uint32_t k = 0; k < pl->whole.format->planes; k++) {
         const uint32_t firstRow = k ? p->dstY / 2 : p->dstY;
         const uint32_t rows = k ? pl->height / 2 : pl->height;
-        if (p->dstX > pl->whole.pitch[k] || pl->width > pl->whole.pitch[k] - p->dstX ||
-            firstRow > pl->whole.rows[k] || rows > pl->whole.rows[k] - firstRow)
+        if (p->dstX > pl->whole.pitch[k] || pl->width > pl->whole.pitch[k] - p->dstX || firstRow > pl->whole.rows[k] ||
+            rows > pl->whole.rows[k] - firstRow)
             return "picture exceeds destination plane geometry";
         pl->band[k] =
             tegra_vic_band_420(d->planeOffset[k], pl->whole.pitch[k], k, p->dstX, p->dstY, pl->width, pl->height);
@@ -110,15 +111,16 @@ inline const char *switch_vic_picture_place(const TegraVICPicture *p, const Tegr
 
 // The source and destination keep their allocation mappings; plane bases select only the requested rectangle.
 // The source takes the destination's format and colour standard for a byte-preserving pass-through.
-inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVICPlacement &pl, uint64_t srcBase, uint64_t dstBase, TegraVICImage *src,
-              TegraVICImage *dst, TegraVICOp *op)
+inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVICPlacement &pl, uint64_t srcBase,
+                                        uint64_t dstBase, TegraVICImage *src, TegraVICImage *dst, TegraVICOp *op)
 {
     *dst = {};
     dst->format = pl.whole.format;
     dst->width = pl.width;
     dst->height = pl.height;
     dst->standard = pl.whole.standard;
-    dst->transfer = pl.whole.transfer; dst->primaries = pl.whole.primaries;
+    dst->transfer = pl.whole.transfer;
+    dst->primaries = pl.whole.primaries;
     dst->chromaSite = pl.whole.chromaSite;
     dst->lastRowExact = 1;
     const uint32_t planes = pl.whole.format->planes;
@@ -143,7 +145,8 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
         src->span[1] = p->chromaOffset < p->bytes ? p->bytes - p->chromaOffset : 0;
     }
     src->standard = pl.whole.standard;
-    src->transfer = pl.whole.transfer; src->primaries = pl.whole.primaries;
+    src->transfer = pl.whole.transfer;
+    src->primaries = pl.whole.primaries;
     src->chromaSite = pl.whole.chromaSite;
     src->blockLinear = 1;
     src->blockHeightLog2 = p->blockHeightLog2;
@@ -156,4 +159,3 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
     op->dstH = pl.height;
     op->nearest = 1;  // 1:1
 }
-

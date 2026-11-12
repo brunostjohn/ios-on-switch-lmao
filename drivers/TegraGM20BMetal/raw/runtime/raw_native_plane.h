@@ -5,12 +5,12 @@
 
 namespace raw {
 
-inline bool nativePlaneFits(const TegraGM20BAbiNativeSurfaceViewReply &view, uint32_t plane,
-                            uint32_t width, uint32_t height, uint32_t bpp)
+inline bool nativePlaneFits(const TegraGM20BAbiNativeSurfaceViewReply &view, uint32_t plane, uint32_t width,
+                            uint32_t height, uint32_t bpp)
 {
-    if (!view.handle || !bpp || (view.format != 0x34323076 && view.format != 0x34323066) ||
-        view.plane_count != 2 || plane >= 2 || !width || !height ||
-        view.crop_x || view.crop_y || (view.kind != 0 && view.kind != TGM_LAYOUT_KIND))
+    if (!view.handle || !bpp || (view.format != 0x34323076 && view.format != 0x34323066) || view.plane_count != 2 ||
+        plane >= 2 || !width || !height || view.crop_x || view.crop_y ||
+        (view.kind != 0 && view.kind != TGM_LAYOUT_KIND))
         return false;
     const auto &p = view.planes[plane];
     const uint32_t cropWidth = plane ? view.crop_width / 2 + (view.crop_width & 1) : view.crop_width;

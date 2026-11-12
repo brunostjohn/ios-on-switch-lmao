@@ -6,7 +6,8 @@
 #include "../SwitchGpuJobTiming.h"
 #include "../SwitchGpuProfileSequence.h"
 
-namespace {
+namespace
+{
 // One job of `us` batches, the stamps in microseconds (as PTIMER units read as nanoseconds times 1000)
 void job(switch_gpu_job_window &w, uint32_t first, const std::vector<uint64_t> &us)
 {
@@ -48,8 +49,10 @@ TEST(SwitchGpuJobTiming, AJobIsItsBatchesAndTheSlowestIsListed)
 	EXPECT_EQ(taken.jobs, 2u);
 	EXPECT_EQ(taken.batches, 5u);
 	EXPECT_EQ(taken.max_ns, 2310000u);
-	EXPECT_EQ(line(taken), "backboardd: 2 jobs, 5 batches (2.5 a job), GPU mean 1195 max 2310 us a job; batches by "
-			       "GPU time: <25us 1 (10 us) <50us 2 (80 us) <400us 1 (300 us) >=1600us 1 (2000 us); slowest "
+	EXPECT_EQ(line(taken), "backboardd: 2 jobs, 5 batches (2.5 a job), GPU mean 1195 max 2310 "
+			       "us a job; batches by "
+			       "GPU time: <25us 1 (10 us) <50us 2 (80 us) <400us 1 (300 us) "
+			       ">=1600us 1 (2000 us); slowest "
 			       "seqno 100-102, 2310 us: 10 300 2000");
 	switch_gpu_job_window next{};
 	switch_gpu_job_take(&w, &next);

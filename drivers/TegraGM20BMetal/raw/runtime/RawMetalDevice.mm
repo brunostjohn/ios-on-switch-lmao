@@ -296,7 +296,8 @@
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     if (!gRM->raw->surfaceGpuWrites(IOSurfaceGetID(s)))
-        os_log_error(rawLog(), "raw: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
+        os_log_error(rawLog(),
+                     "raw: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
                      IOSurfaceGetID(s));
     return (id<MTLBuffer>)b;
 }
@@ -331,13 +332,15 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     const uint64_t bytes = t->_raw.chain ? t->_raw.chain->layout.bytes : t->_raw.span.bytes;
     if (!component || !memory || !(d.usage & MTLTextureUsageRenderTarget))
         return;
-    const uint32_t found = raw::sampledNonFinite(memory, bytes, component, 1024,
-                                                 [](const uint8_t *line) { cacheLines(line, 64, true); });
+    const uint32_t found = raw::sampledNonFinite(memory, bytes, component, 1024, [](const uint8_t *line) {
+        cacheLines(line, 64, true);
+    });
     static std::atomic<uint32_t> seen{0};
     const uint32_t n = found ? seen.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
     if (found && (n <= 32 || n % 64 == 0))
-        os_log(rawLog(), "raw: new %lux%lu format %lu texture (%lu levels, %llu bytes) starts on non-finite values: %u "
-                         "components in its sampled lines (#%u)",
+        os_log(rawLog(),
+               "raw: new %lux%lu format %lu texture (%lu levels, %llu bytes) starts on non-finite values: %u "
+               "components in its sampled lines (#%u)",
                (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
                (unsigned long)d.mipmapLevelCount, (unsigned long long)bytes, found, n);
 }
@@ -557,8 +560,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
             makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
-    } else if (raw::SurfaceImage image;
-               (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
+    } else if (raw::SurfaceImage image; (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
         // a shared texture in the device's layout of its descriptor (RawMetalSharedTextures.mm): a surface of no rows
         t->_rawOk = gRM->raw->createSurfaceImage(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s),
                                                  IOSurfaceGetAllocSize(s), s, image, uint32_t(d.width),

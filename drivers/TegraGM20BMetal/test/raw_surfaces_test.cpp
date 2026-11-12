@@ -68,7 +68,7 @@ TEST(RawSurfaces, GeometryReadChecksTheWholeBackingAndAddressNamespace)
     raw::SurfaceList uses;
     uses.addAddress(0x100040, 64, false);
     EXPECT_FALSE(uses.writesBacking(7, 0x100000, 0x1000));
-    uses.addAddress(0x100800, 64, true); // a different pooled resource, same backing
+    uses.addAddress(0x100800, 64, true);  // a different pooled resource, same backing
     EXPECT_TRUE(uses.writesBacking(7, 0x100000, 0x1000));
     EXPECT_FALSE(uses.writesBacking(0x100800, 0x200000, 0x1000));
     uses.add(9, true);

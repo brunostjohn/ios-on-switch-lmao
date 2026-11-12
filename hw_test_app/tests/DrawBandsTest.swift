@@ -96,7 +96,9 @@ struct DrawBandsTest: HWTest {
             let identical = banded.bytes == whole.bytes
             metrics.set("identical_" + test.name, identical)
             if !identical { failures.append("\(test.name): banded pixels differ from the whole draw's") }
-            if banded.bands < 2 * Self.draws { failures.append("\(test.name): \(banded.bands) bands for \(Self.draws) draws") }
+            if banded.bands < 2 * Self.draws {
+                failures.append("\(test.name): \(banded.bands) bands for \(Self.draws) draws")
+            }
             if whole.bands != 0 { failures.append("\(test.name): \(whole.bands) bands with the budget at 0") }
             if test.name == "fetch" && banded.interlocked == 0 {
                 failures.append("fetch: no draw ran interlocked, so its identity says nothing of the interlock")
@@ -126,14 +128,19 @@ struct DrawBandsTest: HWTest {
                 for key in ["sync_subs", "behind", "behind_sync_us", "sync_max_us"] {
                     metrics.set(key + arm, sync.counts[key] ?? 0)
                 }
-                if arm.isEmpty && (sync.counts["behind"] ?? 0) > 0 && (sync.counts["sync_max_us"] ?? 0) > Self.waitBoundUs {
-                    failures.append("a compositor submission's sync push waited \(sync.counts["sync_max_us"] ?? 0) us for GR")
+                if arm.isEmpty && (sync.counts["behind"] ?? 0) > 0
+                    && (sync.counts["sync_max_us"] ?? 0) > Self.waitBoundUs
+                {
+                    failures.append(
+                        "a compositor submission's sync push waited \(sync.counts["sync_max_us"] ?? 0) us for GR")
                 }
             }
             for key in Self.preemptKeys { metrics.set(key + arm, after.counts[key] ?? 0) }
             if arm.isEmpty {
                 if samples == 0 { failures.append("no compositor kick met a banded draw in \(Self.kickSeconds) s") }
-                if maxUs > Self.waitBoundUs { failures.append("the compositor waited \(maxUs) us behind a banded draw") }
+                if maxUs > Self.waitBoundUs {
+                    failures.append("the compositor waited \(maxUs) us behind a banded draw")
+                }
                 if samples > 0 && (after.counts["preempt_mid_job"] ?? 0) == 0 {
                     failures.append("no preempt landed at a band's release inside a job")
                 }

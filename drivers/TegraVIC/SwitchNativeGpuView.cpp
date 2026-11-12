@@ -20,8 +20,10 @@ int pitchView(const TegraVICSurface &surface, switch_gpu_native_surface_view *ou
     layout.format = desc.fourcc;
     layout.plane_count = 2;
     layout.color_matrix = desc.colorMatrix;
-    layout.transfer = desc.transfer; layout.primaries = desc.primaries;
-    layout.chroma_top = desc.chromaTop; layout.chroma_bottom = desc.chromaBottom;
+    layout.transfer = desc.transfer;
+    layout.primaries = desc.primaries;
+    layout.chroma_top = desc.chromaTop;
+    layout.chroma_bottom = desc.chromaBottom;
     layout.color_range = desc.fourcc == 0x34323066 ? 2 : 1;
     for (unsigned p = 0; p < 2; ++p) {
         const uint32_t width = p ? desc.width / 2 + (desc.width & 1) : desc.width;
@@ -35,22 +37,27 @@ int pitchView(const TegraVICSurface &surface, switch_gpu_native_surface_view *ou
         const uint64_t bytes = desc.planeBytesPerRow[p] * desc.planeHeight[p];
         const uint64_t offset = desc.planeOffset[p];
         if (desc.planeWidth[p] < width || desc.planeHeight[p] < height ||
-            uint64_t(desc.planeWidth[p]) * sample > desc.planeBytesPerRow[p] ||
-            offset > desc.length || bytes > desc.length - offset ||
-            offset > UINT64_MAX - access.offset) {
+            uint64_t(desc.planeWidth[p]) * sample > desc.planeBytesPerRow[p] || offset > desc.length ||
+            bytes > desc.length - offset || offset > UINT64_MAX - access.offset) {
             error = -22;
             break;
         }
-        layout.planes[p] = {offset + access.offset, bytes, uint32_t(desc.planeWidth[p]), uint32_t(desc.planeHeight[p]),
-                            uint32_t(desc.planeBytesPerRow[p]), sample, SWITCH_GPU_BACKING_PITCH, 0};
+        layout.planes[p] = {offset + access.offset,
+                            bytes,
+                            uint32_t(desc.planeWidth[p]),
+                            uint32_t(desc.planeHeight[p]),
+                            uint32_t(desc.planeBytesPerRow[p]),
+                            sample,
+                            SWITCH_GPU_BACKING_PITCH,
+                            0};
     }
     if (!error && layout.planes[0].offset + layout.planes[0].bytes > layout.planes[1].offset)
         error = -22;
     if (!error) {
         surface.memory->retain();
         switch_gpu_backing_retain(access.backing);
-        *out = {nullptr, surface.memory, access.backing, access.backing, {}, access.guard, {}, layout,
-                0, 0, desc.width, desc.height};
+        *out = {nullptr, surface.memory, access.backing, access.backing, {}, access.guard, {}, layout, 0,
+                0,       desc.width,     desc.height};
         access.backing = nullptr;
     }
     switch_vic_surface_release_access(&access);
@@ -72,8 +79,8 @@ extern "C" int switch_native_surface_gpu_acquire(void *object, switch_gpu_native
     if (error == -2 || error == -95 || error == SWITCH_GPU_BACKING_STALE) {
         error = pitchView(surface, out);
     } else if (!error) {
-        *out = {view.owner, view.descriptor, view.logical, view.native, view.guard, view.representation,
-                view.producer, view.layout, view.crop.x, view.crop.y, view.crop.width, view.crop.height};
+        *out = {view.owner,    view.descriptor, view.logical, view.native, view.guard,      view.representation,
+                view.producer, view.layout,     view.crop.x,  view.crop.y, view.crop.width, view.crop.height};
     }
     tegra_vic_surface_release(&surface);
     return error;

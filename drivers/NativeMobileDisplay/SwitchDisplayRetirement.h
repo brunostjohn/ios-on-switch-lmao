@@ -34,4 +34,4 @@ private:
     RetiredFrame pending;
     uint64_t retired = 0;
 };
-} // namespace switch_display
+}  // namespace switch_display

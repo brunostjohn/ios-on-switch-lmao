@@ -139,23 +139,50 @@ extern "C" void switch_gpu_backing_arm_expiry(uint64_t deadline)
 
 extern "C" {
 struct tgm_coh;
-tgm_coh *tgm_coh_find_pa(uint64_t) { return nullptr; }
-void tgm_views_sweep(tgm_coh *) {}
-void tgm_views_deferred_lock(uint32_t, uint32_t) {}
-void tgm_coherency_put(tgm_coh *) {}
-int tegra_gm20b_surface_tiled(uint64_t) { return 0; }
-int switch_gpu_surface_prepare(uint32_t, void *, uint32_t, switch_gpu_backing **out,
-        switch_gpu_cpu_lease **owned, void **descriptor)
-{
-    *out = nullptr;
-    *owned = nullptr;
-    *descriptor = nullptr;
-    return 0;
-}
-void switch_gpu_surface_finish(void *) {}
-uint32_t switch_gpu_surface_users(void *) { return 0; }
-void switch_gpu_surface_descriptor_hold(void *, int) {}
 
+tgm_coh *tgm_coh_find_pa(uint64_t)
+{
+	return nullptr;
+}
+
+void tgm_views_sweep(tgm_coh *)
+{
+}
+
+void tgm_views_deferred_lock(uint32_t, uint32_t)
+{
+}
+
+void tgm_coherency_put(tgm_coh *)
+{
+}
+
+int tegra_gm20b_surface_tiled(uint64_t)
+{
+	return 0;
+}
+
+int switch_gpu_surface_prepare(uint32_t, void *, uint32_t, switch_gpu_backing **out,
+			       switch_gpu_cpu_lease **owned, void **descriptor)
+{
+	*out = nullptr;
+	*owned = nullptr;
+	*descriptor = nullptr;
+	return 0;
+}
+
+void switch_gpu_surface_finish(void *)
+{
+}
+
+uint32_t switch_gpu_surface_users(void *)
+{
+	return 0;
+}
+
+void switch_gpu_surface_descriptor_hold(void *, int)
+{
+}
 }
 
 extern "C" void switch_gpu_backing_cache(const uint64_t *, uint32_t, uint64_t, uint64_t, int)

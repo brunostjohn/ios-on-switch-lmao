@@ -12,6 +12,7 @@ namespace raw {
 struct alignas(16) SplitBatchRecord {
     uint32_t push[32] = {};
     uint64_t frontier = 0, reserved = 0;
+
     struct Buffer {
         uint64_t va = 0;
         uint32_t bytes = 0, reserved = 0;
@@ -33,14 +34,26 @@ struct SplitBatchKey {
     uint64_t data = 0;
     uint32_t dataBytes = 0, threads = 0;
 
-    auto identity() const { return std::tie(program, data, dataBytes, threads); }
-    bool operator<(const SplitBatchKey &other) const { return identity() < other.identity(); }
-    bool operator==(const SplitBatchKey &other) const { return identity() == other.identity(); }
+    auto identity() const
+    {
+        return std::tie(program, data, dataBytes, threads);
+    }
+
+    bool operator<(const SplitBatchKey &other) const
+    {
+        return identity() < other.identity();
+    }
+
+    bool operator==(const SplitBatchKey &other) const
+    {
+        return identity() == other.identity();
+    }
 };
 
 class SplitBatchPlanner {
 public:
     static constexpr uint32_t kEnd = ~0u, kMaxRecords = 1024;
+
     struct Run {
         SplitBatchKey key;
         uint32_t first = kEnd, last = kEnd, count = 0;
@@ -73,8 +86,15 @@ public:
         last_ = run;
     }
 
-    const std::vector<Run> &runs() const { return runs_; }
-    uint32_t next(uint32_t record) const { return next_[record]; }
+    const std::vector<Run> &runs() const
+    {
+        return runs_;
+    }
+
+    uint32_t next(uint32_t record) const
+    {
+        return next_[record];
+    }
 
 private:
     std::vector<Run> runs_;

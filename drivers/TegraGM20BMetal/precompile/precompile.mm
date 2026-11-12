@@ -77,7 +77,10 @@ static Outcome renderState(const std::string &line, std::string &file, std::stri
     if (outcome != Made)
         return outcome;
     NSError *error = nil;
-    if (![gDevice newRenderPipelineStateWithDescriptor:input.descriptor options:input.options reflection:nil error:&error]) {
+    if (![gDevice newRenderPipelineStateWithDescriptor:input.descriptor
+                                               options:input.options
+                                            reflection:nil
+                                                 error:&error]) {
         *why = error;
         fprintf(stderr, "render state %s: %s\n", label.c_str(), error.localizedDescription.UTF8String);
         return Refused;
@@ -97,9 +100,15 @@ static Outcome computeState(const std::string &line, std::string &file, std::str
     if (outcome != Made)
         return outcome;
     NSError *error = nil;
-    id<MTLComputePipelineState> state = input.descriptorForm
-        ? [gDevice newComputePipelineStateWithDescriptor:input.descriptor options:input.options reflection:nil error:&error]
-        : [gDevice newComputePipelineStateWithFunction:input.descriptor.computeFunction options:input.options reflection:nil error:&error];
+    id<MTLComputePipelineState> state =
+        input.descriptorForm ? [gDevice newComputePipelineStateWithDescriptor:input.descriptor
+                                                                      options:input.options
+                                                                   reflection:nil
+                                                                        error:&error]
+                             : [gDevice newComputePipelineStateWithFunction:input.descriptor.computeFunction
+                                                                    options:input.options
+                                                                 reflection:nil
+                                                                      error:&error];
     if (!state) {
         fprintf(stderr, "compute state %s %s: %s\n", input.kernel.name.c_str(), label.c_str(),
                 error.localizedDescription.UTF8String);

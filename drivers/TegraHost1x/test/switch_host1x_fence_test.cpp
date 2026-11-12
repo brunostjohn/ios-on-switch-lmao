@@ -185,7 +185,9 @@ TEST_F(Host1xFence, AWaiterEndsByTheInterruptAndLeavesTheOtherFencesOfItsSyncpoi
 TEST_F(Host1xFence, AWaitTheEngineNeverFinishesTimesOutAndDisarms)
 {
     value(167) = 0;
-    switch_test_sleep = [](uint64_t) { return THREAD_TIMED_OUT; };
+    switch_test_sleep = [](uint64_t) {
+        return THREAD_TIMED_OUT;
+    };
     EXPECT_EQ(tegra_host1x_syncpt_wait(167, 1, 1000), TEGRA_HOST1X_ETIMEDOUT);
     EXPECT_EQ(reg(0xf00 + 4 * (167 / 32)) & (1u << (167 % 32)), 1u << (167 % 32));
 }

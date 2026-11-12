@@ -62,8 +62,8 @@ bool sharedEventWord(id event, uint64_t value, uint64_t inlineStamp, uint64_t &a
     const uint64_t generation = gRM->raw->channelGeneration();
     const bool encoding = b->wordStamp == inlineStamp;
     uint32_t p = b->wordGeneration == generation
-        ? raw::eventReleasePayload(value, b->wordBase, encoding ? b->wordPending : b->wordFloor)
-        : 0;
+                     ? raw::eventReleasePayload(value, b->wordBase, encoding ? b->wordPending : b->wordFloor)
+                     : 0;
     if (!p && !encoding && (b->wordGeneration != generation || value - b->wordBase >= (uint64_t(1) << 31))) {
         uint64_t base = 0;
         uint32_t floor = 0;
@@ -93,8 +93,9 @@ bool sharedEventWord(id event, uint64_t value, uint64_t inlineStamp, uint64_t &a
 static void eventFailure(RMCommandBuffer *cb, NSString *message)
 {
     std::lock_guard<raw::Mutex> lock(cb->_lock);
-    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal
-                                   userInfo:@{NSLocalizedDescriptionKey: message}];
+    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                        code:MTLCommandBufferErrorInternal
+                                    userInfo:@{NSLocalizedDescriptionKey : message}];
 }
 
 int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool native)
@@ -106,8 +107,9 @@ int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool nat
         return -1;
     auto lease = binding->lease;
     // This is only a readiness hint. Atomic submit still resolves the authoritative producer and its failure state.
-    const int result = binding->submittedValue.load(std::memory_order_acquire) >= value ? KERN_SUCCESS :
-                       gRM->sharedEvents->probe(*lease, value);
+    const int result = binding->submittedValue.load(std::memory_order_acquire) >= value
+                           ? KERN_SUCCESS
+                           : gRM->sharedEvents->probe(*lease, value);
     if (result == KERN_SUCCESS) {
         cb->_sharedEventWaits.push_back({(__bridge void *)event, std::move(lease), value});
         return 1;
@@ -119,9 +121,12 @@ int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool nat
     if (!cb->_sharedEventWatch) {
         RMQueue *queue = cb->_queue;
         int armed = KERN_SUCCESS;
-        cb->_sharedEventWatch = gRM->sharedEvents->observe(std::move(lease), value, [queue](int) {
-            wakeSubmit((__bridge void *)queue);
-        }, armed);
+        cb->_sharedEventWatch = gRM->sharedEvents->observe(
+            std::move(lease), value,
+            [queue](int) {
+                wakeSubmit((__bridge void *)queue);
+            },
+            armed);
         if (!cb->_sharedEventWatch) {
             eventFailure(cb, @"Shared-event producer notification could not be armed");
             return 1;
@@ -138,9 +143,12 @@ bool sharedWaitsReady(RMCommandBuffer *cb, bool native)
         if (!wait.completion) {
             RMQueue *queue = cb->_queue;
             int armed = KERN_SUCCESS;
-            wait.completion = gRM->sharedEvents->completion(wait.lease, wait.value, [queue] {
-                wakeSubmit((__bridge void *)queue);
-            }, armed);
+            wait.completion = gRM->sharedEvents->completion(
+                wait.lease, wait.value,
+                [queue] {
+                    wakeSubmit((__bridge void *)queue);
+                },
+                armed);
             if (!wait.completion) {
                 eventFailure(cb, @"Shared-event completion notification could not be armed");
                 return true;
@@ -192,8 +200,8 @@ void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands)
 static void submittedUpTo(SwitchSharedEventBinding *binding, uint64_t value)
 {
     uint64_t old = binding->submittedValue.load(std::memory_order_relaxed);
-    while (old < value &&
-           !binding->submittedValue.compare_exchange_weak(old, value, std::memory_order_release, std::memory_order_relaxed)) {
+    while (old < value && !binding->submittedValue.compare_exchange_weak(old, value, std::memory_order_release,
+                                                                         std::memory_order_relaxed)) {
     }
 }
 

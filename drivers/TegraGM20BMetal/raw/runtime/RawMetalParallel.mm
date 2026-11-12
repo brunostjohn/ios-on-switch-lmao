@@ -5,7 +5,6 @@
 #import "RawMetalCounters.h"
 #include "raw_parallel.h"
 
-
 // A sub-encoder's command buffer: never committed. It keeps each command with the extra words its own record: drops. (Its
 // encoder holds it: weak the other way.)
 @interface RMSubRecorder : RMCommandBuffer {
@@ -36,7 +35,7 @@ static void seam(RMSubRecorder *s, MTLRenderPassDescriptor *parallel, size_t at,
         pass.color[j].store = store;
     }
     MTLRenderPassAttachmentDescriptor *aspects[2][2] = {{own.depthAttachment, parallel.depthAttachment},
-                                                         {own.stencilAttachment, parallel.stencilAttachment}};
+                                                        {own.stencilAttachment, parallel.stencilAttachment}};
     for (auto &[mine, theirs] : aspects)
         if (mine.texture) {
             mine.loadAction = MTLLoadAction(raw::seamLoad(uint8_t(theirs.loadAction), at));
@@ -170,7 +169,9 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
         begins.push_back(cb->_plan.size());
         splice(cb, subs[at], refused);
     }
-    if (!refused && std::any_of(begins.begin(), begins.end(), [&](size_t b) { return cb->_plan.begin(b).refused; }))
+    if (!refused && std::any_of(begins.begin(), begins.end(), [&](size_t b) {
+            return cb->_plan.begin(b).refused;
+        }))
         for (size_t b : begins)
             cb->_plan.setRefused(b, true);
     rmPlaceCounterMarks(cb, self, begins.front(), true);

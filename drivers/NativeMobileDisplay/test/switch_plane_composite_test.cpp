@@ -329,9 +329,16 @@ struct NativeLegacyDisplay : OSObject {
 
 #include "../SwitchLandscapeState.h"
 
-    bool landscapeHolds(PlaneSet &) { return false; }
-    void landscapeLeaveNow(const char *) {}
-    void landscapeAbandonWant() {}
+    bool landscapeHolds(PlaneSet &)
+    {
+        return false;
+    }
+
+    void landscapeLeaveNow(const char *)
+    {}
+
+    void landscapeAbandonWant()
+    {}
 
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"

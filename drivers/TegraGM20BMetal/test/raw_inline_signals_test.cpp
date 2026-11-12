@@ -61,8 +61,8 @@ TEST(RawInlineSignals, AReleaseAfterHostVisibleWritesIsTheKernelsExternalFenceIn
     EXPECT_EQ(words[13], NVB06F_SEMAPHORED_OPERATION_RELEASE | NVB06F_SEMAPHORED_RELEASE_SIZE_4BYTE << 24);
     EXPECT_EQ(words[14], Push::hdr(1, 0, NVB06F_NON_STALL_INTERRUPT, 1));
     const std::string fence = Body(SourceText("../../TegraGM20B/gpu_exec.c"), "static u32 chan_fence_job(");
-    for (const char *step : {"NVB06F_WFI", "NVB06F_FB_FLUSH", "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
-                             "NON_STALL_INTERRUPT"})
+    for (const char *step :
+         {"NVB06F_WFI", "NVB06F_FB_FLUSH", "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NON_STALL_INTERRUPT"})
         EXPECT_THAT(fence, HasSubstr(step));
 }
 

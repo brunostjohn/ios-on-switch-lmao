@@ -26,7 +26,8 @@ public:
 
 	// Method 17's record, apart from its channel: well formed, with `count` uses.
 	static bool valid(const TegraGM20BAbiExecSurfaces *in);
-	static bool validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes, bool addressed = false);
+	static bool validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes,
+				bool addressed = false);
 	// The list for slot's channel's next Exec. False: no memory.
 	bool set(uint32_t slot, const TegraGM20BAbiExecSurfaces *in);
 	bool set(uint32_t slot, const TegraGM20BAbiSurfaceUse *uses, uint32_t count,

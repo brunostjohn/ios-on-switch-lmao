@@ -386,14 +386,20 @@ host_library(
 
 host_test(
     name = "switch_video_color_test",
-    srcs = ["switch_video_color_test.cpp", "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h"],
+    srcs = [
+        "switch_video_color_test.cpp",
+        "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
+    ],
     linkopts = FRAMEWORKS,
 )
 
 host_test(
     name = "switch_video_vui_test",
     srcs = ["switch_video_vui_test.cpp"],
-    deps = [":h264", ":hevc"],
+    deps = [
+        ":h264",
+        ":hevc",
+    ],
 )
 
 host_test(

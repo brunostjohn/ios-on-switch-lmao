@@ -17,12 +17,19 @@ static NSDictionary *metrics(const raw::NvkStage &stage)
         native_bridge_metal_nvk_symbol("switch_nvk_stage_metrics"));
     raw::NvkStageMetrics m = {};
     if (!read || !read(&stage, &m, sizeof(m)) || m.version != 1)
-        return @{ @"error": @"stage metrics unavailable" };
-    return @{ @"codeBytes": @(m.codeBytes), @"instructions": @(m.instructions), @"gprs": @(m.gprs),
-              @"maxWarps": @(m.maxWarps), @"scratchBytes": @(m.scratchBytes),
-              @"memorySpills": @(m.memorySpills), @"memoryFills": @(m.memoryFills),
-              @"registerSpills": @(m.registerSpills), @"registerFills": @(m.registerFills),
-              @"staticCycles": @(m.staticCycles) };
+        return @{@"error" : @"stage metrics unavailable"};
+    return @{
+        @"codeBytes" : @(m.codeBytes),
+        @"instructions" : @(m.instructions),
+        @"gprs" : @(m.gprs),
+        @"maxWarps" : @(m.maxWarps),
+        @"scratchBytes" : @(m.scratchBytes),
+        @"memorySpills" : @(m.memorySpills),
+        @"memoryFills" : @(m.memoryFills),
+        @"registerSpills" : @(m.registerSpills),
+        @"registerFills" : @(m.registerFills),
+        @"staticCycles" : @(m.staticCycles)
+    };
 }
 
 static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_t layout)
@@ -59,10 +66,14 @@ static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_
     } mutableCopy];
     NSString *artifact = nil;
     if (const char *directory = getenv("SWITCH_IR_DUMP")) {
-        [[NSFileManager defaultManager] createDirectoryAtPath:@(directory) withIntermediateDirectories:YES
-                                                  attributes:nil error:nil];
-        artifact = [@(directory) stringByAppendingPathComponent:[NSString stringWithFormat:@"stage-%04u", artifactIndex++]];
-        [[NSData dataWithBytes:words length:bytes] writeToFile:[artifact stringByAppendingString:@".spv"] atomically:YES];
+        [[NSFileManager defaultManager] createDirectoryAtPath:@(directory)
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        artifact =
+            [@(directory) stringByAppendingPathComponent:[NSString stringWithFormat:@"stage-%04u", artifactIndex++]];
+        [[NSData dataWithBytes:words length:bytes] writeToFile:[artifact stringByAppendingString:@".spv"]
+                                                    atomically:YES];
         out[@"artifact"] = artifact;
         if (stage.semantic) {
             const auto &p = *static_cast<const switch_nvk_ir *>(stage.semantic);
@@ -77,9 +88,24 @@ static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_
         raw::DirectNvk compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
         raw::SubgroupSize subgroup;
         subgroup.size = stage.subgroupSize;
-        raw::NvkStageInfo info = {words, bytes, stage.entry, stage.stage, stage.specialization,
-            raw::handle(layout), 0, nullptr, subgroup.size ? &subgroup : nullptr,
-            false, false, 0, 0, {}, 0, stage.semantic, nullptr, nullptr};
+        raw::NvkStageInfo info = {words,
+                                  bytes,
+                                  stage.entry,
+                                  stage.stage,
+                                  stage.specialization,
+                                  raw::handle(layout),
+                                  0,
+                                  nullptr,
+                                  subgroup.size ? &subgroup : nullptr,
+                                  false,
+                                  false,
+                                  0,
+                                  0,
+                                  {},
+                                  0,
+                                  stage.semantic,
+                                  nullptr,
+                                  nullptr};
         raw::NvkStage native = {}, portable = {};
         int n = raw::nvk::compileStage(compiler, raw::handle(device), info, native);
         info.semantic = nullptr;
@@ -107,10 +133,12 @@ static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_
             raw::nvk::stageFinish(compiler, raw::handle(device), ranked);
         }
         if (artifact) {
-            [[NSData dataWithBytes:native.code length:native.codeBytes]
-                writeToFile:[artifact stringByAppendingString:@".native.sass"] atomically:YES];
-            [[NSData dataWithBytes:portable.code length:portable.codeBytes]
-                writeToFile:[artifact stringByAppendingString:@".portable.sass"] atomically:YES];
+            [[NSData dataWithBytes:native.code
+                            length:native.codeBytes] writeToFile:[artifact stringByAppendingString:@".native.sass"]
+                                                      atomically:YES];
+            [[NSData dataWithBytes:portable.code
+                            length:portable.codeBytes] writeToFile:[artifact stringByAppendingString:@".portable.sass"]
+                                                        atomically:YES];
         }
         raw::nvk::stageFinish(compiler, raw::handle(device), native);
         raw::nvk::stageFinish(compiler, raw::handle(device), portable);
@@ -125,10 +153,17 @@ static bool compute(const NmbDirectKernel *kernel, void *context)
     for (unsigned i = 0; i < kernel->writeCount; ++i) {
         const auto &kw = kernel->writes[i];
         const auto &w = kw.write;
-        [writes addObject:@{ @"set": @(w.set), @"binding": @(w.binding), @"element": @(w.element),
-                             @"type": @(w.type), @"source": @(w.source), @"slot": @(w.slot),
-                             @"viewFormat": @(kw.viewFormat), @"viewType": @(w.viewType),
-                             @"sampler": @(w.sampler) }];
+        [writes addObject:@{
+            @"set" : @(w.set),
+            @"binding" : @(w.binding),
+            @"element" : @(w.element),
+            @"type" : @(w.type),
+            @"source" : @(w.source),
+            @"slot" : @(w.slot),
+            @"viewFormat" : @(kw.viewFormat),
+            @"viewType" : @(w.viewType),
+            @"sampler" : @(w.sampler)
+        }];
     }
     out[@"descriptorWrites"] = writes;
     [(__bridge NSMutableArray *)context addObject:out];
@@ -184,20 +219,22 @@ static bool dispatch(const std::string &line, NSMutableArray *stages, std::strin
     dispatch.samplerCount = samplers.size();
     bool ok = true;
     probe::eachRegionShape(shape, [&](const probe::Shape &region, unsigned mask) {
-        if (!ok) return;
+        if (!ok)
+            return;
         memcpy(dispatch.threads, region.threads, sizeof dispatch.threads);
         dispatch.regionMode = region.regionMode;
         const char *refused = nullptr;
         NSUInteger start = stages.count;
         ok = native_bridge_metal_compute_direct(probe::descriptor(region, function), &dispatch, compute,
-                                                 (__bridge void *)stages, &refused);
-        if (!ok) why = refused ?: "compute translation failed";
+                                                (__bridge void *)stages, &refused);
+        if (!ok)
+            why = refused ?: "compute translation failed";
         for (NSUInteger i = start; i < stages.count; ++i) {
             NSMutableDictionary *stage = [stages[i] mutableCopy];
             stage[@"regionMask"] = @(mask);
             stage[@"regionMode"] = @(region.regionMode);
-            stage[@"localSize"] = @[@(region.threads[0]), @(region.threads[1]), @(region.threads[2])];
-            stage[@"nominalLocalSize"] = @[@(shape.threads[0]), @(shape.threads[1]), @(shape.threads[2])];
+            stage[@"localSize"] = @[ @(region.threads[0]), @(region.threads[1]), @(region.threads[2]) ];
+            stage[@"nominalLocalSize"] = @[ @(shape.threads[0]), @(shape.threads[1]), @(shape.threads[2]) ];
             stages[i] = stage;
         }
     });

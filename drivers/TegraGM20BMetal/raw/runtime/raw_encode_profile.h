@@ -243,9 +243,9 @@ struct EncodeTotals {
 
 }  // namespace raw
 
-#define RAW_ENCODE_SPAN_JOIN2(a, b)  a##b
-#define RAW_ENCODE_SPAN_JOIN(a, b)   RAW_ENCODE_SPAN_JOIN2(a, b)
-#define RAW_ENCODE_SPAN(part)        const raw::EncodeSpan RAW_ENCODE_SPAN_JOIN(rawEncodeSpan, __LINE__)(raw::EncodePart::part)
+#define RAW_ENCODE_SPAN_JOIN2(a, b) a##b
+#define RAW_ENCODE_SPAN_JOIN(a, b)  RAW_ENCODE_SPAN_JOIN2(a, b)
+#define RAW_ENCODE_SPAN(part) const raw::EncodeSpan RAW_ENCODE_SPAN_JOIN(rawEncodeSpan, __LINE__)(raw::EncodePart::part)
 #define RAW_ENCODE_BEGIN(name, part) raw::EncodeSpan name(raw::EncodePart::part)
 #define RAW_ENCODE_END(name)         name.stop()
 #define RAW_ENCODE_COUNT(what, ...)  raw::countEncode(raw::EncodeCount::what, ##__VA_ARGS__)

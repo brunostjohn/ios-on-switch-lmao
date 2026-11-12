@@ -148,7 +148,8 @@ extern "C" uint32_t tgm_chan_uid(tgm_chan *)
 	return 1;
 }
 
-extern "C" int tgm_chan_exec(tgm_chan *chan, const tgm_push *, uint32_t, uint32_t *seqno, const tgm_prof *)
+extern "C" int tgm_chan_exec(tgm_chan *chan, const tgm_push *, uint32_t, uint32_t *seqno,
+			     const tgm_prof *)
 {
 	if (faultMoves) {
 		const std::vector<uint8_t> partial(512, 0xc5);
@@ -184,8 +185,9 @@ extern "C" void tgm_cpu_clean_pages(const uint64_t *, uint32_t)
 }
 
 extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *chan, const tgm_push *, uint32_t count,
-					       const switch_gpu_backing_token *, uint32_t, uint32_t *seqno,
-					       const tgm_prof *, uint32_t visibility)
+					       const switch_gpu_backing_token *, uint32_t,
+					       uint32_t *seqno, const tgm_prof *,
+					       uint32_t visibility)
 {
 	EXPECT_EQ(count, 0u);
 	++flushJobs;
@@ -206,8 +208,8 @@ extern "C" void switch_gpu_chan_submit_leave(void)
 {
 }
 
-extern "C" int switch_gpu_chan_wait_submission_room(tgm_chan *, const tgm_push *, uint32_t, uint32_t,
-						     const tgm_prof *)
+extern "C" int switch_gpu_chan_wait_submission_room(tgm_chan *, const tgm_push *, uint32_t,
+						    uint32_t, const tgm_prof *)
 {
 	return 0;
 }
@@ -310,8 +312,8 @@ TEST_F(RelayoutControl, FailedOpenIsUndoneAndTheNextMoveOpensAgain)
 TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 {
 	EXPECT_TRUE(pushVolatile);
-	const uint32_t n =
-		tgm_relayout_checkpoint(gRelayout.space.words, kPushVa + uint64_t(kCheckpointWord) * 4);
+	const uint32_t n = tgm_relayout_checkpoint(gRelayout.space.words,
+						   kPushVa + uint64_t(kCheckpointWord) * 4);
 	const std::vector<uint8_t> commands(pushBytes.begin(), pushBytes.begin() + n * 4);
 	CopyEngine ce(memory);
 	ce.runAt(kPushVa, n);
@@ -323,8 +325,8 @@ TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 TEST_F(RelayoutControl, ReadOnlyMappingReproducesHostSemaphoreWriteFault)
 {
 	memory.map(kPushVa, pushBytes, true);
-	const uint32_t n =
-		tgm_relayout_checkpoint(gRelayout.space.words, kPushVa + uint64_t(kCheckpointWord) * 4);
+	const uint32_t n = tgm_relayout_checkpoint(gRelayout.space.words,
+						   kPushVa + uint64_t(kCheckpointWord) * 4);
 	CopyEngine ce(memory);
 	ce.runAt(kPushVa, n);
 	EXPECT_TRUE(ce.fault);
@@ -334,8 +336,8 @@ TEST_F(RelayoutControl, ReadOnlyMappingReproducesHostSemaphoreWriteFault)
 TEST_F(RelayoutControl, PushTheDriverNeverMappedFaultsBeforeItsFirstMethod)
 {
 	memory.unmap(kPushVa, pushBytes.size());
-	const uint32_t n =
-		tgm_relayout_checkpoint(gRelayout.space.words, kPushVa + uint64_t(kCheckpointWord) * 4);
+	const uint32_t n = tgm_relayout_checkpoint(gRelayout.space.words,
+						   kPushVa + uint64_t(kCheckpointWord) * 4);
 	CopyEngine ce(memory);
 	ce.runAt(kPushVa, n);
 	EXPECT_TRUE(ce.fault);

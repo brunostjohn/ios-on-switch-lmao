@@ -12,8 +12,10 @@ enum X1VICTransposeProbe {
     static let cases = 8
     static let caseWords = 10
     static let replyBytes = 16 + 4 * caseWords * cases
-    static let names = ["copy420_turned", "copy422", "shipped", "shipped_left", "siting_kept", "n422", "n422_kept",
-                        "shipped_turn4"]
+    static let names = [
+        "copy420_turned", "copy422", "shipped", "shipped_left", "siting_kept", "n422", "n422_kept",
+        "shipped_turn4",
+    ]
     static let shipped = [2, 3, 7]
 
     static let probe = X1Probe(

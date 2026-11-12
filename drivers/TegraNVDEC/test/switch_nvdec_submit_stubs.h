@@ -112,11 +112,13 @@ inline void clock_interval_to_deadline(uint32_t value, uint32_t scale, uint64_t 
 
 using thread_call_param_t = void *;
 using thread_call_func_t = void (*)(thread_call_param_t, thread_call_param_t);
+
 struct thread_call {
     thread_call_func_t fire;
     thread_call_param_t param;
     uint32_t entered;
 };
+
 using thread_call_t = thread_call *;
 constexpr int THREAD_CALL_PRIORITY_KERNEL = 0, THREAD_CALL_OPTIONS_ONCE = 1;
 
@@ -138,6 +140,7 @@ inline std::vector<std::string> &switch_test_log()
 }
 
 inline void IOLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
 inline void IOLog(const char *format, ...)
 {
     char line[2048];

@@ -18,19 +18,30 @@ struct switch_gpu_backing {
     std::mutex lock;
     std::condition_variable changed;
 };
+
 struct switch_gpu_cpu_lease {
     switch_gpu_backing *backing;
     uint32_t access;
 };
+
 namespace {
 struct Surface : OSObject {
     IOMemoryDescriptor *memory;
     TegraVICSurfaceDesc desc = {};
     uint32_t id;
     uint64_t offset = 0;
-    Surface(IOMemoryDescriptor *descriptor, uint32_t number) : memory(descriptor), id(number) { memory->retain(); }
-    ~Surface() override { memory->release(); }
+
+    Surface(IOMemoryDescriptor *descriptor, uint32_t number) : memory(descriptor), id(number)
+    {
+        memory->retain();
+    }
+
+    ~Surface() override
+    {
+        memory->release();
+    }
 };
+
 std::atomic<unsigned> transfers{0}, seeds{0}, descriptions{0}, registrations{0}, finishedViews{0};
 int transferError = 0, generationError = 0;
 unsigned gpuReservations = 0, queuedTransfers = 0, cpuAcquisitions = 0;
@@ -39,16 +50,19 @@ bool ready = true;
 TegraVICSurfaceDesc convertedDesc;
 std::function<void()> duringTransfer, duringGeneration, duringExport;
 }
+
 extern "C" void switch_gpu_surface_finish(void *descriptor)
 {
     ++finishedViews;
     SwitchMemoryAttachment::leaveCpu(static_cast<IOMemoryDescriptor *>(descriptor));
 }
+
 extern "C" IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *object)
 {
     auto *surface = dynamic_cast<Surface *>(object);
     return surface ? surface->memory : nullptr;
 }
+
 extern "C" IOReturn switch_vic_surface_from_object(OSObject *object, uint32_t id, TegraVICSurface *out)
 {
     ++descriptions;
@@ -60,14 +74,24 @@ extern "C" IOReturn switch_vic_surface_from_object(OSObject *object, uint32_t id
     *out = {surface, surface->memory, surface->desc, surface->offset, id, false};
     return 0;
 }
+
 extern "C" void tegra_vic_surface_release(TegraVICSurface *surface)
 {
     if (surface->surface)
         surface->surface->release();
     *surface = {};
 }
-extern "C" void tegra_vic_surface_written(const TegraVICSurface *) { ++seeds; }
-extern "C" bool tegra_vic_present_ready() { return ready; }
+
+extern "C" void tegra_vic_surface_written(const TegraVICSurface *)
+{
+    ++seeds;
+}
+
+extern "C" bool tegra_vic_present_ready()
+{
+    return ready;
+}
+
 switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *surface)
 {
     ++registrations;
@@ -76,8 +100,17 @@ switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *surface)
         ++backing->refs;
     return backing;
 }
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing) { ++backing->refs; }
-extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing) { --backing->refs; }
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
+{
+    ++backing->refs;
+}
+
+extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
+{
+    --backing->refs;
+}
+
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
 {
     *info = {};
@@ -85,8 +118,9 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
     info->page_count = backing->pageCount;
     info->content_generation = backing->content;
 }
-extern "C" int switch_gpu_backing_cpu_acquire_owned(switch_gpu_backing *backing, uint64_t offset,
-                                                    uint64_t bytes, uint32_t access, switch_gpu_cpu_lease **out)
+
+extern "C" int switch_gpu_backing_cpu_acquire_owned(switch_gpu_backing *backing, uint64_t offset, uint64_t bytes,
+                                                    uint32_t access, switch_gpu_cpu_lease **out)
 {
     if (!reservingGpu)
         ++cpuAcquisitions;
@@ -97,11 +131,13 @@ extern "C" int switch_gpu_backing_cpu_acquire_owned(switch_gpu_backing *backing,
     std::unique_lock held(backing->lock);
     auto conflict = [&] {
         return backing->writers > (shared ? backing->concurrentWriters : 0) ||
-            (writable && backing->readers > (shared ? backing->concurrentReaders : 0));
+               (writable && backing->readers > (shared ? backing->concurrentReaders : 0));
     };
     if (conflict() && (access & kAvoidSync))
         return -16;
-    backing->changed.wait(held, [&] { return !conflict(); });
+    backing->changed.wait(held, [&] {
+        return !conflict();
+    });
     ++(writable ? backing->writers : backing->readers);
     if (shared)
         ++(writable ? backing->concurrentWriters : backing->concurrentReaders);
@@ -109,28 +145,34 @@ extern "C" int switch_gpu_backing_cpu_acquire_owned(switch_gpu_backing *backing,
     *out = new switch_gpu_cpu_lease{backing, access};
     return 0;
 }
+
 extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing, uint32_t access, int avoid,
-                                                        switch_gpu_cpu_lease **out)
+                                                     switch_gpu_cpu_lease **out)
 {
     ++gpuReservations;
     reservingGpu = true;
     const int error = switch_gpu_backing_cpu_acquire_owned(backing, 0, uint64_t(backing->pageCount) * 4096,
-        access | kNoCache | (avoid ? kAvoidSync : 0), out);
+                                                           access | kNoCache | (avoid ? kAvoidSync : 0), out);
     reservingGpu = false;
     return error;
 }
+
 extern "C" int switch_gpu_backing_admission_ready(switch_gpu_backing *backing, uint32_t access)
 {
     std::lock_guard held(backing->lock);
     return !backing->writers && (!(access & kWrite) || !backing->readers);
 }
+
 extern "C" int switch_gpu_backing_conversion_ready(switch_gpu_backing *backing, uint32_t access)
 {
     return switch_gpu_backing_admission_ready(backing, access);
 }
-extern "C" void switch_gpu_admission_changed(void) {}
-extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing,
-                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
+
+extern "C" void switch_gpu_admission_changed(void)
+{}
+
+extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
+                                              switch_gpu_cpu_lease **owned)
 {
     if (duringExport)
         duringExport();
@@ -138,29 +180,34 @@ extern "C" int switch_gpu_backing_export_read(switch_gpu_backing *backing,
     return switch_gpu_backing_cpu_acquire_owned(backing, 0, uint64_t(backing->pageCount) * 4096,
                                                 kRead | kNoCache | kAvoidSync, owned);
 }
-extern "C" int switch_gpu_backing_snapshot_read(switch_gpu_backing *backing,
-                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
+
+extern "C" int switch_gpu_backing_snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
+                                                switch_gpu_cpu_lease **owned)
 {
     return switch_gpu_backing_export_read(backing, producer, owned);
 }
-extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing,
-                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned);
-extern "C" int switch_gpu_backing_snapshot_read_cpu(switch_gpu_backing *backing,
-                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
+
+extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
+                                                     switch_gpu_cpu_lease **owned);
+
+extern "C" int switch_gpu_backing_snapshot_read_cpu(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
+                                                    switch_gpu_cpu_lease **owned)
 {
     return switch_gpu_backing_snapshot_read_wait(backing, producer, owned);
 }
-extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing,
-                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
+
+extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
+                                                     switch_gpu_cpu_lease **owned)
 {
     if (duringExport)
         duringExport();
-    const int error = switch_gpu_backing_cpu_acquire_owned(backing, 0, uint64_t(backing->pageCount) * 4096,
-                                                          kRead | kNoCache, owned);
+    const int error =
+        switch_gpu_backing_cpu_acquire_owned(backing, 0, uint64_t(backing->pageCount) * 4096, kRead | kNoCache, owned);
     if (!error)
         *producer = backing->producer;
     return error;
 }
+
 extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **owned, int wrote)
 {
     EXPECT_EQ(wrote, 0);
@@ -178,20 +225,22 @@ extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **owned
     *owned = nullptr;
     return 0;
 }
-extern "C" int switch_gpu_backing_cpu_publish_generation(switch_gpu_backing *backing,
-        switch_gpu_cpu_lease *owned, volatile uint64_t *word, uint64_t expected, uint64_t next)
+
+extern "C" int switch_gpu_backing_cpu_publish_generation(switch_gpu_backing *backing, switch_gpu_cpu_lease *owned,
+                                                         volatile uint64_t *word, uint64_t expected, uint64_t next)
 {
     if (duringGeneration)
         duringGeneration();
     if (generationError)
         return generationError;
     std::lock_guard held(backing->lock);
-    if (!owned || owned->backing != backing || !(owned->access & kWrite) ||
-        backing->writers != 1 || backing->readers)
+    if (!owned || owned->backing != backing || !(owned->access & kWrite) || backing->writers != 1 || backing->readers)
         return -22;
     return __atomic_compare_exchange_n(word, &expected, next, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)
-        ? 0 : SWITCH_GPU_BACKING_STALE;
+               ? 0
+               : SWITCH_GPU_BACKING_STALE;
 }
+
 extern "C" int switch_vic_present_surface_owned(const TegraVICPicture *picture, const TegraVICSurface *surface,
                                                 switch_gpu_cpu_lease *owned, const char **)
 {
@@ -206,6 +255,7 @@ extern "C" int switch_vic_present_surface_owned(const TegraVICPicture *picture, 
         duringTransfer();
     return transferError;
 }
+
 extern "C" int switch_vic_present_surface_queue(const TegraVICPicture *picture, const TegraVICSurface *surface,
                                                 switch_gpu_cpu_lease *owned, const char **why)
 {
@@ -284,6 +334,7 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
     }
     return transferError;
 }
+
 namespace {
 class NativeSurface : public testing::Test {
 protected:
@@ -292,6 +343,7 @@ protected:
     Surface *object = nullptr;
     TegraVICSurface surface = {};
     TegraVICPicture picture = {};
+
     void SetUp() override
     {
         transfers = seeds = descriptions = registrations = 0;
@@ -330,6 +382,7 @@ protected:
         picture.surfaceID = 7;
         picture.sampleBytes = 1;
     }
+
     void TearDown() override
     {
         if (object)
@@ -340,6 +393,7 @@ protected:
         EXPECT_EQ(logical.refs, 1u);
         EXPECT_EQ(replacement.refs, 1u);
     }
+
     int prepareCpu(Surface *input, uint32_t options, switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
     {
         const int entered = SwitchMemoryAttachment::enterCpu(input->memory, options & 2);
@@ -347,6 +401,7 @@ protected:
             return entered;
         return switch_native_surface_prepare(input, input->id, nullptr, options, backing, owned);
     }
+
     int prepareGpu(uint32_t options, switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
     {
         const int entered = SwitchMemoryAttachment::enterCpu(memory, options & 2);
@@ -354,6 +409,7 @@ protected:
             return entered;
         return switch_native_surface_prepare_gpu(object, object->id, nullptr, options, backing, owned);
     }
+
     void finishCpu(Surface *input, switch_gpu_backing *backing, switch_gpu_cpu_lease **owned)
     {
         if (*owned)
@@ -848,6 +904,7 @@ TEST_F(NativeSurface, PublishesIntoPageRoundedDescriptor)
     EXPECT_EQ(view.native, &native);
     switch_native_surface_release(&view);
 }
+
 TEST_F(NativeSurface, ConcurrentCpuViewsShareOneMaterializationAndContinuousReadReservations)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -857,7 +914,10 @@ TEST_F(NativeSurface, ConcurrentCpuViewsShareOneMaterializationAndContinuousRead
     std::mutex usersLock;
     std::condition_variable usersChanged;
     unsigned preparedUsers = 0;
-    duringTransfer = [&] { conversionStarted.set_value(); converted.wait(); };
+    duringTransfer = [&] {
+        conversionStarted.set_value();
+        converted.wait();
+    };
     auto reader = [&] {
         switch_gpu_backing *backing = nullptr;
         switch_gpu_cpu_lease *owned = nullptr;
@@ -889,7 +949,9 @@ TEST_F(NativeSurface, ConcurrentCpuViewsShareOneMaterializationAndContinuousRead
     completeConversion.set_value();
     {
         std::unique_lock held(usersLock);
-        EXPECT_TRUE(usersChanged.wait_for(held, std::chrono::seconds(5), [&] { return preparedUsers == 2; }));
+        EXPECT_TRUE(usersChanged.wait_for(held, std::chrono::seconds(5), [&] {
+            return preparedUsers == 2;
+        }));
     }
     finishUsers.set_value();
     EXPECT_EQ(first.get(), 0);
@@ -922,11 +984,18 @@ TEST_F(NativeSurface, AcquiredViewCannotEscapeFailedPublication)
     generationError = -16;
     std::promise<void> replacing, releaseReplacement;
     auto finish = releaseReplacement.get_future().share();
-    duringGeneration = [&] { replacing.set_value(); finish.wait(); };
-    auto publisher = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
+    duringGeneration = [&] {
+        replacing.set_value();
+        finish.wait();
+    };
+    auto publisher = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish(&surface, &picture);
+    });
     replacing.get_future().wait();
     SwitchNativeSurfaceView view = {};
-    auto reader = std::async(std::launch::async, [&] { return switch_native_surface_acquire(&surface, &view, false); });
+    auto reader = std::async(std::launch::async, [&] {
+        return switch_native_surface_acquire(&surface, &view, false);
+    });
     EXPECT_EQ(reader.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
     releaseReplacement.set_value();
     EXPECT_EQ(publisher.get(), -16);
@@ -935,6 +1004,7 @@ TEST_F(NativeSurface, AcquiredViewCannotEscapeFailedPublication)
     EXPECT_EQ(*view.guard.generation, view.guard.expected);
     switch_native_surface_release(&view);
 }
+
 TEST_F(NativeSurface, PitchViewCreatedBeforeNativePublicationBecomesStale)
 {
     auto *stamp = SwitchMemoryAttachment::generation(memory);
@@ -974,6 +1044,7 @@ TEST_F(NativeSurface, GpuReadQueuesMaterializationAndKeepsOwnershipUntilPublicat
     EXPECT_EQ(cpuAcquisitions, 0u);
     finishCpu(object, backing, &owned);
 }
+
 TEST_F(NativeSurface, MutableGpuPreparationInvalidatesOldNativeViewsAfterQueuedConversion)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -991,6 +1062,7 @@ TEST_F(NativeSurface, MutableGpuPreparationInvalidatesOldNativeViewsAfterQueuedC
     finishCpu(object, backing, &owned);
     switch_native_surface_release(&view);
 }
+
 TEST_F(NativeSurface, FailedGpuMaterializationPreservesNativeAuthority)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -998,12 +1070,14 @@ TEST_F(NativeSurface, FailedGpuMaterializationPreservesNativeAuthority)
     switch_gpu_backing *backing = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
     EXPECT_EQ(prepareGpu(0, &backing, &owned), -5);
-    EXPECT_EQ(backing, nullptr); EXPECT_EQ(owned, nullptr);
+    EXPECT_EQ(backing, nullptr);
+    EXPECT_EQ(owned, nullptr);
     finishCpu(object, backing, &owned);
     SwitchNativeSurfaceView view = {};
     EXPECT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     switch_native_surface_release(&view);
 }
+
 TEST_F(NativeSurface, AvoidSyncGpuReadCanQueueWithoutWaitingAndCpuReadStillAcquires)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -1011,10 +1085,12 @@ TEST_F(NativeSurface, AvoidSyncGpuReadCanQueueWithoutWaitingAndCpuReadStillAcqui
     switch_gpu_backing *backing = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
     ASSERT_EQ(prepareGpu(3, &backing, &owned), 0);
-    EXPECT_EQ(queuedTransfers, 1u); EXPECT_EQ(cpuAcquisitions, 0u);
+    EXPECT_EQ(queuedTransfers, 1u);
+    EXPECT_EQ(cpuAcquisitions, 0u);
     finishCpu(object, backing, &owned);
     ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
-    EXPECT_EQ(cpuAcquisitions, 1u); EXPECT_EQ(transfers, 1u);
+    EXPECT_EQ(cpuAcquisitions, 1u);
+    EXPECT_EQ(transfers, 1u);
     finishCpu(object, backing, &owned);
 }
 
@@ -1035,6 +1111,7 @@ TEST_F(NativeSurface, ScanoutOwnsOldPhysicalFrameAfterMutablePitchDetach)
     switch_native_scanout_release(&scanout);
     EXPECT_EQ(native.readers, 0u);
 }
+
 TEST_F(NativeSurface, ScanoutSnapshotRefusesConflictingLogicalWriterWithoutWaiting)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -1063,6 +1140,7 @@ TEST_F(NativeSurface, PitchScanoutQueuesOnceAndPinsTheExactVicProducer)
     switch_native_scanout_release(&scanout);
     EXPECT_EQ(logical.readers, 0u);
 }
+
 TEST_F(NativeSurface, ScanoutAcquireDoesNotWaitForAPublicationWaitingOnTheScreen)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -1070,11 +1148,15 @@ TEST_F(NativeSurface, ScanoutAcquireDoesNotWaitForAPublicationWaitingOnTheScreen
     ASSERT_EQ(switch_native_scanout_pitch(object, &onScreen), 0);
     ASSERT_EQ(logical.readers, 1u);
     picture.backing = &replacement;
-    auto publisher = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
+    auto publisher = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish(&surface, &picture);
+    });
     while (SwitchMemoryAttachment::enterExclusive(memory, true) == 0)
         SwitchMemoryAttachment::leaveExclusive(memory);
     SwitchNativeScanout next = {};
-    auto display = std::async(std::launch::async, [&] { return switch_native_scanout_acquire(object, &next); });
+    auto display = std::async(std::launch::async, [&] {
+        return switch_native_scanout_acquire(object, &next);
+    });
     ASSERT_EQ(display.wait_for(std::chrono::seconds(5)), std::future_status::ready);
     EXPECT_EQ(display.get(), -16);
     EXPECT_EQ(next.lease, nullptr);
@@ -1085,10 +1167,13 @@ TEST_F(NativeSurface, ScanoutAcquireDoesNotWaitForAPublicationWaitingOnTheScreen
     EXPECT_EQ(next.view.native, &replacement);
     switch_native_scanout_release(&next);
 }
+
 TEST_F(NativeSurface, PitchMutationDuringSnapshotHandoffCannotChangeTheAcceptedImage)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
-    duringExport = [&] { ++logical.content; };
+    duringExport = [&] {
+        ++logical.content;
+    };
     SwitchNativeScanout scanout = {};
     EXPECT_EQ(switch_native_scanout_pitch(object, &scanout), SWITCH_GPU_BACKING_STALE);
     EXPECT_EQ(scanout.lease, nullptr);
@@ -1135,6 +1220,7 @@ TEST_F(NativeSurface, OrdinaryPitchGpuViewIsInvalidatedByFirstNativePublication)
     EXPECT_NE(*view.representation.generation, view.representation.expected);
     switch_native_surface_gpu_release(&view);
 }
+
 TEST_F(NativeSurface, DetachedGpuViewReturnsGuardedPitchWithoutRetainingCpuOwnership)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
@@ -1155,7 +1241,10 @@ TEST_F(NativeSurface, DetachedGpuViewReturnsGuardedPitchWithoutRetainingCpuOwner
 
 TEST_F(NativeSurface, WaitingPitchSnapshotCapturesTheCompletedCpuGenerationWithoutGpuWait)
 {
-    duringExport = [&] { ++logical.content; logical.producer = {}; };
+    duringExport = [&] {
+        ++logical.content;
+        logical.producer = {};
+    };
     SwitchNativeScanout scanout = {};
     ASSERT_EQ(switch_native_scanout_pitch_wait(object, &scanout), 0);
     EXPECT_EQ(scanout.allocation.content_generation, logical.content);
@@ -1171,7 +1260,7 @@ TEST_F(NativeSurface, PublicationReservesMetadataWithoutAcquiringCpuAccessToOldG
     const auto previous = logical.producer;
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     EXPECT_EQ(gpuReservations, 1u);
-    EXPECT_EQ(cpuAcquisitions, 1u); // The export shim uses this to model its immutable native reservation.
+    EXPECT_EQ(cpuAcquisitions, 1u);  // The export shim uses this to model its immutable native reservation.
     EXPECT_EQ(logical.producer.value, previous.value);
     EXPECT_EQ(logical.producer.engine, previous.engine);
     EXPECT_EQ(logical.writers, 0u);
@@ -1200,6 +1289,7 @@ TEST_F(NativeSurface, AdmissionReservesConversionWriteOnlyWhileNativePitchIsMiss
     logical.readers = 0;
     SwitchMemoryAttachment::leaveCpu(memory);
 }
+
 TEST_F(NativeSurface, AdmissionDoesNotWaitForPreparationAndRejectsAnotherBacking)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);

@@ -8,14 +8,19 @@ namespace raw {
 
 // Superseded: physically complete, and the record names a newer failure, so it cannot say whether this job failed too
 // (the kernel publishes only its newest); the kernel's WaitFence answers that.
-enum class SemanticFenceStatus : uint8_t { Clear, Pending, Failed, Superseded };
+enum class SemanticFenceStatus : uint8_t {
+    Clear,
+    Pending,
+    Failed,
+    Superseded
+};
 
 struct SemanticFenceRead {
     SemanticFenceStatus status = SemanticFenceStatus::Clear;
     uint32_t first = 0;
 };
 
-template<class Read> SemanticFenceRead readSemanticFence(uint32_t seqno, Read read)
+template <class Read> SemanticFenceRead readSemanticFence(uint32_t seqno, Read read)
 {
     const uint32_t before = read(0);
     if (before & 1)
@@ -52,12 +57,16 @@ inline SemanticFenceRead readSemanticFence(const volatile TegraGM20BAbiFenceSema
 {
     return readSemanticFence(seqno, [record](unsigned field) {
         switch (field) {
-        case 0: return __atomic_load_n(&record->epoch, __ATOMIC_ACQUIRE);
-        case 1: return __atomic_load_n(&record->pending_first, __ATOMIC_RELAXED);
-        case 2: return __atomic_load_n(&record->failed_first, __ATOMIC_RELAXED);
-        default: return __atomic_load_n(&record->flags, __ATOMIC_RELAXED);
+        case 0:
+            return __atomic_load_n(&record->epoch, __ATOMIC_ACQUIRE);
+        case 1:
+            return __atomic_load_n(&record->pending_first, __ATOMIC_RELAXED);
+        case 2:
+            return __atomic_load_n(&record->failed_first, __ATOMIC_RELAXED);
+        default:
+            return __atomic_load_n(&record->flags, __ATOMIC_RELAXED);
         }
     });
 }
 
-} // namespace raw
+}  // namespace raw

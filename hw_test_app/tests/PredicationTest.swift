@@ -50,18 +50,23 @@ struct PredicationTest: HWTest {
         let words: MTLBuffer, marks: MTLBuffer, cpuWords: MTLBuffer
         var ends: [Bool] = []
 
-        func dispatch(_ e: MTLComputeCommandEncoder, _ state: MTLComputePipelineState, _ buffer: MTLBuffer,
-                      _ at: Int, _ value: UInt32) {
+        func dispatch(
+            _ e: MTLComputeCommandEncoder, _ state: MTLComputePipelineState, _ buffer: MTLBuffer,
+            _ at: Int, _ value: UInt32
+        ) {
             var pair = SIMD2<UInt32>(UInt32(at), value)
             e.setComputePipelineState(state)
             e.setBuffer(buffer, offset: 0, index: 0)
             e.setBytes(&pair, length: 8, index: 1)
-            e.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
-                                   threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+            e.dispatchThreadgroups(
+                MTLSize(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
         }
 
-        func startIf(_ e: MTLComputeCommandEncoder, word: Int, offsetBias: Int = 0, _ compare: Int, _ ref: UInt32,
-                     in buffer: MTLBuffer? = nil) {
+        func startIf(
+            _ e: MTLComputeCommandEncoder, word: Int, offsetBias: Int = 0, _ compare: Int, _ ref: UInt32,
+            in buffer: MTLBuffer? = nil
+        ) {
             let o = e as AnyObject
             unsafeBitCast(o.method(for: PredicationTest.startIf), to: StartIf.self)(
                 o, PredicationTest.startIf, buffer ?? words, word * 4 + offsetBias, compare, ref)
@@ -108,7 +113,9 @@ struct PredicationTest: HWTest {
         memset(enc.marks.contents(), 0, 4 * 256)
         memset(cleared.contents(), 0xab, 64)
         memset(copied.contents(), 0, 64)
-        for _ in 0..<2 { _ = try await gpu.run { commands in self.encode(commands, &enc, target, solid, cleared, copied) } }
+        for _ in 0..<2 {
+            _ = try await gpu.run { commands in self.encode(commands, &enc, target, solid, cleared, copied) }
+        }
         memset(enc.marks.contents(), 0, 4 * 256)
         memset(cleared.contents(), 0xab, 64)
         memset(copied.contents(), 0, 64)
@@ -117,8 +124,9 @@ struct PredicationTest: HWTest {
 
         var metrics = Metrics()
         var wrong: [String] = []
-        let marks = UnsafeBufferPointer(start: enc.marks.contents().bindMemory(to: UInt32.self, capacity: 256),
-                                        count: 256)
+        let marks = UnsafeBufferPointer(
+            start: enc.marks.contents().bindMemory(to: UInt32.self, capacity: 256),
+            count: 256)
         var compareWrong: [String] = []
         for (i, c) in Self.cases.enumerated() where marks[i] != (c.holds ? 1 : 2) {
             compareWrong.append("\(c.compare):\(c.word):\(c.reference)=\(marks[i])")
@@ -133,7 +141,8 @@ struct PredicationTest: HWTest {
         let spanFailed = marks[caseCount + nestedMarks + 1]
         let cpuHeld = marks[caseCount + nestedMarks + 2], cpuFailed = marks[caseCount + nestedMarks + 3]
         let pixels = try await gpu.read(target, bytesPerPixel: 4)
-        let drawn = stride(from: 0, to: pixels.count, by: 4).filter { pixels[$0 + 2] == 255 && pixels[$0 + 1] == 0 }.count
+        let drawn = stride(from: 0, to: pixels.count, by: 4).filter { pixels[$0 + 2] == 255 && pixels[$0 + 1] == 0 }
+            .count
         let clearedOk = UnsafeRawBufferPointer(start: cleared.contents(), count: 64).allSatisfy { $0 == 0x5a }
         let copiedOk = UnsafeRawBufferPointer(start: copied.contents(), count: 64).allSatisfy { $0 == 0x5a }
         metrics.set("path", ran.path)
@@ -163,8 +172,10 @@ struct PredicationTest: HWTest {
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
-    func encode(_ commands: MTLCommandBuffer, _ enc: inout Encoding, _ target: MTLTexture,
-                _ solid: MTLRenderPipelineState, _ cleared: MTLBuffer, _ copied: MTLBuffer) {
+    func encode(
+        _ commands: MTLCommandBuffer, _ enc: inout Encoding, _ target: MTLTexture,
+        _ solid: MTLRenderPipelineState, _ cleared: MTLBuffer, _ copied: MTLBuffer
+    ) {
         let e = commands.makeComputeCommandEncoder()!
         for (i, c) in Self.cases.enumerated() {
             enc.word(e, i, c.word)

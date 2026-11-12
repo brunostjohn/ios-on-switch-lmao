@@ -10,11 +10,22 @@ struct Image {
     uint64_t va = 4096;
     uint32_t pitch = 256, height = 64, depth = 1, layers = 1;
     uint64_t layerBytes = 0;
-    struct Span { uint64_t bytes = 0; } span;
-    struct Chain { Span layout; } *chain = nullptr;
+
+    struct Span {
+        uint64_t bytes = 0;
+    } span;
+
+    struct Chain {
+        Span layout;
+    } *chain = nullptr;
+
     bool blockLinear = false, shadowTarget = false, memoryless = false;
     bool sampled = false, standIn = false, planarStandIn = false, conversion = false;
-    bool converted() const { return conversion; }
+
+    bool converted() const
+    {
+        return conversion;
+    }
 };
 
 raw::FusionPass pass()
@@ -120,8 +131,8 @@ TEST(AttachmentLifetime, PitchAndShadowTargetsCanKeepTheSameImageAcrossPasses)
     image.va = 0;
     EXPECT_FALSE(raw::fusionTargetEligible(image, 0));
     image.va = 4096;
-    for (bool Image::*flag : {&Image::memoryless, &Image::sampled, &Image::standIn,
-                              &Image::planarStandIn, &Image::conversion}) {
+    for (bool Image::*flag :
+         {&Image::memoryless, &Image::sampled, &Image::standIn, &Image::planarStandIn, &Image::conversion}) {
         image.*flag = true;
         EXPECT_FALSE(raw::fusionTargetEligible(image, 0));
         image.*flag = false;
@@ -172,10 +183,8 @@ TEST(AttachmentLifetime, BufferTexturesExposeTheirRowsToAliasChecks)
 {
     Image texture;
     EXPECT_EQ(raw::fusionImageBytes(texture), 16384u);
-    EXPECT_TRUE(raw::fusionRangesOverlap(texture.va, raw::fusionImageBytes(texture),
-                                         texture.va + 8192, 256));
-    EXPECT_FALSE(raw::fusionRangesOverlap(texture.va, raw::fusionImageBytes(texture),
-                                          texture.va + 16384, 256));
+    EXPECT_TRUE(raw::fusionRangesOverlap(texture.va, raw::fusionImageBytes(texture), texture.va + 8192, 256));
+    EXPECT_FALSE(raw::fusionRangesOverlap(texture.va, raw::fusionImageBytes(texture), texture.va + 16384, 256));
     texture.layerBytes = 32768;
     texture.layers = 3;
     EXPECT_EQ(raw::fusionImageBytes(texture), 98304u);
@@ -191,7 +200,10 @@ TEST(AttachmentLifetime, BufferTexturesExposeTheirRowsToAliasChecks)
 
 TEST(AttachmentLifetime, OnlyACompleteInitialClearEliminatesTheShadowInputCopy)
 {
-    struct Clear { uint32_t target, x0, y0, x1, y1; };
+    struct Clear {
+        uint32_t target, x0, y0, x1, y1;
+    };
+
     std::vector<Clear> clears;
     EXPECT_FALSE(raw::attachmentStartsCleared(0, 64, 64, clears));
     clears.push_back({1, 0, 0, 64, 64});
@@ -205,4 +217,4 @@ TEST(AttachmentLifetime, OnlyACompleteInitialClearEliminatesTheShadowInputCopy)
     EXPECT_TRUE(raw::attachmentStartsCleared(0, 31, 29, clears));
     EXPECT_FALSE(raw::attachmentStartsCleared(0, 65, 64, clears));
 }
-} // namespace
+}  // namespace

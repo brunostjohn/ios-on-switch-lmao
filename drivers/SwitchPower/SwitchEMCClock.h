@@ -94,4 +94,3 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
     self->startActmon();
     return kIOReturnSuccess;
 }
-

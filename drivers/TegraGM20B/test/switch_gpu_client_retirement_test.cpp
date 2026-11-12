@@ -520,7 +520,8 @@ public:
 		bos_ = bo;
 		auto *mapping = new switch_gpu_mapping{id, va, bytes, buffer, 0, false, big};
 		installPtes(mapping);
-		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0, 0, false};
+		auto *record =
+			new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0, 0, false};
 		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, va);
 		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
 		binds_[at] = {va, bytes, bo, 0, record};
@@ -641,7 +642,8 @@ TEST_F(ClientRetirement, MultipleBindingsKeepTheirBoUntilLastRetirement)
 {
 	auto *bo = client.add(4);
 	auto *record = new AGXDeviceUserClient::RetiredBinding{
-		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096}, {}, 0, 0, 0, false};
+		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096},
+		{},      0,       0,    0,  false};
 	client.binds_[client.nbinds_++] = {0x20000, 4096, bo, 0, record};
 	++bo->bindings;
 	free(4);

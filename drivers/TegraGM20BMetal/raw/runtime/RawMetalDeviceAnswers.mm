@@ -106,8 +106,8 @@ void installDeviceAnswers(Class cls)
 // runs none of them
 - (MTLArchitecture *)architecture
 {
-    static MTLArchitecture *const architecture =
-        [[MTLArchitecture alloc] initWithCPUType:int(raw::kAppleGpuCpuType) cpuSubtype:int(kKind.gpuSubtype)];
+    static MTLArchitecture *const architecture = [[MTLArchitecture alloc] initWithCPUType:int(raw::kAppleGpuCpuType)
+                                                                               cpuSubtype:int(kKind.gpuSubtype)];
     return architecture;
 }
 
@@ -116,10 +116,10 @@ void installDeviceAnswers(Class cls)
 // GetMPSDevice takes its tuning by the exact name within the families supportsFamily: answers.
 - (NSString *)name
 {
-    static NSString *const name = [NSString
-        stringWithFormat:@"%.*s %.*s %.*s", int(kKind.gpuVendor.size()), kKind.gpuVendor.data(),
-                         int(kKind.gpuFamily.size()), kKind.gpuFamily.data(), int(kKind.gpuProduct.size()),
-                         kKind.gpuProduct.data()];
+    static NSString *const name =
+        [NSString stringWithFormat:@"%.*s %.*s %.*s", int(kKind.gpuVendor.size()), kKind.gpuVendor.data(),
+                                   int(kKind.gpuFamily.size()), kKind.gpuFamily.data(), int(kKind.gpuProduct.size()),
+                                   kKind.gpuProduct.data()];
     return name;
 }
 

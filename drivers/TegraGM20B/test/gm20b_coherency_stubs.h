@@ -13,13 +13,26 @@
 #include <thread>
 #include <vector>
 
-class IOUserClient {
+class IOUserClient
+{
 public:
 	bool inactive = false;
 	unsigned refs = 1;
-	bool isInactive() const { return inactive; }
-	void retain() { ++refs; }
-	void release() { --refs; }
+
+	bool isInactive() const
+	{
+		return inactive;
+	}
+
+	void retain()
+	{
+		++refs;
+	}
+
+	void release()
+	{
+		--refs;
+	}
 };
 
 struct IOLock {
@@ -70,15 +83,24 @@ inline void IOLockWakeup(IOLock *lock, void *, bool)
 }
 
 #define THREAD_UNINT 0
+
 inline void *current_thread()
 {
 	static thread_local int identity;
 	return &identity;
 }
 
-inline void *current_task() { return current_thread(); }
+inline void *current_task()
+{
+	return current_thread();
+}
 
-inline bool &failZeroAllocation() { static bool fail = false; return fail; }
+inline bool &failZeroAllocation()
+{
+	static bool fail = false;
+	return fail;
+}
+
 #define IONewZero(type, count) (failZeroAllocation() ? nullptr : new type[(count)]{})
 
 #define IONew(type, count) (new type[(count)])

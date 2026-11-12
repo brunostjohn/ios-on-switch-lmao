@@ -20,9 +20,19 @@ TegraVICPicture exportedPicture;
 IOMemoryDescriptor surfaceMemory;
 }
 
-extern "C" bool tegra_vic_present_ready() { return vicReady; }
-extern "C" bool switch_native_surface_gpu_ready() { return gpuReady; }
-extern "C" bool switch_native_surface_display_ready() { return displayReady;
+extern "C" bool tegra_vic_present_ready()
+{
+    return vicReady;
+}
+
+extern "C" bool switch_native_surface_gpu_ready()
+{
+    return gpuReady;
+}
+
+extern "C" bool switch_native_surface_display_ready()
+{
+    return displayReady;
 }
 
 extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t access, uint32_t *engines,
@@ -35,6 +45,7 @@ extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t 
     *cpuOwners = cpuOwnerCount;
     return queryError;
 }
+
 extern "C" int tegra_nvdec_buffer_alloc(uint64_t bytes, TegraNVDECBlock *block)
 {
     ++allocations;
@@ -47,6 +58,7 @@ extern "C" int tegra_nvdec_buffer_alloc(uint64_t bytes, TegraNVDECBlock *block)
     block->backing = &nextBacking;
     return 0;
 }
+
 extern "C" void tegra_nvdec_buffer_free(TegraNVDECBlock *block)
 {
     ++frees;
@@ -54,6 +66,7 @@ extern "C" void tegra_nvdec_buffer_free(TegraNVDECBlock *block)
     block->pages.memory->release();
     *block = {};
 }
+
 extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICSurface *surface)
 {
     ++lookups;
@@ -66,7 +79,12 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     surface->baseOffset = 0;
     return lookupError;
 }
-extern "C" void tegra_vic_surface_release(TegraVICSurface *) { ++surfaceReleases; }
+
+extern "C" void tegra_vic_surface_release(TegraVICSurface *)
+{
+    ++surfaceReleases;
+}
+
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why,
                                   bool *)
 {
@@ -84,6 +102,7 @@ protected:
     SwitchNVDECBuffer buffer;
     TegraNVDECPresent request;
     task_t task = reinterpret_cast<task_t>(0x1234);
+
     void SetUp() override
     {
         oldMemory = {};
@@ -119,6 +138,7 @@ protected:
         request.sample_bytes = 1;
         request.surface_id = 52;
     }
+
     void unchanged() const
     {
         EXPECT_EQ(buffer.handle, 19u);

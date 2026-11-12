@@ -225,9 +225,10 @@ struct DrawCase {
 // Core Animation's shapes: quads from one stream at moving first vertices, text runs indexed at a base vertex, a few
 // instanced draws, draws at the same first vertex
 const std::vector<DrawCase> kFrame = {
-    {false, 0, 4, 1, 0, 0},     {false, 4, 4, 1, 4, 0},     {false, 8, 4, 1, 8, 0},     {false, 8, 4, 1, 8, 0},
-    {true, 0, 6, 1, 0, 0},      {true, 6, 6, 1, 0, 0},      {true, 0, 6, 1, 64, 0},     {false, 0, 4, 3, 0, 0},
-    {false, 0, 4, 3, 0, 2},     {false, 12, 4, 1, 12, 0},   {true, 0, 12, 1, 128, 0},   {false, 0, 4, 1, 0, 0},
+    {false, 0, 4, 1, 0, 0},           {false, 4, 4, 1, 4, 0},   {false, 8, 4, 1, 8, 0},
+    {false, 8, 4, 1, 8, 0},           {true, 0, 6, 1, 0, 0},    {true, 6, 6, 1, 0, 0},
+    {true, 0, 6, 1, 64, 0},           {false, 0, 4, 3, 0, 0},   {false, 0, 4, 3, 0, 2},
+    {false, 12, 4, 1, 12, 0},         {true, 0, 12, 1, 128, 0}, {false, 0, 4, 1, 0, 0},
     {false, 0x3000, 4, 1, 0x3000, 0},
 };
 
@@ -235,8 +236,8 @@ const std::vector<DrawCase> kFrame = {
 std::vector<Method> methodsOf(const std::vector<uint32_t> &words)
 {
     std::vector<Method> out;
-    const raw::mme::Program programs[] = {raw::mme::kDrawProgram,      raw::mme::kIndexedProgram,
-                                          raw::mme::kIndirectProgram,  raw::mme::kIndexedIndirectProgram,
+    const raw::mme::Program programs[] = {raw::mme::kDrawProgram,       raw::mme::kIndexedProgram,
+                                          raw::mme::kIndirectProgram,   raw::mme::kIndexedIndirectProgram,
                                           raw::mme::kDrawParamsProgram, raw::mme::kIndexedParamsProgram};
     for (size_t i = 0; i < words.size();) {
         const uint32_t hdr = words[i++], op = hdr >> 29, count = (hdr >> 16) & 0x1fff;

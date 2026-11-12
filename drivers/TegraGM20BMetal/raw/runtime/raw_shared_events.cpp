@@ -18,7 +18,9 @@ std::atomic<uintptr_t> nextIdentity{1};
 }
 
 struct SharedEvents::State {
-    State(uint32_t conn, bool tunneled, uint32_t sel) : connection(conn), selector(sel), tunnel(tunneled) {}
+    State(uint32_t conn, bool tunneled, uint32_t sel) : connection(conn), selector(sel), tunnel(tunneled)
+    {}
+
     uint32_t connection, selector;
     bool tunnel;
     std::atomic<bool> closed{false};
@@ -27,10 +29,12 @@ struct SharedEvents::State {
     dispatch_queue_t queue = nullptr;
     raw::Mutex lock;
     std::set<uint64_t> imports;
+
     struct Observer {
         uint64_t handle;
         std::function<void(int)> ready;
     };
+
     std::map<uint64_t, Observer> observers;
     uint64_t nextCookie = 1;
 
@@ -63,9 +67,11 @@ struct SharedEvents::State {
             method = selector;
         }
         if (reference)
-            return IOConnectCallAsyncStructMethod(connection, method, IONotificationPortGetMachPort(port),
-                reference, kOSAsyncRef64Count, input, bytes, output, outputBytes ? &outputBytes : nullptr);
-        return IOConnectCallStructMethod(connection, method, input, bytes, output, outputBytes ? &outputBytes : nullptr);
+            return IOConnectCallAsyncStructMethod(connection, method, IONotificationPortGetMachPort(port), reference,
+                                                  kOSAsyncRef64Count, input, bytes, output,
+                                                  outputBytes ? &outputBytes : nullptr);
+        return IOConnectCallStructMethod(connection, method, input, bytes, output,
+                                         outputBytes ? &outputBytes : nullptr);
     }
 
     void cancel(uint64_t handle, uint64_t cookie)
@@ -81,7 +87,8 @@ struct SharedEvents::State {
 };
 
 SharedEvents::SharedEvents(uint32_t connection, bool tunnel, uint32_t selector)
-    : state_(new State(connection, tunnel, selector)) {}
+    : state_(new State(connection, tunnel, selector))
+{}
 
 std::shared_ptr<SharedEvents> SharedEvents::create(uint32_t connection, bool tunnel, uint32_t selector)
 {
@@ -124,7 +131,7 @@ int SharedEvents::probe(const SharedEventLease &event, uint64_t value)
 }
 
 std::shared_ptr<SharedEventWatch> SharedEvents::observe(std::shared_ptr<SharedEventLease> event, uint64_t value,
-                                                       std::function<void(int)> ready, int &result, bool terminal)
+                                                        std::function<void(int)> ready, int &result, bool terminal)
 {
     auto &s = *state_;
     std::function<void(int)> failedReady;
@@ -147,7 +154,7 @@ std::shared_ptr<SharedEventWatch> SharedEvents::observe(std::shared_ptr<SharedEv
     reference[kIOAsyncCalloutFuncIndex] = uint64_t(reinterpret_cast<uintptr_t>(&notification));
     reference[kIOAsyncCalloutRefconIndex] = s.identity;
     const TegraGM20BAbiEventObserve request{event->handle(), value, cookie,
-        terminal ? uint32_t(TegraGM20BEventObserveTerminal) : 0u, 0};
+                                            terminal ? uint32_t(TegraGM20BEventObserveTerminal) : 0u, 0};
     result = s.call(TegraGM20BMethodEventObserve, &request, sizeof request, nullptr, 0, reference);
     if (result) {
         failedReady = std::move(s.observers.at(cookie).ready);
@@ -158,23 +165,25 @@ std::shared_ptr<SharedEventWatch> SharedEvents::observe(std::shared_ptr<SharedEv
 }
 
 std::shared_ptr<SharedEventCompletion> SharedEvents::completion(std::shared_ptr<SharedEventLease> event, uint64_t value,
-                                                               std::function<void()> ready, int &result)
+                                                                std::function<void()> ready, int &result)
 {
     result = kIOReturnBadArgument;
     if (!ready)
         return nullptr;
     auto completion = std::shared_ptr<SharedEventCompletion>(
         new SharedEventCompletion(std::make_shared<std::atomic<int>>(kIOReturnNotReady)));
-    completion->watch_ = observe(std::move(event), value,
+    completion->watch_ = observe(
+        std::move(event), value,
         [status = completion->result_, ready = std::move(ready)](int code) {
             status->store(code, std::memory_order_release);
             ready();
-        }, result, true);
+        },
+        result, true);
     return completion->watch_ ? completion : nullptr;
 }
 
 std::shared_ptr<ResourceReadyCompletion> SharedEvents::resources(const std::vector<TegraGM20BAbiSurfaceUse> &uses,
-                                                                  std::function<void()> ready, int &result)
+                                                                 std::function<void()> ready, int &result)
 {
     auto &s = *state_;
     std::function<void(int)> failedReady;
@@ -195,9 +204,9 @@ std::shared_ptr<ResourceReadyCompletion> SharedEvents::resources(const std::vect
     auto completion = std::shared_ptr<ResourceReadyCompletion>(
         new ResourceReadyCompletion(std::make_shared<std::atomic<int>>(kIOReturnNotReady)));
     s.observers.emplace(cookie, State::Observer{0, [status = completion->result_, ready = std::move(ready)](int code) {
-        status->store(code, std::memory_order_release);
-        ready();
-    }});
+                                                    status->store(code, std::memory_order_release);
+                                                    ready();
+                                                }});
     uint64_t reference[kOSAsyncRef64Count]{};
     reference[kIOAsyncCalloutFuncIndex] = uint64_t(reinterpret_cast<uintptr_t>(&notification));
     reference[kIOAsyncCalloutRefconIndex] = s.identity;

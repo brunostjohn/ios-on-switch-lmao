@@ -6,8 +6,7 @@
 // A connection's BOs by handle, for the lookups of every submission's uses. Handles are issued in increasing order
 // (next_handle_), so an insert appends and a lookup is a binary search. Memory is the allocation policy:
 // Memory::allocate<Entry>(n) and Memory::release(entries, n).
-template <typename Bo, typename Memory>
-class SwitchGpuBoIndex
+template <typename Bo, typename Memory> class SwitchGpuBoIndex
 {
 public:
 	SwitchGpuBoIndex() = default;

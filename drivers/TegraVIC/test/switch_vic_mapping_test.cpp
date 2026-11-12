@@ -5,28 +5,56 @@
 #include <stdexcept>
 #include <vector>
 #include "switch_vic_backing_stubs.h"
-[[noreturn]] void panic(const char *) { throw std::runtime_error("mapping panic"); }
+
+[[noreturn]] void panic(const char *)
+{
+    throw std::runtime_error("mapping panic");
+}
+
 #include "../SwitchVICMapping.cpp"
 
 namespace {
 switch_gpu_backing backing;
 switch_gpu_backing_info description;
 std::array<uint64_t, 40000> pages;
-struct Created { uint64_t address, first; uint32_t count; bool writable; };
+
+struct Created {
+    uint64_t address, first;
+    uint32_t count;
+    bool writable;
+};
+
 std::vector<Created> created;
 std::vector<uint64_t> unmapped;
 uint64_t nextAddress = 0x30000000;
 }
-extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info) { *info = description; }
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *item) { ++item->refs; }
-extern "C" void switch_gpu_backing_release(switch_gpu_backing *item) { --item->refs; }
+
+extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info)
+{
+    *info = description;
+}
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *item)
+{
+    ++item->refs;
+}
+
+extern "C" void switch_gpu_backing_release(switch_gpu_backing *item)
+{
+    --item->refs;
+}
+
 extern "C" uint64_t switch_vic_mapping_create(const uint64_t *physical, uint32_t count, bool writable)
 {
     nextAddress += 0x1000000;
     created.push_back({nextAddress, physical[0], count, writable});
     return nextAddress;
 }
-extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t) { unmapped.push_back(address); }
+
+extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t)
+{
+    unmapped.push_back(address);
+}
 
 namespace {
 class SwitchVICMappingTest : public testing::Test {
@@ -44,6 +72,7 @@ class SwitchVICMappingTest : public testing::Test {
         created.clear();
         unmapped.clear();
     }
+
     void TearDown() override
     {
         for (auto &mapping : gMappings.maps) {

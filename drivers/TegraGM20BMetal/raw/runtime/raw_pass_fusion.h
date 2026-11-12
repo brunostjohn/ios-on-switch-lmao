@@ -44,4 +44,4 @@ inline bool fusionRangesOverlap(uint64_t a, uint64_t bytesA, uint64_t b, uint64_
     return a && b && bytesA && bytesB && (a <= b ? b - a < bytesA : a - b < bytesB);
 }
 
-} // namespace raw
+}  // namespace raw

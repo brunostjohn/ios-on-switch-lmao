@@ -17,6 +17,7 @@ void switch_gpu_event_stats_waited(void);
 void switch_gpu_event_stats_window(char *line, size_t size);
 #else
 #define SWITCH_GPU_EVENT_STATS 0
+
 static inline void switch_gpu_event_stats_released(uint32_t signals)
 {
 	(void)signals;

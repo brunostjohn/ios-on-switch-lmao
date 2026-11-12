@@ -137,7 +137,8 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
                                   "encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);"));
     const std::string facade = SourceText("../raw/runtime/RawMetalPrivateComp.mm");
     const std::string note = Body(facade, "static void notePipeline(");
-    EXPECT_THAT(note, HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed"));
+    EXPECT_THAT(note,
+                HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed"));
     EXPECT_THAT(note, HasSubstr("cb->_scanStorageTargets = true;")) << "a variant still being made is looked at later";
     const std::string move = Body(facade, "void rmStorageTargetsPlain(");
     EXPECT_THAT(move, HasSubstr("if (cb->_scanStorageTargets)"));

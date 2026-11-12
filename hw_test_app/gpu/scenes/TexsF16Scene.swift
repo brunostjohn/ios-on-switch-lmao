@@ -59,7 +59,9 @@ struct TexsF16Scene: GPUScene {
             bytesPerRow: width * texelBytes)
         let bindless = try gpu.compute("texs_f16_bindless")
         for (sampling, linear, offset) in Self.samplings {
-            let pipeline = try gpu.render(fragment: linear == 1 ? "texs_f16_linear" : "texs_f16_point", format: .rgba32Float) {
+            let pipeline = try gpu.render(
+                fragment: linear == 1 ? "texs_f16_linear" : "texs_f16_point", format: .rgba32Float
+            ) {
                 $0.colorAttachments[1].pixelFormat = .rgba32Float
                 $0.colorAttachments[2].pixelFormat = .r32Float
             }
@@ -77,7 +79,9 @@ struct TexsF16Scene: GPUScene {
                 }
                 let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
                 encoder.setRenderPipelineState(pipeline)
-                var corners: [SIMD4<Float>] = [SIMD4(-1, -1, 0, 1), SIMD4(1, -1, 0, 1), SIMD4(-1, 1, 0, 1), SIMD4(1, 1, 0, 1)]
+                var corners: [SIMD4<Float>] = [
+                    SIMD4(-1, -1, 0, 1), SIMD4(1, -1, 0, 1), SIMD4(-1, 1, 0, 1), SIMD4(1, 1, 0, 1),
+                ]
                 encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
                 encoder.setFragmentTexture(source, index: 0)
                 encoder.setFragmentTexture(source, index: 1)

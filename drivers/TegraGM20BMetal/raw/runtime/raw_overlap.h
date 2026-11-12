@@ -22,8 +22,7 @@ public:
     // An indexed list's runs are index ranges. Runs retain the original vertex IDs and provoking vertex; restarting
     // an odd strip triangle reverses winding.
     static bool sequential(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed,
-                           std::vector<std::pair<uint32_t, uint32_t>> &runs,
-                           std::array<bool, kMaxTriangles> &winding)
+                           std::vector<std::pair<uint32_t, uint32_t>> &runs, std::array<bool, kMaxTriangles> &winding)
     {
         runs.clear();
         winding.fill(false);

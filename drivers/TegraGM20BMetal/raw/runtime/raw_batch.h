@@ -47,12 +47,36 @@ public:
         pushes_.clear();
         ends_.clear();
     }
-    bool empty() const { return pushes_.empty(); }
-    size_t size() const { return pushes_.size(); }
-    const TegraGM20BAbiPush *data() const { return pushes_.data(); }
-    TegraGM20BAbiPush &operator[](size_t at) { return pushes_[at]; }
-    const TegraGM20BAbiPush &operator[](size_t at) const { return pushes_[at]; }
-    TegraGM20BAbiPush &back() { return pushes_.back(); }
+
+    bool empty() const
+    {
+        return pushes_.empty();
+    }
+
+    size_t size() const
+    {
+        return pushes_.size();
+    }
+
+    const TegraGM20BAbiPush *data() const
+    {
+        return pushes_.data();
+    }
+
+    TegraGM20BAbiPush &operator[](size_t at)
+    {
+        return pushes_[at];
+    }
+
+    const TegraGM20BAbiPush &operator[](size_t at) const
+    {
+        return pushes_[at];
+    }
+
+    TegraGM20BAbiPush &back()
+    {
+        return pushes_.back();
+    }
 
     void append(TegraGM20BAbiPush push, bool merge = true)
     {
@@ -129,8 +153,7 @@ public:
         }
     }
 
-    template <class Submit>
-    bool submit(uint32_t maxPushes, uint32_t maxFences, Submit &&submitOne)
+    template <class Submit> bool submit(uint32_t maxPushes, uint32_t maxFences, Submit &&submitOne)
     {
         for (size_t at = 0; at < pushes_.size();) {
             const size_t n = submission(at, maxPushes, maxFences);

@@ -185,6 +185,7 @@ TEST(SubmitQueue, TicketKeepsFinalOwnerAliveOutsideSchedulerLock)
 struct CountedValue {
     unsigned value = 0;
     size_t *comparisons = nullptr;
+
     bool operator!=(const CountedValue &other) const
     {
         ++*comparisons;

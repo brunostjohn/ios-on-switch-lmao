@@ -135,13 +135,14 @@ void tgm_views_deferred_lock(uint32_t id, uint32_t options);
 
 /* TegraGM20BTiled.cpp's relayout counts (debug kernels' stats line; the calling process's GPU path counts) */
 enum tgm_relayout_count {
-	TGM_RELAYOUT_FRESH,           /* a first decision's tiling move skipped: nothing had written the surface */
-	TGM_RELAYOUT_DEFERRED,        /* a last import's untile move left for a CPU lock */
-	TGM_RELAYOUT_LAZY,            /* a deferred untile a CPU lock made */
-	TGM_RELAYOUT_NEVER_UNTILED,   /* a deferred surface's memory went block-linear: its untile never ran */
-	TGM_RELAYOUT_MOVED,           /* a tiling or untiling move made */
+	TGM_RELAYOUT_FRESH, /* a first decision's tiling move skipped: nothing had written the surface */
+	TGM_RELAYOUT_DEFERRED, /* a last import's untile move left for a CPU lock */
+	TGM_RELAYOUT_LAZY,     /* a deferred untile a CPU lock made */
+	TGM_RELAYOUT_NEVER_UNTILED, /* a deferred surface's memory went block-linear: its untile never ran */
+	TGM_RELAYOUT_MOVED, /* a tiling or untiling move made */
 	TGM_RELAYOUT_COUNTS
 };
+
 void tgm_tiled_count(enum tgm_relayout_count which);
 
 #ifdef __cplusplus

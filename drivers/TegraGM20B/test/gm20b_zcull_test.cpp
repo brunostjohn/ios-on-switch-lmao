@@ -11,11 +11,12 @@
 namespace
 {
 struct Reference {
-	uint32_t width_align, height_align, pixel_squares, aliquots, region_bytes, region_header, subregion_header,
-		subregion_width_align, subregion_height_align, subregions;
+	uint32_t width_align, height_align, pixel_squares, aliquots, region_bytes, region_header,
+		subregion_header, subregion_width_align, subregion_height_align, subregions;
 };
 
-Reference nvgpu(uint32_t gpc_count, uint32_t tpc_count, uint32_t gpc0_tpcs, uint32_t zcb_count, uint32_t aliquots)
+Reference nvgpu(uint32_t gpc_count, uint32_t tpc_count, uint32_t gpc0_tpcs, uint32_t zcb_count,
+		uint32_t aliquots)
 {
 	const uint32_t num_gpcs = 1; /* GPU_LIT_NUM_GPCS */
 	Reference r = {};
@@ -37,7 +38,8 @@ TEST(Zcull, LayoutIsNvgpus)
 	for (uint32_t zcbs = 1; zcbs <= 4; zcbs++)
 		for (uint32_t aliquots : {0x100u, 0x400u, 0x800u, 0x1400u, 0xffffu}) {
 			TegraGM20BAbiZcullInfo z = {};
-			ASSERT_TRUE(tgm_zcull_layout(1, 2, 2, zcbs << 16 | 2, aliquots | 0xabcd0000u, 0x1500, &z));
+			ASSERT_TRUE(tgm_zcull_layout(1, 2, 2, zcbs << 16 | 2,
+						     aliquots | 0xabcd0000u, 0x1500, &z));
 			const Reference r = nvgpu(1, 2, 2, zcbs, aliquots);
 			EXPECT_EQ(z.width_align_pixels, r.width_align);
 			EXPECT_EQ(z.height_align_pixels, r.height_align);
@@ -70,9 +72,10 @@ TEST(Zcull, NoRamOrNoImageIsNoZcull)
 	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 0xbadf1100, 0x01ff0800, 0x1500, nullptr));
 	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 0x00040002, 0xbadf1100, 0x1500, nullptr));
 	TegraGM20BAbiZcullInfo z = {};
-	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 1 << 16, 0, 0x1500, &z));         /* the emulator's GR: no RAM size */
-	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 0, 0x400, 0x1500, &z));           /* no zcull bank */
-	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 1 << 16, 0x400, 0, &z));          /* FECS reported no image */
+	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 1 << 16, 0, 0x1500,
+				      &z)); /* the emulator's GR: no RAM size */
+	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 0, 0x400, 0x1500, &z));  /* no zcull bank */
+	EXPECT_FALSE(tgm_zcull_layout(1, 2, 2, 1 << 16, 0x400, 0, &z)); /* FECS reported no image */
 	EXPECT_FALSE(tgm_zcull_layout(0, 0, 0, 1 << 16, 0x400, 0x1500, &z));
 }
 
@@ -85,4 +88,4 @@ TEST(Zcull, RecordIsDrmNouveauGetZcullInfos)
 	EXPECT_EQ(offsetof(TegraGM20BAbiZcullInfo, ctxsw_size), 40u);
 	EXPECT_EQ(sizeof(TegraGM20BAbiZcullInfo), 48u);
 }
-} // namespace
+}  // namespace

@@ -11,6 +11,7 @@ struct SwitchVICSurfaceAccess {
     uint64_t offset = 0;
 };
 
-int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool avoid = false);
+int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access,
+                              bool avoid = false);
 void switch_vic_surface_unreserve(SwitchVICSurfaceAccess *access);
 void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access);

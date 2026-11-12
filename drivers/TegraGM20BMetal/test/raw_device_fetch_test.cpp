@@ -152,9 +152,9 @@ TEST_F(DeviceFetch, TheStorageFormDrawsEveryTopologyWholeInsideTheInterlock)
     ASSERT_EQ(pl->fetchBits & 1, 1);
     const uint32_t args[5] = {9, 1, 0, 0, 0};
     memcpy(static_cast<uint8_t *>(arguments.cpu) + 16, args, sizeof args);
-    for (const auto &[name, drawn] : {std::pair{"strip", strip(pl)}, std::pair{"restart", restart(pl)},
-                                      std::pair{"instanced", instanced(pl)}, std::pair{"indirect", indirect(pl)},
-                                      std::pair{"indexed indirect", indexedIndirect(pl)}}) {
+    for (const auto &[name, drawn] :
+         {std::pair{"strip", strip(pl)}, std::pair{"restart", restart(pl)}, std::pair{"instanced", instanced(pl)},
+          std::pair{"indirect", indirect(pl)}, std::pair{"indexed indirect", indexedIndirect(pl)}}) {
         EXPECT_TRUE(drawn.ok) << name << ": " << drawn.why;
         EXPECT_EQ(drawn.draws, 1u) << name;
         EXPECT_EQ(drawn.interlocked, 1u) << name;

@@ -180,6 +180,7 @@ struct Storage {
         if (made)
             memset(buffer.cpu, 0, bytes);
     }
+
     Storage(const Storage &) = delete;
     Storage &operator=(const Storage &) = delete;
 
@@ -286,7 +287,8 @@ void runChain(switch_bench &b, const switch_bench_experiment &x, switch_bench_re
             link.program = x.chain[i - 1];
         bench::Program p = program(link);
         if (p.data.size() < 16) {
-            bench::fail(r, SWITCH_BENCH_INVALID, "chain: each kernel's shader data holds the output's and QMDs' addresses");
+            bench::fail(r, SWITCH_BENCH_INVALID,
+                        "chain: each kernel's shader data holds the output's and QMDs' addresses");
             break;
         }
         memcpy(p.data.data(), &output.va, 8);
@@ -309,32 +311,35 @@ void runChain(switch_bench &b, const switch_bench_experiment &x, switch_bench_re
     uint64_t gpu = 0, wall = 0;
     memset(output.cpu, kUnwritten, x.output_bytes);
     memset(output.cpu + x.output_bytes - 4, 0, 4);
-    const bool ran = states.size() == x.chain_links + 1 && s.record([&](raw::CommandBuffer &cb) {
-        raw::ComputeEncoder ce(cb, d);
-        bool ok = true;
-        for (uint32_t i = x.chain_links + 1; ok && i-- > 0;) {
-            ce.setState(states[i]);
-            ce.benchQmd = [&, i](uint32_t *qmd) {
-                if (i < x.chain_links && (x.chain_schedule >> i & 1)) {
-                    qmd[kQmdDependent] = uint32_t((qmds.va + uint64_t(i) * kQmdBytes) >> 8);
-                    qmd[kQmdFlags] |= kQmdScheduleDependent;
-                }
-                qmd[kQmdFlags] |= kQmdReleaseEnable0;
-                qmd[kQmdRelease0] = uint32_t(counter);
-                qmd[kQmdRelease0 + 1] = (uint32_t(counter >> 32) & 0xff) | kRelease0AddOneWord;
-                qmd[kQmdRelease0 + 2] = 1;
-                if (i)
-                    memcpy(qmds.cpu + uint64_t(i - 1) * kQmdBytes, qmd, kQmdBytes);
-                return i == 0;
-            };
-            const char *why = nullptr;
-            ok = ce.dispatch(x.groups, x.threads, &why);
-            if (!ok)
-                s.refused(std::string("dispatch refused: ") + (why ? why : "?"));
-        }
-        ce.end();
-        return ok;
-    }, gpu, wall);
+    const bool ran = states.size() == x.chain_links + 1 &&
+                     s.record(
+                         [&](raw::CommandBuffer &cb) {
+                             raw::ComputeEncoder ce(cb, d);
+                             bool ok = true;
+                             for (uint32_t i = x.chain_links + 1; ok && i-- > 0;) {
+                                 ce.setState(states[i]);
+                                 ce.benchQmd = [&, i](uint32_t *qmd) {
+                                     if (i < x.chain_links && (x.chain_schedule >> i & 1)) {
+                                         qmd[kQmdDependent] = uint32_t((qmds.va + uint64_t(i) * kQmdBytes) >> 8);
+                                         qmd[kQmdFlags] |= kQmdScheduleDependent;
+                                     }
+                                     qmd[kQmdFlags] |= kQmdReleaseEnable0;
+                                     qmd[kQmdRelease0] = uint32_t(counter);
+                                     qmd[kQmdRelease0 + 1] = (uint32_t(counter >> 32) & 0xff) | kRelease0AddOneWord;
+                                     qmd[kQmdRelease0 + 2] = 1;
+                                     if (i)
+                                         memcpy(qmds.cpu + uint64_t(i - 1) * kQmdBytes, qmd, kQmdBytes);
+                                     return i == 0;
+                                 };
+                                 const char *why = nullptr;
+                                 ok = ce.dispatch(x.groups, x.threads, &why);
+                                 if (!ok)
+                                     s.refused(std::string("dispatch refused: ") + (why ? why : "?"));
+                             }
+                             ce.end();
+                             return ok;
+                         },
+                         gpu, wall);
     if (ran) {
         r.gpu_ns[0] = gpu;
         r.wall_ns[0] = wall;

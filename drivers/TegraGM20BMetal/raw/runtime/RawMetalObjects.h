@@ -85,7 +85,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::string _constants;
     std::string _framework;
     std::shared_ptr<raw::LibrarySource> _source;
-    bool _specialized;  // made with constant values (even none)
+    bool _specialized;         // made with constant values (even none)
     std::string _libraryName;  // the library function it was made from (its name unless specialized under another)
     RMLibrary *_library;       // the library a twin is made of, while none is
     MTLFunctionConstantValues *_values;  // what a specialized twin is made with
@@ -134,14 +134,18 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMTextureTwinOnly
 };
 
-enum class RMShareable : uint8_t { Unasked, No, Yes };
+enum class RMShareable : uint8_t {
+    Unasked,
+    No,
+    Yes
+};
 
 @interface RMTexture : RMObject {
 @public
     raw::Texture _raw;
     bool _rawOk;  // the raw path can draw with it (else every command buffer using it goes to m2v)
     RMTextureKind _kind;
-    std::atomic<bool> _gpuWrites;  // its surface was declared GPU-written (surfaceGpuWrites)
+    std::atomic<bool> _gpuWrites;   // its surface was declared GPU-written (surfaceGpuWrites)
     std::atomic<bool> _readAsData;  // a blit copied out of it or a kernel took it, as recorded (raw_resolve_rule.h)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
@@ -183,15 +187,15 @@ enum class RMShareable : uint8_t { Unasked, No, Yes };
     // null: not in the pack (every command buffer using it goes to m2v), or not yet made by the runtime (completeLater: set once,
     // released, from its queue)
     raw::Pipeline *_raw;
-    bool _packable;     // its functions are one framework's default library's (looked up in the pack)
+    bool _packable;  // its functions are one framework's default library's (looked up in the pack)
     // its record is the pack's, and so are its variants' (RawMetalCubic.mm packedVariants); a record this process made is
     // not, and its variants are made as well
     bool _packed;
     bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
     bool _archived;     // an archive its creation listed declares it: its twin is made as a packed one's
     bool _caTransform;
-    std::string _failure;                    // why its creation failed (Completion::makeNow), as Metal's would
-    std::string _key;                        // its pack key (completable states')
+    std::string _failure;  // why its creation failed (Completion::makeNow), as Metal's would
+    std::string _key;      // its pack key (completable states')
     MTLRenderPipelineDescriptor
         *_madeFrom;                  // completable states': what its cubic variants and a later twin are made of
     MTLPipelineOption _twinOptions;  // a state raw draws from its creation: its twin is made at its first m2v
@@ -244,6 +248,7 @@ struct RMPass {
     __unsafe_unretained id depth;
     NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
+
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
     struct Zeta {
         __unsafe_unretained id texture;
@@ -253,14 +258,16 @@ struct RMPass {
         MTLStoreAction store;
         bool resolve;
     } zeta[2];
+
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
     uint32_t layers = 1;  // renderTargetArrayLength (0 and 1: one)
     raw::SamplePositions positions;
-    uint8_t compressed = 0;  // colour attachments on compressed memory as the pass was made (raw_private_comp.h)
+    uint8_t compressed = 0;        // colour attachments on compressed memory as the pass was made (raw_private_comp.h)
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
-    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
+    bool continues =
+        false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -352,11 +359,13 @@ struct RMSharedEventWait {
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;
     raw::ProbeTaken _probeTaken;
+
     struct ProbeOp {
         size_t at;
         raw::ProbeOp op;
         RMTexture *read, *written;
     };
+
     std::vector<ProbeOp> _probeOps;
 #endif
     std::vector<RMSegment> _segs;
@@ -393,9 +402,9 @@ struct RMSharedEventWait {
     uint32_t _recordedPass;       // the OpRender the draws being recorded belong to
     // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
     std::vector<RMTexture *> _plainForStorage;
-    bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
+    bool _scanStorageTargets;                  // a pipeline bound in such a pass was a variant still being made
     std::vector<RMCounterMark> _counterMarks;  // in tape order
-    RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    RMBytes _bytes;                            // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // each submitted range's written resources, for its completion (captureWrittenRange): the first _retired of them
     std::deque<raw::RetirementWrites> _retirements;
     size_t _retired;
@@ -426,7 +435,7 @@ struct RMSharedEventWait {
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
     std::unordered_set<void *> _variantObserved;
     std::map<void *, std::shared_ptr<raw::ComputeKernelSet<raw::ComputeState>>> _computeJobs;
-    size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
+    size_t _eventArmed;            // operation position + 1; only the current wait installs a listener
     std::atomic<bool> _inHolders;  // in gHolders or gEventWaits (debug builds): unhold() takes their lock only then
     std::atomic<bool> _committed, _scheduledDone, _completedDone;
     bool _m2v;
@@ -450,12 +459,15 @@ struct RMSharedEventWait {
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)
-    uint32_t _rangeLoopStamp;  // the raw range just encoded laid predicated loops: its stamp (RMRawRetirement::loopStamp)
+    uint32_t
+        _rangeLoopStamp;  // the raw range just encoded laid predicated loops: its stamp (RMRawRetirement::loopStamp)
+
     // _lock: a retired range [from, to) recorded that its loop ending at `tag` would run past its copies (RMSegment::held)
     struct {
         bool pending;
         uint32_t tag, from, to;
     } _loopContinue;
+
     std::atomic<double> _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window
@@ -520,18 +532,18 @@ uint64_t nextTraceId();
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;
     raw::Variant<raw::Pipeline> *_drawnVariant;
-    uint32_t _formats[8];   // the pass's color attachments' formats as the raw path holds them (0: none)
-    uint32_t _count;        // its attachment count (the last attachment's index + 1)
-    uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
-    uint32_t _samples;      // its color attachments' samples a pixel
-    uint8_t _turn;          // its turned attachments' rotation (raw_rotation.h; 0: none)
-    uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
+    uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
+    uint32_t _count;       // its attachment count (the last attachment's index + 1)
+    uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _samples;     // its color attachments' samples a pixel
+    uint8_t _turn;         // its turned attachments' rotation (raw_rotation.h; 0: none)
+    uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
     bool _passShared;                // _pass is the thread's copy for passes of its contents (RawMetalPassCache.h)
     size_t _renderAt;                // its OpRender in the command buffer's plan
     __unsafe_unretained id<MTLBuffer> _visibility;  // its pass's visibility result buffer (the command buffer holds it)
-    bool _drew;                      // a draw recorded
+    bool _drew;                                     // a draw recorded
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -548,8 +560,8 @@ uint64_t nextTraceId();
 @end
 
 // RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
-id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
-                  MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
+id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
+                  MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);

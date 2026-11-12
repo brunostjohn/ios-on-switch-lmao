@@ -72,7 +72,8 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt);
  * longest, and where they landed with their buckets (SwitchGpuPreemptLanding.h; hw_test_app gpu.sched.long_draw_bands,
  * through SwitchGpuPathStats' line) */
 struct switch_gpu_preempt_counts;
-void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns, struct switch_gpu_preempt_counts *counts);
+void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns,
+			   struct switch_gpu_preempt_counts *counts);
 /* Debug kernels: an app channel's batch ending at end_pt, the job's last or not: where a preempt lands */
 void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last);
 /* Half its preemption latency after a preempt: if `chid` has left the GPU, the latency comes down. */

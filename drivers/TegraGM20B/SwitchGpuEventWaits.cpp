@@ -385,9 +385,11 @@ extern "C" int switch_gpu_event_waits_settled_status(const switch_gpu_event_wait
 	const int result = __atomic_load_n(&batch->result, __ATOMIC_ACQUIRE);
 	if (result)
 		return result > 0 ? 1 : 0;
-	const switch_gpu_event_waits *previous = __atomic_load_n(&batch->previous, __ATOMIC_ACQUIRE);
+	const switch_gpu_event_waits *previous =
+		__atomic_load_n(&batch->previous, __ATOMIC_ACQUIRE);
 	return !__atomic_load_n(&batch->count, __ATOMIC_ACQUIRE) &&
-			       (!previous || __atomic_load_n(&previous->result, __ATOMIC_ACQUIRE) > 0)
+			       (!previous ||
+				__atomic_load_n(&previous->result, __ATOMIC_ACQUIRE) > 0)
 		       ? 1
 		       : 0;
 }

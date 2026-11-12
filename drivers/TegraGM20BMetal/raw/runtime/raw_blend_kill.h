@@ -88,8 +88,8 @@ inline uint32_t keyColorFormat(const char *keyString, uint32_t j)
 
 // SET_ITERATED_BLEND_OPTIMIZATION's value for a state: its blob's (method, value) pairs, its targets' SET_CT_WRITE values
 // after them, its key and the targets its program writes as storage images
-inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8], const char *keyString,
-                                  uint8_t storageBits)
+inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8],
+                                  const char *keyString, uint8_t storageBits)
 {
     for (uint32_t j = 1; j < 8; j++)
         if (writes[j] & 0x1111)

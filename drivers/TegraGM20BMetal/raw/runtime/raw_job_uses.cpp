@@ -30,8 +30,7 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
     RAW_ENCODE_COUNT(Uses);
     if (va && dev_->k_.exactJobs() && !useMember(va, bytes ? bytes : 1, write, false)) {
         RAW_ENCODE_COUNT(UseAdds);
-        surfaces_.addAddress(va, bytes ? bytes : 1, write,
-                             bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
+        surfaces_.addAddress(va, bytes ? bytes : 1, write, bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
     }
 }
 
@@ -53,7 +52,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
         RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(buffer.va, buffer.length, write,
                              (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
-                             (ranged ? TegraGM20BSurfaceRange : 0u));
+                                 (ranged ? TegraGM20BSurfaceRange : 0u));
     }
 }
 
@@ -84,7 +83,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
         RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
                              (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
-                             (ranged ? TegraGM20BSurfaceRange : 0u));
+                                 (ranged ? TegraGM20BSurfaceRange : 0u));
     }
 }
 

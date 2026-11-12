@@ -54,12 +54,12 @@ enum Op : uint8_t {
     OpDrawIndirect,
     OpDrawIndexedIndirect,
     OpExecuteCommands,  // an indirect command buffer's range: obj2 it, x the first command, c the count (RawMetalIndirect.mm)
-    OpResetCommands,    // obj and obj2 the buffer, c the first command, x the count
-    OpCopyCommands,     // obj the source, obj2 the destination, c the source's first command, x the count, a the destination's
+    OpResetCommands,  // obj and obj2 the buffer, c the first command, x the count
+    OpCopyCommands,  // obj the source, obj2 the destination, c the source's first command, x the count, a the destination's
     // a compute encoder's predication record (raw_predicate_records.h kind in `stage`): the buffer, the word's offset in
     // `c`, the compare (raw::PredicateCompare) in `a`, the reference in `b`
     OpPredicate,
-    OpExecuteKernels,   // a compute encoder's execute of a buffer of dispatches: obj its RMKernelExecute (RawMetalIndirectExecute.mm)
+    OpExecuteKernels,  // a compute encoder's execute of a buffer of dispatches: obj its RMKernelExecute (RawMetalIndirectExecute.mm)
     OpDepthClip,  // setDepthClipMode: `a` the MTLDepthClipMode
 };
 

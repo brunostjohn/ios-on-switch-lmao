@@ -83,8 +83,8 @@ bool Device::hostAccess(const Texture &texture, bool write, HostAccess &access)
     return hostAccess(texture, texture.cpu, 0, write, access);
 }
 
-bool Device::hostAccess(const Texture &texture, const void *cpu, uint64_t requestedBytes,
-                        bool write, HostAccess &access)
+bool Device::hostAccess(const Texture &texture, const void *cpu, uint64_t requestedBytes, bool write,
+                        HostAccess &access)
 {
     Bo bo;
     uint64_t bytes = 0;

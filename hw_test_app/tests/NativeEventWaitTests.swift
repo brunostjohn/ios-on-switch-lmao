@@ -64,7 +64,8 @@ struct NativeEventWaitTest: NativeObjectTest {
         where !(await NativeSharedEventTest.waited(done, seconds: 5)) {
             work.failures.append("the \(name) command buffer never completed")
         }
-        metrics.set("producer_at_tail", producerAtTail.value == .completed ? "completed" : "\(producerAtTail.value.rawValue)")
+        metrics.set(
+            "producer_at_tail", producerAtTail.value == .completed ? "completed" : "\(producerAtTail.value.rawValue)")
         let wrong = (0..<4096).filter { check.contents().load(fromByteOffset: $0, as: UInt8.self) != 0x5a }.count
         metrics.set("wrong_bytes", wrong)
         if wrong != 0 { work.failures.append("\(wrong) bytes the relayed wait let through early") }

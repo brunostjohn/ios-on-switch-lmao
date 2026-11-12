@@ -227,9 +227,14 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     const bool hevc = e->codec == kCMVideoCodecType_HEVC;
     if (hevc) {
         // The H.264 config above stays the input copy's (h264enc_put_input); the stream is the HEVC config's.
-        e->hevc = (HEVCEncConfig){.width = c->width, .height = c->height, .full_range = c->full_range,
-                                  .colour_description = c->colour_description, .colour_primaries = c->colour_primaries,
-                                  .transfer = c->transfer, .matrix = c->matrix, .fps_num = c->fps_num,
+        e->hevc = (HEVCEncConfig){.width = c->width,
+                                  .height = c->height,
+                                  .full_range = c->full_range,
+                                  .colour_description = c->colour_description,
+                                  .colour_primaries = c->colour_primaries,
+                                  .transfer = c->transfer,
+                                  .matrix = c->matrix,
+                                  .fps_num = c->fps_num,
                                   .fps_den = c->fps_den};
         if (hevcnvenc_configure(&e->hevc))
             return kVTPropertyNotSupportedErr;
@@ -254,8 +259,8 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         return kVTAllocationFailedErr;
 
     uint8_t record[512];
-    const size_t recordSize = hevc ? hevcenc_write_hvcc(&e->hevc, record, sizeof(record))
-                                   : h264enc_write_avcc(c, record, sizeof(record));
+    const size_t recordSize =
+        hevc ? hevcenc_write_hvcc(&e->hevc, record, sizeof(record)) : h264enc_write_avcc(c, record, sizeof(record));
     if (!recordSize)
         return kVTPropertyNotSupportedErr;
     CFDataRef atom = CFDataCreate(kCFAllocatorDefault, record, (CFIndex)recordSize);

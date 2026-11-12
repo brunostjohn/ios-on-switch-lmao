@@ -414,8 +414,8 @@ void fillSurface(switch_bench &b, const void *surface, uint32_t format, uint32_t
     x.twod.color[0] = color;
     raw::Texture t;
     if (!raw::probeTwodFormat(format) ||
-        !d.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0,
-                                x.width, x.height, uint32_t(IOSurfaceGetBytesPerRow(s)), format, t, true))
+        !d.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0, x.width,
+                                x.height, uint32_t(IOSurfaceGetBytesPerRow(s)), format, t, true))
         return fail(r, SWITCH_BENCH_REFUSED, "the raw path takes no texture over the surface");
     Submission submission(b, x, r);
     uint64_t gpu = 0, wall = 0;

@@ -218,7 +218,7 @@ size_t h264enc_write_sps(const H264EncConfig *c, uint8_t *out, size_t cap)
     h264bits_ue(&b, 0);  // pic_order_cnt_type
     h264bits_ue(&b, LOG2_MAX_POC_LSB - 4);
     h264bits_ue(&b, c->reorder ? 2 : 1);  // max_num_ref_frames: the two anchors a B picture reads
-    h264bits_u(&b, 0, 1);  // gaps_in_frame_num_value_allowed_flag
+    h264bits_u(&b, 0, 1);                 // gaps_in_frame_num_value_allowed_flag
     h264bits_ue(&b, wmbs - 1);
     h264bits_ue(&b, hmbs - 1);
     h264bits_u(&b, 1, 1);  // frame_mbs_only_flag
@@ -251,9 +251,9 @@ size_t h264enc_write_sps(const H264EncConfig *c, uint8_t *out, size_t cap)
         h264bits_u(&b, 2 * c->fps_num, 32);  // time_scale (two ticks a frame)
         h264bits_u(&b, 0, 1);                // fixed_frame_rate_flag
     }
-    h264bits_u(&b, 0, 1);               // nal_hrd_parameters_present_flag
-    h264bits_u(&b, 0, 1);               // vcl_hrd_parameters_present_flag
-    h264bits_u(&b, 0, 1);               // pic_struct_present_flag
+    h264bits_u(&b, 0, 1);  // nal_hrd_parameters_present_flag
+    h264bits_u(&b, 0, 1);  // vcl_hrd_parameters_present_flag
+    h264bits_u(&b, 0, 1);  // pic_struct_present_flag
     // bitstream_restriction_flag: decoders hold no picture without reordering, one with it (an anchor waits for the B
     // pictures before it).
     h264bits_u(&b, 1, 1);

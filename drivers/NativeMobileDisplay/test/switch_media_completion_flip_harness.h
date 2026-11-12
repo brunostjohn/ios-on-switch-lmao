@@ -241,6 +241,7 @@ struct Display {
     struct {
         int held = kNoBuffer, pending = kNoBuffer;
     } ring;
+
     uint64_t entrySeq[8] = {};
 
     struct {
@@ -526,11 +527,26 @@ struct Display {
 
 #include "../SwitchLandscapeState.h"
 
-    bool landscapeHolds(PlaneSet &) { return false; }
-    void landscapeLeaveNow(const char *) {}
-    void landscapeAbandonWant() {}
-    bool landscapeHoldsKicks() const { return false; }
-    uint32_t landscapeRequestBits() const { return switch_landscape::overlayRequests(landscapeOn()); }
+    bool landscapeHolds(PlaneSet &)
+    {
+        return false;
+    }
+
+    void landscapeLeaveNow(const char *)
+    {}
+
+    void landscapeAbandonWant()
+    {}
+
+    bool landscapeHoldsKicks() const
+    {
+        return false;
+    }
+
+    uint32_t landscapeRequestBits() const
+    {
+        return switch_landscape::overlayRequests(landscapeOn());
+    }
 
 #define SWITCH_FRAME_TIMELINE 0
 #include "../SwitchDisplayBandwidthDisplay.h"

@@ -5,8 +5,9 @@
 
 static unsigned creations = 0;
 static bool denyCreation = false;
+
 static NmbComputeArtifact *trackedArtifactNew(NmbDevice *device, const NmbComputePipelineDescriptor *descriptor,
-                                               bool reflection)
+                                              bool reflection)
 {
     ++creations;
     return denyCreation ? nullptr : nmb_compute_artifact_new(device, descriptor, reflection);
@@ -44,8 +45,8 @@ int main(int argc, char **argv)
         };
         const auto prepare = [&](MTLComputePipelineDescriptor *input, bool reflected) -> id {
             id reflection = nil;
-            return native_bridge_metal_compute_prepare(input,
-                reflected ? MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo : 0,
+            return native_bridge_metal_compute_prepare(
+                input, reflected ? MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo : 0,
                 reflected ? &reflection : nullptr, &error);
         };
         id plain = prepare(descriptor, false), reflected = prepare(descriptor, true);
@@ -55,8 +56,9 @@ int main(int argc, char **argv)
         const std::string seed = std::string(argv[2]) + "/fixture-seed";
         char plainName[69] = {}, reflectionName[69] = {};
         check(native_bridge_metal_compute_save(plain, seed.c_str(), plainName, sizeof plainName) &&
-              native_bridge_metal_compute_save(reflected, seed.c_str(), reflectionName, sizeof reflectionName) &&
-              strcmp(plainName, reflectionName), "export both reflection identities");
+                  native_bridge_metal_compute_save(reflected, seed.c_str(), reflectionName, sizeof reflectionName) &&
+                  strcmp(plainName, reflectionName),
+              "export both reflection identities");
         gNativeArtifactStorage.seed = seed;
         denyCreation = true;
         MTLComputePipelineDescriptor *same = [descriptor copy];
@@ -64,7 +66,7 @@ int main(int argc, char **argv)
         id plainHit = prepare(same, false), reflectionHit = prepare(same, true);
         check(plainHit && reflectionHit && creations == 2, "seed imports while AIR constructor is disabled");
         check([plainHit maxTotalThreadsPerThreadgroup] == [plain maxTotalThreadsPerThreadgroup] &&
-              [reflectionHit staticThreadgroupMemoryLength] == [reflected staticThreadgroupMemoryLength],
+                  [reflectionHit staticThreadgroupMemoryLength] == [reflected staticThreadgroupMemoryLength],
               "imported public pipeline properties agree");
         same.maxTotalThreadsPerThreadgroup = 64;
         check(!prepare(same, false) && creations == 3, "changed descriptor cannot reuse an unrelated artifact");
@@ -92,7 +94,9 @@ int main(int argc, char **argv)
         const std::string background = std::string(argv[2]) + "/fixture-background";
         gNativeArtifactStorage.cache = background;
         dispatch_semaphore_t permit = dispatch_semaphore_create(0);
-        dispatch_async(persistQueue(), ^{ dispatch_semaphore_wait(permit, DISPATCH_TIME_FOREVER); });
+        dispatch_async(persistQueue(), ^{
+            dispatch_semaphore_wait(permit, DISPATCH_TIME_FOREVER);
+        });
         __weak id retained = nil;
         @autoreleasepool {
             MTLComputePipelineDescriptor *queued = [same copy];
@@ -104,7 +108,8 @@ int main(int argc, char **argv)
               "background persistence retains artifact after caller release without waiting");
         gNativeArtifactStorage.cache.clear();
         dispatch_semaphore_signal(permit);
-        dispatch_sync(persistQueue(), ^{});
+        dispatch_sync(persistQueue(), ^{
+                      });
         check(gNativeArtifactWrites == 0, "background persistence retires its bounded slot");
         same.maxTotalThreadsPerThreadgroup = 96;
         gNativeArtifactStorage.cache = background;

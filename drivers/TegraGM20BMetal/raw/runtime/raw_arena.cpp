@@ -39,8 +39,7 @@ bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bo
 // The host range's pages wired and bound at the arena's VA, under its kind (lock_ held)
 bool Device::bindArena(Arena &a)
 {
-    if (!k_.importPages(a.cpu, a.bytes, a.bo) ||
-        !k_.bindImportAt(a.cpu, a.bo, a.va, a.kind) ||
+    if (!k_.importPages(a.cpu, a.bytes, a.bo) || !k_.bindImportAt(a.cpu, a.bo, a.va, a.kind) ||
         (a.bufferVa != a.va && !k_.bindAlias(a.bo, a.bufferVa, kPteKindPitch))) {
         k_.free(a.bo);
         return false;

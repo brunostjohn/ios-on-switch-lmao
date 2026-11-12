@@ -164,8 +164,8 @@ void testAcceptance()
         CHECK(image.readHigh <= ((d.surface.allocation + 4095) & ~4095ull) && image.readLow < image.readHigh,
               "read range %#llx-%#llx outside %#llx", (unsigned long long)image.readLow,
               (unsigned long long)image.readHigh, (unsigned long long)d.surface.allocation);
-        CHECK(image.readHigh - image.readLow <= switch_window_caps::kPlaneSlotSpan, "read range %llu bytes exceeds a slot",
-              (unsigned long long)(image.readHigh - image.readLow));
+        CHECK(image.readHigh - image.readLow <= switch_window_caps::kPlaneSlotSpan,
+              "read range %llu bytes exceeds a slot", (unsigned long long)(image.readHigh - image.readLow));
         CHECK(!(image.start[0] % 64) && (!image.yuv || !(image.start[1] % 64)), "plane start not 64-aligned");
         CHECK(!image.yuv || !(image.hOffset & 1), "4:2:0 window starts on an odd column");
     }
@@ -300,7 +300,8 @@ void testImage()
     l.kind = kKindNv16Full;
     l.surface = makeSurface(kKindNv16Full, 1280, 720);
     CHECK(imageOf(l, W, H, m) && m.colorDepth == kDepthYCbCr422SP && m.fullRange && !(m.hOffset & 1) &&
-              m.start[0] == 5ull * l.surface.stride[0] && m.start[1] == l.surface.offset[1] + 5ull * l.surface.stride[1],
+              m.start[0] == 5ull * l.surface.stride[0] &&
+              m.start[1] == l.surface.offset[1] + 5ull * l.surface.stride[1],
           "4:2:2 crop: depth %u hOffset %u start %llu/%llu", m.colorDepth, m.hOffset, (unsigned long long)m.start[0],
           (unsigned long long)m.start[1]);
     l.surface.planeHeight[1] = 360;
@@ -362,7 +363,8 @@ void testRoles()
     CHECK(r.ui == 1 && r.plane == 0 && !r.extra, "two full-frame layers: %d %d", r.ui, r.plane);
     bool three[kLayers] = {true, true, true, false};
     r = rolesOf(three, layers, W, H);
-    CHECK(r.ui == 1 && r.plane == 0 && r.second == 2 && !r.extra, "three layers retain both detached layers in stack order");
+    CHECK(r.ui == 1 && r.plane == 0 && r.second == 2 && !r.extra,
+          "three layers retain both detached layers in stack order");
 }
 
 // DC A's window B with the ARM copy: writes go to assembly; UPDATE copies assembly to ARM; at a boundary with ACT_REQ out,
@@ -529,8 +531,8 @@ TEST(DisplayPlanes, WindowSitingDecidesConversionAndNoColourTagRefusesTheSwap)
     l.surface = makeSurface(l.kind, 1920, 1080);
     l.src = {0, 0, 1920, 1080};
     l.dst = {0, 0, 720, 405};
-    const uint32_t tags[][5] = {{16, 9, 3, 1, 1}, {18, 9, 3, 1, 1}, {1, 12, 2, 1, 1}, {1, 1, 7, 1, 1},
-                                {1, 1, 2, 2, 2}, {1, 1, 2, 1, 3}};
+    const uint32_t tags[][5] = {{16, 9, 3, 1, 1}, {18, 9, 3, 1, 1}, {1, 12, 2, 1, 1},
+                                {1, 1, 7, 1, 1},  {1, 1, 2, 2, 2},  {1, 1, 2, 1, 3}};
     for (const auto &tag : tags) {
         l.surface.transfer = tag[0];
         l.surface.primaries = tag[1];

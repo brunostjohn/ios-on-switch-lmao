@@ -67,6 +67,7 @@ TEST_F(SwitchScratch, AKeptScratchGoesToTheTaskThatTakesIt)
     switch_scratch_stats(&held, &peak);
     EXPECT_EQ(held, 0u);
 }
+
 // A lock that gives its rows back and locks again gets the same scratch, its rows kept unless the VM emptied it; one
 // another get took meanwhile is not reclaimed, whatever it holds now.
 TEST_F(SwitchScratch, AScratchGivenBackIsReclaimedOnlyIfNoOneTookItMeanwhile)

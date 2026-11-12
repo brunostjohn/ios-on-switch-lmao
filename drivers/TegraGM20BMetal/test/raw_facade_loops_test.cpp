@@ -77,7 +77,8 @@ protected:
         ASSERT_TRUE(gDevice != nil);
         raw_metal_complete_states(dir().c_str());
         const std::string bytes = kernelLibrary();
-        dispatch_data_t data = dispatch_data_create(bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        dispatch_data_t data =
+            dispatch_data_create(bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
         NSError *error = nil;
         id<MTLLibrary> library = [gDevice newLibraryWithData:data error:&error];
         ASSERT_TRUE(library != nil) << (error.description.UTF8String ?: "");
@@ -185,10 +186,8 @@ protected:
                     [e encodeStartDoWhile];
                     break;
                 case Op::EndDoWhile:
-                    EXPECT_TRUE([e encodeEndDoWhile:words
-                                             offset:offset
-                                         comparison:compare
-                                     referenceValue:op.reference]);
+                    EXPECT_TRUE(
+                        [e encodeEndDoWhile:words offset:offset comparison:compare referenceValue:op.reference]);
                     break;
                 case Op::Encoder:
                     [e endEncoding];
@@ -242,7 +241,9 @@ protected:
             << shape << ": " << got.launches.size() << " launches, Metal's " << want.launches.size();
         EXPECT_EQ(got.words, want.words) << shape;
         const bool loops = std::any_of(tapes.begin(), tapes.end(), [](const Tape &t) {
-            return std::any_of(t.begin(), t.end(), [](const Op &op) { return op.kind == Op::While || op.kind == Op::DoWhile; });
+            return std::any_of(t.begin(), t.end(), [](const Op &op) {
+                return op.kind == Op::While || op.kind == Op::DoWhile;
+            });
         });
         EXPECT_EQ(got.noPrefetch > 0, loops) << shape << ": " << got.noPrefetch << " copies' GP entries";
         EXPECT_EQ(got.qmdsBroken, 0u) << shape;
@@ -284,10 +285,10 @@ TEST_F(FacadeLoops, AnInnerLoopPastItsCopiesGoesOnAndItsOuterLoopAfterIt)
 TEST_F(FacadeLoops, ALoopInAnIfPastItsCopiesFinishesTheIfAndSkipsItsElse)
 {
     for (uint32_t taken : {0u, 1u})
-        expectMetal({{test(Op::If, 2, PredicateCompare::Equal, 1), test(Op::While, 0), dispatch(0, -1),
-                      test(Op::EndWhile, 0), dispatch(3, 1), test(Op::Else, 0), dispatch(4, 1), test(Op::EndIf, 0),
-                      dispatch(5, 1)}},
-                    {{1500, 0, taken}}, taken ? "taken" : "not taken");
+        expectMetal(
+            {{test(Op::If, 2, PredicateCompare::Equal, 1), test(Op::While, 0), dispatch(0, -1), test(Op::EndWhile, 0),
+              dispatch(3, 1), test(Op::Else, 0), dispatch(4, 1), test(Op::EndIf, 0), dispatch(5, 1)}},
+            {{1500, 0, taken}}, taken ? "taken" : "not taken");
 }
 
 // A command buffer that ends in a loop's block: the range after it holds nothing, and the command buffer completes

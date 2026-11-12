@@ -20,11 +20,14 @@ int SwitchGpuEventClient::word(uint64_t handle, uint32_t channel, uint64_t *addr
 	const uint32_t slot = uint32_t(handle % kHandles);
 	switch_gpu_event *event = find(handle);
 	auto &entry = entries_[slot];
-	int result = closed_ ? -19 : !event || !words_.page ? -22 : slot >= TegraGM20BEventWords ? -28 : 0;
+	int result = closed_                        ? -19
+		     : !event || !words_.page       ? -22
+		     : slot >= TegraGM20BEventWords ? -28
+						    : 0;
 	if (!result && !entry.word) {
 		volatile uint32_t *cpu = words_.page + TegraGM20BEventWordFirst + slot;
-		entry.word = switch_gpu_event_word_create(cpu, words_.pool + (TegraGM20BEventWordFirst + slot) * 4,
-							  words_.put);
+		entry.word = switch_gpu_event_word_create(
+			cpu, words_.pool + (TegraGM20BEventWordFirst + slot) * 4, words_.put);
 		if (entry.word && words_.hold)
 			words_.hold(cpu);
 		result = entry.word ? 0 : -12;
@@ -59,7 +62,8 @@ int SwitchGpuEventJob::release(SwitchGpuEventClient &client, uint64_t handle, ui
 			       uint32_t payload)
 {
 	switch_gpu_event_word *word = client.wordOf(handle);
-	const int result = word ? switch_gpu_event_signal_release(signals_[signalCount_ - 1], word, channel, payload)
+	const int result = word ? switch_gpu_event_signal_release(signals_[signalCount_ - 1], word,
+								  channel, payload)
 				: -22;
 	switch_gpu_event_word_release(&word);
 	released_ |= result == 0;

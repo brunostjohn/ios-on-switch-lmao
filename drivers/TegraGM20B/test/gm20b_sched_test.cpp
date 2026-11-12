@@ -515,7 +515,8 @@ TEST(HangBlame, AKernelChannelAnEngineCannotSaveIsNoClientsToKill)
 	present.saving = 1;
 	Candidates k{{present, kStuckResident}};
 	int blame;
-	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK) << "tgm_hang_recover's last resort: every busy engine reset";
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK)
+		<< "tgm_hang_recover's last resort: every busy engine reset";
 }
 
 // With NVIDIA's decode the suspects are channel 4 alone (GR loading it, PBDMA0 on it): no channel is killed.
@@ -765,7 +766,8 @@ TEST(HangSuspects, APbdmaParkedOnASemaphoreAcquireNamesNoSuspect)
 	EXPECT_TRUE(tgm_pbdma_acquiring(0x8000001d, 0x00001008));
 	EXPECT_FALSE(tgm_pbdma_acquiring(0x8000001d, 0x01100002));  // a release
 	EXPECT_FALSE(tgm_pbdma_acquiring(0x80000021, 0x00000000));  // NON_STALL_INTERRUPT
-	EXPECT_FALSE(tgm_pbdma_acquiring(0x80010e01, 0x00001004));  // a 3D method with ACQ_GEQ-like data
+	EXPECT_FALSE(
+		tgm_pbdma_acquiring(0x80010e01, 0x00001004));  // a 3D method with ACQ_GEQ-like data
 }
 
 // The panic: the present waited 2 s for backboardd's fence; GR idle, PBDMA0 between the two channels' acquires and on

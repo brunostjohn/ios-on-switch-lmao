@@ -176,15 +176,21 @@ bool nvdec_can_present(const NVDECClient *c)
 // The fake VIC: TegraNVDECUserClient's geometry checks and TegraVICConfig.h's address rules for the destination, then
 // the copy (BlockLinear.c, as VIC's pass-through would leave it). 16-bit samples ('x420') go as bytes, as the kernel
 // sends them to VIC: an 8-bit picture of twice the width.
-bool switch_nvdec_can_export(const NVDECClient *client) { (void)client; return gNativeOn; }
+bool switch_nvdec_can_export(const NVDECClient *client)
+{
+    (void)client;
+    return gNativeOn;
+}
+
 int switch_nvdec_export(NVDECClient *client, const TegraNVDECPresent *picture)
 {
-    if (!gNativeOn || picture->sample_bytes != 1 || picture->dst_x || picture->dst_y ||
-        picture->handle >= 64 || !client->va[picture->handle])
+    if (!gNativeOn || picture->sample_bytes != 1 || picture->dst_x || picture->dst_y || picture->handle >= 64 ||
+        !client->va[picture->handle])
         return kIOReturnUnsupported;
     ++gNativeExports;
     return 0;
 }
+
 int switch_nvdec_recycle(void *client, uint32_t handle, uint64_t bytes, void **address)
 {
     NVDECClient *owner = client;
@@ -717,8 +723,8 @@ int main(void)
                           gNativeExports - exportsBefore == 30 && gRecycled - recycleBefore == 30 &&
                           gPresents == copiesBefore && gWaitRanges - nativeWaits <= 30 &&
                           gSurfaceWaits == nativeSurfaceWaits;
-    printf("native: %s (exports %u, recycled %u, pitch copies %d)\n", native,
-           gNativeExports - exportsBefore, gRecycled - recycleBefore, gPresents - copiesBefore);
+    printf("native: %s (exports %u, recycled %u, pitch copies %d)\n", native, gNativeExports - exportsBefore,
+           gRecycled - recycleBefore, gPresents - copiesBefore);
     const bool ok = engineOpens >= 1 && engineSubmits == 30 && !gRefused &&
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&

@@ -40,7 +40,7 @@ void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1,
 kern_return_t switch_iokit_iosurface_lock_will(IOUserClient *client, void *p1, void *p2);
 void switch_iokit_iosurface_lock_failed(IOUserClient *client, void *p1, void *p2);
 void switch_iokit_iosurface_ownership_done(IOUserClient *client, uint32_t index, void *p1, void *p2,
-                                          kern_return_t result);
+                                           kern_return_t result);
 void switch_iokit_iosurface_method_done(IOUserClient *client, uint32_t selector,
                                         const struct IOExternalMethodArguments *args);
 

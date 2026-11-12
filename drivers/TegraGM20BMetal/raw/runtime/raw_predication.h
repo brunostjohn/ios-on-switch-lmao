@@ -71,15 +71,18 @@ class Predication {
 public:
     static constexpr uint32_t kSlotBytes = 64, kSlotAlign = 16;
     static constexpr uint32_t kStartWords = 112, kGuardWords = 4, kReleaseWords = 4;
+
     // endLoop's words inside `enclosing` blocks and loops
     static constexpr uint32_t kOverflowWords(size_t enclosing)
     {
         return 96 + 8 * uint32_t(enclosing);
     }
+
     static constexpr uint32_t kEndCopyWords(size_t heads)
     {
         return 80 + 8 * uint32_t(heads);
     }
+
     static constexpr uint32_t kArmWords(size_t heads)
     {
         return 16 + 8 * uint32_t(heads);
@@ -166,6 +169,7 @@ private:
             While,
             DoWhile,
         };
+
         uint64_t ifVa;    // the slot's operands
         uint64_t liveVa;  // this branch's F/K pair
         PredicateTest test;

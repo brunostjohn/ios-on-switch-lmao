@@ -63,9 +63,12 @@ kernel_driver(
         "original-bindings.S",
         "firmware.S",
     ],
-    abi = ["IOSurface"],
     hdrs = ["//kernel/switch:include/switch/memory_attachment.h"],
-    copts = ["-I", "{tree}/kernel/switch/include"],
+    abi = ["IOSurface"],
+    copts = [
+        "-I",
+        "{tree}/kernel/switch/include",
+    ],
     hdr_deps = [
         "drivers/NativeMobileDisplay",
         "drivers/TegraGM20B",

@@ -247,7 +247,6 @@ host_test(
     ],
 )
 
-
 host_test(
     name = "switch_vic_picture_test",
     srcs = [
@@ -262,7 +261,6 @@ host_test(
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
 )
-
 
 host_shims(
     name = "backing_kernel",
@@ -298,7 +296,6 @@ host_test(
     deps = [":backing_kernel"],
 )
 
-
 host_test(
     name = "switch_vic_present_test",
     srcs = [
@@ -328,7 +325,6 @@ host_test(
     deps = [":backing_kernel"],
 )
 
-
 host_test(
     name = "switch_vic_mapping_test",
     srcs = [
@@ -340,7 +336,6 @@ host_test(
     additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICMapping.cpp"],
     deps = [":backing_kernel"],
 )
-
 
 host_test(
     name = "switch_vic_color_test",
@@ -355,7 +350,6 @@ host_test(
         "//drivers/TegraVIC:SwitchVICPicturePlan.h",
     ],
 )
-
 
 host_shims(
     name = "native_surface_kernel",
@@ -411,10 +405,12 @@ host_test(
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.cpp",
         "//kernel/switch:iokit/memory_attachment.cpp",
     ],
-    copts = ["-I", "kernel/switch/include"],
+    copts = [
+        "-I",
+        "kernel/switch/include",
+    ],
     deps = [":native_surface_kernel"],
 )
-
 
 host_test(
     name = "switch_vic_transform_test",
@@ -488,7 +484,6 @@ host_test(
     deps = [":backing_kernel"],
 )
 
-
 host_test(
     name = "switch_vic_access_test",
     srcs = [
@@ -511,14 +506,22 @@ host_test(
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.cpp",
         "//kernel/switch:iokit/memory_attachment.cpp",
     ],
-    copts = ["-I", "kernel/switch/include"],
+    copts = [
+        "-I",
+        "kernel/switch/include",
+    ],
     deps = [":native_surface_kernel"],
 )
 
-
 host_shims(
     name = "jobs_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread.h", "kern/thread_call.h", "kern/clock.h"],
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/thread.h",
+        "kern/thread_call.h",
+        "kern/clock.h",
+    ],
     stubs = "switch_vic_jobs_stubs.h",
 )
 
@@ -556,7 +559,6 @@ host_test(
     ],
     deps = [":jobs_kernel"],
 )
-
 
 host_test(
     name = "switch_vic_scanout_compose_test",
@@ -635,13 +637,22 @@ host_library(
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",
     ],
-    deps = ["//drivers/TegraGM20B/test:switch_gpu_event", "//drivers/TegraGM20B/test:event_kernel"],
+    deps = [
+        "//drivers/TegraGM20B/test:switch_gpu_event",
+        "//drivers/TegraGM20B/test:event_kernel",
+    ],
 )
 
 host_test(
     name = "switch_vic_events_test",
-    srcs = ["switch_vic_events_test.cpp", "//drivers/TegraGM20B/test:switch_gpu_event_fixture.h"],
-    deps = [":switch_vic_events", "//drivers/TegraGM20B/test:event_kernel"],
+    srcs = [
+        "switch_vic_events_test.cpp",
+        "//drivers/TegraGM20B/test:switch_gpu_event_fixture.h",
+    ],
+    deps = [
+        ":switch_vic_events",
+        "//drivers/TegraGM20B/test:event_kernel",
+    ],
 )
 
 host_test(
@@ -678,10 +689,14 @@ host_test(
     deps = [":backing_kernel"],
 )
 
-
 host_shims(
     name = "bounce_pool_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "IOKit/IOBufferMemoryDescriptor.h", "kern/thread.h"],
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "kern/thread.h",
+    ],
     stubs = "switch_vic_bounce_pool_stubs.h",
 )
 

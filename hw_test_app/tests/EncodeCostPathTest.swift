@@ -21,7 +21,8 @@ import Metal
 /// The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
-    let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
+    let name =
+        "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
     var subsystem: Subsystem { .metal }
     static let width = 256, height = 256, passes = 6, drawCounts = [8, 16], buffers = 24, warmups = 20
 

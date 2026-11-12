@@ -101,7 +101,8 @@ void noteReused(const tgm_coh *c, bool same)
 	char name[32];
 	proc_selfname(name, sizeof(name));
 	os_log(OS_LOG_DEFAULT,
-	       "tegra-gm20b: IOSurface %u: a CPU lock reused the rows its last lock moved, no texels moved (%s[%d])",
+	       "tegra-gm20b: IOSurface %u: a CPU lock reused the rows its last lock moved, no "
+	       "texels moved (%s[%d])",
 	       tgm_coh_surface_id(c), name, proc_selfpid());
 #else
 	(void)c;
@@ -161,7 +162,8 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 		return 0;
 	}
 	if (!scratch)
-		scratch = tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1, &rows);
+		scratch = tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1,
+					  &rows);
 	if (!scratch) {
 		switch_refusal("iosurface-layout", "no-scratch",
 			       "IOSurface %u: no memory for a CPU lock's rows: the lock is refused",

@@ -116,6 +116,7 @@ TEST(VicFormats, EveryRowDescribesItsMemory)
         {TEGRA_VIC_FOURCC('2', 'v', 'u', 'y'), TEGRA_VIC_T_U8_Y8__V8_Y8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 2, 0, 1, 0, 1},
         {TEGRA_VIC_FOURCC('y', 'u', 'v', 's'), TEGRA_VIC_T_Y8_U8__Y8_V8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 2, 0, 1, 0, 1},
     };
+
     for (const Row &r : rows) {
         const TegraVICFormat *f = tegra_vic_format(r.fourcc);
         ASSERT_NE(f, nullptr) << std::hex << r.fourcc;

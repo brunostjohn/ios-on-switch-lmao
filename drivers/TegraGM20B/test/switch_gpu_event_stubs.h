@@ -8,7 +8,11 @@
 #include <mutex>
 #include <new>
 #define IONewZero(type, count) static_cast<type *>(calloc(count, sizeof(type)))
-#define IODelete(pointer, type, count) do { (void)(count); free(pointer); } while (0)
+#define IODelete(pointer, type, count) \
+	do {                           \
+		(void)(count);         \
+		free(pointer);         \
+	} while (0)
 #define OSDeclareDefaultStructors(type) \
 public:                                 \
 	type() = default;               \

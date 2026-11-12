@@ -189,8 +189,8 @@ struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
     std::atomic<bool> eventWords{true};  // the kernel has TegraGM20BJobABI.h method 40 (kernel events' words)
-    RawM2V m2v;              // how the m2v device is opened (RawMetalM2V.mm)
-    id<MTLDevice> fallback;  // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
+    RawM2V m2v;                          // how the m2v device is opened (RawMetalM2V.mm)
+    id<MTLDevice> fallback;              // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
     std::atomic<bool> m2vOpened{false};
     uint64_t registryID = 0;
     id device;  // the raw device object
@@ -213,7 +213,7 @@ struct RawState {
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =
-        false;           // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
+        false;  // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
 #if SWITCH_RAW_DIAGNOSTICS
     int lastDriver = 0;
 #endif
@@ -224,8 +224,8 @@ struct RawState {
     // threads in waitUntilCompleted. A change of either wakes the completion thread (inflight.wake()).
     std::atomic<bool> submitPromised{false};
     std::atomic<uint32_t> completionWaiters{0};
-    dispatch_queue_t handlers;             // where scheduled handlers run (in order, never inside commit)
-    std::atomic<uint32_t> committed{0};    // command buffers committed and not finished (gRawRelease's drain)
+    dispatch_queue_t handlers;           // where scheduled handlers run (in order, never inside commit)
+    std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
     std::unique_ptr<raw::Completion> completion;  // the states the pack lacks (raw_metal_complete_states)
 };
@@ -356,8 +356,8 @@ bool fillTexturePass(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc);
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
-bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
-                     void *bytes, NSUInteger row, NSUInteger image, bool write);
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice, void *bytes,
+                     NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 const tgm_layout *textureCpuImportLayout(RMTexture *texture);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
@@ -427,6 +427,7 @@ struct RMEventWaitNote {
     uint64_t value;
     uint64_t sinceUs, saidUs;
 };
+
 extern std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
 #endif
 bool waitsForEvent(RMCommandBuffer *cb);
@@ -457,7 +458,12 @@ void beginInlineSignals(RMCommandBuffer *cb);
 bool isInlineSignal(RMCommandBuffer *cb, size_t at);
 bool releaseInlineSignal(RMCommandBuffer *cb, size_t at, raw::CommandBuffer *commands);
 void enqueueBuffer(RMCommandBuffer *cb);
-enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress = 2 };
+
+enum RMReadyDependency : uint32_t {
+    RMRawProgress = 1,
+    RMCompatibilityProgress = 2
+};
+
 void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
@@ -473,11 +479,13 @@ bool submitRangeExclusive(RMCommandBuffer *cb, bool followed);
 // worker inside one (RawMetalPrivateComp.mm)
 raw::SubmitGate &rmSubmitGate();
 bool rmInSubmission();
+
 // `move` with no submission running: at once on the submit worker inside its own submission
 template <typename Move> auto rmExcludingSubmissions(Move &&move) -> decltype(move())
 {
     return rmInSubmission() ? move() : rmSubmitGate().exclude(move);
 }
+
 extern thread_local bool tRawEncoding;
 uint32_t privateCompressedKind(MTLTextureDescriptor *d);
 bool rmTexturePlain(RMTexture *t);
@@ -556,7 +564,8 @@ void queuePriorityRemove(RMQueue *queue);
 void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
-bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
+bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
+                          const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 
 // RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back

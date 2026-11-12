@@ -15,7 +15,7 @@ enum tgm_bind_op {
 	TGM_BIND_REPLACED, /* a VmBind Map over it */
 	TGM_BIND_FREED,    /* a BoFree of its BO */
 	TGM_BIND_REFUSED,  /* a VmBind Map the kernel refused: nothing is bound there */
-	TGM_BIND_GONE,     /* the PTEs of a retired binding removed, once the work that could use them completed */
+	TGM_BIND_GONE, /* the PTEs of a retired binding removed, once the work that could use them completed */
 };
 
 enum tgm_bind_origin {
@@ -149,7 +149,9 @@ static inline int tgm_bind_note_format(char *buf, unsigned long len, const struc
 			"%llu ms %s: %s 0x%llx+0x%llx of BO %llu (%llu bytes, %s%s at 0x%llx), "
 			"kind 0x%x%s",
 			(unsigned long long)((after ? n->ns - from : from - n->ns) / 1000000),
-			!kill_ns ? "ago" : after ? "after the kill" : "before the kill",
+			!kill_ns ? "ago"
+			: after  ? "after the kill"
+				 : "before the kill",
 			tgm_bind_op_name(n->op), (unsigned long long)n->va,
 			(unsigned long long)n->range, (unsigned long long)n->handle,
 			(unsigned long long)n->bo_bytes, tgm_bind_origin_name(n->origin), surface,

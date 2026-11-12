@@ -69,7 +69,9 @@ enum CompressedShadowCases {
         var out = under
         let q = texel(SIMD4<Double>(quad), f)
         for y in 0..<height {
-            for x in 0..<width / 2 { out.replaceSubrange((y * width + x) * f.bytes..<(y * width + x + 1) * f.bytes, with: q) }
+            for x in 0..<width / 2 {
+                out.replaceSubrange((y * width + x) * f.bytes..<(y * width + x + 1) * f.bytes, with: q)
+            }
         }
         return out
     }
@@ -78,7 +80,9 @@ enum CompressedShadowCases {
     static func opaque(_ under: [UInt8], _ f: Format) -> [UInt8] {
         var out = under
         let one: [UInt8] = f.bytes == 4 ? [255] : [0x00, 0x3c]
-        for t in 0..<width * height { out.replaceSubrange((t + 1) * f.bytes - one.count..<(t + 1) * f.bytes, with: one) }
+        for t in 0..<width * height {
+            out.replaceSubrange((t + 1) * f.bytes - one.count..<(t + 1) * f.bytes, with: one)
+        }
         return out
     }
 
@@ -98,7 +102,8 @@ enum CompressedShadowCases {
                     wrong.append("\(label)_texture")
                     continue
                 }
-                let depth = mixed
+                let depth =
+                    mixed
                     ? try gpu.texture(.depth32Float, width, height, usage: [.renderTarget], storage: .memoryless) : nil
                 let zeta: MTLPixelFormat = mixed ? .depth32Float : .invalid
                 let state = try gpu.render(fragment: "exact_fragment", format: f.pixel, depth: zeta)
@@ -106,7 +111,9 @@ enum CompressedShadowCases {
                     vertex: "fetch_depth_vertex", fragment: "fetch_add_fragment", format: f.pixel, depth: zeta)
                 let half = { (encoder: MTLRenderCommandEncoder) in
                     encoder.setRenderPipelineState(state)
-                    GPU.draw(encoder, corners: GPU.pixelQuad(0, 0, width / 2, height, width: width, height: height), color: quad)
+                    GPU.draw(
+                        encoder, corners: GPU.pixelQuad(0, 0, width / 2, height, width: width, height: height),
+                        color: quad)
                 }
                 var bad = ["load": 0, "cpu": 0, "clear": 0, "fetch": 0]
                 var engagedAt = -1
@@ -124,8 +131,11 @@ enum CompressedShadowCases {
                     let clear = clears(f)[round % 2]
                     paths.insert(try await pass(gpu, target, depth, load: clear, draw: half))
                     let cleared = expected(
-                        Array(repeating: texel(SIMD4(clear.red, clear.green, clear.blue, clear.alpha), f), count: width * height)
-                            .flatMap { $0 }, f)
+                        Array(
+                            repeating: texel(SIMD4(clear.red, clear.green, clear.blue, clear.alpha), f),
+                            count: width * height
+                        )
+                        .flatMap { $0 }, f)
                     if try await gpu.read(target, bytesPerPixel: f.bytes) != cleared { bad["clear", default: 0] += 1 }
                     try await gpu.upload(under, to: target, bytesPerRow: width * f.bytes)
                     paths.insert(
@@ -137,8 +147,12 @@ enum CompressedShadowCases {
                             encoder.setFragmentBytes(&nothing, length: 16, index: 0)
                             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                         })
-                    if try await gpu.read(target, bytesPerPixel: f.bytes) != opaque(under, f) { bad["fetch", default: 0] += 1 }
-                    if engagedAt < 0 && (RawFacade.compression(of: gpu.device)["ce_copies"] ?? 0) > before { engagedAt = round }
+                    if try await gpu.read(target, bytesPerPixel: f.bytes) != opaque(under, f) {
+                        bad["fetch", default: 0] += 1
+                    }
+                    if engagedAt < 0 && (RawFacade.compression(of: gpu.device)["ce_copies"] ?? 0) > before {
+                        engagedAt = round
+                    }
                     try await Task.sleep(nanoseconds: 10_000_000)
                 }
                 for (name, count) in bad {

@@ -7,7 +7,8 @@ struct switch_gpu_backing {
 	switch_gpu_backing_token producer;
 	int error = 0;
 	unsigned users = 0;
-	std::vector<switch_gpu_backing_token> promises = {};  // pending writer promises (SwitchGpuWriterPromise.h)
+	std::vector<switch_gpu_backing_token> promises =
+		{};  // pending writer promises (SwitchGpuWriterPromise.h)
 };
 
 struct switch_gpu_cpu_lease {

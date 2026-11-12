@@ -168,8 +168,8 @@ public:
     bool commit(Key key, Value value, Reservation reservation, bool *held = nullptr)
     {
         auto *q = find(key);
-        if (!q || reservation.generation != q->reservationGeneration ||
-            reservation.position <= q->retired || reservation.position > q->reserved)
+        if (!q || reservation.generation != q->reservationGeneration || reservation.position <= q->retired ||
+            reservation.position > q->reserved)
             return false;
         auto &entry = q->entries[reservation.position - q->retired - 1];
         if (entry.value != value)

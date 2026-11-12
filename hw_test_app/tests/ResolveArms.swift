@@ -51,7 +51,9 @@ enum ResolveArms {
         }
     }
 
-    static func median(_ gpu: GPU, _ target: MTLTexture, _ pipeline: MTLRenderPipelineState?, _ source: MTLTexture?)
+    static func median(
+        _ gpu: GPU, _ target: MTLTexture, _ pipeline: MTLRenderPipelineState?, _ source: MTLTexture?
+    )
         async throws -> Double
     {
         var times: [Double] = []

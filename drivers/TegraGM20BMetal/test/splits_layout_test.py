@@ -81,7 +81,9 @@ class SplitIdentityTest(unittest.TestCase):
     def test_distinct_splits_share_whole_storage_and_keep_their_own_records(self):
         states = []
         for fill in (3, 4):
-            split_record = packfile.PACK_SPLIT.pack(40, 0, 0, 0, 16, 3, 1, 0, 2, bytes([2]) + bytes(7), 0, 0, *([0] * 73))
+            split_record = packfile.PACK_SPLIT.pack(
+                40, 0, 0, 0, 16, 3, 1, 0, 2, bytes([2]) + bytes(7), 0, 0, *([0] * 73)
+            )
             states.append(
                 {
                     'programs': [program(1, [ROOT]), program(2, [ROOT, SET, ubo(48)])],

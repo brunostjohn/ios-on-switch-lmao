@@ -19,13 +19,13 @@
 #define SWITCH_VIC_TRANSPOSE_PROBE_CASES 8u
 
 typedef struct {
-    uint32_t variant;         // switch_vic_transpose_probe::Variant
-    int32_t status;           // 0, -95 refused by tegra_vic_build, else the job's error
-    uint32_t lumaWrong;       // output luma samples off the turned source
-    uint32_t chromaWrong;     // interior CbCr pairs off the value the case expects
-    uint32_t offsetHalves;    // measured on the interior pairs: 0, 1 or 2; 0xf mixed or off the ramp
-    uint32_t expectedHalves;  // what the case's programmed siting gives if the reading holds
-    uint32_t outsideWritten;  // destination bytes changed outside the planes' pictures
+    uint32_t variant;                   // switch_vic_transpose_probe::Variant
+    int32_t status;                     // 0, -95 refused by tegra_vic_build, else the job's error
+    uint32_t lumaWrong;                 // output luma samples off the turned source
+    uint32_t chromaWrong;               // interior CbCr pairs off the value the case expects
+    uint32_t offsetHalves;              // measured on the interior pairs: 0, 1 or 2; 0xf mixed or off the ramp
+    uint32_t expectedHalves;            // what the case's programmed siting gives if the reading holds
+    uint32_t outsideWritten;            // destination bytes changed outside the planes' pictures
     uint32_t firstX, firstY, firstGot;  // the first wrong pair and its Cb | Cr << 8
 } SwitchVICTransposeResult;
 
@@ -60,8 +60,8 @@ enum Variant : uint32_t {
 struct Case {
     Variant variant;
     uint32_t source, transform, site;
-    int32_t format;               // SURF_FORMAT written over the built one; -1 keeps it
-    int32_t locHoriz, locVert;    // -1 keeps the built siting
+    int32_t format;             // SURF_FORMAT written over the built one; -1 keeps it
+    int32_t locHoriz, locVert;  // -1 keeps the built siting
 };
 
 constexpr Case kCases[SWITCH_VIC_TRANSPOSE_PROBE_CASES] = {

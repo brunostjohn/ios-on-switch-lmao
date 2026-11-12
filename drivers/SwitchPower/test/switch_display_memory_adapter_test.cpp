@@ -88,10 +88,12 @@ public:
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned) const;
     void dropDisplayMemory(const char *);
+
     bool displayMemoryReady() const
     {
         return memoryQualified;
     }
+
     bool programMemory(uint32_t, uint32_t, bool = false);
     static IOReturn memoryAction(OSObject *, void *, void *, void *, void *);
     static IOReturn governAction(OSObject *, void *, void *, void *, void *);
@@ -101,6 +103,7 @@ public:
     int reserveMemory(const switch_display_memory_head &);
     bool useFixedRate(unsigned);
     IOReturn holdFixedRate();
+
     unsigned carEmcKhz() const
     {
         return carRate;

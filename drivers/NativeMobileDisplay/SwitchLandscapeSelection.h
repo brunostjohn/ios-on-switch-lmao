@@ -26,12 +26,12 @@ int planeLandscapeSlotFor(OSObject *surface, const native_planes::Layer &layer, 
     SwitchNativeScanout scanout = {};
     int error = switch_native_scanout_acquire(surface, &scanout, true);
     const auto &view = scanout.view;
-    if (!error && (!view.turn.transform ||
-                   !switch_landscape::turnedVideoImage(
-                       layer, view.layout, view.crop.x, view.crop.y, view.crop.width, view.crop.height,
-                       view.turn.transform,
-                       {int32_t(view.turn.x), int32_t(view.turn.y), int32_t(view.turn.width), int32_t(view.turn.height)},
-                       width, height, image)))
+    if (!error &&
+        (!view.turn.transform ||
+         !switch_landscape::turnedVideoImage(
+             layer, view.layout, view.crop.x, view.crop.y, view.crop.width, view.crop.height, view.turn.transform,
+             {int32_t(view.turn.x), int32_t(view.turn.y), int32_t(view.turn.width), int32_t(view.turn.height)}, width,
+             height, image)))
         error = -95;
     // Window A's CSC is live while it scans a video: another matrix waits for the next entry.
     if (!error && landscapeOn() &&

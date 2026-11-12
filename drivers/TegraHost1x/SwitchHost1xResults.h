@@ -35,7 +35,7 @@ extern SwitchHost1xResultState switch_vic_result_state;
 extern SwitchHost1xResultState switch_nvdec_result_state;
 
 template <uint32_t Engine, SwitchHost1xResultState &State =
-                              (Engine == SWITCH_GPU_ENGINE_VIC ? switch_vic_result_state : switch_nvdec_result_state)>
+                               (Engine == SWITCH_GPU_ENGINE_VIC ? switch_vic_result_state : switch_nvdec_result_state)>
 class SwitchHost1xResults {
     static constexpr uint32_t kBuckets = SwitchHost1xResultState::kBuckets;
     static constexpr uint32_t kRecent = SwitchHost1xResultState::kRecent;
@@ -221,9 +221,9 @@ public:
             return -22;
         IOLockLock(State.lock);
         const auto *record = find(*token);
-        const int result = record              ? record->physicalResult
+        const int result = record                 ? record->physicalResult
                            : retiredToken(*token) ? retiredPhysical(*token)
-                                                 : SWITCH_GPU_BACKING_STALE;
+                                                  : SWITCH_GPU_BACKING_STALE;
         IOLockUnlock(State.lock);
         return result;
     }
@@ -244,9 +244,9 @@ public:
             return -22;
         IOLockLock(State.lock);
         const auto *record = find(*token);
-        const int result = record              ? record->result
+        const int result = record                 ? record->result
                            : retiredToken(*token) ? retiredResult(token->value, &token->reset_generation)
-                                                 : SWITCH_GPU_BACKING_STALE;
+                                                  : SWITCH_GPU_BACKING_STALE;
         IOLockUnlock(State.lock);
         return result;
     }
@@ -285,8 +285,8 @@ public:
         IOLockLock(State.lock);
         auto *record = find(*token);
         if (!record) {
-            const int result = retiredToken(*token) ? retiredResult(token->value, &token->reset_generation)
-                                                    : SWITCH_GPU_BACKING_STALE;
+            const int result =
+                retiredToken(*token) ? retiredResult(token->value, &token->reset_generation) : SWITCH_GPU_BACKING_STALE;
             IOLockUnlock(State.lock);
             return result;
         }

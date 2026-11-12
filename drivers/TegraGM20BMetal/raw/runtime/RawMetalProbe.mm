@@ -93,7 +93,8 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
 // (raw_draw_bands.h), in nanoseconds; 0: never banded. Answers the budget it replaced.
 - (NSString *)switchRawBandBudget:(NSNumber *)ns
 {
-    return [NSString stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
+    return [NSString
+        stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
 }
 
 // Storage forms view compressed attachments while set, for gpu.raw.storage_compressed
@@ -128,10 +129,11 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
         @synchronized(t) {
             twin = t->_twin;
         }
-    return [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d twin=%d",
-                                      t != nil, t && t->_raw.comptags, t && t->_raw.blockLinear, t ? t->_raw.pitch : 0,
-                                      (flags & TegraGM20BInfoTiledCache) != 0,
-                                      (flags & TegraGM20BInfoCompression) != 0, twin != nil];
+    return
+        [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d twin=%d",
+                                   t != nil, t && t->_raw.comptags, t && t->_raw.blockLinear, t ? t->_raw.pitch : 0,
+                                   (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
+                                   twin != nil];
 }
 
 @end

@@ -79,6 +79,7 @@ class SwitchEMC : public OSObject {
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
     bool useFixedRate(unsigned now);
     IOReturn holdFixedRate();
+
     unsigned carEmcKhz() const
     {
         return car ? switchclk::readEmc(car).kHz : 0;
@@ -106,6 +107,7 @@ public:
     void deadline(uint64_t until);
     int reserveDisplay(uint64_t bytes);
     int reserveMemory(const switch_display_memory_head &request);
+
     bool displayMemoryReady() const
     {
         return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE);
@@ -198,11 +200,11 @@ bool SwitchEMC::setup(char *why, size_t size)
     const uint32_t fbio = emcProfile ? switch_mmio_read32(emcProfile, 0x104) : 0;
     memoryQualified = mcRegs && emcProfile && chipProfile && switch_display::memoryProfile(hidrev, fbio);
     if (!memoryQualified)
-        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T21x with LPDDR4\n",
-              hidrev, fbio);
+        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T21x with LPDDR4\n", hidrev,
+              fbio);
     if (fixed)
-        IOLog("SwitchEMC: no BPMP firmware: the EMC stays at %u kHz (%s), where display memory admission plans\n",
-              now, switchclk::emcSourceName(switchclk::readEmc(car).source));
+        IOLog("SwitchEMC: no BPMP firmware: the EMC stays at %u kHz (%s), where display memory admission plans\n", now,
+              switchclk::emcSourceName(switchclk::readEmc(car).source));
     regs = switch_mmio_map(kActmonPA, 0x400);
     loop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kActmonIntid, false);

@@ -53,7 +53,8 @@ struct MsaaFirstUseTest: HWTest {
                 checks.append(("its clear wrote comptags alone (a ZBC hit)", zbcHits > 0))
                 if timing.gpuTimed {
                     checks.append(
-                        ("its first pass within \(Self.clearBudgetMs) ms", timing.gpuMilliseconds <= Self.clearBudgetMs))
+                        ("its first pass within \(Self.clearBudgetMs) ms", timing.gpuMilliseconds <= Self.clearBudgetMs)
+                    )
                 }
             }
         }

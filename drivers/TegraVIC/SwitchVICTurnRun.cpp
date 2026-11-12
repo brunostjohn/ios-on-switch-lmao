@@ -21,8 +21,12 @@ uint64_t gShapes[kShapes];
 uint64_t shapeOf(const TegraVICRequest &r, const TegraVICSurfaceDesc &s, const TegraVICSurfaceDesc &d, int pid)
 {
     uint64_t h = 1469598103934665603ull;
-    const uint64_t words[] = {uint64_t(pid),     r.flags & 0x7ff,  s.fourcc, uint64_t(s.width) << 32 | s.height,
-                              d.fourcc,          uint64_t(d.width) << 32 | d.height,
+    const uint64_t words[] = {uint64_t(pid),
+                              r.flags & 0x7ff,
+                              s.fourcc,
+                              uint64_t(s.width) << 32 | s.height,
+                              d.fourcc,
+                              uint64_t(d.width) << 32 | d.height,
                               uint64_t(!!r.src_event_port) << 2 | uint64_t(!!r.dst_event_port) << 1 | !!r.cb_fn};
     for (const uint64_t w : words)
         h = (h ^ w) * 1099511628211ull;
@@ -52,8 +56,8 @@ void fourcc(char out[5], uint32_t f)
 }
 }  // namespace
 
-void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfaceDesc &s,
-                                  const TegraVICSurfaceDesc &d, int pid)
+void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfaceDesc &s, const TegraVICSurfaceDesc &d,
+                                  int pid)
 {
     if (!firstOf(shapeOf(r, s, d, pid)))
         return;
@@ -62,12 +66,13 @@ void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfac
     fourcc(from, s.fourcc);
     fourcc(to, d.fourcc);
     char line[256];
-    snprintf(line, sizeof(line),
-             "TegraVIC: request shape: %s[%d] transform %llu '%s' %ux%u src %llu,%llu %llux%llu (16.16) -> '%s' %ux%u "
-             "dst %u,%u %ux%u; events src %u (wait %llu signal %llu) dst %u (wait %llu signal %llu); callback %d skip %d",
-             name, pid, r.flags & TEGRA_VIC_REQ_TRANSFORM, from, s.width, s.height, r.src_x, r.src_y, r.src_w, r.src_h,
-             to, d.width, d.height, r.dst_x, r.dst_y, r.dst_w, r.dst_h, r.src_event_port, r.src_wait, r.src_signal,
-             r.dst_event_port, r.dst_wait, r.dst_signal, r.cb_fn != 0, (r.flags & TEGRA_VIC_REQ_SKIP_CALLBACK) != 0);
+    snprintf(
+        line, sizeof(line),
+        "TegraVIC: request shape: %s[%d] transform %llu '%s' %ux%u src %llu,%llu %llux%llu (16.16) -> '%s' %ux%u "
+        "dst %u,%u %ux%u; events src %u (wait %llu signal %llu) dst %u (wait %llu signal %llu); callback %d skip %d",
+        name, pid, r.flags & TEGRA_VIC_REQ_TRANSFORM, from, s.width, s.height, r.src_x, r.src_y, r.src_w, r.src_h, to,
+        d.width, d.height, r.dst_x, r.dst_y, r.dst_w, r.dst_h, r.src_event_port, r.src_wait, r.src_signal,
+        r.dst_event_port, r.dst_wait, r.dst_signal, r.cb_fn != 0, (r.flags & TEGRA_VIC_REQ_SKIP_CALLBACK) != 0);
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
 

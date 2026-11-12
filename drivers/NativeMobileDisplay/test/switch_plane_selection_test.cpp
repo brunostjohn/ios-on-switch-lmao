@@ -6,13 +6,34 @@
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 
 namespace {
-struct OSObject { OSObject *metaCast(const char *) { return this; } } surfaces[4];
-struct OriginalLegacySwapRequest { uint32_t updated = 0, ready = 0; OSObject *effective[4] = {}; };
+struct OSObject {
+    OSObject *metaCast(const char *)
+    {
+        return this;
+    }
+} surfaces[4];
+
+struct OriginalLegacySwapRequest {
+    uint32_t updated = 0, ready = 0;
+    OSObject *effective[4] = {};
+};
+
 struct Display {
     using PlaneSet = switch_display::Composition;
     static constexpr unsigned swapUpdated = 0, swapReady = 4, swapEffectiveSurfaces = 8;
-    struct PlaneLayerRecord { OSObject *surface = nullptr; native_planes::Layer layer; } planeLayers[4];
-    struct PlaneDecision { OSObject *ui; bool uiNew, blank, planeChange; bool waitSlot; PlaneSet set; };
+
+    struct PlaneLayerRecord {
+        OSObject *surface = nullptr;
+        native_planes::Layer layer;
+    } planeLayers[4];
+
+    struct PlaneDecision {
+        OSObject *ui;
+        bool uiNew, blank, planeChange;
+        bool waitSlot;
+        PlaneSet set;
+    };
+
     bool stats = false, planesOn = true;
     OSObject *planeShownUi = nullptr;
     unsigned stPlaneUnready = 0, stPlaneDropped = 0, conversions = 0;
@@ -21,17 +42,38 @@ struct Display {
     PlaneSet planeTarget;
     switch_display::WindowState live[2] = {};
     std::array<int, 4> mapping = {0, 1, 2, 3};
-    void getDisplayDimensions(uint32_t *w, uint32_t *h) { *w = 720; *h = 1280; }
-    native_planes::Layer planeLayerOf(const unsigned char *, unsigned i, OSObject *) { return planeLayers[i].layer; }
-    native_planes::Surface planeSurfaceOf(OSObject *) { return {}; }
+
+    void getDisplayDimensions(uint32_t *w, uint32_t *h)
+    {
+        *w = 720;
+        *h = 1280;
+    }
+
+    native_planes::Layer planeLayerOf(const unsigned char *, unsigned i, OSObject *)
+    {
+        return planeLayers[i].layer;
+    }
+
+    native_planes::Surface planeSurfaceOf(OSObject *)
+    {
+        return {};
+    }
+
     using Window = switch_landscape::Window;
-    switch_display::WindowState planeWindowState(Window w) const { return live[w - 1]; }
+
+    switch_display::WindowState planeWindowState(Window w) const
+    {
+        return live[w - 1];
+    }
+
     int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &, uint32_t, uint32_t,
-                          native_planes::Image &image, bool &resolved)
+                           native_planes::Image &image, bool &resolved)
     {
         resolved = true;
-        if (mapError) return mapError;
-        if (planeBuildingSlots) reservedOnSecond = planeBuildingSlots;
+        if (mapError)
+            return mapError;
+        if (planeBuildingSlots)
+            reservedOnSecond = planeBuildingSlots;
         const auto i = unsigned(surface - surfaces);
         image.visible = true;
         image.yuv = native_planes::isNv12(planeLayers[i].layer.kind);
@@ -39,18 +81,26 @@ struct Display {
         image.options = native_planes::kWinEnable;
         return mapping[i];
     }
-    int planeConvertSlot(int slot, const native_planes::Layer &, uint32_t, uint32_t,
-                         native_planes::Image &image, const OriginalLegacySwapRequest *)
+
+    int planeConvertSlot(int slot, const native_planes::Layer &, uint32_t, uint32_t, native_planes::Image &image,
+                         const OriginalLegacySwapRequest *)
     {
         ++conversions;
-        if (convertError) return convertError;
+        if (convertError)
+            return convertError;
         image.yuv = false;
         return slot + 4;
     }
-    bool planeLandscapeDecide(const native_planes::Roles &, uint32_t, uint32_t, PlaneDecision &) { return false; }
+
+    bool planeLandscapeDecide(const native_planes::Roles &, uint32_t, uint32_t, PlaneDecision &)
+    {
+        return false;
+    }
+
     int composite = -1;
     bool compositeWaits = false;
     uint32_t composedFrom = 0;
+
     bool planeComposeWaits(switch_display::Overlay wanted[2], const int *, uint32_t, uint32_t)
     {
         if (compositeWaits || composite < 0)
@@ -63,8 +113,10 @@ struct Display {
         wanted[1] = {};
         return false;
     }
+
 #include "../SwitchPlaneSelection.h"
 };
+
 native_planes::Layer layer(native_planes::Kind kind, bool ui = false)
 {
     native_planes::Layer result;
@@ -74,6 +126,7 @@ native_planes::Layer layer(native_planes::Kind kind, bool ui = false)
     result.src = result.dst = {0, 0, ui ? 720 : 640, ui ? 1280 : 480};
     return result;
 }
+
 OriginalLegacySwapRequest frame(Display &display)
 {
     OriginalLegacySwapRequest request;
@@ -83,6 +136,7 @@ OriginalLegacySwapRequest frame(Display &display)
     }
     return request;
 }
+
 TEST(PlaneSelection, UiAndTwoDetachedLayersPreserveFamilyStackDepth)
 {
     Display display;
@@ -101,6 +155,7 @@ TEST(PlaneSelection, UiAndTwoDetachedLayersPreserveFamilyStackDepth)
     EXPECT_EQ(display.planeBuildingSlots, 0u);
     EXPECT_EQ(display.stPlaneDropped, 0u);
 }
+
 TEST(PlaneSelection, ProducerUpdateKeepsUnchangedUiAndOtherOverlay)
 {
     Display display;
@@ -123,6 +178,7 @@ TEST(PlaneSelection, ProducerUpdateKeepsUnchangedUiAndOtherOverlay)
     EXPECT_TRUE(decision.set.uses(3));
     EXPECT_FALSE(decision.set.uses(2));
 }
+
 TEST(PlaneSelection, BusySourceKeepsTheCurrentFrameForTheNextFrameEnd)
 {
     for (int busy : {-16, -11, -115, int(SWITCH_GPU_BACKING_STALE)}) {
@@ -169,6 +225,7 @@ TEST(PlaneSelection, ConversionThatCannotRunDropsOnlyItsOverlay)
     EXPECT_FALSE(decision.set.window[0].on && decision.set.window[1].on);
     EXPECT_EQ(display.stPlaneDropped, 1u);
 }
+
 TEST(PlaneSelection, LiveCscConflictQueuesConversionAndKeepsOldComposition)
 {
     Display display;
@@ -183,6 +240,7 @@ TEST(PlaneSelection, LiveCscConflictQueuesConversionAndKeepsOldComposition)
     EXPECT_FALSE(decision.planeChange);
     EXPECT_EQ(display.planeBuildingSlots, 0u);
 }
+
 TEST(PlaneSelection, ConvertedOverlayStillKeepsStackOrderAndMappedReservation)
 {
     Display display;
@@ -198,6 +256,7 @@ TEST(PlaneSelection, ConvertedOverlayStillKeepsStackOrderAndMappedReservation)
     EXPECT_EQ(decision.set.window[1].depth, 2u);
     EXPECT_EQ(display.planeBuildingSlots, 0u);
 }
+
 TEST(PlaneSelection, RefusedOverlaysGoOutAsTheirCompositeAlone)
 {
     Display display;
@@ -217,6 +276,7 @@ TEST(PlaneSelection, RefusedOverlaysGoOutAsTheirCompositeAlone)
     EXPECT_FALSE(decision.set.window[0].on && decision.set.window[1].on);
     EXPECT_EQ(display.stPlaneDropped, 0u);
 }
+
 TEST(PlaneSelection, ACompositeOnItsWayKeepsTheCurrentFrame)
 {
     Display display;
@@ -228,6 +288,7 @@ TEST(PlaneSelection, ACompositeOnItsWayKeepsTheCurrentFrame)
     EXPECT_FALSE(decision.planeChange);
     EXPECT_EQ(display.planeBuildingSlots, 0u);
 }
+
 TEST(PlaneSelection, FractionalSamplingChangeIsNotMistakenForStaticContent)
 {
     Display display;
@@ -241,4 +302,4 @@ TEST(PlaneSelection, FractionalSamplingChangeIsNotMistakenForStaticContent)
     other.window[1].image.vInitial = 1;
     EXPECT_FALSE(Display::planeSame(decision.set, other));
 }
-} // namespace
+}  // namespace

@@ -204,15 +204,16 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 }
 
 extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
-				 uint64_t offset, uint8_t kind, int readOnly, int vol,
-				 switch_gpu_mapping **out)
+					  uint64_t offset, uint8_t kind, int readOnly, int vol,
+					  switch_gpu_mapping **out)
 {
 	if (mem->pages[0] == 0x100000u) {
 		EXPECT_EQ(offset, 0u);
 		EXPECT_EQ(bytes, sizeof(words));
 		pushReadOnly = readOnly;
 		pushVolatile = vol;
-		memory.map(va, reinterpret_cast<uint8_t *>(words.data()), bytes, readOnly != 0, !vol);
+		memory.map(va, reinterpret_cast<uint8_t *>(words.data()), bytes, readOnly != 0,
+			   !vol);
 		pushWindow = {va, bytes};
 		*out = &pushWindow;
 		return 0;
@@ -229,7 +230,8 @@ extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes,
 }
 
 extern "C" int switch_gpu_vm_map(tgm_vm *vm, uint64_t va, uint64_t bytes, tgm_mem *mem,
-	uint64_t offset, uint8_t kind, int readOnly, switch_gpu_mapping **out)
+				 uint64_t offset, uint8_t kind, int readOnly,
+				 switch_gpu_mapping **out)
 {
 	return switch_gpu_vm_map_volatile(vm, va, bytes, mem, offset, kind, readOnly, 0, out);
 }

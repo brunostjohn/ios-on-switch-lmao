@@ -40,22 +40,22 @@ enum RMPred : uint8_t {
     PredCallVisibility,
     PredCallBufForeign,      // a = stage << 8 | index (0xffff: an index buffer)
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
-    PredCallDepthBias,     // a = bias, b = slope (float bits)
-    PredCallInvocation,    // an encoder selector recorded as an invocation (each selector logged once)
-    PredCallCBInvocation,  // a command buffer selector recorded as an invocation
+    PredCallDepthBias,       // a = bias, b = slope (float bits)
+    PredCallInvocation,      // an encoder selector recorded as an invocation (each selector logged once)
+    PredCallCBInvocation,    // a command buffer selector recorded as an invocation
     PredCallBlitOptions,
     PredCallBufCopyRange,
     PredBlitTexCopy,
     PredBlitBufToTex,
     PredBlitTexToBuf,
     PredBlitWholeTexCopy,
-    PredBlitTexFill,  // a fillTexture: the raw path does not draw: a = pixel format, b = level or other format
-    PredCompute,        // a kernel's buffer, texture or sampler not made by this device
-    PredComputeOff16,   // a buffer off 16 bytes where the kernel's record names no residual word: a = slot
-    PredComputeKernel,  // no pack kernel at the dispatch's shape, memory, textures and samplers
-    PredComputeImage,   // a texture sampled through an image of its own: a = slot
-    PredComputeView,    // a texture where m2v binds a view of another texel size: a = slot
-    PredComputeEdge,    // dispatchThreads: of a grid with an edge threadgroup: a = the grid's edge
+    PredBlitTexFill,       // a fillTexture: the raw path does not draw: a = pixel format, b = level or other format
+    PredCompute,           // a kernel's buffer, texture or sampler not made by this device
+    PredComputeOff16,      // a buffer off 16 bytes where the kernel's record names no residual word: a = slot
+    PredComputeKernel,     // no pack kernel at the dispatch's shape, memory, textures and samplers
+    PredComputeImage,      // a texture sampled through an image of its own: a = slot
+    PredComputeView,       // a texture where m2v binds a view of another texel size: a = slot
+    PredComputeEdge,       // dispatchThreads: of a grid with an edge threadgroup: a = the grid's edge
     PredComputePredicate,  // predication raw cannot run (a loop, a misused record, a word outside a raw buffer): the command buffer fails; a = kind or offset
     PredMipmaps,
     PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format neither the 2D engine nor a mip state filters: a = format
@@ -74,8 +74,8 @@ enum RMPred : uint8_t {
     PredEncSamples,       // a = the state's samples, b = the pass's | the state's shading passes << 32
     PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredEncGeometry,      // a = primitive, b = count | instances << 32; no native raster-order plan
-    PredEncStorageView,   // a = attachment, b = format | width << 32: no storage view and no barrier form to take
-    PredPassRotated,      // a = raw::RotatedRefusal, b = the rotation (a pass's, or the state's at encode)
+    PredEncStorageView,  // a = attachment, b = format | width << 32: no storage view and no barrier form to take
+    PredPassRotated,     // a = raw::RotatedRefusal, b = the rotation (a pass's, or the state's at encode)
     PredCount
 };
 

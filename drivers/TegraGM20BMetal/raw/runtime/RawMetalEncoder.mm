@@ -367,10 +367,10 @@ void rmPoolEncoders()
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;
     MTLRenderPassStencilAttachmentDescriptor *stencil = pass.stencilAttachment;
-    facts.zeta[0] = {depth.texture, depth.level, depth.slice, depth.loadAction, depth.storeAction,
-                     depth.resolveTexture != nil};
-    facts.zeta[1] = {stencil.texture, stencil.level, stencil.slice, stencil.loadAction, stencil.storeAction,
-                     stencil.resolveTexture != nil};
+    facts.zeta[0] = {depth.texture,    depth.level,       depth.slice,
+                     depth.loadAction, depth.storeAction, depth.resolveTexture != nil};
+    facts.zeta[1] = {stencil.texture,    stencil.level,       stencil.slice,
+                     stencil.loadAction, stencil.storeAction, stencil.resolveTexture != nil};
     e->_turn = passTurn(facts);
     if (const raw::RotatedRefusal turned = rotatedPassRefusal(facts); turned != raw::RotatedRefusal::None) {
         [self takeReason:WhyPass why:@(raw::rotatedRefusalText(turned))];

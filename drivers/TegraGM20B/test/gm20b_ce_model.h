@@ -74,7 +74,8 @@ struct CopyEngine {
 			ASSERT_TRUE(dstPitch);
 			for (uint32_t y = 0; y < h; y++)
 				for (uint32_t x = 0; x < w * b; x++) {
-					uint8_t *pd = memory.at(out + uint64_t(y) * m[0x0414] + x, true);
+					uint8_t *pd =
+						memory.at(out + uint64_t(y) * m[0x0414] + x, true);
 					if (!pd) {
 						fault = true;
 						return;
@@ -87,8 +88,10 @@ struct CopyEngine {
 		const uint32_t pitchIn = m[0x0410], pitchOut = m[0x0414];
 		for (uint32_t y = 0; y < h; y++)
 			for (uint32_t x = 0; x < w * b; x++) {
-				const uint64_t s = srcPitch ? in + uint64_t(y) * pitchIn + x : in + blockLinear(src, b, x, y);
-				const uint64_t d = dstPitch ? out + uint64_t(y) * pitchOut + x : out + blockLinear(dst, b, x, y);
+				const uint64_t s = srcPitch ? in + uint64_t(y) * pitchIn + x
+							    : in + blockLinear(src, b, x, y);
+				const uint64_t d = dstPitch ? out + uint64_t(y) * pitchOut + x
+							    : out + blockLinear(dst, b, x, y);
 				uint8_t *ps = memory.at(s), *pd = memory.at(d, true);
 				if (!ps || !pd) {
 					fault = true;
@@ -119,8 +122,8 @@ struct CopyEngine {
 			}
 			if (mthd == 0x001c) {
 				if (data == (2u | 1u << 24)) {
-					uint8_t *target =
-						memory.at(uint64_t(m[0x0010]) << 32 | m[0x0014], true);
+					uint8_t *target = memory.at(
+						uint64_t(m[0x0010]) << 32 | m[0x0014], true);
 					if (!target) {
 						fault = true;
 						return;

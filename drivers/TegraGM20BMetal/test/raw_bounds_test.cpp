@@ -452,7 +452,7 @@ TEST(RawRegion, CachedProjectionClipsToEachDrawsOwnScissor)
     EXPECT_EQ(budget.vertices, 0u);
     g.viewport.originX += 1;
     auto moved = cache.analysis(g, 1, budget);
-    EXPECT_FALSE(moved.bounds(box)); // different viewport needs new projection work; budget is exhausted
+    EXPECT_FALSE(moved.bounds(box));  // different viewport needs new projection work; budget is exhausted
 }
 
 TEST(RawRegion, UnavailableAndOverBudgetInputsKeepTheEntireScissorWithoutReading)
@@ -471,7 +471,7 @@ TEST(RawRegion, UnavailableAndOverBudgetInputsKeepTheEntireScissorWithoutReading
     EXPECT_EQ(missing.cachedBox().x1, 500u);
     unavailable.bounded = true;
     auto exhausted = cache.analysis(unavailable, 1, budget);
-    EXPECT_FALSE(exhausted.bounds(box)); // deliberately invalid pointers must never be dereferenced
+    EXPECT_FALSE(exhausted.bounds(box));  // deliberately invalid pointers must never be dereferenced
     EXPECT_EQ(exhausted.cachedBox().y1, 700u);
 }
 
@@ -482,8 +482,11 @@ TEST(RawRegion, OwnershipAcquisitionIsLazyAndNeverRetriedInsideASnapshot)
     unsigned attempts = 0;
     g.owner = &attempts;
     g.inputs[0] = reinterpret_cast<const void *>(1);
-    g.acquire = [](void *owner, const void *, const uint8_t *, uint64_t) { ++*static_cast<unsigned *>(owner); return false; };
-    g.matrix = reinterpret_cast<const uint8_t *>(1); // failed ownership must prevent reading even one byte
+    g.acquire = [](void *owner, const void *, const uint8_t *, uint64_t) {
+        ++*static_cast<unsigned *>(owner);
+        return false;
+    };
+    g.matrix = reinterpret_cast<const uint8_t *>(1);  // failed ownership must prevent reading even one byte
     raw::GeometryBudget budget;
     raw::GeometryCache cache;
     auto first = cache.analysis(g, 1, budget);

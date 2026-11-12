@@ -9,7 +9,13 @@
 #include <string>
 #include <vector>
 
-enum : uint32_t { TypeVoid = 19, Load = 61, VectorInsertDynamic = 78, IsInf = 157, Select = 169 };
+enum : uint32_t {
+    TypeVoid = 19,
+    Load = 61,
+    VectorInsertDynamic = 78,
+    IsInf = 157,
+    Select = 169
+};
 
 struct Compared {
     raw::DirectNvk compiler;
@@ -87,23 +93,22 @@ static bool compare(const NmbDirectKernel *kernel, void *context)
         native_bridge_metal_nvk_symbol("switch_nvk_stage_metrics"));
     raw::NvkStageMetrics cost = {};
     bool costValid = metrics && metrics(&native, &cost, sizeof(cost)) && cost.version == 1 &&
-                     cost.codeBytes == native.codeBytes && cost.gprs == native.numGprs &&
-                     cost.instructions > 0 && cost.maxWarps > 0 &&
-                     !metrics(&native, &cost, sizeof(cost) - 1) && !metrics(nullptr, &cost, sizeof(cost));
+                     cost.codeBytes == native.codeBytes && cost.gprs == native.numGprs && cost.instructions > 0 &&
+                     cost.maxWarps > 0 && !metrics(&native, &cost, sizeof(cost) - 1) &&
+                     !metrics(nullptr, &cost, sizeof(cost));
     raw::DirectNvk rankedCompiler = c.compiler;
     rankedCompiler.compileStage = native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage");
     raw::NvkStage ranked = {};
     raw::NvkStageInfo rankedInfo = info;
     rankedInfo.semantic = kernel->stage.semantic;
-    int rankedResult = rankedCompiler.compileStage ?
-        raw::nvk::compileStage(rankedCompiler, device, rankedInfo, ranked) : -1;
+    int rankedResult =
+        rankedCompiler.compileStage ? raw::nvk::compileStage(rankedCompiler, device, rankedInfo, ranked) : -1;
     const raw::NvkStage &selected = ranked.semanticVersion ? native : portable;
     bool rankValid = rankedResult == 0 && sameCode(ranked, selected) && sameMetadata(ranked, selected) &&
                      (!sameCode(native, portable) || ranked.semanticVersion == native.semanticVersion);
     printf("%s %s metrics=%d ranked=%u instructions=%u cycles=%llu spills=%u/%u\n",
-           costValid && rankValid ? "PASS" : "FAIL", c.name, costValid, ranked.semanticVersion,
-           cost.instructions, static_cast<unsigned long long>(cost.staticCycles),
-           cost.memorySpills, cost.memoryFills);
+           costValid && rankValid ? "PASS" : "FAIL", c.name, costValid, ranked.semanticVersion, cost.instructions,
+           static_cast<unsigned long long>(cost.staticCycles), cost.memorySpills, cost.memoryFills);
     same &= costValid && rankValid;
     raw::nvk::stageFinish(c.compiler, device, ranked);
     printf("%s %s native=%u nativeBytes=%u portableBytes=%u byteExact=%d lazy=%d status=%d/%d\n",
@@ -161,8 +166,10 @@ static bool compare(const NmbDirectKernel *kernel, void *context)
                 for (auto &record : records) {
                     if (record.kind != 1 || record.opcode != 44 || record.count != 256)
                         continue;
-                    if (mutation == 0) --record.count;
-                    else operands[record.first + 255] = program.values;
+                    if (mutation == 0)
+                        --record.count;
+                    else
+                        operands[record.first + 255] = program.values;
                     changed = true;
                     break;
                 }
@@ -255,12 +262,11 @@ int main(int argc, char **argv)
             return 1;
         }
         unsigned failures = 0;
-        for (const char *name : {"semantic_integer", "semantic_branch", "semantic_loop", "semantic_float",
-                                 "semantic_float_round", "semantic_atan2",
-                                 "semantic_vector", "semantic_half", "semantic_float_compare", "semantic_convert",
-                                 "semantic_private", "semantic_texture", "semantic_atomic", "semantic_barrier",
-                                 "semantic_extended", "semantic_group_min", "semantic_unpack_half",
-                                 "semantic_subgroup", "semantic_table"}) {
+        for (const char *name :
+             {"semantic_integer", "semantic_branch", "semantic_loop", "semantic_float", "semantic_float_round",
+              "semantic_atan2", "semantic_vector", "semantic_half", "semantic_float_compare", "semantic_convert",
+              "semantic_private", "semantic_texture", "semantic_atomic", "semantic_barrier", "semantic_extended",
+              "semantic_group_min", "semantic_unpack_half", "semantic_subgroup", "semantic_table"}) {
             if (const char *only = getenv("SWITCH_IR_CASE"); only && strcmp(only, name))
                 continue;
             auto *descriptor = [MTLComputePipelineDescriptor new];

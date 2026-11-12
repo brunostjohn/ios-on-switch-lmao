@@ -151,7 +151,8 @@ static inline void switch_gpu_jobs_announce_newest(struct switch_gpu_jobs *jobs)
 }
 
 /* 0 and the count, or -22 for a fence after an incomplete push or the job's last, -7 for more than the ABI allows. */
-static inline int switch_gpu_job_fences(const struct tgm_push *pushes, uint32_t count, uint32_t *fences)
+static inline int switch_gpu_job_fences(const struct tgm_push *pushes, uint32_t count,
+					uint32_t *fences)
 {
 	uint32_t n = 0;
 	for (uint32_t i = 0; i < count; ++i) {
@@ -175,7 +176,8 @@ struct switch_gpu_job_emitter {
 
 /* The user entries in order, an internal fence releasing the next seqno after each marked push. Returns the seqno
  * the job's own fence releases: `submitted` + the internal fences + 1. */
-static inline uint32_t switch_gpu_job_emit(const struct tgm_push *pushes, uint32_t count, uint32_t submitted,
+static inline uint32_t switch_gpu_job_emit(const struct tgm_push *pushes, uint32_t count,
+					   uint32_t submitted,
 					   const struct switch_gpu_job_emitter *emitter)
 {
 	uint32_t seqno = submitted + 1;

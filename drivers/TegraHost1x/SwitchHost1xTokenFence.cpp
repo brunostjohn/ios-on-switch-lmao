@@ -98,8 +98,8 @@ extern "C" int switch_host1x_token_fence(const switch_gpu_backing_token *tokens,
     for (uint32_t i = 0; i < count; ++i) {
         const auto &token = tokens[i];
         join->tokens[i] = token;
-        const uint32_t threshold = status(token) == 1 ? tegra_host1x_syncpt_read(token.queue)
-                                                      : static_cast<uint32_t>(token.value);
+        const uint32_t threshold =
+            status(token) == 1 ? tegra_host1x_syncpt_read(token.queue) : static_cast<uint32_t>(token.value);
         switch_host1x_fence_init(&join->fences[i], token.queue, threshold, signaled);
         const int error = switch_host1x_fence_add(&join->fences[i], 0);
         if (!error)

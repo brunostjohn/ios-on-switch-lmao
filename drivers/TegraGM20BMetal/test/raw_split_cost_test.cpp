@@ -114,4 +114,4 @@ TEST(SplitCost, RasterEstimateClipsScissorAndFractionalViewport)
     EXPECT_EQ(raw::rasterPixelLimit(state, 1280, 720), 0u);
 }
 
-} // namespace
+}  // namespace

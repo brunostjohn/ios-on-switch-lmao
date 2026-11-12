@@ -80,10 +80,10 @@ IOLock *tegra_nvdec_power_lock(void);
 namespace {
 constexpr uint64_t kNvdecPA = 0x54480000, kNvdecSize = 0x40000;
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kPartition = 25;        // TEGRA_POWERGATE_NVDEC
-constexpr unsigned kClock = 194;           // TEGRA210_CLK_NVDEC: CAR bank Y bit 2, also its reset
-constexpr uint32_t kNvjpgPartition = 26;   // TEGRA_POWERGATE_NVJPG, which NVDEC's needs on
-constexpr unsigned kNvjpgClock = 195;      // TEGRA210_CLK_NVJPG: NVDEC's slcg clock
+constexpr uint32_t kPartition = 25;       // TEGRA_POWERGATE_NVDEC
+constexpr unsigned kClock = 194;          // TEGRA210_CLK_NVDEC: CAR bank Y bit 2, also its reset
+constexpr uint32_t kNvjpgPartition = 26;  // TEGRA_POWERGATE_NVJPG, which NVDEC's needs on
+constexpr unsigned kNvjpgClock = 195;     // TEGRA210_CLK_NVJPG: NVDEC's slcg clock
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
@@ -143,15 +143,12 @@ const SwitchEnginePower kNvjpgPower = {kNvjpgPartition,    kNvjpgClock,      MC_
                                        MC_HOTRESET_NVJPG,  OVRE_NVDEC_MBIST, kNvjpgSlcgClocks,   1,
                                        tegra_mc_hot_reset, tegra_smmu_read};
 constexpr SwitchEngineProd kProd[] = {
-    {0xe00, 0},        // THI_CLK_OVERRIDE
-    {0x88, 0},         // THI_SLCG_OVERRIDE_HIGH_A
-    {0x8c, 0},         // THI_SLCG_OVERRIDE_LOW_A
-    {0x10a0, 0},       // FALCON_CGCTL
-    {0x1604, 0},
-    {0x117c, 0x30008},  // FALCON_CG2
-    {0x2328, 0},
-    {0x232c, 0x800000},
-    {0x2330, 0xfffffff8},
+    {0xe00, 0},                      // THI_CLK_OVERRIDE
+    {0x88, 0},                       // THI_SLCG_OVERRIDE_HIGH_A
+    {0x8c, 0},                       // THI_SLCG_OVERRIDE_LOW_A
+    {0x10a0, 0},                     // FALCON_CGCTL
+    {0x1604, 0}, {0x117c, 0x30008},  // FALCON_CG2
+    {0x2328, 0}, {0x232c, 0x800000}, {0x2330, 0xfffffff8},
 };
 
 bool powerUp(bool *wasOn)

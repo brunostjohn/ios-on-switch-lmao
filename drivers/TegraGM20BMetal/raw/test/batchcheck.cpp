@@ -57,7 +57,8 @@ int main()
         section.offset = sizeof header;
     const raw::PackInitMethod init[] = {{0, 0, 0xb197, 0}, {1, 0, 0xb1c0, 0}, {4, 0, 0xb0b5, 0}};
     header.section[raw::PackInit].bytes = sizeof init;
-    const bool written = write(fd, &header, sizeof header) == sizeof header && write(fd, init, sizeof init) == sizeof init;
+    const bool written =
+        write(fd, &header, sizeof header) == sizeof header && write(fd, init, sizeof init) == sizeof init;
     close(fd);
     raw::Device device;
     std::string error;
@@ -125,8 +126,8 @@ int main()
         const bool ok = noWaits && finished && cap_draws() - before == count &&
                         mock_iokit_calls(TegraGM20BMethodExec) - submits == batches;
         if (!ok)
-            fprintf(stderr, "repeated result: noWaits=%d finished=%d draws=%llu/%u submits=%lu/%u error=%s\n",
-                    noWaits, finished, (unsigned long long)(cap_draws() - before), count,
+            fprintf(stderr, "repeated result: noWaits=%d finished=%d draws=%llu/%u submits=%lu/%u error=%s\n", noWaits,
+                    finished, (unsigned long long)(cap_draws() - before), count,
                     mock_iokit_calls(TegraGM20BMethodExec) - submits, batches, device.channelError().c_str());
         return ok;
     };
@@ -188,8 +189,8 @@ int main()
         auto [cb, encoder] = begin();
         const uint64_t before = cap_draws();
         const unsigned long submits = mock_iokit_calls(TegraGM20BMethodExec);
-        const bool draws = encoder && encoder->drawIndirect(3, &arguments, 0, &why) &&
-                           encoder->draw(3, 0, 3, 1, 0, &why);
+        const bool draws =
+            encoder && encoder->drawIndirect(3, &arguments, 0, &why) && encoder->draw(3, 0, 3, 1, 0, &why);
         if (encoder)
             encoder->end();
         uint32_t sequence = 0;
@@ -296,7 +297,12 @@ int main()
             states[i].rec = &kernels[i];
             states[i].cbufType[0] = raw::CbufRoot;
         }
-        struct Expected { uint64_t buffer; uint32_t grid, threads, push, handle; };
+
+        struct Expected {
+            uint64_t buffer;
+            uint32_t grid, threads, push, handle;
+        };
+
         std::vector<Expected> expected;
         auto *cb = device.begin();
         raw::ComputeEncoder encoder(*cb, device);
@@ -310,8 +316,8 @@ int main()
             encoder.setSampler(0, &samplers[sampler]);
             const uint32_t groups[] = {grid, 1, 1}, size[] = {threads, 1, 1};
             dispatched &= encoder.dispatch(groups, size, &why);
-            expected.push_back({input.va + offset, grid, threads, kernels[state].pushWords[0],
-                                t->tic | samplers[sampler].tsc << 20});
+            expected.push_back(
+                {input.va + offset, grid, threads, kernels[state].pushWords[0], t->tic | samplers[sampler].tsc << 20});
         };
         launch(0, 1, 1, 0, 0, 0);
         launch(0, 1, 1, 0, 0, 0);
@@ -345,8 +351,8 @@ int main()
                        (descriptor[0] | uint64_t(descriptor[1]) << 32) == e.buffer;
         }
         expect(matches, "every recorded launch retains its exact earlier resource and dispatch snapshot");
-        expect(matches && roots[0] == roots[1] && roots[1] != roots[2] && sets[1] == sets[2] &&
-                   roots[6] != roots[7] && sets[6] == sets[7] && roots[7] != roots[8],
+        expect(matches && roots[0] == roots[1] && roots[1] != roots[2] && sets[1] == sets[2] && roots[6] != roots[7] &&
+                   sets[6] == sets[7] && roots[7] != roots[8],
                "only changed root/descriptor inputs allocate; failed rebuild cannot revive a stale snapshot");
         device.destroyBuffer(input);
         device.destroyTexture(secondImage);
@@ -368,11 +374,11 @@ int main()
         expect(repeated(1, 1), "encoding recovers on a fresh channel after partial submission failure");
     }
     if (getenv("MOCK_NATIVE_JOBS")) {
-        const auto begun = mock_iokit_admissions(0), ended = mock_iokit_admissions(1), cancelled = mock_iokit_admissions(2);
+        const auto begun = mock_iokit_admissions(0), ended = mock_iokit_admissions(1),
+                   cancelled = mock_iokit_admissions(2);
         expect(begun == ended + cancelled && cancelled == 1,
                "every accepted logical job ended admission or cancelled its failed prefix");
-        expect(repeated(1, 1) && mock_iokit_admissions(0) == begun,
-               "ordinary job adds no admission transaction");
+        expect(repeated(1, 1) && mock_iokit_admissions(0) == begun, "ordinary job adds no admission transaction");
         expect(repeated(256, 2) && mock_iokit_admissions(0) == begun + 1 && mock_iokit_admissions(1) == ended + 1,
                "two batches share one exact resource admission through final publication");
         auto [cb, encoder] = begin();

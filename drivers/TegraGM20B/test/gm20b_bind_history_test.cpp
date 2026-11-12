@@ -5,7 +5,8 @@
 #include <string>
 #include "../TegraGM20BBindHistory.h"
 
-namespace {
+namespace
+{
 constexpr uint64_t kMs = 1000000;
 
 tgm_bind_note note(uint8_t op, uint64_t va, uint64_t range, uint64_t handle, uint64_t ns,

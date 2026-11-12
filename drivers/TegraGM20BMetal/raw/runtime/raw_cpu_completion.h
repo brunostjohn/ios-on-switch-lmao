@@ -7,7 +7,12 @@
 
 namespace raw {
 
-enum class CpuCompletionResult { Legacy, Current, Stale, Failed };
+enum class CpuCompletionResult {
+    Legacy,
+    Current,
+    Stale,
+    Failed
+};
 
 struct CpuCompletion {
     bool valid = true;
@@ -29,7 +34,8 @@ struct CpuCompletion {
             if (count && ranges[count - 1].handle == range.handle &&
                 range.offset <= ranges[count - 1].offset + ranges[count - 1].bytes) {
                 auto &previous = ranges[count - 1];
-                previous.bytes = std::max(previous.offset + previous.bytes, range.offset + range.bytes) - previous.offset;
+                previous.bytes =
+                    std::max(previous.offset + previous.bytes, range.offset + range.bytes) - previous.offset;
             } else {
                 ranges[count++] = range;
             }
@@ -53,11 +59,15 @@ template <class Submit> CpuCompletionResult completeCpuRanges(const CpuCompletio
     for (size_t at = 0; at < completion.ranges.size();) {
         const uint32_t count = uint32_t(std::min<size_t>(TegraGM20BMaxJobUses, completion.ranges.size() - at));
         const TegraGM20BAbiCpuComplete request = {completion.channelUid,
-            uint64_t(uintptr_t(completion.ranges.data() + at)), completion.channel, completion.seqno, count, 0};
+                                                  uint64_t(uintptr_t(completion.ranges.data() + at)),
+                                                  completion.channel,
+                                                  completion.seqno,
+                                                  count,
+                                                  0};
         TegraGM20BAbiCpuCompleteReply reply = {};
         if (!submit(request, reply) || reply.reserved ||
-            uint64_t(reply.current_count) + reply.stale + reply.pending + reply.failed != count ||
-            reply.pending || reply.failed || reply.first_error)
+            uint64_t(reply.current_count) + reply.stale + reply.pending + reply.failed != count || reply.pending ||
+            reply.failed || reply.first_error)
             return CpuCompletionResult::Failed;
         stale |= reply.stale != 0;
         at += count;
@@ -65,4 +75,4 @@ template <class Submit> CpuCompletionResult completeCpuRanges(const CpuCompletio
     return stale ? CpuCompletionResult::Stale : CpuCompletionResult::Current;
 }
 
-} // namespace raw
+}  // namespace raw

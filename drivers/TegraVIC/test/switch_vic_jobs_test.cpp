@@ -459,7 +459,6 @@ void switch_vic_semantics_commit(SwitchVICSemantic *)
 void switch_vic_semantics_physical(uint64_t)
 {}
 
-
 switch_gpu_event_waits *switch_vic_events_batch(SwitchVICEvents *)
 {
     return nullptr;
@@ -817,7 +816,9 @@ TEST_F(SwitchVICJobsTest, AJobRetiresFromItsFenceOnTheWorkLoopWithNoThread)
 {
     jobs[0].pixels = 8000;
     int heard = 1;
-    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    const auto record = [](void *context, int status) {
+        *static_cast<int *>(context) = status;
+    };
     ASSERT_EQ(submit(1, nullptr, record, &heard), 0);
     ASSERT_EQ(fences.size(), 1u);
     EXPECT_EQ(fences[0]->syncpt, 161u);
@@ -841,7 +842,9 @@ TEST_F(SwitchVICJobsTest, AJobThatRanOnACancelledDecodesPictureEndsWithTheDecode
     const switch_gpu_backing_token decode = {0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
     sourceTokens = {decode, {decode.value - 1, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
     int heard = 1;
-    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    const auto record = [](void *context, int status) {
+        *static_cast<int *>(context) = status;
+    };
     ASSERT_EQ(submit(1, nullptr, record, &heard), 0);
     const uint64_t placed = gQueue.submitted;
     const switch_gpu_backing_token token = {placed, switch_vic_result_state.generation, SWITCH_GPU_ENGINE_VIC, gSyncpt};
@@ -872,7 +875,9 @@ TEST_F(SwitchVICJobsTest, AnUpstreamStallNeverResetsVic)
     const switch_gpu_backing_token decode = {0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
     sourceTokens = {decode};
     int placed = 1, behind = 1;
-    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    const auto record = [](void *context, int status) {
+        *static_cast<int *>(context) = status;
+    };
     ASSERT_EQ(submit(1, nullptr, record, &placed), 0);
     sourceTokens.clear();
     ASSERT_EQ(submit(1, nullptr, record, &behind), 0);
@@ -897,7 +902,13 @@ TEST_F(SwitchVICJobsTest, AStallAfterTheInputsCameInStillResetsVic)
 {
     sourceTokens = {{0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
     int heard = 1;
-    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    ASSERT_EQ(submit(
+                  1, nullptr,
+                  [](void *context, int status) {
+                      *static_cast<int *>(context) = status;
+                  },
+                  &heard),
+              0);
     interrupt(1);
     ASSERT_EQ(watchedBounds.size(), 1u);
     outlived(0);
@@ -953,7 +964,13 @@ TEST_F(SwitchVICJobsTest, ABatchRetiresWholeOnItsLastJobsFence)
 {
     jobs[0].pixels = jobs[1].pixels = jobs[2].pixels = 0;
     int heard = 1;
-    ASSERT_EQ(submit(3, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    ASSERT_EQ(submit(
+                  3, nullptr,
+                  [](void *context, int status) {
+                      *static_cast<int *>(context) = status;
+                  },
+                  &heard),
+              0);
     ASSERT_EQ(fences.size(), 1u);
     EXPECT_EQ(fences[0]->threshold, static_cast<uint32_t>(gQueue.submitted));
     EXPECT_EQ(fenceBounds[0], 3u * 2000000u);
@@ -967,7 +984,13 @@ TEST_F(SwitchVICJobsTest, AJobWithASemanticBatchEndsOnItsSemanticCompletion)
 {
     preparedBatch = reinterpret_cast<switch_gpu_event_waits *>(uintptr_t(0x50));
     int heard = 1;
-    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    ASSERT_EQ(submit(
+                  1, nullptr,
+                  [](void *context, int status) {
+                      *static_cast<int *>(context) = status;
+                  },
+                  &heard),
+              0);
     const uint64_t fence = gQueue.submitted;
     interrupt(0);
     EXPECT_EQ(gQueue.count, 1u);
@@ -1056,7 +1079,9 @@ TEST_F(SwitchVICJobsTest, JobsRetireAndCompleteInSubmissionOrder)
 // reset, their fences are released, and the next frame's job runs on the renumbered queue.
 TEST_F(SwitchVICJobsTest, AStalledFrameIsCancelledAndTheNextFrameRuns)
 {
-    const auto heard = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    const auto heard = [](void *context, int status) {
+        *static_cast<int *>(context) = status;
+    };
     int stalledFrame = 1, behindFrame = 1, nextFrame = 1;
     ASSERT_EQ(submit(1, nullptr, heard, &stalledFrame), 0);
     const uint64_t stalled = gQueue.submitted;
@@ -1111,7 +1136,8 @@ TEST_F(SwitchVICJobsTest, AnIdleGatedEngineIsPoweredOnByTheNextJob)
 {
     SwitchEngineGate<TestGatePlatform> gate;
     const SwitchEngineGateOps ops = {
-        "TegraVIC", nullptr,
+        "TegraVIC",
+        nullptr,
         [](void *) -> int {
             hardware += 2;
             switch_vic_jobs_resume(true, hardware);
@@ -1128,7 +1154,13 @@ TEST_F(SwitchVICJobsTest, AnIdleGatedEngineIsPoweredOnByTheNextJob)
     EXPECT_TRUE(gSuspended);
     const uint64_t base = gQueue.submitted;
     int frame = 1;
-    EXPECT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &frame), 0);
+    EXPECT_EQ(submit(
+                  1, nullptr,
+                  [](void *context, int status) {
+                      *static_cast<int *>(context) = status;
+                  },
+                  &frame),
+              0);
     testGate = nullptr;
     EXPECT_TRUE(gate.powered());
     EXPECT_FALSE(gSuspended);
@@ -1144,10 +1176,12 @@ TEST_F(SwitchVICJobsTest, AnIdleGatedEngineIsPoweredOnByTheNextJob)
 TEST_F(SwitchVICJobsTest, ASubmissionWithoutAWriteUseIsRefused)
 {
     switch_gpu_backing_use readOnly[1] = {{uses[0].backing, SWITCH_GPU_BACKING_READ, 0}};
-    EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {nullptr, 0, nullptr, 0, nullptr, 0}, nullptr, nullptr,
-                                        nullptr), -22);
-    EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {readOnly, 1, nullptr, 0, nullptr, 0}, nullptr, nullptr,
-                                        nullptr), -22);
+    EXPECT_EQ(
+        switch_vic_submit_checked(jobs, 1, nullptr, {nullptr, 0, nullptr, 0, nullptr, 0}, nullptr, nullptr, nullptr),
+        -22);
+    EXPECT_EQ(
+        switch_vic_submit_checked(jobs, 1, nullptr, {readOnly, 1, nullptr, 0, nullptr, 0}, nullptr, nullptr, nullptr),
+        -22);
     EXPECT_EQ(gQueue.submitted, gQueue.completed);
 }
 

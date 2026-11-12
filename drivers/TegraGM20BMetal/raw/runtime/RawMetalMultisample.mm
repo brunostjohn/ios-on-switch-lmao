@@ -72,10 +72,11 @@ bool makeStoredZeta(MTLTextureDescriptor *d, raw::Texture &t)
         gRM->raw->createOwnedZeta(width, height, format, 1, (d.usage & MTLTextureUsageShaderRead) != 0, t, layers);
     static std::atomic<bool> said{false};
     if (made && !said.exchange(true))
-        os_log(rawLog(),
-               "raw: stored one-sample depth/stencil on (first %ux%u format %u, %u layers: %llu bytes of %{public}s zeta "
-               "memory, no m2v twin)",
-               width, height, format, layers, (unsigned long long)t.storage.bytes, t.comptags ? "compressed" : "plain");
+        os_log(
+            rawLog(),
+            "raw: stored one-sample depth/stencil on (first %ux%u format %u, %u layers: %llu bytes of %{public}s zeta "
+            "memory, no m2v twin)",
+            width, height, format, layers, (unsigned long long)t.storage.bytes, t.comptags ? "compressed" : "plain");
     if (!made)
         SWITCH_REFUSE_DETAIL("raw", "zeta.owned", d.pixelFormat,
                              "a stored %lux%lu depth/stencil texture of format %lu stays m2v's: no zeta memory",

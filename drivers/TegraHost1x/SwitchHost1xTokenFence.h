@@ -11,7 +11,9 @@
 extern "C" {
 #endif
 
-enum { SWITCH_HOST1X_TOKEN_FENCE_MAX = 4 };
+enum {
+    SWITCH_HOST1X_TOKEN_FENCE_MAX = 4
+};
 
 // tokens: producers of the surface (a view's producer), each a VIC or NVDEC job's. Returns 0 when completed(context,
 // status) will run once, on host1x's interrupt work loop, after every token's job has finished on its engine: status 0,

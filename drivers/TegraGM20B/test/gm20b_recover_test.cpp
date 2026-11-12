@@ -220,12 +220,17 @@ TEST(StuckSave, AKernelChannelWithNothingPendingIsResetOnceAndFatalOnlyIfThatRes
 	const uint32_t done = 9;
 	const int stuck = tgm_switch_unowned(0, done, done);
 	ASSERT_TRUE(stuck);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(0, 0, done)), TGM_CTXSW_REDO)
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(0, 0, done)),
+		  TGM_CTXSW_REDO)
 		<< "the engine is reset at the first tick, nothing killed";
 	const uint32_t resetAfter = done;
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done)), TGM_CTXSW_FATAL)
-		<< "stuck again on the same context with no job since: the reset did not free the engine";
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done + 1)), TGM_CTXSW_REDO)
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done)),
+		  TGM_CTXSW_FATAL)
+		<< "stuck again on the same context with no job since: the reset did not free the "
+		   "engine";
+	EXPECT_EQ(
+		tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done + 1)),
+		TGM_CTXSW_REDO)
 		<< "a later stall after the channel ran again is a new one";
 }
 
@@ -259,7 +264,8 @@ TEST(LastResort, AHangWithNothingToBlameResetsTheEnginesOnceAStall)
 {
 	EXPECT_TRUE(tgm_hang_last_resort(0, 0, 39009));
 	EXPECT_FALSE(tgm_hang_last_resort(1, 39009, 39009)) << "the reset freed nothing: fatal";
-	EXPECT_TRUE(tgm_hang_last_resort(1, 39009, 39010)) << "it completed work since: a new stall";
+	EXPECT_TRUE(tgm_hang_last_resort(1, 39009, 39010))
+		<< "it completed work since: a new stall";
 }
 
 // nvkm's recovery holds runl->mutex through its runlist update and preempt waits (2 s each, recovery.c): a kill still

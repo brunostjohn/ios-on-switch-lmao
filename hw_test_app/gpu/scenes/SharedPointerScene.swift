@@ -16,9 +16,10 @@ struct SharedPointerScene: GPUScene {
             throw TestFailure("aligned no-copy allocation failed")
         }
         original.initializeMemory(as: UInt8.self, repeating: 0xa5, count: length)
-        guard let source = gpu.device.makeBuffer(
-            bytesNoCopy: original, length: length, options: .storageModeShared,
-            deallocator: { pointer, _ in free(pointer) })
+        guard
+            let source = gpu.device.makeBuffer(
+                bytesNoCopy: original, length: length, options: .storageModeShared,
+                deallocator: { pointer, _ in free(pointer) })
         else {
             free(original)
             throw TestFailure("no-copy buffer creation failed")

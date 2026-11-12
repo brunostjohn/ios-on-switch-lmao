@@ -31,8 +31,9 @@ struct SM53ProbeScene: GPUScene {
             for i in inputs.indices { encoder.setBuffer(inputs[i], offset: 0, index: i) }
             encoder.setComputePipelineState(transport)
             encoder.setBuffer(echo, offset: 0, index: 3)
-            encoder.dispatchThreadgroups(MTLSize(width: a.count / 256, height: 1, depth: 1),
-                                         threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.dispatchThreadgroups(
+                MTLSize(width: a.count / 256, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
             encoder.setComputePipelineState(pipeline)
             encoder.setBuffer(out, offset: 0, index: 3)
             encoder.setBuffer(proof, offset: 0, index: 4)
@@ -54,8 +55,11 @@ struct SM53ProbeScene: GPUScene {
         let echoed = echo.contents().bindMemory(to: UInt32.self, capacity: a.count * 4)
         var transportWrong = 0
         for i in a.indices {
-            if echoed[4 * i] != (UInt32(a[i]) | UInt32(b[i]) << 16) || echoed[4 * i + 1] != UInt32(c[i]) ||
-                echoed[4 * i + 2] != UInt32(i) || echoed[4 * i + 3] != 0x5353_494F { transportWrong += 1 }
+            if echoed[4 * i] != (UInt32(a[i]) | UInt32(b[i]) << 16) || echoed[4 * i + 1] != UInt32(c[i])
+                || echoed[4 * i + 2] != UInt32(i) || echoed[4 * i + 3] != 0x5353_494F
+            {
+                transportWrong += 1
+            }
         }
         result.metrics.set("transport_wrong", transportWrong)
         result.expect(transportWrong == 0, "SM53 operand/output transport failed for \(transportWrong) inputs")
@@ -87,7 +91,8 @@ struct SM53ProbeScene: GPUScene {
         result.metrics.set("inputs", a.count)
         result.metrics.set("alu_model", halfFtzWrong.allSatisfy { $0 == 0 } ? "half_round_output_ftz" : "unclassified")
         if attested {
-            result.expect(halfFtzWrong.allSatisfy { $0 == 0 }, "SM53 ALU does not match half-round/output-FTZ: \(halfFtzWrong)")
+            result.expect(
+                halfFtzWrong.allSatisfy { $0 == 0 }, "SM53 ALU does not match half-round/output-FTZ: \(halfFtzWrong)")
         } else {
             result.notes.append("ALU instructions unmodified; this run cannot qualify SM53 forms")
             result.expect(wrong.allSatisfy { $0 == 0 }, "Unmodified ALU reference failed: \(wrong)")
@@ -163,11 +168,14 @@ struct SM53ProbeScene: GPUScene {
             }
         }
         result.metrics.set("f32_inputs", x.count)
-        result.metrics.set("f32_source_model", truncationWrong.allSatisfy { $0 == 0 } ? "truncate_ftz_finite_clamp" : "unclassified")
+        result.metrics.set(
+            "f32_source_model", truncationWrong.allSatisfy { $0 == 0 } ? "truncate_ftz_finite_clamp" : "unclassified")
         result.metrics.set("f32_source_model_half_wrong", truncationWrong[0])
         result.metrics.set("f32_source_model_float_wrong", truncationWrong[1])
         if attested {
-            result.expect(truncationWrong.allSatisfy { $0 == 0 }, "SM53 source conversion does not match truncate/FTZ/clamp: \(truncationWrong)")
+            result.expect(
+                truncationWrong.allSatisfy { $0 == 0 },
+                "SM53 source conversion does not match truncate/FTZ/clamp: \(truncationWrong)")
         } else {
             result.notes.append("F32 source instructions unmodified; this run cannot qualify SM53 forms")
             result.expect(wrong[0] == 0 && wrong[1] == 0, "Unmodified conversion reference failed: \(wrong)")

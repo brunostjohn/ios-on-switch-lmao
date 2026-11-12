@@ -84,8 +84,10 @@ struct BarrierKit {
         let encoder = commands.makeRenderCommandEncoder(descriptor: Self.pass(atlas))!
         encoder.setRenderPipelineState(tap)
         encoder.setFragmentTexture(source, index: 0)
-        var params = [base, step, SIMD2<Int32>(0, Int32(index * Self.tile)),
-                      SIMD2<Int32>(Int32(source.width), Int32(source.height))]
+        var params = [
+            base, step, SIMD2<Int32>(0, Int32(index * Self.tile)),
+            SIMD2<Int32>(Int32(source.width), Int32(source.height)),
+        ]
         encoder.setFragmentBytes(&params, length: 32, index: 0)
         var corners = GPU.pixelQuad(
             0, index * Self.tile, Self.tile, (index + 1) * Self.tile, width: atlas.width, height: atlas.height)
@@ -100,11 +102,14 @@ struct BarrierKit {
         encoder.setRenderPipelineState(tap)
         for (k, source) in sources.enumerated() {
             encoder.setFragmentTexture(source, index: 0)
-            var params = [SIMD2<Int32>(0, 0), SIMD2(1, 1), SIMD2(0, Int32(k * Self.tile)),
-                          SIMD2(Int32(source.width), Int32(source.height))]
+            var params = [
+                SIMD2<Int32>(0, 0), SIMD2(1, 1), SIMD2(0, Int32(k * Self.tile)),
+                SIMD2(Int32(source.width), Int32(source.height)),
+            ]
             encoder.setFragmentBytes(&params, length: 32, index: 0)
-            var corners = GPU.pixelQuad(0, k * Self.tile, Self.tile, (k + 1) * Self.tile, width: atlas.width,
-                                        height: atlas.height)
+            var corners = GPU.pixelQuad(
+                0, k * Self.tile, Self.tile, (k + 1) * Self.tile, width: atlas.width,
+                height: atlas.height)
             encoder.setVertexBytes(&corners, length: 64, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
@@ -142,7 +147,9 @@ struct BarrierKit {
     func texel(_ x: Int, _ y: Int, seed: Int) -> [UInt8] {
         let v = probeHash(UInt32(x), UInt32(y), UInt32(seed))
         if format == .rgba16Float {
-            let halves = [v & 0x3ff, (v >> 10) & 0x3ff, (v >> 20) & 0x3ff, (v >> 22) & 0x3ff].map { UInt16(0x3c00 | $0) }
+            let halves = [v & 0x3ff, (v >> 10) & 0x3ff, (v >> 20) & 0x3ff, (v >> 22) & 0x3ff].map {
+                UInt16(0x3c00 | $0)
+            }
             return halves.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
         }
         return [UInt8((v >> 16) & 255), UInt8((v >> 8) & 255), UInt8(v & 255), UInt8(v >> 24)]

@@ -102,8 +102,8 @@ extern "C" int tegra_nvdec_buffer_alloc(uint64_t size, TegraNVDECBlock *block)
     auto *allocation = IONew(SwitchNVDECAllocation, 1);
     if (allocation) {
         *allocation = {block->pages, block->iova, bytes};
-        block->backing = switch_gpu_backing_register(block->pages.pages, block->pages.count, 0,
-                                                      allocation, releaseAllocation);
+        block->backing =
+            switch_gpu_backing_register(block->pages.pages, block->pages.count, 0, allocation, releaseAllocation);
     }
     if (!block->backing) {
         if (allocation) {

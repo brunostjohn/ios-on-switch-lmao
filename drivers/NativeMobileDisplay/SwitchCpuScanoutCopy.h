@@ -21,5 +21,8 @@ void noteCopy(uint64_t ticks)
     IOLog("SwitchDisplay: CPU scanout copy %llu us, max %llu us, mean %llu us over %llu swaps (%s, %llu waited for a "
           "flip)\n",
           ticks * 1000000 / hz, copyTicksMax * 1000000 / hz, copyTicksSum / copyFrames * 1000000 / hz, copyFrames,
-          doubleBuffer ? "double-buffered" : hwRotate ? "block-linear" : "rotating", flipWaits);
+          doubleBuffer ? "double-buffered"
+          : hwRotate   ? "block-linear"
+                       : "rotating",
+          flipWaits);
 }

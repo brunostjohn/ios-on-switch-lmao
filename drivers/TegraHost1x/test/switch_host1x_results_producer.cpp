@@ -20,7 +20,7 @@ static SwitchHost1xResult *produce(uint64_t first, uint64_t last, switch_gpu_bac
 }
 
 SwitchHost1xResult *switch_host1x_test_produce(uint32_t engine, uint64_t first, uint64_t last,
-                                           switch_gpu_backing_token *token)
+                                               switch_gpu_backing_token *token)
 {
     return engine == SWITCH_GPU_ENGINE_VIC ? produce<VIC>(first, last, token) : produce<NVDEC>(first, last, token);
 }

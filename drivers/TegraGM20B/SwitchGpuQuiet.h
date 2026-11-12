@@ -75,10 +75,13 @@ static inline int switch_gpu_quiet_end(int quiet, int semantic_fence, int scanou
 }
 
 enum {
-	SWITCH_GPU_QUIET_UNASKED = 0, /* nothing at or after the seqno interrupts, and no waiter asked */
-	SWITCH_GPU_QUIET_OWED = 1,    /* asked: the owner has not pushed the wake entry yet */
-	SWITCH_GPU_QUIET_QUEUED = 2,  /* pushed, behind work the GPU has not done: the fence is short of *end */
-	SWITCH_GPU_QUIET_DUE = 3,     /* the GPU is past *end, the fence the interrupt follows: its pass is due */
+	SWITCH_GPU_QUIET_UNASKED =
+		0, /* nothing at or after the seqno interrupts, and no waiter asked */
+	SWITCH_GPU_QUIET_OWED = 1, /* asked: the owner has not pushed the wake entry yet */
+	SWITCH_GPU_QUIET_QUEUED =
+		2, /* pushed, behind work the GPU has not done: the fence is short of *end */
+	SWITCH_GPU_QUIET_DUE =
+		3, /* the GPU is past *end, the fence the interrupt follows: its pass is due */
 };
 
 /* Where the interrupt for `seqno` is, with `completed` the channel's fence. *end comes in as

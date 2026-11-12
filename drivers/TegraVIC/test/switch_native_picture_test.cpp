@@ -114,8 +114,8 @@ TEST(SwitchNativePicture, VICReadsNativePaddedPlanesAndUsesVisibleCrop)
     destination.base[0] = 0x50000000;
     destination.span[0] = uint64_t(5120) * target.height;
     TegraVICJob job = {};
-    EXPECT_EQ(tegra_vic_build(&source, &destination, &operation, &kTegraVICTraits,
-                              0x80001000, 0x80002000, &job), nullptr);
+    EXPECT_EQ(tegra_vic_build(&source, &destination, &operation, &kTegraVICTraits, 0x80001000, 0x80002000, &job),
+              nullptr);
     EXPECT_GT(job.count, 0u);
 }
 

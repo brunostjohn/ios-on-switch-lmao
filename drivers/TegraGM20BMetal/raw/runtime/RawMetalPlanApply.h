@@ -60,13 +60,13 @@ void applyRenderState(const RMCommandPlan &plan, uint32_t index, StateCursor &cu
             applyBuffers(plan.buffers[stage], previous ? previous->buffers[stage] : kNoSnapshot, next.buffers[stage],
                          stage + 1, cursor, sink);
         if (!previous || previous->textures[stage] != next.textures[stage])
-            applyObjects(plan.textures[stage], previous ? previous->textures[stage] : kNoSnapshot,
-                         next.textures[stage], cursor, [&](uint32_t slot, void *object) {
+            applyObjects(plan.textures[stage], previous ? previous->textures[stage] : kNoSnapshot, next.textures[stage],
+                         cursor, [&](uint32_t slot, void *object) {
                              sink.texture(stage + 1, slot, object);
                          });
         if (!previous || previous->samplers[stage] != next.samplers[stage])
-            applyObjects(plan.samplers[stage], previous ? previous->samplers[stage] : kNoSnapshot,
-                         next.samplers[stage], cursor, [&](uint32_t slot, void *object) {
+            applyObjects(plan.samplers[stage], previous ? previous->samplers[stage] : kNoSnapshot, next.samplers[stage],
+                         cursor, [&](uint32_t slot, void *object) {
                              sink.sampler(stage + 1, slot, object);
                          });
     }

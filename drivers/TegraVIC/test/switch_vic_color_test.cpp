@@ -10,7 +10,9 @@ TegraVICSurfaceDesc surface(bool yuv, uint32_t width = 1920, uint32_t height = 1
 {
     TegraVICSurfaceDesc d = {};
     d.fourcc = yuv ? TEGRA_VIC_FOURCC('4', '2', '0', 'v') : TEGRA_VIC_FOURCC('B', 'G', 'R', 'A');
-    d.width = width; d.height = height; d.planes = yuv ? 2 : 0;
+    d.width = width;
+    d.height = height;
+    d.planes = yuv ? 2 : 0;
     d.planeBytesPerRow[0] = ((width * (yuv ? 1 : 4) + 255) & ~255u);
     d.planeHeight[0] = height;
     if (yuv) {
@@ -60,8 +62,10 @@ TEST(SwitchVICColor, TaggedMatricesAndRangesReachPackedConfiguration)
                 ASSERT_EQ(tegra_vic_image_from(fromYuv ? &yuv : &rgb, 0x10000000, &src), nullptr);
                 ASSERT_EQ(tegra_vic_image_from(fromYuv ? &rgb : &yuv, 0x20000000, &dst), nullptr);
                 TegraVICOp op = {};
-                op.srcW = uint64_t(yuv.width) << 16; op.srcH = uint64_t(yuv.height) << 16;
-                op.dstW = yuv.width; op.dstH = yuv.height;
+                op.srcW = uint64_t(yuv.width) << 16;
+                op.srcH = uint64_t(yuv.height) << 16;
+                op.dstW = yuv.width;
+                op.dstH = yuv.height;
                 TegraVICJob job = {};
                 ASSERT_EQ(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
                 TegraVICMatrix expected = {};
@@ -89,8 +93,10 @@ TEST(SwitchVICColor, Bt2020CopyConversionAndFillKeepTheExplicitMatrix)
         ASSERT_EQ(tegra_vic_image_from(&yuv, 0x10000000, &src), nullptr);
         ASSERT_EQ(tegra_vic_image_from(&yuv, 0x20000000, &dst), nullptr);
         TegraVICOp op = {};
-        op.srcW = uint64_t(yuv.width) << 16; op.srcH = uint64_t(yuv.height) << 16;
-        op.dstW = yuv.width; op.dstH = yuv.height;
+        op.srcW = uint64_t(yuv.width) << 16;
+        op.srcH = uint64_t(yuv.height) << 16;
+        op.dstW = yuv.width;
+        op.dstH = yuv.height;
         TegraVICJob job = {};
         EXPECT_EQ(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
         ASSERT_EQ(tegra_vic_image_from(&rgb, 0x20000000, &dst), nullptr);
@@ -111,15 +117,19 @@ TEST(SwitchVICColor, P010ByteViewPreserves2020Tag)
     d.fourcc = TEGRA_VIC_FOURCC('x', '4', '2', '0');
     d.colorMatrix = SWITCH_VIC_MATRIX_2020;
     TegraVICPicture picture = {}, bytes = {};
-    picture.sampleBytes = 2; picture.width = d.width;
+    picture.sampleBytes = 2;
+    picture.width = d.width;
     TegraVICSurfaceDesc desc = {};
     ASSERT_EQ(switch_vic_picture_bytes(&picture, &d, &bytes, &desc), nullptr);
     EXPECT_EQ(desc.colorMatrix, SWITCH_VIC_MATRIX_2020);
 }
+
 TEST(SwitchVICColor, FixedPointMatricesMatchIndependent6017092020ColorEquations)
 {
     constexpr double weights[3][2] = {{0.299, 0.114}, {0.2126, 0.0722}, {0.2627, 0.0593}};
-    const auto code = [](double value) { return std::clamp(std::lround(value), 0L, 255L); };
+    const auto code = [](double value) {
+        return std::clamp(std::lround(value), 0L, 255L);
+    };
     for (unsigned standard = 0; standard != 3; ++standard) {
         const double kr = weights[standard][0], kb = weights[standard][1], kg = 1 - kr - kb;
         for (bool full : {false, true}) {
@@ -138,11 +148,13 @@ TEST(SwitchVICColor, FixedPointMatricesMatchIndependent6017092020ColorEquations)
                         const double cb = (double(b) - 128) * (full ? 1 : 255.0 / 224);
                         const double cr = (double(c) - 128) * (full ? 1 : 255.0 / 224);
                         const double rgb[3] = {y + 2 * (1 - kr) * cr,
-                            y - 2 * kb * (1 - kb) / kg * cb - 2 * kr * (1 - kr) / kg * cr,
-                            y + 2 * (1 - kb) * cb};
+                                               y - 2 * kb * (1 - kb) / kg * cb - 2 * kr * (1 - kr) / kg * cr,
+                                               y + 2 * (1 - kb) * cb};
                         for (unsigned channel = 0; channel != 3; ++channel)
                             ASSERT_NEAR(output[channel] >> 2, code(rgb[channel]), 1);
-                        input[0] = a * 4; input[1] = b * 4; input[2] = c * 4;
+                        input[0] = a * 4;
+                        input[1] = b * 4;
+                        input[2] = c * 4;
                         tegra_vic_matrix_apply(&encode, input, output);
                         const double luma = kr * a + kg * b + kb * c;
                         const double encodedY = full ? luma : 16 + luma * 219 / 255;
@@ -165,11 +177,17 @@ TEST(SwitchVICColor, ChromaMetadataReachesBothPackedSamplingPhases)
         TegraVICImage src = {}, dst = {};
         ASSERT_EQ(tegra_vic_image_from(&d, 0x10000000, &src), nullptr);
         ASSERT_EQ(tegra_vic_image_from(&d, 0x20000000, &dst), nullptr);
-        TegraVICOp op = {}; op.srcW = 256ull << 16; op.srcH = 128ull << 16; op.dstW = 256; op.dstH = 128;
+        TegraVICOp op = {};
+        op.srcW = 256ull << 16;
+        op.srcH = 128ull << 16;
+        op.dstW = 256;
+        op.dstH = 128;
         TegraVICJob job = {};
         ASSERT_EQ(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
-        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_CHROMA_LOC_HORIZ), tegra_vic_chroma_horiz(site));
-        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_LOC_VERT), tegra_vic_chroma_vert(site));
+        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_CHROMA_LOC_HORIZ),
+                  tegra_vic_chroma_horiz(site));
+        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_LOC_VERT),
+                  tegra_vic_chroma_vert(site));
     }
 }
 
@@ -177,7 +195,8 @@ TEST(SwitchVICColor, FieldSpecificAndUnknownChromaRefuseWithoutGuessing)
 {
     auto d = surface(true);
     TegraVICImage image = {};
-    d.chromaTop = 1; d.chromaBottom = 3;
+    d.chromaTop = 1;
+    d.chromaBottom = 3;
     EXPECT_NE(tegra_vic_image_from(&d, 0x10000000, &image), nullptr);
     d.chromaTop = d.chromaBottom = switch_surface_chroma_tag("DV420");
     EXPECT_NE(tegra_vic_image_from(&d, 0x10000000, &image), nullptr);
@@ -190,16 +209,22 @@ TEST(SwitchVICColor, FieldSpecificAndUnknownChromaRefuseWithoutGuessing)
 TEST(SwitchVICColor, TransferAndGamutChangesRequireAColorShader)
 {
     auto d = surface(true, 256, 128);
-    d.transfer = 16; d.primaries = 9;
+    d.transfer = 16;
+    d.primaries = 9;
     TegraVICImage src = {}, dst = {};
     ASSERT_EQ(tegra_vic_image_from(&d, 0x10000000, &src), nullptr);
     ASSERT_EQ(tegra_vic_image_from(&d, 0x20000000, &dst), nullptr);
-    TegraVICOp op = {}; op.srcW = 256ull << 16; op.srcH = 128ull << 16; op.dstW = 256; op.dstH = 128;
+    TegraVICOp op = {};
+    op.srcW = 256ull << 16;
+    op.srcH = 128ull << 16;
+    op.dstW = 256;
+    op.dstH = 128;
     TegraVICJob job = {};
     EXPECT_EQ(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
     dst.transfer = 1;
     EXPECT_NE(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
-    dst.transfer = 16; dst.primaries = 1;
+    dst.transfer = 16;
+    dst.primaries = 1;
     EXPECT_NE(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
 }
 
@@ -209,12 +234,17 @@ TEST(SwitchVICColor, ExplicitSourceEncodingCannotDisappearIntoUntaggedDestinatio
     TegraVICImage src = {}, dst = {};
     ASSERT_EQ(tegra_vic_image_from(&d, 0x10000000, &src), nullptr);
     ASSERT_EQ(tegra_vic_image_from(&d, 0x20000000, &dst), nullptr);
-    TegraVICOp op = {}; op.srcW = 256ull << 16; op.srcH = 128ull << 16; op.dstW = 256; op.dstH = 128;
+    TegraVICOp op = {};
+    op.srcW = 256ull << 16;
+    op.srcH = 128ull << 16;
+    op.dstW = 256;
+    op.dstH = 128;
     TegraVICJob job = {};
     for (uint32_t transfer : {1u, 8u, 13u, 16u, 18u}) {
         src.transfer = transfer;
         EXPECT_NE(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
     }
-    src.transfer = 0; src.primaries = 12;
+    src.transfer = 0;
+    src.primaries = 12;
     EXPECT_NE(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x30000000, 0x30001000, &job), nullptr);
 }

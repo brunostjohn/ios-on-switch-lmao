@@ -4,7 +4,8 @@
 #include "raw_execution_plan.h"
 
 template <class Observable>
-RMPlanError makeExecutionPlan(const RMCommandPlan &commands, bool whole, raw::ExecutionPlan &result, Observable observable)
+RMPlanError makeExecutionPlan(const RMCommandPlan &commands, bool whole, raw::ExecutionPlan &result,
+                              Observable observable)
 {
     const auto error = commands.recordingError();
     if (error != RMPlanError::None)
@@ -15,8 +16,8 @@ RMPlanError makeExecutionPlan(const RMCommandPlan &commands, bool whole, raw::Ex
             const auto &begin = commands.begin(at);
             if (begin.end <= at || begin.end > commands.size())
                 return RMPlanError::UnclosedEncoder;
-            result.append(at, begin.end, !whole && !begin.refused ? raw::ExecutionKind::native :
-                                                                   raw::ExecutionKind::compatibility);
+            result.append(at, begin.end,
+                          !whole && !begin.refused ? raw::ExecutionKind::native : raw::ExecutionKind::compatibility);
             at = begin.end;
         } else {
             raw::ExecutionKind kind = raw::ExecutionKind::compatibility;

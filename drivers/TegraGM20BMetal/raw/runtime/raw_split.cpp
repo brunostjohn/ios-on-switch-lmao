@@ -280,8 +280,8 @@ void CommandBuffer::launchPrologues()
     for (uint32_t i = 0; i < splits_.size(); ++i) {
         const SplitState &split = *splits_[i].split;
         if (split.rec.batchVersion == 1)
-            splitBatches_.append({split.prologue, split.prologueData, split.prologueDataBytes,
-                                  split.rec.batchThreads}, i);
+            splitBatches_.append({split.prologue, split.prologueData, split.prologueDataBytes, split.rec.batchThreads},
+                                 i);
         else
             ++scalars;
     }
@@ -302,8 +302,8 @@ void CommandBuffer::launchPrologues()
         qmd[kQmdRasterHeightDepth] = 1 | 1u << 16;
         for (uint32_t i = 0; i < split.rec.prologueCbufs; ++i) {
             qmd[qmdCbufLo(i)] = uint32_t(cbuf[i]);
-            qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & 0x7f00) |
-                                       (uint32_t(cbuf[i] >> 32) & 0xff) | bytes[i] << kQmdCbufSizeShift;
+            qmd[qmdCbufLo(i) + 1] =
+                (qmd[qmdCbufLo(i) + 1] & 0x7f00) | (uint32_t(cbuf[i] >> 32) & 0xff) | bytes[i] << kQmdCbufSizeShift;
         }
         p.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
         p.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
@@ -318,7 +318,8 @@ void CommandBuffer::launchPrologues()
         uint8_t *table = d.alloc(d.upload_, tableBytes, 256, tableVa);
         uint32_t row = 0;
         for (uint32_t i = run.first; i != SplitBatchPlanner::kEnd; i = splitBatches_.next(i))
-            memcpy(table + sizeof(SplitBatchRecord) * row++, &splitRecords_[splits_[i].batchRecord], sizeof(SplitBatchRecord));
+            memcpy(table + sizeof(SplitBatchRecord) * row++, &splitRecords_[splits_[i].batchRecord],
+                   sizeof(SplitBatchRecord));
         uint64_t cbuf[8] = {};
         uint32_t bytes[8] = {kSplitParamsBytes};
         uint8_t *parameters = d.alloc(d.upload_, kSplitParamsBytes, 256, cbuf[0]);
@@ -349,8 +350,7 @@ void CommandBuffer::launchPrologues()
     const TegraGM20BAbiPush head = segments_[0];
     segments_[0].dwords = prologueDwords_;
     if (head.dwords > prologueDwords_)
-        segments_.insert(1,
-                         {head.va + uint64_t(prologueDwords_) * 4, head.dwords - prologueDwords_, head.flags});
+        segments_.insert(1, {head.va + uint64_t(prologueDwords_) * 4, head.dwords - prologueDwords_, head.flags});
     segments_.insert(1, {va, uint32_t(p.at - start), 0});
 }
 

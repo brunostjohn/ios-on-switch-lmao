@@ -202,7 +202,7 @@ void told(uint32_t offset, uint32_t value, int step, void *arg)
 
 struct Steps {
 	std::vector<int> steps;
-	std::vector<uint32_t> words;     // the word as each step found it
+	std::vector<uint32_t> words;        // the word as each step found it
 	uint32_t makerAt = 0, makerTo = 0;  // the maker's GPU release, landing at RAISING when set
 };
 
@@ -225,13 +225,15 @@ TEST(WriterPromise, TheReleaseMarksBeforeTheWordMovesAndTellsWhoWon)
 	pool[5] = 1;
 	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 20, 2), 0);
 	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &raised), 1u);
-	EXPECT_EQ(raised.steps, (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
+	EXPECT_EQ(raised.steps,
+		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
 	EXPECT_EQ(raised.words, (std::vector<uint32_t>{1, 2}));
 	pool[5] = 1;
 	kept.makerAt = 20;
 	kept.makerTo = 2;
 	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &kept), 0u);
-	EXPECT_EQ(kept.steps, (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
+	EXPECT_EQ(kept.steps,
+		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
 	EXPECT_EQ(pool[5], 2u);
 }
 

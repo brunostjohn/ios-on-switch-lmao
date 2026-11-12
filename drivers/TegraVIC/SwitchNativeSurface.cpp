@@ -16,9 +16,11 @@
 extern "C" IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *surface);
 
 class SwitchNativeSurface : public OSObject {
-    OSDeclareDefaultStructors(SwitchNativeSurface)
-public:
-    bool initialize() { return init(); }
+OSDeclareDefaultStructors(SwitchNativeSurface) public : bool initialize()
+    {
+        return init();
+    }
+
     switch_gpu_backing *native = nullptr;
     switch_gpu_cpu_lease *readLease = nullptr;
     switch_gpu_backing_token producer = {};
@@ -39,9 +41,10 @@ public:
     bool preparing = false;
     void free() override;
 };
+
 OSDefineMetaClassAndStructors(SwitchNativeSurface, OSObject)
 
-static void deliverSignals(SwitchNativeSurface *native);
+    static void deliverSignals(SwitchNativeSurface *native);
 
 void SwitchNativeSurface::free()
 {
@@ -351,7 +354,11 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
     surface->memory->retain();
     const switch_gpu_backing_token *waits = nullptr;
     const uint32_t waitCount = switch_vic_events_tokens(native->events, &waits);
-    *view = {native, surface->memory, logical, native->native, {logical, &native->generation, native->live},
+    *view = {native,
+             surface->memory,
+             logical,
+             native->native,
+             {logical, &native->generation, native->live},
              {logical, representation, __atomic_load_n(representation, __ATOMIC_ACQUIRE)},
              native->producer,
              native->layout,
@@ -360,8 +367,10 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
              waits,
              waitCount};
     view->layout.color_matrix = surface->desc.colorMatrix;
-    view->layout.transfer = surface->desc.transfer; view->layout.primaries = surface->desc.primaries;
-    view->layout.chroma_top = surface->desc.chromaTop; view->layout.chroma_bottom = surface->desc.chromaBottom;
+    view->layout.transfer = surface->desc.transfer;
+    view->layout.primaries = surface->desc.primaries;
+    view->layout.chroma_top = surface->desc.chromaTop;
+    view->layout.chroma_bottom = surface->desc.chromaBottom;
     switch_gpu_surface_finish(surface->memory);
     return 0;
 }
@@ -561,8 +570,8 @@ void switch_native_surface_deliver(const SwitchNativeSurfaceView &view)
         deliverSignals(native);
 }
 
-static int prepareSurface(OSObject *object, uint32_t id, uint32_t options, bool gpu,
-                          switch_gpu_backing **logical, switch_gpu_cpu_lease **owned)
+static int prepareSurface(OSObject *object, uint32_t id, uint32_t options, bool gpu, switch_gpu_backing **logical,
+                          switch_gpu_cpu_lease **owned)
 {
     if (!logical || !owned)
         return -22;
@@ -581,19 +590,18 @@ static int prepareSurface(OSObject *object, uint32_t id, uint32_t options, bool 
 }
 
 extern "C" int switch_native_surface_prepare(OSObject *object, uint32_t id, void *, uint32_t options,
-                                              switch_gpu_backing **logical, switch_gpu_cpu_lease **owned)
+                                             switch_gpu_backing **logical, switch_gpu_cpu_lease **owned)
 {
     return prepareSurface(object, id, options, false, logical, owned);
 }
 
 extern "C" int switch_native_surface_prepare_gpu(OSObject *object, uint32_t id, void *, uint32_t options,
-                                                  switch_gpu_backing **logical, switch_gpu_cpu_lease **owned)
+                                                 switch_gpu_backing **logical, switch_gpu_cpu_lease **owned)
 {
     return prepareSurface(object, id, options, true, logical, owned);
 }
 
-extern "C" int switch_native_surface_gpu_admission(OSObject *object, uint32_t access,
-                                                    switch_gpu_backing *expected)
+extern "C" int switch_native_surface_gpu_admission(OSObject *object, uint32_t access, switch_gpu_backing *expected)
 {
     if (!object || !expected || !access || (access & ~(kRead | kWrite)))
         return -22;
@@ -609,8 +617,8 @@ extern "C" int switch_native_surface_gpu_admission(OSObject *object, uint32_t ac
         result = logical ? SWITCH_GPU_BACKING_STALE : -12;
     if (!result) {
         IOLockLock(gPrepareLock);
-        const bool write = (access & kWrite) ||
-            (active(native) && !__atomic_load_n(&native->pitchValid, __ATOMIC_ACQUIRE));
+        const bool write =
+            (access & kWrite) || (active(native) && !__atomic_load_n(&native->pitchValid, __ATOMIC_ACQUIRE));
         result = native->preparing ? 0 : switch_gpu_backing_conversion_ready(logical, write ? kWrite : kRead);
         IOLockUnlock(gPrepareLock);
     }

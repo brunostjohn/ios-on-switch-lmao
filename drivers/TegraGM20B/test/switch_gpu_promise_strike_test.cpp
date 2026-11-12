@@ -14,8 +14,9 @@
 namespace
 {
 constexpr uint64_t kMs = 1000 * 1000;
-constexpr uint64_t kPresentNs = 1000 * kMs;  // TGM_PRESENT_NS: the deadline, and its re-arm after a look
-constexpr uint64_t kHangNs = 2000 * kMs;     // TGM_HANG_NS: a wait's hang check period
+constexpr uint64_t kPresentNs =
+	1000 * kMs;  // TGM_PRESENT_NS: the deadline, and its re-arm after a look
+constexpr uint64_t kHangNs = 2000 * kMs;  // TGM_HANG_NS: a wait's hang check period
 constexpr uint32_t kOffset = 2052, kValue = 9;
 constexpr int kSourceLost = -5;
 
@@ -32,9 +33,11 @@ struct Present {
 	uint32_t strikes = 0, seen = 0, completed = 40;
 	std::vector<std::string> lines;
 	bool makerReleasesAtRaise = false;
-	bool producerHung = false;    // the control: the present waits on a client producer stuck on its own work
-	bool producerParked = false;  // the present waits on a client producer whose job acquires the promise
-	int shown = 1;                // the frame on the panel
+	bool producerHung =
+		false;  // the control: the present waits on a client producer stuck on its own work
+	bool producerParked =
+		false;  // the present waits on a client producer whose job acquires the promise
+	int shown = 1;  // the frame on the panel
 
 	// gpu_promise.c promise_released
 	static void released(uint32_t offset, uint32_t value, int step, void *arg)
@@ -50,8 +53,8 @@ struct Present {
 			switch_gpu_promise_abandoned_drop(&p->abandoned, offset, value);
 			return;
 		}
-		p->lines.push_back("writer-app's writer promise at fence offset " + std::to_string(offset) +
-				   " was not kept: present waited");
+		p->lines.push_back("writer-app's writer promise at fence offset " +
+				   std::to_string(offset) + " was not kept: present waited");
 	}
 
 	// tgm_hang_recover at the present deadline. On a promise: the present channel parked on the word, which no live
@@ -128,7 +131,8 @@ protected:
 	// tgm_chan_check_progress of a wait on the channel (a fence wait, the bridge's): its next check, then the look
 	enum tgm_hang waitCheck()
 	{
-		now += tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word), p.strikes, kHangNs);
+		now += tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word),
+					       p.strikes, kHangNs);
 		return p.look();
 	}
 
@@ -194,7 +198,9 @@ TEST_F(Strike, AWaitOnAJobParkedOnAPromiseGivesUpAtOneSecond)
 	EXPECT_EQ(waitCheck(), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS + TGM_STUCK_NS);
 	ASSERT_EQ(p.lines.size(), 1u);
-	EXPECT_EQ(tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word), p.strikes, kHangNs), kHangNs)
+	EXPECT_EQ(tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word),
+					  p.strikes, kHangNs),
+		  kHangNs)
 		<< "a raised word is no longer a promise wait";
 }
 

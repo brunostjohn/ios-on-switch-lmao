@@ -137,14 +137,24 @@ public:
 	tgm_vm *vm_ = nullptr;
 	uint64_t next_handle_ = 2;
 	Bo *bos_;
+
 	struct HostMemory {
-		template <typename T>
-		static T *allocate(uint32_t count) { return static_cast<T *>(malloc(sizeof(T) * count)); }
-		template <typename T>
-		static void release(T *items, uint32_t) { free(items); }
+		template <typename T> static T *allocate(uint32_t count)
+		{
+			return static_cast<T *>(malloc(sizeof(T) * count));
+		}
+
+		template <typename T> static void release(T *items, uint32_t)
+		{
+			free(items);
+		}
 	};
+
 	struct Index : SwitchGpuBoIndex<Bo, HostMemory> {
-		~Index() { destroy(); }
+		~Index()
+		{
+			destroy();
+		}
 	} boIndex_;
 
 	Bo *findBo(uint64_t handle)
@@ -267,8 +277,8 @@ TEST_F(NativeImport, ADrawSamplesThePicturesOwnPagesReadOnly)
 	Memory gpu;
 	constexpr uint64_t kVa = 1ull << 32;
 	for (uint32_t i = 0; i < bo->mem->count; ++i)
-		gpu.map(kVa + uint64_t(i) * Memory::kPage, dram[bo->mem->pages[i]].data(), Memory::kPage,
-			bo->readOnly, true);
+		gpu.map(kVa + uint64_t(i) * Memory::kPage, dram[bo->mem->pages[i]].data(),
+			Memory::kPage, bo->readOnly, true);
 	EXPECT_EQ(reply.bytes, uint64_t(bo->mem->count) * Memory::kPage);
 	for (uint32_t p = 0; p < reply.plane_count; ++p) {
 		const uint64_t at = kVa + reply.planes[p].offset;

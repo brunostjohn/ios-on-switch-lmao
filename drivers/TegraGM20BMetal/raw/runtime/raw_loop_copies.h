@@ -37,6 +37,7 @@ public:
     // Room a start or an end (inside `levels` predication levels, the loop's own among them) takes in the open push
     // chunk, so its words stay in one segment
     static constexpr uint32_t kStartRoom = Predication::kArmWords(kMaxSegments) + Predication::kStartWords + 1;
+
     static constexpr uint32_t endRoom(size_t levels)
     {
         return Predication::kEndCopyWords(kMaxSegments) + Predication::kOverflowWords(levels) + 1;

@@ -15,8 +15,8 @@ struct switch_gpu_comp_sync {
 };
 
 /* One profiled submission: its sync pushes' count and time, whether its kick found an app on GR */
-static inline void switch_gpu_comp_sync_add(struct switch_gpu_comp_sync *s, uint32_t syncs, uint64_t sync_ns,
-					    int behind)
+static inline void switch_gpu_comp_sync_add(struct switch_gpu_comp_sync *s, uint32_t syncs,
+					    uint64_t sync_ns, int behind)
 {
 	__atomic_fetch_add(&s->subs, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&s->syncs, syncs, __ATOMIC_RELAXED);
@@ -26,12 +26,13 @@ static inline void switch_gpu_comp_sync_add(struct switch_gpu_comp_sync *s, uint
 		__atomic_fetch_add(&s->behind_ns, sync_ns, __ATOMIC_RELAXED);
 	}
 	uint64_t max = __atomic_load_n(&s->max_ns, __ATOMIC_RELAXED);
-	while (sync_ns > max && !__atomic_compare_exchange_n(&s->max_ns, &max, sync_ns, 0, __ATOMIC_RELAXED,
-							     __ATOMIC_RELAXED))
+	while (sync_ns > max && !__atomic_compare_exchange_n(&s->max_ns, &max, sync_ns, 0,
+							     __ATOMIC_RELAXED, __ATOMIC_RELAXED))
 		;
 }
 
-static inline void switch_gpu_comp_sync_take(struct switch_gpu_comp_sync *s, struct switch_gpu_comp_sync *out)
+static inline void switch_gpu_comp_sync_take(struct switch_gpu_comp_sync *s,
+					     struct switch_gpu_comp_sync *out)
 {
 	out->subs = __atomic_exchange_n(&s->subs, 0, __ATOMIC_RELAXED);
 	out->behind = __atomic_exchange_n(&s->behind, 0, __ATOMIC_RELAXED);
@@ -42,11 +43,14 @@ static inline void switch_gpu_comp_sync_take(struct switch_gpu_comp_sync *s, str
 }
 
 /* "sync_subs=N syncs=K sync_us=T behind=B behind_sync_us=U sync_max_us=M": totals over the profiled submissions */
-static inline int switch_gpu_comp_sync_format(char *buf, unsigned long len, const struct switch_gpu_comp_sync *s)
+static inline int switch_gpu_comp_sync_format(char *buf, unsigned long len,
+					      const struct switch_gpu_comp_sync *s)
 {
-	return snprintf(buf, len, "sync_subs=%u syncs=%u sync_us=%llu behind=%u behind_sync_us=%llu sync_max_us=%llu", s->subs,
-			s->syncs, (unsigned long long)(s->sync_ns / 1000), s->behind,
-			(unsigned long long)(s->behind_ns / 1000), (unsigned long long)(s->max_ns / 1000));
+	return snprintf(
+		buf, len,
+		"sync_subs=%u syncs=%u sync_us=%llu behind=%u behind_sync_us=%llu sync_max_us=%llu",
+		s->subs, s->syncs, (unsigned long long)(s->sync_ns / 1000), s->behind,
+		(unsigned long long)(s->behind_ns / 1000), (unsigned long long)(s->max_ns / 1000));
 }
 
 #endif

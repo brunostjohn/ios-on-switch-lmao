@@ -21,7 +21,18 @@ using Words = std::array<uint32_t, kWordCount>;
 
 struct Op {
     // Encoder: the compute encoder ends and another of its dispatch type begins
-    enum Kind : uint8_t { Dispatch, If, Else, EndIf, While, EndWhile, DoWhile, EndDoWhile, Encoder } kind;
+    enum Kind : uint8_t {
+        Dispatch,
+        If,
+        Else,
+        EndIf,
+        While,
+        EndWhile,
+        DoWhile,
+        EndDoWhile,
+        Encoder
+    } kind;
+
     uint32_t w = 0;
     PredicateCompare compare = PredicateCompare::NotEqual;
     uint32_t reference = 0;

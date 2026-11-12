@@ -4,7 +4,8 @@
 #include <string>
 #include "../TegraGM20BHangDecode.h"
 
-namespace {
+namespace
+{
 std::string format(const tgm_hang_detail &d)
 {
 	char buf[TGM_HANG_LINE];

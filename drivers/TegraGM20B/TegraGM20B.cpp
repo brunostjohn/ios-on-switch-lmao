@@ -211,9 +211,10 @@ void registerClkgateSysctl()
 		static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED),
 		clkgateSysctl, "I", "GPU clock gating on (1) or off (0), debug A/B");
 	sysctl_register_oid(&gClkgateOid);
-	switch_sysctl_oid(&gRegdumpOid, &sysctl__debug_children, "switch_gpu_regdump",
-			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED), regdumpSysctl,
-			  "A", "GM20B registers for the L4T diff");
+	switch_sysctl_oid(
+		&gRegdumpOid, &sysctl__debug_children, "switch_gpu_regdump",
+		static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		regdumpSysctl, "A", "GM20B registers for the L4T diff");
 	sysctl_register_oid(&gRegdumpOid);
 }
 #endif
