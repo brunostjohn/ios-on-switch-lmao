@@ -73,14 +73,14 @@ protected:
         Drawn d;
         raw::CommandBuffer *cb = dev.begin();
         if (!cb)
-            return {"no command buffer"};
+            return {"no command buffer", 0, {}};
         raw::PassDesc pass;
         pass.color[0].texture = &target;
         pass.count = 1;
         raw::RenderEncoder *e = cb->render(pass);
         if (!e) {
             cb->abandon();
-            return {"no pass"};
+            return {"no pass", 0, {}};
         }
         e->setPipeline(pl);
         e->setBuffer(1, 1, &vertices, 0);
