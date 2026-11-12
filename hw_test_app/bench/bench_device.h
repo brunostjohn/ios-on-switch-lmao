@@ -39,8 +39,11 @@ struct Target {
 };
 
 void fail(switch_bench_result &r, uint32_t status, const std::string &why);
-void fill(raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp);
-void readBack(const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into, size_t bytes);
+// The experiment's fill (none: zeros) into `t`, and `t`'s texels out, each under a CPU lease of `t`'s memory; false: the
+// kernel refused the lease
+bool fill(raw::Device &d, raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp);
+bool readBack(raw::Device &d, const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into,
+              size_t bytes);
 // The caller's pixel program in the template's state, made a pipeline of the device; null: `r` says why.
 // `firstColourOnly`: the state without the template's other colours, for a pass that binds colour 0 alone
 raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,

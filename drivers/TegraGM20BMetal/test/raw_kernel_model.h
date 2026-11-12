@@ -22,6 +22,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 namespace kernel_model {
@@ -30,7 +31,8 @@ constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFe
 
 struct BoState {
     bool import = false, cached = false, cpuReached = false;
-    uint32_t set = 0;  // the set it is a member of, 0: none
+    bool hostWritten = false;  // a CPU write lease released on it since a job last named it
+    uint32_t set = 0;          // the set it is a member of, 0: none
 };
 
 struct SetState {
@@ -45,6 +47,7 @@ struct Job {
     std::vector<TegraGM20BAbiSurfaceUse> uses;
     std::vector<TegraGM20BAbiPush> pushes;  // a SubmitJob's GP entries
     std::vector<uint32_t> words;
+    bool hostWritten = false;               // the kernel drops the GPU L2's lines before the job (gpu_exec.c)
 };
 
 struct Slot {
@@ -290,8 +293,15 @@ struct Model {
             set->used |= 1u << (head->channel - 1);
             setJobs++;
         }
+        bool hostWritten = (head->flags & TegraGM20BJobHostWritten) != 0;
+        for (uint32_t i = 0; i < head->shared_count; ++i) {
+            hostWritten |= (shared[i].access & TegraGM20BSurfaceHostWritten) != 0;
+            if (const auto bo = bos.find(resolve(shared[i])); bo != bos.end())
+                hostWritten |= std::exchange(bo->second.hostWritten, false);
+        }
         submitJobs++;
         const int kr = run(*s, head->channel, std::move(uses), reply);
+        jobs.back().hostWritten = hostWritten;
         const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
         jobs.back().pushes.assign(pushes, pushes + head->push_count);
         jobs.back().words = pushWords(pushes, head->push_count);
@@ -374,6 +384,14 @@ struct Model {
             it->second.set = 0;
             endGeneration(set - 1);
         }
+    }
+
+    // A write lease's release: the kernel's next GM20B job naming the BO is host-written (the backing's host epoch moved,
+    // SwitchGpuOwnership.cpp)
+    void cpuReleased(const TegraGM20BAbiCpuAccess &in)
+    {
+        if (const auto it = bos.find(in.handle); it != bos.end() && (in.access & TegraGM20BCpuWrite))
+            it->second.hostWritten = true;
     }
 
     void destroyed(uint32_t channel, bool killed)
@@ -465,6 +483,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         model.cpuLease(static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle);
         return KERN_SUCCESS;
     case TegraGM20BMethodCpuRelease:
+        model.cpuReleased(*static_cast<const TegraGM20BAbiCpuAccess *>(input));
         return KERN_SUCCESS;
     case TegraGM20BMethodResourceSetCreate:
         return model.setCreate(*static_cast<const TegraGM20BAbiResourceSetCreate *>(input),

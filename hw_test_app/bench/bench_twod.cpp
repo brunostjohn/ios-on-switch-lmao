@@ -234,10 +234,10 @@ void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Textu
     Target t;
     if (!d.createTexture(x.width, x.height, x.format, t.color, true))
         return fail(r, SWITCH_BENCH_ERROR, "no memory for the compare target");
-    if (x.fill)
-        fill(t.color, x, bpp);
-    else
-        memset(t.color.cpu, 0, size_t(t.color.pitch) * x.height);
+    if (!fill(d, t.color, x, bpp)) {
+        d.destroyTexture(t.color);
+        return fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a write lease on the compare target");
+    }
     Submission s(b, x, r);
     uint64_t gpu = 0, wall = 0;
     bool ran = false;
@@ -271,9 +271,9 @@ void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Textu
             },
             gpu, wall);
     }
-    if (ran)
-        readBack(t.color, x, bpp, r.compare_texels, r.texel_bytes);
-    else if (r.status == SWITCH_BENCH_OK)
+    if (ran && !readBack(d, t.color, x, bpp, r.compare_texels, r.texel_bytes))
+        fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a read lease on the compare target");
+    else if (!ran && r.status == SWITCH_BENCH_OK)
         fail(r, SWITCH_BENCH_REFUSED, "no compare form for this operation");
     d.destroyTexture(t.color);
 }
@@ -327,10 +327,10 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
     for (uint32_t c = 0; ran && c < x.draw_counts; c++)
         for (uint32_t k = 0; ran && k < x.warmup + x.repeats; k++) {
             uint64_t gpu = 0, wall = 0;
-            if (x.fill)
-                fill(cpuSide, x, bpp);
-            else
-                memset(cpuSide.cpu, 0, size_t(cpuSide.pitch) * x.height);
+            if (!(ran = fill(d, cpuSide, x, bpp))) {
+                fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a write lease on the target");
+                break;
+            }
             if (tiled && !(ran = copyAll(s, staging, t)))
                 break;
             // a resolve's samples come from a command buffer of their own, so its stamps time the resolve alone
@@ -375,8 +375,8 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
         }
     if (ran && tiled)
         ran = copyAll(s, t, staging);
-    if (ran)
-        readBack(cpuSide, x, bpp, r.texels, r.texel_bytes);
+    if (ran && !(ran = readBack(d, cpuSide, x, bpp, r.texels, r.texel_bytes)))
+        fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a read lease on the target");
     if (ran && x.compare != SWITCH_BENCH_COMPARE_NONE && r.compare_texels) {
         CompareRun run(x, r);
         compare(b, x, read, ms.va ? &ms : nullptr, run.r);

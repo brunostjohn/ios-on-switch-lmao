@@ -230,8 +230,8 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
         r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1, 0, 0};
     }
     ran = ran && bench::timeDraws(b, x, t, pipeline, r);
-    if (ran)
-        bench::readBack(compressed ? staging : t.color, x, bpp, into, r.texel_bytes);
+    if (ran && !(ran = bench::readBack(d, compressed ? staging : t.color, x, bpp, into, r.texel_bytes)))
+        bench::fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a read lease on the target");
     if (ran && x.kind != SWITCH_BENCH_NOOP)
         bench::checkAlive(b, x, t, r);
     destroyTarget(d, t);
@@ -445,18 +445,35 @@ void fail(switch_bench_result &r, uint32_t status, const std::string &why)
     snprintf(r.why, sizeof r.why, "%s", why.c_str());
 }
 
-void fill(raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp)
+// The GPU's L2 is not coherent with the CPU: a CPU write reaches the next job only when the kernel knows of it. The
+// lease's release makes that job drop the L2's lines of the memory first (gpu_exec.c), which otherwise still hold what the
+// GPU wrote there before, the previous experiment's texels at the same address.
+bool fill(raw::Device &d, raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp)
 {
-    for (uint32_t y = 0; y < x.height; y++)
-        memcpy(t.cpu + y * t.pitch, x.fill + size_t(y) * x.width * bpp, size_t(x.width) * bpp);
+    raw::HostAccess lease;
+    if (!d.hostAccess(t, t.cpu, uint64_t(t.pitch) * x.height, true, lease))
+        return false;
+    for (uint32_t y = 0; y < x.height; y++) {
+        uint8_t *row = t.cpu + y * t.pitch;
+        if (x.fill)
+            memcpy(row, x.fill + size_t(y) * x.width * bpp, size_t(x.width) * bpp);
+        else
+            memset(row, 0, t.pitch);
+    }
+    return true;
 }
 
-void readBack(const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into, size_t bytes)
+bool readBack(raw::Device &d, const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into,
+              size_t bytes)
 {
     if (!into || !t.cpu || bytes < size_t(x.width) * x.height * bpp)
-        return;
+        return true;
+    raw::HostAccess lease;
+    if (!d.hostAccess(t, t.cpu, uint64_t(t.pitch) * x.height, false, lease))
+        return false;
     for (uint32_t y = 0; y < x.height; y++)
         memcpy(into + size_t(y) * x.width * bpp, t.cpu + y * t.pitch, size_t(x.width) * bpp);
+    return true;
 }
 
 raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,
@@ -500,8 +517,10 @@ bool timeDraws(switch_bench &b, const switch_bench_experiment &x, Target &t, raw
     for (uint32_t c = 0; c < x.draw_counts; c++)
         for (uint32_t k = 0; k < x.warmup + x.repeats; k++) {
             uint64_t gpu = 0, wall = 0;
-            if (x.fill)
-                fill(*written, x, bpp);
+            if (x.fill && !fill(*b.device, *written, x, bpp)) {
+                fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a write lease on the target");
+                return false;
+            }
             if (!s.render(t, pipeline, pipeline ? x.draws[c] : 0, gpu, wall))
                 return false;
             if (k >= x.warmup) {

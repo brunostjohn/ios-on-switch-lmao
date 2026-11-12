@@ -129,6 +129,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.predication',
             'gpu.raw.mps_control_flow',
             'gpu.raw.event_release',
+            'gpu.coherence.cpu_rewrite',
             'gpu.raw.surface_buffer',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',

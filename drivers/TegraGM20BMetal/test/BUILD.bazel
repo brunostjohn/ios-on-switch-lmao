@@ -3214,6 +3214,42 @@ host_test(
     deps = [":frontend_host"],
 )
 
+# A CPU write the next job reads drops the GPU L2's lines first only when it was made under a CPU lease (raw::HostAccess):
+# raw::Device over the kernel model, which takes jobs as host-written as the kernel does
+host_test(
+    name = "raw_host_written_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_frontend_absent.cpp",
+        "raw_host_written_test.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
 # raw/runtime/raw_arena_trim.h: the ranges of a heap kept non-volatile that no resource is placed in, and raw::Device's
 # idle give-back of them over the kernel model: its placed parts imported again with their contents, the holes' pages
 # untouched, a placement into a hole bound again, a volatile heap purged instead
