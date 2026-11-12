@@ -175,8 +175,10 @@ class RecordsTest(unittest.TestCase):
         rec = dict(key='samples=1', vs=0, fs=1, blob=[], entries=[], push=[], vbs=[], set_size=0, fetch=False)
         data = packfile.pipeline_bytes(rec, 0, 0)
         self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 4, 0)
-        self.assertEqual(data[-8:-4], bytes(4))
-        self.assertEqual(struct.unpack_from('<I', data, len(data) - 4), (packfile.ALL_ENTRIES,))
+        v21 = len(data) - packfile.PIPELINE_V21.size
+        self.assertEqual(data[v21 - 8 : v21 - 4], bytes(4))
+        self.assertEqual(struct.unpack_from('<I', data, v21 - 4), (packfile.ALL_ENTRIES,))
+        self.assertEqual(data[v21:], packfile.RUNTIME_ONLY)
 
     def test_shader_test_views_and_push_placements_round_trip(self):
         rec = dict(
