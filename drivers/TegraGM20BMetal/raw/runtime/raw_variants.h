@@ -40,6 +40,14 @@ inline bool fixedPointTexels(uint32_t format)
     }
 }
 
+// Whether `rec` is one of `pack`'s own records. A record a process made (raw_completed.cpp) is not, though Device::pipeline
+// answers its key with it: its state's variants are made as it was, never looked up in the pack.
+inline bool packHolds(const Pack &pack, const PackPipeline *rec)
+{
+    const PackPipeline *first = pack.section<PackPipeline>(PackPipelines);
+    return rec >= first && rec < first + pack.header()->pipelines;
+}
+
 // The first of `count` variants whose assumptions `facts` hold, `count` (the generic program) where none do
 inline uint32_t chooseVariant(const PackVariant *variants, uint32_t count, uint32_t facts)
 {

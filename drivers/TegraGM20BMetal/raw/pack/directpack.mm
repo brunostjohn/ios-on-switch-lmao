@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include "../runtime/raw_emit.h"
 #include "../runtime/raw_xr_pass.h"
+#include "../runtime/raw_zeta.h"
 #include "TwoPlaneStandIn.h"
 #include "direct_kernels.h"
 #include "direct_states.h"
@@ -164,7 +165,8 @@ void markCandidates(const std::string &line, raw::PackPipeline &p)
 
 // The depth and stencil test classes a state's draws ask its variant for (RawMetalCubic.mm drawnRecord): a state that fetches
 // beside a depth or stencil attachment without the storage form, each class raw_fragment_tests.h FragmentTests names above Any
-// (Pass, ReadOnly, DepthWrite, StencilWrite: 1-4)
+// (Pass, ReadOnly, DepthWrite, StencilWrite: 1-4) that its attachments' formats can reach (fragmentTests answers DepthWrite
+// only of a zeta with depth, StencilWrite only of one with stencil)
 std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &key)
 {
     unsigned depth = 0, stencil = 0;
@@ -172,7 +174,12 @@ std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &
     if (!(p.flags & raw::PipelineFetches) || (p.flags & raw::PipelineStorageMetadata) || ds == std::string::npos ||
         sscanf(key.c_str() + ds, "ds=%u/%u", &depth, &stencil) != 2 || !(depth || stencil))
         return {};
-    return {1, 2, 3, 4};
+    std::vector<uint8_t> classes = {1, 2};
+    if (raw::zetaHasDepth(depth) || raw::zetaHasDepth(stencil))
+        classes.push_back(3);
+    if (raw::zetaHasStencil(depth) || raw::zetaHasStencil(stencil))
+        classes.push_back(4);
+    return classes;
 }
 
 struct Counts {

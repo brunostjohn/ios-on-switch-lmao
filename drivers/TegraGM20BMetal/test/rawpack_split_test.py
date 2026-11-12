@@ -48,6 +48,11 @@ class SplitTest(unittest.TestCase):
         corpus = WARM + DISPATCH + ''.join(state(i) for i in range(32))
         self.assertEqual(sum(text.count(DISPATCH) for text in self.split(corpus)), 1)
 
+    def test_an_apps_state_reaches_one_bucket(self):
+        app = ' lib=/Applications/SwitchHWTest.app/default.metallib '
+        line = f'R ok=1 label=- samples=2 topo=0 ds=252/0 | v quad_vertex{app} | f solid_fragment{app} | \n'
+        self.assertEqual(sum(text.count(line) for text in self.split(WARM + line)), 1)
+
 
 RB = ' lib=/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib'
 ICONS = ' lib=/System/Library/PrivateFrameworks/IconRendering.framework/default.metallib'

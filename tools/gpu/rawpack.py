@@ -7,11 +7,13 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
                      --context-header <SwitchGM20BContext.h> --generator <raw/pack/rawpack.py> --tree <tree> --out <dir>
         the generator's host tools (directpack over the host bridge, the probes through this build's frontend too, the
         mock GM20B, the raw path's own.metallib) into <dir>, with the context init nvdec ran (context.log)
-    rawpack.py corpus --corpus corpus.log --build <IPSW build> [--archives <build>.tsv] --out <file> --report <file>
+    rawpack.py corpus --corpus corpus.log --build <IPSW build> [--archives <build>.tsv]
+                      [--app-states <build>.log] --out <file> --report <file>
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=, and every
         other library's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the
         run's input as it was; with the render states Apple's archives declare for the
-        device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. Every such line
+        device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib, and our own
+        apps' states the pack holds (precompile/app-states/<build>.log, app_line). Every such line
         names the OS builds it is a state of (os=<build>[,<build>...] in its head): one of other builds is left out and
         counted in <report>, which the link puts at the end of the pack's report, but for a Core Animation line, kept
         with its tag for its name; one naming none fails the step. A state of two-plane YCbCr attachments is taken as
@@ -21,11 +23,12 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
                      --out <bucket corpus>...
         the states of each of the generator's buckets, with the Core Animation states a device's logs named
         (precompile/ca-names/<build>.txt)
-    rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
+    rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib [--root <dir>]
                      --lines <bucket corpus> --out <dir named bucket<i>>
         one bucket's states and kernels made directly through the shader tools (raw/ holds directpack, the probe, the
         mock, own.metallib and context.log; the NVK twin, whose offline compile directpack calls), with bucket 0's
-        context.log: the channel's context init as nvdec runs it
+        context.log: the channel's context init as nvdec runs it; their libraries'
+        paths under --root (the crawl's root/ with this build's applications in it), else under QuartzCore's crawl
     rawpack.py link --generator <rawpack.py> --out <dir> [--corpus-report <file>] [--archives <build>.tsv]
                     <bucket dir>...
         the pack made from the buckets' records, unstamped: <out>/pack.bin and report.txt, with the archive
@@ -61,6 +64,9 @@ FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w
 OS_LIBRARY = re.compile(r' lib=/System/Library/\S+?\.(?:bundle|framework/Resources)/\S+\.metallib')
 QUARTZCORE = '/QuartzCore.framework/'
 STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
+# Our own apps' libraries (SwitchHWTest's): the runtime keys their states by their functions' AIR, as a bundle's; the
+# pack holds only those precompile/app-states names, since a test of a state made at its creation must find none
+APP_LIBRARY = re.compile(r' lib=/Applications/Switch\w*\.app/default\.metallib')
 # The OS builds a line is a state of, in its head: an R line's (before " | v ") or a D line's
 OS_BUILD = re.compile(r' os=(\S+)')
 # A colour attachment of an R line's head: its index, MTLPixelFormat, write mask and blending
@@ -99,13 +105,29 @@ def framework_line(line: str) -> bool:
     return frameworks != {'QuartzCore'} and all(FRAMEWORK_LIBRARY.fullmatch(lib) for lib in linked)
 
 
+def app_line(line: str) -> bool:
+    """Whether an R line's vertex and fragment functions are one of our own apps' library's, linking nothing."""
+    stages = STAGE_LIBRARY.findall(line)
+    return (
+        line.startswith('R ok=1 ')
+        and len(stages) == 2
+        and len(set(stages)) == 1
+        and bool(APP_LIBRARY.fullmatch(stages[0]))
+        and not LINKED_LIBRARY.search(line)
+    )
+
+
 def probe_lines(corpus: str) -> list[str]:
-    """Return the corpus lines directpack.mm and probe.mm make, as they read them (a D line keeps its libraries)."""
+    """Return the corpus lines directpack.mm and probe.mm make, as they read them (a D line keeps its libraries).
+
+    Not a dispatch shape of our own apps' kernels: their tests ask for kernels no pack holds (gpu.raw.archive_miss,
+    gpu.raw.kernel_direct), and the probe's root holds their library.
+    """
     return [
         line if framework_line(line) or line.startswith('D ') else LIBRARY.sub('', line)
         for line in corpus.split('\n')
         if (line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line)))
-        or line.startswith('D ok=1 ')
+        or (line.startswith('D ok=1 ') and not APP_LIBRARY.search(line))
     ]
 
 
@@ -144,6 +166,15 @@ def stand_in_lines(lines: list[str]) -> list[str]:
             out.append(mapped)
             seen.add(mapped)
     return out
+
+
+def app_states(text: str) -> list[str]:
+    """Return an app-states file's lines, each an app_line; exit naming the first that is not one."""
+    lines = [line.rstrip() + ' ' for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if not app_line(line):
+            sys.exit(f"not one of our own apps' render states, linking nothing: {line[:300]}")
+    return lines
 
 
 def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
@@ -246,6 +277,7 @@ def probe(args: argparse.Namespace, generator: list[str], env: dict[str, str], w
     data = library_view(libraries, work / 'data')
     env = dict(env, PROBE_DATA_LIBS=str(data.resolve()))
     arguments = ['--probe-bucket', out, '--prebuilt', Path(args.raw).resolve(), '--nvk', dylib]
+    arguments += ['--root', Path(args.root).resolve()] if args.root else []
     print(generate(generator, [*arguments, '--qc', Path(args.qc).resolve()], env, f'making {out.name}').rstrip())
     for path in out.iterdir():
         if path.is_file() and path.name not in KEPT:
@@ -306,6 +338,7 @@ def main() -> None:
     for name in ('corpus', 'out'):
         corpus.add_argument('--' + name, required=True)
     corpus.add_argument('--archives')
+    corpus.add_argument('--app-states')
     corpus.add_argument('--build', required=True)
     corpus.add_argument('--report', required=True)
     for step, names in STEPS.items():
@@ -316,6 +349,7 @@ def main() -> None:
     steps.choices['split'].add_argument('--ca-names')
     steps.choices['split'].add_argument('--ca-preferences')
     steps.choices['probe'].add_argument('--data-dir')
+    steps.choices['probe'].add_argument('--root')
     steps.choices['probe'].add_argument('--data', action='append', default=[])
     steps.choices['link'].add_argument('buckets', nargs='+')
     steps.choices['link'].add_argument('--corpus-report')
@@ -327,6 +361,10 @@ def main() -> None:
             harvested = set(lines)
             lines += [line for line in archive_lines(Path(args.archives).read_text()) if line not in harvested]
         lines = stand_in_lines(lines)
+        if args.app_states:
+            own = app_states(Path(args.app_states).read_text())
+            lines += own
+            report.append(f"our own apps' states: {len(own)} lines ({Path(args.app_states).name})")
         Path(args.out).write_text(''.join(line + '\n' for line in lines))
         Path(args.report).write_text(''.join(line + '\n' for line in report))
         print('\n'.join(report))

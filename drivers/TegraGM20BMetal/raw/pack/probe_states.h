@@ -233,8 +233,9 @@ inline bool endsWith(const std::string &s, const std::string &suffix)
     return s.size() >= suffix.size() && !s.compare(s.size() - suffix.size(), suffix.size(), suffix);
 }
 
-// A line's library (its vertex function's lib= path) where it is another framework's default.metallib than QuartzCore's, or a
-// bundle's or a framework resource library of the OS (tools/gpu/rawpack.py OS_LIBRARY)
+// A line's library (its vertex function's lib= path) where it is another framework's default.metallib than QuartzCore's, a
+// bundle's or a framework resource library of the OS (tools/gpu/rawpack.py OS_LIBRARY), or one of our own apps'
+// (APP_LIBRARY)
 inline std::string libraryPath(const std::string &line)
 {
     const size_t at = line.find(" lib=");
@@ -245,7 +246,9 @@ inline std::string libraryPath(const std::string &line)
     const bool resources =
         path.find(".bundle/") != std::string::npos || path.find(".framework/Resources/") != std::string::npos;
     const bool bundle = path.rfind("/System/Library/", 0) == 0 && endsWith(path, ".metallib") && resources;
-    if ((!framework && !bundle) || path.find("/QuartzCore.framework/") != std::string::npos)
+    const bool app = path.rfind("/Applications/Switch", 0) == 0 && endsWith(path, ".app/default.metallib") &&
+                     path.find('/', 14) == path.size() - 17;
+    if ((!framework && !bundle && !app) || path.find("/QuartzCore.framework/") != std::string::npos)
         return "";
     return path;
 }

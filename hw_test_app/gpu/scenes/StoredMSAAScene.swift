@@ -78,8 +78,24 @@ struct StoredMSAAScene: GPUScene {
             let off = gpu.paths.paths.keys.filter { $0 != "raw" }.sorted()
             result.expect(off.isEmpty, "command buffers off the raw path: \(off.joined(separator: ","))")
             result.metrics.set("route", off.isEmpty ? "raw" : "m2v")
+            var packed: [Bool] = []
+            for format in [TexelFormat.rgba8Unorm, .r32Float] {
+                let fragment = Self.unpackFragment(format)
+                guard let held = RawFacade.packed(try gpu.render(fragment: fragment, format: format.metal)) else {
+                    continue
+                }
+                packed.append(held)
+                result.expect(held, "\(fragment): a state made at its creation, not the pack's")
+            }
+            if !packed.isEmpty {
+                result.metrics.set("packed", "\(packed.filter { $0 }.count)/\(packed.count)")
+            }
         }
         return result
+    }
+
+    private static func unpackFragment(_ format: TexelFormat) -> String {
+        format == .r32Float ? "ms_depth_fragment" : "ms_sample_fragment"
     }
 
     private func colour(_ gpu: GPU, _ samples: Int, _ cover: [[Bool]?], _ result: inout SceneResult) async throws {
@@ -384,8 +400,7 @@ struct StoredMSAAScene: GPUScene {
         -> Raster
     {
         let out = try gpu.texture(format.metal, size * samples, size)
-        let pipeline = try gpu.render(
-            fragment: format == .r32Float ? "ms_depth_fragment" : "ms_sample_fragment", format: format.metal)
+        let pipeline = try gpu.render(fragment: unpackFragment(format), format: format.metal)
         try await gpu.run { commands in
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = out

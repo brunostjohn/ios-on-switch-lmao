@@ -110,6 +110,7 @@ filegroup(
         "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_pack.h",
+        "raw/runtime/raw_push.h",
         "raw/runtime/raw_record.h",
         "raw/runtime/raw_record_parts.cpp",
         "raw/runtime/raw_record_parts.h",
@@ -119,6 +120,7 @@ filegroup(
         "raw/runtime/raw_set_reads.h",
         "raw/runtime/raw_xr.h",
         "raw/runtime/raw_xr_pass.h",
+        "raw/runtime/raw_zeta.h",  # the formats directpack.mm's test classes reach
     ],
 )
 
@@ -365,6 +367,12 @@ filegroup(
 filegroup(
     name = "ca_name_lists",
     srcs = glob(["precompile/ca-names/*.txt"]),
+)
+
+# Our own apps' render states the raw pack holds, per IPSW kind (//gpu/seed:raw_pack, tools/gpu/rawpack.py app_states).
+filegroup(
+    name = "app_state_lists",
+    srcs = glob(["precompile/app-states/*.log"]),
 )
 
 py_library(
