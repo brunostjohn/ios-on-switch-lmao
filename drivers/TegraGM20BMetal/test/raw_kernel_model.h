@@ -11,9 +11,10 @@
 // a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
 // fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed killed, or the set is
 // made again. A ResourceSetCreate naming a handle the connection does not hold is refused kIOReturnBadArgument, as the
-// kernel's attachSet refuses it. The first IOServiceOpen of a model is `model`; each later one is a connection of its own
-// (its BOs, sets, channels and GPU VM), closed with IOServiceClose, as HW Test's bench is beside the app's Metal device.
-// Its IOKit calls replace the framework's: include it in one unit of a test.
+// kernel's attachSet refuses it, with the reason in that record's reserved word. The first IOServiceOpen of a model is
+// `model`; each later one is a connection of its own (its BOs, sets, channels and GPU VM), closed with
+// IOServiceClose, as HW Test's bench is beside the app's Metal device. Its IOKit calls replace the framework's:
+// include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
@@ -99,11 +100,11 @@ struct Model {
 
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
-    unsigned setRefusals = 0;     // ResourceSetCreates refused for a member
-    uint64_t refusedHandle = 0;   // the last one's member
-    bool opened = false;          // the first IOServiceOpen took this model
+    unsigned setRefusals = 0;    // ResourceSetCreates refused for a member
+    uint64_t refusedHandle = 0;  // the last one's member
+    bool opened = false;         // the first IOServiceOpen took this model
     io_connect_t nextConnection = 43;
-    std::map<io_connect_t, std::unique_ptr<Model>> others;  // the later IOServiceOpens' connections
+    std::map<io_connect_t, std::unique_ptr<Model>> others;                    // the later IOServiceOpens' connections
     std::map<uint32_t, std::pair<uint64_t, std::vector<uint64_t>>> admitted;  // channel: cookie, its uses' BOs
     std::vector<uint64_t> cpuLocked;  // an IOSurfaceLock in another process: a job naming one is refused CannotLock
 
@@ -353,6 +354,20 @@ struct Model {
     {
         if (!in.count || in.count > TegraGM20BMaxSetMembers || !in.uses_address || in.set > TegraGM20BMaxResourceSets)
             return kIOReturnBadArgument;
+        auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
+        constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
+        std::vector<uint64_t> handles(in.count);
+        for (uint32_t i = 0; i < in.count; ++i) {
+            uint32_t reason = switch_gpu_set_record_refusal(&uses[i]);
+            if (!reason && !(handles[i] = resolve(uses[i])))
+                reason = TegraGM20BSetRefusedGone;
+            if (reason) {
+                setRefusals++;
+                refusedHandle = uses[i].handle;
+                uses[i].reserved = reason;
+                return kIOReturnBadArgument;
+            }
+        }
         uint32_t index = in.set ? in.set - 1 : 0;
         if (in.set && !sets[index].live)
             return kIOReturnBadArgument;
@@ -360,19 +375,6 @@ struct Model {
             ++index;
         if (index == TegraGM20BMaxResourceSets)
             return kIOReturnNoResources;
-        auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
-        constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
-        std::vector<uint64_t> handles(in.count);
-        for (uint32_t i = 0; i < in.count; ++i) {
-            const uint32_t access = uses[i].access;
-            handles[i] = resolve(uses[i]);
-            if (uses[i].reserved || !(access & kAccess) || (access & ~(kAccess | TegraGM20BSurfaceGpuAddress)) ||
-                !handles[i]) {
-                setRefusals++;
-                refusedHandle = uses[i].handle;
-                return kIOReturnBadArgument;
-            }
-        }
         for (const auto &member : sets[index].members)
             if (const auto it = bos.find(member.handle); it != bos.end())
                 it->second.set = 0;
@@ -389,6 +391,18 @@ struct Model {
         sets[index].live = true;
         endGeneration(index);
         out = {index + 1, sets[index].generation, kFenceToken, (TegraGM20BSetGenerationWord + index) * 4};
+        return KERN_SUCCESS;
+    }
+
+    int setRelease(const TegraGM20BAbiResourceSetRelease &in)
+    {
+        if (in.reserved || !in.set || in.set > TegraGM20BMaxResourceSets || !sets[in.set - 1].live)
+            return kIOReturnBadArgument;
+        for (const auto &member : sets[in.set - 1].members)
+            if (const auto it = bos.find(member.handle); it != bos.end())
+                it->second.set = 0;
+        sets[in.set - 1].members.clear();
+        sets[in.set - 1].live = false;
         return KERN_SUCCESS;
     }
 
@@ -540,6 +554,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
     case TegraGM20BMethodResourceSetCreate:
         return model.setCreate(*static_cast<const TegraGM20BAbiResourceSetCreate *>(input),
                                *static_cast<TegraGM20BAbiResourceSetCreateReply *>(output));
+    case TegraGM20BMethodResourceSetRelease:
+        return model.setRelease(*static_cast<const TegraGM20BAbiResourceSetRelease *>(input));
     case TegraGM20BMethodSubmitJob:
         return model.submitJob(*static_cast<const TegraGM20BAbiSubmitAddress *>(input),
                                *static_cast<TegraGM20BAbiExecReply *>(output));

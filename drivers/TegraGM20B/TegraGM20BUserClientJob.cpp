@@ -2,6 +2,18 @@
 // The job interface (TegraGM20BJobABI.h): persistent resource sets.
 #include "TegraGM20BUserClientInternal.h"
 
+static const char *setRefusal(uint32_t reason)
+{
+	switch (reason) {
+	case TegraGM20BSetRefusedReserved:
+		return "reserved word not zero";
+	case TegraGM20BSetRefusedAccess:
+		return "access neither read nor write";
+	default:
+		return "no such BO in this connection";
+	}
+}
+
 IOReturn AGXDeviceUserClient::resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 						TegraGM20BAbiResourceSetCreateReply *out)
 {
@@ -13,28 +25,37 @@ IOReturn AGXDeviceUserClient::resourceSetCreate(const TegraGM20BAbiResourceSetCr
 	IOReturn result = !uses || !members ? kIOReturnNoMemory : kIOReturnSuccess;
 	if (!result && copyin(in->uses_address, uses, in->count * sizeof(*uses)))
 		result = kIOReturnBadArgument;
+	uint32_t refused = in->count;
 	if (!result) {
 		IOLockLock(lock_);
 		if (submitGate_.closed() || !submitGate_.beginMutation(lock_)) {
 			result = kIOReturnNotOpen;
 		} else {
-			result = attachSet(in, uses, members, out);
+			result = attachSet(in, uses, members, out, refused);
 			submitGate_.endMutation(lock_);
 		}
 		IOLockUnlock(lock_);
 	}
-	if (!result && copyout(uses, in->uses_address, in->count * sizeof(*uses)))
+	if (refused < in->count)
+		IOLog("tegra-gm20b: %s: resource set %u refused for member %u of %u (handle %llu, "
+		      "access %#x): %s\n",
+		      owner_, in->set, refused, in->count, (unsigned long long)uses[refused].handle,
+		      uses[refused].access, setRefusal(uses[refused].reserved));
+	if ((!result || refused < in->count) &&
+	    copyout(uses, in->uses_address, in->count * sizeof(*uses)))
 		result = kIOReturnBadArgument;
 	IODelete(uses, TegraGM20BAbiSurfaceUse, in->count);
 	IODelete(members, switch_gpu_set_member, in->count);
 	return result;
 }
 
-// lock_ held, every submission excluded. A member the kernel refuses comes back with access 0 in `uses`.
+// lock_ held, every submission excluded. A member the kernel refuses comes back with access 0 in `uses`. A record
+// it cannot take at all refuses the call: `refusedAt` is its index, its reserved word the TegraGM20BSetRefused reason.
 IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in,
 					TegraGM20BAbiSurfaceUse *uses,
 					switch_gpu_set_member *members,
-					TegraGM20BAbiResourceSetCreateReply *out)
+					TegraGM20BAbiResourceSetCreateReply *out,
+					uint32_t &refusedAt)
 {
 	constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
 	static_assert(uint32_t(TegraGM20BSurfaceRead) == SWITCH_GPU_BACKING_READ &&
@@ -43,13 +64,17 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 	uint32_t count = 0;
 	for (uint32_t i = 0; i < in->count; ++i) {
 		const uint32_t access = uses[i].access;
-		if (uses[i].reserved || !(access & kAccess) ||
-		    (access & ~uint32_t(kAccess | TegraGM20BSurfaceGpuAddress)))
+		uint32_t reason = switch_gpu_set_record_refusal(&uses[i]);
+		const Bo *bo = nullptr;
+		if (!reason &&
+		    !(bo = access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
+								: findBo(uses[i].handle)))
+			reason = TegraGM20BSetRefusedGone;
+		if (reason) {
+			uses[i].reserved = reason;
+			refusedAt = i;
 			return kIOReturnBadArgument;
-		const Bo *bo = access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
-								    : findBo(uses[i].handle);
-		if (!bo)
-			return kIOReturnBadArgument;
+		}
 		if (!bo->backing || bo->surface || bo->nativeView || bo->representation ||
 		    bo->readOnly)
 			uses[i].access = 0;

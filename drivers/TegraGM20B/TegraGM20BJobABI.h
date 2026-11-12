@@ -33,11 +33,33 @@ enum {
  * engine reaches, a BO a CPU lease or CpuComplete ever named, and a BO in another set are refused: each comes back with
  * access 0 in the caller's records and the set holds the rest. A member a CPU lease or CpuComplete names later leaves the
  * set (its generation ends) with the set's jobs as its users; so does one a replace no longer lists.
- * set 0 makes a new set; a live set's id replaces its members and returns a new generation. */
+ * set 0 makes a new set; a live set's id replaces its members and returns a new generation.
+ * kIOReturnBadArgument for a record the kernel cannot take at all leaves the set as it was and names that record: the
+ * records are copied back with its `reserved` holding a TegraGM20BSetRefused reason (the first such record only). */
 struct TegraGM20BAbiResourceSetCreate {
 	uint64_t uses_address;
 	uint32_t count, set;
 };
+
+enum {
+	TegraGM20BSetRefusedReserved = 1, /* its reserved word was not zero */
+	TegraGM20BSetRefusedAccess =
+		2, /* neither Read nor Write, or a flag other than GpuAddress */
+	TegraGM20BSetRefusedGone =
+		3, /* no BO of the connection has the handle (GpuAddress: no binding holds the VA) */
+};
+
+/* A method 31 record's refusal before its BO is looked up, 0 when its form is right */
+static inline uint32_t switch_gpu_set_record_refusal(const struct TegraGM20BAbiSurfaceUse *use)
+{
+	const uint32_t access = (uint32_t)TegraGM20BSurfaceRead | (uint32_t)TegraGM20BSurfaceWrite;
+	if (use->reserved)
+		return TegraGM20BSetRefusedReserved;
+	if (!(use->access & access) ||
+	    (use->access & ~(access | (uint32_t)TegraGM20BSurfaceGpuAddress)))
+		return TegraGM20BSetRefusedAccess;
+	return 0;
+}
 
 struct TegraGM20BAbiResourceSetCreateReply {
 	uint32_t set, generation;
