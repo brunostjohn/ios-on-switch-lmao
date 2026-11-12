@@ -1359,6 +1359,11 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 		flat(definition(gpu(), "int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,"));
 	expectBefore(arm, "switch_gpu_present_watch_arm(", "mutex_unlock(&tgm_present.lock);");
 	expectBefore(arm, "gate_leave();", "present_physical(&tgm_present.watch.token)");
+	// every producer is asked, of the channel its token names, between the arm and the last look
+	expectBefore(arm, "switch_gpu_present_watch_arm(", "tgm_chan_need_tokens(dependencies, dependency_count);");
+	expectBefore(arm, "gate_leave();", "tgm_chan_need_tokens(dependencies, dependency_count);");
+	expectBefore(arm, "tgm_chan_need_tokens(", "present_physical(&tgm_present.watch.token)");
+	EXPECT_THAT(arm, Not(HasSubstr("tgm_chan_need_uid(")));
 	EXPECT_THAT(arm, HasSubstr("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));
 	const std::string outstanding = flat(definition(gpu(), "int tgm_present_outstanding(const void *arg)"));
 	EXPECT_THAT(outstanding, HasSubstr("switch_gpu_present_watch_armed(&tgm_present.watch)"));

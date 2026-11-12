@@ -34,6 +34,20 @@ void tgm_chan_need_uid(uint32_t uid, uint32_t seqno)
 	mutex_unlock(&tgm_live_lock);
 }
 
+void tgm_chan_need_tokens(const struct switch_gpu_backing_token *tokens, uint32_t count)
+{
+	struct tgm_chan *chan = NULL;
+	u32 i = 0;
+
+	mutex_lock(&tgm_live_lock);
+	for (i = 0; i < count; i++) {
+		chan = live_by_uid(tokens[i].queue);
+		if (chan && !chan->error && switch_gpu_quiet_token_on(&tokens[i], chan->id))
+			tgm_chan_need(chan, (u32)tokens[i].value);
+	}
+	mutex_unlock(&tgm_live_lock);
+}
+
 /* A job the interrupt pass already saw end needs no entry: that pass woke whatever waited for it. A killed channel's
  * waiters are woken by its kill. */
 void tgm_chan_wake_push(struct tgm_chan *chan)

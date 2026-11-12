@@ -73,6 +73,22 @@ TEST(GM20BQuietSource, EverySleepOnAUserChannelAsksFirst)
 		     "tgm_waiter_idle(");
 }
 
+// A token is asked only of the GM20B channel it names, by uid and reset generation: a host1x engine's token holds a
+// syncpoint in its queue. A bare uid is asked only by writer_wait, whose uids are GM20B channels'.
+TEST(GM20BQuietSource, ATokenIsAskedOnlyOfItsChannel)
+{
+	expectBefore(Body(unit("gpu_quiet.c"), "void tgm_chan_need_tokens("),
+		     "switch_gpu_quiet_token_on(&tokens[i], chan->id)",
+		     "tgm_chan_need(chan, (u32)tokens[i].value);");
+	size_t uids = 0;
+	for (const char *name : {"gpu_bringup.c", "gpu_chan.c", "gpu_sync.c", "gpu_power.c", "gpu_exec.c",
+				 "gpu_present.c", "gpu_scrub.c", "gpu_hang.c"})
+		uids += Count(unit(name), "tgm_chan_need_uid(");
+	EXPECT_EQ(uids, 1u) << "a token's channel is asked through tgm_chan_need_tokens";
+	EXPECT_THAT(Body(unit("gpu_sync.c"), "static void writer_wait("),
+		    HasSubstr("tgm_chan_need_uid(uid, seqno);"));
+}
+
 // A user channel's lost-wake panic fires once the interrupt that wakes the wait was due; the two left on the fence alone
 // wait on kernel channels, which never end quiet.
 TEST(GM20BQuietSource, LostWakePanicsWaitForTheAnnouncingInterrupt)

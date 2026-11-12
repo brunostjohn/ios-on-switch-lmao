@@ -8,6 +8,7 @@
  * announces. Each side's fence between the two makes one of them see the other, so no ask is left behind both. */
 #pragma once
 #include <stdint.h>
+#include "SwitchGpuBacking.h"
 
 /* announced: the newest seqno a pushed nonstall interrupt follows (the owner writes it); wanted: the newest seqno a
  * waiter asked for an interrupt at */
@@ -50,6 +51,16 @@ static inline int switch_gpu_quiet_need(struct switch_gpu_quiet *q, uint32_t seq
 		;
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return (int32_t)(seqno - __atomic_load_n(&q->announced, __ATOMIC_ACQUIRE)) > 0;
+}
+
+/* Whether a backing token is a seqno of the GM20B channel `channel_id` (its uid, and its reset generation above it), and
+ * so asked of that channel. Another engine's token holds a host1x syncpoint in its queue, never a channel's uid. */
+static inline int switch_gpu_quiet_token_on(const struct switch_gpu_backing_token *token,
+					    uint64_t channel_id)
+{
+	return token->engine == SWITCH_GPU_ENGINE_GM20B && token->value <= UINT32_MAX &&
+	       token->queue == (uint32_t)channel_id &&
+	       token->reset_generation == (channel_id >> 32) + 1;
 }
 
 /* The owner, under its submission order, with `submitted` the channel's newest seqno: whether a wake entry is owed.

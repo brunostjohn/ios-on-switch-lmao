@@ -518,6 +518,11 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 	}
 	mutex_unlock(&tgm_present.lock);
 	gate_leave();
+	/* After the arm and before the last look: a producer's job may end quiet, and then only an interrupt asked for it
+	 * runs the pass that completes the watch (SwitchGpuQuiet.h). The caller's tokens, not the watch's, which the pass
+	 * may already have dropped. */
+	if (!ret)
+		tgm_chan_need_tokens(dependencies, dependency_count);
 	if (!ret && present_physical(&tgm_present.watch.token))
 		nvxnu_work_schedule(tgm_present.watch_work);
 	return ret;

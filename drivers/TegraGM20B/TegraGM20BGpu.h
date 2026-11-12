@@ -289,12 +289,14 @@ void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *a
 /* Quiet job ends (SwitchGpuQuiet.h). on_wake: the channel's owner takes asks for wake entries; `wake(arg, tag)` must not
  * block (it schedules a thread call that runs tgm_chan_quiet_wake under the owner's submission order). need: anything
  * that will sleep until the channel reaches `seqno` asks first, then tests the fence (any context a thread call may be
- * entered from). need_uid: the same for the channel a backing token names (tgm_live_lock taken). quiet_wake: the owner,
- * with no submission of its on the channel under way, outside the gate. */
+ * entered from). need_uid: the same for the GM20B channel of that uid. need_tokens: the same for each GM20B channel the
+ * backing tokens name by uid and reset generation (switch_gpu_quiet_token_on); another engine's token asks nothing. Both
+ * take tgm_live_lock. quiet_wake: the owner, with no submission of its on the channel under way, outside the gate. */
 void tgm_chan_on_wake(struct tgm_chan *chan, void (*wake)(void *arg, uint32_t tag), void *arg,
 		      uint32_t tag);
 void tgm_chan_need(struct tgm_chan *chan, uint32_t seqno);
 void tgm_chan_need_uid(uint32_t uid, uint32_t seqno);
+void tgm_chan_need_tokens(const struct switch_gpu_backing_token *tokens, uint32_t count);
 void tgm_chan_quiet_wake(struct tgm_chan *chan);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
 void tgm_chan_set_group(struct tgm_chan *chan, const void *group);

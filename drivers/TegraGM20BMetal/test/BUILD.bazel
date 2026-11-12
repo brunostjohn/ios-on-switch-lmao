@@ -474,6 +474,7 @@ host_test(
     name = "raw_completion_source_test",
     srcs = [
         "raw_completion_source_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuQuiet.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
