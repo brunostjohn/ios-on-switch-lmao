@@ -18,6 +18,7 @@
 //    they may run; the render thread never blocks for it. waitUntilScheduled waits for the submission, so the display's
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
 #import "RawMetalInternal.h"
+#include "raw_device_answers.h"
 #include "raw_limits_fill.h"
 
 #include <mach/mach.h>
@@ -192,6 +193,7 @@ static struct {
 static raw::Device *openDevice(const char *packPath, uint64_t stack, raw::Device::Role role, std::string &err)
 {
     raw::Device *dev = new raw::Device;
+    dev->indexZeroPastLimit = raw::answers::chipFeature(SWITCH_GM20B_FEATURE_3D_B11);
     if (!dev->open(packPath, stack, err, role)) {
         delete dev;  // its connection closes: the kernel frees what it held
         return nullptr;

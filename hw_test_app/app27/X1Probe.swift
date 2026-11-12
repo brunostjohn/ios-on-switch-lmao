@@ -99,5 +99,6 @@ enum X1Probes {
         X1VICPitchProbe.probe, X1VICLayoutProbe.probe, X1VICFractionProbe.probe,
         X1VICPackedProbe.probe, X1VICTransposeProbe.probe, X1VICLargeProbe.probe, X1VICComposeProbe.probe,
         X1VICComposeProbe.display,
+        X1IndexLimitProbe.probe,
     ]
 }

@@ -1483,6 +1483,10 @@ public:
     // Which of this device's memory holds GPU VA `va` (a killed command buffer's fault VA), and where in it, for its line
     std::string vaOwner(uint64_t va);
 
+    // The index fetch reads index 0 past SET_INDEX_BUFFER_C/D's limit (kits/SwitchGM20B caps row 3D-B11 at chip grade,
+    // which the facade reads at open): a draw past its buffer's indices binds the buffer with its limit, no padded copy
+    bool indexZeroPastLimit = false;
+
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:
