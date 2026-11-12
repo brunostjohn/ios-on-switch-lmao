@@ -3324,9 +3324,9 @@ Pipeline *Device::xrPipeline(XrForm form, bool twoPlanes)
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
-Pipeline *Device::resolvePipeline(uint32_t format)
+Pipeline *Device::resolvePipeline(uint32_t format, uint32_t samples)
 {
-    const char *name = resolveState(format);
+    const char *name = resolveState(format, samples);
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 

@@ -1640,7 +1640,7 @@ public:
     // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
     Pipeline *xrPipeline(XrForm form, bool twoPlanes = false);
     // The pack's resolve state into a target of `format` (raw_samples.h resolveState), null if the pack has none
-    Pipeline *resolvePipeline(uint32_t format);
+    Pipeline *resolvePipeline(uint32_t format, uint32_t samples);
     // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
     Pipeline *mipPipeline(uint32_t format);
     Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState

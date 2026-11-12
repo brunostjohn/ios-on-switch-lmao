@@ -56,6 +56,18 @@ static float4 unorm8(Samples s, uint n, uint2 at)
     return float4(sum / n) * as_type<float>(0x3b808081u);  // 1 / 255
 }
 
+// The same with the sample count built in, in floats: an 8-bit unorm sample reads as the float nearest code / 255, so
+// rint(x * 255) is its code, the codes and half the count sum exactly, and dividing by a power of two and flooring is the
+// integer quotient. With the count from a buffer the loop runs to eight guarded fetches and each conversion to an integer
+// carries its range and NaN guards, the 642 instructions of resolve_*8_frag.
+template <uint N> static float4 unorm8Of(Samples s, uint2 at)
+{
+    float4 sum = float4(N / 2);
+    for (uint k = 0; k < N; k++)
+        sum += rint(s.read(at, k) * 255.0);
+    return floor(sum * (1.0 / N)) * as_type<float>(0x3b808081u);  // 1 / 255
+}
+
 static float4 srgb8(Samples s, uint n, uint2 at)
 {
     uint4 sum = uint4(n / 2);
@@ -139,6 +151,26 @@ fragment float4 resolve_rgba8_srgb_frag(Out in [[stage_in]], Samples s [[texture
 fragment float4 resolve_bgra8_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])
 {
     return unorm8(s, n, uint2(in.position.xy));
+}
+
+fragment float4 resolve_rgba8_2x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return unorm8Of<2>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_rgba8_4x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return unorm8Of<4>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_bgra8_2x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return unorm8Of<2>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_bgra8_4x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return unorm8Of<4>(s, uint2(in.position.xy));
 }
 
 fragment float4 resolve_bgra8_srgb_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])

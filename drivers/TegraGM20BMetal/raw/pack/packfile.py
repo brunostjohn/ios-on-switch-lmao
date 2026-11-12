@@ -205,7 +205,18 @@ def key_hash(rec: dict) -> int:
         (
             'resolve',
             'resolve_vert',
-            ('rgba8_frag', 'rgba8_srgb_frag', 'bgra8_frag', 'bgra8_srgb_frag', 'rg11b10f_frag', 'rgba16f_frag')
+            (
+                'rgba8_frag',
+                'rgba8_srgb_frag',
+                'bgra8_frag',
+                'bgra8_srgb_frag',
+                'rg11b10f_frag',
+                'rgba16f_frag',
+                'rgba8_2x_frag',
+                'rgba8_4x_frag',
+                'bgra8_2x_frag',
+                'bgra8_4x_frag',
+            )
             + tuple(f'{d}_{k}_frag' for d in ('depth16', 'depth32f', 'depth32fs8') for k in ('sample0', 'min', 'max')),
         ),
         (

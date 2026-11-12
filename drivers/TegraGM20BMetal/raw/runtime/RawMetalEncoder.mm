@@ -248,7 +248,7 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
            (r->_raw.renderable || r->_raw.shadowTarget) && !r->_raw.planar && !r->_raw.ycbcr &&
            r->_raw.type == raw::fx::kTexTwoD && r->_raw.samples == 1 && r->_raw.format == from->_raw.format &&
            !a.resolveLevel && !a.resolveSlice && !a.resolveDepthPlane &&
-           (gRM->raw->resolvePipeline(from->_raw.format) || resolvesByTwoD(cb, from->_raw.format));
+           (gRM->raw->resolvePipeline(from->_raw.format, from->_raw.samples) || resolvesByTwoD(cb, from->_raw.format));
 }
 
 // Whether the pass draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h); a pass of a 550 beside one it cannot draw so is
