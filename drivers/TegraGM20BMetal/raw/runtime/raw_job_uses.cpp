@@ -62,7 +62,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
     RAW_ENCODE_COUNT(Uses);
     const auto range = texture.storageRange();
     if (write)
-        publication_.wrote(range.hostVisible || (texture.import && !texture.import->id));
+        publication_.wrote(range.hostVisible || (texture.import && !texture.import->id) || texture.callerPages);
     if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
@@ -72,7 +72,8 @@ void CommandBuffer::use(const Texture &texture, bool write)
     if (!ranged || !importContains(view->import, storage.va, storage.bytes))
         use(view->import, write);
     const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
-    externalWrites_ |= hostVisible && write;
+    // a write into a copied no-copy texture goes on to its caller's pages (RawMetalEncodeBlit.mm copyToCallerPages)
+    externalWrites_ |= (hostVisible || texture.callerPages) && write;
 #if SWITCH_RAW_DIAGNOSTICS
     if (write && dev_->glassMemLive_)
         dev_->glassMem->wrote(storage.va ? storage.va : view->va, dev_->commitCount_,

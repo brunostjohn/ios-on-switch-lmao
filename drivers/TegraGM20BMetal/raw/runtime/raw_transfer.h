@@ -33,6 +33,11 @@ public:
     // channel's set jobs follow each other
     bool copy(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, const TextureTransfer &region,
               void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
+    // `bytes` bytes from GPU address `source`, CPU-written memory whose lines are cleaned, to `destination`, with no CPU
+    // wait; `owner` held until the copy completed. Later work on either range waits for it: by the set where it lies in a
+    // member, else by the kernel's write record.
+    bool copyBytes(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, uint64_t source, uint64_t destination,
+                   uint64_t bytes, std::shared_ptr<void> owner);
     void close(Kernel &kernel, std::mutex &allocationLock);
 
 private:
@@ -45,6 +50,11 @@ private:
 
     bool retire(Kernel &kernel, Slot &slot);
     void reset(Kernel &kernel);
+    Slot *open(Kernel &kernel, std::mutex &allocationLock, uint64_t bytes);
+    bool name(Kernel &kernel, ResourceSet &set, SurfaceList &uses, uint64_t va, uint64_t bytes, bool write,
+              uint32_t flags);
+    bool submit(Kernel &kernel, ResourceSet &set, Slot &slot, uint64_t offset, const uint32_t *start,
+                const uint32_t *end, SurfaceList &uses, uint32_t removals, KernelJob job, std::shared_ptr<void> owner);
     std::mutex lock_;
     std::array<Slot, 4> slots_;
     SetView view_;

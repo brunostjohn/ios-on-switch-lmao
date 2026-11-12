@@ -17,6 +17,7 @@
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
+#include "raw_block_base.h"
 #include "raw_gpu.h"
 #include "TegraGM20BJobABI.h"
 #include "raw_layers.h"
@@ -1386,6 +1387,8 @@ void Device::freeChunk(Chunk &ch)
     RAW_DIAGNOSTIC(stats.poolChunks--);
     RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
     set_.free(k_, ch.bo);
+    if (ch.pitchVa)
+        k_.releaseVa(ch.pitchVa, ch.bytes);
     vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
@@ -2270,6 +2273,28 @@ void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
         freeChunk(ch);
 }
 
+uint64_t Device::blPitchVa(const Span &s)
+{
+    if (!s.valid() || s.chunk >= blChunks_.size())
+        return 0;
+    Chunk &ch = blChunks_[s.chunk];
+    if (!ch.pitchVa) {
+        const uint64_t va = k_.reserveVa(ch.bytes);
+        if (!va)
+            return 0;
+        if (!k_.bindAlias(ch.bo, va, kPteKindPitch)) {
+            k_.releaseVa(va, ch.bytes);
+            return 0;
+        }
+        ch.pitchVa = va;
+        Bo view = ch.bo;
+        view.va = view.vaBase = va;
+        // the chunk is a set member: the kernel takes no use of its backing, so a job names this binding by the set too
+        set_.add(k_, view, TegraGM20BSurfaceWrite);
+    }
+    return ch.pitchVa + s.offset;
+}
+
 bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
@@ -2315,9 +2340,11 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
                                     const fx::MipChain &layout, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
-    if (!blockCompressed(f) || !bytes || length < layout.bytes || (uintptr_t(bytes) & 511) || layout.bpp != f->bpp ||
+    if (!blockCompressed(f) || !bytes || length < layout.bytes || layout.bpp != f->bpp ||
         !shape(width, height, format, t))
         return false;
+    const bool inPlace = blockImageInPlace(uintptr_t(bytes), layout);
+    const uint32_t kind = inPlace ? TGM_LAYOUT_KIND : kPteKindPitch;
     cleanToMemory(bytes, layout.bytes);
     Import *i = new Import;
     if (!k_.importPages(bytes, length, i->bo, 0, true)) {
@@ -2325,25 +2352,37 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
         return false;
     }
     std::lock_guard<std::mutex> l(lock_);
-    if (!k_.bindImport(bytes, i->bo, TGM_LAYOUT_KIND)) {
+    if (!k_.bindImport(bytes, i->bo, kind)) {
         delete i;
         return false;
     }
-    i->kind = TGM_LAYOUT_KIND;
+    i->kind = kind;
     i->refs = 1;
     i->base = uintptr_t(bytes);
     i->bytes = length;
     RAW_DIAGNOSTIC(stats.imports++);
     RAW_DIAGNOSTIC(stats.importsMade++);
     RAW_DIAGNOSTIC(stats.importBytes += i->bo.bytes);
-    if (!(t.tic = allocTic())) {
+    if (!inPlace && !blAlloc(layout.bytes, layout.align, t.span)) {
         release(i);
         return false;
     }
-    t.import = i;
-    t.va = i->bo.va;
-    t.storage = {t.va, layout.bytes, true};
-    t.cpu = static_cast<uint8_t *>(bytes);
+    if ((!inPlace && !(t.imagePitchVa = blPitchVa(t.span))) || !(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        release(i);
+        return false;
+    }
+    if (inPlace) {
+        t.import = i;
+        t.va = i->bo.va;
+        t.cpu = static_cast<uint8_t *>(bytes);
+    } else {
+        t.callerPages = i;
+        t.va = t.span.va;
+        t.cpu = t.span.cpu;
+    }
+    t.storage = {t.va, layout.bytes, inPlace};
     layBlocks(layout, f, width, height, uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD), t);
     return true;
 }
@@ -2438,6 +2477,8 @@ void Device::destroyTexture(Texture &t)
     }
     if (t.import)
         release(t.import);
+    if (t.callerPages)
+        release(t.callerPages);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (auto it = probeCompressed.find(t.va); t.comptags && !t.span.valid() && it != probeCompressed.end()) {
         k_.free(it->second);
@@ -3353,9 +3394,14 @@ std::string Device::vaOwner(uint64_t va)
         return true;
     };
     auto chunk = [&](const std::vector<Chunk> &chunks, const char *what) {
-        for (size_t i = 0; i < chunks.size(); i++)
+        for (size_t i = 0; i < chunks.size(); i++) {
             if (chunks[i].bo.handle && in(chunks[i].bo, chunks[i].bo.bytes, what))
                 return true;
+            if (const uint64_t view = chunks[i].pitchVa; view && va >= view && va - view < chunks[i].bytes) {
+                snprintf(line, sizeof line, "%s's kind-0 view +0x%llx", what, (unsigned long long)(va - view));
+                return true;
+            }
+        }
         return false;
     };
     std::lock_guard<std::mutex> l(lock_);
@@ -6405,6 +6451,16 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
                         stats.memEvents.load(std::memory_order_relaxed));
 #endif
     return TextureTransferResult::Complete;
+}
+
+bool Device::copyCallerPages(const Texture &t, std::shared_ptr<void> owner)
+{
+    if (!t.callerPages)
+        return true;
+    if (!transfers_.copyBytes(k_, set_, lock_, t.callerPages->bo.va, t.imagePitchVa, t.storage.bytes, std::move(owner)))
+        return false;
+    RAW_DIAGNOSTIC(stats.textureUploads.fetch_add(1, std::memory_order_relaxed));
+    return true;
 }
 
 void RenderEncoder::setDepthBias(float constant, float slope, float clamp)

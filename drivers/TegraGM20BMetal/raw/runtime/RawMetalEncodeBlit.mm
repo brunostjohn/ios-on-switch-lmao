@@ -62,6 +62,20 @@ static void copyPlanes(raw::BlitEncoder *be, raw::CommandBuffer *rc, const raw::
     }
 }
 
+// A no-copy texture copied into a pool image (raw::Texture::callerPages): what a copy wrote into the image goes on to the
+// caller's memory, which stays the texture's contents, after it on the copy engine
+static void copyToCallerPages(raw::BlitEncoder *be, raw::CommandBuffer *rc, RMTexture *t)
+{
+    while (t->_kind == RMTextureView && t->_parent)
+        t = t->_parent;
+    const raw::Texture &x = t->_raw;
+    if (!x.callerPages)
+        return;
+    be->access(memoryOf(t), x.callerPages);
+    rc->clean(x.callerPages->bo.cpu, x.storage.bytes, true);
+    be->copyBytes(x.imagePitchVa, x.callerPages->bo.va, x.storage.bytes);
+}
+
 void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
                 std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh)
 {
@@ -90,6 +104,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         for (uint32_t k = 0; k < std::max(d, 1u); k++)
             be->copyTexels(sl ? fromLevel : s->_raw, ex, ey, layerOrPlane(s->_raw, ss, sz + k), dl ? toLevel : t->_raw,
                            fx, fy, layerOrPlane(t->_raw, ds, dz + k), ew, eh);
+        copyToCallerPages(be, rc, t);
         break;
     }
     case OpCopyBuffer: {
@@ -133,6 +148,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
             raw::chainLevelImage(t->_raw, uint32_t(dl), level);
         copyPlanes(be, rc, s->_raw, so, row, image, dl ? level : t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(dz),
                    uint32_t(w), uint32_t(h), uint32_t(d), true, uint8_t(c.a));
+        copyToCallerPages(be, rc, t);
         break;
     }
     case OpCopyTextureToBuffer: {

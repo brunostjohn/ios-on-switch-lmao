@@ -10,6 +10,8 @@
 #                     through the 2D engine model: only their levels written, ordered, every layer
 #   raw_block_layout_test  raw/fx's block-compressed image (the no-copy texture layout) is NIL's, levels included, and its
 #                     CPU copies put every byte where the block-linear addressing has it
+#   raw_block_base_test  raw/runtime/raw_block_base.h: which of a 16 KiB page's 512-byte bases a no-copy block texture is
+#                     its caller's memory at (NIL's image alignment), and which go through a pool image the copy engine fills
 #   nvk_wait_any_test nvkmd_darwin's WAIT_ANY (nvkmd_darwin_wait_any.h) over a model of the kext's WaitFence: it returns
 #                     once one sync of the set resolves (a host signal, a fence's interrupt), sleeps until then, keeps
 #                     its deadline, and calls a passed fence whose wake never came a lost interrupt
@@ -1080,6 +1082,26 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "raw_block_base_test",
+    srcs = [
+        "raw_block_base_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_block_base.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
     ],
     copts = [

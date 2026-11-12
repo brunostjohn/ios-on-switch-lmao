@@ -269,6 +269,13 @@ struct Texture {
     // through `sampled`, a block-linear pool image of its texels the copy engine refreshes from it before work that samples
     // it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
+    // A no-copy block texture whose caller's memory is off its image's alignment (raw_block_base.h) is a pool image of the
+    // same layout: callerPages are the caller's pages, bound pitch, that the copy engine fills the image from
+    // (Device::copyCallerPages) and that Metal's copies into the image go on to. Both copies reach the image through
+    // imagePitchVa, a kind-0 view of its chunk (Device::blPitchVa): each kind places a GOB's bytes in DRAM its own way
+    // (TegraGM20BRelayout.h), so only kind 0 on both sides moves the DRAM bytes unchanged. A view's are its parent's.
+    Import *callerPages = nullptr;
+    uint64_t imagePitchVa = 0;
     bool surfaceView = false;
     uint32_t surfaceX = 0, surfaceY = 0;
 
@@ -1422,11 +1429,16 @@ public:
     bool createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
                             uint8_t type, Texture &t);
     // A block-compressed 2D texture (or 2D array) over the caller's `bytes` (newTextureWithBytesNoCopy), already laid out as
-    // `layout` (fx::blockChainLayout of its texel size, levels and layers): the pages imported under kind 0xFE, cleaned to
-    // memory, and a block-linear header over them, of the texel size. False: not a block-compressed format, `length` short
-    // of the layout, a base off 512 bytes, or the import or header refused.
+    // `layout` (fx::blockChainLayout of its texel size, levels and layers), its pages cleaned to memory. At the layout's
+    // alignment (raw_block_base.h) the pages are imported under kind 0xFE with a block-linear header of the texel size over
+    // them; off it, the texture is a pool image of the layout over which the caller's pages, imported pitch, are copied
+    // (callerPages: copyCallerPages fills it). False: not a block-compressed format, `length` short of the layout, or the
+    // import, image or header refused.
     bool createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
                                 const fx::MipChain &layout, Texture &t);
+    // The copy engine's copy of a createBlockTextureOver texture's caller's pages into its image, ahead of the work after it
+    // (TextureTransfers::copyBytes); `owner` held until it completed. True with nothing to copy (the texture is the pages).
+    bool copyCallerPages(const Texture &t, std::shared_ptr<void> owner);
     // A shared texture over its IOSurface (raw_surface_image.h): the surface's pages imported under its ID and bound 0xFE,
     // the texture over them as the private one of the same image (createMipTexture, createArray, createVolume,
     // createStoredMultisample, createLine, createBlockTextureOver) lies in memory of its own. False: a Plain image, an
@@ -2006,6 +2018,7 @@ private:
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
         bool dedicated = false;
+        uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
     };
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
@@ -2264,6 +2277,8 @@ private:
     {
         tiledFree(blChunks_, s);
     }
+    // lock_ held: where block-linear span `s`'s bytes lie under a kind-0 view of its chunk; 0: no view could be bound
+    uint64_t blPitchVa(const Span &s);
 
     struct Arena {
         uint64_t va = 0, bufferVa = 0, bytes = 0;

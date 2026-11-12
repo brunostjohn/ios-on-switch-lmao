@@ -12,8 +12,13 @@ import Metal
 ///   out in memory and newTextureWithBytesNoCopy wraps it, at every 512-byte base inside a 16 KiB page, twice, the
 ///   second time over new pages while the first round's textures still hold theirs;
 /// - replace: a no-copy texture over zeroed memory, filled after by replaceRegion;
+/// - rewrite: a no-copy texture over zeroed memory, filled after by the layout object;
+/// - blitin: a no-copy texture over zeroed memory, filled after by a blit from a buffer; blitin_back: its caller's
+///   memory read back through getBytes;
 /// - alias: as nocopy, over memory a no-copy buffer already imported and the GPU already read;
 /// - ce: the copy engine's readback of the nocopy textures' blocks.
+/// On the raw facade a base off the layout's alignment (4096 bytes here: bits 0, 8, 16 and 24 of a _bad mask are the
+/// aligned bases) is a pool image the copy engine fills from the caller's memory, and the aligned ones are that memory.
 /// texture= and blit= are wrong blocks; <label>_bad= says which of the 32 bases (bit n: base n x 512) had any, as 8 hex
 /// digits, <label>_wrong= their wrong blocks summed. map=, map2= and map3= are the first three different address bit
 /// mappings the wrong cases showed (BlockLinearMap.bitMap: displayed bit gK from written bits wN), each after the first
@@ -109,9 +114,9 @@ final class AstcLayoutRun {
             return
         }
         result.metrics.set("layout", "\(layout.className):\(layout.size):\(layout.alignment)")
-        for label in ["nocopy", "nocopy2", "replace", "alias"] {
+        for label in ["nocopy", "nocopy2", "replace", "rewrite", "blitin", "alias"] {
             var tally = AstcLayoutTally(label)
-            var copied = AstcLayoutTally("ce")
+            var copied = AstcLayoutTally(label == "blitin" ? "blitin_back" : "ce")
             for (index, base) in Self.bases.enumerated() {
                 do {
                     guard let texture = try await noCopy(layout, label, base) else {
@@ -121,13 +126,14 @@ final class AstcLayoutRun {
                     }
                     tally.add(try await sample(texture, noCopy: true), index, base, &maps)
                     if label == "nocopy" { copied.add(try await copyEngine(texture), index, base, &maps) }
+                    if label == "blitin" { copied.add(readBack(texture), index, base, &maps) }
                 } catch {
                     tally.errors += 1
                     if tally.errors == 1 { result.notes.append("\(label)@\(base): \(error)") }
                 }
             }
             tally.report(&result)
-            if label == "nocopy" { copied.report(&result) }
+            if label == "nocopy" || label == "blitin" { copied.report(&result) }
         }
     }
 
@@ -155,7 +161,8 @@ final class AstcLayoutRun {
                 blit.endEncoding()
             }
         }
-        if label != "replace" {
+        let filledAfter = ["replace", "rewrite", "blitin"].contains(label)
+        if !filledAfter {
             layout.copy(Self.grid.bytes, rowBytes: Self.grid.rowBytes, region: Self.region, to: at)
         }
         guard
@@ -166,13 +173,34 @@ final class AstcLayoutRun {
             return nil
         }
         textures.append(texture)
-        if label == "replace" {
+        switch label {
+        case "replace":
             Self.grid.bytes.withUnsafeBytes {
                 texture.replace(
                     region: Self.region, mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: Self.grid.rowBytes)
             }
+        case "rewrite":
+            layout.copy(Self.grid.bytes, rowBytes: Self.grid.rowBytes, region: Self.region, to: at)
+        case "blitin":
+            try await blitIn(texture)
+        default:
+            break
         }
         return texture
+    }
+
+    /// The image blitted into `texture` from a buffer, on raw: m2v blits nothing into a no-copy texture.
+    func blitIn(_ texture: MTLTexture) async throws {
+        let staging = try gpu.buffer(Self.grid.bytes)
+        let timing = try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            blit.copy(
+                from: staging, sourceOffset: 0, sourceBytesPerRow: Self.grid.rowBytes, sourceBytesPerImage: 0,
+                sourceSize: MTLSize(width: Self.grid.texelWidth, height: Self.grid.texelHeight, depth: 1), to: texture,
+                destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
+            blit.endEncoding()
+        }
+        if timing.path != "raw" { throw TestFailure("the blit into it ran on \(timing.path)") }
     }
 }
 

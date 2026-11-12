@@ -5,9 +5,17 @@
 // PosterBoard's pre-twiddled snapshots (ASTCTwiddler) into memory sized, aligned and filled through the device's layout
 // object, which Core Animation (MetalContext::update_texture), RenderBox and PhotosUI then hand to the no-copy texture
 // call. The layout here is NIL's block-linear image (fx::blockChainLayout), so the texture is the caller's pages under a
-// block-linear header: no copy, no m2v. Other formats and heap- or buffer-backed layouts keep the m2v frontend's answer.
+// block-linear header: no copy, no m2v. Memory off the image's alignment (raw_block_base.h) is copied by the copy engine
+// into a pool image of the same layout when the texture is made and after each write through Metal (replaceRegion, or
+// the layout object into memory a texture already wraps), and a blit into the image is copied back to it. A plain CPU
+// store into that memory is the caller's alone: memory without a surface ID is cleaned once, at import, and no lock or
+// seed shows a later store (TegraGM20BABI.h BoImport), in place or copied.
 #import "RawMetalInternal.h"
+#include <unordered_map>
 #include "../fx/fx_image.h"
+
+@class RMNoCopyTexture;
+static void wroteThroughLayout(const void *memory);
 
 namespace {
 
@@ -89,11 +97,11 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
         return;
     os_log(rawLog(),
            "raw: no-copy texture %lux%lu format %lu over %lu bytes: cpu & 0x3fff 0x%llx, gpu va 0x%llx (& 0x3fff "
-           "0x%llx), %u-GOB blocks, %u GOBs across, kind 0x%x",
+           "0x%llx), %u-GOB blocks, %u GOBs across, %llu aligned, %{public}s",
            (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat, (unsigned long)length,
            (unsigned long long)(uintptr_t(bytes) & 0x3fff), (unsigned long long)t.va,
-           (unsigned long long)(t.va & 0x3fff), 1u << c.yLog2, c.level[0].rowBytes / 64,
-           t.import ? t.import->kind : 0u);
+           (unsigned long long)(t.va & 0x3fff), 1u << c.yLog2, c.level[0].rowBytes / 64, (unsigned long long)c.align,
+           t.callerPages ? "copied into a pool image" : "in place, kind 0xfe");
 }
 #endif
 
@@ -140,9 +148,10 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
     (void)memory;
 }
 
+// The caller's word that it wrote the memory, however it wrote it
 - (void)finalizeTextureMemory:(void *)memory
 {
-    (void)memory;
+    wroteThroughLayout(memory);
 }
 
 - (void)copyFromLinearBytes:(const void *)bytes
@@ -168,6 +177,7 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
     raw::fx::writeElements(_layout, static_cast<uint8_t *>(memory), uint32_t(slice), uint32_t(level), e[0], e[1], e[2],
                            e[3], static_cast<const uint8_t *>(bytes) + offset,
                            rowStride ? rowStride : size_t(e[2]) * _layout.bpp);
+    wroteThroughLayout(memory);
 }
 
 - (void)copyFromTextureMemory:(const void *)memory
@@ -204,10 +214,82 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
 }
 @end
 
+namespace {
+
+// The live no-copy textures by the memory they wrap, for the writes into it through the layout object
+class WrappedMemory {
+public:
+    void add(const void *memory, RMNoCopyTexture *t)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        textures_.emplace(memory, t);
+    }
+
+    // The entries over `memory` whose texture is gone, a deallocating one included
+    void prune(const void *memory)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        auto [from, to] = textures_.equal_range(memory);
+        while (from != to)
+            from = from->second ? std::next(from) : textures_.erase(from);
+    }
+
+    std::vector<RMNoCopyTexture *> over(const void *memory)
+    {
+        std::vector<RMNoCopyTexture *> found;
+        std::lock_guard<std::mutex> l(lock_);
+        auto [from, to] = textures_.equal_range(memory);
+        for (; from != to; ++from)
+            if (RMNoCopyTexture *t = from->second)
+                found.push_back(t);
+        return found;
+    }
+
+private:
+    std::mutex lock_;
+    std::unordered_multimap<const void *, __weak RMNoCopyTexture *> textures_;
+};
+
+WrappedMemory &wrapped()
+{
+    static WrappedMemory *memory = new WrappedMemory;
+    return *memory;
+}
+
+// The texture held until the copy completed: its image and the caller's pages stay until then
+bool copyCallerPages(RMNoCopyTexture *t)
+{
+    if (!t->_raw.callerPages)
+        return true;
+    auto owner = std::shared_ptr<void>((__bridge_retained void *)t, [](void *held) {
+        CFRelease(held);
+    });
+    return gRM->raw->copyCallerPages(t->_raw, std::move(owner));
+}
+
+// The CPU wrote the texture's memory through Metal: the lines go to memory, and a copied texture's image is copied again
+void wrote(RMNoCopyTexture *t, const char *by)
+{
+    cacheLines(static_cast<const uint8_t *>(t->_bytes), t->_layout.bytes, false);
+    if (!copyCallerPages(t))
+        SWITCH_REFUSE("raw", "texture.bytesnocopy.copy",
+                      "a no-copy texture's copy into its image after %s: refused (the GPU reads the blocks before it)",
+                      by);
+}
+
+}  // namespace
+
+static void wroteThroughLayout(const void *memory)
+{
+    for (RMNoCopyTexture *t : wrapped().over(memory))
+        wrote(t, "a layout write");
+}
+
 @implementation RMNoCopyTexture
 
 - (void)dealloc
 {
+    wrapped().prune(_bytes);
     if (_rawOk && gRM)
         gRM->raw->destroyTexture(_raw);
     _rawOk = false;
@@ -238,7 +320,7 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
 #endif
     raw::fx::writeElements(_layout, static_cast<uint8_t *>(_bytes), uint32_t(slice), uint32_t(level), e[0], e[1], e[2],
                            e[3], static_cast<const uint8_t *>(bytes), row);
-    cacheLines(static_cast<const uint8_t *>(_bytes), _layout.bytes, false);
+    wrote(self, "replaceRegion");
 }
 
 - (void)getBytes:(void *)bytes
@@ -252,6 +334,8 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
     uint32_t e[4];
     if (slice >= _layout.layers || !regionElements(_layout, _format, level, r, e))
         return;
+    if (_gpuDirty.exchange(false, std::memory_order_acq_rel))
+        cacheLines(static_cast<const uint8_t *>(_bytes), _layout.bytes, true);
     raw::fx::readElements(_layout, static_cast<const uint8_t *>(_bytes), uint32_t(slice), uint32_t(level), e[0], e[1],
                           e[2], e[3], static_cast<uint8_t *>(bytes), row);
 }
@@ -308,7 +392,16 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
     t->_rawOk = true;
     t->_bytes = bytes;
     t->_length = length;
+    if (!copyCallerPages(t)) {
+        SWITCH_REFUSE_DETAIL("raw", "texture.bytesnocopy.copy", uintptr_t(d.pixelFormat),
+                             "no-copy texture of format %lu %lux%lu over %lu bytes at 0x%llx: the copy engine's copy "
+                             "into its image refused",
+                             (unsigned long)d.pixelFormat, (unsigned long)d.width, (unsigned long)d.height,
+                             (unsigned long)length, (unsigned long long)uintptr_t(bytes));
+        return nil;
+    }
     t->_deallocator = [deallocator copy];
+    wrapped().add(bytes, t);
     return (id<MTLTexture>)t;
 }
 

@@ -56,10 +56,23 @@ extension AstcLayoutRun {
                 destinationOffset: 0, destinationBytesPerRow: Self.grid.rowBytes, destinationBytesPerImage: 0)
             blit.endEncoding()
         }
-        let bytes = [UInt8](UnsafeRawBufferPointer(start: out.contents(), count: Self.grid.bytes.count))
-        return Self.judge { x, y in
-            let at = (y * Self.grid.across + x) * AstcBlockGrid.blockBytes
-            return AstcBlockGrid.decode(bytes[at..<(at + AstcBlockGrid.blockBytes)]).flatMap(Self.grid.source(of:))
+        return Self.blocks([UInt8](UnsafeRawBufferPointer(start: out.contents(), count: Self.grid.bytes.count)))
+    }
+
+    /// The blocks `texture.getBytes` reads: a no-copy texture's caller's memory, through the layout.
+    func readBack(_ texture: MTLTexture) -> AstcLayoutReading {
+        var bytes = [UInt8](repeating: 0, count: Self.grid.bytes.count)
+        bytes.withUnsafeMutableBytes {
+            texture.getBytes($0.baseAddress!, bytesPerRow: Self.grid.rowBytes, from: Self.region, mipmapLevel: 0)
+        }
+        return Self.blocks(bytes)
+    }
+
+    /// Blocks in rows, as the grid wrote them.
+    static func blocks(_ bytes: [UInt8]) -> AstcLayoutReading {
+        judge { x, y in
+            let at = (y * grid.across + x) * AstcBlockGrid.blockBytes
+            return AstcBlockGrid.decode(bytes[at..<(at + AstcBlockGrid.blockBytes)]).flatMap(grid.source(of:))
         }
     }
 

@@ -68,4 +68,34 @@ inline void emitCopy(Push &p, const CopySurface &source, const CopySurface &dest
     kit(p, switch_gm20b_copy_rect, &c, type);
 }
 
+// A byte copy in lines of at most NVK's 128 KiB (nvk_cmd_copy_memory_ce), pitch both sides, no remap: one multi-line copy
+// of the whole lines, one of the rest. The first starts after every copy before it on the channel landed (a copy of the
+// same bytes there may hold older ones); the second's bytes are the first's neighbours, not its own.
+constexpr uint32_t kCopyLineBytes = 1u << 17;
+constexpr uint32_t kCopyBytesWords = 2 * SWITCH_GM20B_COPY_RECT_WORDS(1);
+
+inline void emitCopyBytes(Push &p, uint64_t source, uint64_t destination, uint64_t bytes)
+{
+    bool first = true;
+    auto lines = [&](uint64_t at, uint32_t length, uint32_t count) {
+        switch_gm20b_copy c = {};
+        c.src.bpp = 1;
+        c.src.row_stride = length;
+        c.src.extent_el = {length, count, 1, 1};
+        c.dst = c.src;
+        c.src.base_addr = source + at;
+        c.dst.base_addr = destination + at;
+        c.extent_el = {length, count, 1, 1};
+        kit(p, switch_gm20b_copy_rect, &c,
+            uint8_t(first ? NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED
+                          : NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED));
+        first = false;
+    };
+    const uint64_t whole = bytes / kCopyLineBytes, rest = bytes % kCopyLineBytes;
+    if (whole)
+        lines(0, kCopyLineBytes, uint32_t(whole));
+    if (rest)
+        lines(whole * kCopyLineBytes, uint32_t(rest), 1);
+}
+
 }  // namespace raw

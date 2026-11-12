@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_transfer.h"
+#include "../raw/runtime/raw_kit.h"
 #include "../raw/fx/fx_image.h"
 #include <IOKit/IOReturn.h>
 #include <gtest/gtest.h>
@@ -23,6 +24,7 @@ struct FakeGpu {
     std::unordered_map<uint64_t, std::unique_ptr<uint8_t[]>> memory;
     std::deque<Job> jobs;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    std::vector<uint32_t> launches;  // LAUNCH_DMA words, in the order they ran
     raw::JobVisibility visibility = raw::JobVisibility::Legacy;
 
     void execute(const Job &job)
@@ -32,6 +34,7 @@ struct FakeGpu {
             state.at(method / 4) = value;
             if (method != 0x0300)
                 return;
+            launches.push_back(value);
             const uint32_t remap = state[0x0708 / 4];
             const uint32_t unit = ((remap >> 16) & 3) + 1;
             const uint32_t bpp = (((remap >> 20) & 3) + 1) * unit;
@@ -462,6 +465,102 @@ TEST_F(RawTransfer, RefusedWaitPinsStorageUntilChannelDrain)
     EXPECT_TRUE(gpu.jobs.empty());
     EXPECT_TRUE(gpu.memory.empty());
     EXPECT_TRUE(held.expired());
+}
+
+TEST_F(RawTransfer, ByteCopyMovesExactlyItsBytesWithoutWaitingAndNamesBothRanges)
+{
+    const uint64_t line = raw::kCopyLineBytes;
+    for (uint64_t bytes : {uint64_t(1), uint64_t(16384), line, line + 16, 3 * line + 512, uint64_t(1400832)}) {
+        SCOPED_TRACE(bytes);
+        std::vector<uint8_t> source(bytes), target(bytes + 512, 0xcc);
+        for (size_t i = 0; i < source.size(); ++i)
+            source[i] = uint8_t(i * 131 + (i >> 9));
+        const uint64_t from = reinterpret_cast<uint64_t>(source.data()), to = reinterpret_cast<uint64_t>(target.data());
+        auto owner = std::make_shared<int>(3);
+        std::weak_ptr<int> held = owner;
+        const uint32_t waits = gpu.waits;
+        ASSERT_TRUE(transfers.copyBytes(kernel, set, allocationLock, from, to, bytes, std::move(owner)));
+        EXPECT_EQ(gpu.waits, waits);
+        EXPECT_EQ(gpu.visibility, raw::JobVisibility::Internal);
+        EXPECT_FALSE(held.expired());
+        EXPECT_LE(gpu.jobs.back().words, raw::kCopyBytesWords);
+        ASSERT_EQ(gpu.uses.size(), 3u);
+        EXPECT_EQ(gpu.uses[1].handle, from);
+        EXPECT_EQ(gpu.uses[1].access, uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRead |
+                                               TegraGM20BSurfaceRange | TegraGM20BSurfaceHostWritten));
+        EXPECT_EQ(gpu.uses[1].reserved, bytes);
+        EXPECT_EQ(gpu.uses[2].handle, to);
+        EXPECT_EQ(gpu.uses[2].access,
+                  uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceWrite | TegraGM20BSurfaceRange));
+        EXPECT_EQ(gpu.uses[2].reserved, bytes);
+        gpu.launches.clear();
+        gpu.complete(gpu.sequence);
+        ASSERT_EQ(gpu.launches.size(), size_t(bytes / line > 0) + size_t(bytes % line > 0));
+        EXPECT_EQ(gpu.launches[0] & 3, uint32_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
+        if (gpu.launches.size() > 1)
+            EXPECT_EQ(gpu.launches[1] & 3, uint32_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED));
+        EXPECT_TRUE(std::equal(source.begin(), source.end(), target.begin()));
+        EXPECT_TRUE(std::all_of(target.begin() + bytes, target.end(), [](uint8_t b) {
+            return b == 0xcc;
+        }));
+    }
+}
+
+TEST_F(RawTransfer, ByteCopyRefusesWhatItCannotNameAndHoldsNothing)
+{
+    std::array<uint8_t, 4> source{1, 2, 3, 4}, target{};
+    const uint64_t from = reinterpret_cast<uint64_t>(source.data()), to = reinterpret_cast<uint64_t>(target.data());
+    auto owner = std::make_shared<int>(5);
+    std::weak_ptr<int> held = owner;
+    EXPECT_FALSE(transfers.copyBytes(kernel, set, allocationLock, from, to, 0, owner));
+    EXPECT_FALSE(transfers.copyBytes(kernel, set, allocationLock, 0, to, 4, owner));
+    EXPECT_FALSE(transfers.copyBytes(kernel, set, allocationLock, from, to, uint64_t(UINT32_MAX) + 1, owner));
+    gpu.reject = true;
+    EXPECT_FALSE(transfers.copyBytes(kernel, set, allocationLock, from, to, 4, owner));
+    owner.reset();
+    EXPECT_TRUE(held.expired());
+    EXPECT_EQ(gpu.submissions, 0u);
+    EXPECT_EQ(target, (std::array<uint8_t, 4>{}));
+}
+
+// A pool image's chunk is a set member: the copy into it goes with the set, naming no use of it, and makes the member a
+// written one; the caller's pages, outside the set, stay a use of their own
+TEST_F(RawTransfer, AByteCopyIntoAMemberNamesTheSet)
+{
+    std::vector<uint8_t> source(4096, 0x5a), target(4096, 0);
+    raw::Bo chunk;
+    chunk.handle = 78;
+    chunk.va = chunk.vaBase = reinterpret_cast<uint64_t>(target.data());
+    chunk.bytes = target.size();
+    ASSERT_TRUE(set.add(kernel, chunk, TegraGM20BSurfaceRead));
+    ASSERT_TRUE(transfers.copyBytes(kernel, set, allocationLock, reinterpret_cast<uint64_t>(source.data()),
+                                    chunk.va + 512, 2048, {}));
+    EXPECT_EQ(gpu.set, 1u);
+    EXPECT_EQ(gpu.registrations, 2u) << "the written member was not made a written one";
+    ASSERT_EQ(gpu.uses.size(), 2u) << "the member was named as a use";
+    EXPECT_EQ(gpu.uses[1].handle, reinterpret_cast<uint64_t>(source.data()));
+    gpu.complete(gpu.sequence);
+    EXPECT_TRUE(std::all_of(target.begin() + 512, target.begin() + 2560, [](uint8_t b) {
+        return b == 0x5a;
+    }));
+    EXPECT_EQ(target[511], 0);
+    EXPECT_EQ(target[2560], 0);
+}
+
+TEST_F(RawTransfer, ByteCopiesAndUploadsShareTheSlotsInOrder)
+{
+    std::array<uint8_t, 4> source{9, 8, 7, 6}, copied{}, uploaded{}, bytes{1, 2, 3, 4};
+    const raw::TextureTransfer region{{reinterpret_cast<uint64_t>(uploaded.data()), 4}, 1, 1, 1, 4};
+    for (uint32_t i = 0; i < 6; ++i) {
+        ASSERT_TRUE(transfers.copyBytes(kernel, set, allocationLock, reinterpret_cast<uint64_t>(source.data()),
+                                        reinterpret_cast<uint64_t>(copied.data()), 4, {}));
+        ASSERT_TRUE(copy(region, bytes.data(), 4, true));
+    }
+    EXPECT_EQ(gpu.allocations, 4u);
+    EXPECT_EQ(gpu.submissions, 12u);
+    gpu.complete(gpu.sequence);
+    EXPECT_EQ(copied, source);
+    EXPECT_EQ(uploaded, bytes);
 }
 
 TEST_F(RawTransfer, FailedUploadSlotDrainsChannelBeforeReuse)
