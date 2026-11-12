@@ -12,7 +12,7 @@
 #define SWITCH_GPU_PREEMPT_BUCKETS 6 /* under 250 us, then doubling up to 4 ms and over */
 
 /* An app channel's last batch release: its end stamp (PTIMER), and whether it ended the job */
-struct switch_gpu_release {
+struct switch_gpu_batch_release {
 	uint64_t end_pt;
 	uint8_t job_last;
 };
@@ -29,7 +29,7 @@ struct switch_gpu_preempt_counts {
 	uint32_t bucket[SWITCH_GPU_PREEMPT_BUCKETS];
 };
 
-static inline enum switch_gpu_landing switch_gpu_preempt_landing(const struct switch_gpu_release *last,
+static inline enum switch_gpu_landing switch_gpu_preempt_landing(const struct switch_gpu_batch_release *last,
 								 uint64_t asked_pt, uint64_t start_pt)
 {
 	if (!last->end_pt || last->end_pt < asked_pt || last->end_pt > start_pt)

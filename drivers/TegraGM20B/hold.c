@@ -53,7 +53,7 @@ static struct {
 	int pid[HOLD_CHIDS];
 	u32 n[HOLD_CHIDS];
 	u64 max_ns[HOLD_CHIDS];
-	struct switch_gpu_release last[HOLD_CHIDS]; /* each app channel's last batch release (hold.lock) */
+	struct switch_gpu_batch_release last[HOLD_CHIDS]; /* each app channel's last batch release (hold.lock) */
 	struct switch_gpu_preempt_counts counts[HOLD_CHIDS];
 } sampled;
 #endif

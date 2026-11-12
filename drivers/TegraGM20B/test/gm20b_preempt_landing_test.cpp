@@ -7,24 +7,24 @@
 
 TEST(GM20BPreemptLanding, AReleaseInsideTheJobBetweenTheAskAndTheStartIsABandsRelease)
 {
-	const switch_gpu_release band = {1000, 0};
+	const switch_gpu_batch_release band = {1000, 0};
 	EXPECT_EQ(switch_gpu_preempt_landing(&band, 900, 1100), SWITCH_GPU_LANDED_MID_JOB);
 	EXPECT_EQ(switch_gpu_preempt_landing(&band, 1000, 1000), SWITCH_GPU_LANDED_MID_JOB);
 }
 
 TEST(GM20BPreemptLanding, TheJobsLastReleaseIsItsEnd)
 {
-	const switch_gpu_release last = {1000, 1};
+	const switch_gpu_batch_release last = {1000, 1};
 	EXPECT_EQ(switch_gpu_preempt_landing(&last, 900, 1100), SWITCH_GPU_LANDED_JOB_END);
 }
 
 TEST(GM20BPreemptLanding, NoReleaseBetweenTheAskAndTheStartIsUnknown)
 {
-	const switch_gpu_release before = {800, 0};
+	const switch_gpu_batch_release before = {800, 0};
 	EXPECT_EQ(switch_gpu_preempt_landing(&before, 900, 1100), SWITCH_GPU_LANDED_UNKNOWN);
-	const switch_gpu_release after = {1200, 0};
+	const switch_gpu_batch_release after = {1200, 0};
 	EXPECT_EQ(switch_gpu_preempt_landing(&after, 900, 1100), SWITCH_GPU_LANDED_UNKNOWN);
-	const switch_gpu_release none = {0, 0};
+	const switch_gpu_batch_release none = {0, 0};
 	EXPECT_EQ(switch_gpu_preempt_landing(&none, 0, 1100), SWITCH_GPU_LANDED_UNKNOWN);
 }
 
