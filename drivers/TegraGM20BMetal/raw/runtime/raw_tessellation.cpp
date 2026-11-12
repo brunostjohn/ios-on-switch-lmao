@@ -198,6 +198,7 @@ bool RenderEncoder::icbPatchLayout(const char **why)
     for (uint32_t i = 0; i < r.entries; i++)
         if (r.entry[i].kind == EntryTessBuffer && r.entry[i].slot < TessBufferCount)
             entries[r.entry[i].slot] = r.entry[i].offset;
+    cb_->useAddress(dev_->zero_.va, uint32_t(dev_->zero_.bytes), false);
     if (p_.room() < 16)
         reserve();
     mme::icbPatchLayout(p_, preparedSet_, dev_->root_.va, entries, 0x700 + 4 * (r.controlWord - 1u));

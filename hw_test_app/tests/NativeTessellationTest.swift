@@ -11,7 +11,7 @@ import Metal
 /// so the other half is drawn. Where the device answers supportsIndirectTessellation, an indirect draw of the same patch
 /// from GPU-written arguments draws patch 0's half again, and so do the two forms as an indirect command buffer's patch
 /// commands, each with its own factor buffer and patch index buffer, each executed alone by its range under the inherited
-/// state. Every command buffer stays raw.
+/// state, then both in one execute, which paints the whole target. Every command buffer stays raw.
 struct NativeTessellationTest: NativeObjectTest {
     let id = "metal.native.tessellation"
     let name = "Quad patches tessellated in hardware from GPU-written factors, exact to Metal's integer partitioning"
@@ -55,10 +55,10 @@ struct NativeTessellationTest: NativeObjectTest {
         SIMD4(0, -1, 0, 1), SIMD4(1, -1, 0, 1), SIMD4(1, 1, 0, 1), SIMD4(0, 1, 0, 1),
     ]
 
-    /// Pixels that are not green in the drawn half (`left`) and black in the other
-    static func wrong(_ pixels: [UInt8], left: Bool) -> Int {
+    /// Pixels that are not green in the drawn half (`left`, or both where `both`) and black in the other
+    static func wrong(_ pixels: [UInt8], left: Bool, both: Bool = false) -> Int {
         (0..<size * size).filter { i in
-            let drawn = (i % size < size / 2) == left
+            let drawn = both || (i % size < size / 2) == left
             let want: [UInt8] = drawn ? [0, 255, 0, 255] : [0, 0, 0, 255]
             return Array(pixels.pixel(i % size, i / size, width: size)) != want
         }.count
@@ -112,7 +112,7 @@ struct NativeTessellationTest: NativeObjectTest {
 
         let patchCommands = indirect ? try Self.commands(device, factors, patchOrder) : nil
         if let patchCommands { work.objects.append(patchCommands) }
-        for form in ["direct", "indexed"] + (indirect ? ["indirect", "icb", "icb_indexed"] : []) {
+        for form in ["direct", "indexed"] + (indirect ? ["indirect", "icb", "icb_indexed", "icb_both"] : []) {
             let target = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
             let seen = try gpu.buffer([UInt32](repeating: 0, count: Self.grid * Self.grid))
             let timing = try await gpu.run { commands in
@@ -149,10 +149,11 @@ struct NativeTessellationTest: NativeObjectTest {
                     encoder.drawPatches(
                         numberOfPatchControlPoints: 4, patchStart: 0, patchCount: 1, patchIndexBuffer: patchOrder,
                         patchIndexBufferOffset: 0, instanceCount: 1, baseInstance: 0)
-                case "icb", "icb_indexed":
+                case "icb", "icb_indexed", "icb_both":
                     encoder.useResource(factors, usage: .read, stages: .vertex)
                     encoder.useResource(patchOrder, usage: .read, stages: .vertex)
-                    encoder.executeCommandsInBuffer(patchCommands!, range: form == "icb" ? 0..<1 : 1..<2)
+                    let range = form == "icb" ? 0..<1 : form == "icb_indexed" ? 1..<2 : 0..<2
+                    encoder.executeCommandsInBuffer(patchCommands!, range: range)
                 default:
                     encoder.drawPatches(
                         numberOfPatchControlPoints: 4, patchIndexBuffer: nil, patchIndexBufferOffset: 0,
@@ -161,7 +162,9 @@ struct NativeTessellationTest: NativeObjectTest {
                 encoder.endEncoding()
             }
             work.paths.append(timing.path)
-            let wrongPixels = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), left: !form.hasSuffix("indexed"))
+            let wrongPixels = Self.wrong(
+                try await gpu.read(target, bytesPerPixel: 4), left: !form.hasSuffix("indexed"), both: form == "icb_both"
+            )
             let wrongPoints = Self.wrongPoints(seen)
             metrics.set("\(form)_wrong_pixels", wrongPixels)
             metrics.set("\(form)_wrong_points", wrongPoints)

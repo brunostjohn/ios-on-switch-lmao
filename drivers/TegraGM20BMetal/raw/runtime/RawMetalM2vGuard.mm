@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
 // setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero, so
-// m2v draws without them), a state the raw path made of tessellation, amplification, a dynamic attribute stride or a
-// stage-in kernel has no twin that draws it as Metal does, and the replay of indirect draw commands reads no range the GPU
-// wrote (replayCommands). A range of a command buffer the raw path refused that holds any of these never replays there:
-// the command buffer fails as Metal reports an error, naming the refusal.
+// m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
+// amplification or a dynamic attribute stride has no twin that draws it as Metal does; the replay of indirect draw
+// commands reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused that holds any
+// of these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
 
 namespace {
@@ -51,27 +51,12 @@ const char *kernelStateMissing(RMCommandBuffer *cb, uint32_t index)
     return nullptr;
 }
 
+// m2v's frontend makes no indirect command buffer (its device answers newIndirectCommandBufferWithDescriptor: nil), so
+// replayKernelCommands runs none of the commands
 const char *executeMissing(RMCommandBuffer *cb, size_t at)
 {
-    const RMPlanControl &control = cb->_plan.control(at);
-    if (control.compute != raw::kNoSnapshot)
-        if (const char *missing = kernelStateMissing(cb, control.compute))
-            return missing;
-    RMKernelExecute *x = (__bridge RMKernelExecute *)cb->_plan.legacy(at).obj;
-    if (const char *missing = kernelMissing(x->_pipeline))
-        return missing;
-    RMIndirectComputeBuffer *b = x->_buffer;
-    std::lock_guard<std::mutex> hold(b->_lock);
-    for (const RMICBDispatch &c : b->_dispatches) {
-        if (c.stageIn)
-            return "an indirect dispatch command of a stage-in region";
-        if (const char *missing = kernelMissing(c.pipeline))
-            return missing;
-        for (const uint32_t stride : c.strides)
-            if (stride != raw::kNoBindStride)
-                return "an indirect dispatch command's buffer bound with an attribute stride";
-    }
-    return nullptr;
+    (void)cb, (void)at;
+    return "an execute of indirect dispatch commands, of which m2v makes no buffer";
 }
 
 // What of [from, to) m2v has no form of (null: nothing)
@@ -110,12 +95,16 @@ const char *rmM2vMissingState(MTLRenderPipelineDescriptor *d)
     return nullptr;
 }
 
+// m2v's compute encoder takes a stage-in region (NativeBridgeMetalFrontend.mm setStageInRegion:), not a bind's stride
 const char *rmM2vMissingKernel(MTLComputePipelineDescriptor *d)
 {
     MTLStageInputOutputDescriptor *in = d.stageInputDescriptor;
-    for (NSUInteger i = 0; in && i < 31; i++)
-        if (in.attributes[i].format != MTLAttributeFormatInvalid)
-            return "a stage-in kernel";
+    for (NSUInteger i = 0; in && i < 31; i++) {
+        MTLAttributeDescriptor *a = in.attributes[i];
+        if (a.format != MTLAttributeFormatInvalid && a.bufferIndex < 31 &&
+            in.layouts[a.bufferIndex].stride == MTLBufferLayoutStrideDynamic)
+            return "a stage-in kernel of a dynamic attribute stride";
+    }
     return nullptr;
 }
 
