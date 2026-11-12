@@ -1603,10 +1603,10 @@ public:
         return k_.debugCall(method, in, inSize, out, outSize);
     }
 #endif
-    // Where the command buffer of `stamp` marks a loop that would run past its copies (one the submission continues,
-    // or `inner`, one it cannot), and once it completed what its loops left there
-    uint64_t loopOverflowVa(uint32_t stamp, bool inner) const;
-    LoopOutcome loopOutcome(uint32_t stamp) const;
+    // Where the command buffer of `stamp` records a loop that would run past its copies, and once it completed which
+    // loop did (the stamp page is volatile to the GPU: the record needs no L2 flush)
+    uint64_t loopRecordVa(uint32_t stamp) const;
+    LoopContinue loopContinue(uint32_t stamp) const;
 
     bool lost(uint32_t seqno) const
     {

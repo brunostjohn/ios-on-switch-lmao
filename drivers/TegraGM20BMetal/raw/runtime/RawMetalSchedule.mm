@@ -283,7 +283,7 @@ void submitLoop()
                 RMSegment &range = cb->_segs[cb->_segNext];
                 cb->_plan.prepareRange(range.from, range.to);
                 bool loopRetiring = false;
-                if (range.loopTo) {
+                if (range.held) {
                     std::lock_guard<std::mutex> lock(cb->_lock);
                     loopRetiring = cb->_segmentPending != 0;
                 }

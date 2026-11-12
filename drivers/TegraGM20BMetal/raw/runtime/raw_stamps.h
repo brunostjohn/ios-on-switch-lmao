@@ -70,9 +70,8 @@ inline void emitEndStamp(Push &p, uint64_t slots, uint32_t stamp)
 // wait for idle would. The tiled cache is flushed ahead of each, or a binned draw's pixels could land after its stamp.
 constexpr uint32_t kDrawStampSlots = 256;
 constexpr uint64_t kDrawStampBase = kStampSlots * sizeof(StampSlot);
-// After the measured draws' stamps, two words per command buffer slot, each the stamp of the command buffer one of
-// whose predicated loops would run past its copies (raw_predication.h endLoop): a loop the submission continues
-// (`inner` false) and one it cannot
+// After the measured draws' stamps, a record per command buffer slot: the stamp of the command buffer one of whose
+// predicated loops would run past its copies, and that loop's tag (raw_predication.h endLoop)
 constexpr uint64_t kLoopWordsBase = kDrawStampBase + kDrawStampSlots * sizeof(StampSlot);
 constexpr uint64_t kStampBytes = kLoopWordsBase + kStampSlots * 8;
 constexpr uint32_t kDrawStampWords = 5;
@@ -89,9 +88,9 @@ inline uint64_t drawStampOffset(uint32_t slot, bool end)
            (end ? offsetof(StampSlot, end) : offsetof(StampSlot, start));
 }
 
-inline uint64_t loopOverflowOffset(uint32_t stamp, bool inner)
+inline uint64_t loopRecordOffset(uint32_t stamp)
 {
-    return kLoopWordsBase + uint64_t((stamp - 1) % kStampSlots) * 8 + (inner ? 4 : 0);
+    return kLoopWordsBase + uint64_t((stamp - 1) % kStampSlots) * 8;
 }
 
 inline void emitDrawStamp(Push &p, uint64_t stampsVa, uint32_t slot, bool end, uint32_t payload)

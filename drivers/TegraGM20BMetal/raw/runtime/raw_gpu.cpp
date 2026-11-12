@@ -4085,19 +4085,17 @@ bool CommandBuffer::commit(uint32_t &seqno)
     return true;
 }
 
-uint64_t Device::loopOverflowVa(uint32_t stamp, bool inner) const
+uint64_t Device::loopRecordVa(uint32_t stamp) const
 {
-    return stamps_.va + loopOverflowOffset(stamp, inner);
+    return stamps_.va + loopRecordOffset(stamp);
 }
 
-LoopOutcome Device::loopOutcome(uint32_t stamp) const
+LoopContinue Device::loopContinue(uint32_t stamp) const
 {
     if (!stamp || !stamps_.cpu)
-        return LoopOutcome::Done;
-    const auto word = [&](bool inner) {
-        return *reinterpret_cast<const volatile uint32_t *>(stamps_.cpu + loopOverflowOffset(stamp, inner));
-    };
-    return raw::loopOutcome(stamp, word(false), word(true));
+        return {};
+    const auto *record = reinterpret_cast<const volatile uint32_t *>(stamps_.cpu + loopRecordOffset(stamp));
+    return raw::loopContinue(stamp, record[0], record[1]);
 }
 
 bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const

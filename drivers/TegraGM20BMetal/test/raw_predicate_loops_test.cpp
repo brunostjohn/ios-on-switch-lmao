@@ -2,6 +2,7 @@
 // raw's predicated loops (raw_loop_copies.h) laid down as the compute encoder lays them and run GP entry by GP entry on
 // predication_model.h, with launches that change the words the loops test. Every program runs twice: once with a
 // fetcher that sees the heads the copies write, once with one that does not, and both must launch what Metal does.
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -11,158 +12,13 @@
 #include <gtest/gtest.h>
 
 #include "bazel/testing/source_text.h"
-#include "drivers/TegraGM20BMetal/raw/runtime/raw_kit.h"
-#include "drivers/TegraGM20BMetal/raw/runtime/raw_loop_copies.h"
-#include "drivers/TegraGM20BMetal/raw/runtime/raw_loop_ranges.h"
-#include "drivers/TegraGM20BMetal/raw/runtime/raw_predication.h"
-#include "drivers/TegraGM20BMetal/test/predication_model.h"
-#include "kits/SwitchGM20BEmit/SwitchGM20BEmitPredicate.h"
+#include "drivers/TegraGM20BMetal/test/loop_program.h"
 
 namespace {
 
-using predication_model::Gpu;
-using predication_model::kBase;
-using raw::PredicateCompare;
+using namespace loop_program;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
-using Answer = raw::Predication::Answer;
-
-constexpr uint64_t kWords = kBase, kQmds = kBase + 0x2000, kOverflow = kBase + 0x3000, kFailed = kBase + 0x3004,
-                   kSlots = kBase + 0x4000;
-constexpr uint64_t kPush = kBase + 0x10000;
-constexpr uint32_t kStamp = 77, kQmdWords = 64, kHardwareWord = 48;
-
-uint64_t word(uint32_t i)
-{
-    return kWords + 4 * i;
-}
-
-// The compute encoder's words for one command buffer, over the model's memory: launches named 1, 2, ... in encode order
-struct LoopProgram {
-    Gpu gpu{1 << 20};
-    raw::Predication predication;
-    raw::LoopCopies loops;
-    raw::PushBatches entries;
-    raw::BatchWork batches;
-    uint32_t *chunk = reinterpret_cast<uint32_t *>(gpu.at(kPush));
-    raw::Push p{chunk, chunk + 4096};
-    uint32_t *start = p.at;
-    uint64_t nextSlot = kSlots;
-    uint32_t launches = 0;
-    bool qmdsIntact = true;
-
-    raw::LoopStream stream()
-    {
-        return {p, start, entries, gpu.memory.data(), kBase};
-    }
-
-    raw::PredicateSlot slot()
-    {
-        const raw::PredicateSlot s{gpu.at(nextSlot), nextSlot};
-        nextSlot += raw::Predication::kSlotBytes;
-        return s;
-    }
-
-    // A launch of a QMD the hardware writes a word of, which each copy of a loop puts back
-    uint32_t dispatch(uint64_t work = 1)
-    {
-        const uint32_t id = ++launches;
-        const uint64_t qmd = kQmds + 0x100 * id;
-        uint32_t words[kQmdWords] = {id};
-        memcpy(gpu.at(qmd), words, sizeof words);
-        if (loops.open())
-            raw::kit(p, switch_gm20b_compute_inline_words, qmd, words, kQmdWords);
-        predication.guard(p);
-        p.m(NVB1C0_SEND_PCAS_A, id, predication_model::kCompute);
-        p.m(NVB1C0_SEND_SIGNALING_PCAS_B, 0, predication_model::kCompute);
-        predication.release(p);
-        loops.addWork(work);
-        return id;
-    }
-
-    // The encoder's room() running out: the open segment closes and the next one starts in another chunk
-    void nextChunk()
-    {
-        loops.closeSegment(stream());
-        chunk += 8192;
-        p = raw::Push{chunk, chunk + 4096};
-        loops.openSegment(stream());
-    }
-
-    void startIf(uint32_t w, PredicateCompare c, uint32_t reference)
-    {
-        ASSERT_EQ(predication.startIf(p, slot(), word(w), raw::predicateTest(c, reference)), Answer::Done);
-    }
-
-    void startElse()
-    {
-        ASSERT_EQ(predication.startElse(p, slot()), Answer::Done);
-    }
-
-    void endIf()
-    {
-        ASSERT_EQ(predication.endIf(), Answer::Done);
-    }
-
-    Answer startWhile(uint32_t w, PredicateCompare c, uint32_t reference)
-    {
-        const raw::PredicateTest test = raw::predicateTest(c, reference);
-        return loops.start(stream(), predication, slot(), false, word(w), &test);
-    }
-
-    Answer startDoWhile()
-    {
-        return loops.start(stream(), predication, slot(), true, 0, nullptr);
-    }
-
-    Answer endWhile()
-    {
-        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kFailed, kStamp, 0,
-                         nullptr);
-    }
-
-    Answer endDoWhile(uint32_t w, PredicateCompare c, uint32_t reference)
-    {
-        const raw::PredicateTest test = raw::predicateTest(c, reference);
-        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kFailed, kStamp, word(w),
-                         &test);
-    }
-
-    // The command buffer's GP entries run; each launch's program does `effect`
-    std::vector<uint32_t> run(bool seesHeads, const std::function<void(uint32_t, Gpu &)> &effect = {})
-    {
-        loops.closeSegment(stream());
-        gpu.seesHeads = seesHeads;
-        gpu.onLaunch = [&](uint32_t id) {
-            const uint64_t qmd = kQmds + 0x100 * id;
-            qmdsIntact &= gpu.word(qmd) == id && gpu.word(qmd + 4 * kHardwareWord) == 0;
-            gpu.put(qmd + 4 * kHardwareWord, 0xdead);
-            if (effect)
-                effect(id, gpu);
-        };
-        gpu.runEntries(entries);
-        return gpu.launched;
-    }
-
-    // The loop would run past its copies and the submission lays it down again
-    bool overflowed()
-    {
-        return gpu.word(kOverflow) == kStamp;
-    }
-
-    // One inside another loop or a block would, and the command buffer fails
-    bool failed()
-    {
-        return gpu.word(kFailed) == kStamp;
-    }
-};
-
-std::vector<uint32_t> repeat(std::vector<uint32_t> head, uint32_t id, uint32_t times, std::vector<uint32_t> tail)
-{
-    head.insert(head.end(), times, id);
-    head.insert(head.end(), tail.begin(), tail.end());
-    return head;
-}
 
 // while (word 0 != 0) { launch 2: word 0 -= 1 } between launches 1 and 3
 struct CountDown {
@@ -194,7 +50,10 @@ TEST(RawPredicateLoops, CopiesAreTheBoundForTheNestAndItsGpEntryBudget)
     EXPECT_EQ(raw::LoopCopies::copies(1, 5), 819u);
     EXPECT_EQ(raw::LoopCopies::copies(2, 1), 128u);
     EXPECT_EQ(raw::LoopCopies::copies(2, 200), 20u);
-    EXPECT_EQ(raw::LoopCopies::copies(3, 1), 0u);
+    EXPECT_EQ(raw::LoopCopies::copies(3, 1), 16u);
+    EXPECT_EQ(raw::LoopCopies::copies(4, 1), 2u);
+    EXPECT_EQ(raw::LoopCopies::copies(raw::LoopCopies::kMaxDepth, 1), 1u);
+    EXPECT_EQ(raw::LoopCopies::copies(raw::LoopCopies::kMaxDepth + 1, 1), 0u);
     EXPECT_EQ(raw::LoopCopies::copies(1, 5000), 0u);
 }
 
@@ -212,87 +71,55 @@ TEST(RawPredicateLoops, AWhileRunsItsBodyUntilItsWordFailsUpToItsCopies)
     }
 }
 
-TEST(RawPredicateLoops, PastItsCopiesTheOverflowWordNamesTheCommandBuffer)
+TEST(RawPredicateLoops, PastItsCopiesTheRecordNamesTheCommandBufferAndTheLoop)
 {
     const uint32_t copies = raw::LoopCopies::kOutermostCopies;
     for (bool sees : {true, false}) {
         CountDown loop(copies + 3);
         EXPECT_EQ(loop.run(sees), repeat({1}, 2, copies, {3}));
         EXPECT_TRUE(loop.prog.overflowed());
-        EXPECT_FALSE(loop.prog.failed());
+        EXPECT_EQ(loop.prog.record().tag, 0u);
     }
 }
 
-struct Segment {
-    uint32_t from, to;
-    bool raw;
-    uint32_t loopFrom, loopTo;
-};
-
-// The submission's continuation (RMSegment::loopTo, raw_loop_ranges.h): the range after an outermost loop waits for the
-// loop's laying to retire, its stamp's words decide (loopOutcome), and where the loop would run past its copies the
-// loop alone is laid down again over the same memory (layLoopAgain), so a count of 2,500 runs as 1024 + 1024 + 452
-// iterations over three layings before the range after it
-TEST(RawPredicateLoops, ALoopPastItsCopiesFinishesOverMoreLayingsOfItself)
-{
-    const uint32_t copies = raw::LoopCopies::kOutermostCopies;
-    for (bool sees : {true, false}) {
-        std::vector<Segment> segs{{0, 4, true, 0, 0}, {4, 9, true, 1, 4}};
-        size_t next = 1;
-        uint32_t counter = 2500, ran = 0, layings = 1;
-        CountDown first(counter);
-        ran += uint32_t(first.run(sees).size()) - 2;
-        counter = first.prog.gpu.word(word(0));
-        raw::LoopOutcome outcome =
-            raw::loopOutcome(kStamp, first.prog.gpu.word(kOverflow), first.prog.gpu.word(kFailed));
-        while (raw::layLoopAgain(segs, next, outcome == raw::LoopOutcome::Continue)) {
-            EXPECT_EQ(segs[next].from, 1u);
-            EXPECT_EQ(segs[next].to, 4u);
-            EXPECT_EQ(segs[next].loopTo, 0u);
-            CountDown laying(counter);
-            ran += uint32_t(laying.run(sees).size()) - 2;
-            counter = laying.prog.gpu.word(word(0));
-            outcome = raw::loopOutcome(kStamp, laying.prog.gpu.word(kOverflow), laying.prog.gpu.word(kFailed));
-            ++next;
-            ++layings;
-            ASSERT_LE(layings, 3u);
-        }
-        EXPECT_EQ(outcome, raw::LoopOutcome::Done);
-        EXPECT_EQ(ran, 2500u);
-        EXPECT_EQ(counter, 0u);
-        EXPECT_EQ(layings, (2500 + copies - 1) / copies);
-        EXPECT_EQ(segs.size(), 2u + layings - 1);
-        EXPECT_EQ(segs[next].from, 4u);
-    }
-}
-
-TEST(RawPredicateLoops, ALoopInsideAnotherOrABlockPastItsCopiesFailsTheCommandBuffer)
+// Past its copies an inner loop records itself and stops what follows it in its blocks: the rest of the outer loop's
+// copy and its later copies, or the rest of the If and its Else; the submission lays them again (raw_loop_ranges.h)
+TEST(RawPredicateLoops, ALoopInsideAnotherOrABlockPastItsCopiesStopsWhatFollowsInThem)
 {
     for (bool inLoop : {true, false}) {
-        LoopProgram prog;
-        prog.gpu.put(word(0), 1);
-        prog.gpu.put(word(2), 0);
-        if (inLoop)
-            ASSERT_EQ(prog.startWhile(0, PredicateCompare::NotEqual, 0), Answer::Done);
-        else
-            prog.startIf(2, PredicateCompare::Equal, 0);
-        const uint32_t outer = prog.dispatch();
-        ASSERT_EQ(prog.startWhile(1, PredicateCompare::NotEqual, 0), Answer::Done);
-        prog.dispatch();
-        ASSERT_EQ(prog.endWhile(), Answer::Done);
-        if (inLoop)
-            ASSERT_EQ(prog.endWhile(), Answer::Done);
-        else
-            prog.endIf();
-        prog.run(true, [&](uint32_t id, Gpu &gpu) {
-            if (id == outer) {
-                gpu.put(word(0), 0);
-                gpu.put(word(1), 1000);
+        for (bool sees : {true, false}) {
+            LoopProgram prog;
+            prog.gpu.put(word(0), 2);
+            prog.gpu.put(word(2), 0);
+            if (inLoop)
+                ASSERT_EQ(prog.startWhile(0, PredicateCompare::NotEqual, 0), Answer::Done);
+            else
+                prog.startIf(2, PredicateCompare::Equal, 0);
+            const uint32_t outer = prog.dispatch();
+            ASSERT_EQ(prog.startWhile(1, PredicateCompare::NotEqual, 0), Answer::Done);
+            const uint32_t inner = prog.dispatch();
+            ASSERT_EQ(prog.endWhile(7), Answer::Done);
+            const uint32_t after = prog.dispatch();
+            if (inLoop) {
+                ASSERT_EQ(prog.endWhile(9), Answer::Done);
+            } else {
+                prog.startElse();
+                prog.dispatch();
+                prog.endIf();
             }
-        });
-        EXPECT_TRUE(prog.failed()) << (inLoop ? "inside a loop" : "inside an If");
-        EXPECT_FALSE(prog.overflowed());
-        EXPECT_EQ(raw::loopOutcome(kStamp, prog.gpu.word(kOverflow), prog.gpu.word(kFailed)), raw::LoopOutcome::Fail);
+            const auto launched = prog.run(sees, [&](uint32_t id, Gpu &gpu) {
+                if (id == outer) {
+                    gpu.put(word(0), gpu.word(word(0)) - 1);
+                    gpu.put(word(1), 1000);
+                }
+            });
+            const uint32_t copies = inLoop ? raw::LoopCopies::kNestedCopies : raw::LoopCopies::kOutermostCopies;
+            EXPECT_EQ(launched, repeat({outer}, inner, copies, {}))
+                << (inLoop ? "inside a loop" : "inside an If") << " sees " << sees;
+            EXPECT_EQ(std::count(launched.begin(), launched.end(), after), 0);
+            EXPECT_TRUE(prog.overflowed());
+            EXPECT_EQ(prog.record().tag, 7u);
+        }
     }
 }
 
@@ -461,9 +288,9 @@ TEST(RawPredicateLoops, BatchesEndBetweenCopiesNeverInsideOne)
 TEST(RawPredicateLoops, WhatTheLayoutCannotRunIsMisused)
 {
     LoopProgram depth;
-    ASSERT_EQ(depth.startWhile(0, PredicateCompare::Equal, 1), Answer::Done);
-    ASSERT_EQ(depth.startWhile(1, PredicateCompare::Equal, 1), Answer::Done);
-    EXPECT_EQ(depth.startWhile(2, PredicateCompare::Equal, 1), Answer::Misused);
+    for (size_t d = 0; d < raw::LoopCopies::kMaxDepth; ++d)
+        ASSERT_EQ(depth.startWhile(uint32_t(d), PredicateCompare::Equal, 1), Answer::Done) << d;
+    EXPECT_EQ(depth.startWhile(7, PredicateCompare::Equal, 1), Answer::Misused);
 
     LoopProgram foreign;
     ASSERT_EQ(foreign.startWhile(0, PredicateCompare::Equal, 1), Answer::Done);
@@ -482,18 +309,24 @@ TEST(RawPredicateLoops, WhatTheLayoutCannotRunIsMisused)
 }
 
 // The emitters write into room their callers reserve (and the arm into words reserved before the copies were laid), so
-// each worst case must fit: an ordered compare (two copies and a reduction) inside an enclosing block, eight heads
+// each worst case must fit: an ordered compare (two copies and a reduction) inside enclosing blocks, the most heads
 TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
 {
     static_assert(raw::LoopCopies::kStartRoom >= raw::Predication::kStartWords + 1);
-    static_assert(raw::LoopCopies::kEndRoom >= raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments) +
-                                                  raw::Predication::kOverflowWords);
+    static_assert(raw::LoopCopies::endRoom(2) >= raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments) +
+                                                     raw::Predication::kOverflowWords(1));
     uint64_t heads[raw::LoopCopies::kMaxSegments];
     for (size_t i = 0; i < raw::LoopCopies::kMaxSegments; ++i)
         heads[i] = kPush + 0x100 * i;
     const raw::PredicateTest ordered = raw::predicateTest(PredicateCompare::Greater, 7);
     for (bool doWhile : {false, true}) {
+        LoopProgram outermost;
+        outermost.halting();
+        uint32_t *at = outermost.p.at;
+        ASSERT_EQ(outermost.predication.startWhile(outermost.p, outermost.slot(), word(0), ordered), Answer::Done);
+        EXPECT_LE(uint32_t(outermost.p.at - at), raw::Predication::kStartWords) << "an outermost While, halt gated";
         LoopProgram prog;
+        prog.halting();
         prog.startIf(5, PredicateCompare::Equal, 0);
         const raw::PredicateSlot loop = prog.slot();
         uint32_t *before = prog.p.at;
@@ -514,8 +347,9 @@ TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
                   Answer::Done);
         EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments));
         before = prog.p.at;
-        prog.predication.endLoop(prog.p, kOverflow, kStamp);
-        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kOverflowWords);
+        const size_t enclosing = prog.predication.depth() - 1;
+        prog.predication.endLoop(prog.p, kRecord, kStamp, 3);
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kOverflowWords(enclosing));
         before = prog.p.at;
         raw::Predication::armCopies(prog.p, heads, raw::LoopCopies::kMaxSegments, raw::Predication::goingOf(loop));
         EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kArmWords(raw::LoopCopies::kMaxSegments));
@@ -530,7 +364,7 @@ TEST(RawPredicateLoops, EachRawRangeThatLaidLoopsCarriesItsOwnStampToTheCompleti
     EXPECT_THAT(encode, HasSubstr("cb->_rangeLoopStamp = rc->loopsLaid ? rc->stamp : 0;"));
     const std::string finish = SourceText("../raw/runtime/RawMetalFinish.mm");
     EXPECT_THAT(finish, HasSubstr("std::exchange(cb->_rangeLoopStamp, 0u)"));
-    EXPECT_THAT(finish, HasSubstr("r.raw->loopOutcome(retired.loopStamp)"));
+    EXPECT_THAT(finish, HasSubstr("r.raw->loopContinue(retired.loopStamp)"));
 }
 
 }  // namespace

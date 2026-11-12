@@ -16,6 +16,7 @@ using raw::PredicateCompare;
 // QMDV01_07 (clb1c0qmd.h): PROGRAM_OFFSET is bits 256-287; the HW_ONLY_* fields (:429-438, bits 1536-1663) are words the
 // scheduler writes as it runs a launch
 constexpr uint32_t kProgramWord = 8, kHwOnlyFirst = 48, kHwOnlyLast = 51;
+constexpr uint32_t kTag = 41, kInnerTag = 42;
 
 class DeviceLoops : public harness::DeviceTest {
 protected:
@@ -111,7 +112,7 @@ TEST_F(DeviceLoops, AWhileRunsItsDispatchUntilItsWordFailsEachLaunchOnTheCpusQmd
             raw::ComputeEncoder e(*cb, dev);
             ASSERT_EQ(e.startWhile(wordVa(0), PredicateCompare::NotEqual, 0), Answer::Done);
             dispatch(e, 0);
-            ASSERT_EQ(e.endWhile(), Answer::Done);
+            ASSERT_EQ(e.endWhile(kTag), Answer::Done);
             dispatch(e, 1);
             e.end();
         }
@@ -126,7 +127,7 @@ TEST_F(DeviceLoops, AWhileRunsItsDispatchUntilItsWordFailsEachLaunchOnTheCpusQmd
         EXPECT_EQ(launches.back(), 1);
         EXPECT_EQ(word(0), 0u);
         EXPECT_EQ(qmdsBroken, 0u) << "a copy launched a QMD the scheduler had written";
-        EXPECT_EQ(dev.loopOutcome(stamp), raw::LoopOutcome::Done) << n;
+        EXPECT_FALSE(dev.loopContinue(stamp).continues) << n;
     }
 }
 
@@ -140,7 +141,7 @@ TEST_F(DeviceLoops, AnOutermostLoopPastItsCopiesLeavesContinue)
         raw::ComputeEncoder e(*cb, dev);
         ASSERT_EQ(e.startWhile(wordVa(0), PredicateCompare::NotEqual, 0), Answer::Done);
         dispatch(e, 0);
-        ASSERT_EQ(e.endWhile(), Answer::Done);
+        ASSERT_EQ(e.endWhile(kTag), Answer::Done);
         e.end();
     }
     const uint32_t stamp = commit(cb);
@@ -148,12 +149,13 @@ TEST_F(DeviceLoops, AnOutermostLoopPastItsCopiesLeavesContinue)
     EXPECT_EQ(count(0), raw::LoopCopies::kOutermostCopies);
     EXPECT_EQ(word(0), 7u);
     EXPECT_EQ(qmdsBroken, 0u);
-    EXPECT_EQ(dev.loopOutcome(stamp), raw::LoopOutcome::Continue);
+    EXPECT_TRUE(dev.loopContinue(stamp).continues);
+    EXPECT_EQ(dev.loopContinue(stamp).tag, kTag);
 }
 
-// while (word 0) { 0 clears it; while (word 1) { 1 counts it down } }: the inner loop past its copies leaves the failed
-// word, since a laying of the outer loop alone could not finish it
-TEST_F(DeviceLoops, AnInnerLoopPastItsCopiesLeavesFail)
+// while (word 0) { 0 clears it; while (word 1) { 1 counts it down }; 0 }: the inner loop past its copies records
+// itself with its tag and stops the rest of the outer loop's copy, which the submission lays down again
+TEST_F(DeviceLoops, AnInnerLoopPastItsCopiesRecordsItselfAndStopsTheRestOfItsOuterLoop)
 {
     word(0) = 1;
     word(1) = raw::LoopCopies::kNestedCopies + 1;
@@ -165,8 +167,9 @@ TEST_F(DeviceLoops, AnInnerLoopPastItsCopiesLeavesFail)
         dispatch(e, 0);
         ASSERT_EQ(e.startWhile(wordVa(1), PredicateCompare::NotEqual, 0), Answer::Done);
         dispatch(e, 1);
-        ASSERT_EQ(e.endWhile(), Answer::Done);
-        ASSERT_EQ(e.endWhile(), Answer::Done);
+        ASSERT_EQ(e.endWhile(kInnerTag), Answer::Done);
+        dispatch(e, 0);
+        ASSERT_EQ(e.endWhile(kTag), Answer::Done);
         e.end();
     }
     const uint32_t stamp = commit(cb);
@@ -178,8 +181,10 @@ TEST_F(DeviceLoops, AnInnerLoopPastItsCopiesLeavesFail)
     });
     EXPECT_EQ(count(0), 1u);
     EXPECT_EQ(count(1), raw::LoopCopies::kNestedCopies);
+    EXPECT_EQ(word(1), 1u);
     EXPECT_EQ(qmdsBroken, 0u);
-    EXPECT_EQ(dev.loopOutcome(stamp), raw::LoopOutcome::Fail);
+    EXPECT_TRUE(dev.loopContinue(stamp).continues);
+    EXPECT_EQ(dev.loopContinue(stamp).tag, kInnerTag);
 }
 
 // if (word 0 == 1) { do { 1 counts word 1 down } while (word 1) }; 0
@@ -195,7 +200,7 @@ TEST_F(DeviceLoops, ADoWhileRunsInsideAnIf)
             ASSERT_EQ(e.startIf(wordVa(0), PredicateCompare::Equal, 1), Answer::Done);
             ASSERT_EQ(e.startDoWhile(), Answer::Done);
             dispatch(e, 1);
-            ASSERT_EQ(e.endDoWhile(wordVa(1), PredicateCompare::NotEqual, 0), Answer::Done);
+            ASSERT_EQ(e.endDoWhile(wordVa(1), PredicateCompare::NotEqual, 0, kTag), Answer::Done);
             ASSERT_EQ(e.endIf(), Answer::Done);
             dispatch(e, 0);
             e.end();
@@ -209,7 +214,7 @@ TEST_F(DeviceLoops, ADoWhileRunsInsideAnIf)
         EXPECT_EQ(count(0), 1u) << taken;
         EXPECT_EQ(word(1), taken ? 0u : 3u);
         EXPECT_EQ(qmdsBroken, 0u);
-        EXPECT_EQ(dev.loopOutcome(stamp), raw::LoopOutcome::Done);
+        EXPECT_FALSE(dev.loopContinue(stamp).continues);
     }
 }
 
@@ -226,8 +231,8 @@ TEST_F(DeviceLoops, ADoWhileRunsInsideAWhile)
         dispatch(e, 0);
         ASSERT_EQ(e.startDoWhile(), Answer::Done);
         dispatch(e, 1);
-        ASSERT_EQ(e.endDoWhile(wordVa(1), PredicateCompare::NotEqual, 0), Answer::Done);
-        ASSERT_EQ(e.endWhile(), Answer::Done);
+        ASSERT_EQ(e.endDoWhile(wordVa(1), PredicateCompare::NotEqual, 0, kTag), Answer::Done);
+        ASSERT_EQ(e.endWhile(kTag), Answer::Done);
         e.end();
     }
     const uint32_t stamp = commit(cb);
@@ -242,7 +247,7 @@ TEST_F(DeviceLoops, ADoWhileRunsInsideAWhile)
     EXPECT_EQ(launches, (std::vector<int>{0, 1, 1, 0, 1, 1}));
     EXPECT_EQ(word(0), 0u);
     EXPECT_EQ(qmdsBroken, 0u);
-    EXPECT_EQ(dev.loopOutcome(stamp), raw::LoopOutcome::Done);
+    EXPECT_FALSE(dev.loopContinue(stamp).continues);
 }
 
 // The copies end with the GPU's writes into the push ring, so a command buffer that laid loops names its member written
@@ -255,7 +260,7 @@ TEST_F(DeviceLoops, ACommandBufferThatLaidLoopsWritesThePushRing)
         raw::ComputeEncoder e(*cb, dev);
         ASSERT_EQ(e.startWhile(wordVa(0), PredicateCompare::NotEqual, 0), Answer::Done);
         dispatch(e, 0);
-        ASSERT_EQ(e.endWhile(), Answer::Done);
+        ASSERT_EQ(e.endWhile(kTag), Answer::Done);
         e.end();
     }
     commit(cb);

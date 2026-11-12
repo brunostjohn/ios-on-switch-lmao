@@ -83,13 +83,14 @@ public:
     Predication::Answer startIf(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
     Predication::Answer startElse();
     Predication::Answer endIf();
-    // Loops (raw_predication.h, raw_loop_copies.h): a While's word at `wordVa`, a DoWhile's at its end. Misused: a loop the
+    // Loops (raw_predication.h, raw_loop_copies.h): a While's word at `wordVa`, a DoWhile's at its end; `tag` names the
+    // loop in the record its end leaves where it would run past its copies (Device::loopContinue). Misused: a loop the
     // raw path cannot lay down (deeper than LoopCopies::kMaxDepth, a body of more than kMaxSegments segments or one that
     // left the encoder, no copies within the entry budget), nothing more encoded
     Predication::Answer startWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
-    Predication::Answer endWhile();
+    Predication::Answer endWhile(uint32_t tag);
     Predication::Answer startDoWhile();
-    Predication::Answer endDoWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
+    Predication::Answer endDoWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference, uint32_t tag);
     void end();
 #if defined(SWITCH_RAW_HARNESS_MARKS)
     // The bench's QMD chains (hw_test_app/bench qmdchain): each launch's QMD as built, before its upload, to patch;
@@ -140,7 +141,7 @@ private:
     void stampDispatch(const DrawTiming &t, bool end);
     LoopStream stream();
     Predication::Answer startLoop(bool doWhile, uint64_t wordVa, const PredicateTest *test);
-    Predication::Answer endLoop(uint64_t wordVa, const PredicateTest *test);
+    Predication::Answer endLoop(uint64_t wordVa, const PredicateTest *test, uint32_t tag);
 };
 
 }  // namespace raw

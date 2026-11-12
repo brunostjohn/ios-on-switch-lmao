@@ -70,8 +70,12 @@ constexpr uint32_t kLoopHeadRuns = 0, kLoopHeadEnded = 7u << 29;
 class Predication {
 public:
     static constexpr uint32_t kSlotBytes = 64, kSlotAlign = 16;
-    static constexpr uint32_t kStartWords = 80, kGuardWords = 4, kReleaseWords = 4;
-    static constexpr uint32_t kOverflowWords = 96;
+    static constexpr uint32_t kStartWords = 112, kGuardWords = 4, kReleaseWords = 4;
+    // endLoop's words inside `enclosing` blocks and loops
+    static constexpr uint32_t kOverflowWords(size_t enclosing)
+    {
+        return 96 + 8 * uint32_t(enclosing);
+    }
     static constexpr uint32_t kEndCopyWords(size_t heads)
     {
         return 80 + 8 * uint32_t(heads);
@@ -98,9 +102,11 @@ public:
     // the next copy does not run, and the host's wait after which the fetcher sees them. Misused: no loop is the open block
     Answer endCopy(Push &p, const uint64_t *heads, size_t count, uint64_t wordVa = 0,
                    const PredicateTest *test = nullptr);
-    // After the last copy: `stamp` into `overflowVa` where the loop would run another copy (the command buffer fails);
-    // the loop's block closes
-    void endLoop(Push &p, uint64_t overflowVa, uint32_t stamp);
+    // After the last copy, where the loop would run another copy: `stamp` and `tag` into the record at `recordVa`, and
+    // every enclosing block's F out of its K, so nothing more runs in them (later copies of an enclosing loop end at
+    // its copy's end; an enclosing If's Else finds its test failed). The submission then lays the loop again and the
+    // rest of its enclosing blocks after it (raw_loop_ranges.h). The loop's block closes
+    void endLoop(Push &p, uint64_t recordVa, uint32_t stamp, uint32_t tag);
     // Before the first copy of a loop inside another loop's copy: its heads back to NOP, a DoWhile's `going` back to 1
     // (`goingVa`, 0 for a While), seen by the fetcher before the first copy
     static void armCopies(Push &p, const uint64_t *heads, size_t count, uint64_t goingVa);
@@ -110,6 +116,16 @@ public:
     void endUnit()
     {
         levels_.clear();
+        haltVa_ = 0;
+    }
+
+    // The unit's halt operands (kSlotBytes, the CPU's fill equal): a loop past its copies makes them unequal, and no
+    // outermost While's later copy runs from then on, even where the fetcher reads a copy whose head the GPU ended
+    void halt(PredicateSlot slot);
+
+    bool halting() const
+    {
+        return haltVa_ != 0;
     }
 
     bool active() const
@@ -166,6 +182,7 @@ private:
     static void testWord(Push &p, uint64_t slotVa, const PredicateTest &test, bool holds, uint64_t va, uint32_t value);
 
     std::vector<Level> levels_;
+    uint64_t haltVa_ = 0;
 };
 
 }  // namespace raw

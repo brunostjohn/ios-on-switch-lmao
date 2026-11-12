@@ -269,10 +269,9 @@ struct RMSegment {
     bool event = false;
     bool gpuSignal = false;
     bool gpuWait = false;
-    // A predicated loop no block holds ends right before: [loopFrom, loopTo) is the loop, from its Start to past its
-    // End. The range waits for the ranges before it to retire, and where the loop would run past its copies it is laid
-    // down again first (raw_loop_copies.h)
-    uint32_t loopFrom = 0, loopTo = 0;
+    // The range before it laid predicated loops: it waits for the ranges before it to retire, and where one of their
+    // loops would have run past its copies what follows that loop is laid down first (raw_loop_ranges.h continuation)
+    bool held = false;
 };
 
 struct RMSharedEventWait {
@@ -392,7 +391,11 @@ struct RMSharedEventWait {
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)
     uint32_t _rangeLoopStamp;  // the raw range just encoded laid predicated loops: its stamp (RMRawRetirement::loopStamp)
-    bool _loopContinues;       // _lock: a retired range's loop would run past its copies: lay it again (RMSegment::loopTo)
+    // _lock: a retired range [from, to) recorded that its loop ending at `tag` would run past its copies (RMSegment::held)
+    struct {
+        bool pending;
+        uint32_t tag, from, to;
+    } _loopContinue;
     double _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window
@@ -485,7 +488,9 @@ bool isKernelCommand(Op op);
 // OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
 void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow = false);
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
-bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
+// `at`: the command's tape index, a loop's tag (raw_loop_ranges.h)
+bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, size_t at,
+                  const char **why);
 
 static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
 {

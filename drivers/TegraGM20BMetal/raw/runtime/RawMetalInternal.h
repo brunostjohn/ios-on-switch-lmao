@@ -165,7 +165,9 @@ struct RMRawRetirement {
     uint64_t generation = 0;
     raw::CpuCompletion cpu;
     bool quiet = false;  // its job raised no interrupt: a later range's covers it (raw_completion_source.h)
-    uint32_t loopStamp = 0;  // the range laid predicated loops: the stamp whose overflow word says one ran past its copies
+    // the range laid predicated loops: the stamp of the record that names one which ran past its copies, and the range
+    uint32_t loopStamp = 0;
+    uint32_t loopFrom = 0, loopTo = 0;
 };
 
 struct RawState {

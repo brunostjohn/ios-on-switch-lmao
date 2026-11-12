@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // A predicated loop's GP entries (raw_predication.h): the compute encoder lays the body down once, each of its segments
 // beginning with a head word, and lists those segments once per copy. Without a backward jump the copies are a bound:
-// a loop no block or loop holds that would run past it is laid down again after its job completed (the submission's
-// continuation, one completion interrupt per laying); one inside another loop or a block fails the command buffer there
-// (Predication::endLoop). Copies multiply with nesting and every copy is a GP entry per body segment, so a loop nest
-// lists at most kEntryBudget entries (four jobs of TegraGM20BMaxJobPushes).
+// a loop that would run past it records itself and stops everything after it in its enclosing blocks
+// (Predication::endLoop), and the submission lays the loop down again, then the rest of the blocks around it, after its
+// job completed (raw_loop_ranges.h): one completion interrupt per laying. Copies multiply with nesting and every copy is
+// a GP entry per body segment, so a loop nest lists at most kEntryBudget entries (four jobs of TegraGM20BMaxJobPushes),
+// and deeper loops get fewer copies of their own.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -32,12 +33,17 @@ struct LoopStream {
 class LoopCopies {
 public:
     static constexpr uint32_t kOutermostCopies = 1024, kNestedCopies = 128;
-    static constexpr size_t kMaxDepth = 2, kMaxSegments = 8, kEntryBudget = 4096;
-    // Room a start or an end takes in the open push chunk, so its words stay in one segment
+    static constexpr size_t kMaxDepth = 8, kMaxSegments = 32, kEntryBudget = 4096;
+    // Room a start or an end (inside `levels` predication levels, the loop's own among them) takes in the open push
+    // chunk, so its words stay in one segment
     static constexpr uint32_t kStartRoom = Predication::kArmWords(kMaxSegments) + Predication::kStartWords + 1;
-    static constexpr uint32_t kEndRoom = Predication::kEndCopyWords(kMaxSegments) + Predication::kOverflowWords + 1;
+    static constexpr uint32_t endRoom(size_t levels)
+    {
+        return Predication::kEndCopyWords(kMaxSegments) + Predication::kOverflowWords(levels) + 1;
+    }
 
-    // The copies of a loop `depth` deep (1: no loop holds it) whose copy is `entries` GP entries; 0: none fit
+    // The copies of a loop `depth` deep (1: no loop holds it) whose copy is `entries` GP entries: 1024 outermost, 128
+    // inside one loop, an eighth as many again each level deeper (one at least); 0: none fit
     static uint32_t copies(size_t depth, size_t entries);
 
     bool open() const
@@ -55,14 +61,13 @@ public:
     // A loop's start: `slot` its slot, a While's test of the word at `wordVa`. Misused: deeper than kMaxDepth
     Predication::Answer start(LoopStream s, Predication &predication, PredicateSlot slot, bool doWhile, uint64_t wordVa,
                               const PredicateTest *test);
-    // Its end: the copy's end (a DoWhile's test), the further copies, and `stamp` where the loop would run past them:
-    // into `continuedVa` for a loop no block or loop holds, which the submission continues with another laying of the
-    // loop after its job (RMSegment::loopTo), else into `failedVa`. Where no loop holds this one a batch ends after each
-    // copy that fills one, so the kernel's stuck rule sees seqnos however many copies run. Misused: no loop open, a
+    // Its end: the copy's end (a DoWhile's test), the further copies, and where the loop would run past them `stamp`
+    // and `tag` into the record at `recordVa` (Predication::endLoop). Where no loop holds this one a batch ends after
+    // each copy that fills one, so the kernel's stuck rule sees seqnos however many copies run. Misused: no loop open, a
     // body of more than kMaxSegments segments or with entries neither it nor a loop inside it laid, or no copies within
     // the budget
     Predication::Answer end(LoopStream s, Predication &predication, BatchWork &batches, uint64_t batchLimit,
-                            uint64_t continuedVa, uint64_t failedVa, uint32_t stamp, uint64_t wordVa,
+                            uint64_t recordVa, uint32_t stamp, uint32_t tag, uint64_t wordVa,
                             const PredicateTest *test);
 
 private:

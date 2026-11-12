@@ -49,7 +49,7 @@ TEST(RawDeviceAnswers, FeaturesWithNoFormHereAreNo)
 TEST(RawDeviceAnswers, PredicationNestsAsDeepAsTheLoopsLaidDown)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds)
-        EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 2u) << k.kind;
+        EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 8u) << k.kind;
 }
 
 }  // namespace

@@ -99,29 +99,42 @@ static void noteReplay(const switch_frame::Stamps &f, uint64_t returned)
 
 // Every submission range ends at an encoder boundary. Events are separate operations, so the scheduler can run the
 // prefix, publish its signal, and then block its suffix without preventing another queue from producing that suffix's event.
-// The last native range split after each predicated loop no block holds (raw_loop_ranges.h)
-static void splitAtLoops(RMCommandBuffer *cb)
+// The command buffer's tape as raw_loop_ranges.h walks it
+static auto loopTape(RMCommandBuffer *cb)
 {
-    const RMSegment whole = cb->_segs.back();
-    cb->_segs.pop_back();
-    RMSegment part = whole;
-    raw::LoopRanges loops;
-    for (uint32_t at = whole.from; at < whole.to; ++at) {
+    return [cb](uint32_t at) {
         const Cmd c = cb->_plan.legacy(at);
         if (c.op == OpCompute)
-            loops.computeEncoder(uint32_t(c.a));
-        else if (c.op == OpRender || c.op == OpBlit || c.op == OpSignalEvent || c.op == OpWaitEvent)
-            loops.otherWork();
-        else if (c.op == OpPredicate && loops.record(raw::PredicateRecords::Kind(c.stage), at)) {
-            part.to = at + 1;
-            cb->_segs.push_back(part);
-            part = RMSegment{at + 1, whole.to, true};
-            part.loopFrom = loops.loopFrom();
-            part.loopTo = at + 1;
-        }
+            return raw::LoopTapeEntry{raw::LoopTapeEntry::Compute, uint32_t(c.a)};
+        if (c.op == OpRender || c.op == OpBlit || c.op == OpSignalEvent || c.op == OpWaitEvent)
+            return raw::LoopTapeEntry{raw::LoopTapeEntry::Other, 0};
+        if (c.op == OpPredicate)
+            return raw::LoopTapeEntry{raw::LoopTapeEntry::Predicate, uint32_t(c.stage)};
+        return raw::LoopTapeEntry{};
+    };
+}
+
+// `range` as native segments split after each block that holds a loop and no block holds, at `at` in the segment list:
+// each one after a segment that lays loops is held (raw_loop_ranges.h). The segments made.
+static size_t insertSplitAtLoops(RMCommandBuffer *cb, size_t at, RMSegment range, bool heldFirst)
+{
+    const auto tape = loopTape(cb);
+    std::vector<RMSegment> parts;
+    uint32_t from = range.from;
+    for (const uint32_t split : raw::loopSplits(tape, range.from, range.to)) {
+        RMSegment part = range;
+        part.from = from;
+        part.to = split;
+        parts.push_back(part);
+        range.gpuWait = false;
+        from = split;
     }
-    part.to = whole.to;
-    cb->_segs.push_back(part);
+    range.from = from;
+    parts.push_back(range);
+    for (size_t i = 0; i < parts.size(); ++i)
+        parts[i].held = i ? raw::laysLoops(tape, parts[i - 1].from, parts[i - 1].to) : heldFirst;
+    cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(at), parts.begin(), parts.end());
+    return parts.size();
 }
 
 void planSegments(RMCommandBuffer *cb)
@@ -159,8 +172,18 @@ void planSegments(RMCommandBuffer *cb)
         cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), native,
                              range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
                              false, range.gpuWait});
-        if (native && cb->_predicates.loops())
-            splitAtLoops(cb);
+        if (native && cb->_predicates.loops()) {
+            const RMSegment whole = cb->_segs.back();
+            cb->_segs.pop_back();
+            insertSplitAtLoops(cb, cb->_segs.size(), whole, false);
+        }
+    }
+    // A loop's record is read where the range after its range starts: the last range that lays loops gets an empty one
+    if (!cb->_segs.empty() && cb->_segs.back().raw && !cb->_segs.back().event &&
+        raw::laysLoops(loopTape(cb), cb->_segs.back().from, cb->_segs.back().to)) {
+        RMSegment after{cb->_segs.back().to, cb->_segs.back().to, true};
+        after.held = true;
+        cb->_segs.push_back(after);
     }
     inlineSignals(cb);
 }
@@ -188,8 +211,8 @@ static raw::RangeEnd rangeEnd(RMCommandBuffer *cb, bool last, bool followed, boo
     end.lastOfBuffer = last;
     if (!last) {
         const RMSegment &next = cb->_segs[cb->_segNext + 1];
-        // a range after a loop waits for this one's completion (RMSegment::loopTo)
-        end.nextRangeRaw = next.raw && !next.event && !next.loopTo;
+        // a range after loops waits for this one's completion (RMSegment::held)
+        end.nextRangeRaw = next.raw && !next.event && !next.held;
         end.signals = next.event;
     }
     end.followed = followed;
@@ -220,15 +243,38 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
     }
     RMSegment &range = cb->_segs[cb->_segNext];
     const bool last = cb->_segNext + 1 == cb->_segs.size();
-    if (range.loopTo) {
-        bool continues;
+    if (range.held) {
+        decltype(cb->_loopContinue) loop;
         {
             std::lock_guard<std::mutex> l(cb->_lock);
-            continues = std::exchange(cb->_loopContinues, false);
+            loop = std::exchange(cb->_loopContinue, {});
         }
-        if (raw::layLoopAgain(cb->_segs, cb->_segNext, continues)) {
+        if (loop.pending) {
+            const auto pieces = raw::continuation(loopTape(cb), loop.from, loop.to, loop.tag);
+            if (pieces.empty()) {
+                finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                               code:MTLCommandBufferErrorInternal
+                                           userInfo:@{
+                                               NSLocalizedDescriptionKey :
+                                                   @"A predicated loop's record names no loop of the range that laid it"
+                                           }]);
+                return true;
+            }
+            size_t at = cb->_segNext;
+            for (size_t i = 0; i < pieces.size(); ++i) {
+                const bool held = i && raw::laysLoops(loopTape(cb), pieces[i - 1].from, pieces[i - 1].to);
+                at += insertSplitAtLoops(cb, at, RMSegment{pieces[i].from, pieces[i].to, true}, held);
+            }
             RAW_DIAGNOSTIC(r.stats.loopContinuations++);
             return false;
+        }
+        if (range.from == range.to) {
+            ++cb->_segNext;
+            if (last) {
+                scheduled(cb);
+                finish(cb, nil);
+            }
+            return last;
         }
     }
     if (range.event) {

@@ -420,7 +420,7 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     }
 }
 
-static bool encodePredicate(raw::ComputeEncoder &e, const Cmd &c, const char **why)
+static bool encodePredicate(raw::ComputeEncoder &e, const Cmd &c, size_t at, const char **why)
 {
     const uint64_t wordVa = c.obj ? ((__bridge RMBuffer *)c.obj)->_raw.va + c.c : 0;
     const auto compare = raw::PredicateCompare(c.a);
@@ -439,26 +439,27 @@ static bool encodePredicate(raw::ComputeEncoder &e, const Cmd &c, const char **w
         answer = e.startWhile(wordVa, compare, c.b);
         break;
     case raw::PredicateRecords::EndWhile:
-        answer = e.endWhile();
+        answer = e.endWhile(uint32_t(at));
         break;
     case raw::PredicateRecords::StartDoWhile:
         answer = e.startDoWhile();
         break;
     case raw::PredicateRecords::EndDoWhile:
-        answer = e.endDoWhile(wordVa, compare, c.b);
+        answer = e.endDoWhile(wordVa, compare, c.b, uint32_t(at));
         break;
     default:
         break;
     }
     if (answer != raw::Predication::Answer::Done)
         *why = c.stage >= raw::PredicateRecords::StartWhile
-                   ? "a predicated loop the raw path cannot lay down (deeper than two, a body of more than eight push "
+                   ? "a predicated loop the raw path cannot lay down (deeper than eight, a body of more than 32 push "
                      "segments, one that left its compute encoder, or more GP entries than one nest takes)"
                    : "a predication record the raw path cannot run";
     return answer == raw::Predication::Answer::Done;
 }
 
-bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why)
+bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, size_t at,
+                  const char **why)
 {
     id object = (__bridge id)c.obj;
     switch (c.op) {
@@ -489,7 +490,7 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
         e.barrier();
         break;
     case OpPredicate:
-        return encodePredicate(e, c, why);
+        return encodePredicate(e, c, at, why);
     case OpDispatch: {
         const uint32_t groups[3] = {uint32_t(extra(cb, c.x + 3)), uint32_t(extra(cb, c.x + 4)),
                                     uint32_t(extra(cb, c.x + 5))},

@@ -22,12 +22,25 @@ void endHeads(Push &p, const uint64_t *heads, size_t count)
 
 // F is (live, holds): live, set once per copy under the enclosing block, never changes while the loop runs; holds is
 // this copy's test
+void Predication::halt(PredicateSlot slot)
+{
+    memset(slot.cpu, 0, kSlotBytes);
+    haltVa_ = slot.va;
+}
+
 Predication::Answer Predication::startWhile(Push &p, PredicateSlot slot, uint64_t wordVa, const PredicateTest &test)
 {
     const bool outermost = levels_.empty();
+    if (!haltVa_)
+        return Answer::Misused;
     initSlot(slot, outermost, 0, test.wordInB ? 0 : test.reference);
-    const uint32_t reset[2] = {outermost, 0};
+    const uint32_t reset[2] = {0, 0};
     kit(p, switch_gm20b_compute_inline_words, slot.va + kLiveAt, reset, 2u);
+    if (outermost) {
+        kit(p, switch_gm20b_render_enable, haltVa_, kIfEqual);
+        kit(p, switch_gm20b_compute_inline_word, slot.va + kLiveAt, 1u);
+        kit(p, switch_gm20b_render_enable_always);
+    }
     if (!test.never)
         copyOperands(p, slot.va, wordVa, test);
     if (!outermost)
@@ -89,7 +102,7 @@ Predication::Answer Predication::endCopy(Push &p, const uint64_t *heads, size_t 
     return Answer::Done;
 }
 
-void Predication::endLoop(Push &p, uint64_t overflowVa, uint32_t stamp)
+void Predication::endLoop(Push &p, uint64_t recordVa, uint32_t stamp, uint32_t tag)
 {
     const Level loop = levels_.back();
     if (loop.kind == Level::While) {
@@ -102,7 +115,11 @@ void Predication::endLoop(Push &p, uint64_t overflowVa, uint32_t stamp)
         kit(p, switch_gm20b_compute_idle_flushed);
     }
     kit(p, switch_gm20b_render_enable, loop.liveVa, kIfEqual);
-    kit(p, switch_gm20b_compute_inline_word, overflowVa, stamp);
+    const uint32_t record[2] = {stamp, tag};
+    kit(p, switch_gm20b_compute_inline_words, recordVa, record, 2u);
+    kit(p, switch_gm20b_compute_inline_word, haltVa_, 1u);
+    for (size_t i = 0; i + 1 < levels_.size(); ++i)
+        kit(p, switch_gm20b_compute_inline_word, levels_[i].liveVa, 0u);
     kit(p, switch_gm20b_render_enable_always);
     levels_.pop_back();
 }

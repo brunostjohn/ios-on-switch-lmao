@@ -10,7 +10,8 @@ uint32_t LoopCopies::copies(size_t depth, size_t entries)
 {
     if (!entries || !depth || depth > kMaxDepth)
         return 0;
-    const uint32_t bound = depth == 1 ? kOutermostCopies : kNestedCopies;
+    const uint32_t bound =
+        depth == 1 ? kOutermostCopies : std::max<uint32_t>(1, kNestedCopies >> std::min<size_t>(31, 3 * (depth - 2)));
     return uint32_t(std::min<size_t>(bound, kEntryBudget / entries));
 }
 
@@ -75,7 +76,7 @@ Predication::Answer LoopCopies::start(LoopStream s, Predication &predication, Pr
 }
 
 Predication::Answer LoopCopies::end(LoopStream s, Predication &predication, BatchWork &batches, uint64_t batchLimit,
-                                    uint64_t continuedVa, uint64_t failedVa, uint32_t stamp, uint64_t wordVa,
+                                    uint64_t recordVa, uint32_t stamp, uint32_t tag, uint64_t wordVa,
                                     const PredicateTest *test)
 {
     if (frames_.empty())
@@ -110,8 +111,7 @@ Predication::Answer LoopCopies::end(LoopStream s, Predication &predication, Batc
         Predication::armCopies(arm, body.heads.data(), body.heads.size(), body.goingVa);
     }
     openSegment(s);
-    const bool continued = frames_.empty() && predication.depth() == 1;
-    predication.endLoop(s.p, continued ? continuedVa : failedVa, stamp);
+    predication.endLoop(s.p, recordVa, stamp, tag);
     return Predication::Answer::Done;
 }
 

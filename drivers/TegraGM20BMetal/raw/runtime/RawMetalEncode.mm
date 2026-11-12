@@ -108,8 +108,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
-    // A range that starts inside a compute encoder (a predicated loop laid again, or what follows a loop: RMSegment
-    // loopTo): that encoder's work goes on in a new raw encoder, the planned state applied at its first dispatch
+    // A range that starts inside a compute encoder (a loop's continuation, or what follows a block that holds loops:
+    // RMSegment::held): that encoder's work goes on in a new raw encoder, the planned state applied at its first dispatch
     for (size_t at = from; at-- > 0;) {
         const Cmd c = cb->_plan.legacy(at);
         if (c.op == OpCompute) {
@@ -473,7 +473,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         }
         if (isKernelCommand(c.op)) {
             RAW_ENCODE_SPAN(Compute);
-            if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
+            if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, at, &w))
                 return fail(PredCompute, w, c.op);
             continue;
         }
