@@ -312,7 +312,7 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                     *why = "a kernel m2v binds a view of another texel size at a texture slot";
                     return false;
                 }
-                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window))) {
+                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window, ViewAccess::Texture))) {
                     *why = "no texture header left for a kernel's view of another format";
                     return false;
                 }

@@ -36,6 +36,7 @@
 #include "raw_loop_copies.h"
 #include "raw_loop_ranges.h"
 #include "raw_visibility.h"
+#include "raw_view.h"
 #include <array>
 #include <atomic>
 #include <thread>
@@ -1456,8 +1457,9 @@ public:
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
     // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
-    // of the same texel size), made on first use and freed with t's header; 0: no header slot left
-    uint32_t viewTic(const Texture &t, uint32_t word0);
+    // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
+    // with t's header; 0: no header slot left
+    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
     bool shared() const
@@ -2156,8 +2158,8 @@ private:
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
     bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
-    // by header: its views' word 0 and header (viewTic)
-    std::unordered_multimap<uint32_t, std::pair<uint32_t, uint32_t>> viewTics_;
+    // by header: its views' word 0 (above it, the sample grid of a storage view: raw_view.h viewHeader) and header (viewTic)
+    std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> viewTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid

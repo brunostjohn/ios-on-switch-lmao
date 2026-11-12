@@ -41,7 +41,8 @@
 #                     classes (the runtime's, never a record's), ahead of every program of the pack or a record
 #   raw_view_test     raw/runtime/raw_view.h: a kernel's texture slot binds the texture's own header, or a header of its
 #                     memory with the word 0 of m2v's view of it in another format of the same texel size (a half
-#                     texture's unsigned twin), with no sRGB conversion; texels of another size or blocks bind none
+#                     texture's unsigned twin), with no sRGB conversion; texels of another size or blocks bind none; a
+#                     storage view of a multisampled texture is NIL's, spanning the sample grid
 #   raw_tic_words_test  raw/runtime/raw_zeta.h and raw_gpu.cpp's block-compressed rows: each depth/stencil format's
 #                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
 #                     row of NVK's format by NIL's generator rules
@@ -1490,9 +1491,20 @@ host_test(
     name = "raw_view_test",
     srcs = [
         "raw_view_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_view.h",
     ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
     cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
 )
 
 host_test(

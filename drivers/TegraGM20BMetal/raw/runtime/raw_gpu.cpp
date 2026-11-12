@@ -6343,29 +6343,38 @@ uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
     for (uint8_t i = 0; i < passViewCount_; ++i)
         if (passViews_[i].ownTic == t.tic && passViews_[i].word0 == word0)
             return passViews_[i].tic;
-    const uint32_t tic = dev_->viewTic(t, word0);
+    const uint32_t tic = dev_->viewTic(t, word0, ViewAccess::Storage);
     if (tic && passViewCount_ < passViews_.size())
         passViews_[passViewCount_++] = {t.tic, word0, tic};
     return tic;
 }
 
-uint32_t Device::viewTic(const Texture &t, uint32_t word0)
+uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
 {
+    uint8_t sxLog2 = 0, syLog2 = 0;
+    if (access == ViewAccess::Storage && t.samples > 1) {
+        fx::MipChain grid;
+        if (!fx::msLayout(t.width, t.height, t.samples, t.bpp, grid))
+            return 0;
+        sxLog2 = grid.sxLog2;
+        syLog2 = grid.syLog2;
+    }
+    const uint64_t key = word0 | uint64_t(sxLog2) << 32 | uint64_t(syLog2) << 40;
     RAW_ENCODE_LOCK(l, lock_);
     if (!t.tic)
         return 0;
     const auto views = viewTics_.equal_range(t.tic);
     for (auto v = views.first; v != views.second; ++v)
-        if (v->second.first == word0)
+        if (v->second.first == key)
             return v->second.second;
     const uint32_t tic = allocTic();
     if (!tic)
         return 0;
     uint32_t own[8], w[8];
     memcpy(own, tic_.cpu + 32 * t.tic, 32);
-    viewHeader(own, word0, w);
+    viewHeader(own, word0, w, sxLog2, syLog2);
     memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
-    viewTics_.emplace(t.tic, std::make_pair(word0, tic));
+    viewTics_.emplace(t.tic, std::make_pair(key, tic));
     return tic;
 }
 
