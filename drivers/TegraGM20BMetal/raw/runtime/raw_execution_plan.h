@@ -62,6 +62,11 @@ public:
     {
         return ranges_;
     }
+
+    void clear()
+    {
+        ranges_.clear();
+    }
 };
 
 // A native range whose encoder [from, to) the raw path refused while encoding it: that encoder alone goes to m2v, and

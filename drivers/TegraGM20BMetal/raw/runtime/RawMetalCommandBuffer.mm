@@ -21,6 +21,7 @@ struct RMRecording {
     std::vector<uint64_t> extra;
     std::vector<id> owners;
     raw::PointerMap<bool> ownerKeys;
+    std::vector<RMSegment> segs;
     size_t kept = 0;
 };
 
@@ -39,6 +40,7 @@ static void swapRecording(RMCommandBuffer *b, RMRecording &r)
     b->_extra.swap(r.extra);
     b->_owners.swap(r.owners);
     std::swap(b->_ownerKeys, r.ownerKeys);
+    b->_segs.swap(r.segs);
 }
 
 static void takeRecording(RMCommandBuffer *b)
@@ -119,7 +121,9 @@ void rmBytesDone(RMCommandBuffer *cb)
     coalesceBytes(s);
     for (const raw::Buffer &k : s.chunks)
         keepBytesChunk(k);
-    s = {};
+    s.chunks.clear();  // its capacity goes on with the recording to the next command buffer
+    s.at = 0;
+    s.used = 0;
 }
 
 bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk)
@@ -145,7 +149,8 @@ static void giveRecording(RMCommandBuffer *b)
     uint64_t bytes = 0;
     for (const raw::Buffer &k : b->_bytes.chunks)
         bytes += k.va ? k.length : kKeptBytes;  // (heap chunks are not kept)
-    bytes += b->_plan.storageBytes() + b->_extra.capacity() * 8 + b->_shadow.capacity();
+    bytes += b->_plan.storageBytes() + b->_extra.capacity() * 8 + b->_shadow.capacity() +
+             b->_segs.capacity() * sizeof(RMSegment);
     if (bytes > kKeptBytes) {
         dropBytes(b->_bytes);
         return;
@@ -169,6 +174,7 @@ static void giveRecording(RMCommandBuffer *b)
     r->extra.clear();
     r->owners.clear();
     r->ownerKeys.clear();
+    r->segs.clear();
     coalesceBytes(r->bytes);
     gRecordings.keep(node);
 }

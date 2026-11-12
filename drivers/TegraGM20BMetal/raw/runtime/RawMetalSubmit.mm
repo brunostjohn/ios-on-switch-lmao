@@ -144,7 +144,8 @@ void planSegments(RMCommandBuffer *cb)
     cb->_segNext = 0;
     cb->_gpuPrefixEligible = true;
     [cb closeEncoder];
-    raw::ExecutionPlan plan;
+    static thread_local raw::ExecutionPlan plan;  // its capacity kept for the committing thread's next command buffer
+    plan.clear();
     // m2v's encoders take no predication records: a command buffer with records the raw path cannot run fails instead
     // of running the work they skip
     cb->_predicates.end();
