@@ -146,9 +146,11 @@ int main(int argc, char **argv)
             }
         cpu.push_back((threadNs() - c0) / 1e6);
     }
-    raw::Buffer ring, indices, fills;
+    raw::Buffer ring, indices, fills, zeros;
     dev.createBuffer(frame::kRingBytes, ring);
     dev.createBuffer(65536, indices);
+    dev.createBuffer(frame::kZeroBytes, zeros);
+    memset(zeros.cpu, 0, frame::kZeroBytes);
     const bool filling = frame::fillUniforms() && dev.createBuffer(frame::kFillBytes, fills);  // FRAME_FILL (frame.h)
     if (filling)
         memset(fills.cpu, 0, frame::kFillBytes);
@@ -190,6 +192,10 @@ int main(int argc, char **argv)
                 fprintf(stderr, "pass refused\n");
                 return 1;
             }
+            for (int stage = 1; stage <= 2; stage++)
+                for (int slot = 0; slot < frame::kBufferSlots; slot++)
+                    if (!frame::slotFilled(pass, stage, slot))
+                        e->setBuffer(stage, slot, &zeros, 0);
             bool bound[3][31] = {};
             for (const frame::Draw &d : pass.draws) {
                 e->setPipeline(d.blur ? blur[d.state] : uber[d.state]);
