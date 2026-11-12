@@ -100,7 +100,7 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
     {
         std::lock_guard<std::mutex> l(gRM->doneLock);
         gRM->inflight.push_back({cb, cb->_seqno, writes, std::move(signals), cb->_gpuEventWaits,
-                                 cb->_channelGeneration, std::move(cpu), quiet});
+                                 cb->_channelGeneration, std::move(cpu), quiet, std::exchange(cb->_rangeLoopStamp, 0u)});
         gRM->submitPromised = quiet;
     }
     if (!quiet)
@@ -434,7 +434,7 @@ void completionLoop()
                 r.inflight.pop_front();
             }
             NSError *error = ok ? nil : killError(r.raw->lostError());
-            if (!error && cb->_predicates.loops() && r.raw->loopOverflowed(cb->_stamp)) {
+            if (!error && retired.loopStamp && r.raw->loopOverflowed(retired.loopStamp)) {
                 os_log_error(rawLog(), "raw: command buffer %u failed: a predicated loop would have run past its copies",
                              retired.seqno);
                 error = [NSError errorWithDomain:MTLCommandBufferErrorDomain

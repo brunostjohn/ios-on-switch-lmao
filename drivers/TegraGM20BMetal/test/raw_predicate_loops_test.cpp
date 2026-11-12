@@ -7,8 +7,10 @@
 #include <functional>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "bazel/testing/source_text.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_kit.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_loop_copies.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_predication.h"
@@ -20,6 +22,8 @@ namespace {
 using predication_model::Gpu;
 using predication_model::kBase;
 using raw::PredicateCompare;
+using switch_ios::test::SourceText;
+using testing::HasSubstr;
 using Answer = raw::Predication::Answer;
 
 constexpr uint64_t kWords = kBase, kQmds = kBase + 0x2000, kOverflow = kBase + 0x3000, kSlots = kBase + 0x4000;
@@ -431,6 +435,17 @@ TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
         raw::Predication::armCopies(prog.p, heads, raw::LoopCopies::kMaxSegments, raw::Predication::goingOf(loop));
         EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kArmWords(raw::LoopCopies::kMaxSegments));
     }
+}
+
+// A command buffer with loops is one driver's but not one range (a wait or an un-inlined signal is a range of its own),
+// so the overflow word is read with the stamp of the range that laid the loops, carried on its retirement
+TEST(RawPredicateLoops, EachRawRangeThatLaidLoopsCarriesItsOwnStampToTheCompletion)
+{
+    const std::string encode = SourceText("../raw/runtime/RawMetalEncode.mm");
+    EXPECT_THAT(encode, HasSubstr("cb->_rangeLoopStamp = rc->loopsLaid ? rc->stamp : 0;"));
+    const std::string finish = SourceText("../raw/runtime/RawMetalFinish.mm");
+    EXPECT_THAT(finish, HasSubstr("std::exchange(cb->_rangeLoopStamp, 0u)"));
+    EXPECT_THAT(finish, HasSubstr("retired.loopStamp && r.raw->loopOverflowed(retired.loopStamp)"));
 }
 
 }  // namespace
