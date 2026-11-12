@@ -910,6 +910,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
+    pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
@@ -4803,7 +4804,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
-        pl, movedEntries(r), ~0u,
+        pl, movedEntries(r), pl->memoryEntries,
         [&](PreparedDescriptorWords &prepared, uint32_t moved) {
             RAW_ENCODE_COUNT(DescriptorBuilds);
             static_assert(sizeof(prepared.words) == kSetBytes);

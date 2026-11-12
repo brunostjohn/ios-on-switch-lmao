@@ -11,7 +11,7 @@ MAGIC = b'GM20BPK1'
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
 # forms and their iterated blend programs
-VERSION = 17
+VERSION = 18
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
 # constant[8][3], program[128]
@@ -21,6 +21,9 @@ PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
 # uniform[8], fetchRung[8], variantName
 PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
+# PackPipeline's record-v18 tail: memoryEntries
+PIPELINE_V18 = struct.Struct('<I')
+ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -213,7 +216,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         bytes(rec.get('fetch_rung', [0] * 8)),
         name_offset,
     )
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15
+    v18 = PIPELINE_V18.pack(rec.get('memory_entries', ALL_ENTRIES))
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18
 
 
 def kernel_window(e: dict) -> int:

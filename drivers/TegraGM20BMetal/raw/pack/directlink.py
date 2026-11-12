@@ -29,7 +29,10 @@ import splits
 PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
-PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
+PIPELINE_BYTES = (
+    PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
+    + packfile.PIPELINE_V18.size
+)
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
@@ -152,7 +155,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
+    tail = PIPELINE_BYTES - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
@@ -163,6 +166,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     v15 = packfile.PIPELINE_V15.unpack_from(p, tail)
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
+    (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -203,6 +207,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'clears': 0,
         'problems': [],
         'bound_entries': bound_entries,
+        'memory_entries': memory_entries,
         'uniform': uniform,
         'fetch_rung': list(fetch_rung),
         'iterated_name': rec.get('iterated', ''),

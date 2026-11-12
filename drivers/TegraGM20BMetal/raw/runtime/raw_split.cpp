@@ -9,6 +9,7 @@
 #include "raw_gpu.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
+#include "raw_set_reads.h"
 #include "raw_slm.h"
 #include "raw_split_metadata.h"
 
@@ -126,6 +127,7 @@ SplitState *Device::makeSplit(Pipeline &pl)
     s.prologueData = prologueData;
     s.prologueDataBytes = prologueDataBytes;
     build(s.pipeline, *source->pp, source->vs, fs, source->blob, source->keyString, source->caTransform);
+    s.pipeline.memoryEntries |= placedSetReads(fs.header, *fs.record, *source->pp);
     if (!bindsAsWhole(s.pipeline, pl)) {
         splitStates_.pop_back();
         __atomic_store_n(&pl.splitSource, nullptr, __ATOMIC_RELEASE);

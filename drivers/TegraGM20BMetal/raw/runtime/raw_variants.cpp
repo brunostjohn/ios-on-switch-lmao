@@ -5,6 +5,7 @@
 // compiled.
 #include <algorithm>
 #include "raw_gpu.h"
+#include "raw_set_reads.h"
 #include "raw_slm.h"
 #include "raw_variants.h"
 
@@ -60,6 +61,9 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
     Pipeline &made = variantPipelines_.emplace_back();
     build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
           pl.caTransform);
+    for (uint32_t s = 0; s < 2; s++)
+        if (index[s] != (s ? pp.fs : pp.vs))
+            made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, pp);
     made.restore = pl.restore;
     if (const PackSplit *split = pack_.split(index[1]); split && !made.storageBits) {
         SplitSource source;

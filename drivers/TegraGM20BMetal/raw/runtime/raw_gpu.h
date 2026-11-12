@@ -401,6 +401,9 @@ struct Pipeline {
     UboCbuf ubos[2 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
     uint8_t uboCount = 0;
     bool ubosNamed = true;
+    // set 0's entries its programs read from the set's upload: the record's (PackPipeline::memoryEntries), and those a
+    // variant's or a split twin's own programs read
+    uint32_t memoryEntries = ~0u;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them

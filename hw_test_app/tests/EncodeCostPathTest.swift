@@ -9,7 +9,8 @@ import Metal
 /// at each of two draw counts. Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
 /// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks,
-/// Objective-C sends and vertices the CPU read must not grow with its draws, and every command buffer is the raw path's.
+/// Objective-C sends, vertices the CPU read and set-0 uploads must not grow with its draws, and every command buffer is
+/// the raw path's.
 /// The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
@@ -26,7 +27,7 @@ struct EncodeCostPathTest: HWTest {
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
         "geometry_vertices",
     ]
-    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "geometry_vertices"]
+    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "geometry_vertices", "descriptor_uploads"]
 
     func run(_: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()

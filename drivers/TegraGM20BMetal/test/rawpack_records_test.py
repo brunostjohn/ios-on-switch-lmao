@@ -58,11 +58,14 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(back['variants'], [dict(stage=1, assume=1, program=2)])
         self.assertEqual((back['bound_entries'], back['uniform'], back['fetch_rung']),
                          (1, uniform, rec['fetch_rung']))
+        self.assertEqual(back['memory_entries'], packfile.ALL_ENTRIES)
+        self.assertEqual(directlink.pipeline_of(dict(record, pipeline=packfile.pipeline_bytes(
+            dict(rec, memory_entries=5), 0, 0)), [], ids, [])['memory_entries'], 5)
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0, 5), data)
         pipes, _, _, variants = packfile.pipeline_sections([dict(back, key=rec['key']), dict(back, key=rec['key'])])
         self.assertEqual(len(variants), 16)
-        self.assertEqual(struct.unpack_from('<I', pipes, directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V15.size),
-                         (1,))
+        v15 = directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+        self.assertEqual(struct.unpack_from('<I', pipes, v15), (1,))
 
     def test_a_variant_record_lies_under_its_states_key_and_is_named(self):
         own = {'key': 'samples=1 ds=260/260 c0=80:15:0 | v a | f b', 'vs': 0, 'fs': 1, 'blob': [], 'entries': [],
@@ -73,7 +76,7 @@ class RecordsTest(unittest.TestCase):
         records = [pipes[i * directlink.PIPELINE_BYTES : (i + 1) * directlink.PIPELINE_BYTES] for i in range(2)]
         flags = [directlink.PIPELINE.unpack_from(r)[-1] for r in records]
         self.assertEqual((flags[0] & 16, flags[1] & 16), (0, 16))
-        name = struct.unpack_from('<I', records[1], directlink.PIPELINE_BYTES - 4)[0]
+        name = struct.unpack_from('<I', records[1], directlink.PIPELINE_BYTES - packfile.PIPELINE_V18.size - 4)[0]
         self.assertEqual(strings[name:].split(b'\0')[0], b' | tests=3')
 
     def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):
@@ -100,7 +103,8 @@ class RecordsTest(unittest.TestCase):
         rec = dict(key='samples=1', vs=0, fs=1, blob=[], entries=[], push=[], vbs=[], set_size=0, fetch=False)
         data = packfile.pipeline_bytes(rec, 0, 0)
         self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 4, 0)
-        self.assertEqual(data[-4:], bytes(4))
+        self.assertEqual(data[-8:-4], bytes(4))
+        self.assertEqual(struct.unpack_from('<I', data, len(data) - 4), (packfile.ALL_ENTRIES,))
 
     def test_shader_test_views_and_push_placements_round_trip(self):
         rec = dict(key='samples=4 ds=260/260 c0=80:15:0', vs=0, fs=1, blob=[],

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <set>
 #include "raw_owned.h"
+#include "raw_set_reads.h"
 
 namespace raw {
 namespace {
@@ -346,6 +347,12 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.shaderTests = parts.shaderTests;
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
     describeReads(out, key);
+    constexpr size_t kHeaderBytes = 0x50;
+    for (const CapturedProgram &program : out.programs)
+        if (program.image.size() > kHeaderBytes)
+            p.memoryEntries |= programSetReads(program.image.data() + kHeaderBytes, program.image.size() - kHeaderBytes,
+                                               program.cbufTypes.data(), uint32_t(program.cbufTypes.size()),
+                                               program.boundTextures, p);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))
