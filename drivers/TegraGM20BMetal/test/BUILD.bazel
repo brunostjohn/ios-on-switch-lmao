@@ -1801,3 +1801,131 @@ host_test(
     ],
     cxx_std = "c++17",
 )
+
+# The raw runtime and the raw facade's Objective-C++ units on the host, with the frontend and the bridge answered by
+# raw_facade_standins.mm (no m2v device): what the raw_facade_*_test targets open the facade over the kernel model with
+FACADE_HOST_HEADERS = [
+    "//drivers/NativeMetal:frontend_headers",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+    "//drivers/TegraGM20BMetal:raw_runtime_headers",
+]
+
+FACADE_HOST_COPTS = [
+    "-Idrivers/NativeMetal",
+    "-Idrivers/TegraGM20B",
+    "-I$(GENDIR)/kits/SwitchGM20B",
+    "-DSWITCH_RAW_HARNESS_MARKS",
+    "-Wno-deprecated-declarations",
+]
+
+FACADE_HOST_DEPS = [
+    "//drivers/NativeMetal/abi:metal_abi",
+    "//kits/SwitchGM20B:caps",
+    "//kits/SwitchGM20B:classes",
+    "//kits/SwitchGM20BEmit:emit_ndebug",
+    "//kits/SwitchGM20BEmit:macros_h",
+    "//kits/SwitchRefusal:switch_refusal",
+]
+
+host_library(
+    name = "raw_runtime_host",
+    srcs = FACADE_HOST_HEADERS + ["//drivers/TegraGM20BMetal:raw/fx/" + f for f in [
+        "fx_image.cpp",
+        "fx_mip.cpp",
+    ]] + ["//drivers/TegraGM20BMetal:raw/runtime/%s.cpp" % f for f in [
+        "raw_alias",
+        "raw_arena",
+        "raw_cache",
+        "raw_comp",
+        "raw_compiler",
+        "raw_completed",
+        "raw_compute",
+        "raw_direct",
+        "raw_direct_compute",
+        "raw_emit",
+        "raw_encoder_state",
+        "raw_gpu",
+        "raw_job_uses",
+        "raw_kernel",
+        "raw_kernel_cache",
+        "raw_kernel_job",
+        "raw_metallib",
+        "raw_multisample",
+        "raw_pack",
+        "raw_record_parts",
+        "raw_resource_set",
+        "raw_semantic_plan",
+        "raw_semantic_resources",
+        "raw_semantic_setters",
+        "raw_shared_events",
+        "raw_split",
+        "raw_state_segment",
+        "raw_transfer",
+        "raw_variants",
+        "raw_visibility",
+        "raw_visibility_pass",
+        "raw_xr_planes",
+        "raw_ycbcr",
+        "raw_zeta",
+    ]],
+    copts = FACADE_HOST_COPTS,
+    cxx_std = "c++17",
+    deps = FACADE_HOST_DEPS,
+)
+
+host_library(
+    name = "raw_facade_host",
+    srcs = FACADE_HOST_HEADERS + [
+        "raw_facade_standins.h",
+        "raw_facade_standins.mm",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ],
+    copts = FACADE_HOST_COPTS + [
+        "-fobjc-arc",
+        "-std=c++17",
+    ],
+    cxx_std = "c++17",
+    deps = FACADE_HOST_DEPS + [":raw_runtime_host"],
+)
+
+# The facade over the kernel model (raw_facade_harness.h). raw_facade_arguments_test: its MTLArgumentEncoder over
+# descriptors and over a function's runs, nested encoders and refusals, and the gpuResourceID of its textures and samplers,
+# named at the first ask and forgotten when they go. raw_facade_heap_use_test: useHeap on its render and compute encoders
+# is one use of the heap in the plan and of its arena in each job at 4 and 404 textures, host-written for a shared heap;
+# a heap texture used alone names its own range.
+[host_test(
+    name = name,
+    srcs = FACADE_HOST_HEADERS + [
+        name + ".mm",
+        "raw_device_harness.h",
+        "raw_facade_harness.h",
+        "raw_facade_standins.h",
+        "raw_kernel_model.h",
+    ],
+    copts = FACADE_HOST_COPTS + [
+        "-fobjc-arc",
+        "-std=c++17",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-lobjc",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = FACADE_HOST_DEPS + [":raw_facade_host"],
+) for name in [
+    "raw_facade_arguments_test",
+    "raw_facade_heap_use_test",
+]]
