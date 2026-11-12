@@ -40,4 +40,14 @@ TEST(NVENCInputsWiring, TheClientsWaitAnswersTheInputsFailure)
     ASSERT_NE(asked, std::string::npos);
     EXPECT_LT(waited, asked);
 }
+
+// NVENC's every bounded wait (a client's, a full queue's, the idle gate's drain) counts its bound from the inputs.
+TEST(NVENCInputsWiring, EveryBoundedWaitCountsFromTheInputs)
+{
+    const std::string source = SourceText("../TegraNVENC.cpp");
+    EXPECT_THAT(Body(source, "int run("), HasSubstr("boundedWait(gBase + job - kInFlight)"));
+    EXPECT_THAT(Body(source, "extern \"C\" int tegra_nvenc_wait("), HasSubstr("boundedWait(fence)"));
+    EXPECT_THAT(Body(source, "int gateOff(void *, bool drain)"), HasSubstr("boundedWait(gBase + gIssued)"));
+    EXPECT_EQ(switch_ios::test::Count(source, "tegra_host1x_syncpt_wait(gSyncpt"), 1u) << "only boundedWait's own";
+}
 }  // namespace
