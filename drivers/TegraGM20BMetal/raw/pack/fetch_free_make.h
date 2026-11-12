@@ -72,7 +72,7 @@ inline FreeOutcome makeFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const s
     if (outcome != raw::CompileOutcome::Made)
         return FreeOutcome::Refused;
     return (rec.pipeline.flags & raw::PipelineStorageMetadata) || !readsOthersOnly() ? FreeOutcome::Fetches
-                                                                                      : FreeOutcome::Made;
+                                                                                     : FreeOutcome::Made;
 }
 
 }  // namespace probe

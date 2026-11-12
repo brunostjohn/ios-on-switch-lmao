@@ -155,7 +155,7 @@ struct PackIteratedBlend {
     uint8_t constants;       // constant slots it reads, from 0
     uint8_t uniformSlot;     // the colour matrix's: the fragment buffer index it is in; kNoUniform: none
     uint16_t uniformOffset;  // the matrix's bytes from the buffer's bind offset
-    uint8_t uniformWords;    // the matrix's words there: five half4 rows, then the clamp pair where its QuartzCore has one
+    uint8_t uniformWords;    // its words there: five half4 rows, then the clamp pair where its QuartzCore has one
     uint8_t reserved;
     uint32_t alphaSource, alphaDest;           // SET_BLEND_ALPHA_SOURCE_COEFF, SET_BLEND_ALPHA_DEST_COEFF (OGL values)
     uint64_t name;  // FNV-1a 64 of the program's name (pack/iterated/table.py; vcm), which raw_chip_facts.h proves

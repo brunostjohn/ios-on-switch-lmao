@@ -157,7 +157,8 @@ void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std:
     std::map<uint32_t, uint32_t> registers;
     std::string why;
     bool barrier = false;
-    const probe::FreeOutcome outcome = probe::makeFetchFree(direct, qc, line, textures, form, rec, &registers, why, barrier);
+    const probe::FreeOutcome outcome =
+        probe::makeFetchFree(direct, qc, line, textures, form, rec, &registers, why, barrier);
     if (outcome == probe::FreeOutcome::None)
         return;
     if (outcome != probe::FreeOutcome::Made) {

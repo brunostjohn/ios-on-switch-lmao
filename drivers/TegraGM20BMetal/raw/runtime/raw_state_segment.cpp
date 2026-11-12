@@ -59,8 +59,8 @@ void matrixCall(std::vector<PushBody> &bodies, uint32_t *start, uint32_t *at, ui
     PushBody header{start, at};
     header.incomplete = true;
     bodies.push_back(header);
-    bodies.push_back(PushBody::resident(uniformVa, words,
-                                        TegraGM20BPushNoPrefetch | (clampWords ? TegraGM20BPushIncomplete : 0u)));
+    bodies.push_back(
+        PushBody::resident(uniformVa, words, TegraGM20BPushNoPrefetch | (clampWords ? TegraGM20BPushIncomplete : 0u)));
     if (clampWords)
         bodies.push_back(PushBody::resident(clampVa, clampWords, TegraGM20BPushNoPrefetch));
 }
