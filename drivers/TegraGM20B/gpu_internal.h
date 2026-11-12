@@ -606,6 +606,8 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
 #define TGM_PRESENT_NS \
 	(1000 *        \
 	 NSEC_PER_MSEC) /* as the display's own limit: compositor jobs up to ~90 ms were seen */
+/* A watch whose interrupt is due and not taken yet: as nvxnu_wake_due's grace for a wake already under way */
+#define TGM_PRESENT_WAKE_GRACE_NS (50 * NSEC_PER_MSEC)
 
 struct present_state {
 	struct mutex lock;
@@ -627,6 +629,7 @@ struct present_state {
 	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
+	u64 late;      /* when the deadline first found the watch's interrupt due (gpu_present_deadline.c), 0: not */
 
 	/* the copy of the present in flight (valid: it copies), for a redo after a copy engine reset */
 	struct {
@@ -650,6 +653,8 @@ int tgm_present_redo(void);
 void tgm_present_push_copy(struct nvif_push *push);
 void tgm_present_redo_work(void *unused);
 void tgm_present_redo_kick(void);
+/* gpu_present_deadline.c: the present's deadline work item */
+void tgm_present_deadline(void *arg);
 #if TGM_STATS
 /* gpu_copy_reset.c (TegraGM20BCopyResetABI.h): the armed present is taken by present_copy, looked at on the present
  * channel's nonstall interrupts, and its redo and completion are counted */

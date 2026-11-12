@@ -967,7 +967,25 @@ host_test(
 host_test(
     name = "switch_gpu_present_quiet_test",
     srcs = [
+        "switch_gpu_present_model.h",
         "switch_gpu_present_quiet_test.cpp",
+        "switch_gpu_quiet_model.h",
+        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuJobFences.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
+        "//drivers/TegraGM20B:SwitchGpuQuiet.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_present_deadline_test",
+    srcs = [
+        "switch_gpu_present_deadline_test.cpp",
+        "switch_gpu_present_model.h",
         "switch_gpu_quiet_model.h",
         "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",

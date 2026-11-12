@@ -378,7 +378,7 @@ void tgm_fence_kill_clear(volatile uint32_t *fence);
  * one GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs; dst_va 0: no copy), after exactly the producer tokens
  * given, and returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an
  * accepted present, from its completion work item, when its bytes are in DRAM: status 0, or the producers' failure.
- * One not done in 1 s is the present's deadline's (gpu_present.c present_deadline).
+ * One not done in 1 s is the present's deadline's (gpu_present_deadline.c).
  * tgm_present_outstanding: whether the copy accepted with `arg` is not completed yet (its callback not returned). */
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);

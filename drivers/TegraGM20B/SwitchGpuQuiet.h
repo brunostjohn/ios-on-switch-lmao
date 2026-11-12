@@ -63,6 +63,30 @@ static inline int switch_gpu_quiet_token_on(const struct switch_gpu_backing_toke
 	       token->reset_generation == (channel_id >> 32) + 1;
 }
 
+enum {
+	SWITCH_GPU_QUIET_UNASKED = 0, /* nothing at or after the seqno interrupts, and no waiter asked */
+	SWITCH_GPU_QUIET_OWED = 1,    /* asked: the owner has not pushed the wake entry yet */
+	SWITCH_GPU_QUIET_QUEUED = 2,  /* pushed, behind work the GPU has not done: the fence is short of *end */
+	SWITCH_GPU_QUIET_DUE = 3,     /* the GPU is past *end, the fence the interrupt follows: its pass is due */
+};
+
+/* Where the interrupt for `seqno` is, with `completed` the channel's fence. *end comes in as
+ * switch_gpu_jobs_announced_by's answer (`recorded` its flag). When later jobs overwrote the interrupting job's record,
+ * *end becomes the newest announced seqno, which that interrupt cannot come after. */
+static inline int switch_gpu_quiet_interrupt(const struct switch_gpu_quiet *q, uint32_t seqno,
+					     uint32_t completed, uint32_t *end, int recorded)
+{
+	const uint32_t announced = __atomic_load_n(&q->announced, __ATOMIC_ACQUIRE);
+
+	if ((int32_t)(announced - seqno) < 0)
+		return (int32_t)(__atomic_load_n(&q->wanted, __ATOMIC_ACQUIRE) - seqno) >= 0
+			       ? SWITCH_GPU_QUIET_OWED
+			       : SWITCH_GPU_QUIET_UNASKED;
+	if (!recorded)
+		*end = announced;
+	return (int32_t)(completed - *end) >= 0 ? SWITCH_GPU_QUIET_DUE : SWITCH_GPU_QUIET_QUEUED;
+}
+
 /* The owner, under its submission order, with `submitted` the channel's newest seqno: whether a wake entry is owed.
  * An ask past `submitted` belongs to a job not kicked yet, whose own fence sees it; the newest kicked job still gets
  * the entry, as an ask the max replaced may be for it. */

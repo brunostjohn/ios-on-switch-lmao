@@ -419,6 +419,10 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	if (tgm_gpu.stage >= 3 && !chan->error &&
 	    (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		chan_abandon(chan);
+	/* A watched producer whose fence passed with its pass still to come (an asked wake entry not taken yet) gets no
+	 * pass of this channel after the teardown: the teardown hands the watch to its work item, as a kill does. */
+	if (!chan->kernel)
+		present_watch_fenced(chan, 1);
 	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
 	idle_retire(chan, chan->submitted);
 	mutex_lock(&tgm_live_lock);

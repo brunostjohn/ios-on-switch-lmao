@@ -93,6 +93,7 @@ kernel_driver(
         "gpu_exec.c",
         "gpu_quiet.c",
         "gpu_present.c",
+        "gpu_present_deadline.c",
         "gpu_present_redo.c",
         "gpu_copy_reset.c",
         "gpu_scrub.c",

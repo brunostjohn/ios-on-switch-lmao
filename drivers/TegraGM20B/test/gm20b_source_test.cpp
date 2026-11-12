@@ -44,7 +44,7 @@ const std::string &gpu()
 		std::string units;
 		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire",
 					 "stats", "stats_tick", "chan", "sync", "exec", "present",
-					 "present_redo", "scrub", "power"})
+					 "present_deadline", "present_redo", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -1367,8 +1367,22 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 	EXPECT_THAT(arm, HasSubstr("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));
 	const std::string outstanding = flat(definition(gpu(), "int tgm_present_outstanding(const void *arg)"));
 	EXPECT_THAT(outstanding, HasSubstr("switch_gpu_present_watch_armed(&tgm_present.watch)"));
-	const std::string deadline = flat(definition(gpu(), "static void present_deadline(void *arg)"));
-	expectBefore(deadline, "present_watch_work(NULL);", "mutex_lock(&tgm_present.lock);");
+	// the deadline never delivers a watch: it follows the work an asked interrupt is behind, or panics for a lost one
+	const std::string deadline = flat(definition(gpu(), "void tgm_present_deadline(void *arg)"));
+	EXPECT_THAT(deadline, Not(HasSubstr("present_watch_work(")));
+	expectBefore(deadline, "watched = switch_gpu_backing_token_physical_status(&tgm_present.watch.token, 0);",
+		     "mutex_lock(&tgm_live_lock);");
+	expectBefore(deadline, "if (watch_late(watched, age, &waited, &seqno)) {", "tgm_hang_recover(");
+	const std::string late = flat(definition(gpu(), "static int watch_late("));
+	expectBefore(late, "switch_gpu_quiet_interrupt(", "nvxnu_panic(");
+	EXPECT_THAT(late, HasSubstr("if (now - tgm_present.late < TGM_PRESENT_WAKE_GRACE_NS) {"));
+	EXPECT_THAT(late, Not(HasSubstr("watch_claim")));
+	EXPECT_THAT(late, Not(HasSubstr("watch_work")));
+	EXPECT_THAT(flat(definition(gpu(), "int tgm_present_watch_dependencies(")),
+		    HasSubstr("tgm_present.late = 0;"));
+	const std::string del = flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)"));
+	expectBefore(del, "chan_abandon(chan);", "present_watch_fenced(chan, 1);");
+	expectBefore(del, "present_watch_fenced(chan, 1);", "list_del(&chan->live);");
 	EXPECT_THAT(deadline, HasSubstr("if (tgm_present.pending && (s32)(tgm_chan_completed(tgm_present.chan) - "
 					"tgm_present.pending) >= 0)"));
 	const std::string offer = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));

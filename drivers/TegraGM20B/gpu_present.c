@@ -98,7 +98,7 @@ static void present_watch_flush(void)
 	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 }
 
-/* Thread context, may sleep: a kill, a semantic wait, a hidden producer, the offer's own late look, the deadline. */
+/* Thread context, may sleep: a kill, a semantic wait, a hidden producer, the offer's own late look. */
 static void present_watch_work(void *unused)
 {
 	int found;
@@ -141,91 +141,6 @@ void tgm_present_pass(void)
 			       1);
 }
 
-/* tgm_live_lock held; these descriptions only run after the present deadline expires. */
-static void present_channel_brief(struct tgm_chan *chan, int chid, char *buf, unsigned int len)
-{
-	if (!chan) {
-		scnprintf(buf, len, "untracked ch %d", chid);
-		return;
-	}
-	scnprintf(buf, len, "%.16s ch %u fence %u/%u err %u uid %llu", chan->owner, chan->chid,
-		  tgm_chan_completed(chan), chan->submitted, chan->error, chan->id);
-}
-
-/* TGM_PRESENT_NS after a present was queued, if it has not completed: name its pending producer. */
-static void present_deadline(void *arg)
-{
-	struct tgm_chan *chan = NULL;
-	struct tgm_chan *waited = NULL;
-	struct switch_gpu_present_pending pending;
-	char state[TGM_HANG_LINE];
-	char what[96], current_owner[96], next_owner[96];
-	u64 age = 0;
-	u32 seqno = 0;
-	u32 eng;
-
-	(void)arg;
-	present_watch_work(NULL);
-	mutex_lock(&tgm_present.lock);
-	if ((!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
-	     __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
-		     SWITCH_GPU_PRESENT_WATCH_ARMED) ||
-	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) {
-		mutex_unlock(&tgm_present.lock);
-		return;
-	}
-	/* a deadline of an earlier present that was already running when that one completed: this one has its own time,
-	 * which a recovery under way restarts */
-	age = nvxnu_nanotime() - max(tgm_present.queued, tgm_present.recovered);
-	if (age < TGM_PRESENT_NS) {
-		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS - age);
-		mutex_unlock(&tgm_present.lock);
-		return;
-	}
-	age = nvxnu_nanotime() - tgm_present.queued;
-	if (tgm_present.pending &&
-	    (s32)(tgm_chan_completed(tgm_present.chan) - tgm_present.pending) >= 0) {
-		nvxnu_panic("tegra-gm20b: present fence %u complete after %llu ms but its nonstall "
-			    "interrupt never came",
-			    tgm_present.pending, age / 1000000);
-	}
-	/* Timeline status may lock engine state; never query it while holding tgm_live_lock. */
-	pending = switch_gpu_present_tokens_pending(&tgm_present.tokens);
-	mutex_lock(&tgm_live_lock);
-	if (pending.token.engine == SWITCH_GPU_ENGINE_GM20B) {
-		chan = live_by_uid(pending.token.queue);
-		if (chan && switch_gpu_present_pending_matches(&pending, chan->id, tgm_chan_completed(chan))) {
-			waited = chan;
-			seqno = (u32)pending.token.value;
-		}
-	}
-	if (tgm_hang_recover(waited ? waited : tgm_present.chan, "present",
-			     waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
-		mutex_unlock(&tgm_live_lock);
-		tgm_present.recovered = nvxnu_nanotime();
-		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
-		mutex_unlock(&tgm_present.lock);
-		return;
-	}
-	if (waited) {
-		present_channel_brief(waited, waited->chid, what, sizeof(what));
-	} else {
-		scnprintf(what, sizeof(what), "no pending GPU producer");
-	}
-	eng = nvkm_rd32(tgm_gpu.device, PFIFO_ENG_STATUS(0));
-	present_channel_brief(eng & PFIFO_ENG_ID_TSG ? NULL : live_by(0, PFIFO_ENG_ID(eng)),
-			      PFIFO_ENG_ID(eng), current_owner, sizeof(current_owner));
-	present_channel_brief(eng & PFIFO_ENG_NEXT_ID_TSG ? NULL : live_by(0, PFIFO_ENG_NEXT_ID(eng)),
-			      PFIFO_ENG_NEXT_ID(eng), next_owner, sizeof(next_owner));
-	tgm_chan_describe(tgm_present.chan, state, sizeof(state));
-	nvxnu_panic("tegra-gm20b: present timeout %llums; typed %u pending %u:%u:%llu status %d "
-		    "physical %d; "
-		    "GR %08x current{%.80s} next{%.80s}; waiting{%.80s} seq %u; present{%.448s}",
-		    (nvxnu_nanotime() - tgm_present.queued) / 1000000, tgm_present.tokens.count,
-		    pending.token.engine, pending.token.queue, pending.token.value, pending.status,
-		    pending.physical, eng, current_owner, next_owner, what, seqno, state);
-}
-
 #if TGM_STATS
 void tgm_present_stats(u32 *presents, u64 *sum, u64 *max)
 {
@@ -251,7 +166,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 	if (ret)
 		goto out;
 	tgm_fence_page_put(probe);
-	tgm_present.deadline_work = nvxnu_work_alloc(present_deadline, NULL);
+	tgm_present.deadline_work = nvxnu_work_alloc(tgm_present_deadline, NULL);
 	tgm_present.redo_work = nvxnu_work_alloc(tgm_present_redo_work, NULL);
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
 	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
@@ -512,6 +427,7 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.done = done;
 		tgm_present.arg = arg;
 		tgm_present.queued = nvxnu_nanotime();
+		tgm_present.late = 0;
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 		switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);

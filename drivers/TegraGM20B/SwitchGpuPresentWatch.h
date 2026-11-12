@@ -3,8 +3,9 @@
  * offer arms the watch, asks the producer's channel for the interrupt at its seqno (a quiet job raises none unasked,
  * SwitchGpuQuiet.h), then looks at the producer once more, so a pass that ran just before the arm is not missed.
  * The producer channel's interrupt pass makes it due with plain loads (nvkm's event lock is held there), and the pass's
- * end, in thread context, delivers it. A kill, a semantic wait, a producer that ended with its writes still in the L2,
- * and the deadline go through the present's watch work item, which may sleep. */
+ * end, in thread context, delivers it. A kill, a channel's teardown, a semantic wait and a producer that ended with its
+ * writes still in the L2 go through the present's watch work item, which may sleep. The deadline takes none: it follows
+ * work the asked interrupt is queued behind, and panics for one that was due and never came (gpu_present_deadline.c). */
 #pragma once
 #include <stdint.h>
 #include "SwitchGpuBacking.h"
