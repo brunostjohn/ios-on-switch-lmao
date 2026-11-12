@@ -261,6 +261,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_packed422': False,
         'gpu.x1.vic_transpose422': False,
         'gpu.x1.vic_4k': False,
+        'gpu.x1.vic_compose': False,
     },
 }
 

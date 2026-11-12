@@ -7,6 +7,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOUserClient.h>
 #include "SwitchVICJobs.h"
+#include "SwitchVICComposeProbe.h"
 #include "SwitchVICFractionProbe.h"
 #include "SwitchVICLargeProbe.h"
 #include "SwitchVICLayoutProbe.h"
@@ -27,6 +28,7 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_PACKED_PROBE_MAGIC, sizeof(SwitchVICPackedProbeReply), switch_vic_packed_probe_run},
     {SWITCH_VIC_TRANSPOSE_PROBE_MAGIC, sizeof(SwitchVICTransposeProbeReply), switch_vic_transpose_probe_run},
     {SWITCH_VIC_LARGE_PROBE_MAGIC, sizeof(SwitchVICLargeProbeReply), switch_vic_large_probe_run},
+    {SWITCH_VIC_COMPOSE_PROBE_MAGIC, sizeof(SwitchVICComposeProbeReply), switch_vic_compose_probe_run},
 };
 
 bool gBusy;

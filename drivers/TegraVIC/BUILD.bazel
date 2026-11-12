@@ -52,6 +52,7 @@ kernel_driver(
         "SwitchVICPackedProbe.cpp",
         "SwitchVICTransposeProbe.cpp",
         "SwitchVICLargeProbe.cpp",
+        "SwitchVICComposeProbe.cpp",
         "TegraVICPresent.cpp",
         "TegraVICSurface.cpp",
         "TegraVICUserClient.cpp",

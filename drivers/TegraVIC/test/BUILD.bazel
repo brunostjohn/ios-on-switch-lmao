@@ -78,6 +78,18 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_compose_probe_test",
+    srcs = [
+        "switch_vic_compose_probe_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchVICComposeProbe.h",
+        "//drivers/TegraVIC:TegraVICCompose.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+)
+
+host_test(
     name = "switch_vic_transpose_probe_test",
     srcs = [
         "switch_vic_transpose_probe_test.cpp",
