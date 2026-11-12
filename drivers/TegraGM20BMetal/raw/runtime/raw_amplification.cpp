@@ -29,25 +29,6 @@ void RenderEncoder::setAmplification(uint32_t count, bool viewportOffsets)
     amplificationDirty_ = true;
 }
 
-bool RenderEncoder::amplified(const std::function<bool()> &draw, const char **why)
-{
-    if (amplificationOffsets_) {
-        *why = "a vertex amplification view mapping of a viewport offset: viewport arrays go to m2v";
-        return false;
-    }
-    amplifying_ = true;
-    bool drawn = true;
-    for (uint32_t a = 0; drawn && a < amplifications_; a++) {
-        amplification_ = a;
-        amplificationDirty_ = true;
-        drawn = draw();
-    }
-    amplifying_ = false;
-    amplification_ = 0;
-    amplificationDirty_ = true;
-    return drawn;
-}
-
 const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
 {
     const uint32_t most = std::max<uint32_t>(1, r.amplificationMax);

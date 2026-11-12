@@ -743,8 +743,27 @@ private:
                                    UINT32_MAX, UINT32_MAX, UINT32_MAX};
     uint32_t amplifications_ = 1, amplification_ = 0;
     bool amplificationOffsets_ = false, amplifying_ = false, amplificationDirty_ = true;
+
     // `draw` once per amplification, its id in the state's AmplificationId word
-    bool amplified(const std::function<bool()> &draw, const char **why);
+    template <typename Draw> bool amplified(const Draw &draw, const char **why)
+    {
+        if (amplificationOffsets_) {
+            *why = "a vertex amplification view mapping of a viewport offset: viewport arrays go to m2v";
+            return false;
+        }
+        amplifying_ = true;
+        bool drawn = true;
+        for (uint32_t a = 0; drawn && a < amplifications_; a++) {
+            amplification_ = a;
+            amplificationDirty_ = true;
+            drawn = draw();
+        }
+        amplifying_ = false;
+        amplification_ = 0;
+        amplificationDirty_ = true;
+        return drawn;
+    }
+
     // What of a draw's amplification and bind strides the state does not take (null: it takes them)
     const char *drawnWordsRefusal(const PackPipeline &r) const;
     void drawnWords(const PackPipeline &r, uint32_t (&want)[32]);
