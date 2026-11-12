@@ -72,7 +72,8 @@ struct NativeBlockTexturesTest: NativeObjectTest {
         paths.append(timing.path)
         let texels = UnsafeBufferPointer(
             start: out.contents().bindMemory(to: SIMD4<Float>.self, capacity: 16), count: 16)
-        return texels.filter { Array($0).map { Int(($0 * 255).rounded()) } != [138, 138, 138, 255] }.count
+        return texels.filter { [$0.x, $0.y, $0.z, $0.w].map { Int(($0 * 255).rounded()) } != [138, 138, 138, 255] }
+            .count
     }
 
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
