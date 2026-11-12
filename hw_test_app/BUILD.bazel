@@ -9,6 +9,7 @@ load("@rules_swift//swift:swift_library.bzl", "swift_library")
 load("@rules_swift//swift:swift_test.bzl", "swift_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
+load("//kernel/rules:package.bzl", "ios_binary")
 load(":apps.bzl", "hwtest_app", "ios_arm64e")
 
 package(default_visibility = ["//visibility:public"])
@@ -366,6 +367,49 @@ cc_library(
 )
 
 swift_interop_hint(
+    name = "texpeer_pattern_module",
+    module_name = "SwitchTexturePattern",
+)
+
+# What metal.native.shared_texture_peer's second process writes and the app reads back (peer/texpeer_pattern.h)
+cc_library(
+    name = "texpeer_pattern",
+    hdrs = ["peer/texpeer_pattern.h"],
+    aspect_hints = [":texpeer_pattern_module"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+# metal.native.shared_texture_peer's second process (peer/texpeer.mm): debug boot packages stage it at /usr/bin/switch-texpeer;
+# the 21H461 BlueTool stand-in starts it for the app, 24B119's launchd for its Mach service (com.brunostjohn.switch.texpeer.plist).
+ios_binary(
+    name = "switch-texpeer",
+    srcs = ["peer/texpeer.mm"],
+    out = "build/switch-hwtest/switch-texpeer",
+    hdrs = ["peer/texpeer_pattern.h"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+    ] + select({
+        "//ipsw:24B119": ["-DSWITCH_TEXPEER_LAUNCHD=1"],
+        "//conditions:default": [],
+    }),
+)
+
+# The overlay files of this package that overlay/manifest.json names.
+filegroup(
+    name = "overlay_files",
+    srcs = ["peer/com.brunostjohn.switch.texpeer.plist"],
+)
+
+swift_interop_hint(
     name = "a64x_probe_module",
     module_name = "SwitchA64XProbe",
 )
@@ -407,12 +451,14 @@ cc_library(
         "bench/switch_bench.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
@@ -428,8 +474,10 @@ cc_library(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
         "//drivers/TegraGM20BMetal:raw_runtime_headers",
     ],
@@ -500,6 +548,7 @@ swift_library(
         ":cpu_clock",
         ":gpu",
         ":sched_probe",
+        ":texpeer_pattern",
         ":video",
         ":workloop_probe",
     ],

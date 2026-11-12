@@ -26,7 +26,7 @@ template <typename T> class ComputeKernelSet;
 struct ComputeState;
 }
 
-@class RMDevice, RMCommandBuffer;
+@class RMDevice, RMCommandBuffer, RMCounterSampleBuffer;
 struct SurfaceWriteCount;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
@@ -118,6 +118,12 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMTextureTwinOnly
 };
 
+enum class RMShareable : uint8_t {
+    Unasked,
+    No,
+    Yes
+};
+
 @interface RMTexture : RMObject {
 @public
     raw::Texture _raw;
@@ -147,7 +153,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMHeap *_heap;
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
-    std::atomic<bool> _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (RawMetalResourceIds.mm)
+    std::atomic<bool>
+        _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (RawMetalResourceIds.mm)
+    std::atomic<RMShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
 }
 @end
 
@@ -174,6 +182,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     bool _asked;                             // its record asked of the runtime (completeLater)
     std::string _key;                        // its pack key (completable states')
     MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
+    const char *_m2vMissing;                 // what of it m2v has no form of (rmM2vMissingState), null: nothing
     std::mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
 }
@@ -211,6 +220,7 @@ struct RMPass {
     struct Color {
         __unsafe_unretained id texture;
         NSUInteger level;
+        NSUInteger slice;  // its slice, a 3D texture's depth plane
         MTLLoadAction load;
         MTLStoreAction store;
         MTLClearColor clear;
@@ -218,21 +228,26 @@ struct RMPass {
     } color[8];
 
     __unsafe_unretained id depth;
+    NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
+
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
     struct Zeta {
         __unsafe_unretained id texture;
-        NSUInteger level;
+        NSUInteger level, slice;
         MTLLoadAction load;
         MTLStoreAction store;
         bool resolve;
     } zeta[2];
+
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
+    uint32_t layers = 1;  // renderTargetArrayLength (0 and 1: one)
     raw::SamplePositions positions;
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
-    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
+    bool continues =
+        false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -251,6 +266,15 @@ struct RMSegment {
     bool event = false;
     bool gpuSignal = false;
     bool gpuWait = false;
+};
+
+// A counter sample a pass descriptor's attachment asks for (RawMetalCounterEncode.mm): at the tape position of its encoder's
+// first command (a start) or its OpEnd (an end); the command buffer retains the buffer
+struct RMCounterMark {
+    uint32_t at;
+    raw::counters::Point point;
+    uint32_t index;
+    __unsafe_unretained RMCounterSampleBuffer *buffer;
 };
 
 struct RMSharedEventWait {
@@ -280,11 +304,13 @@ struct RMSharedEventWait {
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;
     raw::ProbeTaken _probeTaken;
+
     struct ProbeOp {
         size_t at;
         raw::ProbeOp op;
         RMTexture *read, *written;
     };
+
     std::vector<ProbeOp> _probeOps;
 #endif
     std::vector<RMSegment> _segs;
@@ -304,8 +330,9 @@ struct RMSharedEventWait {
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     RMCommandPlan _plan;
-    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
-    RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    std::vector<RMPass> _passes;               // OpRender's (Cmd::x)
+    std::vector<RMCounterMark> _counterMarks;  // in tape order
+    RMBytes _bytes;                            // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
     // the encode reads (the first draw's cover test) is not read from the write-combined chunk
     std::vector<uint8_t> _shadow;
@@ -386,6 +413,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     RMCommandBuffer *_cb;
     bool _ended;
     uint64_t _traceId;
+    std::vector<RMCounterMark> _counterPending;  // its descriptor's samples not yet placed on the tape
 }
 @end
 
@@ -409,15 +437,21 @@ uint64_t nextTraceId();
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;
     raw::Variant<raw::Pipeline> *_drawnVariant;
-    uint32_t _formats[8];   // the pass's color attachments' formats as the raw path holds them (0: none)
-    uint32_t _count;        // its attachment count (the last attachment's index + 1)
-    uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
-    uint32_t _samples;      // its color attachments' samples a pixel
-    uint8_t _turn;          // its turned attachments' rotation (raw_rotation.h; 0: none)
-    uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
+    uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
+    uint32_t _count;       // its attachment count (the last attachment's index + 1)
+    uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _samples;     // its color attachments' samples a pixel
+    uint8_t _turn;         // its turned attachments' rotation (raw_rotation.h; 0: none)
+    uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
     bool _drew;                      // a draw recorded
+    // setTessellationFactorBuffer:offset:instanceStride: and setTessellationFactorScale:, which its patch draws record
+    // (RawMetalTessellation.mm; unretained: each draw retains what it reads)
+    RMBuffer *_tessFactors;
+    NSUInteger _tessFactorOffset, _tessFactorStride;
+    float _tessScale;
+    BOOL _tessScaleSet;
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -427,12 +461,13 @@ uint64_t nextTraceId();
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
+    MTLRegion _stageIn;  // setStageInRegion:, which each dispatch records (a stage-in kernel's [[stage_in]] grid)
 }
 @end
 
 // RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
-id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
-                  MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
+id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
+                  MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);

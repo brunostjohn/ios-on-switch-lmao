@@ -9,6 +9,7 @@ struct TextureCpuShape {
     bool tiled, volume;
     const fx::MipChain *chain;
     const tgm_layout *importLayout;
+    uint64_t layerBytes;  // an array's layer stride (a mipmapped one's view: its chain's, past level 0's image)
 };
 
 struct TextureCpuRange {
@@ -35,12 +36,12 @@ inline TextureCpuRegion textureCpuRange(const TextureCpuShape &shape, const uint
     fx::MipChain made;
     const fx::MipChain *chain = nullptr;
     uint64_t layerOffset = 0;
-    if (shape.chain && !slice && size[2] <= 1) {
-        if (level >= shape.chain->levels)
+    if (shape.chain && (shape.volume || size[2] <= 1)) {
+        // a layer's levels arrayStride on; a 3D level's planes in its own blocks (volumeOffset)
+        if (level >= shape.chain->levels || slice >= shape.chain->layers)
             return TextureCpuRegion::Invalid;
-        if (shape.chain->depth > 1 || shape.chain->level[level].zLog2)
-            return TextureCpuRegion::Unsupported;
         chain = shape.chain;
+        layerOffset = slice * shape.chain->arrayStride;
     } else if (shape.volume && !level && !slice) {
         if (!fx::volumeLayout(shape.width, shape.height, shape.depth, 1, shape.bpp, !shape.blockDepth, made))
             return TextureCpuRegion::Invalid;
@@ -49,7 +50,7 @@ inline TextureCpuRegion textureCpuRange(const TextureCpuShape &shape, const uint
         if (!fx::arrayLayout(shape.width, shape.height, shape.layers, 1, shape.bpp, made))
             return TextureCpuRegion::Invalid;
         chain = &made;
-        layerOffset = slice * made.arrayStride;
+        layerOffset = slice * (shape.layerBytes ? shape.layerBytes : made.arrayStride);
     } else if (level || slice || size[2] > 1) {
         return TextureCpuRegion::Unsupported;
     }

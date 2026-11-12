@@ -64,12 +64,15 @@ class Memory:
         return self.words.get(va, 0)
 
 
+V20_AT = directlink.PIPELINE_BYTES - packfile.PIPELINE_V21.size - packfile.PIPELINE_V20.size
+
+
 def f32(x: float) -> int:
     return struct.unpack('<I', struct.pack('<f', x))[0]
 
 
 def tail(rec: dict) -> tuple:
-    return packfile.PIPELINE_V20.unpack_from(rec['pipeline'], directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+    return packfile.PIPELINE_V20.unpack_from(rec['pipeline'], V20_AT)
 
 
 def device(mem: Memory, rec: dict, textures: dict, samplers: dict, holds) -> None:  # noqa: ANN001  a class predicate

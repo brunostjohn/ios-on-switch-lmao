@@ -37,6 +37,7 @@
 #include <dispatch/dispatch.h>
 #include <errno.h>
 #include <notify.h>
+#include <os/lock.h>
 #include <os/log.h>
 #include <signal.h>
 #include <spawn.h>
@@ -143,6 +144,53 @@ static void watchColumnScan(const char *name, int blockHeightLog2)
 }
 #endif
 
+#if SWITCH_DEBUG && SWITCH_BLUETOOL_STARTS_HELPERS
+// Debug builds: HW Test's second process for shared textures (hw_test_app/peer/texpeer.mm). The sandboxed app can start no
+// process, so it sends {kMsgId: "SwitchTexturePeer", endpoint: its anonymous listener's}; this starts the peer and keeps
+// the endpoint until that process asks for it ({kMsgId: "SwitchTexturePeerEndpoint"}), then the peer connects to the app.
+extern pid_t ios_xpc_connection_get_pid(xpc_connection_t connection) __asm__("_xpc_connection_get_pid");
+
+static const char kTexturePeer[] = "/usr/bin/switch-texpeer";
+static os_unfair_lock gPeerLock = OS_UNFAIR_LOCK_INIT;
+static xpc_object_t gPeerEndpoint;
+static pid_t gPeerPid;
+
+static void startTexturePeer(xpc_object_t message, xpc_object_t reply)
+{
+    xpc_object_t endpoint = xpc_dictionary_get_value(message, "endpoint");
+    int error = endpoint && xpc_get_type(endpoint) == XPC_TYPE_ENDPOINT ? 0 : EINVAL;
+    pid_t pid = 0;
+    os_unfair_lock_lock(&gPeerLock);
+    if (!error) {
+        char *argv[] = {(char *)kTexturePeer, NULL};
+        error = posix_spawn(&pid, kTexturePeer, NULL, NULL, argv, environ);
+    }
+    if (!error) {
+        if (gPeerEndpoint)
+            xpc_release(gPeerEndpoint);
+        gPeerEndpoint = xpc_retain(endpoint);
+        gPeerPid = pid;
+    }
+    os_unfair_lock_unlock(&gPeerLock);
+    os_log(OS_LOG_DEFAULT, "BlueTool: texture peer %{public}s: %d (pid %d)", kTexturePeer, error, pid);
+    xpc_dictionary_set_int64(reply, "result", error);
+    xpc_dictionary_set_int64(reply, "pid", pid);
+}
+
+static void giveTexturePeerEndpoint(xpc_connection_t peer, xpc_object_t reply)
+{
+    os_unfair_lock_lock(&gPeerLock);
+    const bool started = gPeerEndpoint && ios_xpc_connection_get_pid(peer) == gPeerPid;
+    if (started) {
+        xpc_dictionary_set_value(reply, "endpoint", gPeerEndpoint);
+        xpc_release(gPeerEndpoint);
+        gPeerEndpoint = NULL;
+    }
+    os_unfair_lock_unlock(&gPeerLock);
+    xpc_dictionary_set_int64(reply, "result", started ? 0 : EPERM);
+}
+#endif
+
 #if SWITCH_DEBUG
 // Debug builds: the GPU's clock gating off and on again for a frame-time A/B within one boot (drivers/TegraGM20B
 // debug.switch_gpu_clkgate), once per Darwin notification the Mac posts
@@ -173,6 +221,12 @@ static void answer(xpc_connection_t peer, xpc_object_t message)
         xpc_dictionary_set_int64(reply, "manufacturer", 0);
         xpc_dictionary_set_string(reply, "firmware", kFirmware);
     }
+#if SWITCH_DEBUG && SWITCH_BLUETOOL_STARTS_HELPERS
+    if (id && !strcmp(id, "SwitchTexturePeer"))
+        startTexturePeer(message, reply);
+    if (id && !strcmp(id, "SwitchTexturePeerEndpoint"))
+        giveTexturePeerEndpoint(peer, reply);
+#endif
     xpc_connection_send_message(peer, reply);
     xpc_release(reply);
 #if SWITCH_BLUETOOL_STARTS_HELPERS

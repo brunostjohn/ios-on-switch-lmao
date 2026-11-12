@@ -1,7 +1,7 @@
 # file	name	nv|tegra|mismatch|policy	expression or reason	note
 raw_gpu.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_gpu.cpp	kUboChunk	policy	upload granule
-raw_gpu.cpp	kMaxCbufBytes	policy	NVK_MAX_CBUF_SIZE (the class takes up to 64 KiB per binding)
+raw_gpu.cpp	kSetGroups	policy	nvk_pipeline_bind_group of the vertex, pixel, tessellation init and tessellation programs
 raw_gpu.cpp	kTicCount	policy	texture header pool size the runtime allocates
 raw_gpu.cpp	kTscCount	policy	sampler pool size the runtime allocates
 raw_gpu.cpp	kEngines	policy	TegraGM20BABI.h engine mask
@@ -44,6 +44,12 @@ raw_stamps.h	kStampWords	policy	push words of a stamp
 raw_stamps.h	kPtimerNsNum	policy	PTIMER to ns on this part (raw_stamps.h)
 raw_stamps.h	kPtimerNsDen	policy	PTIMER to ns on this part (raw_stamps.h)
 raw_stamps.h	kStampSlots	policy	stamp page layout
+raw_counters.h	kSampleBytes	policy	Metal's sample (AGXMTLCounterSampleBuffer sampleSize)
+raw_counters.h	kRecordBytes	policy	the four-word report structure a sample is written in
+raw_counters.h	kMaxBufferBytes	policy	the AGX driver's largest sample buffer (counterSampleBufferLimits maxBufferSize)
+raw_counters.h	kPayload	policy	a written record's payload
+raw_counters.h	kErrorValue	policy	Metal's MTLCounterErrorValue
+raw_counters.h	kTimestampWords	policy	push words of a sample's report
 raw_mme.h	kAbi	policy	raw macro ABI version
 raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot
@@ -55,8 +61,22 @@ raw_mme.h	kIndexedParams	policy	raw macro slot
 raw_mme.h	kIcbRange	policy	raw macro slot
 raw_mme.h	kIcbDraw	policy	raw macro slot
 raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
+raw_mme.h	kIcbGate	policy	raw macro slot
+raw_mme.h	kIcbBind	policy	raw macro slot
+raw_mme.h	kClearLayers	policy	raw macro slot
 raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kIcbPatches	policy	raw macro slot
+raw_mme.h	kScratchSetHi	policy	MME shadow scratch words of a patch execute's layout, after the range's
+raw_mme.h	kNoEntry	policy	a patch execute's layout word for a control-stage buffer its state names no entry of
+raw_mme.h	kIcbSetBytes	policy	NVK's descriptor set slot, as the patch macro selects it
+raw_mme.h	kIcbRootBytes	policy	NVK's root descriptor table size (raw_gpu.cpp kRootBytes), as the patch macro selects it
+raw_mme.h	kIcbPatchesArguments	policy	the patch macro's call data words
+raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, above NVK's
+raw_mme.h	kAmplify	policy	raw macro slot
+raw_mme.h	kAmplifyIndexed	policy	raw macro slot
+raw_mme.h	kAmplifyCallWords	policy	push words of an amplify call: its header and an indexed draw's five words
+raw_mme.h	kAmplificationScratchWords	policy	push words of the amplify macros' scratch writes: the count, both maps, a state's words
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

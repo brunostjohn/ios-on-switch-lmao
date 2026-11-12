@@ -240,6 +240,21 @@ pub(super) fn builtin_object(
     })
 }
 
+/// The fragment's `Layer` input, at which the layered storage form
+/// (`LoweringInputs::layered_storage`) addresses its images: its object, shared with a
+/// `[[render_target_array_index]]` read of `Layer`, declared through its enabling capability.
+pub(super) fn layer_input(cx: &mut SelectCx<'_>) -> Result<usize, Error> {
+    let enabler = enabler(cx, crate::spv::BuiltIn::Layer, Feature::LayeredRendering)?;
+    Ok(builtin_through(
+        &mut cx.families.stage_io,
+        crate::spv::BuiltIn::Layer,
+        IoDir::Input,
+        Shape::U32,
+        StageBuiltin::Layer,
+        enabler,
+    ))
+}
+
 /// [`builtin`], declared through enabling capability `enabler` when the builtin has
 /// alternatives ([`builtin_enablers`]).
 fn builtin_through(
@@ -594,6 +609,13 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 source: Source::LoopSample(f),
             });
             return Ok(());
+        }
+        // Drawn one amplification at a time, a stage reads the count from the push word the binder
+        // writes with each amplification's, so one pipeline draws at every count.
+        (ParamRole::Builtin(Builtin::AmplificationCount), Stage::Vertex | Stage::Fragment)
+            if cx.inputs.amplification_draws.is_some() =>
+        {
+            return pushed(cx, b, ty, PushField::AmplificationCount);
         }
         // Vulkan has no builtin for the count: the binder specializes it.
         (ParamRole::Builtin(Builtin::AmplificationCount), _) => {

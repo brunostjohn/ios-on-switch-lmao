@@ -46,6 +46,14 @@ static inline uint64_t tgm_stamp_monotonic(uint64_t last, uint64_t now)
 	return now > last ? now : last;
 }
 
+/* PTIMER read right after a wake's nvkm_timer_init: what to set it to so it is past `last`, every GPU time before the
+ * power-down (a power-up's times then lie below the next power-up's clock anchor, TegraGM20BClockABI.h), or 0 where it
+ * already is */
+static inline uint64_t tgm_stamp_reseed(uint64_t last, uint64_t ptimer)
+{
+	return ptimer > last ? 0 : last + 1;
+}
+
 /* `up`: the GPU is powered; `display_on`: the backlight's last word; `idle`: the GPU is at its idle clock; `held`: a
  * demand's hold has not run out; `sc7`: system sleep (or the bring-up) holds the GPU. */
 static inline enum tgm_rail_move tgm_rail_next(int up, int display_on, int idle, int held, int sc7)

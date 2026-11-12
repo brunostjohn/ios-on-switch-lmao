@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include "bridge/NativeMetalDirect.h"
 #include "raw_emit.h"
 #include "raw_record_parts.h"
@@ -112,11 +113,11 @@ public:
     CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
                            uint32_t zeroPush = 0, bool texsF16 = false)
     {
-        if (state.stageCount != 2) {
+        if (state.stageCount != 2 && !(state.stageCount == 4 && state.tess.parameters && state.tess.controlWord)) {
             why = std::to_string(state.stageCount) + " stages";
             return CompileOutcome::Refused;
         }
-        for (uint32_t k = 0; k < 2; k++) {
+        for (uint32_t k = 0; k < state.stageCount; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
@@ -164,6 +165,11 @@ public:
         return programs_[k];
     }
 
+    bool tessellates() const
+    {
+        return made_[3].owner != nullptr;
+    }
+
     EmitProgram emit(int k) const
     {
         return {made_[k].header, made_[k].numGprs, made_[k].earlyFragmentTests, made_[k].interlockControl,
@@ -178,8 +184,8 @@ public:
 private:
     const DirectNvk &nvk_;
     const NakLayoutData &layout_;
-    NvkStage made_[2] = {};
-    CapturedProgram programs_[2];
+    NvkStage made_[4] = {};
+    CapturedProgram programs_[4];
 };
 
 // The set-0 byte of `w` in the draw's layout
@@ -204,6 +210,14 @@ bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &
         if (!offsetOf(set0, w, e.offset)) {
             why = "set 0 binding " + std::to_string(w.binding) + " not in its layout";
             return false;
+        }
+        if (w.source == NmbDirectTessFactors || w.source == NmbDirectPatchIndices ||
+            w.source == NmbDirectControlPointIndices) {
+            e.tessBuffer = int8_t(w.source == NmbDirectTessFactors    ? TessFactors
+                                  : w.source == NmbDirectPatchIndices ? TessPatchIndices
+                                                                      : TessControlPointIndices);
+            out.push_back(e);
+            continue;
         }
         if (w.type == StorageBuffer && w.source == NmbDirectColorTable) {
             e.colorTable = true;
@@ -329,17 +343,41 @@ const char *spillTables(const NmbDirectState &state, RecordParts &parts)
     return nullptr;
 }
 
+// The streams past stream 0 into the record (PackPipeline::vertexStreams). Stream 0 is the bridge's first vertex buffer
+// (vertexSlot), which binds at the lowest Metal buffer index as raw_emit numbers the streams
+bool vertexStreams(const std::vector<EmitStream> &streams, RecordParts &parts, std::string &why)
+{
+    if (streams.size() > kPackVertexStreams) {
+        why = "more vertex streams than a record's " + std::to_string(kPackVertexStreams);
+        return false;
+    }
+    if (!streams.empty() && streams[0].buffer != parts.vertexSlot) {
+        why = "the first vertex stream is not the translation's first vertex buffer";
+        return false;
+    }
+    for (size_t k = 1; k < streams.size(); k++)
+        parts.vertexStreams[k - 1] = uint8_t(streams[k].buffer + 1) | (streams[k].bindStride ? kStreamBindStride : 0);
+    return true;
+}
+
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
-// unless the pack varies it, so it never costs an extra.
-bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t blended,
-             const PackRules &rules, std::map<uint32_t, uint32_t> &regs, std::string &why)
+// unless the pack varies it, so it never costs an extra. Fixed-function input fetches the attributes the translation does not
+// pull, at the locations m2v gives them (dense in attribute order).
+bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t pulled,
+             uint32_t blended, const PackRules &rules, std::map<uint32_t, uint32_t> &regs,
+             std::vector<EmitStream> &streams, std::string &why)
 {
     std::string fields = key.substr(0, key.find(" | "));
     while (!fields.empty() && fields.back() == ' ')
         fields.pop_back();
+    std::vector<uint32_t> fetched;
+    if (!stages.tessellates())
+        std::copy_if(attributes.begin(), attributes.end(), std::back_inserter(fetched), [&](uint32_t index) {
+            return index >= 32 || !(pulled >> index & 1);
+        });
     std::vector<EmitRegister> made;
     if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
-        !emitVertexInput(fields, attributes, made, why))
+        !emitVertexInput(fields, fetched, made, streams, why))
         return false;
     regs = rules.context;
     for (const auto &[m, v] : rules.baseline)
@@ -406,6 +444,52 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const Na
         out.pipeline.variantCount[k] = uint8_t(made[k].size());
         out.variants.insert(out.variants.end(), made[k].begin(), made[k].end());
     }
+}
+
+// The push words the probe draws agree a raw draw writes itself (raw_direct_push.h drawnPushMask), into the record
+bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &why)
+{
+    const NmbDirectDraw &d = state.draws[0];
+    for (const NmbDirectDraw &other : state.draws)
+        if (other.amplificationIdWord != d.amplificationIdWord ||
+            other.amplificationCountWord != d.amplificationCountWord || other.arrayLengthWord != d.arrayLengthWord ||
+            other.viewportCountWord != d.viewportCountWord ||
+            other.amplificationLayerWord != d.amplificationLayerWord ||
+            other.amplificationViewportWord != d.amplificationViewportWord ||
+            memcmp(other.pulledStrides, d.pulledStrides, sizeof d.pulledStrides)) {
+            why = "probe draws that place a drawn push word apart";
+            return false;
+        }
+    if (d.amplificationMax > 0xFF) {
+        why = "a vertex amplification count past 255";
+        return false;
+    }
+    parts.amplificationMax = uint8_t(d.amplificationMax > 1 ? d.amplificationMax : 0);
+    parts.amplificationIdWord = uint8_t(d.amplificationIdWord);
+    parts.amplificationCountWord = uint8_t(d.amplificationCountWord);
+    parts.arrayLengthWord = uint8_t(d.arrayLengthWord);
+    parts.viewportCountWord = uint8_t(d.viewportCountWord);
+    for (size_t k = 0; k < 4; k++) {
+        parts.pulledStride[k][0] = uint8_t(d.pulledStrides[k][0]);
+        parts.pulledStride[k][1] = uint8_t(d.pulledStrides[k][1]);
+    }
+    return true;
+}
+
+// A tessellation state's registers its draws set and the draws after it set back: its domain, spacing and output primitives,
+// patches of one control point, and the control and evaluation stages on at bind groups 1 and 2 (nvk_pipeline_bind_group)
+void tessellationRegisters(const NmbDirectTess &tess, RuntimeRecord &out)
+{
+    constexpr uint32_t kTessellationParameters = 0x0320, kPatch = 0x0dcc;
+    constexpr uint32_t kShader = 0x2000, kBinding = 0x2010, kStride = 0x40, kControl = 2, kEvaluation = 3;
+    out.extras.insert(out.extras.end(), {{kTessellationParameters, tess.parameters},
+                                         {kPatch, 1},
+                                         {kShader + kStride * kControl, 1 | kControl << 4},
+                                         {kBinding + kStride * kControl, 1},
+                                         {kShader + kStride * kEvaluation, 1 | kEvaluation << 4},
+                                         {kBinding + kStride * kEvaluation, 2}});
+    out.restore.insert(out.restore.end(), {{kShader + kStride * kControl, kControl << 4},
+                                           {kShader + kStride * kEvaluation, kEvaluation << 4}});
 }
 
 // The fragment program's split as a record holds it (NVK made none where it saves nothing)
@@ -492,7 +576,8 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         return CompileOutcome::Refused;
     }
     // a split prologue binds its own constant buffers, set 1 not among them
-    const bool splits = split && !storage.storageMask && !heap.arrays && !draw.spillWords[0] && !draw.spillWords[1];
+    const bool splits = split && !storage.storageMask && !heap.arrays && !draw.spillWords[0] && !draw.spillWords[1] &&
+                        state.stageCount == 2;
     Stages stages(nvk, nakLayout);
     if (const CompileOutcome compiled = stages.compile(state, halfFloatTargets(key), splits, why);
         compiled != CompileOutcome::Made)
@@ -528,6 +613,13 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
     parts.heap = heap;
+    if (state.stageCount == 4) {
+        parts.tessPrograms[0] = &stages.program(2);
+        parts.tessPrograms[1] = &stages.program(3);
+        parts.controlWord = uint8_t(state.tess.controlWord);
+        parts.controlPoints = uint8_t(state.tess.controlPoints);
+        parts.controlPointIndexBytes = uint8_t(state.tess.indexBytes);
+    }
     if (!programsBindable(parts, why) || !layout(draw, parts.layout, why))
         return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(state.draws[1]);
@@ -538,10 +630,19 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         return CompileOutcome::Refused;
     }
     if (draw.vertexSlot != UINT32_MAX) {
+        if (!draw.vertexStrideDynamic && draw.vertexStride > kStreamStrideField) {
+            why = "a fixed-function vertex stream of a stride past SET_VERTEX_STREAM_A_FORMAT's 12 bits";
+            return CompileOutcome::Refused;
+        }
         parts.vertexSlot = uint8_t(draw.vertexSlot);
-        parts.vertexStride = uint16_t(draw.vertexStride & 0xFFF);
+        parts.vertexStride = uint16_t(draw.vertexStride);
+        parts.vertexStrideDynamic = draw.vertexStrideDynamic != 0;
     }
-    if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, why))
+    if (!drawnWords(state, parts, why))
+        return CompileOutcome::Refused;
+    std::vector<EmitStream> streams;
+    if (!emitted(key, stages, attributes, draw.pulledAttributes, state.blended, rules, parts.regs, streams, why) ||
+        !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     const uint32_t addresses = addressPushWords(draw);
     for (uint32_t i = 0; i < 32; i++)
@@ -550,16 +651,20 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.setBytes = uint16_t(Set0(draw.set0Bindings, draw.set0BindingCount).bytes());
     if (!assembleRecord(parts, key, rules, out, why))
         return CompileOutcome::Refused;
+    out.amplificationLayerWord = uint8_t(draw.amplificationLayerWord);
+    out.amplificationViewportWord = uint8_t(draw.amplificationViewportWord);
     if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {
         why = "storage form: assembled record lost its attachment contract";
         return CompileOutcome::Refused;
     }
+    if (state.stageCount == 4)
+        tessellationRegisters(state.tess, out);
     if (registers)
         *registers = parts.regs;
-    out.splitTried = split;
+    out.splitTried = split && state.stageCount == 2;
     if (splits)
         splitInto(nvk, stages.split(1), out);
-    if (variants)
+    if (variants && state.stageCount == 2)
         programVariants(state, nvk, nakLayout, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }

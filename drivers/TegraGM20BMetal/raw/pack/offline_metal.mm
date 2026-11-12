@@ -306,6 +306,20 @@ bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbOfflineRenderPipelineDe
     p.samples = d.rasterSampleCount;
     p.topology = d.inputPrimitiveTopology;
     p.rasterization = d.rasterizationEnabled;
+    // Metal's defaults are what the bridge takes without it (m2v TessellationDescriptor::default)
+    if (d.maxTessellationFactor != 16 || d.tessellationPartitionMode || d.tessellationFactorFormat ||
+        d.tessellationFactorStepFunction || d.tessellationOutputWindingOrder || d.tessellationControlPointIndexType ||
+        d.tessellationFactorScaleEnabled) {
+        p.tessellation = 1;
+        p.max_tessellation_factor = d.maxTessellationFactor;
+        p.partition_mode = d.tessellationPartitionMode;
+        p.factor_format = d.tessellationFactorFormat;
+        p.factor_step_function = d.tessellationFactorStepFunction;
+        p.winding = d.tessellationOutputWindingOrder;
+        p.control_point_index_type = d.tessellationControlPointIndexType;
+        p.factor_scale_enabled = d.tessellationFactorScaleEnabled;
+    }
+    p.max_amplification = d.maxVertexAmplificationCount;
     if (MTLVertexDescriptor *v = d.vertexDescriptor)
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = v.attributes[i];
@@ -321,22 +335,30 @@ bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbOfflineRenderPipelineDe
     return true;
 }
 
-// As the frontend's computeDescriptor: no stage inputs, binary functions, groups or libraries
+// As the frontend's computeDescriptor: no binary functions, groups or libraries
 bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbOfflineComputePipelineDescriptor &p,
                        std::vector<NmbOfflineFunction *> &linked)
 {
     if (!d || ![(id)d.computeFunction isKindOfClass:[RawOfflineFunction class]])
         return false;
-    MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor;
-    bool empty = !stage || (stage.indexType == MTLIndexTypeUInt16 && stage.indexBufferIndex == 0);
-    for (NSUInteger index = 0; stage && index < 31; ++index) {
-        MTLAttributeDescriptor *a = stage.attributes[index];
-        MTLBufferLayoutDescriptor *b = stage.layouts[index];
-        empty = empty && a.format == MTLAttributeFormatInvalid && !a.offset && !a.bufferIndex && !b.stride &&
-                b.stepFunction == MTLStepFunctionPerVertex && b.stepRate == 1;
+    // Metal materializes an empty stage input descriptor on access: no attribute set is none
+    if (MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor) {
+        for (NSUInteger index = 0; index < 31; ++index) {
+            MTLAttributeDescriptor *a = stage.attributes[index];
+            if (a.format == MTLAttributeFormatInvalid)
+                continue;
+            p.stage_inputs = 1;
+            p.stage_attributes[index] = {(uint64_t)a.format, a.offset, a.bufferIndex};
+            if (a.bufferIndex < 31) {
+                MTLBufferLayoutDescriptor *l = stage.layouts[a.bufferIndex];
+                p.stage_layouts[a.bufferIndex] = {l.stride, (uint64_t)l.stepFunction, l.stepRate};
+            }
+        }
+        p.stage_index_type = stage.indexType;
+        p.stage_index_buffer = stage.indexBufferIndex;
     }
     MTLLinkedFunctions *functions = d.linkedFunctions;
-    if (!empty || functions.binaryFunctions.count || functions.groups.count || d.preloadedLibraries.count ||
+    if (functions.binaryFunctions.count || functions.groups.count || d.preloadedLibraries.count ||
         d.insertLibraries.count)
         return false;
     if (!handles(functions.functions, linked))

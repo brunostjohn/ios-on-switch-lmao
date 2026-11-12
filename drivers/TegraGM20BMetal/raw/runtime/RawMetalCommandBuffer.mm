@@ -140,25 +140,27 @@ static void giveRecording(RMCommandBuffer *b)
                         const auto &record = *native->rec;
                         for (uint32_t i = 0; i < record.entries; ++i) {
                             const auto &entry = record.entry[i];
-                            if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
+                            if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 &&
+                                entry.slot < 31) {
                                 const auto &binding =
                                     _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
                                 if (binding.source == raw::BufferBinding::Source::Buffer)
-                                    bound.push_back({binding.object,
-                                                    uint8_t(raw::ResourceUse::Read |
-                                                            (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
+                                    bound.push_back(
+                                        {binding.object,
+                                         uint8_t(raw::ResourceUse::Read |
+                                                 (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
                                        entry.slot < raw::kStageTextures) {
                                 const uint32_t at = raw::handleStage(entry);
                                 bound.push_back({_plan.textures[at][state.textures[at]].objects[entry.slot],
-                                                raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                                                 raw::ResourceUse::Read | raw::ResourceUse::Sample});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&
                                 entry.samplerKind == raw::SamplerSlot && entry.sampler < raw::kStageSamplers) {
                                 const uint32_t at = raw::handleStage(entry);
-                                bound.push_back(
-                                    {_plan.samplers[at][state.samplers[at]].objects[entry.sampler], raw::ResourceUse::Read});
+                                bound.push_back({_plan.samplers[at][state.samplers[at]].objects[entry.sampler],
+                                                 raw::ResourceUse::Read});
                             }
                         }
                         if (record.vertexSlot < 31 && record.vertexStride) {
@@ -182,7 +184,7 @@ static void giveRecording(RMCommandBuffer *b)
         } else if (cmd.op == OpDispatch && cmd.obj2) {
             const char *why = nullptr;
             if (!admitComputeDispatch(self, _plan.size() - 1,
-                                       static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
+                                      static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
             const RMPass &pass = _passes[cmd.x];
@@ -213,7 +215,7 @@ static void giveRecording(RMCommandBuffer *b)
         if (cmd.op == OpEnd && _encOpen)
             _plan.prepareRange(_encAt, _plan.size());
     }
-    const size_t consumed = raw::extraWords(cmd.op);
+    const size_t consumed = raw::extraWords(cmd);
     if (consumed && cmd.x + consumed == _extra.size())
         _extra.resize(cmd.x);
 }

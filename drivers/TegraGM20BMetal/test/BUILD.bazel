@@ -36,6 +36,10 @@
 #   raw_view_test     raw/runtime/raw_view.h: a kernel's texture slot binds the texture's own header, or a header of its
 #                     memory with the word 0 of m2v's view of it in another format of the same texel size (a half
 #                     texture's unsigned twin), with no sRGB conversion; texels of another size or blocks bind none
+#   raw_attachment_view_test  raw/runtime/raw_attachment_view.h: a pass's view of an attachment's layers is headed at its
+#                     first layer with the level's extent and the pass's layers, and the layer stride the texture unit
+#                     derives from the header is the one the pass renders at (a mipmapped array's level, a 3D level's
+#                     planes, a backing's own header)
 #   raw_tic_words_test  raw/runtime/raw_zeta.h and raw_gpu.cpp's block-compressed rows: each depth/stencil format's
 #                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
 #                     row of NVK's format by NIL's generator rules
@@ -81,14 +85,44 @@
 #   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
 #                     (iOS 27's thin Apple GPU binaries), as Metal opens a file of another GPU's binaries; which archive
 #                     files are m2v's own, and the path an archive inventory names a file by
+#   raw_device_layers_test  raw_attachment_target.h, raw_layers.h, raw_viewports.h: a pass into a level, slice, cube face or
+#                     3D plane binds NVK's target words there, a layered pass binds and clears every layer (the clear
+#                     macro), viewports and scissors past the first are written at their index, and mipmapped arrays,
+#                     cubes and volumes are chains of fx's layouts, as the methods raw::Device submitted
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
-#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: no amplification above one view, and NO
-#                     for predication, dynamic attribute stride, shared texture handles and tessellation
-#   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
-#                     metallib entry's TESS tag, Xcode's bytes for them
+#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: NO for predication, YES for shared texture
+#                     handles, the target's tessellation, amplification and dynamic
+#                     attribute stride, and counter sampling at stage boundaries alone
+#   raw_shared_texture_test  raw/runtime/raw_shared_texture.h, raw_surface_image.h and RawMetalSharedTexture.h, every kind:
+#                     a shared texture's IOSurface creation properties from its descriptor (Metal's keys; a one-level 2D
+#                     one's rows and room for the kernel's block-linear layout, any other's image as the raw path lays
+#                     the descriptor out, AGX's two surface properties), the descriptor read back from them, refused for
+#                     another device's registry ID or a missing key, and the shapes the raw path lays out no image of
+#   raw_surface_image_test  raw::Device::createSurfaceImage: a shared texture over its surface is the private texture of
+#                     the same descriptor, field and header word, at its import's address
+#   raw_counters_test raw/runtime/raw_counters.h, raw_counter_kernel.h: a counter sample buffer's checks in the AGX
+#                     driver's words, PTIMER on the CPU's clock by the anchor of its power-up across simulated power
+#                     cycles, the resolve on the CPU and the GPU kernel's 32-bit search and arithmetic equal to it, and each
+#                     stage boundary's report words
+#   raw_device_amplification_test  raw_amplification.cpp on raw::Device: one draw per amplification, the counts and
+#                     viewport offsets a state takes, a dynamic vertex stride from its bind
+#   raw_device_streams_test  raw_vertex_streams.cpp on raw::Device, off the submitted pushes: each fixed-function vertex
+#                     stream bound at its own bind, a moved one alone, a second stream's bind stride
+#   raw_device_stage_in_test  a stage-in kernel on raw::Device: a dispatch's region and bind stride in the root table its
+#                     QMD names, an indirect dispatch command's in its own region's root table
+#   raw_device_tessellation_test  raw_tessellation.cpp on raw::Device: a tessellation state's programs and tessellator
+#                     registers bound and switched off after it, patches drawn only with one, a draw's indexing held to it
+#   raw_device_icb_test  RenderEncoder::executeSlots on raw::Device through the FIFO's decoding and the MME simulator: each
+#                     patch command's own factors and control words where its tessellation state reads them, set 0 and the
+#                     root table the encoder's again after, one pass of the range per amplification
 #   raw_icb_test      raw/runtime/raw_icb.h: an indirect command buffer's command words through the FIFO's decoding and the
 #                     MME simulator: topology, index buffer, then the indirect draw macro's methods; empty commands no-ops
+#   raw_icb_compute_test  raw/runtime/raw_icb_compute.h: an indirect command buffer's dispatch commands through the FIFO's
+#                     decoding and the MME simulator: the gate lets exactly the regions of the commands in a CPU or
+#                     GPU-read range launch, a barrier flushes either way, the execute's head waits for GPU-written words;
+#                     a command's stage-in words its own region and bind strides; the bind slots write the CPU's
+#                     descriptors for the encoder's buffers through inline-to-memory
 #   raw_parallel_test  raw/runtime/raw_parallel.h: a parallel encoder's sub-encoders as the passes m2v replays, and
 #                     their commands recorded again with the parallel encoder's passes, setBytes chunks and extra words
 #   raw_heap_test     raw/runtime/raw_heap.h: an MTLHeap's placements in its one span, Metal's contract (a full heap
@@ -162,6 +196,7 @@ host_test(
         "raw_fence_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fence.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
@@ -215,6 +250,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -248,209 +284,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-    ],
-    copts = ["-Idrivers/TegraGM20B"],
-    cxx_std = "c++17",
-    linkopts = [
-        "-framework",
-        "IOKit",
-        "-framework",
-        "CoreFoundation",
-    ],
-)
-
-# raw::Device itself over the kernel model (raw_device_harness.h): a kill fails what it took and the next command buffer
-# gets a new channel, a reopen the kernel refuses, rings outgrown before a kill freed once the channel is made again (its
-# slot's fence behind their seqnos), and an event job checked against a channel the kill replaced ordered again
-host_test(
-    name = "raw_device_recovery_test",
-    srcs = [
-        "raw_device_harness.h",
-        "raw_device_recovery_test.cpp",
-        "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
-        "//drivers/TegraGM20B:TegraGM20BGpu.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
-        "//drivers/TegraGM20BMetal:raw_runtime_headers",
-    ],
-    copts = [
-        "-Idrivers/TegraGM20B",
-        "-DSWITCH_RAW_HARNESS_MARKS",
-    ],
-    cxx_std = "c++17",
-    linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
-        "-framework",
-        "IOKit",
-        "-framework",
-        "CoreFoundation",
-    ],
-    deps = [
-        "//kits/SwitchGM20B:classes",
-        "//kits/SwitchGM20BEmit:emit_ndebug",
-        "//kits/SwitchGM20BEmit:macros_h",
-    ],
-)
-
-# Fetching draws on raw::Device (raw_device_harness.h), a state made from a record as the runtime makes one: in its storage
-# form a strip, an indexed strip with restarts, an instanced list and indirect draws are each one draw, never split or
-# refused; in its barrier form a strip is drawn a triangle at a time and the shapes that cannot be are refused
-host_test(
-    name = "raw_device_fetch_test",
-    srcs = [
-        "raw_device_harness.h",
-        "raw_device_fetch_test.cpp",
-        "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
-        "//drivers/TegraGM20B:TegraGM20BGpu.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
-        "//drivers/TegraGM20BMetal:raw_runtime_headers",
-    ],
-    copts = [
-        "-Idrivers/TegraGM20B",
-        "-DSWITCH_RAW_HARNESS_MARKS",
-    ],
-    cxx_std = "c++17",
-    linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
-        "-framework",
-        "IOKit",
-        "-framework",
-        "CoreFoundation",
-    ],
-    deps = [
-        "//kits/SwitchGM20B:classes",
-        "//kits/SwitchGM20BEmit:emit_ndebug",
-        "//kits/SwitchGM20BEmit:macros_h",
-    ],
-)
-
-# Passes with no depth/stencil attachment on raw::Device (raw_device_harness.h): a draw whose state compares depth other than
-# Always or tests the stencil draws over the pass's hidden attachment (PassDesc::hiddenZeta), Always needs none, and a pass
-# not given it refuses such a state
-host_test(
-    name = "raw_device_depth_test",
-    srcs = [
-        "raw_device_harness.h",
-        "raw_device_depth_test.cpp",
-        "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
-        "//drivers/TegraGM20B:TegraGM20BGpu.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
-        "//drivers/TegraGM20BMetal:raw_runtime_headers",
-    ],
-    copts = [
-        "-Idrivers/TegraGM20B",
-        "-DSWITCH_RAW_HARNESS_MARKS",
-    ],
-    cxx_std = "c++17",
-    linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
-        "-framework",
-        "IOKit",
-        "-framework",
-        "CoreFoundation",
-    ],
-    deps = [
-        "//kits/SwitchGM20B:classes",
-        "//kits/SwitchGM20BEmit:emit_ndebug",
-        "//kits/SwitchGM20BEmit:macros_h",
-    ],
-)
-
-host_test(
-    name = "raw_kernel_nvk_test",
-    srcs = [
-        "raw_kernel_nvk_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_host_access.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -474,6 +308,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -481,6 +316,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
@@ -496,8 +332,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
@@ -532,6 +370,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -539,6 +378,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
@@ -554,8 +394,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
@@ -590,6 +432,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -597,6 +440,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
@@ -611,8 +455,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
@@ -647,6 +493,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -654,6 +501,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
@@ -668,8 +516,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
@@ -715,6 +565,645 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
+# raw::Device itself over the kernel model (raw_device_harness.h): a kill fails what it took and the next command buffer
+# gets a new channel, a reopen the kernel refuses, rings outgrown before a kill freed once the channel is made again (its
+# slot's fence behind their seqnos), and an event job checked against a channel the kill replaced ordered again
+host_test(
+    name = "raw_device_recovery_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_recovery_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+# Fetching draws on raw::Device (raw_device_harness.h), a state made from a record as the runtime makes one: in its storage
+# form a strip, an indexed strip with restarts, an instanced list and indirect draws are each one draw, never split or
+# refused; in its barrier form a strip is drawn a triangle at a time and the shapes that cannot be are refused
+host_test(
+    name = "raw_device_fetch_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_fetch_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+# The headers a draw's framebuffer fetch binds on raw::Device (raw_attachment_view.h): a layered pass's attachment through a
+# slice-choosing state's layered storage form is a 2D array of the pass's layers from its slice (a mipmapped array's level
+# its chain there, a memoryless array's backing its own header), the one-layer form a 2D view of the slice, the
+# input-attachment form an array; the layered form in a pass of one layer an array of one, a pitch target's over the
+# block-linear backing the pass then renders it through
+host_test(
+    name = "raw_device_layered_fetch_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_layered_fetch_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+# Passes with no depth/stencil attachment on raw::Device (raw_device_harness.h): a draw whose state compares depth other than
+# Always or tests the stencil draws over the pass's hidden attachment (PassDesc::hiddenZeta), Always needs none, and a pass
+# not given it refuses such a state
+host_test(
+    name = "raw_device_depth_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_depth_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_amplification_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_amplification_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_layers_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_layers_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_streams_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_streams_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_tessellation_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_tessellation_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_stage_in_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_stage_in_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_icb_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        ":raw_mme_simulator",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_device_icb_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_icb_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        ":raw_mme_simulator",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_kernel_nvk_test",
+    srcs = [
+        "raw_kernel_nvk_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_host_access.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -743,6 +1232,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -814,6 +1304,28 @@ host_test(
 )
 
 host_test(
+    name = "raw_icb_compute_test",
+    srcs = [
+        "raw_icb_compute_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_icb.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_icb_compute.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_residual.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_stage_in.h",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        ":raw_mme_simulator",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
     name = "raw_plan_completion_test",
     srcs = [
         "raw_plan_completion_test.cpp",
@@ -839,6 +1351,7 @@ host_test(
         "raw_cpu_completion_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
     ],
     cxx_std = "c++17",
 )
@@ -886,6 +1399,7 @@ host_test(
         "raw_batch_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
     ],
     cxx_std = "c++17",
 )
@@ -1136,6 +1650,7 @@ host_test(
     srcs = [
         "nvk_kill_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_kill.h",
     ],
     copts = [
@@ -1150,6 +1665,7 @@ host_test(
     srcs = [
         "nvk_surfaces_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_surfaces.h",
     ],
     copts = [
@@ -1157,6 +1673,19 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_cbuf_test",
+    srcs = [
+        "raw_cbuf_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cbuf.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+    ],
 )
 
 host_test(
@@ -1214,6 +1743,7 @@ host_test(
     srcs = [
         "raw_state_segment_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
@@ -1234,6 +1764,7 @@ host_test(
     srcs = [
         "raw_tiled_cache_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_tiled_cache.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stats.h",
@@ -1275,6 +1806,7 @@ host_test(
     srcs = [
         "raw_comp_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/pack/nvdec_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
@@ -1316,13 +1848,16 @@ py_test(
     name = "raw_tic_words_test",
     srcs = ["raw_tic_words_test.py"],
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/cl9097tex.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb097tex.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197tex.h",
         "//third_party/mesa/src/nouveau/nil:nil_formats.csv",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
     ],
 )
 
@@ -1406,6 +1941,7 @@ host_test(
     srcs = [
         "raw_xr_planes_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw_runtime_headers",
     ],
@@ -1436,11 +1972,14 @@ host_test(
     ],
     cxx_std = "c++17",
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
     ],
 )
 
@@ -1465,6 +2004,30 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_view.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_attachment_view_test",
+    srcs = [
+        "raw_attachment_view_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_attachment_view.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_view.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
 )
 
 host_test(
@@ -1504,6 +2067,7 @@ host_test(
     srcs = [
         "raw_native_surface_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_native_plane.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_native_surface.h",
@@ -1524,6 +2088,22 @@ host_test(
 )
 
 host_test(
+    name = "raw_counters_test",
+    srcs = [
+        "raw_counters_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BRail.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_counter_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_counters.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_stamps.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
     name = "raw_stamps_test",
     srcs = [
         "raw_stamps_test.cpp",
@@ -1534,7 +2114,10 @@ host_test(
     data = [
         "//drivers/TegraGM20B:gpu_exec.c",
         "//drivers/TegraGM20B:gpu_inline.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
     ],
     deps = ["//kits/SwitchGM20B:classes"],
 )
@@ -1620,6 +2203,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
@@ -1648,6 +2232,7 @@ host_test(
     srcs = [
         "raw_host_access_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_host_access.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
@@ -1723,6 +2308,7 @@ host_test(
     srcs = [
         "raw_zcull_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
@@ -1747,6 +2333,7 @@ host_test(
     srcs = [
         "raw_visibility_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
@@ -1889,16 +2476,107 @@ host_test(
     ],
 )
 
+# A shared texture over its IOSurface (raw::Device::createSurfaceImage, raw_device_harness.h): the private texture of the
+# same descriptor's fields and header words at the import's address, bound 0xFE and not as a kernel-tiled surface
 host_test(
-    name = "raw_function_tess_test",
+    name = "raw_surface_image_test",
     srcs = [
-        "raw_function_tess_test.cpp",
-        "//drivers/NativeMetal:MetallibSlice.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_function_tess.h",
+        "raw_device_harness.h",
+        "raw_kernel_model.h",
+        "raw_surface_image_test.cpp",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_multisample.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
     ],
-    copts = ["-Idrivers/NativeMetal"],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
     cxx_std = "c++17",
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+host_test(
+    name = "raw_shared_texture_test",
+    srcs = [
+        "raw_shared_texture_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSharedTexture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_texture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_image.h",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/NativeMetal/abi:kinds/21H461.json",
+        "//drivers/NativeMetal/abi:kinds/24B119.json",
+    ],
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "Metal",
+    ],
+    deps = [
+        "//drivers/NativeMetal/abi:metal_abi",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
 )
 
 host_test(
@@ -2033,6 +2711,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
@@ -2180,6 +2859,7 @@ host_test(
         "raw_surfaces_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
@@ -2209,6 +2889,7 @@ host_test(
     srcs = [
         "raw_depth_stencil_state_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_depth_stencil_state.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
@@ -2235,8 +2916,11 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFences.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
     ],
 )
 
@@ -2302,6 +2986,7 @@ host_test(
 FACADE_HOST_HEADERS = [
     "//drivers/NativeMetal:frontend_headers",
     "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BClockABI.h",
     "//drivers/TegraGM20B:TegraGM20BJobABI.h",
     "//drivers/TegraGM20B:TegraGM20BLayout.h",
     "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
@@ -2332,6 +3017,7 @@ host_library(
         "fx_mip.cpp",
     ]] + ["//drivers/TegraGM20BMetal:raw/runtime/%s.cpp" % f for f in [
         "raw_alias",
+        "raw_amplification",
         "raw_arena",
         "raw_cache",
         "raw_comp",
@@ -2343,6 +3029,7 @@ host_library(
         "raw_emit",
         "raw_encoder_state",
         "raw_gpu",
+        "raw_icb_compute",
         "raw_job_uses",
         "raw_kernel",
         "raw_kernel_cache",
@@ -2358,8 +3045,11 @@ host_library(
         "raw_shared_events",
         "raw_split",
         "raw_state_segment",
+        "raw_surface_image",
+        "raw_tessellation",
         "raw_transfer",
         "raw_variants",
+        "raw_vertex_streams",
         "raw_visibility",
         "raw_visibility_pass",
         "raw_xr_planes",

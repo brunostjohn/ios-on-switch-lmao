@@ -16,5 +16,6 @@
     id<MTLComputePipelineState> _compatibility;
     id<MTLDevice> _fallback;
     std::once_flag _twinOnce;
+    const char *_m2vMissing;  // what of it m2v has no form of (rmM2vMissingKernel), null: nothing
 }
 @end

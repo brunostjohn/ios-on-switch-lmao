@@ -19,6 +19,9 @@ struct switch_gm20b_target {
     uint32_t layers;
     uint32_t array_pitch;  // block-linear: the layer size / 4
     uint32_t layer;
+    // A 3D image's level (NVK: THIRD_DIMENSION_DEFINES_DEPTH_SIZE, its blocks' depth); layers then counts its planes
+    bool depth;
+    uint8_t block_depth_log2;
 };
 
 #define SWITCH_GM20B_COLOR_TARGET_WORDS 12u
@@ -52,11 +55,15 @@ struct switch_gm20b_clear_state {
     uint16_t xmin, xmax, ymin, ymax;
     uint32_t target;
     bool depth, stencil;
+    // A layered pass's: its layers from `layer` on, each cleared by the channel's layer loop macro at slot `layer_macro`
+    // (NVK's nvk_mme_clear) where there are more than one
+    uint32_t layer, layers, layer_macro;
 };
 
 #define SWITCH_GM20B_CLEAR_WORDS 13u
 
-// Clears one colour target's R, G, B and A (and depth, stencil) over the rectangle, whatever the render enable says
+// Clears one colour target's R, G, B and A (and depth, stencil) over the rectangle in its layers, whatever the render enable
+// says
 void switch_gm20b_clear(struct nv_push *p, const struct switch_gm20b_clear_state *c);
 
 struct switch_gm20b_blend_state {

@@ -23,8 +23,14 @@
 #include "raw_spill_table.h"
 #include "raw_dispatch_regions.h"
 #include "raw_gpu.h"
+#include "raw_stage_in.h"
 
 namespace raw {
+
+namespace icb {
+struct ComputeBind;
+struct ComputeStride;
+}
 
 constexpr uint32_t kQmdWords = 64;
 
@@ -71,6 +77,10 @@ public:
                     const Buffer *allocation = nullptr);  // bytes already where the GPU reads them
     void setBuffer(uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(uint32_t slot, uint64_t offset);
+    // A stage-in kernel's: a buffer slot's bind stride (UINT32_MAX: none), which a layout of a dynamic stride reads, and
+    // setStageInRegion:'s origin and size, both written into its push words at each dispatch
+    void setBufferStride(uint32_t slot, uint32_t stride);
+    void setStageInRegion(const std::array<uint32_t, 6> &region);
     void setTexture(uint32_t slot, const Texture *t);
     void setSampler(uint32_t slot, const Sampler *s);
 
@@ -81,13 +91,59 @@ public:
                         const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why);
     // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
     void barrier();
+    // A counter sample on the compute class now: right after the encoder's opening wait for idle, its start
+    void timestamp(uint64_t va);
     void end();
+
+    // A buffer an indirect dispatch command binds at a slot (va 0: none)
+    struct IcbBuffer {
+        uint64_t va = 0;
+        uint32_t size = 0;
+    };
+
+    // One region of an indirect dispatch command of kernel `k` (raw_icb_compute.h): its QMD, root table and set 0 written at
+    // `block` (GPU address `va`, icb::computeRegionBytes(k.rec->setBytes) long), the command's stage-in words in its root
+    // table. False: refused (*why), as a dispatch is.
+    static bool icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
+                          const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
+                          const IcbBuffer (&buffers)[31], const StageIn &stageIn, uint8_t *block, uint64_t va,
+                          const char **why);
+    // The set-0 buffer descriptors and StageInStride root words of a region of kernel `k` written at `va` (icbRegion), as a
+    // buffer that inherits the encoder's buffers binds them at an execute (raw_icb_compute.h ComputeBind, ComputeStride).
+    // False: refused (*why).
+    static bool icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out,
+                         std::vector<icb::ComputeStride> &strides, const char **why);
+    // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written,
+    // and their bind strides
+    void inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 31> &strides);
+
+    struct IcbExecute {
+        const Buffer *slots;  // the commands' words, icb::kComputeSlotWords each, command `first`'s at slot `at`
+        uint32_t at, first, count;
+        const Buffer *range;  // the execution range the GPU reads at rangeOffset; null: [first, first + count)
+        uint64_t rangeOffset;
+        bool written;  // a blit wrote the words on the GPU
+        // a buffer that inherits the encoder's buffers: its bind slots (icb::kComputeBindSlotWords each, as `slots`), the
+        // Metal buffer indices they read, those whose descriptors have no residual word (bound off 16 bytes: refused),
+        // and those whose bind stride a stage-in command reads
+        const Buffer *binds = nullptr;
+        uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
+    };
+
+    // The commands by reference, ordered after this encoder's work before them as a dispatch is
+    bool executeSlots(const IcbExecute &x, const char **why);
 
 private:
 #ifdef SWITCH_RAW_HARNESS_MARKS
     friend struct DeviceHarness;
 #endif
     void argumentRoot(const PackKernel &r, uint32_t *root);
+    static void rootWords(const PackKernel &r, const uint32_t groups[3], uint64_t setVa, uint32_t residualMask,
+                          const std::array<uint32_t, 32> &residuals, const uint32_t region[8], uint32_t *root);
+    static bool qmdWords(const ComputeState &k, const uint32_t groups[3], uint64_t rootVa, uint64_t setVa,
+                         uint32_t *qmd, const char **why);
+    // Why an indirect dispatch command cannot carry kernel `k`, null where it can
+    static const char *icbRefusal(const ComputeState &k);
 
     struct Bound {
         uint64_t va = 0;
@@ -98,7 +154,8 @@ private:
 
         bool operator==(const Bound &b) const
         {
-            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset && resourceVa == b.resourceVa;
+            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset &&
+                   resourceVa == b.resourceVa;
         }
     };
 
@@ -121,6 +178,7 @@ private:
     uint64_t setVa_ = 0, rootVa_ = 0;
     std::array<uint32_t, 3> grid_{};
     std::array<uint32_t, 8> region_{};
+    StageIn stageIn_;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);

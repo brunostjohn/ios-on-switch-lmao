@@ -52,7 +52,8 @@ struct CompressedTargetsTest: HWTest {
             clear: MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1), clearDepth: 0.5),
     ]
 
-    static func pass(_ c: Case, colour: MTLTexture, depth: MTLTexture, resolve: MTLTexture?) -> MTLRenderPassDescriptor {
+    static func pass(_ c: Case, colour: MTLTexture, depth: MTLTexture, resolve: MTLTexture?) -> MTLRenderPassDescriptor
+    {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = colour
         pass.colorAttachments[0].loadAction = .clear
@@ -101,13 +102,15 @@ struct CompressedTargetsTest: HWTest {
             let state = try gpu.render(
                 fragment: "exact_fragment", format: c.colour, samples: c.samples, depth: c.depth,
                 stencil: c.depth == .depth32Float_stencil8 ? c.depth : .invalid)
-            var corners = GPU.pixelQuad(0, 0, Self.width / 2, Self.height, width: Self.width, height: Self.height, z: 0.25)
+            var corners = GPU.pixelQuad(
+                0, 0, Self.width / 2, Self.height, width: Self.width, height: Self.height, z: 0.25)
             for _ in 0..<Self.rounds {
                 paths.insert(
                     try await gpu.run { commands in
                         let encoder = commands.makeRenderCommandEncoder(
-                            descriptor: Self.pass(c, colour: c.samples > 1 ? colour : out, depth: depth,
-                                                  resolve: c.samples > 1 ? out : nil))!
+                            descriptor: Self.pass(
+                                c, colour: c.samples > 1 ? colour : out, depth: depth,
+                                resolve: c.samples > 1 ? out : nil))!
                         encoder.setRenderPipelineState(state)
                         encoder.setDepthStencilState(depthState)
                         var value = Self.quadColour

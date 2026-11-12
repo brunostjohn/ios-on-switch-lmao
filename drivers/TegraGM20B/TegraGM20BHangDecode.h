@@ -47,7 +47,7 @@ struct tgm_hang_detail {
 	uint64_t stalled_ms; /* since its fence last moved, or it last went from idle to work */
 	int waits;           /* its last order acquire has not passed */
 	uint32_t wait_chid, wait_seqno, wait_at;
-	int source_live; /* the acquire's source is a live channel: */
+	int source_live;                        /* the acquire's source is a live channel: */
 	uint32_t source_done, source_submitted; /* its fence */
 	uint64_t source_ms;                     /* and how long it has not moved */
 	uint32_t late_chid, late_done, late_submitted;
@@ -111,7 +111,8 @@ static inline void tgm_hang_note(const struct tgm_hang_log *log, uint32_t hung, 
 			 " %d/%u pushes read, last engine method subc %u %04x)",
 			 (unsigned long long)interlocks, hung, read, n, last >> 16, last & 0xffff);
 	} else if (read) {
-		snprintf(buf, len, " (hung submit %u: %d of %u pushes read, last engine method subc %u %04x)",
+		snprintf(buf, len,
+			 " (hung submit %u: %d of %u pushes read, last engine method subc %u %04x)",
 			 hung, read, n, last >> 16, last & 0xffff);
 	}
 }
@@ -134,8 +135,10 @@ struct tgm_engine_regs {
 static inline void tgm_engine_format(char *buf, unsigned long len, const struct tgm_engine_regs *r)
 {
 	snprintf(buf, len,
-		 "GR status1 %08x engine %08x activity %08x %08x %08x %08x go_idle %08x; FECS mailbox0 "
-		 "%08x ctxsw %08x/%08x ctx %08x -> %08x; FE trap %08x (subc %u mthd %04x class %04x) "
+		 "GR status1 %08x engine %08x activity %08x %08x %08x %08x go_idle %08x; FECS "
+		 "mailbox0 "
+		 "%08x ctxsw %08x/%08x ctx %08x -> %08x; FE trap %08x (subc %u mthd %04x class "
+		 "%04x) "
 		 "data %08x; PBDMA0 gp %u/%u pb %02x%08x/%02x%08x mthd1 %08x hdr %08x",
 		 r->status1, r->engine_status, r->activity[0], r->activity[1], r->activity[2],
 		 r->activity[3], r->go_idle, r->mailbox0, r->fecs_fe0, r->fecs_1, r->current_ctx,

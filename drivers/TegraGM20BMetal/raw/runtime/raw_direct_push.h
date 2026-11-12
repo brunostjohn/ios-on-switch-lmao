@@ -31,11 +31,31 @@ inline uint32_t addressPushWords(const NmbDirectDraw &d)
     return mask;
 }
 
+// The words of a tessellation state's control stage (m2v control::PUSH_FIELDS), which every patch draw writes
+constexpr uint32_t kControlWords = 6;
+
+inline uint32_t controlPushMask(const NmbDirectState &state)
+{
+    return pushFieldMask(state.tess.controlWord, kControlWords);
+}
+
+// The words a raw draw writes itself: each amplification's id and offsets, the draw's amplification count, the pass's
+// layer count, the encoder's viewport count and each dynamic pulled layout's stride
+inline uint32_t drawnPushMask(const NmbDirectDraw &d)
+{
+    uint32_t mask = pushFieldMask(d.amplificationIdWord, 1) | pushFieldMask(d.amplificationCountWord, 1) |
+                    pushFieldMask(d.amplificationLayerWord, 1) | pushFieldMask(d.amplificationViewportWord, 1) |
+                    pushFieldMask(d.arrayLengthWord, 1) | pushFieldMask(d.viewportCountWord, 1);
+    for (const auto &pulled : d.pulledStrides)
+        mask |= pushFieldMask(pulled[1], 1);
+    return mask;
+}
+
 // The bind-offset draw changes every buffer residual; only words shared by all probe draws can be folded. An address hole is
 // 0 in every probe draw and the draw's address in a real one.
 inline uint32_t constantPushWords(const NmbDirectState &state)
 {
-    uint32_t mask = state.draws[0].pushMask;
+    uint32_t mask = state.draws[0].pushMask & ~controlPushMask(state) & ~drawnPushMask(state.draws[0]);
     for (const NmbDirectDraw &d : state.draws) {
         mask &= ~(pushFieldMask(d.blendColorWord, 8) | pushFieldMask(d.halfBlendColorWord, 4) |
                   pushFieldMask(d.depthTestWord, 4) | pushFieldMask(d.stencilTestWord, 4) | addressPushWords(d));

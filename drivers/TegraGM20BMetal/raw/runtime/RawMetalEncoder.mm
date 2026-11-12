@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import "RawMetalRotated.h"
+#include "raw_attachment_target.h"
+#include "raw_device_answers.h"
 
 // One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
 uint64_t nextTraceId()
@@ -97,6 +100,8 @@ uint64_t nextTraceId()
     if (_ended)
         return;
     _ended = true;
+    if (!_counterPending.empty())
+        rmPlaceCounterMarks(_cb, self, _cb->_plan.size(), false);
     [_cb record:cmd(OpEnd)];
     _cb->_active = nil;
 }
@@ -166,9 +171,10 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         (depth && std::isnan(d.clearDepth)))
         return false;
     MTLRenderPassAttachmentDescriptor *aspects[2] = {depth ? d : nil, stencil ? s : nil};
+    const NSUInteger slice = depth ? d.slice : s.slice;
     for (MTLRenderPassAttachmentDescriptor *a : aspects)
         if (a &&
-            (a.level || a.slice || a.depthPlane || a.resolveTexture ||
+            (a.level || a.slice != slice || slice >= std::max(t->_raw.layers, 1u) || a.depthPlane || a.resolveTexture ||
              (t->_raw.memoryless && (a.storeAction != MTLStoreActionDontCare ||
                                      (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))) ||
              (a.storeAction != MTLStoreActionDontCare && a.storeAction != MTLStoreActionStore)))
@@ -230,7 +236,9 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         id<MTLTexture> t = a.texture;
         if (!t)
             continue;
-        facts.color[c] = {t, a.level, a.loadAction, a.storeAction, a.clearColor, a.resolveTexture};
+        const bool volume = t.textureType == MTLTextureType3D;
+        const NSUInteger slice = volume ? a.depthPlane : a.slice;
+        facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, a.resolveTexture};
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
@@ -260,16 +268,15 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
                    (x->_raw.ycbcr && ycbcrTargetPassRefusal(x->_raw, pass.colorAttachments[c]))) {
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c | uint64_t(a.loadAction) << 8);
-        } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
-                   (pass.colorAttachments[c].resolveTexture && !rawResolve(self, pass.colorAttachments[c], x)) ||
-                   (x->_raw.type != raw::fx::kTexTwoD && x->_raw.type != raw::fx::kTexOneD) ||
-                   (pass.colorAttachments[c].level &&
-                    (!x->_raw.chain || pass.colorAttachments[c].level >= x->_raw.chain->layout.levels))) {
-            // A slice or depth plane needs an array or 3D texture; the raw path renders into no layer of an array or cube or
-            // plane of a 3D one
-            [self takeReason:WhyPass why:@"a color attachment slice, depth plane or resolve"];
-            hit(self, PredPassAttLevel, pass.colorAttachments[c].level | pass.colorAttachments[c].slice << 8,
-                pass.colorAttachments[c].resolveTexture != nil);
+        } else if (raw::Texture part;
+                   (volume ? a.slice : a.depthPlane) || a.level >= raw::fx::kMaxLevels || slice > UINT32_MAX ||
+                   (a.resolveTexture &&
+                    (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) || !rawResolve(self, a, x))) ||
+                   (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) &&
+                    !raw::attachmentTarget(x->_raw, uint32_t(a.level), uint32_t(slice), part))) {
+            // a level, slice or depth plane is a block-linear image's (raw_attachment_target.h), resolved from no layer
+            [self takeReason:WhyPass why:@"a color attachment level, slice, depth plane or resolve"];
+            hit(self, PredPassAttLevel, a.level | slice << 8, a.resolveTexture != nil);
         } else {
             e->_formats[c] = x->_raw.planarStandIn ? x->_raw.planarStandIn->format : x->_raw.format;
             e->_count = c + 1;
@@ -282,13 +289,15 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         hit(self, PredPassRotated, uint64_t(turned));
     }
     facts.depth = zetaAttachment(pass);
+    facts.depthSlice = pass.depthAttachment.texture ? pass.depthAttachment.slice : pass.stencilAttachment.slice;
     facts.depthLoad = pass.depthAttachment.loadAction;
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;
     MTLRenderPassStencilAttachmentDescriptor *stencil = pass.stencilAttachment;
-    facts.zeta[0] = {depth.texture, depth.level, depth.loadAction, depth.storeAction, depth.resolveTexture != nil};
-    facts.zeta[1] = {stencil.texture, stencil.level, stencil.loadAction, stencil.storeAction,
-                     stencil.resolveTexture != nil};
+    facts.zeta[0] = {depth.texture,    depth.level,       depth.slice,
+                     depth.loadAction, depth.storeAction, depth.resolveTexture != nil};
+    facts.zeta[1] = {stencil.texture,    stencil.level,       stencil.slice,
+                     stencil.loadAction, stencil.storeAction, stencil.resolveTexture != nil};
     facts.clearDepth = pass.depthAttachment.clearDepth;
     facts.clearStencil = pass.stencilAttachment.clearStencil;
     facts.width = pass.renderTargetWidth;
@@ -311,7 +320,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     // as m2v copies results only where a query was taken (visibility.rs plan)
     [self retain:pass.visibilityResultBuffer];
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
-    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap ||
+    facts.layers = uint32_t(std::clamp<NSUInteger>(pass.renderTargetArrayLength, 1, 2048));
+    if ((facts.layers > 1 && !raw::answers::kThisKind.layeredRendering) || pass.rasterizationRateMap ||
         (positions && !passSamplePositions(pass, positions, e->_samples, facts.positions))) {
         [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
         hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
@@ -320,6 +330,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     m.obj = (__bridge void *)pass;
     m.x = e->_passAt;
     [self record:m];
+    rmCounterMarks(self, e, pass);
+    rmPlaceCounterMarks(self, e, _encAt, true);
     return (id<MTLRenderCommandEncoder>)e;
 }
 
@@ -333,8 +345,10 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
 
 - (id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:(MTLBlitPassDescriptor *)d
 {
-    (void)d;
-    return [self blitCommandEncoder];
+    RMBlitEncoder *e = (RMBlitEncoder *)[self blitCommandEncoder];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLBlitCommandEncoder>)e;
 }
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
@@ -355,7 +369,10 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:(MTLComputePassDescriptor *)d
 {
-    return [self computeCommandEncoderWithDispatchType:d.dispatchType];
+    RMComputeEncoder *e = (RMComputeEncoder *)[self computeCommandEncoderWithDispatchType:d.dispatchType];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLComputeCommandEncoder>)e;
 }
 
 @end

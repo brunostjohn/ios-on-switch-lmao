@@ -17,11 +17,14 @@
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_attachment_target.h"
+#include "raw_layers.h"
 #include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
 #include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
+#include "raw_cbuf.h"
 #include "raw_residual.h"
 #include "raw_multisample.h"
 #include "raw_rotated_pass.h"
@@ -69,6 +72,10 @@ enum : uint32_t {
     PIXEL_SHADER_INTERLOCK_CONTROL = NVB197_SET_PIXEL_SHADER_INTERLOCK_CONTROL,
     PIPELINE_REGISTER_COUNT_VERTEX = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_VERTEX),
     PIPELINE_REGISTER_COUNT_PIXEL = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_PIXEL),
+    PIPELINE_PROGRAM_TESS = NVB197_SET_PIPELINE_PROGRAM(NVB197_SET_PIPELINE_SHADER_TYPE_TESSELLATION_INIT),
+    PIPELINE_REGISTER_COUNT_TESS =
+        NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_TESSELLATION_INIT),
+    kPipelineStageStride = NVB197_SET_PIPELINE_SHADER(1) - NVB197_SET_PIPELINE_SHADER(0),
     BINDLESS_TEXTURE = NVB197_SET_BINDLESS_TEXTURE,
     DEPTH_TEST = NVB197_SET_DEPTH_TEST,
     STENCIL_TEST = NVB197_SET_STENCIL_TEST,
@@ -100,8 +107,8 @@ enum : uint32_t {
     BLEND_CONST_RED = NVB197_SET_BLEND_CONST_RED,
     COLOR_COMPRESSION = NVB197_SET_COLOR_COMPRESSION(0),
     CT_WRITE = NVB197_SET_CT_WRITE(0),
-    VERTEX_STREAM_LOCATION = NVB197_SET_VERTEX_STREAM_A_LOCATION_A(0),
-    VERTEX_STREAM_LIMIT = NVB197_SET_VERTEX_STREAM_LIMIT_A_A(0),
+    VERTEX_STREAM_FORMAT = NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
+    kStreamMethods = NVB197_SET_VERTEX_STREAM_A_FORMAT(1) - NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
     CB_SELECTOR_A = NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
     LOAD_CB_OFFSET = NVB197_LOAD_CONSTANT_BUFFER_OFFSET,
     LOAD_CB = NVB197_LOAD_CONSTANT_BUFFER(0),
@@ -120,7 +127,8 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kUboChunk = 0x100;
-constexpr uint32_t kMaxCbufBytes = 0x10000;  // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
+// The bind groups of Pipeline::setSlot's programs (nvk_pipeline_bind_group): vertex, pixel, tessellation init, tessellation
+constexpr uint8_t kSetGroups[4] = {0, 4, 1, 2};
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 static_assert(kTicCount == kPackHeapElements && kTscCount <= kPackHeapElements, "a heap holds header i at element i");
 constexpr uint32_t kEngines =
@@ -182,6 +190,8 @@ switch_gm20b_viewport_state viewportState(const uint32_t w[8])
     return v;
 }
 
+constexpr uint32_t kRtLayerFromShader = NVDEF(NVB197, SET_RT_LAYER, CONTROL, GEOMETRY_SHADER_SELECTS_LAYER);
+
 // A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
 constexpr uint32_t kSampleWords = 20;
 
@@ -200,7 +210,7 @@ const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {13, 0, 0x6014921d, 1, false},      // R8Uint, storage/sampled
+    {13, 0, 0x6014921d, 1, false},       // R8Uint, storage/sampled
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
     {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
@@ -224,7 +234,8 @@ const FormatInfo kFormats[] = {
     {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
-    // block-compressed (sampled only, private: Metal's copies move whole blocks), word 0 NIL's row of NVK's format
+    // block-compressed (sampled only: Metal's copies move whole blocks), word 0 NIL's row of NVK's format; ETC2 and EAC
+    // NIL's MaxwellA rows, which the texture unit decodes as m2v's NVK twin does
     {130, 0, 0x58d24924, 8, false, 4, 4},     // BC1_RGBA: DXT1_RGBA
     {131, 0, 0x58d24924, 8, true, 4, 4},      // BC1_RGBA_sRGB: DXT1_SRGBA
     {132, 0, 0x58d24925, 16, false, 4, 4},    // BC2_RGBA: DXT3_RGBA
@@ -239,6 +250,16 @@ const FormatInfo kFormats[] = {
     {151, 0, 0x78d7ff91, 16, false, 4, 4},    // BC6H_RGBUfloat: BPTC_RGB_UFLOAT
     {152, 0, 0x58d24917, 16, false, 4, 4},    // BC7_RGBAUnorm: BPTC_RGBA_UNORM
     {153, 0, 0x58d24917, 16, true, 4, 4},     // BC7_RGBAUnorm_sRGB: BPTC_SRGBA
+    {170, 0, 0x70124919, 8, false, 4, 4},     // EAC_R11Unorm: ETC2_R11_UNORM
+    {172, 0, 0x70112499, 8, false, 4, 4},     // EAC_R11Snorm: ETC2_R11_SNORM
+    {174, 0, 0x70d2491a, 16, false, 4, 4},    // EAC_RG11Unorm: ETC2_RG11_UNORM
+    {176, 0, 0x70d1249a, 16, false, 4, 4},    // EAC_RG11Snorm: ETC2_RG11_SNORM
+    {178, 0, 0x58d2490b, 16, false, 4, 4},    // EAC_RGBA8: ETC2_RGBA8
+    {179, 0, 0x58d2490b, 16, true, 4, 4},     // EAC_RGBA8_sRGB: ETC2_SRGBA8
+    {180, 0, 0x78d24906, 8, false, 4, 4},     // ETC2_RGB8: ETC2_RGB8
+    {181, 0, 0x78d24906, 8, true, 4, 4},      // ETC2_RGB8_sRGB: ETC2_SRGB8
+    {182, 0, 0x58d2490a, 8, false, 4, 4},     // ETC2_RGB8A1: ETC2_RGB8A1
+    {183, 0, 0x58d2490a, 8, true, 4, 4},      // ETC2_RGB8A1_sRGB: ETC2_SRGB8A1
     {186, 0, 0x58d24940, 16, true, 4, 4},     // ASTC_4x4_sRGB: ASTC_4x4_SRGB
     {187, 0, 0x58d24950, 16, true, 5, 4},     // ASTC_5x4_sRGB: ASTC_5x4_SRGB
     {188, 0, 0x58d24941, 16, true, 5, 5},     // ASTC_5x5_sRGB: ASTC_5x5_SRGB
@@ -763,7 +784,7 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
             setSlot = c;
         if (prog.cbufType[c] != CbufShaderData)
             continue;
-        w.inc(CB_SELECTOR_A, {std::min(prog.dataBytes, kMaxCbufBytes), uint32_t(data >> 32), uint32_t(data)});
+        w.inc(CB_SELECTOR_A, {cbufBindBytes(prog.dataBytes), uint32_t(data >> 32), uint32_t(data)});
         w.m(BIND_GROUP_CB + 0x20 * group, 1 | uint32_t(c) << 4);
         w.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
     }
@@ -990,9 +1011,10 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
                                           : nullptr;
         rec = usableRecord(barrier) ? barrier : nullptr;
         if (blends)
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-                         "raw: pack state %016llx computes its blend in a storage form this runtime cannot read: refused",
-                         (unsigned long long)keyHash);
+            os_log_error(
+                os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                "raw: pack state %016llx computes its blend in a storage form this runtime cannot read: refused",
+                (unsigned long long)keyHash);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (rec) {
             stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
@@ -1047,7 +1069,8 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
 // lock_ held: `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
 // and whose key's attachment and vertex fields are `keyString`
 void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-                   const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills)
+                   const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
+                   const PlacedProgram *tess)
 {
     auto instructions = [](const PackProgram &program) {
         const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;
@@ -1056,7 +1079,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
     pl.memoryEntries = pp.memoryEntries;
-    std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
+    std::vector<uint32_t> words(64 + 16 + (tess ? 64 : 0) + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
     uint32_t interlockControl = 0;
@@ -1068,6 +1091,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
+        if (m >= VERTEX_STREAM_FORMAT && m < VERTEX_STREAM_FORMAT + kStreamMethods * kPackVertexStreams &&
+            (m - VERTEX_STREAM_FORMAT) % kStreamMethods == 0)
+            pl.streamStride[(m - VERTEX_STREAM_FORMAT) / kStreamMethods] =
+                uint16_t(NVVAL_GET(v, NVB197, SET_VERTEX_STREAM_A_FORMAT, STRIDE));
         if (m == PIXEL_SHADER_INTERLOCK_CONTROL) {
             interlockControl = v;
             continue;
@@ -1093,10 +1120,20 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
     if (fs.record->boundTextures)
         w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
-    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
-    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, 4, fs.data, root_.va);
-    for (const auto &[prog, group] : {std::pair{vs.record, uint8_t(0)}, std::pair{fs.record, uint8_t(4)}})
-        for (uint8_t c = 1; c < prog->cbufs; c++) {
+    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va);
+    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va);
+    const PackProgram *programs[4] = {vs.record, fs.record};
+    for (uint32_t k = 0; tess && k < 2; k++) {
+        w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
+        w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
+        pl.setSlot[2 + k] = bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va);
+        programs[2 + k] = tess[k].record;
+        pl.tessReadsHeap |= heapCbufSlot(*tess[k].record) != 0;
+    }
+    for (uint32_t k = 0; k < 4; k++)
+        for (uint8_t c = 1; programs[k] && c < programs[k]->cbufs; c++) {
+            const PackProgram *prog = programs[k];
+            const uint8_t group = kSetGroups[k];
             if (cbufKind(prog->cbufType[c]) != CbufUbo)
                 continue;
             uint8_t entry = 0;
@@ -1155,8 +1192,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
-    pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    pl.primitiveId = (sph[5] >> 24) & 1;    // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
+    pl.viewportIndex = headerWritesViewportIndex(vs.header);
+    pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -1493,7 +1532,9 @@ void Device::release(Import *i)
     if (!i || --i->refs)
         return;
     if (i->id)
-        surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
+        if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
+            it != surfaces_.end() && it->second == i)
+            surfaces_.erase(it);
     RAW_DIAGNOSTIC(stats.imports--);
     RAW_DIAGNOSTIC(stats.importBytes -= i->bo.bytes);
     if (i->native)
@@ -1770,7 +1811,7 @@ bool Device::layout(const TextureAsk &ask, Texture &t, uint64_t &bytes, uint64_t
         break;
     case TextureAsk::Volume:
         if (!shape(ask.width, ask.height, ask.format, t) || xr ||
-            !fx::volumeLayout(ask.width, ask.height, ask.depth, 1, t.bpp, ask.view2d, c))
+            !fx::volumeLayout(ask.width, ask.height, ask.depth, ask.levels, t.bpp, ask.view2d, c))
             return false;
         chainRows(t, c, c.bytes);
         t.type = fx::kTexThreeD;
@@ -1779,7 +1820,7 @@ bool Device::layout(const TextureAsk &ask, Texture &t, uint64_t &bytes, uint64_t
         break;
     case TextureAsk::Array:
         if (!shape(ask.width, ask.height, ask.format, t) || xr ||
-            !fx::arrayLayout(ask.width, ask.height, ask.layers, 1, t.bpp, c))
+            !fx::arrayLayout(ask.width, ask.height, ask.layers, ask.levels, t.bpp, c))
             return false;
         chainRows(t, c, c.arrayStride);
         t.type = ask.type;
@@ -1845,8 +1886,10 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     uint64_t bytes = 0, align = 0;
     uint32_t kind = 0;
     Texture::Chain *chain = ask.kind == TextureAsk::Mips ? new Texture::Chain : nullptr;
+    const bool image = ask.kind == TextureAsk::Volume || ask.kind == TextureAsk::Array;
+    fx::MipChain imageLayout;
     if ((!at && ask.kind == TextureAsk::Plain) ||
-        !layout(ask, t, bytes, align, kind, chain ? &chain->layout : nullptr)) {
+        !layout(ask, t, bytes, align, kind, chain ? &chain->layout : image ? &imageLayout : nullptr)) {
         delete chain;
         return false;
     }
@@ -1892,6 +1935,8 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
         t.chain = chain;
         RAW_DIAGNOSTIC(stats.chains++);
         RAW_DIAGNOSTIC(stats.chainBytes += chain->layout.bytes);
+    } else if (image) {
+        layImage(imageLayout, formatInfo(ask.format), t.type, t);
     } else if (t.tic) {
         writeTic(t);
     }
@@ -1908,29 +1953,57 @@ bool Device::createLine(uint32_t width, uint32_t format, Texture &t, const Arena
 }
 
 bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
-                          const ArenaAt *at)
+                          uint32_t levels, const ArenaAt *at)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Volume;
     ask.width = width;
     ask.height = height;
     ask.depth = depth;
+    ask.levels = levels;
     ask.format = format;
     ask.view2d = view2d;
     return createLaidOut(ask, t, at);
 }
 
 bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
-                         const ArenaAt *at)
+                         uint32_t levels, const ArenaAt *at)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Array;
     ask.width = width;
     ask.height = height;
     ask.layers = layers;
+    ask.levels = levels;
     ask.format = format;
     ask.type = uint8_t(type);
     return createLaidOut(ask, t, at);
+}
+
+void Device::layImage(const fx::MipChain &c, const FormatInfo *f, uint8_t type, Texture &t)
+{
+    const bool volume = type == fx::kTexThreeD;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.type = type;
+    t.layers = volume ? 1 : c.layers;
+    t.layerBytes = volume ? c.bytes : c.arrayStride;
+    t.depth = c.depth;
+    t.blockDepth = c.zLog2;
+    if (c.levels == 1) {
+        writeTic(t);
+        return;
+    }
+    t.chain = new Texture::Chain;
+    t.chain->layout = c;
+    t.chain->va = t.va;
+    t.chain->fmt2d = volume ? 0 : fx::twodFormat(t.format);
+    uint32_t w[8];
+    fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, c.levels, w, type);
+    memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+    RAW_DIAGNOSTIC(stats.chains++);
+    RAW_DIAGNOSTIC(stats.chainBytes += c.bytes);
 }
 
 // A texture over a block-linear surface's import: TegraGM20BLayout.h's image from the surface's first byte, at the shape the
@@ -1993,7 +2066,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     t.pitch = pitch;
     const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
     t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND) {
+    if (t.import && t.import->kernelTiled()) {
         SurfaceView view;
         const bool valid = surfaceView(t.import->layout, offset, width, height, t.bpp, pitch, view);
         if (valid && !view.direct && !sampled) {
@@ -2216,7 +2289,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
 }
 
 bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled,
-                            Texture &t, const char **why)
+                            Texture &t, const char **why, uint32_t layers)
 {
     uint64_t bytes, align;
     *why = !zetaShape(width, height, format, 1, t, bytes, align) ? "a size or format the raw path renders no zeta of"
@@ -2225,7 +2298,8 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
            : m.blockDepth                                        ? "its image's blocks are deeper than one plane"
            : m.bpp != t.bpp                                      ? "its texel size is not the format's"
            : m.pitch < width * t.bpp || m.pitch % 64             ? "its row stride is not whole GOBs of its texels"
-           : m.bytes < m.layerBytes || uint64_t(m.pitch) * height > m.bytes ? "its image is smaller than its rows"
+           : m.bytes < m.layerBytes * layers || uint64_t(m.pitch) * height > m.bytes
+               ? "its image is smaller than its rows"
            : sampled && m.pitch != (width * t.bpp + 63) / 64 * 64
                ? "its row stride is not the one a texture header implies"
                : nullptr;
@@ -2236,8 +2310,9 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
     t.pitch = m.pitch;
     t.blockHeight = m.blockHeight;
     t.layerBytes = m.layerBytes;
+    t.layers = layers;
     t.comptags = m.compressed;
-    if (!sampled)
+    if (!sampled || layers > 1)
         return true;
     if (!(t.tic = allocTic())) {
         *why = "no texture header is left";
@@ -2261,12 +2336,16 @@ bool Device::stencilTemp(Texture &t)
     return true;
 }
 
-bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
+bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples,
+                              uint32_t layers)
 {
     uint64_t bytes, align;
     const bool zeta = zetaFormatIndex(format) < kZetaFormats;
-    if (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t))
+    if (!layers || layers > 2048 || (layers > 1 && samples > 1) ||
+        (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t)) ||
+        (layers > 1 && !zeta && (!t.renderable || xrForm(format) != XrForm::None)))
         return false;
+    t.layers = layers;
     fx::MipChain c;
     if (samples > 1 && !zeta &&
         (!t.renderable || xrForm(format) != XrForm::None || !fx::msLayout(width, height, samples, t.bpp, c)))
@@ -2473,12 +2552,41 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     t.va = i->bo.va;
     t.storage = {t.va, layout.bytes, true};
     t.cpu = static_cast<uint8_t *>(bytes);
+    layBlocks(layout, f, width, height, uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD), t);
+    return true;
+}
+
+bool Device::createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
+                                uint8_t type, Texture &t)
+{
+    const FormatInfo *f = formatInfo(format);
+    fx::MipChain c;
+    if (!blockCompressed(f) || !shape(width, height, format, t) ||
+        !fx::blockChainLayout(width, height, levels, layers, f->blockW, f->blockH, f->bpp, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    layBlocks(c, f, width, height, type, t);
+    return true;
+}
+
+void Device::layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,
+                       Texture &t)
+{
     t.pitch = layout.level[0].rowBytes;
     t.blockLinear = true;
     t.blockHeight = layout.yLog2;
     t.layers = layout.layers;
     t.layerBytes = layout.arrayStride;
-    t.type = uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD);
+    t.type = type;
     uint32_t w[8];
     fx::mipChainTic(layout, t.va, f->tic0, f->srgb, 0, layout.levels, w, t.type);
     setField(w, 143, 128, width - 1);  // WIDTH_MINUS_ONE in texels (NIL's extent_px)
@@ -2489,7 +2597,6 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
         t.chain->layout = layout;
         t.chain->va = t.va;
     }
-    return true;
 }
 
 void Device::destroyTexture(Texture &t)
@@ -3027,12 +3134,18 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         t.blockHeight = c.level[0].yLog2;
         t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
         t.samples = m.samples;
+    } else if (m.layers > 1) {
+        return nullptr;
     } else {
         if (!f || !shape(m.width, m.height, m.format, t))
             return nullptr;
         t.pitch = (m.width * t.bpp + 255) & ~255u;
         bytes = uint64_t(t.pitch) * t.height;
     }
+    // a layered pass's: its layers one layer's whole tiles apart (NIL's array stride of a one-level image)
+    t.layers = std::max(m.layers, 1u);
+    if (t.layers > 1)
+        bytes = (t.layerBytes * t.layers + align - 1) / align * align;
     PlainMem *mem = largestPlain(tag, memory);
     if (!mem || mem->span.bytes < bytes || (mem->span.va & (align - 1))) {
         auto made = std::make_unique<PlainMem>();
@@ -3137,9 +3250,11 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
-    BackingAsk ask{m.width, m.height, m.format, tag, m.samples, m.zeta, blockLinear, compression, copied};
+    BackingAsk ask{m.width,   m.height, m.format,    tag,         std::max(m.layers, 1u),
+                   m.samples, m.zeta,   blockLinear, compression, copied};
     blockLinear |= m.zeta;
-    const uint32_t kind = compression ? compKind(m, blockLinear, copied) : 0;
+    // a layered pass's backing: plain memory of its layers (compressed backings are one layer's)
+    const uint32_t kind = compression && m.layers <= 1 ? compKind(m, blockLinear, copied) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
@@ -3156,7 +3271,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
     const auto matches = [&](const Backing *b) {
         return b && !b->retired && b->texture.width == m.width && b->texture.height == m.height &&
                b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
-               b->texture.samples == m.samples;
+               b->texture.samples == m.samples && b->texture.layers == std::max(m.layers, 1u);
     };
     if (Backing *last = tag < lastBackings_.size() ? lastBackings_[tag] : nullptr;
         matches(last) && backingCompressionMatches(last->comp != nullptr, last->comp, mem, kind != 0))
@@ -3477,6 +3592,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     slmChannel_ = 0;
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
+    rtLayer_ = ~0u;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
@@ -3528,7 +3644,9 @@ CommandBuffer *Device::begin()
     if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
         return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
-        if (it->unused(channelGeneration(), [this](uint32_t seqno) { return done(seqno); })) {
+        if (it->unused(channelGeneration(), [this](uint32_t seqno) {
+                return done(seqno);
+            })) {
             set_.free(k_, it->bo);
             it = grownOut_.erase(it);
         } else {
@@ -3567,6 +3685,7 @@ CommandBuffer *Device::begin()
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
+    cb.rtLayer_ = rtLayer_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
     cb.heldSegment_ = heldSegment_;
@@ -3628,6 +3747,23 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
     segments_.append({va, uint32_t(to - from), 0});
 }
 
+void CommandBuffer::timestamps(const counters::Stamp *stamps, size_t count)
+{
+    if (!count)
+        return;
+    const uint32_t words = uint32_t(count) * counters::kTimestampWords;
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, words * 4, 256, va));
+    Push p{start, start + words};
+    for (size_t i = 0; i < count; i++) {
+        useAddress(stamps[i].va, counters::kRecordBytes, true);
+        counters::emit(p, stamps[i]);
+    }
+    checkRoom(p, "counter samples");
+    segment(start, p.at);
+    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - dev_->push_.bo.cpu);
+}
+
 void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 {
     dirty_.add(cpu, bytes, invalidate);
@@ -3675,12 +3811,18 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             samples = t->samples;
         }
     e.samples_ = std::max<uint8_t>(samples, 1);
-    if (passRotation(pass, e.rot_) != RotatedRefusal::None)
+    if (passRotation(pass, e.rot_) != RotatedRefusal::None || layeredRefusal(pass, e.samples_, e.rot_.turned()))
         return nullptr;
+    const uint32_t layers = e.pass_.layers = std::max(pass.layers, 1u);
+    const auto layered = [layers](Texture shape) {
+        shape.layers = layers;
+        return shape;
+    };
     const bool hidden = !zeta && pass.hiddenZeta;
-    bool blockLinear = zeta != nullptr || hidden;
+    bool blockLinear = zeta != nullptr || hidden || layers > 1;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
+        if (const Texture *t = pass.color[j].texture;
+            t && !t->memoryless && (t->blockLinear || t->shadowTarget || (pass.arrayedStorageMask >> j & 1)))
             blockLinear = true;
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
@@ -3695,7 +3837,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         return dev_->backing(shape, tag, linear, compression, copied);
     };
     if (zeta && zeta->memoryless) {
-        Texture *b = backing(planeShaped(*zeta, e.rot_), 0, false, true);
+        Texture *b = backing(layered(planeShaped(*zeta, e.rot_)), 0, false, true);
         if (!b)
             return nullptr;
         e.pass_.depthStencil.texture = b;
@@ -3731,7 +3873,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b = backing(layered(planeShaped(*t, e.rot_)), scratchTags[j], blockLinear,
+                                 layers == 1 && !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3739,10 +3882,16 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
         }
     }
+    if (hidden) {
+        Texture *b = backing(e.hiddenZetaShape(pass), 0, false, true);
+        if (!b)
+            return nullptr;
+        e.pass_.depthStencil = {b, true, true, 1.0f, 0};
+        e.hiddenZeta_ = true;
+        backings_.push_back(b);
+    }
     if (backingLock.owns_lock())
         backingLock.unlock();
-    if (hidden && !e.hideZeta(pass))
-        return nullptr;
     for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
@@ -3764,8 +3913,10 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
+    // (raw_zcull.h's region is one plane's: an array's zeta, or a layer of one, keeps zcull off)
     e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth;
+                         pass.depthStencil.clearDepth && layers == 1 && zeta->layers <= 1 &&
+                         (!zeta->storage.va || zeta->va == zeta->storage.va);
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -3966,6 +4117,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     RAW_ENCODE_COUNT(GeometryVertices, GeometryBudget().vertices - geometryBudget_.vertices);
     if (nativeError)
         return false;
+
     struct ReleaseReads {
         CommandBuffer &cb;
 
@@ -4081,8 +4233,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_, &d.argumentRoots_})
             control(*bo, true);
         for (const auto &part : d.heapParts_)
-            surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
-                (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
+            surfaces_.addAccess(part.bo.handle,
+                                TegraGM20BSurfaceRead | (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
         for (const Bo &bo : d.slmOutgrown_)
             control(bo, true);
         nameHeaps();
@@ -4140,13 +4292,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     const bool pushed = segments_.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
         const bool closing = at + n == segments_.size();
-        const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy :
-            externalWrites_ && closing ? JobVisibility::External : JobVisibility::Internal;
+        const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy
+                                         : externalWrites_ && closing         ? JobVisibility::External
+                                                                              : JobVisibility::Internal;
         const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
-        const uint32_t signalCount = closing ?
-            uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
+        const uint32_t signalCount =
+            closing ? uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
+                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
         if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events))
             return false;
         waited += waitCount;
@@ -4161,10 +4314,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
         return false;
     while (waited < sharedWaits_.size() || signaled < sharedSignals_.size()) {
         const uint32_t waitCount = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
-        const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,
-                                                             TegraGM20BMaxJobEvents - waitCount));
+        const uint32_t signalCount =
+            uint32_t(std::min<size_t>(sharedSignals_.size() - signaled, TegraGM20BMaxJobEvents - waitCount));
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
+                               signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
         if (!submit(nullptr, 0, eventResources, JobVisibility::External, events))
             return false;
         waited += waitCount;
@@ -4177,6 +4330,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.retire(d.upload_, seq);
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
+    d.rtLayer_ = rtLayer_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
@@ -4257,7 +4411,7 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
     const Pipeline &pl = *emitted_;
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
-                                                    uint64_t(pl.fragmentInstructions) * pl.samplePasses);
+                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
     if (!cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
         return;
     if (p_.at > bodyStart_) {
@@ -4342,6 +4496,7 @@ void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
     scissor_[0] = (x + w) << 16 | x;
     scissor_[1] = (y + h) << 16 | y;
     scissorDirty_ = true;
+    views_.scissors = 1;
 }
 
 // Metal's viewport as m2v gives it to Vulkan (y flipped: y + h, height -h) and NVK writes it (nvk_emit_viewport)
@@ -4367,6 +4522,52 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
     viewport_[6] = uint32_t(xmax - xmin) << 16 | uint32_t(xmin);
     viewport_[7] = uint32_t(ymax - ymin) << 16 | uint32_t(ymin);
     viewportDirty_ = true;
+    views_.viewports = 1;
+}
+
+void RenderEncoder::setViewports(const double (*viewports)[6], uint32_t count)
+{
+    count = std::clamp(count, 1u, kMaxViewports);
+    setViewport(viewports[0][0], viewports[0][1], viewports[0][2], viewports[0][3], viewports[0][4], viewports[0][5]);
+    for (uint32_t j = 1; j < count; j++) {
+        viewportWords(viewports[j], views_.viewport[j]);
+        std::copy_n(viewports[j], 4, views_.vp[j]);
+    }
+    views_.dirtyViewports |= ((1u << count) - 1) & ~1u;
+    views_.viewports = count;
+}
+
+void RenderEncoder::setScissors(const uint32_t (*rects)[4], uint32_t count)
+{
+    count = std::clamp(count, 1u, kMaxViewports);
+    setScissor(rects[0][0], rects[0][1], rects[0][2], rects[0][3]);
+    for (uint32_t j = 1; j < count; j++)
+        views_.scissor[j] = scissorBox(rects[j], areaW_, areaH_);
+    views_.dirtyScissors |= ((1u << count) - 1) & ~1u;
+    views_.scissors = count;
+}
+
+// Viewports and scissors 1 .. count - 1 as NVK writes viewport j (nvk_emit_viewport, nvk_emit_scissor), through a turned
+// pass's transform and its clip-space swizzle at each index (index 0's is the pass's prologue's)
+void RenderEncoder::emitViewports(Push &p)
+{
+    for (uint32_t dirty = views_.dirtyViewports; dirty; dirty &= dirty - 1) {
+        const uint32_t j = uint32_t(__builtin_ctz(dirty));
+        switch_gm20b_viewport_state v = viewportState(views_.viewport[j]);
+        turnViewport(rot_, v);
+        kit(p, switch_gm20b_viewport, j, &v);
+        if (rot_.turned() && !(views_.swizzled >> j & 1)) {
+            kit(p, switch_gm20b_viewport_swizzle, j, rot_.swizzle());
+            views_.swizzled |= 1u << j;
+        }
+    }
+    for (uint32_t dirty = views_.dirtyScissors; dirty; dirty &= dirty - 1) {
+        const uint32_t j = uint32_t(__builtin_ctz(dirty));
+        const ScissorBox &b = views_.scissor[j];
+        const Rect s = planeRect(b.x0, b.y0, b.x1, b.y1);
+        kit(p, switch_gm20b_scissor, j, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));
+    }
+    views_.dirtyViewports = views_.dirtyScissors = 0;
 }
 
 void RenderEncoder::setBlendColor(const float rgba[4])
@@ -4416,6 +4617,10 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
+    if (amplifies() && runsPerAmplification(primitive, count, instances, false))
+        return amplified([&] {
+            return draw(primitive, first, count, instances, baseInstance, why);
+        });
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4441,8 +4646,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #endif
             const bool reverse = runWinding_[run++];
             raster_.winding ^= reverse;
-            const bool prepared =
-                prepare(pl, primitive, first + begin, first + begin, end - begin, false, why);
+            const bool prepared = prepare(pl, primitive, first + begin, first + begin, end - begin, false, why);
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
@@ -4468,13 +4672,16 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     if (probe)
         dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
 #endif
-    mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
+    if (amplifies())
+        amplifyCall(*pl, false, first, count, instances, first, baseInstance);
+    else
+        mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probe && !probe->after.empty())
         p_.raw(probe->after.data(), uint32_t(probe->after.size()));
 #endif
-    cb_->draws++;
-    finishDraw(count, instances);
+    cb_->draws += amplifies() ? amplifications_ : 1;
+    finishDraw(count, amplifies() ? instances * amplifications_ : instances);
     return true;
 }
 
@@ -4616,6 +4823,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
+    if (amplifies() && runsPerAmplification(primitive, count, instances, true))
+        return amplified([&] {
+            return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why);
+        });
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4730,10 +4941,13 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         }
         if (p_.room() < kInstanceWords)
             reserve();
-        mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
-        finishDraw(end - begin, instances);
+        if (amplifies())
+            amplifyCall(*pl, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
+        else
+            mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
+        finishDraw(end - begin, amplifies() ? instances * amplifications_ : instances);
     }
-    cb_->draws++;
+    cb_->draws += amplifies() ? amplifications_ : 1;
     return true;
 }
 
@@ -4768,20 +4982,26 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     cb_->use(*arguments, false);
     if (arguments->hostVisible && !arguments->wc && arguments->cpu)
         cb_->clean(arguments->cpu + offset, bytes);
-    if (p_.room() < 8)
+    if (p_.room() < 8 + mme::kAmplificationScratchWords + mme::kAmplifyCallWords)
         reserve();
     // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
     p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
-    mme::indirectHeader(p_, indexed);
+    if (amplifies()) {
+        amplificationScratch(p_, pl);
+        mme::amplifyHeader(p_, indexed);
+        heldAmplifyWords(pl);
+    } else {
+        mme::indirectHeader(p_, indexed);
+    }
     bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
     bodies_.push_back(PushBody::resident(arguments->va + offset, bytes / 4, TegraGM20BPushNoPrefetch));
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
     params_.unknown = true;
-    ++cb_->draws;
+    cb_->draws += amplifies() ? amplifications_ : 1;
     finishDraw(0, 0, true);
     return true;
 }
@@ -4819,8 +5039,8 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 }
 
 // The state the commands inherit prepared once, as an indirect draw's, the range into the macros' scratch, then the
-// commands' words by reference. Each command sets its topology, restart, index buffer and draw parameters, which the
-// encoder holds unknown after them.
+// commands' words by reference, once per amplification with its id between. Each command sets its topology, restart, index
+// buffer and draw parameters, which the encoder holds unknown after them; patch commands their control-stage words too.
 bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
 {
     RAW_ENCODE_SPAN(Draw);
@@ -4834,7 +5054,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         refuseFetch(pl, refusal, x.primitive, 0, 0, why);
         return false;
     }
-    const uint64_t offset = uint64_t(x.first) * icb::kSlotWords * 4, bytes = uint64_t(x.count) * icb::kSlotWords * 4;
+    const uint64_t slotBytes = uint64_t(x.slotWords) * 4, offset = x.first * slotBytes, bytes = x.count * slotBytes;
     if (!x.slots->va || offset > x.slots->length || x.slots->length - offset < bytes) {
         *why = "indirect command buffer commands outside its memory";
         return false;
@@ -4848,16 +5068,17 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     indirectGeometry_ = true;
     const bool prepared = prepare(form, x.primitive, 0, 0, UINT32_MAX, x.indexed, why);
     indirectGeometry_ = false;
-    if (!prepared)
+    const bool patches = x.primitive == icb::kPatchPrimitive;
+    if (!prepared || (patches && !icbPatchLayout(why)))
         return false;
     cb_->use(*x.slots, false);
     if (x.slots->hostVisible && !x.slots->wc && x.slots->cpu)
         cb_->clean(x.slots->cpu + offset, bytes);
-    for (size_t i = 0; i < x.indexBufferCount; i++) {
-        const Buffer &ib = *x.indexBuffers[i];
-        cb_->use(ib, false);
-        if (ib.hostVisible && !ib.wc && ib.cpu)
-            cb_->clean(ib.cpu, ib.length);
+    for (size_t i = 0; i < x.bufferCount; i++) {
+        const Buffer &b = *x.buffers[i];
+        cb_->use(b, false);
+        if (b.hostVisible && !b.wc && b.cpu)
+            cb_->clean(b.cpu, b.length);
     }
     if (p_.room() < 16)
         reserve();
@@ -4873,14 +5094,22 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::icbRangeHeader(p_);
         bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
         bodies_.push_back(PushBody::resident(x.range->va + x.rangeOffset, 2, TegraGM20BPushNoPrefetch));
+        bodyStart_ = p_.at;
     } else {
         mme::icbRange(p_, x.first, x.count);
-        bodies_.push_back({bodyStart_, p_.at});
     }
-    bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
-    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-    bodyStart_ = nullptr;
-    reserve();
+    for (uint32_t a = 0; a < amplifications_; a++) {
+        if (amplifications_ > 1)
+            icbAmplification(a);
+        if (p_.at > bodyStart_)
+            bodies_.push_back({bodyStart_, p_.at});
+        bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
+        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+        bodyStart_ = nullptr;
+        reserve();
+    }
+    if (patches)
+        icbPatchesDone();
     topology_ = restart_ = ~0u;
     ibVa_ = ibEnd_ = ~uint64_t(0);
     ibSize_ = 0;
@@ -4901,7 +5130,8 @@ static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uin
     for (uint64_t at = from, n = 0; at < length && n < 32; ++at, ++n)
         snprintf(hex + 3 * n, 4, "%02x ", bytes[at]);
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-           "raw: uniform probe %{public}s stage %u slot %u: %u non-finite floats and %u halves in %llu bytes, first at +%llu; "
+           "raw: uniform probe %{public}s stage %u slot %u: %u non-finite floats and %u halves in %llu bytes, first at "
+           "+%llu; "
            "+%llu: %{public}s(mach %llu)",
            pl.uniformProbe, stage, slot, found.words, found.halves, (unsigned long long)length,
            (unsigned long long)found.first, (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
@@ -5163,23 +5393,52 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             bool indexed, const char **why)
 {
     RAW_ENCODE_SPAN(Prepare);
+    if (pl->strideTwin && bindStridePastStream(*pl->rec))
+        pl = pl->strideTwin;
+    if (tessellates(*pl->rec) != (primitive == icb::kPatchPrimitive)) {
+        *why = "primitives drawn with a tessellation state";
+        cb_->refusal = {};
+        return false;
+    }
+    if (const char *refused = drawnWordsRefusal(*pl->rec)) {
+        *why = refused;
+        cb_->refusal = {};
+        return false;
+    }
+    // A record of a vertex function that chooses its slice writes Layer below the pass's length (arrayLengthWord) and
+    // one that chooses its viewport ViewportIndex below the encoder's count (viewportCountWord); a record of one layer
+    // draws layer 0, and a record made before the viewport word viewport 0
+    if (const char *missing = layeredDrawMissing(pl->rec->arrayLengthWord, pass_.layers, kLayerDropped)) {
+        *why = missing;
+        cb_->refusal = {};
+        return false;
+    }
+    if (views_.viewports > 1 && pl->viewportIndex && !pl->rec->viewportCountWord) {
+        *why = "a vertex function choosing among several viewports: its record draws viewport 0";
+        cb_->refusal = {RefViewports, views_.viewports, 0, 0};
+        return false;
+    }
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
     readBits_ |= pl->readBits | pl->fetchBits;
-    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
-    auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
-        const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
-        const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
-        const int64_t end =
-            size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
-        out[0] = uint32_t(std::max<int64_t>(lo, first));
-        out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
-    };
+    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels), over each
+    // viewport its vertex function may choose
     uint32_t x[2], y[2];
-    const bool empty = vp_[2] == 0 || vp_[3] == 0;
-    axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
-    axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    viewportPixels(vp_, {sc_[0], sc_[1], sc_[0] + sc_[2], sc_[1] + sc_[3]}, areaW_, areaH_, x, y);
+    for (uint32_t j = 1; pl->viewportIndex && j < views_.viewports; j++) {
+        uint32_t xj[2], yj[2];
+        viewportPixels(views_.vp[j], j < views_.scissors ? views_.scissor[j] : ScissorBox{0, 0, areaW_, areaH_}, areaW_,
+                       areaH_, xj, yj);
+        if (xj[1] <= xj[0] || yj[1] <= yj[0])
+            continue;
+        if (x[1] <= x[0] || y[1] <= y[0]) {
+            x[0] = xj[0], x[1] = xj[1], y[0] = yj[0], y[1] = yj[1];
+            continue;
+        }
+        x[0] = std::min(x[0], xj[0]), x[1] = std::max(x[1], xj[1]);
+        y[0] = std::min(y[0], yj[0]), y[1] = std::max(y[1], yj[1]);
+    }
     RAW_ENCODE_BEGIN(geometrySpan, Geometry);
     // only a pass's first draw is bounded by its vertices, for the cover test below (its vertex bytes the recording's
     // cached copy, RMCommandBuffer::_shadow); every other decision takes the draw's pixel limit
@@ -5188,8 +5447,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         g.limit = {x[0], y[0], x[1], y[1]};
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    auto geometryAnalysis =
-        geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
+    auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     RAW_ENCODE_BEGIN(variantSpan, Variant);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
@@ -5221,7 +5479,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         if (!fragmentTestsMatch(pl->rec->storageTests, ds_, zeta ? zeta->format : 0)) {
             *why = "an ordered storage variant whose depth/stencil tests differ from the draw";
-            cb_->refusal = {RefDepthStencil, pl->rec->storageTests, uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
+            cb_->refusal = {RefDepthStencil, pl->rec->storageTests,
+                            uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
             return false;
         }
         // A pass that declares no attachment tests depth and stencil against its hidden one (PassDesc::hiddenZeta), which the
@@ -5246,7 +5505,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (!prepareShaderTests(*pl, why))
         return false;
-    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0))
+    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
+                        (views_.dirtyViewports | views_.dirtyScissors ? 24 * kMaxViewports : 0))
         reserve();
     Device &d = *dev_;
     Push &p = p_;
@@ -5266,8 +5526,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
         if (shaderTestsActive_)
             emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
-        else if (bindDepthStencil(p, bodies_, bodyStart_, dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
-                                  cb_->ds_, bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
+        else if (bindDepthStencil(p, bodies_, bodyStart_,
+                                  dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]), cb_->ds_,
+                                  bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
             cb_->segmentBinds_++;
             RAW_DIAGNOSTIC(cb_->counts_.segmentBinds++);
         }
@@ -5291,6 +5552,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (pl->heapMissing) {
         *why = "no memory for the tables a state reads argument buffers through";
+        cb_->refusal = {};
+        return false;
+    }
+    if (pl->tessReadsHeap) {
+        *why = "a tessellation program that reads argument buffers through set 1";
         cb_->refusal = {};
         return false;
     }
@@ -5334,8 +5600,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     at[3] = 0;
                     continue;
                 }
-                if (e.kind == EntryUbo) {
-                    const Bound &b = bufs_[e.stage][e.slot];
+                if (e.kind == EntryUbo || e.kind == EntryTessBuffer) {
+                    const Bound b = e.kind == EntryUbo ? bufs_[e.stage][e.slot] : tessBuffer(e.slot);
                     cb_->buffersWritten_ |= bufferStorage(e);
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
@@ -5396,26 +5662,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
                     tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
                 } else if (e.kind == EntryFetch) {
-                    const Texture *t = pass_.color[e.slot].texture;
-                    if (t && !t->tic) {
-                        *why = "framebuffer fetch from a target the raw path cannot sample";
-                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                    const ColorAttachment &a = pass_.color[e.slot];
+                    const Texture *t = a.texture;
+                    const bool storage = t && (pl->storageBits >> e.slot & 1);
+                    if (storage && storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples,
+                                                       *t) != StorageFallback::None) {
+                        *why = "an incompatible framebuffer storage view";
+                        cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                         return false;
                     }
-                    if (t)
+                    if (t) {
                         cb_->use(*t, pl->storageWriteBits >> e.slot & 1);
-                    tic = t ? t->tic : 0;
-                    if (t && (pl->storageBits >> e.slot & 1)) {
-                        if (storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples, *t) !=
-                            StorageFallback::None) {
-                            *why = "an incompatible framebuffer storage view";
-                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
-                            return false;
-                        }
-                        tic = passViewTic(*t, pl->storageTic[e.slot]);
+                        tic = fetchTic(a, storage ? pl->storageTic[e.slot] : 0, layeredRecord(pl->rec->arrayLengthWord),
+                                       why);
                         if (!tic) {
-                            *why = "no room for the framebuffer storage view";
-                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
+                            cb_->refusal = {storage ? RefStorageView : RefNoTic, e.slot, t->format, t->width};
                             return false;
                         }
                     }
@@ -5472,12 +5733,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
     const uint64_t setVa = prepared->address;
+    prepared_ = pl;
+    preparedSet_ = setVa;
     RAW_ENCODE_BEGIN(bindSpan, Bind);
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
     const bool slotRoots = r.rootSlots[0] || r.rootSlots[1];
+    const bool patches = tessellates(r);
+    const bool drawnWordsDirty = ((r.amplificationIdWord || r.amplificationCountWord || pl->amplificationLayerWord ||
+                                   pl->amplificationViewportWord) &&
+                                  amplificationDirty_) ||
+                                 r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
-        r.shaderTests.flags || slotRoots) {
+        r.shaderTests.flags || slotRoots || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -5493,6 +5761,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 narrowed_ = narrow;
             }
             bindState(p, *pl);
+            // a vertex program's Layer selects the slice where it writes one (NVK: the last pre-rasterization stage's)
+            if (const uint32_t rtLayer = pl->writesLayer ? kRtLayerFromShader : 0; rtLayer != cb_->rtLayer_) {
+                p.m(NVB197_SET_RT_LAYER, rtLayer);
+                cb_->rtLayer_ = rtLayer;
+            }
             RAW_DIAGNOSTIC(cb_->counts_.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;
@@ -5502,6 +5775,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         // run of words that change
         uint32_t want[32];
         memcpy(want, pl->push, sizeof want);
+        if (patches) {
+            controlWords(r, want);
+            tessWordsDirty_ = false;
+        }
+        drawnWords(*pl, want);
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
         if (!blendWords(r, why))
@@ -5556,40 +5834,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         kit(p, switch_gm20b_scissor, 0u, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));
         scissorDirty_ = false;
     }
+    if (views_.dirtyViewports | views_.dirtyScissors)
+        emitViewports(p);
     // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
     if ((pl->constantBlend || dynamicBlend) && blendColorDirty_) {
         p.incArray(BLEND_CONST_RED, blendColor_, 4);
         blendColorDirty_ = false;
     }
-    // vertex stream 0 from the pipeline's vertex buffer slot
-    if (r.vertexSlot != 0xff) {
-        const Bound &b = bufs_[1][r.vertexSlot];
-        // the stream ends where the bound bytes end: a setBytes chunk (256-aligned, as m2v's upload blocks) or the buffer's end
-        uint64_t location = b.va, bytes = b.buffer ? b.size : (b.size + kUboChunk - 1) & ~uint64_t(kUboChunk - 1);
-        if (!location ||
-            !bytes) {  // none bound, or none of it left: NVK's empty stream (nvk_mme_bind_vb before Turing)
-            location = d.zero_.va;
-            bytes = 0;
-        }
-        const uint64_t limit = location + bytes - 1;
-        if (location != vbVa_ || limit != vbLimit_) {
-            if (b.buffer)
-                cb_->use(*b.buffer, false);
-            else
-                cb_->useAddress(b.va, b.size, false);
-            p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
-            p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
-            vbVa_ = location;
-            vbLimit_ = limit;
-        }
-        if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && r.vertexStride) {
-            const uint64_t from =
-                std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * r.vertexStride), b.buffer->length);
-            const uint64_t bytes =
-                std::min<uint64_t>(indexed ? b.size : uint64_t(count) * r.vertexStride, b.buffer->length - from);
-            cb_->clean(b.buffer->cpu + from, bytes);
-        }
-    }
+    bindStreams(p, *pl, indexed, vFirst, count);
     bool selected = false;
     if (descriptorBinding_.changed(pl, setVa)) {
         const HeapSet *heap = pl->heapSet;
@@ -5600,19 +5852,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, heap ? 8 : 4);
         if (pl->heapSlot[0] || pl->heapSlot[1]) {
-            p.inc(CB_SELECTOR_A, {std::min(r.heapBytes, kMaxCbufBytes), uint32_t(heapVa >> 32), uint32_t(heapVa)});
+            p.inc(CB_SELECTOR_A, {cbufBindBytes(r.heapBytes), uint32_t(heapVa >> 32), uint32_t(heapVa)});
             if (pl->heapSlot[0])
                 p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->heapSlot[0]) << 4);
             if (pl->heapSlot[1])
                 p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->heapSlot[1]) << 4);
             selected = true;
         }
-        if (pl->setSlot[0] || pl->setSlot[1]) {
-            p.inc(CB_SELECTOR_A, {setBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-            if (pl->setSlot[0])
-                p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
-            if (pl->setSlot[1])
-                p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
+        const bool setRead = pl->setSlot[0] || pl->setSlot[1] || pl->setSlot[2] || pl->setSlot[3];
+        if (setRead) {
+            p.inc(CB_SELECTOR_A, {cbufBindBytes(setBytes), uint32_t(setVa >> 32), uint32_t(setVa)});
+            for (uint32_t k = 0; k < 4; k++)
+                if (pl->setSlot[k])
+                    p.m(BIND_GROUP_CB + 0x20 * kSetGroups[k], 1 | uint32_t(pl->setSlot[k]) << 4);
             selected = true;
         }
     }
@@ -5623,7 +5875,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         if (!descriptorBinding_.uboMoved(u, desc))
             continue;
         if (desc[2]) {
-            p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
+            p.inc(CB_SELECTOR_A, {cbufBindBytes(desc[2]), desc[1], desc[0]});
             p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
             selected = true;
         } else {
@@ -5918,7 +6170,7 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND)
+    if (t.import && t.import->kernelTiled())
         return {t.va, t.pitch, x + t.surfaceX, y + t.surfaceY, t.import->layout.height, true, t.blockHeight};
     if (t.layers > 1)
         return {t.va + z * t.layerBytes, t.pitch, x, y, t.height, true, t.blockHeight};
@@ -6038,18 +6290,22 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     const auto image = [&](ShaderTestImage which) {
         switch (which) {
-        case ShaderTestImage::depth: return side(*shaderDepth_);
-        case ShaderTestImage::stencil: return side(*shaderStencil_);
-        case ShaderTestImage::temporary: return side(*shaderStencilTemp_);
-        case ShaderTestImage::attachment: return attachment;
+        case ShaderTestImage::depth:
+            return side(*shaderDepth_);
+        case ShaderTestImage::stencil:
+            return side(*shaderStencil_);
+        case ShaderTestImage::temporary:
+            return side(*shaderStencilTemp_);
+        case ShaderTestImage::attachment:
+            return attachment;
         }
         return attachment;
     };
     const auto copies = shaderTestTransfers(flags, shape.packedStencil, toAttachment);
     for (uint8_t at = 0; at < copies.count; ++at) {
         const auto &copy = copies.transfers[at];
-        copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height,
-                     copy.remap, copy.bytes, dev_->stats, copy.ordered);
+        copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height, copy.remap, copy.bytes,
+                     dev_->stats, copy.ordered);
     }
     RAW_DIAGNOSTIC(dev_->stats.compZetaCopies += zeta.comptags);
     p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
@@ -6068,9 +6324,9 @@ void RenderEncoder::endShaderTests()
 }
 
 // Clear [x0, x1) x [y0, y1) of target `target` to `v` (its format's clear words), with depth (bit 0) and stencil (bit 1)
-// of `zsBits`, whatever the render enable says
+// of `zsBits`, in each of `layers` layers, whatever the render enable says
 static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const uint32_t v[4], uint32_t target,
-                      uint32_t zsBits)
+                      uint32_t zsBits, uint32_t layers)
 {
     switch_gm20b_clear_state s = {};
     for (uint32_t i = 0; i < 4; i++)
@@ -6082,31 +6338,37 @@ static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y
     s.target = target;
     s.depth = zsBits & 1;
     s.stencil = zsBits & 2;
+    s.layers = layers;
+    s.layer_macro = mme::kClearLayers;
     kit(p, switch_gm20b_clear, &s);
 }
 
-static void colorTarget(Push &p, uint32_t index, const Texture &t)
+// A pass of `layers` layers binds that many from the target's own (pitch memory: one)
+static void colorTarget(Push &p, uint32_t index, const Texture &t, uint32_t layers)
 {
     ColorTargetDesc d;
     d.va = t.va;
     d.pitch = t.pitch;
-    d.height = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
+    d.height = t.import && t.import->kernelTiled() ? t.import->layout.height : sampleRows(t);
     d.bpp = t.bpp;
     d.rtFormat = formatInfo(t.format)->rt;
     d.blockLinear = t.blockLinear;
     d.blockHeight = t.blockHeight;
     d.layerBytes = t.layerBytes;
+    d.layers = layers;
+    d.depth = t.type == fx::kTexThreeD;
+    d.blockDepth = t.blockDepth;
     const switch_gm20b_target k = kitTarget(d);
     kit(p, switch_gm20b_color_target, index, &k, t.comptags);
 }
 
 // A slot with no target below the pass's last one, as NVK writes it: FORMAT DISABLED, VA 0, compressed. Left as it was,
 // the slot would still name the target of an earlier pass, which CT_SELECT's count makes the hardware render to.
-static void disabledTarget(Push &p, uint32_t index)
+static void disabledTarget(Push &p, uint32_t index, uint32_t layers)
 {
     switch_gm20b_target k = {};
     k.width = 64;
-    k.layers = 1;
+    k.layers = layers;
     kit(p, switch_gm20b_color_target, index, &k, true);
 }
 
@@ -6131,13 +6393,48 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
 
 uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
 {
+    AttachmentView v;
+    v.word0 = word0;
     for (uint8_t i = 0; i < passViewCount_; ++i)
-        if (passViews_[i].ownTic == t.tic && passViews_[i].word0 == word0)
+        if (passViews_[i].ownTic == t.tic && passViews_[i].view == v)
             return passViews_[i].tic;
     const uint32_t tic = dev_->viewTic(t, word0);
     if (tic && passViewCount_ < passViews_.size())
-        passViews_[passViewCount_++] = {t.tic, word0, tic};
+        passViews_[passViewCount_++] = {t.tic, v, tic};
     return tic;
+}
+
+uint32_t RenderEncoder::passViewTic(const Texture &owner, const AttachmentView &v, const char **why)
+{
+    for (uint8_t i = 0; i < passViewCount_; ++i)
+        if (passViews_[i].ownTic == owner.tic && passViews_[i].view == v)
+            return passViews_[i].tic;
+    const uint32_t tic = dev_->attachmentViewTic(owner, v, why);
+    if (tic && passViewCount_ < passViews_.size())
+        passViews_[passViewCount_++] = {owner.tic, v, tic};
+    return tic;
+}
+
+uint32_t RenderEncoder::fetchTic(const ColorAttachment &a, uint32_t storage, bool layeredRecord, const char **why)
+{
+    const Texture &t = *a.texture;
+    const bool layered = pass_.layers > 1;
+    if (t.tic && (storage ? !layeredRecord : !layered))
+        return storage ? passViewTic(t, storage) : t.tic;
+    const FormatInfo *f = formatInfo(t.format);
+    if (!f) {
+        *why = "framebuffer fetch from a target the raw path cannot sample";
+        return 0;
+    }
+    AttachmentView v;
+    v.word0 = storage ? storage : f->tic0;
+    v.srgb = !storage && f->srgb;
+    v.arrayed = storage ? layeredRecord : layered;
+    v.layers = v.arrayed ? pass_.layers : 1;
+    v.part = a.image != nullptr;
+    v.level = uint8_t(a.level);
+    v.slice = a.slice;
+    return passViewTic(v.part ? *a.image : t, v, why);
 }
 
 uint32_t Device::viewTic(const Texture &t, uint32_t word0)
@@ -6145,9 +6442,11 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0)
     RAW_ENCODE_LOCK(l, lock_);
     if (!t.tic)
         return 0;
+    AttachmentView key;
+    key.word0 = word0;
     const auto views = viewTics_.equal_range(t.tic);
     for (auto v = views.first; v != views.second; ++v)
-        if (v->second.first == word0)
+        if (v->second.first == key)
             return v->second.second;
     const uint32_t tic = allocTic();
     if (!tic)
@@ -6156,7 +6455,44 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0)
     memcpy(own, tic_.cpu + 32 * t.tic, 32);
     viewHeader(own, word0, w);
     memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
-    viewTics_.emplace(t.tic, std::make_pair(word0, tic));
+    viewTics_.emplace(t.tic, std::make_pair(key, tic));
+    return tic;
+}
+
+uint32_t Device::attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why)
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    constexpr const char *kNoHeader = "framebuffer fetch from a target the raw path cannot sample";
+    if (!owner.tic) {
+        *why = kNoHeader;
+        return 0;
+    }
+    const auto views = viewTics_.equal_range(owner.tic);
+    for (auto it = views.first; it != views.second; ++it)
+        if (it->second.first == v)
+            return it->second.second;
+    uint32_t w[8];
+    bool headed = false;
+    if (v.part) {
+        fx::MipChain c;
+        uint64_t base = 0;
+        headed = attachmentImage(owner, c, base) && attachmentViewHeader(c, base, owner.type == fx::kTexThreeD, v, w);
+    } else {
+        uint32_t own[8];
+        memcpy(own, tic_.cpu + 32 * owner.tic, 32);
+        headed = ownViewHeader(own, v, w);
+    }
+    if (!headed) {
+        *why = kNoHeader;
+        return 0;
+    }
+    const uint32_t tic = allocTic();
+    if (!tic) {
+        *why = "no room for the framebuffer storage view";
+        return 0;
+    }
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    viewTics_.emplace(owner.tic, std::make_pair(v, tic));
     return tic;
 }
 
@@ -6177,6 +6513,11 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     out.blockHeight = d.blockHeight;
     out.layerBytes = t.chain->layout.layers > 1 ? t.chain->layout.arrayStride : d.layerBytes;
     out.layers = t.chain->layout.layers;
+    if (t.type == fx::kTexThreeD) {  // the level's planes in its own blocks' depth (the copy engine's 3D addressing)
+        out.type = fx::kTexThreeD;
+        out.depth = t.chain->layout.level[level].depth;
+        out.blockDepth = t.chain->layout.level[level].zLog2;
+    }
     out.blockW = t.blockW;
     out.blockH = t.blockH;
     out.texelWidth = std::max(1u, t.texelWidth >> level);
@@ -6213,9 +6554,8 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
     }
     const Texture &t = *selected;
     if (!t.va || t.zeta || t.samples > 1 || t.converted() || t.blockW > 1 || t.blockH > 1 ||
-        xrForm(t.format) != XrForm::None || !size[0] || !size[1] || !size[2] ||
-        origin[0] > t.width || size[0] > t.width - origin[0] ||
-        origin[1] > t.height || size[1] > t.height - origin[1])
+        xrForm(t.format) != XrForm::None || !size[0] || !size[1] || !size[2] || origin[0] > t.width ||
+        size[0] > t.width - origin[0] || origin[1] > t.height || size[1] > t.height - origin[1])
         return TextureTransferResult::Unsupported;
     const bool volume = t.type == fx::kTexThreeD;
     if (volume ? (slice || origin[2] > t.depth || size[2] > t.depth - origin[2])
@@ -6261,6 +6601,14 @@ RenderEncoder::Raster RenderEncoder::rasterFor(uint32_t primitive) const
 void RenderEncoder::emitSwizzle(Push &p, uint32_t word)
 {
     kit(p, switch_gm20b_viewport_swizzle, 0u, word);
+}
+
+void RenderEncoder::timestampAtStart(uint64_t va, counters::Point point)
+{
+    if (startStampCount_ == startStamps_.size())
+        return;
+    startStamps_[startStampCount_++] = {va, point};
+    cb_->useAddress(va, counters::kRecordBytes, true);
 }
 
 void RenderEncoder::continuePass(uint8_t stores)
@@ -6322,11 +6670,14 @@ void RenderEncoder::end()
     RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
     endShaderTests();
-    if (p_.room() < 64 + kSampleWords)
+    if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports)
         reserve();
     writeRaster(p_, Raster());
-    if (rot_.turned())
+    if (rot_.turned()) {
         emitSwizzle(p_, kSwizzleIdentity);
+        for (uint32_t turned = views_.swizzled & ~1u; turned; turned &= turned - 1)
+            kit(p_, switch_gm20b_viewport_swizzle, uint32_t(__builtin_ctz(turned)), kSwizzleIdentity);
+    }
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
     if (params_.unknown || params_.root || params_.baseInstance) {
         const uint32_t zero[2] = {};
@@ -6369,12 +6720,14 @@ void RenderEncoder::end()
     if (!clearsSealed_)
         clears(initialClears_);
     const std::vector<Clear> &cl = initialClears_;
+    const uint32_t layers = std::max(pass_.layers, 1u);
 #if SWITCH_RAW_DIAGNOSTICS
     probeEdges();
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size());
+                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size()) +
+                          startStampCount_ * counters::kTimestampWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -6385,6 +6738,8 @@ void RenderEncoder::end()
 #else
     kit(p, switch_gm20b_pass_barrier, false);
 #endif
+    for (uint8_t i = 0; i < startStampCount_; i++)
+        counters::emit(p, startStamps_[i]);
     if (rot_.turned())
         emitSwizzle(p, rot_.swizzle());
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
@@ -6417,14 +6772,14 @@ void RenderEncoder::end()
             continue;
         const Texture *t = pass_.color[c.target].texture;
         const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
-        colorTarget(p, 0, *t);
+        colorTarget(p, 0, *t, layers);
         kit(p, switch_gm20b_render_area, 1u, r.x1, r.y1);
         p.m(ZT_SELECT, 0);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
-        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0, layers);
         own = true;
     }
     if (own) {
@@ -6436,15 +6791,15 @@ void RenderEncoder::end()
             count = j + 1;
     for (uint32_t j = 0; j < count; j++) {
         if (const Texture *t = pass_.color[j].texture)
-            colorTarget(p, j, *t);
+            colorTarget(p, j, *t, layers);
         else
-            disabledTarget(p, j);
+            disabledTarget(p, j, layers);
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
     // (0, 0) over the render area
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
-    zetaTargetWords(p, zs.texture);
+    zetaTargetWords(p, zs.texture, layers);
     // ahead of the depth clear, which sets the region; over the plane the pass renders (a turned drawable's own axes)
     const Rect plane = planeArea();
     if (ZcullRegion region; zcull_.candidate && zcullRegion(d.zcullInfo_, plane.x0, plane.y0, plane.x1 - plane.x0,
@@ -6470,7 +6825,7 @@ void RenderEncoder::end()
         const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
-        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0, layers);
         zsBits = area ? 0 : zsBits;
     }
     if (zsBits) {
@@ -6478,7 +6833,10 @@ void RenderEncoder::end()
         p.inc(CLEAR_RECT_H, {a.x1 << 16 | a.x0, a.y1 << 16 | a.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);
         p.m(RENDER_ENABLE_OVERRIDE, 1);
-        p.m(CLEAR_SURFACE, zsBits);
+        if (layers > 1)
+            mme::clearLayers(p, zsBits, layers);
+        else
+            p.m(CLEAR_SURFACE, zsBits);
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
     checkRoom(p, "a pass prologue");
@@ -6695,7 +7053,8 @@ void BlitEncoder::fillWords(uint64_t dst, uint64_t bytes, uint32_t word)
     for (uint64_t at = dst, left = bytes & ~uint64_t(3); left >= 4;) {
         const uint64_t words = left / 4;
         const uint32_t width = uint32_t(std::min<uint64_t>(words, kFillMaxDim)),
-                       height = words >= kFillMaxDim ? uint32_t(std::min<uint64_t>(words / kFillMaxDim, kFillMaxDim)) : 1;
+                       height =
+                           words >= kFillMaxDim ? uint32_t(std::min<uint64_t>(words / kFillMaxDim, kFillMaxDim)) : 1;
         fillRun(at, width, height, 4);
         at += uint64_t(width) * height * 4;
         left -= uint64_t(width) * height * 4;
@@ -6753,8 +7112,9 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
     cb_->buffersWritten_ |= !toTexture;
-    const uint32_t element = t.zeta && aspect == kAspectStencil ? 1 :
-                             t.zeta && aspect == kAspectDepth ? 4 : bufferTexelBytes(t.format, t.bpp);
+    const uint32_t element = t.zeta && aspect == kAspectStencil ? 1
+                             : t.zeta && aspect == kAspectDepth ? 4
+                                                                : bufferTexelBytes(t.format, t.bpp);
     if (w && h)
         cb_->useAddress(va, rowStorageBytes(pitch, w, h, element), !toTexture);
     cb_->use(t, toTexture);
@@ -6812,7 +7172,8 @@ void BlitEncoder::convertPlanar(const Texture &t)
     cb_->useAddress(t.planes.chroma, rowStorageBytes(t.planes.chromaPitch, t.width, t.height, 2), false);
     cb_->use(t, true);
     RAW_DIAGNOSTIC(dev_->stats.ceOps += 2);
-    RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(t.width) * t.height * 4 * 2);  // (each launch writes the image's rows, through NO_WRITE)
+    RAW_DIAGNOSTIC(dev_->stats.ceBytes +=
+                   uint64_t(t.width) * t.height * 4 * 2);  // (each launch writes the image's rows, through NO_WRITE)
     room();
     constexpr uint32_t A = 4, W = 6, one = 0 << 16, dst4 = 3u << 24;
     p_.m(CE_SET_REMAP_CONST_A, 0xff, SUBC_COPY);
@@ -6858,7 +7219,15 @@ void BlitEncoder::barrier()
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
+void BlitEncoder::timestamp(uint64_t va, bool afterCopies)
+{
+    room(counters::kTimestampWords);
+    cb_->useAddress(va, counters::kRecordBytes, true);
+    counters::emitCopy(p_, va, afterCopies);
+}
+
+void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last,
+                           [[maybe_unused]] uint32_t unproven)
 {
     Texture::Chain *c = t.chain;
     if (!c || !fmt2d || first >= last || last >= c->layout.levels)
@@ -6948,10 +7317,11 @@ bool CommandBuffer::probeResolve(const Texture &multisampled, const Texture &int
     fx::MipChain grid;
     const uint32_t fmt2d = probeTwodFormat(into.format);
     ProbeOp op;
-    if (!fmt2d || !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
-        !probeResolveOp(probeSurface(multisampled, fmt2d, multisampled.width << grid.sxLog2,
-                                     multisampled.height << grid.syLog2),
-                        grid.sxLog2, grid.syLog2, probeSurface(into, fmt2d, into.width, into.height), op))
+    if (!fmt2d ||
+        !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
+        !probeResolveOp(
+            probeSurface(multisampled, fmt2d, multisampled.width << grid.sxLog2, multisampled.height << grid.syLog2),
+            grid.sxLog2, grid.syLog2, probeSurface(into, fmt2d, into.width, into.height), op))
         return false;
     BlitEncoder *b = blit();
     b->probe(op, &multisampled, into);

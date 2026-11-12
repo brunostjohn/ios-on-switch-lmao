@@ -57,7 +57,10 @@ inline std::vector<EventJobSlice> eventJobSlices(size_t waits, size_t signals, u
 
 // What a refused event job asks of its command buffer: to fail, or (its channel made again after the caller ordered the job
 // and checked its waits there) to order it again on the new channel and submit it then
-enum class EventJobAnswer { failed, reordered };
+enum class EventJobAnswer {
+    failed,
+    reordered
+};
 
 constexpr EventJobAnswer eventJobAnswer(int result)
 {

@@ -582,30 +582,51 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
                     beforeStages:before];
 }
 
-// The count forms at one viewport or scissor are the single ones; more go to m2v with the call
-- (void)forwardCall:(SEL)selector pointer:(const void *)pointer count:(NSUInteger)count
+// Every viewport and scissor the encoder sets, as both identities' drivers keep them (the A10X's setViewports:count:
+// 0x21c9614cc stores its count unclamped and converts each one, though its device answers maxViewportCount 1), up to the
+// 16 GM20B holds (SET_VIEWPORT_*(j))
+static NSUInteger viewportCount(NSUInteger count)
 {
-    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[self methodSignatureForSelector:selector]];
-    inv.selector = selector;
-    [inv setArgument:&pointer atIndex:2];
-    [inv setArgument:&count atIndex:3];
-    [self forwardInvocation:inv];
+    return std::min<NSUInteger>(count, raw::kMaxViewports);
 }
 
 - (void)setViewports:(const MTLViewport[])viewports count:(NSUInteger)count
 {
-    if (count == 1)
-        [self setViewport:viewports[0]];
-    else
-        [self forwardCall:_cmd pointer:viewports count:count];
+    SWITCH_API(ApiState);
+    count = viewportCount(count);
+    if (count <= 1) {
+        if (count)
+            [self setViewport:viewports[0]];
+        return;
+    }
+    Cmd m = cmd(OpViewport, 0, uint16_t(count));
+    m.x = _cb->_extra.size();
+    for (NSUInteger j = 0; j < count; j++) {
+        const MTLViewport &v = viewports[j];
+        for (double x : {v.originX, v.originY, v.width, v.height, v.znear, v.zfar}) {
+            uint64_t u;
+            memcpy(&u, &x, 8);
+            _cb->_extra.push_back(u);
+        }
+    }
+    [_cb record:m];
 }
 
 - (void)setScissorRects:(const MTLScissorRect[])rects count:(NSUInteger)count
 {
-    if (count == 1)
-        [self setScissorRect:rects[0]];
-    else
-        [self forwardCall:_cmd pointer:rects count:count];
+    SWITCH_API(ApiState);
+    count = viewportCount(count);
+    if (count <= 1) {
+        if (count)
+            [self setScissorRect:rects[0]];
+        return;
+    }
+    Cmd m = cmd(OpScissor, 0, uint16_t(count));
+    m.x = _cb->_extra.size();
+    for (NSUInteger j = 0; j < count; j++)
+        for (NSUInteger word : {rects[j].x, rects[j].y, rects[j].width, rects[j].height})
+            _cb->_extra.push_back(uint32_t(word));
+    [_cb record:m];
 }
 
 // Metal's default clips; clamping goes to m2v with the call

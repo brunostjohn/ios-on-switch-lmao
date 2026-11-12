@@ -749,6 +749,12 @@ pub fn sample_id(cx: &mut SelectCx<'_>) -> usize {
     )
 }
 
+/// Plan the fragment's `Layer` input for the layered storage form
+/// (`LoweringInputs::layered_storage`): the index of its object.
+pub fn layer(cx: &mut SelectCx<'_>) -> Result<usize, Error> {
+    plan::layer_input(cx)
+}
+
 /// Plan the fragment's `FrontFacing` input for a family that reads the fragment's face (the
 /// shader-side stencil): the index of its object, shared with a `[[front_facing]]` input.
 pub fn front_facing(cx: &mut SelectCx<'_>) -> usize {

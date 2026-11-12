@@ -28,12 +28,16 @@ struct NativeWork {
 /// is the device's own with no m2v twin made, and the command buffers that used them stayed raw.
 protocol NativeObjectTest: HWTest {
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork
+    /// Why this build's identity has nothing of the feature to test (nil: it has)
+    var unavailable: String? { get }
 }
 
 extension NativeObjectTest {
     var subsystem: Subsystem { .metal }
+    var unavailable: String? { nil }
 
     func run(_ context: TestContext) async throws -> Outcome {
+        if let why = unavailable { return .skip(why) }
         let gpu = try GPU.make()
         guard RawFacade.kind(of: gpu.device) == "raw" else {
             return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")

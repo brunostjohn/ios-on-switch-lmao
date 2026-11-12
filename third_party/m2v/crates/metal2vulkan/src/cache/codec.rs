@@ -835,6 +835,7 @@ codec_enum! {
         Specialized(f0),
         ColorWriteRule(f0),
         HalfBlendColor,
+        AmplificationCount,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1176,6 +1177,7 @@ codec_enum! {
         StorageTextureIntegerChannels { slot },
         HeapHalfTexelWrites { stage, packed },
         MovableStorageWrites { early_variant },
+        LayeredStorage,
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

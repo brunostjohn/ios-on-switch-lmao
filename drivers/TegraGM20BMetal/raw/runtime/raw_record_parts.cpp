@@ -218,7 +218,9 @@ bool foreign(uint32_t m, uint32_t targets)
 
 bool programsBindable(const RecordParts &parts, std::string &why)
 {
-    for (const CapturedProgram *p : parts.programs) {
+    const CapturedProgram *all[] = {parts.programs[0], parts.programs[1], parts.tessPrograms[0], parts.tessPrograms[1]};
+    for (uint32_t k = 0; k < (parts.controlWord ? 4u : 2u); k++) {
+        const CapturedProgram *p = all[k];
         if (!p) {
             why = "unknown program";
             return false;
@@ -295,6 +297,10 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         return false;
     out.programs[0] = *parts.programs[0];
     out.programs[1] = *parts.programs[1];
+    if (parts.controlWord) {
+        out.tessPrograms[0] = *parts.tessPrograms[0];
+        out.tessPrograms[1] = *parts.tessPrograms[1];
+    }
     if (parts.layout.size() > kPackEntries) {
         why = "more than " + std::to_string(kPackEntries) + " set-0 entries";
         return false;
@@ -315,6 +321,14 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
             entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
         else if (e.table)
             entry = {uint16_t(e.offset), e.table, e.stage, 0, 0, 0, 0};
+        else if (e.tessBuffer >= 0 && e.tessBuffer < TessBufferCount && parts.controlWord)
+            entry = {uint16_t(e.offset),
+                     EntryTessBuffer,
+                     1,
+                     uint8_t(e.tessBuffer),
+                     uint8_t(1 | (parts.controlWord + kTessResidualWord[e.tessBuffer]) << 2),
+                     0,
+                     0};
         else if (e.buffer)
             entry = bufferEntry(e, parts, storageCodes[probeStorageCode(e.stage, e.slot)] > 1);
         else if (!handleEntry(e, out, entry, why))
@@ -322,12 +336,21 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         if (entry.kind == EntryFetch)
             p.flags |= PipelineFetches;
     }
-    if (!ubosNamed(out.programs[0], p) || !ubosNamed(out.programs[1], p)) {
+    if (!ubosNamed(out.programs[0], p) || !ubosNamed(out.programs[1], p) ||
+        (parts.controlWord && (!ubosNamed(out.tessPrograms[0], p) || !ubosNamed(out.tessPrograms[1], p)))) {
         why = "a program reads a set-0 uniform buffer the layout does not name";
         return false;
     }
     p.vertexSlot = parts.vertexSlot;
     p.vertexStride = parts.vertexStride;
+    p.vertexStrideDynamic = parts.vertexStrideDynamic;
+    memcpy(p.pulledStride, parts.pulledStride, sizeof p.pulledStride);
+    memcpy(p.vertexStreams, parts.vertexStreams, sizeof p.vertexStreams);
+    p.amplificationMax = parts.amplificationMax;
+    p.amplificationIdWord = parts.amplificationIdWord;
+    p.amplificationCountWord = parts.amplificationCountWord;
+    p.arrayLengthWord = parts.arrayLengthWord;
+    p.viewportCountWord = parts.viewportCountWord;
     const uint32_t colors = targets(key);
     std::map<uint32_t, uint32_t> regs;
     for (const auto &[m, v] : parts.regs)
@@ -360,6 +383,9 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         p.pushes++;
     }
     p.setBytes = parts.setBytes;
+    p.controlWord = parts.controlWord;
+    p.controlPoints = parts.controlPoints;
+    p.controlPointIndexBytes = parts.controlPointIndexBytes;
     p.flags |= parts.pushMetadata ? PipelinePushMetadata : 0;
     p.blendColorWord = parts.blendColorWord;
     p.halfBlendColorWord = parts.halfBlendColorWord;
@@ -392,11 +418,12 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     }
     describeReads(out, key);
     constexpr size_t kHeaderBytes = 0x50;
-    for (const CapturedProgram &program : out.programs)
-        if (program.image.size() > kHeaderBytes)
-            p.memoryEntries |= programSetReads(program.image.data() + kHeaderBytes, program.image.size() - kHeaderBytes,
-                                               program.cbufTypes.data(), uint32_t(program.cbufTypes.size()),
-                                               program.boundTextures, p);
+    for (const CapturedProgram *program :
+         {&out.programs[0], &out.programs[1], &out.tessPrograms[0], &out.tessPrograms[1]})
+        if (program->image.size() > kHeaderBytes)
+            p.memoryEntries |= programSetReads(program->image.data() + kHeaderBytes,
+                                               program->image.size() - kHeaderBytes, program->cbufTypes.data(),
+                                               uint32_t(program->cbufTypes.size()), program->boundTextures, p);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))
@@ -479,6 +506,11 @@ bool loadsSurface(const RuntimeRecord &rec)
         if (loads(v.program))
             return true;
     return rec.split && (loads(rec.splitPrograms[0]) || loads(rec.splitPrograms[1]));
+}
+
+std::string strideTwinKey(const std::string &key)
+{
+    return key + " | strides pulled";
 }
 
 uint64_t packKeyHash(const std::string &key)

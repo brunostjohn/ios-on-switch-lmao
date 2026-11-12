@@ -41,6 +41,17 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
 bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
                      std::vector<EmitRegister> &out, std::string &why);
 
+// A fixed-function vertex stream emitVertexInput lays out: its Metal buffer index, and whether its stride is its bind's
+// (the key's UINT32_MAX)
+struct EmitStream {
+    uint8_t buffer;
+    bool bindStride;
+};
+
+// The same, with the streams in stream order
+bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
+                     std::vector<EmitRegister> &out, std::vector<EmitStream> &streams, std::string &why);
+
 // Every method emitState and emitVertexInput may write
 std::set<uint32_t> emittableMethods();
 

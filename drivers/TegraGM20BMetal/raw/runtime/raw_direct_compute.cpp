@@ -303,6 +303,15 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     clearDispatchWords(r.qmd);
     r.keyHash = computeKeyHash(key);
     r.regionWord = int8_t(k.regionWord);
+    if (k.stageInRegionWord + 8 > 32) {
+        why = "a stage-in region past the root push window";
+        return CompileOutcome::Refused;
+    }
+    r.stageInRegionWord = uint8_t(k.stageInRegionWord + 1);
+    for (size_t i = 0; i < 4; i++) {
+        r.stageInStride[i][0] = uint8_t(k.stageInStrides[i][0]);
+        r.stageInStride[i][1] = uint8_t(k.stageInStrides[i][1]);
+    }
     r.entries = uint8_t(entries.entries.size());
     std::copy(entries.entries.begin(), entries.entries.end(), r.entry);
     for (uint32_t i = 0; i < r.entries; i++)

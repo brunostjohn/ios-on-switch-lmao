@@ -11,7 +11,7 @@ use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorBytes, DescriptorRange, DrawCall,
     DrawCommands, FieldLocation, FragmentTests, ImageSource, NeutralResource, PushHole, SamplerDescriptor,
-    SamplerSource, StageTable, TextureFacts, WriteSource, heap_class_code,
+    SamplerSource, StageTable, TextureFacts, VertexAmplification, ViewMapping, WriteSource, heap_class_code,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -21,8 +21,9 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    BindingSource, GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType,
-    SlotClass, SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, SyntheticBinding, TextureSlot,
+    BindingSource, GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, RuntimeFact,
+    SampledType, SlotClass, SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, SyntheticBinding,
+    TextureSlot, VertexStride,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -70,9 +71,14 @@ pub enum NmbDirectSource {
     TextureTable,
     SamplerTable,
     ArgumentTable,
+    TessFactors,
+    PatchIndices,
+    ControlPointIndices,
 }
 
 pub const NMB_DIRECT_IMMUTABLE: u32 = u32::MAX;
+/// NmbDirectDraw::array_length_word of a state whose vertex function chooses its slice, compiled for one layer
+pub const LAYER_DROPPED: u32 = 0xFF;
 pub const NMB_DIRECT_NEUTRAL: u32 = u32::MAX - 1;
 
 #[repr(C)]
@@ -193,6 +199,16 @@ pub struct NmbDirectDraw {
     pub heap_class: [u32; HEAP_ARRAYS],
     pub vertex_slot: u32,
     pub vertex_stride: u32,
+    pub vertex_stride_dynamic: u32,
+    pub pulled_strides: [[u32; 2]; 4],
+    pub amplification_max: u32,
+    pub amplification_id_word: u32,
+    pub amplification_count_word: u32,
+    pub amplification_layer_word: u32,
+    pub amplification_viewport_word: u32,
+    pub array_length_word: u32,
+    pub viewport_count_word: u32,
+    pub pulled_attributes: u32,
     pub variant: *const c_char,
     pub spill: [*const u32; 2],
     pub spill_words: [u32; 2],
@@ -224,6 +240,7 @@ pub struct NmbDirectBinds {
     pub textures: *const NmbDirectTextureFormat,
     pub texture_count: u32,
     pub fragment_tests: u32,
+    pub bind_stride: u32,
 }
 
 /// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by slot
@@ -232,6 +249,7 @@ struct Binds {
     cubic: Vec<(u32, SamplerDescriptor)>,
     textures: Vec<(u32, PixelFormat)>,
     fragment_tests: u32,
+    bind_stride: Option<u32>,
 }
 
 impl Binds {
@@ -247,6 +265,7 @@ impl Binds {
             return Err("invalid native fragment-test mode".into());
         }
         out.fragment_tests = b.fragment_tests;
+        out.bind_stride = (b.bind_stride != 0).then_some(b.bind_stride);
         let cubic: &[NmbDirectCubicSampler] = if b.cubic.is_null() {
             &[]
         } else {
@@ -329,12 +348,22 @@ fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NmbDirectTess {
+    pub parameters: u32,
+    pub control_word: u32,
+    pub control_points: u32,
+    pub index_bytes: u32,
+}
+
+#[repr(C)]
 pub struct NmbDirectState {
     pub device: u64,
     pub layout: u64,
     pub layout_data: *const NmbDirectLayout,
     pub stage_count: u32,
-    pub stages: [NmbDirectStage; 2],
+    pub stages: [NmbDirectStage; 4],
+    pub tess: NmbDirectTess,
     pub sample_shading: bool,
     pub storage_form: bool,
     pub storage: NmbDirectStorage,
@@ -461,6 +490,13 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     }
 }
 
+fn chooses_layer(pipeline: &RenderPipeline) -> bool {
+    pipeline
+        .dependencies
+        .iter()
+        .any(|d| matches!(d.fact, RuntimeFact::RenderTargetArrayLength { .. }))
+}
+
 /// The texture slots the probe binds by their declarations: each the state's functions declare at the vertex stage or at
 /// a fragment slot past the tagged ones, and each tagged fragment one declared other than a single-sample `texture2d` of
 /// floats. A texture of the declared type (Core Animation's colour cubes a 3D one, a `texture2d_ms` or a `depth2d_ms` a
@@ -531,8 +567,10 @@ fn probe_address(stage: u32, slot: u32) -> u64 {
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
 /// buffers at each slot's own offset; a buffer of the run's bytes at a slot of `addressed`, which m2v reaches by its
-/// device address), 16 textures of `format` and `samples` and 16 samplers at the fragment stage, a texture of its
-/// declaration at each of `declared` and a sampler at each of `vertex_samplers`, `binds`' in their places
+/// device address; vertex buffers at `binds`' stride), 16 textures of `format` and `samples` and 16 samplers at the
+/// fragment stage, a texture of its declaration at each of `declared` and a sampler at each of `vertex_samplers`, `binds`'
+/// in their places
+#[allow(clippy::too_many_arguments)]
 fn probe_state(
     run: usize,
     format: PixelFormat,
@@ -541,8 +579,22 @@ fn probe_state(
     vertex_samplers: &[u32],
     binds: &Binds,
     addressed: &[SlotRef],
+    patches: bool,
+    amplification: u32,
+    layers: u32,
 ) -> BindState {
     let mut state = BindState::default();
+    state.render_target_array_length = layers;
+    // One draw per amplification, which the raw path draws in order, under mappings that offset the viewport (with `layers`
+    // 2, a layered pass): its vertex program writes each amplification's layer and viewport from its offset words
+    if amplification > 1 {
+        let mappings = (0..amplification).map(|a| ViewMapping::new(1, a)).collect();
+        state.vertex_amplification = VertexAmplification::new(amplification, mappings);
+        state.vertex_amplification.one_at_a_time = true;
+    }
+    if patches {
+        crate::direct_tess::bind_factors(&mut state);
+    }
     state.fragment_tests = match binds.fragment_tests {
         1 => FragmentTests::Pass,
         2 => FragmentTests::Drop,
@@ -552,6 +604,11 @@ fn probe_state(
     };
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
+        let attribute_stride = if stage == Stage::Vertex {
+            binds.bind_stride
+        } else {
+            None
+        };
         for slot in 0..PROBE_SLOTS {
             let address = probe_address(stage_number(stage), slot);
             let reached = addressed.iter().any(|a| a.stage == stage && a.index == slot);
@@ -561,7 +618,7 @@ fn probe_state(
                     offset: probe_bind_offset(stage_number(stage), slot),
                     gpu_address: address,
                     device_address: Some(address),
-                    attribute_stride: None,
+                    attribute_stride,
                 }
             } else if reached {
                 BoundBuffer::Buffer {
@@ -569,12 +626,12 @@ fn probe_state(
                     offset: 0,
                     gpu_address: address,
                     device_address: Some(address),
-                    attribute_stride: None,
+                    attribute_stride,
                 }
             } else {
                 BoundBuffer::Bytes {
                     len: RUN_BYTES[run],
-                    attribute_stride: None,
+                    attribute_stride,
                 }
             };
             table.buffers.insert(slot, bound);
@@ -631,13 +688,6 @@ fn probe_state(
     }
     state
 }
-
-const PROBE_DRAW: DrawCall = DrawCall::Primitives {
-    vertex_start: 0,
-    vertex_count: 4,
-    instance_count: 1,
-    base_instance: 0,
-};
 
 pub(crate) fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
@@ -743,6 +793,18 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
             };
             out.stage = stage_number(*stage);
             out.range = u64::from(*bytes_len);
+        }
+        WriteSource::TessellationFactors | WriteSource::PatchIndices { .. } | WriteSource::ControlPointIndices => {
+            out.source = match w.source {
+                WriteSource::TessellationFactors => NmbDirectSource::TessFactors,
+                WriteSource::PatchIndices { .. } => NmbDirectSource::PatchIndices,
+                _ => NmbDirectSource::ControlPointIndices,
+            };
+            out.stage = 1;
+            out.range = ranges
+                .iter()
+                .find(|r| r.set == w.set && r.binding == w.binding)
+                .map_or(0, |r| r.range.range);
         }
         _ => {}
     }
@@ -1132,6 +1194,7 @@ fn settle(
     descriptor: &RenderPipelineDescriptor,
     variants: &mut Vec<(VariantKey, RenderPipeline)>,
     state: &BindState,
+    draw: &DrawCall,
     budget: &Budget,
 ) -> Result<Run, Unsettled> {
     let shape = state.shape();
@@ -1157,7 +1220,7 @@ fn settle(
             plan => (at, plan.map_err(e("plan variant"))?),
         }
     };
-    let commands = plan.instantiate_draw(state, &PROBE_DRAW).map_err(e("instantiate"))?;
+    let commands = plan.instantiate_draw(state, draw).map_err(e("instantiate"))?;
     Ok(Run {
         variant,
         commands,
@@ -1172,6 +1235,7 @@ fn draw_of(
     writes: &[NmbDirectWrite],
     spills: &[Vec<u32>; 2],
     variant: &CString,
+    amplification: u32,
 ) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
         set0: layout.set0(),
@@ -1195,6 +1259,21 @@ fn draw_of(
         heap_class: [0; HEAP_ARRAYS],
         vertex_slot: u32::MAX,
         vertex_stride: 0,
+        vertex_stride_dynamic: 0,
+        pulled_strides: [[0; 2]; 4],
+        amplification_max: amplification,
+        amplification_id_word: 0,
+        amplification_count_word: 0,
+        amplification_layer_word: 0,
+        amplification_viewport_word: 0,
+        array_length_word: 0,
+        viewport_count_word: 0,
+        pulled_attributes: pipeline
+            .vertex_input
+            .pulled
+            .iter()
+            .filter(|a| a.attribute < 32)
+            .fold(0, |mask, a| mask | 1 << a.attribute),
         variant: variant.as_ptr(),
         spill: [spills[0].as_ptr(), spills[1].as_ptr()],
         spill_words: [spills[0].len() as u32, spills[1].len() as u32],
@@ -1205,6 +1284,7 @@ fn draw_of(
     };
     holes_of(&run.commands, &mut draw)?;
     heap_of(pipeline, layout, &mut draw);
+    dynamic_words(run, pipeline, &mut draw)?;
     for field in &run.plan.push.fields {
         let (word, bytes) = match field.field {
             // a static root's guest address, which the probe's draws fill with their own
@@ -1216,6 +1296,8 @@ fn draw_of(
             PushField::HalfBlendColor => (&mut draw.half_blend_color_word, 16),
             PushField::ShaderTestsState => (&mut draw.depth_test_word, 16),
             PushField::ShaderStencilState => (&mut draw.stencil_test_word, 16),
+            PushField::RenderTargetArrayLength => (&mut draw.array_length_word, 4),
+            PushField::ViewportCount => (&mut draw.viewport_count_word, 4),
             _ => continue,
         };
         // a field past the window is a word of the fragment stage's argument table: raw_spill_table.h numbers it from 32
@@ -1257,17 +1339,52 @@ fn draw_of(
         {
             Some(b) => match b.stride {
                 metal2vulkan::pipeline::VertexStride::Static(stride) => stride,
-                _ => run
-                    .commands
-                    .vertex_strides
-                    .iter()
-                    .find(|(at, _)| *at == first.binding)
-                    .map_or(0, |(_, s)| *s),
+                _ => {
+                    draw.vertex_stride_dynamic = 1;
+                    run.commands
+                        .vertex_strides
+                        .iter()
+                        .find(|(at, _)| *at == first.binding)
+                        .map_or(0, |(_, s)| *s)
+                }
             },
             None => 0,
         };
     }
     Ok(draw)
+}
+
+/// The push words a raw draw writes itself: each amplification's id, count and offsets, and each dynamic pulled layout's
+/// stride
+fn dynamic_words(run: &Run, pipeline: &RenderPipeline, draw: &mut NmbDirectDraw) -> Result<(), String> {
+    let mut pulled = 0;
+    for field in &run.plan.push.fields {
+        let FieldLocation::PushWindow { offset } = field.location else {
+            continue;
+        };
+        let word = offset / 4 + 1;
+        match field.field {
+            PushField::AmplificationId => draw.amplification_id_word = word,
+            PushField::AmplificationCount => draw.amplification_count_word = word,
+            PushField::AmplificationLayerOffset => draw.amplification_layer_word = word,
+            PushField::AmplificationViewportOffset => draw.amplification_viewport_word = word,
+            PushField::VertexBufferStride(layout)
+                if pipeline
+                    .vertex_input
+                    .pulled
+                    .iter()
+                    .any(|a| a.buffer_index == layout && a.stride == VertexStride::PerBind) =>
+            {
+                if pulled == draw.pulled_strides.len() {
+                    return Err("more than four pulled vertex buffers of a dynamic stride".into());
+                }
+                draw.pulled_strides[pulled] = [layout, word];
+                pulled += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// The words used by Metal extended-range blending for `setBlendColorRed:green:blue:alpha:`.
@@ -1283,6 +1400,33 @@ pub unsafe extern "C" fn switch_nmb_blend_color_words(color: *const f32, words: 
             .cast::<[u32; 8]>()
             .write(metal2vulkan::bind::extended_blend_color_words(color));
     }
+}
+
+/// The pipeline's stages in NmbDirectState's order: vertex and fragment, then a tessellation state's control and evaluation
+fn stage_order(pipeline: &RenderPipeline) -> Result<Vec<usize>, String> {
+    let wanted: &[avk::ShaderStageFlags] = if pipeline.graphics.tessellation.is_some() {
+        &[
+            avk::ShaderStageFlags::VERTEX,
+            avk::ShaderStageFlags::FRAGMENT,
+            avk::ShaderStageFlags::TESSELLATION_CONTROL,
+            avk::ShaderStageFlags::TESSELLATION_EVALUATION,
+        ]
+    } else {
+        &[avk::ShaderStageFlags::VERTEX, avk::ShaderStageFlags::FRAGMENT]
+    };
+    if pipeline.stages.len() != wanted.len() {
+        return Err(format!("{} stages", pipeline.stages.len()));
+    }
+    wanted
+        .iter()
+        .map(|&flag| {
+            pipeline
+                .stages
+                .iter()
+                .position(|s| avk::ShaderStageFlags::from(s.stage) == flag)
+                .ok_or_else(|| format!("no stage of flags {:#x}", flag.as_raw()))
+        })
+        .collect()
 }
 
 /// `texture_format`, `texture_samples`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm) and sample count, as
@@ -1369,42 +1513,71 @@ fn translate(
         0 => PixelFormat::BGRA8Unorm,
         f => raw::<PixelFormat>(f, "texture format")?,
     };
+    let amplification = descriptor.max_vertex_amplification_count.max(1);
     let budget = Budget::standard();
     let base = compile
         .compile_render_pipeline(descriptor, &budget)
         .map_err(compile_error("compile"))?;
     let declared = declared_slots(&base);
     let samplers = vertex_samplers(&base);
+    let draw = crate::direct_tess::probe_draw(base.graphics.tessellation.as_ref());
+    let patches = base.graphics.tessellation.is_some();
+    let chooses = chooses_layer(&base);
     let mut variants = vec![(VariantKey::new(), base)];
-    let mut addressed: Vec<SlotRef> = Vec::new();
-    let runs = 'settled: loop {
-        let mut runs = Vec::with_capacity(RUN_BYTES.len());
-        for run in 0..RUN_BYTES.len() {
-            let state = probe_state(
-                run,
-                format,
-                texture_samples.max(1),
-                &declared,
-                &samplers,
-                binds,
-                &addressed,
-            );
-            match settle(compile, descriptor, &mut variants, &state, &budget) {
-                Ok(settled) => runs.push(settled),
-                Err(Unsettled::Address(slot)) if !addressed.contains(&slot) => {
-                    addressed.push(slot);
-                    continue 'settled;
+    let probe = |variants: &mut Vec<(VariantKey, RenderPipeline)>, layers: u32| -> Result<Vec<Run>, String> {
+        let mut addressed: Vec<SlotRef> = Vec::new();
+        'settled: loop {
+            let mut runs = Vec::with_capacity(RUN_BYTES.len());
+            for run in 0..RUN_BYTES.len() {
+                let state = probe_state(
+                    run,
+                    format,
+                    texture_samples.max(1),
+                    &declared,
+                    &samplers,
+                    binds,
+                    &addressed,
+                    patches,
+                    amplification,
+                    layers,
+                );
+                match settle(compile, descriptor, variants, &state, &draw, &budget) {
+                    Ok(settled) => runs.push(settled),
+                    Err(Unsettled::Address(slot)) if !addressed.contains(&slot) => {
+                        addressed.push(slot);
+                        continue 'settled;
+                    }
+                    Err(Unsettled::Address(slot)) => return Err(format!("plan: no device address at {slot:?}")),
+                    Err(Unsettled::Refused(why)) => return Err(why),
                 }
-                Err(Unsettled::Address(slot)) => return Err(format!("plan: no device address at {slot:?}")),
-                Err(Unsettled::Refused(why)) => return Err(why),
+            }
+            break Ok(runs);
+        }
+    };
+    // A vertex function that chooses its render target slice, or one amplified, is compiled as for a pass of two
+    // layers: the variant that writes Layer, reading the pass's length from its push word, draws in a pass of any
+    // length. One the translation has no layered form of (a fragment function of tile memory, an imageblock, the
+    // shader-side stencil or depth test, or an extended-range shadow) is compiled for one layer, its record marked so
+    // (LAYER_DROPPED): a layered pass draws it elsewhere.
+    let (runs, layer_dropped) = if amplification > 1 {
+        (probe(&mut variants, 2)?, false)
+    } else if chooses {
+        match probe(&mut variants, 2) {
+            Ok(runs) => (runs, false),
+            Err(_) => {
+                variants.truncate(1);
+                (probe(&mut variants, 0)?, true)
             }
         }
-        break runs;
+    } else {
+        (probe(&mut variants, 0)?, false)
     };
     let layouts = variants
         .iter()
         .map(|(_, pipeline)| Layout::new(vulkan, &pipeline.layout))
         .collect::<Result<Vec<_>, String>>()?;
+    // The layered storage variant's attachments are the runtime's views of the pass's layers (render_target.rs
+    // attachment_view_in), which its storage images address at each primitive's layer
     let writes: Vec<Vec<NmbDirectWrite>> = runs
         .iter()
         .map(|run| {
@@ -1415,7 +1588,13 @@ fn translate(
                 .iter()
                 .filter(|w| w.set == 0)
                 .take(MAX_WRITES)
-                .map(|w| table_of(write_of(w, &run.commands.descriptor_ranges), layout))
+                .map(|w| {
+                    let mut out = table_of(write_of(w, &run.commands.descriptor_ranges), layout);
+                    if run.plan.variant.layered_storage && out.source == NmbDirectSource::StorageAttachment {
+                        out.view_type = avk::ImageViewType::TYPE_2D_ARRAY.as_raw();
+                    }
+                    out
+                })
                 .collect();
             writes.extend(immutable_samplers(layout, &writes));
             writes
@@ -1431,7 +1610,7 @@ fn translate(
         .iter()
         .map(|run| CString::new(format!("{:?}", run.plan.variant)).unwrap_or_default())
         .collect();
-    let draws: Vec<NmbDirectDraw> = runs
+    let mut draws: Vec<NmbDirectDraw> = runs
         .iter()
         .enumerate()
         .map(|(k, run)| {
@@ -1442,9 +1621,15 @@ fn translate(
                 &writes[k],
                 &spills[k],
                 &names[k],
+                amplification,
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
+    if layer_dropped {
+        for d in &mut draws {
+            d.array_length_word = LAYER_DROPPED;
+        }
+    }
 
     let first = &runs[0];
     let pipeline = &variants[first.variant].1;
@@ -1483,14 +1668,24 @@ fn translate(
                 .data(&specialization.data)
         })
         .collect();
-    if pipeline.stages.len() > 2 {
-        return Err(format!("{} stages", pipeline.stages.len()));
-    }
+    let order = stage_order(pipeline)?;
+    let tess = pipeline.graphics.tessellation.as_ref();
+    let modes = match tess {
+        Some(_) => crate::tess_modes::control_modes(&pipeline.stages[order[2]].spirv),
+        None => Vec::new(),
+    };
+    let evaluation = match tess {
+        Some(_) => Some(
+            crate::tess_modes::evaluation_with_modes(&pipeline.stages[order[3]].spirv, &modes)
+                .ok_or("a tessellation state's evaluation stage without its entry point")?,
+        ),
+        None => None,
+    };
     let mut state = NmbDirectState {
         device: vulkan.map_or(0, |d| avk::Handle::as_raw(d.handle())),
         layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
         layout_data: &layouts[first.variant].data,
-        stage_count: pipeline.stages.len() as u32,
+        stage_count: order.len() as u32,
         stages: [NmbDirectStage {
             spirv: std::ptr::null(),
             spirv_bytes: 0,
@@ -1502,7 +1697,13 @@ fn translate(
             semantic: std::ptr::null(),
             portable_context: std::ptr::null(),
             portable: None,
-        }; 2],
+        }; 4],
+        tess: tess.map_or(NmbDirectTess::default(), |t| NmbDirectTess {
+            parameters: crate::tess_modes::parameters(&modes),
+            control_word: t.push_offset / 4 + 1,
+            control_points: t.control_points,
+            index_bytes: crate::direct_tess::index_bytes(t),
+        }),
         sample_shading: pipeline.graphics.sample_shading,
         storage_form: storage.mask != 0,
         storage,
@@ -1515,10 +1716,15 @@ fn translate(
             .fold(0, |mask, (j, _)| mask | 1 << j),
         draws: [draws[0], draws[1], draws[2], draws[3]],
     };
-    for (k, stage) in pipeline.stages.iter().enumerate() {
-        state.stages[k] = NmbDirectStage {
-            spirv: stage.spirv.as_ptr(),
-            spirv_bytes: stage.spirv.len() * 4,
+    for (slot, &k) in order.iter().enumerate() {
+        let stage = &pipeline.stages[k];
+        let spirv: &[u32] = match &evaluation {
+            Some(words) if slot == 3 => words,
+            _ => &stage.spirv,
+        };
+        state.stages[slot] = NmbDirectStage {
+            spirv: spirv.as_ptr(),
+            spirv_bytes: spirv.len() * 4,
             entry: entries[k].as_ptr(),
             stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
             flags: avk::PipelineShaderStageCreateFlags::from(stage.stage_flags).as_raw(),

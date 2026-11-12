@@ -13,8 +13,9 @@ MAGIC = b'GM20BPK1'
 # forms and their iterated blend programs; 18: a record's set-0 entries read from memory; 19: an iterated blend
 # program's name and its matrix's words; 20: argument buffers (handle-table entries, root-table and status push words,
 # root slots, set-1 heap arrays of states and kernels; argument tables of push fields past a stage's window, their
-# words in the blob section)
-VERSION = 20
+# words in the blob section); 21: the runtime records' tessellation, amplification, dynamic stride and stage-in
+# fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words
+VERSION = 21
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
@@ -34,6 +35,15 @@ HEAP_ARRAYS = 8
 # PackKernel's v20 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs,
 # spillEntry, spillWords, reserved, spillAt
 KERNEL_V20 = struct.Struct('<4B2I16IBBHI')
+# PackPipeline's record-v21 tail: the runtime records' fields (controlWord, controlPoints, controlPointIndexBytes,
+# vertexStrideDynamic, amplificationMax, amplificationIdWord, amplificationCountWord), arrayLengthWord, the runtime
+# records' pulledStride[4][2], vertexStreams[7], viewportCountWord
+PIPELINE_V21 = struct.Struct('<7sB8s7sB')
+RUNTIME_ONLY_HEAD, RUNTIME_ONLY_PULLED = bytes(7), bytes(8)
+VERTEX_STREAMS = 7  # PackPipeline.vertexStreams' length: the streams past stream 0
+STREAM_BIND_STRIDE = 0x80  # runtime/raw_pack.h kStreamBindStride
+# PackKernel's record-v21 tail: stageInRegionWord, stageInStride[4][2], reserved
+KERNEL_V21 = struct.Struct('<B8s3x')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -232,7 +242,9 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     )
     v18 = PIPELINE_V18.pack(rec.get('memory_entries', ALL_ENTRIES))
     entries = entry_bytes(rec['entries'])
-    return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + v20_tail(rec)
+    return (
+        head + entries + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + v20_tail(rec) + v21_tail(rec)
+    )
 
 
 def v20_tail(rec: dict) -> bytes:
@@ -252,6 +264,17 @@ def v20_tail(rec: dict) -> bytes:
         *rec.get('spill_entry', [0, 0]),
         *[len(words) for words in rec.get('spill', [[], []])],
         rec.get('spill_at', 0) if any(rec.get('spill', [[], []])) else 0,
+    )
+
+
+def v21_tail(rec: dict) -> bytes:
+    """Give a record's PIPELINE_V21 tail: its runtime-only fields zero, its vertex streams and pass push words."""
+    return PIPELINE_V21.pack(
+        RUNTIME_ONLY_HEAD,
+        rec.get('array_length_word', 0),
+        RUNTIME_ONLY_PULLED,
+        bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'),
+        rec.get('viewport_count_word', 0),
     )
 
 
@@ -292,6 +315,7 @@ def kernel_bytes(k: dict, key_offset: int, spill_at: int = 0) -> bytes:
         + struct.pack('<32I', *words)
         + entries
         + arguments
+        + KERNEL_V21.pack(k.get('stage_in_region', 0), k.get('stage_in_strides', bytes(8)))
     )
 
 

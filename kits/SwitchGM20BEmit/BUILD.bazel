@@ -113,8 +113,10 @@ cc_library(
 cc_binary(
     name = "gen_macros",
     srcs = MESA_MME_SOURCES + MESA_MME_HEADERS + SWITCH_GM20B_MESA_HEADERS + [
+        "SwitchGM20BMacroSlots.h",
         "mme/switch_gm20b_macros.c",
         ":push_headers_mesa",
+        "//kits/SwitchGM20B:SwitchGM20BTegra.h",
     ],
     copts = MESA_MME_COPTS,
     tags = ["no-lint"],
@@ -129,7 +131,10 @@ genrule(
 
 cc_library(
     name = "macros_h",
-    hdrs = [":macros"],
+    hdrs = [
+        "SwitchGM20BMacroSlots.h",
+        ":macros",
+    ],
     includes = ["gen"],
 )
 

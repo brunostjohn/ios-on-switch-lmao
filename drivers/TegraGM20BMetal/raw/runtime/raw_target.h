@@ -8,7 +8,11 @@
 //    ONE_GOB, BLOCK_HEIGHT the level's, BLOCK_DEPTH 0, LAYOUT_BLOCKLINEAR, THIRD_DIMENSION_DEFINES_ARRAY_SIZE; one layer,
 //    ARRAY_PITCH the image's layer size / 4, LAYER 0. The 2D engine's level writes (fx::emitCopyToLevel,
 //    emitGenerate) address the same level by the same base and block height.
+// A block-linear target of a layered pass binds its layers from the attachment's slice on (THIRD_DIMENSION, ARRAY_PITCH
+// the image's array stride); a 3D image's level binds its planes (THIRD_DIMENSION_DEFINES_DEPTH_SIZE, BLOCK_DEPTH the
+// level's), as nvk_CmdBeginRendering binds a view of either. NVIDIA renders a pitch target as one 2D layer only.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmit3D.h"
 #include "../fx/fx_mip.h"
@@ -22,6 +26,9 @@ struct ColorTargetDesc {
     bool blockLinear = false;
     uint8_t blockHeight = 0;  // log2 GOBs (block-linear)
     uint64_t layerBytes = 0;  // the image's layer size (block-linear: ARRAY_PITCH)
+    uint32_t layers = 1;      // block-linear: THIRD_DIMENSION
+    bool depth = false;       // a 3D image's level: layers are its planes
+    uint8_t blockDepth = 0;   // log2 planes a block (a 3D image's level)
 };
 
 inline switch_gm20b_target kitTarget(const ColorTargetDesc &d)
@@ -33,8 +40,10 @@ inline switch_gm20b_target kitTarget(const ColorTargetDesc &d)
     k.format = uint8_t(d.rtFormat);
     k.pitch = !d.blockLinear;
     k.block_height_log2 = uint8_t(d.blockHeight & 0xf);
-    k.layers = 1;
+    k.layers = d.blockLinear ? std::max(d.layers, 1u) : 1;
     k.array_pitch = d.blockLinear ? uint32_t(d.layerBytes >> 2) : 0;
+    k.depth = d.blockLinear && d.depth;
+    k.block_depth_log2 = d.blockLinear ? uint8_t(d.blockDepth & 0xf) : 0;
     return k;
 }
 

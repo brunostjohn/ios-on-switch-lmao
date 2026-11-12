@@ -304,6 +304,7 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     RMPipeline *p = [RMPipeline new];
     p->_device = device;
     p.label = d.label;
+    p->_m2vMissing = rmM2vMissingState(d);
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     // a state linking functions is packed under them too (its key names each), where they are framework libraries' as well
@@ -337,8 +338,8 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
     // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
     const bool deviceArchive = p->_packable && p->_raw;
-    const raw::ArchiveAnswer answer = p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error)
-                                                                        : raw::ArchiveAnswer::NotAsked;
+    const raw::ArchiveAnswer answer =
+        p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error) : raw::ArchiveAnswer::NotAsked;
     if (answer == raw::ArchiveAnswer::Missed)
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;

@@ -35,7 +35,8 @@ from tools.gpu.maxwell.quad import LANES, run_quad  # noqa: E402
 ROOT_PUSH, ROOT_WORDS = 0x700, 32
 BUFFERS, SPILL, TABLES, HEAP, ROOTS = 0x8000000, 0x7100000, 0x3000000, 0x4000000, 0x2000000
 FRAGMENT_CODES = (1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15)
-TAIL = directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+V20_AT = directlink.PIPELINE_BYTES - packfile.PIPELINE_V21.size - packfile.PIPELINE_V20.size
+TAIL = V20_AT - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
 
 
 def f32(x: float) -> int:
@@ -74,7 +75,7 @@ def dynamic_words(p: bytes) -> set[int]:
     """Give the record words (0-31 root, 32 on the fragment table's) the raw path writes from a draw's own state."""
     blend, half, _ = struct.unpack_from('<BBH', p, TAIL - 56)
     depth, stencil = struct.unpack_from('<BB', p, TAIL - 16)
-    v20 = packfile.PIPELINE_V20.unpack_from(p, directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+    v20 = packfile.PIPELINE_V20.unpack_from(p, V20_AT)
     out = set()
     for word, count in ((blend, 8), (half, 4), (depth, 1), (stencil, 1), *((w, 2) for w in v20[:4])):
         out.update(range(word - 1, word - 1 + count) if word else ())
@@ -82,7 +83,7 @@ def dynamic_words(p: bytes) -> set[int]:
 
 
 def tables_of(rec: dict) -> list[list[int]]:
-    v20 = packfile.PIPELINE_V20.unpack_from(rec['pipeline'], directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+    v20 = packfile.PIPELINE_V20.unpack_from(rec['pipeline'], V20_AT)
     vertex, fragment = v20[26], v20[27]
     return [list(rec['spill'][:vertex]), list(rec['spill'][vertex : vertex + fragment])]
 
@@ -188,7 +189,7 @@ class Draw:
                 self.set0[e['off']] = [SPILL + 0x1000 * (e['stage'] - 1), 0, (4 * len(table) + 255) & ~255, 0]
             elif e['kind'] in ('texture_table', 'sampler_table'):
                 self.set0[e['off']] = [TABLES, 0, 0x10000, 0]
-        v20 = packfile.PIPELINE_V20.unpack_from(rec['pipeline'], directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+        v20 = packfile.PIPELINE_V20.unpack_from(rec['pipeline'], V20_AT)
         for word in v20[:4]:
             if word:
                 self.push[word - 1], self.push[word] = ROOTS, 0

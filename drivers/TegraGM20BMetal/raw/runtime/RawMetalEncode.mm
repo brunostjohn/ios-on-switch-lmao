@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
 #import "RawMetalIndirect.h"
+#include "raw_attachment_target.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -13,9 +15,8 @@
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
 // encoder names that encoder's first command in *refusedEncoder; one no encoder owns (the channel's, the kernel's, a planar
 // texture sampled and rendered across the range) leaves it alone.
-__attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to,
-                                                                        const char **why, bool &stale,
-                                                                        size_t *refusedEncoder)
+__attribute__((objc_externally_retained)) static bool
+encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale, size_t *refusedEncoder)
 {
     raw::Device &d = *gRM->raw;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -97,6 +98,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
+    RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
@@ -318,6 +320,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
+    raw::Texture zetaPart;         // and its depth/stencil attachment's layer
 #if SWITCH_RAW_DIAGNOSTICS
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
@@ -325,17 +328,17 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     auto refresh = [&](size_t pass) {
         cb->_plan.forEachResource(pass, cb->_plan.encoderEnd(pass), RMResourceKind::Texture,
                                   [&](const RMRangeResource &use) {
-            if (!(use.access & raw::ResourceUse::Sample))
-                return;
-            __unsafe_unretained RMTexture *t = (__bridge RMTexture *)use.object;
-            if (rc->readTexture(&t->_raw) != &t->_raw || !t->_raw.sampled ||
-                (!t->_raw.surfaceView && !fresh.insert(t).second))
-                return;
-            const raw::Texture &x = t->_raw;
-            raw::BlitEncoder *b = rc->blit();
-            b->copyTexels(x, 0, 0, 0, *x.sampled, 0, 0, 0, x.width, x.height);
-            b->end();
-        });
+                                      if (!(use.access & raw::ResourceUse::Sample))
+                                          return;
+                                      __unsafe_unretained RMTexture *t = (__bridge RMTexture *)use.object;
+                                      if (rc->readTexture(&t->_raw) != &t->_raw || !t->_raw.sampled ||
+                                          (!t->_raw.surfaceView && !fresh.insert(t).second))
+                                          return;
+                                      const raw::Texture &x = t->_raw;
+                                      raw::BlitEncoder *b = rc->blit();
+                                      b->copyTexels(x, 0, 0, 0, *x.sampled, 0, 0, 0, x.width, x.height);
+                                      b->end();
+                                  });
     };
     // extended-range textures (raw_xr.h): a draw samples the stand-in, drawn from the codes by the pack's conversion state
     // before the first pass whose draws sample it, and again after work here writes the codes. Their passes' prologue barrier
@@ -347,12 +350,12 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         std::vector<__unsafe_unretained RMTexture *> stale;
         cb->_plan.forEachResource(pass, cb->_plan.encoderEnd(pass), RMResourceKind::Texture,
                                   [&](const RMRangeResource &use) {
-            if (!(use.access & raw::ResourceUse::Sample))
-                return;
-            __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
-            if (texture->_raw.standIn && !standInFresh.count(texture))
-                stale.push_back(texture);
-        });
+                                      if (!(use.access & raw::ResourceUse::Sample))
+                                          return;
+                                      __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
+                                      if (texture->_raw.standIn && !standInFresh.count(texture))
+                                          stale.push_back(texture);
+                                  });
         for (__unsafe_unretained RMTexture *t : stale) {
             xrPlanes.read(t);
             raw::Texture &x = t->_raw;
@@ -415,13 +418,13 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 copyShadows(false);
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const auto &regions = dispatch.regions;
+            ce->setStageInRegion(dispatch.stageIn);
             if (!kernels || kernels->count != regions.count)
                 return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
             for (uint8_t region = 0; region < regions.count; ++region) {
                 ce->setState(kernels->jobs[region]->value());
-                if (const char *w = nullptr;
-                    !ce->dispatchRegion(regions.regions[region], regions.grid, regions.nominal, !region,
-                                        region + 1 == regions.count, &w))
+                if (const char *w = nullptr; !ce->dispatchRegion(regions.regions[region], regions.grid, regions.nominal,
+                                                                 !region, region + 1 == regions.count, &w))
                     return fail(PredCompute, w, c.op);
             }
             if (count) {
@@ -445,6 +448,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
+            counters.started(at, *ce);
             break;
         case OpRender: {
             RAW_ENCODE_SPAN(Pass);
@@ -467,7 +471,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                     refresh(sub);
                 if (cb->_standIns && !standIns(sub))
                     return false;
-                p.storageMask |= passStorageMask(cb, sub);
+                passStorageMasks(cb, sub, p);
                 p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
             }
             for (unsigned j = 0; j < 8; j++) {
@@ -492,20 +496,30 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
                 standInFresh.erase(t);
-                if (t->_raw.chain && a.level) {
-                    if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j]))
-                        return fail(PredEncPassRender, "a mip level the raw path cannot render to", a.level);
-                    levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
+                const bool whole = raw::wholeAttachment(t->_raw, uint32_t(a.level), uint32_t(a.slice));
+                if (!whole) {
+                    if (!raw::attachmentTarget(t->_raw, uint32_t(a.level), uint32_t(a.slice), levelTargets[j]))
+                        return fail(PredEncPassRender, "a level, slice or plane the raw path cannot render to",
+                                    a.level | a.slice << 8);
+                    // a 2D chain's level alone has a header (a fetch of the attachment reads it)
+                    if (t->_raw.chain && t->_raw.type == raw::fx::kTexTwoD && !a.slice)
+                        levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
 #if SWITCH_RAW_DIAGNOSTICS
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
-                        os_log(rawLog(), "raw: renders into mip levels (first: level %lu of %ux%u format %u)",
-                               (unsigned long)a.level, t->_raw.width, t->_raw.height, t->_raw.format);
+                        os_log(rawLog(),
+                               "raw: renders into levels and slices (first: level %lu slice %lu of %ux%u format %u "
+                               "type %u)",
+                               (unsigned long)a.level, (unsigned long)a.slice, t->_raw.width, t->_raw.height,
+                               t->_raw.format, unsigned(t->_raw.type));
 #endif
                 }
-                p.color[j].texture = a.level                 ? &levelTargets[j]
+                p.color[j].texture = !whole                  ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
                                                              : &t->_raw;
+                p.color[j].image = whole ? nullptr : &t->_raw;
+                p.color[j].level = uint32_t(a.level);
+                p.color[j].slice = uint32_t(a.slice);
                 p.color[j].load = a.load == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.load == MTLLoadActionLoad ? raw::ColorAttachment::Load
                                                                 : raw::ColorAttachment::DontCare;
@@ -523,6 +537,13 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             if (__unsafe_unretained RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
+                if (pass.depthSlice && !z->_raw.memoryless) {  // a layer of a 2D array or cube: its layers from there
+                    zetaPart = z->_raw;
+                    zetaPart.va += pass.depthSlice * z->_raw.layerBytes;
+                    zetaPart.layers -= uint32_t(pass.depthSlice);
+                    zetaPart.tic = 0;
+                    p.depthStencil.texture = &zetaPart;
+                }
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
@@ -530,6 +551,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
+            p.layers = pass.layers;
             p.positions = pass.positions;
             for (__unsafe_unretained RMTexture *t : standInLoads)
                 if (standInPass(t, false))
@@ -537,6 +559,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             standInLoads.clear();
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
             break;
         }
@@ -547,6 +570,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (o.at == at)
                     be->probe(o.op, o.read ? &o.read->_raw : nullptr, o.written->_raw);
 #endif
+            counters.started(at, *be);
             break;
         case OpEnd:
             if (re)
@@ -556,13 +580,16 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                     continuing = true;
                     break;
                 }
-                // the next pass's facts are the next boundary's first pass's
-                const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
-                fused = fusionPass(cb, at + 1);
-                fusedAt = at + 1;
-                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && raw::canFusePasses(first, fused)) {
-                    continuing = true;
-                    break;
+                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && !counters.at(at) &&
+                    !counters.at(at + 1)) {
+                    // the next pass's facts are the next boundary's first pass's
+                    const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
+                    fused = fusionPass(cb, at + 1);
+                    fusedAt = at + 1;
+                    if (raw::canFusePasses(first, fused)) {
+                        continuing = true;
+                        break;
+                    }
                 }
             }
             if (re)
@@ -579,6 +606,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (standInPass(t, true))
                     return false;
             standInStores.clear();
+            counters.ended(at);
             re = nullptr;
             be = nullptr;
             break;
@@ -590,10 +618,10 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             re->barrier();
             break;
         case OpVisibility:
-            if (!re->setVisibility(c.a,
-                                   [(__bridge id)c.obj isKindOfClass:[RMBuffer class]] ? &((__bridge RMBuffer *)c.obj)->_raw
-                                                                                         : nullptr,
-                                   c.c))
+            if (!re->setVisibility(
+                    c.a,
+                    [(__bridge id)c.obj isKindOfClass:[RMBuffer class]] ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr,
+                    c.c))
                 return fail(PredCallVisibility, "a visibility offset the raw path cannot take", c.a, c.c);
             break;
         case OpDrawIndexed: {
@@ -625,6 +653,11 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         }
         case OpExecuteCommands:
             if (!encodeCommands(re, rc, cb->_plan.draw(at), why))
+                return refused();
+            break;
+        case OpDrawPatches:
+        case OpDrawPatchesIndirect:
+            if (!encodePatches(re, rc, cb->_plan.draw(at), cb->_plan.patches(at), c.op == OpDrawPatchesIndirect, why))
                 return refused();
             break;
         case OpResetCommands:
@@ -673,12 +706,19 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         if (rc->admissionBlocked) {
             RMQueue *queue = cb->_queue;
             int armed = KERN_SUCCESS;
-            cb->_resourceReady = rc->resourceReadiness([queue] { wakeSubmit((__bridge void *)queue); }, armed);
+            cb->_resourceReady = rc->resourceReadiness(
+                [queue] {
+                    wakeSubmit((__bridge void *)queue);
+                },
+                armed);
             if (!cb->_resourceReady) {
                 std::lock_guard<std::mutex> lock(cb->_lock);
-                cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                                   code:MTLCommandBufferErrorInternal
-                                               userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"}];
+                cb->_segError = [NSError
+                    errorWithDomain:MTLCommandBufferErrorDomain
+                               code:MTLCommandBufferErrorInternal
+                           userInfo:@{
+                               NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"
+                           }];
             }
             rc->abandon();
             return false;
@@ -709,7 +749,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     }
     noteSurfaceWrites(cb, from, to);
     xrPlanes.submitted();
-    for (__unsafe_unretained RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
+    for (__unsafe_unretained RMTexture *t :
+         planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
     cb->_channelGeneration = generation;

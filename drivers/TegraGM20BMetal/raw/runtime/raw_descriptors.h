@@ -35,6 +35,11 @@ public:
         return address_;
     }
 
+    void forget()
+    {
+        address_ = 0;
+    }
+
 private:
     DescriptorWords words_ = {};
     uint32_t bytes_ = 0;
@@ -80,6 +85,14 @@ public:
     const PreparedDescriptorWords &last() const
     {
         return value_;
+    }
+
+    // The GPU loaded words into the set it uploaded last: the next resolve builds and uploads one of its own
+    void forget()
+    {
+        value_ = {};
+        pipeline_ = nullptr;
+        snapshot_.forget();
     }
 
 private:

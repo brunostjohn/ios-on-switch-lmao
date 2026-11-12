@@ -13,10 +13,20 @@ public:
         const auto &image = texture->_raw;
         if (image.blockW > 1 || image.blockH > 1)
             return;
-        const raw::TextureCpuShape shape = {
-            image.width, image.height, image.depth, image.layers, image.pitch, image.surfaceX, image.surfaceY,
-            image.bpp, image.blockDepth, image.blockLinear, image.type == raw::fx::kTexThreeD,
-            image.chain ? &image.chain->layout : nullptr, textureCpuImportLayout(texture)};
+        const raw::TextureCpuShape shape = {image.width,
+                                            image.height,
+                                            image.depth,
+                                            image.layers,
+                                            image.pitch,
+                                            image.surfaceX,
+                                            image.surfaceY,
+                                            image.bpp,
+                                            image.blockDepth,
+                                            image.blockLinear,
+                                            image.type == raw::fx::kTexThreeD,
+                                            image.chain ? &image.chain->layout : nullptr,
+                                            textureCpuImportLayout(texture),
+                                            image.layerBytes};
         const uint64_t origin[] = {region.origin.x, region.origin.y, region.origin.z};
         const uint64_t size[] = {region.size.width, region.size.height, region.size.depth};
         raw::TextureCpuRange range;
@@ -29,20 +39,23 @@ public:
         while (texture->_kind == RMTextureView && texture->_parent)
             texture = texture->_parent;
         const bool acquired = texture->_buffer
-            ? gRM->raw->hostAccess(texture->_buffer->_raw, cpu, range.bytes, write, access_)
-            : gRM->raw->hostAccess(texture->_raw, cpu, range.bytes, write, access_);
+                                  ? gRM->raw->hostAccess(texture->_buffer->_raw, cpu, range.bytes, write, access_)
+                                  : gRM->raw->hostAccess(texture->_raw, cpu, range.bytes, write, access_);
         if (!acquired)
             [NSException raise:NSInternalInconsistencyException format:@"GPU texture CPU ownership failed"];
         native_ = true;
     }
 
-    bool native() const { return native_; }
+    bool native() const
+    {
+        return native_;
+    }
 
 private:
     raw::HostAccess access_;
     bool native_ = false;
 };
-} // namespace
+}  // namespace
 
 // Before the raw path first renders into a surface texture: the kernel takes the surface's imports as only sampled until
 // then, so a CPU lock of a surface the GPU never writes invalidates nothing.
@@ -357,11 +370,6 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     return 0;
 }
 
-- (BOOL)isShareable
-{
-    return NO;
-}
-
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
     if (_heap)
@@ -409,14 +417,22 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         noteSurfaceWrite(_surfaceWrites);
     if (transferTexture(self, r, level, slice, const_cast<void *>(bytes), row, image, true))
         return;
-    TextureCpuAccess access(self, r, level, slice, true);
-    if (!access.native()) {
-        [(id<MTLTexture>)[self rmTwin] replaceRegion:r mipmapLevel:level slice:slice
-                                         withBytes:bytes bytesPerRow:row bytesPerImage:image];
+    if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
+        cpuBlocks(self, r, level, slice, (uint8_t *)bytes, row, true);
         return;
     }
-    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
-        cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
+    TextureCpuAccess access(self, r, level, slice, true);
+    if (!access.native()) {
+        [(id<MTLTexture>)[self rmTwin] replaceRegion:r
+                                         mipmapLevel:level
+                                               slice:slice
+                                           withBytes:bytes
+                                         bytesPerRow:row
+                                       bytesPerImage:image];
+        return;
+    }
+    if (_rawOk && _raw.chain) {
+        cpuLevel(self, r, level, slice, (uint8_t *)bytes, row, image, true);
         return;
     }
     if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&
@@ -461,14 +477,22 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         return;
     if (transferTexture(self, r, level, slice, bytes, row, image, false))
         return;
-    TextureCpuAccess access(self, r, level, slice, false);
-    if (!access.native()) {
-        [(id<MTLTexture>)[self rmTwin] getBytes:bytes bytesPerRow:row bytesPerImage:image
-                                  fromRegion:r mipmapLevel:level slice:slice];
+    if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
+        cpuBlocks(self, r, level, slice, (uint8_t *)bytes, row, false);
         return;
     }
-    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
-        cpuLevel(self, r, level, (uint8_t *)bytes, row, false);
+    TextureCpuAccess access(self, r, level, slice, false);
+    if (!access.native()) {
+        [(id<MTLTexture>)[self rmTwin] getBytes:bytes
+                                    bytesPerRow:row
+                                  bytesPerImage:image
+                                     fromRegion:r
+                                    mipmapLevel:level
+                                          slice:slice];
+        return;
+    }
+    if (_rawOk && _raw.chain) {
+        cpuLevel(self, r, level, slice, (uint8_t *)bytes, row, image, false);
         return;
     }
     if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&
@@ -544,9 +568,8 @@ static int viewHeaderType(MTLTextureType type)
                                          levels:(NSRange)levels
                                          slices:(NSRange)slices
 {
-    const bool cube =
-        _descriptor.textureType == MTLTextureTypeCube || _descriptor.textureType == MTLTextureTypeCubeArray;
-    const NSUInteger allSlices = std::max<NSUInteger>(_descriptor.arrayLength, 1) * (cube ? 6 : 1);
+    const NSUInteger allSlices = raw::textureLayers(uint32_t(_descriptor.textureType),
+                                                    uint32_t(std::min<NSUInteger>(_descriptor.arrayLength, 2048)));
     if (type == _descriptor.textureType && !levels.location && levels.length == _descriptor.mipmapLevelCount &&
         !slices.location && slices.length == allSlices)
         return [self newTextureViewWithPixelFormat:format];

@@ -38,7 +38,8 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
-    uint32_t flags = 0;  // SubmitAddress: TegraGM20BAbiSubmit.surface_flags; SubmitJob: TegraGM20BAbiJob.flags
+    uint32_t flags = 0;           // SubmitAddress: TegraGM20BAbiSubmit.surface_flags; SubmitJob: TegraGM20BAbiJob.flags
+    std::vector<uint32_t> words;  // its pushes' method stream, in push order, where the model's memory holds them
 };
 
 struct Slot {
@@ -63,7 +64,7 @@ struct Model {
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     unsigned creates = 0, destroys = 0, staleReads = 0;
-    std::vector<uint64_t> freed;  // BoFree's handles, in order
+    std::vector<uint64_t> freed;             // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
 
     TegraGM20BAbiFence &fence(uint32_t slot)
@@ -129,12 +130,31 @@ struct Model {
         return 0;
     }
 
+    // The words of `count` pushes from the memory bound at their addresses
+    std::vector<uint32_t> pushWords(const TegraGM20BAbiPush *push, uint32_t count)
+    {
+        std::vector<uint32_t> words;
+        for (uint32_t i = 0; i < count; i++)
+            for (const auto &[va, bound] : binds)
+                if (push[i].va >= va && push[i].va + 4ull * push[i].dwords <= va + bound.second &&
+                    memory.count(uint32_t(bound.first))) {
+                    const std::vector<uint8_t> &bytes = memory[uint32_t(bound.first)];
+                    const size_t at = size_t(push[i].va - va);
+                    if (at + 4ull * push[i].dwords <= bytes.size()) {
+                        const auto *from = reinterpret_cast<const uint32_t *>(bytes.data() + at);
+                        words.insert(words.end(), from, from + push[i].dwords);
+                    }
+                    break;
+                }
+        return words;
+    }
+
     int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply,
-            uint32_t flags)
+            uint32_t flags, std::vector<uint32_t> words = {})
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags, std::move(words)};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -163,7 +183,8 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        return run(*s, head->channel, {uses, uses + head->surface_count}, reply, head->surface_flags);
+        return run(*s, head->channel, {uses, uses + head->surface_count}, reply, head->surface_flags,
+                   pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count));
     }
 
     int submitJob(const TegraGM20BAbiSubmitAddress &address, TegraGM20BAbiExecReply &reply)
@@ -201,7 +222,8 @@ struct Model {
             setJobs++;
         }
         submitJobs++;
-        return run(*s, head->channel, std::move(uses), reply, head->flags);
+        return run(*s, head->channel, std::move(uses), reply, head->flags,
+                   pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count));
     }
 
     void endGeneration(uint32_t index)
@@ -307,8 +329,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
-                     TegraGM20BInfoCpuAccess;
+        info.flags =
+            TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord | TegraGM20BInfoCpuAccess;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
@@ -334,6 +356,11 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;
+    case TegraGM20BMethodCpuComplete: {
+        const auto &in = *static_cast<const TegraGM20BAbiCpuComplete *>(input);
+        *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodVmBind: {
         const auto &op = static_cast<const TegraGM20BAbiVmBind *>(input)->ops[0];
         model.binds[op.va] = {op.handle, op.range};

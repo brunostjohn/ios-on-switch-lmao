@@ -103,7 +103,12 @@ TEST(SamplePositions, ReadAtTheCountThePassHolds)
     for (uint32_t held : {0u, 9u, 16u}) {
         bool called = false;
         raw::SamplePositions p;
-        EXPECT_FALSE(raw::readSamplePositions(held, 4, [&](float *, uint32_t) { called = true; }, p));
+        EXPECT_FALSE(raw::readSamplePositions(
+            held, 4,
+            [&](float *, uint32_t) {
+                called = true;
+            },
+            p));
         EXPECT_FALSE(called) << held;
     }
 }

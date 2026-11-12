@@ -4,10 +4,11 @@ import HWTestGPU
 import Metal
 
 /// The features the device has no form of are NO wherever Metal lets a caller ask, and every creation past a NO fails:
-/// one view of amplification, no predication, no dynamic attribute stride (render or compute stage-in), no shared
-/// texture handles, no counter sets, no tessellation (a post-tessellation vertex function reads as one, and its state
-/// is refused). Linear textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults
-/// to, 1, draws on the raw path.
+/// no predication, and on 21H461's A10X one view of amplification and no dynamic attribute stride (render or compute
+/// stage-in), which 24B119's A13 answers YES (metal.native.amplification, metal.native.dynamic_stride). A
+/// post-tessellation vertex function reads as one, and a state of a maximum tessellation factor past the device's is
+/// refused (metal.native.tessellation draws patches). Linear textures align to the pitch texture header's 32 bytes. The
+/// amplification count Metal defaults to, 1, draws on the raw path.
 struct NativeUnsupportedTest: NativeObjectTest {
     let id = "metal.native.unsupported"
     let name = "Features the device has no form of answer NO and refuse their creations; amplification 1 draws raw"
@@ -45,31 +46,28 @@ struct NativeUnsupportedTest: NativeObjectTest {
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let device = gpu.device
         var work = NativeWork()
-        let zeroes = [
-            "maxPredicatedNestingDepth", "supportsDynamicAttributeStride", "supportsSharedTextureHandles",
-            "supportsTessellation", "maxTessellationFactor",
-        ]
+        // 24B119's A13 amplifies (supportsVertexAmplificationCount: 0 to 8, maxVertexAmplificationCount 2) and binds
+        // dynamic strides; 21H461's A10X does neither
+        let a13 = device.name.contains("A13")
+        metrics.set("identity", a13 ? "A13" : "A10X")
+        let zeroes =
+            ["maxPredicatedNestingDepth"]
+            + (a13 ? [] : ["supportsDynamicAttributeStride"])
         for selector in zeroes where Self.answer(device, selector) != 0 {
             work.failures.append("\(selector) answers \(Self.answer(device, selector).map(String.init) ?? "nothing")")
         }
-        if Self.answer(device, "maxVertexAmplificationCount") != 1 { work.failures.append("amplification above 1") }
-        if !device.supportsVertexAmplificationCount(1) || device.supportsVertexAmplificationCount(2) {
-            work.failures.append("supportsVertexAmplificationCount: is not 1 alone")
+        if a13 && Self.answer(device, "supportsDynamicAttributeStride") != 1 {
+            work.failures.append("supportsDynamicAttributeStride is not the A13's YES")
         }
-        let points: [MTLCounterSamplingPoint] = [
-            .atStageBoundary, .atDrawBoundary, .atDispatchBoundary, .atTileDispatchBoundary, .atBlitBoundary,
-        ]
-        if !(device.counterSets ?? []).isEmpty || points.contains(where: device.supportsCounterSampling) {
-            work.failures.append("counter sets or a sampling point answered")
+        if Self.answer(device, "maxVertexAmplificationCount") != (a13 ? 2 : 1) {
+            work.failures.append("maxVertexAmplificationCount is not the target's")
         }
-        let counters = MTLCounterSampleBufferDescriptor()
-        if Self.refused({ _ = try device.makeCounterSampleBuffer(descriptor: counters) }) == nil {
-            work.failures.append("a counter sample buffer was made")
+        let amplifiesAbove1 = (2...8).contains(where: device.supportsVertexAmplificationCount)
+        if !device.supportsVertexAmplificationCount(1) || amplifiesAbove1 != a13
+            || device.supportsVertexAmplificationCount(9)
+        {
+            work.failures.append("supportsVertexAmplificationCount: is not the target's")
         }
-        let shared = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm, width: 16, height: 16, mipmapped: false)
-        if device.makeSharedTexture(descriptor: shared) != nil { work.failures.append("a shared texture was made") }
-
         let patchLibrary = try await device.makeLibrary(source: Self.patchSource, options: nil)
         guard let post = patchLibrary.makeFunction(name: "tri_post") else { throw TestFailure("no tri_post") }
         metrics.set("patch", "\(post.patchType.rawValue)x\(post.patchControlPointCount)")
@@ -80,6 +78,9 @@ struct NativeUnsupportedTest: NativeObjectTest {
         tessellated.vertexFunction = post
         tessellated.fragmentFunction = patchLibrary.makeFunction(name: "tri_fragment")
         tessellated.colorAttachments[0].pixelFormat = .rgba8Unorm
+        tessellated.maxTessellationFactor = 64
+        let pastFactor = (Self.answer(device, "maxTessellationFactor") ?? 0) < 64
+        metrics.set("max_tessellation_factor", Self.answer(device, "maxTessellationFactor") ?? -1)
         let amplified = MTLRenderPipelineDescriptor()
         amplified.vertexFunction = gpu.library.makeFunction(name: "quad_vertex")
         amplified.fragmentFunction = gpu.library.makeFunction(name: "solid_fragment")
@@ -92,7 +93,10 @@ struct NativeUnsupportedTest: NativeObjectTest {
         vertices.layouts[1].stride = Int(bitPattern: UInt.max)  // MTLBufferLayoutStrideDynamic
         strided.vertexDescriptor = vertices
         var refusals: [String] = []
-        for (what, descriptor) in [("tessellation", tessellated), ("amplification", amplified), ("stride", strided)] {
+        let refusable =
+            (pastFactor ? [("tessellation", tessellated)] : [])
+            + (a13 ? [] : [("amplification", amplified), ("stride", strided)])
+        for (what, descriptor) in refusable {
             if let error = Self.refused({ _ = try device.makeRenderPipelineState(descriptor: descriptor) }) {
                 refusals.append(what)
                 metrics.set("\(what)_error", error)
@@ -107,10 +111,11 @@ struct NativeUnsupportedTest: NativeObjectTest {
         stageIn.attributes[0].bufferIndex = 2
         stageIn.layouts[2].stride = Int(bitPattern: UInt.max)
         compute.stageInputDescriptor = stageIn
-        if let error = Self.refused({ _ = try device.makeComputePipelineState(descriptor: compute, options: []) }) {
+        if !a13, let error = Self.refused({ _ = try device.makeComputePipelineState(descriptor: compute, options: []) })
+        {
             refusals.append("stage_in")
             metrics.set("stage_in_error", error)
-        } else {
+        } else if !a13 {
             work.failures.append("a dynamic-stride stage-in state was made")
         }
         metrics.set("refused", refusals.joined(separator: ","))

@@ -70,7 +70,6 @@ kernel_driver(
 
 kernel_driver(
     name = "TegraGM20B",
-    hdrs = ["//kernel/switch:include/switch/memory_attachment.h"],
     srcs = [
         "shim/linux.c",
         "shim/tegra_shim.c",
@@ -78,6 +77,7 @@ kernel_driver(
         "shim/nvif_nvkm.c",
         "platform.c",
         "gpu_bringup.c",
+        "gpu_anchor.c",
         "gpu_clock.c",
         "gpu_mem.c",
         "gpu_hang.c",
@@ -154,6 +154,7 @@ kernel_driver(
         # GM20B falcon firmware (linux-firmware nvidia/gm20b) by .incbin.
         "firmware.S",
     ],
+    hdrs = ["//kernel/switch:include/switch/memory_attachment.h"],
     abi = [
         "IOSurface",
         "IOSurfaceSharedEvent",
@@ -175,6 +176,7 @@ kernel_driver(
         "drivers/TegraI2C",
         "drivers/TegraHost1x",
         "kits/SwitchDMA",
+        "kits/SwitchGM20BEmit",
         "kits/SwitchIdle",
         "kits/SwitchLinux",
         "kits/SwitchMMIO",

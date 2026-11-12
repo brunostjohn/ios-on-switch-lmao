@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 // MTLParallelRenderCommandEncoder (raw_parallel.h): its sub-encoders record into command buffers of their own, which no
 // other thread touches, and its end records their commands into its command buffer in their creation order.
-#import "RawMetalInternal.h"
+#import "RawMetalCounters.h"
 #include "raw_parallel.h"
 
 namespace {
 
 struct RMSubCommand {
     Cmd cmd;
-    std::array<uint64_t, 6> extra;
+    std::vector<uint64_t> extra;
 };
 
 }  // namespace
@@ -28,8 +28,8 @@ struct RMSubCommand {
 - (void)record:(const Cmd &)c
 {
     RMSubCommand s{c, {}};
-    if (const size_t words = raw::extraWords(c.op))
-        std::copy_n(_extra.begin() + ptrdiff_t(c.x), words, s.extra.begin());
+    if (const size_t words = raw::extraWords(c))
+        s.extra.assign(_extra.begin() + ptrdiff_t(c.x), _extra.begin() + ptrdiff_t(c.x + words));
     _log.push_back(s);
     [super record:c];
 }
@@ -53,7 +53,7 @@ static void seam(RMSubRecorder *s, MTLRenderPassDescriptor *parallel, size_t at,
         pass.color[j].store = store;
     }
     MTLRenderPassAttachmentDescriptor *aspects[2][2] = {{own.depthAttachment, parallel.depthAttachment},
-                                                         {own.stencilAttachment, parallel.stencilAttachment}};
+                                                        {own.stencilAttachment, parallel.stencilAttachment}};
     for (auto &[mine, theirs] : aspects)
         if (mine.texture) {
             mine.loadAction = MTLLoadAction(raw::seamLoad(uint8_t(theirs.loadAction), at));
@@ -95,9 +95,8 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     cb->_encOpen = true;
     cb->_encRefused = refused;
     for (const RMSubCommand &r : s->_log) {
-        const size_t words = raw::extraWords(r.cmd.op);
         const Cmd c = raw::spliced(r.cmd, passBase, chunkBase, cb->_extra.size());
-        cb->_extra.insert(cb->_extra.end(), r.extra.begin(), r.extra.begin() + ptrdiff_t(words));
+        cb->_extra.insert(cb->_extra.end(), r.extra.begin(), r.extra.end());
         [cb record:c];
     }
     [cb closeEncoder];
@@ -186,9 +185,13 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
         begins.push_back(cb->_plan.size());
         splice(cb, subs[at], refused);
     }
-    if (!refused && std::any_of(begins.begin(), begins.end(), [&](size_t b) { return cb->_plan.begin(b).refused; }))
+    if (!refused && std::any_of(begins.begin(), begins.end(), [&](size_t b) {
+            return cb->_plan.begin(b).refused;
+        }))
         for (size_t b : begins)
             cb->_plan.setRefused(b, true);
+    rmPlaceCounterMarks(cb, self, begins.front(), true);
+    rmPlaceCounterMarks(cb, self, cb->_plan.size() - 1, false);
     cb->_active = nil;
 }
 
@@ -203,6 +206,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     [self begin:e];
     e->_descriptor = [d copy];
     [self retain:e->_descriptor];
+    rmCounterMarks(self, e, e->_descriptor);
     return (id<MTLParallelRenderCommandEncoder>)e;
 }
 

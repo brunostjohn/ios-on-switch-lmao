@@ -389,10 +389,12 @@ struct Candidates {
 
 // live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index),
 // victim
-constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0, 0},
-			     kNone = {0, 0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0, 0},
+constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0},
+			     kBusyClient = {1, 0, 0, 0, 0, 0, 0}, kNone = {0, 0, 0, 0, 0, 0, 0},
+			     kStuckResident = {1, 1, 0, 1, 0, 0, 0},
 			     kMovingResident = {1, 1, 0, 1, 1, 0, 0},
-			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0}, kBusyKernel = {1, 0, 1, 0, 0, 0, 0};
+			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0},
+			     kBusyKernel = {1, 0, 1, 0, 0, 0, 0};
 
 constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
 {
@@ -614,7 +616,8 @@ TEST(HangSuspects, APbdmaParkedOnASemaphoreAcquireNamesNoSuspect)
 	EXPECT_TRUE(tgm_pbdma_acquiring(0x8000001d, 0x00001008));
 	EXPECT_FALSE(tgm_pbdma_acquiring(0x8000001d, 0x01100002));  // a release
 	EXPECT_FALSE(tgm_pbdma_acquiring(0x80000021, 0x00000000));  // NON_STALL_INTERRUPT
-	EXPECT_FALSE(tgm_pbdma_acquiring(0x80010e01, 0x00001004));  // a 3D method with ACQ_GEQ-like data
+	EXPECT_FALSE(
+		tgm_pbdma_acquiring(0x80010e01, 0x00001004));  // a 3D method with ACQ_GEQ-like data
 }
 
 // The panic: the present waited 2 s for backboardd's fence; GR idle, PBDMA0 between the two channels' acquires and on

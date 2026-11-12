@@ -15,6 +15,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -194,7 +195,7 @@ struct RawState {
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =
-        false;           // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
+        false;  // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
 #if SWITCH_RAW_DIAGNOSTICS
     int lastDriver = 0;
 #endif
@@ -226,6 +227,10 @@ bool volumeRendered(MTLTextureDescriptor *d);
 uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 bool multisampleShape(MTLTextureDescriptor *d);
+uint32_t memorylessLayers(MTLTextureDescriptor *d);
+bool blockShape(MTLTextureDescriptor *d);
+bool cpuBlocks(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+               bool write);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 bool identitySwizzle(MTLTextureSwizzleChannels s);
 // `t` reading its channels through `s` (a descriptor's swizzle, or a swizzled view's): its raw header, its descriptor
@@ -286,6 +291,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 // RawMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
 void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write);
 void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
+// RawMetalTessellation.mm: a patch draw on the raw encoder, and its replay on m2v's
+bool encodePatches(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlanDraw &draw, const RMPlanPatches &patches,
+                   bool indirect, const char **why);
+void replayPatches(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const RMPlanPatches &patches,
+                   bool indirect, const std::function<id(void *)> &use);
 
 // RawMetalEncodeBlit.mm: a blit encoder's command of the tape onto the raw path's copy engine; a texture it writes leaves
 // `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)
@@ -300,11 +310,12 @@ bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
-bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
-                     void *bytes, NSUInteger row, NSUInteger image, bool write);
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice, void *bytes,
+                     NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 const tgm_layout *textureCpuImportLayout(RMTexture *texture);
-void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+              NSUInteger image, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write);
 
@@ -346,6 +357,11 @@ size_t rmPassGroupEnd(RMCommandBuffer *cb, size_t begin);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
+// RawMetalM2vGuard.mm: what of a state m2v has no form of (null: none), and whether the range [from, to) holds such work,
+// which fails its command buffer (its error set, one refusal line) instead of replaying on m2v
+const char *rmM2vMissingState(MTLRenderPipelineDescriptor *d);
+const char *rmM2vMissingKernel(MTLComputePipelineDescriptor *d);
+bool rmRefuseM2vRange(RMCommandBuffer *cb, size_t from, size_t to);
 
 // RawMetalEncode.mm
 bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder);
@@ -360,6 +376,7 @@ struct RMEventWaitNote {
     uint64_t value;
     uint64_t sinceUs, saidUs;
 };
+
 extern std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
 #endif
 bool waitsForEvent(RMCommandBuffer *cb);
@@ -379,7 +396,12 @@ bool sharedWaitsReady(RMCommandBuffer *cb, bool native);
 void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands);
 void publishSharedEvents(RMCommandBuffer *cb);
 void enqueueBuffer(RMCommandBuffer *cb);
-enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress = 2 };
+
+enum RMReadyDependency : uint32_t {
+    RMRawProgress = 1,
+    RMCompatibilityProgress = 2
+};
+
 void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
@@ -416,6 +438,12 @@ void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [
 void installDeviceAnswers(Class cls);
 uint64_t deviceAnswer(SEL selector, uint64_t argument);
 
+// RawMetalSharedTextures.mm: the shared texture methods only some kinds' Metal has (raw_shared_texture.h), on `cls`
+void installSharedTextureMethods(Class cls);
+// The image of `d` that surface `s` holds as a shared texture of the device's layout (raw_surface_image.h): false for any
+// other surface, or a Plain image
+bool laidOutSurface(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::SurfaceImage &image);
+
 // RawMetalQueuePriority.mm
 void queuePriorityAdd(RMQueue *queue);
 void queuePriorityRemove(RMQueue *queue);
@@ -424,7 +452,8 @@ void queuePriorityRemove(RMQueue *queue);
 void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
-bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
+bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
+                          const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 
 // RawMetalRates.mm

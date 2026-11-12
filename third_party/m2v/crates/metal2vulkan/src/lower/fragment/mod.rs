@@ -201,6 +201,10 @@ pub struct FragmentPlan {
     /// writes each storage-form color: Metal runs such a function once per covered sample and
     /// reads its own sample.
     pub fetch_sample: Option<usize>,
+    /// The stage interface's `Layer` object, at which a function compiled for a layered pass
+    /// (`LoweringInputs::layered_storage`) addresses its storage-form images: the layer its
+    /// primitive renders.
+    pub fetch_layer: Option<usize>,
     /// The field of the returned value holding the function's `[[sample_mask]]` output, which
     /// gates each storage-form write of a per-sample function on the invocation's own sample bit,
     /// and of a function at one sample on bit 0.
@@ -488,6 +492,7 @@ pub fn declare(
         &fp.colors,
         (&fp.fetch, &fp.input_blends),
         fp.fetch_sample.is_some(),
+        fp.fetch_layer.is_some(),
     )?;
     for (&color, sc) in &fp.fetch {
         if sc.shadowed {

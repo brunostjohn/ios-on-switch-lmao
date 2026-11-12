@@ -65,6 +65,12 @@
     return [_metadata staticThreadgroupMemoryLength];
 }
 
+// The descriptor's, as Metal's state answers it, without making m2v's twin
+- (BOOL)supportIndirectCommandBuffers
+{
+    return _direct.supportIndirectCommandBuffers;
+}
+
 @end
 
 static bool airOf(id<MTLFunction> function, raw::AirHash &out)
@@ -85,6 +91,29 @@ static bool airOf(id<MTLFunction> function, raw::AirHash &out)
 // The archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists (this device's, RawMetalBinaryArchive.mm), as
 // Metal's answer: false (and Metal's error) where none holds the state and the pack holds no kernel of it, never compiled.
 // m2v's state goes without the archives or the option either way: it reads none of this device's archives.
+// A stage input descriptor's set attributes and their layouts, as a key names them (a dynamic stride as UINT32_MAX, as
+// RawPipelineKey.h's vertex layouts): "" for none, so a kernel without one keys as before
+static std::string stageInText(MTLStageInputOutputDescriptor *in)
+{
+    std::string text;
+    char b[96];
+    for (NSUInteger i = 0; in && i < 31; i++) {
+        MTLAttributeDescriptor *a = in.attributes[i];
+        if (a.format == MTLAttributeFormatInvalid)
+            continue;
+        MTLBufferLayoutDescriptor *l = in.layouts[a.bufferIndex < 31 ? a.bufferIndex : 0];
+        const unsigned long stride = l.stride == MTLBufferLayoutStrideDynamic ? UINT32_MAX : l.stride;
+        snprintf(b, sizeof b, " a%lu=%lu:%lu:%lu:%lu:%lu:%lu", (unsigned long)i, (unsigned long)a.format,
+                 (unsigned long)a.offset, (unsigned long)a.bufferIndex, stride, (unsigned long)l.stepFunction,
+                 (unsigned long)l.stepRate);
+        text += b;
+    }
+    if (text.empty())
+        return text;
+    snprintf(b, sizeof b, " i=%lu:%lu", (unsigned long)in.indexType, (unsigned long)in.indexBufferIndex);
+    return " | in" + text + b;
+}
+
 static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &options, NSError **error)
 {
     raw::ArchiveAnswer answer = raw::ArchiveAnswer::NotAsked;
@@ -118,7 +147,8 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
     // linked functions are no part of the key: such a state's dispatches stay m2v's
     s->_keyed = f && !descriptor.linkedFunctions.functions.count &&
                 !descriptor.linkedFunctions.privateFunctions.count && airOf(function, s->_air);
-    s->_constants = f ? f->_constants : "";
+    s->_constants = (f ? f->_constants : "") + stageInText(descriptor.stageInputDescriptor);
+    s->_m2vMissing = rmM2vMissingKernel(descriptor);
     s->_maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];

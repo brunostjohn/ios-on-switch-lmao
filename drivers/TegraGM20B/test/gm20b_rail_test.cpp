@@ -83,9 +83,11 @@ struct GpuTime {
 		railed = true;
 	}
 
-	void up()  // wake_m1
+	void up()  // wake_m1: nvkm_timer_init, then stamp_reseed
 	{
-		ptimer = tgm_stamp_monotonic(last, ktime);
+		ptimer = ktime;
+		if (const uint64_t floor = tgm_stamp_reseed(last, ptimer))
+			ptimer = floor;
 		railed = false;
 	}
 };
@@ -115,8 +117,8 @@ TEST(Gm20bRail, GpuTimeNeverGoesBackwardsAcrossRailCycles)
 			prev = s;
 		}
 		t.up();
-		ASSERT_GE(t.ptimer, gpuWritten)
-			<< "cycle " << cycle << ": PTIMER reseeded behind its last value";
+		ASSERT_GT(t.ptimer, gpuWritten)
+			<< "cycle " << cycle << ": PTIMER reseeded at or behind its last value";
 		ASSERT_GE(t.ptimer, prev)
 			<< "cycle " << cycle << ": PTIMER reseeded behind a time handed out";
 	}
@@ -127,6 +129,9 @@ TEST(Gm20bRail, PtimerFollowsKtimeOnceKtimeIsAhead)
 	EXPECT_EQ(tgm_stamp_monotonic(5, 9), 9u);
 	EXPECT_EQ(tgm_stamp_monotonic(9, 5), 9u);
 	EXPECT_EQ(tgm_stamp_monotonic(7, 7), 7u);
+	EXPECT_EQ(tgm_stamp_reseed(5, 9), 0u);
+	EXPECT_EQ(tgm_stamp_reseed(9, 9), 10u);
+	EXPECT_EQ(tgm_stamp_reseed(9, 5), 10u);
 }
 
 // gpu_bringup.c: tgm_gpu.lock (`gpuLock`, owned by whoever takes it, as lck_mtx is), tgm_gate_lock with the gate's two events, and

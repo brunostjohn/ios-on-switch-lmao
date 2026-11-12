@@ -3,11 +3,13 @@
 // of the GM20B and names each push for the push profile (gpu_fenced.h "push profile"). Plain C++ with no kernel dependency, so
 // the host test (test/gm20b_push_scan_test.cpp) runs the same code over NVK's streams.
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's
-// subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 10 SET_ANTI_ALIAS,
-// 11..16 the draws); method numbers from Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h.
+// subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros at the slots both drivers load them at
+// (SwitchGM20BMacroSlots.h: NVK's clear and anti-alias, and the draws, NVK's and the raw path's); method numbers from
+// Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h.
 #pragma once
 #include <stdint.h>
 #include "TegraGM20BGpu.h"
+#include "../../kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h"
 
 namespace tgm_scan
 {
@@ -102,21 +104,26 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			if (mthd == 0x0814)
 				p.rtPitch = pitch;
 		} else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
+			static_assert((0x3c00 - 0x3800) / 8 == SWITCH_GM20B_MACRO_SLOTS,
+				      "a call per slot");
 			const uint32_t j = (mthd - 0x3800) / 8;
-			if (j == 10) {
+			const bool draw = j >= SWITCH_GM20B_MACRO_DRAWS_FIRST &&
+					  j <= SWITCH_GM20B_MACRO_DRAWS_LAST;
+			if (j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS) {
 				const uint32_t mask = data >> 16;
 				p.antiAlias = (p.antiAlias & ~mask) | (data & mask);
 				p.shadingKnown = p.shadingKnown || ((mask & 0xf) != 0u);
 			}
-			c.draws += static_cast<uint64_t>(j >= 11 && j <= 16);
-			c.sampleDraws += static_cast<uint64_t>(
-				j >= 11 && j <= 16 && p.shadingKnown && shadingPassesLog2(p) != 0u);
-			c.clears += static_cast<uint64_t>(j == 2);
+			c.draws += static_cast<uint64_t>(draw);
+			c.sampleDraws += static_cast<uint64_t>(draw && p.shadingKnown &&
+							       shadingPassesLog2(p) != 0u);
+			c.clears += static_cast<uint64_t>(j == SWITCH_GM20B_MACRO_NVK_CLEAR);
 			// SET_ANTI_ALIAS (once per vkCmdBeginRendering), its argument the macro's data: a sample count
 			// (log2 in bits 7:4, under mask 0xf0 in bits 23:16) above one
 			c.msaaPasses += static_cast<uint64_t>(
-				j == 10 && ((data & 0x00f00000) != 0u) && (data & 0xf0) != 0u);
-			if (j == 10 && (data & 0x00f00000))
+				j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS &&
+				((data & 0x00f00000) != 0u) && (data & 0xf0) != 0u);
+			if (j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS && (data & 0x00f00000))
 				p.msaa = ((data & 0xf0) != 0u);
 		}
 		break;

@@ -101,7 +101,7 @@ protected:
         } else {
             cb->abandon();
         }
-        // a command buffer's interlocked draws reach the device's counts at its commit
+        // a command buffer's per-draw counts reach the device's at its commit (CommandBuffer::foldCounts)
         d.interlocked = k.interlocked - interlocked;
         d.split = k.sequential - split;
         d.triangles = k.sequentialTriangles - triangles;
@@ -152,9 +152,9 @@ TEST_F(DeviceFetch, TheStorageFormDrawsEveryTopologyWholeInsideTheInterlock)
     ASSERT_EQ(pl->fetchBits & 1, 1);
     const uint32_t args[5] = {9, 1, 0, 0, 0};
     memcpy(static_cast<uint8_t *>(arguments.cpu) + 16, args, sizeof args);
-    for (const auto &[name, drawn] : {std::pair{"strip", strip(pl)}, std::pair{"restart", restart(pl)},
-                                      std::pair{"instanced", instanced(pl)}, std::pair{"indirect", indirect(pl)},
-                                      std::pair{"indexed indirect", indexedIndirect(pl)}}) {
+    for (const auto &[name, drawn] :
+         {std::pair{"strip", strip(pl)}, std::pair{"restart", restart(pl)}, std::pair{"instanced", instanced(pl)},
+          std::pair{"indirect", indirect(pl)}, std::pair{"indexed indirect", indexedIndirect(pl)}}) {
         EXPECT_TRUE(drawn.ok) << name << ": " << drawn.why;
         EXPECT_EQ(drawn.draws, 1u) << name;
         EXPECT_EQ(drawn.interlocked, 1u) << name;

@@ -135,8 +135,9 @@ TEST_F(BenchRecords, ATemplateIsTakenByItsKeyOnlyWhenPlain)
 
 TEST_F(BenchRecords, FirstColourOnlyDropsTheOtherColours)
 {
-    EXPECT_EQ(bench::withoutOtherColours("samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31"),
-              "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 a0=31");
+    EXPECT_EQ(
+        bench::withoutOtherColours("samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31"),
+        "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 a0=31");
     EXPECT_EQ(bench::withoutOtherColours("c0=80:15:0 c1=115:0:0 c2=55:0:0"), "c0=80:15:0");
     raw::RuntimeRecord r;
     std::string why;

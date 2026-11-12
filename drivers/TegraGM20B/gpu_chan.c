@@ -281,8 +281,8 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	/* nouveau_fence_context_new(): the fence's nonstall interrupt (uchan.c NVIF_CHAN_EVENT_V0_NON_STALL_INTR); its
 	 * allow sets PFIFO_INTR_EN_0 bit 31 (gf100_fifo_nonstall_allow). Without it, fences are still seen by polling. */
 	host->type = NVIF_CHAN_EVENT_V0_NON_STALL_INTR;
-	ret = nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall,
-                              true, &kargs.ev, sizeof(kargs), &chan->nonstall);
+	ret = nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall, true,
+			      &kargs.ev, sizeof(kargs), &chan->nonstall);
 	if (ret)
 		goto fail;
 	ret = nvif_chan906f_ctor(&chan->chan, chan->user.map.ptr,
@@ -458,6 +458,7 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 		__atomic_store_n(&tgm_fence_pages.refs[i], 1, __ATOMIC_RELEASE);
 		tgm_fence_pages.next = i + 1;
 		memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
+		tgm_clock_anchors_fill(i);
 		*va = (volatile uint32_t *)((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT);
 		*pa = tgm_fence_pages.pa + i * TGM_FENCE_SLOT;
 		ret = 0;
@@ -491,12 +492,13 @@ void switch_gpu_fence_put(const volatile uint32_t *va)
 
 uint64_t switch_gpu_chan_identity(struct tgm_chan *chan)
 {
-    return chan->id;
+	return chan->id;
 }
 
-void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno, struct switch_gpu_backing_token *token)
+void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno,
+			   struct switch_gpu_backing_token *token)
 {
-    switch_gpu_timeline_token(chan->timeline, seqno, token);
+	switch_gpu_timeline_token(chan->timeline, seqno, token);
 }
 
 void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token)
@@ -504,7 +506,8 @@ void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing
 	switch_gpu_timeline_token(chan->timeline, chan->submitted + 1, token);
 }
 
-void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences, struct switch_gpu_backing_token *token)
+void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences,
+			       struct switch_gpu_backing_token *token)
 {
 	switch_gpu_timeline_token(chan->timeline, chan->submitted + fences + 1, token);
 }

@@ -15,7 +15,15 @@ HEAD = struct.Struct('<QIIBb')
 ENTRY = struct.Struct('<HBBI')
 ENTRIES = packfile.KERNEL_ENTRIES
 COUNTS = struct.Struct('<HQI')  # setBytes, readOnlyEntries, pushMask
-KERNEL_BYTES = HEAD.size + 64 * 4 + COUNTS.size + 32 * 4 + ENTRIES * ENTRY.size + packfile.KERNEL_V20.size
+KERNEL_BYTES = (
+    HEAD.size
+    + 64 * 4
+    + COUNTS.size
+    + 32 * 4
+    + ENTRIES * ENTRY.size
+    + packfile.KERNEL_V20.size
+    + packfile.KERNEL_V21.size
+)
 
 
 def entry(fields: tuple[int, int, int, int], headers: list[list[int]], constexpr_tsc: list[list[int]]) -> dict:
@@ -49,6 +57,9 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
     root, status, arrays, _, slots, heap_bytes, *pairs = packfile.KERNEL_V20.unpack_from(k, at + ENTRIES * ENTRY.size)
     pairs, (spill_entry, spill_words, _, _) = pairs[:16], pairs[16:]
+    stage_in_region, stage_in_strides = packfile.KERNEL_V21.unpack_from(
+        k, at + ENTRIES * ENTRY.size + packfile.KERNEL_V20.size
+    )
     return {
         'root_table_word': root,
         'status_word': status,
@@ -64,6 +75,8 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
         'qmd': qmd,
         'push': {w: words[w] for w in range(32) if mask >> w & 1},
         'entries': entries,
+        'stage_in_region': stage_in_region,
+        'stage_in_strides': stage_in_strides,
         'prog': rec['program'],
     }
 

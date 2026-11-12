@@ -41,6 +41,16 @@ struct RMPlanDraw {
     void *arguments = nullptr;
     uint64_t argumentOffset = 0;
     uint8_t primitive = 0, indexType = 0;
+    uint32_t patches = raw::kNoSnapshot;  // a patch draw's RMPlanPatches
+};
+
+// A patch draw's (OpDrawPatches, OpDrawPatchesIndirect): the encoder's factor buffer, offset, instance stride and scale, its
+// control points, and its control-point index buffer (its patch index buffer is the draw's `indices`)
+struct RMPlanPatches {
+    void *factors = nullptr, *pointIndices = nullptr;
+    uint64_t factorOffset = 0, pointIndexOffset = 0;
+    uint32_t factorStride = 0, controlPoints = 0;
+    float scale = 1;
 };
 
 struct RMPlanDispatch {
@@ -51,6 +61,7 @@ struct RMPlanDispatch {
     size_t encoderBegin = 0;
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};
+    std::array<uint32_t, 6> stageIn{};  // setStageInRegion:'s origin and size
     bool perThread = false;
     raw::ComputeDispatch regions;
 };
@@ -76,12 +87,28 @@ struct RMPlanOperation {
     uint32_t uses = 0;
 };
 
-enum class RMPlanError : uint8_t { None, NestedEncoder, EventInsideEncoder, UnclosedEncoder };
+enum class RMPlanError : uint8_t {
+    None,
+    NestedEncoder,
+    EventInsideEncoder,
+    UnclosedEncoder
+};
 
-enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Heap, Count };
+enum class RMResourceKind : uint8_t {
+    Other,
+    Buffer,
+    Texture,
+    Sampler,
+    Heap,
+    Count
+};
 
 struct RMResourceFacts {
-    enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };
+    enum Role : uint8_t {
+        Converted = 1,
+        PlanarTarget = 2
+    };
+
     void *cpuBuffer = nullptr;
     RMResourceKind kind = RMResourceKind::Other;
     uint8_t roles = 0;
@@ -105,6 +132,7 @@ class RMCommandPlan {
     std::vector<RMPlanRasterGroup> rasterGroups_;
     uint32_t lastRasterGroup_ = raw::kNoSnapshot;
     std::vector<RMPlanDispatch> dispatches_;
+    std::vector<RMPlanPatches> patches_;
     std::vector<RMPlanTransfer> transfers_;
     std::vector<RMPlanControl> controls_;
     std::vector<RMPlanEvent> events_;
@@ -119,6 +147,7 @@ class RMCommandPlan {
     Op encoder_ = OpEnd;
     RMPlanError recordingError_ = RMPlanError::None;
     size_t encoderBegin_ = 0;
+
     struct Range {
         size_t from = 0, to = 0;
         uint32_t uses = 0;
@@ -128,6 +157,7 @@ class RMCommandPlan {
         std::array<uint32_t, size_t(RMResourceKind::Count) + 1> first{};
         void *planarFeedback = nullptr;
     };
+
     // the ranges prepared, the first rangeCount_ of them live: a cleared plan keeps them, their lists' capacity too, for
     // the next command buffer's
     std::deque<Range> ranges_;
@@ -164,6 +194,7 @@ public:
     raw::StateSnapshots<raw::KernelState> kernel;
     std::vector<raw::RenderStateRef> renderStates;
     std::vector<raw::KernelStateRef> kernelStates;
+    std::vector<uint64_t> viewArrays;  // raw::RasterState's viewport and scissor arrays
 
     bool record(const Cmd &c, const std::vector<uint64_t> &extra);
 
@@ -208,8 +239,9 @@ public:
 
     RMPlanError recordingError() const
     {
-        return recordingError_ != RMPlanError::None ? recordingError_ :
-            encoder_ != OpEnd ? RMPlanError::UnclosedEncoder : RMPlanError::None;
+        return recordingError_ != RMPlanError::None ? recordingError_
+               : encoder_ != OpEnd                  ? RMPlanError::UnclosedEncoder
+                                                    : RMPlanError::None;
     }
 
     const RMPlanBegin &begin(size_t at) const
@@ -225,6 +257,11 @@ public:
     const RMPlanDraw &draw(size_t at) const
     {
         return draws_[operations_[at].payload];
+    }
+
+    const RMPlanPatches &patches(size_t at) const
+    {
+        return patches_[draw(at).patches];
     }
 
     template <typename F> void forEachRasterGroup(size_t begin, F visit) const
@@ -273,11 +310,14 @@ public:
     }
 
     void registerResource(void *object, RMResourceFacts facts);
+
     const RMResourceFacts *factsOf(void *object) const
     {
         return resourceFacts_.find(object);
     }
+
     void *nativeRangeRefusal(size_t from, size_t to) const;
+
     template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
     {
         const auto &range = rangeAt(from, to);

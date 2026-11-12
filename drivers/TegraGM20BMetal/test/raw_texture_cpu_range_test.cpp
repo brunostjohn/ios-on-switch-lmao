@@ -10,7 +10,7 @@ using raw::TextureCpuRegion;
 
 raw::TextureCpuShape shape(uint32_t w, uint32_t h, uint8_t bpp)
 {
-    return {w, h, 1, 1, w * bpp, 0, 0, bpp, 0, false, false, nullptr, nullptr};
+    return {w, h, 1, 1, w * bpp, 0, 0, bpp, 0, false, false, nullptr, nullptr, 0};
 }
 
 // Enumerate the memory's block/GOB/16-byte-line order, then map each logical byte back to that sequence.
@@ -138,6 +138,22 @@ TEST(TextureCpuRange, MipsAndLayersDoNotAcquireTheWholeParentImage)
         const uint64_t origin[] = {15, 7, 0}, size[] = {3, 3, 1};
         compare(s, layout, 0, slice, map, origin, size);
     }
+}
+
+TEST(TextureCpuRange, AViewOfAMipmappedArraysLevelZeroStridesByTheChain)
+{
+    auto s = shape(64, 64, 4);
+    s.tiled = true;
+    s.layers = 3;
+    raw::fx::MipChain chain, one;
+    ASSERT_TRUE(raw::fx::arrayLayout(64, 64, 3, 4, 4, chain));
+    ASSERT_TRUE(raw::fx::arrayLayout(64, 64, 3, 1, 4, one));
+    ASSERT_NE(chain.arrayStride, one.arrayStride);
+    s.layerBytes = chain.arrayStride;
+    const uint64_t origin[] = {0, 0, 0}, size[] = {1, 1, 1};
+    raw::TextureCpuRange range;
+    ASSERT_EQ(raw::textureCpuRange(s, origin, size, 0, 2, range), TextureCpuRegion::Native);
+    EXPECT_EQ(range.offset, 2 * chain.arrayStride);
 }
 
 TEST(TextureCpuRange, CroppedViewUsesOwningImportLayoutWithItsOriginalCoordinates)

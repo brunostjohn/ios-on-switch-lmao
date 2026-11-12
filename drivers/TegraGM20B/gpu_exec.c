@@ -91,11 +91,11 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
 	if (external && chan->visible_cpu) {
-		PUSH_MTHD(push, NV906F, SEMAPHOREA, upper_32_bits(chan->visible_gpu),
-			  SEMAPHOREB, lower_32_bits(chan->visible_gpu), SEMAPHOREC, next, SEMAPHORED,
+		PUSH_MTHD(push, NV906F, SEMAPHOREA, upper_32_bits(chan->visible_gpu), SEMAPHOREB,
+			  lower_32_bits(chan->visible_gpu), SEMAPHOREC, next, SEMAPHORED,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
-			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
-			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
+				  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
+				  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	}
 	PUSH_MTHD(push, NV906F, SEMAPHOREA,
 		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(chan->fence_gpu)),
@@ -121,10 +121,10 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);
 	if (stats_on())
 		__atomic_fetch_add(&tgm_wstat.jobs, 1, __ATOMIC_RELAXED);
-    if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
-        nvxnu_panic("SwitchGpu: cannot arm channel completion");
-    WRITE_ONCE(chan->submitted, next);
-    idle_kicked(first, next);
+	if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
+		nvxnu_panic("SwitchGpu: cannot arm channel completion");
+	WRITE_ONCE(chan->submitted, next);
+	idle_kicked(first, next);
 	switch_emc_gpu_submit();
 	chan->chan.defer_kick = false;
 	PUSH_KICK(push);
@@ -145,20 +145,20 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	return next;
 }
 
-void switch_gpu_chan_semantic_visibility(struct tgm_chan *chan, volatile struct TegraGM20BAbiFenceSemantic *state)
+void switch_gpu_chan_semantic_visibility(struct tgm_chan *chan,
+					 volatile struct TegraGM20BAbiFenceSemantic *state)
 {
-    switch_gpu_timeline_semantic_visibility(chan->timeline, state);
+	switch_gpu_timeline_semantic_visibility(chan->timeline, state);
 }
 
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
-		uint64_t visible_gpu)
+				uint64_t visible_gpu)
 {
 	*visible_cpu = chan->submitted;
 	chan->visible_cpu = visible_cpu;
 	chan->visible_gpu = visible_gpu;
 	switch_gpu_timeline_visibility(chan->timeline, visible_cpu);
 }
-
 
 __attribute__((weak)) void switch_sched_render_submitted(void)
 {
@@ -231,15 +231,18 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
 			va = chan->vm->fences_va +
 			     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
 			if (emit) {
-				PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
-					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC, (u32)token->value,
-					SEMAPHORED, NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-					NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+				PUSH_MTHD(
+					&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
+					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
+					(u32)token->value, SEMAPHORED,
+					NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+						NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 				if (chan->high)
 					tgm_hold_need(tgm_gpu.device, source->chid);
 			}
 			mutex_unlock(&tgm_live_lock);
-		} else if (token->engine == SWITCH_GPU_ENGINE_VIC || token->engine == SWITCH_GPU_ENGINE_NVDEC ||
+		} else if (token->engine == SWITCH_GPU_ENGINE_VIC ||
+			   token->engine == SWITCH_GPU_ENGINE_NVDEC ||
 			   token->engine == SWITCH_GPU_ENGINE_DISPLAY) {
 			u32 words[TGM_SYNCPT_WAIT_DWORDS];
 			u32 n;
@@ -262,7 +265,7 @@ struct chan_job {
 	struct tgm_chan *chan;
 	const struct tgm_push *pushes;
 	const struct tgm_prof *prof;
-	u32 first; /* the GPFIFO entry the current batch starts at, for the hang log */
+	u32 first;        /* the GPFIFO entry the current batch starts at, for the hang log */
 	int unprefetched; /* the first push follows the L2 and TLB maintenance */
 };
 
@@ -277,7 +280,8 @@ static inline __attribute__((always_inline)) void chan_job_entry(void *context, 
 	nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 			      pushes[i].no_prefetch || (job->unprefetched && !i));
 	if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {
-		push_stamp(&chan->chan.push, chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
+		push_stamp(&chan->chan.push,
+			   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
 			   chan->submitted + 1);
 		PUSH_KICK(&chan->chan.push);
 	}
@@ -294,7 +298,8 @@ static void chan_job_fence(void *context, u32 seqno)
 
 	tgm_hang_log_submit(&chan->hang, seqno, job->first, chan->chan.gpfifo.cur);
 	if (stats_on())
-		push_stamp(push, chan_stamps_va(chan, seqno) + offsetof(struct tgm_stamps, end), seqno);
+		push_stamp(push, chan_stamps_va(chan, seqno) + offsetof(struct tgm_stamps, end),
+			   seqno);
 	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
 	PUSH_MTHD(push, NV906F, SEMAPHOREA,
@@ -335,8 +340,8 @@ static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *p
 
 /* SubmitJob's acquires on the latest set job of the connection's other channels, in the same entry as the dependencies:
  * a sibling shares the waiter's address space, so its fence_gpu is that word's VA here. */
-static inline __attribute__((always_inline)) void chan_sibling_waits(struct tgm_chan *chan,
-	const struct switch_gpu_sibling_wait *siblings, u32 count)
+static inline __attribute__((always_inline)) void
+chan_sibling_waits(struct tgm_chan *chan, const struct switch_gpu_sibling_wait *siblings, u32 count)
 {
 	u32 i;
 
@@ -345,9 +350,10 @@ static inline __attribute__((always_inline)) void chan_sibling_waits(struct tgm_
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
 		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(source->fence_gpu),
-			  SEMAPHOREB, lower_32_bits(source->fence_gpu), SEMAPHOREC, siblings[i].seqno,
-			  SEMAPHORED, NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-			  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+			  SEMAPHOREB, lower_32_bits(source->fence_gpu), SEMAPHOREC,
+			  siblings[i].seqno, SEMAPHORED,
+			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 		if (chan->high)
 			tgm_hold_need(tgm_gpu.device, source->chid);
@@ -355,10 +361,12 @@ static inline __attribute__((always_inline)) void chan_sibling_waits(struct tgm_
 }
 
 /* chan_exec and SubmitJob's switch_gpu_chan_exec_job: one body, inlined into each, so chan_exec keeps its code. */
-static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan *chan,
-	const struct tgm_push *pushes, uint32_t count, uint32_t *seqno, const struct tgm_prof *prof,
-	const struct switch_gpu_backing_token *dependencies, u32 dependency_count, int may_wait, u32 visibility,
-	const struct switch_gpu_sibling_wait *siblings, u32 sibling_count)
+static inline __attribute__((always_inline)) int
+chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
+	       uint32_t *seqno, const struct tgm_prof *prof,
+	       const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
+	       int may_wait, u32 visibility, const struct switch_gpu_sibling_wait *siblings,
+	       u32 sibling_count)
 {
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
@@ -377,15 +385,15 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 	u64 bind_va = 0;
 	int bind = 0;
 	int host_written = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
-		(visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+			   (visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
 	int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
-		(visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
+		       (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
 
 	if (chan->error)
 		return -EIO;
 	for (i = 0; i < count; ++i)
-		if (pushes[i].reserved || (pushes[i].incomplete &&
-		    (i + 1 == count || !pushes[i + 1].no_prefetch)))
+		if (pushes[i].reserved ||
+		    (pushes[i].incomplete && (i + 1 == count || !pushes[i + 1].no_prefetch)))
 			return -EINVAL;
 	ret = switch_gpu_job_fences(pushes, count, &fences);
 	if (ret)
@@ -417,8 +425,8 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 		if (ps && (s32)(tgm_chan_completed(chan) - ps) > CHAN_NSTAMPS)
 			WRITE_ONCE(chan->prof_seqno, 0);
 	}
-	chan_submission_room(chan, pushes, count, dependency_count + sibling_count, fences, &prof, &entries,
-			     &words);
+	chan_submission_room(chan, pushes, count, dependency_count + sibling_count, fences, &prof,
+			     &entries, &words);
 	if (!may_wait && !chan_room(chan, entries, words))
 		return -EAGAIN;
 	ret = may_wait ? tgm_chan_wait_ready(chan, entries, words) : 0;
@@ -517,8 +525,10 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 	job.first = chan->chan.gpfifo.cur;
 	job.unprefetched = (l2_on() && host_written) || tlb;
 	if (stats_on()) {
-		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].last, chan->submitted + 1 + fences);
-		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].first, chan->submitted + 1);
+		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].last,
+			   chan->submitted + 1 + fences);
+		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].first,
+			   chan->submitted + 1);
 	}
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
@@ -533,10 +543,11 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 		     uint32_t *seqno, const struct tgm_prof *prof,
-		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count, int may_wait, u32 visibility)
+		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
+		     int may_wait, u32 visibility)
 {
-	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count, may_wait, visibility,
-			      NULL, 0);
+	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count,
+			      may_wait, visibility, NULL, 0);
 }
 
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
@@ -563,7 +574,8 @@ void switch_gpu_chan_submit_leave(void)
 }
 
 int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm_push *pushes,
-	u32 count, u32 dependency_count, const struct tgm_prof *prof)
+					 u32 count, u32 dependency_count,
+					 const struct tgm_prof *prof)
 {
 	u32 fences = 0;
 	u32 entries = 0;
@@ -573,32 +585,37 @@ int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm
 		return -E2BIG;
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return -EINVAL;
-	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);
+	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries,
+			     &words);
 	ret = tgm_chan_wait_ready(chan, entries, words);
 	if (ret == -ETIMEDOUT && tgm_gpu.stage >= 3)
-		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
+		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
+				 NSEC_PER_SEC);
 	return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
 }
 
 int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
-	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
-	uint32_t *seqno, const struct tgm_prof *prof)
+			 const struct switch_gpu_backing_token *dependencies,
+			 uint32_t dependency_count, uint32_t *seqno, const struct tgm_prof *prof)
 {
 	return chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0, 0);
 }
 
-int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *pushes,
-	u32 count, const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
-	u32 *seqno, const struct tgm_prof *prof, u32 visibility)
+int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *pushes, u32 count,
+				    const struct switch_gpu_backing_token *dependencies,
+				    u32 dependency_count, u32 *seqno, const struct tgm_prof *prof,
+				    u32 visibility)
 {
-	return chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0, visibility);
+	return chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0,
+			 visibility);
 }
 
 int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *pushes, u32 count,
-	const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
-	const struct switch_gpu_sibling_wait *siblings, u32 sibling_count, u32 *seqno, const struct tgm_prof *prof,
-	u32 visibility)
+			     const struct switch_gpu_backing_token *dependencies,
+			     u32 dependency_count, const struct switch_gpu_sibling_wait *siblings,
+			     u32 sibling_count, u32 *seqno, const struct tgm_prof *prof,
+			     u32 visibility)
 {
-	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0, visibility,
-			      siblings, sibling_count);
+	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0,
+			      visibility, siblings, sibling_count);
 }

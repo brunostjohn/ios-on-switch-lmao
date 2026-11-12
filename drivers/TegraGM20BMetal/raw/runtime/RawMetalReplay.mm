@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalIndirect.h"
@@ -183,6 +184,8 @@ static void replayInvocation(NSInvocation *inv, id target)
 // nothing encoded and the command buffer's error set, where an attachment of one of its passes has no twin.
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
+    if (rmRefuseM2vRange(cb, from, to))
+        return nil;
     if (void *missing = missingAttachmentTwin(cb, from, to)) {
         failMissingTwin(cb, (__bridge id)missing);
         return nil;
@@ -195,6 +198,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
         failRawArguments(cb, arguments);
         return nil;
     }
+    rmCounterMarksDropped(cb, from, to);
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::SlotStart);
@@ -287,6 +291,8 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             const auto &dispatch = cb->_plan.dispatch(at);
             const MTLSize grid = MTLSizeMake(dispatch.grid[0], dispatch.grid[1], dispatch.grid[2]);
             const MTLSize threads = MTLSizeMake(dispatch.threads[0], dispatch.threads[1], dispatch.threads[2]);
+            const auto &in = dispatch.stageIn;
+            [enc setStageInRegion:MTLRegionMake3D(in[0], in[1], in[2], in[3], in[4], in[5])];
             if (dispatch.perThread)
                 [enc dispatchThreads:grid threadsPerThreadgroup:threads];
             else
@@ -507,6 +513,14 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                     if (buffer)
                         buffers.insert(buffer);
             replayCommands(enc, cb->_plan.draw(at), use);
+            break;
+        case OpDrawPatches:
+        case OpDrawPatchesIndirect:
+            for (auto &stage : bound)
+                for (RMBuffer *buffer : stage)
+                    if (buffer)
+                        buffers.insert(buffer);
+            replayPatches(enc, cb->_plan.draw(at), cb->_plan.patches(at), c.op == OpDrawPatchesIndirect, use);
             break;
         case OpResetCommands:
         case OpCopyCommands:

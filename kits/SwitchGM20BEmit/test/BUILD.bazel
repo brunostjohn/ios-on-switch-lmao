@@ -1,6 +1,7 @@
 # kits/SwitchGM20BEmit on the host: its words against the drivers' emitters for the same inputs.
 #
 #   bazel test //kits/SwitchGM20BEmit/test:all
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 load("//kernel/rules:kernel.bzl", "kernel_driver")
@@ -177,6 +178,19 @@ host_test(
     deps = ["//kits/SwitchGM20BEmit:context_h"],
 )
 
+host_test(
+    name = "emit_amplify_test",
+    srcs = [
+        "emit_amplify_test.cpp",
+    ] + MESA_MME_HEADERS,
+    copts = MESA_MME_COPTS,
+    deps = [
+        ":mesa_mme_sim",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
 # The kit compiled by the kernel toolchain, C and C++: never linked, built so the kernel's headers and flags keep taking it.
 kernel_driver(
     name = "SwitchGM20BEmitKernelCheck",
@@ -191,4 +205,14 @@ kernel_driver(
         "kits/SwitchGM20BEmit",
     ],
     tags = ["no-lint"],
+)
+
+# kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h's NVK slots against the order NVK loads its macros in (nvk_mme.h)
+py_test(
+    name = "macro_slots_test",
+    srcs = ["macro_slots_test.py"],
+    data = [
+        "//kits/SwitchGM20BEmit:SwitchGM20BMacroSlots.h",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_mme.h",
+    ],
 )

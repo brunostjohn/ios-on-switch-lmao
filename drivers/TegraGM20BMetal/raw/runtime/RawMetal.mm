@@ -314,6 +314,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         free(methods);
     }
     installDeviceAnswers(cls);
+    installSharedTextureMethods(cls);
     objc_registerClassPair(cls);
     // Each facade class conforms to its Metal protocol, as the m2v objects it stands in for do (the frontend's adoptMetalProtocols).
     const std::pair<Class, Protocol *> classes[] = {

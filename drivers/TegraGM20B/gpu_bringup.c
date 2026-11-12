@@ -172,6 +172,8 @@ static int m1(char *line, unsigned int len)
 	ret = nvkm_subdev_init(device->privring);
 	if (!ret)
 		ret = nvkm_subdev_init(&device->timer->subdev);
+	if (!ret)
+		tgm_clock_anchor_publish(device);
 	start = nvkm_rd32(device,
 			  0x120050); /* PRI_RINGMASTER_START_RESULTS, bit 0 = connectivity pass */
 	fbps = nvkm_rd32(device, 0x120074); /* PRI_RINGMASTER_ENUM_FBP */

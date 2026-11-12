@@ -7,11 +7,13 @@
 #include "raw_compute_key.h"
 #include "raw_compute_lookup.h"
 #import "RawMetalComputeState.h"
+#import "RawMetalCounters.h"
+#include "TegraGM20BClockABI.h"
+#import "RawMetalIndirectCompute.h"
 #include "raw_view.h"
 #include "raw_surface_view.h"
 
 using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
-using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @interface RMComputeEncoder () {
     RMComputeState *_state;
@@ -221,35 +223,35 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
                         if (_samplers[slot])
                             ask->sampler(slot, _samplers[slot]->_descriptor);
                     RMComputeState *state = _state;
-                    completion->backgroundKernel([pending, ask, specialization, state, completion, grid, threads,
-                                                  perThread, region] {
-                        RMKernelJob::Run run{pending};
-                        const auto text = specialization.text();
-                        const auto key =
-                            raw::computeKey(state->_air, state->_constants, state->_maxThreads, state->_multipleOfWidth,
-                                            specialization.threads.data(), text.memory, text.textures, text.samplers,
-                                            specialization.regionMode);
-                        run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
-                        if (run.result.state) {
-                            run.result.retry = false;
-                            return;
-                        }
-                        uint64_t retryAtUs = 0;
-                        run.result.state = completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry,
-                                                              &retryAtUs);
-                        if (run.result.retry && retryAtUs) {
-                            run.result.deferredRetry = true;
-                            const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
-                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
-                                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                                pending->allowRetry();
-                            });
-                        }
-                        if (run.result.state && !region)
-                            native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
-                                                                 text.memory.c_str(), text.textures.c_str(),
-                                                                 text.samplers.c_str());
-                    });
+                    completion->backgroundKernel(
+                        [pending, ask, specialization, state, completion, grid, threads, perThread, region] {
+                            RMKernelJob::Run run{pending};
+                            const auto text = specialization.text();
+                            const auto key =
+                                raw::computeKey(state->_air, state->_constants, state->_maxThreads,
+                                                state->_multipleOfWidth, specialization.threads.data(), text.memory,
+                                                text.textures, text.samplers, specialization.regionMode);
+                            run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
+                            if (run.result.state) {
+                                run.result.retry = false;
+                                return;
+                            }
+                            uint64_t retryAtUs = 0;
+                            run.result.state =
+                                completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry, &retryAtUs);
+                            if (run.result.retry && retryAtUs) {
+                                run.result.deferredRetry = true;
+                                const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
+                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
+                                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                                   pending->allowRetry();
+                                               });
+                            }
+                            if (run.result.state && !region)
+                                native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
+                                                                     text.memory.c_str(), text.textures.c_str(),
+                                                                     text.samplers.c_str());
+                        });
                 });
             }
             _shape = dispatch;
@@ -265,8 +267,9 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
     Cmd m = cmd(OpDispatch, 3, perThread);
     m.c = uint64_t(t[0]) | uint64_t(t[1]) << 16 | uint64_t(t[2]) << 32;
     m.x = _cb->_extra.size();
-    for (uint64_t v :
-         {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1], groups[2]})
+    for (uint64_t v : {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1],
+                       groups[2], uint64_t(_stageIn.origin.x), uint64_t(_stageIn.origin.y), uint64_t(_stageIn.origin.z),
+                       uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth)})
         _cb->_extra.push_back(v);
     if (kernels) {
         _cb->_computeJobs.try_emplace(kernels.get(), kernels);
@@ -290,9 +293,24 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @end
 
+@implementation RMComputeEncoder (State)
+
+- (RMComputeState *)rmState
+{
+    return _state;
+}
+
+@end
+
 bool isKernelCommand(Op op)
 {
-    return op >= OpKernelState && op <= OpDispatch;
+    return (op >= OpKernelState && op <= OpDispatch) || op == OpExecuteKernels;
+}
+
+// A binding command's attributeStride (RawMetalStrides.mm: its x the stride + 1, 0 none)
+static uint32_t commandStride(const Cmd &c)
+{
+    return c.x && c.x <= UINT32_MAX ? uint32_t(c.x - 1) : UINT32_MAX;
 }
 
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers)
@@ -304,16 +322,30 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         [e setComputePipelineState:twinOf(object)];
         break;
     case OpKernelBytes:
-        [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
+        if (c.x)
+            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
         break;
     case OpKernelBuffer:
         if ([object isKindOfClass:[RMBuffer class]])
             buffers.insert((RMBuffer *)object);
-        [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
+        if (c.x)
+            [e setBuffer:twinOf(object) offset:c.c attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
         break;
     case OpKernelBufferOffset:
-        [e setBufferOffset:c.c atIndex:c.index];
+        if (c.x)
+            [e setBufferOffset:c.c attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBufferOffset:c.c atIndex:c.index];
         break;
+    case OpKernelClockAnchors: {
+        const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
+        [e setBytes:&anchors length:sizeof anchors atIndex:c.index];
+        break;
+    }
     case OpKernelTexture:
         [e setTexture:twinOf(object) atIndex:c.index];
         break;
@@ -335,12 +367,17 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpDispatch: {
         const MTLSize grid = MTLSizeMake(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2)),
                       threads = MTLSizeMake(c.c & 0xffff, (c.c >> 16) & 0xffff, c.c >> 32);
+        [e setStageInRegion:MTLRegionMake3D(extra(cb, c.x + 6), extra(cb, c.x + 7), extra(cb, c.x + 8),
+                                            extra(cb, c.x + 9), extra(cb, c.x + 10), extra(cb, c.x + 11))];
         if (c.index)
             [e dispatchThreads:grid threadsPerThreadgroup:threads];
         else
             [e dispatchThreadgroups:grid threadsPerThreadgroup:threads];
         break;
     }
+    case OpExecuteKernels:
+        replayKernelCommands(e, (__bridge RMKernelExecute *)c.obj, buffers);
+        break;
     default:
         break;
     }
@@ -349,6 +386,8 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why)
 {
     id object = (__bridge id)c.obj;
+    if (c.op == OpKernelBytes || c.op == OpKernelBuffer || c.op == OpKernelBufferOffset)
+        e.setBufferStride(c.index, commandStride(c));
     switch (c.op) {
     case OpKernelBytes: {
         const raw::Buffer &k = cb->_bytes.chunks[c.c];
@@ -364,6 +403,9 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
     }
     case OpKernelBufferOffset:
         e.setBufferOffset(c.index, c.c);
+        break;
+    case OpKernelClockAnchors:
+        e.setBytesAt(c.index, c.c, c.b);
         break;
     case OpKernelTexture: {
         RMTexture *t = (RMTexture *)object;
@@ -381,8 +423,13 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
                                     uint32_t(extra(cb, c.x + 5))},
                        threads[3] = {uint32_t(c.c & 0xffff), uint32_t(c.c >> 16) & 0xffff, uint32_t(c.c >> 32)};
         e.setState(static_cast<const raw::ComputeState *>(c.obj2));
+        e.setStageInRegion({uint32_t(extra(cb, c.x + 6)), uint32_t(extra(cb, c.x + 7)), uint32_t(extra(cb, c.x + 8)),
+                            uint32_t(extra(cb, c.x + 9)), uint32_t(extra(cb, c.x + 10)),
+                            uint32_t(extra(cb, c.x + 11))});
         return e.dispatch(groups, threads, why);
     }
+    case OpExecuteKernels:
+        return encodeKernelCommands(e, rc, (RMKernelExecute *)object, why);
     default:  // the state and threadgroup memory are the dispatch's kernel's; residency is every buffer's already
         break;
     }

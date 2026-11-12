@@ -205,7 +205,7 @@ TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
     draw(plan);
     Cmd empty = cmd(OpDraw, 3);
     empty.b = 6;
-    plan.record(empty, {}); // zero instances
+    plan.record(empty, {});  // zero instances
     plan.record(cmd(OpDrawIndirect, 3), {});
     plan.record(cmd(OpEnd), {});
     const size_t second = plan.size();
@@ -213,16 +213,22 @@ TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
     draw(plan);
     plan.record(cmd(OpEnd), {});
     std::vector<uint32_t> counts;
-    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{100, 1}));
     counts.clear();
-    plan.forEachRasterGroup(second, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(second, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{1}));
     plan.clear();
     plan.record(cmd(OpRender), {});
     draw(plan);
     counts.clear();
-    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{1}));
 }
 
@@ -301,7 +307,9 @@ TEST(SemanticPlan, RasterAndOffsetChangesReuseResourceIdentity)
     EXPECT_EQ(plan.renderStates.size(), 10000u);
     std::map<void *, uint8_t> uses;
     plan.prepareRange(0, plan.size());
-    plan.forEachUse(0, plan.size(), [&](void *resource, uint8_t access) { uses[resource] = access; });
+    plan.forEachUse(0, plan.size(), [&](void *resource, uint8_t access) {
+        uses[resource] = access;
+    });
     EXPECT_EQ(uses, (std::map<void *, uint8_t>{{object(42), raw::ResourceUse::Read}}));
 }
 
@@ -366,7 +374,7 @@ TEST(SemanticPlan, KernelResourcePlansSurviveOffsetAndDispatchChanges)
         plan.record(binding(OpKernelBufferOffset, 3, 0, 0, i * 16), {});
         Cmd dispatch = cmd(OpDispatch);
         dispatch.c = 1 | uint64_t(1) << 16 | uint64_t(1) << 32;
-        plan.record(dispatch, {i + 1, 1, 1, i + 1, 1, 1});
+        plan.record(dispatch, {i + 1, 1, 1, i + 1, 1, 1, 0, 0, 0, 0, 0, 0});
         plan.setKernelUses(plan.size() - 1, object(90), [&] {
             ++builds;
             return std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
@@ -379,7 +387,9 @@ TEST(SemanticPlan, KernelResourcePlansSurviveOffsetAndDispatchChanges)
     });
     EXPECT_EQ(builds, 2u);
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(plan.size() - 1, plan.size(), [&](void *resource, uint8_t access) { uses[resource] = access; });
+    plan.forEachUse(plan.size() - 1, plan.size(), [&](void *resource, uint8_t access) {
+        uses[resource] = access;
+    });
     EXPECT_EQ(uses[object(42)], raw::ResourceUse::Write);
 }
 
@@ -528,8 +538,8 @@ TEST(SemanticPlan, KernelDispatchHasTypedGridAndSharedState)
     dispatch.a = 1u << 2;
     dispatch.c = 8 | uint64_t(4) << 16 | uint64_t(2) << 32;
     dispatch.obj2 = object(999);
-    plan.record(dispatch, {16, 12, 8, 2, 3, 4});
-    plan.record(dispatch, {24, 12, 8, 3, 3, 4});
+    plan.record(dispatch, {16, 12, 8, 2, 3, 4, 0, 0, 0, 0, 0, 0});
+    plan.record(dispatch, {24, 12, 8, 3, 3, 4, 0, 0, 0, 0, 0, 0});
     ASSERT_EQ(plan.kernelStates.size(), 1u);
     EXPECT_EQ(plan.dispatch(1).groups, (std::array<uint64_t, 3>{2, 3, 4}));
     EXPECT_EQ(plan.dispatch(2).grid, (std::array<uint64_t, 3>{24, 12, 8}));
@@ -557,7 +567,7 @@ TEST(SemanticPlan, CachedRangeSummariesUnionAccessAndExcludeOtherRanges)
     plan.record(binding(OpKernelBuffer, 3, 0, 2), {});
     Cmd dispatch = cmd(OpDispatch);
     dispatch.c = 1 | uint64_t(1) << 16 | uint64_t(1) << 32;
-    plan.record(dispatch, {1, 1, 1, 1, 1, 1});
+    plan.record(dispatch, {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, 3);
     plan.prepareRange(0, plan.size());
@@ -732,12 +742,12 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
     plan.record(binding(OpKernelBuffer, 3, 0, 10), {});
     plan.record(binding(OpKernelTexture, 3, 1, 20), {});
     plan.record(binding(OpKernelTexture, 3, 2, 30), {});
-    const std::vector<uint64_t> dimensions{1, 1, 1, 1, 1, 1};
+    const std::vector<uint64_t> dimensions{1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0};
     unsigned builds = 0;
     auto readSource = [&] {
         ++builds;
         return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-            {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
+                                             {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
     };
     for (unsigned i = 0; i < 10000; ++i) {
         plan.record(cmd(OpDispatch), dimensions);
@@ -750,8 +760,12 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
         return std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Read | raw::ResourceUse::Write}};
     });
     std::map<void *, uint8_t> first, last;
-    plan.forEachUse(1, boundary, [&](void *object, uint8_t access) { first[object] = access; });
-    plan.forEachUse(boundary, plan.size(), [&](void *object, uint8_t access) { last[object] = access; });
+    plan.forEachUse(1, boundary, [&](void *object, uint8_t access) {
+        first[object] = access;
+    });
+    plan.forEachUse(boundary, plan.size(), [&](void *object, uint8_t access) {
+        last[object] = access;
+    });
     ASSERT_EQ(first.size(), 2u);
     EXPECT_EQ(first[object(10)], raw::ResourceUse::Read);
     EXPECT_EQ(first[object(20)], raw::ResourceUse::Read | raw::ResourceUse::Sample);
@@ -763,7 +777,7 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
 TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
 {
     RMCommandPlan plan;
-    const std::vector<uint64_t> dimensions{1, 1, 1, 1, 1, 1};
+    const std::vector<uint64_t> dimensions{1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0};
     plan.record(cmd(OpCompute), {});
     plan.record(binding(OpKernelBuffer, 3, 0, 10, 64), {});
     Cmd pending = cmd(OpDispatch);
@@ -802,7 +816,9 @@ TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
     EXPECT_EQ(plan.dispatch(1).kernel, object(200));
     EXPECT_EQ(plan.dispatch(1).surfaceSlots, 4u);
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(0, boundary, [&](void *object, uint8_t access) { uses[object] = access; });
+    plan.forEachUse(0, boundary, [&](void *object, uint8_t access) {
+        uses[object] = access;
+    });
     EXPECT_EQ(uses[object(10)], raw::ResourceUse::Read);
     EXPECT_EQ(uses[object(20)], raw::ResourceUse::Write);
     plan.clear();
@@ -817,17 +833,19 @@ TEST(SemanticPlan, ComputeAliasesUnionAccessAndExplicitWritesRemainDependencies)
 {
     RMCommandPlan plan;
     plan.record(cmd(OpCompute), {});
-    plan.record(cmd(OpDispatch), {1, 1, 1, 1, 1, 1});
+    plan.record(cmd(OpDispatch), {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
     plan.setKernelUses(1, object(1), [] {
         return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-                                           {object(10), raw::ResourceUse::Write}};
+                                             {object(10), raw::ResourceUse::Write}};
     });
     auto explicitUse = binding(OpKernelUse, 3, 0, 20, 2);
     plan.record(explicitUse, {});
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, plan.size());
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(0, plan.size(), [&](void *object, uint8_t access) { uses[object] = access; });
+    plan.forEachUse(0, plan.size(), [&](void *object, uint8_t access) {
+        uses[object] = access;
+    });
     EXPECT_EQ(uses[object(10)], raw::ResourceUse::Read | raw::ResourceUse::Write);
     EXPECT_EQ(uses[object(20)], raw::ResourceUse::Write | raw::ResourceUse::Explicit);
 }
@@ -928,13 +946,13 @@ TEST(SemanticPlan, NonuniformRegionsKeepOneOriginalReplayOperationAndImmutableGr
     Cmd dispatch = cmd(OpDispatch, 3, 1);
     dispatch.c = 8 | uint64_t(5) << 16 | uint64_t(3) << 32;
     dispatch.obj = object(40);
-    plan.record(dispatch, {19, 11, 7, 3, 3, 3});
+    plan.record(dispatch, {19, 11, 7, 3, 3, 3, 0, 0, 0, 0, 0, 0});
     ASSERT_EQ(plan.size(), 2u);
     ASSERT_EQ(plan.dispatch(1).regions.count, 8);
     EXPECT_EQ(plan.dispatch(1).grid, (std::array<uint64_t, 3>{19, 11, 7}));
     EXPECT_EQ(plan.dispatch(1).threads, (std::array<uint32_t, 3>{8, 5, 3}));
     plan.resolveDispatch(1, object(41), 0);
-    plan.record(dispatch, {3, 2, 1, 1, 1, 1});
+    plan.record(dispatch, {3, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
     EXPECT_EQ(plan.dispatch(1).regions.count, 8);
     EXPECT_EQ(plan.dispatch(2).regions.count, 1);
     EXPECT_EQ(plan.dispatch(1).kernel, object(41));
@@ -952,8 +970,8 @@ struct CallLog {
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &value)
     {
         calls.push_back("b" + std::to_string(stage) + "." + std::to_string(slot) + "=" +
-                        std::to_string(reinterpret_cast<uintptr_t>(value.object)) + "+" +
-                        std::to_string(value.offset) + "/" + std::to_string(int(value.source)));
+                        std::to_string(reinterpret_cast<uintptr_t>(value.object)) + "+" + std::to_string(value.offset) +
+                        "/" + std::to_string(int(value.source)));
     }
 
     void texture(uint32_t stage, uint32_t slot, void *value)

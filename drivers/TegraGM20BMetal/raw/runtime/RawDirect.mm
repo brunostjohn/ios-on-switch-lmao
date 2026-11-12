@@ -101,11 +101,13 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
         cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
-    const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
-                                  textures.fragmentTests};
+    const NmbDirectBinds binds = {cubic.data(),           uint32_t(cubic.size()),
+                                  formats.data(),         uint32_t(formats.size()),
+                                  textures.fragmentTests, textures.bindStride};
+    const bool plain = textures.cubic.empty() && !textures.fragmentTests && !textures.bindStride;
     const char *refused = nullptr;
-    if (!translator_.render(descriptor, barrier, textures.format, textures.samples,
-                            textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made, &a, &refused)) {
+    if (!translator_.render(descriptor, barrier, textures.format, textures.samples, plain ? nullptr : &binds, made, &a,
+                            &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
@@ -135,12 +137,12 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
             attributes.push_back(uint32_t(a.attributeIndex));
     const auto barrierForm = [&](bool twin) {
         const CompileOutcome made = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-        if (made == CompileOutcome::Made) {
-            dropUnreadFetches(out);
-            if (twin || (out.pipeline.flags & PipelineFetches))
-                out.pipeline.flags |= PipelineBarrierForm;
-        }
-        return made;
+        if (made != CompileOutcome::Made)
+            return made;
+        dropUnreadFetches(out);
+        if (twin || (out.pipeline.flags & PipelineFetches))
+            out.pipeline.flags |= PipelineBarrierForm;
+        return strideTwin(descriptor, textures, key, attributes, out, why, split);
     };
     if (requested == PackForm::Barrier)
         return barrierForm(true);
@@ -149,7 +151,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
         const bool storage = out.pipeline.flags & PipelineStorageMetadata;
         dropUnreadFetches(out);
         if (!storage || (out.pipeline.storageMask && loadsSurface(out)))
-            return outcome;
+            return strideTwin(descriptor, textures, key, attributes, out, why, split);
         // its program holds the pixel interlock around no load of a colour: made again without the interlock
         storageRefusal_ = out.pipeline.storageMask ? "storage form: its program loads no colour"
                                                    : "storage form: its program reads and writes no colour";
@@ -159,6 +161,36 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
         return outcome;
     storageRefusal_ = why;
     return barrierForm(false);
+}
+
+// The probe binds every vertex buffer at a stride no fixed-function stream fetches, so m2v's plan asks for its
+// pulled-vertex-buffer variant of every per-bind layout. A twin the translation refuses leaves the state without one:
+// its draws of such a stride are refused (RenderEncoder::drawnWordsRefusal). The twin is made as its record was, and the
+// bound draw kept is the record's.
+CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures,
+                                  const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                                  std::string &why, bool split)
+{
+    if (!bindStrideStreams(out.pipeline))
+        return CompileOutcome::Made;
+    textures.bindStride = kStreamStrideField + 1;
+    auto twin = std::make_shared<RuntimeRecord>();
+    std::string twinWhy;
+    const bool barrier = (out.pipeline.flags & PipelineBarrierForm) || !storageRefusal_.empty();
+    const BoundDraw bound = bound_;
+    const CompileOutcome outcome = form(descriptor, barrier, textures, key, attributes, *twin, twinWhy, nullptr, split);
+    bound_ = bound;
+    if (outcome == CompileOutcome::Failed) {
+        why = "its stride twin: " + twinWhy;
+        return outcome;
+    }
+    if (outcome != CompileOutcome::Made || bindStrideStreams(twin->pipeline))
+        return CompileOutcome::Made;
+    dropUnreadFetches(*twin);
+    twin->pipeline.flags |= out.pipeline.flags & PipelineBarrierForm;
+    twin->pipeline.keyHash = packKeyHash(strideTwinKey(key));
+    out.strideTwin = std::move(twin);
+    return CompileOutcome::Made;
 }
 
 }  // namespace raw

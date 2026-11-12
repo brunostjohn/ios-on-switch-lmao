@@ -101,11 +101,13 @@ bool heapTextureAsk(MTLTextureDescriptor *d, bool blockLinear, raw::TextureAsk &
         ask.kind = raw::TextureAsk::Volume;
         ask.depth = uint32_t(d.depth);
         ask.view2d = volumeRendered(d);
+        ask.levels = uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1));
     } else if (array) {
         const bool cube = array == raw::fx::kTexCube || array == raw::fx::kTexCubeArray;
         ask.kind = raw::TextureAsk::Array;
         ask.type = uint8_t(array);
         ask.layers = uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * (cube ? 6 : 1));
+        ask.levels = uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1));
     } else if (zetaDescriptor(d)) {
         ask.kind = raw::TextureAsk::Zeta;
         ask.sampled = (d.usage & MTLTextureUsageShaderRead) != 0;
