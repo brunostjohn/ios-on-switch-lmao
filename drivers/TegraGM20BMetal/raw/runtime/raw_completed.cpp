@@ -159,6 +159,26 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     stored.pipeline.strideTwin = strideTwin;
     if (r.split && !c.record.storageMask)
         offerCompletedSplit(stored, r, vs, caTransform);
+    for (uint32_t i = r.pipeline.variantCount[0]; i < r.variants.size(); i++) {
+        if (!(r.variants[i].assume & AssumeTurned))
+            continue;
+        PlacedProgram turned;
+        if (!placeCompleted(r.variants[i].program, turned)) {
+            stored.pipeline.turnRefused = true;
+            break;
+        }
+        build(stored.turned, stored.record, vs, turned, stored.blob.data(), stored.keyString.c_str(), caTransform,
+              stored.spill.size() == stored.record.spillWords[0] + stored.record.spillWords[1] ? stored.spill.data()
+                                                                                               : nullptr,
+              tess ? tessPlaced : nullptr);
+        stored.turned.restore = stored.pipeline.restore;
+        stored.turned.amplificationLayerWord = r.amplificationLayerWord;
+        stored.turned.amplificationViewportWord = r.amplificationViewportWord;
+        stored.turned.strideTwin = strideTwin;
+        stored.pipeline.turnedTwin = &stored.turned;
+        stored.pipeline.turnedVariant = true;
+        break;
+    }
     completed_[key] = &stored.pipeline;
     return &stored.pipeline;
 }

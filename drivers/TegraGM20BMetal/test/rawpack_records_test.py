@@ -74,7 +74,7 @@ class RecordsTest(unittest.TestCase):
             vertex_streams=[5],
         )
         data = packfile.pipeline_bytes(rec, 0, 0)
-        self.assertEqual(data[-packfile.PIPELINE_V21.size :], bytes(16) + bytes([5]) + bytes(7))
+        self.assertEqual(data[-packfile.PIPELINE_V21.size :], bytes(16) + bytes([5]) + bytes(7) + bytes(4))
         programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
         ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
         record = dict(
@@ -94,11 +94,42 @@ class RecordsTest(unittest.TestCase):
         record['pipeline'] = packfile.pipeline_bytes(dict(rec, array_length_word=3, viewport_count_word=4), 0, 0)
         self.assertEqual(
             record['pipeline'][-packfile.PIPELINE_V21.size :],
-            bytes(7) + bytes([3]) + bytes(8) + bytes([5]) + bytes(6) + bytes([4]),
+            bytes(7) + bytes([3]) + bytes(8) + bytes([5]) + bytes(6) + bytes([4]) + bytes(4),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual((back['array_length_word'], back['viewport_count_word']), (3, 4))
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0), record['pipeline'])
+
+    def test_a_two_plane_record_keeps_its_sampled_slots_and_flags(self):
+        rec = dict(
+            key='samples=1 c0=550:15:0',
+            vs=0,
+            fs=1,
+            blob=[],
+            entries=[],
+            push=[],
+            vbs=[],
+            set_size=0,
+            fetch=False,
+            turn_refused=True,
+            two_plane=True,
+            xr_slots=0x8001,
+        )
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(data[-4:], struct.pack('<HH', 0x8001, 0))
+        self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 0xE0, 0xC0)
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(
+            pipeline=data,
+            key=rec['key'],
+            programs=programs,
+            samplers=[],
+            probe=dict(index=0, form='', records=[dict(regs={})]),
+        )
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual((back['turn_refused'], back['two_plane'], back['xr_slots']), (True, True, 0x8001))
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
 
     def test_a_vertex_stream_fetches_at_its_layouts_stride_alone(self):
         rec = dict(

@@ -4,12 +4,13 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// RGB10A8_2P_XR10 (550) over a 'b3a8' surface, as Core Animation's backdrop blur makes it: a cleared pass with a
+/// RGB10A8_2P_XR10 (550) over a 'b3a8' surface, as Core Animation's backdrop blur makes it, drawn in its planes
+/// (raw_xr_pass.h: the word into plane 0, the alpha byte into plane 1 as a target of its own): a cleared pass with a
 /// draw, a pass that loads it and draws again, and a pass that samples it; then, each after the CPU rewrote part of
-/// both planes (the raw path merges the planes into its image again), a loading pass, a sampling pass and a blit into a
-/// buffer; last a blit from a buffer into it. Every command buffer must take the raw path; the planes must hold Metal's
-/// bytes (plane 0 the code word, plane 1 the alpha byte, codes as raw_xr.h writeCode stores them), the samples each
-/// code's value as a half, and blits move plane 0's words alone (m2v two_planes.rs).
+/// both planes, a loading pass, a sampling pass and a blit into a buffer; last a blit from a buffer into it. Every
+/// command buffer must take the raw path, and the planes must hold Metal's bytes (plane 0 the code word, plane 1 the alpha byte, codes as raw_xr.h writeCode stores
+/// them), the samples each code's value as a half, and blits move plane 0's words alone (m2v two_planes.rs); rows of
+/// 128-byte multiples (96 wide) are drawn in place. Then XRTwoPlaneCells.
 struct XRTwoPlaneTest: HWTest {
     let id = "gpu.raw.xr_two_plane"
     let name = "RGB10A8_2P_XR10 over a b3a8 surface: drawn, loaded, sampled and blitted on the raw path"
@@ -34,6 +35,7 @@ struct XRTwoPlaneTest: HWTest {
         guard RawFacade.kind(of: gpu.device) == "raw" else {
             return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")
         }
+        let counted = RawFacade.counters(of: gpu.device)
         let (buffer, texture) = try Self.surfaceTexture(gpu)
         let draw = try gpu.render(fragment: "solid_fragment", format: Self.format)
         var want = [UInt64](repeating: Self.texel(Self.clear), count: Self.width * Self.height)
@@ -56,7 +58,51 @@ struct XRTwoPlaneTest: HWTest {
         want = zip(want, incoming).map { $0 & 0xff_0000_0000 | UInt64($1) }
         let copiedIn = Self.wrongTexels(Self.planes(buffer), want)
 
+        let moved = { (name: String) in
+            (RawFacade.counters(of: gpu.device)[name] ?? 0) - (counted[name] ?? 0)
+        }
+        let directShadows = moved("xr_plane_shadows")
+        guard let m2v = RawFacade.m2vDevice(of: gpu.device) else { throw TestFailure("the facade hands out no m2v device") }
+        let cells = XRTwoPlaneCells(gpu: gpu, reference: try GPU.make(device: m2v))
+        let blend = try await cells.blendWrong()
+        let storage = try await cells.fetchWrong(barrier: false)
+        let barrier = try await cells.fetchWrong(barrier: true)
+        let cellShadows = moved("xr_plane_shadows") - directShadows
+        let narrow = try await cells.narrowWrong()
+        let narrowShadows = moved("xr_plane_shadows") - directShadows - cellShadows
+        let nearest = try await cells.pairSamples(texture, "nearest_fragment")
+        let linear = try await cells.pairSamples(texture, "linear_fragment")
+        let gatherAlpha = try await cells.gatherWrong(texture, want, alpha: true)
+        let gatherRed = try await cells.gatherWrong(texture, want, alpha: false)
+        let (referenceBuffer, referenceTexture) = try Self.surfaceTexture(cells.reference)
+        Self.copyPlanes(from: buffer, to: referenceBuffer)
+        let referenceLinear = try await XRTwoPlaneCells.samples(cells.reference, referenceTexture, "linear_fragment")
+        let referenceNearest = try await XRTwoPlaneCells.samples(cells.reference, referenceTexture, "nearest_fragment")
+        let nearestApart = XRTwoPlaneCells.halfDistance(nearest.halves, referenceNearest)
+        let linearApart = XRTwoPlaneCells.halfDistance(linear.halves, referenceLinear)
+
         var metrics = Metrics()
+        let planePasses = moved("xr_plane_passes")
+        metrics.set("plane_passes", planePasses)
+        metrics.set("plane_shadows", directShadows)
+        metrics.set("cell_shadows", cellShadows)
+        metrics.set("narrow_wrong", narrow)
+        metrics.set("narrow_shadows", narrowShadows)
+        metrics.set("blend_wrong", blend.wrong)
+        metrics.set("blend_interlocked", blend.interlocked)
+        metrics.set("fetch_storage_wrong", storage.wrong)
+        metrics.set("fetch_storage_interlocked", storage.interlocked)
+        metrics.set("fetch_barrier_wrong", barrier.wrong)
+        metrics.set("fetch_barrier_interlocked", barrier.interlocked)
+        metrics.set("fetch_barrier_drawn", barrier.fetched)
+        metrics.set("pair_nearest", nearest.paired ? 1 : 0)
+        metrics.set("pair_nearest_apart", nearestApart.apart)
+        metrics.set("pair_linear", linear.paired ? 1 : 0)
+        metrics.set("pair_linear_apart", linearApart.apart)
+        metrics.set("pair_linear_steps", linearApart.steps)
+        metrics.set("pair_gather", gatherAlpha.paired && gatherRed.paired ? 1 : 0)
+        metrics.set("pair_gather_alpha_wrong", gatherAlpha.wrong)
+        metrics.set("pair_gather_red_wrong", gatherRed.wrong)
         metrics.set("drawn_wrong", drawn)
         metrics.set("sampled_wrong", sampled)
         metrics.set("loaded_wrong", loaded)
@@ -74,7 +120,45 @@ struct XRTwoPlaneTest: HWTest {
                 ("the samples follow a CPU write of the planes", resampled == 0),
                 ("a blit into a buffer gives plane 0's words after a CPU write", copiedOut == 0),
                 ("a blit from a buffer writes plane 0 alone", copiedIn == 0),
+                ("the passes drew in the planes", planePasses > 0),
+                (
+                    "rows of 128-byte multiples are drawn in place, beside a memoryless 550 too",
+                    directShadows == 0 && cellShadows == 0
+                ),
+                ("a surface 60 wide is drawn through shadows", narrow == 0 && narrowShadows > 0),
+                ("blended draws are the m2v device's", blend.wrong == 0 && blend.interlocked > 0),
+                (
+                    "Core Animation's blended fills in the storage form are the m2v device's",
+                    storage.wrong == 0 && storage.interlocked > 0
+                ),
+                (
+                    "Core Animation's blended fills in the barrier form are the m2v device's",
+                    barrier.wrong == 0 && barrier.interlocked == 0 && barrier.fetched > 0
+                ),
+                ("nearest samples through the header pair are the m2v device's", nearest.paired && nearestApart.apart == 0),
+                ("linear samples through the header pair within a half step", linear.paired && linearApart.steps <= 1),
+                (
+                    "gathers of alpha and red through the header pair are the texels' values",
+                    gatherAlpha.paired && gatherRed.paired && gatherAlpha.wrong == 0 && gatherRed.wrong == 0
+                ),
             ], metrics, proof: gpu.proof)
+    }
+
+    /// Both planes of `from` into `to`, two surfaces of one size, under their locks
+    static func copyPlanes(from: CVPixelBuffer, to: CVPixelBuffer) {
+        CVPixelBufferLockBaseAddress(from, .readOnly)
+        CVPixelBufferLockBaseAddress(to, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(to, [])
+            CVPixelBufferUnlockBaseAddress(from, .readOnly)
+        }
+        for plane in 0..<2 {
+            let rows = CVPixelBufferGetBytesPerRowOfPlane(from, plane)
+            precondition(rows == CVPixelBufferGetBytesPerRowOfPlane(to, plane))
+            memcpy(
+                CVPixelBufferGetBaseAddressOfPlane(to, plane)!, CVPixelBufferGetBaseAddressOfPlane(from, plane)!,
+                rows * CVPixelBufferGetHeightOfPlane(from, plane))
+        }
     }
 
     /// raw_xr.h writeCode: a channel's code, or the alpha byte
@@ -90,11 +174,15 @@ struct XRTwoPlaneTest: HWTest {
         UInt64(code(c.w, alpha: true)) << 32 | UInt64(code(c.x) << 20 | code(c.y) << 10 | code(c.z))
     }
 
-    static func paint(_ texels: inout [UInt64], _ r: (Int, Int, Int, Int), _ value: UInt64) {
+    static func paint(
+        _ texels: inout [UInt64], _ r: (Int, Int, Int, Int), _ value: UInt64, width: Int = XRTwoPlaneTest.width
+    ) {
         for y in r.1..<r.3 { for x in r.0..<r.2 { texels[y * width + x] = value } }
     }
 
-    static func surfaceTexture(_ gpu: GPU) throws -> (CVPixelBuffer, MTLTexture) {
+    static func surfaceTexture(
+        _ gpu: GPU, width: Int = XRTwoPlaneTest.width, height: Int = XRTwoPlaneTest.height
+    ) throws -> (CVPixelBuffer, MTLTexture) {
         var made: CVPixelBuffer?
         let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
         guard
@@ -135,7 +223,9 @@ struct XRTwoPlaneTest: HWTest {
     }
 
     /// The planes as texels (alpha byte above the word), through a CPU lock of the surface
-    static func planes(_ buffer: CVPixelBuffer) -> [UInt64] {
+    static func planes(
+        _ buffer: CVPixelBuffer, width: Int = XRTwoPlaneTest.width, height: Int = XRTwoPlaneTest.height
+    ) -> [UInt64] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         let word = CVPixelBufferGetBaseAddressOfPlane(buffer, 0)!,

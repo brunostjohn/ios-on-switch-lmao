@@ -27,10 +27,12 @@ struct DirectNvk {
 // (the reflection's active vertexAttributes). Refused: a state the raw path does not draw from a record (`why`); Failed: NVK
 // could not compile it. `registers`: the 3D registers the record is made from (raw_emit's over the rules' baseline and context).
 // `split`: with its fragment program's split (RuntimeRecord::splitTried), which costs about one more compile of that stage.
-// `variants`: with its program variants (RuntimeRecord::variants), one more compile of both stages each: the pack builder's only
+// `variants`: with its program variants (RuntimeRecord::variants), one more compile of both stages each: the pack builder's only.
+// `xrSlots`: the fragment texture slots its fragment programs read through two-plane RGB10A8_2P_XR10 header pairs
+// (raw_xr_pass.h, the record of its " | xrs=" variant)
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                             std::string &why, std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
-                            bool variants = false);
+                            bool variants = false, uint16_t xrSlots = 0);
 
 }  // namespace raw

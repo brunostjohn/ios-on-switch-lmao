@@ -28,6 +28,7 @@
 #include "raw_residual.h"
 #include "raw_multisample.h"
 #include "raw_rotated_pass.h"
+#include "raw_ycbcr_store.h"
 #include "raw_fragment_tests.h"
 #include "raw_shader_tests.h"
 #include "raw_shader_test_push.h"
@@ -40,6 +41,7 @@
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
+#include "raw_xr_pass.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -204,35 +206,65 @@ void sampleWords(Push &p, uint32_t samples, uint64_t root, const SamplePositions
     sampleLayoutMethods(p, l, kRootBytes, root);
 }
 
+// A turned pass's turn words into the root table (raw_rotation.h kRootTurn), which its fragment programs' turned variants read
+constexpr uint32_t kTurnWordsMethods = 16;
+
+void turnWordsInto(Push &p, uint64_t root, const Rotation &r)
+{
+    uint32_t w[kTurnWords];
+    turnWords(r, w);
+    p.inc(NVB197_SET_CONSTANT_BUFFER_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
+    p.m(NVB197_LOAD_CONSTANT_BUFFER_OFFSET, kRootTurn);
+    p.nonInc(NVB197_LOAD_CONSTANT_BUFFER(0), w, kTurnWords);
+}
+
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
 // NVK writes for a target of it (raw/test/targetcheck.py over the probe's PROBE_TARGETS run; 0 where m2v's NVK renders none).
+// The integer formats' are NIL's rows (nil_formats.csv: the class's RU*/RS* target, UINT or SINT components, alpha ONE_INT).
 const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {13, 0, 0x6014921d, 1, false},       // R8Uint, storage/sampled
+    {13, 0xf6, 0x6014921d, 1, false},    // R8Uint (NIL's R8_UINT: UINT components, alpha ONE_INT)
+    {14, 0xf5, 0x60136d9d, 1, false},    // R8Sint
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
-    {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
+    {23, 0xf1, 0x6014921b, 2, false},    // R16Uint
+    {24, 0xf0, 0x60136d9b, 2, false},    // R16Sint
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
     {30, 0xea, 0x70d24918, 2, false},    // RG8Unorm
+    {33, 0xed, 0x60d49218, 2, false},    // RG8Uint
+    {34, 0xec, 0x60d36d98, 2, false},    // RG8Sint
     {40, 0xe8, 0x74e24915, 2, false},    // B5G6R5Unorm
     {41, 0, 0x272a4913, 2, false},       // A1BGR5Unorm
     {42, 0, 0x272a4912, 2, false},       // ABGR4Unorm
     {43, 0xe9, 0x54e24914, 2, false},    // BGR5A1Unorm
+    {53, 0xe4, 0x6014920f, 4, false},    // R32Uint
+    {54, 0xe3, 0x60136d8f, 4, false},    // R32Sint
     {55, 0xe5, 0x7017ff8f, 4, false},    // R32Float
     {60, 0xda, 0x70d2490c, 4, false},    // RG16Unorm
+    {63, 0xdd, 0x60d4920c, 4, false},    // RG16Uint
+    {64, 0xdc, 0x60d36d8c, 4, false},    // RG16Sint
     {65, 0xde, 0x70d7ff8c, 4, false},    // RG16Float
     {70, 0xd5, 0x58d24908, 4, false},    // RGBA8Unorm (rendered: a 4:2:0 code texture's image)
     {71, 0xd6, 0x58d24908, 4, true},     // RGBA8Unorm_sRGB
+    {73, 0xd9, 0x58d49208, 4, false},    // RGBA8Uint
+    {74, 0xd8, 0x58d36d88, 4, false},    // RGBA8Sint
     {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
     {81, 0xd0, 0x54e24908, 4, true},     // BGRA8Unorm_sRGB
     {90, 0xd1, 0x58d24909, 4, false},    // RGB10A2Unorm (rendered: a 10-bit code texture's image)
+    {91, 0xd2, 0x58d49209, 4, false},    // RGB10A2Uint
     {92, 0xe0, 0x78d7ffa1, 4, false},    // RG11B10Float
     {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
     {94, 0xdf, 0x54e24909, 4, false},    // BGR10A2Unorm
+    {103, 0xcd, 0x60d49204, 8, false},   // RG32Uint
+    {104, 0xcc, 0x60d36d84, 8, false},   // RG32Sint
     {105, 0xcb, 0x70d7ff84, 8, false},   // RG32Float
     {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
+    {113, 0xc9, 0x58d49203, 8, false},   // RGBA16Uint
+    {114, 0xc8, 0x58d36d83, 8, false},   // RGBA16Sint
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
+    {123, 0xc2, 0x58d49201, 16, false},  // RGBA32Uint
+    {124, 0xc1, 0x58d36d81, 16, false},  // RGBA32Sint
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
     // block-compressed (sampled only: Metal's copies move whole blocks), word 0 NIL's row of NVK's format; ETC2 and EAC
     // NIL's MaxwellA rows, which the texture unit decodes as m2v's NVK twin does
@@ -522,6 +554,7 @@ bool Device::init(std::string &err)
         !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
         !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
         !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
+        !k_.allocControl(cbufBindBytes(kSrgbEncodeEntries * 2), srgbEncode_, ControlUse::ColorTable) ||
         !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_, ControlUse::Stamps)) {
         err = k_.error();
         return false;
@@ -532,6 +565,7 @@ bool Device::init(std::string &err)
                   {&zero_, TegraGM20BSurfaceRead},
                   {&tickets_, TegraGM20BSurfaceWrite},
                   {&colorTable_, TegraGM20BSurfaceRead},
+                  {&srgbEncode_, TegraGM20BSurfaceRead},
                   {&stamps_, TegraGM20BSurfaceWrite}});
 #if SWITCH_RAW_DIAGNOSTICS
     static std::once_flag ticketsLogged;
@@ -554,6 +588,11 @@ bool Device::init(std::string &err)
     memset(zero_.cpu, 0, zero_.bytes);
     memset(tickets_.cpu, 0, tickets_.bytes);
     colorTableWords(reinterpret_cast<uint32_t *>(colorTable_.cpu));
+    static constexpr uint16_t kSrgbEncode[kSrgbEncodeEntries] = {
+#include "../pack/srgb_encode.h"
+    };
+    memset(srgbEncode_.cpu, 0, srgbEncode_.bytes);
+    memcpy(srgbEncode_.cpu, kSrgbEncode, sizeof kSrgbEncode);
     memset(stamps_.cpu, 0, stamps_.bytes);
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
@@ -991,12 +1030,26 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
 {
     std::vector<std::pair<std::string, Pipeline *>> out;
     for (const PackPipeline *rec : pack_.variantRecords(keyHash)) {
+        const std::string name = pack_.string(rec->variantName);
+        // a barrier record is a storage form's twin unless it is the variant's one record (its storage form refused)
+        if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(keyHash, name, PackForm::Default))
+            continue;
         Pipeline *pl = nullptr;
         if (usableRecord(rec)) {
             std::lock_guard<std::mutex> l(lock_);
             pl = placeRecord(*rec, caTransform);
         }
-        out.emplace_back(pack_.string(rec->variantName), pl);
+        // a storage form's barrier twin, as Device::pipeline gives a state's own
+        const PackPipeline *barrier = pl && pl->storageBits && !pl->storageBlendBits
+                                          ? pack_.variantRecord(keyHash, name, PackForm::Barrier)
+                                          : nullptr;
+        if (usableRecord(barrier)) {
+            std::lock_guard<std::mutex> l(lock_);
+            Pipeline *twin = placeRecord(*barrier, caTransform);
+            if (twin && twin != pl && !twin->storageBits)
+                pl->barrierTwin = twin;
+        }
+        out.emplace_back(name, pl);
     }
     return out;
 }
@@ -1171,6 +1224,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                 pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
         }
     }
+    if (pp.flags & PipelineTwoPlane) {
+        const std::array<int8_t, 8> alpha = xrAlphaSlots(pl.colorFormats);
+        xrPlaneFormats(pl.colorFormats);
+        for (uint32_t j = 0; j < 8; j++)
+            if (alpha[j] >= 0 && (pl.readBits >> j & 1))
+                pl.readBits |= uint8_t(1u << alpha[j]);
+    }
     // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
     // or Float4, per vertex, from the stream's buffer
     unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
@@ -1192,7 +1252,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
-    pl.primitiveId = (sph[5] >> 24) & 1;    // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    uint32_t vsph0;
+    memcpy(&vsph0, vs.header, sizeof vsph0);
+    pl.vertexStores = (vsph0 >> 16) & 1;    // NVA097_SPHV3T1_DOES_GLOBAL_STORE
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     pl.viewportIndex = headerWritesViewportIndex(vs.header);
     pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
@@ -1223,11 +1286,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             iteratedBlendWords(*pack_.iterated(pp), pl.freeForm.colour, pl.methods, pl.restore);
         }
     }
-    const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
-    const HeapPart *code = heapPartAt(fs.program + 0x50);
-    pl.turnSensitive =
-        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code->cpu + (fs.program + 0x50 - code->offset)),
-                               codeBytes / 4, pl.fetchBits || pl.storageBits);
+    pl.turnRefused = pp.flags & PipelineTurnRefused;
+    pl.xrSlots = pp.xrSlots;
     pl.rec = &pp;
 }
 
@@ -1569,6 +1629,29 @@ void Device::freeTic(uint32_t tic)
     viewTics_.erase(views.first, views.second);
 }
 
+uint32_t Device::allocTicPair()
+{
+    if (!freeTicPairs_.empty()) {
+        const uint32_t first = freeTicPairs_.back();
+        freeTicPairs_.pop_back();
+        return first;
+    }
+    if (nextTic_ + 1 >= kTicCount)
+        return 0;
+    const uint32_t first = nextTic_;
+    nextTic_ += 2;
+    return first;
+}
+
+// As freeTic leaves a freed header: header 0's null descriptor in both (an over-planes RGB10A8_2P_XR10 texture's pair,
+// raw_xr_texture.cpp)
+void Device::freeTicPair(uint32_t first)
+{
+    memcpy(tic_.cpu + 32 * first, tic_.cpu, 32);
+    memcpy(tic_.cpu + 32 * (first + 1), tic_.cpu, 32);
+    freeTicPairs_.push_back(first);
+}
+
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
 // TEXTURE_TYPE TWO_D_NO_MIPMAP), word 0 NVK's for the format
 void Device::writeTic(const Texture &t)
@@ -1907,7 +1990,7 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
         return false;
     }
     const Span &span = zeta && !at ? owned : t.span;
-    if ((!zeta || ask.sampled) && !(t.tic = allocTic())) {
+    if ((!zeta || ask.sampled || ask.samples > 1) && !(t.tic = allocTic())) {
         Lease *none = nullptr;
         if (zeta && !at)
             tiledFree(zChunks_[z], owned);
@@ -2609,12 +2692,14 @@ void Device::destroyTexture(Texture &t)
         t = {};
         return;
     }
-    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp, t.chromaCodes, t.chromaHalved})
+    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = t.chromaCodes = t.chromaHalved = nullptr;
+    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = nullptr;
+    delete t.ycbcrStore;
+    t.ycbcrStore = nullptr;
     if (t.standIn) {
         destroyTexture(*t.standIn);
         delete t.standIn;
@@ -2627,7 +2712,9 @@ void Device::destroyTexture(Texture &t)
         t.tic = 0;
     }
     std::lock_guard<std::mutex> l(lock_);
-    if (t.tic) {
+    if (t.tic && t.xrPlanes) {
+        freeTicPair(t.tic);
+    } else if (t.tic) {
         freeTic(t.tic);
     }
     if (t.zeta)
@@ -3018,22 +3105,48 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
 
 Pipeline *Device::ycbcrPipeline(uint8_t output)
 {
-    static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
-                                        "raw.ycbcr.ycbcr_codes_frag", "raw.ycbcr.ycbcr_codes10_frag"};
-    if (!output || output > 4)
+    static const char *const names[] = {"",
+                                        "raw.ycbcr.ycbcr_converted_frag",
+                                        "raw.ycbcr.ycbcr_srgb_frag",
+                                        "raw.ycbcr.ycbcr_codes_frag",
+                                        "raw.ycbcr.ycbcr_codes10_frag",
+                                        "raw.ycbcr.ycbcr_packed_converted_frag",
+                                        "raw.ycbcr.ycbcr_packed_srgb_frag",
+                                        "raw.ycbcr.ycbcr_packed_codes10_frag"};
+    if (!output || output >= sizeof names / sizeof *names)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
-Pipeline *Device::xrPipeline(XrForm form)
+Pipeline *Device::ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store)
 {
-    const char *name = xrConversion(form);
+    static const char *const names[2][2][2] = {
+        {{"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}},
+        {{"raw.ycbcr_store.ycbcr_store_luma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_luma16_srgb_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma16_srgb_frag"}}};
+    static const char *const packed[2][2] = {
+        {"raw.ycbcr_store.ycbcr_store_luma_packed_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_frag"},
+        {"raw.ycbcr_store.ycbcr_store_luma_packed_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_srgb_frag"}};
+    const char *name = store.packed ? packed[store.srgb != 0][chroma] : names[store.srgb != 0][chroma][store.max > 255];
+    return pipeline(Pack::fnv(name, strlen(name)));
+}
+
+Pipeline *Device::xrPipeline(XrForm form, bool twoPlanes)
+{
+    const char *name = xrConversion(form, twoPlanes);
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
 Pipeline *Device::resolvePipeline(uint32_t format)
 {
     const char *name = resolveState(format);
+    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+}
+
+Pipeline *Device::depthResolvePipeline(uint32_t format, uint32_t filter)
+{
+    const char *name = depthResolveState(format, filter);
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
@@ -3045,7 +3158,7 @@ Pipeline *Device::mipPipeline(uint32_t format)
 
 bool Device::createStandIn(Texture &t, const ArenaAt *at)
 {
-    if (t.standIn || !xrPipeline(xrForm(t.format)))
+    if (t.standIn || !xrPipeline(xrForm(t.format), t.xrPlanes))
         return t.standIn != nullptr;
     Texture *s = new Texture;
     if (!createTexture(t.width, t.height, kXrStandInFormat, *s, false, true, at)) {
@@ -3070,7 +3183,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
             }
         return false;
     };
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, width, height, plan.lumaPitch,
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, plan.lumaWidth, height, plan.lumaPitch,
                               plan.lumaFormat, *y))
         return undo();
     if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,
@@ -3178,6 +3291,14 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
     t.va = mem->span.va;
     t.storage = {t.va, bytes, false};
     t.cpu = memory == kPlainPool ? mem->span.cpu : nullptr;
+    if (m.zeta) {  // a depth resolve's or a turn copy's source samples it
+        if (!(t.tic = allocTic())) {
+            if (!mem->views)
+                dropPlain(mem);
+            return nullptr;
+        }
+        writeTic(t);
+    }
     if (!m.zeta) {
         if (!(t.tic = allocTic())) {
             if (!mem->views)
@@ -3522,7 +3643,9 @@ std::string Device::vaOwner(uint64_t va)
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
         in(tickets_, tickets_.bytes, "the interlock tickets") ||
-        in(colorTable_, colorTable_.bytes, "the colour table") || in(stamps_, stamps_.bytes, "the GPU time stamps") ||
+        in(colorTable_, colorTable_.bytes, "the colour table") ||
+        in(srgbEncode_, srgbEncode_.bytes, "the sRGB encode table") ||
+        in(stamps_, stamps_.bytes, "the GPU time stamps") ||
         in(handleTables_, handleTables_.bytes, "the argument buffers' handle tables") ||
         in(argumentRoots_, argumentRoots_.bytes, "the argument buffers' root table") ||
         std::any_of(heapSets_.begin(), heapSets_.end(),
@@ -3798,7 +3921,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.pass_ = pass;
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
-    // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
+    // its pitch ones then rendered through block-linear shadows as NVK does, or when every one is memoryless; memoryless ones
+    // get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && !zeta->zeta)
         return nullptr;
@@ -3818,12 +3942,20 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         shape.layers = layers;
         return shape;
     };
+    // a turned pass's attachment that is not turned is transient (passRotation): a backing laid out as the plane stands in
+    const auto backed = [&](const Texture &t) {
+        return t.memoryless || standsInTurned(t, e.rot_);
+    };
     const bool hidden = !zeta && pass.hiddenZeta;
-    bool blockLinear = zeta != nullptr || hidden || layers > 1;
+    bool blockLinear = zeta != nullptr || hidden || layers > 1, pitchTarget = false;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture;
-            t && !t->memoryless && (t->blockLinear || t->shadowTarget || (pass.arrayedStorageMask >> j & 1)))
-            blockLinear = true;
+        if (const Texture *t = pass.color[j].texture; t && !backed(*t)) {
+            if (t->blockLinear || t->shadowTarget || (pass.arrayedStorageMask >> j & 1))
+                blockLinear = true;
+            else
+                pitchTarget = true;
+        }
+    blockLinear |= !pitchTarget;
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
     std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
@@ -3836,7 +3968,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         return dev_->backing(shape, tag, linear, compression, copied);
     };
-    if (zeta && zeta->memoryless) {
+    if (zeta && backed(*zeta)) {
         Texture *b = backing(layered(planeShaped(*zeta, e.rot_)), 0, false, true);
         if (!b)
             return nullptr;
@@ -3846,7 +3978,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     uint8_t scratchMask = 0;
     for (uint32_t j = 0; j < pass.count && j < 8; ++j)
         if (const Texture *t = pass.color[j].texture;
-            t && (t->memoryless || t->shadowTarget || (blockLinear && !t->blockLinear)))
+            t && (backed(*t) || t->shadowTarget || (blockLinear && !t->blockLinear)))
             scratchMask |= uint8_t(1u << j);
     const auto scratchTags = transientColorTags(scratchMask);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
@@ -3855,8 +3987,9 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         if (!t->renderable && !t->shadowTarget)
             return nullptr;
-        const bool mixed = blockLinear && !t->blockLinear && !t->memoryless;
-        if (t->shadowTarget || mixed) {  // rendered through a pool image (end(): copied in before, back after)
+        const bool mixed = blockLinear && !t->blockLinear && !backed(*t);
+        if ((t->shadowTarget && !backed(*t)) || mixed) {  // rendered through a pool image (end(): copied in before, back after)
+            RAW_DIAGNOSTIC(dev_->stats.xrPlaneShadows += t->xrPlane != 0);
             if (mixed) {
                 RAW_DIAGNOSTIC(dev_->stats.rtMixed++);
             } else {
@@ -3872,7 +4005,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
             continue;
         }
-        if (t->memoryless) {  // back it for this pass
+        if (backed(*t)) {  // back it for this pass
             Texture *b = backing(layered(planeShaped(*t, e.rot_)), scratchTags[j], blockLinear,
                                  layers == 1 && !(pass.storageMask >> j & 1));
             if (!b)
@@ -4214,7 +4347,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             if (bo.handle && !d.member(bo))
                 surfaces_.add(bo.handle, write);
         };
-        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
+        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_, &d.srgbEncode_})
             control(*bo, false);
         // the handle tables and heap sets the CPU wrote since the last submission that invalidated the L2 for them
         if (d.tablesWritten_ != d.tablesInvalidated_) {
@@ -4483,6 +4616,10 @@ void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
 
 void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
+    if (reachStep_) {
+        const Rect r = reachScissor(x, y, w, h, reachW_, reachH_, reachStep_);
+        x = r.x0, y = r.y0, w = r.x1 - r.x0, h = r.y1 - r.y0;
+    }
     // a rectangle past the render area is clipped to it, as plain Metal clips it (m2v render_state.rs `set_scissors`)
     const uint32_t x0 = std::min(x, areaW_), y0 = std::min(y, areaH_);
     w = uint32_t(std::min<uint64_t>(uint64_t(x) + w, areaW_)) - x0;
@@ -4502,6 +4639,11 @@ void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 // Metal's viewport as m2v gives it to Vulkan (y flipped: y + h, height -h) and NVK writes it (nvk_emit_viewport)
 void RenderEncoder::setViewport(double x, double y, double w, double h, double znear, double zfar)
 {
+    const Rect reachClip = reachStep_ ? reachViewportClip(x, y, w, h, reachStep_) : Rect{};
+    if (reachStep_) {
+        const double s = 1.0 / reachStep_;
+        x *= s, y *= s, w *= s, h *= s;
+    }
     depthRange_[0] = float(znear);
     depthRange_[1] = float(zfar);
     spillDirty_ = true;
@@ -4521,6 +4663,10 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
                 ymax = std::clamp(std::max(vy, vy + vh), 0.0f, 65535.0f);
     viewport_[6] = uint32_t(xmax - xmin) << 16 | uint32_t(xmin);
     viewport_[7] = uint32_t(ymax - ymin) << 16 | uint32_t(ymin);
+    if (reachStep_) {
+        viewport_[6] = (reachClip.x1 - reachClip.x0) << 16 | reachClip.x0;
+        viewport_[7] = (reachClip.y1 - reachClip.y0) << 16 | reachClip.y0;
+    }
     viewportDirty_ = true;
     views_.viewports = 1;
 }
@@ -4584,6 +4730,8 @@ void RenderEncoder::setBlendColor(const float rgba[4])
 
 void RenderEncoder::setDepthStencil(const DepthStencilState *s)
 {
+    if (reachStep_)
+        return;  // a reach target has no depth or stencil
     dsState_ = s ? s : &DepthStencilState::metalDefault();
     ds_ = dsState_->desc();
     compatible_ = nullptr;
@@ -4790,6 +4938,10 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl)
             return free;
     if (!pl || !pl->storageBits)
         return pl;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (cb_->forms_.barrierFetch && pl->barrierTwin)
+        return pl->barrierTwin;
+#endif
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None)
         return pl;
@@ -5449,11 +5601,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     RAW_ENCODE_BEGIN(variantSpan, Variant);
-    if (!indirectGeometry_)
+    // a turned draw of a turned variant's state takes the variant over the generic program's split twin
+    if (!indirectGeometry_ && !(rot_.turned() && pl->turnedVariant))
         pl = splitTwin(pl, geometryAnalysis);
     // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
-    if (!pl->splitOf)
-        pl = dev_->variant(*pl, bindingFacts(*pl));
+    if (rot_.turned() && pl->turnedTwin)
+        pl = pl->turnedTwin;
+    else if (!pl->splitOf)
+        pl = dev_->variant(*pl, bindingFacts(*pl) | (rot_.turned() ? AssumeTurned : 0u));
     RAW_ENCODE_END(variantSpan);
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
@@ -5496,7 +5651,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
             return false;
         }
-        if (rot_.turned() && pl->turnSensitive) {
+        if (rot_.turned() && pl->turnRefused) {
             *why = rotatedRefusalText(RotatedRefusal::Variant);
             cb_->refusal = {RefRotated, uint32_t(RotatedRefusal::Variant), rot_.turn};
             return false;
@@ -5658,9 +5813,22 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                         return false;
                     }
-                    if (t)
+                    // a two-plane texture's header pair where the program reads it so, else its stand-in
+                    const bool xrSlot = e.stage == 2 && (pl->xrSlots >> e.slot & 1);
+                    const bool pair = t && t->xrPlanes && xrSlot;
+                    if (!pair && xrSlot) {
+                        *why = "a state that reads a two-plane texture's header pair drawn without one";
+                        cb_->refusal = {RefNoTic, e.slot, t ? t->format : 0, t ? t->width : 0};
+                        return false;
+                    }
+                    if (pair) {
+                        cb_->use(*t->luma, false);
+                        cb_->use(*t->chroma, false);
+                        RAW_DIAGNOSTIC(dev_->stats.xrPairBinds++);
+                    } else if (t) {
                         cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
-                    tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
+                    }
+                    tic = !t ? 0 : pair ? t->tic : t->standIn ? t->standIn->tic : t->tic;
                 } else if (e.kind == EntryFetch) {
                     const ColorAttachment &a = pass_.color[e.slot];
                     const Texture *t = a.texture;
@@ -6726,7 +6894,7 @@ void RenderEncoder::end()
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size()) +
+                          kZetaClearWords + 16 + kSampleWords + kTurnWordsMethods + uint32_t(restore.size()) +
                           startStampCount_ * counters::kTimestampWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
@@ -6740,8 +6908,10 @@ void RenderEncoder::end()
 #endif
     for (uint8_t i = 0; i < startStampCount_; i++)
         counters::emit(p, startStamps_[i]);
-    if (rot_.turned())
+    if (rot_.turned()) {
         emitSwizzle(p, rot_.swizzle());
+        turnWordsInto(p, d.root_.va, rot_);
+    }
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
         sampleWords(p, samples_, d.root_.va, pass_.positions, rot_);
@@ -6939,8 +7109,9 @@ void RenderEncoder::clears(std::vector<Clear> &out)
             uint32_t rw = w, rh = h;
             if (a.store && !memoryless_[j]) {
                 const Rotation frame = rot_.turned() ? rot_ : frameOf(*a.texture);
-                rw = called_ ? std::min((w + kTile - 1) / kTile * kTile, frame.width) : frame.width;
-                rh = called_ ? std::min((h + kTile - 1) / kTile * kTile, frame.height) : frame.height;
+                const bool called = called_ || pass_.drawn;
+                rw = called ? std::min((w + kTile - 1) / kTile * kTile, frame.width) : frame.width;
+                rh = called ? std::min((h + kTile - 1) / kTile * kTile, frame.height) : frame.height;
             }
             Clear c{j, 0, 0, rw, rh, a.clear};
             c.own = rw != w || rh != h;
@@ -7111,6 +7282,8 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
+    if (t.xrPlanes && t.luma)  // plane 0's words alone (raw_xr.h bufferTexelBytes): the alpha plane stays as it is
+        return copyBufferTexels(va, pitch, *t.luma, x, y, z, w, h, toTexture, aspect);
     cb_->buffersWritten_ |= !toTexture;
     const uint32_t element = t.zeta && aspect == kAspectStencil ? 1
                              : t.zeta && aspect == kAspectDepth ? 4
@@ -7238,15 +7411,6 @@ void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t 
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodLevels += last - first);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodUnproven += unproven);
-}
-
-void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)
-{
-    cb_->use(codes, false);
-    cb_->use(halved, true);
-    room(uint32_t(fx::halveWords()));
-    fx::emitHalve(p_, {codes.va, codes.pitch, codes.width, codes.height}, halved.va, halved.blockHeight, halved.width,
-                  halved.height, fx::twodFormat(codes.format));
 }
 
 void BlitEncoder::end()

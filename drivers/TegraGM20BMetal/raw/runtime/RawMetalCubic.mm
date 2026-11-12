@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_fragment_tests.h"
+#include "raw_xr_pass.h"
 
 raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16],
                            RMTexture *const textures[raw::kStageTextures])
@@ -46,25 +47,43 @@ void packedVariants(RMPipeline *p, uint64_t keyHash)
     }
 }
 
-// A packed state's test class the pack builder could not make: its draws take the record without it, as a refused device
-// compile leaves it, and say so
-static raw::Pipeline *untestedVariant(RMPipeline *p, const std::string &name)
+// A packed state's variant the pack does not hold, of no cubic or sampled form (those are made, renderVariant): one of a test
+// class the pack builder could not make draws the record without it (the state's own, or its two-plane variant's), as a
+// refused device compile left it, and says so; a two-plane variant it could not make is refused
+static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, const std::string &name)
 {
     const std::string key = p->_key + name;
-    SWITCH_REFUSE_DETAIL("raw", "state.tests_unpacked", raw::Pack::fnv(key.data(), key.size()),
-                         "a packed state's test class the pack builder could not make: drawn without it: %s",
-                         key.c_str());
-    return p->_raw;
+    raw::Pipeline *untested = p->_raw;
+    if (!suffix.empty()) {
+        std::lock_guard<std::mutex> lock(p->_variantLock);
+        const auto found = p->_variants.find(suffix);
+        untested = suffix != name && found != p->_variants.end() ? found->second->value() : nullptr;
+    }
+    if (untested) {
+        SWITCH_REFUSE_DETAIL("raw", "state.tests_unpacked", raw::Pack::fnv(key.data(), key.size()),
+                             "a packed state's test class the pack builder could not make: drawn without it: %s",
+                             key.c_str());
+        return untested;
+    }
+    SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
+                         "a packed state's variant the pack lacks: its draws are refused: %s", key.c_str());
+    return nullptr;
 }
 
-// A cubic variant no pack holds is made off the encoding thread from the binds of the draw that first needs it, the only
-// place they are known (the texture unit has no cubic filter for another record to stand in with); m2v draws until it is
-// made. Its record is kept on disk, so a later boot draws it raw from its first draw. A RenderBox state's compile takes
-// seconds on the device, which no encoding thread may wait for.
-static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests)
+// The state's variant for a draw's cubic binds, test class, pass of two-plane colours and two-plane textures sampled at
+// `xrSlots` (raw_xr_pass.h), named in that order. A cubic or sampled variant no pack holds is made off the encoding thread
+// from the binds of the draw that first needs it, the only place they are known (the texture unit has no cubic filter for
+// another record to stand in with). Until it is, m2v draws a cubic variant's draws, and a sampled variant's draws sample
+// those textures' stand-ins. Its record is kept on disk, so a later boot draws it raw from its first draw. A RenderBox
+// state's compile takes seconds on the device, which no encoding thread may wait for.
+static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests,
+                                                  bool planes, uint16_t xrSlots)
 {
-    const std::string suffix = binds.empty() ? std::string() : binds.key();
-    const std::string name = suffix + (tests ? " | tests=" + std::to_string(tests) : std::string());
+    const std::string cubic = binds.empty() ? std::string() : binds.key();
+    const std::string forms = (planes ? std::string(raw::kXrPlanesVariant) : std::string()) +
+                              (xrSlots ? raw::xrSampledVariant(xrSlots) : std::string());
+    const std::string suffix = cubic + forms;
+    const std::string name = cubic + (tests ? " | tests=" + std::to_string(tests) : std::string()) + forms;
     std::shared_ptr<raw::Variant<raw::Pipeline>> variant;
     {
         std::lock_guard<std::mutex> lock(p->_variantLock);
@@ -73,8 +92,8 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
         variant = std::make_shared<raw::Variant<raw::Pipeline>>();
         p->_variants.emplace(name, variant);
     }
-    if (p->_packed && binds.empty()) {
-        variant->publish(untestedVariant(p, name));
+    if (p->_packed && binds.empty() && !xrSlots) {
+        variant->publish(unpackedVariant(p, suffix, name));
         return variant.get();
     }
     raw::Completion::Ask request;
@@ -84,26 +103,46 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     request.own = !p->_packable;
     request.cubic = binds;
     request.fragmentTests = tests;
+    request.twoPlane = planes;
+    request.xrSlots = xrSlots;
     request.resolveDescriptor = true;
-    raw::Pipeline *base = p->_raw;
+    // the state's own record draws a test class's draws it could not be made for, never a cubic or two-plane variant's
+    raw::Pipeline *base = binds.empty() && !planes && !xrSlots ? p->_raw : nullptr;
     raw::Completion *completion = gRM->completion.get();
     if (!request.descriptor || !completion) {
-        variant->publish(binds.empty() ? base : nullptr);
+        variant->publish(base);
         return variant.get();
     }
     raw::Completion::Ask fallback = request;
     fallback.key = p->_key + suffix;
     fallback.fragmentTests = 0;
     completion->ask(std::move(request), [variant, base, fallback, tests, completion](raw::Pipeline *made) {
-        if (!made && tests && !fallback.cubic.empty()) {
-            completion->ask(fallback, [variant](raw::Pipeline *cubic) {
-                variant->publish(cubic);
+        if (!made && tests && !base) {
+            completion->ask(fallback, [variant](raw::Pipeline *untested) {
+                variant->publish(untested);
             });
         } else {
-            variant->publish(made ? made : fallback.cubic.empty() ? base : nullptr);
+            variant->publish(made ? made : base);
         }
     });
     return variant.get();
+}
+
+// The slots of each stage (vertex, fragment: raw::handleStage) a draw of `pl` samples a two-plane RGB10A8_2P_XR10
+// texture at (raw_xr_pass.h)
+static std::array<uint32_t, 2> xrSampledSlots(const raw::Pipeline &pl,
+                                              RMTexture *const textures[2][raw::kStageTextures])
+{
+    std::array<uint32_t, 2> slots{};
+    const raw::PackPipeline &r = *pl.rec;
+    for (uint32_t i = 0; i < r.entries; i++) {
+        const raw::PackEntry &e = r.entry[i];
+        RMTexture *t =
+            e.kind == raw::EntryTexture && e.slot < raw::kStageTextures ? textures[raw::handleStage(e)][e.slot] : nil;
+        if (t && t->_raw.xrPlanes && !t->_raw.memoryless)
+            slots[raw::handleStage(e)] |= 1u << e.slot;
+    }
+    return slots;
 }
 
 @implementation RMRenderEncoder (Cubic)
@@ -114,7 +153,22 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     const raw::CubicBinds binds = _cubicMask ? cubicBinds(*base, _samp, _tex[1]) : raw::CubicBinds();
     const uint8_t tests =
         base->fetchBits && base->depthFormat && !base->storageBits ? uint8_t(raw::fragmentTests(_ds, _zeta)) : 0;
-    auto *variant = (!binds.empty() || tests) ? renderVariant(_pipe, binds, tests) : nullptr;
+    auto *variant =
+        (!binds.empty() || tests || _xrPlanes) ? renderVariant(_pipe, binds, tests, _xrPlanes, 0) : nullptr;
+    // a variant reads the header pairs of fragment slots 0 to 15 alone (PackPipeline::xrSlots): every other two-plane
+    // texture a draw samples is sampled through its stand-in
+    const std::array<uint32_t, 2> xrSampled = xrSampledSlots(*base, _tex);
+    std::array<uint32_t, 2> standIns = {xrSampled[0], xrSampled[1] & ~0xffffu};
+    if (const uint16_t xrSlots = uint16_t(xrSampled[1])) {
+        auto *sampled = renderVariant(_pipe, binds, tests, _xrPlanes, xrSlots);
+        if (sampled->state() == raw::Variant<raw::Pipeline>::State::Ready)
+            variant = sampled;
+        else
+            standIns[1] |= xrSlots;
+    }
+    for (uint32_t stage = 0; stage < 2; stage++)
+        for (uint32_t slots = standIns[stage]; slots; slots &= slots - 1)
+            _cb->_xrStandIns.insert(_tex[stage][__builtin_ctz(slots)]);
     if (base != _drawn || variant != _drawnVariant) {
         Cmd state = cmd(OpPipeline);
         state.obj = (__bridge void *)_pipe;

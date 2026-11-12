@@ -158,8 +158,13 @@ def _normal_render(line: str) -> tuple[str | None, str | None]:
     if v < 0 or f < 0:
         return None, None
     # The functions the state links follow its stages (the frontend's linkedText: " | <vl|vp|fl|fp> <stage>"), then
-    # the cubic samplers' binds of a state's variant (" | cubic ...", raw_cubic.h)
-    while end >= 0 and (line[end + 3 : end + 6] in ('vl ', 'vp ', 'fl ', 'fp ') or line[end + 3 : end + 9] == 'cubic '):
+    # the cubic samplers' binds of a state's variant (" | cubic ...", raw_cubic.h), then the slots its sampled two-plane
+    # variant reads two-plane textures at (" | xrs=<slots>", raw_xr_pass.h)
+    while end >= 0 and (
+        line[end + 3 : end + 6] in ('vl ', 'vp ', 'fl ', 'fp ')
+        or line[end + 3 : end + 9] == 'cubic '
+        or line[end + 3 : end + 7] == 'xrs='
+    ):
         end = line.find(' | ', end + 3)
     head = line[:v].split()
     label = next((t for t in head if t.startswith('label=')), 'label=-')

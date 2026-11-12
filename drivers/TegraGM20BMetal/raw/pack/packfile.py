@@ -14,7 +14,8 @@ MAGIC = b'GM20BPK1'
 # program's name and its matrix's words; 20: argument buffers (handle-table entries, root-table and status push words,
 # root slots, set-1 heap arrays of states and kernels; argument tables of push fields past a stage's window, their
 # words in the blob section); 21: the runtime records' tessellation, amplification, dynamic stride and stage-in
-# fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words
+# fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words, the
+# fragment slots it samples two-plane RGB10A8_2P_XR10 textures at
 VERSION = 21
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
@@ -37,8 +38,8 @@ HEAP_ARRAYS = 8
 KERNEL_V20 = struct.Struct('<4B2I16IBBHI')
 # PackPipeline's record-v21 tail: the runtime records' fields (controlWord, controlPoints, controlPointIndexBytes,
 # vertexStrideDynamic, amplificationMax, amplificationIdWord, amplificationCountWord), arrayLengthWord, the runtime
-# records' pulledStride[4][2], vertexStreams[7], viewportCountWord
-PIPELINE_V21 = struct.Struct('<7sB8s7sB')
+# records' pulledStride[4][2], vertexStreams[7], viewportCountWord, xrSlots, reserved
+PIPELINE_V21 = struct.Struct('<7sB8s7sBH2x')
 RUNTIME_ONLY_HEAD, RUNTIME_ONLY_PULLED = bytes(7), bytes(8)
 VERTEX_STREAMS = 7  # PackPipeline.vertexStreams' length: the streams past stream 0
 STREAM_BIND_STRIDE = 0x80  # runtime/raw_pack.h kStreamBindStride
@@ -126,8 +127,8 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
-# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ..." then " | tests=<n>" at its end
-VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?$')
+# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>" at its end
+VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?$')
 
 
 def variant_name(key: str) -> str:
@@ -143,13 +144,47 @@ def key_hash(rec: dict) -> int:
     parts = key.split(' | ')
     pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
     for family, vertex, fragments in (
-        ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
-        ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
+        (
+            'ycbcr',
+            'ycbcr_vert',
+            (
+                'converted_frag',
+                'srgb_frag',
+                'codes_frag',
+                'codes10_frag',
+                'packed_converted_frag',
+                'packed_srgb_frag',
+                'packed_codes10_frag',
+            ),
+        ),
+        (
+            'ycbcr_store',
+            'ycbcr_store_vert',
+            tuple(
+                f'{plane}{bits}{srgb}_frag'
+                for srgb in ('', '_srgb')
+                for plane in ('luma', 'chroma')
+                for bits in ('8', '16', '_packed')
+            ),
+        ),
+        (
+            'turn',
+            'turn_vert',
+            tuple(f'{form}{bits}_frag' for form in ('copy', 'masked') for bits in (8, 16, 32, 64, 128))
+            + ('depth16_frag', 'depth32f_frag', 'depth32fs8_frag', 'reach_frag', 'reach_reduce_frag'),
+        ),
+        (
+            'stencil_bits',
+            'stencil_bits_vert',
+            ('s8_frag', 'd32fs8_frag', 'ms_s8_frag', 'ms_d32fs8_frag', 'ms_d32fs8_min_frag', 'ms_d32fs8_max_frag'),
+        ),
+        ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag', 'two_planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),
         (
             'resolve',
             'resolve_vert',
-            ('rgba8_frag', 'rgba8_srgb_frag', 'bgra8_frag', 'bgra8_srgb_frag', 'rg11b10f_frag', 'rgba16f_frag'),
+            ('rgba8_frag', 'rgba8_srgb_frag', 'bgra8_frag', 'bgra8_srgb_frag', 'rg11b10f_frag', 'rgba16f_frag')
+            + tuple(f'{d}_{k}_frag' for d in ('depth16', 'depth32f', 'depth32fs8') for k in ('sample0', 'min', 'max')),
         ),
         (
             'mip',
@@ -192,6 +227,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     flags |= 8 if rec.get('storage_mask') else 0
     flags |= 16 if variant_name(rec['key']) else 0
     flags |= 32 if rec.get('form') == 'free' else 0
+    flags |= 64 if rec.get('turn_refused') else 0  # PipelineTurnRefused
+    flags |= 128 if rec.get('two_plane') else 0  # PipelineTwoPlane
     head = struct.pack(
         '<QIIIIIBBBBHHI',
         keyhash,
@@ -268,13 +305,14 @@ def v20_tail(rec: dict) -> bytes:
 
 
 def v21_tail(rec: dict) -> bytes:
-    """Give a record's PIPELINE_V21 tail: its runtime-only fields zero, its vertex streams and pass push words."""
+    """Give a record's PIPELINE_V21 tail: its runtime-only fields zero, its streams, pass push words and xrSlots."""
     return PIPELINE_V21.pack(
         RUNTIME_ONLY_HEAD,
         rec.get('array_length_word', 0),
         RUNTIME_ONLY_PULLED,
         bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'),
         rec.get('viewport_count_word', 0),
+        rec.get('xr_slots', 0),
     )
 
 

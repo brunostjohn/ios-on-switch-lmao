@@ -145,7 +145,7 @@ int main(int argc, char **argv)
         pass.count = j + 1;
     }
     if (pl->depthFormat) {
-        if (!dev.createOwnedZeta(16, 16, pl->depthFormat, pl->samples, false, targets[8])) {
+        if (!dev.createOwnedZeta(16, 16, pl->depthFormat, pl->samples, targets[8])) {
             fprintf(stderr, "depth: format %u at %u samples\n", pl->depthFormat, pl->samples);
             return 1;
         }

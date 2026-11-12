@@ -111,6 +111,9 @@ struct State {
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
     raw::CubicBinds cubic;  // a line naming the state's cubic variant (" | cubic ...", raw_cubic.h): its binds
+    // a line naming the state's sampled two-plane variant (" | xrs=<slots>", raw_xr_pass.h): its slots, which its key
+    // leaves out (the runtime names the variant after the test class and the two-plane pass, RawMetalCubic.mm)
+    uint16_t xrSlots = 0;
 };
 
 // A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (raw_cubic.h key) as binds
@@ -215,6 +218,8 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             return false;
         if (segment.rfind("cubic ", 0) == 0 && !cubicBinds(segment, s.cubic))
             return false;
+        if (segment.rfind("xrs=", 0) == 0 && !(s.xrSlots = uint16_t(strtoul(segment.c_str() + 4, nullptr, 10))))
+            return false;
         at = next;
     }
     s.key = raw::pipelineKey(d, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework) +
@@ -313,9 +318,37 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                             "125 | v ycbcr_vert | f ycbcr_srgb_frag",
                             "70 | v ycbcr_vert | f ycbcr_codes_frag",
                             "90 | v ycbcr_vert | f ycbcr_codes10_frag",
+                            "115 | v ycbcr_vert | f ycbcr_packed_converted_frag",
+                            "125 | v ycbcr_vert | f ycbcr_packed_srgb_frag",
+                            "90 | v ycbcr_vert | f ycbcr_packed_codes10_frag",
+                            "10 | v ycbcr_store_vert | f ycbcr_store_luma8_frag",
+                            "20 | v ycbcr_store_vert | f ycbcr_store_luma16_frag",
+                            "30 | v ycbcr_store_vert | f ycbcr_store_chroma8_frag",
+                            "60 | v ycbcr_store_vert | f ycbcr_store_chroma16_frag",
+                            "10 | v ycbcr_store_vert | f ycbcr_store_luma8_srgb_frag",
+                            "20 | v ycbcr_store_vert | f ycbcr_store_luma16_srgb_frag",
+                            "30 | v ycbcr_store_vert | f ycbcr_store_chroma8_srgb_frag",
+                            "60 | v ycbcr_store_vert | f ycbcr_store_chroma16_srgb_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_luma_packed_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_chroma_packed_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_luma_packed_srgb_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_chroma_packed_srgb_frag",
+                            "13 | v turn_vert | f turn_copy8_frag",
+                            "23 | v turn_vert | f turn_copy16_frag",
+                            "53 | v turn_vert | f turn_copy32_frag",
+                            "103 | v turn_vert | f turn_copy64_frag",
+                            "123 | v turn_vert | f turn_copy128_frag",
+                            "13 | v turn_vert | f turn_masked8_frag",
+                            "23 | v turn_vert | f turn_masked16_frag",
+                            "53 | v turn_vert | f turn_masked32_frag",
+                            "103 | v turn_vert | f turn_masked64_frag",
+                            "123 | v turn_vert | f turn_masked128_frag",
+                            "13 | v turn_vert | f turn_reach_frag",
+                            "13 | v turn_vert | f turn_reach_reduce_frag",
                             "115 | v xr_vert | f xr_bgr10_frag",
                             "115 | v xr_vert | f xr_bgra10_frag",
                             "115 | v xr_vert | f xr_planes_frag",
+                            "115 | v xr_vert | f xr_two_planes_frag",
                             "70 | v resolve_vert | f resolve_rgba8_frag",
                             "70 | v resolve_vert | f resolve_rgba8_srgb_frag",
                             "80 | v resolve_vert | f resolve_bgra8_frag",
@@ -343,6 +376,19 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
         lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) + ":15:0:1:0:0:1:0:0" +
                         o.substr(bar));
     }
+    for (const char *depth : {"250/0 | v resolve_vert | f resolve_depth16_", "252/0 | v resolve_vert | f resolve_depth32f_",
+                              "260/260 | v resolve_vert | f resolve_depth32fs8_"})
+        for (const char *filter : {"sample0_frag", "min_frag", "max_frag"})
+            lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth + filter);
+    for (const char *depth : {"250/0 | v turn_vert | f turn_depth16_frag", "252/0 | v turn_vert | f turn_depth32f_frag",
+                              "260/260 | v turn_vert | f turn_depth32fs8_frag",
+                              "0/253 | v stencil_bits_vert | f stencil_bits_s8_frag",
+                              "260/260 | v stencil_bits_vert | f stencil_bits_d32fs8_frag",
+                              "0/253 | v stencil_bits_vert | f stencil_bits_ms_s8_frag",
+                              "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_frag",
+                              "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_min_frag",
+                              "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_max_frag"})
+        lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth);
     for (const char *out : {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
                             "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
         lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);

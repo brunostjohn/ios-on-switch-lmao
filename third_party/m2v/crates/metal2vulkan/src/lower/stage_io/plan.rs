@@ -188,7 +188,7 @@ fn color_type(cx: &SelectCx<'_>, attachment: u32, f: Form) -> Result<IoType, Err
     })
 }
 
-fn user(
+pub(super) fn user(
     sp: &mut StageIoPlan,
     key: VaryingKey,
     dir: IoDir,
@@ -1095,7 +1095,7 @@ fn rotated_second(
     })
 }
 
-fn push_var(list: &mut Vec<IoVariable>, v: IoVariable) {
+pub(super) fn push_var(list: &mut Vec<IoVariable>, v: IoVariable) {
     if !list.contains(&v) {
         list.push(v);
     }

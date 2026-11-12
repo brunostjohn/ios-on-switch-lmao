@@ -333,8 +333,10 @@ def build(work: Path, bridge: Path, metal_abi: Path, context_header: Path) -> No
         [HERE / 'native_seed.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in (*DIRECT_RUNTIME, 'raw_cache', 'raw_kernel_cache')),
     )
-    own = ('ycbcr', 'xr', 'resolve', 'mip')
-    exact = {'resolve': ['-fno-fast-math']}  # its sums in sample order and its NaN tests kept (resolve.metal)
+    own = ('ycbcr', 'ycbcr_store', 'xr', 'resolve', 'mip', 'turn', 'stencil_bits')
+    # resolve.metal's sums in sample order and its NaN tests kept; ycbcr_store.metal's NaN tests and half rounding;
+    # stencil_bits.metal's depth comparisons
+    exact = {'resolve': ['-fno-fast-math'], 'ycbcr_store': ['-fno-fast-math'], 'stencil_bits': ['-fno-fast-math']}
     for name in own:
         run(
             [
@@ -411,7 +413,7 @@ def state_key(line: str) -> str:
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
     key = ' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]
-    cubic = ''
+    cubic = sampled = ''
     for segment in line[bar3 + 3 :].split(' | ') if bar3 >= 0 else ():
         if segment.startswith(LINKED):
             tokens = segment.split()
@@ -420,9 +422,11 @@ def state_key(line: str) -> str:
             key += ' | ' + ' '.join(tokens[:2] + named) + ' ' + ' '.join(values)
         elif segment.startswith('cubic '):
             cubic = ' | ' + ' '.join(segment.split())
+        elif segment.startswith('xrs='):
+            sampled = ' | ' + segment.strip()
     # A stage with no constants keeps its space before what follows it (RawPipelineKey.h pipelineKey trims the key's end
     # alone): " | f <function>  | l <framework>"
-    return (f'{key} | l {framework}' if framework else key).strip() + cubic
+    return (f'{key} | l {framework}' if framework else key).strip() + cubic + sampled
 
 
 def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:

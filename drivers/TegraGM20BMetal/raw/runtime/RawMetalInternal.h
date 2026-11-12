@@ -333,12 +333,13 @@ id rmRefuseUnsupported(const char *why, NSError **error);
 RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
 bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
 
-// RawMetalYcbcrTargets.mm: two-plane YCbCr code textures rendered into (raw_ycbcr_store.h). A target's stand-in and chroma
-// textures (Texture::planarStandIn, chromaCodes, chromaHalved), the reason a pass into one goes to m2v (null: none), its chroma
-// blocks from the codes its store wrote, and a descriptor's first such attachment's format (0: none)
-void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat);
+// RawMetalYcbcrTargets.mm: two-plane YCbCr textures rendered into (raw_ycbcr_store.h). A target's stand-in and store shape
+// (Texture::planarStandIn, ycbcrStore), the reason a pass into one goes to m2v (null: none), its planes stored from its pass's
+// backing of the stand-in (0; 1 a pass it cannot render, 2 a draw the encoder refused: *why), and a descriptor's first such
+// attachment's format (0: none)
+void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat, const raw::YcbcrStoreShape &store);
 const char *ycbcrTargetPassRefusal(const raw::Texture &t, MTLRenderPassColorAttachmentDescriptor *a);
-void storeYcbcrChroma(raw::CommandBuffer *rc, const raw::Texture &t);
+int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::Texture &standIn, const char **why);
 uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d);
 
 @interface RMDevice (YcbcrTargets)

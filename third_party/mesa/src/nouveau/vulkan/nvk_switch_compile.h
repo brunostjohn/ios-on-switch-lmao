@@ -66,6 +66,13 @@ struct switch_nvk_stage_info {
     * fact the pack builder holds: raw_chip_facts.h AssumeTexsF16)
     */
    bool texs_f16;
+   /* A fragment stage drawn into a turned plane (nvk_switch_turn.h) */
+   bool turned;
+   /* A fragment stage's set-0 bindings of two-plane RGB10A8_2P_XR10 textures
+    * (bit b: binding b), each read through its header pair
+    * (nvk_switch_xr_planes.h)
+    */
+   uint64_t xr_plane_bindings;
 };
 
 extern _Thread_local bool switch_nvk_center_frag_depth_current;

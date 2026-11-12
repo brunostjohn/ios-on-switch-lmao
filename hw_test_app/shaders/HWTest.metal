@@ -43,6 +43,12 @@ fragment float4 solid_fragment(constant float4 &color [[buffer(0)]])
     return color;
 }
 
+/// A half4 output: Metal's extended-range blend takes one under every factor (m2v fragment/fetch.rs)
+fragment half4 solid_half_fragment(constant float4 &color [[buffer(0)]])
+{
+    return half4(color);
+}
+
 /// Writes exactly the floats it is given, so the render target's own float-to-format conversion is what is tested.
 fragment float4 exact_fragment(constant float4 &value [[buffer(0)]])
 {

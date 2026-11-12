@@ -1717,6 +1717,27 @@ fn scalar_type(mb: &mut ModuleBuilder, numeric: SampledType) -> BResult<crate::s
 /// The storage image of attachment `color` held as `samples`, the texel of the invocation's
 /// sample, and the access's image operands: the invocation's [`pixel`] with its [`operands`],
 /// or, for planes, the pixel and the invocation's `SampleId` as the layer.
+/// The texel of storage-form attachment `color` at the invocation's pixel (at its sample as
+/// `samples` holds them), read inside the interlock: a two-plane attachment's raw texel joined
+/// from its two views.
+fn read_texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    samples: StorageSamples,
+) -> BResult<SValue> {
+    let (image, at, ops) = image_and_texel(cx, fb, color, samples)?;
+    let mem = memory_model::coherence(cx.plan).texel(fb)?;
+    let texel = fb.read(image, at, &ops, mem)?;
+    let Some(alpha) = super::two_plane::alpha(cx, color) else {
+        return Ok(texel);
+    };
+    let (image, at, ops) = image_and_texel(cx, fb, alpha, samples)?;
+    let mem = memory_model::coherence(cx.plan).texel(fb)?;
+    let byte = fb.read(image, at, &ops, mem)?;
+    super::two_plane::join(fb, texel, byte)
+}
+
 fn image_and_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1845,11 +1866,7 @@ pub(super) fn value(
     };
     let texel = match texel {
         Some(held) => held,
-        None => {
-            let (image, at, ops) = image_and_texel(cx, fb, c.color, sc.view.samples)?;
-            let mem = memory_model::coherence(cx.plan).texel(fb)?;
-            fb.read(image, at, &ops, mem)?
-        }
+        None => read_texel(cx, fb, c.color, sc.view.samples)?,
     };
     let texel = match (sc.view.extended, sc.view.uint_view) {
         (Some(_), _) if sc.shadowed => texel,
@@ -1970,8 +1987,19 @@ pub(super) fn emit_return(
                 texel_of(fb, part, form, sc.view.numeric)?
             }
         };
-        let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
-        texels.push((image, at, texel, ops));
+        match super::two_plane::alpha(cx, color) {
+            Some(alpha) => {
+                let [word, byte] = super::two_plane::split(fb, texel)?;
+                let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
+                texels.push((image, at, word, ops));
+                let (image, at, ops) = image_and_texel(cx, fb, alpha, sc.view.samples)?;
+                texels.push((image, at, byte, ops));
+            }
+            None => {
+                let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
+                texels.push((image, at, texel, ops));
+            }
+        }
         if let Some(held) = held {
             let (image, at) = shadow_and_texel(cx, fb, color)?;
             texels.push((image, at, held, ImageOperands::default()));
@@ -2209,9 +2237,7 @@ fn blended(
         if let Some(texel) = codes {
             return Ok(texel);
         }
-        let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
-        let mem = memory_model::coherence(cx.plan).texel(fb)?;
-        let texel = fb.read(image, at, &ops, mem)?;
+        let texel = read_texel(cx, fb, color, sc.view.samples)?;
         codes = Some(texel);
         Ok(texel)
     };

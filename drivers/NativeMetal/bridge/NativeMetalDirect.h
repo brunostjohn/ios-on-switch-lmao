@@ -184,6 +184,7 @@ typedef struct NmbDirectState {
     uint32_t blended;  // the color attachments m2v hands a Vulkan blend, by index
     NmbDirectDraw draws
         [4];  // probe.mm's: 256, 16 and 4096 inline bytes per slot, and 256 bytes in buffers at each slot's own offset
+    bool twoPlane;  // compiled with each RGB10A8_2P_XR10 colour in its two planes (NmbDirectBinds::twoPlane)
 } NmbDirectState;
 
 // A fragment sampler slot the probe binds a cubic sampler state at (MTLSamplerMinMagFilterCubic, no mip filter): its address
@@ -199,7 +200,8 @@ typedef struct NmbDirectTextureFormat {
     uint64_t format;
 } NmbDirectTextureFormat;
 
-// What the probe binds beyond its tagged textures and samplers (the raw path's cubic variants: raw/runtime/raw_cubic.h)
+// What the probe binds beyond its tagged textures and samplers (the raw path's cubic variants: raw/runtime/raw_cubic.h).
+// `twoPlane`: each RGB10A8_2P_XR10 attachment held in Metal's two planes (raw/runtime/raw_xr_pass.h)
 typedef struct NmbDirectBinds {
     const NmbDirectCubicSampler *cubic;
     uint32_t cubicCount;
@@ -207,6 +209,7 @@ typedef struct NmbDirectBinds {
     uint32_t textureCount;
     uint32_t fragmentTests;
     uint32_t bindStride;  // the attributeStride the probe binds every vertex buffer at (0: none)
+    bool twoPlane;
 } NmbDirectBinds;
 
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to

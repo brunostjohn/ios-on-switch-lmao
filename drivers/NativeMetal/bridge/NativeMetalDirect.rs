@@ -241,15 +241,18 @@ pub struct NmbDirectBinds {
     pub texture_count: u32,
     pub fragment_tests: u32,
     pub bind_stride: u32,
+    pub two_plane: bool,
 }
 
-/// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by slot
+/// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by
+/// slot; and whether the state is compiled for RGB10A8_2P_XR10 attachments held in their two planes
 #[derive(Default)]
 struct Binds {
     cubic: Vec<(u32, SamplerDescriptor)>,
     textures: Vec<(u32, PixelFormat)>,
     fragment_tests: u32,
     bind_stride: Option<u32>,
+    two_plane: bool,
 }
 
 impl Binds {
@@ -266,6 +269,7 @@ impl Binds {
         }
         out.fragment_tests = b.fragment_tests;
         out.bind_stride = (b.bind_stride != 0).then_some(b.bind_stride);
+        out.two_plane = b.two_plane;
         let cubic: &[NmbDirectCubicSampler] = if b.cubic.is_null() {
             &[]
         } else {
@@ -369,6 +373,7 @@ pub struct NmbDirectState {
     pub storage: NmbDirectStorage,
     pub blended: u32,
     pub draws: [NmbDirectDraw; 4],
+    pub two_plane: bool,
 }
 
 /// A translation's failure as the caller's text; one the same request may get past (its deadline, the host's memory) starts
@@ -385,6 +390,20 @@ pub(crate) fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::err
 static BARRIER: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 static ORDERED: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 static COMPUTE: Mutex<Option<([u8; 32], Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
+type Planed = Vec<([u8; 32], Arc<metal2vulkan::device::Device>)>;
+static TWO_PLANE: Mutex<Planed> = Mutex::new(Vec::new());
+
+/// `compile` as a profile that holds each RGB10A8_2P_XR10 attachment in its two planes, one per compile device
+fn two_plane_device(compile: &metal2vulkan::device::Device) -> Result<Arc<metal2vulkan::device::Device>, String> {
+    let mut kept = TWO_PLANE.lock().map_err(|_| "two-plane compile device lock")?;
+    let fingerprint = compile.profile_fingerprint();
+    if let Some((_, device)) = kept.iter().find(|(of, _)| *of == fingerprint) {
+        return Ok(device.clone());
+    }
+    let device = Arc::new(compile.with_two_plane_extended_range());
+    kept.push((fingerprint, device.clone()));
+    Ok(device)
+}
 
 pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, String> {
     let mut kept = COMPUTE.lock().map_err(|_| "native compute device lock")?;
@@ -1496,8 +1515,8 @@ pub unsafe extern "C" fn nmb_render_pipeline_offline(
     })
 }
 
-/// The state `descriptor` describes as the translator makes it on `compile` for the probe's draws, its layouts made on
-/// `vulkan` where there is one, handed to `each`
+/// The state `descriptor` describes as the translator makes it on `compile` (its two-plane profile where `binds` ask)
+/// for the probe's draws, its layouts made on `vulkan` where there is one, handed to `each`
 #[allow(clippy::too_many_arguments)]
 fn translate(
     compile: &metal2vulkan::device::Device,
@@ -1509,6 +1528,11 @@ fn translate(
     each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> Result<bool, String> {
+    let planes = match binds.two_plane {
+        true => Some(two_plane_device(compile)?),
+        false => None,
+    };
+    let compile = planes.as_deref().unwrap_or(compile);
     let format = match texture_format {
         0 => PixelFormat::BGRA8Unorm,
         f => raw::<PixelFormat>(f, "texture format")?,
@@ -1715,6 +1739,7 @@ fn translate(
             .filter(|(_, c)| c.as_ref().is_some_and(|c| c.blend.is_some()))
             .fold(0, |mask, (j, _)| mask | 1 << j),
         draws: [draws[0], draws[1], draws[2], draws[3]],
+        two_plane: binds.two_plane,
     };
     for (slot, &k) in order.iter().enumerate() {
         let stage = &pipeline.stages[k];

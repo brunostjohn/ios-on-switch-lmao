@@ -6,9 +6,10 @@
 #include "raw_surface_view.h"
 #include "raw_view.h"
 
+// A texture a raw kernel samples as it is (raw_kernel_texture.h), and not one held in two planes: its header is a pair
 static bool plainTexture(RMTexture *t)
 {
-    return t->_rawOk && raw::kernelSamplesInPlace(t->_raw);
+    return t->_rawOk && raw::kernelSamplesInPlace(t->_raw) && !t->_raw.xrPlanes;
 }
 
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,

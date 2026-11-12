@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
-#import "RawMetalXrPlanes.h"
 #include "raw_texture_cpu_range.h"
 
 namespace {
@@ -112,7 +111,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         const raw::Texture::StorageRange storage = _raw.storageRange();
         rmHeapForget(_heap, storage.bytes ? storage.va : _raw.va);
     }
-    if (_rawOk && _surface && (_raw.converted() || xrOverPlanes(_raw)))
+    if (_rawOk && _surface && _raw.converted())
         surfaceConverted(_surfaceWrites, false);
     rmHeapForgetTexture(self);
     if (_rawOk)

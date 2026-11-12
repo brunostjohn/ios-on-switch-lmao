@@ -9,6 +9,7 @@
 #include "raw_direct_storage.h"
 #include "raw_direct_encode.h"
 #include "raw_nak_target.h"
+#include "raw_rotation.h"
 #include "raw_spill_table.h"
 #include "raw_split_metadata.h"
 
@@ -98,7 +99,8 @@ uint32_t halfFloatTargets(const std::string &key)
 
 class Stages {
 public:
-    Stages(const DirectNvk &nvk, const NakLayoutData &layout) : nvk_(nvk), layout_(layout)
+    Stages(const DirectNvk &nvk, const NakLayoutData &layout, uint64_t xrPlaneBindings = 0)
+        : nvk_(nvk), layout_(layout), xrPlaneBindings_(xrPlaneBindings)
     {}
 
     ~Stages()
@@ -109,15 +111,17 @@ public:
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
-    // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones
+    // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones.
+    // `turned`: the fragment stage alone, as a turned plane's (NVK's nvk_switch_turn.h)
     CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
-                           uint32_t zeroPush = 0, bool texsF16 = false)
+                           uint32_t zeroPush = 0, bool texsF16 = false, bool turned = false)
     {
         if (state.stageCount != 2 && !(state.stageCount == 4 && state.tess.parameters && state.tess.controlWord)) {
             why = std::to_string(state.stageCount) + " stages";
             return CompileOutcome::Refused;
         }
-        for (uint32_t k = 0; k < state.stageCount; k++) {
+        const uint32_t first = turned ? 1 : 0, end = turned ? 2 : state.stageCount;
+        for (uint32_t k = first; k < end; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
@@ -146,6 +150,8 @@ public:
                 nullptr};
             memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
             info.texsF16 = texsF16 && s.stage == kFragmentBit;
+            info.turned = turned;
+            info.xrPlaneBindings = s.stage == kFragmentBit ? xrPlaneBindings_ : 0;
             info.constPushMask |= zeroPush;
             for (uint32_t i = 0; i < 32; i++)
                 if (zeroPush >> i & 1)
@@ -184,9 +190,26 @@ public:
 private:
     const DirectNvk &nvk_;
     const NakLayoutData &layout_;
+    uint64_t xrPlaneBindings_;
     NvkStage made_[4] = {};
     CapturedProgram programs_[4];
 };
+
+// The set-0 bindings of draw 0's writes of fragment texture slots `slots` (nvk_switch_xr_planes.h), 0 where one has none
+uint64_t xrPlaneBindings(const NmbDirectDraw &d, uint16_t slots)
+{
+    uint64_t bindings = 0;
+    uint16_t found = 0;
+    for (uint32_t i = 0; i < d.writeCount; i++) {
+        const NmbDirectWrite &w = d.writes[i];
+        if (w.set == 0 && w.stage == 2 && w.slot < 16 && (slots >> w.slot & 1) && w.binding < 64 &&
+            (w.source == NmbDirectTexture || w.source == NmbDirectCombined)) {
+            bindings |= uint64_t(1) << w.binding;
+            found |= uint16_t(1u << w.slot);
+        }
+    }
+    return found == slots ? bindings : 0;
+}
 
 // The set-0 byte of `w` in the draw's layout
 bool offsetOf(const Set0 &set0, const NmbDirectWrite &w, uint32_t &offset)
@@ -364,7 +387,7 @@ bool vertexStreams(const std::vector<EmitStream> &streams, RecordParts &parts, s
 // unless the pack varies it, so it never costs an extra. Fixed-function input fetches the attributes the translation does not
 // pull, at the locations m2v gives them (dense in attribute order).
 bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t pulled,
-             uint32_t blended, const PackRules &rules, std::map<uint32_t, uint32_t> &regs,
+             uint32_t blended, bool twoPlane, const PackRules &rules, std::map<uint32_t, uint32_t> &regs,
              std::vector<EmitStream> &streams, std::string &why)
 {
     std::string fields = key.substr(0, key.find(" | "));
@@ -376,7 +399,7 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
             return index >= 32 || !(pulled >> index & 1);
         });
     std::vector<EmitRegister> made;
-    if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
+    if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended, twoPlane) ||
         !emitVertexInput(fields, fetched, made, streams, why))
         return false;
     regs = rules.context;
@@ -393,7 +416,7 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
 // at an immediate offset; and where the chip is proven to round them so (raw_chip_facts.h), fetches rounded to half in
 // TEXS's F16 forms. A stage's variant is kept only where its code differs, and nothing else a record says of it does.
 void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const NakLayoutData &layout,
-                     uint32_t halfTargets, const Stages &generic, RuntimeRecord &out)
+                     uint32_t halfTargets, uint64_t xrPlanes, const Stages &generic, RuntimeRecord &out)
 {
     uint32_t residual[2] = {}, zeroPush = 0;
     const PackPipeline &p = out.pipeline;
@@ -423,7 +446,7 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const Na
         kinds.push_back({0, true});
     std::vector<RuntimeRecord::Variant> made[2];
     for (const Kind &kind : kinds) {
-        Stages stages(nvk, layout);
+        Stages stages(nvk, layout, xrPlanes);
         std::string why;
         if (stages.compile(state, halfTargets, false, why, kind.zeroPush, kind.texsF16) != CompileOutcome::Made)
             continue;
@@ -492,6 +515,41 @@ void tessellationRegisters(const NmbDirectTess &tess, RuntimeRecord &out)
                                            {kShader + kStride * kEvaluation, kEvaluation << 4}});
 }
 
+// The fragment program's turned variant (AssumeTurned), first of its stage's: compiled where the generic program's code may read
+// a turned plane's axes (turnSensitive) and kept where its code differs, the turn then being the program's to undo. Where it
+// would be needed and cannot be made, the record says so (PipelineTurnRefused).
+void turnedVariant(const NmbDirectState &state, const DirectNvk &nvk, const NakLayoutData &layout, uint32_t halfTargets,
+                   uint64_t xrPlanes, const Stages &generic, RuntimeRecord &out)
+{
+    const CapturedProgram &fs = generic.program(1);
+    if (fs.image.size() <= 80)
+        return;
+    uint32_t sph[20];
+    memcpy(sph, fs.image.data(), sizeof sph);
+    std::vector<uint32_t> code((fs.image.size() - 80) / 4);
+    memcpy(code.data(), fs.image.data() + 80, code.size() * 4);
+    if (!turnSensitive(sph, code.data(), uint32_t(code.size()), false))
+        return;
+    Stages stages(nvk, layout, xrPlanes);
+    std::string why;
+    const EmitProgram a = generic.emit(1);
+    if (stages.compile(state, halfTargets, false, why, 0, false, true) != CompileOutcome::Made) {
+        out.pipeline.flags |= PipelineTurnRefused;
+        return;
+    }
+    const CapturedProgram &program = stages.program(1);
+    const EmitProgram b = stages.emit(1);
+    if (program.image == fs.image)
+        return;
+    if (program.cbufTypes != fs.cbufTypes || a.earlyFragmentTests != b.earlyFragmentTests ||
+        a.interlockControl != b.interlockControl || a.usesSampleShading != b.usesSampleShading) {
+        out.pipeline.flags |= PipelineTurnRefused;
+        return;
+    }
+    out.variants.insert(out.variants.begin() + out.pipeline.variantCount[0], {AssumeTurned, program});
+    out.pipeline.variantCount[1]++;
+}
+
 // The fragment program's split as a record holds it (NVK made none where it saves nothing)
 void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
 {
@@ -548,7 +606,8 @@ bool DirectNvk::complete() const
 
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split, bool variants)
+                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split, bool variants,
+                            uint16_t xrSlots)
 {
     out = {};
     const NmbDirectDraw &draw = state.draws[0];
@@ -575,10 +634,15 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         why = "a descriptor type NVK lays out by another rule";
         return CompileOutcome::Refused;
     }
+    const uint64_t xrPlanes = xrSlots ? xrPlaneBindings(draw, xrSlots) : 0;
+    if (xrSlots && !xrPlanes) {
+        why = "a two-plane texture slot the state's fragment function does not sample";
+        return CompileOutcome::Refused;
+    }
     // a split prologue binds its own constant buffers, set 1 not among them
     const bool splits = split && !storage.storageMask && !heap.arrays && !draw.spillWords[0] && !draw.spillWords[1] &&
                         state.stageCount == 2;
-    Stages stages(nvk, nakLayout);
+    Stages stages(nvk, nakLayout, xrPlanes);
     if (const CompileOutcome compiled = stages.compile(state, halfFloatTargets(key), splits, why);
         compiled != CompileOutcome::Made)
         return compiled;
@@ -641,7 +705,8 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     if (!drawnWords(state, parts, why))
         return CompileOutcome::Refused;
     std::vector<EmitStream> streams;
-    if (!emitted(key, stages, attributes, draw.pulledAttributes, state.blended, rules, parts.regs, streams, why) ||
+    if (!emitted(key, stages, attributes, draw.pulledAttributes, state.blended, state.twoPlane, rules, parts.regs,
+                 streams, why) ||
         !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     const uint32_t addresses = addressPushWords(draw);
@@ -661,11 +726,15 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         tessellationRegisters(state.tess, out);
     if (registers)
         *registers = parts.regs;
+    if (state.twoPlane)
+        out.pipeline.flags |= PipelineTwoPlane;
+    out.pipeline.xrSlots = xrSlots;
     out.splitTried = split && state.stageCount == 2;
     if (splits)
         splitInto(nvk, stages.split(1), out);
     if (variants && state.stageCount == 2)
-        programVariants(state, nvk, nakLayout, halfFloatTargets(key), stages, out);
+        programVariants(state, nvk, nakLayout, halfFloatTargets(key), xrPlanes, stages, out);
+    turnedVariant(state, nvk, nakLayout, halfFloatTargets(key), xrPlanes, stages, out);
     return CompileOutcome::Made;
 }
 

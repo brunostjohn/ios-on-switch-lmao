@@ -139,3 +139,15 @@ rust_test(
     env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
+
+# RGB10A8_2P_XR10 in its two planes (pipeline/two_plane.rs): the output split, the input attachments and storage views
+# of a fetch, the alpha index
+rust_test(
+    name = "two_plane_test",
+    args = ["tests::engine_extended_range::two_plane::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = ["@gpu_llvm_as//:bin/llvm-as"],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)

@@ -28,6 +28,8 @@ struct NvkStageInfo {
     const void *portableContext;
     bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
     bool texsF16 = false;
+    bool turned = false;
+    uint64_t xrPlaneBindings = 0;  // nvk_switch_xr_planes.h: set-0 bindings read through a header pair
 };
 
 struct NvkStage {

@@ -151,7 +151,7 @@ LAYOUTS = {
     18: (544, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
     19: (544, 44, 13, struct.Struct('<QIIIIIBBBBHHI')),
     20: (636, 44, 13, struct.Struct('<QIIIIIBBBBHHI')),
-    21: (660, 44, 13, struct.Struct('<QIIIIIBBBBHHI')),
+    21: (664, 44, 13, struct.Struct('<QIIIIIBBBBHHI')),
 }
 # PackProgram's constant buffer slots by its size: the count at byte 20, the slots' types from 21, then the registers
 # and the bound textures' slot + 1

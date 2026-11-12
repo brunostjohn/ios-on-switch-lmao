@@ -195,6 +195,11 @@ def check_streams(key: str, slot: int, streams: list[int], regs: dict[int, int])
             raise ValueError(f'vertex stream {k} of buffer {buffer} at stride {held}, its layout {stride}: {key}')
 
 
+def two_plane_colors(key: str) -> int:
+    """Give the RGB10A8_2P_XR10 colours of a state's key."""
+    return sum(1 for t in key.split(' | ')[0].split() if t[:1] == 'c' and t[1:2].isdigit() and t[3:7] == '550:')
+
+
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
     """Give a state's pipeline as mkpack.py's pipeline() gives the probe's."""
     p = rec['pipeline']
@@ -204,7 +209,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    head, array_length_word, pulled, streams, viewport_count_word = packfile.PIPELINE_V21.unpack_from(
+    head, array_length_word, pulled, streams, viewport_count_word, xr_slots = packfile.PIPELINE_V21.unpack_from(
         p, PIPELINE_BYTES - packfile.PIPELINE_V21.size
     )
     runtime_only = head != packfile.RUNTIME_ONLY_HEAD or pulled != packfile.RUNTIME_ONLY_PULLED
@@ -231,6 +236,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     spill_entry, spill_words, spill = list(v20[24:26]), v20[26:28], rec.get('spill', [])
     regs = rec['probe']['records'][0]['regs']
     check_streams(rec['key'], slot, streams, regs)
+    # a two-plane record's alpha bytes are targets of their own past the key's (runtime/raw_xr_pass.h)
+    targets = mkpack.targets(rec['key']) + (two_plane_colors(rec['key']) if flags & 128 else 0)
     varying = list(varying)
     if storage_mask:
         for method in [0x0210, 0x0754, 0x1224] + [0x1A00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
@@ -242,15 +249,14 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'form': rec['probe']['form'],
         'vs': prog_index[program_id(rec['programs'][0])],
         'fs': prog_index[program_id(rec['programs'][1])],
-        'blob': [
-            (m, regs.get(m, 0))
-            for m in varying
-            if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, mkpack.targets(rec['key']))
-        ],
+        'blob': [(m, regs.get(m, 0)) for m in varying if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, targets)],
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1],
         'push_metadata': bool(flags & 4),
+        'turn_refused': bool(flags & 64),
+        'two_plane': bool(flags & 128),
         'blend_color_word': blend,
         'half_blend_color_word': half,
+        'xr_slots': xr_slots,
         'storage_mask': storage_mask,
         'storage_write_mask': storage_write_mask,
         'storage_samples': storage_samples,
@@ -336,6 +342,8 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     split_identities(states)
     for index, rec in enumerate(states):
         n = mkpack.targets(rec['key'])
+        if PIPELINE.unpack_from(rec['pipeline'])[12] & 128:
+            n += two_plane_colors(rec['key'])
         regs = dict(context)
         regs.update(rec['regs'])
         for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):

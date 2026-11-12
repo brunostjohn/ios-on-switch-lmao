@@ -90,6 +90,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
     d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
+    d[@"xr_plane_passes"] = @(gRM->raw->stats.xrPlanePasses.load());
+    d[@"xr_plane_shadows"] = @(gRM->raw->stats.xrPlaneShadows.load());
+    d[@"xr_pair_binds"] = @(gRM->raw->stats.xrPairBinds.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
@@ -432,6 +435,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk =
             gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                        std::max<uint32_t>(uint32_t(d.sampleCount), 1), std::max(transientLayers, 1u));
+        if (t->_rawOk && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes)
+            t->_rawOk = gRM->raw->createXrMemoryless(t->_raw);
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
@@ -565,7 +570,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
             gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
-            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
+            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat), ycbcr.store);
     } else if (raw::SurfaceImage image; (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
         // a shared texture in the device's layout of its descriptor (RawMetalSharedTextures.mm): a surface of no rows
         t->_rawOk = gRM->raw->createSurfaceImage(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s),

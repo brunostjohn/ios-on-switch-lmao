@@ -6,6 +6,7 @@
 #include "nvk_descriptor_set_layout.h"
 #include "nvk_descriptor_types.h"
 #include "nvk_shader.h"
+#include "nvk_switch_xr_planes.h"
 
 #include "vk_pipeline.h"
 
@@ -1317,6 +1318,12 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
                          NVK_IMAGE_DESCRIPTOR_SAMPLER_INDEX_MASK);
          combined_handle = nir_ior(b, combined_handle, sampler_index);
       }
+   }
+
+   /* The next header: a two-plane texture's alpha plane (nvk_switch_xr_planes.h) */
+   if (tex->backend_flags & SWITCH_NVK_TEX_ALPHA_PLANE) {
+      combined_handle = nir_iadd_imm(b, combined_handle, 1);
+      tex->backend_flags &= ~SWITCH_NVK_TEX_ALPHA_PLANE;
    }
 
    nir_tex_instr_add_src(tex, nir_tex_src_texture_handle, combined_handle);

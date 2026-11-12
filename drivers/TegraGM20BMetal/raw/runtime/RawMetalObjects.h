@@ -231,7 +231,8 @@ struct RMPass {
     NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
 
-    // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
+    // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it (a
+    // resolve's, MultisampleResolve and StoreAndMultisampleResolve, as DontCare and Store)
     struct Zeta {
         __unsafe_unretained id texture;
         NSUInteger level, slice;
@@ -240,6 +241,10 @@ struct RMPass {
         bool resolve;
     } zeta[2];
 
+    __unsafe_unretained id depthResolve;    // its depth resolve's texture, nil for none
+    uint32_t depthFilter;                   // and MTLMultisampleDepthResolveFilter
+    __unsafe_unretained id stencilResolve;  // its stencil resolve's texture, nil for none
+    raw::StencilSample stencilPick;         // and the sample whose stencil it takes
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
@@ -329,6 +334,9 @@ struct RMSharedEventWait {
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
+    // the two-plane RGB10A8_2P_XR10 textures a draw samples through the stand-in, its state having no ready " | xrs="
+    // variant for them (raw_xr_pass.h): only these of that format get their stand-in drawn
+    std::set<RMTexture *> _xrStandIns;
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;               // OpRender's (Cmd::x)
     std::vector<RMCounterMark> _counterMarks;  // in tape order
@@ -442,6 +450,7 @@ uint64_t nextTraceId();
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
     uint32_t _samples;     // its color attachments' samples a pixel
     uint8_t _turn;         // its turned attachments' rotation (raw_rotation.h; 0: none)
+    bool _xrPlanes;        // it draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h): its states' " | xr2p" variants
     uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read

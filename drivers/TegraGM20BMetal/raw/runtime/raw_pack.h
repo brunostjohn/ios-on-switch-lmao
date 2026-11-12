@@ -37,7 +37,8 @@ enum PackSectionId {
 constexpr uint32_t kPackVersion = 21;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
-// hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
+// hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
+// (kChipAssumptions): 17 and
 // 18 of the code a variant runs, 19-25 of the ROP blend a storage form computes in its program (PackPipeline::storageBlendModel
 // holds them shifted down by kRopBlendShift, m2v rop_blend::Assumption's bits). A record is drawn whatever its ROP bits: they
 // name what a device probe has to confirm before the program's blend can be called the ROP's.
@@ -57,6 +58,9 @@ enum PackAssumption : uint32_t {
     AssumeRopSrgbTables = 1u << 23,    // sRGB decoded and encoded by Metal's tables
     AssumeRopMinMaxNumber = 1u << 24,  // Min and Max answer the operand that is not a NaN
     AssumeRopDenormals = 1u << 25,     // f32 denormals flushed to zero
+    // The pass draws into a turned plane (raw_rotation.h): the fragment program reads the frame through the root table's turn
+    // words. Such a variant is its stage's first, so a turned draw takes it before any other.
+    AssumeTurned = 1u << 26,
 };
 
 constexpr uint32_t kUniformRanges = 8, kTextureFacts = 8;
@@ -270,14 +274,20 @@ enum PackPipelineFlags : uint32_t {
     // the state drawn with no framebuffer fetch: its program writes the blend's source, which the ROP blends with the
     // color (fetchRung: FetchBlend, its registers' blend; FetchIteratedBlend, the iterated program it names). Under the
     // state's keyHash; only PackForm::FetchFree finds it
-    PipelineFetchFreeForm = 32
+    PipelineFetchFreeForm = 32,
+    // its fragment program reads a turned plane's axes and no turned variant (AssumeTurned) could be made of it: a turned pass
+    // does not draw it
+    PipelineTurnRefused = 64,
+    // its RGB10A8_2P_XR10 colours drawn in Metal's two planes (raw_xr_pass.h): the record of the state's " | xr2p" variant
+    PipelineTwoPlane = 128
 };
 
-// Where a key's variant name starts (" | cubic ...", then " | tests=<n>": the runtime's names, RawMetalCubic.mm), its size
-// where it names none
+// Where a key's variant name starts (" | cubic ...", then " | tests=<n>", then " | xr2p", then " | xrs=<slots>": the runtime's
+// names, RawMetalCubic.mm), its size where it names none
 inline size_t variantNameAt(const std::string &key)
 {
-    return std::min({key.find(" | cubic "), key.find(" | tests="), key.size()});
+    return std::min(
+        {key.find(" | cubic "), key.find(" | tests="), key.find(" | xr2p"), key.find(" | xrs="), key.size()});
 }
 
 // Which of a state's records: its first (the storage form where it has both), its barrier form, or its fetch-free form
@@ -396,6 +406,9 @@ struct PackPipeline {
     // The push word + 1 of m2v's ViewportCount (0: none), the encoder's viewport count, which each draw writes: an index
     // its vertex program writes at or past the count is 0
     uint8_t viewportCountWord;
+    // the fragment texture slots its programs read through a two-plane RGB10A8_2P_XR10 texture's header pair (raw_xr_pass.h):
+    // the record of its " | xrs=<slots>" variant
+    uint16_t xrSlots, xrReserved;
 };
 
 // PackPipeline::arrayLengthWord of a record of one layer whose vertex function chooses its slice
@@ -564,7 +577,7 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 24,
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 28,
               "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
@@ -572,7 +585,8 @@ static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipel
                   offsetof(PackPipeline, spillEntry) == 628,
               "pack layout: packfile.py PIPELINE_V20");
 static_assert(offsetof(PackPipeline, controlWord) == 636 && offsetof(PackPipeline, arrayLengthWord) == 643 &&
-                  offsetof(PackPipeline, vertexStreams) == 652 && offsetof(PackPipeline, viewportCountWord) == 659,
+                  offsetof(PackPipeline, vertexStreams) == 652 && offsetof(PackPipeline, viewportCountWord) == 659 &&
+                  offsetof(PackPipeline, xrSlots) == 660,
               "pack layout: packfile.py PIPELINE_V21");
 static_assert(sizeof(PackProgram) == 44, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
@@ -604,9 +618,11 @@ public:
     }
 
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
-    // the state's PipelineVariantRecords, and the one named `name` (variantNameAt); nullptr: not in the pack
+    // the state's PipelineVariantRecords, and the one named `name` (variantNameAt) of `form` (a two-plane form's storage
+    // form has its barrier twin, raw_xr_pass.h); nullptr: not in the pack
     std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
-    const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name) const;
+    const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name,
+                                      PackForm form = PackForm::Default) const;
     const PackKernel *findKernel(uint64_t keyHash) const;  // nullptr: not in the pack
     const PackSplit *split(uint32_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none

@@ -202,6 +202,10 @@ static void giveRecording(RMCommandBuffer *b)
             for (const RMPass::Color &a : pass.color)
                 if (a.resolve)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
+            if (pass.depthResolve)
+                uses.push_back({(__bridge void *)pass.depthResolve, raw::ResourceUse::Write});
+            if (pass.stencilResolve)
+                uses.push_back({(__bridge void *)pass.stencilResolve, raw::ResourceUse::Write});
         } else if (cmd.op == OpVisibility && cmd.obj) {
             uses.push_back({cmd.obj, raw::ResourceUse::Write});
         } else if (cmd.op == OpInvocation) {

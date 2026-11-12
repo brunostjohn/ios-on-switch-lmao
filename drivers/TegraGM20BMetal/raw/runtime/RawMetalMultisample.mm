@@ -26,7 +26,7 @@ bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::T
                    samples = uint32_t(d.sampleCount);
     const bool zeta = kind == RMStoredSamples::Zeta;
     const bool made =
-        zeta ? gRM->raw->createOwnedZeta(width, height, format, samples, (d.usage & MTLTextureUsageShaderRead) != 0, t)
+        zeta ? gRM->raw->createOwnedZeta(width, height, format, samples, t)
              : gRM->raw->createStoredMultisample(width, height, format, samples, t);
     static std::atomic<bool> said[2];
     if (made && !said[zeta].exchange(true))

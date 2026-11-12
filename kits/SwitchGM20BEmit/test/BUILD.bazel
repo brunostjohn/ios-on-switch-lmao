@@ -136,6 +136,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_sample_shading.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
         "//kits/SwitchGM20B/test:driver_constants_h",
     ],
     copts = ["-Idrivers/TegraGM20B"],

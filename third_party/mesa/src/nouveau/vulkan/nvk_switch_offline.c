@@ -19,6 +19,8 @@
 #include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_split.h"
+#include "nvk_switch_turn.h"
+#include "nvk_switch_xr_planes.h"
 
 #include "vk_graphics_state.h"
 #include "vk_nir.h"
@@ -284,6 +286,8 @@ switch_nak_compile_stage(const struct switch_nak_frozen *frozen,
    switch_nvk_split_current = info->split;
    switch_nvk_center_frag_depth_current = info->center_frag_depth != 0;
    switch_nvk_texs_f16_current = info->texs_f16;
+   switch_nvk_turned_current = info->turned;
+   switch_nvk_xr_plane_bindings_current = info->xr_plane_bindings;
    bool native_used = false;
    VkResult result = compile(frozen, info, &l, shader, &native_used);
    switch_nvk_const_push_current = NULL;
@@ -291,6 +295,8 @@ switch_nak_compile_stage(const struct switch_nak_frozen *frozen,
    switch_nvk_split_current = false;
    switch_nvk_center_frag_depth_current = false;
    switch_nvk_texs_f16_current = false;
+   switch_nvk_turned_current = false;
+   switch_nvk_xr_plane_bindings_current = 0;
    layout_finish(&l);
    if (result != VK_SUCCESS) {
       switch_nak_stage_finish(&(struct switch_nvk_stage){.owner = shader});
