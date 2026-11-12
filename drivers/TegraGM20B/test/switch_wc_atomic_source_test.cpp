@@ -101,7 +101,7 @@ const Mapping kMappings[] = {
 	 "switch_linux_ioremap's definition"},
 	{"kits/SwitchLinux/SwitchLinux.cpp", "switch_linux_ioremap", 1, nullptr, "its definition"},
 	{"kits/SwitchLinux/SwitchLinux.h", "switch_linux_ioremap", 1, nullptr, "its declaration"},
-	{"kits/SwitchMMIO/SwitchMMIOKernel.h", "ml_io_map", 2, nullptr,
+	{"kits/SwitchMMIO/SwitchMMIOKernel.h", "ml_io_map", 2, R"(\bswitch_mmio_map\s*\()",
 	 "switch_mmio maps, switch_mmio_read32/write32"},
 	{"kits/qemu/SharedWindow.cpp", "kIOMapInhibitCache", 1, nullptr,
 	 "QEMU's shared window, copies only"},
@@ -317,6 +317,10 @@ Scan scan()
 						: std::vector<std::string>{
 							  firstArgument(source, open + 1)};
 				for (const std::string &operand : operands) {
+					if (operand.find_first_not_of(" \t\n") !=
+						    std::string::npos &&
+					    operand[operand.find_first_not_of(" \t\n")] == '[')
+						continue;  // a lambda, never the operand
 					const std::string name = local(operand);
 					const std::string from =
 						name.empty() ? std::string()
