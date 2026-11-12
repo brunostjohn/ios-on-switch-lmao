@@ -11,7 +11,8 @@ import Metal
 /// state, keyed by its fragment blend: worst_<blend> the largest difference in codes between the two routes' first
 /// attachments (rule fetch.blend allows 2; rung 3's programs are exact in QuartzCore's arithmetic, so 2 too),
 /// us_rung4_<blend> and us_rung<N>_<blend> one full-screen draw's GPU time each way, us_pass_<blend> the fetch-free
-/// form's time per pass of its program. r<N>= the draws the facade's counter says took the fetch-free form.
+/// form's time per pass of its program. r<N>= the draws the facade's counter says took the fetch-free form. clr_m1's
+/// form reads its memoryless image (the second attachment) behind a pixel barrier beside the ROP's blend of its colour.
 /// verdict=PASS: every state within the bound and faster on its fetch-free form, with every forced draw counted.
 /// proven= the programs every state of which was within the bound and faster, the list raw_chip_facts.h
 /// kIteratedProven takes for rung 3: a program is taken by its own measured cost, not by its pass count. A state this
@@ -32,7 +33,10 @@ struct FetchRungTest: HWTest {
     /// QuartzCore, tagged os=24B119 and os=21H461), each with the key its metrics take (its fragment blend) and its
     /// program's passes (raw/pack/iterated/table.py; vcm's macro at its longest, which CAStateSweep's matrix selects)
     static let states: [Int: [(label: String, key: String, passes: Int)]] = [
-        2: [("PBGRAXm_TimgBclrA2Xhf_Isrc", "clr", 0), ("PBGRAXm_TimgBaddA2Xhf_Isrc", "add", 0)],
+        2: [
+            ("PBGRAXm_TimgBclrA2Xhf_Isrc", "clr", 0), ("PBGRAXm_TimgBaddA2Xhf_Isrc", "add", 0),
+            ("PBGRAXm_TimgBclrA2Xhf_IsrcM1", "clr_m1", 0),
+        ],
         3: [
             ("PBGRAXm_TimgBmpyA2Xhf_Isrc", "mpy", 2), ("PBGRAXm_TimgBpdiA2Xhf_Isrc", "pdi", 2),
             ("PBGRAXm_TimgBlbnA2Xhf_Isrc", "lbn", 4), ("PBGRAXm_TimgBpldA2Xhf_Isrc", "pld", 5),
