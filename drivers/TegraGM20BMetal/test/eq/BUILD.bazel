@@ -13,64 +13,92 @@ lint_files()
 
 GM20B_METAL = "//drivers/TegraGM20BMetal"
 
+# What decodes raw's submissions (eq_capture.cpp over the kernel model, nvdec with the MME simulator and the 2D engine)
+CAPTURE_SRCS = [
+    "eq_capture.cpp",
+    "//drivers/TegraGM20BMetal/test:raw_kernel_model.h",
+] + [GM20B_METAL + ":raw/" + f for f in [
+    "fx/test/twod_sim.cpp",
+    "fx/test/twod_sim.h",
+    "pack/nvdec.cpp",
+    "pack/nvdec.h",
+    "pack/nvdec_comp.h",
+    "pack/nvdec_compute.cpp",
+    "pack/probe_record.h",
+    "pack/mesa/mme_bitpack_helpers.h",
+    "pack/mesa/mme_fermi.c",
+    "pack/mesa/mme_fermi.h",
+    "pack/mesa/mme_fermi_sim.c",
+    "pack/mesa/mme_fermi_sim.h",
+    "pack/mesa/mme_sim.h",
+    "pack/mesa/nv_device_info.h",
+    "pack/mesa/nv_push_cl902d.h",
+    "pack/mesa/nv_push_cl9097.h",
+    "pack/mesa/util/bitpack_helpers.h",
+    "pack/mesa/util/macros.h",
+    "pack/mesa/util/u_math.h",
+]]
+
+CAPTURE_CONLYOPTS = [
+    "-Wno-unused-parameter",
+    "-Wno-sign-compare",
+]
+
+CAPTURE_COPTS = [
+    "-DSWITCH_RAW_HARNESS_MARKS",
+    "-DNVDEC_TWOD",
+    "-Idrivers/TegraGM20B",
+    "-Idrivers/TegraGM20BMetal/raw/runtime",
+    "-Ikits/SwitchGM20BEmit/mesa",
+    "-I$(GENDIR)/kits/SwitchGM20BEmit/gen",
+    "-Ithird_party/mesa/src/nouveau/headers",
+    "-Wno-deprecated-declarations",
+]
+
+CAPTURE_LINKOPTS = [
+    "-framework",
+    "IOKit",
+    "-framework",
+    "IOSurface",
+    "-framework",
+    "CoreFoundation",
+]
+
+CAPTURE_DEPS = [
+    "//drivers/TegraGM20BMetal/test:raw_runtime_marked",
+    "//kits/SwitchGM20B:classes",
+    "//kits/SwitchGM20BEmit:emit_ndebug",
+    "//kits/SwitchGM20BEmit:macros_h",
+]
+
 cc_binary(
     name = "rawframe",
     testonly = True,
-    srcs = [
-        "eq_capture.cpp",
-        "//drivers/TegraGM20BMetal/test:raw_kernel_model.h",
-    ] + [GM20B_METAL + ":raw/" + f for f in [
-        "fx/test/twod_sim.cpp",
-        "fx/test/twod_sim.h",
-        "pack/nvdec.cpp",
-        "pack/nvdec.h",
-        "pack/nvdec_comp.h",
-        "pack/nvdec_compute.cpp",
-        "pack/probe_record.h",
-        "pack/mesa/mme_bitpack_helpers.h",
-        "pack/mesa/mme_fermi.c",
-        "pack/mesa/mme_fermi.h",
-        "pack/mesa/mme_fermi_sim.c",
-        "pack/mesa/mme_fermi_sim.h",
-        "pack/mesa/mme_sim.h",
-        "pack/mesa/nv_device_info.h",
-        "pack/mesa/nv_push_cl902d.h",
-        "pack/mesa/nv_push_cl9097.h",
-        "pack/mesa/util/bitpack_helpers.h",
-        "pack/mesa/util/macros.h",
-        "pack/mesa/util/u_math.h",
-        "test/frame.h",
-        "test/rawframe.cpp",
-    ]],
-    conlyopts = [
-        "-Wno-unused-parameter",
-        "-Wno-sign-compare",
+    srcs = CAPTURE_SRCS + [
+        GM20B_METAL + ":raw/test/frame.h",
+        GM20B_METAL + ":raw/test/rawframe.cpp",
     ],
-    copts = [
-        "-DSWITCH_RAW_HARNESS_MARKS",
-        "-DNVDEC_TWOD",
-        "-Idrivers/TegraGM20B",
-        "-Idrivers/TegraGM20BMetal/raw/runtime",
-        "-Ikits/SwitchGM20BEmit/mesa",
-        "-I$(GENDIR)/kits/SwitchGM20BEmit/gen",
-        "-Ithird_party/mesa/src/nouveau/headers",
-        "-Wno-deprecated-declarations",
-    ],
+    conlyopts = CAPTURE_CONLYOPTS,
+    copts = CAPTURE_COPTS,
     cxxopts = ["-std=c++17"],
-    linkopts = [
-        "-framework",
-        "IOKit",
-        "-framework",
-        "IOSurface",
-        "-framework",
-        "CoreFoundation",
+    linkopts = CAPTURE_LINKOPTS,
+    deps = CAPTURE_DEPS,
+)
+
+# computeeq's raw side: computeframe's raw mode (an NVK run's kernel record and program through raw's compute encoder)
+cc_binary(
+    name = "computeframe",
+    testonly = True,
+    srcs = CAPTURE_SRCS + [
+        "computeframe_main.cpp",
+        GM20B_METAL + ":raw/test/computeframe.h",
+        GM20B_METAL + ":raw/test/computeframe_raw.cpp",
     ],
-    deps = [
-        "//drivers/TegraGM20BMetal/test:raw_runtime_marked",
-        "//kits/SwitchGM20B:classes",
-        "//kits/SwitchGM20BEmit:emit_ndebug",
-        "//kits/SwitchGM20BEmit:macros_h",
-    ],
+    conlyopts = CAPTURE_CONLYOPTS,
+    copts = CAPTURE_COPTS,
+    cxxopts = ["-std=c++17"],
+    linkopts = CAPTURE_LINKOPTS,
+    deps = CAPTURE_DEPS,
 )
 
 py_library(
