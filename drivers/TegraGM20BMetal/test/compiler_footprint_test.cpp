@@ -95,6 +95,7 @@ void show(const char *mode)
 struct Asked : switch_compiler::Work {
     switch_compiler::Prepared prepared;
     std::string request;
+    dispatch_semaphore_t done = nullptr;
 };
 
 std::string logPath()
@@ -159,9 +160,11 @@ struct Serving {
             const int32_t result = compile(asked.prepared, entry, failed);
             if (!entry.empty())
                 store.put(asked.prepared.name, entry);
-            if (result == TegraGM20BCompileMade)
+            if (result == TegraGM20BCompileMade && !asked.request.empty())
                 log.add(asked.prepared.name, asked.request);
             primary(result);
+            if (asked.done)
+                dispatch_semaphore_signal(asked.done);
             return result;
         };
         hooks.complete = [](const switch_compiler::Waiter &, int32_t) {};
@@ -176,32 +179,42 @@ struct Serving {
         return true;
     }
 
-    void submit(const std::string &request, switch_compiler::Band band)
+    // As Service::submit: true where a job of its own runs it
+    bool submit(switch_compiler::Prepared prepared, std::string request, switch_compiler::Band band,
+                dispatch_semaphore_t done)
     {
         auto work = std::make_unique<Asked>();
-        std::string why;
-        if (!switch_compiler::prepare(request, 0, system, work->prepared, why))
-            return (void)(ADD_FAILURE() << why);
-        work->request = request;
+        work->prepared = std::move(prepared);
+        work->request = std::move(request);
+        work->done = done;
         const switch_compiler::Name name = work->prepared.name;
-        pool->submit(name, std::move(work), {1, 1, band, false});
+        return pool->submit(name, std::move(work), {1, 1, band, false});
     }
 
+    // As Service::warm: the log's requests one at a time, then the clients'
     void serve(Steps &steps)
     {
+        dispatch_semaphore_t ran = dispatch_semaphore_create(0);
         log.replay([&](const std::string &request, raw::Digest &name) {
             switch_compiler::Prepared p;
             std::string why;
             if (!switch_compiler::prepare(request, 0, system, p, why))
                 return false;
             name = p.name;
-            submit(request, switch_compiler::Band::Background);
+            if (submit(std::move(p), std::string(), switch_compiler::Band::Background, ran))
+                dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
             return true;
         });
         pool->drain();
         steps.step("replayed the log");
-        for (const std::string &request : clients())
-            submit(request, switch_compiler::Band::Interactive);
+        for (const std::string &request : clients()) {
+            switch_compiler::Prepared p;
+            std::string why;
+            if (switch_compiler::prepare(request, 0, system, p, why))
+                submit(std::move(p), request, switch_compiler::Band::Interactive, nullptr);
+            else
+                ADD_FAILURE() << why;
+        }
         pool->drain();
         steps.step("served the clients");
         malloc_zone_pressure_relief(nullptr, 0);
