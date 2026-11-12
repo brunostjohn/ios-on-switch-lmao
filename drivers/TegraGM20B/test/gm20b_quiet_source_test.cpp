@@ -173,8 +173,12 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	expectBefore(job, "keepPromises(record.promises, releases)",
 		     "switch_gpu_chan_submit_enter(chan);");
 	expectBefore(job, "events->captureDependencies(job.dependencies, dependencies);",
-		     "job.uses[i].backing, ownPromises,");
-	expectBefore(job, "job.uses[i].backing, ownPromises,", "switch_gpu_chan_exec_job(");
+		     "switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,");
+	expectBefore(job, "switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,",
+		     "switch_gpu_chan_exec_job(");
+	// between begin and commit the transaction holds every use's backing lock: a promise read that takes one again
+	// (switch_gpu_backing_promise_tokens) never returns on XNU
+	EXPECT_THAT(job, Not(HasSubstr("switch_gpu_backing_promise_tokens(")));
 	expectBefore(job, "switch_gpu_backing_commit(&transaction);",
 		     "keptPromises(record.promises, slot);");
 	const std::string fence = Body(unit("gpu_exec.c"), "static u32 chan_fence_job(");

@@ -396,6 +396,30 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 	return *needed > capacity ? -28 : 0;
 }
 
+extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transaction *transaction,
+						       switch_gpu_backing_token *out, uint32_t capacity,
+						       uint32_t *needed, uint32_t own_first, uint32_t own_end)
+{
+	if (!transaction || !needed || *needed > capacity || transaction->locked != transaction->count)
+		return -22;
+	uint32_t extra = 0;
+	for (uint32_t i = 0; i < transaction->count; ++i) {
+		const auto *backing = transaction->uses[i].backing;
+		if (!backing->promise_count)
+			continue;
+		const uint32_t at = *needed + extra;
+		const int pending = switch_gpu_backing_promises_locked(backing, own_first, own_end,
+								       at < capacity ? out + at : nullptr,
+								       at < capacity ? capacity - at : 0);
+		// past the room, the count alone: the caller grows by it, as for switch_gpu_backing_dependencies
+		extra += pending >= 0 ? uint32_t(pending)
+				      : uint32_t(switch_gpu_backing_promises_locked(backing, own_first, own_end,
+										   nullptr, 0));
+	}
+	*needed += extra;
+	return *needed > capacity ? -28 : 0;
+}
+
 extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transaction)
 {
 	if (!transaction || transaction->locked != transaction->count ||

@@ -144,6 +144,49 @@ TEST_F(Backing, AWaitingSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	switch_gpu_backing_release(b);
 }
 
+// Another connection's job reads a promised surface: it takes the promise as a token while its transaction holds the
+// surface's lock, as SubmitJob does between begin and commit, and its own connection's promises are left out.
+TEST_F(Backing, AJobTakesThePromisesUnderItsOwnTransaction)
+{
+	auto *b = promised();
+	switch_gpu_backing_use read{b, kRead, 0};
+	switch_gpu_backing_transaction transaction = {};
+	const auto job = token(9, 2);
+	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
+	switch_gpu_backing_token tokens[2] = {};
+	uint32_t needed = 1;
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, 0, 0), 0);
+	EXPECT_EQ(needed, 2u);
+	EXPECT_EQ(tokens[1].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+	EXPECT_EQ(tokens[1].queue, kOffset);
+	needed = 0;
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, kOffset, kOffset + 4), 0);
+	EXPECT_EQ(needed, 0u);
+	needed = 0;
+	EXPECT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 0, &needed, 0, 0), -28);
+	EXPECT_EQ(needed, 1u);
+	switch_gpu_backing_abort(&transaction);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
+// The surface-level read takes the surface's lock, which the transaction already holds: XNU's lock never returns, and
+// the model aborts. This is the read SubmitJob made before, from inside its transaction.
+TEST_F(Backing, ASurfacesOwnPromiseReadInsideATransactionTakesItsLockTwice)
+{
+	auto *b = promised();
+	switch_gpu_backing_use read{b, kRead, 0};
+	switch_gpu_backing_transaction transaction = {};
+	const auto job = token(9, 2);
+	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
+	switch_gpu_backing_token tokens[1] = {};
+	EXPECT_DEATH(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), "already holds this lock");
+	switch_gpu_backing_abort(&transaction);
+	EXPECT_EQ(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), 1);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
 // The hang rule raises a word a stuck reader waits for without dropping the surface's ref: nothing waits for it after.
 TEST_F(Backing, APromiseWhoseWordWasRaisedHoldsNothingOff)
 {

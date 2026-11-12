@@ -294,16 +294,14 @@ refresh:
 			error = captured;
 		}
 		// another connection's writer promises on what the job uses: acquired on the GPU, never a shared event's
-		// captured dependency
-		const uint32_t ownPromises = tgm_fence_offset(promiseWord(0));
-		for (uint32_t i = 0; !error && i < useTotal; ++i) {
-			const int promised = switch_gpu_backing_promise_tokens(
-				job.uses[i].backing, ownPromises, ownPromises + TegraGM20BMaxPromises * 4,
-				job.dependencies + dependencies, TegraGM20BMaxJobDependencies - dependencies);
-			if (promised < 0)
-				error = promised;
-			dependencies += promised > 0 ? uint32_t(promised) : 0u;
-			promiseWaits += promised > 0;
+		// captured dependency; read under the transaction's locks on the uses' backings, never by taking one again
+		if (!error && count) {
+			const uint32_t ownPromises = tgm_fence_offset(promiseWord(0)), before = dependencies;
+			error = switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,
+									TegraGM20BMaxJobDependencies, &dependencies,
+									ownPromises,
+									ownPromises + TegraGM20BMaxPromises * 4);
+			promiseWaits = dependencies - before;
 		}
 		if (!error)
 			error = events->bind(&completion);

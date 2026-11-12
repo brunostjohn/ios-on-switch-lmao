@@ -189,6 +189,12 @@ int switch_gpu_backing_begin_conversion_checked(struct switch_gpu_backing_use *u
 int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction *transaction,
 				    struct switch_gpu_backing_token *out, uint32_t capacity,
 				    uint32_t *needed);
+/* The transaction's uses' pending writer promises (SwitchGpuWriterPromise.h) but those in [own_first, own_end) (a
+ * connection's own) as tokens after the *needed already in `out`, read under the locks the transaction holds on their
+ * backings: *needed grows by them, -28 past capacity. */
+int switch_gpu_backing_promise_dependencies(struct switch_gpu_backing_transaction *transaction,
+					    struct switch_gpu_backing_token *out, uint32_t capacity,
+					    uint32_t *needed, uint32_t own_first, uint32_t own_end);
 void switch_gpu_backing_commit(struct switch_gpu_backing_transaction *transaction);
 void switch_gpu_backing_abort(struct switch_gpu_backing_transaction *transaction);
 int switch_gpu_backing_write_ranges(struct switch_gpu_backing_transaction *transaction,

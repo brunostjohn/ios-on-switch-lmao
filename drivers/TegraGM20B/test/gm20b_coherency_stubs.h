@@ -3,10 +3,14 @@
 // concurrency test runs traps against releases on two threads), IONew/IODelete, IOLog counted, and tgm_cpu_clean_pages
 // recording each call's pages.
 #pragma once
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <condition_variable>
+#include <thread>
 #include <vector>
 
 class IOUserClient {
@@ -21,6 +25,7 @@ public:
 struct IOLock {
 	std::mutex m;
 	std::condition_variable condition;
+	std::atomic<std::thread::id> owner{};
 };
 
 inline IOLock *IOLockAlloc()
@@ -33,20 +38,29 @@ inline void IOLockFree(IOLock *lock)
 	delete lock;
 }
 
+// XNU's IOLock (lck_mtx) is not recursive: a thread taking one it holds never returns. The model aborts there.
 inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
+	if (lock->owner.load(std::memory_order_relaxed) == std::this_thread::get_id()) {
+		std::fputs("IOLockLock: the thread already holds this lock\n", stderr);
+		std::abort();
+	}
 	lock->m.lock();
+	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 }
 
 inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
+	lock->owner.store(std::thread::id(), std::memory_order_relaxed);
 	lock->m.unlock();
 }
 
 inline void IOLockSleep(IOLock *lock, void *, int) __attribute__((no_thread_safety_analysis))
 {
 	std::unique_lock<std::mutex> held(lock->m, std::adopt_lock);
+	lock->owner.store(std::thread::id(), std::memory_order_relaxed);
 	lock->condition.wait(held);
+	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	held.release();
 }
 
