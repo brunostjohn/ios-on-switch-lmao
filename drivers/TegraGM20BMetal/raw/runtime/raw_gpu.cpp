@@ -141,10 +141,15 @@ constexpr size_t kDedicatedSpares = 2;
 // The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MiB
 // of programs, of which a process uses a few hundred. Its GPU VA is the whole program window: SET_PIPELINE_PROGRAM is a 32-bit
 // offset from SET_PROGRAM_REGION, so every program lies in the 4 GiB after it (NVK's contiguous shader arena before Volta is
-// that window too). Only VA is held; parts of host memory are bound in it as programs are placed, with room after the last
-// one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
+// that window too). Only VA is held. A program of a page or more runs in place from the pack's own pages (Device::placeInPlace:
+// RenderBox's uber programs are 200-520 KiB each, a SwiftUI process's heap was MiBs of copies of them); a smaller one is
+// copied into parts of host memory bound after the pack's region as programs are placed, with room after the last one for
+// the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
 // Animation's states place in their first frames (17's journal: 1.13 MiB).
-constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
+constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = kProgramPrefetchBytes,
+                   kHeapAtOpen = 2 << 20;
+// The window after the pack's region the copied programs may take; the store's mappings come after it
+constexpr uint64_t kHeapCopiesWindow = 512ull << 20;
 // A client's first chunk of a kind, and its first heap part, as a share of the role's size: a widget's few surfaces and states
 // fit, and jetsam limits of a few tens of MB leave nothing for a render server's steps.
 constexpr uint64_t kClientFirstShare = 16, kClientHeapFirstShare = 4;
@@ -592,6 +597,16 @@ bool Device::init(std::string &err)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
     placed_.assign(pack_.header()->programs, ~0u);
+    {
+        const PackHeader &h = *pack_.header();
+        const uint64_t page = k_.info().page_size;
+        uint64_t mapped = 0;
+        for (const PackSection &section : h.section)
+            mapped = std::max(mapped, (section.offset + section.bytes + page - 1) / page * page);
+        packPages_.reset(h.section[PackHeap].offset, mapped, mapped, 0);
+        heapCopiesAt_ = heapBound_ = heapPlaced_ = (packPages_.windowEnd() + kHeapStep - 1) & ~(kHeapStep - 1);
+        heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
+    }
     if (role_ == Role::Client)
         return true;
     if (!ensureChannel()) {
@@ -602,7 +617,7 @@ bool Device::init(std::string &err)
     // first pool chunk
     {
         std::lock_guard<std::mutex> l(lock_);
-        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
+        heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         Span first;
         if (blAlloc(1, 0, first))
             blFree(first);
@@ -669,17 +684,22 @@ bool Device::openChannel(std::string &err)
     return true;
 }
 
-// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, its
-// SET_PIPELINE_PROGRAM value and its shader data's GPU address (0: none). A slot is a few KiB copied once per process from the
-// pack's pages, so the CPU copies it (the copy engine would want the pack's pages imported, wired, for the whole process); the
-// prologue of the next submission committed after it invalidates the instruction caches too (CommandBuffer::commit), and every
-// prologue the constant cache, before any draw reads it. False: the heap is full (that state stays m2v's).
+// lock_ held: program `prog`'s slot in the program window the first time a state uses it, its SET_PIPELINE_PROGRAM value and
+// its shader data's GPU address (0: none). A slot of a page or more, or one whose pages are bound already, runs in place from
+// the pack's pages; a smaller one is copied into the heap's host memory, since importing its page would wire a page for a
+// few KiB. The prologue of the next submission committed after it invalidates the instruction caches too
+// (CommandBuffer::commit), and every prologue the constant cache, before any draw reads it. False: the heap is full (that
+// state stays m2v's).
 bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
     if (placed_[prog] == ~0u) {
         uint64_t at = 0;
-        if (!heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
+        const uint8_t *file = reinterpret_cast<const uint8_t *>(pack_.header());
+        const uint64_t fileOffset = pack_.header()->section[PackHeap].offset + p.heapOffset;
+        const bool inPlace = p.bytes >= k_.info().page_size || packPages_.bound(fileOffset, p.bytes + kHeapSlack);
+        if (!(inPlace && placeInPlace(packPages_, file, fileOffset, p.bytes, at)) &&
+            !heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
         placed_[prog] = uint32_t(at);
         RAW_DIAGNOSTIC(stats.programsPlaced++);
@@ -717,14 +737,15 @@ bool Device::heapGrow(uint64_t end)
 {
     if (end <= heapBound_)
         return true;
-    if (end > heap_.bytes)
+    if (end > heapStoresAt_)
         return false;
     // a client's parts double from a quarter step, as its chunks do
     const uint64_t step =
-        role_ == Role::Client ? std::clamp(heapBound_, kHeapStep / kClientHeapFirstShare, kHeapStep) : kHeapStep;
+        role_ == Role::Client ? std::clamp(heapBound_ - heapCopiesAt_, kHeapStep / kClientHeapFirstShare, kHeapStep)
+                              : kHeapStep;
     HeapPart part;
     part.offset = heapBound_;
-    part.bytes = std::min(heap_.bytes - heapBound_, (end - heapBound_ + step - 1) & ~(step - 1));
+    part.bytes = std::min(heapStoresAt_ - heapBound_, (end - heapBound_ + step - 1) & ~(step - 1));
     vm_address_t cpu = 0;
     if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
         return false;
@@ -756,6 +777,8 @@ const Device::HeapPart *Device::heapPartAt(uint64_t at) const
 // memory before the GPU can read it. False: no room in the window.
 bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
+    if (size >= k_.info().page_size && slotLookup_ && placeFromStore(bytes, size, offset))
+        return true;
     uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
     for (const HeapPart *p = heapPartAt(at); p && at + size > p->offset + p->bytes; p = heapPartAt(at))
         at = p->offset + p->bytes;
@@ -767,7 +790,90 @@ bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
     cleanToMemory(cpu, size);
     offset = at;
     heapPlaced_ = at + size;
+    heapEpoch_.fetch_add(1, std::memory_order_release);
     return true;
+}
+
+// lock_ held: a slot of `size` bytes at `fileOffset` of the read-only mapping `file` run in place: the grains it and the
+// instruction prefetch past its end lie in imported and bound at their window offsets where they are not yet, its window
+// offset in `offset`. The kernel wires the pages read-only (BoImport's read-only retry; the GPU maps them read-only),
+// cleans them at the import, and the bind's TLB and L2 invalidate makes the GPU's first walk read them; a slot in grains
+// bound already is cleaned here. The imports are held as long as the device and are never a job's use or a set member: no
+// job writes them, the CPU never changes a published slot, the kernel refuses a read-only import as a member, and a
+// connection's close kills its channels before it unbinds and unwires anything (drainResources). False: not inside the
+// file's region, or the kernel refused an import (the slot is then copied).
+bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fileOffset, uint32_t size, uint64_t &offset)
+{
+    std::vector<ProgramPages::Grain> grains;
+    if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))
+        return false;
+    for (const ProgramPages::Grain &r : grains) {
+        void *cpu = const_cast<uint8_t *>(file + r.offset);
+        Bo bo;
+        if (!k_.importPages(cpu, r.bytes, bo, 0, true)) {
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: the kernel refused %llu KiB of program pages at file offset 0x%llx: copied instead",
+                         (unsigned long long)(r.bytes >> 10), (unsigned long long)r.offset);
+            return false;
+        }
+        if (!k_.bindImportAt(cpu, bo, heap_.va + pages.windowOffset(r.offset), kPteKindPitch)) {
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: the program pages at file offset 0x%llx would not bind in the window: copied instead",
+                         (unsigned long long)r.offset);
+            return false;
+        }
+        inPlaceImports_.push_back(bo);
+        pages.bind(r);
+    }
+    if (grains.empty())
+        cleanToMemory(file + fileOffset, size);
+    offset = pages.windowOffset(fileOffset);
+    heapEpoch_.fetch_add(1, std::memory_order_release);
+    return true;
+}
+
+// lock_ held: a slot the shader compiler's store holds (switch_compiler::Store::putProgramSlots: on pages of its own, zeros
+// through the prefetch past its end) run in place from this process's mapping of the store. False: the store holds none of
+// its bytes, or the window has no room for another mapping (the slot is then copied).
+bool Device::placeFromStore(const uint8_t *slot, uint32_t size, uint64_t &offset)
+{
+    const uint8_t *mapping = nullptr;
+    uint64_t bytes = 0;
+    const uint8_t *at = slotLookup_(slot, size, mapping, bytes);
+    if (!at)
+        return false;
+    StoreRegion *region = nullptr;
+    for (StoreRegion &r : storeRegions_)
+        if (r.mapping == mapping)
+            region = &r;
+    if (!region) {
+        const uint64_t after = storeRegions_.empty() ? heapStoresAt_ : storeRegions_.back().pages.windowEnd();
+        const uint64_t window = (after + kHeapStep - 1) & ~(kHeapStep - 1), page = k_.info().page_size;
+        if (window + (bytes + page - 1) / page * page > heap_.bytes)
+            return false;
+        region = &storeRegions_.emplace_back(StoreRegion{mapping, {}});
+        region->pages.reset(0, bytes, (bytes + page - 1) / page * page, window);
+    }
+    return placeInPlace(region->pages, mapping, uint64_t(at - mapping), size, offset);
+}
+
+void Device::runSlotsFrom(SlotLookup lookup)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    slotLookup_ = std::move(lookup);
+}
+
+// lock_ held: the CPU's view of window offset `at`: the pack's or a store's mapping, or the heap part holding it (null:
+// none)
+const uint8_t *Device::heapCpu(uint64_t at) const
+{
+    if (packPages_.holdsWindow(at))
+        return reinterpret_cast<const uint8_t *>(pack_.header()) + packPages_.fileOffset(at);
+    for (const StoreRegion &r : storeRegions_)
+        if (r.pages.holdsWindow(at))
+            return r.mapping + r.pages.fileOffset(at);
+    const HeapPart *part = heapPartAt(at);
+    return part ? part->cpu + (at - part->offset) : nullptr;
 }
 
 // The methods that bind program `prog`'s shader data at its slot of constant buffer group `group` (0 vertex, 4 pixel), leaving
@@ -1013,10 +1119,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         pl.readBits &= ~pl.storageBits;
     }
     const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
-    const HeapPart *code = heapPartAt(fs.program + 0x50);
+    const uint8_t *code = heapCpu(fs.program + 0x50);
     pl.turnSensitive =
-        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code->cpu + (fs.program + 0x50 - code->offset)),
-                               codeBytes / 4, pl.fetchBits || pl.storageBits);
+        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code), codeBytes / 4, pl.fetchBits || pl.storageBits);
     pl.rec = &pp;
 }
 
@@ -2413,6 +2518,15 @@ uint32_t Device::wcChunksHeld()
     return n;
 }
 
+uint64_t Device::heapInPlaceBytes()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    uint64_t bytes = packPages_.boundBytes();
+    for (const StoreRegion &r : storeRegions_)
+        bytes += r.pages.boundBytes();
+    return bytes;
+}
+
 uint64_t Device::wcChunkBytesHeld()
 {
     std::lock_guard<std::mutex> l(lock_);
@@ -3693,7 +3807,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     } rollback{d, invalidates, published, invalidatedBefore};
 
     uint64_t slmGiven = 0, slmVa = 0;
-    const uint64_t placed = d.heapPlaced_.load(std::memory_order_acquire);
+    const uint64_t placed = d.heapEpoch_.load(std::memory_order_acquire);
     if (shaderInvalidate_ && placed != d.heapInvalidated_) {
         *shaderInvalidate_ |= kInvalidateInstruction;
         invalidates = true;

@@ -114,6 +114,8 @@ void Remote::map(uint32_t generation)
     const auto *base = reinterpret_cast<const uint8_t *>(uintptr_t(reply.address));
     auto *made = new Mapping;
     made->generation = generation;
+    made->base = base;
+    made->bytes = reply.bytes;
     if (reply.bytes >= switch_seed_pack::kStoreHeaderBytes)
         memcpy(made->identity, base + kIdentityStackAt, sizeof made->identity);
     if (reply.bytes < switch_seed_pack::kStoreHeaderBytes ||
@@ -139,6 +141,20 @@ bool Remote::find(const Digest &name, std::string &bytes)
         return false;
     bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
     return true;
+}
+
+const uint8_t *Remote::findSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping, uint64_t &bytes) const
+{
+    const Mapping *m = mapping_.load(std::memory_order_acquire);
+    if (!m)
+        return nullptr;
+    const Digest name = programSlotName(slot, size);
+    switch_seed_pack::Bytes found;
+    if (!m->reader.find(name.data(), found) || found.size < size || memcmp(found.data, slot, size))
+        return nullptr;
+    mapping = m->base;
+    bytes = m->bytes;
+    return found.data;
 }
 
 std::string Remote::storeIdentity() const

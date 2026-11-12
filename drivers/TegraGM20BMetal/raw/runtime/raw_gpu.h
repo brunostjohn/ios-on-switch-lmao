@@ -35,6 +35,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -62,6 +63,7 @@
 #include "raw_heap.h"
 #include "raw_order.h"
 #include "raw_pack.h"
+#include "raw_program_pages.h"
 #include "raw_push.h"
 #include "raw_overlap.h"
 #include "raw_region.h"
@@ -1294,11 +1296,21 @@ public:
     // The free bytes of the block-linear chunks (test/poolcheck.cpp: a chunk's worth kept ahead)
     uint64_t blChunkFreeBytes();
 
-    // the shader heap's bound bytes (the programs placed so far, in steps)
+    // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
     {
-        return heapBound_;
+        return heapBound_ - heapCopiesAt_;
     }
+
+    // the pack's and the shader compiler's store's pages bound in the program window, where larger programs run in place
+    uint64_t heapInPlaceBytes();
+
+    // Where the shader compiler's program slots are, as this process maps its store (RawComplete.mm): a slot's bytes found
+    // there in place, with that mapping's first byte and size, else null. A copied slot of a page or more is looked up
+    // there first and runs in place where it is found. Null: none.
+    using SlotLookup = std::function<const uint8_t *(const uint8_t *slot, uint32_t size, const uint8_t *&mapping,
+                                                     uint64_t &bytes)>;
+    void runSlotsFrom(SlotLookup lookup);
 
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     bool createControlBuffer(uint64_t length, Buffer &buffer);
@@ -1718,8 +1730,9 @@ private:
         return setView_.holds(bo);
     }
     Pack pack_;
-    // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
-    // host memory as programs are placed
+    // heap_: the shader heap's GPU VA reservation (bytes: the program window). The pack's pages are bound at its start where
+    // programs run in place (packPages_), and from heapCopiesAt_ on parts of host memory, through heapBound_, hold the
+    // programs copied there
     Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, stamps_;
     // visibility results' report slots (raw_visibility.h), made at first use
     uint64_t visibilitySlot();
@@ -1734,7 +1747,18 @@ private:
     };
 
     std::vector<HeapPart> heapParts_;
-    uint64_t heapBound_ = 0;
+    uint64_t heapCopiesAt_ = 0, heapBound_ = 0;
+    ProgramPages packPages_;
+    // each mapping of the shader compiler's store slots ran from, its pages from window offset heapStoresAt_ on, a mapping
+    // after another's (a store written again is mapped again; the old mapping stays)
+    struct StoreRegion {
+        const uint8_t *mapping;
+        ProgramPages pages;
+    };
+    std::deque<StoreRegion> storeRegions_;
+    uint64_t heapStoresAt_ = 0;
+    SlotLookup slotLookup_;
+    std::vector<Bo> inPlaceImports_;  // the pages programs run from in place, held as long as the device
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
     std::vector<std::pair<Bo, uint32_t>> grownOut_;
@@ -1771,9 +1795,11 @@ private:
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
-    std::atomic<uint64_t> heapPlaced_{0};
-    // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
-    // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
+    uint64_t heapPlaced_ = 0;
+    // Programs placed so far, in place or copied, and that count as of the last submission whose prologue invalidated the
+    // SMs' instruction caches (~0: none on this channel). The instruction cache prefetches past a program's end, where the
+    // next program is placed.
+    std::atomic<uint64_t> heapEpoch_{0};
     uint64_t heapInvalidated_ = ~0ull;
     // Shader local memory (raw_slm.h), under lock_: the area and the most a placed program or kernel asks of a warp. An area
     // it outgrew is kept: a submission already made may still use it.
@@ -1788,6 +1814,9 @@ private:
     bool heapGrow(uint64_t end);
     const HeapPart *heapPartAt(uint64_t at) const;
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
+    bool placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fileOffset, uint32_t size, uint64_t &offset);
+    bool placeFromStore(const uint8_t *slot, uint32_t size, uint64_t &offset);
+    const uint8_t *heapCpu(uint64_t at) const;
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
     // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads

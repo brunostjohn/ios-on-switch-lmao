@@ -103,8 +103,10 @@ static const char *zetaMemoryRefusal(int asked)
 }
 
 // hw_test_app's system.widgets_render and gpu.raw.memoryless_burst: the bytes the raw device holds now. pool: its pool,
-// block-linear and depth chunks; wc: its write-combined chunks; heap: the shader heap's bound parts; backings: memoryless
-// attachments' uncompressed backings (trimBackings' last count); grows: allocations that wired a chunk themselves.
+// block-linear and depth chunks; wc: its write-combined chunks; heap: the shader heap's host memory (programs copied);
+// heap_in_place: the pack's and the shader compiler's store's pages larger programs run from (file pages, outside the
+// footprint); backings: memoryless attachments' uncompressed backings (trimBackings' last count); grows: allocations that
+// wired a chunk themselves.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawMemory
 {
     raw::Device &d = *gRM->raw;
@@ -112,6 +114,7 @@ static const char *zetaMemoryRefusal(int asked)
         @"pool" : @(d.stats.poolBytes.load()),
         @"wc" : @(d.wcChunkBytesHeld()),
         @"heap" : @(d.heapBytes()),
+        @"heap_in_place" : @(d.heapInPlaceBytes()),
         @"backings" : @(d.stats.backingBytes.load()),
         @"grows" : @(d.stats.poolStalls.load())
     };
