@@ -33,7 +33,10 @@ class SweepsTest(unittest.TestCase):
             protocol.validate_experiment(e)
             self.assertEqual(e['targets'], 1)
             self.assertFalse(protocol.unb64(e['program']['sph'])[1] & 1 << 6, e['id'])
-            self.assertIn([0x0DD0, 0], e['restore'])
+            self.assertIn([0x0DD0, 0], e['methods' if e['meta'].get('primer') else 'restore'])
+        primers, drawn = experiments[0::2], experiments[1::2]
+        self.assertEqual([p['id'] for p in primers], ['pr-' + e['id'] for e in drawn])
+        self.assertTrue(all(p['fill'] == e['fill'] for p, e in zip(primers, drawn, strict=True)))
 
     def test_precision_runs_on_the_fake_device(self) -> None:
         planned = [e for e in sweeps.precision() if e['meta']['option'] in ('base', 'color-clamp-off')][:4]

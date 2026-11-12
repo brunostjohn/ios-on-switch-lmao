@@ -7,7 +7,10 @@ setting makes the store or the blend match Metal's rounding.
 
 iterated: the iterated blend unit with colour 0 bound alone (the unit takes one target), a single-output pixel header,
 SET_BLEND_STATE_PER_TARGET false: the setup variants first, then each program of a rung-3 microcode table
-(out/agent-scratch/x1-f1/rung3/microcode.tsv: name, tags, method, value rows).
+(out/agent-scratch/x1-f1/rung3/microcode.tsv: name, tags, method, value rows), its constants renumbered so the first
+pass reads constant 0 (ibprogram.py). A primer draws each experiment's destination rows, blend off, just before it: on
+12 Nov about one blend in twenty read the previous experiment's texels instead of its own CPU fill
+(x1-bench3/BENCH3.md), and with the primer the stale texels are the fill's own.
 """
 
 import csv
@@ -17,7 +20,7 @@ import struct
 from fractions import Fraction
 from pathlib import Path
 
-from tools.benchloop import blend, columns, protocol, rop, texels
+from tools.benchloop import blend, columns, ibprogram, protocol, rop, texels
 
 SIDE = 64
 FUNC_ADD = 0x8006
@@ -185,6 +188,15 @@ def _iterated_experiment(eid: str, methods: list, restore: list, meta: dict) -> 
 IB_RESTORE = [[0x0DD0, 0], [0x1360, 0], [0x12E4, 1], [0x02F4, 0]]
 
 
+def primer(e: dict) -> dict:
+    """Give a draw writing `e`'s fill rows into the same target, blend and iterated blend off."""
+    fill, width = protocol.unb64(e['fill']), e['target']['width']
+    rows = [texels.decode(fill[4 * width * y : 4 * width * y + 4], 'bgra8unorm') for y in range(e['target']['height'])]
+    p = {k: v for k, v in e.items() if k not in ('id', 'meta', 'methods', 'restore', 'program')}
+    p |= {'id': ('pr-' + e['id'])[:64], 'program': columns.program(rows, columns.POSITION_Y)}
+    return _one_target(p | {'methods': [[0x0DD0, 0], [0x1360, 0]], 'restore': [[0x1360, 0]], 'meta': {'primer': True}})
+
+
 def _global_blend(src: int = 0x4001, dst: int = 0x4000) -> list[list[int]]:
     return [
         [0x12E4, 0],
@@ -209,7 +221,7 @@ def microcode(path: Path) -> dict[str, list[list[int]]]:
     with path.open() as f:
         for row in csv.DictReader(f, delimiter='\t'):
             programs.setdefault(row['name'], []).append([int(row['method'], 16), int(row['value'], 16)])
-    return programs
+    return {name: ibprogram.renumbered(methods) for name, methods in programs.items()}
 
 
 def iterated(table: Path | None = None) -> list[dict]:
@@ -235,11 +247,16 @@ def iterated(table: Path | None = None) -> list[dict]:
             'pass_output': 'TEMP0',
         }
     )
+    to_alpha = blend.instruction(
+        {'test_cc': 'TRUE', 'operation': 'ADD', 'operand_b': 'SRC_AAA', 'operand_d': 'DEST_AAA'}
+        | {'output_swizzle': 'R_TO_A', 'pass_output': 'TEMP1'}
+    )
+    keep = blend.instruction({'test_cc': 'TRUE', 'operation': 'ADD', 'operand_b': 'TEMP0_RGB', 'operand_d': 'ZERO'})
     setups = {
         'ib1t-control-ff': ([*_global_blend(0x4001, 0x4001), [0x1360, 1]], {'expect': 'add'}),
         'ib1t-mov': (_program([mov]), {'expect': 'src'}),
         'ib1t-add': (_program([add]), {'expect': 'add'}),
-        'ib1t-add-rgba': (_program([add], enable=3), {'expect': 'add'}),
+        'ib1t-add-rgba': (_program([add, to_alpha, keep], enable=3), {'expect': 'add'}),
         'ib1t-add-noblend0': ([m for m in _program([add]) if m[0] != 0x1360], {'expect': 'add'}),
         'ib1t-two-passes': (_program([add, mov], passes=2), {'expect': 'src'}),
         'ib1t-mrt-off': ([[0x0FAC, 0], *_program([add])], {'expect': 'add'}),
@@ -253,13 +270,15 @@ def iterated(table: Path | None = None) -> list[dict]:
         for name, methods in microcode(table).items():
             eid = 'ib1t-' + ''.join(c if c.isalnum() else '-' for c in name.lower())[:58]
             out.append(_iterated_experiment(eid, methods, IB_RESTORE, {'program': name}))
-    return out
+    return [x for e in out for x in (primer(e), e)]
 
 
 def analyse_iterated(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
     """Give, per experiment, whether the draw landed (texels moved off the fill) and the first few texels."""
     rows = []
     for e in experiments:
+        if e.get('meta', {}).get('primer'):
+            continue
         result = results.get(e['id']) or {}
         data = _texels(result)
         fill = protocol.unb64(e['fill'])

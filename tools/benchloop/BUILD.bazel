@@ -23,7 +23,10 @@ exports_files(
 
 py_library(
     name = "protocol",
-    srcs = ["protocol.py"],
+    srcs = [
+        "ibprogram.py",
+        "protocol.py",
+    ],
 )
 
 py_library(
@@ -123,6 +126,7 @@ APP_SOURCES = [
         "capture_test",
         "golden_test",
         "gr_errors_test",
+        "ibprogram_test",
         "known_test",
         "loop_test",
         "pack_test",

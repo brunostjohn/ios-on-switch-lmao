@@ -10,6 +10,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from tools.benchloop import ibprogram
+
 PROTOCOL = 'benchloop/3'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod', 'pack')
@@ -507,6 +509,8 @@ def validate_experiment(e: dict) -> None:
         _pairs(e.get('methods', []), 'methods')
         _pairs(e.get('restore', []), 'restore')
         _require(e.get('targets', 0) in (0, 1), 'targets is 1 (colour 0 bound alone) or left out')
+        why = ibprogram.refusal(e.get('methods', []))
+        _require(why is None, f'{e["id"]}: iterated blend: {why}')
     else:
         _require('methods' not in e and 'restore' not in e, 'only readback experiments set methods')
         _require('targets' not in e, 'only readback experiments choose their targets')

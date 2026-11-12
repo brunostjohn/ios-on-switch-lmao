@@ -15,6 +15,7 @@ from tools.gpu.maxwell import execute
 Colour = tuple[float, float, float, float]
 MAX_COLUMNS = protocol.MAX_DATA // 16
 POSITION_X = 0x70
+POSITION_Y = 0x74
 
 
 def ldc64(d: int, offset_reg: int, bank: int, offset: int) -> encode.Instr:
@@ -25,10 +26,10 @@ def ldc64(d: int, offset_reg: int, bank: int, offset: int) -> encode.Instr:
     return encode.Instr(0xEF90 << 48 | d | offset_reg << 8 | encode.PT << 16 | offset << 20 | bank << 36 | 5 << 48)
 
 
-def code() -> bytes:
+def code(position: int = POSITION_X) -> bytes:
     through = {'wr_bar': 0, 'wait': 1, 'delay': 15}
     body = [
-        encode.ipa(4, POSITION_X).sched(wr_bar=0, delay=encode.BARRIER_SET_CYCLES),
+        encode.ipa(4, position).sched(wr_bar=0, delay=encode.BARRIER_SET_CYCLES),
         encode.f2i(4, 4, 'u32 rz').sched(**through),
         encode.shl(4, 4, encode.Imm(4)).sched(delay=15, wait=1),
         ldc64(0, 4, DATA_BANK, 0).sched(wr_bar=0),
@@ -37,10 +38,11 @@ def code() -> bytes:
     return encode.bundle(encode.finish(body))
 
 
-def program(colours: list[Colour]) -> dict:
+def program(colours: list[Colour], position: int = POSITION_X) -> dict:
+    """Give the program colouring each column (each row, with POSITION_Y) with its colour."""
     if not 0 < len(colours) <= MAX_COLUMNS:
         raise ValueError(f'1..{MAX_COLUMNS} columns')
-    c = code()
+    c = code(position)
     return {
         'sph': protocol.b64(sph.pixel(operands.attributes(c))),
         'code': protocol.b64(c),
