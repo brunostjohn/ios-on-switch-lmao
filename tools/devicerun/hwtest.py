@@ -239,6 +239,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_pitch': False,
         'gpu.x1.constant_colour': False,
         'gpu.x1.fill_bbox': False,
+        'gpu.x1.index_past_limit': False,
     },
 }
 
