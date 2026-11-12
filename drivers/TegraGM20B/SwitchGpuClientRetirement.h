@@ -403,6 +403,9 @@ void AGXDeviceUserClient::drainResources()
 	for (auto &admission : admissions_)
 		admission.end();
 	bzero(admissionCookies_, sizeof(admissionCookies_));
+	for (auto &promise : promises_)
+		promise.end();
+	bzero(promiseCookies_, sizeof(promiseCookies_));
 	hangHolder_ = nullptr;
 	IOLockUnlock(lock_);
 	// Channel destruction drains the callbacks before their preallocated work is cancelled.

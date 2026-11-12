@@ -1188,6 +1188,23 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
 }
 
+// A held command buffer's writer promise (TegraGM20BMethodWriterPromise) is the connection's: method 34 reaches it, it
+// names writes of the connection's imports only, and the connection's close ends every one it still has.
+TEST(GM20BJobSource, AWriterPromiseIsTheConnectionsAndEndsWithIt)
+{
+	const std::string run = flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
+	EXPECT_THAT(run, HasSubstr("case TegraGM20BMethodWriterPromise: wantIn = sizeof(TegraGM20BAbiWriterPromise);"));
+	EXPECT_THAT(run, HasSubstr("return writerPromise(static_cast<const TegraGM20BAbiWriterPromise *>(in));"));
+	const std::string promise = flat(definition(
+		client(), "IOReturn AGXDeviceUserClient::promiseWrites(const TegraGM20BAbiWriterPromise *in,"));
+	EXPECT_THAT(promise, HasSubstr("uses[i].access != TegraGM20BSurfaceWrite"));
+	EXPECT_THAT(promise, HasSubstr("const Bo *bo = findBo(uses[i].handle); if (!bo || !bo->backing) return "
+				       "kIOReturnNotFound;"));
+	EXPECT_THAT(promise, HasSubstr("promises_[slot].promise(backings, in->count)"));
+	const std::string retire = flat(client());
+	EXPECT_THAT(retire, HasSubstr("for (auto &promise : promises_) promise.end(); bzero(promiseCookies_,"));
+}
+
 // A direct present whose producer still runs at the offer has no job (SwitchGpuPresentWatch.h): the producer's own
 // interrupt pass makes it due with plain loads, the pass's end delivers it with interrupts on, and a kill, a hidden
 // producer and the deadline go to the work item. The arm comes before the offer's own look.

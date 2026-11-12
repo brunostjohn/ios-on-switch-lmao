@@ -11,6 +11,10 @@ enum {
 	TegraGM20BMethodResourceSetCreate = 31,
 	TegraGM20BMethodResourceSetRelease = 32,
 	TegraGM20BMethodSubmitJob = 33,
+	TegraGM20BMethodWriterPromise = 34,
+
+	TegraGM20BMaxWriterPromises = 16,
+	TegraGM20BMaxPromisedWrites = 32,
 
 	TegraGM20BMaxResourceSets = 16,
 	TegraGM20BMaxSetMembers = 4096,
@@ -71,6 +75,26 @@ struct TegraGM20BAbiJob {
 	uint32_t shared_count, flags;
 };
 
+/* TegraGM20BAbiWriterPromise.flags: exactly one */
+enum {
+	TegraGM20BPromiseBegin = 1u << 0,
+	TegraGM20BPromiseEnd = 1u << 1,
+};
+
+/* Method 34. A command buffer that counts as scheduled before its work reaches the kernel (its queue waits on a shared
+ * event its committer may be about to signal) promises the surfaces it will write, as an Apple GPU's scheduled command
+ * buffer already holds them: until the promise ends no present latches one of them (the display defers it, as for a CPU
+ * writer) and a CPU lock of one waits. Begin: count records (TegraGM20BAbiSurfaceUse, handles of the connection's
+ * imports, TegraGM20BSurfaceWrite) at uses_address and a cookie the connection has no promise under. End (count 0,
+ * uses_address 0): the promise under cookie ends, once the job that writes them has returned from its submission or
+ * never will. kIOReturnNotFound: a handle is not an import of the connection's. No CPU owner refuses a promise, and
+ * the promised job's own submission (its conversions, layouts and imports) never waits for it. Closing the connection
+ * ends its promises. */
+struct TegraGM20BAbiWriterPromise {
+	uint64_t cookie, uses_address;
+	uint32_t count, flags;
+};
+
 #ifdef __cplusplus
 #define TEGRA_GM20B_JOB_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -80,5 +104,6 @@ TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiResourceSetCreate, 16);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiResourceSetCreateReply, 16);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiResourceSetRelease, 8);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJob, 24);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromise, 24);
 #undef TEGRA_GM20B_JOB_ASSERT
 #endif

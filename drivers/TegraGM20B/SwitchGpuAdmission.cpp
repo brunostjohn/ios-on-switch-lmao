@@ -13,12 +13,9 @@ SwitchGpuAdmission::~SwitchGpuAdmission()
 	IODelete(uses_, switch_gpu_backing_use, capacity_);
 }
 
-int SwitchGpuAdmission::begin(const switch_gpu_backing_use *uses, uint32_t count,
-			      const switch_gpu_backing_guard *guards, uint32_t guardCount,
-			      switch_gpu_cpu_lease *const *leases, uint32_t leaseCount)
+int SwitchGpuAdmission::copyUses(const switch_gpu_backing_use *uses, uint32_t count,
+				 uint32_t *unique)
 {
-	if (active_ || (count && !uses) || (guardCount && !guards) || (leaseCount && !leases))
-		return -22;
 	if (count > capacity_) {
 		auto *made = IONew(switch_gpu_backing_use, count);
 		if (!made)
@@ -34,13 +31,57 @@ int SwitchGpuAdmission::begin(const switch_gpu_backing_use *uses, uint32_t count
 		uses_[i] = uses[i];
 	}
 	switch_gpu_backing_sort_uses(uses_, count);
-	uint32_t unique = 0;
+	*unique = 0;
 	for (uint32_t i = 0; i < count; ++i) {
-		if (unique && uses_[unique - 1].backing == uses_[i].backing)
-			uses_[unique - 1].access |= uses_[i].access;
+		if (*unique && uses_[*unique - 1].backing == uses_[i].backing)
+			uses_[*unique - 1].access |= uses_[i].access;
 		else
-			uses_[unique++] = uses_[i];
+			uses_[(*unique)++] = uses_[i];
 	}
+	return 0;
+}
+
+int SwitchGpuAdmission::promise(const switch_gpu_backing_use *uses, uint32_t count)
+{
+	if (active_ || !count || !uses)
+		return -22;
+	uint32_t unique = 0;
+	const int copied = copyUses(uses, count, &unique);
+	if (copied)
+		return copied;
+	for (uint32_t i = 0; i < unique; ++i)
+		if (!(uses_[i].access & SWITCH_GPU_BACKING_WRITE))
+			return -22;
+	uint32_t taken = 0;
+	for (; taken < unique; ++taken) {
+		auto *backing = uses_[taken].backing;
+		IOLockLock(backing->lock);
+		const bool room = backing->promised_writers != UINT32_MAX;
+		if (room)
+			++backing->promised_writers;
+		IOLockUnlock(backing->lock);
+		if (!room)
+			break;
+		switch_gpu_backing_retain(backing);
+	}
+	count_ = taken;
+	active_ = promised_ = true;
+	if (taken == unique)
+		return 0;
+	end();
+	return -75;
+}
+
+int SwitchGpuAdmission::begin(const switch_gpu_backing_use *uses, uint32_t count,
+			      const switch_gpu_backing_guard *guards, uint32_t guardCount,
+			      switch_gpu_cpu_lease *const *leases, uint32_t leaseCount)
+{
+	if (active_ || (count && !uses) || (guardCount && !guards) || (leaseCount && !leases))
+		return -22;
+	uint32_t unique = 0;
+	const int copied = copyUses(uses, count, &unique);
+	if (copied)
+		return copied;
 	for (uint32_t i = 0; i < leaseCount; ++i) {
 		if (!leases[i])
 			return -22;
@@ -149,13 +190,15 @@ void SwitchGpuAdmission::end()
 	for (uint32_t i = 0; i < count_; ++i) {
 		auto *backing = uses_[i].backing;
 		IOLockLock(backing->lock);
-		--(uses_[i].access & SWITCH_GPU_BACKING_WRITE ? backing->gpu_admission_writers
-							      : backing->gpu_admission_readers);
+		--(promised_ ? backing->promised_writers
+		  : uses_[i].access & SWITCH_GPU_BACKING_WRITE ? backing->gpu_admission_writers
+							       : backing->gpu_admission_readers);
 		IOLockWakeup(backing->lock, &backing->cpu_writers, false);
 		IOLockUnlock(backing->lock);
 		switch_gpu_backing_release(backing);
 	}
 	count_ = 0;
+	promised_ = false;
 	switch_gpu_admission_changed();
 }
 

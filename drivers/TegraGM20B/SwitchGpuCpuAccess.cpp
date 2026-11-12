@@ -88,7 +88,7 @@ bool cpu_conflicts(const switch_gpu_backing *backing, uint32_t access)
 		backing->cpu_writers - (concurrent ? backing->concurrent_writers : 0);
 	const uint32_t readers =
 		backing->cpu_readers - (concurrent ? backing->concurrent_readers : 0);
-	return writers || backing->gpu_admission_writers ||
+	return writers || backing->gpu_admission_writers || backing->promised_writers ||
 	       ((access & kWrite) && (readers || backing->gpu_admission_readers));
 }
 
