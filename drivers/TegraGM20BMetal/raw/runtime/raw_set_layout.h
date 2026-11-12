@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright © 2022 Collabora Ltd. and Red Hat Inc.
 // Descriptor set 0 as NVK lays it out on GM20B (nvk_descriptor_set_layout.c, nvk_descriptor_types.h): each binding's
 // byte offset and stride in the set, the set's size as its pool places it, and the size word of a buffer descriptor.
 // The records' layouts are made in these terms, which raw's descriptor writes follow.
