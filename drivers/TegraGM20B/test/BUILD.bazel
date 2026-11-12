@@ -245,6 +245,7 @@ host_test(
     srcs = [
         "gm20b_job_abi_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyResetABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BReadbackABI.h",
         "//drivers/TegraGM20B:TegraGM20BRegDumpABI.h",

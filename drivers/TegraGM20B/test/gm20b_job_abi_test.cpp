@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string>
 #include "bazel/testing/source_text.h"
+#include "drivers/TegraGM20B/TegraGM20BCopyResetABI.h"
 #include "drivers/TegraGM20B/TegraGM20BJobABI.h"
 #include "drivers/TegraGM20B/TegraGM20BReadbackABI.h"
 #include "drivers/TegraGM20B/TegraGM20BRegDumpABI.h"
@@ -10,7 +11,8 @@
 TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 {
 	const uint32_t hashed[] = {TegraGM20BMethodGetInfo, TegraGM20BMethodCpuComplete,
-				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump};
+				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump,
+				   TegraGM20BMethodCopyReset};
 	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate, TegraGM20BMethodResourceSetRelease,
 				TegraGM20BMethodSubmitJob, TegraGM20BMethodWriterPromise};
 	for (uint32_t method : job) {

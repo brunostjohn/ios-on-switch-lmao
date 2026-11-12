@@ -1364,23 +1364,40 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 {
 	const auto fenced = flat(definition(gpu(), "static inline void present_fenced("));
 	expectBefore(fenced,
-		     "if (__atomic_load_n(&tgm_present.redo, __ATOMIC_SEQ_CST) == pending) {",
+		     "redo = pending; if (__atomic_compare_exchange_n(&tgm_present.redo, &redo, 0,",
 		     "nvxnu_work_schedule(tgm_present.completion_work);");
+	expectBefore(fenced, "__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) return;",
+		     "redo = pending; if (");
 	expectBefore(fenced, "nvxnu_work_schedule(tgm_present.redo_work); return; }",
 		     "nvxnu_work_schedule(tgm_present.completion_work);");
 	const auto redo = flat(definition(gpu(), "void tgm_present_redo_work("));
+	expectBefore(redo, "|| !gate_try()) return;", "tgm_present_push_copy(push);");
 	expectBefore(redo, "tgm_present_push_copy(push);", "chan_fence_volatile(chan);");
+	expectBefore(redo, "__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);",
+		     "gate_leave();");
+	EXPECT_THAT(flat(definition(gpu(), "static void gate_open(")),
+		    HasSubstr("tgm_present_redo_kick();"));
 	EXPECT_THAT(redo, Not(HasSubstr("done(arg")));
 	EXPECT_THAT(redo, Not(HasSubstr("tgm_present.done")));
 	EXPECT_THAT(redo, Not(HasSubstr("SEMAPHORED")));
-	const auto mark = flat(definition(gpu(), "void tgm_present_redo("));
+	const auto mark = flat(definition(gpu(), "int tgm_present_redo("));
 	expectBefore(mark, "__atomic_store_n(&tgm_present.redo, pending, __ATOMIC_SEQ_CST);",
-		     "if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) != pending)");
+		     "if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) == pending) "
+		     "return 1;");
 	EXPECT_THAT(flat(definition(gpu(), "static inline void scrub_fenced(")),
 		    HasSubstr("nvxnu_pool_free_dirty(tgm_scrub.job[slot].pa, "
 			      "tgm_scrub.job[slot].bytes);"));
-	expectBefore(flat(definition(gpu(), "enum tgm_ctxsw tgm_ctxsw_decide(")),
-		     "tgm_ctxsw_redo_mark(chan);", "nvxnu_panic(");
+	const auto decide = flat(definition(gpu(), "enum tgm_ctxsw tgm_ctxsw_decide("));
+	expectBefore(decide, "tgm_ctxsw_redo_mark(chan);", "nvxnu_panic(");
+	// an idle kernel channel the engine cannot switch off has no drain to wait for: it is reset, not waited on forever
+	EXPECT_THAT(
+		decide,
+		HasSubstr("chan_stuck(chan, now) || (chan->kernel && tgm_chan_completed(chan) == "
+			  "chan->submitted)"));
+	// progress after the reset: the redone work landing, or with nothing to redo any job completing
+	EXPECT_THAT(flat(definition(gpu(), "void tgm_ctxsw_redo_mark(")),
+		    HasSubstr("chan->ctxsw_reset_after = marked ? chan->submitted : "
+			      "tgm_chan_completed(chan);"));
 }
 
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)

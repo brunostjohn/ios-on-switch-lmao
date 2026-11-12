@@ -134,9 +134,10 @@ static inline int tgm_engine_holds(uint32_t status, int chid)
 
 /* PBDMA_INTR_0 ENG_RESET (gv100 dev_pbdma.ref): an engine of the PBDMA's runlist was reset while the PBDMA served a
  * channel. Only a recovery resets an engine, and only when the context on it, or the one it is switching out, is the
- * channel recovered (nvkm_runl_rc: the engine's channel group under recovery; recover.c: a killed channel or none). The
- * PBDMA's channel is then that one, or one whose context had not reached the engine, so none of its methods were
- * lost: the method it holds goes on to the reset engine, which loads its context first. nvgpu's gm20b PBDMA handling
+ * channel recovered (nvkm_runl_rc: the engine's channel group under recovery; recover.c: a killed channel, none, or a stuck
+ * kernel channel whose work it redoes). The PBDMA's channel is then that one, or one whose context had not reached the
+ * engine, so none of its methods were lost but the kernel channel's cut work, which is redone: the method it holds goes
+ * on to the reset engine, which loads its context first. nvgpu's gm20b PBDMA handling
  * counts no error for the bit; nvkm's would report it as the channel's error and replace that method with a NOP. */
 #define TGM_PBDMA_ENG_RESET 0x01000000u
 

@@ -208,9 +208,21 @@ static inline void present_fenced(struct tgm_chan *chan)
 {
 	u32 pending = __atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE);
 	u64 queued = 0;
+	u32 redo = 0;
 
-	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0)
+	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0 ||
+	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE))
 		return;
+	redo = pending;
+	if (__atomic_compare_exchange_n(&tgm_present.redo, &redo, 0, false, __ATOMIC_SEQ_CST,
+					__ATOMIC_RELAXED)) {
+		/* a copy engine reset cut its copy: pending stays set, so the present is outstanding and present_copy
+		 * refuses the next, until tgm_present_redo_work has pushed the copy again */
+		__atomic_store_n(&tgm_present.redoing, 1, __ATOMIC_RELEASE);
+		nvxnu_work_cancel(tgm_present.deadline_work);
+		nvxnu_work_schedule(tgm_present.redo_work);
+		return;
+	}
 	queued = tgm_present.queued;
 	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 	if (!__atomic_compare_exchange_n(&tgm_present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
@@ -219,12 +231,9 @@ static inline void present_fenced(struct tgm_chan *chan)
 		return;
 	}
 	nvxnu_work_cancel(tgm_present.deadline_work);
-	if (__atomic_load_n(&tgm_present.redo, __ATOMIC_SEQ_CST) == pending) {
-		/* a copy engine reset cut its copy: tgm_present_redo_work copies it again, and the claim on completing stays */
-		__atomic_store_n(&tgm_present.redo, 0, __ATOMIC_RELEASE);
-		nvxnu_work_schedule(tgm_present.redo_work);
-		return;
-	}
+	redo = pending; /* a mark set as its fence passed (tgm_present_redo): the copy was whole */
+	__atomic_compare_exchange_n(&tgm_present.redo, &redo, 0, false, __ATOMIC_SEQ_CST,
+				    __ATOMIC_RELAXED);
 	if (stats_on()) {
 		__atomic_fetch_add(&tgm_present.presents, 1, __ATOMIC_RELAXED);
 		stats_add(&tgm_present.lat_sum, &tgm_present.lat_max,

@@ -45,10 +45,13 @@ static int scrub_submit(u64 pa, u64 bytes)
 	return 0;
 }
 
-void tgm_scrub_redo(u32 through)
+int tgm_scrub_redo(u32 through)
 {
+	if (__atomic_load_n(&tgm_scrub.tail, __ATOMIC_ACQUIRE) == READ_ONCE(tgm_scrub.head))
+		return 0;
 	__atomic_store_n(&tgm_scrub.redo_through, through, __ATOMIC_RELAXED);
 	__atomic_store_n(&tgm_scrub.redo, 1, __ATOMIC_RELEASE);
+	return 1;
 }
 
 /* Room for one more range: a free job slot (the boot's claims also keep to SCRUB_INFLIGHT). Under tgm_scrub.lock. */

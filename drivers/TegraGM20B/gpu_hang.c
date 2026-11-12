@@ -486,14 +486,14 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 /* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
 static char ctxsw_line[1024];
 
+/* Progress after the reset is the redone work completing when there is some, else any job completing. */
 void tgm_ctxsw_redo_mark(struct tgm_chan *chan)
 {
+	const int marked =
+		chan->kernel == CHAN_SCRUB ? tgm_scrub_redo(chan->submitted) : tgm_present_redo();
+
 	chan->ctxsw_reset = 1;
-	chan->ctxsw_reset_after = chan->submitted;
-	if (chan->kernel == CHAN_SCRUB)
-		tgm_scrub_redo(chan->submitted);
-	else
-		tgm_present_redo();
+	chan->ctxsw_reset_after = marked ? chan->submitted : tgm_chan_completed(chan);
 }
 
 /* A client's context that cannot switch is the only one lost: nvkm's recovery (nvkm_runl_rc) takes that channel off
@@ -513,19 +513,23 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name)
 	mutex_lock(&tgm_live_lock);
 	chan = live_by(0, chid);
 	if (chan) {
+		/* a kernel channel with nothing outstanding has no drain to wait for */
 		verdict = tgm_ctxsw_verdict(
-			1, READ_ONCE(chan->error) != 0, chan->kernel, chan_stuck(chan, now),
+			1, READ_ONCE(chan->error) != 0, chan->kernel,
+			chan_stuck(chan, now) ||
+				(chan->kernel && tgm_chan_completed(chan) == chan->submitted),
 			tgm_ctxsw_redo_pending(chan->ctxsw_reset, chan->ctxsw_reset_after,
 					       tgm_chan_completed(chan)));
 		if (verdict == TGM_CTXSW_REDO) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			tgm_engines_line(engines, sizeof(engines));
 			tgm_ctxsw_redo_mark(chan);
-			scnprintf(ctxsw_line, sizeof(ctxsw_line),
-				  "tegra-gm20b: context switch timed out on %s's channel %u on %s: "
-				  "the engine reset, its work redone on the GPU, nothing killed: %s; "
-				  "engines %s\n",
-				  chan->owner, chan->chid, engine_name, state, engines);
+			scnprintf(
+				ctxsw_line, sizeof(ctxsw_line),
+				"tegra-gm20b: context switch timed out on %s's channel %u on %s: "
+				"the engine reset, its work redone on the GPU, nothing killed: %s; "
+				"engines %s\n",
+				chan->owner, chan->chid, engine_name, state, engines);
 			switch_linux_log_line(ctxsw_line);
 		}
 		if (verdict == TGM_CTXSW_FATAL) {

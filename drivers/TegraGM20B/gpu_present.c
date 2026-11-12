@@ -167,9 +167,10 @@ static void present_deadline(void *arg)
 	(void)arg;
 	present_watch_work(NULL);
 	mutex_lock(&tgm_present.lock);
-	if (!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
-	    __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
-		    SWITCH_GPU_PRESENT_WATCH_ARMED) {
+	if ((!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
+	     __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
+		     SWITCH_GPU_PRESENT_WATCH_ARMED) ||
+	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) {
 		mutex_unlock(&tgm_present.lock);
 		return;
 	}
@@ -254,7 +255,8 @@ int tgm_present_open(struct tgm_vm **pvm)
 	tgm_present.redo_work = nvxnu_work_alloc(tgm_present_redo_work, NULL);
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
 	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
-	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work
+	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work &&
+		      tgm_present.redo_work
 		      ? tgm_vm_new(&tgm_present.vm)
 		      : -ENOMEM;
 	if (!ret) {

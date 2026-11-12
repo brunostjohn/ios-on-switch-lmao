@@ -618,17 +618,19 @@ struct present_state {
 	} copy;
 
 	u32 redo; /* seqno of a present whose copy a reset cut: redone when it completes (atomic) */
+	u32 redoing; /* its fence completed and its copy is not pushed again yet (atomic) */
 	void *redo_work;
 };
 extern struct present_state tgm_present;
 void tgm_present_stats(u32 *presents, u64 *sum, u64 *max);
 /* tgm_ctxsw_decide, tgm_live_lock held, before the engine on the present's channel is reset: the present in flight, if it
  * copies, is copied again once its fence completes, and the display gets its completion only from that copy. */
-void tgm_present_redo(void);
+int tgm_present_redo(void);
 /* gpu_present_redo.c: tgm_present.copy's L2 flush and copy (tgm_present.lock held), and the work item that redoes it */
 #define TGM_PRESENT_COPY_DWORDS (9 + TGM_COPY_RECT_DWORDS)
 void tgm_present_push_copy(struct nvif_push *push);
 void tgm_present_redo_work(void *unused);
+void tgm_present_redo_kick(void);
 #if TGM_STATS
 /* gpu_copy_reset.c (TegraGM20BCopyResetABI.h): the armed present is taken by present_copy, looked at on the present
  * channel's nonstall interrupts, and its redo and completion are counted */
@@ -641,7 +643,7 @@ void tgm_copy_reset_redone(void);
 void tgm_copy_reset_presented(int status);
 #endif
 /* the same for the pool scrubber: its jobs up to `through` go back to the pool dirty, to be scrubbed again */
-void tgm_scrub_redo(u32 through);
+int tgm_scrub_redo(u32 through);
 /* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) and a
  * second context-switch timeout before the redo lands is fatal (tgm_ctxsw_decide) */
 void tgm_ctxsw_redo_mark(struct tgm_chan *chan);

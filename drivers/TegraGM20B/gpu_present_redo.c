@@ -24,7 +24,8 @@ void tgm_present_push_copy(struct nvif_push *push)
 
 /* The present whose copy a copy engine reset cut (tgm_present_redo): its fence completed, so it is copied again, with no
  * acquire (what it waited for completed before), the L2 flush and the fence as present_copy pushes them. The display
- * keeps scanning the frame before it until this copy's fence completes and present_fenced delivers its completion. */
+ * keeps scanning the frame before it until this copy's fence completes and present_fenced delivers its completion. While
+ * the GPU sleeps the redo waits: gate_open kicks it again (tgm_present_redo_kick). */
 void tgm_present_redo_work(void *unused)
 {
 	struct tgm_chan *chan = tgm_present.chan;
@@ -32,6 +33,8 @@ void tgm_present_redo_work(void *unused)
 	int ret = 0;
 
 	(void)unused;
+	if (!__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE) || !gate_try())
+		return;
 	mutex_lock(&tgm_present.lock);
 	push = &chan->chan.push;
 	ret = chan->error ? -ENODEV
@@ -45,26 +48,35 @@ void tgm_present_redo_work(void *unused)
 	tgm_present_push_copy(push);
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
+	__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);
 	nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 	chan_fence_volatile(chan);
 #if TGM_STATS
 	tgm_copy_reset_redone();
 #endif
 	mutex_unlock(&tgm_present.lock);
-	/* present_fenced kept the completion claimed (tgm_present_outstanding) until the redo is in flight */
-	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+	gate_leave();
+}
+
+void tgm_present_redo_kick(void)
+{
+	if (__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE))
+		nvxnu_work_schedule(tgm_present.redo_work);
 }
 
 /* present_fenced takes pending to 0 before it reads redo: a present that completed before redo was set is seen gone here
  * and the mark withdrawn, so no later present inherits it. */
-void tgm_present_redo(void)
+int tgm_present_redo(void)
 {
 	u32 pending = __atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST);
 
-	if (!pending || !tgm_present.copy.valid)
-		return;
+	if (!pending || !tgm_present.copy.valid ||
+	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE))
+		return 0;
 	__atomic_store_n(&tgm_present.redo, pending, __ATOMIC_SEQ_CST);
-	if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) != pending)
-		__atomic_compare_exchange_n(&tgm_present.redo, &pending, 0, false, __ATOMIC_SEQ_CST,
-					    __ATOMIC_RELAXED);
+	if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) == pending)
+		return 1;
+	__atomic_compare_exchange_n(&tgm_present.redo, &pending, 0, false, __ATOMIC_SEQ_CST,
+				    __ATOMIC_RELAXED);
+	return 0;
 }

@@ -432,6 +432,7 @@ static void gate_open(void)
 	nvxnu_wakeup(&tgm_sc7_gate.shut);
 	mutex_unlock(&tgm_gate_lock);
 	scrub_kick();
+	tgm_present_redo_kick();
 }
 
 static void wake_open(void)
