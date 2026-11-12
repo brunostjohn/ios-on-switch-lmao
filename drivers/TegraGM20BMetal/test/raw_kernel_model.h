@@ -10,8 +10,10 @@
 // (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
 // a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
 // fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed killed, or the set is
-// made again. Its IOKit calls replace the framework's:
-// include it in one unit of a test.
+// made again. A ResourceSetCreate naming a handle the connection does not hold is refused kIOReturnBadArgument, as the
+// kernel's attachSet refuses it. The first IOServiceOpen of a model is `model`; each later one is a connection of its own
+// (its BOs, sets, channels and GPU VM), closed with IOServiceClose, as HW Test's bench is beside the app's Metal device.
+// Its IOKit calls replace the framework's: include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
@@ -22,6 +24,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -96,6 +99,11 @@ struct Model {
 
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
+    unsigned setRefusals = 0;     // ResourceSetCreates refused for a member
+    uint64_t refusedHandle = 0;   // the last one's member
+    bool opened = false;          // the first IOServiceOpen took this model
+    io_connect_t nextConnection = 43;
+    std::map<io_connect_t, std::unique_ptr<Model>> others;  // the later IOServiceOpens' connections
     std::map<uint32_t, std::pair<uint64_t, std::vector<uint64_t>>> admitted;  // channel: cookie, its uses' BOs
     std::vector<uint64_t> cpuLocked;  // an IOSurfaceLock in another process: a job naming one is refused CannotLock
 
@@ -354,20 +362,27 @@ struct Model {
             return kIOReturnNoResources;
         auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
         constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
-        for (uint32_t i = 0; i < in.count; ++i)
-            if (uses[i].reserved || !(uses[i].access & kAccess) || (uses[i].access & ~kAccess) ||
-                !bos.count(uses[i].handle))
+        std::vector<uint64_t> handles(in.count);
+        for (uint32_t i = 0; i < in.count; ++i) {
+            const uint32_t access = uses[i].access;
+            handles[i] = resolve(uses[i]);
+            if (uses[i].reserved || !(access & kAccess) || (access & ~(kAccess | TegraGM20BSurfaceGpuAddress)) ||
+                !handles[i]) {
+                setRefusals++;
+                refusedHandle = uses[i].handle;
                 return kIOReturnBadArgument;
+            }
+        }
         for (const auto &member : sets[index].members)
             if (const auto it = bos.find(member.handle); it != bos.end())
                 it->second.set = 0;
         sets[index].members.clear();
         for (uint32_t i = 0; i < in.count; ++i) {
-            const BoState &bo = bos.at(uses[i].handle);
+            const BoState &bo = bos.at(handles[i]);
             if (bo.cpuReached || (bo.set && bo.set != index + 1))
                 uses[i].access = 0;
             else
-                sets[index].members.push_back(uses[i]);
+                sets[index].members.push_back({handles[i], uses[i].access & kAccess, 0});
         }
         for (const auto &member : sets[index].members)
             bos[member.handle].set = index + 1;
@@ -460,13 +475,19 @@ struct Model {
 inline Model &model = *new Model;
 // held through every call but a WaitFence, and by a test GPU's reads of the model
 inline std::mutex &callLock = *new std::mutex;
+constexpr io_connect_t kFirstConnection = 42;
+
+inline Model &connected(io_connect_t connection)
+{
+    return connection == kFirstConnection ? model : *model.others.at(connection);
+}
 
 }  // namespace kernel_model
 
-extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method, const void *input, size_t,
+extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint32_t method, const void *input, size_t,
                                                    void *output, size_t *)
 {
-    using kernel_model::model;
+    kernel_model::Model &model = kernel_model::connected(connection);
     std::unique_lock<std::mutex> hold(kernel_model::callLock, std::defer_lock);
     if (method != TegraGM20BMethodWaitFence)
         hold.lock();
@@ -609,7 +630,16 @@ extern "C" io_service_t IOServiceGetMatchingService(mach_port_t, CFDictionaryRef
 
 extern "C" kern_return_t IOServiceOpen(io_service_t, task_port_t, uint32_t, io_connect_t *connection)
 {
-    *connection = 42;
+    using kernel_model::model;
+    std::lock_guard<std::mutex> hold(kernel_model::callLock);
+    if (!std::exchange(model.opened, true)) {
+        *connection = kernel_model::kFirstConnection;
+        return KERN_SUCCESS;
+    }
+    *connection = model.nextConnection++;
+    auto &other = model.others[*connection] = std::make_unique<kernel_model::Model>();
+    other->vaEnd = model.vaEnd;
+    other->opened = true;
     return KERN_SUCCESS;
 }
 
@@ -618,7 +648,9 @@ extern "C" kern_return_t IOObjectRelease(io_object_t)
     return KERN_SUCCESS;
 }
 
-extern "C" kern_return_t IOServiceClose(io_connect_t)
+extern "C" kern_return_t IOServiceClose(io_connect_t connection)
 {
+    std::lock_guard<std::mutex> hold(kernel_model::callLock);
+    kernel_model::model.others.erase(connection);
     return KERN_SUCCESS;
 }
