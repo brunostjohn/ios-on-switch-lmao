@@ -160,6 +160,15 @@ static void giveRecording(RMCommandBuffer *b)
                             if (binding.source == raw::BufferBinding::Source::Buffer)
                                 bound.push_back({binding.object, raw::ResourceUse::Read});
                         }
+                        // the buffer slots a stage reaches through its root table, which may be written there too
+                        for (uint32_t stage = 0; stage < 2; ++stage)
+                            for (uint32_t slots = record.rootSlots[stage]; slots; slots &= slots - 1) {
+                                const auto &binding =
+                                    _plan.buffers[stage][state.buffers[stage]][__builtin_ctz(slots)];
+                                if (binding.source == raw::BufferBinding::Source::Buffer)
+                                    bound.push_back({binding.object,
+                                                    uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Write)});
+                            }
                         return bound;
                     });
                 }

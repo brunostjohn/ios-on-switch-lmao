@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 18;
+constexpr uint32_t kPackVersion = 19;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -182,7 +182,11 @@ enum PackEntryKind : uint8_t {
     // buffer descriptor of the device's own copy
     EntryColorTable = 5,
     EntryDepthTest = 6,
-    EntryStencilTest = 7
+    EntryStencilTest = 7,
+    // m2v's handle tables of argument-buffer textures and samplers (bind/heap.rs): a storage buffer descriptor of the
+    // device's own table, every texture's by its header index, every sampler's by its sampler header's (raw_heap_tables.h)
+    EntryTextureTable = 8,
+    EntrySamplerTable = 9
 };
 
 constexpr uint8_t kNoSlot = 0xFF;
@@ -256,6 +260,9 @@ constexpr uint8_t cbufKind(uint8_t type)
     return type & 7;
 }
 
+// A program's constant buffer of set 1, the heap's arrays (nvk_switch_capture.c switch_nvk_cbuf_code: the set in bits 3-7)
+constexpr uint8_t kCbufHeapSet = CbufSet | 1 << 3;
+
 constexpr uint32_t cbufUboOffset(uint8_t type)
 {
     return uint32_t(type >> 3) * 16;
@@ -269,6 +276,17 @@ struct PackShaderTests {
     uint32_t depthTic, stencilTic;
     uint32_t reservedTail;
 };
+
+// One set-1 heap array of a state (m2v's argument-buffer textures and samplers, bind/heap.rs): its class as the bridge words
+// it (metal2vulkan heap_class_code), and the byte of set 1 its element 0 is at in NVK's layout. Every element is 4 bytes
+// (nvk_sampled_image_descriptor), element i the descriptor of texture header i (an image class) or sampler header i.
+struct PackHeapArray {
+    uint32_t heapClass, offset;
+};
+
+constexpr uint32_t kPackHeapArrays = 8;
+// Every heap array's elements: the texture header pool's (Device kTicCount), which the sampler header pool's fits
+constexpr uint32_t kPackHeapElements = 8192;
 
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
@@ -299,6 +317,14 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
+    // What m2v's reads through argument buffers take of a draw (raw_heap_tables.h): each stage's push word + 1 of the root
+    // table's address and of the ExecutionStatus buffer's (0: none), and the buffer slots its root table holds
+    // (bit n: [[buffer(n)]], m2v's BufferForm::Psb), vertex then fragment
+    uint8_t rootTableWord[2], statusWord[2];
+    uint32_t rootSlots[2];
+    uint8_t heapArrays, heapReserved[3];
+    uint32_t heapBytes;  // set 1's size in NVK's layout
+    PackHeapArray heap[kPackHeapArrays];
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -410,9 +436,11 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4, "pack layout");
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 84, "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
+static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipeline, heap) == 564,
+              "pack layout: packfile.py PIPELINE_V19");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");

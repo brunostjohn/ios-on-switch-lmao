@@ -78,6 +78,16 @@ static constexpr auto kWaitLimit = std::chrono::seconds(20);
 
 os_log_t rawLog();
 void once(NSString *text);
+// The device's handle tables of argument buffers (RawMetalResourceIds.mm): which texture a heap array holds, and an object
+// whose ID was named going
+bool rmHeapHolds(uint32_t heapClass, const raw::HeapTextureFacts *facts);
+void rmHeapForgetTexture(RMTexture *t);
+void rmHeapForgetSampler(RMSampler *s);
+// A heap's live resources (RawMetalHeap.mm): one made from it joins them, and useHeap names each to the command buffer
+void rmHeapHold(RMHeap *heap, id resource);
+void rmHeapEach(id<MTLHeap> heap, void (^each)(id<MTLResource> resource));
+// newArgumentEncoderWithBufferIndex: of a function (RawMetalArgumentEncoder.mm): nil where Metal makes no encoder
+id<MTLArgumentEncoder> rmFunctionArgumentEncoder(RMFunction *function, NSUInteger index);
 double hostSeconds();
 uint64_t nowUs();
 

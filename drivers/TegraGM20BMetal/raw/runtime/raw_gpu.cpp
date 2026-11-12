@@ -120,6 +120,7 @@ constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
+static_assert(kTicCount == kPackHeapElements && kTscCount <= kPackHeapElements, "a heap holds header i at element i");
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr size_t kDedicatedSpares = 2;
@@ -776,6 +777,149 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
     return setSlot;
 }
 
+// The slot program `prog` reads set 1, a heap's arrays, at (0: none)
+static uint8_t heapCbufSlot(const PackProgram &prog)
+{
+    for (uint8_t c = 1; c < prog.cbufs; c++)
+        if (prog.cbufType[c] == kCbufHeapSet)
+            return c;
+    return 0;
+}
+
+// lock_ held: m2v's handle tables and roots, made at their first use (most processes name no object an argument buffer holds).
+// A new binding's first submission invalidates the L2 for it (TegraGM20BTlb.h), after this fill.
+bool Device::heapMemory()
+{
+    if (heapTables_.attached())
+        return true;
+    if (!k_.allocControl(HeapTables::tablesBytes(kTicCount, kTscCount), handleTables_, ControlUse::HandleTables))
+        return false;
+    if (!k_.allocControl(HeapTables::kRootsBytes, argumentRoots_, ControlUse::ArgumentRoots)) {
+        k_.free(handleTables_);
+        handleTables_ = {};
+        return false;
+    }
+    heapTables_.attach({handleTables_.cpu, handleTables_.va, handleTables_.bytes},
+                       {argumentRoots_.cpu, argumentRoots_.va, argumentRoots_.bytes}, kTicCount, kTscCount,
+                       k_.info().va_start, k_.info().va_end, heapHolds_);
+    return true;
+}
+
+// lock_ held: the CPU wrote the handle tables or a heap set, write-combined: drained here, on the writing core, before the
+// next submission's job names them host-written (commit's DSB is the committing core's)
+void Device::tablesWritten()
+{
+#if defined(__aarch64__)
+    __asm__ volatile("dsb st" ::: "memory");
+#endif
+    tablesWritten_++;
+}
+
+// lock_ held: the set 1 of a record's arrays, shared by every record of the same arrays
+const HeapSet *Device::heapSet(const PackPipeline &rec)
+{
+    if (!heapMemory())
+        return nullptr;
+    if (const HeapSet *set = heapTables_.find(rec))
+        return set;
+    Bo bo;
+    if (!rec.heapBytes || !k_.allocControl(rec.heapBytes, bo, ControlUse::HandleTables))
+        return nullptr;
+    heapSets_.push_back(bo);
+    const HeapSet *set = heapTables_.add(rec, {bo.cpu, bo.va, bo.bytes});
+    tablesWritten();
+    return set;
+}
+
+bool Device::heapTexture(uint32_t tic, const HeapTexture *texture)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (!texture && !heapTables_.attached())
+        return true;
+    if (!heapMemory())
+        return false;
+    heapTables_.texture(tic, texture);
+    tablesWritten();
+    return true;
+}
+
+bool Device::heapSampler(uint32_t tsc, const HeapSampler *sampler)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (!sampler && !heapTables_.attached())
+        return true;
+    if (!heapMemory())
+        return false;
+    heapTables_.sampler(tsc, sampler);
+    tablesWritten();
+    return true;
+}
+
+HeapTexture Device::heapTextureOf(const Texture &t, const HeapTextureFacts &facts, uint32_t flags)
+{
+    HeapTexture h;
+    h.sampleTic = t.addressMap ? 0 : t.standIn ? t.standIn->tic : t.tic;
+    h.flags = flags;
+    h.facts = heapFacts(facts);
+    return h;
+}
+
+bool Device::nameTexture(const Texture &t, const HeapTextureFacts &facts, uint32_t flags)
+{
+    const HeapTexture h = heapTextureOf(t, facts, flags);
+    return heapTexture(t.tic, &h);
+}
+
+void Device::forgetTexture(const Texture &t)
+{
+    heapTexture(t.tic, nullptr);
+}
+
+bool Device::nameSampler(const Sampler &s, uint32_t word, Sampler &twin)
+{
+    HeapSampler h = {s.tsc, word};
+    if (s.desc.pixel) {
+        SamplerDesc normalized = s.desc;
+        normalized.pixel = false;
+        h.sampleTsc = twin.tsc || createSampler(normalized, twin) ? twin.tsc : 0;
+    }
+    return h.sampleTsc && heapSampler(s.tsc, &h);
+}
+
+void Device::forgetSampler(const Sampler &s, Sampler &twin)
+{
+    heapSampler(s.tsc, nullptr);
+    if (twin.tsc)
+        destroySampler(twin);
+}
+
+// lock_ held: what `pl`'s reads through argument buffers take of every draw: each stage's root table address (a stage whose
+// root table holds buffer slots takes its own per draw: RenderEncoder::rootTable) and ExecutionStatus address in its push
+// words, and its set 1. Its draws are refused where the device has no memory for them.
+void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
+{
+    const bool roots = pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1];
+    if (!roots && !pp.heapArrays)
+        return;
+    if (!heapMemory()) {
+        pl.heapMissing = true;
+        return;
+    }
+    const auto address = [&](uint8_t word, uint64_t va) {
+        if (!word || word > 31)
+            return;
+        pl.push[word - 1] = uint32_t(va);
+        pl.push[word] = uint32_t(va >> 32);
+        pl.pushMask |= 3u << (word - 1);
+    };
+    for (uint32_t k = 0; k < 2; k++) {
+        address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
+        address(pp.statusWord[k], heapTables_.statusVa());
+    }
+    if (pp.heapArrays && !(pl.heapSet = heapSet(pp)))
+        pl.heapMissing = true;
+}
+
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
 // the pipeline's blend has no barrier twin: its barrier form would leave the blend to the ROP after a fetch outside the
@@ -966,6 +1110,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.segment = segmentHeap_.place(pl.methods.data(), uint32_t(pl.methods.size()));
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
+    pl.heapSlot[0] = heapCbufSlot(*vs.record);
+    pl.heapSlot[1] = heapCbufSlot(*fs.record);
+    bindArguments(pl, pp);
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = keyString; (at = strstr(at, " c")); at += 2) {
@@ -3124,6 +3271,12 @@ std::string Device::vaOwner(uint64_t va)
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
         in(tickets_, tickets_.bytes, "the interlock tickets") ||
         in(colorTable_, colorTable_.bytes, "the colour table") || in(stamps_, stamps_.bytes, "the GPU time stamps") ||
+        in(handleTables_, handleTables_.bytes, "the argument buffers' handle tables") ||
+        in(argumentRoots_, argumentRoots_.bytes, "the argument buffers' root table") ||
+        std::any_of(heapSets_.begin(), heapSets_.end(),
+                    [&](const Bo &bo) {
+                        return in(bo, bo.bytes, "an argument buffers' heap set");
+                    }) ||
         chunk(chunks_, "a pool chunk") || chunk(blChunks_, "a block-linear chunk") ||
         std::any_of(std::begin(zChunks_), std::end(zChunks_),
                     [&](const std::vector<Chunk> &z) {
@@ -3693,20 +3846,27 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     bool invalidates = false, published = false;
     uint64_t invalidatedBefore = 0;
+    bool tablesInvalidate = false;
+    uint64_t tablesBefore = 0;
 
     struct RollbackInvalidation {
         Device &device;
         bool &invalidates, &published;
         uint64_t &before;
+        bool &tables;
+        uint64_t &tablesBefore;
 
         ~RollbackInvalidation()
         {
-            if (invalidates && !published) {
+            if ((invalidates || tables) && !published) {
                 RAW_ENCODE_LOCK(lock, device.lock_);
-                device.heapInvalidated_ = before;
+                if (invalidates)
+                    device.heapInvalidated_ = before;
+                if (tables)
+                    device.tablesInvalidated_ = tablesBefore;
             }
         }
-    } rollback{d, invalidates, published, invalidatedBefore};
+    } rollback{d, invalidates, published, invalidatedBefore, tablesInvalidate, tablesBefore};
 
     uint64_t slmGiven = 0, slmVa = 0;
     {
@@ -3763,7 +3923,19 @@ bool CommandBuffer::commit(uint32_t &seqno)
         };
         for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
             control(*bo, false);
-        for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
+        // the handle tables and heap sets the CPU wrote since the last submission that invalidated the L2 for them
+        if (d.tablesWritten_ != d.tablesInvalidated_) {
+            tablesInvalidate = true;
+            tablesBefore = d.tablesInvalidated_;
+            d.tablesInvalidated_ = d.tablesWritten_;
+        }
+        const uint32_t tables =
+            TegraGM20BSurfaceRead | (tablesInvalidate ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u);
+        if (d.handleTables_.handle)
+            surfaces_.addAccess(d.handleTables_.handle, tables);
+        for (const Bo &bo : d.heapSets_)
+            surfaces_.addAccess(bo.handle, tables);
+        for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_, &d.argumentRoots_})
             control(*bo, true);
         for (const auto &part : d.heapParts_)
             surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
@@ -4677,6 +4849,33 @@ static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, c
 }
 #endif
 
+// Stage `k`'s (0 vertex, 1 fragment) root table for this draw, in the upload ring: m2v's {null, sink, an entry per buffer slot
+// it reaches through the table} over the identity resident set (raw_heap_tables.h). A buffer reached so may be written.
+uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k)
+{
+    Device &d = *dev_;
+    const uint32_t slots = r.rootSlots[k], entries = drawRootEntries(slots);
+    RootSlot slot[32];
+    for (uint32_t n = 0; kFirstSlotRoot + n < entries; n++) {
+        const Bound &b = bufs_[k + 1][n];
+        slot[n] = {};
+        if (!(slots >> n & 1) || !b.va)
+            continue;
+        if (b.buffer) {
+            cb_->use(*b.buffer, true);
+            slot[n] = {b.buffer->va, b.buffer->length, b.offset};
+        } else {
+            cb_->useAddress(b.va, b.size, true);
+            slot[n] = {b.va, b.size, 0};
+        }
+    }
+    uint64_t va = 0;
+    auto *table = reinterpret_cast<RootEntry *>(d.alloc(d.upload_, entries * sizeof(RootEntry), 256, va));
+    writeDrawRoots(table, va, slots, slot, d.heapTables_.sinkVa(), d.heapTables_.identityVa());
+    RAW_DIAGNOSTIC(d.stats.uploadBytes += entries * sizeof(RootEntry));
+    return va;
+}
+
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             bool indexed, const char **why)
 {
@@ -4806,6 +5005,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    if (pl->heapMissing) {
+        *why = "no memory for the tables a state reads argument buffers through";
+        cb_->refusal = {};
+        return false;
+    }
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, movedEntries(r), pl->memoryEntries,
@@ -4822,6 +5026,15 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     at[0] = uint32_t(d.colorTable_.va);
                     at[1] = uint32_t(d.colorTable_.va >> 32);
                     at[2] = kColorTableBytes;
+                    at[3] = 0;
+                    continue;
+                }
+                if (e.kind == EntryTextureTable || e.kind == EntrySamplerTable) {
+                    const bool textures = e.kind == EntryTextureTable;
+                    const uint64_t va = textures ? d.heapTables_.textureTableVa() : d.heapTables_.samplerTableVa();
+                    at[0] = uint32_t(va);
+                    at[1] = uint32_t(va >> 32);
+                    at[2] = textures ? d.heapTables_.textureTableBytes() : d.heapTables_.samplerTableBytes();
                     at[3] = 0;
                     continue;
                 }
@@ -4960,8 +5173,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_BEGIN(bindSpan, Bind);
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
+    const bool slotRoots = r.rootSlots[0] || r.rootSlots[1];
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
-        r.shaderTests.flags) {
+        r.shaderTests.flags || slotRoots) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -5002,6 +5216,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         patchBlendPush(r, blendColor_, blendWords_, want);
         patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
+        for (uint32_t k = 0; k < 2; k++)
+            if (const uint8_t word = r.rootTableWord[k]; r.rootSlots[k] && word && word <= 31) {
+                const uint64_t table = rootTable(r, k);
+                want[word - 1] = uint32_t(table);
+                want[word] = uint32_t(table >> 32);
+            }
         for (int i = 0; i < 32;) {
             if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
@@ -5080,9 +5300,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     bool selected = false;
     if (descriptorBinding_.changed(pl, setVa)) {
-        const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};
+        const HeapSet *heap = pl->heapSet;
+        const uint64_t heapVa = heap ? heap->memory.va : 0;
+        // NVK's root table sets[0] and sets[1]: set 0, and set 1 for a heap array a program reads past its constant buffer
+        const uint32_t s[8] = {uint32_t(setVa),        uint32_t(setVa >> 32),  kSetBytes, 0, uint32_t(heapVa),
+                               uint32_t(heapVa >> 32), heap ? r.heapBytes : 0, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
-        p.nonInc(LOAD_CB, s, 4);
+        p.nonInc(LOAD_CB, s, heap ? 8 : 4);
+        if (pl->heapSlot[0] || pl->heapSlot[1]) {
+            p.inc(CB_SELECTOR_A, {std::min(r.heapBytes, kMaxCbufBytes), uint32_t(heapVa >> 32), uint32_t(heapVa)});
+            if (pl->heapSlot[0])
+                p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->heapSlot[0]) << 4);
+            if (pl->heapSlot[1])
+                p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->heapSlot[1]) << 4);
+            selected = true;
+        }
         if (pl->setSlot[0] || pl->setSlot[1]) {
             p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
             if (pl->setSlot[0])

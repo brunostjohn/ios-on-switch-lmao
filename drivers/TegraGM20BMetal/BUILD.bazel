@@ -1,5 +1,6 @@
 # The TegraGM20B Metal plugin's sources and the precompile/stage tools (m2v and our changes to it: third_party/m2v). The bundle itself is
 # built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -85,6 +86,7 @@ filegroup(
         "raw/runtime/raw_direct.h",
         "raw/runtime/raw_direct_compute.cpp",
         "raw/runtime/raw_direct_compute.h",
+        "raw/runtime/raw_direct_heap.h",
         "raw/runtime/raw_direct_nvk.h",
         "raw/runtime/raw_direct_push.h",
         "raw/runtime/raw_dynamic_push.h",
@@ -385,6 +387,37 @@ py_test(
     deps = [
         ":archives",
         "//tools/gpu/shaders:metallib",
+    ],
+)
+
+# argcheck (raw/test/argcheck.py): HW Test's argument-buffer states' fragment programs on the Maxwell interpreter, over a
+# draw's root table as rootdump writes it with the device's own writer
+cc_binary(
+    name = "rootdump",
+    srcs = [
+        "raw/runtime/raw_heap_tables.h",
+        "raw/runtime/raw_pack.h",
+        "raw/runtime/raw_resource_id.h",
+        "raw/test/rootdump.cpp",
+    ],
+)
+
+py_binary(
+    name = "argcheck",
+    srcs = ["raw/test/argcheck.py"],
+    args = [
+        "--rootdump",
+        "$(rootpath :rootdump)",
+    ],
+    data = [
+        ":raw_pack_generator",
+        ":rootdump",
+    ],
+    main = "raw/test/argcheck.py",
+    deps = [
+        ":raw_pack",
+        "//tools/gpu/maxwell:interp",
+        "//tools/gpu/maxwell:isa",
     ],
 )
 

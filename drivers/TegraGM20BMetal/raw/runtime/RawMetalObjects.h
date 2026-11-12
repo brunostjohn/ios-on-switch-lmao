@@ -83,6 +83,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::atomic<uint64_t> _used;  // what its resources made outside its arena hold
     uint32_t _arena;              // its arena + 1; 0: none
     std::atomic<int> _purgeable;  // the MTLPurgeableState asked last (0: never asked)
+    // its live resources, weakly: what useHeap names to a command buffer (an argument buffer may reach any of them)
+    NSHashTable *_resources;
 }
 @end
 
@@ -142,6 +144,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMHeap *_heap;
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
+    std::atomic<bool> _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (RawMetalResourceIds.mm)
 }
 @end
 
@@ -149,6 +152,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @public
     raw::Sampler _raw;
     MTLSamplerDescriptor *_descriptor;
+    std::atomic<bool> _idNamed;
+    raw::Sampler _normalized;  // a pixel-coordinate sampler's twin of normalized coordinates, what a heap holds of it
     NSMutableDictionary<NSValue *, id<MTLSamplerState>> *_clamped;  // its descriptor's with a bind's LOD clamps
 }
 @end

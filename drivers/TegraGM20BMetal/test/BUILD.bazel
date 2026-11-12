@@ -243,6 +243,64 @@ host_test(
     ],
 )
 
+# A state that reads argument buffers on raw::Device (raw_device_harness.h): its root-table and status words, its set 1
+# holding the textures whose IDs were named, its draws submitted
+host_test(
+    name = "raw_device_arguments_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_device_arguments_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:SwitchGpuJobVisibility.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
 # raw/runtime/raw_resource_set.h over the same model (methods 31-33): members go with the set and never as uses, what the
 # kernel refuses stays a use, a freed member leaves the view before its VA is reused, a killed channel's set is made again
 # for the next job, and a NotReady the generation's mirror does not explain stays the job's
@@ -1635,6 +1693,31 @@ host_test(
     srcs = [
         "raw_argument_layout_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_argument_layout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+# The facade's MTLArgumentEncoder (raw_argument_encoder.h): a function's encoder from the bridge's runs, its nested encoders,
+# the writes Metal's validation stops
+host_test(
+    name = "raw_argument_encoder_test",
+    srcs = [
+        "raw_argument_encoder_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_argument_encoder.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_argument_layout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+# The device-wide handle tables and heap sets argument buffers read through (raw_heap_tables.h), searched as m2v's
+# lookup_host searches them
+host_test(
+    name = "raw_heap_tables_test",
+    srcs = [
+        "raw_heap_tables_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_heap_tables.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_id.h",
     ],
     cxx_std = "c++17",
 )

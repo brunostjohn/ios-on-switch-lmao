@@ -38,13 +38,16 @@
 
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
 {
-    return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index];
+    return rmFunctionArgumentEncoder(self, index);
 }
 
+// No reflection object is made: the reflection form answers nil there, as Metal does when it was not asked for (m2v's)
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
                                                  reflection:(MTLAutoreleasedArgument *)reflection
 {
-    return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index reflection:reflection];
+    if (reflection)
+        *reflection = nil;
+    return rmFunctionArgumentEncoder(self, index);
 }
 
 @end

@@ -97,3 +97,58 @@ fragment float4 argument_colour_fragment(constant ColourArguments &arguments [[b
 {
     return *arguments.colour;
 }
+
+/// Two textures and a sampler reached through an argument buffer (metal.native.argument_encoder): the target's left half
+/// samples the first texture, its right half the second.
+struct TextureArguments {
+    texture2d<float> first [[id(0)]];
+    texture2d<float> second [[id(1)]];
+    sampler nearest [[id(2)]];
+};
+
+fragment float4 argument_textures_fragment(float4 position [[position]],
+                                           constant TextureArguments &arguments [[buffer(0)]])
+{
+    const float2 centre = float2(0.5);
+    return position.x < 4.0 ? arguments.first.sample(arguments.nearest, centre)
+                             : arguments.second.sample(arguments.nearest, centre);
+}
+
+/// An argument buffer's array of three textures and array of two samplers (metal.native.argument_encoder): column k of the
+/// target samples texture k, row 0 through a clamping sampler and row 1 through a repeating one, at u = 1.25, where the clamp
+/// reads a texture's right texel and the repeat its left
+struct ArrayArguments {
+    array<texture2d<float>, 3> textures [[id(0)]];
+    array<sampler, 2> samplers [[id(3)]];
+};
+
+fragment float4 argument_array_fragment(float4 position [[position]], constant ArrayArguments &arguments [[buffer(0)]])
+{
+    const uint column = min(uint(position.x), 2u), row = min(uint(position.y), 1u);
+    return arguments.textures[column].sample(arguments.samplers[row], float2(1.25, 0.5));
+}
+
+/// A buffer slot and an argument buffer's pointer behind one pointer (metal.native.argument_encoder): m2v reaches the slot
+/// through the draw's root table too. Pixel 0 reads the slot's colour, pixel 1 the colour behind the argument buffer's pointer
+fragment float4 argument_slot_fragment(float4 position [[position]], constant ColourArguments &arguments [[buffer(0)]],
+                                       constant float4 *direct [[buffer(1)]])
+{
+    return *(position.x < 1.0 ? direct : arguments.colour);
+}
+
+/// An argument buffer behind an argument buffer's pointer (metal.native.argument_encoder): pixel 0 samples its texture, pixel
+/// 1 reads the colour behind its pointer
+struct InnerArguments {
+    texture2d<float> texture [[id(0)]];
+    constant float4 *colour [[id(1)]];
+};
+
+struct OuterArguments {
+    constant InnerArguments *inner [[id(0)]];
+};
+
+fragment float4 argument_nested_fragment(float4 position [[position]], constant OuterArguments &arguments [[buffer(0)]])
+{
+    constexpr sampler nearest(filter::nearest);
+    return position.x < 1.0 ? arguments.inner->texture.sample(nearest, float2(0.5)) : *arguments.inner->colour;
+}

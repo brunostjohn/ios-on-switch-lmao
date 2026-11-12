@@ -61,6 +61,7 @@
 #include "raw_fence.h"
 #include "raw_host_access.h"
 #include "raw_heap.h"
+#include "raw_heap_tables.h"
 #include "raw_order.h"
 #include "raw_pack.h"
 #include "raw_push.h"
@@ -466,6 +467,11 @@ struct Pipeline {
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
+    // its record's set 1 (raw_heap_tables.h, null: none) and the constant buffer slot each program reads it at (0: none); its
+    // draws refused where the device had no memory for it (heapMissing)
+    const HeapSet *heapSet = nullptr;
+    uint8_t heapSlot[2] = {};
+    bool heapMissing = false;
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -740,6 +746,7 @@ private:
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
     uint8_t shaderTestsActive_ = 0;
     bool prepareShaderTests(const Pipeline &pipeline, const char **why);
+    uint64_t rootTable(const PackPipeline &r, uint32_t k);
     void copyShaderTests(uint8_t flags, bool toAttachment);
     void endShaderTests();
 
@@ -1364,6 +1371,25 @@ public:
     bool createSampler(const SamplerDesc &d, Sampler &s);
     void destroySampler(Sampler &s);
 
+    // m2v's handle tables and heap (raw_heap_tables.h): texture header `tic` now names `texture`, sampler header `tsc`
+    // `sampler` (null: none). False: no memory for the tables.
+    bool heapTexture(uint32_t tic, const HeapTexture *texture);
+    bool heapSampler(uint32_t tsc, const HeapSampler *sampler);
+    // A texture or sampler whose gpuResourceID was asked for, named in the tables until it is forgotten as it goes. A sample
+    // through a texture's ID reads it as a slot binds it: its stand-in where it has one, none for a planar texture (its
+    // samplers take its address map, which no argument buffer's sampler carries). A sampler of pixel coordinates samples
+    // through `twin`, made here with normalized ones, since m2v's program scales such a sampler's coordinates itself.
+    static HeapTexture heapTextureOf(const Texture &t, const HeapTextureFacts &facts, uint32_t flags);
+    bool nameTexture(const Texture &t, const HeapTextureFacts &facts, uint32_t flags);
+    void forgetTexture(const Texture &t);
+    bool nameSampler(const Sampler &s, uint32_t word, Sampler &twin);
+    void forgetSampler(const Sampler &s, Sampler &twin);
+    // Which texture an image array of a heap holds (the facade's: the bridge's switch_nmb_heap_holds), before any ID is named
+    void heapHolds(HeapHolds holds)
+    {
+        heapHolds_ = holds;
+    }
+
     // The first pool chunk made now (its pages wired and imported), off the render thread's first texture (raw_metal_prepare),
     // and the pool's grower started: the next chunk of the pool, of block-linear images or of a zeta format is made on its own
     // thread once the free bytes of that kind's shared chunks fall below a chunk's worth, so the render thread's allocations
@@ -1730,6 +1756,19 @@ private:
     Buffer visibilityPage_;
     std::once_flag visibilityOnce_;
     std::atomic<uint32_t> visibilityNext_{0};
+    // m2v's handle tables and roots, made at the first ID named or state drawn through an argument buffer, and each record's
+    // set 1 (raw_heap_tables.h), under lock_
+    Bo handleTables_, argumentRoots_;
+    std::vector<Bo> heapSets_;
+    HeapTables heapTables_;
+    // the tables' and sets' CPU writes, and their count as of the last submission that invalidated the L2 for them: an
+    // exact job names them host-written while the two differ
+    uint64_t tablesWritten_ = 0, tablesInvalidated_ = 0;
+    HeapHolds heapHolds_ = nullptr;
+    bool heapMemory();
+    const HeapSet *heapSet(const PackPipeline &rec);
+    void bindArguments(Pipeline &pl, const PackPipeline &pp);
+    void tablesWritten();
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap

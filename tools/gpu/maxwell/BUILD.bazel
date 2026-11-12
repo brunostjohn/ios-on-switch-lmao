@@ -28,7 +28,10 @@ py_library(
     name = "isa",
     srcs = ["isa.py"],
     data = ["opcodes.txt"],
-    visibility = ["//tools:__subpackages__"],
+    visibility = [
+        "//drivers/TegraGM20BMetal:__pkg__",
+        "//tools:__subpackages__",
+    ],
 )
 
 py_binary(
@@ -59,7 +62,10 @@ py_library(
         "quad.py",
         "texture.py",
     ],
-    visibility = ["//tools:__subpackages__"],
+    visibility = [
+        "//drivers/TegraGM20BMetal:__pkg__",
+        "//tools:__subpackages__",
+    ],
     deps = [":isa"],
 )
 

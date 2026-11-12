@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: MIT
+// A state that reads argument buffers on raw::Device (raw_device_harness.h): its push words name the device's root table and
+// ExecutionStatus words at its creation, its set 1 holds every texture whose ID was named where its class fits, and its
+// draws are submitted.
+#include "raw_device_harness.h"
+#include "SwitchGpuJobVisibility.h"
+#include "../raw/runtime/raw_record.h"
+
+namespace {
+
+constexpr uint32_t kRGBA8 = 70, kTriangle = 3, kSampled2d = 0x5, kSamplerClass = 0x2;
+
+bool holdsEvery2d(uint32_t heapClass, const raw::HeapTextureFacts *facts)
+{
+    return heapClass == kSampled2d && facts->textureType == 2;
+}
+
+class DeviceArguments : public harness::DeviceTest {
+protected:
+    raw::Texture target, sampled;
+    raw::Pipeline *pl = nullptr;
+
+    void SetUp() override
+    {
+        dev.heapHolds(holdsEvery2d);
+        DeviceTest::SetUp();
+        ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, target));
+        ASSERT_TRUE(dev.createTexture(4, 4, kRGBA8, sampled));
+        raw::RuntimeRecord r;
+        r.keyString = "samples=1 c0=70 ds=0/0 ";
+        for (raw::CapturedProgram &p : r.programs) {
+            p.image.assign(80 + 64, 0);
+            p.gprs = 8;
+            p.cbufTypes = {raw::CbufRoot, raw::CbufSet};
+        }
+        r.programs[1].cbufTypes = {raw::CbufRoot, raw::kCbufHeapSet, raw::CbufSet};
+        r.pipeline.keyHash = 0xab;
+        r.pipeline.entries = 2;
+        r.pipeline.entry[0] = {0, raw::EntryTextureTable, 2, 0, 0, 0, 0};
+        r.pipeline.entry[1] = {16, raw::EntrySamplerTable, 2, 0, 0, 0, 0};
+        r.pipeline.setBytes = 32;
+        r.pipeline.rootTableWord[1] = 17;
+        r.pipeline.statusWord[1] = 19;
+        r.pipeline.pushMask = 0xF << 16;
+        r.pipeline.heapArrays = 2;
+        r.pipeline.heap[0] = {kSampled2d, 0};
+        r.pipeline.heap[1] = {kSamplerClass, 0x8000};
+        r.pipeline.heapBytes = 0x10000;
+        r.blob = {0x1a00, 0x1111};
+        std::string why;
+        pl = dev.addRecord(r, false, why);
+        ASSERT_NE(pl, nullptr) << why;
+    }
+
+    uint32_t element(uint32_t array, uint32_t i) const
+    {
+        uint32_t word;
+        memcpy(&word, pl->heapSet->memory.cpu + pl->heapSet->array[array].offset + 4 * i, 4);
+        return word;
+    }
+
+    const raw::HeapTables &tables() const
+    {
+        return raw::DeviceHarness::tables(dev);
+    }
+
+    // A state whose fragment root table holds [[buffer(1)]] (m2v's Psb slot), its other words as SetUp's
+    raw::Pipeline *slotState()
+    {
+        raw::RuntimeRecord r;
+        r.keyString = "samples=1 c0=70 ds=0/0 slot ";
+        for (raw::CapturedProgram &p : r.programs) {
+            p.image.assign(80 + 64, 0);
+            p.gprs = 8;
+            p.cbufTypes = {raw::CbufRoot, raw::CbufSet};
+        }
+        r.pipeline.keyHash = 0xac;
+        r.pipeline.rootTableWord[1] = 17;
+        r.pipeline.statusWord[1] = 19;
+        r.pipeline.rootSlots[1] = 1u << 1;
+        r.pipeline.pushMask = 0xF << 16;
+        r.blob = {0x1a00, 0x1111};
+        std::string why;
+        raw::Pipeline *made = dev.addRecord(r, false, why);
+        EXPECT_NE(made, nullptr) << why;
+        return made;
+    }
+
+    // `explicitly`: as the facade's command buffers (RawMetalEncode.mm), whose jobs name what the CPU wrote
+    std::string draw(bool explicitly = false, raw::Pipeline *state = nullptr, const raw::Buffer *slot1 = nullptr,
+                     uint64_t offset = 0)
+    {
+        raw::CommandBuffer *cb = dev.begin();
+        if (!cb)
+            return "no command buffer";
+        if (explicitly)
+            cb->internalCompletion();
+        raw::PassDesc pass;
+        pass.color[0].texture = &target;
+        pass.count = 1;
+        raw::RenderEncoder *e = cb->render(pass);
+        if (!e) {
+            cb->abandon();
+            return "no pass";
+        }
+        e->setPipeline(state ? state : pl);
+        if (slot1)
+            e->setBuffer(2, 1, slot1, offset);
+        const char *why = nullptr;
+        const bool ok = e->draw(kTriangle, 0, 3, 1, 0, &why);
+        e->end();
+        uint32_t seqno = 0;
+        if (!ok || !cb->commit(seqno)) {
+            cb->abandon();
+            return why ? why : "not committed";
+        }
+        return "";
+    }
+};
+
+TEST_F(DeviceArguments, AStatesAddressWordsAreTheDevicesRootTableAndStatus)
+{
+    ASSERT_NE(pl->heapSet, nullptr);
+    EXPECT_FALSE(pl->heapMissing);
+    EXPECT_EQ(pl->heapSlot[0], 0);
+    EXPECT_EQ(pl->heapSlot[1], 1);
+    const uint64_t root = uint64_t(pl->push[17]) << 32 | pl->push[16];
+    const uint64_t status = uint64_t(pl->push[19]) << 32 | pl->push[18];
+    EXPECT_NE(root, 0u);
+    EXPECT_EQ(status, root + 3 * sizeof(raw::RootEntry) + raw::kRootSinkBytes);
+    EXPECT_EQ(pl->pushMask & 0xF0000u, 0xF0000u);
+    EXPECT_EQ(dev.vaOwner(root).rfind("the argument buffers' root table", 0), 0u) << dev.vaOwner(root);
+}
+
+TEST_F(DeviceArguments, ANamedTextureIsInTheStatesSetAndItsDrawsAreSubmitted)
+{
+    raw::HeapTexture t;
+    t.sampleTic = sampled.tic;
+    t.facts.textureType = 2;
+    ASSERT_TRUE(dev.heapTexture(sampled.tic, &t));
+    EXPECT_EQ(element(0, sampled.tic), sampled.tic);
+    raw::Sampler s;
+    ASSERT_TRUE(dev.createSampler({}, s));
+    const raw::HeapSampler sampler = {s.tsc, 0};
+    ASSERT_TRUE(dev.heapSampler(s.tsc, &sampler));
+    EXPECT_EQ(element(1, s.tsc), s.tsc << 20);
+    EXPECT_EQ(draw(), "");
+    ASSERT_TRUE(dev.heapTexture(sampled.tic, nullptr));
+    EXPECT_EQ(element(0, sampled.tic), 0u);
+    EXPECT_EQ(draw(), "");
+}
+
+TEST_F(DeviceArguments, AJobAfterTheTablesChangedNamesThemHostWrittenAndTheNextDoesNot)
+{
+    const auto hostWritten = [] {
+        size_t n = 0;
+        for (const auto &use : kernel_model::model.jobs.back().uses)
+            n += (use.access & TegraGM20BSurfaceHostWritten) != 0;
+        return n;
+    };
+    raw::HeapTexture t;
+    t.sampleTic = sampled.tic;
+    t.facts.textureType = 2;
+    ASSERT_TRUE(dev.heapTexture(sampled.tic, &t));
+    ASSERT_EQ(draw(true), "");
+    const size_t changed = hostWritten();
+    ASSERT_EQ(draw(true), "");
+    EXPECT_GE(changed, hostWritten() + 2);  // the handle tables and the state's set 1
+}
+
+TEST_F(DeviceArguments, ATexturesIdSamplesItAsASlotBindsIt)
+{
+    raw::Texture standIn = sampled, planar = sampled;
+    standIn.tic = 77;
+    raw::Texture held = sampled;
+    held.standIn = &standIn;
+    planar.addressMap = 1;
+    const raw::HeapTextureFacts facts = {70, 2, 1, 0, 1, 1, {2, 3, 4, 5}};
+    EXPECT_EQ(raw::Device::heapTextureOf(sampled, facts, 9).sampleTic, sampled.tic);
+    EXPECT_EQ(raw::Device::heapTextureOf(held, facts, 9).sampleTic, 77u);
+    EXPECT_EQ(raw::Device::heapTextureOf(planar, facts, 9).sampleTic, 0u);
+    EXPECT_EQ(raw::Device::heapTextureOf(sampled, facts, 9).flags, 9u);
+    EXPECT_EQ(raw::Device::heapTextureOf(sampled, facts, 9).facts.usage, raw::kTextureUsageEvery);  // MTLTextureUsageUnknown
+}
+
+TEST_F(DeviceArguments, ANamedTextureIsInTheTablesUntilItIsForgotten)
+{
+    const raw::HeapTextureFacts facts = {70, 2, 1, 1, 1, 1, {2, 3, 4, 5}};
+    ASSERT_TRUE(dev.nameTexture(sampled, facts, 0x250000));
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).element, sampled.tic);
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).flags, 0x250000u);
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).idLo, sampled.tic);
+    EXPECT_EQ(element(0, sampled.tic), sampled.tic);
+    dev.forgetTexture(sampled);
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).element, 0u);
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).flags, 0u);
+    EXPECT_EQ(tables().textureEntryAt(sampled.tic).idLo, sampled.tic);  // ids never change: the table stays sorted
+    EXPECT_EQ(element(0, sampled.tic), 0u);
+}
+
+TEST_F(DeviceArguments, APixelCoordinateSamplerSamplesThroughANormalizedTwinUntilItIsForgotten)
+{
+    raw::SamplerDesc desc;
+    desc.pixel = true;
+    raw::Sampler s, twin;
+    ASSERT_TRUE(dev.createSampler(desc, s));
+    ASSERT_TRUE(dev.nameSampler(s, raw::kSamplerWordPixelCoordinates, twin));
+    ASSERT_NE(twin.tsc, 0u);
+    EXPECT_NE(twin.tsc, s.tsc);
+    EXPECT_FALSE(twin.desc.pixel);
+    EXPECT_EQ(element(1, s.tsc), twin.tsc << 20);
+    EXPECT_EQ(tables().samplerEntryAt(s.tsc).element, s.tsc);
+    EXPECT_EQ(tables().samplerEntryAt(s.tsc).flags, raw::kSamplerWordPixelCoordinates);
+    const uint32_t twinTsc = twin.tsc;
+    dev.forgetSampler(s, twin);
+    EXPECT_EQ(twin.tsc, 0u);
+    EXPECT_EQ(element(1, s.tsc), 0u);
+    EXPECT_EQ(tables().samplerEntryAt(s.tsc).element, 0u);
+    raw::Sampler next;
+    ASSERT_TRUE(dev.createSampler({}, next));
+    EXPECT_EQ(next.tsc, twinTsc);  // the twin's header was given back
+}
+
+TEST_F(DeviceArguments, ANormalizedSamplerSamplesThroughItsOwnHeader)
+{
+    raw::Sampler s, twin;
+    ASSERT_TRUE(dev.createSampler({}, s));
+    ASSERT_TRUE(dev.nameSampler(s, 0x40, twin));
+    EXPECT_EQ(twin.tsc, 0u);
+    EXPECT_EQ(element(1, s.tsc), s.tsc << 20);
+}
+
+// The draw's own fragment root table (RenderEncoder::rootTable) in the upload ring, read where its push words point: the
+// writer's entries over the bound buffer, and the buffer named to the job as written
+TEST_F(DeviceArguments, ASlotStatesDrawWritesItsRootTableOverTheBoundBuffer)
+{
+    raw::Pipeline *state = slotState();
+    ASSERT_NE(state, nullptr);
+    raw::Buffer buffer;
+    ASSERT_TRUE(dev.createBuffer(100, buffer));
+    ASSERT_EQ(draw(true, state, &buffer, 48), "");
+    const uint64_t va = uint64_t(raw::DeviceHarness::rootPush(dev, 17)) << 32 | raw::DeviceHarness::rootPush(dev, 16);
+    ASSERT_NE(va, 0u);
+    EXPECT_NE(va, tables().rootTableVa());
+    const auto *table = reinterpret_cast<const raw::RootEntry *>(raw::DeviceHarness::upload(dev, va, 4 * 32));
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(table[0].host | table[0].guest | table[0].size, 0u);
+    EXPECT_EQ(table[1].host, tables().sinkVa());
+    EXPECT_EQ(va + 32 * table[1].guest, tables().identityVa());
+    EXPECT_EQ(table[2].host | table[2].size, 0u);
+    EXPECT_EQ(table[3].host, buffer.va);
+    EXPECT_EQ(table[3].guest, buffer.va);
+    EXPECT_EQ(table[3].size, (buffer.length + 15) & ~uint64_t(15));
+    EXPECT_EQ(table[3].bindOffset, 48u);
+    bool written = false;
+    for (const auto &use : kernel_model::model.jobs.back().uses)
+        written |= (use.access & TegraGM20BSurfaceGpuAddress) && use.handle == buffer.va &&
+                   (use.access & TegraGM20BSurfaceWrite);
+    EXPECT_TRUE(written);
+}
+
+// A job submitted without explicit visibility names nothing host-written, and needs not: the kernel acquires every CPU
+// write before such a job (TegraGM20BUserClientSubmit.cpp exec)
+TEST_F(DeviceArguments, ALegacyJobAcquiresEveryHostWrite)
+{
+    raw::HeapTexture t;
+    t.sampleTic = sampled.tic;
+    t.facts.textureType = 2;
+    ASSERT_TRUE(dev.heapTexture(sampled.tic, &t));
+    ASSERT_EQ(draw(false), "");
+    const kernel_model::Job &legacy = kernel_model::model.jobs.back();
+    EXPECT_TRUE(switch_gpu_submit_acquires_host_writes(legacy.flags));
+    ASSERT_TRUE(dev.heapTexture(sampled.tic, nullptr));
+    ASSERT_EQ(draw(true), "");
+    const kernel_model::Job &exact = kernel_model::model.jobs.back();
+    EXPECT_FALSE(switch_gpu_submit_acquires_host_writes(exact.flags));
+    bool named = false;
+    for (const auto &use : exact.uses)
+        named |= (use.access & TegraGM20BSurfaceHostWritten) != 0;
+    EXPECT_TRUE(named);
+}
+
+}  // namespace

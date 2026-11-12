@@ -98,6 +98,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         _heap->_used -= _heapBytes;
     if (_rawOk && _surface && (_raw.converted() || xrOverPlanes(_raw)))
         surfaceConverted(_surfaceWrites, false);
+    rmHeapForgetTexture(self);
     if (_rawOk)
         if (gRM)
             gRM->raw->destroyTexture(_raw);

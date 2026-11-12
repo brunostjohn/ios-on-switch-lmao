@@ -151,6 +151,7 @@ bool regionElements(const raw::fx::MipChain &c, const raw::FormatInfo *f, NSUInt
 
 - (void)dealloc
 {
+    rmHeapForgetTexture(self);
     if (_rawOk && gRM)
         gRM->raw->destroyTexture(_raw);
     _rawOk = false;

@@ -38,7 +38,10 @@ typedef enum NmbDirectSource : uint32_t {
     NmbDirectColorTable,  // m2v's sRGB colour table (bind::color_write_table), the same bytes for every state
     NmbDirectOther,
     NmbDirectDepthStandIn,
-    NmbDirectStencilStandIn
+    NmbDirectStencilStandIn,
+    NmbDirectTextureTable,  // a stage's handle table of argument-buffer textures (m2v Synthetic(HandleTable))
+    NmbDirectSamplerTable,  // and of argument-buffer samplers (Synthetic(SamplerTable))
+    NmbDirectArgumentTable  // push fields past the push window (Synthetic(ArgumentTable)), which instantiation fills
 } NmbDirectSource;
 
 #define NMB_DIRECT_IMMUTABLE UINT32_MAX
@@ -64,7 +67,16 @@ typedef struct NmbDirectDraw {
     uint32_t push[32];
     uint32_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
     uint32_t depthTestWord, stencilTestWord;
-    uint32_t pushHoles;   // push words the consumer fills with addresses
+    uint32_t pushHoles;  // push words the consumer fills with addresses
+    // Of them, each stage's (vertex, fragment) root-table and ExecutionStatus address as push word + 1 (0: none), and the
+    // holes of any other kind; the buffer slots each stage's root table holds (bit n: [[buffer(n)]], m2v BufferForm::Psb)
+    uint8_t rootTableWord[2], statusWord[2];
+    uint32_t otherHoles;
+    uint32_t rootSlots[2];
+    uint64_t set1;  // the variant's set 1 VkDescriptorSetLayout, its heap (0: none)
+    // set 1's arrays by binding: each one's class (metal2vulkan heap_class_code, 0: one it cannot word)
+    uint32_t heapArrays;
+    uint32_t heapClass[8];
     uint32_t vertexSlot;  // the first fixed-function vertex buffer's Metal slot (UINT32_MAX: none) and stride
     uint32_t vertexStride;
     const char *variant;
@@ -176,6 +188,19 @@ typedef struct NmbDirectKernel {
 bool nmb_compute_pipeline_direct(NmbDevice *device, const struct NmbComputePipelineDescriptor *descriptor,
                                  const NmbDirectDispatch *dispatch,
                                  bool (*each)(const NmbDirectKernel *kernel, void *ctx), void *ctx);
+
+// A texture as the raw path's device-wide heap asks of it (raw_heap_tables.h HeapTextureFacts): its MTLTextureDescriptor's
+// pixel format, type, sample count, usage, array length, levels and swizzle (MTLTextureSwizzle values)
+typedef struct NmbHeapTextureFacts {
+    uint32_t pixelFormat, textureType, sampleCount, usage, arrayLength, levels;
+    uint8_t swizzle[4];
+} NmbHeapTextureFacts;
+
+// Whether a heap array of class `heapClass` (metal2vulkan heap_class_code, a record's PackHeapArray) holds a texture of
+// `facts`; the flags of its handle-table entry (metal2vulkan handle_entry_flags); a sampler's SamplerWord
+bool switch_nmb_heap_holds(uint32_t heapClass, const NmbHeapTextureFacts *facts);
+uint32_t switch_nmb_heap_texture_flags(const NmbHeapTextureFacts *facts);
+uint32_t switch_nmb_sampler_word(const struct NmbSamplerDescriptor *descriptor);
 
 #ifdef __cplusplus
 }

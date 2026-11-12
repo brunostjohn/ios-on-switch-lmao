@@ -260,6 +260,11 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
         why = "a kernel reading a constant buffer the raw path does not bind";
         return CompileOutcome::Refused;
     }
+    for (uint32_t c = 0; c < made.stage.cbufCount && c < 16; c++)
+        if (cbufKind(made.stage.cbufTypes[c]) == CbufSet && made.stage.cbufTypes[c] != CbufSet) {
+            why = "a kernel reading a descriptor set past set 0";
+            return CompileOutcome::Refused;
+        }
     clearDispatchWords(r.qmd);
     r.keyHash = computeKeyHash(key);
     r.regionWord = int8_t(k.regionWord);

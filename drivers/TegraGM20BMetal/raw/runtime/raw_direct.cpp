@@ -2,6 +2,7 @@
 // See raw_direct.h. What the probe's capture reads of NVK's commands (raw_record.cpp) is read here from what made them: m2v's plan
 // of each probe draw and NVK's own rules for the layout and the descriptors.
 #include "raw_direct.h"
+#include "raw_direct_heap.h"
 #include "raw_direct_nvk.h"
 #include "raw_direct_push.h"
 #include "raw_chip_facts.h"
@@ -206,6 +207,16 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             e.colorTable = true;
             out.push_back(e);
             continue;
+        }
+        if (w.type == StorageBuffer && (w.source == NmbDirectTextureTable || w.source == NmbDirectSamplerTable)) {
+            e.table = w.source == NmbDirectTextureTable ? EntryTextureTable : EntrySamplerTable;
+            e.stage = uint8_t(w.stage);
+            out.push_back(e);
+            continue;
+        }
+        if (w.source == NmbDirectArgumentTable) {
+            why = "push fields m2v spills past the push window into an argument table";
+            return false;
         }
         if (bufferType(w.type)) {
             if ((w.source != NmbDirectBuffer && w.source != NmbDirectBytes) || (w.stage != 1 && w.stage != 2)) {
@@ -448,17 +459,19 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         why = refused;
         return CompileOutcome::Refused;
     }
-    if (draw.pushHoles) {
-        why = std::to_string(draw.pushHoles) + " push words m2v fills with addresses";
+    RecordHeap heap;
+    if (const char *refused = directHeap(nvk, device, state, heap)) {
+        why = refused;
         return CompileOutcome::Refused;
     }
     if (!validDynamicPush(state)) {
         why = "inconsistent dynamic state push placement";
         return CompileOutcome::Refused;
     }
+    // a split prologue binds its own constant buffers, set 1 not among them
+    const bool splits = split && !storage.storageMask && !heap.arrays;
     Stages stages(nvk, device);
-    if (const CompileOutcome compiled =
-            stages.compile(state, halfFloatTargets(key), split && !storage.storageMask, why);
+    if (const CompileOutcome compiled = stages.compile(state, halfFloatTargets(key), splits, why);
         compiled != CompileOutcome::Made)
         return compiled;
     const uint32_t interlock = stages.emit(1).interlockControl;
@@ -491,6 +504,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.halfBlendColorWord = uint8_t(draw.halfBlendColorWord);
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
+    parts.heap = heap;
     if (!programsBindable(parts, why) || !layout(nvk, device, draw, parts.layout, why))
         return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
@@ -502,9 +516,10 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     }
     if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, why))
         return CompileOutcome::Refused;
+    const uint32_t addresses = addressPushWords(draw);
     for (uint32_t i = 0; i < 32; i++)
-        if (draw.pushMask >> i & 1)
-            parts.push[kRootPush + 4 * i] = draw.push[i];
+        if ((draw.pushMask | addresses) >> i & 1)
+            parts.push[kRootPush + 4 * i] = addresses >> i & 1 ? 0 : draw.push[i];
     parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
         return CompileOutcome::Refused;
@@ -515,7 +530,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     if (registers)
         *registers = parts.regs;
     out.splitTried = split;
-    if (split && !storage.storageMask)
+    if (splits)
         splitInto(nvk, stages.split(1), out);
     if (variants)
         programVariants(state, nvk, device, halfFloatTargets(key), stages, out);

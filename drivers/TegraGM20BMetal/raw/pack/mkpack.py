@@ -176,6 +176,7 @@ def default_forms(simple: list[dict], storage: set[str]) -> tuple[list[dict], li
 # set 0, and set 0's uniform buffers (mkprograms.py cbuf_code: the type in bits 0-2, the descriptor's offset / 16 above)
 # at the slots the program names (raw_gpu.cpp)
 CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET, CBUF_UBO = 1, 2, 3, 5
+CBUF_HEAP_SET = CBUF_SET | 1 << 3  # runtime/raw_pack.h kCbufHeapSet: set 1, a heap's arrays
 
 
 def ubo_offsets(program: dict) -> list[int]:
@@ -183,9 +184,10 @@ def ubo_offsets(program: dict) -> list[int]:
     return [(c >> 3) * 16 for c in program['cbufs'][1:] if c & 7 == CBUF_UBO]
 
 
-def raw_bindable(program: dict) -> bool:
+def raw_bindable(program: dict, heap: bool = False) -> bool:
+    """Give whether a raw draw binds every constant buffer `program` reads; set 1 only with a heap (`heap`)."""
     cbufs = program['cbufs']
-    rest = [c for c in cbufs[1:] if c & 7 != CBUF_UBO]
+    rest = [c for c in cbufs[1:] if c & 7 != CBUF_UBO and not (heap and c == CBUF_HEAP_SET)]
     offsets = ubo_offsets(program)
     return (
         bool(cbufs)

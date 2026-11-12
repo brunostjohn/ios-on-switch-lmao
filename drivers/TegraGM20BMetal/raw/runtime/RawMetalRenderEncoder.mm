@@ -524,15 +524,17 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [self useResource:resource usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
+// Every resource the heap holds, as useResource names one for reading: an argument buffer may reach any of them
 - (void)useHeap:(id<MTLHeap>)heap
 {
-    (void)heap;  // the facade's heaps hold ordinary resources: nothing to make resident
+    [self useHeap:heap stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
-    (void)heap;
-    (void)stages;
+    rmHeapEach(heap, ^(id<MTLResource> resource) {
+        [self useResource:resource usage:MTLResourceUsageRead stages:stages];
+    });
 }
 
 - (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
@@ -553,15 +555,14 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
 {
-    (void)heaps;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k]];
 }
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count stages:(MTLRenderStages)stages
 {
-    (void)heaps;
-    (void)count;
-    (void)stages;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k] stages:stages];
 }
 
 // A barrier on some resources is the scope barrier over all of them (iOS's texture scope covers render attachments)

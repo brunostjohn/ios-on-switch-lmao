@@ -61,6 +61,7 @@ id<MTLBuffer> makeArenaBuffer(RMHeap *h, NSUInteger length, MTLResourceOptions o
             return nil;
     }
     b->_aliasable = offset.has_value();
+    rmHeapHold(h, b);
     return (id<MTLBuffer>)b;
 }
 
@@ -78,7 +79,9 @@ id<MTLTexture> makeArenaTexture(RMHeap *h, MTLTextureDescriptor *d, std::optiona
     t->_rawOk = true;
     t->_heap = h;
     t->_aliasable = offset.has_value();
-    return swizzled((id<MTLTexture>)t, d.swizzle);
+    id<MTLTexture> made = swizzled((id<MTLTexture>)t, d.swizzle);
+    rmHeapHold(h, made);
+    return made;
 }
 
 }  // namespace
@@ -86,6 +89,28 @@ id<MTLTexture> makeArenaTexture(RMHeap *h, MTLTextureDescriptor *d, std::optiona
 bool heapResident(RMHeap *h)
 {
     return resident(h);
+}
+
+void rmHeapHold(RMHeap *heap, id resource)
+{
+    if (!heap || !resource)
+        return;
+    @synchronized(heap) {
+        if (!heap->_resources)
+            heap->_resources = [NSHashTable weakObjectsHashTable];
+        [heap->_resources addObject:resource];
+    }
+}
+
+void rmHeapEach(id<MTLHeap> heap, void (^each)(id<MTLResource> resource))
+{
+    if (![(id)heap isKindOfClass:[RMHeap class]])
+        return;
+    RMHeap *h = (RMHeap *)heap;
+    @synchronized(h) {
+        for (id<MTLResource> resource in h->_resources)
+            each(resource);
+    }
 }
 
 @implementation RMHeap
@@ -201,6 +226,7 @@ bool heapResident(RMHeap *h)
     }
     ((RMBuffer *)b)->_heap = self;
     ((RMBuffer *)b)->_heapBytes = need.size;
+    rmHeapHold(self, b);
     return (id<MTLBuffer>)b;
 }
 
@@ -229,6 +255,7 @@ bool heapResident(RMHeap *h)
     }
     ((RMTexture *)t)->_heap = self;
     ((RMTexture *)t)->_heapBytes = need.size;
+    rmHeapHold(self, t);
     return (id<MTLTexture>)t;
 }
 

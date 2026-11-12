@@ -64,8 +64,28 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0, 5), data)
         pipes, _, _, variants = packfile.pipeline_sections([dict(back, key=rec['key']), dict(back, key=rec['key'])])
         self.assertEqual(len(variants), 16)
-        v15 = directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+        v15 = directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V19.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
         self.assertEqual(struct.unpack_from('<I', pipes, v15), (1,))
+
+    def test_argument_buffer_tail_round_trip(self):
+        tables = [{'off': 32, 'kind': 'texture_table', 'stage': 2}, {'off': 48, 'kind': 'sampler_table', 'stage': 2}]
+        heap = [{'class': 0x25, 'offset': 0}, {'class': 2, 'offset': 0x8000}]
+        rec = {
+            'key': 'samples=1 c0=70:15:0', 'vs': 0, 'fs': 1, 'blob': [], 'entries': tables, 'push': [], 'vbs': [],
+            'set_size': 64, 'fetch': False, 'root_table_word': [0, 17], 'status_word': [0, 19], 'root_slots': [0, 5],
+            'heap': heap, 'heap_bytes': 0x10000,
+        }
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(len(data), directlink.PIPELINE_BYTES)
+        programs = [{'image': bytes([i]), 'data': b'', 'cbufs': []} for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        probe = {'index': 0, 'form': '', 'records': [{'regs': {}}]}
+        record = {'pipeline': data, 'key': rec['key'], 'programs': programs, 'samplers': [], 'probe': probe}
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(back['entries'], tables)
+        self.assertEqual((back['root_table_word'], back['status_word'], back['root_slots']), ([0, 17], [0, 19], [0, 5]))
+        self.assertEqual((back['heap'], back['heap_bytes']), (heap, 0x10000))
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
 
     def test_a_variant_record_lies_under_its_states_key_and_is_named(self):
         own = {'key': 'samples=1 ds=260/260 c0=80:15:0 | v a | f b', 'vs': 0, 'fs': 1, 'blob': [], 'entries': [],
@@ -76,7 +96,9 @@ class RecordsTest(unittest.TestCase):
         records = [pipes[i * directlink.PIPELINE_BYTES : (i + 1) * directlink.PIPELINE_BYTES] for i in range(2)]
         flags = [directlink.PIPELINE.unpack_from(r)[-1] for r in records]
         self.assertEqual((flags[0] & 16, flags[1] & 16), (0, 16))
-        name = struct.unpack_from('<I', records[1], directlink.PIPELINE_BYTES - packfile.PIPELINE_V18.size - 4)[0]
+        name = struct.unpack_from(
+            '<I', records[1], directlink.PIPELINE_BYTES - packfile.PIPELINE_V19.size - packfile.PIPELINE_V18.size - 4
+        )[0]
         self.assertEqual(strings[name:].split(b'\0')[0], b' | tests=3')
 
     def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):

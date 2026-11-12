@@ -24,6 +24,7 @@
 
 - (void)dealloc
 {
+    rmHeapForgetSampler(self);
     if (gRM)
         gRM->raw->destroySampler(_raw);
 }

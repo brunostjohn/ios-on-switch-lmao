@@ -37,6 +37,7 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    uint32_t flags = 0;  // SubmitAddress: TegraGM20BAbiSubmit.surface_flags; SubmitJob: TegraGM20BAbiJob.flags
 };
 
 struct Slot {
@@ -126,11 +127,12 @@ struct Model {
         return 0;
     }
 
-    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply)
+    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply,
+            uint32_t flags)
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses)};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -159,7 +161,7 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        return run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        return run(*s, head->channel, {uses, uses + head->surface_count}, reply, head->surface_flags);
     }
 
     int submitJob(const TegraGM20BAbiSubmitAddress &address, TegraGM20BAbiExecReply &reply)
@@ -197,7 +199,7 @@ struct Model {
             setJobs++;
         }
         submitJobs++;
-        return run(*s, head->channel, std::move(uses), reply);
+        return run(*s, head->channel, std::move(uses), reply, head->flags);
     }
 
     void endGeneration(uint32_t index)

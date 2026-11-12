@@ -39,8 +39,10 @@ PIPELINE_BYTES = (
     + 16
     + packfile.PIPELINE_V15.size
     + packfile.PIPELINE_V18.size
+    + packfile.PIPELINE_V19.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
+TABLE_KINDS = {8: 'texture_table', 9: 'sampler_table'}
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
 
@@ -127,6 +129,8 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
         )
         if kind == ENTRY_COLOR_TABLE:
             out.append({'off': off, 'kind': 'color_table'})
+        elif kind in TABLE_KINDS:
+            out.append({'off': off, 'kind': TABLE_KINDS[kind], 'stage': stage})
         elif kind == ENTRY_UBO:
             residual = sampler_kind >> 2
             out.append(
@@ -162,7 +166,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    tail = PIPELINE_BYTES - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+    tail = PIPELINE_BYTES - packfile.PIPELINE_V19.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
@@ -174,6 +178,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
+    v19 = packfile.PIPELINE_V19.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V19.size)
+    heap_arrays, heap_bytes, heap_words = v19[6], v19[7], v19[8:]
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -215,6 +221,11 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'problems': [],
         'bound_entries': bound_entries,
         'memory_entries': memory_entries,
+        'root_table_word': list(v19[0:2]),
+        'status_word': list(v19[2:4]),
+        'root_slots': list(v19[4:6]),
+        'heap': [{'class': heap_words[2 * i], 'offset': heap_words[2 * i + 1]} for i in range(heap_arrays)],
+        'heap_bytes': heap_bytes,
         'uniform': uniform,
         'fetch_rung': list(fetch_rung),
         'iterated_name': rec.get('iterated', ''),

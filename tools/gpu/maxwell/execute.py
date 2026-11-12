@@ -143,12 +143,7 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             op = bits(w, 41, 2)
         lane.w(d, (x & y, x | y, x ^ y, y)[op])
     elif base in ('IADD', 'IADD32I'):
-        if base == 'IADD32I':
-            x, y = (-a if bits(w, 56, 1) else a), bits(w, 20, 32)
-        else:
-            b = operand_b(lane, w, name, inputs, i20)
-            x, y = (-a if bits(w, 49, 1) else a), (-b if bits(w, 48, 1) else b)
-        lane.w(d, x + y)
+        lane.w(d, iadd(name, w, a, lane, inputs))
     elif base in ('SHL', 'SHR'):
         s = operand_b(lane, w, name, inputs, i20)
         s = s & 31 if bits(w, 39, 1) else min(s, 32)
@@ -159,6 +154,10 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             lane.w(d, sa >> min(s, 31))
         else:
             lane.w(d, a >> s if s < 32 else 0)
+    elif base == 'SHF':
+        # the immediate's high bits are the type field's (bits 37-38): NAK reduces a shift below the type's width first
+        shift = bits(w, 20, 17) if name.endswith('_imm') else lane.r(bits(w, 20, 8))
+        lane.w(d, shf(name, w, a, lane.r(bits(w, 39, 8)), shift))
     elif base == 'IMNMX':
         b = operand_b(lane, w, name, inputs, i20)
         lt = int_cmp(1, a, b, bool(bits(w, 48, 1)))
@@ -203,6 +202,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         texture.tex(name, w, lane, inputs, d)
     elif base == 'TEXS':
         texture.texs(w, lane, inputs)
+    elif base == 'TLD':
+        texture.tld(name, w, lane, inputs, d)
     elif name == 'TXQ_b':
         result = inputs.texture(('txq', lane.r(bits(w, 8, 8)), bits(w, 22, 6)))
         mask = bits(w, 31, 4)
@@ -235,6 +236,50 @@ def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
         result = inputs.texture(('suld', handle, coords))
     for k in range(count):
         lane.w(d + k, result[k % 4])
+
+
+def iadd(name: str, w: int, a: int, lane: Lane, inputs: Inputs) -> int:
+    """Give IADD's sum (NAK sm50.rs OpIAdd2, OpIAdd2X), writing the carry where it sets the condition code (.CC).
+
+    The .X form adds the carry in and its operand modifiers are bitwise nots; the plain form's are negations, a negated
+    operand taken as its not plus one, so a subtraction carries out where it does not borrow.
+    """
+    if name.startswith('IADD32I'):
+        b, mod_a, mod_b, extended, carry_out = bits(w, 20, 32), bits(w, 56, 1), 0, bits(w, 53, 1), bits(w, 52, 1)
+    else:
+        b = operand_b(lane, w, name, inputs, i20)
+        mod_a, mod_b, extended, carry_out = bits(w, 49, 1), bits(w, 48, 1), bits(w, 43, 1), bits(w, 47, 1)
+    if extended:
+        x, y = (~a & 0xFFFFFFFF if mod_a else a), (~b & 0xFFFFFFFF if mod_b else b)
+        total = x + y + lane.carry
+    else:
+        x, y = ((~a & 0xFFFFFFFF) + 1 if mod_a else a), ((~b & 0xFFFFFFFF) + 1 if mod_b else b)
+        total = x + y
+    if carry_out:
+        lane.carry = int(total > 0xFFFFFFFF)
+    return total & 0xFFFFFFFF
+
+
+def shf(name: str, w: int, low: int, high: int, shift: int) -> int:
+    """Give SHF's funnel shift of high:low (NAK ir.rs OpShf's fold before SM70).
+
+    A left shift gives the high word, a right one the word bit 48 picks; bits 37-38 are the type (0 32-bit, 2 U64, 3
+    I64), bit 50 a wrapping shift count.
+    """
+    right = name.startswith('SHF_r')
+    kind = bits(w, 37, 2)
+    width = 64 if kind >= 2 else 32
+    shift = shift & (width - 1) if bits(w, 50, 1) else min(shift, width)
+    x = low | high << 32
+    dst_high = bool(bits(w, 48, 1)) or not right
+    if right and kind == 3:
+        signed = x - (1 << 64) if x >> 63 else x
+        shifted = (signed >> min(shift, 63)) & 0xFFFFFFFFFFFFFFFF
+    elif right:
+        shifted = x >> shift if shift < 64 else 0
+    else:
+        shifted = (x << shift) & 0xFFFFFFFFFFFFFFFF if shift < 64 else 0
+    return shifted >> 32 if dst_high else shifted & 0xFFFFFFFF
 
 
 def bfe(v: int, pos: int, length: int, signed: bool, reverse: bool) -> int:

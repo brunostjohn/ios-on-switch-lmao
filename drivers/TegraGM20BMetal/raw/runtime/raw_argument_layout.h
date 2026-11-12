@@ -6,6 +6,9 @@
 // vectors; a run of constants is a block whose first may raise its alignment, stepped as (o + a - 1) & ~(a - 1) even where
 // a is no power of two. The layout's alignment is the largest type alignment, its length the end rounded up to it. An index
 // two descriptors claim is the later one's.
+// A function's argument buffer (newArgumentEncoderWithBufferIndex:) is m2v's layout of its AIR as flat runs
+// (bind/argument_runs.rs, fromRuns): a member covers `count` elements of `idsPerElement` ids, the first `width` of each
+// arguments at offset + element * stride + w * elementStride, and a pointer to an argument buffer names that buffer's layout.
 #pragma once
 #include <algorithm>
 #include <cstddef>
@@ -55,11 +58,21 @@ struct ArgumentMember {
     uint32_t id = 0, count = 1;
     uint64_t offset = 0, size = 0;
     ArgumentKind kind = ArgumentKind::Buffer;
+    uint32_t idsPerElement = 1, width = 1;
+    uint64_t stride = 0, elementStride = 0;  // stride 0: size
+    int32_t nested = -1;                     // a pointer's argument buffer: its layout's index in the encoder's list
 };
 
 struct ArgumentPlace {
     ArgumentKind kind = ArgumentKind::Buffer;
     uint64_t offset = 0, size = 0;
+    int32_t nested = -1;
+};
+
+// One flat run of a function's layout as the bridge gives it (bridge/NativeMetalObjects.h NmbArgumentRun)
+struct ArgumentRun {
+    uint32_t id, count, idsPerElement, width, kind, nested;
+    uint64_t offset, stride, elementStride, size;
 };
 
 enum class ArgumentLayoutError : uint8_t {
@@ -117,13 +130,44 @@ struct ArgumentLayout {
                                                                     : ArgumentLayoutError::TooLarge;
     }
 
+    // A function's layout from its runs; false: a run of no argument kind, or a nested layout past `layouts` of them
+    static bool fromRuns(uint64_t encodedLength, uint64_t alignment, const ArgumentRun *runs, uint32_t count,
+                         uint32_t layouts, ArgumentLayout &out)
+    {
+        out = {};
+        out.encodedLength = encodedLength;
+        out.alignment = std::max<uint64_t>(alignment, 1);
+        for (uint32_t i = 0; i < count; i++) {
+            const ArgumentRun &r = runs[i];
+            if (r.kind > uint32_t(ArgumentKind::DepthStencilState) || r.nested > layouts)
+                return false;
+            ArgumentMember m;
+            m.id = r.id;
+            m.count = r.count;
+            m.offset = r.offset;
+            m.size = r.size;
+            m.kind = ArgumentKind(r.kind);
+            m.idsPerElement = std::max<uint32_t>(r.idsPerElement, 1);
+            m.width = r.width;
+            m.stride = r.stride;
+            m.elementStride = r.elementStride;
+            m.nested = int32_t(r.nested) - 1;
+            out.members.push_back(m);
+        }
+        return true;
+    }
+
     // Where argument `index` lands: in the last member whose indices hold it
     bool place(uint32_t index, ArgumentPlace &out) const
     {
         for (auto m = members.rbegin(); m != members.rend(); ++m) {
-            if (index < m->id || index - m->id >= m->count)
+            if (index < m->id)
                 continue;
-            out = {m->kind, m->offset + m->size * (index - m->id), m->size};
+            const uint32_t rel = index - m->id, element = rel / m->idsPerElement, within = rel % m->idsPerElement;
+            if (element >= m->count || within >= m->width)
+                continue;
+            const uint64_t stride = m->stride ? m->stride : m->size;
+            out = {m->kind, m->offset + stride * element + m->elementStride * within, m->size, m->nested};
             return true;
         }
         return false;

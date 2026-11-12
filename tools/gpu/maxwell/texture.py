@@ -73,6 +73,24 @@ def tex(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     write_compact(lane, d, mask, fetch(inputs, handle, coords, mode, level, dref, offset, dim))
 
 
+def tld(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
+    """TLD: a texel fetch, bindless (TLD_b, the handle register B's first operand) or bound.
+
+    Its key is ('tld', handle, coordinates, level, offset, sample, dimension); the field layouts NAK sm50.rs OpTld's.
+    """
+    if name not in ('TLD', 'TLD_b'):
+        raise UnsupportedError(name)
+    dim, mask = bits(w, 28, 3), bits(w, 31, 4)
+    ra, rb = bits(w, 8, 8), bits(w, 20, 8)
+    coords = tuple(reg(lane, ra + k if ra != RZ_REG else RZ_REG) for k in range(DIM_COORDS[dim]))
+    operands = [reg(lane, rb + k if rb != RZ_REG else RZ_REG) for k in range(5)]
+    handle = operands.pop(0) if name == 'TLD_b' else inputs.cbuf(inputs.bound_cbuf, bits(w, 36, 13) * 4)
+    level = operands.pop(0) if bits(w, 55, 1) else None
+    offset = operands.pop(0) if bits(w, 35, 1) else None
+    sample = operands.pop(0) if bits(w, 50, 1) else None
+    write_compact(lane, d, mask, inputs.texture(('tld', handle, coords, level, offset, sample, dim)))
+
+
 def texs(w: int, lane: Lane, inputs: Inputs) -> None:
     """TEXS: its operands in registers A and B as its target places them, its components in A's pair then B's."""
     target = bits(w, 53, 4)

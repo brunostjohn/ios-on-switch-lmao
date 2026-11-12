@@ -56,6 +56,8 @@ rust_static_library(
         METAL + ":bridge/NativeMetalBridge.rs",
         METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalDirectCompute.rs",
+        METAL + ":bridge/NativeMetalHeap.rs",
+        METAL + ":bridge/NativeMetalArguments.rs",
         METAL + ":bridge/NativeMetalComputeArtifact.rs",
         METAL + ":bridge/NativeMetalArtifactCodec.rs",
         METAL + ":bridge/NativeMetalReflection.rs",
