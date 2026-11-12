@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-// What the system shader compiler holds as it serves, each run a process of its own over the mock GM20B: its start
-// (compiler_service.mm open: the pack, the store, the request log, the take buffer, the pool's workers), the compiler
-// opened at the first compile, then boot 12's requests (compiler_boot12.log) made through the pool and the pool idle.
-// Once with the m2v device the compiler opened before its compile context (its libraries cached as compiler_engine.mm
-// cached them), once with the engine. Each step's line: the heap in use and allocated (the device's footprint line's
-// figures), phys_footprint and its peak, and what grew, by image and VM tag (footprint_breakdown.h). Run by hand with
-// MallocStackLogging=1 and COMPILER_FOOTPRINT_SITES=<dir>, each step also leaves malloc_history's allocations by size there.
+// What the system shader compiler holds as it serves boot 12's requests (compiler_boot12.log), each run a process of its
+// own over the mock GM20B, as compiler_service.mm opens and serves: the pack, the store, the request log an earlier boot
+// left (boot 12's 13 replayed requests), the take buffer and the pool's workers; the log replayed at the background
+// class; the 2 requests clients then asked; the pool idle. Once with the m2v device the compiler opened before its compile
+// context (its libraries cached as compiler_engine.mm cached them), once with the engine. Each step's line: the heap in
+// use and allocated (the device's footprint line's figures), phys_footprint and its peak, and what grew, by image and VM
+// tag (footprint_breakdown.h). Run by hand: SWITCH_HWTEST_METALLIB names the HW Test app's library (its states are left
+// out without it), SWITCH_PACK a raw pack, and with MallocStackLogging=1, COMPILER_FOOTPRINT_SITES=<dir> keeps
+// malloc_history's allocations by size at each step there.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <malloc/malloc.h>
@@ -20,9 +22,12 @@
 #include "../compiler/compiler_store.h"
 #include "../raw/runtime/raw_pack.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
 #include <gtest/gtest.h>
 #include <fstream>
 #include <mutex>
+#include "TegraGM20BCompilerABI.h"
 
 namespace {
 
@@ -42,6 +47,12 @@ std::string loader()
 std::string root()
 {
     return compiler_test::systemRoot(getenv("SWITCH_QUARTZCORE"));
+}
+
+std::string packPath()
+{
+    const char *pack = getenv("SWITCH_PACK");
+    return pack && *pack ? pack : compiler_test::emptyPack(dir());
 }
 
 // What the device's line reports (compiler_service.mm logFootprint on x1-jetsam), and what grew since the last step
@@ -83,9 +94,52 @@ void show(const char *mode)
 
 struct Asked : switch_compiler::Work {
     switch_compiler::Prepared prepared;
+    std::string request;
 };
 
-// The compiler's own start: compiler_service.mm Service::open's state, and its pool, whose run is `compile`
+std::string logPath()
+{
+    return dir() + "/shaders/requests";
+}
+
+// Boot 12's requests (compiler_boot12.log): the request log's, which an earlier boot's compiles left, and the 2 asked
+std::vector<raw::CompileRequest> boot12()
+{
+    compiler_test::Requests made(
+        root(), {{"/Applications/SwitchHWTest.app/default.metallib", getenv("SWITCH_HWTEST_METALLIB") ?: ""}});
+    return made.of(compiler_test::corpusLines(getenv("SWITCH_BOOT12")));
+}
+
+constexpr size_t kAsked = 2;
+
+std::vector<std::string> clients()
+{
+    const std::vector<raw::CompileRequest> asked = boot12();
+    std::vector<std::string> out;
+    for (size_t i = asked.size() - std::min(kAsked, asked.size()); i < asked.size(); ++i)
+        out.push_back(raw::encodeRequest(asked[i]));
+    return out;
+}
+
+void writeLog()
+{
+    mkdir((dir() + "/shaders").c_str(), 0755);
+    unlink(logPath().c_str());
+    switch_compiler::RequestLog log;
+    switch_compiler::SystemLibraries system(root());
+    ASSERT_TRUE(log.open(logPath()));
+    const std::vector<raw::CompileRequest> asked = boot12();
+    for (size_t i = 0; i + kAsked < asked.size(); ++i) {
+        switch_compiler::Prepared p;
+        std::string why;
+        const std::string request = raw::encodeRequest(asked[i]);
+        ASSERT_TRUE(switch_compiler::prepare(request, 0, system, p, why)) << why;
+        log.add(p.name, request);
+    }
+}
+
+// compiler_service.mm Service as it opens and serves: its state, its pool (whose run is `compile`, then the store and the
+// log as Service::run publishes), its replay of the log at the background class and the clients' requests after
 struct Serving {
     switch_compiler::Store store;
     switch_compiler::RequestLog log;
@@ -96,12 +150,17 @@ struct Serving {
     template <typename Compile> bool open(const raw::Digest &rules, Compile compile)
     {
         std::string why;
-        if (!store.open(dir() + "/shaders", 0, rules, why) || !log.open(dir() + "/shaders/requests"))
+        if (!store.open(dir() + "/shaders", 0, rules, why) || !log.open(logPath()))
             return ADD_FAILURE() << why, false;
         switch_compiler::Pool::Hooks hooks;
-        hooks.run = [compile](switch_compiler::Work &work, const std::function<void(int32_t)> &primary) {
+        hooks.run = [this, compile](switch_compiler::Work &work, const std::function<void(int32_t)> &primary) {
+            Asked &asked = static_cast<Asked &>(work);
             std::string entry, failed;
-            const int32_t result = compile(static_cast<Asked &>(work).prepared, entry, failed);
+            const int32_t result = compile(asked.prepared, entry, failed);
+            if (!entry.empty())
+                store.put(asked.prepared.name, entry);
+            if (result == TegraGM20BCompileMade)
+                log.add(asked.prepared.name, asked.request);
             primary(result);
             return result;
         };
@@ -117,33 +176,34 @@ struct Serving {
         return true;
     }
 
-    // Boot 12's requests in its order: the 13 its request log replayed at the background class, then the 2 asked
-    void replay(Steps &steps)
+    void submit(const std::string &request, switch_compiler::Band band)
     {
-        compiler_test::Requests made(
-            root(), {{"/Applications/SwitchHWTest.app/default.metallib", getenv("SWITCH_HWTEST_METALLIB") ?: ""}});
-        const std::vector<raw::CompileRequest> asked = made.of(compiler_test::corpusLines(getenv("SWITCH_BOOT12")));
-        bool first = true;
-        for (size_t i = 0; i < asked.size(); ++i) {
-            auto work = std::make_unique<Asked>();
+        auto work = std::make_unique<Asked>();
+        std::string why;
+        if (!switch_compiler::prepare(request, 0, system, work->prepared, why))
+            return (void)(ADD_FAILURE() << why);
+        work->request = request;
+        const switch_compiler::Name name = work->prepared.name;
+        pool->submit(name, std::move(work), {1, 1, band, false});
+    }
+
+    void serve(Steps &steps)
+    {
+        log.replay([&](const std::string &request, raw::Digest &name) {
+            switch_compiler::Prepared p;
             std::string why;
-            if (!switch_compiler::prepare(raw::encodeRequest(asked[i]), 0, system, work->prepared, why)) {
-                ADD_FAILURE() << why;
-                continue;
-            }
-            const switch_compiler::Name name = work->prepared.name;
-            const bool background = i + 2 < asked.size();
-            pool->submit(
-                name, std::move(work),
-                {i + 1, 1, background ? switch_compiler::Band::Background : switch_compiler::Band::Interactive, false});
-            if (first) {
-                pool->drain();
-                steps.step("first compile");
-                first = false;
-            }
-        }
+            if (!switch_compiler::prepare(request, 0, system, p, why))
+                return false;
+            name = p.name;
+            submit(request, switch_compiler::Band::Background);
+            return true;
+        });
         pool->drain();
-        steps.step(("replayed " + std::to_string(asked.size())).c_str());
+        steps.step("replayed the log");
+        for (const std::string &request : clients())
+            submit(request, switch_compiler::Band::Interactive);
+        pool->drain();
+        steps.step("served the clients");
         malloc_zone_pressure_relief(nullptr, 0);
         steps.step("idle");
     }
@@ -162,7 +222,7 @@ void withTheDevice()
     Steps steps{"device"};
     raw::Pack pack;
     std::string why;
-    ASSERT_TRUE(pack.load(compiler_test::emptyPack(dir()).c_str(), 0, why)) << why;
+    ASSERT_TRUE(pack.load(packPath().c_str(), 0, why)) << why;
     std::mutex opening, caching;
     id<MTLDevice> device = nil;
     std::unique_ptr<raw::Direct> direct;
@@ -192,7 +252,7 @@ void withTheDevice()
     };
     ASSERT_TRUE(serving.open(raw::sha256("", 0), compile));
     steps.step("serving");
-    serving.replay(steps);
+    serving.serve(steps);
 }
 
 void withTheEngine()
@@ -201,14 +261,14 @@ void withTheEngine()
     Steps steps{"context"};
     switch_compiler::Engine engine;
     std::string why;
-    ASSERT_TRUE(engine.open(0, {compiler_test::emptyPack(dir()), loader(), root()}, why)) << why;
+    ASSERT_TRUE(engine.open(0, {packPath(), loader(), root()}, why)) << why;
     Serving serving;
     ASSERT_TRUE(
         serving.open(engine.rules(), [&](const switch_compiler::Prepared &p, std::string &entry, std::string &failed) {
             return engine.compile(p, entry, failed);
         }));
     steps.step("serving");
-    serving.replay(steps);
+    serving.serve(steps);
 }
 
 }  // namespace
@@ -225,12 +285,14 @@ TEST(CompilerFootprint, AtLaunch)
 
 TEST(CompilerFootprint, ServingBoot12WithTheM2VDevice)
 {
+    writeLog();
     switch_ios::test::ExpectPassesInFreshProcess(withTheDevice);
     show("device");
 }
 
 TEST(CompilerFootprint, ServingBoot12WithTheCompileContext)
 {
+    writeLog();
     switch_ios::test::ExpectPassesInFreshProcess(withTheEngine);
     show("context");
 }
