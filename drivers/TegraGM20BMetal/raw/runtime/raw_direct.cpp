@@ -45,7 +45,7 @@ using CompileAbi = void (*)(uint32_t sizes[3]);
 constexpr uint64_t kLibraryBit = 0x800;
 constexpr uint32_t kFragmentBit = 0x10;  // VK_SHADER_STAGE_FRAGMENT_BIT
 // pack/splits.py lay_out's limits: the constant buffers a split per-pixel program binds, and a QMD's
-constexpr uint32_t kSplitProgramCbufs = 11, kQmdCbufs = 8;
+constexpr uint32_t kSplitProgramCbufs = sizeof(PackProgram::cbufType), kQmdCbufs = 8;
 constexpr uint32_t kRootPush = 0x700;
 constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
 

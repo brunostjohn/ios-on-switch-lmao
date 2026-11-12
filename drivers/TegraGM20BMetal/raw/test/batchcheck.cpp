@@ -23,7 +23,7 @@ extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 static std::vector<uint64_t> launchAddresses()
 {
     fflush(nullptr);
-    std::ifstream dump("/private/tmp/switch-batchcheck-push.log");
+    std::ifstream dump(getenv("PUSHDUMP"));
     std::vector<uint64_t> addresses;
     std::string line;
     while (std::getline(dump, line)) {
@@ -44,8 +44,8 @@ static uint64_t cbufAddress(const uint32_t qmd[64])
 
 int main()
 {
-    setenv("RAWCAP_LOG", "/private/tmp/switch-batchcheck-capture.log", 1);
-    setenv("PUSHDUMP", "/private/tmp/switch-batchcheck-push.log", 1);
+    setenv("RAWCAP_LOG", "/private/tmp/switch-batchcheck-capture.log", 0);
+    setenv("PUSHDUMP", "/private/tmp/switch-batchcheck-push.log", 0);
     char path[] = "/private/tmp/switch-batch-pack-XXXXXX";
     const int fd = mkstemp(path);
     if (fd < 0)
@@ -237,7 +237,7 @@ int main()
         expect(dispatched && cb->commit(sequence) && device.wait(sequence) &&
                    mock_iokit_calls(TegraGM20BMethodExec) - submits == 8,
                "1000 dispatch launches form eight bounded submissions");
-        std::ifstream trace("/private/tmp/switch-batchcheck-capture.log");
+        std::ifstream trace(getenv("RAWCAP_LOG"));
         std::string line;
         unsigned launches = 0;
         while (std::getline(trace, line))

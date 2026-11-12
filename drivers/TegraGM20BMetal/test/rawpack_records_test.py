@@ -167,6 +167,12 @@ class RecordsTest(unittest.TestCase):
         self.assertNotIn('stage', back[1])
         self.assertEqual(packfile.entry_bytes(back), data)
 
+    def test_a_target_between_two_a_state_has_is_foreign_to_it(self):
+        mask = mkpack.targets('samples=1 c0=25:15 c2=25:15 c3=25:15 | v FusionVert')
+        self.assertEqual(mask, 0b1101)
+        self.assertEqual([mkpack.foreign(0x1A00 + 4 * j, mask) for j in range(5)], [False, True, False, False, True])
+        self.assertEqual([mkpack.foreign(0x1E04 + 0x20 * j, mask) for j in range(4)], [False, True, False, False])
+
     def test_a_pipeline_holds_32_entries(self):
         ents = packfile.entry_bytes([handle(('slot', 3))] * 27)
         self.assertEqual(len(ents), 8 * 32)

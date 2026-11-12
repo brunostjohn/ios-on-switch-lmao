@@ -1,19 +1,14 @@
 // SPDX-License-Identifier: MIT
-// The job interface (TegraGM20BJobABI.h, methods 31-33) over the mock GPU. A resource set's members decide residency and
-// ownership, which the mock does not model, so a set is its id and generation, and a job runs as Exec of its pushes.
+// The job interface (TegraGM20BJobABI.h, methods 31-33) over the mock GPU, in the host harnesses' mock only
+// (SWITCH_MOCK_JOB_INTERFACE): the raw stack key hashes the pack's mock and not that header. A resource set's members decide
+// residency and ownership, which the mock does not model, so a set is its id and generation, and a job runs as Exec of
+// its pushes.
 #pragma once
 #include "TegraGM20BJobABI.h"
 
 static struct {
     uint32_t live, generation;
 } mock_sets[TegraGM20BMaxResourceSets];
-
-static uint32_t *fence_page(void)
-{
-    if (!fence)
-        fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-    return fence;
-}
 
 static kern_return_t mock_set_create(const void *input, size_t bytes, void *out)
 {

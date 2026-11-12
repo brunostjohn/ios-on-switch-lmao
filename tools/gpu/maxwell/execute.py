@@ -7,6 +7,7 @@ from tools.gpu.maxwell import isa, texture
 from tools.gpu.maxwell.floats import F16, F32, RN, arith, convert, encode, flush, is_inf, is_nan, value
 from tools.gpu.maxwell.interp import (
     MAX_STEPS,
+    RZ_REG,
     Inputs,
     Lane,
     UnsupportedError,
@@ -199,6 +200,18 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             lane.w(d + k, inputs.cbuf(bits(w, 36, 5), offset + 4 * k))
     elif base == 'IPA':
         ipa(w, lane, inputs, d)
+    elif base == 'LDL':
+        at, count = local_words(w, lane)
+        for k in range(count):
+            lane.w(d + k, lane.local.get(at + 4 * k, 0))
+    elif base == 'STL':
+        at, count = local_words(w, lane)
+        for k in range(count):
+            lane.local[at + 4 * k] = lane.r(bits(w, 0, 8) + k)
+    elif base == 'ALD':
+        ald(w, lane, inputs, d)
+    elif base == 'AST':
+        ast(w, lane)
     elif base == 'TEX':
         texture.tex(name, w, lane, inputs, d)
     elif base == 'TEXS':
@@ -207,6 +220,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         texture.tld(name, w, lane, inputs, d)
     elif base == 'TLDS':
         texture.tlds(w, lane, inputs)
+    elif base == 'TXD':
+        texture.txd(name, w, lane, inputs, d)
     elif name == 'TXQ_b':
         result = inputs.texture(('txq', lane.r(bits(w, 8, 8)), bits(w, 22, 6)))
         mask = bits(w, 31, 4)
@@ -353,6 +368,39 @@ def ipa(w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     lane.w(d, v)
 
 
+def local_words(w: int, lane: Lane) -> tuple[int, int]:
+    """LDL's and STL's address (Ra plus the signed offset in bits 20-43) and its count of words (bits 48-50)."""
+    count = {4: 1, 5: 2, 6: 4}.get(bits(w, 48, 3))
+    if count is None:
+        raise UnsupportedError(f'local access of type {bits(w, 48, 3)}')
+    offset = bits(w, 20, 24)
+    if offset & 1 << 23:
+        offset -= 1 << 24
+    return (lane.r(bits(w, 8, 8)) + offset) & 0xFFFFFFFF, count
+
+
+def attribute_address(w: int, lane: Lane) -> int:
+    if bits(w, 31, 1) or bits(w, 39, 8) != RZ_REG:
+        raise UnsupportedError('ALD or AST of a patch or another vertex')
+    return (lane.r(bits(w, 8, 8)) + bits(w, 20, 10)) & 0x3FF
+
+
+def ald(w: int, lane: Lane, inputs: Inputs, d: int) -> None:
+    """ALD: attribute words at a[Ra + addr], the invocation's inputs, or its own outputs (bit 32) as AST wrote them."""
+    at = attribute_address(w, lane)
+    written = {a: v for kind, a, v in lane.stores if kind == 'ast'}
+    for k in range(bits(w, 47, 2) + 1):
+        a = at + 4 * k
+        lane.w(d + k, written.get(a, 0) if bits(w, 32, 1) else inputs.attribute(a))
+
+
+def ast(w: int, lane: Lane) -> None:
+    """AST: registers from bits 0-7 on to the output attributes at a[Ra + addr], kept in the lane's stores in order."""
+    at = attribute_address(w, lane)
+    for k in range(bits(w, 47, 2) + 1):
+        lane.stores.append(('ast', at + 4 * k, lane.r(bits(w, 0, 8) + k)))
+
+
 def branch_target(pc: int, w: int) -> int:
     off = bits(w, 20, 24)
     if off & (1 << 23):
@@ -360,10 +408,13 @@ def branch_target(pc: int, w: int) -> int:
     return pc + 8 + off
 
 
-def run(code: bytes, inputs: Inputs, outputs: int) -> tuple[list[int], bool]:  # noqa: C901, PLR0912  every control opcode here
-    """Run one invocation to EXIT; give its first `outputs` registers and whether it was killed."""
+def run(code: bytes, inputs: Inputs, outputs: int, lane: Lane | None = None) -> tuple[list[int], bool]:  # noqa: C901, PLR0912  every control opcode here
+    """Run one invocation to EXIT; give its first `outputs` registers and whether it was killed.
+
+    `lane`: the lane it runs in, whose stores (AST's, SUST's) the caller reads after.
+    """
     words = isa.words_of(code)
-    lane = Lane()
+    lane = lane or Lane()
     pc, stack = 8, []
     while True:
         lane.steps += 1

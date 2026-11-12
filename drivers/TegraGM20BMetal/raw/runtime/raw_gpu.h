@@ -669,6 +669,9 @@ public:
 
 private:
     friend class CommandBuffer;
+#ifdef SWITCH_RAW_HARNESS_MARKS
+    friend struct EncoderHarness;
+#endif
 
     struct Bound {
         uint64_t va = 0;

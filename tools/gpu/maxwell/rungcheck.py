@@ -311,6 +311,11 @@ def main() -> None:
         if key not in stored:
             print(f'{label}: no storage form in the dump')
             continue
+        if not any(entry[0] == ENTRY_FETCH for entry in stored[key]['entries']):
+            # a state whose programs read no colour draws plain: it has no fetch for a rung to stand in for
+            print(f'{label}: draws plain, no fetch')
+            rungs[free[key]['free_rung'], 'plain'] += 1
+            continue
         rung = free[key]['free_rung']
         verdict, differences = check(stored[key], free[key], a.invocations, a.seed)
         kind = verdict.split(':')[0].split(' ')[0]

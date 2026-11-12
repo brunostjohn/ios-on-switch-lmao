@@ -56,18 +56,18 @@ def value(word: int) -> float:
 class Record:
     """A storage-form record's fragment program and the set-0 words its fetched colours' handles are read from."""
 
-    def __init__(self, pack: bytes, sections: list, at: int, head: struct.Struct):
+    def __init__(self, pack: bytes, sections: list, at: int, head: struct.Struct, program_bytes: int):
         key, _, _, fs, _, _, entries, *_, self.flags = head.unpack_from(pack, at)
         self.key = key
         self.written = pack[at + head.size + STORAGE_MASKS + 1]
-        program = sections[0][0] + 36 * fs
+        program = sections[0][0] + program_bytes * fs
         heap, _, size, data, _ = PROGRAM.unpack_from(pack, program)
-        cbufs, types = pack[program + 20], pack[program + 21 : program + 32]
-        self.bound = pack[program + 33] - 1
+        cbufs, types, _, bound = nakstat.program_fields(pack, program, program_bytes)
+        self.bound = bound - 1
         image = pack[sections[7][0] + heap + 0x30 : sections[7][0] + heap + (data or size)]
         self.code = image[isa.HEADER_BYTES :]
         self.outputs = rungcheck.nakstat_outputs(image)
-        banks = [b for b in range(min(cbufs, 11)) if types[b] & 7 == CBUF_SET]
+        banks = [b for b in range(min(cbufs, len(types))) if types[b] & 7 == CBUF_SET]
         self.handles = {}
         for k in range(entries):
             offset, kind, _, slot = struct.unpack_from('<HBBB', pack, at + head.size + 8 * k)
@@ -78,11 +78,11 @@ class Record:
 def records(path: Path, keys: set[int]) -> list[Record]:
     pack = path.read_bytes()
     version, _, count, _ = struct.unpack_from('<4I', pack, 8)
-    size, _, nsections, head = nakstat.LAYOUTS[version]
+    size, program_bytes, nsections, head = nakstat.LAYOUTS[version]
     sections = [struct.unpack_from('<QQ', pack, 24 + 16 * i) for i in range(nsections)]
     out = []
     for i in range(count):
-        r = Record(pack, sections, sections[1][0] + size * i, head)
+        r = Record(pack, sections, sections[1][0] + size * i, head, program_bytes)
         if r.key in keys and r.flags & STORAGE_METADATA and not r.flags & SKIPPED and r.handles:
             out.append(r)
     return out

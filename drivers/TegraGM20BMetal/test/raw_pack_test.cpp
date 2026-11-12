@@ -337,6 +337,25 @@ TEST(RawPack, ProgramIndicesPast16BitsReadBackAsThePackWriterWroteThem)
     EXPECT_EQ(pack.split(70001 & 0xFFFF), nullptr);
 }
 
+// wide_index_pack.py's second program: the root table and 11 uniform buffers, then its registers and bound textures' slot
+TEST(RawPack, AProgramOfTwelveConstantBuffersReadsBackWhole)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load("drivers/TegraGM20BMetal/test/wide_index.bin", 0, err)) << err;
+    ASSERT_EQ(pack.bytes(raw::PackPrograms), 2 * sizeof(raw::PackProgram));
+    const raw::PackProgram &p = pack.section<raw::PackProgram>(raw::PackPrograms)[1];
+    ASSERT_EQ(p.cbufs, 12u);
+    EXPECT_EQ(p.cbufType[0], raw::CbufRoot);
+    for (uint32_t c = 1; c < 12; c++) {
+        EXPECT_EQ(raw::cbufKind(p.cbufType[c]), raw::CbufUbo);
+        EXPECT_EQ(raw::cbufUboOffset(p.cbufType[c]), 16 * (c - 1));
+    }
+    EXPECT_EQ(p.cbufType[12], 0u);
+    EXPECT_EQ(p.gprs, 40u);
+    EXPECT_EQ(p.boundTextures, 2u);
+}
+
 TEST(RawPack, APackWithoutArchiveListsListsNone)
 {
     raw::Pack pack;

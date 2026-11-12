@@ -10,7 +10,7 @@ state's split with its record (directpack.mm); directlink.py packs the split of 
 import kernels
 import packfile
 
-PROGRAM_CBUFS = 11
+PROGRAM_CBUFS = packfile.PROGRAM_CBUFS
 QMD_CBUFS = 8
 FRONTIER = 6  # runtime/raw_pack.h CbufFrontier
 

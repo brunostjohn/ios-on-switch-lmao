@@ -41,6 +41,7 @@ class Lane:
     killed: bool = False
     steps: int = 0
     stores: list = field(default_factory=list)
+    local: dict = field(default_factory=dict)  # LDL and STL's memory, a word per byte address
 
     def r(self, i: int) -> int:
         return 0 if i == RZ_REG else self.regs[i]

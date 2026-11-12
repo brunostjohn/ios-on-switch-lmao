@@ -116,7 +116,7 @@ enum : uint32_t {
     CE_SET_SRC_BLOCK_SIZE = NVB0B5_SET_SRC_BLOCK_SIZE,  // then SRC_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
 };
 
-constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kRootBytes = 0x800, kUboChunk = 0x100;
 constexpr uint32_t kMaxCbufBytes = 0x10000;  // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
@@ -4798,12 +4798,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    const uint32_t setBytes = renderSetBytes(r.setBytes);
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, movedEntries(r), pl->memoryEntries,
         [&](PreparedDescriptorWords &prepared, uint32_t moved) {
             RAW_ENCODE_COUNT(DescriptorBuilds);
-            static_assert(sizeof(prepared.words) == kSetBytes);
             uint32_t *set = prepared.words.data();
             for (uint32_t i = 0; i < r.entries; i++) {
                 if (!(moved >> i & 1))
@@ -4934,10 +4934,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         [&](const DescriptorWords &words) {
             RAW_ENCODE_COUNT(DescriptorUploads);
             uint64_t address = 0;
-            uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
-            memcpy(upload, words.data(), sizeof(words));
+            uint8_t *upload = d.alloc(d.upload_, setBytes, 256, address);
+            memcpy(upload, words.data(), setBytes);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += sizeof(words));
+            RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += setBytes);
 #endif
             return address;
         });
@@ -5072,11 +5072,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     bool selected = false;
     if (descriptorBinding_.changed(pl, setVa)) {
-        const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};
+        const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), setBytes, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, 4);
         if (pl->setSlot[0] || pl->setSlot[1]) {
-            p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
+            p.inc(CB_SELECTOR_A, {setBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
             if (pl->setSlot[0])
                 p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
             if (pl->setSlot[1])
