@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include "raw_gpu.h"
+#include "raw_cbuf.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
 #include "raw_slm.h"
@@ -197,7 +198,7 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
         frontier = 0;
 #endif
     if (!frontier) {
-        d.alloc(d.upload_, (uint32_t(s.rec.frontierBytes) + 255) & ~255u, 256, frontier);
+        d.alloc(d.upload_, cbufBindBytes(s.rec.frontierBytes), kCbufUnit, frontier);
         if (s.rec.batchVersion == 1) {
             l.batchRecord = uint32_t(cb_->splitRecords_.size());
             SplitBatchRecord &record = cb_->splitRecords_.emplace_back();
@@ -218,7 +219,7 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
         cb_->splitReuse_.remember(inputs, frontier);
         RAW_DIAGNOSTIC(d.stats.uploadBytes += s.rec.frontierBytes);
     }
-    p.inc(CB_SELECTOR_A, {s.rec.frontierBytes, uint32_t(frontier >> 32), uint32_t(frontier)});
+    p.inc(CB_SELECTOR_A, {cbufBindBytes(s.rec.frontierBytes), uint32_t(frontier >> 32), uint32_t(frontier)});
     p.m(BIND_GROUP_CB + 0x20 * kPixelGroup, 1 | uint32_t(s.rec.frontierCbuf) << 4);
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
 }
