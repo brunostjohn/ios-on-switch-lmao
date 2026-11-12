@@ -52,6 +52,14 @@
         .width;  // a tile dispatch's: the device's limit, as m2v answers
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's gpu.ca.asked_forms: whether the state's record came out of the pack at its creation
+- (NSNumber *)switchPackHit
+{
+    return @(_packed);
+}
+#endif
+
 @end
 
 @implementation RMTwinObject

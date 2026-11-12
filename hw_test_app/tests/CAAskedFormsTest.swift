@@ -3,12 +3,12 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// The states this device's QuartzCore asks for where Apple's offline compilation manifest names another colour
-/// precision (ca_asked.log: raw/pack/ca/deepcolour.py), each made on the raw facade from the pack: none of them may be a
-/// state the pack lacks (the facade's pack_misses), which would cost Core Animation a generic draw and a compile at an
-/// app's launch. QuartzCore names them by CADeviceUseCIF10, which this process reads as QuartzCore does
-/// (MobileGestalt's HasExtendedColorDisplay, the CAEnableDeepFramebuffer preference over it): it has to be the answer
-/// the pack was made for.
+/// The Core Animation states the raw pack holds by deduction (ca_asked.log): those this device's QuartzCore asks for where
+/// Apple's offline compilation manifest names another colour precision (raw/pack/ca/deepcolour.py), and those device logs
+/// named as made at run time (precompile/ca-names). Each is made on the raw facade and has to come out of the pack
+/// (switchPackHit): a miss costs Core Animation a compile at an app's launch. QuartzCore names them by CADeviceUseCIF10,
+/// which this process reads as QuartzCore does (MobileGestalt's HasExtendedColorDisplay, the CAEnableDeepFramebuffer
+/// preference over it): it has to be the answer the pack was made for.
 struct CAAskedFormsTest: HWTest {
     let id = "gpu.ca.asked_forms"
     let name = "Core Animation's states in this device's colour precision come from the pack"
@@ -52,26 +52,30 @@ struct CAAskedFormsTest: HWTest {
         var failed: [String] = []
         var slowest = 0.0
         let started = DispatchTime.now().uptimeNanoseconds
+        let missesBefore = RawFacade.counters(of: gpu.device)["pack_misses"] ?? 0
+        var unanswered = 0
         for line in lines {
-            let before = RawFacade.counters(of: gpu.device)["pack_misses"] ?? 0
             let made = DispatchTime.now().uptimeNanoseconds
-            do {
-                _ = try CAState.pipeline(line, library: library, device: gpu.device)
-            } catch {
+            guard let state = try? CAState.pipeline(line, library: library, device: gpu.device) else {
                 failed.append(line.shortLabel)
                 continue
             }
             slowest = max(slowest, Double(DispatchTime.now().uptimeNanoseconds - made) / 1e6)
-            if (RawFacade.counters(of: gpu.device)["pack_misses"] ?? 0) != before { missed.append(line.shortLabel) }
+            switch RawFacade.packHit(state) {
+            case .some(true): break
+            case .some(false): missed.append(line.shortLabel)
+            case .none: unanswered += 1
+            }
         }
+        metrics.set("process_pack_misses", (RawFacade.counters(of: gpu.device)["pack_misses"] ?? 0) - missesBefore)
         metrics.set("ms", Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6)
         metrics.set("slowest_ms", slowest)
         metrics.set("pack_misses", missed.count)
         metrics.set("failed", failed.count)
         if !missed.isEmpty { metrics.set("missed_states", missed.prefix(12).joined(separator: ",")) }
         if !failed.isEmpty { metrics.set("failed_states", failed.prefix(12).joined(separator: ",")) }
-        guard RawFacade.counters(of: gpu.device)["pack_misses"] != nil else {
-            return .fail("the facade counts no pack misses (switchRawCounters: a debug build's)", metrics)
+        guard unanswered == 0 else {
+            return .fail("\(unanswered) states answered no switchPackHit (a debug build's)", metrics)
         }
         if !missed.isEmpty || !failed.isEmpty {
             return .fail("\(missed.count) states the pack lacks, \(failed.count) not made", metrics)
