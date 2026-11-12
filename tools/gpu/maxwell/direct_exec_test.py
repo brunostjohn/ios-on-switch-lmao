@@ -25,7 +25,7 @@ from tools.gpu.maxwell import direct_records as dr
 from tools.gpu.maxwell.interp import UnsupportedError
 
 RECORDS: dict = {}
-ATTR_POSITION, ATTR_GENERIC = 0x70, 0x80
+ATTR_LAYER, ATTR_VIEWPORT, ATTR_POSITION, ATTR_GENERIC = 0x64, 0x68, 0x70, 0x80
 ATTR_TESS_COORD, ATTR_INSTANCE_ID, ATTR_VERTEX_ID = 0x2F0, 0x2F8, 0x2FC
 TESS_LEVELS = {'outer': (0x000, 0x004, 0x008), 'inner': 0x010}
 SV_LANE_ID, SV_INVOCATION_ID, SV_INVOCATION_INFO = 0x00, 0x11, 0x1D
@@ -157,23 +157,34 @@ class Amplification(Records):
     """A state of maxVertexAmplificationCount 2.
 
     Each amplification's draw writes its id into the record's AmplificationId word, and the vertex function reads it as
-    [[amplification_id]].
+    [[amplification_id]]; it writes its mapping's offsets and the pass's layer and viewport counts into the record's
+    words, and the vertex program stores Layer and ViewportIndex from them: the offset below the count, else 0.
     """
 
     POINTS = ((1.0, 2.0, 3.0, 1.0), (-4.0, 0.5, 0.25, 1.0), (8.0, -16.0, 0.0, 2.0))
 
     def test_each_amplifications_vertices(self):
         record = self.state('amplification')
-        amplification_max, id_word, count_read = record['amplification']
+        amplification_max, id_word, count_word = record['amplification']
+        layer_word, viewport_word = record['amplification_offsets']
+        length_word, count_word_of_viewports = record['pass_words']
         self.assertEqual(amplification_max, 2)
         self.assertGreater(id_word, 0)
-        self.assertEqual(count_read, 0)
+        self.assertEqual(count_word, 0)
+        for word in (layer_word, viewport_word, length_word, count_word_of_viewports):
+            self.assertGreater(word, 0)
         program = record['programs'][0]
+        # (layer offset, layers, viewport offset, viewports) of each amplification: amplification 1's layer past the
+        # pass's length renders layer 0
+        mappings = {0: (1, 2, 3, 4), 1: (5, 2, 1, 4)}
         for amplification in (0, 1):
             binding = dr.Binding()
             binding.bind((1, 0), dr.floats(*[c for p in self.POINTS for c in p]))
             push = dr.record_push(record)
             push[id_word - 1] = amplification
+            layer, layers, viewport, viewports = mappings[amplification]
+            push[layer_word - 1], push[length_word - 1] = layer, layers
+            push[viewport_word - 1], push[count_word_of_viewports - 1] = viewport, viewports
             binding.tables(dr.root_table(push, record['set_bytes']), dr.render_set(record, binding))
             for vid, point in enumerate(self.POINTS):
                 words = {ATTR_VERTEX_ID: vid, ATTR_INSTANCE_ID: 0}
@@ -182,6 +193,8 @@ class Amplification(Records):
                 expected = [point[0] + 0.5 * amplification, *point[1:]]
                 self.assertEqual(outputs(environment, ATTR_POSITION, 4), expected, f'{amplification} {vid}')
                 self.assertEqual(outputs(environment, ATTR_GENERIC, 4), [float(amplification), float(vid), 0.0, 1.0])
+                self.assertEqual(environment.outputs[(0, ATTR_LAYER)], layer if layer < layers else 0)
+                self.assertEqual(environment.outputs[(0, ATTR_VIEWPORT)], viewport if viewport < viewports else 0)
 
 
 class WideStride(Records):
