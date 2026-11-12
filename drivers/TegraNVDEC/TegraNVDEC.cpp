@@ -224,7 +224,7 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, *id),
     };
     const uint64_t began = switch_now_us();
-    int ret = tegra_host1x_submit(stream, 3);
+    int ret = switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_DEFAULT, stream, 3, *id, *from + 2);
     const char *stage = "submit";
     if (!ret) {
         stage = "host interface (IMMEDIATE)";
@@ -406,7 +406,7 @@ int gateOn(void *)
             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, gSyncpt),
             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt),
         };
-        const int ret = tegra_host1x_submit(stream, 3);
+        const int ret = switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_DEFAULT, stream, 3, gSyncpt, from + 2);
         answered = !ret && !tegra_host1x_syncpt_wait(gSyncpt, from + 2, 500000);
         if (!answered) {
             char state[160];

@@ -13,6 +13,8 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
+uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
+uint32_t arenaShort, arenaWaits, cancels;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
 int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
 std::vector<switch_host1x_fence *> fences;
@@ -197,10 +199,44 @@ int switch_gpu_bridge_wait_room()
     return 0;
 }
 
-int tegra_host1x_submit(const uint32_t *words, uint32_t count)
+int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, uint32_t **words)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_DEFAULT));
+    EXPECT_TRUE(switch_test_queue_locked);
+    EXPECT_EQ(reservedWords, 0u) << "one reservation at a time";
+    if (arenaShort) {
+        --arenaShort;
+        return TEGRA_HOST1X_EAGAIN;
+    }
+    reservedWords = capacity;
+    *words = arena;
+    return 0;
+}
+
+int switch_host1x_job_wait_room(uint32_t, uint32_t)
+{
+    EXPECT_FALSE(transactionLocked);
+    EXPECT_FALSE(switch_test_queue_locked);
+    ++arenaWaits;
+    return 0;
+}
+
+void switch_host1x_job_cancel(uint32_t)
+{
+    ++cancels;
+    reservedWords = 0;
+}
+
+// The stream host1x gathers is the one the job path wrote into the arena.
+int switch_host1x_job_submit(uint32_t, const uint32_t *first, uint32_t count, uint32_t syncpt, uint32_t threshold)
 {
     ++submits;
-    publishedWords.assign(words, words + count);
+    EXPECT_EQ(first, arena);
+    EXPECT_LE(count, reservedWords);
+    reservedWords = 0;
+    publishedWords.assign(first, first + count);
+    submittedSyncpt = syncpt;
+    submittedThreshold = threshold;
     return submitError;
 }
 
@@ -339,6 +375,7 @@ protected:
     void SetUp() override
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
+        reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = cancels = 0;
         powerUses = powerDones = 0;
         bridgeError = submitError = retainError = statusError = powerError = 0;
         semanticResult = 1;
@@ -379,8 +416,7 @@ protected:
             Results::cancel(&job.outcome);
         }
         EXPECT_EQ(bridges, released);
-        if (work.words)
-            IODelete(work.words, uint32_t, work.wordCapacity);
+        EXPECT_EQ(reservedWords, 0u) << "every reservation submitted or cancelled";
         IOLockFree(gLock);
         gLock = nullptr;
         switch_test_queue_lock = nullptr;
@@ -437,6 +473,26 @@ TEST_F(SwitchNVDECSubmitTest, PendingGpuUsesHardwareBridgeOutsideOwnershipLocks)
     EXPECT_EQ(publishedWords[0], tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5));
     EXPECT_EQ(publishedWords[1], 0x1000001u);
     EXPECT_EQ(publishedWords[2], 170u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AJobIsGatheredFromWhereItWasWrittenWithItsOwnFence)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(submits, 1u);
+    EXPECT_EQ(submittedSyncpt, gSyncpt);
+    EXPECT_EQ(submittedThreshold, fence);
+    EXPECT_EQ(publishedWords.back(), tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt));
+}
+
+TEST_F(SwitchNVDECSubmitTest, NoArenaRoomSleepsOutsideTheQueueAndOwnershipLocks)
+{
+    arenaShort = 1;
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(arenaWaits, 1u);
+    EXPECT_EQ(begins, 2u);
+    EXPECT_EQ(aborts, 1u);
+    EXPECT_EQ(commits, 1u);
+    EXPECT_EQ(submits, 1u);
 }
 
 TEST_F(SwitchNVDECSubmitTest, ExecutedGpuStillBridgesUntilExternalVisibility)

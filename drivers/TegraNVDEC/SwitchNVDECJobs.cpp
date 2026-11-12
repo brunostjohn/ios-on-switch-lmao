@@ -37,7 +37,6 @@ struct Submission {
     TegraNVDECBlock blocks[TEGRA_NVDEC_MAX_ENTRIES] = {};
     switch_gpu_backing_use uses[TEGRA_NVDEC_MAX_ENTRIES] = {};
     uint32_t *words = nullptr;
-    uint32_t wordCapacity = 0;
     uint32_t useCount = 0;
 };
 
@@ -188,20 +187,8 @@ int prepare(const TegraNVDECSubmit &submit, TegraNVDECResolve resolve, void *con
     return 0;
 }
 
-int growWords(Submission &work, uint32_t dependencies)
-{
-    const uint32_t count = 2 + 3 * (TEGRA_NVDEC_MAX_ENTRIES + 1) + SWITCH_HOST1X_WAIT_WORDS * (dependencies + 1);
-    if (work.wordCapacity >= count)
-        return 0;
-    auto *words = IONew(uint32_t, count);
-    if (!words)
-        return -12;
-    if (work.words)
-        IODelete(work.words, uint32_t, work.wordCapacity);
-    work.words = words;
-    work.wordCapacity = count;
-    return 0;
-}
+static_assert(SWITCH_HOST1X_WAIT_WORDS * (SWITCH_GPU_BRIDGE_MAX_TOKENS + 1) + 3 * (TEGRA_NVDEC_MAX_ENTRIES + 1) + 2 <=
+              SWITCH_HOST1X_ARENA_WORDS);
 
 int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECCompletion &completion, uint32_t *fence,
             bool *waitedForRoom)
@@ -218,8 +205,6 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
         }
     } batch;
 
-    if (const int error = growWords(work, dependencies.capacity))
-        return error;
     if (const int error = switch_gpu_event_waits_prepare(nullptr, 0, &batch.value))
         return error;
     for (;;) {
@@ -253,8 +238,6 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
             if (error != -28)
                 return error;
             if (const int grown = dependencies.grow(needed))
-                return grown;
-            if (const int grown = growWords(work, dependencies.capacity))
                 return grown;
             continue;
         }
@@ -323,9 +306,20 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
                 return submitted;
             continue;
         }
+        const uint32_t capacity = SWITCH_HOST1X_WAIT_WORDS * (needed + 1) + 3 * (submit.entry_count + 1) + 2;
+        if (const int reserved = switch_host1x_job_reserve(TEGRA_HOST1X_CHANNEL_DEFAULT, capacity, &work.words)) {
+            switch_gpu_backing_abort(&transaction);
+            IOLockUnlock(gLock);
+            if (reserved != TEGRA_HOST1X_EAGAIN)
+                return reserved;
+            if (const int waited = switch_host1x_job_wait_room(TEGRA_HOST1X_CHANNEL_DEFAULT, capacity))
+                return waited;
+            continue;
+        }
         SwitchNVDECSemantic *semantic = nullptr;
         error = switch_nvdec_semantics_bind(batch.value, &token, &semantic);
         if (error) {
+            switch_host1x_job_cancel(TEGRA_HOST1X_CHANNEL_DEFAULT);
             switch_gpu_backing_abort(&transaction);
             IOLockUnlock(gLock);
             return error;
@@ -356,7 +350,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
         }
         work.words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
         const uint64_t began = switch_now_us();
-        error = tegra_host1x_submit(work.words, n);
+        error = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_DEFAULT, work.words, n, gSyncpt,
+                                         static_cast<uint32_t>(gQueue.next()));
         const uint32_t queued = gQueue.tail();
         const switch_gpu_bridge *bridge = nullptr;
         if (!error) {
@@ -429,8 +424,6 @@ int run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context
         error = publish(*submit, *work, completion ? *completion : SwitchNVDECCompletion{}, fence, waitedForRoom);
         switch_nvdec_power_done();
     }
-    if (work->words)
-        IODelete(work->words, uint32_t, work->wordCapacity);
     IODelete(work, Submission, 1);
     return error;
 }

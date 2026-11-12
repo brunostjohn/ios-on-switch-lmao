@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraHost1x.cpp and SwitchHost1xFence.cpp on the host with a memory register file: where waits sleep and callbacks run.
+// TegraHost1x.cpp, SwitchHost1xChannels.cpp and SwitchHost1xFence.cpp on the host with a memory register file: where
+// waits sleep and callbacks run.
 // The memory does not clear status bits written one, so each step sets the registers the interrupt would see.
 #include "switch_host1x_fence_stubs.h"
 #include <gtest/gtest.h>
@@ -8,13 +9,14 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../TegraHost1x.cpp"
+#include "../SwitchHost1xChannels.cpp"
 #include "../SwitchHost1xFence.cpp"
 
 namespace {
 alignas(16384) uint8_t gHostRegisters[kHost1xSize];
 alignas(4096) uint8_t gMcRegisters[0x1000];
-alignas(4096) uint8_t gPushBuffers[TEGRA_HOST1X_CHANNELS][kPushBytes + PAGE_SIZE];
-uint32_t gPushAllocated;
+alignas(4096) uint8_t gChannelBuffers[2 * TEGRA_HOST1X_CHANNELS][SWITCH_HOST1X_ARENA_WORDS * 4];
+uint32_t gChannelAllocated;
 
 uint32_t &reg(uint32_t offset)
 {
@@ -86,10 +88,10 @@ extern "C" void switch_car_reset_deassert(unsigned)
 
 bool switch_dma_alloc(switch_dma_buffer *out, size_t size, uint64_t, IOOptionBits)
 {
-    if (gPushAllocated == TEGRA_HOST1X_CHANNELS || size > sizeof(gPushBuffers[0]))
+    if (gChannelAllocated == 2 * TEGRA_HOST1X_CHANNELS || size > sizeof(gChannelBuffers[0]))
         return false;
-    out->va = gPushBuffers[gPushAllocated++];
-    out->pa = 0x80000000u + gPushAllocated * 0x10000u;
+    out->va = gChannelBuffers[gChannelAllocated++];
+    out->pa = 0x80000000u + gChannelAllocated * 0x10000u;
     out->size = size;
     return true;
 }
@@ -270,5 +272,34 @@ TEST_F(Host1xFence, AcrossSleepAddsFailAndPendingFencesAreArmedAgain)
     value(174) = 1;
     interrupt(174);
     EXPECT_EQ(gSignals[1].calls, 1);
+}
+
+// A submitter that finds the arena held by a job in flight sleeps until that job's fence interrupt, on host1x's work
+// loop, gives the room back; nothing polls.
+TEST_F(Host1xFence, ASubmitWithoutArenaRoomSleepsUntilTheOldestJobsFenceInterrupt)
+{
+    constexpr uint32_t channel = TEGRA_HOST1X_CHANNEL_VIC, half = SWITCH_HOST1X_ARENA_WORDS / 2;
+    value(175) = 0;
+    uint32_t *words = nullptr;
+    for (const uint32_t fence : {1u, 2u}) {
+        ASSERT_EQ(switch_host1x_job_reserve(channel, half, &words), TEGRA_HOST1X_OK);
+        ASSERT_EQ(switch_host1x_job_submit(channel, words, half, 175, fence), TEGRA_HOST1X_OK);
+    }
+    ASSERT_EQ(switch_host1x_job_reserve(channel, half, &words), TEGRA_HOST1X_EAGAIN);
+    int sleeps = 0;
+    switch_test_sleep = [&](uint64_t) {
+        ++sleeps;
+        EXPECT_EQ(threshold(175), 1u) << "armed at the oldest job's fence";
+        value(175) = 1;
+        interrupt(175);
+        return THREAD_AWAKENED;
+    };
+    ASSERT_EQ(switch_host1x_job_begin(channel, half, &words), TEGRA_HOST1X_OK);
+    EXPECT_EQ(sleeps, 1);
+    switch_host1x_job_cancel(channel);
+    switch_test_sleep = nullptr;
+    value(175) = 2;
+    ASSERT_EQ(switch_host1x_job_reserve(channel, SWITCH_HOST1X_ARENA_WORDS, &words), TEGRA_HOST1X_OK);
+    switch_host1x_job_cancel(channel);
 }
 }  // namespace

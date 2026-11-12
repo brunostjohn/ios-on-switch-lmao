@@ -21,6 +21,7 @@ enum {
     TEGRA_HOST1X_ENOMEM = -12,
     TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
     TEGRA_HOST1X_ELOST = -5,       // the threshold was reached but its interrupt never came (before strict mode only)
+    TEGRA_HOST1X_EAGAIN = -35,     // no command arena room until earlier jobs' fences pass
 };
 
 // Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVJPG, ..._NVDEC).
@@ -105,8 +106,30 @@ enum {
     TEGRA_HOST1X_CHANNELS = 4
 };
 
-// Copies `count` opcode words into a channel's push buffer and starts them. The stream must leave its syncpoint
-// increments to the caller's wait; `count` must be below 4096. Serialised; returns at once.
+// A job's stream is written in place in its channel's command arena (below 4 GiB) and host1x gathers it from there, so
+// nothing copies it. Reserve room for up to `capacity` words, write the stream (it starts with a SETCLASS), then submit
+// the words [first, first + count) of the reservation with the job's own fence: its room is reused once `syncpt`
+// reaches `threshold`. Submit and cancel end the reservation; a channel has one open at a time.
+// Reserve never sleeps: TEGRA_HOST1X_EAGAIN means the room is held by jobs in flight or another reservation, and
+// wait_room sleeps until a reservation would succeed. A caller holding a lock that a fence callback takes (the job
+// queues retire from host1x's work loop) drops it before wait_room; begin is reserve and wait_room in a loop.
+enum {
+    SWITCH_HOST1X_ARENA_WORDS = 8192
+};
+
+int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, uint32_t **words);
+int switch_host1x_job_wait_room(uint32_t channel, uint32_t capacity);
+int switch_host1x_job_begin(uint32_t channel, uint32_t capacity, uint32_t **words);
+int switch_host1x_job_submit(uint32_t channel, const uint32_t *first, uint32_t count, uint32_t syncpt,
+                             uint32_t threshold);
+void switch_host1x_job_cancel(uint32_t channel);
+
+// Copies `count` opcode words into the channel's arena and gathers them with their fence, for one-off streams (an
+// engine's proof of life). Never sleeps: TEGRA_HOST1X_ENOMEM when there is no room.
+int switch_host1x_job_copy(uint32_t channel, const uint32_t *words, uint32_t count, uint32_t syncpt,
+                           uint32_t threshold);
+// The same without a fence: its room comes back with the channel's next fenced job, so a channel holds at most 63 of
+// these in a row.
 int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t count);
 // The same on the default channel.
 int tegra_host1x_submit(const uint32_t *words, uint32_t count);

@@ -307,7 +307,8 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, stream, sizeof(stream) / sizeof(stream[0]));
+    int ret =
+        switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, stream, sizeof(stream) / sizeof(stream[0]), id, from + 2);
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";
@@ -544,7 +545,12 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_lines(gSetup.va, sizeof(job->setup));
     bzero(gStatus.va, sizeof(nvjpg_dec_status));
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
-    uint32_t words[1 + 3 * 11 + 1];
+    uint32_t *words = nullptr;
+    if (const int error = switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)) {
+        IOLockUnlock(gStateLock);
+        gGate.done();
+        return error;
+    }
     uint32_t n = 0;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     const auto method = [&](uint32_t offset, uint32_t value) {
@@ -567,7 +573,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
     const uint64_t start = switch_now_us();
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, words, n);
+    int ret = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence);
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));

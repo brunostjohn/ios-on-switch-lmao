@@ -36,8 +36,9 @@ int gResults[SwitchVICQueue::kSlots];
 constexpr uint32_t kThiMethod0 = 0x40;
 constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000, kAcquireUs = 2000000;
 constexpr uint32_t kBatchMax = 3;
-uint32_t
-    gWords[kBatchMax * (2 + 3 * TEGRA_VIC_MAX_METHODS) + SWITCH_HOST1X_WAIT_WORDS * (2 + SWITCH_GPU_BRIDGE_MAX_TOKENS)];
+static_assert(kBatchMax * (2 + 3 * TEGRA_VIC_MAX_METHODS) +
+                  SWITCH_HOST1X_WAIT_WORDS * (2 + SWITCH_GPU_BRIDGE_MAX_TOKENS) <=
+              SWITCH_HOST1X_ARENA_WORDS);
 
 using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_VIC>;
 
@@ -360,17 +361,32 @@ retry:
         }
         goto retry;
     }
+    uint32_t capacity = SWITCH_HOST1X_WAIT_WORDS * (needed + 2);
+    for (uint32_t j = 0; j < count; ++j)
+        capacity += 2 + 3 * jobs[j].count;
+    uint32_t *words = nullptr;
+    if (const int reserved = switch_host1x_job_reserve(TEGRA_HOST1X_CHANNEL_VIC, capacity, &words)) {
+        switch_gpu_backing_abort(&transaction);
+        IOLockUnlock(gLock);
+        if (reserved == TEGRA_HOST1X_EAGAIN)
+            error = switch_host1x_job_wait_room(TEGRA_HOST1X_CHANNEL_VIC, capacity);
+        if (reserved != TEGRA_HOST1X_EAGAIN || error) {
+            SWITCH_VIC_REFUSED("command arena room");
+            return reserved != TEGRA_HOST1X_EAGAIN ? reserved : error;
+        }
+        goto retry;
+    }
     SwitchVICSemantic *semantic = nullptr;
     error = switch_vic_semantics_bind(batch.value, &token, &semantic);
     if (!error)
         error = switch_vic_events_bind(events, &token);
     if (error) {
+        switch_host1x_job_cancel(TEGRA_HOST1X_CHANNEL_VIC);
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
         SWITCH_VIC_REFUSED("semantic or event binding");
         return error;
     }
-    uint32_t *words = gWords;
     uint32_t n = 0, bridgeSyncpoint = 0, bridgeThreshold = 0;
     if (dependencies.acquire(&bridgeSyncpoint, &bridgeThreshold))
         n += tegra_host1x_op_wait_syncpt(words + n, bridgeSyncpoint, bridgeThreshold);
@@ -397,7 +413,8 @@ retry:
         words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     }
     const uint64_t started = switch_now_us();
-    const int status = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, words, n);
+    const int status = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_VIC, words, n, gSyncpt,
+                                                static_cast<uint32_t>(gQueue.submitted + count));
     uint32_t end = 0;
     const switch_gpu_bridge *bridge = nullptr;
     if (!status) {
