@@ -178,7 +178,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
 	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
 	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work &&
-		      tgm_present.redo_work
+		      tgm_present.redo_work && !tgm_promise_open()
 		      ? tgm_vm_new(&tgm_present.vm)
 		      : -ENOMEM;
 	if (!ret) {

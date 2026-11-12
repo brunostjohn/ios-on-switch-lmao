@@ -653,6 +653,7 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuBackingMemory.cpp",
         "//drivers/TegraGM20B:SwitchGpuAdmission.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPromiseSleepers.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuComplete.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",

@@ -117,7 +117,7 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 	IOLockLock(backing->lock);
 	while (!avoid && (backing->cpu_writers || backing->gpu_admission_writers ||
 			  (cpu && switch_gpu_backing_promise_pending_locked(backing))))
-		switch_gpu_backing_sleep_cpu_locked(backing);
+		switch_gpu_backing_sleep_promised_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
 		backing->cpu_readers == UINT32_MAX ? -16 : 0;
 	int pending = 0;

@@ -600,6 +600,8 @@ uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 w
 /* tgm_live_lock held: whether one of the promises the channel acquires is still unkept */
 int tgm_chan_waits_promise(const struct tgm_chan *chan);
 void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns);
+/* the work item a promise given up on wakes CPU readers with (switch_gpu_backing_promise_sleepers_wake) */
+int tgm_promise_open(void);
 void tgm_present_promise_watch(struct switch_gpu_backing_token *kept);
 #if TGM_STATS
 void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u64 queued, int copy);

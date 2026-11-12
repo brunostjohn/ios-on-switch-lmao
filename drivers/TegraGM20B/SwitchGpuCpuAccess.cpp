@@ -139,7 +139,7 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 		if (access & kAvoid)
 			result = -16;
 		else
-			switch_gpu_backing_sleep_cpu_locked(backing);
+			switch_gpu_backing_sleep_promised_locked(backing);
 	}
 	bool held = false;
 	if (!result) {

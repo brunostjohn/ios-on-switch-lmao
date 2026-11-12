@@ -76,6 +76,21 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 #endif
 
 static struct switch_gpu_promise_abandoned promise_abandoned;
+static void *promise_wake_work;
+
+/* CPU readers asleep behind a promise given up on go on, as after a cancel; thread context, as the backings' locks are */
+static void promise_wake(void *unused)
+{
+	(void)unused;
+	switch_gpu_backing_promise_sleepers_wake();
+}
+
+int tgm_promise_open(void)
+{
+	if (!promise_wake_work)
+		promise_wake_work = nvxnu_work_alloc(promise_wake, NULL);
+	return promise_wake_work ? 0 : -ENOMEM;
+}
 
 int tgm_promise_abandoned(uint32_t offset, uint32_t value)
 {
@@ -85,6 +100,7 @@ int tgm_promise_abandoned(uint32_t offset, uint32_t value)
 void tgm_promise_abandon(uint32_t offset, uint32_t value)
 {
 	switch_gpu_promise_abandoned_add(&promise_abandoned, offset, value);
+	nvxnu_work_schedule(promise_wake_work);
 	tgm_present_promise_released(offset, value);
 }
 

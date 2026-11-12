@@ -13,3 +13,6 @@ extern "C" int switch_gpu_ready_waiting(void) { return switch_gpu_test_ready_wai
 
 // The path counts (SwitchGpuPathStats.h) are the kernel's; a test that reads them defines its own.
 extern "C" __attribute__((weak)) void switch_gpu_path_taken(int, unsigned) {}
+
+// No writer promise is given up on unless a test says so.
+extern "C" __attribute__((weak)) int tgm_promise_abandoned(unsigned, unsigned) { return 0; }

@@ -202,6 +202,9 @@ int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction 
  * connection's own) as tokens after the *needed already in `out`, read under the locks the transaction holds on their
  * backings: *needed grows by them, -28 past capacity. The reader acquires them on the GPU, so its reads read what the
  * promised writes leave, and commit records them so: the promised job does not wait for them, which wait for it. */
+/* A writer promise was given up on (SwitchGpuWriterPromise.h): CPU threads asleep behind one go on. Thread context, no
+ * backing's lock held. */
+void switch_gpu_backing_promise_sleepers_wake(void);
 int switch_gpu_backing_promise_dependencies(struct switch_gpu_backing_transaction *transaction,
 					    struct switch_gpu_backing_token *out, uint32_t capacity,
 					    uint32_t *needed, uint32_t own_first, uint32_t own_end);

@@ -154,6 +154,41 @@ TEST_F(Backing, TheCpusSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	switch_gpu_backing_release(b);
 }
 
+// The hang rule (or a present's deadline) gives the promise up: CPU readers asleep behind it, a lock and the display's
+// CPU copy, go on at the abandonment's wake with no cancel or close of the promise, and read what the surface held
+// before (its last writer). The mark alone wakes nobody: the wake is what lets them go.
+TEST_F(Backing, CpuReadersAsleepOnAPromiseGivenUpOnGoOnAtItsWake)
+{
+	auto *b = promised();
+	ASSERT_EQ(publish(b, kWrite, token(3, 2)), 0);
+	complete(token(3, 2));
+	std::atomic<int> copied{1}, locked{1};
+	switch_gpu_backing_token producer = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	std::thread copy([&] { copied = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease); });
+	std::thread lock([&] { locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	EXPECT_EQ(copied.load(), 1);
+	EXPECT_EQ(locked.load(), 1);
+	abandoned = uint64_t(kOffset) << 32 | 1;
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	EXPECT_EQ(copied.load(), 1);
+	EXPECT_EQ(locked.load(), 1);
+	const auto woken = std::chrono::steady_clock::now();
+	switch_gpu_backing_promise_sleepers_wake();
+	copy.join();
+	lock.join();
+	EXPECT_LT(std::chrono::steady_clock::now() - woken, std::chrono::milliseconds(100));
+	EXPECT_EQ(copied.load(), 0);
+	EXPECT_EQ(locked.load(), 0);
+	EXPECT_EQ(producer.value, 2u) << "the frame before the promised one";
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, kRead), 0);
+	abandoned = 0;
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
 // VIC's scanout source sleeps for a CPU writer only: a writer promise is one of its job's dependencies, which the
 // GPU-to-host1x bridge acquires, so the snapshot is taken at once behind a lease the promised job's write ignores.
 TEST_F(Backing, AnEngineReadersWaitingSnapshotTakesThePromiseAsADependency)

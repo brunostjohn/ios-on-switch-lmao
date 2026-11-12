@@ -57,6 +57,9 @@ struct switch_gpu_backing {
 	// waits for
 	switch_gpu_promise_ref promises[SWITCH_GPU_BACKING_PROMISES];
 	uint32_t promise_count, promised_readers;
+	// CPU threads asleep on it behind a pending promise (SwitchGpuPromiseSleepers.cpp, under its lock)
+	switch_gpu_backing *promise_sleep_next, *promise_sleep_prev;
+	uint32_t promise_sleepers, promise_woken;
 };
 
 struct switch_gpu_cpu_lease {
@@ -100,19 +103,31 @@ void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 // (switch_gpu_surface_sweep), which GPU jobs run while any thread or ready watch (switch_gpu_ready_waiting) waits.
 extern uint32_t switch_gpu_cpu_sleepers;
 void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
+// The same where a pending writer promise may be what it waits for: a promise given up on wakes it too
+void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing);
+extern "C" int tgm_promise_abandoned(uint32_t offset, uint32_t value);
 extern "C" int switch_gpu_ready_waiting(void);
 
 // Writer promises (SwitchGpuWriterPromise.h), under the backing's lock: the pending ones but the asking connection's own
-// as tokens (at most capacity, -28 past it), or with no tokens their count. A CPU reader cannot acquire one on the GPU:
-// it sleeps as for a CPU writer until the promised job is submitted or the promise is given back.
+// as tokens (at most capacity, -28 past it), or with no tokens their count. One given up on is not pending: its users go
+// on without its writes. A CPU reader cannot acquire one on the GPU: it sleeps as for a CPU writer until the promised
+// job is submitted or the promise is given back or up.
 inline int switch_gpu_backing_promises_locked(const switch_gpu_backing *backing, uint32_t own_first,
 					      uint32_t own_end, switch_gpu_backing_token *tokens,
 					      uint32_t capacity)
 {
 	uint32_t offsets[SWITCH_GPU_BACKING_PROMISES], values[SWITCH_GPU_BACKING_PROMISES];
-	const int pending = switch_gpu_promise_ref_pending(backing->promises, backing->promise_count,
-							   own_first, own_end, offsets, values,
-							   SWITCH_GPU_BACKING_PROMISES);
+	const int found = switch_gpu_promise_ref_pending(backing->promises, backing->promise_count, own_first,
+							 own_end, offsets, values, SWITCH_GPU_BACKING_PROMISES);
+	int pending = 0;
+	for (int i = 0; i < found; ++i) {
+		if (tgm_promise_abandoned(offsets[i], values[i]))
+			continue;
+		offsets[pending] = offsets[i];
+		values[pending++] = values[i];
+	}
+	if (found < 0)
+		return found;
 	if (pending <= 0 || !tokens)
 		return pending;
 	if (uint32_t(pending) > capacity)

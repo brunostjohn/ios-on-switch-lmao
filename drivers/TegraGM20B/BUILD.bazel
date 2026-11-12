@@ -132,6 +132,7 @@ kernel_driver(
         "SwitchGpuResourceSet.cpp",
         "SwitchGpuWriters.cpp",
         "SwitchGpuWriterPromise.cpp",
+        "SwitchGpuPromiseSleepers.cpp",
         "SwitchGpuCpuAccess.cpp",
         "SwitchGpuCpuComplete.cpp",
         "SwitchGpuPathStats.cpp",
