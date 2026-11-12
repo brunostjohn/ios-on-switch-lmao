@@ -29,7 +29,7 @@ struct CompilerAliveTest: HWTest {
         metrics.set("inactive_mb", Int(probe.inactive_mb))
         metrics.set("inactive_fatal", Int(probe.inactive_fatal))
         metrics.set("state", "0x" + String(probe.state, radix: 16))
-        metrics.set("line_error", KernelSysctl.code(probe.line_error))
+        metrics.set("line_error", Self.code(probe.line_error))
         metrics.set("priority_error", Self.code(probe.priority_error))
         metrics.set("limits_error", Self.code(probe.limits_error))
 
