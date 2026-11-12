@@ -130,6 +130,7 @@ TESTS: dict[str, bool] = {
             'metal.native.shared_texture',
             'metal.native.tessellation',
             'metal.native.amplification',
+            'metal.native.amplification_count',
             'metal.native.dynamic_stride',
             'metal.native.stage_in',
             'metal.native.vertex_streams',
