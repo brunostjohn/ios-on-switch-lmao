@@ -18,7 +18,10 @@ struct Row {
     Kind kind = Kind::Default;
     Digest digest{};
 
-    bool operator<(const Row &o) const { return key != o.key ? key < o.key : kind < o.kind; }
+    bool operator<(const Row &o) const
+    {
+        return key != o.key ? key < o.key : kind < o.kind;
+    }
 };
 
 using RecordId = std::pair<uint64_t, Kind>;

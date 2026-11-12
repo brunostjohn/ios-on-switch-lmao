@@ -16,7 +16,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const char *workspace = getenv("BUILD_WORKSPACE_DIRECTORY");
-    const std::string dir = argc > 3 ? argv[3]
+    const std::string dir = argc > 3    ? argv[3]
                             : workspace ? std::string(workspace) + "/drivers/TegraGM20BMetal/test/records/testdata"
                                         : ".";
     raw::Pack pack;

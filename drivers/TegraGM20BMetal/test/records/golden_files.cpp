@@ -141,8 +141,8 @@ bool parseSample(const std::string &text, std::map<RecordId, SectionHashes> &out
     while (std::getline(in, line)) {
         std::istringstream fields(line);
         std::string key, kind, name, hash;
-        if (!std::getline(fields, key, '\t') || !std::getline(fields, kind, '\t') || !std::getline(fields, name, '\t') ||
-            !std::getline(fields, hash))
+        if (!std::getline(fields, key, '\t') || !std::getline(fields, kind, '\t') ||
+            !std::getline(fields, name, '\t') || !std::getline(fields, hash))
             return false;
         out[{std::stoull(key, nullptr, 16), Kind(std::stoi(kind))}][name] = hash;
     }

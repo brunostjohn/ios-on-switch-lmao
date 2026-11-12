@@ -143,7 +143,9 @@ TEST(RecordDigest, TheSampleHoldsNoBlobAndOfThePacksOwnRecordsOnlyInit)
     const std::string text = records::sampleText(all, records::pickSample(all, 100));
     EXPECT_EQ(text.find("\tblob\t"), std::string::npos);
     EXPECT_NE(text.find("\tregisters\t"), std::string::npos);
-    const auto packRecord = [&](uint64_t key) { return text.find(records::keyText(key) + "\t5\t") != std::string::npos; };
+    const auto packRecord = [&](uint64_t key) {
+        return text.find(records::keyText(key) + "\t5\t") != std::string::npos;
+    };
     EXPECT_TRUE(packRecord(records::kInitRecord));
     for (uint64_t key : {records::kBaselineRecord, records::kSamplersRecord, records::kArchivesRecord})
         EXPECT_FALSE(packRecord(key)) << key;

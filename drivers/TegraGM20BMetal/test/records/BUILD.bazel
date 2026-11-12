@@ -145,6 +145,17 @@ cc_test(
     deps = [":records"],
 )
 
+# The sample pack's fetch-free and storage records hold their forms' contracts (form_contracts.cpp)
+cc_test(
+    name = "form_contracts_test",
+    srcs = ["form_contracts.cpp"],
+    args = ["$(rootpath :sample_pack)/pack.bin"],
+    copts = ["-std=c++17"],
+    data = [":sample_pack"],
+    tags = ["m2v"],
+    deps = [":records"],
+)
+
 # raw_emit's registers of each record of the sample pack but its form records, made from the record's key fields and
 # programs as a direct compile makes them, against the record (raw/test/emitcheck.cpp)
 cc_test(

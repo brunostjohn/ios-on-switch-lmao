@@ -35,8 +35,8 @@ struct Section {
 struct Record {
     uint64_t key = 0;
     Kind kind = Kind::Default;
-    uint64_t state = 0;  // the state's or kernel's keyHash, which its corpus line hashes to
-    std::string label;   // the state key's text, for messages
+    uint64_t state = 0;   // the state's or kernel's keyHash, which its corpus line hashes to
+    std::string label;    // the state key's text, for messages
     uint32_t traits = 0;  // Trait bits, which pick a sample that covers every kind of record
     std::vector<Section> sections;
 };
@@ -48,7 +48,8 @@ enum Trait : uint32_t {
     TraitIterated = 8,
     TraitVariants = 16,
     TraitStorage = 32,
-    TraitRungShift = 8  // bits 8-11: the highest fetch rung of its colour attachments
+    TraitStorageTests = 64,  // a storage record with depth or stencil tests and none in its shader (form_contracts.cpp)
+    TraitRungShift = 8       // bits 8-11: the highest fetch rung of its colour attachments
 };
 
 using Digest = std::array<uint8_t, 16>;

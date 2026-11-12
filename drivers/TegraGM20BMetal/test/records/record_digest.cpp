@@ -144,6 +144,8 @@ uint32_t traits(const Pack &pack, const PackPipeline &pp)
         t |= TraitVariants;
     if (pp.storageMask)
         t |= TraitStorage;
+    if (pp.storageMask && pp.storageTests >= 2 && !pp.shaderTests.flags)
+        t |= TraitStorageTests;
     for (uint8_t r : pp.fetchRung)
         rung = std::max<uint32_t>(rung, r & kFetchRungMask);
     return t | rung << TraitRungShift;
