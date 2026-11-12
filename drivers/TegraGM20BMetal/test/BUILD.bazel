@@ -5230,7 +5230,6 @@ host_test(
     srcs = [
         "raw_remote_ask_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_remote_ask.h",
-        "//kits/SwitchSeedPack:SwitchSeedStore.h",
     ] + RAW_HOST_HEADERS,
     copts = RAW_HOST_COPTS,
     cxx_std = "c++17",
