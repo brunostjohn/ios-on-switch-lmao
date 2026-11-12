@@ -233,6 +233,7 @@ TESTS: dict[str, bool] = {
     'gpu.latency': False,
     'gpu.raw_share': False,
     'gpu.recover.kill_one': False,
+    'gpu.x1.dc_host1x_class': False,
     'input.controllers': False,
     'input.joycon': False,
     'input.focus_idle': False,
