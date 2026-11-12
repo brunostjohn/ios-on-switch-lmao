@@ -1,57 +1,44 @@
-"""Per-draw goldens of an nvdec log as raw/pack/eqcheck.py sees it, and a log held to them as eqcheck holds two.
+"""Write eq's per-draw goldens from raw's frame where it differs from NVK's only as eq_rules.py allows, and check a log.
 
-usage: draw_goldens.py write <log> <golden>
-       draw_goldens.py check <log> <golden>
+The goldens are written while NVK can still be run; a raw log is then held to them alone.
 
-A golden line per item of each frame:
-  C <frame> <clears>                    the frame's clears in order (eqcheck.split_depth_stencil), sha256/16 each
-  E <frame> <kind> <i> <digest> <bars>  a draw's or dispatch's fields but its barriers (its live registers less the
-                                        pools' limits as one field), sha256/16 of all, and its barriers
-  F <frame> <kind> <i> <field> <hash>   each field's own hash, for a fixed sample of the events
-A log passes where eqcheck would pass it against the golden's: the same fields, every barrier the golden requires
-covered (one the raw path marks ELIDED excused), the same clears but the first frame's that only the golden has.
+usage: draw_goldens.py write <nvk.log> <raw.log> <golden>   refuses where raw differs from NVK in a way no rule allows
+       draw_goldens.py check <raw.log> <golden>
+
+A golden line per item of the frame (eq_fields.py's normalisation):
+  C <early clears> <clears>              the frame's clears before its first draw and after, sha256/16 each
+  E <i> <digest> <barriers> <tags>       a draw's fields (sha256/16 of all), its barriers, and how it differs from NVK's
+  F <i> <field> <hash>                   each field's own hash, for one draw in SAMPLED
+A log passes where every draw has its golden's fields and at least its barriers, and leaves a barrier out (ELIDED) only
+where the golden's does, its scissor still meeting no pixel written since the last barrier.
 """
 
 import hashlib
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'raw/pack'))
-import eqcheck
+import eq_fields
+import eq_rules
 
-SAMPLED = 8  # one event in SAMPLED, by the hash of its place, keeps its fields' hashes
+SAMPLED = 8
 
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
-def field_hashes(event: dict) -> tuple[dict[str, str], str]:
-    hashes, barriers = {}, '-'
-    for name, value in eqcheck.fields(event).items():
-        if name == 'barriers':
-            barriers = ','.join(sorted(value)) or '-'
-        elif name == 'R':
-            hashes[name] = digest(
-                ' '.join(f'{m}={v}' for m, v in sorted(value.items()) if m not in eqcheck.POOL_LIMITS)
-            )
-        elif name != 'regs':
-            hashes[name] = digest(str(value))
-    return hashes, barriers
+def joined(items: list[str]) -> str:
+    return ','.join(digest(c) for c in items) or '-'
 
 
-def golden_of(log: str) -> list[list[str]]:
-    rows = []
-    for fi, events in enumerate(eqcheck.rename_all(eqcheck.frames(log))):
-        clears = [eqcheck.fields(e)['clear'] for e in events if e['head'].startswith('CLEAR')]
-        rows.append(['C', str(fi), ','.join(digest(c) for c in eqcheck.split_depth_stencil(clears)) or '-'])
-        for kind in ('DRAW', 'DISPATCH'):
-            for i, event in enumerate(e for e in events if e['head'].startswith(kind)):
-                place = [str(fi), kind.lower(), str(i)]
-                hashes, barriers = field_hashes(event)
-                rows.append(['E', *place, digest(' '.join(f'{k}={v}' for k, v in sorted(hashes.items()))), barriers])
-                if int(digest(' '.join(place)), 16) % SAMPLED == 0:
-                    rows += [['F', *place, name, h] for name, h in sorted(hashes.items())]
+def rows_of(frame: eq_fields.Frame, tags: list[set]) -> list[list[str]]:
+    rows = [['C', joined(frame.early), joined(frame.clears)]]
+    for i, d in enumerate(frame.draws):
+        fields = eq_fields.digest_fields(d)
+        whole = digest(' '.join(f'{k}={v}' for k, v in fields.items()))
+        rows.append(['E', str(i), whole, ','.join(sorted(d.barriers)) or '-', ';'.join(sorted(tags[i])) or '-'])
+        if int(digest(str(i)), 16) % SAMPLED == 0:
+            rows += [['F', str(i), k, digest(v)] for k, v in fields.items()]
     return rows
 
 
@@ -59,56 +46,54 @@ def read(golden: str) -> list[list[str]]:
     return [line.split('\t') for line in Path(golden).read_text().splitlines()]
 
 
-def clears_moved(fi: str, want: str, got: str) -> list[str]:
-    nvk = [c for c in want.split(',') if c != '-']
-    raw = [c for c in got.split(',') if c != '-']
-    if fi == '0':
-        nvk = [c for c in nvk if c in raw]  # textures m2v initialised in the first frame
-    return [] if nvk == raw else [f'frame {fi}: {len(raw)} clears, the golden {len(nvk)} or another order']
-
-
-def barriers_moved(where: str, want: str, got: str) -> list[str]:
-    need = set() if want == '-' else set(want.split(','))
-    made = set() if got == '-' else set(got.split(','))
-    if eqcheck.compare_barriers(eqcheck.Tally(0), where, need, made):
-        return []
-    return [f'{where}: barriers {sorted(made)}, the golden {sorted(need)}']
-
-
-def differences(want_rows: list[list[str]], got_rows: list[list[str]]) -> list[str]:
-    got = {tuple(r[1:-2] if r[0] == 'E' else r[1:-1]): r for r in got_rows if r[0] in 'CE'}
-    got_fields = {tuple(r[1:5]): r[5] for r in got_rows if r[0] == 'F'}
-    moved = []
-    for row in want_rows:
-        if row[0] == 'C':
-            moved += clears_moved(row[1], row[2], got.get((row[1],), ['C', row[1], '-'])[2])
-        elif row[0] == 'E':
-            have = got.pop(tuple(row[1:4]), None)
-            where = ' '.join(row[1:4])
-            if have is None:
-                moved.append(f'{where}: not in the log')
-                continue
-            moved += barriers_moved(where, row[5], have[5])
-            if have[4] != row[4]:
-                moved.append(f'{where}: moved')
-        elif got_fields.get(tuple(row[1:5])) != row[5]:
-            moved.append(f'{" ".join(row[1:4])}: {row[4]} moved')
-    moved += [f'{" ".join(k)}: only in the log' for k, r in got.items() if r[0] == 'E']
+def differences(want: list[list[str]], log: str) -> list[str]:
+    frame = eq_fields.frame(log)
+    got = rows_of(frame, [set()] * len(frame.draws))
+    moved = [] if got[0] == want[0] else ['clears moved']
+    events = {r[1]: r for r in want if r[0] == 'E'}
+    have = {r[1]: r for r in got if r[0] == 'E'}
+    if len(events) != len(have):
+        return [*moved, f'draws: golden {len(events)} log {len(have)}']
+    fields = {(r[1], r[2]): r[3] for r in want if r[0] == 'F'}
+    for i, row in events.items():
+        g = have[i]
+        if g[2] != row[2]:
+            now = eq_fields.digest_fields(frame.draws[int(i)])
+            named = [k for (j, k), h in fields.items() if j == i and h != digest(now.get(k, ''))]
+            moved.append(f'draw {i}: moved {named or ""}')
+        need = set() if row[3] == '-' else set(row[3].split(','))
+        made = frame.draws[int(i)].barriers
+        if not need - {'ELIDED'} <= made:
+            moved.append(f'draw {i}: barriers {sorted(made)}, the golden {sorted(need)}')
+        if 'ELIDED' in made:
+            if 'ELIDED' not in need:
+                moved.append(f'draw {i}: a barrier left out where the golden has none left out')
+            elif why := eq_rules.elided(frame.draws, int(i))[1]:
+                moved.append(f'draw {i}: {why}')
     return moved
 
 
 def main() -> int:
-    mode, log, golden = sys.argv[1:4]
+    mode, *paths = sys.argv[1:]
     if mode == 'write':
-        rows = golden_of(log)
-        Path(golden).write_text(''.join('\t'.join(r) + '\n' for r in rows))
-        print(f'{sum(r[0] == "E" for r in rows)} events -> {golden}')
+        nvk, raw, golden = paths
+        n, r = eq_fields.frame(nvk), eq_fields.frame(raw)
+        tags, refused = eq_rules.compare(n, r)
+        for line in refused[:60]:
+            print(line)
+        if refused:
+            print(f'{len(refused)} differences no rule allows: no golden written')
+            return 1
+        rows = rows_of(r, tags)
+        Path(golden).write_text(''.join('\t'.join(row) + '\n' for row in rows))
+        print(f'{len(r.draws)} draws -> {golden}')
         return 0
+    log, golden = paths
     want = read(golden)
-    moved = differences(want, golden_of(log))
+    moved = differences(want, log)
     for line in moved[:40]:
         print(line)
-    print(f'{sum(r[0] == "E" for r in want)} golden events: {len(moved)} differences')
+    print(f'{sum(row[0] == "E" for row in want)} golden draws: {len(moved)} differences')
     return 1 if moved else 0
 
 
