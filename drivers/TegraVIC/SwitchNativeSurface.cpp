@@ -212,8 +212,6 @@ SwitchNativeSurface *takeRetired()
     IOLockUnlock(gPrepareLock);
     if (!reused)
         return nullptr;
-    deliverSignals(reused);
-    switch_vic_events_release(&reused->events);
     reused->delivered = 0;
     if (reused->readLease)
         switch_gpu_backing_cpu_release_owned(&reused->readLease, 0);
@@ -414,7 +412,10 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
         panic("SwitchSurface: native publication rollback lost attachment");
     if (old && !error) {
         deliverSignals(old);  // a recorded turn replaced before it was shown or read: its frame was dropped
-        retire(old);
+        if (old->events)
+            old->release();  // its request's events and their tokens live as long as its last reader
+        else
+            retire(old);
     } else if (old) {
         old->release();
     }
