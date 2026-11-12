@@ -92,8 +92,11 @@ static bool takesArgumentBuffers(id<MTLFunction> f)
         for (NSUInteger index = 0; index < 31 && !takes; index++) {
             const char *why = nullptr;
             takes = native_bridge_metal_argument_layouts(
-                function->_twin, index, [](const NmbArgumentLayout *, uint32_t, void *) { return true; }, nullptr,
-                &why);
+                function->_twin, index,
+                [](const NmbArgumentLayout *, uint32_t, void *) {
+                    return true;
+                },
+                nullptr, &why);
         }
         function->_argumentBuffers = takes ? 2 : 1;
     }
@@ -115,29 +118,33 @@ static bool readsArguments(RMPipeline *p)
     return d && (takesArgumentBuffers(d.vertexFunction) || takesArgumentBuffers(d.fragmentFunction));
 }
 
-// What a range reads that m2v's twins cannot: a buffer an argument encoder wrote, which holds the raw device's resource IDs
-// and addresses (RawMetalArgumentEncoder.mm), or a facade heap (no twin names it: RMHeap rmTwin) beside a render state
-// that reads argument buffers, whose IDs the app took of the raw device (gpuResourceID); nil: none. A heap whose textures
-// the range binds at slots or as attachments draws on m2v through their twins.
+// What a range reads that m2v's twins cannot (raw_replay_twins.h): a buffer RawMetalArgumentEncoder.mm wrote, or a facade
+// heap beside a render state that reads argument buffers, whose IDs the app took of the raw device (gpuResourceID)
 static id rawArgumentsIn(RMCommandBuffer *cb, size_t from, size_t to)
 {
-    id written = nil, heap = nil;
-    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
-        id o = (__bridge id)value;
-        if (!heap && [o isKindOfClass:[RMHeap class]])
-            heap = o;
-        else if (!written && [o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)
-            written = o;
-    });
-    if (written || !heap)
-        return written;
-    for (size_t at = from; at < to; at++) {
-        const Cmd c = cb->_plan.legacy(at);
-        id state = (__bridge id)c.obj;
-        if (c.op == OpPipeline && [state isKindOfClass:[RMPipeline class]] && readsArguments((RMPipeline *)state))
-            return heap;
-    }
-    return nil;
+    return (__bridge id)raw::rawArgumentsIn(
+        [&](auto &&visit) {
+            cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
+                visit(value);
+            });
+        },
+        [](void *value) {
+            id o = (__bridge id)value;
+            if ([o isKindOfClass:[RMHeap class]])
+                return raw::ReplayUse::Heap;
+            if ([o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)
+                return raw::ReplayUse::WrittenArguments;
+            return raw::ReplayUse::Other;
+        },
+        [&](auto &&visit) {
+            for (size_t at = from; at < to; at++)
+                if (const Cmd c = cb->_plan.legacy(at); c.op == OpPipeline)
+                    visit(c.obj);
+        },
+        [](void *state) {
+            id s = (__bridge id)state;
+            return [s isKindOfClass:[RMPipeline class]] && readsArguments((RMPipeline *)s);
+        });
 }
 
 // The command buffer's error for a range replay could not draw as Metal does: it reads through the raw device's argument

@@ -5616,7 +5616,7 @@ uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
 }
 
 // The extended blend colour's words (switch_nmb_blend_color_words) where `r` reads them, made again after the colour moved
-bool RenderEncoder::blendWords(const PackPipeline &r, const char **why)
+bool RenderEncoder::blendWords(const PackPipeline &r, [[maybe_unused]] const char **why)
 {
     if (!r.blendColorWord || !blendWordsDirty_)
         return true;
