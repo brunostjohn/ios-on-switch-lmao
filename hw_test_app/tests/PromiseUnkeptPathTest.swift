@@ -61,8 +61,8 @@ final class PromiseSafetyCancel: @unchecked Sendable {
 /// its writer reported in one line, and each reader goes on with the frame the surface held before.
 /// - composite: a layer showing the surface, rendered by the render server, whose job acquires the promise and parks
 ///   at its submit, so the display's present waits behind that job: composite_ms about 1000. Judged on its own
-///   evidence: a composite that never parked (nothing given up, and it returned well inside the second) is SKIP with
-///   that reason; one that parked fails only on its give-up count or the frame it shows.
+///   evidence: a composite that never parked (nothing given up, no safety cancel) is SKIP with that reason, its promise
+///   cancelled; one that parked fails only on its give-up count, the frame it shows or its time.
 /// - copy: the Metal device's blit of the surface (this process's own job, run only when its command buffers take the
 ///   raw path). It parks at its submit: copy_ms about 1000. After the raise the parked channel must see the
 ///   CPU-written word at once (raise_to_end_ms under oneStrikeMs), the give-up's DSB. Alongside it a CPU lock of the
@@ -76,8 +76,6 @@ struct PromiseUnkeptPathTest: GPUPathTest {
     static let size = 64
     static let fill: [UInt8] = [0, 0, 255, 255]  // BGRA red: the frame before the promised one
     static let compositeLimitMs = 1100.0, copyLimitMs = 1100.0, oneStrikeMs = 500.0, safetySeconds = 8.0
-    /// A composite that returned this soon with nothing given up never waited on the promise
-    static let neverParkedMs = 500.0
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let rowBytes = Self.size * 4
@@ -122,7 +120,10 @@ struct PromiseUnkeptPathTest: GPUPathTest {
         metrics.set("composite_d_abandoned", compositeGivenUp)
         metrics.set(
             "centre", centre.prefix(3).map { String(Int(($0 * render.levels).rounded())) }.joined(separator: ","))
-        if compositeGivenUp == 0 && !compositeSafety.fired && compositeMs < Self.neverParkedMs {
+        if compositeGivenUp == 0 && !compositeSafety.fired {
+            // its promise stays made otherwise, and the copy's job below would acquire it too
+            let words = GPUConnection.words([0, 0, PromiseCancelPathTest.promiseCancel, 0, compositePromise, 0])
+            _ = maker.call(PromiseCancelPathTest.writerPromise, words, outputSize: 8)
             PathParts.current?.skip(
                 String(format: "composite: the render server never parked on the promise (%.0f ms)", compositeMs),
                 counters: [])
