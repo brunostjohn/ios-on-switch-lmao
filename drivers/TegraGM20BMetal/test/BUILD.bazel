@@ -145,6 +145,8 @@
 #                     it once, naming what for
 #   raw_arena_trim_test  raw/runtime/raw_arena_trim.h: an idle heap kept non-volatile gives back the ranges no resource is
 #                     placed in, keeps the rest's contents, and binds a hole again at a placement into it
+#   raw_seed_slot_test  a seeded record's program of a page or more runs from the installed seed's pages (raw_cache.h
+#                     findSeedSlot), imported and bound in the program window; one the seed lacks is copied
 #   raw_multisample_test  raw/runtime/raw_multisample.h, raw_sample_positions.h: a stored multisampled texture's header
 #                     (NIL's) and target (its sample grid), and a pass's sample layout at the standard positions or its
 #                     own, rounded as Metal samples them, as the methods NVK writes
@@ -1696,6 +1698,7 @@ host_test(
     srcs = [
         "raw_native_seed_test.cpp",
         "//drivers/NativeMetal:MetallibSlice.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_record.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
@@ -2267,8 +2270,47 @@ host_test(
     name = "raw_arena_trim_test",
     srcs = [
         "raw_arena_trim_test.cpp",
+        "empty_pack.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
+# A seeded record's large programs as a client device places them over the kernel model: from the installed seed's pages
+host_test(
+    name = "raw_seed_slot_test",
+    srcs = [
+        "raw_seed_slot_test.cpp",
+        "empty_pack.h",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
+        "//kits/SwitchSeedPack:SwitchSeedPackWriter.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",

@@ -292,6 +292,22 @@ bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
     return true;
 }
 
+const uint8_t *RecordCache::findSeedSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping,
+                                         uint64_t &bytes) const
+{
+    const uint64_t value = seedSlotName(slot, size);
+    uint8_t name[sizeof value];
+    for (unsigned i = 0; i < sizeof name; ++i)
+        name[i] = uint8_t(value >> (8 * (sizeof name - 1 - i)));
+    switch_seed_pack::Bytes found, pack;
+    if (!seed_ || !seed_->find(name, found) || found.size < size || memcmp(found.data, slot, size) ||
+        !seed_->packOf(found.data, pack))
+        return nullptr;
+    mapping = pack.data;
+    bytes = pack.size;
+    return found.data;
+}
+
 void RecordCache::tidy()
 {
     if (dir_.empty())

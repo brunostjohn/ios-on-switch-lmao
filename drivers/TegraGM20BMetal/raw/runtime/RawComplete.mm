@@ -92,8 +92,10 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     remote_ = std::make_unique<Remote>(
         KernelTransport{kernel.connection(), kernel.tunnelled(), kernel.tunnelSelector()}, stack_);
     Remote *remote = remote_.get();
-    device_.runSlotsFrom([remote](const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes) {
-        return remote->findSlot(slot, size, mapping, bytes);
+    const RecordCache *cache = &cache_;
+    device_.runSlotsFrom([remote, cache](const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes) {
+        const uint8_t *found = remote->findSlot(slot, size, mapping, bytes);
+        return found ? found : cache->findSeedSlot(slot, size, mapping, bytes);
     });
     if (!remote_->serving())
         os_log_error(rawLog(),

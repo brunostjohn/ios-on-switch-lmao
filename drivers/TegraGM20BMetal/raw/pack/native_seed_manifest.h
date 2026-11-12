@@ -2,6 +2,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #include "../runtime/raw_cache_io.h"
+#include "../runtime/raw_program_pages.h"
 #include "NativeMetalArtifactCache.h"
 #include <map>
 #include <sys/stat.h>
@@ -109,6 +110,32 @@ inline bool recordIdentity(const std::string &bytes, raw::CacheKey &key, raw::Ru
            raw::encodeEntry(key, &record, "") == bytes;
 }
 
+// A render record's program slots of a page or more, each written as the entry the runtime runs in place
+// (programSlotEntryBytes) to <output>/raw-<stack>/<seedSlotName>.slot and named in `slots`
+inline bool writeSlots(const raw::RuntimeRecord &record, uint64_t stack, const std::string &output,
+                       NSArray *__strong &slots)
+{
+    NSMutableArray *written = [NSMutableArray array];
+    for (const raw::CapturedProgram *program : raw::slotPrograms(record)) {
+        if (program->image.empty())
+            continue;
+        raw::PackProgram info;
+        std::vector<uint8_t> slot = raw::programSlot(*program, info);
+        if (slot.size() < raw::kProgramSlotPage)
+            continue;
+        const uint64_t name = raw::seedSlotName(slot.data(), slot.size());
+        slot.resize(raw::programSlotEntryBytes(slot.size()));
+        const std::string relative = "raw-" + hex(stack) + "/" + hex(name) + ".slot";
+        NSData *bytes = [NSData dataWithBytesNoCopy:slot.data() length:slot.size() freeWhenDone:NO];
+        if (![bytes writeToFile:@((output + "/" + relative).c_str()) atomically:YES] ||
+            chmod((output + "/" + relative).c_str(), 0644))
+            return false;
+        [written addObject:@{@"name" : @(hex(name).c_str()), @"path" : @(relative.c_str())}];
+    }
+    slots = written.count ? written : nil;
+    return true;
+}
+
 inline bool restampRow(NSMutableDictionary *row, const std::string &input, uint64_t oldStack, uint64_t stack,
                        const std::string &output, raw::RecordCache &cache, std::map<uint64_t, std::string> &written)
 {
@@ -170,8 +197,12 @@ inline bool restampRow(NSMutableDictionary *row, const std::string &input, uint6
         if (!stored || chmod((output + "/" + relative).c_str(), 0644))
             return false;
     }
+    NSArray *slots = nil;
+    if (!kernel && !writeSlots(record, stack, output, slots))
+        return false;
     identify(row, key);
     row[@"artifact"] = @(relative.c_str());
+    row[@"slots"] = slots;
     return true;
 }
 

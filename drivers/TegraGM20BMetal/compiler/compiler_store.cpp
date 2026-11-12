@@ -119,12 +119,7 @@ static std::vector<std::vector<uint8_t>> entrySlots(const raw::CacheKey &key, co
     std::string refusal;
     raw::RuntimeRecord record;
     if (raw::decodeEntry(entry, key, record, refusal) == raw::RecordCache::Found::Record) {
-        std::vector<const raw::CapturedProgram *> programs = {&record.programs[0], &record.programs[1]};
-        for (const raw::RuntimeRecord::Variant &v : record.variants)
-            programs.push_back(&v.program);
-        if (record.split)
-            programs.push_back(&record.splitPrograms[0]);
-        for (const raw::CapturedProgram *program : programs) {
+        for (const raw::CapturedProgram *program : raw::slotPrograms(record)) {
             raw::PackProgram info;
             if (!program->image.empty())
                 slots.push_back(raw::programSlot(*program, info));

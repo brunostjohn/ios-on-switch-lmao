@@ -250,6 +250,21 @@ class NativeSeedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             native_seed.pack_lists(self.manifest)
 
+    def test_a_records_program_slots_are_packed_and_certified_with_it(self):
+        record = self.manifest['records'][0]
+        slot = {'name': '00000000000000a0', 'path': f'raw-{self.stack}/00000000000000a0.slot'}
+        (self.root / slot['path']).write_bytes(bytes(native_seed.SLOT_PAGE_BYTES * 2))
+        record['slots'] = [slot]
+        self.assertIn(slot['path'], self.report()['artifacts'])
+        records, _ = native_seed.pack_lists(self.manifest)
+        self.assertEqual(records[slot['name']], (0, slot['path']))
+        (self.root / slot['path']).write_bytes(bytes(100))
+        with self.assertRaises(ValueError):
+            self.report()
+        record['slots'] = [dict(slot, path=f'raw-{self.stack}/00000000000000a1.slot')]
+        with self.assertRaises(ValueError):
+            self.report()
+
     def test_pack_writes_the_device_layout_the_same_every_time(self):
         self.manifest['records'].append(self.analysis_row())
         (self.root / 'manifest.json').write_text(json.dumps(self.manifest))

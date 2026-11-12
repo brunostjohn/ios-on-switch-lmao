@@ -22,6 +22,14 @@ class Seed;
 
 namespace raw {
 
+// The installed native records' name of a program slot's entry (RecordCache::findSeedSlot): its bytes' FNV-1a, moved off
+// the records' names (a name both took would fail the seed's write); a find compares the bytes
+inline uint64_t seedSlotName(const void *slot, size_t size)
+{
+    constexpr uint64_t kSlotDomain = 0x736c6f7400000000ull;
+    return Pack::fnv(slot, size) ^ kSlotDomain;
+}
+
 // What a made record depends on: the build (its stack key hashes what records are made and read by: the pack generator, m2v, NVK
 // and NAK, the frontend and the raw runtime's direct compile and codecs, so a new compiler or pack generator is a new stack), the
 // functions' AIR (their metallib HASH tags: SHA-256 of each one's bitcode) and the state's key (every descriptor field and function
@@ -46,6 +54,9 @@ public:
     // The installed native records, <dir>/raw-<stack>/ packed (kits/SwitchSeedPack), are mapped here and read in place
     // before the directory's own entries; attach before any compiler worker starts.
     bool attachSeed(const std::string &dir, uint64_t stack);
+    // A program slot the installed native records hold as an entry of its own pages (seedSlotName, raw_program_pages.h
+    // programSlotEntryBytes): its bytes in place, with the seed's pack mapping holding them; null: none
+    const uint8_t *findSeedSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping, uint64_t &bytes) const;
     void tidy();
 
     enum class Found : uint8_t {
