@@ -4564,6 +4564,7 @@ public:
     }
 
 #include "SwitchDirectSlots.h"
+#include "SwitchDirectVisibleDisplay.h"
 
     // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
     void cleanDomain()
@@ -4585,6 +4586,8 @@ public:
         const int entry = directSlotFor(surface, memory, stride, allocation, tiled);
         if (entry == kNoBuffer)
             return false;
+        if (presentDirectVisible(request, entry, width, height, kickAt))
+            return true;
         TegraScanoutCopy copy = {};
         copy.version = TEGRA_SCANOUT_COPY_VERSION;
         copy.width = width;

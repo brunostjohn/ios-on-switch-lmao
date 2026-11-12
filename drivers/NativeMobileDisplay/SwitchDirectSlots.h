@@ -66,6 +66,7 @@
         slot = {memory, surface, nullptr, stride, ++slotUses, pages, tiled, storage,
                 snapshot.allocation.allocation_id, snapshot.allocation.allocation_generation, offset};
         *slot.read = snapshot;
+        holdScanoutBacking(static_cast<unsigned>(victim));
         slot.tiled = holdLayout(slot, tiled);
         cleanDomain();
         return kSlot0 + victim;
@@ -99,6 +100,7 @@
     // A slot's mapping and its surface given back (it is neither scanned nor asked for).
     void dropSlot(unsigned k)
     {
+        releaseScanoutBacking(k);
         DirectSlot &slot = slots[k];
         if (slot.pages)
             probeDomain.unmap(kProbeSlot + static_cast<uint64_t>(k) * kSlotSpan, slot.pages);

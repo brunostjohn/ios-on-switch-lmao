@@ -650,3 +650,26 @@ host_test(
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
     ],
 )
+
+# SwitchDirectVisibleDisplay.h: a direct frame already in DRAM flips from the kick, with no present job.
+host_test(
+    name = "switch_direct_visible_test",
+    srcs = [
+        "switch_direct_visible_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDirectVisibleDisplay.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
