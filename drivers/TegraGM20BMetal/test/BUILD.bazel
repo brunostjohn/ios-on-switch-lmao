@@ -2366,7 +2366,11 @@ host_test(
         "-x",
         "objective-c++",
         "-fobjc-arc",
-    ] + RAW_HOST_COPTS,
+    ] + RAW_HOST_COPTS + select({
+        # the corpus's states of private linked functions are iOS 27's libraries' alone
+        "//ipsw:24B119": ["-DSWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS=1"],
+        "//conditions:default": [],
+    }),
     cxx_std = "c++17",
     data = [
         "//drivers/TegraGM20BMetal:precompile/corpus.log",

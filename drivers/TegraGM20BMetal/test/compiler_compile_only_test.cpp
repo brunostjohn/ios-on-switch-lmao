@@ -46,8 +46,10 @@ void environment()
 }
 
 // The sample: every corpus state linking functions, a few of each other kind, a stride through the rest, a RenderBox
-// state's cubic and test-class variants as the device asked for them, a kernel at an edge of its grid, and Core
-// Animation states that may fetch their attachment over a depth attachment and multisampled (their storage forms)
+// state's cubic and test-class variants as the device asked for them, VectorKit states the direct compile refuses (a
+// sampler m2v's layout leaves untagged), kernels at an edge of their grid, and Core Animation states that may fetch
+// their attachment over a depth attachment and multisampled (their storage forms). Each kind is drawn from lines both
+// crawls' libraries hold, but for the private linked functions, which only iOS 27's libraries have.
 std::vector<std::string> sample()
 {
     const std::vector<std::string> lines = compiler_test::corpusLines(getenv("SWITCH_CORPUS"));
@@ -60,21 +62,31 @@ std::vector<std::string> sample()
         }
     };
     const std::regex linked(R"( \| (fp|vp|fl|vl) )"), msaa("samples=[24] "), depth("ds=(252|260)/"),
-        samplers(R"( smp=\S)"), quartzKernel("^D .*QuartzCore");
+        samplers(R"( smp=\S)"), quartzKernel("^D .*QuartzCore"), atOrigin("edge=0,0,0 threads=0");
+    const auto atAnEdge = [&](const std::string &l) {
+        return std::regex_replace(l, atOrigin, "edge=7,3,0 threads=1");
+    };
     for (size_t i = 0; i < lines.size(); ++i) {
         const std::string &l = lines[i];
+        const bool regionable = std::regex_search(l, atOrigin);
         if (std::regex_search(l, linked))
             take("linked", l, 8);
         if (l[0] == 'R' && std::regex_search(l, msaa))
             take("msaa", l, 4);
         if (l[0] == 'R' && std::regex_search(l, depth))
             take("depth", l, 6);
-        if (l[0] == 'D' && std::regex_search(l, samplers))
+        if (l[0] == 'R' && l.find("samples=4 ") != std::string::npos &&
+            l.find("| v DaVinci::ground_base_vertex ") != std::string::npos)
+            take("neutral sampler", l, 2);
+        if (l[0] == 'D' && std::regex_search(l, samplers)) {
             take("samplers", l, 6);
+            if (regionable && l.find(" lib=/System/") != std::string::npos)
+                take("sampler kernel region", atAnEdge(l), 1);
+        }
         if (std::regex_search(l, quartzKernel)) {
             take("kernel", l, 4);
-            if (!taken["region"] && l.find("edge=0,0,0 threads=0") != std::string::npos)
-                take("region", std::regex_replace(l, std::regex("edge=0,0,0 threads=0"), "edge=7,3,0 threads=1"), 1);
+            if (regionable)
+                take("region", atAnEdge(l), 1);
         }
         if (i % 41 == 0)
             take("stride", l, 64);
@@ -220,8 +232,11 @@ TEST(CompilerCompileOnly, ItsRecordsAreTheDevicesByteForByte)
     }
     for (const char *kind :
          {"render", "refused", "constexpr samplers", "storage form", "cubic", "test class", "multisampled",
-          "specialized", "private linked", "kernel", "kernel with textures and samplers", "region kernel"})
+          "specialized", "kernel", "kernel with textures and samplers", "region kernel"})
         EXPECT_GT(covered[kind], 0u) << "the sample made no " << kind << " record";
+#if SWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS
+    EXPECT_GT(covered["private linked"], 0u) << "the sample made no private linked record";
+#endif
     std::string counts;
     for (const auto &[kind, n] : covered)
         counts += " " + kind + "=" + std::to_string(n);
