@@ -435,7 +435,7 @@ host_test(
 
 host_shims(
     name = "jobs_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread.h", "kern/clock.h"],
+    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread.h", "kern/thread_call.h", "kern/clock.h"],
     stubs = "switch_vic_jobs_stubs.h",
 )
 
@@ -445,6 +445,8 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xResults.cpp",
         "switch_vic_jobs_test.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.h",
+        "//drivers/TegraVIC:TegraVICEngine.h",
+        "//kits/SwitchEngineGate:SwitchEngineGate.h",
         "//drivers/TegraVIC:SwitchVICEvents.h",
         "//drivers/TegraVIC:SwitchVICSemantics.h",
         "//drivers/TegraVIC:TegraVICRequest.h",
@@ -465,7 +467,10 @@ host_test(
         "//kits/SwitchDMA:SwitchDcache.h",
         "//kits/SwitchTime:SwitchTime.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICJobs.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraVIC:SwitchVICJobs.cpp",
+        "//drivers/TegraVIC:TegraVICCancel.cpp",
+    ],
     deps = [":jobs_kernel"],
 )
 

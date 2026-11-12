@@ -5,6 +5,8 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../SwitchVICJobs.cpp"
+#include "../TegraVICCancel.cpp"
+#include "../../../kits/SwitchEngineGate/SwitchEngineGate.h"
 
 struct switch_gpu_bridge {
     std::vector<switch_gpu_backing_token> tokens;
@@ -28,6 +30,53 @@ std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
 bool transactionLocked, changeProducer, busyOnce;
 volatile uint64_t *changeGeneration;
+
+// The engine and host1x behind the queue: the job syncpoint's value, what the cancellation did to the channel and the
+// engine, in order, and an idle gate whose power-on proof moves the syncpoint by two as V2 does.
+uint32_t hardware;
+std::vector<std::string> engineSteps;
+bool engineBoots = true;
+IOLock *powerLock;
+
+struct TestGatePlatform {
+    bool start(void (*)(void *), void *)
+    {
+        return true;
+    }
+
+    void lock()
+    {
+        IOLockLock(powerLock);
+    }
+
+    void unlock()
+    {
+        IOLockUnlock(powerLock);
+    }
+
+    void sleep(void *)
+    {
+        throw std::runtime_error("the gate sleeps");
+    }
+
+    void wake(void *)
+    {}
+
+    void arm(uint32_t)
+    {}
+
+    uint64_t nowUs()
+    {
+        return 0;
+    }
+
+    void log(const char *line)
+    {
+        switch_test_log().emplace_back(line);
+    }
+};
+
+SwitchEngineGate<TestGatePlatform> *testGate;
 }
 
 extern "C" {
@@ -231,19 +280,95 @@ void tegra_vic_describe(char *, size_t)
 int switch_vic_power_use()
 {
     ++powerUses;
-    return powerError;
+    return testGate ? testGate->use() : powerError;
 }
 
 void switch_vic_power_done()
 {
     ++powerDones;
+    if (testGate)
+        testGate->done();
 }
 
 void switch_vic_power_idle()
-{}
+{
+    if (testGate)
+        testGate->idle();
+}
 
-void tegra_host1x_describe_channel(uint32_t, char *, size_t)
-{}
+void tegra_host1x_describe_channel(uint32_t, char *buffer, size_t size)
+{
+    if (size)
+        snprintf(buffer, size, "ch1 test");
+}
+
+uint32_t tegra_host1x_syncpt_read(uint32_t id)
+{
+    EXPECT_EQ(id, gSyncpt);
+    return hardware;
+}
+
+int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maxIncrements)
+{
+    EXPECT_EQ(id, gSyncpt);
+    const auto distance = static_cast<int32_t>(threshold - hardware);
+    if (distance > static_cast<int32_t>(maxIncrements) || maxIncrements > 2)
+        return -22;
+    if (distance > 0)
+        hardware = threshold;
+    engineSteps.emplace_back("release " + std::to_string(threshold));
+    return 0;
+}
+
+void tegra_host1x_channel_teardown(uint32_t channel)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_VIC));
+    engineSteps.emplace_back("teardown");
+}
+
+void tegra_host1x_channel_restart(uint32_t channel)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_VIC));
+    engineSteps.emplace_back("restart");
+}
+}
+
+IOLock *switch_vic_power_lock()
+{
+    return powerLock;
+}
+
+bool switch_vic_engine_powered()
+{
+    EXPECT_TRUE(powerLock->locked);
+    return true;
+}
+
+void switch_vic_engine_describe(char *text, size_t size)
+{
+    snprintf(text, size, "falcon CPUCTL 0");
+}
+
+bool switch_vic_engine_reset()
+{
+    EXPECT_TRUE(powerLock->locked);
+    engineSteps.emplace_back("reset");
+    return true;
+}
+
+bool switch_vic_engine_boot()
+{
+    EXPECT_TRUE(powerLock->locked);
+    engineSteps.emplace_back("boot");
+    if (engineBoots)
+        hardware += 2;
+    return engineBoots;
+}
+
+const char *switch_vic_engine_wedge()
+{
+    engineSteps.emplace_back("wedge");
+    return "falcon did not answer";
 }
 
 bool switch_vic_semantics_start(uint32_t, void (*)(switch_gpu_event_waits *))
@@ -353,7 +478,14 @@ protected:
         nextTestSequence += 4096;
         gQueue.submitted = gQueue.completed = nextTestSequence;
         gCompleted = nextTestSequence;
-        gFailed = gSuspended = false;
+        gFailed = gSuspended = gCancelling = gRecovered = gRecoveredReady = false;
+        hardware = static_cast<uint32_t>(nextTestSequence);
+        engineSteps.clear();
+        switch_test_log().clear();
+        engineBoots = true;
+        testGate = nullptr;
+        powerLock = IOLockAlloc();
+        ASSERT_TRUE(switch_vic_cancel_start(161));
         for (auto &stage : Stages::stages)
             stage = {};
         gLock = IOLockAlloc();
@@ -380,6 +512,10 @@ protected:
         IOLockFree(gLock);
         gLock = nullptr;
         switch_test_queue_lock = nullptr;
+        EXPECT_FALSE(powerLock->locked);
+        IOLockFree(powerLock);
+        delete gCancel;
+        gCancel = nullptr;
     }
 
     int submit(uint32_t count = 1, const switch_gpu_backing_guard *guard = nullptr,
@@ -395,6 +531,32 @@ protected:
         auto *fence = fences.at(which);
         fence->state = SWITCH_HOST1X_FENCE_IDLE;
         fence->signaled(fence, 0);
+    }
+
+    // The fence's bound passed with its syncpoint short of it (host1x's bounds call, on its work loop).
+    static void outlived(size_t which)
+    {
+        auto *fence = fences.at(which);
+        ASSERT_EQ(fence->state, SWITCH_HOST1X_FENCE_QUEUED);
+        fence->state = SWITCH_HOST1X_FENCE_IDLE;
+        fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT);
+    }
+
+    // The threshold interrupt for every queued fence the syncpoint has reached.
+    static void reachedInterrupts()
+    {
+        for (auto *fence : fences)
+            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && SwitchVICQueue::reached(hardware, fence->threshold)) {
+                fence->state = SWITCH_HOST1X_FENCE_IDLE;
+                fence->signaled(fence, 0);
+            }
+    }
+
+    static void runCancellation()
+    {
+        ASSERT_EQ(gCancel->entered, 1u);
+        gCancel->entered = 0;
+        gCancel->fire(gCancel->param, nullptr);
     }
 
     static void bridged(size_t which, int status)
@@ -655,11 +817,92 @@ TEST_F(SwitchVICJobsTest, JobsRetireAndCompleteInSubmissionOrder)
     EXPECT_EQ(gQueue.count, 0u);
 }
 
-TEST_F(SwitchVICJobsTest, AFenceThatFailsPanicsWithTheEngineAndChannelState)
+// A job past its bound fails its frame, never a panic: the batch behind it fails too (its completion hears the
+// failure, so the display does not show that frame), the channel is torn down and restarted around the engine's
+// reset, their fences are released, and the next frame's job runs on the renumbered queue.
+TEST_F(SwitchVICJobsTest, AStalledFrameIsCancelledAndTheNextFrameRuns)
+{
+    const auto heard = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    int stalledFrame = 1, behindFrame = 1, nextFrame = 1;
+    ASSERT_EQ(submit(1, nullptr, heard, &stalledFrame), 0);
+    const uint64_t stalled = gQueue.submitted;
+    ASSERT_EQ(submit(2, nullptr, heard, &behindFrame), 0);
+    const uint64_t behind = gQueue.submitted;
+    outlived(0);
+    EXPECT_EQ(stalledFrame, -5);
+    EXPECT_EQ(waitSequence(stalled), -5);
+    EXPECT_EQ(gQueue.count, 2u);
+    EXPECT_THROW(submit(), std::runtime_error) << "new jobs wait for the cancellation";
+    IOLockUnlock(gLock);
+    runCancellation();
+    EXPECT_EQ(engineSteps,
+              (std::vector<std::string>{"teardown", "reset", "release " + std::to_string(uint32_t(behind) - 1),
+                                        "release " + std::to_string(uint32_t(behind)), "restart", "boot"}))
+        << "two increments at a time, through the cancelled batch's last job";
+    EXPECT_EQ(behindFrame, 1) << "the cancelled batch ends on its released fence";
+    reachedInterrupts();
+    EXPECT_EQ(behindFrame, -5);
+    EXPECT_EQ(waitSequence(behind), -5);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_FALSE(gCancelling);
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("TegraVIC: job fence " + std::to_string(stalled) + " not reached"),
+              std::string::npos);
+    EXPECT_NE(switch_test_log()[0].find("engine reset: running again"), std::string::npos);
+    ASSERT_EQ(submit(1, nullptr, heard, &nextFrame), 0);
+    EXPECT_EQ(gQueue.submitted, behind + 3) << "after the proof's two increments";
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    EXPECT_EQ(nextFrame, 0);
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+TEST_F(SwitchVICJobsTest, AnEngineTheResetDoesNotBringBackRefusesTheNextJob)
 {
     ASSERT_EQ(submit(), 0);
-    auto *fence = fences.at(0);
-    EXPECT_THROW(fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT), std::runtime_error);
+    engineBoots = false;
+    outlived(0);
+    EXPECT_FALSE(switch_vic_jobs_park(false)) << "the idle gate leaves a cancelling engine powered";
+    runCancellation();
+    EXPECT_EQ(engineSteps.back(), "wedge");
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("it did not come back, VIC refuses work: falcon did not answer"),
+              std::string::npos);
+    EXPECT_EQ(submit(), -19);
+}
+
+// After an idle power-off (SwitchEngineGate expire), the next job powers VIC on: the power-on's proof moves the
+// syncpoint by two, the queue rebases on it, and the job runs on the next fence.
+TEST_F(SwitchVICJobsTest, AnIdleGatedEngineIsPoweredOnByTheNextJob)
+{
+    SwitchEngineGate<TestGatePlatform> gate;
+    const SwitchEngineGateOps ops = {
+        "TegraVIC", nullptr,
+        [](void *) -> int {
+            hardware += 2;
+            switch_vic_jobs_resume(true, hardware);
+            return 0;
+        },
+        [](void *, bool drain) -> int {
+            return switch_vic_jobs_park(drain) ? SWITCH_ENGINE_GATE_OFF : SWITCH_ENGINE_GATE_BUSY;
+        },
+    };
+    ASSERT_TRUE(gate.start(ops));
+    testGate = &gate;
+    gate.expire();
+    EXPECT_FALSE(gate.powered());
+    EXPECT_TRUE(gSuspended);
+    const uint64_t base = gQueue.submitted;
+    int frame = 1;
+    EXPECT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &frame), 0);
+    testGate = nullptr;
+    EXPECT_TRUE(gate.powered());
+    EXPECT_FALSE(gSuspended);
+    EXPECT_EQ(gQueue.submitted, base + 3);
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    EXPECT_EQ(frame, 0);
+    EXPECT_EQ(gQueue.count, 0u);
 }
 
 // A submission records its output as a write, or VIC refuses it: an unrecorded write would leave the GPU's L2 lines of the
