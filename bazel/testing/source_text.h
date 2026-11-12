@@ -174,6 +174,7 @@ inline std::vector<bool> CodeMask(std::string_view raw)
         kString,
         kChar
     } state = kCode;
+
     std::vector<bool> code(raw.size(), false);
     for (size_t i = 0; i < raw.size(); ++i) {
         const char c = raw[i], next = i + 1 < raw.size() ? raw[i + 1] : '\0';
@@ -228,8 +229,7 @@ public:
     CodeText() = default;
 
     explicit CodeText(std::string_view text) : text_(Normal(text))
-    {
-    }
+    {}
 
     [[nodiscard]] testing::AssertionResult Has(std::string_view needle) const
     {
@@ -248,8 +248,8 @@ public:
     {
         const size_t a = Find(first), b = Find(second);
         if (a == std::string::npos || b == std::string::npos)
-            return testing::AssertionFailure() << "no " << (a == std::string::npos ? first : second) << " in "
-                                               << Shown();
+            return testing::AssertionFailure()
+                   << "no " << (a == std::string::npos ? first : second) << " in " << Shown();
         if (a >= b)
             return testing::AssertionFailure() << second << " comes before " << first << " in " << Shown();
         return testing::AssertionSuccess() << first << " comes before " << second;
