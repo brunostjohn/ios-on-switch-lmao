@@ -411,6 +411,13 @@ extern "C" void switch_gpu_backing_member_freed(switch_gpu_backing *backing)
 	if (!set)
 		return;
 	switch_gpu_set_reached(backing, SWITCH_GPU_SET_CAUSE_FREE);
+	// A member that could not take the set's jobs as its users is still the set's: it stays listed and held until a
+	// replace or the set's destroy lets it go, or its set pointer would outlive the set.
+	IOLockLock(backing->lock);
+	const bool kept = backing->set == set;
+	IOLockUnlock(backing->lock);
+	if (kept)
+		return;
 	uint32_t at = 0;
 	while (at < set->count && set->members[at].backing != backing)
 		++at;

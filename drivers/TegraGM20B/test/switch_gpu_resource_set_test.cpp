@@ -445,6 +445,27 @@ TEST_F(ResourceSet, AFinishedSetJobStillOwesAMembersReaderItsVisibility)
 	switch_gpu_backing_release(member);
 }
 
+// A freed member that cannot take the set's jobs as its users (no memory for their records) stays the set's, listed and
+// held, until the set lets it go: its set pointer never outlives the set it names.
+TEST_F(ResourceSet, AFreedMemberThatCannotAdoptStaysUntilTheSetLetsItGo)
+{
+	auto *member = backing();
+	{
+		Set set;
+		const uint32_t generation = set.attach({{member, kWrite, 0}});
+		const auto job = token(3, 6);
+		switch_gpu_set_note_job(set.set, 0, &job);
+		failAllocation() = true;
+		switch_gpu_backing_member_freed(member);
+		failAllocation() = false;
+		EXPECT_GT(switch_gpu_set_generation(set.set), generation);
+		EXPECT_EQ(switch_gpu_backing_set(member), set.set);
+	}
+	EXPECT_EQ(switch_gpu_backing_set(member), nullptr);
+	switch_gpu_backing_member_cpu(member);
+	switch_gpu_backing_release(member);
+}
+
 // A freed member leaves the set's list too: its pages go back once its users are done, not at the next registration.
 TEST_F(ResourceSet, AFreedMembersMemoryIsNotHeldByTheSet)
 {

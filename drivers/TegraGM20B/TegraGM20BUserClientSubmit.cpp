@@ -38,12 +38,13 @@ IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool r
 		auto *lease = *at;
 		if (lease)
 			*at = lease->next;
+		// lock_ keeps the backing's set alive: its release and the connection's close destroy sets under it
+		if (lease && (in->access & TegraGM20BCpuWrite))
+			if (auto *set = switch_gpu_backing_set(lease->backing))
+				switch_gpu_set_host_written(set);
 		IOLockUnlock(lock_);
 		if (!lease)
 			return kIOReturnBadArgument;
-		if (in->access & TegraGM20BCpuWrite)
-			if (auto *set = switch_gpu_backing_set(lease->backing))
-				switch_gpu_set_host_written(set);
 		const int result = lease->reservation.release(lease->backing);
 		switch_gpu_backing_release(lease->backing);
 		IODelete(lease, CpuLease, 1);

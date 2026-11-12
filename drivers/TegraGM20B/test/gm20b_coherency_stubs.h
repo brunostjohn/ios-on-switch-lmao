@@ -103,7 +103,13 @@ inline bool &failZeroAllocation()
 
 #define IONewZero(type, count) (failZeroAllocation() ? nullptr : new type[(count)]{})
 
-#define IONew(type, count) (new type[(count)])
+inline bool &failAllocation()
+{
+	static bool fail = false;
+	return fail;
+}
+
+#define IONew(type, count) (failAllocation() ? nullptr : new type[(count)])
 #define IODelete(ptr, type, count) (delete[] (ptr))
 
 inline void bzero(void *p, size_t n)
