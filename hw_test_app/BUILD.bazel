@@ -415,6 +415,9 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+# The texture peer's jetsam limits, which //overlay:jetsam_properties merges into iOS 27's overlay in debug
+exports_files(["peer/com.brunostjohn.switch.texpeer.jetsam.plist"])
+
 # tools/benchloop's tests hold the app's known program and method ranges to the host's
 exports_files(
     [

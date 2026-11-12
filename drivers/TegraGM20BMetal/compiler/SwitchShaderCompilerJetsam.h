@@ -2,9 +2,9 @@
 /* The shader compiler's jetsam band and memory limits, the same on every iOS version. iOS 17's BlueTool stand-in spawns
  * it with them (posix_spawnattr_setjetsam_ext, as xpcproxy does for launchd). iOS 27's launchd ignores a daemon plist's
  * JetsamProperties and takes them from the Supplemental cryptex's jetsam properties overlay
- * (overlay/supplemental/com.apple.jetsamproperties.cryptex.plist; tools/package/shader_compiler_launch_test.py holds it
- * to these). Without an entry there a daemon gets J181's Daemon Override Global: band 40, ActiveSoft and InactiveHard
- * 6 MB.
+ * (overlay/supplemental/com.brunostjohn.switch.shadercompiler.jetsam.plist, merged into //overlay:jetsam_properties;
+ * tools/package/shader_compiler_launch_test.py holds it to these). Without an entry there a daemon gets J181's Daemon
+ * Override Global: band 40, ActiveSoft and InactiveHard 6 MB.
  *
  * The daemon declares no transactions (EnableTransactions false in its launchd plist, untracked on 17), so it is never
  * clean, ages into no idle band and is never idle-exited: the active limit is the one in force. Like Apple's compiler
