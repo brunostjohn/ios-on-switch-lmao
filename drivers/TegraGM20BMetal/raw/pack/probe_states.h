@@ -180,15 +180,19 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             c.alphaBlendOperation = (MTLBlendOperation)x[8];
         } else if (h[0] == 'a' && isdigit(h[1])) {
             unsigned i, x[6] = {};
-            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7 || i >= 31 ||
-                x[2] >= 31)
+            unsigned long long stride = 0;
+            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%llu:%u:%u", &i, x, x + 1, x + 2, &stride, x + 4, x + 5) != 7 ||
+                i >= 31 || x[2] >= 31)
                 continue;
             if (!vd)
                 vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
-            vd.layouts[x[2]].stride = x[3];
+            // MTLBufferLayoutStrideDynamic, as a journal's key wrote it (NSUIntegerMax) or RawPipelineKey.h writes it now
+            const bool dynamic = stride == UINT64_MAX || stride == UINT32_MAX;
+            x[3] = dynamic ? UINT32_MAX : unsigned(stride);
+            vd.layouts[x[2]].stride = dynamic ? MTLBufferLayoutStrideDynamic : NSUInteger(stride);
             vd.layouts[x[2]].stepFunction = (MTLVertexStepFunction)x[4];
             vd.layouts[x[2]].stepRate = x[5];
             s.vertexBuffer = x[2];

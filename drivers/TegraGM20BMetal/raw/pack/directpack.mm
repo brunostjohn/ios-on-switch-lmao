@@ -63,6 +63,30 @@ struct Writer {
 };
 
 // The record's head; false: no more follows (it was not made)
+// A record field the pack holds none of (raw_pack.h's v21 fields): the runtime makes such a state at its creation, with its
+// draws' binds and counts
+const char *runtimeOnly(const raw::PackPipeline &p)
+{
+    if (raw::tessellates(p))
+        return "a tessellation state, which the runtime makes";
+    if (p.vertexStrideDynamic)
+        return "a dynamic vertex buffer stride, which the runtime makes";
+    for (const auto &pulled : p.pulledStride)
+        if (pulled[1])
+            return "a pulled vertex buffer of a dynamic stride, which the runtime makes";
+    if (p.amplificationMax || p.amplificationIdWord || p.amplificationCountRead)
+        return "vertex amplification, which the runtime makes";
+    return nullptr;
+}
+
+const char *runtimeOnly(const raw::PackKernel &k)
+{
+    for (const auto &stride : k.stageInStride)
+        if (stride[1])
+            return "a compute stage-in of a dynamic stride, which the runtime makes";
+    return k.stageInRegionWord ? "a compute stage-in kernel, which the runtime makes" : nullptr;
+}
+
 bool head(Writer &w, const char *tag, const std::string &key, raw::CompileOutcome outcome, const std::string &why)
 {
     fwrite(tag, 1, 4, w.f);
@@ -186,7 +210,11 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
     const auto make = [&](const std::string &key, raw::PackForm form, raw::RuntimeRecord &rec) {
         std::map<uint32_t, uint32_t> registers;
         std::string why;
-        const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, &registers, true, form);
+        raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, &registers, true, form);
+        if (const char *runtime = outcome == raw::CompileOutcome::Made ? runtimeOnly(rec.pipeline) : nullptr) {
+            outcome = raw::CompileOutcome::Refused;
+            why = runtime;
+        }
         markCandidates(line, rec.pipeline);
         record(w, key, outcome, why, rec, registers);
         return outcome;
@@ -274,7 +302,11 @@ int main(int argc, char **argv)
                 probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
                 raw::ComputeRecord rec;
                 std::string why;
-                const raw::CompileOutcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                raw::CompileOutcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                if (const char *runtime = outcome == raw::CompileOutcome::Made ? runtimeOnly(rec.kernel) : nullptr) {
+                    outcome = raw::CompileOutcome::Refused;
+                    why = runtime;
+                }
                 kernel(w, k.key, outcome, why, rec);
                 kernels[uint32_t(outcome)]++;
             },
