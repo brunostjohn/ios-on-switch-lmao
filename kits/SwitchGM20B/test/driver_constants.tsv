@@ -53,6 +53,14 @@ raw_stamps.h	kDrawStampBase	policy	stamp page layout
 raw_stamps.h	kLoopWordsBase	policy	stamp page layout: the predicated-loop records after the draw stamps
 raw_stamps.h	kStampBytes	policy	stamp page layout: the slots, the draw stamps and a predicated-loop record (stamp, tag) per slot
 raw_stamps.h	kDrawStampWords	policy	push words of a draw stamp
+raw_counters.h	kSampleBytes	policy	Metal's sample (AGXMTLCounterSampleBuffer sampleSize)
+raw_counters.h	kRecordBytes	policy	the four-word report structure a sample is written in
+raw_counters.h	kMaxBufferBytes	policy	the AGX driver's largest sample buffer (counterSampleBufferLimits maxBufferSize)
+raw_counters.h	kPayload	policy	a written record's payload
+raw_counters.h	kErrorValue	policy	Metal's MTLCounterErrorValue
+raw_counters.h	kTimestampWords	policy	push words of a sample's report
+raw_counters.h	kAnchorSlackNs	policy	how far a reading may land from where an anchor places it
+raw_counters.h	kClockRoundingNs	policy	the kernel's and user space's mach_absolute_time to ns rounding apart
 raw_mme.h	kAbi	policy	raw macro ABI version
 raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot

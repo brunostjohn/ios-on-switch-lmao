@@ -49,6 +49,7 @@ DRIVER_SOURCES = {
     "raw_emit.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.cpp",
     "raw_tiled_cache.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_tiled_cache.h",
     "raw_stamps.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_stamps.h",
+    "raw_counters.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_counters.h",
     "raw_mme.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
     "fx_mip.cpp": "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
     "nvdec.cpp": "//drivers/TegraGM20BMetal:raw/pack/nvdec.cpp",

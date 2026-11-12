@@ -7,5 +7,6 @@ enum NativeCallTests {
         NativeUnsupportedTest(), NativeVertexSamplerTest(), NativeParallelEncoderTest(), NativeIndirectCommandsTest(),
         NativeSharedTextureTest(),
         NativeComputeCommandsTest(),
+        NativeCountersTest(),
     ]
 }

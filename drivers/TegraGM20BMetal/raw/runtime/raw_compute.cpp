@@ -541,6 +541,13 @@ void ComputeEncoder::stampDispatch(const DrawTiming &t, bool end)
     emitStamp(p_, dev_.stamps_.va + drawStampOffset(t.slot, end), t.payload);
 }
 
+void ComputeEncoder::timestamp(uint64_t va)
+{
+    room(counters::kTimestampWords);
+    cb_.useAddress(va, counters::kRecordBytes, true);
+    counters::emitCompute(p_, va);
+}
+
 void ComputeEncoder::end()
 {
     room(8);

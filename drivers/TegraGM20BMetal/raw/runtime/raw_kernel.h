@@ -192,6 +192,9 @@ public:
     void markLost(uint32_t channel, uint32_t opened);
     // GetStatus: false when the kernel has no such channel (destroyed) or refused the call
     bool status(uint32_t channel, TegraGM20BAbiStatus &st);
+    // GetTimestamp: PTIMER now, in its own units (raw_stamps.h), or the kernel's clock while the GPU is powered down; false
+    // when the kernel refused the call or has no GPU time yet
+    bool ptimer(uint64_t &units);
 
     // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
     bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);

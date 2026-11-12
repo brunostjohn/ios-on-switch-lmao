@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_device_answers.h, every kind: a feature the device has no form of is answered NO wherever Metal lets a
-// caller ask for it, and its answers agree with each other (RawMetalUnsupported.mm refuses the creations past them).
+// caller ask for it, and its answers agree with each other (RawMetalUnsupported.mm refuses the creations past them);
+// counter sampling is answered as the identity's driver answers it.
 #include "../raw/runtime/raw_device_answers.h"
 
 #include <gtest/gtest.h>
@@ -34,6 +35,16 @@ TEST(RawDeviceAnswers, AmplificationIsOneViewAndEveryQuerySaysSo)
         EXPECT_EQ(argument(k, "supportsVertexAmplificationCount:", 1), 1u) << k.kind;
         for (uint64_t n = 2; n <= 8; n++)
             EXPECT_EQ(argument(k, "supportsVertexAmplificationCount:", n), 0u) << k.kind << " count " << n;
+    }
+}
+
+// The identity's AGX driver samples counters at stage boundaries (MTLCounterSamplingPointAtStageBoundary, 0) alone
+TEST(RawDeviceAnswers, CountersAreSampledAtStageBoundariesAlone)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(argument(k, "supportsCounterSampling:", 0), 1u) << k.kind;
+        for (uint64_t point = 1; point <= 4; point++)
+            EXPECT_EQ(argument(k, "supportsCounterSampling:", point), 0u) << k.kind << " point " << point;
     }
 }
 

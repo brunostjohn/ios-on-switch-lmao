@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // MTLParallelRenderCommandEncoder (raw_parallel.h): its sub-encoders record into command buffers of their own, which no
 // other thread touches, and its end records their commands into its command buffer in their creation order.
-#import "RawMetalInternal.h"
+#import "RawMetalCounters.h"
 #include "raw_parallel.h"
 
 namespace {
@@ -189,6 +189,8 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     if (!refused && std::any_of(begins.begin(), begins.end(), [&](size_t b) { return cb->_plan.begin(b).refused; }))
         for (size_t b : begins)
             cb->_plan.setRefused(b, true);
+    rmPlaceCounterMarks(cb, self, begins.front(), true);
+    rmPlaceCounterMarks(cb, self, cb->_plan.size() - 1, false);
     cb->_active = nil;
 }
 
@@ -203,6 +205,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     [self begin:e];
     e->_descriptor = [d copy];
     [self retain:e->_descriptor];
+    rmCounterMarks(self, e, e->_descriptor);
     return (id<MTLParallelRenderCommandEncoder>)e;
 }
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import <objc/message.h>
 #import "RawMetalPlanAdapters.h"
@@ -105,6 +106,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
         failOwnedZeta(cb, owned);
         return nil;
     }
+    rmCounterMarksDropped(cb, from, to);
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::SlotStart);

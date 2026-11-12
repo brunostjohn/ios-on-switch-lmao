@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
 #import "RawMetalResolveAsk.h"
@@ -105,6 +106,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
+    RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
@@ -485,6 +487,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
+            counters.started(at, *ce);
             break;
         case OpRender: {
             computeUnit = false;
@@ -580,6 +583,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             standInLoads.clear();
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
             break;
         }
@@ -592,6 +596,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (o.at == at)
                     be->probe(o.op, o.read ? &o.read->_raw : nullptr, o.written->_raw);
 #endif
+            counters.started(at, *be);
             break;
         case OpEnd:
             if (re)
@@ -605,7 +610,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
                 fused = fusionPass(cb, at + 1);
                 fusedAt = at + 1;
-                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && raw::canFusePasses(first, fused)) {
+                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && !counters.at(at) &&
+                    !counters.at(at + 1) && raw::canFusePasses(first, fused)) {
                     continuing = true;
                     break;
                 }
@@ -624,6 +630,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (standInPass(t, true))
                     return false;
             standInStores.clear();
+            counters.ended(at);
             re = nullptr;
             be = nullptr;
             break;

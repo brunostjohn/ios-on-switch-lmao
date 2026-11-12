@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
 # m2v's items: base 3 m2v 4 none 32 raw 324 read 336 refused 163 unread 157 zero 38
-# sent selectors: base 79 m2v 11 none 7 raw 529 refused 56 zero 133
+# sent selectors: base 78 m2v 11 none 7 raw 534 refused 56 zero 129
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -115,8 +115,8 @@ MTLBlitCommandEncoder	-	invalidateCompressedTexture:slice:level:	-	24B119	zero
 MTLBlitCommandEncoder	-	label	-	21H461,24B119	raw
 MTLBlitCommandEncoder	-	popDebugGroup	-	21H461,24B119	raw
 MTLBlitCommandEncoder	-	pushDebugGroup:	-	21H461,24B119	raw
-MTLBlitCommandEncoder	-	resolveCounters:inRange:destinationBuffer:destinationOffset:	-	21H461,24B119	zero
-MTLBlitCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	zero
+MTLBlitCommandEncoder	-	resolveCounters:inRange:destinationBuffer:destinationOffset:	-	21H461,24B119	raw
+MTLBlitCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	raw
 MTLBlitCommandEncoder	-	setLabel:	-	21H461,24B119	raw
 MTLBlitCommandEncoder	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:	I	21H461,24B119	raw
 MTLBlitCommandEncoder	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:	I	21H461,24B119	raw
@@ -294,7 +294,7 @@ MTLComputeCommandEncoder	-	insertDebugSignpost:	-	21H461,24B119	raw
 MTLComputeCommandEncoder	-	label	-	21H461,24B119	raw
 MTLComputeCommandEncoder	-	popDebugGroup	-	21H461,24B119	raw
 MTLComputeCommandEncoder	-	pushDebugGroup:	-	21H461,24B119	raw
-MTLComputeCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	zero
+MTLComputeCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	raw
 MTLComputeCommandEncoder	-	setAccelerationStructure:atBufferIndex:	-	21H461,24B119	zero
 MTLComputeCommandEncoder	-	setIntersectionFunctionTable:atBufferIndex:	-	24B119	zero
 MTLComputeCommandEncoder	-	setIntersectionFunctionTables:withBufferRange:	-	21H461,24B119	zero
@@ -502,7 +502,7 @@ MTLDevice	-	newVisibleFunctionTableWithDescriptor:	-	24B119	none
 MTLDevice	-	productName	-	21H461,24B119	raw
 MTLDevice	-	queryTimestampFrequency	-	24B119	base
 MTLDevice	-	recommendedMaxWorkingSetSize	-	24B119	raw
-MTLDevice	-	sampleTimestamps:gpuTimestamp:	-	21H461,24B119	base
+MTLDevice	-	sampleTimestamps:gpuTimestamp:	-	21H461,24B119	raw
 MTLDevice	-	setCompilerProcessesCount:	-	24B119	base
 MTLDevice	-	setPluginData:	-	24B119	base
 MTLDevice	-	setShaderDebugInfoCaching:	-	21H461,24B119	base
@@ -907,7 +907,7 @@ MTLRenderCommandEncoder	-	insertDebugSignpost:	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	label	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	popDebugGroup	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	pushDebugGroup:	-	21H461,24B119	raw
-MTLRenderCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	zero
+MTLRenderCommandEncoder	-	sampleCountersInBuffer:atSampleIndex:withBarrier:	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	setAlphaTestReferenceValue:	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	setColorResolveTexture:slice:depthPlane:level:atIndex:	-	21H461,24B119	zero
 MTLRenderCommandEncoder	-	setColorResolveTexture:slice:depthPlane:level:yInvert:atIndex:	-	21H461,24B119	zero

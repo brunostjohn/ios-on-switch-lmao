@@ -33,7 +33,7 @@ template <typename T> class ComputeKernelSet;
 struct ComputeState;
 }
 
-@class RMDevice, RMCommandBuffer;
+@class RMDevice, RMCommandBuffer, RMCounterSampleBuffer;
 struct SurfaceWriteCount;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
@@ -277,6 +277,15 @@ struct RMSegment {
     bool held = false;
 };
 
+// A counter sample a pass descriptor's attachment asks for (RawMetalCounterEncode.mm): at the tape position of its encoder's
+// first command (a start) or its OpEnd (an end); the command buffer retains the buffer
+struct RMCounterMark {
+    uint32_t at;
+    raw::counters::Point point;
+    uint32_t index;
+    __unsafe_unretained RMCounterSampleBuffer *buffer;
+};
+
 struct RMSharedEventWait {
     void *event;
     std::shared_ptr<raw::SharedEventLease> lease;
@@ -347,6 +356,7 @@ struct RMSharedEventWait {
     // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
     std::vector<RMTexture *> _plainForStorage;
     bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
+    std::vector<RMCounterMark> _counterMarks;  // in tape order
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // each submitted range's written resources, for its completion (captureWrittenRange): the first _retired of them
     std::deque<raw::RetirementWrites> _retirements;
@@ -438,6 +448,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     RMCommandBuffer *_cb;
     bool _ended;
     uint64_t _traceId;
+    std::vector<RMCounterMark> _counterPending;  // its descriptor's samples not yet placed on the tape
 }
 @end
 

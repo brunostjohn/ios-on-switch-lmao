@@ -91,6 +91,8 @@ public:
     Predication::Answer endWhile(uint32_t tag);
     Predication::Answer startDoWhile();
     Predication::Answer endDoWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference, uint32_t tag);
+    // A counter sample on the compute class now: right after the encoder's opening wait for idle, its start
+    void timestamp(uint64_t va);
     void end();
 #if defined(SWITCH_RAW_HARNESS_MARKS)
     // The bench's QMD chains (hw_test_app/bench qmdchain): each launch's QMD as built, before its upload, to patch;
