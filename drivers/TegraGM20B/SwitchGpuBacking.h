@@ -156,6 +156,9 @@ struct switch_gpu_backing_transaction {
 	struct switch_gpu_backing_use *uses;
 	uint32_t count, locked, prepared, host_written;
 	struct switch_gpu_backing_token completion;
+	/* switch_gpu_backing_promise_dependencies ran: the writer promises outside [promise_first, promise_end) its reads
+	 * order behind */
+	uint32_t promised, promise_first, promise_end;
 };
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
@@ -191,7 +194,8 @@ int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction 
 				    uint32_t *needed);
 /* The transaction's uses' pending writer promises (SwitchGpuWriterPromise.h) but those in [own_first, own_end) (a
  * connection's own) as tokens after the *needed already in `out`, read under the locks the transaction holds on their
- * backings: *needed grows by them, -28 past capacity. */
+ * backings: *needed grows by them, -28 past capacity. The reader acquires them on the GPU, so its reads read what the
+ * promised writes leave, and commit records them so: the promised job does not wait for them, which wait for it. */
 int switch_gpu_backing_promise_dependencies(struct switch_gpu_backing_transaction *transaction,
 					    struct switch_gpu_backing_token *out, uint32_t capacity,
 					    uint32_t *needed, uint32_t own_first, uint32_t own_end);

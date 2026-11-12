@@ -2,6 +2,9 @@
 // Writer promises on a backing (SwitchGpuWriterPromise.h): a display snapshot takes them as GPU tokens behind a lease the
 // promised job's write admission does not wait for, and a CPU reader (a CPU lock, a waiting snapshot) sleeps until the
 // promised job is submitted.
+#include <algorithm>
+#include <vector>
+
 #include "switch_gpu_backing_fixture.h"
 #include "drivers/TegraGM20B/SwitchGpuAdmission.h"
 #include "drivers/TegraGM20B/SwitchGpuWriterPromise.h"
@@ -183,6 +186,86 @@ TEST_F(Backing, ASurfacesOwnPromiseReadInsideATransactionTakesItsLockTwice)
 	EXPECT_DEATH(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), "already holds this lock");
 	switch_gpu_backing_abort(&transaction);
 	EXPECT_EQ(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), 1);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
+// Which engines' work a write by `job` waits for
+std::vector<uint32_t> waitedFor(switch_gpu_backing *b, const switch_gpu_backing_token &job)
+{
+	switch_gpu_backing_use write{b, kWrite, 0};
+	switch_gpu_backing_transaction transaction = {};
+	std::vector<uint32_t> engines;
+	EXPECT_EQ(switch_gpu_backing_begin(&write, 1, &job, &transaction), 0);
+	switch_gpu_backing_token out[4] = {};
+	uint32_t needed = 0;
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, out, 4, &needed), 0);
+	for (uint32_t i = 0; i < needed; ++i)
+		engines.push_back(out[i].engine);
+	switch_gpu_backing_commit(&transaction);
+	return engines;
+}
+
+// A read of `job` that acquires the surface's pending promises on the GPU, committed
+void readBehindPromises(switch_gpu_backing *b, const switch_gpu_backing_token &job, uint32_t own_first = 0,
+			uint32_t own_end = 0)
+{
+	switch_gpu_backing_use read{b, kRead, 0};
+	switch_gpu_backing_transaction transaction = {};
+	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &job, &transaction), 0);
+	switch_gpu_backing_token tokens[2] = {};
+	uint32_t needed = 0;
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 2, &needed, own_first, own_end), 0);
+	switch_gpu_backing_commit(&transaction);
+}
+
+bool has(const std::vector<uint32_t> &engines, uint32_t engine)
+{
+	return std::find(engines.begin(), engines.end(), engine) != engines.end();
+}
+
+// Another connection's job and a VIC job both read a promised surface behind its promise, so each waits on the GPU for
+// the promised job. That job's write must not wait for them (a cycle the hang rule alone would break), while it still
+// waits for a reader of what the surface held before; a writer after the promised one waits for both.
+TEST_F(Backing, ThePromisedJobDoesNotWaitForReadersOrderedBehindItsPromise)
+{
+	auto *b = promised();
+	ASSERT_EQ(publish(b, kRead, token(7, 1, SWITCH_GPU_ENGINE_NVDEC)), 0);
+	readBehindPromises(b, token(9, 2));
+	readBehindPromises(b, token(160, 3, SWITCH_GPU_ENGINE_VIC));
+	const auto promisedWrite = waitedFor(b, token(3, 4));
+	EXPECT_TRUE(has(promisedWrite, SWITCH_GPU_ENGINE_NVDEC));
+	EXPECT_FALSE(has(promisedWrite, SWITCH_GPU_ENGINE_VIC));
+	EXPECT_FALSE(has(promisedWrite, SWITCH_GPU_ENGINE_GM20B)) << "the other connection's reader";
+	switch_gpu_backing_promise_drop(b, kOffset);
+	const auto next = waitedFor(b, token(5, 1));
+	EXPECT_TRUE(has(next, SWITCH_GPU_ENGINE_VIC));
+	EXPECT_TRUE(has(next, SWITCH_GPU_ENGINE_GM20B));
+	switch_gpu_backing_release(b);
+}
+
+// Two promised jobs write one surface: a reader behind both is waited for by neither.
+TEST_F(Backing, AReaderBehindTwoPromisesIsWaitedForByNeitherPromisedJob)
+{
+	auto *b = promised();
+	fence[(kOffset + 4) / 4] = 0;
+	const switch_gpu_promise_ref second = {tgm_fence_word(kOffset + 4), kOffset + 4, 1};
+	ASSERT_EQ(switch_gpu_backing_promise_add(b, &second), 0);
+	readBehindPromises(b, token(160, 3, SWITCH_GPU_ENGINE_VIC));
+	EXPECT_FALSE(has(waitedFor(b, token(3, 4)), SWITCH_GPU_ENGINE_VIC));
+	switch_gpu_backing_promise_drop(b, kOffset);
+	EXPECT_FALSE(has(waitedFor(b, token(4, 1)), SWITCH_GPU_ENGINE_VIC));
+	switch_gpu_backing_promise_drop(b, kOffset + 4);
+	EXPECT_TRUE(has(waitedFor(b, token(5, 1)), SWITCH_GPU_ENGINE_VIC));
+	switch_gpu_backing_release(b);
+}
+
+// A connection's own reads do not order behind its own promises (its later job keeps them): its writer waits for them.
+TEST_F(Backing, AReadOutsideThePromisedRangeIsAnOrdinaryRead)
+{
+	auto *b = promised();
+	readBehindPromises(b, token(9, 2), kOffset, kOffset + 4);
+	EXPECT_TRUE(has(waitedFor(b, token(3, 4)), SWITCH_GPU_ENGINE_GM20B));
 	switch_gpu_backing_promise_drop(b, kOffset);
 	switch_gpu_backing_release(b);
 }

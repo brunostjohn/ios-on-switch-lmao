@@ -359,7 +359,7 @@ extern "C" int switch_gpu_backing_begin_checked(switch_gpu_backing_use *uses, ui
 	EXPECT_TRUE(entered);
 	EXPECT_FALSE(locked);
 	locked = true;
-	*out = {uses, count, count, count, 0, *token};
+	*out = {uses, count, count, count, 0, *token, 0, 0, 0};
 	return 0;
 }
 
