@@ -21,10 +21,17 @@ RAW = [
     "splits.py",
     "eqcheck.py",
     "probe.mm",
+    "fetchfree_link.py",
     "ca/caset.py",
     "ca/caspec.py",
     "ca/caspec27.py",
+    "ca/deepcolour.py",
+    "ca/fetchfree.py",
     "ca/qc-21H461.json",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
 ]
 
 [write_file(
