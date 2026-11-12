@@ -5,6 +5,7 @@
 //! device, on which the variants' layouts are made for NVK's stage compile.
 
 use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor};
+use crate::offline::{NmbOfflineRenderPipelineDescriptor, offline_devices};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
@@ -707,9 +708,10 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
     out
 }
 
-/// A variant's Vulkan layout on the runtime's device, as the runtime makes it (pipeline/objects.rs create_set_layout)
+/// A variant's layout as data, and as the runtime makes it on its device where there is one (pipeline/objects.rs
+/// create_set_layout); with no device its handles are 0
 pub(crate) struct Layout<'d> {
-    device: &'d ash::Device,
+    device: Option<&'d ash::Device>,
     samplers: Vec<avk::Sampler>,
     sets: Vec<avk::DescriptorSetLayout>,
     pub(crate) pipeline: avk::PipelineLayout,
@@ -722,7 +724,7 @@ pub(crate) struct Layout<'d> {
 }
 
 impl<'d> Layout<'d> {
-    pub(crate) fn new(device: &'d ash::Device, layout: &PipelineLayout) -> Result<Layout<'d>, String> {
+    pub(crate) fn new(device: Option<&'d ash::Device>, layout: &PipelineLayout) -> Result<Layout<'d>, String> {
         let mut made = Layout {
             device,
             samplers: Vec::new(),
@@ -766,6 +768,10 @@ impl<'d> Layout<'d> {
                     desc.border_components.map(avk::ComponentMapping::from),
                 );
                 data_bindings.push(data);
+                let Some(device) = device else {
+                    immutable.push(Vec::new());
+                    continue;
+                };
                 // SAFETY: `info` and its chain are live for the call.
                 let sampler = unsafe { device.create_sampler(&info, None) }.map_err(e("sampler"))?;
                 made.samplers.push(sampler);
@@ -792,6 +798,9 @@ impl<'d> Layout<'d> {
                 made.set0_bindings = data_bindings.clone();
             }
             made.set_bindings.push(data_bindings);
+            let Some(device) = device else {
+                continue;
+            };
             let flags: Vec<avk::DescriptorBindingFlags> = set.bindings.iter().map(|b| b.flags.into()).collect();
             let mut flags_info = avk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
             let mut info = avk::DescriptorSetLayoutCreateInfo::default()
@@ -829,6 +838,9 @@ impl<'d> Layout<'d> {
             push: made.push_ranges.as_ptr(),
             push_count: made.push_ranges.len() as u32,
         };
+        let Some(device) = device else {
+            return Ok(made);
+        };
         let push: Vec<avk::PushConstantRange> = layout
             .push_constants
             .iter()
@@ -854,14 +866,17 @@ impl<'d> Layout<'d> {
 
 impl Drop for Layout<'_> {
     fn drop(&mut self) {
+        let Some(device) = self.device else {
+            return;
+        };
         // SAFETY: made here, used by no pipeline or set: the stage compile only reads them.
         unsafe {
-            self.device.destroy_pipeline_layout(self.pipeline, None);
+            device.destroy_pipeline_layout(self.pipeline, None);
             for &set in &self.sets {
-                self.device.destroy_descriptor_set_layout(set, None);
+                device.destroy_descriptor_set_layout(set, None);
             }
             for &sampler in &self.samplers {
-                self.device.destroy_sampler(sampler, None);
+                device.destroy_sampler(sampler, None);
             }
         }
     }
@@ -1017,7 +1032,6 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         // SAFETY: the caller's contract.
         let binds = unsafe { Binds::of(binds) }?;
         let nmb = get(device)?;
-        let runtime = nmb.device();
         let descriptor = render_descriptor(descriptor)?;
         // Every raw form of a state (default, storage, ordered, barrier) and every compute kernel lowers half on SM53, so
         // a storage form and its barrier twin round alike. m2v's own twin stays on the Vulkan target (no float16 below SM70).
@@ -1026,151 +1040,199 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         } else {
             native_compute_device(nmb)?
         };
-        let compile = compile.as_ref();
-        let format = match texture_format {
-            0 => PixelFormat::BGRA8Unorm,
-            f => raw::<PixelFormat>(f, "texture format")?,
-        };
-        let budget = Budget::standard();
-        let base = compile
-            .compile_render_pipeline(&descriptor, &budget)
-            .map_err(compile_error("compile"))?;
-        let declared = declared_slots(&base);
-        let samplers = vertex_samplers(&base);
-        let mut variants = vec![(VariantKey::new(), base)];
-        let mut runs = Vec::with_capacity(RUN_BYTES.len());
-        for run in 0..RUN_BYTES.len() {
-            runs.push(settle(
-                compile,
-                &descriptor,
-                &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &declared, &samplers, &binds),
-                &budget,
-            )?);
-        }
         // SAFETY: the runtime device's own handles, used while it lives.
-        let handles = unsafe { runtime.raw() };
-        let layouts = variants
-            .iter()
-            .map(|(_, pipeline)| Layout::new(handles.device, &pipeline.layout))
-            .collect::<Result<Vec<_>, String>>()?;
-        let writes: Vec<Vec<NmbDirectWrite>> = runs
-            .iter()
-            .map(|run| {
-                run.plan
-                    .descriptors
-                    .iter()
-                    .take(MAX_WRITES)
-                    .map(|w| write_of(w, &run.commands.descriptor_ranges))
-                    .collect()
-            })
-            .collect();
-        let names: Vec<CString> = runs
-            .iter()
-            .map(|run| CString::new(format!("{:?}", run.plan.variant)).unwrap_or_default())
-            .collect();
-        let draws: Vec<NmbDirectDraw> = runs
+        let handles = unsafe { nmb.device().raw() };
+        translate(
+            &compile,
+            &descriptor,
+            Some(handles.device),
+            texture_format,
+            texture_samples,
+            &binds,
+            each,
+            ctx,
+        )
+    })
+}
+
+/// nmb_render_pipeline_direct's answer for a state of offline functions, made on the compile profile's devices with no
+/// Vulkan object: every handle the state hands over is 0.
+///
+/// # Safety
+/// As nmb_render_pipeline_direct's.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_render_pipeline_offline(
+    descriptor: *const NmbOfflineRenderPipelineDescriptor,
+    barrier: bool,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: *const NmbDirectBinds,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> bool {
+    guard(false, || {
+        // SAFETY: the caller's contract.
+        let binds = unsafe { Binds::of(binds) }?;
+        let descriptor = render_descriptor(descriptor)?;
+        let compile = offline_devices()?.render(barrier, binds.fragment_tests);
+        translate(compile, &descriptor, None, texture_format, texture_samples, &binds, each, ctx)
+    })
+}
+
+/// The state `descriptor` describes as the translator makes it on `compile` for the probe's draws, its layouts made on
+/// `vulkan` where there is one, handed to `each`
+#[allow(clippy::too_many_arguments)]
+fn translate(
+    compile: &metal2vulkan::device::Device,
+    descriptor: &RenderPipelineDescriptor,
+    vulkan: Option<&ash::Device>,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: &Binds,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    let format = match texture_format {
+        0 => PixelFormat::BGRA8Unorm,
+        f => raw::<PixelFormat>(f, "texture format")?,
+    };
+    let budget = Budget::standard();
+    let base = compile
+        .compile_render_pipeline(descriptor, &budget)
+        .map_err(compile_error("compile"))?;
+    let declared = declared_slots(&base);
+    let samplers = vertex_samplers(&base);
+    let mut variants = vec![(VariantKey::new(), base)];
+    let mut runs = Vec::with_capacity(RUN_BYTES.len());
+    for run in 0..RUN_BYTES.len() {
+        runs.push(settle(
+            compile,
+            descriptor,
+            &mut variants,
+            &probe_state(run, format, texture_samples.max(1), &declared, &samplers, binds),
+            &budget,
+        )?);
+    }
+    let layouts = variants
+        .iter()
+        .map(|(_, pipeline)| Layout::new(vulkan, &pipeline.layout))
+        .collect::<Result<Vec<_>, String>>()?;
+    let writes: Vec<Vec<NmbDirectWrite>> = runs
+        .iter()
+        .map(|run| {
+            run.plan
+                .descriptors
+                .iter()
+                .take(MAX_WRITES)
+                .map(|w| write_of(w, &run.commands.descriptor_ranges))
+                .collect()
+        })
+        .collect();
+    let names: Vec<CString> = runs
+        .iter()
+        .map(|run| CString::new(format!("{:?}", run.plan.variant)).unwrap_or_default())
+        .collect();
+    let draws: Vec<NmbDirectDraw> = runs
+        .iter()
+        .enumerate()
+        .map(|(k, run)| {
+            draw_of(
+                run,
+                &variants[run.variant].1,
+                &layouts[run.variant],
+                &writes[k],
+                &names[k],
+            )
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let first = &runs[0];
+    let pipeline = &variants[first.variant].1;
+    let mut storage = storage_of(&pipeline.graphics)?;
+    for run in &runs {
+        if storage_of(&variants[run.variant].1.graphics)? != storage {
+            return Err("storage form: probe variants change the attachment contract".into());
+        }
+    }
+    if storage.mask != 0 {
+        storage.fragment_tests = binds.fragment_tests;
+    }
+    let specialization = &first.plan.specialization;
+    let entries: Vec<CString> = pipeline
+        .stages
+        .iter()
+        .map(|s| CString::new(s.entry_point.as_str()).unwrap_or_default())
+        .collect();
+    let maps: Vec<Vec<avk::SpecializationMapEntry>> = pipeline
+        .stages
+        .iter()
+        .map(|stage| {
+            specialization
+                .entries
+                .iter()
+                .filter(|entry| stage.specialization.constants.iter().any(|c| c.id == entry.constant_id))
+                .map(|&entry| entry.into())
+                .collect()
+        })
+        .collect();
+    let infos: Vec<avk::SpecializationInfo<'_>> = maps
+        .iter()
+        .map(|map| {
+            avk::SpecializationInfo::default()
+                .map_entries(map)
+                .data(&specialization.data)
+        })
+        .collect();
+    if pipeline.stages.len() > 2 {
+        return Err(format!("{} stages", pipeline.stages.len()));
+    }
+    let mut state = NmbDirectState {
+        device: vulkan.map_or(0, |d| avk::Handle::as_raw(d.handle())),
+        layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
+        layout_data: &layouts[first.variant].data,
+        stage_count: pipeline.stages.len() as u32,
+        stages: [NmbDirectStage {
+            spirv: std::ptr::null(),
+            spirv_bytes: 0,
+            entry: std::ptr::null(),
+            stage: 0,
+            flags: 0,
+            subgroup_size: 0,
+            specialization: std::ptr::null(),
+            semantic: std::ptr::null(),
+            portable_context: std::ptr::null(),
+            portable: None,
+        }; 2],
+        sample_shading: pipeline.graphics.sample_shading,
+        storage_form: storage.mask != 0,
+        storage,
+        blended: pipeline
+            .graphics
+            .color_attachments
             .iter()
             .enumerate()
-            .map(|(k, run)| {
-                draw_of(
-                    run,
-                    &variants[run.variant].1,
-                    &layouts[run.variant],
-                    &writes[k],
-                    &names[k],
-                )
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
-        let first = &runs[0];
-        let pipeline = &variants[first.variant].1;
-        let mut storage = storage_of(&pipeline.graphics)?;
-        for run in &runs {
-            if storage_of(&variants[run.variant].1.graphics)? != storage {
-                return Err("storage form: probe variants change the attachment contract".into());
-            }
-        }
-        if storage.mask != 0 {
-            storage.fragment_tests = binds.fragment_tests;
-        }
-        let specialization = &first.plan.specialization;
-        let entries: Vec<CString> = pipeline
-            .stages
-            .iter()
-            .map(|s| CString::new(s.entry_point.as_str()).unwrap_or_default())
-            .collect();
-        let maps: Vec<Vec<avk::SpecializationMapEntry>> = pipeline
-            .stages
-            .iter()
-            .map(|stage| {
-                specialization
-                    .entries
-                    .iter()
-                    .filter(|entry| stage.specialization.constants.iter().any(|c| c.id == entry.constant_id))
-                    .map(|&entry| entry.into())
-                    .collect()
-            })
-            .collect();
-        let infos: Vec<avk::SpecializationInfo<'_>> = maps
-            .iter()
-            .map(|map| {
-                avk::SpecializationInfo::default()
-                    .map_entries(map)
-                    .data(&specialization.data)
-            })
-            .collect();
-        if pipeline.stages.len() > 2 {
-            return Err(format!("{} stages", pipeline.stages.len()));
-        }
-        let mut state = NmbDirectState {
-            device: avk::Handle::as_raw(handles.device.handle()),
-            layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
-            layout_data: &layouts[first.variant].data,
-            stage_count: pipeline.stages.len() as u32,
-            stages: [NmbDirectStage {
-                spirv: std::ptr::null(),
-                spirv_bytes: 0,
-                entry: std::ptr::null(),
-                stage: 0,
-                flags: 0,
-                subgroup_size: 0,
-                specialization: std::ptr::null(),
-                semantic: std::ptr::null(),
-                portable_context: std::ptr::null(),
-                portable: None,
-            }; 2],
-            sample_shading: pipeline.graphics.sample_shading,
-            storage_form: storage.mask != 0,
-            storage,
-            blended: pipeline
-                .graphics
-                .color_attachments
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.as_ref().is_some_and(|c| c.blend.is_some()))
-                .fold(0, |mask, (j, _)| mask | 1 << j),
-            draws: [draws[0], draws[1], draws[2], draws[3]],
+            .filter(|(_, c)| c.as_ref().is_some_and(|c| c.blend.is_some()))
+            .fold(0, |mask, (j, _)| mask | 1 << j),
+        draws: [draws[0], draws[1], draws[2], draws[3]],
+    };
+    for (k, stage) in pipeline.stages.iter().enumerate() {
+        state.stages[k] = NmbDirectStage {
+            spirv: stage.spirv.as_ptr(),
+            spirv_bytes: stage.spirv.len() * 4,
+            entry: entries[k].as_ptr(),
+            stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
+            flags: avk::PipelineShaderStageCreateFlags::from(stage.stage_flags).as_raw(),
+            subgroup_size: stage.required_subgroup_size.unwrap_or(0),
+            specialization: if maps[k].is_empty() {
+                std::ptr::null()
+            } else {
+                (&infos[k] as *const avk::SpecializationInfo<'_>).cast()
+            },
+            semantic: std::ptr::null(),
+            portable_context: std::ptr::null(),
+            portable: None,
         };
-        for (k, stage) in pipeline.stages.iter().enumerate() {
-            state.stages[k] = NmbDirectStage {
-                spirv: stage.spirv.as_ptr(),
-                spirv_bytes: stage.spirv.len() * 4,
-                entry: entries[k].as_ptr(),
-                stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
-                flags: avk::PipelineShaderStageCreateFlags::from(stage.stage_flags).as_raw(),
-                subgroup_size: stage.required_subgroup_size.unwrap_or(0),
-                specialization: if maps[k].is_empty() {
-                    std::ptr::null()
-                } else {
-                    (&infos[k] as *const avk::SpecializationInfo<'_>).cast()
-                },
-                semantic: std::ptr::null(),
-                portable_context: std::ptr::null(),
-                portable: None,
-            };
-        }
-        // SAFETY: the caller's contract; everything `state` points at lives until after the call.
-        Ok(unsafe { each(&state, ctx) })
-    })
+    }
+    // SAFETY: the caller's contract; everything `state` points at lives until after the call.
+    Ok(unsafe { each(&state, ctx) })
 }

@@ -47,9 +47,10 @@ struct Kernel {
 };
 
 // Each dispatch shape of `text`'s D lines the kernel probe made (its state made, its key once): `each(kernel)`, and
-// `refused(line, why)` for one it would not make
+// `refused(line, why)` for one it would not make. `dev` makes its state and textures, `libraries` the functions the
+// kernel's descriptor holds.
 template <typename Each, typename Refused>
-void eachKernel(id<MTLDevice> dev, NSString *text, Each each, Refused refused)
+void eachKernel(id<MTLDevice> dev, id<MTLDevice> libraries, NSString *text, Each each, Refused refused)
 {
     std::set<std::string> seen;
     for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
@@ -58,9 +59,10 @@ void eachKernel(id<MTLDevice> dev, NSString *text, Each each, Refused refused)
         Kernel k;
         k.line = l.UTF8String;
         std::string why;
-        raw::AirHash air;
-        id<MTLFunction> f = nil;
-        if (!parse(k.line, k.shape, why) || !(f = function(dev, k.shape, air)) || !state(dev, k.shape, f, why) ||
+        raw::AirHash air, made;
+        id<MTLFunction> f = nil, state = nil;
+        if (!parse(k.line, k.shape, why) || !(f = function(libraries, k.shape, air)) ||
+            !(state = libraries == dev ? f : function(dev, k.shape, made)) || !probe::state(dev, k.shape, state, why) ||
             !(k.textures = textures(dev, k.shape.textures, why))) {
             refused(k.line, why.empty() ? "no function " + k.shape.function : why);
             continue;
@@ -74,6 +76,11 @@ void eachKernel(id<MTLDevice> dev, NSString *text, Each each, Refused refused)
                 each(k);
         });
     }
+}
+
+template <typename Each, typename Refused> void eachKernel(id<MTLDevice> dev, NSString *text, Each each, Refused refused)
+{
+    eachKernel(dev, dev, text, each, refused);
 }
 
 }  // namespace probe

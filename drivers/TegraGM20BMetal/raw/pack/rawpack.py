@@ -96,7 +96,7 @@ def option(name: str, required: bool = True) -> str | None:
     return None
 
 
-BUILT = ('probe', 'directpack', 'native-seed', 'libmock_iokit.dylib', 'own.metallib')
+BUILT = ('probe', 'directpack', 'native-seed', 'compile-profile', 'libmock_iokit.dylib', 'own.metallib')
 # Another framework's states, and a bundle's or a framework resource library's (their lines keep lib=,
 # tools/gpu/rawpack.py framework_line): the probe loads that library from the crawl's root
 FRAMEWORK = re.compile(
@@ -293,9 +293,10 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
     tool('probe', [HERE / 'probe.mm'])
     tool(
         'directpack',
-        [HERE / 'directpack.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
+        [HERE / 'directpack.mm', HERE / 'offline_metal.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in DIRECT_RUNTIME),
     )
+    tool('compile-profile', [HERE / 'compile_profile.mm'])
     tool(
         'native-seed',
         [HERE / 'native_seed.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],

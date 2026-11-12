@@ -144,7 +144,7 @@ private:
         std::array<uint32_t, 8> header = {};
         const bool known = w.sampler == NMB_DIRECT_IMMUTABLE
                                ? immutableSamplerHeader(k_.set0Bindings, k_.set0BindingCount, w.binding, header.data())
-                               : kw.sampler && samplerHeader(kw.samplerState, header.data());
+                               : kw.hasSampler && samplerHeader(kw.samplerState, header.data());
         if (!known) {
             why = "a sampler slot the dispatch leaves unbound at " + std::to_string(offset);
             return false;
@@ -256,7 +256,7 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     }
     attachResiduals(k, entries.entries);
     PackKernel &r = out.kernel;
-    r.setBytes = k.set0 ? uint16_t(Set0(k.set0Bindings, k.set0BindingCount).bytes()) : 0;
+    r.setBytes = uint16_t(Set0(k.set0Bindings, k.set0BindingCount).bytes());
     if (!computeQmd(made.stage, r.setBytes, r.qmd)) {
         why = "a kernel reading a constant buffer the raw path does not bind";
         return CompileOutcome::Refused;

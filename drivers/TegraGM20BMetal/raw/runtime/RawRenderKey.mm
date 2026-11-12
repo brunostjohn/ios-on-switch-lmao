@@ -2,6 +2,11 @@
 #import "RawRenderKey.h"
 #include "NativeBridgeMetalFrontend.h"
 
+// Weak, so the pack generator links without the frontend
+extern "C" id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length)
+    __attribute__((weak_import));
+extern "C" NSString *native_bridge_metal_function_library_name(id function) __attribute__((weak_import));
+
 namespace raw {
 namespace {
 
@@ -9,11 +14,12 @@ bool functionAir(id<MTLFunction> function, AirHash &out)
 {
     const void *bytes = nullptr;
     size_t length = 0;
+    std::string entry;
     std::map<std::string, AirHash> hashes;
-    id library = native_bridge_metal_function_metallib(function, &bytes, &length);
-    if (!library || !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
+    if (!functionLibrary(function, bytes, length, entry) ||
+        !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
         return false;
-    const auto found = hashes.find(native_bridge_metal_function_library_name(function).UTF8String ?: "");
+    const auto found = hashes.find(entry);
     if (found == hashes.end())
         return false;
     out = found->second;
@@ -21,6 +27,20 @@ bool functionAir(id<MTLFunction> function, AirHash &out)
 }
 
 }  // namespace
+
+bool functionLibrary(id<MTLFunction> function, const void *&bytes, size_t &length, std::string &entry)
+{
+    if ([(id)function conformsToProtocol:@protocol(RawLibraryFunction)]) {
+        id<RawLibraryFunction> own = (id<RawLibraryFunction>)function;
+        bytes = [own libraryBytes:&length];
+        entry = own.libraryFunctionName.UTF8String ?: "";
+        return bytes != nullptr;
+    }
+    if (!native_bridge_metal_function_metallib || !native_bridge_metal_function_metallib(function, &bytes, &length))
+        return false;
+    entry = native_bridge_metal_function_library_name(function).UTF8String ?: "";
+    return true;
+}
 
 bool renderCacheKey(MTLRenderPipelineDescriptor *descriptor, const std::string &key, bool own, uint64_t stack,
                     CacheKey &out)

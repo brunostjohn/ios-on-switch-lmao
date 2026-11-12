@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "NativeBridgeMetalFrontend.h"
 #include "kernel_shapes.h"
 #include "native_seed_key.h"
 #include "native_seed_manifest.h"

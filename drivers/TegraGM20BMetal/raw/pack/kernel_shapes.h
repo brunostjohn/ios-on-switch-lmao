@@ -13,7 +13,7 @@
 #include <vector>
 #include "../runtime/raw_compute_key.h"
 #import "../runtime/RawPipelineKey.h"
-#include "NativeBridgeMetalFrontend.h"
+#import "../runtime/RawRenderKey.h"
 
 namespace probe {
 
@@ -228,7 +228,7 @@ inline MTLFunctionConstantValues *constantValues(const std::string &text)
 inline id<MTLLibrary> library(id<MTLDevice> dev, const std::string &name)
 {
     static NSMutableDictionary<NSString *, id<MTLLibrary>> *loaded = [NSMutableDictionary dictionary];
-    NSString *key = @(name.c_str());
+    NSString *key = [NSString stringWithFormat:@"%p %s", (void *)dev, name.c_str()];
     if (!loaded[key]) {
         std::string path;
         if (name.rfind("data:", 0) == 0) {
@@ -257,8 +257,9 @@ inline id<MTLFunction> function(id<MTLDevice> dev, const Shape &s, raw::AirHash 
                                                                 : [lib newFunctionWithName:@(s.function.c_str())];
     const void *bytes = nullptr;
     size_t length = 0;
+    std::string entry;
     std::map<std::string, raw::AirHash> hashes;
-    if (!f || !native_bridge_metal_function_metallib(f, &bytes, &length) ||
+    if (!f || !raw::functionLibrary(f, bytes, length, entry) ||
         !raw::metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes) || !hashes.count(s.function))
         return nil;
     air = hashes[s.function];

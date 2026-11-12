@@ -13,6 +13,7 @@ use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
     sampler_descriptor,
 };
+use crate::offline::{NmbOfflineComputePipelineDescriptor, offline_devices};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
@@ -66,6 +67,7 @@ pub struct NmbDirectKernelWrite {
     pub components: [u32; 4],
     pub sampler: u64,
     pub sampler_state: NmbDirectSamplerState,
+    pub has_sampler: bool,
 }
 
 #[repr(C)]
@@ -317,20 +319,22 @@ fn region_word(plan: &BindingPlan) -> i32 {
         .unwrap_or(-1)
 }
 
-/// The samplers made for a dispatch's sampler writes, destroyed with it
+/// The samplers a dispatch's sampler writes take: their states, and the Vulkan samplers made of them where there is a
+/// device, destroyed with it
 struct Samplers<'d> {
-    device: &'d ash::Device,
+    device: Option<&'d ash::Device>,
     made: Vec<avk::Sampler>,
 }
 
 impl Samplers<'_> {
+    /// The sampler a write takes (its handle, 0 with no device, and its state); none where the dispatch binds none
     fn make(
         &mut self,
         compile: &metal2vulkan::device::Device,
         state: &BindState,
         source: &SamplerSource,
         image_format: Option<metal2vulkan::vk::Format>,
-    ) -> Result<(u64, NmbDirectSamplerState), String> {
+    ) -> Result<Option<(u64, NmbDirectSamplerState)>, String> {
         if let SamplerSource::Neutral(NeutralResource::Sampler { compare }) = source {
             let info = avk::SamplerCreateInfo::default()
                 .mag_filter(avk::Filter::NEAREST)
@@ -343,7 +347,7 @@ impl Samplers<'_> {
                 .compare_enable(*compare)
                 .compare_op(avk::CompareOp::NEVER);
             let state = sampler_state(&info, avk::SamplerReductionMode::WEIGHTED_AVERAGE, None);
-            return Ok((self.create(&info)?, state));
+            return Ok(Some((self.create(&info)?, state)));
         }
         let SamplerSource::Slot {
             slot,
@@ -352,14 +356,14 @@ impl Samplers<'_> {
             opaque_black,
         } = source
         else {
-            return Ok((0, NmbDirectSamplerState::default()));
+            return Ok(None);
         };
         let Some(bound) = state
             .stages
             .get(&Stage::Kernel)
             .and_then(|table| table.samplers.get(&slot.index))
         else {
-            return Ok((0, NmbDirectSamplerState::default()));
+            return Ok(None);
         };
         let desc =
             metal2vulkan::bind::sampler_desc(compile, &bound.desc, *compare, *integer, *opaque_black, image_format)
@@ -368,12 +372,15 @@ impl Samplers<'_> {
         let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
         let info = metal2vulkan::ash_interop::sampler_create_info(&desc, &mut reduction, &mut border);
         let made = sampler_state(&info, desc.reduction.into(), desc.border_components.map(avk::ComponentMapping::from));
-        Ok((self.create(&info)?, made))
+        Ok(Some((self.create(&info)?, made)))
     }
 
     fn create(&mut self, info: &avk::SamplerCreateInfo<'_>) -> Result<u64, String> {
+        let Some(device) = self.device else {
+            return Ok(0);
+        };
         // SAFETY: `info` and its chain are live for the call.
-        let sampler = unsafe { self.device.create_sampler(info, None) }.map_err(e("sampler"))?;
+        let sampler = unsafe { device.create_sampler(info, None) }.map_err(e("sampler"))?;
         self.made.push(sampler);
         Ok(avk::Handle::as_raw(sampler))
     }
@@ -381,9 +388,20 @@ impl Samplers<'_> {
 
 impl Drop for Samplers<'_> {
     fn drop(&mut self) {
+        let Some(device) = self.device else {
+            return;
+        };
         for &sampler in &self.made {
             // SAFETY: made here; NVK only read its header.
-            unsafe { self.device.destroy_sampler(sampler, None) };
+            unsafe { device.destroy_sampler(sampler, None) };
+        }
+    }
+}
+
+impl NmbDirectKernelWrite {
+    fn take_sampler(&mut self, made: Option<(u64, NmbDirectSamplerState)>) {
+        if let Some((sampler, state)) = made {
+            (self.sampler, self.sampler_state, self.has_sampler) = (sampler, state, true);
         }
     }
 }
@@ -414,6 +432,7 @@ fn kernel_write(
         components: [0; 4],
         sampler: 0,
         sampler_state: NmbDirectSamplerState::default(),
+        has_sampler: false,
     };
     match &w.source {
         WriteSource::Texture { view, .. } => (out.view_format, out.components) = view_parts(view),
@@ -429,10 +448,10 @@ fn kernel_write(
                 integer: *integer,
                 opaque_black: *opaque_black,
             };
-            (out.sampler, out.sampler_state) = samplers.make(compile, state, &source, None)?;
+            out.take_sampler(samplers.make(compile, state, &source, None)?);
         }
         WriteSource::Neutral(neutral @ NeutralResource::Sampler { .. }) => {
-            (out.sampler, out.sampler_state) = samplers.make(compile, state, &SamplerSource::Neutral(*neutral), None)?;
+            out.take_sampler(samplers.make(compile, state, &SamplerSource::Neutral(*neutral), None)?);
         }
         WriteSource::CombinedImageSampler { image, sampler } => {
             let format = match image {
@@ -443,7 +462,7 @@ fn kernel_write(
                 ImageSource::Neutral(_) => None,
             };
             if out.write.sampler != NMB_DIRECT_IMMUTABLE {
-                (out.sampler, out.sampler_state) = samplers.make(compile, state, sampler, format)?;
+                out.take_sampler(samplers.make(compile, state, sampler, format)?);
             }
         }
         _ => {}
@@ -466,7 +485,28 @@ pub unsafe extern "C" fn nmb_compute_pipeline_direct(
         let native = crate::direct::native_compute_device(nmb)?;
         let descriptor = compute_descriptor(descriptor)?;
         let ask = get(dispatch)?;
-        direct(nmb, &native, &descriptor, None, ask, each, ctx)
+        // SAFETY: the runtime device's own handles, used while it lives.
+        let handles = unsafe { nmb.device().raw() };
+        direct(Some(handles.device), &native, &descriptor, None, ask, each, ctx)
+    })
+}
+
+/// nmb_compute_pipeline_direct's answer for a kernel of offline functions, made on the compile profile's device with no
+/// Vulkan object: every handle the kernel hands over is 0.
+///
+/// # Safety
+/// As nmb_compute_pipeline_direct's.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_compute_pipeline_offline(
+    descriptor: *const NmbOfflineComputePipelineDescriptor,
+    dispatch: *const NmbDirectDispatch,
+    each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> bool {
+    guard(false, || {
+        let native = &offline_devices()?.native;
+        let descriptor = compute_descriptor(descriptor)?;
+        direct(None, native, &descriptor, None, get(dispatch)?, each, ctx)
     })
 }
 
@@ -482,8 +522,10 @@ pub unsafe extern "C" fn nmb_compute_artifact_direct(
 ) -> bool {
     guard(false, || {
         let artifact = get(artifact)?;
+        // SAFETY: the runtime device's own handles, used while it lives.
+        let handles = unsafe { get(device)?.device().raw() };
         direct(
-            get(device)?,
+            Some(handles.device),
             &artifact.compile,
             &artifact.descriptor,
             Some(artifact),
@@ -495,7 +537,7 @@ pub unsafe extern "C" fn nmb_compute_artifact_direct(
 }
 
 fn direct(
-    nmb: &NmbDevice,
+    vulkan: Option<&ash::Device>,
     compile: &metal2vulkan::device::Device,
     descriptor: &ComputePipelineDescriptor,
     artifact: Option<&NmbComputeArtifact>,
@@ -503,7 +545,6 @@ fn direct(
     each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> Result<bool, String> {
-    let runtime = nmb.device();
     let budget = Budget::standard();
     let call = if ask.region_mode != 0 {
         Dispatch::ThreadgroupRange { groups: GRID, first: [0; 3], count: GRID, threads_per_group: ask.threads }
@@ -546,11 +587,9 @@ fn direct(
     };
     let moved_same = same(&moved) && ranges(&moved) == ranges(&plain);
 
-    // SAFETY: the runtime device's own handles, used while it lives.
-    let handles = unsafe { runtime.raw() };
-    let layout = Layout::new(handles.device, &plain.pipeline.layout)?;
+    let layout = Layout::new(vulkan, &plain.pipeline.layout)?;
     let mut samplers = Samplers {
-        device: handles.device,
+        device: vulkan,
         made: Vec::new(),
     };
     let writes = plain
@@ -573,7 +612,7 @@ fn direct(
     let [buffer_reads, buffer_writes, texture_reads, texture_writes] =
         access_masks([&plain.plan, &moved.plan, &bound.plan]);
     let kernel = NmbDirectKernel {
-        device: avk::Handle::as_raw(handles.device.handle()),
+        device: vulkan.map_or(0, |d| avk::Handle::as_raw(d.handle())),
         layout: avk::Handle::as_raw(layout.pipeline),
         layout_data: &layout.data,
         set0: layout.set0(),

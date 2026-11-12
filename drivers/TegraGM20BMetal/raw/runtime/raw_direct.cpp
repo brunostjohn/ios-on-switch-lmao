@@ -516,7 +516,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     for (uint32_t i = 0; i < 32; i++)
         if (draw.pushMask >> i & 1)
             parts.push[kRootPush + 4 * i] = draw.push[i];
-    parts.setBytes = draw.set0 ? uint16_t(Set0(draw.set0Bindings, draw.set0BindingCount).bytes()) : 0;
+    parts.setBytes = uint16_t(Set0(draw.set0Bindings, draw.set0BindingCount).bytes());
     if (!assembleRecord(parts, key, rules, out, why))
         return CompileOutcome::Refused;
     if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {

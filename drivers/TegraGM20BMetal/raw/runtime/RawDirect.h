@@ -42,11 +42,25 @@ struct ProbeTextures {
     uint8_t fragmentTests = 0;
 };
 
+// What makes a state's or a kernel's translation and finds NVK's exports: the frontend over its m2v runtime device, or
+// the pack generator's offline compile (pack/offline_metal.h), whose descriptors hold its own functions. False with `why`:
+// the translator refused it.
+struct DirectTranslator {
+    bool (*render)(id descriptor, bool barrier, NSUInteger textureFormat, NSUInteger textureSamples,
+                   const NmbDirectBinds *binds, bool (*each)(const NmbDirectState *, void *), void *ctx,
+                   const char **why) = nullptr;
+    bool (*compute)(id descriptor, const NmbDirectDispatch *dispatch, bool (*each)(const NmbDirectKernel *, void *),
+                    void *ctx, const char **why) = nullptr;
+    void *(*nvkSymbol)(const char *name) = nullptr;
+
+    static DirectTranslator frontend();
+};
+
 class Direct {
 public:
     explicit Direct(const Pack &pack);
     // The pack generator's: records under `rules` alone (pack/directpack.mm)
-    explicit Direct(PackRules rules, bool rankArtifacts = false);
+    explicit Direct(PackRules rules, bool rankArtifacts = false, DirectTranslator translator = DirectTranslator::frontend());
 
     // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `registers`: as
     // directRecord's; `split`: with its fragment program's split (directRecord)
@@ -74,6 +88,7 @@ public:
 
 private:
     PackRules rules_;
+    DirectTranslator translator_;
     DirectNvk nvk_;
     bool variants_ = false;
     std::string storageRefusal_;

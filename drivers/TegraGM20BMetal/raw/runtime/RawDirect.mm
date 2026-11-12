@@ -60,17 +60,26 @@ bool madeKernel(const NmbDirectKernel *kernel, void *ctx)
 
 }  // namespace
 
+DirectTranslator DirectTranslator::frontend()
+{
+    DirectTranslator t;
+    t.render = native_bridge_metal_render_direct;
+    t.compute = native_bridge_metal_compute_direct;
+    t.nvkSymbol = native_bridge_metal_nvk_symbol;
+    return t;
+}
+
 Direct::Direct(const Pack &pack) : Direct(PackRules::of(pack))
 {}
 
-Direct::Direct(PackRules rules, bool rankArtifacts)
+Direct::Direct(PackRules rules, bool rankArtifacts, DirectTranslator translator)
     : rules_(std::move(rules)),
-      nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
+      translator_(translator),
+      nvk_(translator.nvkSymbol ? DirectNvk::find(translator.nvkSymbol) : DirectNvk{})
 {
     if (rankArtifacts)
-        nvk_.nakCompileStage = native_bridge_metal_nvk_symbol
-                                   ? native_bridge_metal_nvk_symbol("switch_nak_compile_ranked_stage")
-                                   : nullptr;
+        nvk_.nakCompileStage =
+            translator.nvkSymbol ? translator.nvkSymbol("switch_nak_compile_ranked_stage") : nullptr;
 }
 
 CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
@@ -87,9 +96,8 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
     const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
                                   textures.fragmentTests};
     const char *refused = nullptr;
-    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples,
-                                           textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made,
-                                           &a, &refused)) {
+    if (!translator_.render(descriptor, barrier, textures.format, textures.samples,
+                            textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
@@ -102,7 +110,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
                             bool split, PackForm requested)
 {
     storageRefusal_.clear();
-    if (!native_bridge_metal_render_direct || !nvk_.complete()) {
+    if (!translator_.render || !nvk_.complete()) {
         why = nvk_.nakCompileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
                                                        : "the frontend or NVK has no direct compile";
         return CompileOutcome::Failed;
@@ -184,13 +192,13 @@ const NmbDirectDispatch &KernelDispatch::dispatch()
 CompileOutcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
                               const std::string &key, ComputeRecord &out, std::string &why)
 {
-    if (!native_bridge_metal_compute_direct || !nvk_.complete()) {
+    if (!translator_.compute || !nvk_.complete()) {
         why = "the frontend or NVK has no direct compile of kernels";
         return CompileOutcome::Failed;
     }
     AskedKernel a = {nvk_, key, out, {}};
     const char *refused = nullptr;
-    if (!native_bridge_metal_compute_direct(descriptor, &dispatch, madeKernel, &a, &refused)) {
+    if (!translator_.compute(descriptor, &dispatch, madeKernel, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }

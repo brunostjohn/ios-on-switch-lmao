@@ -29,6 +29,7 @@
 #include "direct_kernels.h"
 #include "direct_states.h"
 #include "fetch_free_make.h"
+#include "offline_metal.h"
 
 namespace {
 
@@ -232,21 +233,23 @@ int main(int argc, char **argv)
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
+        // the m2v runtime's device: its kernels' states and textures
         id<MTLDevice> dev = native_bridge_metal_open(argv[1], argv[2], 0, missing);
+        id<MTLDevice> libraries = (id<MTLDevice>)[RawOfflineDevice new];
         NSError *error = nil;
-        id<MTLLibrary> qc = dev ? [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error] : nil;
+        id<MTLLibrary> qc = [libraries newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
         NSString *text = [NSString stringWithContentsOfFile:@(argv[4]) encoding:NSUTF8StringEncoding error:nil];
         Writer w = {fopen(argv[5], "wb")};
-        if (!qc || !text || !w.f) {
+        if (!dev || !qc || !text || !w.f) {
             fprintf(stderr, "directpack: %s\n", dev ? "library, corpus or output unread" : nmb_last_error());
             return 1;
         }
         id<MTLLibrary> own = nil, standIn = nil;
         if (const char *path = getenv("PROBE_OWN_LIB"); path && *path) {
-            own = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
+            own = [libraries newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
             dispatch_data_t data = dispatch_data_create(kTwoPlaneStandInLibrary, sizeof kTwoPlaneStandInLibrary,
                                                         nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-            standIn = own ? [dev newLibraryWithData:data error:&error] : nil;
+            standIn = own ? [libraries newLibraryWithData:data error:&error] : nil;
             if (!own || !standIn) {
                 fprintf(stderr, "directpack: own library: %s\n", error.localizedDescription.UTF8String);
                 return 1;
@@ -255,10 +258,10 @@ int main(int argc, char **argv)
         // every register raw_emit writes, over no baseline: directlink.py sets them over the context
         raw::PackRules rules;
         rules.varying = raw::emittableMethods();
-        raw::Direct direct(std::move(rules));
+        raw::Direct direct(std::move(rules), false, offline::translator(argv[1]));
         direct.makeVariants(true);
         Counts counts;
-        probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
+        probe::eachState(libraries, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {
                              raw::ProbeTextures textures = probe::probeTextures(line, ours);
                              textures.cubic = s.cubic;
@@ -266,7 +269,7 @@ int main(int argc, char **argv)
                          });
         uint32_t kernels[3] = {};
         probe::eachKernel(
-            dev, text,
+            dev, libraries, text,
             [&](const probe::Kernel &k) {
                 std::unique_ptr<raw::KernelDispatch> ask;
                 probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
