@@ -30,14 +30,13 @@ state.notpack	record	m2v	-	functions from another device's library: with one bac
 state.pack	record	layer	L4	a state the pack lacks: made at creation (compiler daemon) or the archive-miss error FailOnBinaryArchiveMiss asks for
 state.making	record	growth	-	the record completes before the command buffer's first job runs: the GPU work waits, never the CPU
 call.vis	record	gap	-	Counting and Boolean results on the copy engine (raw_visibility.h); accumulated results (MTLVisibilityResultTypeAccumulate): REPORT_SEMAPHORE with reduction ADD (probe gpu.x1.visibility, d17), no planner node yet
-call.buf	record	m2v	-	an m2v buffer, or setBytes with no pool memory (growth)
+call.buf	record	m2v	-	an m2v buffer
 call.sampler	record	gap	sampler_address_mode	mirror-clamp-to-edge and opaque borders: an address-lowering program variant (L4)
 call.dbias	record	layer	L4	an infinite or NaN depth bias: the state program's viewport Z offset, as m2v's render_state.rs does
 call.inv	record	layer	L6	an encoder selector raw does not implement: implemented, or failed at creation per Metal
 call.cbinv	record	layer	L6	a command buffer selector raw does not implement: as call.inv
 call.blitopt	record	rule	copy.ce	depth or stencil of a combined format: copy-engine remap of the aspect
 call.bufcopy	record	client	buffer_range	a copy or fill past the buffer
-call.bytes	record	growth	-	setBytes with no GPU pool memory: the pool grows
 blit.tex	record	rule	copy.ce	levels, slices and 3D planes: one copy rectangle per layer; texel sizes that differ are client error copy_texel_size
 blit.b2t	record	rule	copy.ce	buffer rows into a texture: copy rectangles, one per plane
 blit.t2b	record	rule	copy.ce	texture rows into a buffer: as blit.b2t

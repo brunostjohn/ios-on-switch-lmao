@@ -217,6 +217,7 @@ static void completeBuffer(RMCommandBuffer *cb)
     cb->_completedDone = true;
     rmChanged(cb);
     cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
+    rmBytesDone(cb);
     cb->_computeJobs.clear();
     cb->_sharedEventWaits.clear();
     cb->_resourceReady.reset();
@@ -259,10 +260,10 @@ static void deliverCompletion(RMCommandBuffer *cb)
         dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
 }
 
-void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
+void failCommandBuffer(RMCommandBuffer *cb, NSString *reason, MTLCommandBufferError code)
 {
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                         code:MTLCommandBufferErrorInternal
+                                         code:code
                                      userInfo:@{NSLocalizedDescriptionKey : reason}];
     std::lock_guard<raw::Mutex> l(cb->_lock);
     if (!cb->_segError)

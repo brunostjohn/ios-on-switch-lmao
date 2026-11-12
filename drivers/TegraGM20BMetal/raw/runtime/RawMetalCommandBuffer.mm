@@ -84,6 +84,61 @@ static void coalesceBytes(RMBytes &s)
     s.chunks.push_back(one);
 }
 
+// Finished command buffers' setBytes chunks for the next to fill, given back at completion rather than with the recording
+// at dealloc: command buffers an app keeps after they complete hold none of the GPU pool's control memory
+static constexpr uint32_t kChunksKept = 64, kChunksIdle = 4;
+static raw::TakePool<raw::Buffer, kChunksKept> &gBytesChunks = *new raw::TakePool<raw::Buffer, kChunksKept>;
+
+static std::atomic<bool> gBytesGrowing{false};
+
+static void keepBytesChunk(const raw::Buffer &chunk)
+{
+    uint32_t node;
+    raw::Buffer *slot = chunk.va ? gBytesChunks.room(node) : nullptr;
+    if (!slot) {
+        RMBytes one;
+        one.chunks.push_back(chunk);
+        dropBytes(one);
+        return;
+    }
+    *slot = chunk;
+    gBytesChunks.keep(node);
+}
+
+static void growBytesChunks(void *)
+{
+    raw::Buffer chunk;
+    if (gRM->raw->createControlBuffer(kRMBytesChunk, chunk))
+        keepBytesChunk(chunk);
+    gBytesGrowing.store(false, std::memory_order_release);
+}
+
+void rmBytesDone(RMCommandBuffer *cb)
+{
+    RMBytes &s = cb->_bytes;
+    coalesceBytes(s);
+    for (const raw::Buffer &k : s.chunks)
+        keepBytesChunk(k);
+    s = {};
+}
+
+bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk)
+{
+    uint32_t node;
+    if (raw::Buffer *kept = gBytesChunks.take(node)) {
+        if (kept->length >= length) {
+            chunk = *kept;
+            *kept = {};
+            gBytesChunks.giveBack(node);
+            if (!gBytesChunks.kept() && !gBytesGrowing.exchange(true, std::memory_order_acq_rel))
+                dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), nullptr, growBytesChunks);
+            return true;
+        }
+        gBytesChunks.keep(node);
+    }
+    return gRM->raw->createControlBuffer(length, chunk);
+}
+
 static void giveRecording(RMCommandBuffer *b)
 {
     constexpr size_t kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
@@ -120,6 +175,17 @@ static void giveRecording(RMCommandBuffer *b)
 
 void releaseRecordings()
 {
+    while (gBytesChunks.kept() > kChunksIdle) {
+        uint32_t node;
+        raw::Buffer *kept = gBytesChunks.take(node);
+        if (!kept)
+            break;
+        RMBytes one;
+        one.chunks.push_back(*kept);
+        dropBytes(one);
+        *kept = {};
+        gBytesChunks.giveBack(node);
+    }
     while (gRecordings.kept() > kKeptIdle) {
         uint32_t node;
         RMRecording *r = gRecordings.take(node);

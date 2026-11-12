@@ -6,16 +6,15 @@
 // Room for `padded` bytes in the command buffer's setBytes chunks (RMBytes): false when only heap memory had it
 static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &offset)
 {
-    constexpr uint32_t kChunk = 64 << 10;  // a Core Animation frame's setBytes (~55 KB of 256-byte copies)
     while (s.at < s.chunks.size() && s.used + padded > s.chunks[s.at].length) {
         s.at++;
         s.used = 0;
     }
     if (s.at == s.chunks.size()) {
         raw::Buffer b;
-        if (!gRM->raw->createControlBuffer(std::max(padded, kChunk), b)) {
+        if (!rmTakeBytesChunk(std::max(padded, kRMBytesChunk), b)) {
             b = {};
-            b.length = std::max(padded, kChunk);
+            b.length = std::max(padded, kRMBytesChunk);
             b.cpu = static_cast<uint8_t *>(malloc(size_t(b.length)));
         }
         s.chunks.push_back(b);
@@ -37,9 +36,16 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
     }
     const uint32_t padded = std::max<uint32_t>((uint32_t(length) + 255) & ~255u, 256);
     uint32_t chunk, offset;
+    // Out of memory as Metal reports it: the command buffer fails (its bytes go to the heap meanwhile, so recording goes
+    // on), never another backend
     if (!bytesRoom(cb->_bytes, padded, chunk, offset)) {
-        [cb takeReason:WhyCall why:@"setBytes with no GPU pool memory for its bytes"];
-        hit(cb, PredCallBytes, length);
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true))
+            os_log_error(rawLog(),
+                         "raw: setBytes of %lu bytes: no GPU memory for its chunk (%{public}s): its command "
+                         "buffer fails out of memory; later ones not logged",
+                         (unsigned long)length, gRM->raw->kernel().error().c_str());
+        failCommandBuffer(cb, @"no GPU memory for setBytes", MTLCommandBufferErrorOutOfMemory);
     }
     uint8_t *to = cb->_bytes.chunks[chunk].cpu + offset;
     memcpy(to, bytes, length);

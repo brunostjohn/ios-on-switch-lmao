@@ -490,8 +490,14 @@ void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &bi
 // from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 
-// RawMetalCommandBuffer.mm: the kept recordings past what steady frames take, given back
+// RawMetalCommandBuffer.mm: the kept recordings and setBytes chunks past what steady frames take, given back
 void releaseRecordings();
+// cb completed: its setBytes chunks kept for the next command buffer's (one of their total where it filled several)
+void rmBytesDone(RMCommandBuffer *cb);
+// A setBytes chunk of at least `length` bytes: one a completed command buffer gave back, else a new one (false: the kernel
+// had no memory for it). One taken that leaves none kept has the next made off the recording thread.
+constexpr uint32_t kRMBytesChunk = 64 << 10;  // a Core Animation frame's setBytes (~55 KB of 256-byte copies)
+bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk);
 // RawMetalEncoder.mm: render, blit and compute encoders built on the storage of those before (raw_object_pool.h), from
 // before the device's first command buffer
 void rmPoolEncoders();
@@ -508,7 +514,8 @@ dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);
 // The command buffer's error, unless it has one: under its lock, which waitUntilScheduled reads it under
-void failCommandBuffer(RMCommandBuffer *cb, NSString *reason);
+void failCommandBuffer(RMCommandBuffer *cb, NSString *reason,
+                       MTLCommandBufferError code = MTLCommandBufferErrorInternal);
 void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::RetirementWrites &writes, uint32_t dependencies,
                       const std::vector<RMNativeEventSignal> &signals = {},
                       const std::vector<raw::EventTimeline::Promise> &waits = {},

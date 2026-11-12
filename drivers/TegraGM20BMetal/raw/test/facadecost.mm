@@ -9,8 +9,8 @@
 // (facade) and with the batch held until all complete (held). A line FAIL where the profile's or the held window's
 // count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
 // whose predecessor's completion has not run hands its own to it), or where the runtime's own count of the locks it took
-// on every thread (facade_locks) passes 4 a command buffer, or where a command buffer of the profile's batch was not the
-// raw path's (switchRawPath). Then each pooled encoder class's bytes, blocks and costs.
+// on every thread (facade_locks) passes 4 a command buffer, or where a command buffer of the profile's batch, or of 300
+// held at once, was not the raw path's (switchRawPath). Then each pooled encoder class's bytes, blocks and costs.
 // usage: [DYLD_INSERT_LIBRARIES=<libfacadecount.dylib>] facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
@@ -456,6 +456,19 @@ int main(int argc, char **argv)
             }
         }
         printSites(sites, buffers);
+        // 300 held at once, well past the ~120 whose setBytes chunks once ran the control memory dry: every one raw
+        constexpr unsigned kHeldMany = 300;
+        failures += !batch(arms[0], kHeldMany, true);
+        unsigned heldRaw = 0;
+        for (const auto &[path, count] : paths) {
+            if (path == "raw")
+                heldRaw += count;
+            else {
+                printf("FAIL: %u of %u held command buffers went %s\n", count, kHeldMany, path.c_str());
+                failures++;
+            }
+        }
+        printf("facadecost held %u: raw %u\n", kHeldMany, heldRaw);
         printPools();
         for (const auto &[name, value] : counted[0]) {
             const double grown = counted[1][name] - value;
