@@ -6,7 +6,7 @@
 #include "../SwitchDisplayMemoryEnvelope.h"
 
 namespace {
-uint64_t reserved;
+uint64_t reserved, reserveLimit = UINT64_MAX;
 int reserveError;
 
 int switch_emc_display_memory_ready()
@@ -17,7 +17,7 @@ int switch_emc_display_memory_ready()
 int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
     reserved = request->peak_bytes_per_second;
-    return reserveError;
+    return request->peak_bytes_per_second > reserveLimit ? -1 : reserveError;
 }
 
 void IOLog(const char *, ...)
@@ -75,6 +75,7 @@ struct Display {
         planeLatch.values = sets;
         reserved = 0;
         reserveError = 0;
+        reserveLimit = UINT64_MAX;
         switch_display_memory_head mode{};
         mode.pixel_clock_hz = 78000000;
         mode.active_width = 720;
@@ -112,6 +113,7 @@ struct Display {
 
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
+#include "../SwitchPlaneAdmissionDrop.h"
 #include "../SwitchCompositionRegisters.h"
 #include "../SwitchOverlayRecovery.h"
 #include "../SwitchPlanesResume.h"
@@ -229,6 +231,41 @@ TEST(OverlayRegisters, BandwidthRefusalWithNoLatchComingArmsTheOverlaysOffInstea
     EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], 0u);
     EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kOptions], 0u);
     EXPECT_EQ(display.stPlaneDropped, 1u);
+}
+
+// Two overlays over the budget with no latch coming: the heavier goes, the lighter one stays on window B.
+TEST(OverlayRegisters, BandwidthRefusalOfTwoOverlaysDropsOnlyTheHeavierWhenOneFits)
+{
+    Display display;
+    display.stats = true;
+    auto two = video(native_planes::kBt709, 1);
+    two.window[1] = two.window[0];
+    two.window[1].slot = 2;
+    two.window[1].depth = 2;
+    two.window[1].image.prescaled = (1280u << 17) | 2880;  // twice the lines and four times the bytes across
+    ASSERT_TRUE(display.stage(video(native_planes::kBt709, 3)));
+    display.latch();
+    native_planes::Image light = two.window[0].image, heavy = two.window[1].image;
+    const uint64_t lightBytes = display.planeAdmissionDemand(light), heavyBytes = display.planeAdmissionDemand(heavy);
+    ASSERT_LT(lightBytes, heavyBytes);
+    reserveLimit = 0;
+    display.stage(two);
+    reserveLimit = UINT64_MAX;
+    EXPECT_GE(display.stPlaneDropped, 1u);
+    Display fits;
+    fits.stats = true;
+    ASSERT_TRUE(fits.stage(video(native_planes::kBt709, 3)));
+    fits.latch();
+    fits.stage(video(native_planes::kBt709, 1));
+    const uint64_t oneReserved = reserved;
+    fits.latch();
+    reserveLimit = oneReserved + (heavyBytes - lightBytes) / 2;
+    two.seq = 3;
+    ASSERT_TRUE(fits.stage(two));
+    EXPECT_EQ(fits.stPlaneDropped, 1u);
+    const auto &armed = fits.planeSetOf(fits.planeLatch.armed);
+    EXPECT_TRUE(armed.window[0].on);
+    EXPECT_FALSE(armed.window[1].on);
 }
 
 TEST(OverlayRegisters, BandwidthRefusalWithALatchComingWaitsForItThenGoes)

@@ -525,6 +525,7 @@ host_test(
         "switch_overlay_registers_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlanesResume.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneAdmissionDrop.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",

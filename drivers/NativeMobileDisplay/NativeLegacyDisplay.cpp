@@ -4690,6 +4690,7 @@ public:
 #include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
 #include "SwitchPaletteDisplay.h"
+#include "SwitchPlaneAdmissionDrop.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {

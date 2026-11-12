@@ -163,7 +163,7 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
     if (!planeReserveBandwidth(p)) {
         if (planeHoldForLatch(p))
             return false;
-        planeDropOverlays(p, 3);
+        planeDropUntilAdmitted(p);
         planeTarget = p;
     }
     PlaneSet commit = p;
