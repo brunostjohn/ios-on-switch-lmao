@@ -2569,6 +2569,27 @@ bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
     return true;
 }
 
+bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t bytes, uint64_t length, const void *owner, Buffer &b,
+                                 bool &tiled)
+{
+    b = {};
+    tiled = false;
+    std::lock_guard<std::mutex> l(lock_);
+    Import *i = importSurface(id, base, bytes, owner);
+    if (!i)
+        return false;
+    if (i->kind == TGM_LAYOUT_KIND) {
+        tiled = true;
+        release(i);
+        return false;
+    }
+    b.import = i;
+    b.va = i->bo.va;
+    b.cpu = static_cast<uint8_t *>(base);
+    b.length = length;
+    return true;
+}
+
 void Device::destroyBuffer(Buffer &b)
 {
     std::lock_guard<std::mutex> l(lock_);

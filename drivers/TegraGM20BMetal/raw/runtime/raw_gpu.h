@@ -1323,6 +1323,10 @@ public:
     }
 
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
+    // An IOSurface's pages as a buffer of `length` bytes (newBufferWithIOSurface:), sharing its textures' import. False
+    // where the kernel refuses the import, or keeps the surface block-linear (`tiled`): its bytes are no pitch buffer then
+    bool createSurfaceBuffer(uint64_t id, void *base, uint64_t bytes, uint64_t length, const void *owner, Buffer &b,
+                             bool &tiled);
     bool createControlBuffer(uint64_t length, Buffer &buffer);
     bool hostAccess(const Buffer &buffer, bool write, HostAccess &access);
     bool hostAccess(const Texture &texture, bool write, HostAccess &access);
