@@ -228,8 +228,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     p->_raw = gRM->completion->makeNow(a, &retry);
     RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
-    // the journal names m2v's functions (the harvest's corpus lines): a debug build twins a state made at its creation
-    if (p->_raw && native_bridge_metal_journal_render)
+    // the journal names m2v's functions (the harvest's corpus lines), so it is written only where m2v's device is open
+    // already: a process without one is left to tools/gpu/logharvest.py, which reads its compile lines
+    if (p->_raw && native_bridge_metal_journal_render && rmM2VIfOpen())
         native_bridge_metal_journal_render(twinDescriptor(a.descriptor), 0);
 #endif
 #if SWITCH_RAW_DIAGNOSTICS

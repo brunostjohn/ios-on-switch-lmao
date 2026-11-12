@@ -1951,6 +1951,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_set_reads.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stats.h",
         "//kits/SwitchSeedPack:SwitchSeedPack.h",
         "//kits/SwitchSeedPack:SwitchSeedStore.h",
@@ -2017,6 +2018,9 @@ RAW_HOST_UNITS = [
     for u in [
         "raw_gpu.cpp",
         "raw_draw_bands.cpp",
+        "raw_job_uses.cpp",
+        "raw_encoder_state.cpp",
+        "raw_state_segment.cpp",
         "raw_transfer.cpp",
         "raw_split.cpp",
         "raw_variants.cpp",
