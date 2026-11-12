@@ -4611,7 +4611,7 @@ public:
         copy.source = memory;
         copy.sourceStride = stride;
         copy.sourceBytes = allocation;
-        copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY;
+        copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);
         copy.alsoWritten = planeNextAlsoWritten();
         switch_gpu_backing_token planeTokens[2] = {};
         planeNextDependencies(copy, planeTokens);

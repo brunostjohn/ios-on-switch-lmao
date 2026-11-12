@@ -227,6 +227,16 @@ static inline void present_fenced(struct tgm_chan *chan)
 	nvxnu_work_schedule(tgm_present.completion_work);
 }
 
+/* A user channel's fence moved, in its interrupt pass or by its kill: a present watching its producer is due
+ * (SwitchGpuPresentWatch.h). The pass's end delivers it (tgm_present_pass); a kill runs outside a pass, so it hands the
+ * watch to the work item. */
+static inline void present_watch_fenced(struct tgm_chan *chan, int killed)
+{
+	if (switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, tgm_chan_completed(chan)) &&
+	    killed)
+		nvxnu_work_schedule(tgm_present.watch_work);
+}
+
 /* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean; then more claims. */
 static inline void scrub_fenced(struct tgm_chan *chan)
 {

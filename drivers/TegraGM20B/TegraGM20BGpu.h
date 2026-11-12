@@ -367,6 +367,11 @@ int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_
     uint32_t block_height_log2, void (*done)(void *, int), void *arg,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 int tgm_present_outstanding(const void *arg);
+/* tgm_present_copy_dependencies with no job when exactly one GM20B producer is left to wait for: its own interrupt
+ * pass completes the present (gpu_present.c tgm_present_pass). 1: not watchable, queue the job instead. */
+int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
+    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
+void tgm_present_pass(void);
 /* Host import bookkeeping: `pa` is the import's first page; add 1 when made, 0 when released (gpu_sync.c vm_imports). */
 void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
 

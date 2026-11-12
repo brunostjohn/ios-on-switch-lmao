@@ -75,6 +75,7 @@
 #include "SwitchGpuTimeline.h"
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuPresentTokens.h"
+#include "SwitchGpuPresentWatch.h"
 #include "SwitchGpuMapping.h"
 #include "SwitchGpuPathStats.h"
 #include "SwitchGpuJobStats.h"
@@ -544,8 +545,9 @@ struct present_state {
 	struct tgm_mem *fence_mem, *fences_mem;
 	void *fence; /* the channel's own fence page (pool) */
 	u64 fence_pa, fence_gpu, fences_gpu;
-	void *deadline_work, *completion_work;
+	void *deadline_work, *completion_work, *watch_work;
 	struct switch_gpu_present_tokens tokens;
+	struct switch_gpu_present_watch watch; /* a present with no job: tgm_present_watch_dependencies */
 	u32 typed_pending;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;

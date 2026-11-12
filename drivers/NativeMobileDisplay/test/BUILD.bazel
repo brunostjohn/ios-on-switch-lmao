@@ -702,6 +702,7 @@ host_test(
     srcs = [
         "switch_direct_visible_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDirectVisibleDisplay.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraVIC:SwitchNativeScanout.h",
         "//drivers/TegraVIC:SwitchNativeSurface.h",
         "//drivers/TegraVIC:TegraVICSurface.h",

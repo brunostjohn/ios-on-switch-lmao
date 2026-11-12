@@ -3,10 +3,13 @@
 // (switch_gpu_backing_scanout), so the GPU driver ends every job that writes it External: its completion then means its
 // writes left the GPU's L2 (FRAMECPU C6.1). A swap whose slot's producer token is externally visible at the offer (or
 // that no engine wrote) flips from the kick itself; one whose producer is still running keeps the fence-only present.
-// A window B change going out with the frame keeps the present when it has writers of its own to wait for.
+// A window B change going out with the frame keeps the present when it has writers of its own to wait for. A producer
+// still running at the offer, past the slot's first frame, is watched instead: its own interrupt pass completes the
+// fence-only offer with no present job (TEGRA_SCANOUT_COPY_PRODUCER_WATCH).
 // Included in the class body after SwitchDirectSlots.h; under the gate.
 
 switch_gpu_backing *scanoutHeld[kSlots] = {};
+uint64_t scanoutHeldUse[kSlots] = {};
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 bool directVisibleLogged = false;
 #endif
@@ -20,6 +23,15 @@ void holdScanoutBacking(unsigned k)
     switch_gpu_backing_retain(backing);
     switch_gpu_backing_scanout(backing, 1);
     scanoutHeld[k] = backing;
+    scanoutHeldUse[k] = slots[k].used;
+}
+
+// The slot's first frame was written before its backing was held scanned, by a job that may have ended Internal: only
+// the present job's flush puts it in DRAM.
+uint32_t producerWatch(int entry) const
+{
+    const auto k = static_cast<unsigned>(entry - kSlot0);
+    return scanoutHeld[k] && slots[k].used != scanoutHeldUse[k] ? TEGRA_SCANOUT_COPY_PRODUCER_WATCH : 0u;
 }
 
 void releaseScanoutBacking(unsigned k)

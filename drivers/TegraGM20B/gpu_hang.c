@@ -153,6 +153,7 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
 	__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
+	present_watch_fenced(chan, 1);
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
 		  chan->owner, chan->chid, report);
 	nvxnu_wake();

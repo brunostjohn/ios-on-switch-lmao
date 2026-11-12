@@ -22,6 +22,10 @@ struct switch_gpu_backing_token;
 // flags: the source is block-linear (tegra_gm20b_surface_layout): GOBs of 64 bytes x 8 lines, blocks 1 GOB wide and
 // 2^sourceBlockHeightLog2 GOBs high, width x 4 bytes (whole GOBs) across.
 #define TEGRA_SCANOUT_COPY_SOURCE_BLOCK 2u
+// flags, with FENCE_ONLY: every job that wrote the source since the display began scanning it in place ended External
+// (switch_gpu_backing_scanout), so a sole GM20B producer's own completion may stand for the present: the GPU driver
+// queues no job and its interrupt pass completes the offer once the producer's writes are in DRAM.
+#define TEGRA_SCANOUT_COPY_PRODUCER_WATCH 4u
 // Tiled IOSurfaces (the GPU renders them block-linear, the display scans them as such): laid out by the GPU driver's one
 // rule (drivers/TegraGM20B/TegraGM20BLayout.h, NIL's, its block height lowered to fit the allocation:
 // TegraGM20BLayoutFit.h) in the surface's own pages, under the generic 16Bx2 PTE kind; rows of width x bytes per pixel

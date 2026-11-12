@@ -173,6 +173,13 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 	return kPresentSurface + slot * kPresentSurfaceSpan;
 }
 
+// The display's direct frame with its producer still running: the producer's interrupt pass completes it, no job.
+int presentWatched()
+{
+	return tgm_present_watch_dependencies(SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot,
+					      gPresentSnapshot.tokens, gPresentSnapshot.count);
+}
+
 IOLock *presentLock()
 {
 	if (!gPresentLock) {
@@ -196,6 +203,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	IOMemoryDescriptor *memory =
 		OSDynamicCast(IOMemoryDescriptor, static_cast<OSObject *>(copy->source));
 	const bool fenceOnly = (copy->flags & TEGRA_SCANOUT_COPY_FENCE_ONLY) != 0u;
+	const bool watch = fenceOnly && (copy->flags & TEGRA_SCANOUT_COPY_PRODUCER_WATCH) != 0u;
 	const bool sourceBlock = (copy->flags & TEGRA_SCANOUT_COPY_SOURCE_BLOCK) != 0u;
 	if (sourceBlock && copy->sourceBlockHeightLog2 > 5)
 		return kIOReturnBadArgument;
@@ -251,19 +259,24 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		tgm_present_read reads[TGM_PRESENT_READS] = {};
 		const uint32_t nreads = tgm_readback_take(copy, source, blockLog2, target, reads);
 		gPresentSnapshot.done = nreads ? tgm_readback_done : presentDone;
-		ret = tgm_present_copy_read_dependencies(
-			source, copy->sourceStride, blockLog2, copy->width, copy->height, target,
-			copy->targetPitch, copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
-			&gPresentSnapshot, reads, nreads, gPresentSnapshot.tokens,
-			gPresentSnapshot.count);
+		ret = watch && !nreads ? presentWatched() : 1;
+		if (ret == 1)
+			ret = tgm_present_copy_read_dependencies(
+				source, copy->sourceStride, blockLog2, copy->width, copy->height,
+				target, copy->targetPitch, copy->blockHeightLog2,
+				SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, reads, nreads,
+				gPresentSnapshot.tokens, gPresentSnapshot.count);
 		if (ret && nreads)
 			tgm_readback_refused();
 #else
 		gPresentSnapshot.done = presentDone;
-		ret = tgm_present_copy_dependencies(
-			source, copy->sourceStride, blockLog2, copy->width, copy->height, target,
-			copy->targetPitch, copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
-			&gPresentSnapshot, gPresentSnapshot.tokens, gPresentSnapshot.count);
+		ret = watch ? presentWatched() : 1;
+		if (ret == 1)
+			ret = tgm_present_copy_dependencies(
+				source, copy->sourceStride, blockLog2, copy->width, copy->height,
+				target, copy->targetPitch, copy->blockHeightLog2,
+				SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot,
+				gPresentSnapshot.tokens, gPresentSnapshot.count);
 #endif
 	}
 	if (ret)

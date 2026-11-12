@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchDirectVisibleDisplay.h: a direct scanout slot holds its backing as scanned for its whole life, and a swap whose
-// producer's writes are already in DRAM flips from the kick with no present job; anything still to wait for keeps it.
+// producer's writes are already in DRAM flips from the kick with no present job; one still running past the slot's first
+// frame is watched by the GPU driver instead of a present job; anything else keeps the job.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../../TegraVIC/SwitchNativeScanout.h"
 #include "bazel/testing/source_text.h"
 
@@ -44,6 +46,7 @@ struct NativeLegacyDisplay {
     static constexpr bool stats = true;
     struct DirectSlot {
         SwitchNativeScanout *read = nullptr;
+        uint64_t used = 0;
     };
     DirectSlot slots[kSlots];
     SwitchNativeScanout reads[kSlots];
@@ -137,12 +140,26 @@ TEST_F(DirectVisible, AWindowBChangeWithWritersOfItsOwnKeepsThePresentJob)
     EXPECT_TRUE(display.presentDirectVisible(&request, NativeLegacyDisplay::kSlot0 + 1, 1280, 720, 5));
 }
 
+TEST_F(DirectVisible, ASlotsFirstFrameKeepsThePresentJobAndLaterOnesAreWatched)
+{
+    const int entry = NativeLegacyDisplay::kSlot0 + 1;
+    EXPECT_EQ(display.producerWatch(entry), 0u);  // nothing held: its jobs were never made External
+    display.slots[1].used = 9;
+    display.holdScanoutBacking(1);
+    EXPECT_EQ(display.producerWatch(entry), 0u);  // written before the hold
+    display.slots[1].used = 12;
+    EXPECT_EQ(display.producerWatch(entry), TEGRA_SCANOUT_COPY_PRODUCER_WATCH);
+    display.releaseScanoutBacking(1);
+    EXPECT_EQ(display.producerWatch(entry), 0u);
+}
+
 TEST(DirectVisibleSource, TheOfferTriesItOnceTheSlotIsMappedAndSlotsHoldTheirBacking)
 {
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
     const std::string offer = Between(display, "    bool offerDirect(", "\n    }\n");
     EXPECT_LT(offer.find("if (entry == kNoBuffer)"), offer.find("presentDirectVisible(request, entry, width"));
     EXPECT_LT(offer.find("presentDirectVisible(request, entry, width"), offer.find("tegra_gm20b_scanout_copy(&copy)"));
+    EXPECT_THAT(offer, HasSubstr("copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);"));
     const std::string slots = SourceText("../SwitchDirectSlots.h");
     EXPECT_THAT(Between(slots, "    void dropSlot(unsigned k)", "\n    }\n"), HasSubstr("releaseScanoutBacking(k);"));
     EXPECT_THAT(slots, HasSubstr("*slot.read = snapshot;\n        holdScanoutBacking(static_cast<unsigned>(victim));"));

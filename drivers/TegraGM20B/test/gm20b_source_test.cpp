@@ -421,7 +421,8 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	const std::string scanout =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
 	expectBefore(scanout, "#if TGM_STATS tgm_present_read reads",
-		     "#else gPresentSnapshot.done = presentDone; ret = tgm_present_copy_dependencies(");
+		     "#else gPresentSnapshot.done = presentDone; ret = watch ? presentWatched() : 1; if (ret "
+		     "== 1) ret = tgm_present_copy_dependencies(");
 	EXPECT_THAT(scanout, HasSubstr("nreads ? tgm_readback_done : presentDone"));
 	EXPECT_THAT(scanout, HasSubstr("if (ret && nreads) tgm_readback_refused();"));
 
@@ -503,7 +504,8 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
 	const std::string nonstall = flat(definition(
 		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)"));
-	EXPECT_THAT(nonstall, HasSubstr("} else { chan_wake_waiters(chan); }"));
+	EXPECT_THAT(nonstall,
+		    HasSubstr("} else { chan_wake_waiters(chan); present_watch_fenced(chan, 0); }"));
 	EXPECT_EQ(Count(nonstall, "nvxnu_wake();"),
 		  1u);  // the scrubber's, while the sleep gate is shut
 	const std::string wake =
@@ -1184,6 +1186,52 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 	expectBefore(imported, "bo->surface = switch_gpu_surface_hold(", "tgm_coherency_add(");
 	const auto released = flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
 	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
+}
+
+// A direct present whose producer still runs at the offer has no job (SwitchGpuPresentWatch.h): the producer's own
+// interrupt pass makes it due with plain loads, the pass's end delivers it with interrupts on, and a kill, a hidden
+// producer and the deadline go to the work item. The arm comes before the offer's own look.
+TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
+{
+	const auto fenced = flat(definition(gpu(), "static inline void present_watch_fenced("));
+	EXPECT_THAT(fenced, HasSubstr("switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, "
+				      "tgm_chan_completed(chan))"));
+	EXPECT_THAT(fenced, Not(HasSubstr("mutex_lock")));
+	EXPECT_THAT(fenced, Not(HasSubstr("finish_visible")));
+	const std::string killed = flat(definition(
+		gpu(), "int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
+	expectBefore(killed, "__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);",
+		     "present_watch_fenced(chan, 1);");
+	const std::string pass = flat(definition(
+		SourceText("../shim/xnu_glue.cpp"),
+		"void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)"));
+	expectBefore(pass, "nvxnu_poll_irqs();", "tgm_present_pass();");
+	expectBefore(pass, "tgm_present_pass();", "nvxnu_wake();");
+	const std::string deliver = flat(definition(gpu(), "void tgm_present_pass(void)"));
+	EXPECT_THAT(deliver, HasSubstr("switch_gpu_present_watch_take_visible("));
+	// the pass's own thread: nothing may wait for a GPU interrupt
+	EXPECT_THAT(deliver, HasSubstr("switch_gpu_present_tokens_finish_ready("));
+	EXPECT_THAT(deliver, Not(HasSubstr("finish_visible")));
+	EXPECT_THAT(deliver, Not(HasSubstr("_wait(")));
+	EXPECT_THAT(flat(Between(SourceText("../SwitchGpuPresentTokens.h"),
+				 "switch_gpu_present_tokens_finish_ready(", "\n}\n")),
+		    Not(HasSubstr("token_wait")));
+	EXPECT_THAT(deliver, HasSubstr("nvxnu_work_schedule(tgm_present.watch_work);"));
+	EXPECT_THAT(deliver, Not(HasSubstr("mutex_lock")));
+	const std::string arm =
+		flat(definition(gpu(), "int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,"));
+	expectBefore(arm, "switch_gpu_present_watch_arm(", "mutex_unlock(&tgm_present.lock);");
+	expectBefore(arm, "gate_leave();", "present_physical(&tgm_present.watch.token)");
+	EXPECT_THAT(arm, HasSubstr("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));
+	const std::string outstanding = flat(definition(gpu(), "int tgm_present_outstanding(const void *arg)"));
+	EXPECT_THAT(outstanding, HasSubstr("switch_gpu_present_watch_armed(&tgm_present.watch)"));
+	const std::string deadline = flat(definition(gpu(), "static void present_deadline(void *arg)"));
+	expectBefore(deadline, "present_watch_work(NULL);", "mutex_lock(&tgm_present.lock);");
+	EXPECT_THAT(deadline, HasSubstr("if (tgm_present.pending && (s32)(tgm_chan_completed(tgm_present.chan) - "
+					"tgm_present.pending) >= 0)"));
+	const std::string offer = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
+	EXPECT_THAT(offer, HasSubstr("ret = watch && !nreads ? presentWatched() : 1;"));
+	EXPECT_THAT(offer, HasSubstr("ret = watch ? presentWatched() : 1;"));
 }
 
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)

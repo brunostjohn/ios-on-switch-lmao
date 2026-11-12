@@ -391,6 +391,7 @@ host_test(
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
         "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
         "//drivers/TegraGM20B:recover.c",
         "//drivers/TegraGM20B:nouveau/nvkm/subdev/ltc/base.c",
@@ -802,6 +803,15 @@ host_test(
     srcs = [
         "switch_gpu_present_tokens_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_present_watch_test",
+    srcs = [
+        "switch_gpu_present_watch_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
     ],
 )
