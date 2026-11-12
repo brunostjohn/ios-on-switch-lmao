@@ -7,8 +7,8 @@ import Metal
 
 /// Render passes into two-plane YCbCr attachments over CoreVideo surfaces, as cameracaptured renders its frames
 /// (RGB8_420_2P over '420v'/'420f'): a clear, a draw of floats and a draw of halves into each, every byte of both planes
-/// against Metal's store (YcbcrStore, an M4 Max's bytes; m2v's rule for the converted YCBCR8 formats) and every command
-/// buffer on the raw path. The raw path renders each pass into a memoryless stand-in and draws both planes from it with the
+/// against Metal's store (YcbcrStore, an M4 Max's bytes: the code formats, the converted YCBCR*_2P and their sRGB twins)
+/// and every command buffer on the raw path. The raw path renders each pass into a memoryless stand-in and draws both planes from it with the
 /// pack's store states (device log: "raw: YCbCr target stored on the GPU"). wrong_luma_ and wrong_chroma_ split each
 /// target's count by plane.
 struct YcbcrTargetTest: HWTest {
@@ -25,13 +25,18 @@ struct YcbcrTargetTest: HWTest {
             return "\(format) over '\(code)'"
         }
 
-        var tenBit: Bool { (543...545).contains(format) }
-        var converted: Bool { format == 500 || format == 502 }
-        var halvedAcross: Bool { format != 545 }
-        var halvedDown: Bool { format == 500 || format == 540 || format == 543 }
+        var bits: Int { [500, 502, 503, 520, 522, 523, 540, 541].contains(format) ? 8 : 10 }
+        var tenBit: Bool { bits == 10 }
+        var converted: Bool { (500...527).contains(format) }
+        var srgb: Bool { (520...527).contains(format) }
+        var halvedAcross: Bool { ![503, 507, 523, 527, 545].contains(format) }
+        var halvedDown: Bool { [500, 505, 520, 525, 540, 543].contains(format) }
         var full: Bool {
-            [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_422YpCbCr8BiPlanarFullRange]
-                .contains(fourcc)
+            [
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+                kCVPixelFormatType_444YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                kCVPixelFormatType_422YpCbCr10BiPlanarFullRange, kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+            ].contains(fourcc)
         }
     }
 
@@ -45,6 +50,18 @@ struct YcbcrTargetTest: HWTest {
         Target(format: 543, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
         Target(format: 544, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange),
         Target(format: 545, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange),
+        Target(format: 503, fourcc: kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange),
+        Target(format: 505, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        Target(format: 505, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange),
+        Target(format: 506, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange),
+        Target(format: 507, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarFullRange),
+        Target(format: 520, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        Target(format: 520, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+        Target(format: 522, fourcc: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange),
+        Target(format: 523, fourcc: kCVPixelFormatType_444YpCbCr8BiPlanarFullRange),
+        Target(format: 525, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        Target(format: 526, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarFullRange),
+        Target(format: 527, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange),
     ]
     static let width = 128, height = 64
     static let clear = MTLClearColor(red: 0.70196, green: 0.501960784, blue: 0.17058829, alpha: 1)
@@ -141,7 +158,8 @@ struct YcbcrTargetTest: HWTest {
         let (luma, chroma) =
             target.converted
             ? YcbcrStore.converted(
-                texels, width: width, height: height, full: target.full, halvedDown: target.halvedDown)
+                texels, width: width, height: height, bits: target.bits, full: target.full,
+                halvedAcross: target.halvedAcross, halvedDown: target.halvedDown, srgb: target.srgb, source: source)
             : YcbcrStore.codes(
                 texels, width: width, height: height, max: target.tenBit ? 1023 : 255,
                 halvedAcross: target.halvedAcross, halvedDown: target.halvedDown, source: source)

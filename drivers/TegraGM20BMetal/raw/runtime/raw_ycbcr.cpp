@@ -232,9 +232,9 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
     s[14] = !planeOne;
     if (f.target) {
         const bool across = halvedAcross(format->sub), down = halvedDown(format->sub);
-        out.store = format->reads == Converted
-                        ? ycbcrConvertedShape(surface->full, YcbcrMatrix(matrix), across, down)
-                        : ycbcrCodesShape(format->bits, across, down);
+        out.store = format->reads == Codes ? ycbcrCodesShape(format->bits, across, down)
+                                           : ycbcrConvertedShape({format->bits, format->reads == Srgb, surface->full,
+                                                                  YcbcrMatrix(matrix), across, down});
     }
     return nullptr;
 }

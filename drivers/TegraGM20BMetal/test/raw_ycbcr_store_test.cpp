@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment, against bytes an M4 Max's Metal
-// stored (the measured texels below; every byte of its passes: raw/test/ycbcrstoreoracle.mm), and the raw path's route to it:
-// the pack's store states (pack/ycbcr_store.metal, step for step ycbcrStoreDrawn) over the pass's stand-in. Also which YCbCr
-// textures planYcbcr takes as render targets.
+// raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr code attachment, against bytes an M4 Max's
+// Metal stored (the measured texels below; every byte of its passes: raw/test/ycbcrstoreoracle.mm), and the raw path's route to
+// it: the pack's store states (pack/ycbcr_store.metal, step for step ycbcrStoreDrawn) over the pass's stand-in. Also which
+// YCbCr textures planYcbcr takes as render targets. The converted and sRGB targets: raw_ycbcr_converted_store_test.cpp.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -150,7 +150,8 @@ TEST(RawYcbcrStore, ConvertedFormatsAreMtwovsRule)
 
     for (const auto &w : want) {
         uint16_t luma[4], chroma[2];
-        ASSERT_TRUE(raw::ycbcrStoreConverted(w.full, raw::YcbcrMatrix::Bt601, true, v.data(), 2, 2, luma, chroma));
+        ASSERT_TRUE(raw::ycbcrStoreConverted({8, false, w.full, raw::YcbcrMatrix::Bt601, true, true}, nullptr, v.data(),
+                                             2, 2, raw::YcbcrTexelSource::DrawnFloat, luma, chroma));
         for (int i = 0; i < 4; i++)
             EXPECT_EQ(luma[i], w.luma[i]);
         EXPECT_EQ(chroma[0], w.cb);
@@ -186,8 +187,8 @@ TEST(RawYcbcrStore, TheStoreStatesStoreMetalsCodes)
         for (bool down : {true, false}) {
             const std::vector<float> rgba = passTexels(w, h, bits * 2 + down);
             std::vector<uint16_t> luma(w * h), chroma(w * h), wantLuma(w * h), wantChroma(w * h);
-            ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(bits, true, down), rgba.data(), w, h, luma.data(),
-                                             chroma.data()));
+            ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(bits, true, down), nullptr, rgba.data(), w, h,
+                                             luma.data(), chroma.data()));
             ASSERT_TRUE(raw::ycbcrStore({(1u << bits) - 1, down}, rgba.data(), w, h,
                                         raw::YcbcrTexelSource::DrawnFloat, wantLuma.data(), wantChroma.data()));
             EXPECT_EQ(luma, wantLuma) << bits << (down ? " 4:2:0" : " 4:2:2");
@@ -203,7 +204,7 @@ TEST(RawYcbcrStore, AClearsColourRoundedToItsHalfFirstStoresMetalsClearCodes)
     for (size_t i = 0; i < rgba.size(); i++)
         rounded[i] = float(_Float16(rgba[i]));
     std::vector<uint16_t> luma(w * h), chroma(w * h), wantLuma(w * h), wantChroma(w * h);
-    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, true, true), rounded.data(), w, h, luma.data(),
+    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, true, true), nullptr, rounded.data(), w, h, luma.data(),
                                      chroma.data()));
     ASSERT_TRUE(raw::ycbcrStore({1023, true}, rgba.data(), w, h, raw::YcbcrTexelSource::Clear, wantLuma.data(),
                                 wantChroma.data()));
@@ -216,44 +217,11 @@ TEST(RawYcbcrStore, FourFourFourChromaIsEachTexelsOwnCodes)
     constexpr uint32_t w = 8, h = 4;
     const std::vector<float> rgba = passTexels(w, h, 444);
     std::vector<uint16_t> luma(w * h), chroma(2 * w * h);
-    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, false, false), rgba.data(), w, h, luma.data(),
+    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, false, false), nullptr, rgba.data(), w, h, luma.data(),
                                      chroma.data()));
     for (uint32_t i = 0; i < w * h; i++) {
         EXPECT_EQ(chroma[2 * i], raw::ycbcrTexelCode(rgba[4 * i + 2], raw::YcbcrTexelSource::DrawnFloat, 1023));
         EXPECT_EQ(chroma[2 * i + 1], raw::ycbcrTexelCode(rgba[4 * i], raw::YcbcrTexelSource::DrawnFloat, 1023));
-    }
-}
-
-TEST(RawYcbcrStore, TheConvertedStoreStatesAreMtwovsRule)
-{
-    constexpr uint32_t w = 64, h = 32;
-    for (bool full : {false, true})
-        for (raw::YcbcrMatrix m : {raw::YcbcrMatrix::Bt601, raw::YcbcrMatrix::Bt709, raw::YcbcrMatrix::Bt2020})
-            for (bool down : {true, false}) {
-                const std::vector<float> rgba = passTexels(w, h, 500 + full * 8 + int(m) * 2 + down);
-                std::vector<uint16_t> luma(w * h), chroma(w * h), wantLuma(w * h), wantChroma(w * h);
-                ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrConvertedShape(full, m, true, down), rgba.data(), w, h,
-                                                 luma.data(), chroma.data()));
-                ASSERT_TRUE(raw::ycbcrStoreConverted(full, m, down, rgba.data(), w, h, wantLuma.data(),
-                                                     wantChroma.data()));
-                EXPECT_EQ(luma, wantLuma) << full << int(m) << down;
-                EXPECT_EQ(chroma, wantChroma) << full << int(m) << down;
-            }
-}
-
-TEST(RawYcbcrStore, ThirtyTwoBitStepsScaleAsTheSixtyFourBitProduct)
-{
-    std::mt19937 rng(20);
-    const auto want = [](int32_t sum, uint32_t mul) {
-        return int32_t(std::floor(double(int64_t(sum) * mul) / double(1 << 20)));
-    };
-    for (uint32_t mul : {255u, 256u, 512u}) {
-        for (int32_t sum : {0, 1, -1, 4095, 4096, -4096, -4097, (1 << 20) - 1, -(1 << 20), 3 << 26, -(3 << 26)})
-            EXPECT_EQ(raw::ycbcrScaled(sum, mul), want(sum, mul)) << sum << " " << mul;
-        for (int i = 0; i < 200000; i++) {
-            const int32_t sum = int32_t(rng() % (6u << 26)) - (3 << 26);
-            ASSERT_EQ(raw::ycbcrScaled(sum, mul), want(sum, mul)) << sum << " " << mul;
-        }
     }
 }
 
@@ -273,7 +241,7 @@ raw::YcbcrFacts target(uint32_t format, uint32_t fourcc, uint32_t w, uint32_t h,
     return f;
 }
 
-constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, k444v = 0x34343476, kX420 = 0x78343230;
+constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, k444v = 0x34343476, kX420 = 0x78343230, kXf20 = 0x78663230;
 
 TEST(RawYcbcrStore, TargetsAreTakenOverTheirOwnChroma)
 {
@@ -300,7 +268,23 @@ TEST(RawYcbcrStore, TargetsAreTakenOverTheirOwnChroma)
     EXPECT_EQ(raw::planYcbcr(target(500, k420v, 1920, 1080, 540), p), nullptr);
     EXPECT_EQ(p.store.converted, 1u);
     EXPECT_EQ(p.store.offset[0], 16);
-    EXPECT_NE(raw::planYcbcr(target(503, k444v, 1920, 1080, 1080), p), nullptr);
+    EXPECT_EQ(p.store.srgb, 0u);
+    raw::YcbcrFacts four = target(503, k444v, 1920, 1080, 1080);
+    four.pitch[1] = 3840;
+    four.allocBytes = four.offset[1] + uint64_t(four.pitch[1]) * 1080;
+    EXPECT_EQ(raw::planYcbcr(four, p), nullptr);
+    EXPECT_EQ(p.store.converted, 1u);
+    EXPECT_EQ(p.store.across, 0u);
+    raw::YcbcrFacts srgb = ten;
+    srgb.pixelFormat = 525;
+    srgb.fourcc = kXf20;
+    EXPECT_EQ(raw::planYcbcr(srgb, p), nullptr);
+    EXPECT_EQ(p.store.srgb, 1u);
+    EXPECT_EQ(p.store.max, 1023u);
+    EXPECT_EQ(p.store.termBits, 4u);
+    EXPECT_EQ(p.store.offset[0], 0);
+    EXPECT_EQ(p.store.offset[1], 512);
+    EXPECT_EQ(p.store.mul[0], 1023u);
     EXPECT_NE(raw::planYcbcr(target(546, kX420, 1920, 1080, 540), p), nullptr);
     raw::YcbcrFacts sampled = target(500, k420v, 1920, 1080, 540);
     sampled.target = false;

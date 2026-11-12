@@ -2623,12 +2623,14 @@ Pipeline *Device::ycbcrPipeline(uint8_t output)
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
-Pipeline *Device::ycbcrStorePipeline(bool chroma, bool wide)
+Pipeline *Device::ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store)
 {
-    static const char *const names[2][2] = {
-        {"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
-        {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}};
-    const char *name = names[chroma][wide];
+    static const char *const names[2][2][2] = {
+        {{"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}},
+        {{"raw.ycbcr_store.ycbcr_store_luma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_luma16_srgb_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma16_srgb_frag"}}};
+    const char *name = names[store.srgb != 0][chroma][store.max > 255];
     return pipeline(Pack::fnv(name, strlen(name)));
 }
 
