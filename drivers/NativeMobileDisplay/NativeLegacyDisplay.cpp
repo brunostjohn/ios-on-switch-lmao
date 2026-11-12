@@ -4797,9 +4797,9 @@ public:
 #include "SwitchPlaneSurfaceUseDisplay.h"
 #include "SwitchVICScanoutDisplay.h"
 #include "NativeColumnScanDisplay.h"
+#include "SwitchDcHost1xClassProbe.h"
 #include "DisplayWindowProbeDisplay.h"
 #include "SwitchLandscapeRunDisplay.h"
-#include "SwitchDcHost1xClassProbe.h"
 #include "SwitchPaletteDisplay.h"
 #include "SwitchPlaneAdmissionDrop.h"
 
