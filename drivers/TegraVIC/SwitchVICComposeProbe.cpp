@@ -39,6 +39,30 @@ int runCase(uint32_t index, const SwitchVICProbeBuffers &buffers, SwitchVICCompo
 }
 }  // namespace
 
+extern "C" int switch_display_composite_probe(uint32_t arm, uint32_t *composited) __attribute__((weak));
+
+namespace {
+int composite(void *out, uint32_t arm)
+{
+    auto *reply = static_cast<uint32_t *>(out);
+    reply[0] = arm ? SWITCH_VIC_COMPOSITE_ARM_MAGIC : SWITCH_VIC_COMPOSITE_REPORT_MAGIC;
+    reply[1] = arm;
+    const int error = switch_display_composite_probe ? switch_display_composite_probe(arm, &reply[2]) : -19;
+    reply[3] = uint32_t(error);
+    return 0;
+}
+}  // namespace
+
+int switch_vic_composite_arm_run(void *out)
+{
+    return composite(out, 1);
+}
+
+int switch_vic_composite_report_run(void *out)
+{
+    return composite(out, 0);
+}
+
 int switch_vic_compose_probe_run(void *out)
 {
     auto *reply = static_cast<SwitchVICComposeProbeReply *>(out);

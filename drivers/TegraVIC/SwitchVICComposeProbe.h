@@ -19,7 +19,12 @@
 #include "TegraVICCompose.h"
 
 #define SWITCH_VIC_COMPOSE_PROBE_MAGIC 0x56434d50u  // 'VCMP'
-#define SWITCH_VIC_COMPOSE_PROBE_CASES 12u
+// HW Test display.planes_composite: arm the display's composite probe, then report and disarm it
+// (NativeMobileDisplay/SwitchPlaneCompositeProbe.h). The reply: magic, armed, frames composited, the display's error.
+#define SWITCH_VIC_COMPOSITE_ARM_MAGIC    0x56434641u  // 'VCFA'
+#define SWITCH_VIC_COMPOSITE_REPORT_MAGIC 0x56434652u  // 'VCFR'
+#define SWITCH_VIC_COMPOSITE_REPLY_BYTES  16u
+#define SWITCH_VIC_COMPOSE_PROBE_CASES    12u
 
 typedef struct {
     uint32_t slots;                 // 0: the control (tegra_vic_build)

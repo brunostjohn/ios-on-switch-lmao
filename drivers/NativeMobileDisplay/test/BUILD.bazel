@@ -576,6 +576,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:SwitchVICPicture.h",
     ],
+    defines = ["DEVELOPMENT=1"],
     deps = [":native_scanout_kernel"],
 )
 

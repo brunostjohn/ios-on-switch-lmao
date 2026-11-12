@@ -624,6 +624,24 @@ TEST_F(PlaneComposite, ANativePictureIsReadBlockLinearFromItsCrop)
     EXPECT_FALSE(lastSources[0].image.blockLinear);
 }
 
+// HW Test display.planes_composite: armed, an overlay admission takes goes as the composite; the report counts it and
+// disarms.
+TEST_F(PlaneComposite, TheArmedProbeComposesWhatAdmissionTakesAndTheReportDisarms)
+{
+    EXPECT_EQ(display->planeCompositeProbe(true), 0u);
+    switch_display::Overlay one[2] = {wanted[0], {}};
+    ASSERT_TRUE(display->planeComposeWaits(one, selected, 720, 1280));
+    runWorker();
+    ASSERT_FALSE(display->planeComposeWaits(one, selected, 720, 1280));
+    EXPECT_EQ(one[0].slot, 6);
+    EXPECT_EQ(lastIds.size(), 1u);
+    EXPECT_EQ(display->planeCompositeProbe(false), 1u);
+    switch_display::Overlay after[2] = {wanted[0], {}};
+    EXPECT_FALSE(display->planeComposeWaits(after, selected, 720, 1280));
+    EXPECT_EQ(after[0].slot, 1);
+    EXPECT_EQ(composites, 1u);
+}
+
 TEST_F(PlaneComposite, WithoutMultiSlotTwoOverlaysAreNotComposed)
 {
     reserveLimit = twoVideos() - 1;

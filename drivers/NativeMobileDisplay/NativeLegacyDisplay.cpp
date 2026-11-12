@@ -5430,4 +5430,5 @@ extern "C" uint64_t native_display_last_swap_ns(void)
     return ns;
 }
 
+#include "SwitchPlaneCompositeProbe.h"
 #include "SwitchConsoleRelease.h"

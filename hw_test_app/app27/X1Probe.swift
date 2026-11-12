@@ -97,5 +97,6 @@ enum X1Probes {
         X1CompressedCopyProbe.probe, X1TwodProbes.scale, X1TwodProbes.clear, X1TwodProbes.resolve,
         X1VICPitchProbe.probe, X1VICLayoutProbe.probe, X1VICFractionProbe.probe,
         X1VICPackedProbe.probe, X1VICTransposeProbe.probe, X1VICLargeProbe.probe, X1VICComposeProbe.probe,
+        X1VICComposeProbe.display,
     ]
 }

@@ -37,6 +37,10 @@ struct PlaneComposite {
     switch_display::CompositeDemand refused;
     switch_display::CompositeKey failed;
     const char *why;
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+    bool forced;
+    uint32_t forcedCount;
+#endif
 };
 
 PlaneComposite *planeComposite = nullptr;
@@ -57,6 +61,21 @@ bool planeCompositeReady()
             this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
     return planeComposite && planeComposite->call;
 }
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// HW Test display.planes_composite (SwitchPlaneCompositeProbe.h): armed, every overlay set is taken as refused, so the
+// route runs on whatever Core Animation detaches; the report disarms and returns the frames composited meanwhile.
+uint32_t planeCompositeProbe(bool arm)
+{
+    if (planeCompositeStopping || !planeCompositeReady())
+        return 0;
+    const uint32_t composited = planeComposite->forcedCount;
+    planeComposite->forced = arm;
+    planeComposite->forcedCount = 0;
+    planeComposite->refusedSet = false;
+    return composited;
+}
+#endif
 
 bool planeCompositeUses(int slot) const
 {
@@ -92,6 +111,10 @@ bool planeCompositeShown(const PlaneSet &set) const
 // Whether planeStage arms the overlays as they are; reserving them here is what it would do a moment later.
 bool planeAdmits(const switch_display::Overlay wanted[2])
 {
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+    if (planeComposite->forced)
+        return false;
+#endif
     const auto demand = switch_display::compositeDemand(wanted);
     if (planeComposite->refusedSet && switch_display::sameDemand(demand, planeComposite->refused))
         return false;
@@ -336,8 +359,13 @@ void planeCompositeFinished()
         planeComposite->failed = target.key;
         planeComposite->failedSet = true;
         planeCompositeRefuse("a composite job could not be submitted");
-    } else if (stats) {
-        ++stPlaneComposited;
+    } else {
+        if (stats)
+            ++stPlaneComposited;
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+        if (planeComposite->forced)
+            ++planeComposite->forcedCount;
+#endif
     }
     kickSwapQueue();
 }

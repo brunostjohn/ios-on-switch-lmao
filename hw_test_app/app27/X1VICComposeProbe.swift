@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 
 /// L959: kTegraVICTraits.multiSlot, one VIC job composing several slots bottom first
 /// (drivers/TegraVIC/SwitchVICComposeProbe.h), the display's overlays as one plane when DC A's memory admission refuses
@@ -19,6 +20,9 @@ enum X1VICComposeProbe {
         "control", "one", "disjoint", "over", "under", "premultiplied", "straight", "global", "scaled", "block",
         "zero_blend", "composited_fill",
     ]
+
+    /// display.planes_composite: the display's composite route, its selector calls through this app's X1VICKernelTest.
+    static let display = PlanesCompositeTest(kernelTest: { X1VICKernelTest.call($0, replyBytes: $1) })
 
     static let probe = X1Probe(
         id: "gpu.x1.vic_compose", name: "VIC slots composed in one job: order, alpha, scale, block-linear output",
