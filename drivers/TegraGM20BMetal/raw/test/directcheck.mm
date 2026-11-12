@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
-// directcheck: the direct compile (runtime/raw_direct.h) of every state of a corpus against the pack. Each state's record is made
-// from m2v's translation and plans and NVK's stage compile, with no pipeline, command buffer or capture: every state the pack holds
-// a record for must come out byte for byte the same (its barrier form made as on a device without the pixel interlock), with the
-// pack's split of its fragment program, every one it set aside refused. The states are pack/probe.mm's: Core Animation's
-// lines, another framework's (lib=, under PROBE_LIB_ROOT) and, with PROBE_OWN_LIB, the raw path's own.
-// usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
-//   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
-//   that it met every record of the pack)
-//   DIRECTCHECK_DUMP=<dir>: writes each record made to <dir>/<key hash>.json (its key, programs and blob), what
-//   tools/gpu/maxwell/nakstat.py --dump reads, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json
-//   with its rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
-// Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
-// device's harvest against the pack it booted with, they are the states its runtime refused. A state made in the barrier
-// form because its storage form was refused is listed with that reason (BARRIER FORM lines).
+// directcheck: the direct compile (runtime/raw_direct.h) of every state of a corpus, dumped. Each state's record is made
+// from m2v's translation and plans and NVK's stage compile, with no pipeline, command buffer or capture (its barrier form
+// made as on a device without the pixel interlock), with the pack it is given for the compile's rules. The states are
+// pack/probe.mm's: Core Animation's lines, another framework's (lib=, under PROBE_LIB_ROOT) and, with PROBE_OWN_LIB, the
+// raw path's own. The record goldens (test/records) hold the pack's records; this only dumps.
+// usage: DIRECTCHECK_DUMP=<dir> directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
+//   writes each record made to <dir>/<key hash>.json (its key, programs and blob), what tools/gpu/maxwell/gate.py and
+//   nakstat.py --dump read, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json with its
+//   rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
+// A state the direct compile refuses is listed with its reason (REFUSED lines), and one made in the barrier form because
+// its storage form was refused with that reason (BARRIER FORM lines).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -25,7 +22,6 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
-#include "record_compare.h"
 
 namespace {
 
@@ -96,8 +92,8 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
         variants += std::string(i ? ", " : "") + "{\"stage\": " + (i < rec.pipeline.variantCount[0] ? "0" : "1") +
                     ", \"assume\": " + std::to_string(v.assume) + ", \"gprs\": " + std::to_string(v.program.gprs) +
-                    ", \"bound_textures\": " + std::to_string(v.program.boundTextures) +
-                    ", \"code\": \"" + hexOf(v.program.image) + "\"}";
+                    ", \"bound_textures\": " + std::to_string(v.program.boundTextures) + ", \"code\": \"" +
+                    hexOf(v.program.image) + "\"}";
     }
     fprintf(f,
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
@@ -133,8 +129,10 @@ void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &li
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc != 6) {
-            fprintf(stderr, "usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>\n");
+        const char *dir = getenv("DIRECTCHECK_DUMP");
+        if (argc != 6 || !dir || !*dir) {
+            fprintf(stderr, "usage: DIRECTCHECK_DUMP=<dir> directcheck <nvk dylib> <cache dir> <default.metallib> "
+                            "<corpus.log> <pack.bin>\n");
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
@@ -165,10 +163,9 @@ int main(int argc, char **argv)
         }
         raw::Direct direct(pack);
         direct.makeVariants(true);
-        FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
-        uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0, splits = 0;
+        uint32_t states = 0, made = 0, refused = 0, failed = 0;
         double ms = 0;
-        std::map<std::string, uint32_t> differences, reasons;
+        std::map<std::string, uint32_t> reasons;
         probe::eachState(
             dev, qc, own, standIn, probe::corpusLines(text, own != nil),
             [&](const std::string &line, bool ours, probe::State &s) {
@@ -176,70 +173,38 @@ int main(int argc, char **argv)
                 raw::ProbeTextures textures = probe::probeTextures(line, ours);
                 textures.cubic = s.cubic;
                 // DIRECTCHECK_TESTS=<n>: each state's variant beside depth or stencil tests of class n
-                // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes, against the
-                // pack's record of it (PipelineVariantRecord)
+                // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes
                 std::string key = s.key;
                 if (const char *tests = getenv("DIRECTCHECK_TESTS"); tests && *tests) {
                     textures.fragmentTests = uint8_t(atoi(tests));
                     key += " | tests=" + std::to_string(textures.fragmentTests);
                 }
-                const size_t named = raw::variantNameAt(key);
-                const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
-                const raw::PackPipeline *pp =
-                    named < key.size() ? pack.variantRecord(keyHash, key.substr(named)) : pack.find(keyHash);
-                const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
                 raw::RuntimeRecord rec;
                 std::string why;
                 const auto began = std::chrono::steady_clock::now();
                 const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, nullptr, true);
-                if (pp && named < key.size()) {
-                    rec.pipeline.keyHash = keyHash;
-                    rec.pipeline.flags |= raw::PipelineVariantRecord;
-                }
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
-                if (outcome == raw::CompileOutcome::Made && !direct.storageRefusal().empty())
-                    printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
-                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made) {
-                    dumpRecord(dir, key, rec);
-                    dumpFetchFree(direct, qc, line, key, textures, dir);
-                }
-                std::string verdict;
                 if (outcome == raw::CompileOutcome::Failed) {
-                    verdict = " failed (" + why + ")";
-                } else if (pp) {
-                    verdict = outcome == raw::CompileOutcome::Made ? recordcompare::differences(pack, *pp, rec) +
-                                                                         recordcompare::splitDifferences(pack, *pp, rec)
-                                                                   : " refused (" + why + ")";
-                    splits += verdict.empty() && rec.split;
-                    (barrier ? barriers : same) += verdict.empty();
-                    if (met && verdict.empty())
-                        fprintf(met, "%016llx %u\n", (unsigned long long)pp->keyHash,
-                                pp->flags & raw::PipelineBarrierForm);
-                } else {
-                    verdict = outcome == raw::CompileOutcome::Made ? " made, and the pack set it aside" : "";
-                    refused += verdict.empty();
-                    if (verdict.empty()) {
-                        reasons[why.substr(0, 90)]++;
-                        printf("REFUSED (%s): %s\n", why.c_str(), s.key.substr(0, 160).c_str());
-                    }
+                    failed++;
+                    printf("FAILED (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
+                    return;
                 }
-                if (!verdict.empty()) {
-                    bad++;
-                    differences[verdict.substr(0, verdict.find('['))]++;
-                    printf("DIFFERS%s%s: %s\n", barrier ? " (barrier)" : "", verdict.c_str(),
-                           s.key.substr(0, 160).c_str());
+                if (outcome == raw::CompileOutcome::Refused) {
+                    refused++;
+                    reasons[why.substr(0, 90)]++;
+                    printf("REFUSED (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
+                    return;
                 }
+                made++;
+                if (!direct.storageRefusal().empty())
+                    printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
+                dumpRecord(dir, key, rec);
+                dumpFetchFree(direct, qc, line, key, textures, dir);
             });
-        if (met)
-            fclose(met);
-        for (const auto &[what, n] : differences)
-            printf("  %u x%s\n", n, what.c_str());
         for (const auto &[why, n] : reasons)
             printf("  %u x refused: %s\n", n, why.c_str());
-        printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier "
-               "forms, "
-               "%u set aside and refused, %u differ; %u with the pack's split; %.1f ms a state\n",
-               states, same, barriers, refused, bad, splits, states ? ms / states : 0.0);
-        return bad || !states ? 1 : 0;
+        printf("directcheck: %u states, %u made and dumped to %s, %u refused, %u failed; %.1f ms a state\n", states,
+               made, dir, refused, failed, states ? ms / states : 0.0);
+        return failed || !states ? 1 : 0;
     }
 }
