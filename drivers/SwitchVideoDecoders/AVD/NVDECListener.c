@@ -69,8 +69,12 @@ static void deliver(NVDECListener *l, const uint8_t *bytes)
     memcpy(&m, bytes, sizeof(m));
     const uint32_t count = (m.size - (uint32_t)sizeof(IOReturn)) / sizeof(io_user_reference_t);
     if (m.header.msgh_size < sizeof(m) || m.header.msgh_id != kOSNotificationMessageID ||
-        m.type != kIOAsyncCompletionNotificationType || count < SWITCH_NVDEC_COMPLETION_ARGS)
+        m.type != kIOAsyncCompletionNotificationType || count < SWITCH_NVDEC_COMPLETION_ARGS) {
+        switch_refusal("AVD", "NVDEC completion message not understood",
+                       "size %u id %d type %u arguments %u: its picture is never answered", m.header.msgh_size,
+                       m.header.msgh_id, m.type, count);
         return;
+    }
     l->done(l->context, (uint32_t)m.arguments[0], m.result ? -5 : 0, (uint32_t)m.arguments[1],
             (uint32_t)m.arguments[2]);
 }
@@ -85,9 +89,15 @@ static void received(void *context)
     } m;
 
     while (!stopped(l)) {
-        if (mach_msg(&m.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(m), l->port, 0, MACH_PORT_NULL) !=
-            MACH_MSG_SUCCESS)
+        const mach_msg_return_t kr =
+            mach_msg(&m.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(m), l->port, 0, MACH_PORT_NULL);
+        if (kr == MACH_RCV_TIMED_OUT)
             return;
+        if (kr != MACH_MSG_SUCCESS) {
+            switch_refusal("AVD", "NVDEC completion message lost",
+                           "mach_msg %#x: a completion was dropped and its picture is never answered", kr);
+            return;
+        }
         deliver(l, m.bytes);
     }
 }
