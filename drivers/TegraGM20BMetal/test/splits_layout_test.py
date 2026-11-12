@@ -29,8 +29,15 @@ def program(fill: int, cbufs: list[int]) -> dict:
     return {'image': bytes([fill]) * 96, 'cbufs': cbufs, 'data': b''}
 
 
-def split(fs: str, frontier_cbuf: int = 3) -> dict:
-    return {'fs': fs, 'prologue': 'p', 'frontier_cbuf': frontier_cbuf, 'prologue_cbufs': 2, 'ubo_cbufs': [2]}
+def split(fs: str, frontier_cbuf: int = 3, frontier_bytes: int = 64) -> dict:
+    return {
+        'fs': fs,
+        'prologue': 'p',
+        'frontier_cbuf': frontier_cbuf,
+        'frontier_bytes': frontier_bytes,
+        'prologue_cbufs': 2,
+        'ubo_cbufs': [2],
+    }
 
 
 class LayOutTest(unittest.TestCase):
@@ -58,6 +65,11 @@ class LayOutTest(unittest.TestCase):
 
     def test_a_frontier_not_after_the_wholes_buffers_is_left_out(self) -> None:
         self.assertEqual(self.lay_out({'a': split('fa', frontier_cbuf=2)}), [])
+
+    def test_a_frontier_the_runtime_refuses_is_left_out(self) -> None:
+        for frontier_bytes in (0, 24, 4112):
+            self.assertEqual(self.lay_out({'a': split('fa', frontier_bytes=frontier_bytes)}), [], frontier_bytes)
+        self.assertEqual(self.lay_out({'a': split('fa', frontier_bytes=4096)}), ['a'])
 
 
 class SplitIdentityTest(unittest.TestCase):
