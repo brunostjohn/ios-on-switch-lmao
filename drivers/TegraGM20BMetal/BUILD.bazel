@@ -104,6 +104,7 @@ filegroup(
         "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_pack.h",
+        "raw/runtime/raw_push.h",
         "raw/runtime/raw_record.h",
         "raw/runtime/raw_record_parts.cpp",
         "raw/runtime/raw_record_parts.h",
@@ -111,6 +112,7 @@ filegroup(
         "raw/runtime/raw_rotation.h",
         "raw/runtime/raw_xr.h",
         "raw/runtime/raw_xr_pass.h",
+        "raw/runtime/raw_zeta.h",  # the formats directpack.mm's test classes reach
     ],
 )
 
