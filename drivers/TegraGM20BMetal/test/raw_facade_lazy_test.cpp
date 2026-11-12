@@ -5,8 +5,15 @@
 #include "MetalABI.h"
 #include "bazel/testing/fresh_process.h"
 
+#import <IOSurface/IOSurface.h>
 #include <gtest/gtest.h>
+#include <mach/vm_page_size.h>
 #include <set>
+
+@protocol HarnessDeviceSPI
+- (id<MTLBuffer>)newBufferWithIOSurface:(IOSurfaceRef)surface;
+- (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
+@end
 
 namespace {
 
@@ -157,6 +164,39 @@ void inheritedMethod()
     EXPECT_EQ(gOpens, 1);
 }
 
+// A buffer over an IOSurface's pages and a linear texture's row are the raw device's own answers
+void surfaceBufferAndLinearRow()
+{
+    const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
+    ASSERT_TRUE(device != nil);
+    id<HarnessDeviceSPI> spi = (id<HarnessDeviceSPI>)device;
+    IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @64,
+        (id)kIOSurfaceHeight : @64,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_TRUE(surface != nullptr);
+    id<MTLBuffer> buffer = [spi newBufferWithIOSurface:surface];
+    ASSERT_TRUE(buffer != nil);
+    EXPECT_EQ(buffer.contents, IOSurfaceGetBaseAddress(surface));
+    EXPECT_EQ(buffer.length % vm_page_size, 0u);
+    EXPECT_GE(buffer.length, IOSurfaceGetAllocSize(surface));
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:100
+                                                                                height:4
+                                                                             mipmapped:NO];
+    const NSUInteger align = [device minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatBGRA8Unorm];
+    ASSERT_GT(align, 0u);
+    EXPECT_EQ([spi requiredLinearTextureBytesPerRowForDescriptor:d], (400 + align - 1) / align * align);
+    d.pixelFormat = MTLPixelFormatASTC_4x4_LDR;
+    EXPECT_EQ([spi requiredLinearTextureBytesPerRowForDescriptor:d], 0u);
+    EXPECT_EQ(gOpens, 0);
+    EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
+    buffer = nil;
+    CFRelease(surface);
+}
+
 // The device is an _MTLDevice of its own; its identity and every limits field m2v's device answered are its own answers
 void ownDevice()
 {
@@ -214,6 +254,11 @@ TEST(RawFacadeLazy, ForeignSamplerOpensM2VForItsTwin)
 TEST(RawFacadeLazy, InheritedMethodOpensM2VAtItsFirstCall)
 {
     switch_ios::test::ExpectPassesInFreshProcess(inheritedMethod);
+}
+
+TEST(RawFacadeLazy, SurfaceBufferAndLinearRowOpenNoM2V)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(surfaceBufferAndLinearRow);
 }
 
 TEST(RawFacadeLazy, DeviceIsItsOwn)

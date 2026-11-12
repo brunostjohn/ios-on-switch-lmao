@@ -3,6 +3,7 @@
 #import "RawMetalRotated.h"
 #import "RawMetalXrPlanes.h"
 #include "raw_nonfinite.h"
+#include <mach/vm_page_size.h>
 #include "NativeBridgeMetalFrontend.h"
 #import "RawMetalMultisample.h"
 
@@ -283,6 +284,37 @@ static const char *zetaMemoryRefusal(int asked)
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_deallocator = [deallocator copy];
+    return (id<MTLBuffer>)b;
+}
+
+// (SPI) A surface of one plane as a buffer over its pages, as m2v makes one: nil for a planar, unaligned or block-linear
+// surface. The GPU's writes are declared at once, so a CPU lock waits for them.
+- (id<MTLBuffer>)newBufferWithIOSurface:(IOSurfaceRef)s
+{
+    SWITCH_API(ApiObject);
+    if (!s || IOSurfaceGetPlaneCount(s))
+        return nil;
+    void *base = IOSurfaceGetBaseAddress(s);
+    const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(s);
+    if (!base || (uintptr_t(base) & (page - 1)) || !allocation || allocation > SIZE_MAX - (page - 1))
+        return nil;
+    RMBuffer *b = [RMBuffer new];
+    b->_device = self;
+    b->_options = MTLResourceStorageModeShared;
+    bool tiled = false;
+    if (!gRM->raw->createSurfaceBuffer(IOSurfaceGetID(s), base, allocation, (allocation + page - 1) & ~(page - 1), s,
+                                       b->_raw, tiled)) {
+        if (tiled)
+            return nil;
+        RMTwinObject *t = [RMTwinObject new];
+        t->_device = self;
+        id<RMDeviceSPI> m2v = (id<RMDeviceSPI>)RM_M2V("a buffer over an IOSurface the kernel would not import");
+        t->_twin = [m2v newBufferWithIOSurface:s];
+        return t->_twin ? (id<MTLBuffer>)t : nil;
+    }
+    if (!gRM->raw->surfaceGpuWrites(IOSurfaceGetID(s)))
+        os_log_error(rawLog(), "raw: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
+                     IOSurfaceGetID(s));
     return (id<MTLBuffer>)b;
 }
 
