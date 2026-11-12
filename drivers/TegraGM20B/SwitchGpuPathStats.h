@@ -64,6 +64,9 @@ void switch_gpu_path_promise_direct(int what);
 void switch_gpu_span_note(const char *owner, const char *text);
 void switch_gpu_compositor_job(uint64_t ns);
 void switch_gpu_span_line(char *line, size_t size);
+/* SwitchGpuCompositorSync.h: a profiled compositor submission's sync pushes (the interrupt pass), and the window's line */
+void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind);
+void switch_gpu_compositor_sync_window(char *line, size_t size);
 #else
 #define SWITCH_GPU_PATH_STATS 0
 static inline void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
@@ -94,6 +97,13 @@ static inline void switch_gpu_path_job(uint32_t visibility, int unlocked_writes,
 static inline void switch_gpu_compositor_job(uint64_t ns)
 {
 	(void)ns;
+}
+
+static inline void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
+{
+	(void)syncs;
+	(void)ns;
+	(void)behind;
 }
 
 static inline void switch_gpu_path_window(char *line, size_t size)

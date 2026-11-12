@@ -393,6 +393,9 @@ void tgm_stats_tick(void)
 	nvxnu_stats("tegra-gm20b: stats %s", line);
 	stats_deadline(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: deadline %s", line);
+	switch_gpu_compositor_sync_window(line, sizeof(line));
+	if (line[0])
+		nvxnu_stats("tegra-gm20b: compositor sync pushes in profiled frames: %s", line);
 	/* the pool by holder, so no share of it goes unnamed */
 	uint64_t pool_clients = 0;
 	uint64_t pool_orphan_bytes = 0;

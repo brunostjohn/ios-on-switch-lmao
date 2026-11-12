@@ -28,6 +28,8 @@ static inline void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64
 	u32 draws = 0;
 	u32 sdraws = 0;
 	u32 ilk = 0;
+	u32 syncs = 0;
+	u64 sync_ns = 0;
 	struct switch_gpu_prof_seq *run = &chan->prof_run;
 	struct switch_gpu_prof_push *at = NULL;
 
@@ -49,6 +51,10 @@ static inline void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64
 		t = slot[i].ns;
 		if (t < prev)
 			return;
+		if (c == TGM_PC_SYNC) {
+			syncs++;
+			sync_ns += t - prev;
+		}
 		__atomic_fetch_add(&chan->prof_ns[c], t - prev, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_n[c], 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_dn[c], draws, __ATOMIC_RELAXED);
@@ -69,6 +75,9 @@ static inline void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64
 		__atomic_fetch_add(&chan->prof_ns[TGM_PC_FENCE], end - prev, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_n[TGM_PC_FENCE], 1, __ATOMIC_RELAXED);
 		run->ns = tgm_deadline_pt_ns(end - start);
+		run->behind = READ_ONCE(chan->stat_kick[seqno % CHAN_NSTAMPS]) != TGM_KICK_CLEAR;
+		if (chan->high)
+			switch_gpu_compositor_sync(syncs, tgm_deadline_pt_ns(sync_ns), run->behind);
 		switch_gpu_prof_seq_offer(&chan->prof_slow, run);
 		__atomic_fetch_add(&chan->prof_span, end - start, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_spans, 1, __ATOMIC_RELAXED);

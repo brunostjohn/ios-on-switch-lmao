@@ -17,7 +17,7 @@ struct switch_gpu_prof_push {
 
 /* The interrupt pass offers, the window's line takes; `gen` is odd while a slower one is copied in. */
 struct switch_gpu_prof_seq {
-	uint32_t gen, first, last, n, pushes;
+	uint32_t gen, first, last, n, pushes, behind; /* behind: its kick found an app on GR */
 	uint64_t ns;
 	struct switch_gpu_prof_push push[SWITCH_GPU_PROF_SEQ];
 };
@@ -33,6 +33,7 @@ static inline void switch_gpu_prof_seq_offer(struct switch_gpu_prof_seq *slow, c
 	slow->last = run->last;
 	slow->n = n;
 	slow->pushes = run->pushes;
+	slow->behind = run->behind;
 	for (uint32_t i = 0; i < n; i++)
 		slow->push[i] = run->push[i];
 	__atomic_store_n(&slow->ns, run->ns, __ATOMIC_RELAXED);
@@ -48,6 +49,7 @@ static inline void switch_gpu_prof_seq_take(struct switch_gpu_prof_seq *slow, st
 	out->last = slow->last;
 	out->n = slow->n < SWITCH_GPU_PROF_SEQ ? slow->n : SWITCH_GPU_PROF_SEQ;
 	out->pushes = slow->pushes;
+	out->behind = slow->behind;
 	for (uint32_t i = 0; i < out->n; i++)
 		out->push[i] = slow->push[i];
 	out->ns = __atomic_exchange_n(&slow->ns, 0, __ATOMIC_RELAXED);
@@ -112,8 +114,8 @@ static inline int switch_gpu_prof_seq_format(char *buf, unsigned long len, const
 
 	if (!seq->n)
 		return 0;
-	put = snprintf(buf, len, "%s seqno %u-%u, %llu us:", owner, seq->first, seq->last,
-		       (unsigned long long)(seq->ns / 1000));
+	put = snprintf(buf, len, "%s seqno %u-%u, %llu us%s:", owner, seq->first, seq->last,
+		       (unsigned long long)(seq->ns / 1000), seq->behind ? " (kicked behind an app on GR)" : "");
 	at = put > 0 ? (unsigned long)put : 0;
 	for (uint32_t i = 0; i < seq->n && at < len; i++) {
 		put = switch_gpu_prof_push_format(buf + at, len - at, &seq->push[i]);

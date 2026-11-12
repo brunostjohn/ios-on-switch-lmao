@@ -12,6 +12,7 @@ extern "C" {
 #include <sys/errno.h>
 #include <sys/sysctl.h>
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#include "SwitchGpuCompositorSync.h"
 #include "SwitchGpuPreemptLanding.h"
 #include "SwitchGpuSpanNotes.h"
 
@@ -119,6 +120,7 @@ int promisesSysctl SYSCTL_HANDLER_ARGS
 struct sysctl_oid gPromisesOid;
 switch_gpu_spans::Notes gSpans;
 uint64_t gCompositorJobMax;
+switch_gpu_comp_sync gSyncWindow, gSyncAsked;
 }  // namespace
 
 extern "C" void switch_gpu_path_promise_direct(int what)
@@ -151,6 +153,22 @@ extern "C" void switch_gpu_compositor_job(uint64_t ns)
 		;
 }
 
+extern "C" void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
+{
+	switch_gpu_comp_sync_add(&gSyncWindow, syncs, ns, behind);
+	switch_gpu_comp_sync_add(&gSyncAsked, syncs, ns, behind);
+}
+
+extern "C" void switch_gpu_compositor_sync_window(char *line, size_t size)
+{
+	switch_gpu_comp_sync taken = {};
+	switch_gpu_comp_sync_take(&gSyncWindow, &taken);
+	if (size)
+		line[0] = 0;
+	if (taken.subs)
+		switch_gpu_comp_sync_format(line, size, &taken);
+}
+
 extern "C" void switch_gpu_span_line(char *line, size_t size)
 {
 	if (size)
@@ -158,8 +176,12 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	IOLock *held = processLock();
 	if (!held)
 		return;
+	switch_gpu_comp_sync sync = {};
+	switch_gpu_comp_sync_take(&gSyncAsked, &sync);
+	char head[160];
+	switch_gpu_comp_sync_format(head, sizeof(head), &sync);
 	IOLockLock(held);
-	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED), line, size);
+	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED), head, line, size);
 	IOLockUnlock(held);
 }
 

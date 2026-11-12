@@ -32,13 +32,14 @@ inline void add(Notes &n, const char *owner, const char *text)
 		n.count++;
 }
 
-/* "job_max_us=N spans=K; <owner>: <text>; ..." with the compositor's longest job since the last take, the notes oldest
- * first, whole notes only; then the notes start again */
-inline void take(Notes &n, uint64_t job_max_ns, char *out, size_t size)
+/* "job_max_us=N <sync> spans=K; <owner>: <text>; ..." with the compositor's longest job since the last take and its sync
+ * totals (SwitchGpuCompositorSync.h), the notes oldest first, whole notes only; then the notes start again */
+inline void take(Notes &n, uint64_t job_max_ns, const char *sync, char *out, size_t size)
 {
 	if (!size)
 		return;
-	int put = snprintf(out, size, "job_max_us=%llu spans=%u", (unsigned long long)(job_max_ns / 1000), n.count);
+	int put = snprintf(out, size, "job_max_us=%llu %s spans=%u", (unsigned long long)(job_max_ns / 1000), sync,
+			   n.count);
 	size_t used = put > 0 ? static_cast<size_t>(put) : 0;
 	for (uint32_t i = 0; i < n.count && used < size; i++) {
 		const Note &at = n.note[(n.next - n.count + i) % kNotes];

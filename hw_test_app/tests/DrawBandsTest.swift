@@ -15,7 +15,9 @@ import UIKit
 /// `preempt_max_us`, buckets `preempt_lt250_us`..`preempt_ge4000_us`) must stay within the budget plus a context
 /// switch, and where each preempt landed (SwitchGpuPreemptLanding.h): `preempt_mid_job` at a band's release inside a
 /// job, `preempt_job_end` at a job's end. One mid-job landing proves a preempt lands while the PBDMA waits at a band's
-/// release. The unbanded arm shows what a whole draw costs the compositor. us_per_band is the GPU time a band took.
+/// release. The compositor's profiled submissions kicked behind these draws (spans op: `behind`, `sync_max_us`) must find GR
+/// within the same bound: their first push's wait for GR is the app's preemption latency. The unbanded arm shows what a whole
+/// draw costs the compositor. us_per_band is the GPU time a band took.
 /// The learned arm draws a loop of scattered texture reads, a few dozen instructions priced far under a band: its first
 /// draw is whole and measured (raw_band_rates.h), and once its state's rate is learned the same draw must be banded by
 /// the time it took, with the whole draw's pixels.
@@ -108,6 +110,7 @@ struct DrawBandsTest: HWTest {
         for (arm, budgetNs) in [("", Self.budgetUs * 1000), ("_whole", 0)] {
             _ = Self.budget(gpu.device, budgetNs)
             _ = GPUPaths.read(connection)
+            let syncBefore = connection.flatMap { LaunchHitchTest.spans($0) }
             let until = CFAbsoluteTimeGetCurrent() + Self.kickSeconds
             while CFAbsoluteTimeGetCurrent() < until {
                 try await gpu.run { commands in Self.encode(commands, pipeline, target, samples: 1, resolve: nil) }
@@ -118,6 +121,15 @@ struct DrawBandsTest: HWTest {
             }
             let samples = after.counts["preempts"] ?? 0
             let maxUs = after.counts["preempt_max_us"] ?? 0
+            if syncBefore != nil, let line = connection.flatMap({ LaunchHitchTest.spans($0) }) {
+                let sync = SpanReading.parse(line)
+                for key in ["sync_subs", "behind", "behind_sync_us", "sync_max_us"] {
+                    metrics.set(key + arm, sync.counts[key] ?? 0)
+                }
+                if arm.isEmpty && (sync.counts["behind"] ?? 0) > 0 && (sync.counts["sync_max_us"] ?? 0) > Self.waitBoundUs {
+                    failures.append("a compositor submission's sync push waited \(sync.counts["sync_max_us"] ?? 0) us for GR")
+                }
+            }
             for key in Self.preemptKeys { metrics.set(key + arm, after.counts[key] ?? 0) }
             if arm.isEmpty {
                 if samples == 0 { failures.append("no compositor kick met a banded draw in \(Self.kickSeconds) s") }

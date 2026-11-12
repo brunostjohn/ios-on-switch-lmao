@@ -39,6 +39,9 @@ struct LaunchHitchTest: HWTest {
         metrics.set("job_max_us", reading.jobMaxUs)
         metrics.set("spans", reading.spans.count)
         metrics.set("generic_spans", reading.spans.filter { $0.contains("Xghfc") }.count)
+        for key in ["sync_subs", "sync_us", "behind", "behind_sync_us", "sync_max_us"] {
+            metrics.set(key, reading.counts[key] ?? 0)
+        }
         for (i, span) in reading.spans.prefix(6).enumerated() { metrics.set("span\(i)", span) }
         if reading.jobMaxUs > Self.jobBoundUs {
             let named = reading.spans.isEmpty ? "no span of 5 ms named" : reading.spans.joined(separator: " | ")
@@ -68,16 +71,20 @@ struct LaunchHitchTest: HWTest {
 }
 
 /// "job_max_us=N spans=K; <owner>: <span>; ..." (drivers/TegraGM20B/SwitchGpuSpanNotes.h)
+/// With the compositor's sync pushes in its profiled submissions (SwitchGpuCompositorSync.h): sync_subs, syncs, sync_us,
+/// behind (kicks that found an app on GR), behind_sync_us, sync_max_us
 struct SpanReading {
     let jobMaxUs: Int
+    let counts: [String: Int]
     let spans: [String]
 
     static func parse(_ line: String) -> SpanReading {
         let parts = line.components(separatedBy: "; ")
-        var jobMaxUs = 0
-        for field in (parts.first ?? "").split(separator: " ") where field.hasPrefix("job_max_us=") {
-            jobMaxUs = Int(field.dropFirst("job_max_us=".count)) ?? 0
+        var counts: [String: Int] = [:]
+        for field in (parts.first ?? "").split(separator: " ") {
+            let pair = field.split(separator: "=", maxSplits: 1)
+            if pair.count == 2, let value = Int(pair[1]) { counts[String(pair[0])] = value }
         }
-        return SpanReading(jobMaxUs: jobMaxUs, spans: Array(parts.dropFirst()))
+        return SpanReading(jobMaxUs: counts["job_max_us"] ?? 0, counts: counts, spans: Array(parts.dropFirst()))
     }
 }
