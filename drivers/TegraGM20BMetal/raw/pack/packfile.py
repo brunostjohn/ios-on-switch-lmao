@@ -122,13 +122,15 @@ def key_hash(rec: dict) -> int:
         (
             'ycbcr_store',
             'ycbcr_store_vert',
-            tuple(
-                f'{plane}{bits}{srgb}_frag'
-                for srgb in ('', '_srgb')
-                for plane in ('luma', 'chroma')
-                for bits in ('8', '16', '_packed')
-            )
-            + ('plane_packed_frag',),
+            (
+                *(
+                    f'{plane}{bits}{srgb}_frag'
+                    for srgb in ('', '_srgb')
+                    for plane in ('luma', 'chroma')
+                    for bits in ('8', '16', '_packed')
+                ),
+                'plane_packed_frag',
+            ),
         ),
         (
             'turn',
