@@ -437,6 +437,8 @@ struct Display {
     bool landscapeHolds(PlaneSet &) { return false; }
     void landscapeLeaveNow(const char *) {}
     void landscapeAbandonWant() {}
+    bool landscapeHoldsKicks() const { return false; }
+    uint32_t landscapeRequestBits() const { return switch_landscape::overlayRequests(landscapeOn()); }
 
 #define SWITCH_FRAME_TIMELINE 0
 #include "../SwitchDisplayBandwidthDisplay.h"
