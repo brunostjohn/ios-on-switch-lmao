@@ -2,7 +2,8 @@
 // The headers a draw's framebuffer fetch binds on raw::Device (raw_attachment_view.h, RenderEncoder::fetchTic), read back
 // from the device's header table: a layered pass's attachment through a slice-choosing state's layered storage form is a 2D
 // array of the pass's layers from the attachment's slice, the one-layer form's a 2D view of that slice, the
-// input-attachment form's an array of the pass's layers; the layered form in a pass of one layer is an array of one.
+// input-attachment form's an array of the pass's layers; the layered form in a pass of one layer is an array of one, a
+// pitch target's over the block-linear backing the pass renders it through.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_attachment_target.h"
 #include "../raw/runtime/raw_record.h"
@@ -73,8 +74,9 @@ protected:
         return p;
     }
 
-    // One draw of `pl` into attachment `a` in a pass of `layers` layers: empty, or why it was refused
-    std::string draw(raw::Pipeline *pl, const raw::ColorAttachment &a, uint32_t layers)
+    // One draw of `pl` into attachment `a` in a pass of `layers` layers: empty, or why it was refused. `declared`: the pass
+    // names the colors the layered record binds as arrays (RawMetalEncode.mm passArrayedStorageMask)
+    std::string draw(raw::Pipeline *pl, const raw::ColorAttachment &a, uint32_t layers, bool declared = true)
     {
         raw::CommandBuffer *cb = dev.begin();
         if (!cb)
@@ -85,6 +87,7 @@ protected:
         pass.count = 1;
         pass.layers = layers;
         pass.storageMask = pl->storageBits;
+        pass.arrayedStorageMask = declared && raw::layeredRecord(pl->rec->arrayLengthWord) ? pl->storageBits : 0;
         raw::RenderEncoder *e = cb->render(pass);
         if (!e) {
             cb->abandon();
@@ -198,13 +201,25 @@ TEST_F(DeviceLayeredFetch, TheLayeredFormInAPassOfOneLayerIsAnArrayOfOne)
     EXPECT_EQ(made[0].va, t.va);
     EXPECT_EQ(made[0].type, raw::fx::kTexTwoDArray);
     EXPECT_EQ(made[0].layers, 1u);
+}
+
+TEST_F(DeviceLayeredFetch, APitchTargetOfTheLayeredFormRendersThroughABlockLinearBacking)
+{
     raw::Texture pitch;
     ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, pitch));
     ASSERT_FALSE(pitch.blockLinear);
     raw::ColorAttachment linear;
     linear.texture = &pitch;
-    EXPECT_EQ(draw(pipeline(true, true), linear, 1), "framebuffer fetch from a target the raw path cannot sample")
+    raw::Pipeline *layered = pipeline(true, true);
+    EXPECT_EQ(draw(layered, linear, 1, false), "framebuffer fetch from a target the raw path cannot sample")
         << "a pitch header has no array form";
+    EXPECT_EQ(draw(layered, linear, 1), "");
+    const auto made = headers(kR32UintWord0);
+    ASSERT_EQ(made.size(), 1u);
+    EXPECT_NE(made[0].va, pitch.va);
+    EXPECT_EQ(made[0].type, raw::fx::kTexTwoDArray);
+    EXPECT_EQ(made[0].layers, 1u);
+    EXPECT_EQ(made[0].width, 64u);
 }
 
 TEST_F(DeviceLayeredFetch, AMemorylessArraysBackingIsAnArrayOfThePassesLayers)

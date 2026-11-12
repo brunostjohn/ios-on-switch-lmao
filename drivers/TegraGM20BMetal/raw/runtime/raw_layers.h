@@ -36,13 +36,6 @@ template <class Pass> const char *layeredRefusal(const Pass &pass, uint8_t sampl
     return nullptr;
 }
 
-// Whether a record of `arrayLengthWord` (PackPipeline's) is a slice-choosing state's layered form: made for a pass of
-// layers, its storage images 2D arrays of the pass's layers (the bridge's TYPE_2D_ARRAY storage writes, raw_direct_storage.h)
-inline bool layeredRecord(uint8_t arrayLengthWord)
-{
-    return arrayLengthWord && arrayLengthWord <= 32;
-}
-
 // What a draw of a state whose record is `arrayLengthWord`'s in a pass of `layers` layers leaves no renderer for (null:
 // none): a state whose vertex function chooses its slice, made for one layer (kLayerDropped), has no layered form in
 // m2v either (its plan refuses the same fragment function in a layered pass)

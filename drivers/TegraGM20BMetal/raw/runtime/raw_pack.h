@@ -350,6 +350,13 @@ struct PackPipeline {
 // PackPipeline::arrayLengthWord of a record of one layer whose vertex function chooses its slice
 constexpr uint8_t kLayerDropped = 0xFF;
 
+// Whether a record of `arrayLengthWord` is a slice-choosing state's layered form: made for a pass of layers, its storage
+// images 2D arrays of the pass's layers (the bridge's TYPE_2D_ARRAY storage writes, raw_direct_storage.h)
+inline bool layeredRecord(uint8_t arrayLengthWord)
+{
+    return arrayLengthWord && arrayLengthWord <= 32;
+}
+
 // A vertexStreams byte's Metal buffer index
 inline uint8_t streamSlot(uint8_t stream)
 {

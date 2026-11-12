@@ -579,6 +579,9 @@ struct PassDesc {
     // colors a draw of the pass binds as storage images (a pipeline's storage form): their memoryless backings take no
     // compression, which the surface unit cannot read through
     uint8_t storageMask = 0;
+    // of those, the colors a layered record's draws bind as 2D arrays (raw_pack.h layeredRecord): a pitch one renders
+    // through a block-linear backing, as a pitch header has no array form
+    uint8_t arrayedStorageMask = 0;
     SamplePositions positions;
     // no depth/stencil attachment, and a draw's state tests depth or stencil (testsHiddenZeta): the pass renders over a hidden
     // Depth32Float_Stencil8 backing of its own, cleared to 1.0 and 0, as plain Metal tests such a draw

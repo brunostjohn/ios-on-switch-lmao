@@ -205,17 +205,21 @@ class LayeredFetch(Records):
     The vertex program stores instance i as Layer below the pass's length word (an index at or past it as 0). The
     fragment program, run on quads of each layer of passes of 2 and 6 layers, reads its Layer input and loads and stores
     the attachment's storage image, a 2D array (SULD and SUST of three coordinates), at (x, y, Layer): each layer's own
-    texel with its channels rotated, as the Metal source computes it on the CPU.
+    texel with its channels rotated, as the Metal source computes it on the CPU, compared as the RGBA8 codes stored.
     """
 
     HEADER = 0x123  # the attachment view's header index set 0 holds (raw_gpu.cpp: tic | tsc << 20, no sampler)
     QUADS = ((2, 4), (13, 7))
 
     @staticmethod
-    def texel(x: int, y: int, layer: int) -> list[int]:
-        """Give the storage image's texel (x, y) of `layer` as SULD.P loads an RGBA8Unorm one, each layer's its own."""
-        codes = ((7 * x + 31 * layer) & 255, (5 * y + 47 * layer) & 255, (x + y + 90 * layer) & 255, 200 + layer)
-        return [dr.f32(c / 255) for c in codes]
+    def codes(x: int, y: int, layer: int) -> list[int]:
+        """Give the RGBA8 codes of the storage image's texel (x, y) of `layer`, each layer's its own."""
+        return [(7 * x + 31 * layer) & 255, (5 * y + 47 * layer) & 255, (x + y + 90 * layer) & 255, 200 + layer]
+
+    @classmethod
+    def texel(cls, x: int, y: int, layer: int) -> list[int]:
+        """Give the texel as SULD.P loads an RGBA8Unorm one: each code's value."""
+        return [dr.f32(c / 255) for c in cls.codes(x, y, layer)]
 
     def setUp(self) -> None:
         self.record = self.state('layered_fetch')
@@ -280,9 +284,10 @@ class LayeredFetch(Records):
                         at = (x, y, layer)
                         self.assertFalse(killed, f'{layers} layers: {at}')
                         self.assertEqual(loaded, [(self.HEADER, at)], f'{layers} layers: the loads at {at}')
-                        r, g, b, a = self.texel(*at)
-                        want = [(self.HEADER, at, (g, b, r, a))]
-                        self.assertEqual(stores, want, f'{layers} layers: the store at {at}')
+                        self.assertEqual([s[:2] for s in stores], [(self.HEADER, at)], f'{layers} layers: {at}')
+                        stored = [round(dr.value(w) * 255) for w in stores[0][2]]
+                        r, g, b, a = self.codes(*at)
+                        self.assertEqual(stored, [g, b, r, a], f'{layers} layers: the codes stored at {at}')
 
 
 class WideStride(Records):

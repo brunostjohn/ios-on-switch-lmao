@@ -467,7 +467,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     refresh(sub);
                 if (cb->_standIns && !standIns(sub))
                     return false;
-                p.storageMask |= passStorageMask(cb, sub);
+                passStorageMasks(cb, sub, p);
                 p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
             }
             for (unsigned j = 0; j < 8; j++) {

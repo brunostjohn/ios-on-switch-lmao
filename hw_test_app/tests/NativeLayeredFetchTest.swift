@@ -8,7 +8,8 @@ import Metal
 /// storage form, whose storage image is a 2D array of the pass's layers from the attachment's slice. Every part of each
 /// texture is cleared to a colour of its own first; the quad in each layer the pass renders then holds that layer's colour
 /// with its channels rotated, every other texel its clear colour. Passes of six layers, of two from slice 3, of three of a
-/// mipmapped array's level 1 from slice 2, and of one layer (the layered state drawn into a 2D texture), each raw.
+/// mipmapped array's level 1 from slice 2, and of one layer (the layered state drawn into a 2D texture, and into a linear
+/// one over a buffer, which the pass renders through a block-linear backing), each raw.
 struct NativeLayeredFetchTest: NativeObjectTest {
     let id = "metal.native.layered_fetch"
     let name = "A fragment function fetches the colour of the layer its vertex function chose in a layered pass"
@@ -32,6 +33,7 @@ struct NativeLayeredFetchTest: NativeObjectTest {
         let type: MTLTextureType
         let layers: Int, levels: Int
         let level: Int, slice: Int, length: Int
+        var linear = false
     }
 
     static let cases = [
@@ -39,7 +41,23 @@ struct NativeLayeredFetchTest: NativeObjectTest {
         Case(name: "two_from_3", type: .type2DArray, layers: 6, levels: 1, level: 0, slice: 3, length: 2),
         Case(name: "level_1", type: .type2DArray, layers: 6, levels: 2, level: 1, slice: 2, length: 3),
         Case(name: "one_layer", type: .type2D, layers: 1, levels: 1, level: 0, slice: 0, length: 1),
+        Case(
+            name: "one_layer_linear", type: .type2D, layers: 1, levels: 1, level: 0, slice: 0, length: 1, linear: true),
     ]
+
+    /// A texture of case `c`: a linear one over a shared buffer (which the texture keeps), rows 128 bytes apart
+    static func texture(_ device: MTLDevice, _ c: Case) throws -> MTLTexture {
+        let d = NativeTargetPartsTest.descriptor(c.type, 32, 32, layers: c.layers, levels: c.levels)
+        guard c.linear else {
+            guard let t = device.makeTexture(descriptor: d) else { throw TestFailure("no texture for \(c.name)") }
+            return t
+        }
+        d.storageMode = .shared
+        guard let buffer = device.makeBuffer(length: 32 * 128, options: .storageModeShared),
+            let t = buffer.makeTexture(descriptor: d, offset: 0, bytesPerRow: 128)
+        else { throw TestFailure("no linear texture for \(c.name)") }
+        return t
+    }
 
     static func rotated(_ c: [UInt8]) -> [UInt8] { [c[1], c[2], c[0], c[3]] }
 
@@ -54,8 +72,7 @@ struct NativeLayeredFetchTest: NativeObjectTest {
         let pipeline = try await device.makeRenderPipelineState(descriptor: descriptor)
         var work = NativeWork(objects: [pipeline])
         for c in Self.cases {
-            let d = NativeTargetPartsTest.descriptor(c.type, 32, 32, layers: c.layers, levels: c.levels)
-            guard let t = device.makeTexture(descriptor: d) else { throw TestFailure("no texture for \(c.name)") }
+            let t = try Self.texture(device, c)
             work.objects.append(t)
             let parts = TextureParts.parts(t)
             let timing = try await gpu.run { commands in

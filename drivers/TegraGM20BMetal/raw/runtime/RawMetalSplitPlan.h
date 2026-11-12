@@ -13,15 +13,18 @@ inline raw::Pipeline *nativeOf(const raw::RasterState &state)
                                   : nullptr;
 }
 
-// The colors the pass's draws bind as storage images (raw::PassDesc::storageMask)
-__attribute__((objc_externally_retained)) inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
+// The colors the pass's draws bind as storage images, and of those as 2D arrays (raw::PassDesc::storageMask,
+// arrayedStorageMask)
+__attribute__((objc_externally_retained)) inline void passStorageMasks(RMCommandBuffer *cb, size_t begin,
+                                                                       raw::PassDesc &p)
 {
-    uint8_t mask = 0;
     cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t) {
-        if (const raw::Pipeline *native = nativeOf(state))
-            mask |= native->storageBits;
+        if (const raw::Pipeline *native = nativeOf(state)) {
+            p.storageMask |= native->storageBits;
+            if (raw::layeredRecord(native->rec->arrayLengthWord))
+                p.arrayedStorageMask |= native->storageBits;
+        }
     });
-    return mask;
 }
 
 __attribute__((objc_externally_retained)) inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin,

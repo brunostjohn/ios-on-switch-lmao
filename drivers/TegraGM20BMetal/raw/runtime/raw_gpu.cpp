@@ -3512,7 +3512,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     const bool hidden = !zeta && pass.hiddenZeta;
     bool blockLinear = zeta != nullptr || hidden || layers > 1;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
+        if (const Texture *t = pass.color[j].texture;
+            t && !t->memoryless && (t->blockLinear || t->shadowTarget || (pass.arrayedStorageMask >> j & 1)))
             blockLinear = true;
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
@@ -5977,24 +5978,29 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0)
 uint32_t Device::attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why)
 {
     RAW_ENCODE_LOCK(l, lock_);
-    *why = "framebuffer fetch from a target the raw path cannot sample";
-    if (!owner.tic)
+    constexpr const char *kNoHeader = "framebuffer fetch from a target the raw path cannot sample";
+    if (!owner.tic) {
+        *why = kNoHeader;
         return 0;
+    }
     const auto views = viewTics_.equal_range(owner.tic);
     for (auto it = views.first; it != views.second; ++it)
         if (it->second.first == v)
             return it->second.second;
     uint32_t w[8];
+    bool headed = false;
     if (v.part) {
         fx::MipChain c;
         uint64_t base = 0;
-        if (!attachmentImage(owner, c, base) || !attachmentViewHeader(c, base, owner.type == fx::kTexThreeD, v, w))
-            return 0;
+        headed = attachmentImage(owner, c, base) && attachmentViewHeader(c, base, owner.type == fx::kTexThreeD, v, w);
     } else {
         uint32_t own[8];
         memcpy(own, tic_.cpu + 32 * owner.tic, 32);
-        if (!ownViewHeader(own, v, w))
-            return 0;
+        headed = ownViewHeader(own, v, w);
+    }
+    if (!headed) {
+        *why = kNoHeader;
+        return 0;
     }
     const uint32_t tic = allocTic();
     if (!tic) {

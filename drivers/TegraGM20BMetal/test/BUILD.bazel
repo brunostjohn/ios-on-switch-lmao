@@ -448,7 +448,8 @@ host_test(
 # The headers a draw's framebuffer fetch binds on raw::Device (raw_attachment_view.h): a layered pass's attachment through a
 # slice-choosing state's layered storage form is a 2D array of the pass's layers from its slice (a mipmapped array's level
 # its chain there, a memoryless array's backing its own header), the one-layer form a 2D view of the slice, the
-# input-attachment form an array; the layered form in a pass of one layer an array of one, none over a pitch target
+# input-attachment form an array; the layered form in a pass of one layer an array of one, a pitch target's over the
+# block-linear backing the pass then renders it through
 host_test(
     name = "raw_device_layered_fetch_test",
     srcs = [

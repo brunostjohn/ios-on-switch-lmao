@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include "bridge/NativeMetalDirect.h"
-#include "raw_layers.h"
 #include "raw_storage.h"
 
 namespace raw {
@@ -34,7 +33,7 @@ template <class Header> const char *qualifyStorage(const NmbDirectState &state, 
     for (const NmbDirectDraw &draw : state.draws) {
         uint32_t bound = 0;
         uint32_t tests = 0;
-        // a slice-choosing state's layered form (raw_layers.h layeredRecord) binds its attachments as arrays of the pass's
+        // a slice-choosing state's layered form (raw_pack.h layeredRecord) binds its attachments as arrays of the pass's
         // layers, every other record as one 2D layer
         const int32_t attachmentView = layeredRecord(uint8_t(draw.arrayLengthWord)) ? kViewType2DArray : kViewType2D;
         for (uint32_t i = 0; i < draw.writeCount; i++) {
