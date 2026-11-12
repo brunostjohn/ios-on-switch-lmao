@@ -358,7 +358,8 @@ void ComputeEncoder::rootWords(const PackKernel &r, const uint32_t groups[3], ui
         memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(8 * 4, 4 * (32 - r.regionWord)));
 }
 
-bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out, const char **why)
+bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out,
+                              std::vector<icb::ComputeStride> &strides, const char **why)
 {
     const PackKernel &r = *k.rec;
     const uint64_t rootVa = va + icb::kComputeQmdBytes, setVa = rootVa + icb::kComputeRootBytes;
@@ -375,6 +376,9 @@ bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<ic
         out.push_back(
             {setVa + e.offset, word >= 0 ? rootVa + kRootPush + 4 * uint32_t(word) : 0, e.slot, kernelBufferWindow(e)});
     }
+    for (const auto &stride : r.stageInStride)
+        if (stride[1] && stride[1] <= 32 && stride[0] < 31)
+            strides.push_back({rootVa + kRootPush + 4 * (stride[1] - 1u), stride[0]});
     return true;
 }
 

@@ -167,10 +167,11 @@ inline void icbGateHeader(Push &push)
     *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * kIcbGate, 1);
 }
 
-// A command's descriptors to write from the inherited buffers in scratch: the call's data is their count, then six words each
-inline void icbBindHeader(Push &push, uint32_t descriptors)
+// A command's descriptors and bind strides to write from the inherited buffers in scratch: the call's data is the
+// descriptors' count, six words each, then the strides' count, three words each
+inline void icbBindHeader(Push &push, uint32_t descriptors, uint32_t strides)
 {
-    *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * kIcbBind, 1 + 6 * descriptors);
+    *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * kIcbBind, 2 + 6 * descriptors + 3 * strides);
 }
 
 // The range a CPU execute names, written as the scratch words themselves

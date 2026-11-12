@@ -47,7 +47,8 @@ enum {
     // an indirect command buffer execute's range: location, length
     SWITCH_GM20B_SCRATCH_ICB_LOCATION = 120,
     SWITCH_GM20B_SCRATCH_ICB_LENGTH = 121,
-    // a command's bound buffers: 128 + 3 x index (address low, address high, size), index < 31
+    // a command's bound buffers: 128 + 3 x index (address low, address high, size), index < 31; the address-high word
+    // holds the buffer's bind stride above its address's bits (SWITCH_GM20B_ICB_STRIDE_SHIFT)
     SWITCH_GM20B_SCRATCH_ICB_BUFFERS = 128,
     SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS = 31,
     SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END = SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 3 * SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS,
@@ -82,6 +83,8 @@ enum {
     SWITCH_GM20B_ICB_ROOT_BYTES = 0x800,
     SWITCH_GM20B_ICB_PATCH_BUFFERS = 3,
     SWITCH_GM20B_ICB_PATCH_CONTROL_WORDS = 6,
+    // X1's GPU addresses lie below 2^40 (TegraGM20BGpu.h TGM_VA_LIMIT): an address-high word's bits from here are free
+    SWITCH_GM20B_ICB_STRIDE_SHIFT = 8,
 };
 
 // SWITCH_GM20B_SCRATCH_AMP_LAYER's modes besides a word: the draws render the pass's first layer, or SET_RT_LAYER takes

@@ -31,10 +31,10 @@ struct RMICBDispatch {
     std::shared_ptr<RMKernelSet> kernels;  // its own pipeline's at its shape
     std::shared_ptr<RMICBBlock> block;
     raw::icb::ComputeCommand words{};  // what its slot launches
-    // a buffer that inherits the encoder's buffers: its descriptors' binds (its bind slot's words), the Metal buffer indices
-    // they read, those of them with no residual word, and those whose bind stride a stage-in kernel reads (its regions hold
-    // none: the execute refuses a stride the encoder binds there)
+    // a buffer that inherits the encoder's buffers: its descriptors' and stage-in strides' binds (its bind slot's words),
+    // the Metal buffer indices they read, those of them with no residual word, and those whose bind stride it reads
     std::vector<raw::icb::ComputeBind> binds;
+    std::vector<raw::icb::ComputeStride> strideWords;
     uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
     bool raw = false;  // its slot launches it (a buffer that inherits no pipeline)
 };

@@ -322,6 +322,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
     for (NSUInteger i = 0; i < count; i++) {
         if (copy && !from->_inheritBuffers) {
             commands[i].binds.clear();
+            commands[i].strideWords.clear();
             commands[i].bindSlots = commands[i].alignedSlots = commands[i].strideSlots = 0;
         }
         to->_dispatches[into + i] = commands[i];
@@ -333,6 +334,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
         else
             raw::icb::computeEmpty(slotOf(to, into + i));
         if (to->_inheritBuffers)
-            raw::icb::binds(rmBindSlot(to, into + i), commands[i].binds.data(), uint32_t(commands[i].binds.size()));
+            raw::icb::binds(rmBindSlot(to, into + i), commands[i].binds.data(), uint32_t(commands[i].binds.size()),
+                            commands[i].strideWords.data(), uint32_t(commands[i].strideWords.size()));
     }
 }

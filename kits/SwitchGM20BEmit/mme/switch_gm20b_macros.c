@@ -569,7 +569,9 @@ static void build_inline_word(struct mme_builder *b, struct mme_value word)
  * kernel's window of it in bytes (0 the whole buffer) and the address of its root push word for the base's residual (high
  * word 0: none). The descriptor is raw_residual.h's storage buffer descriptor of the scratch's binding: the base aligned
  * down to 16 bytes, the range from it to the end of the buffer or of the window rounded up to 16 (an X1 buffer is far
- * below the 0xfffffff0 the CPU's clamps it to), 0 for no buffer. Written with the 3D class's inline-to-memory methods. */
+ * below the 0xfffffff0 the CPU's clamps it to), 0 for no buffer. Then the count of a stage-in kernel's bind strides, and
+ * for each the address of its StageInStride root word (high, low) and its buffer's first scratch word: the stride the
+ * address-high scratch word holds above its address. Written with the 3D class's inline-to-memory methods. */
 static void build_icb_bind(struct mme_builder *b, bool unused)
 {
     (void)unused;
@@ -594,6 +596,7 @@ static void build_icb_bind(struct mme_builder *b, bool unused)
             build_inline_word(b, base);
             struct mme_value upper =
                 mme_state_arr(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 1), at);
+            mme_and_to(b, upper, upper, mme_imm((1u << SWITCH_GM20B_ICB_STRIDE_SHIFT) - 1));
             build_inline_word(b, upper);
             mme_or_to(b, base, base, upper);
             mme_free_reg(b, upper);
@@ -636,6 +639,27 @@ static void build_icb_bind(struct mme_builder *b, bool unused)
             mme_free_reg(b, hi);
             mme_free_reg(b, lo);
             mme_free_reg(b, residual);
+        }
+        mme_end_loop(b);
+    }
+    struct mme_value strides = mme_load(b);
+    mme_if(b, ine, strides, mme_zero())
+    {
+        mme_start_loop(b, strides);
+        mme_free_reg(b, strides);
+        {
+            struct mme_value hi = mme_load(b);
+            struct mme_value lo = mme_load(b);
+            build_i2m_head(b, hi, lo, 4);
+            mme_free_reg(b, hi);
+            mme_free_reg(b, lo);
+            struct mme_value at = mme_load(b);
+            struct mme_value stride =
+                mme_state_arr(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 1), at);
+            mme_free_reg(b, at);
+            mme_srl_to(b, stride, stride, mme_imm(SWITCH_GM20B_ICB_STRIDE_SHIFT));
+            build_inline_word(b, stride);
+            mme_free_reg(b, stride);
         }
         mme_end_loop(b);
     }

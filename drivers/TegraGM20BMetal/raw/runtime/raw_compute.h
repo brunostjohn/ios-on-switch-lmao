@@ -100,9 +100,11 @@ public:
                           const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
                           const IcbBuffer (&buffers)[31], const StageIn &stageIn, uint8_t *block, uint64_t va,
                           const char **why);
-    // The set-0 buffer descriptors of a region of kernel `k` written at `va` (icbRegion), as a buffer that inherits the
-    // encoder's buffers binds them at an execute (raw_icb_compute.h ComputeBind). False: refused (*why).
-    static bool icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out, const char **why);
+    // The set-0 buffer descriptors and StageInStride root words of a region of kernel `k` written at `va` (icbRegion), as a
+    // buffer that inherits the encoder's buffers binds them at an execute (raw_icb_compute.h ComputeBind, ComputeStride).
+    // False: refused (*why).
+    static bool icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out,
+                         std::vector<icb::ComputeStride> &strides, const char **why);
     // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written,
     // and their bind strides
     void inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 31> &strides);
@@ -114,7 +116,8 @@ public:
         uint64_t rangeOffset;
         bool written;  // a blit wrote the words on the GPU
         // a buffer that inherits the encoder's buffers: its bind slots (icb::kComputeBindSlotWords each, as `slots`), the
-        // Metal buffer indices they read, and those whose descriptors have no residual word (bound off 16 bytes: refused)
+        // Metal buffer indices they read, those whose descriptors have no residual word (bound off 16 bytes: refused),
+        // and those whose bind stride a stage-in command reads
         const Buffer *binds = nullptr;
         uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
     };

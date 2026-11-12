@@ -2,11 +2,16 @@
 // A stage-in kernel's words on raw::Device: a compute encoder's dispatch writes setStageInRegion:'s origin and size and a
 // bind's stride into the StageInRegion and StageInStride push words of the root table its QMD names (read off the
 // device's submitted words and the memory they point at), and an indirect dispatch command's region writes its own into
-// its region's root table in ICB memory; a kernel of no stage-in takes neither.
+// its region's root table in ICB memory, or, inheriting the encoder's buffers, its bind slot writes the encoder's stride
+// there at each execute; a kernel of no stage-in takes neither.
 #include "raw_device_harness.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20BCompute.h"
+#include "../raw/pack/mesa/mme_fermi.h"
+#include "../raw/pack/mesa/mme_fermi_sim.h"
 #include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_icb_compute.h"
+#include <map>
+#include <vector>
 
 namespace {
 
@@ -143,31 +148,143 @@ TEST_F(DeviceStageIn, AnIndirectDispatchCommandsRegionIsInItsOwnRootTable)
     EXPECT_EQ(push[kStrideWord - 1], 40u);
 }
 
-// A buffer that inherits the encoder's buffers writes its commands' regions once, without the encoder's strides: an execute
-// under a stride bound where a command's kernel reads one is refused, one with none there runs
-TEST_F(DeviceStageIn, AnInheritedStrideACommandReadsIsRefused)
+// The 3D methods of the words raw::Device submitted, as the channel runs them: scratch writes, kIcbBind through the
+// Fermi simulator, and the 3D class's inline-to-memory writes into `memory`
+struct BindChannel {
+    std::map<uint64_t, uint32_t> memory;
+    uint32_t scratch[256] = {}, inlineLeft = 0;
+    uint64_t out = 0;
+    std::vector<uint32_t> arguments;
+    size_t consumed = 0;
+
+    static bool isScratch(uint32_t m)
+    {
+        return m >= NVB197_SET_MME_SHADOW_SCRATCH(0) && m < NVB197_CALL_MME_MACRO(0);
+    }
+
+    void method(uint32_t m, uint32_t v)
+    {
+        if (isScratch(m))
+            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = v;
+        else if (m == NVB197_OFFSET_OUT_UPPER)
+            out = (out & 0xffffffffull) | uint64_t(v & 0xff) << 32;
+        else if (m == NVB197_OFFSET_OUT)
+            out = (out & ~0xffffffffull) | v;
+        else if (m == NVB197_LINE_LENGTH_IN)
+            inlineLeft = v / 4;
+        else if (m == NVB197_LOAD_INLINE_DATA && inlineLeft) {
+            memory[out] = v;
+            out += 4;
+            inlineLeft--;
+        }
+    }
+
+    static uint32_t load(void *opaque)
+    {
+        auto &c = *static_cast<BindChannel *>(opaque);
+        return c.consumed < c.arguments.size() ? c.arguments[c.consumed++] : 0;
+    }
+
+    static uint32_t state(void *opaque, uint16_t m)
+    {
+        return isScratch(m) ? static_cast<BindChannel *>(opaque)->scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4]
+                            : 0;
+    }
+
+    static void emit(void *opaque, uint16_t m, uint32_t v)
+    {
+        static_cast<BindChannel *>(opaque)->method(m, v);
+    }
+
+    static void barrier(void *)
+    {}
+
+    static uint32_t *dram(void *, uint32_t)
+    {
+        return nullptr;
+    }
+
+    void run(const std::vector<uint32_t> &w)
+    {
+        for (size_t i = 0; i < w.size();) {
+            const uint32_t h = w[i++], op = h >> 29, count = h >> 16 & 0x1fff, subc = h >> 13 & 7, m = (h & 0xfff) << 2;
+            if (op == 4) {
+                if (subc == raw::SUBC_3D)
+                    method(m, count);
+                continue;
+            }
+            if (i + count > w.size())
+                return;
+            if (subc == raw::SUBC_3D && m == NVB197_CALL_MME_MACRO(raw::mme::kIcbBind)) {
+                arguments.assign(w.begin() + ptrdiff_t(i), w.begin() + ptrdiff_t(i + count));
+                consumed = 0;
+                const raw::mme::Program &p = raw::mme::kIcbBindProgram;
+                std::vector<mme_fermi_inst> decoded(p.size);
+                mme_fermi_decode(decoded.data(), p.words, p.size);
+                const mme_sim_state_ops ops = {load, state, emit, barrier, dram};
+                mme_fermi_sim_core(uint32_t(decoded.size()), decoded.data(), &ops, this);
+                EXPECT_EQ(consumed, arguments.size());
+            } else if (subc == raw::SUBC_3D && m < NVB197_CALL_MME_MACRO(0)) {
+                for (uint32_t k = 0; k < count; k++)
+                    method(op == 1 ? m + 4 * k : op == 5 && k ? m + 4 : m, w[i + k]);
+            }
+            i += count;
+        }
+    }
+};
+
+// A buffer that inherits the encoder's buffers writes a stage-in command's region once, its stride word 0: each execute's
+// bind slot writes the encoder's bind stride there, 24 at the first and 40 at the second, and 0 once none is bound
+TEST_F(DeviceStageIn, AnInheritingCommandTakesEachExecutesBindStride)
 {
-    raw::Buffer slots, binds;
+    const raw::ComputeState *k = raw::placeCompute(dev, stageInKernel());
+    ASSERT_NE(k, nullptr);
+    raw::Buffer block, slots, binds, bound;
+    ASSERT_TRUE(dev.createBuffer(raw::icb::computeRegionBytes(0), block));
     ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeSlotWords * 4, slots));
     ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeBindSlotWords * 4, binds));
-    raw::icb::computeEmpty(reinterpret_cast<uint32_t *>(slots.cpu));
-    raw::icb::bindsEmpty(reinterpret_cast<uint32_t *>(binds.cpu));
-    for (const uint32_t stride : {raw::kNoBindStride, 24u}) {
+    ASSERT_TRUE(dev.createBuffer(4096, bound));
+    raw::ComputeRegion region;
+    region.local = {1, 1, 1};
+    region.groups = {1, 1, 1};
+    const raw::ComputeEncoder::IcbBuffer none[31] = {};
+    const char *why = nullptr;
+    ASSERT_TRUE(raw::ComputeEncoder::icbRegion(dev, *k, region, {1, 1, 1}, {1, 1, 1}, none, raw::StageIn{}, block.cpu,
+                                               block.va, &why))
+        << (why ? why : "");
+    std::vector<raw::icb::ComputeBind> descriptors;
+    std::vector<raw::icb::ComputeStride> strides;
+    ASSERT_TRUE(raw::ComputeEncoder::icbBinds(*k, block.va, descriptors, strides, &why)) << (why ? why : "");
+    ASSERT_EQ(strides.size(), 1u);
+    const uint64_t word = block.va + raw::icb::kComputeQmdBytes + kRootPush + 4 * (kStrideWord - 1);
+    EXPECT_EQ(strides[0].word, word);
+    raw::icb::ComputeCommand command{};
+    command.qmd[0] = block.va;
+    command.regions = 1;
+    raw::icb::dispatch(reinterpret_cast<uint32_t *>(slots.cpu), 0, command);
+    ASSERT_TRUE(raw::icb::binds(reinterpret_cast<uint32_t *>(binds.cpu), descriptors.data(),
+                                uint32_t(descriptors.size()), strides.data(), uint32_t(strides.size())));
+    for (const uint32_t stride : {24u, 40u, raw::kNoBindStride}) {
         raw::CommandBuffer *cb = dev.begin();
         ASSERT_NE(cb, nullptr);
-        const char *why = nullptr;
-        bool ran = false;
+        const size_t before = kernel_model::model.jobs.size();
         {
             raw::ComputeEncoder e(*cb, dev);
+            e.setBuffer(1, &bound, 0);
             e.setBufferStride(1, stride);
             raw::ComputeEncoder::IcbExecute x = {&slots, 0, 0, 1, nullptr, 0, false};
             x.binds = &binds;
             x.strideSlots = 1u << 1;
-            ran = e.executeSlots(x, &why);
+            EXPECT_TRUE(e.executeSlots(x, &why)) << (why ? why : "");
             e.end();
         }
-        cb->abandon();
-        EXPECT_EQ(ran, stride == raw::kNoBindStride) << stride << ": " << (why ? why : "");
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        BindChannel channel;
+        for (size_t j = before; j < kernel_model::model.jobs.size(); j++)
+            channel.run(kernel_model::model.jobs[j].words);
+        ASSERT_EQ(channel.memory.count(word), 1u) << stride;
+        EXPECT_EQ(channel.memory.at(word), stride == raw::kNoBindStride ? 0u : stride);
     }
 }
 

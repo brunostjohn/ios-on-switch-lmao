@@ -119,16 +119,17 @@ void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&o
 bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDispatch &c, const char **why)
 {
     c.binds.clear();
+    c.strideWords.clear();
     c.bindSlots = c.alignedSlots = c.strideSlots = 0;
     uint32_t at = 0;
     for (uint8_t region = 0; region < kernels.count; ++region) {
         const raw::ComputeState &k = *kernels.jobs[region]->value();
-        if (!raw::ComputeEncoder::icbBinds(k, block.va + at, c.binds, why))
+        if (!raw::ComputeEncoder::icbBinds(k, block.va + at, c.binds, c.strideWords, why))
             return false;
         at += raw::icb::computeRegionBytes(k.rec->setBytes);
     }
-    if (c.binds.size() > raw::icb::kComputeBindsMax) {
-        *why = "more inherited buffer descriptors than a bind slot holds";
+    if (!raw::icb::bindsFit(uint32_t(c.binds.size()), uint32_t(c.strideWords.size()))) {
+        *why = "more inherited buffer descriptors and strides than a bind slot holds";
         return false;
     }
     for (const raw::icb::ComputeBind &b : c.binds) {
@@ -136,10 +137,8 @@ bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDi
         if (!b.residual)
             c.alignedSlots |= 1u << b.slot;
     }
-    for (uint8_t region = 0; region < kernels.count; ++region)
-        for (const auto &stride : kernels.jobs[region]->value()->rec->stageInStride)
-            if (stride[1] && stride[0] < 31)
-                c.strideSlots |= 1u << stride[0];
+    for (const raw::icb::ComputeStride &s : c.strideWords)
+        c.strideSlots |= 1u << s.slot;
     return true;
 }
 
@@ -200,7 +199,8 @@ std::shared_ptr<RMICBVariant> rmPipelineVariant(RMIndirectComputeBuffer *b, RMCo
         words.barrier = c.barrier;
         raw::icb::dispatch(slot, uint32_t(i), words);
         if (bind) {
-            raw::icb::binds(bind, bound.binds.data(), uint32_t(bound.binds.size()));
+            raw::icb::binds(bind, bound.binds.data(), uint32_t(bound.binds.size()), bound.strideWords.data(),
+                            uint32_t(bound.strideWords.size()));
             v->bindSlots |= bound.bindSlots;
             v->alignedSlots |= bound.alignedSlots;
             v->strideSlots |= bound.strideSlots;
@@ -247,6 +247,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     RMICBDispatch &c = _dispatches[index];
     c.raw = false;
     c.binds.clear();
+    c.strideWords.clear();
     c.bindSlots = c.alignedSlots = c.strideSlots = 0;
     _bindsChanged = true;
     _generation++;
@@ -279,7 +280,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     c.words.barrier = c.barrier;
     raw::icb::dispatch(computeSlot(self, index), uint32_t(index), c.words);
     if (_inheritBuffers)
-        raw::icb::binds(rmBindSlot(self, index), c.binds.data(), uint32_t(c.binds.size()));
+        raw::icb::binds(rmBindSlot(self, index), c.binds.data(), uint32_t(c.binds.size()), c.strideWords.data(),
+                        uint32_t(c.strideWords.size()));
     c.raw = true;
 }
 

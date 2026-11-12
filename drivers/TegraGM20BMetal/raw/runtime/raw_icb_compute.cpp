@@ -115,16 +115,17 @@ bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
         IcbBuffer inherited[31];
         std::array<uint32_t, 31> strides;
         inheritBuffers(inherited, strides);
-        for (uint32_t s = 0; s < 31; s++)
-            if ((x.strideSlots >> s & 1) && strides[s] != kNoBindStride) {
-                *why = "an inherited bind stride a stage-in command reads: its regions are written once, without one";
-                return false;
-            }
         uint64_t va[31] = {};
-        uint32_t size[31] = {};
+        uint32_t size[31] = {}, stride[31] = {};
         for (uint32_t s = 0; s < 31; s++) {
             if ((x.alignedSlots >> s & 1) && (inherited[s].va & 15)) {
                 *why = "a buffer bound at an offset that is not a multiple of 16";
+                return false;
+            }
+            // a bind without a stride reads at 0, as Metal's does (raw_stage_in.h)
+            stride[s] = strides[s] == kNoBindStride ? 0 : strides[s];
+            if ((x.strideSlots >> s & 1) && stride[s] > icb::kComputeStrideLimit) {
+                *why = "a bind stride past the 24 bits an execute's scratch word holds";
                 return false;
             }
             va[s] = inherited[s].va;
@@ -132,7 +133,7 @@ bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
         }
         cb_.use(*x.binds, false);
         room(8 + 3 * 31);
-        icb::computeBindHead(p_, va, size, x.bindSlots);
+        icb::computeBindHead(p_, va, size, stride, x.bindSlots | x.strideSlots);
         cb_.segment(start_, p_.at);
         cb_.segments_.append({x.binds->va + uint64_t(x.at) * icb::kComputeBindSlotWords * 4,
                               x.count * icb::kComputeBindSlotWords, TegraGM20BPushNoPrefetch},
