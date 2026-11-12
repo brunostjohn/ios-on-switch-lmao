@@ -1599,6 +1599,7 @@ host_test(
     srcs = [
         "raw_storage_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_interlock.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_dynamic_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shader_test_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_sample_shading.h",
