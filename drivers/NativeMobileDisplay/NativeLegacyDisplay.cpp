@@ -64,6 +64,7 @@
 #include "../SwitchPower/SwitchEMC.h"
 #include "../SwitchPower/SwitchDisplayBandwidth.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
+#include "SwitchSurfaceUse.h"
 #if SWITCH_FRAME_TIMELINE
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
@@ -3253,6 +3254,7 @@ public:
             IOFreeType(frameInfo, switch_frame_info::State);
         if (planeSets)
             IODelete(planeSets, PlaneSet, PlaneCommits::kSlots + 1);
+        releasePlaneUses();
         if (entryPlane)
             IODelete(entryPlane, PlaneSet, TegraScanoutRing::kMaxEntries);
         if (intMaskLock)
@@ -4691,6 +4693,7 @@ public:
 #include "SwitchMediaPlaneFence.h"
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
+#include "SwitchPlaneSurfaceUseDisplay.h"
 #include "NativeColumnScanDisplay.h"
 #include "SwitchPaletteDisplay.h"
 #include "SwitchPlaneAdmissionDrop.h"

@@ -51,6 +51,9 @@ struct Display {
     static const tgm_layout *surfaceLayout(OSObject *, tgm_layout &) { return nullptr; }
     static uint64_t planeSlotIova(int slot) { return 0x10000000ULL + uint64_t(slot) * kPlaneSlotSpan; }
     void cleanDomain() { ++flushes; }
+    int planeUseNoted(int slot, OSObject *) { return slot; }
+    void planeUseRelease(unsigned) {}
+    void planeUseHoldScanned() {}
     ~Display() { for (unsigned i = 0; i < kPlaneSlots; ++i) { planeDropSlot(i); delete[] planeSlots[i].native; } }
 #include "../SwitchPlaneSlots.h"
 #include "../SwitchNativePlaneDisplay.h"

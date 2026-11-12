@@ -9,6 +9,7 @@
 
 void planeDropSlot(unsigned k)
 {
+    planeUseRelease(k);
     PlaneSlot &slot = planeSlots[k];
     if (slot.memory || slot.mappedAllocation || (slot.native && slot.native->lease)) {
         probeDomain.unmap(planeSlotIova(static_cast<int>(k)), static_cast<uint32_t>((slot.high - slot.low) / 4096));
@@ -30,6 +31,7 @@ void planeDropSlot(unsigned k)
 
 void planeReleaseLease(unsigned k)
 {
+    planeUseRelease(k);
     auto *native = planeSlots[k].native;
     if (native && native->lease)
         switch_native_scanout_release(native);
@@ -38,6 +40,7 @@ void planeReleaseLease(unsigned k)
 // After a latch: every frame no set shows goes back to its producer; with window B idle, GPU surfaces go back too.
 void planeReleaseIdle()
 {
+    planeUseHoldScanned();
     const bool idle = planeWindowIdle();
     for (unsigned k = 0; k < kPlaneSlots; ++k) {
         if (planeSlotBusy(static_cast<int>(k)))

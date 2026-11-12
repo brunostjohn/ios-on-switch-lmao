@@ -10,7 +10,8 @@
   "constants": {
     "baseOffset": "0x168",
     "clientMemory": "0x150",
-    "clientTask": "0x170"
+    "clientTask": "0x170",
+    "useCountFlags": "0x3b2"
   },
   "addresses": {
     "protection": "0xfffffff005b9d2fc",
@@ -32,7 +33,10 @@
     "copy_value": "0xfffffff005ba0ed4",
     "bytes_per_element": "0xfffffff005b9ebdc",
     "element_width": "0xfffffff005b9ebe4",
-    "element_height": "0xfffffff005b9ebec"
+    "element_height": "0xfffffff005b9ebec",
+    "use_count_increment": "0xfffffff005b9f758",
+    "use_count_decrement": "0xfffffff005b9f814",
+    "use_count": "0xfffffff005b9f9e0"
   },
   "hints": {
     "functions": {
@@ -135,6 +139,21 @@
         "at": "0xfffffff005b9ebec",
         "body": "3941cc00 d65f03c0",
         "why": "ldrb w0, [x0, #0x73]: IOSurfaceElementHeight; constructor stores the parsed property at this field"
+      },
+      "use_count_increment": {
+        "at": "0xfffffff005b9f758",
+        "body": "a9bf7bfd 910003fd 7100043f 54000508 d2c00028 b2607fe9 1280000a 394ec80b 3728036b f940bc0b 9100616b f940016d 92407dac 92607dae 8b0801cf eb0901bf 9a8931ef aa0c01ef 110005b0",
+        "why": "IOSurface::incrementUseCount(category): category above 1 refused, +0x3b2 bit 5 (kIOSurfaceProhibitUseCount) logs \"Attempt to change IOSurface useCount while kIOSurfaceProhibitUseCount is set, ignored.\", else an exclusive add of 1 to the low (category 0) or high word at +0x18 of the shared entry (+0x178), up the parent chain (+0x358); selector 14 reaches it (0xfffffff005bae1bc via 0xfffffff005bb0624); the wrapper at 0xfffffff005b9f750 (mov w1, #0) is AppleAVE2's GOT entry 0xfffffff006f79e80"
+      },
+      "use_count_decrement": {
+        "at": "0xfffffff005b9f814",
+        "body": "a9bd57f6 a9014ff4 a9027bfd 910083fd 7100043f 540007c8 aa0103f3 aa0003f4 b2607ff5 f000fa56 394eca88 37280608 f940be88 91006108 f940010b d360fd69 92607d6a 8b15014c 7100013f 9a8c03ec b3407d6c 5100056d",
+        "why": "IOSurface::decrementUseCount(category): the same checks, an exclusive take of 1 from the category's word at +0x18 (never below 0); selector 15 reaches it (0xfffffff005bae1cc via 0xfffffff005bb06c4); the wrapper at 0xfffffff005b9f80c is GOT entry 0xfffffff006f79e70, 0x10 before the increment's as in 24B119's AppleAVE2"
+      },
+      "use_count": {
+        "at": "0xfffffff005b9f9e0",
+        "body": "f940bc08 f9400d08 d360fd09 0b080120 d65f03c0",
+        "why": "IOSurface::getUseCount(): the shared entry's +0x18 low and high words added; selector 16 (0xfffffff005bae1dc) returns it; GOT entry 0xfffffff006f79ec8"
       }
     },
     "constants": {
@@ -155,6 +174,12 @@
         "at": "0xfffffff005ba5a3c",
         "word": "f940b809",
         "why": "ldr x9, [x0, #0x170] in the map-into-task, compared with the client's task"
+      },
+      "useCountFlags": {
+        "value": "0x3b2",
+        "at": "0xfffffff005b9f774",
+        "word": "394ec80b",
+        "why": "ldrb w11, [x0, #0x3b2] then tbnz w11, #5 in incrementUseCount: the prohibit flag every use-count change tests (24B119: +0x3d2)"
       }
     }
   }

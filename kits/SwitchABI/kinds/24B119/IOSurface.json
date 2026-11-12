@@ -10,7 +10,8 @@
   "constants": {
     "baseOffset": "0x168",
     "clientMemory": "0x150",
-    "clientTask": "0x170"
+    "clientTask": "0x170",
+    "useCountFlags": "0x3d2"
   },
   "addresses": {
     "alloc_size": "0xfffffff009aeb438",
@@ -32,6 +33,9 @@
     "plane_width": "0xfffffff009aee910",
     "prepare": "0xfffffff009aefa78",
     "protection": "0xfffffff009aec5f4",
+    "use_count": "0xfffffff009aef630",
+    "use_count_decrement": "0xfffffff009aef2bc",
+    "use_count_increment": "0xfffffff009aef170",
     "width": "0xfffffff009aee5f8"
   },
   "found": {
@@ -57,6 +61,10 @@
     "plane_width": "plane accessor reading entry +0x00 (stride 0x38), falling back to +0x58",
     "prepare": "IOSurface::prepare(): the descriptor (+0x30) checked, the lock at +0x398 taken, the wire count at +0x22c raised (21H461: +0x380, +0x20c); the 11th and 15th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
     "protection": "the protection options: the value at +0x3a0, now kept signed (autda, the address and +0x50 blended) where 21H461 read +0x388 plainly; the GOT entry after the plane accessor that follows getPlaneBytesPerRow in both AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
+    "useCountFlags": "value shown by 394f4a8b at 0xfffffff009aef1a4",
+    "use_count": "IOSurface::getUseCount(): the shared entry's +0x18 low and high words added; what selector 16 (s_get_surface_use_count, 0xfffffff009b05284) returns and AppleAVE2 imports; IOSurface.framework's IOSurfaceClientIsInUse reads the same word from its mapping of the entry",
+    "use_count_decrement": "IOSurface::decrementUseCount(category): the same checks, a compare-and-swap at +0x18 taking 1 from the category's word (never below 0); the last use dropped takes the lock at +0x50 for the purgeable state (+0x3d0 bit 6); the target of selector 15 (0xfffffff009b05270 via 0xfffffff009b08f18) and of the no-argument wrapper at 0xfffffff009aef2b0 that AppleAVE2 imports",
+    "use_count_increment": "IOSurface::incrementUseCount(category): category above 1 refused, +0x3d2 bit 5 (kIOSurfaceProhibitUseCount) logs instead, else a compare-and-swap on the shared entry (+0x178, signed) at +0x18 adds 1 to the low word (category 0) or the high word (category 1), up the parent chain (+0x378); the target of selector 14 (s_increment_surface_use_count, 0xfffffff009b0525c via 0xfffffff009b08e04) and of the no-argument wrapper at 0xfffffff009aef164 (mov w1, #0) that AppleAVE2 imports",
     "width": "ldr x0, [x0, #0x58]: the field the plane-width accessor falls back to"
   },
   "hints": {
@@ -160,6 +168,21 @@
         "at": "0xfffffff009aee640",
         "body": "3941cc00 d65f03c0",
         "why": "ldrb w0, [x0, #0x73]: IOSurfaceElementHeight; constructor stores the parsed property at this field"
+      },
+      "use_count_increment": {
+        "at": "0xfffffff009aef170",
+        "body": "d503237f a9bd57f6 a9014ff4 a9027bfd 910083fd 7100043f 540004a8 aa0103f3 aa0003f4 d2c00028 b2607fe9 1280000a 394f4a8b 3728044b f940be90 9105e291 f2f47371 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 f9400e0b 92607d6c 8b08018c eb09017f 9a89318c 1100056d",
+        "why": "IOSurface::incrementUseCount(category): category above 1 refused, +0x3d2 bit 5 (kIOSurfaceProhibitUseCount) logs instead, else a compare-and-swap on the shared entry (+0x178, signed) at +0x18 adds 1 to the low word (category 0) or the high word (category 1), up the parent chain (+0x378); the target of selector 14 (s_increment_surface_use_count, 0xfffffff009b0525c via 0xfffffff009b08e04) and of the no-argument wrapper at 0xfffffff009aef164 (mov w1, #0) that AppleAVE2 imports"
+      },
+      "use_count_decrement": {
+        "at": "0xfffffff009aef2bc",
+        "body": "d503237f a9bc5ff8 a90157f6 a9024ff4 a9037bfd 9100c3fd 7100043f 54000808 aa0103f3 aa0003f4 d2c00035 b2607ff6 12800017 90009ef8 394f4a88 372807a8 f940be90 9105e291 f2f47371 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 f9400e0a 92607d48 eb15011f 1a9f17e9 8b160108 d360fd4b f100017f 9a8803e8 7100054b",
+        "why": "IOSurface::decrementUseCount(category): the same checks, a compare-and-swap at +0x18 taking 1 from the category's word (never below 0); the last use dropped takes the lock at +0x50 for the purgeable state (+0x3d0 bit 6); the target of selector 15 (0xfffffff009b05270 via 0xfffffff009b08f18) and of the no-argument wrapper at 0xfffffff009aef2b0 that AppleAVE2 imports"
+      },
+      "use_count": {
+        "at": "0xfffffff009aef630",
+        "body": "f940bc10 9105e011 f2f47371 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 f9400e08 d360fd09 0b080120 d65f03c0",
+        "why": "IOSurface::getUseCount(): the shared entry's +0x18 low and high words added; what selector 16 (s_get_surface_use_count, 0xfffffff009b05284) returns and AppleAVE2 imports; IOSurface.framework's IOSurfaceClientIsInUse reads the same word from its mapping of the entry"
       }
     },
     "constants": {
@@ -180,6 +203,12 @@
         "at": "0xfffffff009af7f4c",
         "word": "f940b810",
         "why": "ldr x16, [x0, #0x170] in mapInTask, as in 21H461: signed in Apple's binary (autda, its address blended with 0xf19c), plain under our prelink"
+      },
+      "useCountFlags": {
+        "value": "0x3d2",
+        "at": "0xfffffff009aef1a4",
+        "word": "394f4a8b",
+        "why": "ldrb w11, [x20, #0x3d2] then tbnz w11, #5 in incrementUseCount: the prohibit flag every use-count change tests (21H461: +0x3b2)"
       }
     }
   }

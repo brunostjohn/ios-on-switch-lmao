@@ -622,6 +622,29 @@ host_test(
     ],
 )
 
+# SwitchPlaneSurfaceUseDisplay.h: window B holds an IOSurface use count on what it scans, from the latch until the
+# lease goes; three pool buffers going round leave only the one shown in use.
+host_shims(
+    name = "surface_use_kernel",
+    headers = ["OriginalIOSurface.h"],
+    stubs = "switch_surface_use_stubs.h",
+)
+
+host_test(
+    name = "switch_plane_surface_use_test",
+    srcs = [
+        "switch_plane_surface_use_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSurfaceUseDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchSurfaceUse.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchNativePlaneDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSlots.h",
+    ],
+    deps = [":surface_use_kernel"],
+)
+
 # SwitchTimedPresent.h: a swap flips at the frame end before its requested presentation; the next vblank's as before.
 host_test(
     name = "switch_timed_present_test",
