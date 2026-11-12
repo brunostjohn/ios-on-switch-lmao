@@ -144,10 +144,6 @@ TEST(Gm20bClkgate, GrResetRunsWithGatingOffAndGetsTheListsBack)
 	ASSERT_NE(on, std::string::npos);
 	EXPECT_LT(off, nouveau);
 	EXPECT_LT(nouveau, on);
-	// the PBDMA's ENG_RESET is held from before GR goes into reset until its init is done (recover_engine.c)
-	EXPECT_LT(reset.find("tgm_recover_reset_hold(engine);"), nouveau);
-	EXPECT_LT(nouveau, reset.find("tgm_recover_reset_release(engine);"));
-	EXPECT_LT(reset.find("tgm_recover_reset_release(engine);"), on);
 
 	const std::string guard =
 		Body(Text(CLKGATE_C), "void tgm_clkgate_guard_reset(struct nvkm_device *device)");

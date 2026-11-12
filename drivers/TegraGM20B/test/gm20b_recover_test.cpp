@@ -188,6 +188,76 @@ TEST(EngineReset, OnlyTheOutermostOfNestedResetsHoldsAndReleases)
 	EXPECT_EQ(holds, 0u);
 }
 
+// T-v3g 4471 s: "GR 802ac02a current{SwitchHWTest ch 42 fence 3/3 err 0} ... PGRAPH 01000081 ENG0 802ac02a (ch 42 -> ch 42,
+// ctxsw save), PBDMA0 00042004 ch 4 mthd 80001424": GR busy saving channel 42, whose jobs had all completed (a 2D solid
+// fill with a float colour format into an 8-bit target left GR unable to idle), backboardd's channel 4 on the PBDMA
+// behind it. Every tick said WAIT: the stuck rule needs work pending, and 42 had none.
+TEST(StuckSave, Tv3gsSaveOfAChannelWithNothingPendingIsDecidedAtTheFirstTick)
+{
+	constexpr uint32_t eng0 = 0x802ac02au, pgraph = 0x01000081u, pbdma = 0x00042004u;
+	EXPECT_TRUE(eng0 & PFIFO_ENG_BUSY);
+	EXPECT_EQ(PFIFO_ENG_CTX_STATUS(eng0), uint32_t(PFIFO_ENG_CTX_SAVE));
+	EXPECT_EQ(tgm_engine_saving(eng0, 0), 42);
+	EXPECT_TRUE(tgm_engine_switch_pending(eng0));
+	EXPECT_FALSE(tgm_engine_load_stuck(eng0));
+	EXPECT_TRUE(tgm_engine_holds(eng0, 42));
+	EXPECT_NE(pgraph & 1u, 0u) << "GR busy";
+	EXPECT_EQ(PBDMA_CHID(pbdma), 4u);
+	EXPECT_EQ(PBDMA_METHOD_ADDR(0x80001424u), 0x1424u);
+	const uint64_t tick = 250 * kMs;
+	EXPECT_FALSE(tgm_stuck(0, 3, 3, tick, 0)) << "what the rule saw at every tick";
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, tgm_stuck(0, 3, 3, tick, 0), 0), TGM_CTXSW_WAIT);
+	EXPECT_TRUE(tgm_switch_unowned(0, 3, 3));
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, tgm_switch_unowned(0, 3, 3), 0), TGM_CTXSW_KILL);
+	EXPECT_FALSE(tgm_switch_unowned(1, 3, 3)) << "a killed channel's context is residue";
+	EXPECT_FALSE(tgm_switch_unowned(0, 2, 3)) << "work pending: the stuck rule decides";
+}
+
+TEST(StuckSave, OnlyASwitchAwayFromTheContextIsASave)
+{
+	EXPECT_EQ(tgm_engine_saving(engine(6, 42, 4), 0), 42);
+	EXPECT_EQ(tgm_engine_saving(engine(7, 42, 4), 0), 42);
+	EXPECT_EQ(tgm_engine_saving(engine(7, 42, 4), 1), -1) << "FECS loading the next";
+	EXPECT_EQ(tgm_engine_saving(engine(5, 42, 4), 0), -1);
+	EXPECT_EQ(tgm_engine_saving(engine(1, 42, 0), 0), -1);
+	EXPECT_EQ(tgm_engine_saving(engine(6, 42, 4) & ~kBusy, 0), -1);
+	EXPECT_EQ(tgm_engine_saving(engine(6, 42, 4) | 0x00001000u, 0), -1) << "a TSG";
+}
+
+// T-v3g 13:31:15-32: 32 copy-engine saves stuck under HW Test's gpu.astc.layouts, each killed 517-553 ms after its
+// submit: the 250 ms ticks waited for the 500 ms stuck rule. A copy engine's work is never long and finite, and the
+// ticks now come every 100 ms (nvgpu's period).
+TEST(StuckSave, ACopyEngineSwitchIsDecidedAtTheFirstTickAndGrsLongJobsAreWaitedOut)
+{
+	constexpr uint64_t tick = 100 * kMs;
+	const uint64_t kick = 1000 * kMs, firstTick = kick + tick + 20 * kMs;
+	EXPECT_FALSE(tgm_stuck(0, 2934, 2935, firstTick, kick));
+	EXPECT_TRUE(tgm_stuck_for(0, 2934, 2935, firstTick, kick, tgm_stuck_window(0)));
+	EXPECT_FALSE(tgm_stuck_for(0, 2934, 2935, firstTick, kick, tgm_stuck_window(1)))
+		<< "GR jobs up to 428 ms were measured";
+	EXPECT_LT(TGM_STUCK_COPY_NS, tick);
+	EXPECT_GT(TGM_STUCK_NS, 428 * kMs);
+}
+
+TEST(LastResort, AHangWithNothingToBlameResetsTheEnginesOnceAStall)
+{
+	EXPECT_TRUE(tgm_hang_last_resort(0, 0, 39009));
+	EXPECT_FALSE(tgm_hang_last_resort(1, 39009, 39009)) << "the reset freed nothing: fatal";
+	EXPECT_TRUE(tgm_hang_last_resort(1, 39009, 39010)) << "it completed work since: a new stall";
+}
+
+// nvkm's recovery holds runl->mutex through its runlist update and preempt waits (2 s each, recovery.c): a kill still
+// under way is waited for, one never scheduled is asked for again, and only past both is it lost.
+TEST(IsolateDeadline, AKillNvkmIsStillDoingIsWaitedForNotFatal)
+{
+	EXPECT_EQ(tgm_iso_verdict(1, 600 * kMs, 0), TGM_ISO_WAIT);
+	EXPECT_EQ(tgm_iso_verdict(1, 4400 * kMs, 1), TGM_ISO_WAIT);
+	EXPECT_EQ(tgm_iso_verdict(0, 600 * kMs, 0), TGM_ISO_RETRY);
+	EXPECT_EQ(tgm_iso_verdict(0, 1100 * kMs, 1), TGM_ISO_LOST);
+	EXPECT_EQ(tgm_iso_verdict(1, 4600 * kMs, 1), TGM_ISO_LOST);
+	EXPECT_GT(TGM_ISOLATE_NVKM_NS, 4000 * kMs);
+}
+
 // T-v2 kill_one: the poisoned job P stopped GR, which finished P and released its fence before the kill
 TEST(Kill, TheFirstFailedSeqnoIsTheJobAGrErrorStoppedIn)
 {

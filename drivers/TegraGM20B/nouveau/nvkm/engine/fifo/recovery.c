@@ -27,6 +27,10 @@
 #include <nouveau/nvkm/engine/fifo/runq.h>
 #include <subdev/timer.h>
 
+void tgm_recover_reset_hold(struct nvkm_engine *);
+void tgm_recover_reset_release(struct nvkm_engine *);
+void tgm_recover_preempt_unblock(struct nvkm_runl *);
+
 struct nvkm_cgrp *
 nvkm_engn_cgrp_get(struct nvkm_engn *engn, unsigned long *pirqflags)
 {
@@ -110,7 +114,9 @@ nvkm_runl_rc(struct nvkm_runl *runl)
 		}
 
 		ENGN_DEBUG(engn, "resetting...");
+		tgm_recover_reset_hold(engn->engine);
 		BUG_ON(nvkm_engine_reset(engn->engine));
+		tgm_recover_reset_release(engn->engine);
 	}
 
 	/* Submit runlist update, and clear any remaining exception state. */
@@ -123,6 +129,7 @@ nvkm_runl_rc(struct nvkm_runl *runl)
 		nvkm_runl_allow(runl);
 	BUG_ON(runl->func->wait(runl));
 	if (runl->func->preempt_pending) {
+		tgm_recover_preempt_unblock(runl);
 		BUG_ON(nvkm_msec(fifo->engine.subdev.device, 2000,
 			if (!runl->func->preempt_pending(runl))
 				break;

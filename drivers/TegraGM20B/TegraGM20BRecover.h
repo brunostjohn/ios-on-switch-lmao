@@ -55,10 +55,11 @@ static inline int tgm_ctxsw_redo_pending(int reset, uint32_t reset_after, uint32
 }
 
 /* gpu_hang.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid, switched on the engine
- * named `engine`. A stuck client channel is being killed on return. For TGM_CTXSW_REDO the kernel channel's work is
- * marked to be redone (gpu_present.c, gpu_scrub.c) before the caller resets the engine; a second timeout before that
- * work lands panics. */
-enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine);
+ * named `engine`, GR (gr) or another: stuck when nothing completed for tgm_stuck_window(gr), or when it has nothing
+ * pending at all (tgm_switch_unowned). A stuck client channel is being killed on return. For TGM_CTXSW_REDO the kernel
+ * channel's work is marked to be redone (gpu_present.c, gpu_scrub.c) before the caller resets the engine; a second
+ * timeout before that work lands panics. */
+enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine, int gr);
 
 #if TGM_STATS
 /* gpu_copy_reset.c's HW Test hook, thread context: what ctxsw_work does for TGM_CTXSW_REDO, on the copy engine if it is
@@ -179,6 +180,19 @@ static inline int tgm_engine_load_stuck(uint32_t status)
 	       PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_LOAD;
 }
 
+/* The channel a BUSY engine is switching away from: a SAVE, or a SWITCH before FECS begins the load; -1: none. T-v3g's
+ * 0x802ac02a is GR saving channel 42. */
+static inline int tgm_engine_saving(uint32_t status, int fecs_loading)
+{
+	const uint32_t ctx = PFIFO_ENG_CTX_STATUS(status);
+
+	if (!(status & PFIFO_ENG_BUSY) || !(status & PFIFO_ENG_CHSW) || (status & PFIFO_ENG_ID_TSG))
+		return -1;
+	if (ctx != PFIFO_ENG_CTX_SAVE && (ctx != PFIFO_ENG_CTX_SWITCH || fecs_loading))
+		return -1;
+	return (int)PFIFO_ENG_ID(status);
+}
+
 /* An engine whose context-switch timeout tick gets a decision: a switch pending while BUSY (nvkm's), or a stuck load */
 static inline int tgm_engine_switch_pending(uint32_t status)
 {
@@ -257,6 +271,14 @@ int tgm_recover_residue(struct nvkm_device *device, int chid);
 const char *tgm_recover_loading(struct nvkm_device *device, int chid);
 /* Resets every engine stuck loading chid's context; how many */
 int tgm_recover_reload(struct nvkm_device *device, int chid);
+/* runl->mutex held, in nvkm_runl_rc before it waits for a posted preempt: an engine of runl stuck saving a context with
+ * nothing to drain (a killed channel's, or a client's with nothing pending) holds that preempt up, and is reset under
+ * the hold, nothing killed, so the wait ends at once. */
+void tgm_recover_preempt_unblock(struct nvkm_runl *runl);
+/* Whether a BUSY engine is switching away from hardware channel chid's context (tgm_engine_saving) */
+int tgm_recover_saving(struct nvkm_device *device, int chid);
+/* Resets every engine that is busy or switching, under the hold; how many */
+int tgm_recover_engines(struct nvkm_device *device);
 /* nvkm's FIFO functions as a writable copy put in place of its const table, once: recover.c and sched.c replace entries
  * of it, and vendored nouveau stays as it is. */
 struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo);
@@ -290,6 +312,31 @@ static inline int tgm_stuck(int dead, uint32_t completed, uint32_t submitted, ui
 	return !dead && (int32_t)(completed - submitted) < 0 && now - progress_ns >= TGM_STUCK_NS;
 }
 
+/* Only GR runs work that is long and finite (single GR jobs up to 428 ms were measured, T-v3e's boot stats): a copy
+ * engine's work that completes nothing for this long while its switch is pending is stuck, so the context-switch
+ * timeout's first tick (100 ms) decides it. */
+#define TGM_STUCK_COPY_NS (90ull * 1000 * 1000)
+
+static inline uint64_t tgm_stuck_window(int gr)
+{
+	return gr ? TGM_STUCK_NS : TGM_STUCK_COPY_NS;
+}
+
+static inline int tgm_stuck_for(int dead, uint32_t completed, uint32_t submitted, uint64_t now,
+				uint64_t progress_ns, uint64_t window)
+{
+	return !dead && (int32_t)(completed - submitted) < 0 && now - progress_ns >= window;
+}
+
+/* An engine whose switch away from a live channel is pending at a context-switch timeout tick, the channel having
+ * nothing pending: no work it owns can drain, so it is stuck at that tick. The fence counts only what the channel
+ * submitted: a job can complete and still leave the engine unable to save its context (T-v3g's 2D solid fill with a
+ * float colour format into an 8-bit target: fence 3/3, then GR stuck saving channel 42). */
+static inline int tgm_switch_unowned(int dead, uint32_t completed, uint32_t submitted)
+{
+	return !dead && completed == submitted;
+}
+
 /* A job's internal fences move its channel's fence word with no interrupt, so a check reads the word itself: a value
  * neither the interrupt pass (irq_done) nor an earlier check (*seen) accounted for is progress at the check's time. */
 static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint32_t *seen)
@@ -305,6 +352,29 @@ static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint3
 static inline uint32_t tgm_kill_first(int faulted, uint32_t fault_seqno, uint32_t completed)
 {
 	return faulted ? fault_seqno : completed + 1;
+}
+
+/* A hang check that finds nothing to recover (TGM_HANG_STUCK) resets every engine that is busy or switching, kills no
+ * one and waits on (reset: done before for the late channel, completed_at_reset: what it had completed then). Only the
+ * same stall again with nothing completed since is fatal: a reset that did not free the GPU. */
+static inline int tgm_hang_last_resort(int reset, uint32_t completed_at_reset, uint32_t completed)
+{
+	return !reset || completed != completed_at_reset;
+}
+
+/* tgm_iso_deadline for a channel being killed past TGM_ISOLATE_NS: nvkm's recovery of its group still under way
+ * (marked) is waited for up to nvkm's own bounded waits (its runlist update and preempt waits, 2 s each); a recovery
+ * never scheduled is asked for once more; past that the kill is lost. */
+enum tgm_iso { TGM_ISO_WAIT, TGM_ISO_RETRY, TGM_ISO_LOST };
+#define TGM_ISOLATE_NVKM_NS (4500ull * 1000 * 1000)
+
+static inline enum tgm_iso tgm_iso_verdict(int marked, uint64_t since_ns, int retried)
+{
+	if (marked && since_ns < TGM_ISOLATE_NVKM_NS)
+		return TGM_ISO_WAIT;
+	if (!marked && !retried)
+		return TGM_ISO_RETRY;
+	return TGM_ISO_LOST;
 }
 
 /* What a wait that ran out with no GPU error reported found (gpu_hang.c tgm_hang_recover). */
@@ -326,6 +396,8 @@ struct tgm_hang_candidate {
 	uint8_t victim; /* its acquire waits on what the kernel or a host1x engine releases, never on its own work */
 	uint8_t dead; /* not a live channel, or one killed already: an engine or PBDMA left on it is a recovery's residue */
 	uint8_t loading; /* an engine is stuck loading its context (tgm_engine_load_stuck): its work has not begun there */
+	uint8_t saving;  /* an engine is BUSY switching away from its context (tgm_engine_saving): the context-switch timeout
+			  * names it, and no channel waiting behind that engine is to blame meanwhile */
 };
 
 /* A long single job and a hung one look alike for the whole check: the PBDMA's GET stops once the engine's method FIFO is
@@ -373,6 +445,16 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 			*blame = i;
 			return TGM_HANG_RELOAD;
 		}
+	}
+	for (i = 0; i < n; i++) {
+		if (!c[i].live || !c[i].resident || !c[i].saving)
+			continue;
+		if (!c[i].stuck)
+			return TGM_HANG_PROGRESSING;
+		if (c[i].kernel)
+			return TGM_HANG_STUCK;
+		*blame = i;
+		return TGM_HANG_RECOVERING;
 	}
 	for (i = 0; i < n; i++) {
 		if (!c[i].live || !c[i].resident || !c[i].stuck || c[i].moving)

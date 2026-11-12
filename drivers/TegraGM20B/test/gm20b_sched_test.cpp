@@ -384,25 +384,26 @@ TEST(Preempt, OneInFlightIsWaitedForOnlyByAThread)
 	EXPECT_EQ(tgm_preempt_how(1, 1), TGM_PREEMPT_RECOVER);
 }
 
-constexpr uint64_t kTick = 250 * kMs;  // recover.c's CTXSW_TIMEOUT_US
+constexpr uint64_t kTick = 100 * kMs;  // recover.c's CTXSW_TIMEOUT_US
 
 TEST(Stuck, ALongDrainOfTheOutgoingChannelIsWaitedOut)
 {
 	// backboardd's m2v pass of 144 ms, two a frame, while an app waits: its last completion 20 ms before the switch
-	// request, the first tick 250 ms after it, the pass done at 288 ms, the second tick at 500 ms
+	// request, a tick every 100 ms after it, the passes done at 144 and 288 ms
 	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
 	EXPECT_FALSE(tgm_stuck(0, 90, 92, request + kTick, lastDone));
-	EXPECT_FALSE(tgm_stuck(0, 91, 92, request + 2 * kTick, request + 288 * kMs));
+	EXPECT_FALSE(tgm_stuck(0, 91, 92, request + 2 * kTick, request + 144 * kMs));
+	EXPECT_FALSE(tgm_stuck(0, 92, 93, request + 3 * kTick, request + 288 * kMs));
 	EXPECT_LT(2 * 144 * kMs, TGM_STUCK_NS);
 }
 
 TEST(Stuck, Deploy2045sSwitchThatNeverEndsIsKilled)
 {
-	// ENG0 801ae003 at both ticks; backboardd's fence 90/93, nothing completed since 20 ms before the request
+	// ENG0 801ae003 at every tick; backboardd's fence 90/93, nothing completed since 20 ms before the request
 	EXPECT_EQ(tgm_kick_victim(kHangEng0, 1, 1, 26, 0), TGM_VICTIM_SWITCHING);
 	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
-	EXPECT_FALSE(tgm_stuck(0, 90, 93, request + kTick, lastDone));
-	EXPECT_TRUE(tgm_stuck(0, 90, 93, request + 2 * kTick, lastDone));
+	EXPECT_FALSE(tgm_stuck(0, 90, 93, request + 4 * kTick, lastDone));
+	EXPECT_TRUE(tgm_stuck(0, 90, 93, request + 5 * kTick, lastDone));
 }
 
 TEST(Stuck, IdleOrDeadChannelsNeverAre)
@@ -425,14 +426,15 @@ struct Candidates {
 };
 
 // live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index),
-// victim, dead (no live channel, or a killed one), loading (an engine stuck loading its context)
-constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0, 0, 0},
-			     kBusyClient = {1, 0, 0, 0, 0, 0, 0, 0, 0},
-			     kNone = {0, 0, 0, 0, 0, 0, 0, 0, 0},
-			     kStuckResident = {1, 1, 0, 1, 0, 0, 0, 0, 0},
-			     kMovingResident = {1, 1, 0, 1, 1, 0, 0, 0, 0},
-			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0, 0, 0},
-			     kBusyKernel = {1, 0, 1, 0, 0, 0, 0, 0, 0};
+// victim, dead (no live channel, or a killed one), loading (an engine stuck loading its context), saving (an engine
+// switching away from its context)
+constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+			     kBusyClient = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			     kNone = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			     kStuckResident = {1, 1, 0, 1, 0, 0, 0, 0, 0, 0},
+			     kMovingResident = {1, 1, 0, 1, 1, 0, 0, 0, 0, 0},
+			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0, 0, 0, 0},
+			     kBusyKernel = {1, 0, 1, 0, 0, 0, 0, 0, 0, 0};
 
 constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
 {
@@ -484,6 +486,36 @@ TEST(HangBlame, Tv3eKilledTheCompositorWhoseContextGrWasLoading)
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RELOAD)
 		<< "GR is loading 4: reset under it, kill no one";
 	EXPECT_EQ(blame, 1);
+}
+
+// T-v3g: GR saving the bench's channel 42 (nothing pending), PBDMA0 on backboardd's channel 4 behind it. The old rule
+// never found 42 stuck (no work pending) and blamed backboardd once two checks found it still. Now the channel an engine
+// is saving is the only one blamed, once two checks confirm the stall; until then nothing is.
+TEST(HangBlame, Tv3gBlamesTheChannelGrCannotSaveNeverTheCompositorBehindIt)
+{
+	tgm_hang_candidate bench = kBusyClient, present = kStuckKernel;
+	bench.resident = 1;
+	present.resident = 0;
+	Candidates k{{bench, kStuckResident, present}};
+	k.late_kernel = 1;
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING) << "the old rule";
+	EXPECT_EQ(blame, 1) << "backboardd";
+	k.c[0].saving = 1;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING) << "first look: no one blamed";
+	EXPECT_EQ(blame, -1);
+	k.c[0].stuck = 1;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
+	EXPECT_EQ(blame, 0) << "the bench's channel alone";
+}
+
+TEST(HangBlame, AKernelChannelAnEngineCannotSaveIsNoClientsToKill)
+{
+	tgm_hang_candidate present = kStuckKernel;
+	present.saving = 1;
+	Candidates k{{present, kStuckResident}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK) << "tgm_hang_recover's last resort: every busy engine reset";
 }
 
 // With NVIDIA's decode the suspects are channel 4 alone (GR loading it, PBDMA0 on it): no channel is killed.
@@ -565,7 +597,7 @@ TEST(HangBlame, AnAcquireTimeoutKillsTheProducerNotTheWaiter)
 
 TEST(HangBlame, AWaiterOnAProducerThatMovesIsLeftAlone)
 {
-	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);
@@ -626,7 +658,7 @@ TEST(HangBlame, WithNoEngineOnThemTheBlameFollowsTheAcquiresToTheEnd)
 
 TEST(HangBlame, AnAcquireOnASourceThatMovesIsSlowWork)
 {
-	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);

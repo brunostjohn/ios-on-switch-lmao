@@ -16,6 +16,20 @@ void tgm_fault_publish(struct tgm_chan *chan)
 		__atomic_store_n(&by_chid[chan->chid], chan, __ATOMIC_RELEASE);
 }
 
+/* runl->mutex held (chan_free's nvkm destructor waits for it, so a channel read here is not freed under the caller): 1 if
+ * hardware channel chid is a live client's with nothing pending */
+int tgm_chid_unowned(int chid)
+{
+	struct tgm_chan *chan = NULL;
+
+	if (chid < 0 || chid >= CHIDS)
+		return 0;
+	chan = __atomic_load_n(&by_chid[chid], __ATOMIC_ACQUIRE);
+	return chan && !chan->kernel &&
+	       tgm_switch_unowned(READ_ONCE(chan->error) != 0, tgm_chan_completed(chan),
+				  READ_ONCE(chan->submitted));
+}
+
 /* chan_free, before nvkm's channel goes: nvkm's GR interrupt holds that channel's group lock while it calls
  * tgm_gr_fault, and nvkm takes the same lock to drop the channel, so a tgm_gr_fault that found this one is done
  * before chan_free frees it. */

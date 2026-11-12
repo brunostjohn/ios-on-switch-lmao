@@ -14,15 +14,16 @@
 
 /* PFIFO_ENG_TIMEOUT (nvgpu hw_fifo_gm20b.h fifo_eng_timeout_r): nouveau leaves it as reset, and with it off a context
  * switch that never completes stalls every channel with no interrupt at all. Its period counts PTIMER microseconds, and
- * PTIMER runs at 19.2/31.25 of real time on this Tegra (gpu_stats.c "stats"; nvgpu scales it the same way, scale_ptimer). The
- * period is a detection tick, not a limit: a graphics context saves only at a wait-for-idle, so a switch waits for the
- * work in flight, and the hardware raises SCHED_ERROR CTXSW_TIMEOUT again each period the switch stays pending (nvgpu
- * gk20a_fifo_check_ch_ctxsw_timeout adds up these ticks). A tick recovers the context only once its channel is stuck by
- * gpu_hang.c's rule (tgm_ctxsw_decide: nothing completed for TGM_STUCK_NS), so a long but finite drain, as backboardd's m2v
- * passes of 144 ms, two a frame, is waited out. */
+ * PTIMER runs at 19.2/31.25 of real time on this Tegra (gpu_stats.c "stats"; nvgpu scales it the same way, scale_ptimer),
+ * and its period is nvgpu's (GRFIFO_TIMEOUT_CHECK_PERIOD_US). The period is a detection tick, not a limit: a graphics
+ * context saves only at a wait-for-idle, so a switch waits for the work in flight, and the hardware raises SCHED_ERROR
+ * CTXSW_TIMEOUT again each period the switch stays pending (nvgpu gk20a_fifo_check_ch_ctxsw_timeout adds up these ticks).
+ * A tick recovers the context only once its channel is stuck by gpu_hang.c's rule (tgm_ctxsw_decide): at the first tick
+ * when it has nothing pending or the engine is a copy engine, after TGM_STUCK_NS with nothing completed on GR, so a long
+ * but finite GR drain is waited out. */
 #define ENG_TIMEOUT 0x002a0c
 #define ENG_TIMEOUT_DETECTION 0x80000000
-#define CTXSW_TIMEOUT_US 250000
+#define CTXSW_TIMEOUT_US 100000
 #define PTIMER_US(us) ((us) * 1920u / 3125u)
 /* written 1 to clear (gk104_runl_fault_clear); a runlist's bit stops its scheduling */
 #define ERROR_SCHED_DISABLE 0x00262c
@@ -291,7 +292,9 @@ static void ctxsw_work(void *arg)
 			else if (tgm_engine_load_stuck(status))
 				verdict = tgm_ctxsw_load_decide(id, engn->engine->subdev.name);
 			else
-				verdict = tgm_ctxsw_decide(id, engn->engine->subdev.name);
+				verdict = tgm_ctxsw_decide(
+					id, engn->engine->subdev.name,
+					engn->engine->subdev.type == NVKM_ENGINE_GR);
 			switch (verdict) {
 			case TGM_CTXSW_KILL:
 				stuck |= BIT((u32)engn->id);

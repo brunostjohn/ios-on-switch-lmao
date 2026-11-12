@@ -275,3 +275,76 @@ int tgm_recover_reload(struct nvkm_device *device, int chid)
 	}
 	return reset;
 }
+
+/* gpu_fault.c, runl->mutex held: hardware channel chid is a live client's with nothing pending */
+int tgm_chid_unowned(int chid);
+
+void tgm_recover_preempt_unblock(struct nvkm_runl *runl)
+{
+	struct nvkm_device *device = runl->fifo->engine.subdev.device;
+	struct nvkm_engn *engn = NULL;
+	u32 status = 0;
+	int id = 0;
+
+	if (!(nvkm_rd32(device, PFIFO_PREEMPT) & PFIFO_PREEMPT_PENDING))
+		return;
+	/* nouveau's runlist walk takes each engine by container_of. */
+	/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+	nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+	{
+		status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+		id = tgm_engine_saving(status, PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
+						       nvkm_engine_chsw_load(engn->engine));
+		if (id >= 0 && (!chan_alive(runl->fifo, (u32)id) || tgm_chid_unowned(id)))
+			tgm_engine_reset_locked(runl, engn, id,
+						"saving, with nothing to drain, the context of");
+	}
+}
+
+int tgm_recover_saving(struct nvkm_device *device, int chid)
+{
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	u32 status = 0;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+		{
+			status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+			if (tgm_engine_saving(status, PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
+							      nvkm_engine_chsw_load(engn->engine)) == chid)
+				return 1;
+		}
+	}
+	return 0;
+}
+
+int tgm_recover_engines(struct nvkm_device *device)
+{
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	bool cgid = false;
+	u32 status = 0;
+	int reset = 0;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		mutex_lock(&runl->mutex);
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+		{
+			status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+			if (!(status & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)))
+				continue;
+			tgm_engine_reset_locked(runl, engn, engn->func->cxid(engn, &cgid),
+						"busy with nothing to blame on");
+			reset++;
+		}
+		mutex_unlock(&runl->mutex);
+	}
+	return reset;
+}

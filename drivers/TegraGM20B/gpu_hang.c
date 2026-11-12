@@ -141,31 +141,6 @@ static int chan_marked(u32 chid)
 	return marked;
 }
 
-static int fifo_error(const char *report, const char *end)
-{
-	const char *sched = strstr(report, "SCHED_ERROR");
-	const char *bind = strstr(report, "BIND_ERROR");
-
-	return (sched && (!end || sched < end)) || (bind && (!end || bind < end));
-}
-
-/* 1 if every report of the pass is a scheduler or bind error: recover.c takes those from nvkm's handler and decides on
- * them (tgm_ctxsw_decide), so one here came between its handler and nvkm's. */
-static int only_fifo_errors(const char *errors)
-{
-	const char *p = errors;
-	const char *bar = NULL;
-
-	for (;;) {
-		bar = strstr(p, " | ");
-		if (!fifo_error(p, bar))
-			return 0;
-		if (!bar)
-			return 1;
-		p = bar + 3;
-	}
-}
-
 static void chan_recover(u32 chid)
 {
 	struct nvkm_runl *runl = NULL;
@@ -193,7 +168,6 @@ void tgm_chan_isolate(struct tgm_chan *chan, const char *report, u64 now)
 	tgm_hold_drop(chan->chid);
 	strscpy(chan->fault, report, sizeof(chan->fault));
 	chan_recover(chan->chid);
-	tgm_iso.until = now + TGM_ISOLATE_NS;
 	nvxnu_work_schedule_after(tgm_iso.deadline, TGM_ISOLATE_NS);
 }
 
@@ -226,7 +200,9 @@ int tgm_errors_contained(const char *errors)
 				break;
 			}
 		}
-		if (!found || found->kernel)
+		if (!found)
+			continue; /* no live channel: nvkm's own handling of it is all there is */
+		if (found->kernel)
 			contained = 0;
 		for (i = 0; contained && i < n && named[i] != found; i++)
 			;
@@ -246,8 +222,9 @@ int tgm_errors_contained(const char *errors)
 			named[n++] = chan;
 		}
 	}
-	if (!n && (!tgm_iso.until || now >= tgm_iso.until) && !only_fifo_errors(errors))
-		contained = 0;
+	if (!n && contained)
+		nvxnu_log("tegra-gm20b: GPU error naming no live channel, nothing killed: %s\n",
+			  errors);
 	for (i = 0; contained && i < n; i++)
 		tgm_chan_isolate(named[i], errors, now);
 	mutex_unlock(&tgm_live_lock);
@@ -259,23 +236,35 @@ void tgm_iso_deadline(void *arg)
 	struct tgm_chan *chan = NULL;
 	char state[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
+	int again = 0;
 
 	(void)arg;
 	mutex_lock(&tgm_live_lock);
 	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
-		if (chan->isolating && !READ_ONCE(chan->error) &&
-		    now - chan->isolated_ns >= TGM_ISOLATE_NS) {
+		if (!chan->isolating || READ_ONCE(chan->error) ||
+		    now - chan->isolated_ns < TGM_ISOLATE_NS)
+			continue;
+		switch (tgm_iso_verdict(chan_marked(chan->chid), now - chan->isolated_ns,
+					chan->iso_retried)) {
+		case TGM_ISO_WAIT:
+			again = 1;
+			break;
+		case TGM_ISO_RETRY:
+			chan->iso_retried = 1;
+			chan_recover(chan->chid);
+			again = 1;
+			break;
+		case TGM_ISO_LOST:
 			tgm_chan_describe(chan, state, sizeof(state));
 			nvxnu_panic("tegra-gm20b: GPU error in %s not recovered %llu ms after it "
 				    "(\"%s\"): %s",
-				    chan->owner,
-				    (unsigned long long)(TGM_ISOLATE_NS / NSEC_PER_MSEC),
+				    chan->owner, (now - chan->isolated_ns) / NSEC_PER_MSEC,
 				    chan->fault, state);
 		}
 	}
-	if (tgm_iso.until && now >= tgm_iso.until)
-		tgm_iso.until = 0;
+	if (again)
+		nvxnu_work_schedule_after(tgm_iso.deadline, TGM_ISOLATE_NS);
 	mutex_unlock(&tgm_live_lock);
 }
 
@@ -293,14 +282,25 @@ static u64 chan_progress_ns(struct tgm_chan *chan, u64 now)
 }
 
 /* The hold's time since the channel's last progress is left out, as tgm_chan_check_progress leaves it out. */
-static int chan_stuck(struct tgm_chan *chan, u64 now)
+static int chan_stuck_for(struct tgm_chan *chan, u64 now, u64 window)
 {
 	u64 since = chan_progress_ns(chan, now);
 	u64 unheld = tgm_unheld_ns(now, since, tgm_hold_held_ns(chan->chid, now),
 				   READ_ONCE(chan->progress_held));
 
-	return tgm_stuck(READ_ONCE(chan->error) != 0, tgm_chan_completed(chan),
-			 READ_ONCE(chan->submitted), since + unheld, since);
+	return tgm_stuck_for(READ_ONCE(chan->error) != 0, tgm_chan_completed(chan),
+			     READ_ONCE(chan->submitted), since + unheld, since, window);
+}
+
+static int chan_stuck(struct tgm_chan *chan, u64 now)
+{
+	return chan_stuck_for(chan, now, TGM_STUCK_NS);
+}
+
+static int chan_unowned(struct tgm_chan *chan)
+{
+	return tgm_switch_unowned(READ_ONCE(chan->error) != 0, tgm_chan_completed(chan),
+				  READ_ONCE(chan->submitted));
 }
 
 /* Whether the channel's fence moved within the stuck time, or its GET did since tgm_hang_recover last read it (a long job
@@ -385,6 +385,9 @@ static enum tgm_wait_source candidate_wait(struct candidate_waits *w, struct tgm
 	return i < w->n ? w->kind[i] : TGM_WAITS_NONE;
 }
 
+/* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
+static char ctxsw_line[1024];
+
 enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
 {
 	struct tgm_hang_candidate c[8] = {};
@@ -425,6 +428,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		c[i].kernel = chans[i] && chans[i]->kernel;
 		c[i].resident = i < resident;
 		c[i].loading = chans[i] && tgm_recover_loading(tgm_gpu.device, (int)chans[i]->chid);
+		c[i].saving = chans[i] && tgm_recover_saving(tgm_gpu.device, (int)chans[i]->chid);
 		c[i].moving = chans[i] && chan_moving(chans[i], now);
 		for (j = 0; j < i && chans[j] != chans[i]; j++)
 			;
@@ -434,7 +438,9 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		else
 			c[i].stuck =
 				chans[i] &&
-				tgm_hang_confirm(chan_stuck(chans[i], now) && !c[i].moving,
+				tgm_hang_confirm((chan_stuck(chans[i], now) ||
+						  (c[i].saving && chan_unowned(chans[i]))) &&
+							 !c[i].moving,
 						 tgm_chan_completed(chans[i]),
 						 &chans[i]->hang_strikes, &chans[i]->hang_seen);
 	}
@@ -475,6 +481,8 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 			break;
 		}
 	}
+	if (verdict == TGM_HANG_STUCK)
+		return tgm_hang_last_resort_locked(late, who, seqno, waited_ns);
 	if (b < 0 || chans[b]->isolating)
 		return verdict;
 	blame = chans[b];
@@ -493,9 +501,6 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	return verdict;
 }
 
-/* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
-static char ctxsw_line[1024];
-
 /* Progress after the reset is the redone work completing when there is some, else any job completing. */
 void tgm_ctxsw_redo_mark(struct tgm_chan *chan)
 {
@@ -510,7 +515,7 @@ void tgm_ctxsw_redo_mark(struct tgm_chan *chan)
  * the runlist and resets the engines still on its group; every other channel's context lives in its own instance
  * block, GR's reset reloads its firmware with clock gating off (tgm_clkgate_guard_reset) and ZBC from nvkm's tables, and
  * the runlist goes on without the dead channel. */
-enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name)
+enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name, int gr)
 {
 	struct tgm_chan *chan = NULL;
 	char report[sizeof(chan->fault)];
@@ -523,11 +528,9 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name)
 	mutex_lock(&tgm_live_lock);
 	chan = live_by(0, chid);
 	if (chan) {
-		/* a kernel channel with nothing outstanding has no drain to wait for */
 		verdict = tgm_ctxsw_verdict(
 			1, READ_ONCE(chan->error) != 0, chan->kernel,
-			chan_stuck(chan, now) ||
-				(chan->kernel && tgm_chan_completed(chan) == chan->submitted),
+			chan_stuck_for(chan, now, tgm_stuck_window(gr)) || chan_unowned(chan),
 			tgm_ctxsw_redo_pending(chan->ctxsw_reset, chan->ctxsw_reset_after,
 					       tgm_chan_completed(chan)));
 		if (verdict == TGM_CTXSW_REDO) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// An engine stuck loading a live channel's context: reset under it, nothing killed (TegraGM20BRecover.h tgm_load_verdict).
+// Engine resets that kill no one: under a live channel's stuck context load (TegraGM20BRecover.h tgm_load_verdict), and
+// a hang check's last resort when it finds nothing to blame (tgm_hang_last_resort).
 #include "gpu_internal.h"
 #include "../../kits/SwitchLinux/SwitchLinux.h"
 
@@ -54,4 +55,25 @@ int tgm_load_recover_locked(struct tgm_chan *chan, const char *who)
 	if (!engine || load_verdict(chan, engine, who) != TGM_CTXSW_RELOAD)
 		return 0;
 	return tgm_recover_reload(tgm_gpu.device, (int)chan->chid) > 0;
+}
+
+enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
+{
+	char state[TGM_HANG_LINE];
+	char engines[TGM_HANG_LINE];
+	const u32 done = tgm_chan_completed(late);
+
+	if (!tgm_hang_last_resort(late->last_resort, late->last_resort_done, done))
+		return TGM_HANG_STUCK;
+	tgm_chan_describe(late, state, sizeof(state));
+	tgm_engines_line(engines, sizeof(engines));
+	scnprintf(load_line, sizeof(load_line),
+		  "tegra-gm20b: GPU hang with nothing to blame: %s waited %llu ms for %s fence %u: "
+		  "every busy engine reset, nothing killed: %s; engines %s\n",
+		  who, waited_ns / 1000000, late->owner, seqno, state, engines);
+	switch_linux_log_line(load_line);
+	late->last_resort = 1;
+	late->last_resort_done = done;
+	tgm_recover_engines(tgm_gpu.device);
+	return TGM_HANG_RECOVERING;
 }

@@ -1427,11 +1427,9 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 			      "tgm_scrub.job[slot].bytes);"));
 	const auto decide = flat(definition(gpu(), "enum tgm_ctxsw tgm_ctxsw_decide("));
 	expectBefore(decide, "tgm_ctxsw_redo_mark(chan);", "nvxnu_panic(");
-	// an idle kernel channel the engine cannot switch off has no drain to wait for: it is reset, not waited on forever
-	EXPECT_THAT(
-		decide,
-		HasSubstr("chan_stuck(chan, now) || (chan->kernel && tgm_chan_completed(chan) == "
-			  "chan->submitted)"));
+	// an idle channel the engine cannot switch off has no drain to wait for: a kernel one is reset, a client's killed,
+	// at the first tick
+	EXPECT_THAT(decide, HasSubstr("chan_stuck_for(chan, now, tgm_stuck_window(gr)) || chan_unowned(chan)"));
 	// progress after the reset: the redone work landing, or with nothing to redo any job completing
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_ctxsw_redo_mark(")),
 		    HasSubstr("chan->ctxsw_reset_after = marked ? chan->submitted : "

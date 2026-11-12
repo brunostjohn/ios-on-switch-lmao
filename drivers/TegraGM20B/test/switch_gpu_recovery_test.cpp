@@ -163,6 +163,21 @@ void nvkm_chan_remove_locked(nvkm_chan *channel)
 	calls.emplace_back("remove");
 }
 
+void tgm_recover_reset_hold(nvkm_engine *)
+{
+	calls.emplace_back("hold");
+}
+
+void tgm_recover_reset_release(nvkm_engine *)
+{
+	calls.emplace_back("release");
+}
+
+void tgm_recover_preempt_unblock(nvkm_runl *)
+{
+	calls.emplace_back("unblock");
+}
+
 int nvkm_engine_reset(nvkm_engine *)
 {
 	EXPECT_EQ(notifications, 0);
@@ -188,8 +203,9 @@ TEST_F(Recovery, RemovedChannelsPublishOnlyAfterQuiescence)
 {
 	nvkm_runl_rc(&run);
 	EXPECT_EQ(calls, (std::vector<std::string>{"disable", "remove", "disable", "remove", "idle",
-						   "reset", "update", "clear", "allow", "wait",
-						   "preempt", "terminal", "terminal"}));
+						   "hold", "reset", "release", "update", "clear",
+						   "allow", "wait", "unblock", "preempt", "terminal",
+						   "terminal"}));
 	EXPECT_EQ(notifications, 2);
 	EXPECT_EQ(locks, 0);
 	EXPECT_EQ(run.cgrps, nullptr);

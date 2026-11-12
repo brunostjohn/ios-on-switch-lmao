@@ -256,4 +256,24 @@ TEST(Gm20bGrFault, AStuckLoadIsResetNeverKilled)
 		  hang.find("if (b < 0 || chans[b]->isolating)"));
 }
 
+// A client's submissions never panic the system (T-v3g): the context-switch timeout decides a save of a channel with
+// nothing pending at its first tick, a hang check with nothing to blame resets the engines before it may be fatal, and
+// a kill nvkm is still doing is waited for.
+TEST(Gm20bGrFault, AClientsStallEndsInItsKillOrAnEngineResetNeverAPanic)
+{
+	const std::string hang = Text(GPU_HANG_C);
+	const std::string decide = Body(hang, "enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name, int gr)\n{");
+	EXPECT_NE(decide.find("chan_stuck_for(chan, now, tgm_stuck_window(gr)) ||"), std::string::npos);
+	EXPECT_NE(decide.find("chan_unowned(chan)"), std::string::npos);
+	const std::string recover = Body(hang, "enum tgm_hang tgm_hang_recover(");
+	EXPECT_LT(recover.find("if (verdict == TGM_HANG_STUCK)\n\t\treturn tgm_hang_last_resort_locked(late, who, seqno, waited_ns);"),
+		  recover.find("if (b < 0 || chans[b]->isolating)"));
+	EXPECT_NE(recover.find("c[i].saving = chans[i] && tgm_recover_saving("), std::string::npos);
+	const std::string iso = Body(hang, "void tgm_iso_deadline(void *arg)\n{");
+	EXPECT_NE(iso.find("tgm_iso_verdict(chan_marked(chan->chid)"), std::string::npos);
+	EXPECT_NE(iso.find("nvxnu_work_schedule_after(tgm_iso.deadline, TGM_ISOLATE_NS);"), std::string::npos);
+	const std::string contained = Body(hang, "int tgm_errors_contained(const char *errors)\n{");
+	EXPECT_NE(contained.find("if (!found)\n\t\t\tcontinue;"), std::string::npos);
+}
+
 }  // namespace

@@ -343,6 +343,10 @@ struct tgm_chan {
 	/* an engine was reset under its context load, and what it had completed then (gpu_reload.c; tgm_live_lock) */
 	int load_reset;
 	u32 load_reset_done;
+	/* a hang check found nothing to blame and reset every engine, and what it had completed then (tgm_live_lock) */
+	int last_resort;
+	u32 last_resort_done;
+	int iso_retried; /* tgm_iso_deadline asked nvkm for its kill again */
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
@@ -392,14 +396,13 @@ void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
  * engine still on it reset; nvkm starts it itself for MMU faults, tgm_errors_contained() for the rest, which nvkm only
  * reports) kills each one, tgm_chan_killed() marks it dead and releases its fence word so no acquire or CPU wait stays on
  * it, and the GPU goes on. A hang with no error report (a wait that ran out) is recovered the same way by
- * tgm_hang_recover(), from what the GPU itself is stuck on. Everything else panics: an error on a kernel channel, a report
- * naming no channel or an unknown one (one naming none is taken as fallout while a recovery is under way), a kill not
- * done TGM_ISOLATE_NS after its report, and a hang on a kernel channel or with nothing progressing (tgm_chan_hung). */
+ * tgm_hang_recover(), from what the GPU itself is stuck on; one with nothing to blame resets every busy engine and kills no
+ * one. A client's submissions never panic the system: what panics is an error on a kernel channel, a kill nvkm's recovery
+ * never completes (tgm_iso_verdict), and a hang that the engine resets did not free (tgm_hang_last_resort). */
 #define TGM_ISOLATE_NS (500 * NSEC_PER_MSEC)
 
 struct iso_state {
 	void *deadline; /* tgm_iso_deadline */
-	u64 until;      /* end of the recovery window, 0: none (tgm_live_lock) */
 };
 extern struct iso_state tgm_iso;
 
@@ -413,6 +416,11 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 /* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_RELOAD. 1 if an engine was reset under chan's context
  * load; a second stuck load with nothing completed since panics. */
 int tgm_load_recover_locked(struct tgm_chan *chan, const char *who);
+int tgm_chid_unowned(int chid);
+/* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_STUCK. Resets every busy engine and returns
+ * TGM_HANG_RECOVERING, unless that was done for this late channel and it completed nothing since (TGM_HANG_STUCK). */
+enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno,
+					  u64 waited_ns);
 
 struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */

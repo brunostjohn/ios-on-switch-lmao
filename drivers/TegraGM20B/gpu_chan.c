@@ -371,7 +371,7 @@ int tgm_chan_new_copy(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t
 static void chan_abandon(struct tgm_chan *chan)
 {
 	u64 now = nvxnu_nanotime();
-	u64 end = now + 2 * TGM_ISOLATE_NS;
+	u64 end = now + TGM_ISOLATE_NVKM_NS;
 
 	if (chan->kernel)
 		tgm_chan_hung(chan, "channel destroy", chan->submitted, NSEC_PER_SEC);
