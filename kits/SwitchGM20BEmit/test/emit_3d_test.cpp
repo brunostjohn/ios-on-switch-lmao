@@ -115,7 +115,7 @@ TEST(Emit3D, BlendConstantAsRawWritesIt)
 TEST(Emit3D, ClearAsRawWritesIt)
 {
     expectRawSays("kit(p, switch_gm20b_clear, &s);");
-    expectRawSays("clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);");
+    expectRawSays("clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0, layers);");
     for (const bool depth : {false, true}) {
         const switch_gm20b_clear_state c = {{0x3f800000, 0, 0x3f000000, 0x3f800000}, 4, 1280, 8, 720, 2, depth, depth};
         const uint32_t zsBits = depth ? 3 : 0;
@@ -129,6 +129,29 @@ TEST(Emit3D, ClearAsRawWritesIt)
                       p.m(uint32_t(g::c_CLEAR_SURFACE_CONTROL), 0x10);
                       p.m(uint32_t(g::c_RENDER_ENABLE_OVERRIDE), 1);
                       p.m(uint32_t(g::c_CLEAR_SURFACE), 0x3c | c.target << 6 | zsBits);
+                      p.m(uint32_t(g::c_RENDER_ENABLE_OVERRIDE), 0);
+                  })));
+    }
+}
+
+TEST(Emit3D, LayeredClearCallsTheLayerLoop)
+{
+    for (const bool depth : {false, true}) {
+        switch_gm20b_clear_state c = {{0x3f800000, 0, 0x3f000000, 0x3f800000}, 4, 1280, 8, 720, 2, depth, depth};
+        c.layers = 6;
+        c.layer_macro = 9;
+        const uint32_t zsBits = depth ? 3 : 0;
+        EXPECT_EQ(Methods(ours([&](nv_push *p) {
+                      switch_gm20b_clear(p, &c);
+                  })),
+                  Methods(theirs([&](raw::Push &p) {
+                      p.inc(uint32_t(g::c_COLOR_CLEAR_VALUE), {c.value[0], c.value[1], c.value[2], c.value[3]});
+                      p.inc(uint32_t(g::c_CLEAR_RECT_H),
+                            {uint32_t(c.xmax) << 16 | c.xmin, uint32_t(c.ymax) << 16 | c.ymin});
+                      p.m(uint32_t(g::c_CLEAR_SURFACE_CONTROL), 0x10);
+                      p.m(uint32_t(g::c_RENDER_ENABLE_OVERRIDE), 1);
+                      p.m(0x3800 + 8 * 9, 0x3c | c.target << 6 | zsBits);
+                      p.m(0x3800 + 8 * 9 + 4, 6);
                       p.m(uint32_t(g::c_RENDER_ENABLE_OVERRIDE), 0);
                   })));
     }

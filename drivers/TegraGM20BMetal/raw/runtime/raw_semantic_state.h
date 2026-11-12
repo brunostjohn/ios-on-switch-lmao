@@ -154,6 +154,10 @@ struct RasterState {
     void *depthStencil = nullptr;
     std::array<uint32_t, 4> scissor{};
     std::array<uint64_t, 6> viewport{};
+    // setViewports:count: and setScissorRects:count: past one: their count and where the plan's viewArrays hold them
+    // (six words a viewport from viewportsAt, four a rectangle from scissorsAt); index 0 is viewport and scissor
+    uint16_t viewports = 1, scissors = 1;
+    uint32_t viewportsAt = 0, scissorsAt = 0;
     std::array<uint32_t, 4> blend{};
     std::array<uint32_t, 3> depthBias{};
     std::array<uint32_t, 2> stencil{};

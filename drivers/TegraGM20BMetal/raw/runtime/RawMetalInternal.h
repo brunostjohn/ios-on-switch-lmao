@@ -216,6 +216,9 @@ bool volumeRendered(MTLTextureDescriptor *d);
 uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 bool multisampleShape(MTLTextureDescriptor *d);
+bool blockShape(MTLTextureDescriptor *d);
+bool cpuBlocks(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+               bool write);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 bool identitySwizzle(MTLTextureSwizzleChannels s);
 // `t` reading its channels through `s` (a descriptor's swizzle, or a swizzled view's): its raw header, its descriptor
@@ -287,7 +290,8 @@ bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSU
                      void *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 const tgm_layout *textureCpuImportLayout(RMTexture *texture);
-void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+              NSUInteger image, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write);
 

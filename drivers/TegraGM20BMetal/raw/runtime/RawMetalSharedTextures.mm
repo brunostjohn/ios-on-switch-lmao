@@ -55,8 +55,6 @@ const char *sharedImage(MTLTextureDescriptor *d, raw::SurfaceImage &image)
         return "memoryless";
     if (rotated(d))
         return "rotated";
-    if (raw::blockCompressed(f) && d.storageMode != MTLStorageModePrivate)
-        return "block-compressed and not private: the copy engine writes and reads it, never the CPU";
     raw::SurfaceImageFacts facts;
     facts.type = uint32_t(d.textureType);
     facts.width = uint32_t(std::min<NSUInteger>(d.width, UINT32_MAX));

@@ -147,6 +147,38 @@ TEST_F(SurfaceImage, ArraysAndCubesAreCreateArraysLayers)
     EXPECT_EQ(made.layers, 4u);
 }
 
+TEST_F(SurfaceImage, MipmappedArraysCubesAndVolumesAreTheirChains)
+{
+    raw::SurfaceImageFacts d = facts(raw::kTypeCubeArray, 32, 32, kRGBA8);
+    d.arrayLength = 2;
+    d.levels = 6;
+    same(d, kRGBA8, raw::SurfaceImage::Layers, [&](raw::Texture &t) {
+        return dev.createArray(32, 32, 12, kRGBA8, raw::fx::kTexCubeArray, t, 6);
+    });
+    ASSERT_NE(made.chain, nullptr);
+    EXPECT_EQ(made.chain->layout.layers, 12u);
+    dev.destroyTexture(made);
+    d = facts(raw::kType2DArray, 40, 24, kRGBA8);
+    d.arrayLength = 3;
+    d.levels = 4;
+    same(d, kRGBA8, raw::SurfaceImage::Layers, [&](raw::Texture &t) {
+        return dev.createArray(40, 24, 3, kRGBA8, raw::fx::kTexTwoDArray, t, 4);
+    });
+    dev.destroyTexture(made);
+    for (const bool rendered : {false, true}) {
+        d = facts(raw::kType3D, 20, 12, kRGBA8);
+        d.depth = 9;
+        d.levels = 3;
+        d.rendered = rendered;
+        same(d, kRGBA8, raw::SurfaceImage::Volume, [&](raw::Texture &t) {
+            return dev.createVolume(20, 12, 9, kRGBA8, rendered, t, 3);
+        });
+        ASSERT_NE(made.chain, nullptr);
+        EXPECT_EQ(made.chain->layout.depth, 9u);
+        dev.destroyTexture(made);
+    }
+}
+
 TEST_F(SurfaceImage, AVolumeIsCreateVolumesImageEitherWay)
 {
     for (const bool rendered : {false, true}) {

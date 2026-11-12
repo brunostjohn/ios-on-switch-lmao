@@ -29,8 +29,8 @@ struct SurfaceImage {
     enum Kind : uint8_t {
         Plain,
         Chain,   // a mipmapped 2D texture
-        Layers,  // a 1D or 2D array, a cube or a cube array, one level
-        Volume,  // a 3D texture, one level
+        Layers,  // a 1D or 2D array, a cube or a cube array, any levels
+        Volume,  // a 3D texture, any levels
         Samples,
         Line,    // a 1D texture
         Blocks,  // a block-compressed 2D texture or 2D array, any levels
@@ -73,8 +73,8 @@ inline const char *surfaceImage(const SurfaceImageFacts &d, SurfaceImage &out)
         return nullptr;
     if (d.extended)
         return "an extended-range format, which only a one-level 2D texture keeps";
-    if (levels > 1 && d.type != kType2D)
-        return "a mipmapped array, cube or 3D texture, which the raw path keeps in no memory of its own";
+    if (levels > 1 && d.type != kType2D && !d.target)
+        return "a mipmapped array, cube or 3D texture of a format the raw path does not render";
     bool laid = false;
     switch (d.type) {
     case kType2D:
@@ -103,8 +103,8 @@ inline const char *surfaceImage(const SurfaceImageFacts &d, SurfaceImage &out)
                            : d.type == kType2DArray ? fx::kTexTwoDArray
                            : d.type == kTypeCube    ? fx::kTexCube
                                                     : fx::kTexCubeArray);
-        laid = samples == 1 &&
-               fx::arrayLayout(d.width, std::max(d.height, 1u), arrayLength * (cube ? 6 : 1), 1, d.bpp, out.layout);
+        laid = samples == 1 && fx::arrayLayout(d.width, std::max(d.height, 1u), arrayLength * (cube ? 6 : 1), levels,
+                                               d.bpp, out.layout);
         break;
     }
     case kType3D:
@@ -112,7 +112,7 @@ inline const char *surfaceImage(const SurfaceImageFacts &d, SurfaceImage &out)
             return "a 3D render target of a format the raw path does not render";
         out.kind = SurfaceImage::Volume;
         out.type = fx::kTexThreeD;
-        laid = samples == 1 && fx::volumeLayout(d.width, d.height, depth, 1, d.bpp, d.rendered, out.layout);
+        laid = samples == 1 && fx::volumeLayout(d.width, d.height, depth, levels, d.bpp, d.rendered, out.layout);
         break;
     case kType2DMultisample:
         if (!d.target || (samples != 2 && samples != 4))

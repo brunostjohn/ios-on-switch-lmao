@@ -76,16 +76,29 @@ void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool wr
                     uint32_t(r.size.height), bytes, row);
 }
 
-// replaceRegion/getBytes of level `level` of a shared mipmapped texture: in its chain, in the CPU's view of kind-0xFE memory
-void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write)
+// replaceRegion/getBytes of level `level` of slice `slice` of a shared mipmapped texture: in its chain (a layer's levels
+// arrayStride on, a 3D level's planes in its own blocks), in the CPU's view of kind-0xFE memory
+void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+              NSUInteger image, bool write)
 {
     const raw::Texture::Chain &c = *t->_raw.chain;
-    if (level >= c.layout.levels)
+    if (level >= c.layout.levels || slice >= c.layout.layers)
         return;
     const raw::fx::MipLevel &lv = c.layout.level[level];
-    if (r.origin.x + r.size.width > lv.width || r.origin.y + r.size.height > lv.height)
+    if (r.origin.x + r.size.width > lv.width || r.origin.y + r.size.height > lv.height ||
+        r.origin.z + r.size.depth > lv.depth)
         return;
-    uint8_t *chain = t->_raw.cpu;
+    if (t->_raw.type == raw::fx::kTexThreeD) {
+        const uint32_t origin[3] = {uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.origin.z)},
+                       size[3] = {uint32_t(r.size.width), uint32_t(r.size.height), uint32_t(r.size.depth)};
+        const size_t planeBytes = image ? image : size_t(row) * r.size.height;
+        if (write)
+            raw::fx::writeVolume(c.layout, t->_raw.cpu, uint32_t(level), origin, size, bytes, row, planeBytes);
+        else
+            raw::fx::readVolume(c.layout, t->_raw.cpu, uint32_t(level), origin, size, bytes, row, planeBytes);
+        return;
+    }
+    uint8_t *chain = t->_raw.cpu + slice * c.layout.arrayStride;
     if (write) {
         raw::fx::writeLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
                             uint32_t(r.size.width), uint32_t(r.size.height), bytes, row);
@@ -127,4 +140,37 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
     }
     raw::fx::readLevel(c, layer, 0, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
                        uint32_t(r.size.height), bytes, row);
+}
+
+// replaceRegion/getBytes of whole blocks of a block-compressed texture in memory of its own: NIL's image (its chain's
+// levels and layers), in the CPU's view of kind-0xFE memory, under the kernel's CPU access to its pages. False: no such
+// region (an origin off a block, a level or slice past the image's)
+bool cpuBlocks(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+               bool write)
+{
+    const raw::Texture &x = t->_raw;
+    const raw::FormatInfo *f = raw::formatInfo(x.format);
+    raw::fx::MipChain made;
+    const raw::fx::MipChain *c = x.chain ? &x.chain->layout : &made;
+    if (!f || !x.cpu ||
+        (!x.chain && !raw::fx::blockChainLayout(x.texelWidth, x.texelHeight, 1, std::max(x.layers, 1u), f->blockW,
+                                                f->blockH, f->bpp, made)))
+        return false;
+    if (level >= c->levels || slice >= c->layers || r.size.depth != 1 || r.origin.z || r.origin.x % f->blockW ||
+        r.origin.y % f->blockH)
+        return false;
+    const uint32_t x0 = uint32_t(r.origin.x / f->blockW), y0 = uint32_t(r.origin.y / f->blockH),
+                   w = uint32_t((r.size.width + f->blockW - 1) / f->blockW),
+                   h = uint32_t((r.size.height + f->blockH - 1) / f->blockH);
+    const raw::fx::MipLevel &lv = c->level[level];
+    if (!w || !h || x0 + w > lv.width || y0 + h > lv.height)
+        return false;
+    raw::HostAccess access;
+    if (!gRM->raw->hostAccess(x, x.cpu, c->bytes, write, access))
+        return false;
+    if (write)
+        raw::fx::writeElements(*c, x.cpu, uint32_t(slice), uint32_t(level), x0, y0, w, h, bytes, row);
+    else
+        raw::fx::readElements(*c, x.cpu, uint32_t(slice), uint32_t(level), x0, y0, w, h, bytes, row);
+    return true;
 }

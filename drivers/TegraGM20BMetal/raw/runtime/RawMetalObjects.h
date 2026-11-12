@@ -204,6 +204,7 @@ struct RMPass {
     struct Color {
         __unsafe_unretained id texture;
         NSUInteger level;
+        NSUInteger slice;  // its slice, a 3D texture's depth plane
         MTLLoadAction load;
         MTLStoreAction store;
         MTLClearColor clear;
@@ -215,6 +216,7 @@ struct RMPass {
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
+    uint32_t layers = 1;  // renderTargetArrayLength (0 and 1: one)
     raw::SamplePositions positions;
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
     bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)

@@ -65,9 +65,22 @@ TEST(PassFusion, EveryColorDepthAndStencilAttachmentMustMatch)
         b.attachments[i].level++;
         EXPECT_FALSE(raw::canFusePasses(a, b));
         b = a;
+        b.attachments[i].slice++;
+        EXPECT_FALSE(raw::canFusePasses(a, b));
+        b = a;
         b.attachments[i].native = false;
         EXPECT_FALSE(raw::canFusePasses(a, b));
     }
+}
+
+TEST(PassFusion, PassesOfOtherLayersKeepTheirBoundaries)
+{
+    auto a = pass(), b = a;
+    a.layers = b.layers = 6;
+    EXPECT_TRUE(raw::canFusePasses(a, b));
+    b.layers = 1;
+    EXPECT_FALSE(raw::canFusePasses(a, b));
+    EXPECT_FALSE(raw::canFusePasses(b, a));
 }
 
 TEST(PassFusion, ResourceSideEffectsAndRenderAreaChangesKeepTheirBoundaries)

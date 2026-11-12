@@ -149,6 +149,7 @@ public:
     raw::StateSnapshots<raw::KernelState> kernel;
     std::vector<raw::RenderStateRef> renderStates;
     std::vector<raw::KernelStateRef> kernelStates;
+    std::vector<uint64_t> viewArrays;  // raw::RasterState's viewport and scissor arrays
 
     bool record(const Cmd &c, const std::vector<uint64_t> &extra);
 

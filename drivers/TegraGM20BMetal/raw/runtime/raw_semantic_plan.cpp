@@ -423,6 +423,7 @@ void RMCommandPlan::clear()
     useSpans_.push_back({});
     renderStates.clear();
     kernelStates.clear();
+    viewArrays.clear();
     for (auto &state : buffers)
         state.clear();
     for (auto &state : textures)

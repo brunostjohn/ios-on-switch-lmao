@@ -13,12 +13,13 @@ inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
     raw::FusionPass result;
     result.width = pass.width;
     result.height = pass.height;
+    result.layers = pass.layers;
     // a fused pass's draws take the first pass's sample layout; each Metal pass's hidden depth starts at 1.0
     result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count &&
                       (pass.depth || !pass.testsHiddenZeta);
     std::array<RMTexture *, 10> targets{};
-    auto attachment = [&](size_t slot, id object, NSUInteger level, MTLLoadAction load, MTLStoreAction store,
-                          bool resolve) {
+    auto attachment = [&](size_t slot, id object, NSUInteger level, NSUInteger slice, MTLLoadAction load,
+                          MTLStoreAction store, bool resolve) {
         if (!object)
             return;
         RMTexture *texture = (RMTexture *)object;
@@ -27,21 +28,23 @@ inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
         auto &a = result.attachments[slot];
         a.identity = uintptr_t((__bridge void *)texture);
         a.level = level;
+        a.slice = slice;
         a.loads = load == MTLLoadActionLoad;
         a.stores = store == MTLStoreActionStore;
         a.resolves = resolve;
-        a.native = raw::fusionTargetEligible(t, level);
+        a.native = raw::fusionTargetEligible(t, level | slice);
     };
     for (size_t i = 0; i < 8; ++i) {
         const auto &a = pass.color[i];
-        attachment(i, a.texture, a.level, a.load, a.store, descriptor.colorAttachments[i].resolveTexture != nil);
+        attachment(i, a.texture, a.level, a.slice, a.load, a.store,
+                   descriptor.colorAttachments[i].resolveTexture != nil);
     }
     attachment(8, descriptor.depthAttachment.texture, descriptor.depthAttachment.level,
-               descriptor.depthAttachment.loadAction, descriptor.depthAttachment.storeAction,
-               descriptor.depthAttachment.resolveTexture != nil);
+               descriptor.depthAttachment.slice, descriptor.depthAttachment.loadAction,
+               descriptor.depthAttachment.storeAction, descriptor.depthAttachment.resolveTexture != nil);
     attachment(9, descriptor.stencilAttachment.texture, descriptor.stencilAttachment.level,
-               descriptor.stencilAttachment.loadAction, descriptor.stencilAttachment.storeAction,
-               descriptor.stencilAttachment.resolveTexture != nil);
+               descriptor.stencilAttachment.slice, descriptor.stencilAttachment.loadAction,
+               descriptor.stencilAttachment.storeAction, descriptor.stencilAttachment.resolveTexture != nil);
     const size_t end = cb->_plan.encoderEnd(begin);
     for (size_t i = begin + 1; i + 1 < end; ++i) {
         const Op op = cb->_plan.operation(i).op;

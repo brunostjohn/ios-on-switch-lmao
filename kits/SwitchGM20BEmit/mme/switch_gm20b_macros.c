@@ -178,6 +178,23 @@ static void build_icb_gate(struct mme_builder *b, bool unused)
     mme_free_reg(b, below.hi);
 }
 
+/* NVK's nvk_mme_clear without a view mask: CLEAR_SURFACE's payload once a layer for `count` layers, its RT_ARRAY_INDEX one
+ * higher each time (a layered pass's clear; the count is at least one) */
+static void build_clear_layers(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value payload = mme_load(b);
+    struct mme_value count = mme_load(b);
+    mme_loop(b, count)
+    {
+        mme_mthd(b, NVB197_CLEAR_SURFACE);
+        mme_emit(b, payload);
+        mme_add_to(b, payload, payload, mme_imm(1u << DRF_LO(NVB197_CLEAR_SURFACE_RT_ARRAY_INDEX)));
+    }
+    mme_free_reg(b, count);
+    mme_free_reg(b, payload);
+}
+
 static void build_i2m_head(struct mme_builder *b, struct mme_value hi, struct mme_value lo, uint32_t bytes)
 {
     mme_mthd(b, NVB197_OFFSET_OUT_UPPER);
@@ -313,7 +330,8 @@ int main(int argc, char **argv)
         "    SWITCH_GM20B_MACRO_DRAW_INDEXED,\n    SWITCH_GM20B_MACRO_INDIRECT,\n"
         "    SWITCH_GM20B_MACRO_INDEXED_INDIRECT,\n    SWITCH_GM20B_MACRO_ICB_RANGE,\n"
         "    SWITCH_GM20B_MACRO_ICB_DRAW,\n    SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,\n"
-        "    SWITCH_GM20B_MACRO_ICB_GATE,\n    SWITCH_GM20B_MACRO_ICB_BIND,\n};\n\n"
+        "    SWITCH_GM20B_MACRO_ICB_GATE,\n    SWITCH_GM20B_MACRO_ICB_BIND,\n    "
+        "SWITCH_GM20B_MACRO_CLEAR_LAYERS,\n};\n\n"
         "// The shadow scratch words the indirect command buffer macros keep their range and an execute's inherited\n"
         "// buffers in\n"
         "enum {\n    SWITCH_GM20B_SCRATCH_ICB_LOCATION = %u,\n    SWITCH_GM20B_SCRATCH_ICB_LENGTH = %u,\n"
@@ -328,6 +346,7 @@ int main(int argc, char **argv)
     write_macro(out, "icb_draw_indexed", build_icb_draw, true, &dev);
     write_macro(out, "icb_gate", build_icb_gate, false, &dev);
     write_macro(out, "icb_bind", build_icb_bind, false, &dev);
+    write_macro(out, "clear_layers", build_clear_layers, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

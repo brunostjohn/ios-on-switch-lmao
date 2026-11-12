@@ -3,7 +3,8 @@
 // recovery tests. Channels live in the slots of one fence page: a channel takes the lowest free slot, and a slot's seqnos
 // go on across the channels it holds, so a channel made again can land in a slot whose fence is behind the old one. Jobs
 // (SubmitAddress) complete as they are submitted, or stay in flight until a kill, which writes the record and then moves
-// the fence past every seqno given out, as the kernel does. Memory a killed job wrote holds undefined contents until a job
+// the fence past every seqno given out, as the kernel does. Each job keeps the words of its pushes that lie in BOs the
+// model bound (VmBind), for a test to read the methods back. Memory a killed job wrote holds undefined contents until a job
 // writes it again; a job that only reads it is counted (staleReads). Its IOKit calls replace the framework's: include it
 // in one unit of a test.
 #pragma once
@@ -22,6 +23,11 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    std::vector<uint32_t> words;
+};
+
+struct Binding {
+    uint64_t va = 0, range = 0, handle = 0, offset = 0;
 };
 
 struct Slot {
@@ -44,6 +50,23 @@ struct Model {
     unsigned creates = 0, destroys = 0, staleReads = 0;
     std::vector<uint64_t> freed;  // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
+    std::vector<Binding> bindings;
+
+    // The CPU's view of `dwords` words at GPU address `va` in a BO the model allocated (its latest binding), or null
+    const uint32_t *at(uint64_t va, uint32_t dwords)
+    {
+        for (auto it = bindings.rbegin(); it != bindings.rend(); ++it) {
+            const Binding &b = *it;
+            if (va < b.va || va - b.va + uint64_t(dwords) * 4 > b.range)
+                continue;
+            auto m = memory.find(uint32_t(b.handle));
+            const uint64_t off = b.offset + (va - b.va);
+            if (m == memory.end() || off + uint64_t(dwords) * 4 > m->second.size())
+                return nullptr;
+            return reinterpret_cast<const uint32_t *>(m->second.data() + off);
+        }
+        return nullptr;
+    }
 
     TegraGM20BAbiFence &fence(uint32_t slot)
     {
@@ -111,7 +134,11 @@ struct Model {
         }
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
-        Job job{head->channel, ++s->submitted, s->uid, {uses, uses + head->surface_count}};
+        Job job{head->channel, ++s->submitted, s->uid, {uses, uses + head->surface_count}, {}};
+        const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
+        for (uint32_t i = 0; i < head->push_count; i++)
+            if (const uint32_t *w = at(pushes[i].va, pushes[i].dwords))
+                job.words.insert(job.words.end(), w, w + pushes[i].dwords);
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -219,7 +246,13 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodVmBind:
+    case TegraGM20BMethodVmBind: {
+        const auto &in = *static_cast<const TegraGM20BAbiVmBind *>(input);
+        for (uint32_t i = 0; i < in.count && i < TegraGM20BMaxBindOps; i++)
+            if (in.ops[i].handle)
+                model.bindings.push_back({in.ops[i].va, in.ops[i].range, in.ops[i].handle, in.ops[i].bo_offset});
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodUnmap:
     case TegraGM20BMethodCpuAcquire:
     case TegraGM20BMethodCpuRelease:

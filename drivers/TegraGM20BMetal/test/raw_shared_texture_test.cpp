@@ -253,15 +253,37 @@ TEST(RawSharedTexture, EveryShapeIsTheImageTheRawPathLaysOut)
         }
 }
 
+TEST(RawSharedTexture, MipmappedArraysCubesAndVolumesAreTheirLevelsLayout)
+{
+    raw::SurfaceImage image;
+    raw::fx::MipChain c;
+    raw::SurfaceImageFacts d = rgba8(raw::kTypeCubeArray, 32, 32);
+    d.arrayLength = 2;
+    d.levels = 6;
+    ASSERT_EQ(raw::surfaceImage(d, image), nullptr);
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Layers);
+    ASSERT_TRUE(raw::fx::arrayLayout(32, 32, 12, 6, 4, c));
+    EXPECT_TRUE(sameLayout(image.layout, c));
+    d = rgba8(raw::kType3D, 20, 12);
+    d.depth = 9;
+    d.levels = 3;
+    ASSERT_EQ(raw::surfaceImage(d, image), nullptr);
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Volume);
+    ASSERT_TRUE(raw::fx::volumeLayout(20, 12, 9, 3, 4, false, c));
+    EXPECT_TRUE(sameLayout(image.layout, c));
+}
+
 TEST(RawSharedTexture, ShapesTheRawPathKeepsInNoMemoryHaveNoImage)
 {
     raw::SurfaceImage image;
     raw::SurfaceImageFacts d = rgba8(raw::kType2DArray, 32, 32);
     d.levels = 2;
-    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped array";
+    d.target = false;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped array, not a target";
     d = rgba8(raw::kType3D, 32, 32);
     d.levels = 2;
-    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped 3D texture";
+    d.target = false;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped 3D texture, not a target";
     d = rgba8(raw::kType2DMultisample, 32, 32);
     d.samples = 8;
     EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "8 samples";

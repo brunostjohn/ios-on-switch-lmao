@@ -322,6 +322,23 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             return (id<MTLTexture>)t;
         }
     }
+    if (blockShape(d)) {
+        RMTexture *t = [RMTexture new];
+        t->_device = self;
+        t->_descriptor = [d copy];
+        t->_kind = RMTexturePool;
+        const bool array = d.textureType == MTLTextureType2DArray;
+        t->_rawOk = gRM->raw->createBlockTexture(
+            uint32_t(d.width), uint32_t(d.height), uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)),
+            uint32_t(array ? std::max<NSUInteger>(d.arrayLength, 1) : 1), uint32_t(d.pixelFormat),
+            uint8_t(array ? raw::fx::kTexTwoDArray : raw::fx::kTexTwoD), t->_raw);
+        if (t->_rawOk)
+            return (id<MTLTexture>)t;
+        RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        if (w)
+            refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
+        return (id<MTLTexture>)w;
+    }
     const bool line = lineShape(d), volume = volumeShape(d), multisampled = multisampleShape(d);
     const uint32_t array = arrayType(d);
     const RMStoredSamples stored = storedMultisampleKind(d);
@@ -343,14 +360,15 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk = makeStoredMultisample(d, stored, t->_raw);
     } else if (volume) {
         t->_kind = RMTexturePool;
-        t->_rawOk = gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth),
-                                           uint32_t(d.pixelFormat), volumeRendered(d), t->_raw);
+        t->_rawOk =
+            gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth), uint32_t(d.pixelFormat),
+                                   volumeRendered(d), t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (array) {
         t->_kind = RMTexturePool;
         const NSUInteger faces = array == raw::fx::kTexCube || array == raw::fx::kTexCubeArray ? 6 : 1;
-        t->_rawOk = gRM->raw->createArray(uint32_t(d.width), uint32_t(d.height),
-                                          uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
-                                          uint32_t(d.pixelFormat), array, t->_raw);
+        t->_rawOk = gRM->raw->createArray(
+            uint32_t(d.width), uint32_t(d.height), uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
+            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         // one allocation for both drivers: m2v's texture, which the raw path renders and copies in place
         t->_kind = RMTexturePool;
