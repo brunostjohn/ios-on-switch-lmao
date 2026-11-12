@@ -55,6 +55,9 @@ std::string constantsLast(const std::string &key)
            key.substr(constants + 2, shape - constants - 2);
 }
 
+constexpr const char kNoCompiler[] =
+    "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
+
 }  // namespace
 
 Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir)
@@ -117,28 +120,52 @@ bool Completion::keyOf(Ask &a, CacheKey &k)
 }
 
 struct Completion::Pending {
-    Pending(dispatch_group_t group, std::function<void(Pipeline *)> ready)
-        : group(group), ready(std::move(ready))
+    Pending(dispatch_group_t group, Ready ready, bool creation)
+        : group(group), ready(std::move(ready)), creation(creation)
     {
         dispatch_group_enter(group);
     }
     ~Pending() { dispatch_group_leave(group); }
     dispatch_group_t group;
-    std::function<void(Pipeline *)> ready;
+    Ready ready;
+    // a state's creation, which a failure ends (Metal's error) where a variant's ask tries again
+    const bool creation;
     VariantPlacement<Pipeline> placement;
 };
 
 void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
 {
     asked.qos = uint32_t(qos_class_self());
-    request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready)));
+    request(std::move(asked), std::make_shared<Pending>(
+                                  pending_,
+                                  [ready = std::move(ready)](Pipeline *made, const std::string &) {
+                                      ready(made);
+                                  },
+                                  false));
+}
+
+void Completion::create(Ask asked, Ready ready)
+{
+    asked.qos = uint32_t(qos_class_self());
+    request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready), true));
+}
+
+// Why an ask of `k` that came to nothing failed, "" where it was refused
+std::string Completion::failureOf(const CacheKey &k)
+{
+    if (remote_->declined())
+        return kNoCompiler;
+    RuntimeRecord record;
+    std::string why;
+    return compiler_->lookup(k, record, why) == RecordCache::Found::Refusal ? std::string()
+                                                                            : "the state's compile could not run";
 }
 
 void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
 {
     dispatch_async(queue_, ^{
         if (stopping_.load(std::memory_order_acquire)) {
-            pending->ready(nullptr);
+            pending->ready(nullptr, std::string());
             return;
         }
         Ask a = asked;
@@ -148,7 +175,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         }
         CacheKey k;
         if (!keyOf(a, k)) {
-            pending->ready(nullptr);
+            pending->ready(nullptr, std::string());
             return;
         }
         // the installed seed's, this process's or the disk's answer, which compiler_->ask then gives at once
@@ -157,7 +184,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
         bool remote = !found && remote_->serving();
         if (!found && !remote && remote_->declined()) {
-            pending->ready(nullptr);
+            pending->ready(nullptr, pending->creation ? kNoCompiler : "");
             return;
         }
         {
@@ -170,7 +197,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
                 if (record)
                     place(k, record, caTransform, pending);
                 else
-                    pending->ready(nullptr);
+                    pending->ready(nullptr, pending->creation ? failureOf(k) : std::string());
             }))
             return;
         auto done = [this, k, asked, pending, caTransform](const RuntimeRecord *record, const std::string &) {
@@ -179,12 +206,12 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
                 return;
             }
             uint64_t us = 0;
-            if (!stopping_.load(std::memory_order_acquire) && compiler_->retryAfter(k, us))
+            if (!pending->creation && !stopping_.load(std::memory_order_acquire) && compiler_->retryAfter(k, us))
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(us) * 1000), queue_, ^{
                     request(asked, pending);
                 });
             else
-                pending->ready(nullptr);
+                pending->ready(nullptr, pending->creation ? failureOf(k) : std::string());
         };
         const RuntimeRecord *made = nullptr;
         const Compiler::State state = compiler_->ask(k, done, &made);
@@ -201,15 +228,23 @@ void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool ca
     const CacheKey keptKey = key;
     dispatch_async(queue_, ^{
         if (stopping_.load(std::memory_order_acquire)) {
-            pending->ready(nullptr);
+            pending->ready(nullptr, std::string());
             return;
         }
-        const uint64_t delay = pending->placement.attempt([&](bool &retry) {
-            std::string why;
-            return device_.addRecord(*record, caTransform, why, &retry);
-        }, [&](Pipeline *made) {
-            pending->ready(made);
-        });
+        std::string full;
+        const uint64_t delay = pending->placement.attempt(
+            [&](bool &retry) {
+                std::string why;
+                Pipeline *made = device_.addRecord(*record, caTransform, why, &retry);
+                if (!made && retry && pending->creation) {
+                    full = why;
+                    retry = false;
+                }
+                return made;
+            },
+            [&](Pipeline *made) {
+                pending->ready(made, full);
+            });
         if (delay)
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay) * 1000), queue_, ^{
                 place(keptKey, record, caTransform, pending);
@@ -241,7 +276,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     case RecordCache::Found::None:
         if (!remote_->serving()) {
             if (remote_->declined()) {
-                failure = "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
+                failure = kNoCompiler;
                 return nullptr;
             }
             compiledHere(InProcess::NoCompiler);
@@ -260,7 +295,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
             break;
         }
         case Asked::Gone:
-            failure = "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
+            failure = kNoCompiler;
             return nullptr;
         }
         break;

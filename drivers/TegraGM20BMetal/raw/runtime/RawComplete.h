@@ -57,6 +57,10 @@ public:
     // The state's pipeline handed to `ready` once made, or null for a permanent refusal. Temporary allocation
     // failures keep the request pending and retry from retained compiler output.
     void ask(Ask a, std::function<void(Pipeline *)> ready);
+    // A state's creation that may complete later (Metal's completion-handler forms): `ready` gets its pipeline; or null
+    // and, where its creation fails as makeNow's would, why; nothing is tried again later
+    using Ready = std::function<void(Pipeline *, const std::string &failure)>;
+    void create(Ask a, Ready ready);
     // The state's pipeline now, on the caller's thread: its record from this process or the disk (a state made in an earlier
     // boot is raw from its first draw), else made while the thread waits, as Metal makes a state at its creation, so its
     // first draw is raw. Null with `failure` empty: refused (m2v draws it); with it, the creation fails with it as Metal's
@@ -96,6 +100,7 @@ public:
 private:
     struct Pending;
     void request(Ask asked, std::shared_ptr<Pending> pending);
+    std::string failureOf(const CacheKey &k);
     void place(const CacheKey &key, const RuntimeRecord *record, bool caTransform, std::shared_ptr<Pending> pending);
 
     struct Kernel {

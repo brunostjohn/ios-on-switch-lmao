@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Metal's completion-handler creations of render states. They may complete later, so a state the pack lacks is asked of
-// the runtime without a waiting thread (Completion::ask: the shader compiler's answer arrives on the runtime's queue), and
-// the handler runs once it is there, on a global queue of the caller's class, as Metal calls it. No thread sleeps on the
-// compiler for them.
+// the runtime without a waiting thread (Completion::create: the shader compiler's answer arrives on the runtime's queue),
+// and the handler runs once it is there, on a global queue of the caller's class, as Metal calls it. No thread sleeps on
+// the compiler for them. A creation that fails gets the synchronous form's error and no m2v state.
 #import "RawMetalInternal.h"
 
 static dispatch_queue_t creationQueue(qos_class_t qos)
@@ -41,12 +41,17 @@ static void createLater(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPip
             return finish(nil, nil, error);
         if (!rmNeedsRecord(p))
             return finishState(p, d, o, reflect, finish);
-        gRM->completion->ask(rmRecordAsk(p, d), [p, d, o, reflect, finish, qos](raw::Pipeline *made) {
-            p->_raw = made;
-            dispatch_async(creationQueue(qos), ^{
-                finishState(p, d, o, reflect, finish);
-            });
-        });
+        gRM->completion->create(rmRecordAsk(p, d),
+                                [p, d, o, reflect, finish, qos](raw::Pipeline *made, const std::string &failure) {
+                                    p->_raw = made;
+                                    NSError *failed = failure.empty() ? nil : rmCreationError(failure);
+                                    dispatch_async(creationQueue(qos), ^{
+                                        if (failed)
+                                            finish(nil, nil, failed);
+                                        else
+                                            finishState(p, d, o, reflect, finish);
+                                    });
+                                });
     });
 }
 

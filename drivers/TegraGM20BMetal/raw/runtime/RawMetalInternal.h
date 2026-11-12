@@ -369,6 +369,8 @@ bool rmNeedsRecord(RMPipeline *p);
 raw::Completion::Ask rmRecordAsk(RMPipeline *p, MTLRenderPipelineDescriptor *d);
 id<MTLRenderPipelineState> rmFinishState(RMPipeline *p, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
                                          MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error);
+// The error a state's creation fails with (Completion::makeNow's `failure`), as Metal's compile failures come
+NSError *rmCreationError(const std::string &failure);
 
 // RawMetalYcbcrTargets.mm: two-plane YCbCr code textures rendered into (raw_ycbcr_store.h). A target's stand-in and chroma
 // textures (Texture::planarStandIn, chromaCodes, chromaHalved), the reason a pass into one goes to m2v (null: none), its chroma

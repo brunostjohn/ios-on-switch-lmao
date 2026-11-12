@@ -342,12 +342,17 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     if (p->_failure.empty())
         return p;
     if (error)
-        *error = [NSError errorWithDomain:MTLLibraryErrorDomain
-                                     code:MTLLibraryErrorInternal
-                                 userInfo:@{
-                                     NSLocalizedDescriptionKey : @(p->_failure.c_str())
-                                 }];
+        *error = rmCreationError(p->_failure);
     return nil;
+}
+
+NSError *rmCreationError(const std::string &failure)
+{
+    return [NSError errorWithDomain:MTLLibraryErrorDomain
+                               code:MTLLibraryErrorInternal
+                           userInfo:@{
+                               NSLocalizedDescriptionKey : @(failure.c_str())
+                           }];
 }
 
 static void refuseUnmade(RMPipeline *p, MTLRenderPipelineDescriptor *d)

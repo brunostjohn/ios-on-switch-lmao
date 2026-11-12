@@ -155,7 +155,7 @@ size_t raw_metal_rates(char *out, size_t size)
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
         "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ce=%llu/%.0fKB "
-        "ev=%llu/%llu sig=%llu/%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
+        "ev=%llu/%llu sig=%llu/%llu/%llu ws=%llu/%lluus wc=%llu/%lluus here=%llu%s",
         secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
         (unsigned long long)(s.switches.load() - gRates.switches),
         (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
@@ -175,7 +175,8 @@ size_t raw_metal_rates(char *out, size_t size)
         (unsigned long long)(s.scheduledWaits.load() - gRates.scheduledWaits),
         (unsigned long long)(s.scheduledWaitUs.load() - gRates.scheduledWaitUs),
         (unsigned long long)(s.completedWaits.load() - gRates.completedWaits),
-        (unsigned long long)(s.completedWaitUs.load() - gRates.completedWaitUs), diag);
+        (unsigned long long)(s.completedWaitUs.load() - gRates.completedWaitUs),
+        (unsigned long long)(gRM->completion ? gRM->completion->compiledHere() : 0), diag);
     gRates.raw = raw;
     gRates.m2v = m2v;
     gRates.encodeUs = s.encodeUs.load();
