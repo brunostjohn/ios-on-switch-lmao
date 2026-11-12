@@ -3,6 +3,7 @@
 #include "RawMetalPlanExecution.h"
 #import "RawMetalEventJobs.h"
 #include "raw_encode_mallocs.h"
+#include "raw_loop_ranges.h"
 #include "raw_order.h"
 #include "raw_completion_source.h"
 
@@ -98,6 +99,31 @@ static void noteReplay(const switch_frame::Stamps &f, uint64_t returned)
 
 // Every submission range ends at an encoder boundary. Events are separate operations, so the scheduler can run the
 // prefix, publish its signal, and then block its suffix without preventing another queue from producing that suffix's event.
+// The last native range split after each predicated loop no block holds (raw_loop_ranges.h)
+static void splitAtLoops(RMCommandBuffer *cb)
+{
+    const RMSegment whole = cb->_segs.back();
+    cb->_segs.pop_back();
+    RMSegment part = whole;
+    raw::LoopRanges loops;
+    for (uint32_t at = whole.from; at < whole.to; ++at) {
+        const Cmd c = cb->_plan.legacy(at);
+        if (c.op == OpCompute)
+            loops.computeEncoder(uint32_t(c.a));
+        else if (c.op == OpRender || c.op == OpBlit || c.op == OpSignalEvent || c.op == OpWaitEvent)
+            loops.otherWork();
+        else if (c.op == OpPredicate && loops.record(raw::PredicateRecords::Kind(c.stage), at)) {
+            part.to = at + 1;
+            cb->_segs.push_back(part);
+            part = RMSegment{at + 1, whole.to, true};
+            part.loopFrom = loops.loopFrom();
+            part.loopTo = at + 1;
+        }
+    }
+    part.to = whole.to;
+    cb->_segs.push_back(part);
+}
+
 void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
@@ -133,6 +159,8 @@ void planSegments(RMCommandBuffer *cb)
         cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), native,
                              range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
                              false, range.gpuWait});
+        if (native && cb->_predicates.loops())
+            splitAtLoops(cb);
     }
     inlineSignals(cb);
 }
@@ -160,7 +188,8 @@ static raw::RangeEnd rangeEnd(RMCommandBuffer *cb, bool last, bool followed, boo
     end.lastOfBuffer = last;
     if (!last) {
         const RMSegment &next = cb->_segs[cb->_segNext + 1];
-        end.nextRangeRaw = next.raw && !next.event;
+        // a range after a loop waits for this one's completion (RMSegment::loopTo)
+        end.nextRangeRaw = next.raw && !next.event && !next.loopTo;
         end.signals = next.event;
     }
     end.followed = followed;
@@ -191,6 +220,17 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
     }
     RMSegment &range = cb->_segs[cb->_segNext];
     const bool last = cb->_segNext + 1 == cb->_segs.size();
+    if (range.loopTo) {
+        bool continues;
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            continues = std::exchange(cb->_loopContinues, false);
+        }
+        if (raw::layLoopAgain(cb->_segs, cb->_segNext, continues)) {
+            RAW_DIAGNOSTIC(r.stats.loopContinuations++);
+            return false;
+        }
+    }
     if (range.event) {
         const Cmd event = cb->_plan.legacy(range.from);
         if (event.op == OpWaitEvent)

@@ -282,7 +282,15 @@ void submitLoop()
             if (!error && !blocked && cb->_segNext < cb->_segs.size()) {
                 RMSegment &range = cb->_segs[cb->_segNext];
                 cb->_plan.prepareRange(range.from, range.to);
-                if (!range.event && range.raw) {
+                bool loopRetiring = false;
+                if (range.loopTo) {
+                    std::lock_guard<std::mutex> lock(cb->_lock);
+                    loopRetiring = cb->_segmentPending != 0;
+                }
+                if (loopRetiring) {
+                    blocked = true;
+                    dependencies = RMRawProgress;
+                } else if (!range.event && range.raw) {
                     int ready = variantReadiness(cb, range);
                     if (ready > 0)
                         ready = computeReadiness(cb, range);

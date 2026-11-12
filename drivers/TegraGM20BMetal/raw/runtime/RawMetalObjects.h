@@ -269,6 +269,10 @@ struct RMSegment {
     bool event = false;
     bool gpuSignal = false;
     bool gpuWait = false;
+    // A predicated loop no block holds ends right before: [loopFrom, loopTo) is the loop, from its Start to past its
+    // End. The range waits for the ranges before it to retire, and where the loop would run past its copies it is laid
+    // down again first (raw_loop_copies.h)
+    uint32_t loopFrom = 0, loopTo = 0;
 };
 
 struct RMSharedEventWait {
@@ -388,6 +392,7 @@ struct RMSharedEventWait {
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)
     uint32_t _rangeLoopStamp;  // the raw range just encoded laid predicated loops: its stamp (RMRawRetirement::loopStamp)
+    bool _loopContinues;       // _lock: a retired range's loop would run past its copies: lay it again (RMSegment::loopTo)
     double _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window

@@ -75,7 +75,8 @@ Predication::Answer LoopCopies::start(LoopStream s, Predication &predication, Pr
 }
 
 Predication::Answer LoopCopies::end(LoopStream s, Predication &predication, BatchWork &batches, uint64_t batchLimit,
-                                    uint64_t overflowVa, uint32_t stamp, uint64_t wordVa, const PredicateTest *test)
+                                    uint64_t continuedVa, uint64_t failedVa, uint32_t stamp, uint64_t wordVa,
+                                    const PredicateTest *test)
 {
     if (frames_.empty())
         return Predication::Answer::Misused;
@@ -109,7 +110,8 @@ Predication::Answer LoopCopies::end(LoopStream s, Predication &predication, Batc
         Predication::armCopies(arm, body.heads.data(), body.heads.size(), body.goingVa);
     }
     openSegment(s);
-    predication.endLoop(s.p, overflowVa, stamp);
+    const bool continued = frames_.empty() && predication.depth() == 1;
+    predication.endLoop(s.p, continued ? continuedVa : failedVa, stamp);
     return Predication::Answer::Done;
 }
 

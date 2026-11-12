@@ -101,6 +101,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
     d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
+#if SWITCH_RAW_DIAGNOSTICS
+    d[@"loop_continuations"] = @(gRM->stats.loopContinuations.load());
+#endif
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());

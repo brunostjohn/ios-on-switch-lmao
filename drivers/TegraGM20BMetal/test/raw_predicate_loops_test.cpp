@@ -13,6 +13,7 @@
 #include "bazel/testing/source_text.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_kit.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_loop_copies.h"
+#include "drivers/TegraGM20BMetal/raw/runtime/raw_loop_ranges.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_predication.h"
 #include "drivers/TegraGM20BMetal/test/predication_model.h"
 #include "kits/SwitchGM20BEmit/SwitchGM20BEmitPredicate.h"
@@ -26,7 +27,8 @@ using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using Answer = raw::Predication::Answer;
 
-constexpr uint64_t kWords = kBase, kQmds = kBase + 0x2000, kOverflow = kBase + 0x3000, kSlots = kBase + 0x4000;
+constexpr uint64_t kWords = kBase, kQmds = kBase + 0x2000, kOverflow = kBase + 0x3000, kFailed = kBase + 0x3004,
+                   kSlots = kBase + 0x4000;
 constexpr uint64_t kPush = kBase + 0x10000;
 constexpr uint32_t kStamp = 77, kQmdWords = 64, kHardwareWord = 48;
 
@@ -115,13 +117,15 @@ struct LoopProgram {
 
     Answer endWhile()
     {
-        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kStamp, 0, nullptr);
+        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kFailed, kStamp, 0,
+                         nullptr);
     }
 
     Answer endDoWhile(uint32_t w, PredicateCompare c, uint32_t reference)
     {
         const raw::PredicateTest test = raw::predicateTest(c, reference);
-        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kStamp, word(w), &test);
+        return loops.end(stream(), predication, batches, raw::BatchWork::kLimit, kOverflow, kFailed, kStamp, word(w),
+                         &test);
     }
 
     // The command buffer's GP entries run; each launch's program does `effect`
@@ -140,9 +144,16 @@ struct LoopProgram {
         return gpu.launched;
     }
 
+    // The loop would run past its copies and the submission lays it down again
     bool overflowed()
     {
         return gpu.word(kOverflow) == kStamp;
+    }
+
+    // One inside another loop or a block would, and the command buffer fails
+    bool failed()
+    {
+        return gpu.word(kFailed) == kStamp;
     }
 };
 
@@ -181,7 +192,7 @@ TEST(RawPredicateLoops, CopiesAreTheBoundForTheNestAndItsGpEntryBudget)
 {
     EXPECT_EQ(raw::LoopCopies::copies(1, 1), 1024u);
     EXPECT_EQ(raw::LoopCopies::copies(1, 5), 819u);
-    EXPECT_EQ(raw::LoopCopies::copies(2, 1), 32u);
+    EXPECT_EQ(raw::LoopCopies::copies(2, 1), 128u);
     EXPECT_EQ(raw::LoopCopies::copies(2, 200), 20u);
     EXPECT_EQ(raw::LoopCopies::copies(3, 1), 0u);
     EXPECT_EQ(raw::LoopCopies::copies(1, 5000), 0u);
@@ -208,6 +219,80 @@ TEST(RawPredicateLoops, PastItsCopiesTheOverflowWordNamesTheCommandBuffer)
         CountDown loop(copies + 3);
         EXPECT_EQ(loop.run(sees), repeat({1}, 2, copies, {3}));
         EXPECT_TRUE(loop.prog.overflowed());
+        EXPECT_FALSE(loop.prog.failed());
+    }
+}
+
+struct Segment {
+    uint32_t from, to;
+    bool raw;
+    uint32_t loopFrom, loopTo;
+};
+
+// The submission's continuation (RMSegment::loopTo, raw_loop_ranges.h): the range after an outermost loop waits for the
+// loop's laying to retire, its stamp's words decide (loopOutcome), and where the loop would run past its copies the
+// loop alone is laid down again over the same memory (layLoopAgain), so a count of 2,500 runs as 1024 + 1024 + 452
+// iterations over three layings before the range after it
+TEST(RawPredicateLoops, ALoopPastItsCopiesFinishesOverMoreLayingsOfItself)
+{
+    const uint32_t copies = raw::LoopCopies::kOutermostCopies;
+    for (bool sees : {true, false}) {
+        std::vector<Segment> segs{{0, 4, true, 0, 0}, {4, 9, true, 1, 4}};
+        size_t next = 1;
+        uint32_t counter = 2500, ran = 0, layings = 1;
+        CountDown first(counter);
+        ran += uint32_t(first.run(sees).size()) - 2;
+        counter = first.prog.gpu.word(word(0));
+        raw::LoopOutcome outcome =
+            raw::loopOutcome(kStamp, first.prog.gpu.word(kOverflow), first.prog.gpu.word(kFailed));
+        while (raw::layLoopAgain(segs, next, outcome == raw::LoopOutcome::Continue)) {
+            EXPECT_EQ(segs[next].from, 1u);
+            EXPECT_EQ(segs[next].to, 4u);
+            EXPECT_EQ(segs[next].loopTo, 0u);
+            CountDown laying(counter);
+            ran += uint32_t(laying.run(sees).size()) - 2;
+            counter = laying.prog.gpu.word(word(0));
+            outcome = raw::loopOutcome(kStamp, laying.prog.gpu.word(kOverflow), laying.prog.gpu.word(kFailed));
+            ++next;
+            ++layings;
+            ASSERT_LE(layings, 3u);
+        }
+        EXPECT_EQ(outcome, raw::LoopOutcome::Done);
+        EXPECT_EQ(ran, 2500u);
+        EXPECT_EQ(counter, 0u);
+        EXPECT_EQ(layings, (2500 + copies - 1) / copies);
+        EXPECT_EQ(segs.size(), 2u + layings - 1);
+        EXPECT_EQ(segs[next].from, 4u);
+    }
+}
+
+TEST(RawPredicateLoops, ALoopInsideAnotherOrABlockPastItsCopiesFailsTheCommandBuffer)
+{
+    for (bool inLoop : {true, false}) {
+        LoopProgram prog;
+        prog.gpu.put(word(0), 1);
+        prog.gpu.put(word(2), 0);
+        if (inLoop)
+            ASSERT_EQ(prog.startWhile(0, PredicateCompare::NotEqual, 0), Answer::Done);
+        else
+            prog.startIf(2, PredicateCompare::Equal, 0);
+        const uint32_t outer = prog.dispatch();
+        ASSERT_EQ(prog.startWhile(1, PredicateCompare::NotEqual, 0), Answer::Done);
+        prog.dispatch();
+        ASSERT_EQ(prog.endWhile(), Answer::Done);
+        if (inLoop)
+            ASSERT_EQ(prog.endWhile(), Answer::Done);
+        else
+            prog.endIf();
+        prog.run(true, [&](uint32_t id, Gpu &gpu) {
+            if (id == outer) {
+                gpu.put(word(0), 0);
+                gpu.put(word(1), 1000);
+            }
+        });
+        EXPECT_TRUE(prog.failed()) << (inLoop ? "inside a loop" : "inside an If");
+        EXPECT_FALSE(prog.overflowed());
+        EXPECT_EQ(raw::loopOutcome(kStamp, prog.gpu.word(kOverflow), prog.gpu.word(kFailed)), raw::LoopOutcome::Fail);
     }
 }
 
@@ -445,7 +530,7 @@ TEST(RawPredicateLoops, EachRawRangeThatLaidLoopsCarriesItsOwnStampToTheCompleti
     EXPECT_THAT(encode, HasSubstr("cb->_rangeLoopStamp = rc->loopsLaid ? rc->stamp : 0;"));
     const std::string finish = SourceText("../raw/runtime/RawMetalFinish.mm");
     EXPECT_THAT(finish, HasSubstr("std::exchange(cb->_rangeLoopStamp, 0u)"));
-    EXPECT_THAT(finish, HasSubstr("retired.loopStamp && r.raw->loopOverflowed(retired.loopStamp)"));
+    EXPECT_THAT(finish, HasSubstr("r.raw->loopOutcome(retired.loopStamp)"));
 }
 
 }  // namespace

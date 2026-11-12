@@ -108,6 +108,19 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
+    // A range that starts inside a compute encoder (a predicated loop laid again, or what follows a loop: RMSegment
+    // loopTo): that encoder's work goes on in a new raw encoder, the planned state applied at its first dispatch
+    for (size_t at = from; at-- > 0;) {
+        const Cmd c = cb->_plan.legacy(at);
+        if (c.op == OpCompute) {
+            ce.emplace(*rc, d);
+            serialCompute = c.a == MTLDispatchTypeSerial;
+            ce->setSerial(serialCompute);
+            computeUnit = true;
+        }
+        if (c.op == OpCompute || c.op == OpRender || c.op == OpBlit || c.op == OpEnd)
+            break;
+    }
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;

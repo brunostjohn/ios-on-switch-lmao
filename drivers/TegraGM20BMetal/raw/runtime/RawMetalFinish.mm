@@ -434,15 +434,21 @@ void completionLoop()
                 r.inflight.pop_front();
             }
             NSError *error = ok ? nil : killError(r.raw->lostError());
-            if (!error && retired.loopStamp && r.raw->loopOverflowed(retired.loopStamp)) {
-                os_log_error(rawLog(), "raw: command buffer %u failed: a predicated loop would have run past its copies",
+            const raw::LoopOutcome loops = r.raw->loopOutcome(retired.loopStamp);
+            if (!error && loops == raw::LoopOutcome::Fail) {
+                os_log_error(rawLog(),
+                             "raw: command buffer %u failed: a predicated loop inside another loop or a block would "
+                             "have run past its copies",
                              retired.seqno);
                 error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                             code:MTLCommandBufferErrorInternal
                                         userInfo:@{
                                             NSLocalizedDescriptionKey :
-                                                @"A predicated loop ran past the copies the raw path lays down"
+                                                @"A predicated loop inside another ran past the copies the raw path lays down"
                                         }];
+            } else if (!error && loops == raw::LoopOutcome::Continue) {
+                std::lock_guard<std::mutex> l(cb->_lock);
+                cb->_loopContinues = true;
             }
             segmentCompleted(cb, error, *retired.writes, RMRawProgress, retired.signals, retired.waits, &retired.cpu);
         }

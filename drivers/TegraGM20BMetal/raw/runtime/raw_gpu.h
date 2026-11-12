@@ -33,6 +33,7 @@
 #include "raw_private_comp.h"
 #include "raw_event_release.h"
 #include "raw_predication.h"
+#include "raw_loop_ranges.h"
 #include "raw_visibility.h"
 #include <array>
 #include <atomic>
@@ -1602,9 +1603,10 @@ public:
         return k_.debugCall(method, in, inSize, out, outSize);
     }
 #endif
-    // Where the command buffer of `stamp` marks a loop that ran past its copies, and whether one did once it completed
-    uint64_t loopOverflowVa(uint32_t stamp) const;
-    bool loopOverflowed(uint32_t stamp) const;
+    // Where the command buffer of `stamp` marks a loop that would run past its copies (one the submission continues,
+    // or `inner`, one it cannot), and once it completed what its loops left there
+    uint64_t loopOverflowVa(uint32_t stamp, bool inner) const;
+    LoopOutcome loopOutcome(uint32_t stamp) const;
 
     bool lost(uint32_t seqno) const
     {

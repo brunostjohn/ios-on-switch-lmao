@@ -37,8 +37,9 @@ Predication::Answer ComputeEncoder::startLoop(bool doWhile, uint64_t wordVa, con
 Predication::Answer ComputeEncoder::endLoop(uint64_t wordVa, const PredicateTest *test)
 {
     room(LoopCopies::kEndRoom);
-    const Predication::Answer answer = loops_.end(stream(), cb_.predication_, cb_.batchWork_, cb_.batchLimit(),
-                                                  dev_.loopOverflowVa(cb_.stamp), cb_.stamp, wordVa, test);
+    const Predication::Answer answer =
+        loops_.end(stream(), cb_.predication_, cb_.batchWork_, cb_.batchLimit(), dev_.loopOverflowVa(cb_.stamp, false),
+                   dev_.loopOverflowVa(cb_.stamp, true), cb_.stamp, wordVa, test);
     cb_.loopsLaid |= answer == Predication::Answer::Done;
     return answer;
 }
