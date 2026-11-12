@@ -1,0 +1,104 @@
+# Files //:format_test lets fail its format checks, and fails once they pass. Nothing joins this list; a file leaves it
+# when it is formatted.
+#
+# What //gpu:raw_stack hashes (its `inputs` output group, and the sources of the NVK dylib it hashes) and the raw pack
+# generator's own sources (raw/pack, gpu/seed, tools/gpu and the runtime headers it reads): formatting them moves the
+# raw stack key or the pack, so they are formatted with the next key batch.
+drivers/NativeMetal/NativeBridgeMetalFrontend.mm
+drivers/NativeMetal/NativeComputeArtifactStorage.h
+drivers/NativeMetal/NativeMetalArtifactCache.h
+drivers/NativeMetal/bridge/NativeMetalBridge.rs
+drivers/NativeMetal/bridge/NativeMetalDirectCompute.rs
+drivers/TegraGM20B/TegraGM20BABI.h
+drivers/TegraGM20BMetal/precompile/PrecompileCompute.h
+drivers/TegraGM20BMetal/raw/pack/ca/caspec27_test.py
+drivers/TegraGM20BMetal/raw/pack/directlink.py
+drivers/TegraGM20BMetal/raw/pack/mock_iokit.c
+drivers/TegraGM20BMetal/raw/pack/mock_submission.h
+drivers/TegraGM20BMetal/raw/pack/native_seed.mm
+drivers/TegraGM20BMetal/raw/pack/native_seed_analysis.h
+drivers/TegraGM20BMetal/raw/pack/native_seed_manifest.h
+drivers/TegraGM20BMetal/raw/pack/packfile.py
+drivers/TegraGM20BMetal/raw/runtime/raw_direct.cpp
+drivers/TegraGM20BMetal/raw/runtime/raw_direct_nvk.h
+third_party/mesa/src/nouveau/compiler/BUILD.bazel
+#
+# Code that source tests read as text and pin by its layout (display_planes_source_test,
+# native_legacy_display_source_test, switch_completion_flip_test, switch_direct_visible_test,
+# switch_timed_present_test, gm20b_quiet_source_test, gm20b_source_test): formatted together with those tests once
+# they read the code rather than its line breaks.
+drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp
+drivers/NativeMobileDisplay/NativePlaneFenceDisplay.h
+drivers/NativeMobileDisplay/NativePlanesDisplay.h
+drivers/NativeMobileDisplay/SwitchDirectSlots.h
+drivers/NativeMobileDisplay/SwitchLandscapeDisplay.h
+drivers/NativeMobileDisplay/SwitchNativePlaneDisplay.h
+drivers/NativeMobileDisplay/SwitchOverlayRegisters.h
+drivers/NativeMobileDisplay/SwitchPlaneFenceAdmission.h
+drivers/NativeMobileDisplay/SwitchPlaneSelection.h
+drivers/NativeMobileDisplay/SwitchRetireDisplay.h
+drivers/NativeMobileDisplay/SwitchScanoutSetup.h
+drivers/NativeMobileDisplay/SwitchScanoutStart.h
+drivers/NativeMobileDisplay/SwitchTimedPresentDisplay.h
+drivers/NativeMobileDisplay/test/display_planes_source_test.cpp
+drivers/NativeMobileDisplay/test/native_legacy_display_source_test.cpp
+drivers/NativeMobileDisplay/test/switch_completion_flip_harness.h
+drivers/NativeMobileDisplay/test/switch_direct_visible_test.cpp
+drivers/TegraDisplayFlip/TegraScanoutCopy.h
+drivers/TegraGM20B/SwitchGpuAdmission.cpp
+drivers/TegraGM20B/SwitchGpuBacking.cpp
+drivers/TegraGM20B/SwitchGpuBacking.h
+drivers/TegraGM20B/SwitchGpuBridge.cpp
+drivers/TegraGM20B/SwitchGpuCachedZero.cpp
+drivers/TegraGM20B/SwitchGpuCpuAccess.cpp
+drivers/TegraGM20B/SwitchGpuCpuLease.cpp
+drivers/TegraGM20B/SwitchGpuKqueue.h
+drivers/TegraGM20B/SwitchGpuOwnership.cpp
+drivers/TegraGM20B/SwitchGpuPathStats.cpp
+drivers/TegraGM20B/SwitchGpuPresentTokens.h
+drivers/TegraGM20B/SwitchGpuVmMap.h
+drivers/TegraGM20B/SwitchGpuWriterPromise.h
+drivers/TegraGM20B/TegraGM20BCopy.cpp
+drivers/TegraGM20B/TegraGM20BExecSurfaces.cpp
+drivers/TegraGM20B/TegraGM20BGpu.h
+drivers/TegraGM20B/TegraGM20BRelayout.cpp
+drivers/TegraGM20B/TegraGM20BSurfaceClient.cpp
+drivers/TegraGM20B/TegraGM20BUserClient.cpp
+drivers/TegraGM20B/TegraGM20BUserClientBo.cpp
+drivers/TegraGM20B/TegraGM20BUserClientChannel.cpp
+drivers/TegraGM20B/TegraGM20BUserClientDispatch.cpp
+drivers/TegraGM20B/TegraGM20BUserClientInternal.h
+drivers/TegraGM20B/TegraGM20BUserClientJob.cpp
+drivers/TegraGM20B/TegraGM20BUserClientJobSubmit.cpp
+drivers/TegraGM20B/TegraGM20BUserClientPresent.cpp
+drivers/TegraGM20B/TegraGM20BUserClientPromise.cpp
+drivers/TegraGM20B/TegraGM20BUserClientSubmit.cpp
+drivers/TegraGM20B/gpu_chan.c
+drivers/TegraGM20B/gpu_exec.c
+drivers/TegraGM20B/gpu_fenced.h
+drivers/TegraGM20B/gpu_hang.c
+drivers/TegraGM20B/gpu_internal.h
+drivers/TegraGM20B/gpu_power.c
+drivers/TegraGM20B/gpu_present.c
+drivers/TegraGM20B/gpu_present_deadline.c
+drivers/TegraGM20B/gpu_promise.c
+drivers/TegraGM20B/gpu_reload.c
+drivers/TegraGM20B/gpu_stats_tick.c
+drivers/TegraGM20B/gpu_zcull.c
+drivers/TegraGM20B/recover.c
+drivers/TegraGM20B/recover_engine.c
+drivers/TegraGM20B/shim/include/nvif/os.h
+drivers/TegraGM20B/shim/include/nvxnu.h
+drivers/TegraGM20B/shim/linux.c
+drivers/TegraGM20B/shim/xnu_glue.cpp
+drivers/TegraGM20B/test/gm20b_quiet_source_test.cpp
+drivers/TegraGM20B/test/gm20b_source_test.cpp
+drivers/TegraGM20BMetal/raw/runtime/raw_gpu.cpp
+drivers/TegraHost1x/SwitchHost1xFence.h
+drivers/TegraNVDEC/SwitchNVDECJobs.cpp
+drivers/TegraVIC/SwitchNativeSurface.h
+drivers/TegraVIC/SwitchSurfaceColor.h
+drivers/TegraVIC/SwitchVICJobs.cpp
+drivers/TegraVIC/TegraVICConfig.h
+drivers/TegraVIC/TegraVICFormats.h
+drivers/TegraVIC/TegraVICRequest.h
