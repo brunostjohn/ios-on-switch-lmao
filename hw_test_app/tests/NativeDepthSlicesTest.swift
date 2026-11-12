@@ -5,7 +5,8 @@ import Metal
 
 /// The slices of a stored depth 2D array, a pass each: slice k cleared to depth 1 where k is even and 0 where odd and
 /// stored, then loaded by a pass over the same slice of a colour array that draws a quad at depth 0.5 under a less
-/// compare. Only the even slices' quads pass, so each slice's pass read the depth its own clear stored.
+/// compare. Only the even slices' quads pass, so each slice's pass read the depth its own clear stored. The depth array
+/// is m2v's allocation the raw path renders in place (its twin from the start), so it is no object of the verdict.
 struct NativeDepthSlicesTest: NativeObjectTest {
     let id = "metal.native.depth_slices"
     let name = "Each slice of a stored depth array keeps the depth its own pass stored"
@@ -34,7 +35,7 @@ struct NativeDepthSlicesTest: NativeObjectTest {
         guard let less = gpu.device.makeDepthStencilState(descriptor: descriptor) else {
             throw TestFailure("makeDepthStencilState returned nil")
         }
-        var work = NativeWork(objects: [depth, color, less])
+        var work = NativeWork(objects: [color, less])
         let black: [UInt8] = [0, 0, 0, 255], red: [UInt8] = [255, 0, 0, 255]
         let timing = try await gpu.run { commands in
             for slice in 0..<Self.layers {
