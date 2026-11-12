@@ -50,7 +50,7 @@ public:
     {
         retained = 0;
         for (uint32_t i = 0; i < count; ++i) {
-            if (tokens[i].engine != SWITCH_GPU_ENGINE_GM20B)
+            if (tokens[i].engine != SWITCH_GPU_ENGINE_GM20B && tokens[i].engine != SWITCH_GPU_ENGINE_PROMISE)
                 continue;
             const auto token = tokens[i];
             const int error = switch_gpu_backing_token_retain(&token);

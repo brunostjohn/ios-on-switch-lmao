@@ -12,7 +12,10 @@ struct SwitchNativeScanout {
 // turns: a picture TegraVIC recorded turned (SwitchVICTurn.h) too, for window A's column scan; view.turn says which.
 int switch_native_scanout_acquire(OSObject *surface, SwitchNativeScanout *scanout, bool turns = false);
 int switch_native_scanout_pitch(OSObject *surface, SwitchNativeScanout *scanout);
+// _wait: sleeps for a CPU writer, for an engine reader, which orders behind writer promises on the GPU; _cpu: also until
+// a promised job is submitted, for the CPU's own read (switch_gpu_backing_snapshot_read_cpu).
 int switch_native_scanout_pitch_wait(OSObject *surface, SwitchNativeScanout *scanout);
+int switch_native_scanout_pitch_cpu(OSObject *surface, SwitchNativeScanout *scanout);
 void switch_native_scanout_release(SwitchNativeScanout *scanout);
 // The display latched (or dropped) the frame the scanout shows: a recorded turn's request signals go now.
 void switch_native_scanout_deliver(SwitchNativeScanout *scanout);

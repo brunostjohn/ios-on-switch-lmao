@@ -134,6 +134,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.quiet_jobs',
             'gpu.path.present_promise',
             'gpu.path.promise_cancel',
+            'gpu.path.promise_vic',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',

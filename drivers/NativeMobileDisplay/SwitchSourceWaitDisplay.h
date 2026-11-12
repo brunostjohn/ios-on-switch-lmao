@@ -54,10 +54,13 @@ bool holdCopySource(OSObject *surface)
     return true;
 }
 
-// 0 once the producer's writes are in DRAM: external_wait answers 1 for that, 0 while it is still pending.
+// 0 once the producer's writes are in DRAM: external_wait answers 1 for that, 0 while it is still pending. A read taken
+// behind a writer promise names no producer the CPU can wait for: it is taken again once the promised job is submitted.
 int waitCopySource()
 {
-    const int error = sourceWait->read.lease ? 0 : switch_native_scanout_pitch_wait(sourceWait->surface, &sourceWait->read);
+    if (sourceWait->read.lease && switch_gpu_backing_promised(sourceWait->read.view.native))
+        switch_native_scanout_release(&sourceWait->read);
+    const int error = sourceWait->read.lease ? 0 : switch_native_scanout_pitch_cpu(sourceWait->surface, &sourceWait->read);
     if (error)
         return error;
     const auto &producer = sourceWait->read.view.producer;

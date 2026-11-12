@@ -57,8 +57,11 @@ int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout
     return error;
 }
 
-static int pitchSnapshot(OSObject *object, SwitchNativeScanout *scanout, bool wait)
+enum class SnapshotWait { none, cpuWriters, cpuReader };
+
+static int pitchSnapshot(OSObject *object, SwitchNativeScanout *scanout, SnapshotWait how)
 {
+    const bool wait = how != SnapshotWait::none;
     if (!scanout)
         return -22;
     *scanout = {};
@@ -72,8 +75,10 @@ static int pitchSnapshot(OSObject *object, SwitchNativeScanout *scanout, bool wa
         switch_gpu_backing_describe(access.backing, &before);
         if (access.owned)
             switch_gpu_backing_cpu_release_owned(&access.owned, 0);
-        error = wait ? switch_gpu_backing_snapshot_read_wait(access.backing, &scanout->view.producer, &scanout->lease)
-                     : switch_gpu_backing_snapshot_read(access.backing, &scanout->view.producer, &scanout->lease);
+        error = how == SnapshotWait::cpuReader
+                    ? switch_gpu_backing_snapshot_read_cpu(access.backing, &scanout->view.producer, &scanout->lease)
+                : wait ? switch_gpu_backing_snapshot_read_wait(access.backing, &scanout->view.producer, &scanout->lease)
+                       : switch_gpu_backing_snapshot_read(access.backing, &scanout->view.producer, &scanout->lease);
     }
     if (!error) {
         switch_gpu_backing_describe(access.backing, &scanout->allocation);
@@ -94,10 +99,15 @@ static int pitchSnapshot(OSObject *object, SwitchNativeScanout *scanout, bool wa
 
 int switch_native_scanout_pitch(OSObject *object, SwitchNativeScanout *scanout)
 {
-    return pitchSnapshot(object, scanout, false);
+    return pitchSnapshot(object, scanout, SnapshotWait::none);
 }
 
 int switch_native_scanout_pitch_wait(OSObject *object, SwitchNativeScanout *scanout)
 {
-    return pitchSnapshot(object, scanout, true);
+    return pitchSnapshot(object, scanout, SnapshotWait::cpuWriters);
+}
+
+int switch_native_scanout_pitch_cpu(OSObject *object, SwitchNativeScanout *scanout)
+{
+    return pitchSnapshot(object, scanout, SnapshotWait::cpuReader);
 }

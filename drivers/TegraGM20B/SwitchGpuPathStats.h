@@ -38,7 +38,7 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_QUIET_JOB,      /* SubmitJob: a job ending with no interrupt unless asked (SwitchGpuQuiet.h) */
 	SWITCH_GPU_PATH_WAKE_ASK,       /* a wait that asked for a wake entry behind a quiet job */
 	SWITCH_GPU_PATH_WRITER_PROMISE, /* method 34: a writer promise made (SwitchGpuWriterPromise.h) */
-	SWITCH_GPU_PATH_PROMISE_WAIT,   /* a job or present that waits on the GPU for another's writer promise */
+	SWITCH_GPU_PATH_PROMISE_WAIT,   /* a job, present or VIC/NVDEC job that waits on the GPU for another's writer promise */
 	SWITCH_GPU_PATH_PROMISE_CPU_RELEASE, /* a pending writer promise's word written by the CPU (cancel, kill, close, hang) */
 	SWITCH_GPU_PATH_COUNT
 };

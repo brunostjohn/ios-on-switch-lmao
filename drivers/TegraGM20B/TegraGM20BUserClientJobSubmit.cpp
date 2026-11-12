@@ -236,7 +236,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 				((head.flags & TegraGM20BJobHasEvents) ? uint32_t(TegraGM20BSubmitHasEvents) : 0u);
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
-	uint32_t seqno = 0, dependencies = 0, jobVisibility = 0, leaseCount = 0, promiseWaits = 0;
+	uint32_t seqno = 0, dependencies = 0, jobVisibility = 0, leaseCount = 0;
 	bool ownershipBusy = false, ownershipFailed = false;
 refresh:
 	if (admissionContinue) {
@@ -261,7 +261,7 @@ refresh:
 	ownershipFailed = error == -5;
 	switch_gpu_chan_submit_enter(chan);
 	for (; !error;) {
-		dependencies = promiseWaits = 0;
+		dependencies = 0;
 		const bool runs = count || (head.flags & TegraGM20BJobHasEvents);
 		if (runs)
 			switch_gpu_chan_job_token(chan, fences, &completion);
@@ -296,12 +296,11 @@ refresh:
 		// another connection's writer promises on what the job uses: acquired on the GPU, never a shared event's
 		// captured dependency; read under the transaction's locks on the uses' backings, never by taking one again
 		if (!error && count) {
-			const uint32_t ownPromises = tgm_fence_offset(promiseWord(0)), before = dependencies;
+			const uint32_t ownPromises = tgm_fence_offset(promiseWord(0));
 			error = switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,
 									TegraGM20BMaxJobDependencies, &dependencies,
 									ownPromises,
 									ownPromises + TegraGM20BMaxPromises * 4);
-			promiseWaits = dependencies - before;
 		}
 		if (!error)
 			error = events->bind(&completion);
@@ -370,7 +369,6 @@ refresh:
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB,
 			      (jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0);
-	switch_gpu_path_taken(SWITCH_GPU_PATH_PROMISE_WAIT, promiseWaits ? 1u : 0u);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

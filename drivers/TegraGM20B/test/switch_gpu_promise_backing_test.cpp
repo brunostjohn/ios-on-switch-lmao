@@ -128,14 +128,14 @@ TEST_F(Backing, ACpuLockWaitsForThePromisedJobAndAvoidingASyncIsBusy)
 	switch_gpu_backing_release(b);
 }
 
-// The CPU copy and VIC read through a waiting snapshot: it sleeps until the promised job is submitted and names it.
-TEST_F(Backing, AWaitingSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
+// The display's CPU copy reads through the CPU's snapshot: it sleeps until the promised job is submitted and names it.
+TEST_F(Backing, TheCpusSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 {
 	auto *b = promised();
 	std::atomic<int> result{1};
 	switch_gpu_backing_token producer = {};
 	switch_gpu_cpu_lease *lease = nullptr;
-	std::thread copy([&] { result = switch_gpu_backing_snapshot_read_wait(b, &producer, &lease); });
+	std::thread copy([&] { result = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease); });
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	EXPECT_EQ(result.load(), 1);
 	ASSERT_EQ(publish(b, kWrite | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, token(3, 9)), 0);
@@ -144,6 +144,32 @@ TEST_F(Backing, AWaitingSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	EXPECT_EQ(result.load(), 0);
 	EXPECT_EQ(producer.value, 9u);
 	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_release(b);
+}
+
+// VIC's scanout source sleeps for a CPU writer only: a writer promise is one of its job's dependencies, which the
+// GPU-to-host1x bridge acquires, so the snapshot is taken at once behind a lease the promised job's write ignores.
+TEST_F(Backing, AnEngineReadersWaitingSnapshotTakesThePromiseAsADependency)
+{
+	auto *b = promised();
+	switch_gpu_backing_token producer = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	ASSERT_EQ(switch_gpu_backing_snapshot_read_wait(b, &producer, &lease), 0);
+	SwitchGpuAdmission admission;
+	const switch_gpu_backing_use write{b, kWrite, 0};
+	EXPECT_EQ(admission.begin(&write, 1, nullptr, 0, nullptr, 0), 0);
+	admission.end();
+	switch_gpu_backing_use read{b, kRead, 0};
+	switch_gpu_backing_transaction transaction = {};
+	const auto vic = token(160, 3, SWITCH_GPU_ENGINE_VIC);
+	ASSERT_EQ(switch_gpu_backing_begin(&read, 1, &vic, &transaction), 0);
+	switch_gpu_backing_token tokens[1] = {};
+	uint32_t needed = 0;
+	ASSERT_EQ(switch_gpu_backing_promise_dependencies(&transaction, tokens, 1, &needed, 0, 0), 0);
+	EXPECT_EQ(tokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+	switch_gpu_backing_abort(&transaction);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
 	switch_gpu_backing_release(b);
 }
 

@@ -296,6 +296,19 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
                 return error;
             continue;
         }
+        // writer promises on what the job reads: acquired by the GPU-to-host1x bridge, never a shared event's captured
+        // dependency
+        error = switch_gpu_backing_promise_dependencies(&transaction, dependencies.tokens, dependencies.capacity,
+                                                        &needed, 0, 0);
+        if (error) {
+            switch_gpu_backing_abort(&transaction);
+            IOLockUnlock(gLock);
+            if (error != -28)
+                return error;
+            if (const int grown = dependencies.grow(needed))
+                return grown;
+            continue;
+        }
         bool bridgeRequired = false;
         for (uint32_t i = 0; i < needed && !error; ++i) {
             auto &dependency = dependencies.tokens[i];
@@ -307,7 +320,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
             if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_NVDEC || dependency.engine == SWITCH_GPU_ENGINE_VIC ||
                            dependency.engine == SWITCH_GPU_ENGINE_NVENC))
                 continue;
-            if (!ready && dependency.engine == SWITCH_GPU_ENGINE_GM20B) {
+            if (!ready &&
+                (dependency.engine == SWITCH_GPU_ENGINE_GM20B || dependency.engine == SWITCH_GPU_ENGINE_PROMISE)) {
                 const int covered = dependencies.covered(dependency);
                 if (covered >= 0) {
                     bridgeRequired |= covered == 0;

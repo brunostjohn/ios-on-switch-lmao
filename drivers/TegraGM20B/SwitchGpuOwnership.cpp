@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <string.h>
 #include "SwitchGpuBackingInternal.h"
+#include "SwitchGpuPathStats.h"
 extern "C" void switch_gpu_surface_sweep(void) __attribute__((weak));
 
 bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
@@ -438,7 +439,10 @@ extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transa
 										   nullptr, 0));
 	}
 	*needed += extra;
-	return *needed > capacity ? -28 : 0;
+	if (*needed > capacity)
+		return -28;
+	switch_gpu_path_taken(SWITCH_GPU_PATH_PROMISE_WAIT, extra ? 1 : 0);
+	return 0;
 }
 
 extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transaction)

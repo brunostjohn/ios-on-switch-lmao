@@ -195,7 +195,11 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	EXPECT_THAT(Body(unit("SwitchGpuCpuAccess.cpp"), "bool cpu_conflicts("),
 		    HasSubstr("switch_gpu_backing_promise_pending_locked(backing)"));
 	expectBefore(Body(unit("SwitchGpuCpuLease.cpp"), "static int snapshot_read("), "while (!avoid &&",
-		     "switch_gpu_backing_promise_pending_locked(backing)))");
+		     "(cpu && switch_gpu_backing_promise_pending_locked(backing))))");
+	// an engine reader of a promised surface (VIC, NVDEC) orders behind the promise through the bridge
+	for (const char *reader : {"../TegraVIC/SwitchVICJobs.cpp", "../TegraNVDEC/SwitchNVDECJobs.cpp"})
+		expectBefore(unit(reader), "switch_gpu_backing_promise_dependencies(&transaction,",
+			     "dependency.engine == SWITCH_GPU_ENGINE_PROMISE");
 	const std::string retirement = unit("SwitchGpuClientRetirement.h");
 	expectBefore(Body(retirement, "void AGXDeviceUserClient::drainResources()"),
 		     "releasePromises(true);", "tgm_chan_del(&chan);");

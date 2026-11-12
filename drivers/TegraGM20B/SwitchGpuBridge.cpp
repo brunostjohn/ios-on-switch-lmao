@@ -318,8 +318,9 @@ extern "C" int switch_gpu_bridge_covers(const switch_gpu_bridge *bridge, const s
         const auto &held = bridge->tokens[i];
         if (token->engine == held.engine && token->queue == held.queue &&
             token->reset_generation == held.reset_generation &&
-            (held.engine == SWITCH_GPU_ENGINE_GM20B ? int32_t(uint32_t(held.value - token->value)) >= 0
-                                                   : held.value >= token->value))
+            (held.engine == SWITCH_GPU_ENGINE_GM20B || held.engine == SWITCH_GPU_ENGINE_PROMISE
+                 ? int32_t(uint32_t(held.value - token->value)) >= 0
+                 : held.value >= token->value))
             return 1;
     }
     return 0;

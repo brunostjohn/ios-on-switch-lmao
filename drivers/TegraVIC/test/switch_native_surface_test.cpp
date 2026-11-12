@@ -144,6 +144,13 @@ extern "C" int switch_gpu_backing_snapshot_read(switch_gpu_backing *backing,
     return switch_gpu_backing_export_read(backing, producer, owned);
 }
 extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing,
+                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned);
+extern "C" int switch_gpu_backing_snapshot_read_cpu(switch_gpu_backing *backing,
+                                                switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
+{
+    return switch_gpu_backing_snapshot_read_wait(backing, producer, owned);
+}
+extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing,
                                                 switch_gpu_backing_token *producer, switch_gpu_cpu_lease **owned)
 {
     if (duringExport)

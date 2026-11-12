@@ -16,6 +16,7 @@ struct switch_gpu_bridge {
 
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
+std::vector<switch_gpu_backing_token> promiseTokens;  // the uses' pending writer promises
 std::vector<uint32_t> publishedWords;
 uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
 uint32_t arenaShort, arenaWaits, cancels;
@@ -163,6 +164,20 @@ int switch_gpu_backing_dependencies(const switch_gpu_backing_transaction *, swit
     if (capacity < *needed)
         return -28;
     std::copy(sourceTokens.begin(), sourceTokens.end(), out);
+    return 0;
+}
+
+int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transaction *transaction, switch_gpu_backing_token *out,
+                                            uint32_t capacity, uint32_t *needed, uint32_t ownFirst, uint32_t ownEnd)
+{
+    EXPECT_TRUE(transactionLocked);
+    EXPECT_EQ(ownFirst, ownEnd);
+    transaction->promised = 1;
+    const uint32_t at = *needed;
+    *needed += static_cast<uint32_t>(promiseTokens.size());
+    if (capacity < *needed)
+        return -28;
+    std::copy(promiseTokens.begin(), promiseTokens.end(), out + at);
     return 0;
 }
 
@@ -544,6 +559,7 @@ protected:
             stage = {};
         transactionLocked = changeProducer = busyOnce = semanticCapture = false;
         sourceTokens.clear();
+        promiseTokens.clear();
         publishedWords.clear();
         gQueue = {};
         nextTestSequence += 4096;
@@ -667,6 +683,19 @@ TEST_F(SwitchNVDECSubmitTest, PendingGpuUsesHardwareBridgeOutsideOwnershipLocks)
     ASSERT_NE(gQueue.jobs[0].bridge, nullptr);
     EXPECT_EQ(publishedWords[0], tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5));
     EXPECT_EQ(publishedWords[1], 0x1000001u);
+    EXPECT_EQ(publishedWords[2], 170u);
+}
+
+// A writer promise on a reference picture (its job not submitted yet) is acquired by the GPU-to-host1x bridge, with no CPU
+// sleep for it.
+TEST_F(SwitchNVDECSubmitTest, AWriterPromiseIsAcquiredByTheBridge)
+{
+    promiseTokens = {{7, 0, SWITCH_GPU_ENGINE_PROMISE, 2052}};
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(commits, 1u);
+    ASSERT_NE(gQueue.jobs[0].bridge, nullptr);
+    ASSERT_EQ(gQueue.jobs[0].bridge->tokens.size(), 1u);
+    EXPECT_EQ(gQueue.jobs[0].bridge->tokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
     EXPECT_EQ(publishedWords[2], 170u);
 }
 

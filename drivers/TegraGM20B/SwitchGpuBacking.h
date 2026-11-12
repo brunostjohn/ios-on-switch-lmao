@@ -256,9 +256,13 @@ int switch_gpu_backing_promise_tokens(struct switch_gpu_backing *backing, uint32
 				      uint32_t own_end, struct switch_gpu_backing_token *tokens,
 				      uint32_t capacity);
 int switch_gpu_backing_promised(struct switch_gpu_backing *backing);
-/* Thread-context admission: sleeps for CPU writers and for a writer promise until its job is submitted (or the promise
- * is given back), whose CPU or VIC reader cannot acquire it; a GPU producer remains a retained hardware dependency. */
+/* Thread-context admission: sleeps only for CPU writers; a GPU producer and a writer promise remain hardware
+ * dependencies of the engine reader (switch_gpu_backing_promise_dependencies). */
 int switch_gpu_backing_snapshot_read_wait(struct switch_gpu_backing *backing,
+    struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
+/* The same for a CPU reader, which cannot acquire a writer promise: it also sleeps until the promised job is submitted
+ * (or the promise is given back), then names that job as the producer. */
+int switch_gpu_backing_snapshot_read_cpu(struct switch_gpu_backing *backing,
     struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
 /* Consumes a full owned NO_CACHE lease into an ordinary CPU reservation without dropping ownership or its backing pin.
  * It waits for conversion and establishes CPU cache visibility; READ leases cannot become writable. */

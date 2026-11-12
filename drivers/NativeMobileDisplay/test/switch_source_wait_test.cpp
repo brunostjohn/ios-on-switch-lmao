@@ -12,7 +12,8 @@ constexpr int TEGRA_SCANOUT_SOURCE_LOST=-5;
 class OSObject { public: unsigned refs=1; void retain(){++refs;} void release(){--refs;} };
 struct OriginalLegacySwapRequest {};
 namespace {
-unsigned leases, waits, observations, producerWaits;
+unsigned leases, waits, cpuWaits, observations, producerWaits;
+int promisedNow;  // the surface's writer promises pending (SwitchGpuWriterPromise.h)
 int waitError, producerError, producerVisible;
 switch_gpu_backing_token producer;
 std::function<void()> waiting;
@@ -52,6 +53,11 @@ int switch_native_scanout_pitch_wait(OSObject *,SwitchNativeScanout *out) {
     if(waitError) return waitError;
     out->lease=reinterpret_cast<switch_gpu_cpu_lease *>(1); out->view.producer=producer; ++leases; return 0;
 }
+// the CPU's own read: once the promised job is submitted, it names that job
+int switch_native_scanout_pitch_cpu(OSObject *object,SwitchNativeScanout *out) {
+    ++cpuWaits; promisedNow=0; return switch_native_scanout_pitch_wait(object,out);
+}
+extern "C" int switch_gpu_backing_promised(switch_gpu_backing *) { return promisedNow; }
 // As SwitchGpuTimeline.cpp's external_wait: 1 once the writes are DRAM-visible, 0 still pending, negative failed.
 extern "C" int switch_gpu_backing_token_external_wait(const switch_gpu_backing_token *token) {
     EXPECT_EQ(token->value, producer.value); ++producerWaits; return producerError ? producerError : producerVisible;
@@ -65,7 +71,7 @@ protected:
     NativeLegacyDisplay *display;
     OriginalLegacySwapRequest request,other;
     OSObject surface;
-    void SetUp() override { leases=waits=observations=producerWaits=0; waitError=producerError=0; producerVisible=1; cleanInvalidates.clear(); invalidates.clear(); producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
+    void SetUp() override { leases=waits=cpuWaits=observations=producerWaits=0; waitError=producerError=promisedNow=0; producerVisible=1; cleanInvalidates.clear(); invalidates.clear(); producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
     void TearDown() override { delete display; EXPECT_EQ(leases,0u); EXPECT_EQ(surface.refs,1u); }
     void defer(){ASSERT_TRUE(display->deferSource(&request,&surface));}
 };
@@ -105,6 +111,17 @@ TEST_F(SourceWait, OrdinaryCpuFallbackTakesOwnershipBeforeItReadsAndReusesDeferr
     ASSERT_EQ(display->waitCopySource(),0); EXPECT_EQ(waits,1u); EXPECT_EQ(leases,1u);
     ASSERT_TRUE(display->holdCopySource(&surface)); ASSERT_EQ(display->waitCopySource(),0);
     EXPECT_EQ(waits,1u); EXPECT_EQ(leases,1u); EXPECT_EQ(surface.refs,2u);
+}
+
+// A deferral's read was taken behind a writer promise (an engine reader orders on it on the GPU): the CPU copy cannot,
+// and takes its read again once the promised job is submitted, so the producer it waits for is that job.
+TEST_F(SourceWait, CpuFallbackTakesAPromisedReadAgainAfterThePromisedJob) {
+    defer(); display->onKick=[&]{display->copyQueued=true;}; display->sourceWaitWork();
+    ASSERT_EQ(waits,1u); ASSERT_EQ(leases,1u);
+    promisedNow=1; producer={7,1,SWITCH_GPU_ENGINE_GM20B,3};
+    ASSERT_EQ(display->waitCopySource(),0);
+    EXPECT_EQ(cpuWaits,1u); EXPECT_EQ(leases,1u); EXPECT_EQ(producerWaits,1u);
+    display->copyQueued=false; display->releaseSourceWait();
 }
 
 TEST_F(SourceWait, OnlyCpuFallbackWaitsTheExactProducerAndRejectsItsFailure) {

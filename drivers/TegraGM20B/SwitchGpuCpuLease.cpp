@@ -97,11 +97,12 @@ extern "C" int switch_gpu_backing_cpu_publish_generation(switch_gpu_backing *bac
 	return result;
 }
 
-// A reader that does not wait (the display) snapshots a surface with writer promises pending at once, with them as
-// tokens when it asks (`promises`), behind a lease the promised job's admission does not wait for; one that waits (the
-// CPU copy, VIC) sleeps until the promised job is submitted.
+// A surface with writer promises pending is snapshotted behind a lease the promised job's admission does not wait for,
+// with the promises as tokens when the reader asks (`promises`): an engine reader orders behind them on the GPU. Only a
+// CPU reader (`cpu`: the display's CPU copy) cannot, and sleeps until the promised job is submitted, as a reader that
+// may wait (`!avoid`) does for a CPU writer.
 static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
-			 switch_gpu_cpu_lease **out, bool allow_cpu, bool avoid,
+			 switch_gpu_cpu_lease **out, bool allow_cpu, bool avoid, bool cpu = false,
 			 switch_gpu_backing_token *promises = nullptr, uint32_t capacity = 0,
 			 uint32_t *promised = nullptr)
 {
@@ -115,7 +116,7 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
 	while (!avoid && (backing->cpu_writers || backing->gpu_admission_writers ||
-			  switch_gpu_backing_promise_pending_locked(backing)))
+			  (cpu && switch_gpu_backing_promise_pending_locked(backing))))
 		switch_gpu_backing_sleep_cpu_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
 		backing->cpu_readers == UINT32_MAX ? -16 : 0;
@@ -198,7 +199,7 @@ extern "C" int switch_gpu_backing_snapshot_read_promises(switch_gpu_backing *bac
 {
 	uint32_t promised = 0;
 	const int result =
-		snapshot_read(backing, producer, out, true, true, promises, capacity, &promised);
+		snapshot_read(backing, producer, out, true, true, false, promises, capacity, &promised);
 	return result ? result : int(promised);
 }
 
@@ -207,6 +208,13 @@ extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing
 						     switch_gpu_cpu_lease **out)
 {
 	return snapshot_read(backing, producer, out, true, false);
+}
+
+extern "C" int switch_gpu_backing_snapshot_read_cpu(switch_gpu_backing *backing,
+						    switch_gpu_backing_token *producer,
+						    switch_gpu_cpu_lease **out)
+{
+	return snapshot_read(backing, producer, out, true, false, true);
 }
 
 extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing, uint32_t access,

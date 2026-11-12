@@ -585,6 +585,8 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
         "//drivers/TegraGM20B:gpu_sources",
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraVIC:SwitchVICJobs.cpp",
     ],
 )
 
@@ -655,6 +657,7 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuBackingInternal.h",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
         "//drivers/TegraGM20B:SwitchGpuWriterRanges.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
         "//drivers/TegraGM20B:SwitchGpuCpuComplete.h",
         "//drivers/TegraGM20B:SwitchGpuBackingMemory.h",
         "//drivers/TegraGM20B:SwitchGpuAdmission.h",

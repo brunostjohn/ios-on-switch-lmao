@@ -350,6 +350,22 @@ retry:
         }
         goto retry;
     }
+    // writer promises on what the jobs read: acquired by the GPU-to-host1x bridge, never a shared event's captured
+    // dependency
+    if (useCount) {
+        error = switch_gpu_backing_promise_dependencies(&transaction, dependencies.tokens, dependencies.capacity,
+                                                        &needed, 0, 0);
+        if (error) {
+            switch_gpu_backing_abort(&transaction);
+            IOLockUnlock(gLock);
+            SWITCH_VIC_REFUSED("writer promise dependencies");
+            if (error != -28)
+                return error;
+            if (const int grown = dependencies.grow(needed))
+                return grown;
+            goto retry;
+        }
+    }
     bool bridgeRequired = false;
     for (uint32_t i = 0; i < needed; ++i) {
         auto &dependency = dependencies.tokens[i];
@@ -361,7 +377,8 @@ retry:
         if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_VIC || dependency.engine == SWITCH_GPU_ENGINE_NVDEC ||
                        dependency.engine == SWITCH_GPU_ENGINE_NVENC))
             continue;
-        if (!ready && dependency.engine == SWITCH_GPU_ENGINE_GM20B) {
+        if (!ready &&
+            (dependency.engine == SWITCH_GPU_ENGINE_GM20B || dependency.engine == SWITCH_GPU_ENGINE_PROMISE)) {
             const int covered = dependencies.covered(dependency);
             if (covered >= 0) {
                 bridgeRequired |= covered == 0;
