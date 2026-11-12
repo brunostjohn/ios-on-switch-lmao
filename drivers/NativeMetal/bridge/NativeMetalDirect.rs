@@ -31,7 +31,7 @@ const PROBE_TAGGED: u32 = 16;
 const RUN_BYTES: [u32; 4] = [256, 16, 4096, 256];
 const BOUND_RUN: usize = 3;
 const MAX_WRITES: usize = 64;
-const HEAP_ARRAYS: usize = 8;
+pub(crate) const HEAP_ARRAYS: usize = 8;
 /// The raw path's texture header pool (raw_heap_tables.h kHeapElements): its heap holds texture header i and sampler header
 /// i at element i, so no array needs more elements
 pub(crate) const RAW_HEAP_ELEMENTS: u32 = 8192;
@@ -828,6 +828,11 @@ impl<'d> Layout<'d> {
 
     pub(crate) fn set0(&self) -> u64 {
         self.sets.first().map_or(0, |s| avk::Handle::as_raw(*s))
+    }
+
+    /// The handle of the `at`th set layout, 0: none
+    pub(crate) fn set_at(&self, at: usize) -> u64 {
+        self.sets.get(at).map_or(0, |s| avk::Handle::as_raw(*s))
     }
 }
 

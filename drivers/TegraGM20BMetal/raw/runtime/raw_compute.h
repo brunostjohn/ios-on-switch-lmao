@@ -36,6 +36,11 @@ struct ComputeState {
     uint64_t data = 0;     // its shader data's address, 0: none
     PackKernel placed =
         {};  // a runtime record's, its samplers numbered among the device's (placeCompute): rec points here
+    // its reads through argument buffers (Device::bindKernelArguments): the root push words of the device's root table and
+    // ExecutionStatus addresses, its set 1 (null: none), and whether the device had no memory for them
+    uint32_t argumentPush[32] = {}, argumentMask = 0;
+    const HeapSet *heapSet = nullptr;
+    bool heapMissing = false;
 };
 
 // The pack's kernel of key `keyHash` (computeKeyHash), its program placed at its first use; null: not in the pack, or no
@@ -77,6 +82,7 @@ public:
     void end();
 
 private:
+    void argumentRoot(const PackKernel &r, uint32_t *root);
     struct Bound {
         uint64_t va = 0;
         uint32_t size = 0;

@@ -333,7 +333,11 @@ struct PackPipeline {
 enum PackKernelEntryKind : uint8_t {
     KernelBuffer,
     KernelTexture,
-    KernelSampler
+    KernelSampler,
+    // m2v's handle tables of argument-buffer textures and samplers: a storage buffer descriptor of the device's own
+    // (EntryTextureTable, EntrySamplerTable)
+    KernelTextureTable,
+    KernelSamplerTable
 };
 
 // A word range of set 0 and the Metal argument it holds: a buffer's {address, range} descriptor (its range the bound bytes
@@ -372,6 +376,12 @@ struct PackKernel {
     uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
     PackKernelEntry entry[16];
+    // What m2v's reads through argument buffers take of a dispatch, as PackPipeline's for the kernel stage: the push word + 1
+    // of the root table's address and of the ExecutionStatus buffer's (0: none), the buffer slots its root table holds, and
+    // its set-1 heap arrays
+    uint8_t rootTableWord, statusWord, heapArrays, argumentsReserved;
+    uint32_t rootSlots, heapBytes;
+    PackHeapArray heap[kPackHeapArrays];
 };
 
 inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
@@ -444,7 +454,7 @@ static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipel
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128 + 76, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
 

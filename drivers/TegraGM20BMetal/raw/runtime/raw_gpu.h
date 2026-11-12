@@ -1776,7 +1776,8 @@ private:
     uint64_t tablesWritten_ = 0, tablesInvalidated_ = 0;
     HeapHolds heapHolds_ = nullptr;
     bool heapMemory();
-    const HeapSet *heapSet(const PackPipeline &rec);
+    const HeapSet *heapSet(const HeapLayout &layout);
+    void bindKernelArguments(ComputeState &c, const PackKernel &k);
     void bindArguments(Pipeline &pl, const PackPipeline &pp);
     void tablesWritten();
 

@@ -73,6 +73,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
     c.instructions = std::max(1u, (p.dataBytes ? p.dataOffset : p.bytes) / 8);
     memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));
+    dev.bindKernelArguments(c, *k);
     return &gStates.emplace(std::make_pair(&dev, keyHash), c).first->second;
 }
 
@@ -112,10 +113,27 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
     c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
+    dev.bindKernelArguments(c, r.kernel);
     ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
     placed.rec = &placed.placed;
     return &placed;
 }
+
+// What a kernel's reads through argument buffers take of every dispatch, as bindArguments for a state: its root table
+// address (a kernel whose root table holds buffer slots takes its own per dispatch) and ExecutionStatus address words,
+// and its set 1. Its dispatches are refused where the device has no memory for them.
+void Device::bindKernelArguments(ComputeState &c, const PackKernel &k)
+{
+    const bool tables = std::any_of(k.entry, k.entry + std::min<uint8_t>(k.entries, 16), [](const PackKernelEntry &e) {
+        return e.kind == KernelTextureTable || e.kind == KernelSamplerTable;
+    });
+    if (!k.rootTableWord && !k.statusWord && !k.heapArrays && !tables)
+        return;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!heapMemory()) {
+        c.heapMissing = true;
+}
+
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
 {
@@ -288,6 +306,14 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                 }
             }
             at[0] |= tic;
+        } else if (e.kind == KernelTextureTable || e.kind == KernelSamplerTable) {
+            const HeapTables &tables = dev_.heapTables_;
+            const bool textures = e.kind == KernelTextureTable;
+            const uint64_t va = textures ? tables.textureTableVa() : tables.samplerTableVa();
+            at[0] = uint32_t(va);
+            at[1] = uint32_t(va >> 32);
+            at[2] = textures ? tables.textureTableBytes() : tables.samplerTableBytes();
+            at[3] = 0;
         } else if (e.slot & kConstexprSampler) {
             const uint32_t index = e.slot & ~kConstexprSampler;
             if (index >= dev_.constexprCount_) {
@@ -343,6 +369,10 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         *why = "a threadgroup m2v's dispatch region cannot name";
         return false;
     }
+    if (state_->heapMissing) {
+        *why = "no memory for the tables a kernel reads argument buffers through";
+        return false;
+    }
     if (!prepareDescriptors(why))
         return false;
     const std::array<uint32_t, 3> grid{groups[0], groups[1], groups[2]};
@@ -358,6 +388,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
             root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
         for (uint32_t m = residualMask_; m; m &= m - 1)
             root[kRootPush / 4 + __builtin_ctz(m)] = residuals_[__builtin_ctz(m)];
+        argumentRoot(r, root);
         if (r.regionWord >= 0)
             memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
         uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
@@ -381,7 +412,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
             va = rootVa_;
             break;
         case CbufSet:
-            va = setVa_;
+            va = state_->cbufType[i] == kCbufHeapSet ? (state_->heapSet ? state_->heapSet->memory.va : 0) : setVa_;
             break;
         case CbufShaderData:
             va = state_->data;
@@ -414,6 +445,43 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     }
     RAW_DIAGNOSTIC(dev_.stats.dispatches++);
     return true;
+}
+
+// The root table words of the kernel's reads through argument buffers: the device's root table and ExecutionStatus
+// addresses, NVK's sets[1] for its heap arrays, and for a kernel whose root table holds buffer slots, that table of this
+// dispatch's bound buffers in the upload ring (raw_heap_tables.h writeDrawRoots), each slot's buffer used as written
+void ComputeEncoder::argumentRoot(const PackKernel &r, uint32_t *root)
+{
+    for (uint32_t m = state_->argumentMask; m; m &= m - 1)
+        root[kRootPush / 4 + __builtin_ctz(m)] = state_->argumentPush[__builtin_ctz(m)];
+    if (const HeapSet *heap = state_->heapSet) {
+        root[kRootSets / 4 + 4] = uint32_t(heap->memory.va);
+        root[kRootSets / 4 + 5] = uint32_t(heap->memory.va >> 32);
+        root[kRootSets / 4 + 6] = r.heapBytes;
+    }
+    if (!r.rootSlots || !r.rootTableWord || r.rootTableWord > 31)
+        return;
+    const uint32_t entries = drawRootEntries(r.rootSlots);
+    RootSlot slot[32];
+    for (uint32_t n = 0; kFirstSlotRoot + n < entries; n++) {
+        const Bound &b = bufs_[n];
+        slot[n] = {};
+        if (!(r.rootSlots >> n & 1) || !b.va)
+            continue;
+        if (b.buffer) {
+            cb_.use(*b.buffer, true);
+            slot[n] = {b.buffer->va, b.buffer->length, b.offset};
+        } else {
+            cb_.useAddress(b.va, b.size, true);
+            slot[n] = {b.va, b.size, 0};
+        }
+    }
+    uint64_t va = 0;
+    auto *table = reinterpret_cast<RootEntry *>(dev_.alloc(dev_.upload_, entries * sizeof(RootEntry), 256, va));
+    writeDrawRoots(table, va, r.rootSlots, slot, dev_.heapTables_.sinkVa(), dev_.heapTables_.identityVa());
+    root[kRootPush / 4 + r.rootTableWord - 1] = uint32_t(va);
+    root[kRootPush / 4 + r.rootTableWord] = uint32_t(va >> 32);
+    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += entries * sizeof(RootEntry));
 }
 
 void ComputeEncoder::end()

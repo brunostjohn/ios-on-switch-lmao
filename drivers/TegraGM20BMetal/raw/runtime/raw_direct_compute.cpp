@@ -77,6 +77,8 @@ public:
     {
         const NmbDirectWrite &w = kw.write;
         NvkSetBinding b = {};
+        if (w.set == 1 && k_.set1)
+            return true;  // a heap array's element: the device's own (raw_heap_tables.h)
         if (w.set != 0) {
             why = "a set-" + std::to_string(w.set) + " descriptor (binding " + std::to_string(w.binding) + ")";
             return false;
@@ -109,6 +111,11 @@ private:
 
     bool buffer(const NmbDirectWrite &w, uint16_t offset, std::string &why)
     {
+        if (w.source == NmbDirectTextureTable || w.source == NmbDirectSamplerTable) {
+            entries.push_back(
+                {offset, w.source == NmbDirectTextureTable ? KernelTextureTable : KernelSamplerTable, 0, 0});
+            return true;
+        }
         if (w.source != NmbDirectBuffer && w.source != NmbDirectBytes) {
             why = "a set-0 buffer m2v binds itself at " + std::to_string(offset) + " (source " +
                   std::to_string(w.source) + ")";
@@ -215,11 +222,46 @@ CompileOutcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled 
     return CompileOutcome::Made;
 }
 
+// The kernel's reads through argument buffers a dispatch takes of the device (raw_heap_tables.h): its address words, the
+// buffer slots its root table holds, its set-1 heap arrays in NVK's layout (raw_direct_heap.h's rules for a draw's)
+bool kernelArguments(const NmbDirectKernel &k, const DirectNvk &nvk, PackKernel &r, std::string &why)
+{
+    r.rootTableWord = k.rootTableWord;
+    r.statusWord = k.statusWord;
+    r.rootSlots = k.rootSlots;
+    if (r.rootSlots && !r.rootTableWord) {
+        why = "a root table's buffer slots in a kernel that reads no root table";
+        return false;
+    }
+    if (!k.set1)
+        return true;
+    if (k.heapArrays > kPackHeapArrays) {
+        why = "more set-1 heap arrays than a record holds";
+        return false;
+    }
+    for (uint32_t b = 0; b < k.heapArrays; b++) {
+        NvkSetBinding binding = {};
+        if (!k.heapClass[b]) {
+            why = "a set-1 heap array of a class the bridge cannot word";
+            return false;
+        }
+        if (!nvk::setLayoutBinding(nvk, k.set1, b, binding) || binding.stride != 4 ||
+            binding.arraySize != kPackHeapElements) {
+            why = "a set-1 heap array off the raw heap's 4-byte elements";
+            return false;
+        }
+        r.heap[b] = {k.heapClass[b], binding.offset};
+    }
+    r.heapArrays = uint8_t(k.heapArrays);
+    r.heapBytes = nvk::setLayoutSize(nvk, handle(k.device), k.set1);
+    return true;
+}
+
 // What sends a kernel's dispatch to no record
 bool recordable(const NmbDirectKernel &k, std::string &why)
 {
-    if (k.pushHoles)
-        why = std::to_string(k.pushHoles) + " push words m2v fills with addresses";
+    if (k.otherHoles)
+        why = std::to_string(k.otherHoles) + " push words m2v fills with addresses other than its root and status tables";
     else if (k.regions != 1)
         why = std::to_string(k.regions) + " Vulkan dispatches for one";
     else if (!k.movedSame ||
@@ -256,12 +298,15 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     attachResiduals(k, entries.entries);
     PackKernel &r = out.kernel;
     r.setBytes = k.set0 ? uint16_t(nvk::setLayoutSize(nvk, handle(k.device), k.set0)) : 0;
-    if (!nvk::computeQmd(nvk, handle(k.device), made.stage, r.setBytes, r.qmd)) {
+    if (!kernelArguments(k, nvk, r, why))
+        return CompileOutcome::Refused;
+    if (!nvk::computeQmd(nvk, handle(k.device), made.stage, r.setBytes, r.heapBytes, r.qmd)) {
         why = "a kernel reading a constant buffer the raw path does not bind";
         return CompileOutcome::Refused;
     }
     for (uint32_t c = 0; c < made.stage.cbufCount && c < 16; c++)
-        if (cbufKind(made.stage.cbufTypes[c]) == CbufSet && made.stage.cbufTypes[c] != CbufSet) {
+        if (cbufKind(made.stage.cbufTypes[c]) == CbufSet && made.stage.cbufTypes[c] != CbufSet &&
+            !(made.stage.cbufTypes[c] == kCbufHeapSet && r.heapArrays)) {
             why = "a kernel reading a descriptor set past set 0";
             return CompileOutcome::Refused;
         }

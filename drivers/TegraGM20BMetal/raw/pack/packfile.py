@@ -29,6 +29,8 @@ ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: eve
 # (heapClass, offset) pairs
 PIPELINE_V19 = struct.Struct('<2B2B2IB3xI16I')
 HEAP_ARRAYS = 8
+# PackKernel's v19 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs
+KERNEL_V19 = struct.Struct('<4B2I16I')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -259,12 +261,25 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
         words[w] = v
     entries = b''.join(struct.pack('<HBBI', e['off'], e['kind'], e['slot'], kernel_window(e)) for e in k['entries'])
     entries += bytes(8 * (KERNEL_ENTRIES - len(k['entries'])))
+    heap = k.get('heap', [])
+    pairs = [word for array in heap for word in (array['class'], array['offset'])]
+    arguments = KERNEL_V19.pack(
+        k.get('root_table_word', 0),
+        k.get('status_word', 0),
+        len(heap),
+        0,
+        k.get('root_slots', 0),
+        k.get('heap_bytes', 0),
+        *pairs,
+        *[0] * (2 * HEAP_ARRAYS - len(pairs)),
+    )
     return (
         struct.pack('<QIIBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
         + struct.pack('<64I', *k['qmd'])
         + struct.pack('<HHI', k['set_bytes'], k.get('read_only_entries', 0), mask)
         + struct.pack('<32I', *words)
         + entries
+        + arguments
     )
 
 

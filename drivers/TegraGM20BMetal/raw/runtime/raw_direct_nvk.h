@@ -136,10 +136,11 @@ inline bool samplerHeader(const DirectNvk &n, void *device, uint64_t sampler, ui
     return reinterpret_cast<bool (*)(void *, void *, uint32_t *)>(n.samplerHeader)(device, handle(sampler), header);
 }
 
-inline bool computeQmd(const DirectNvk &n, void *device, const NvkStage &stage, uint32_t setBytes, uint32_t *qmd)
+inline bool computeQmd(const DirectNvk &n, void *device, const NvkStage &stage, uint32_t setBytes, uint32_t heapBytes,
+                       uint32_t *qmd)
 {
-    return reinterpret_cast<bool (*)(void *, const NvkStage *, uint32_t, uint32_t *)>(n.computeQmd)(device, &stage,
-                                                                                                    setBytes, qmd);
+    return reinterpret_cast<bool (*)(void *, const NvkStage *, uint32_t, uint32_t, uint32_t *)>(n.computeQmd)(
+        device, &stage, setBytes, heapBytes, qmd);
 }
 
 inline bool viewHeaderWord0(const DirectNvk &n, void *device, uint32_t format, const NvkComponents &components,

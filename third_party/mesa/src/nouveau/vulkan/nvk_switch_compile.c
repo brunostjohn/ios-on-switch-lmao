@@ -292,7 +292,7 @@ switch_nvk_buffer_descriptor_size(VkDevice _device, VkDescriptorType type,
 static bool
 compute_cbufs(const struct nvk_physical_device *pdev,
               const struct nvk_shader *shader, uint32_t set_bytes,
-              struct nak_qmd_info *info)
+              uint32_t heap_bytes, struct nak_qmd_info *info)
 {
    const uint32_t align_B = nvk_min_cbuf_alignment(&pdev->info);
    for (uint32_t c = 0; c < shader->cbuf_map.cbuf_count; c++) {
@@ -309,9 +309,9 @@ compute_cbufs(const struct nvk_physical_device *pdev,
          size_B = shader->data_size;
          break;
       case NVK_CBUF_TYPE_DESC_SET:
-         if (cbuf->desc_set != 0)
+         if (cbuf->desc_set > 1 || (cbuf->desc_set == 1 && !heap_bytes))
             return false;
-         size_B = set_bytes;
+         size_B = cbuf->desc_set ? heap_bytes : set_bytes;
          break;
       default:
          return false;
@@ -327,13 +327,14 @@ compute_cbufs(const struct nvk_physical_device *pdev,
 }
 
 /* The QMD NVK fills for a dispatch of a compute stage switch_nvk_compile_stage
- * made, with set 0 of set_bytes, its program at 0, no grid and its constant
- * buffers at 0. False where the stage reads a constant buffer other than the
- * root table, set 0 and its shader data.
+ * made, with set 0 of set_bytes and set 1 (argument buffers' heap arrays) of
+ * heap_bytes, its program at 0, no grid and its constant buffers at 0. False
+ * where the stage reads a constant buffer other than the root table, those sets
+ * and its shader data.
  */
 SWITCH_EXPORT bool
 switch_nvk_compute_qmd(VkDevice _device, const struct switch_nvk_stage *stage,
-                       uint32_t set_bytes, uint32_t qmd[64])
+                       uint32_t set_bytes, uint32_t heap_bytes, uint32_t qmd[64])
 {
    VK_FROM_HANDLE(nvk_device, dev, _device);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
@@ -348,7 +349,7 @@ switch_nvk_compute_qmd(VkDevice _device, const struct switch_nvk_stage *stage,
    struct nak_qmd_info info = {
       .smem_size = shader->info.cs.smem_size,
    };
-   if (!compute_cbufs(pdev, shader, set_bytes, &info))
+   if (!compute_cbufs(pdev, shader, set_bytes, heap_bytes, &info))
       return false;
    uint32_t words[NAK_MAX_QMD_DWORDS] = { 0 };
    nak_fill_qmd(&pdev->info, &shader->info, &info, words, qmd_size_B);

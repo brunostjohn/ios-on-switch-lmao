@@ -158,13 +158,14 @@ bool switch_nvk_immutable_sampler_header(VkDevice device,
 bool switch_nvk_sampler_header(VkDevice device, VkSampler sampler,
                                uint32_t header[8]);
 /* The QMD NVK fills for a dispatch of compute `stage` with set 0 of
- * `set_bytes`, its program offset, grid and constant buffer addresses 0;
- * false where the stage reads another constant buffer than the root table,
- * set 0 and its shader data
+ * `set_bytes` and set 1 of `heap_bytes`, its program offset, grid and constant
+ * buffer addresses 0; false where the stage reads another constant buffer than
+ * the root table, those sets and its shader data
  */
 bool switch_nvk_compute_qmd(VkDevice device,
                             const struct switch_nvk_stage *stage,
-                            uint32_t set_bytes, uint32_t qmd[64]);
+                            uint32_t set_bytes, uint32_t heap_bytes,
+                            uint32_t qmd[64]);
 /* Word 0 of the texture header of a view of `format` with `components`, as
  * a sampled or storage image (format and swizzle alone)
  */

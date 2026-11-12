@@ -152,3 +152,16 @@ fragment float4 argument_nested_fragment(float4 position [[position]], constant 
     constexpr sampler nearest(filter::nearest);
     return position.x < 1.0 ? arguments.inner->texture.sample(nearest, float2(0.5)) : *arguments.inner->colour;
 }
+
+/// A kernel reading through an argument buffer (metal.native.argument_encoder): word 0 of its output the colour behind the
+/// argument buffer's pointer, word 1 texel (0, 0) of its texture
+struct KernelArguments {
+    texture2d<float> texture [[id(0)]];
+    constant float4 *colour [[id(1)]];
+};
+
+kernel void argument_kernel(constant KernelArguments &arguments [[buffer(0)]], device float4 *out [[buffer(1)]])
+{
+    out[0] = *arguments.colour;
+    out[1] = arguments.texture.read(uint2(0, 0));
+}

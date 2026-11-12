@@ -94,6 +94,7 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
         let draws: [(String, (GPU) async throws -> String)] = [
             ("draw_path", drawThroughArguments), ("texture_draw_path", drawTexturesThroughArguments),
             ("array_draw_path", drawArraysThroughArguments), ("slot_draw_path", drawSlotThroughArguments),
+            ("kernel_path", dispatchThroughArguments),
         ]
         for (key, draw) in draws {
             var path = "error"

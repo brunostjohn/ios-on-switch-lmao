@@ -817,18 +817,18 @@ void Device::tablesWritten()
 }
 
 // lock_ held: the set 1 of a record's arrays, shared by every record of the same arrays
-const HeapSet *Device::heapSet(const PackPipeline &rec)
+const HeapSet *Device::heapSet(const HeapLayout &layout)
 {
     if (!heapMemory())
         return nullptr;
-    if (const HeapSet *set = heapTables_.find(rec))
+    if (const HeapSet *set = heapTables_.find(layout))
         return set;
     Bo bo;
-    if (!rec.heapBytes || !k_.allocControl(rec.heapBytes, bo, ControlUse::HandleTables))
+    if (!layout.bytes || !k_.allocControl(layout.bytes, bo, ControlUse::HandleTables))
         return nullptr;
     heapSets_.push_back(bo);
     set_.add(k_, bo, TegraGM20BSurfaceRead);
-    const HeapSet *set = heapTables_.add(rec, {bo.cpu, bo.va, bo.bytes});
+    const HeapSet *set = heapTables_.add(layout, {bo.cpu, bo.va, bo.bytes});
     tablesWritten();
     return set;
 }
@@ -918,8 +918,23 @@ void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
         address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
         address(pp.statusWord[k], heapTables_.statusVa());
     }
-    if (pp.heapArrays && !(pl.heapSet = heapSet(pp)))
+    if (pp.heapArrays && !(pl.heapSet = heapSet(heapLayout(pp))))
         pl.heapMissing = true;
+}
+
+        return;
+    }
+    const auto address = [&](uint8_t word, uint64_t va) {
+        if (!word || word > 31)
+            return;
+        c.argumentPush[word - 1] = uint32_t(va);
+        c.argumentPush[word] = uint32_t(va >> 32);
+        c.argumentMask |= 3u << (word - 1);
+    };
+    address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
+    address(k.statusWord, heapTables_.statusVa());
+    if (k.heapArrays && !(c.heapSet = heapSet(heapLayout(k))))
+        c.heapMissing = true;
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers

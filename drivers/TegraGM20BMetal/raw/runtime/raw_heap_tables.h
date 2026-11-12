@@ -114,16 +114,32 @@ struct HeapMemory {
     uint64_t va = 0, bytes = 0;
 };
 
+// A record's set-1 layout: a state's (PackPipeline) or a kernel's (PackKernel)
+struct HeapLayout {
+    uint8_t arrays = 0;
+    const PackHeapArray *array = nullptr;
+    uint32_t bytes = 0;
+};
+
+inline HeapLayout heapLayout(const PackPipeline &p)
+{
+    return {p.heapArrays, p.heap, p.heapBytes};
+}
+
+inline HeapLayout heapLayout(const PackKernel &k)
+{
+    return {k.heapArrays, k.heap, k.heapBytes};
+}
+
 // One record's set 1, shared by every record of the same arrays
 struct HeapSet {
     uint8_t arrays = 0;
     PackHeapArray array[kPackHeapArrays] = {};
     HeapMemory memory;
 
-    bool of(const PackPipeline &rec) const
+    bool of(const HeapLayout &l) const
     {
-        return rec.heapArrays == arrays && rec.heapBytes <= memory.bytes &&
-               !memcmp(rec.heap, array, sizeof(PackHeapArray) * arrays);
+        return l.arrays == arrays && l.bytes <= memory.bytes && !memcmp(l.array, array, sizeof(PackHeapArray) * arrays);
     }
 };
 
@@ -230,20 +246,20 @@ public:
             writeSampler(*set, tsc);
     }
 
-    const HeapSet *find(const PackPipeline &rec) const
+    const HeapSet *find(const HeapLayout &l) const
     {
         for (const auto &set : sets_)
-            if (set->of(rec))
+            if (set->of(l))
                 return set.get();
         return nullptr;
     }
 
-    // `rec`'s set in `memory` (rec.heapBytes of it), its elements those of every texture and sampler named so far
-    const HeapSet *add(const PackPipeline &rec, HeapMemory memory)
+    // `l`'s set in `memory` (l.bytes of it), its elements those of every texture and sampler named so far
+    const HeapSet *add(const HeapLayout &l, HeapMemory memory)
     {
         auto set = std::make_unique<HeapSet>();
-        set->arrays = std::min<uint8_t>(rec.heapArrays, kPackHeapArrays);
-        memcpy(set->array, rec.heap, sizeof set->array);
+        set->arrays = std::min<uint8_t>(l.arrays, kPackHeapArrays);
+        memcpy(set->array, l.array, sizeof(PackHeapArray) * set->arrays);
         set->memory = memory;
         memset(memory.cpu, 0, memory.bytes);
         for (uint32_t i = 1; i < textures_.size(); i++)

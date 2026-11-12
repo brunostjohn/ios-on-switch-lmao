@@ -5,7 +5,9 @@
 //! compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
 
 use crate::compute_artifact::NmbComputeArtifact;
-use crate::direct::{Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of};
+use crate::direct::{
+    HEAP_ARRAYS, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of,
+};
 use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
     sampler_descriptor,
@@ -14,11 +16,15 @@ use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, Dispatch, DispatchCommands, FieldLocation,
-    ImageSource, NeutralResource, SamplerSource, StageTable, TextureFacts, UseTarget, WriteSource,
+    ImageSource, NeutralResource, PushHole, SamplerSource, StageTable, TextureFacts, UseTarget, WriteSource,
+    heap_class_code,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, NativePipeline, NativeProgram, NativeRecord, PushField, SlotClass, Stage, StageSource};
+use metal2vulkan::pipeline::{
+    BindingSource, ComputePipeline, ComputePipelineDescriptor, NativePipeline, NativeProgram, NativeRecord,
+    PipelineLayout, PushField, SlotClass, Stage, StageSource,
+};
 use std::ffi::{CString, c_void};
 use std::sync::Arc;
 
@@ -88,6 +94,72 @@ pub struct NmbDirectKernel {
     pub buffer_writes: u32,
     pub texture_reads: u32,
     pub texture_writes: u32,
+    pub root_table_word: u8,
+    pub status_word: u8,
+    pub other_holes: u32,
+    pub root_slots: u32,
+    pub set1: u64,
+    pub heap_arrays: u32,
+    pub heap_class: [u32; HEAP_ARRAYS],
+}
+
+/// The kernel's reads through argument buffers the raw path fills (NativeMetalDirect.rs holes_of and heap_of for a draw): its
+/// root-table and ExecutionStatus address holes (push word + 1), the others counted, the buffer slots its root table holds
+/// an entry for as the bound dispatch names them, and its set 1's heap arrays
+fn arguments_of(commands: &DispatchCommands, bound: &DispatchCommands, layout: &PipelineLayout, sets: &Layout<'_>,
+                kernel: &mut NmbDirectKernel) -> Result<(), String> {
+    for hole in &commands.push_holes {
+        let (word, offset) = match *hole {
+            PushHole::RootTableAddress { offset, .. } => (&mut kernel.root_table_word, offset),
+            PushHole::ExecutionStatusAddress { offset, .. } => (&mut kernel.status_word, offset),
+            _ => {
+                kernel.other_holes += 1;
+                continue;
+            }
+        };
+        if offset % 4 != 0 || offset > 128 - 8 {
+            return Err("an address push hole outside the root push window".into());
+        }
+        let encoded = (offset / 4 + 1) as u8;
+        if *word != 0 && *word != encoded {
+            return Err("the kernel's address push hole at two places".into());
+        }
+        *word = encoded;
+    }
+    if let Some(table) = &bound.root_table {
+        let field = |root: usize, at: usize| {
+            table
+                .bytes
+                .get(32 * root + at..32 * root + at + 8)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0, u64::from_le_bytes)
+        };
+        let first = (field(1, 8) as usize).min(table.bytes.len() / 32);
+        for root in 2..first {
+            if field(root, 0) == 0 {
+                continue;
+            }
+            if root - 2 >= 31 {
+                return Err("a root table entry past the buffer slots".into());
+            }
+            kernel.root_slots |= 1 << (root - 2);
+        }
+    }
+    let Some((at, set)) = layout.sets.iter().enumerate().find(|(_, s)| s.set == 1) else {
+        return Ok(());
+    };
+    kernel.set1 = sets.set_at(at);
+    kernel.heap_arrays = set.bindings.len() as u32;
+    for b in &set.bindings {
+        let code = match &b.source {
+            BindingSource::Heap(class) => heap_class_code(class).unwrap_or(0),
+            _ => 0,
+        };
+        if let Some(slot) = kernel.heap_class.get_mut(b.binding as usize) {
+            *slot = code;
+        }
+    }
+    Ok(())
 }
 
 fn access_masks(plans: [&BindingPlan; 3]) -> [u32; 4] {
@@ -562,7 +634,7 @@ fn direct(
     // InlineBytes have no buffer hazard entries; the moved and bound plans expose those accesses.
     let [buffer_reads, buffer_writes, texture_reads, texture_writes] =
         access_masks([&plain.plan, &moved.plan, &bound.plan]);
-    let kernel = NmbDirectKernel {
+    let mut kernel = NmbDirectKernel {
         device: avk::Handle::as_raw(handles.device.handle()),
         layout: avk::Handle::as_raw(layout.pipeline),
         set0: layout.set0(),
@@ -600,7 +672,15 @@ fn direct(
         buffer_writes,
         texture_reads,
         texture_writes,
+        root_table_word: 0,
+        status_word: 0,
+        other_holes: 0,
+        root_slots: 0,
+        set1: 0,
+        heap_arrays: 0,
+        heap_class: [0; HEAP_ARRAYS],
     };
+    arguments_of(&plain.commands, &bound.commands, &plain.pipeline.layout, &layout, &mut kernel)?;
     // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
     Ok(unsafe { each(&kernel, ctx) })
 }

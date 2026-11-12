@@ -181,6 +181,13 @@ typedef struct NmbDirectKernel {
     uint32_t pushHoles;  // push words the consumer fills with addresses
     const char *variant;
     uint32_t bufferReads, bufferWrites, textureReads, textureWrites;
+    // Its reads through argument buffers, as NmbDirectDraw's for the kernel stage: the push word + 1 of its root table's
+    // address and of its ExecutionStatus buffer's (0: none), the other holes, the buffer slots its root table holds, its
+    // set 1 (a VkDescriptorSetLayout, 0: none) and each array's class (switch_nmb_heap_holds' words)
+    uint8_t rootTableWord, statusWord;
+    uint32_t otherHoles, rootSlots;
+    uint64_t set1;
+    uint32_t heapArrays, heapClass[8];
 } NmbDirectKernel;
 
 // `descriptor`'s compute state as the translator makes it for a dispatch of `dispatch`'s threadgroup shape and bindings, handed
