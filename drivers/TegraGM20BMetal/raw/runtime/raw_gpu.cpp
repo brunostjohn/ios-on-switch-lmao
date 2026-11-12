@@ -106,7 +106,6 @@ enum : uint32_t {
     CT_WRITE = NVB197_SET_CT_WRITE(0),
     VERTEX_STREAM_FORMAT = NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
     kStreamMethods = NVB197_SET_VERTEX_STREAM_A_FORMAT(1) - NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
-    kStreamStrideMask = 0xfff,  // NVB197_SET_VERTEX_STREAM_A_FORMAT_STRIDE 11:0
     CB_SELECTOR_A = NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
     LOAD_CB_OFFSET = NVB197_LOAD_CONSTANT_BUFFER_OFFSET,
     LOAD_CB = NVB197_LOAD_CONSTANT_BUFFER(0),
@@ -933,7 +932,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             writes[(m - CT_WRITE) / 4] = v;
         if (m >= VERTEX_STREAM_FORMAT && m < VERTEX_STREAM_FORMAT + kStreamMethods * kPackVertexStreams &&
             (m - VERTEX_STREAM_FORMAT) % kStreamMethods == 0)
-            pl.streamStride[(m - VERTEX_STREAM_FORMAT) / kStreamMethods] = uint16_t(v & kStreamStrideMask);
+            pl.streamStride[(m - VERTEX_STREAM_FORMAT) / kStreamMethods] =
+                uint16_t(NVVAL_GET(v, NVB197, SET_VERTEX_STREAM_A_FORMAT, STRIDE));
         if (m == PIXEL_SHADER_INTERLOCK_CONTROL) {
             interlockControl = v;
             continue;
