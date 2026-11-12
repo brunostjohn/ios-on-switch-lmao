@@ -90,12 +90,14 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
 }
 
 // A fetching draw whose state has a fetch-free form of rung `rung` (2 or 3) takes it whatever its rule; 4 keeps every draw
-// on the storage form; 0 gives the decision back to the rules (raw_fetch_free.h), for HW Test gpu.raw.fetch_rung2/3
+// on the storage form; 5 and 6 draw a blended storage form's barrier twin, a barrier a triangle or one a draw
+// (raw_fetch_rungs.h); 0 gives the decision back to the rules (raw_fetch_free.h), for HW Test gpu.raw.fetch_rung2/3 and
+// gpu.raw.blend_twin
 - (NSString *)switchRawProbeFetchRung:(NSNumber *)rung
 {
     const unsigned value = rung.unsignedIntValue;
-    if (value && (value < 2 || value > 4))
-        return @"rung is 0, 2, 3 or 4";
+    if (value && (value < 2 || value > 6))
+        return @"rung is 0, 2, 3, 4, 5 or 6";
     gRM->raw->probeFetchRung.store(uint8_t(value), std::memory_order_release);
     return nil;
 }

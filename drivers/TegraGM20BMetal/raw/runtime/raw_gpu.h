@@ -415,6 +415,9 @@ struct Pipeline {
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
+    // a storage form that computes the pipeline's blend: its barrier form, placed in debug builds only and drawn only where
+    // the probe forces it (raw_fetch_rungs.h kProbeBlendTwinTriangles, kProbeBlendTwinWhole)
+    Pipeline *blendTwin = nullptr;
     // the same state's fetch-free form (raw_fetch_free.h), which a draw takes where its rung's rule holds; null where the
     // pack has none. On that form: the rung it draws on and the colour it blends
     Pipeline *fetchFree = nullptr;
@@ -1623,7 +1626,8 @@ public:
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
     std::atomic<bool> probeBooleanVisibility{false};
     // A fetching draw whose state has a fetch-free form of this rung takes it whatever its rule (2, 3), or keeps the storage
-    // form (4); 0: the rules decide (raw_fetch_free.h fetchFreeTaken)
+    // form (4); a blended storage form's barrier twin (5 a barrier a triangle, 6 one a draw: raw_fetch_rungs.h); 0: the
+    // rules decide (raw_fetch_free.h fetchFreeTaken)
     std::atomic<uint8_t> probeFetchRung{0};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
 #endif

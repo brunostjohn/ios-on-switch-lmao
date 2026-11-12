@@ -778,9 +778,10 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
-// the pipeline's blend has no barrier twin: its barrier form would leave the blend to the ROP after a fetch outside the
-// interlock, which keeps Metal's result only drawn a triangle at a time from the CPU. A pass it cannot view as its storage
+// the pipeline's blend has no barrier twin to fall back on: its barrier form leaves the blend to the ROP after a fetch
+// outside the interlock, which keeps Metal's result only drawn a triangle at a time. A pass it cannot view as its storage
 // images refuses its draws (RenderEncoder::prepare), as Metal fails a state drawn into attachments it was not made for.
+// Debug builds place that form as its blendTwin, which only the probe draws, to measure it against the storage form.
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     Pipeline *pl = placePipeline(keyHash, form, caTransform);
@@ -790,12 +791,16 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         if (free && free != pl && free->freeForm.rung != FetchNone)
             pl->fetchFree = free;
     }
-    if (form != PackForm::Default || !pl || !pl->storageBits || pl->storageBlendBits)
+    if (form != PackForm::Default || !pl || !pl->storageBits)
         return pl;
+#if defined(SWITCH_DEBUG) && !SWITCH_DEBUG
+    if (pl->storageBlendBits)
+        return pl;
+#endif
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
     std::lock_guard<std::mutex> l(lock_);
     if (twin && twin != pl && !twin->storageBits)
-        pl->barrierTwin = twin;
+        (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
     return pl;
 }
 
@@ -4171,6 +4176,10 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinWhole)
+        return &runs;
+#endif
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, shape); refusal != FetchRefusal::None)
         return refuseFetch(pl, refusal, primitive, count, instances, why);
     return sequentialRuns(pl, shape, runs, why);
@@ -4245,6 +4254,14 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 
 Pipeline *RenderEncoder::formFor(Pipeline *pl)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (const uint8_t forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
+        pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
+        if (Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin) {
+            dev_->stats.fetch.blendTwin++;
+            return twin;
+        }
+#endif
     if (pl)
         if (Pipeline *free = fetchFreeFor(*pl))
             return free;
