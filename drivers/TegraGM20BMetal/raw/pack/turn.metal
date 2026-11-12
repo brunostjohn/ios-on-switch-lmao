@@ -84,3 +84,81 @@ fragment Depth turn_depth32fs8_frag(Out in [[stage_in]], depth2d<float, access::
 {
     return {s.read(source(in.position, m))};
 }
+
+// A masked turn copy: a destination texel whose frame tile, (ax x + ay y + cx, bx x + by y + cy) / 32, no draw reaches (0 in the
+// mask, raw/runtime/raw_reach.h), or that lies in no tile of it, is kept
+struct Tiles {
+    int ax, ay, cx, bx, by, cy;
+    int tilesX, tilesY;
+};
+
+struct Masked {
+    Map map;
+    Tiles tiles;
+};
+
+static uint2 reached(float4 position, constant Masked &m, texture2d<uint, access::read> mask)
+{
+    const int2 d = int2(position.xy);
+    const constant Tiles &t = m.tiles;
+    const int2 f = int2(t.ax * d.x + t.ay * d.y + t.cx, t.bx * d.x + t.by * d.y + t.cy);
+    if (f.x < 0 || f.y < 0)
+        discard_fragment();
+    const int2 tile = f / 32;
+    if (tile.x >= t.tilesX || tile.y >= t.tilesY || mask.read(uint2(tile)).x == 0)
+        discard_fragment();
+    return source(position, m.map);
+}
+
+fragment uint4 turn_masked8_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                 texture2d<uint, access::read> mask [[texture(1)]], constant Masked &m [[buffer(0)]])
+{
+    return s.read(reached(in.position, m, mask));
+}
+
+fragment uint4 turn_masked16_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                  texture2d<uint, access::read> mask [[texture(1)]], constant Masked &m [[buffer(0)]])
+{
+    return s.read(reached(in.position, m, mask));
+}
+
+fragment uint4 turn_masked32_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                  texture2d<uint, access::read> mask [[texture(1)]], constant Masked &m [[buffer(0)]])
+{
+    return s.read(reached(in.position, m, mask));
+}
+
+fragment uint4 turn_masked64_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                  texture2d<uint, access::read> mask [[texture(1)]], constant Masked &m [[buffer(0)]])
+{
+    return s.read(reached(in.position, m, mask));
+}
+
+fragment uint4 turn_masked128_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                   texture2d<uint, access::read> mask [[texture(1)]], constant Masked &m [[buffer(0)]])
+{
+    return s.read(reached(in.position, m, mask));
+}
+
+// The reach pass's pixel program (raw/runtime/raw_reach.h): it reads no input, so any draw's vertex program feeds it
+fragment uint4 turn_reach_frag()
+{
+    return uint4(1);
+}
+
+struct Image {
+    uint width, height, perTile;
+};
+
+// A reach image of `perTile` x `perTile` texels a tile reduced to its tiles: 1 where a texel of the tile is
+fragment uint4 turn_reach_reduce_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
+                                      constant Image &f [[buffer(0)]])
+{
+    const uint2 first = uint2(in.position.xy) * f.perTile, end = min(first + f.perTile, uint2(f.width, f.height));
+    for (uint y = first.y; y < end.y; y++)
+        for (uint x = first.x; x < end.x; x++)
+            if (s.read(uint2(x, y)).x)
+                return uint4(1);
+    discard_fragment();
+    return uint4(0);
+}

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
+#import "RawMetalReach.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
 #include <array>
@@ -634,9 +635,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (standInPass(t, false))
                     return false;
             standInLoads.clear();
-            bool draws = false;
-            for (size_t i = at + 1; i < to && !draws && cb->_plan.operation(i).op != OpEnd; i++)
-                draws = isPlanDraw(cb->_plan.operation(i).op);
+            PlanDraws draws(cb, at, to, *rc);
             if (!turned.begin(*rc, p, draws, why))
                 return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))

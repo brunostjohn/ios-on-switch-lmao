@@ -9,7 +9,8 @@
 
 namespace raw {
 
-bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why)
+bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
+                             const TurnMask *mask)
 {
     static const DepthStencilState depthWrites = [] {
         DepthStencilDesc desc;
@@ -19,7 +20,10 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
     }();
     const bool copies = !dst.zeta || zetaHasDepth(dst.format), stencil = dst.zeta && zetaHasStencil(dst.format);
     const uint32_t format = dst.zeta ? dst.format : turnCopyFormat(dst.bpp);
-    const char *state = !copies ? nullptr : dst.zeta ? turnDepthState(dst.format) : turnCopyState(dst.bpp);
+    const char *state = !copies    ? nullptr
+                        : dst.zeta ? (mask ? nullptr : turnDepthState(dst.format))
+                        : mask     ? turnMaskedState(dst.bpp)
+                                   : turnCopyState(dst.bpp);
     const FormatInfo *f = dst.zeta ? nullptr : formatInfo(format);
     Pipeline *pl = state ? dev_->pipeline(Pack::fnv(state, strlen(state))) : nullptr;
     if ((copies && !pl) || (!dst.zeta && !f) || src.bpp != dst.bpp || src.zeta != dst.zeta ||
@@ -61,7 +65,13 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         if (dst.zeta)
             e->setDepthStencil(&depthWrites);
         e->setTexture(0, &source);
-        e->setBytes(2, 0, &bounded, sizeof bounded);
+        if (mask) {
+            const MaskedTurnMap masked{bounded, mask->tiles};
+            e->setTexture(1, mask->mask);
+            e->setBytes(2, 0, &masked, sizeof masked);
+        } else {
+            e->setBytes(2, 0, &bounded, sizeof bounded);
+        }
         if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
             return false;
     }
