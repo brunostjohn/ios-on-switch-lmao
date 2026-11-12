@@ -508,6 +508,43 @@ TEST_P(Call, NothingIsArmedAtIdle)
 		  0u);
 }
 
+// After the keeping job's pass cancelled the call, an interrupt pass costs one load: no simple lock, no tgm_live_lock.
+// A keep takes the ring's simple lock alone, never tgm_live_lock, until a reader parks again.
+TEST_P(Call, ACancelledCallCostsALoadAtEachPassAndNoLiveLockAtAKeep)
+{
+	readerSubmits();
+	makerKeeps(0);
+	makerReleases();
+	ASSERT_EQ(fake::call.cancelled, 1u);
+	const unsigned saves = interrupts_off::saves, takes = tgm_live_takes;
+	for (int i = 0; i < 50; ++i)
+		pass();
+	EXPECT_EQ(interrupts_off::saves - saves, 50u)
+		<< "the test's own interrupts-off pass, nothing inside it";
+	for (int i = 0; i < 5; ++i) {
+		const switch_gpu_backing_token job = {maker.submitted, 1, SWITCH_GPU_ENGINE_GM20B,
+						      uint32_t(maker.id)};
+		tgm_promise_kept(kOffset + 4, kValue + uint32_t(i), &maker, &job);
+	}
+	EXPECT_EQ(interrupts_off::saves - saves, 55u) << "each keep's ring under the simple lock";
+	EXPECT_EQ(tgm_live_takes, takes);
+	EXPECT_EQ(fake::call.ran, 0u);
+}
+
+// A direct present's promise whose word moved unheard is handed to it by whichever drop finds it, here the sweep of the
+// next park.
+TEST_P(Call, EveryDropOfAMovedWordTheDirectPresentWaitsOnHandsItOver)
+{
+	ASSERT_EQ(tgm_promise_park(kOffset, kValue, "the display", "a direct present", nullptr, 1),
+		  1);
+	fake::pool[kOffset / 4] = kValue;
+	fake::pool[(kOffset + 4) / 4] = kValue - 1;
+	tgm_fence_pages.made[0][(kOffset + 4) / 4 - TGM_FENCE_PROMISE_WORD] = kValue;
+	const switch_gpu_backing_token other = {kValue, 0, SWITCH_GPU_ENGINE_PROMISE, kOffset + 4};
+	tgm_chan_park_promises(&reader, &other, 1);
+	EXPECT_EQ(presentReleased, 1u);
+}
+
 // A promise kept before its reader parks is never waited on.
 TEST_P(Call, AWordAlreadyKeptArmsNothing)
 {

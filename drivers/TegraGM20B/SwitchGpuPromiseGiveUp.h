@@ -56,8 +56,9 @@ struct switch_gpu_giveups {
 	struct switch_gpu_giveup entry[SWITCH_GPU_GIVEUPS];
 	struct switch_gpu_giveup_kept kept[SWITCH_GPU_GIVEUP_KEPT];
 	uint32_t kept_next;
-	uint32_t used;     /* entries in use: the interrupt pass's look is one load while none is */
-	uint64_t armed_ns; /* when the call is due; 0: not armed (the call's simple lock) */
+	uint32_t used; /* entries in use */
+	uint64_t
+		armed_ns; /* when the call is due; 0: not armed (written under the call's simple lock) */
 };
 
 /* Where the promised job is (switch_gpu_giveup_ops.job_ahead) */
@@ -82,6 +83,8 @@ struct switch_gpu_giveup_ops {
 	void (*stepped)(uint32_t offset, uint32_t value, int step, void *entry);
 	/* the word moved while the direct present still waited on it: a job it never heard of kept it */
 	void (*moved)(uint32_t offset, uint32_t value);
+	/* the promised job keptPromises remembered while the call ran, taken into an entry that has none */
+	void (*recall)(struct switch_gpu_giveup *e);
 };
 
 /* The call's arming, under its simple lock */
@@ -104,6 +107,16 @@ static inline void switch_gpu_giveup_free(struct switch_gpu_giveups *g, struct s
 	__atomic_store_n(&e->offset, 0u, __ATOMIC_RELEASE);
 	__atomic_store_n(&e->ahead, (const volatile uint32_t *)0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g->used, g->used - 1, __ATOMIC_RELEASE);
+}
+
+/* An entry whose word moved: the direct present, when it still waits on it, hears that it did */
+static inline void switch_gpu_giveup_drop_moved(struct switch_gpu_giveups *g,
+						const struct switch_gpu_giveup_ops *ops,
+						struct switch_gpu_giveup *e)
+{
+	if (e->display)
+		ops->moved(e->offset, e->value);
+	switch_gpu_giveup_free(g, e);
 }
 
 static inline void switch_gpu_giveup_add(struct switch_gpu_giveup *e,
@@ -173,7 +186,7 @@ static inline int switch_gpu_giveup_park(struct switch_gpu_giveups *g,
 		e = &g->entry[i];
 		if (e->offset &&
 		    !switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner))
-			switch_gpu_giveup_free(g, e);
+			switch_gpu_giveup_drop_moved(g, ops, e);
 		if (e->offset == offset && e->value == value && e->owner == owner) {
 			switch_gpu_giveup_add(e, reader, display);
 			return i;
@@ -260,7 +273,7 @@ static inline uint64_t switch_gpu_giveup_next(struct switch_gpu_giveups *g,
 		if (!e->offset)
 			continue;
 		if (!switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner)) {
-			switch_gpu_giveup_free(g, e);
+			switch_gpu_giveup_drop_moved(g, ops, e);
 			continue;
 		}
 		if (!next || (int64_t)(e->due_ns - next) < 0)
@@ -325,11 +338,11 @@ static inline void switch_gpu_giveup_run(struct switch_gpu_giveups *g,
 		if (!e->offset)
 			continue;
 		if (!switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner)) {
-			if (e->display)
-				ops->moved(e->offset, e->value);
-			switch_gpu_giveup_free(g, e);
+			switch_gpu_giveup_drop_moved(g, ops, e);
 			continue;
 		}
+		if (!e->kept)
+			ops->recall(e);
 		if (!switch_gpu_giveup_waited(ops, e)) {
 			switch_gpu_giveup_free(g, e);
 			continue;
@@ -350,12 +363,12 @@ static inline void switch_gpu_giveup_arm_locked(struct switch_gpu_giveups *g,
 	if (!next) {
 		if (g->armed_ns)
 			call->cancel();
-		g->armed_ns = 0;
+		__atomic_store_n(&g->armed_ns, 0, __ATOMIC_RELEASE);
 		return;
 	}
 	if (g->armed_ns == next)
 		return;
-	g->armed_ns = next;
+	__atomic_store_n(&g->armed_ns, next, __ATOMIC_RELEASE);
 	call->after((int64_t)(next - now) > 0 ? next - now : 0);
 }
 
@@ -367,14 +380,15 @@ enum {
 	SWITCH_GPU_GIVEUP_PASS_CANCEL = 2, /* every word waited on moved: the call is cancelled */
 };
 
-/* The end of a GPU interrupt pass: plain loads, no lock. An entry being filled or dropped meanwhile is read again under
+/* The end of a GPU interrupt pass: plain loads, no lock, and one load while the call is not armed (nothing waited on,
+ * or the call running, which looks at every entry itself). An entry being filled or dropped meanwhile is read again under
  * the call's lock before a cancel, and its writer arms the call under that lock after it. */
 static inline int switch_gpu_giveup_pass(const struct switch_gpu_giveups *g,
 					 const struct switch_gpu_promise_fence *fence)
 {
 	int waited = 0;
 
-	if (!__atomic_load_n(&g->used, __ATOMIC_ACQUIRE))
+	if (!__atomic_load_n(&g->armed_ns, __ATOMIC_ACQUIRE))
 		return SWITCH_GPU_GIVEUP_PASS_NONE;
 	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
 		const struct switch_gpu_giveup *e = &g->entry[i];

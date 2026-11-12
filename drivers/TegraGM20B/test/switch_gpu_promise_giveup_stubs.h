@@ -119,13 +119,14 @@ struct spinlock_t {
 
 inline struct mutex tgm_live_lock;
 inline int tgm_live_locked = 0;
+inline unsigned tgm_live_takes = 0;
 
 inline void mutex_unlock(struct mutex *)
 {
 	--tgm_live_locked;
 }
 
-#define mutex_lock(m) (mutex_lock(m), ++tgm_live_locked)
+#define mutex_lock(m) (mutex_lock(m), ++tgm_live_takes, ++tgm_live_locked)
 
 inline volatile uint32_t *tgm_fence_word(uint32_t offset)
 {

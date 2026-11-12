@@ -131,9 +131,22 @@ static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entr
 	giveup_report(offset, value, e, nvxnu_nanotime() - e->parked_ns);
 }
 
+/* tgm_live_lock held */
+static void giveup_recall(struct switch_gpu_giveup *e)
+{
+	unsigned long flags;
+	int recalled = 0;
+
+	spin_lock_irqsave(&giveup_lock, flags);
+	recalled = switch_gpu_giveup_recall(&giveups, e);
+	spin_unlock_irqrestore(&giveup_lock, flags);
+	if (recalled)
+		giveup_need(e->job.uid, e->job_last);
+}
+
 static const struct switch_gpu_giveup_ops giveup_ops = {
-	&tgm_promise_fence, giveup_reader_parked, giveup_job_ahead,
-	giveup_need,        giveup_stepped,       tgm_present_promise_released};
+	&tgm_promise_fence, giveup_reader_parked,         giveup_job_ahead, giveup_need,
+	giveup_stepped,     tgm_present_promise_released, giveup_recall};
 
 static void giveup_after(uint64_t ns)
 {
@@ -165,7 +178,7 @@ static void giveup_run(void *unused)
 
 	(void)unused;
 	spin_lock_irqsave(&giveup_lock, flags);
-	giveups.armed_ns = 0;
+	__atomic_store_n(&giveups.armed_ns, 0, __ATOMIC_RELEASE);
 	spin_unlock_irqrestore(&giveup_lock, flags);
 	mutex_lock(&tgm_live_lock);
 	switch_gpu_giveup_run(&giveups, &giveup_ops, nvxnu_nanotime());
@@ -238,7 +251,8 @@ void tgm_promise_leave(uint32_t offset, uint32_t value, int display)
 }
 
 /* keptPromises: `job` (its channel's uid and its fence's seqno) keeps the promise; chan is that channel, which the
- * caller holds. Only a promise a reader is parked on takes tgm_live_lock. */
+ * caller holds. tgm_live_lock is taken only while the call is armed: a reader parked meanwhile, or while the call ran,
+ * recalls the job from the ring. */
 void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
 		      const struct switch_gpu_backing_token *job)
 {
@@ -251,7 +265,7 @@ void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
 	spin_lock_irqsave(&giveup_lock, flags);
 	switch_gpu_giveup_remember(&giveups, offset, value, &kept, (u32)job->value);
 	spin_unlock_irqrestore(&giveup_lock, flags);
-	if (!__atomic_load_n(&giveups.used, __ATOMIC_ACQUIRE))
+	if (!__atomic_load_n(&giveups.armed_ns, __ATOMIC_ACQUIRE))
 		return;
 	mutex_lock(&tgm_live_lock);
 	switch_gpu_giveup_kept(&giveups, &giveup_ops, offset, value, &kept, (u32)job->value);
