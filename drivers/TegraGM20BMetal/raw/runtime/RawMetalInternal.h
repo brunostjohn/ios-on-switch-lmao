@@ -463,6 +463,9 @@ void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &bi
 // from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 
+// RawMetalCommandBuffer.mm: the kept recordings past what steady frames take, given back
+void releaseRecordings();
+
 // RawMetalFinish.mm
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);

@@ -8,7 +8,8 @@
 // ---- the device's submission machinery ----
 
 // A finished command buffer's recording storage, kept for the next one (its capacity a frame's): Core Animation's steady frames
-// allocate none of it
+// allocate none of it. As many are kept as were live at once (an app that commits a batch before it waits records each into
+// kept storage), up to kKeptTotal bytes; gRawRelease gives back all but kKeptIdle.
 struct RMRecording {
     RMCommandPlan plan;
     std::vector<RMPass> passes;
@@ -18,10 +19,13 @@ struct RMRecording {
     std::vector<uint64_t> extra;
     std::vector<id> owners;
     raw::PointerMap<bool> ownerKeys;
+    size_t kept = 0;
 };
 
+static constexpr size_t kKeptTotal = 16 << 20, kKeptIdle = 4;
 static std::mutex gRecordingsLock;
 static std::vector<RMRecording> gRecordings;
+static size_t gRecordingBytes;
 
 static void takeRecording(RMCommandBuffer *b)
 {
@@ -37,6 +41,7 @@ static void takeRecording(RMCommandBuffer *b)
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
             std::swap(b->_ownerKeys, r.ownerKeys);
+            gRecordingBytes -= r.kept;
             gRecordings.pop_back();
             return;
         }
@@ -56,16 +61,17 @@ static void dropBytes(RMBytes &s)
 
 static void giveRecording(RMCommandBuffer *b)
 {
-    constexpr size_t kKept = 4,
-                     kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
+    constexpr size_t kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
     uint64_t bytes = 0;
     for (const raw::Buffer &k : b->_bytes.chunks)
         bytes += k.va ? k.length : kKeptBytes;  // (heap chunks are not kept)
-    if (bytes + b->_plan.storageBytes() + b->_extra.capacity() * 8 + b->_shadow.capacity() > kKeptBytes) {
+    bytes += b->_plan.storageBytes() + b->_extra.capacity() * 8 + b->_shadow.capacity();
+    if (bytes > kKeptBytes) {
         dropBytes(b->_bytes);
         return;
     }
     RMRecording r;
+    r.kept = bytes;
     std::swap(r.plan, b->_plan);
     r.passes.swap(b->_passes);
     std::swap(r.bytes, b->_bytes);
@@ -84,12 +90,28 @@ static void giveRecording(RMCommandBuffer *b)
     r.ownerKeys.clear();
     {
         std::lock_guard<std::mutex> l(gRecordingsLock);
-        if (gRecordings.size() < kKept) {
+        if (gRecordingBytes + bytes <= kKeptTotal) {
+            gRecordingBytes += bytes;
             gRecordings.push_back(std::move(r));
             return;
         }
     }
     dropBytes(r.bytes);
+}
+
+void releaseRecordings()
+{
+    std::vector<RMRecording> given;
+    {
+        std::lock_guard<std::mutex> l(gRecordingsLock);
+        while (gRecordings.size() > kKeptIdle) {
+            gRecordingBytes -= gRecordings.back().kept;
+            given.push_back(std::move(gRecordings.back()));
+            gRecordings.pop_back();
+        }
+    }
+    for (RMRecording &r : given)
+        dropBytes(r.bytes);
 }
 
 @implementation RMCommandBuffer

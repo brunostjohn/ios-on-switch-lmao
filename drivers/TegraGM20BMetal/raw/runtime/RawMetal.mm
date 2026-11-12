@@ -368,6 +368,7 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
             gRM->raw->trim();
             gRM->raw->purgeArenas(gRM->committed);
             gRM->raw->trimArenas(gRM->committed);
+            releaseRecordings();
             // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);

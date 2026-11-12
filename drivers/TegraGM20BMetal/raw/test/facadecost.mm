@@ -4,7 +4,8 @@
 // draw's vertices, transform and zero uniforms by setBytes with a scissor of its own, at 8 and 16 draws a pass) over the
 // m2v device the render server's facade wraps, on the mock GPU. Per command buffer: the facade's encode profile
 // (switchRawEncodeProfile, as the HW Test reads it), then on every thread the Objective-C messages, locks and allocations
-// the facade's image made (facadecount.c, preloaded) and the CPU time of the recording thread and of the others. A line
+// the facade's image made (facadecount.c, preloaded) and the CPU time of the recording thread and of the others, with
+// each command buffer released once it completes (facade) and with the batch held until all complete (held). A line
 // FAIL where a count grows with the draws.
 // usage: DYLD_INSERT_LIBRARIES=<libfacadecount.dylib> facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
@@ -274,15 +275,26 @@ int main(int argc, char **argv)
         // A batch ends when its last command buffer is destroyed, not when it completes: the completion thread
         // releases it (and frees what it owned) after waitUntilCompleted returns, which would land a varying part of
         // one command buffer's frees in the next window.
+        // A held batch keeps every command buffer until all complete, as an app that commits a batch before it waits
+        // (and HW Test gpu.path.encode_cost) does: each records while the others are still alive.
         static char goneKey;
-        auto batch = [&](unsigned draws, unsigned count) {
+        auto batch = [&](unsigned draws, unsigned count, bool hold) {
             id<MTLCommandBuffer> last = nil;
+            NSMutableArray<id<MTLCommandBuffer>> *held = [NSMutableArray arrayWithCapacity:count];
             for (unsigned i = 0; i < count; i++)
                 @autoreleasepool {
                     last = encode(draws);
+                    if (hold)
+                        [held addObject:last];
                 }
+            bool completed = true;
+            for (id<MTLCommandBuffer> b in held) {
+                [b waitUntilCompleted];
+                completed &= b.status == MTLCommandBufferStatusCompleted;
+            }
+            [held removeAllObjects];
             [last waitUntilCompleted];
-            const bool completed = last.status == MTLCommandBufferStatusCompleted;
+            completed &= last.status == MTLCommandBufferStatusCompleted;
             dispatch_semaphore_t gone = dispatch_semaphore_create(0);
             @autoreleasepool {
                 FacadeCostGone *sentinel = [FacadeCostGone new];
@@ -299,12 +311,12 @@ int main(int argc, char **argv)
         const unsigned arms[2] = {8, 16};
         std::map<std::string, double> counted[2];
         for (unsigned a = 0; a < 2; a++) {
-            if (!batch(arms[a], 8)) {
+            if (!batch(arms[a], 8, false)) {
                 fprintf(stderr, "a warm-up command buffer failed\n");
                 return 1;
             }
             NSDictionary<NSString *, NSNumber *> *before = profile(device);
-            failures += !batch(arms[a], buffers);
+            failures += !batch(arms[a], buffers, false);
             NSDictionary<NSString *, NSNumber *> *after = profile(device);
             const double encodes = after[@"encodes"].doubleValue - before[@"encodes"].doubleValue;
             const double mallocEncodes = after[@"malloc_encodes"].doubleValue - before[@"malloc_encodes"].doubleValue;
@@ -322,23 +334,29 @@ int main(int argc, char **argv)
             counted[a]["profile_mallocs"] = per(@"mallocs", mallocEncodes);
             counted[a]["profile_sends"] = per(@"sends", encodes);
 
-            facadecount c{};
-            uint64_t mine0, others0, mine1, others1;
-            cpuNs(mine0, others0);
-            start();
-            failures += !batch(arms[a], buffers);
-            stop(&c);
-            cpuNs(mine1, others1);
-            printf(
-                "facadecost d%u facade: sends %.2f locks %.2f mallocs %.2f frees %.2f | cpu us recording thread %.1f "
-                "others %.1f\n",
-                arms[a], double(c.sends) / buffers, double(c.locks) / buffers, double(c.mallocs) / buffers,
-                double(c.frees) / buffers, double(mine1 - mine0) / 1e3 / buffers,
-                double(others1 - others0) / 1e3 / buffers);
-            counted[a]["sends"] = double(c.sends) / buffers;
-            counted[a]["locks"] = double(c.locks) / buffers;
-            counted[a]["mallocs"] = double(c.mallocs) / buffers;
-            counted[a]["frees"] = double(c.frees) / buffers;
+            for (const bool hold : {false, true}) {
+                if (hold)
+                    failures += !batch(arms[a], buffers, true);
+                facadecount c{};
+                uint64_t mine0, others0, mine1, others1;
+                cpuNs(mine0, others0);
+                start();
+                failures += !batch(arms[a], buffers, hold);
+                stop(&c);
+                cpuNs(mine1, others1);
+                const char *shape = hold ? "held" : "facade";
+                printf(
+                    "facadecost d%u %s: sends %.2f locks %.2f mallocs %.2f frees %.2f | cpu us recording thread %.1f "
+                    "others %.1f\n",
+                    arms[a], shape, double(c.sends) / buffers, double(c.locks) / buffers, double(c.mallocs) / buffers,
+                    double(c.frees) / buffers, double(mine1 - mine0) / 1e3 / buffers,
+                    double(others1 - others0) / 1e3 / buffers);
+                const std::string prefix = hold ? "held " : "";
+                counted[a][prefix + "sends"] = double(c.sends) / buffers;
+                counted[a][prefix + "locks"] = double(c.locks) / buffers;
+                counted[a][prefix + "mallocs"] = double(c.mallocs) / buffers;
+                counted[a][prefix + "frees"] = double(c.frees) / buffers;
+            }
         }
         printSites(sites, buffers);
         for (const auto &[name, value] : counted[0]) {
