@@ -4,7 +4,8 @@
 // lowest free slot, and a slot's seqnos go on across the channels it holds, so a channel made again can land in a slot
 // whose fence is behind the old one. Jobs (SubmitAddress, SubmitJob) complete as they are submitted, or stay in flight
 // until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does, or with
-// a test's GPU (model_gpu.h) complete as it runs them, a WaitFence waiting for that. Memory a
+// a test's GPU (model_gpu.h) complete as it runs them, a WaitFence waiting for that. Each job keeps the words of its
+// pushes that lie in memory the model bound (VmBind), for a test to read the methods back. Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
 // (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
 // a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
@@ -43,6 +44,7 @@ struct Job {
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
     std::vector<TegraGM20BAbiPush> pushes;  // a SubmitJob's GP entries
+    std::vector<uint32_t> words;
 };
 
 struct Slot {
@@ -172,11 +174,25 @@ struct Model {
         return 0;
     }
 
+    // The words of `pushes` that lie whole in memory the model bound
+    std::vector<uint32_t> pushWords(const TegraGM20BAbiPush *pushes, uint32_t count)
+    {
+        std::vector<uint32_t> words;
+        for (uint32_t i = 0; i < count; i++) {
+            const uint8_t *first = host(pushes[i].va), *last = host(pushes[i].va + uint64_t(pushes[i].dwords) * 4 - 1);
+            if (first && last == first + uint64_t(pushes[i].dwords) * 4 - 1) {
+                const auto *w = reinterpret_cast<const uint32_t *>(first);
+                words.insert(words.end(), w, w + pushes[i].dwords);
+            }
+        }
+        return words;
+    }
+
     int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply)
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses), {}};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), {}, {}};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -206,6 +222,7 @@ struct Model {
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
         const int kr = run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        jobs.back().words = pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count);
         if (jobAdded)
             jobAdded();
         return kr;
@@ -277,6 +294,7 @@ struct Model {
         const int kr = run(*s, head->channel, std::move(uses), reply);
         const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
         jobs.back().pushes.assign(pushes, pushes + head->push_count);
+        jobs.back().words = pushWords(pushes, head->push_count);
         if (jobAdded)
             jobAdded();
         return kr;

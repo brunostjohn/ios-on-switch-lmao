@@ -94,12 +94,36 @@ struct NativePlanSink {
             __unsafe_unretained RMDepthStencil *depth = (__bridge RMDepthStencil *)next.depthStencil;
             render->setDepthStencil(depth ? &depth->_raw : nullptr);
         }
-        if (rasterChanged(next, previous, R::Scissor, &R::scissor))
-            render->setScissor(next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]);
-        if (rasterChanged(next, previous, R::Viewport, &R::viewport))
-            render->setViewport(raw::stateDouble(next.viewport[0]), raw::stateDouble(next.viewport[1]),
-                                raw::stateDouble(next.viewport[2]), raw::stateDouble(next.viewport[3]),
-                                raw::stateDouble(next.viewport[4]), raw::stateDouble(next.viewport[5]));
+        if (rasterChanged(next, previous, R::Scissor, &R::scissor) ||
+            rasterChanged(next, previous, R::Scissor, &R::scissors) ||
+            rasterChanged(next, previous, R::Scissor, &R::scissorsAt)) {
+            if (next.scissors > 1) {
+                uint32_t rects[raw::kMaxViewports][4];
+                const uint32_t count = std::min<uint32_t>(next.scissors, raw::kMaxViewports);
+                for (uint32_t j = 0; j < count; j++)
+                    for (uint32_t i = 0; i < 4; i++)
+                        rects[j][i] = uint32_t(cb->_plan.viewArrays[next.scissorsAt + 4 * j + i]);
+                render->setScissors(rects, count);
+            } else {
+                render->setScissor(next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]);
+            }
+        }
+        if (rasterChanged(next, previous, R::Viewport, &R::viewport) ||
+            rasterChanged(next, previous, R::Viewport, &R::viewports) ||
+            rasterChanged(next, previous, R::Viewport, &R::viewportsAt)) {
+            if (next.viewports > 1) {
+                double viewports[raw::kMaxViewports][6];
+                const uint32_t count = std::min<uint32_t>(next.viewports, raw::kMaxViewports);
+                for (uint32_t j = 0; j < count; j++)
+                    for (uint32_t i = 0; i < 6; i++)
+                        viewports[j][i] = raw::stateDouble(cb->_plan.viewArrays[next.viewportsAt + 6 * j + i]);
+                render->setViewports(viewports, count);
+            } else {
+                render->setViewport(raw::stateDouble(next.viewport[0]), raw::stateDouble(next.viewport[1]),
+                                    raw::stateDouble(next.viewport[2]), raw::stateDouble(next.viewport[3]),
+                                    raw::stateDouble(next.viewport[4]), raw::stateDouble(next.viewport[5]));
+            }
+        }
         if (rasterChanged(next, previous, R::Cull, &R::cull))
             render->setCullMode(uint8_t(next.cull));
         if (rasterChanged(next, previous, R::Winding, &R::winding))

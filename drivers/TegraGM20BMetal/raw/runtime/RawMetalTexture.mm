@@ -395,14 +395,18 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         noteSurfaceWrite(_surfaceWrites);
     if (transferTexture(self, r, level, slice, const_cast<void *>(bytes), row, image, true))
         return;
+    if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
+        cpuBlocks(self, r, level, slice, (uint8_t *)bytes, row, true);
+        return;
+    }
     TextureCpuAccess access(self, r, level, slice, true);
     if (!access.native()) {
         [(id<MTLTexture>)[self rmTwin] replaceRegion:r mipmapLevel:level slice:slice
                                          withBytes:bytes bytesPerRow:row bytesPerImage:image];
         return;
     }
-    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
-        cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
+    if (_rawOk && _raw.chain) {
+        cpuLevel(self, r, level, slice, (uint8_t *)bytes, row, image, true);
         return;
     }
     if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&
@@ -447,14 +451,18 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         return;
     if (transferTexture(self, r, level, slice, bytes, row, image, false))
         return;
+    if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
+        cpuBlocks(self, r, level, slice, (uint8_t *)bytes, row, false);
+        return;
+    }
     TextureCpuAccess access(self, r, level, slice, false);
     if (!access.native()) {
         [(id<MTLTexture>)[self rmTwin] getBytes:bytes bytesPerRow:row bytesPerImage:image
                                   fromRegion:r mipmapLevel:level slice:slice];
         return;
     }
-    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
-        cpuLevel(self, r, level, (uint8_t *)bytes, row, false);
+    if (_rawOk && _raw.chain) {
+        cpuLevel(self, r, level, slice, (uint8_t *)bytes, row, image, false);
         return;
     }
     if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&

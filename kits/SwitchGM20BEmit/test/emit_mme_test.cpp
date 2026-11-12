@@ -159,6 +159,11 @@ TEST(EmitMme, TheMacrosTakeNvksDrawSlots)
     EXPECT_EQ(SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, 16);
 }
 
+TEST(EmitMme, TheLayeredClearTakesNvksClearSlot)
+{
+    EXPECT_EQ(SWITCH_GM20B_MACRO_CLEAR_LAYERS, 2);
+}
+
 TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
 {
     const size_t words = count(switch_gm20b_macro_draw) + count(switch_gm20b_macro_draw_indexed) +

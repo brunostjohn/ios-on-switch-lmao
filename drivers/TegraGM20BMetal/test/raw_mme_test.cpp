@@ -157,6 +157,21 @@ TEST(RawMme, IndirectHeaderDeclaresExactlyTheMetalArgumentWords)
     }
 }
 
+TEST(RawMme, LayeredClearSurfacesEveryLayerFromTheBase)
+{
+    constexpr uint32_t kLayer = 1u << 10;  // CLEAR_SURFACE RT_ARRAY_INDEX's lowest bit
+    for (const uint32_t layers : {1u, 2u, 6u, 2048u}) {
+        const uint32_t payload = 0x3c | 2u << 6 | 3 | 5 * kLayer;
+        Simulation simulation;
+        simulation.runEncoded(raw::mme::kClearLayersProgram.words, raw::mme::kClearLayersProgram.size,
+                              {payload, layers});
+        std::vector<Method> want;
+        for (uint32_t i = 0; i < layers; i++)
+            want.emplace_back(uint16_t(NVB197_CLEAR_SURFACE), payload + i * kLayer);
+        EXPECT_EQ(simulation.methods, want) << layers;
+    }
+}
+
 TEST(RawMme, ContextReservationCoversEveryProgram)
 {
     std::array<uint32_t, raw::mme::kContextWords> words{};

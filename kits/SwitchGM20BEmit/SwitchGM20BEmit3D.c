@@ -29,9 +29,11 @@ void switch_gm20b_color_target(struct nv_push *p, uint32_t index, const struct s
         {
             .block_width = BLOCK_WIDTH_ONE_GOB,
             .block_height = t->pitch ? 0 : t->block_height_log2,
-            .block_depth = BLOCK_DEPTH_ONE_GOB,
+            .block_depth = t->pitch ? BLOCK_DEPTH_ONE_GOB : t->block_depth_log2,
             .layout = t->pitch ? LAYOUT_PITCH : LAYOUT_BLOCKLINEAR,
-            .third_dimension_control = THIRD_DIMENSION_CONTROL_THIRD_DIMENSION_DEFINES_ARRAY_SIZE,
+            .third_dimension_control = t->depth && !t->pitch
+                                           ? THIRD_DIMENSION_CONTROL_THIRD_DIMENSION_DEFINES_DEPTH_SIZE
+                                           : THIRD_DIMENSION_CONTROL_THIRD_DIMENSION_DEFINES_ARRAY_SIZE,
         });
     P_NVB197_SET_COLOR_TARGET_THIRD_DIMENSION(p, index, t->layers);
     P_NVB197_SET_COLOR_TARGET_ARRAY_PITCH(p, index, t->array_pitch);
@@ -116,17 +118,21 @@ void switch_gm20b_clear(struct nv_push *p, const struct switch_gm20b_clear_state
                .use_viewport_clip0 = USE_VIEWPORT_CLIP0_FALSE,
            });
     P_IMMD(p, NVB197, SET_RENDER_ENABLE_OVERRIDE, MODE_ALWAYS_RENDER);
-    P_IMMD(p, NVB197, CLEAR_SURFACE,
-           {
-               .z_enable = c->depth,
-               .stencil_enable = c->stencil,
-               .r_enable = R_ENABLE_TRUE,
-               .g_enable = G_ENABLE_TRUE,
-               .b_enable = B_ENABLE_TRUE,
-               .a_enable = A_ENABLE_TRUE,
-               .mrt_select = c->target,
-               .rt_array_index = 0,
-           });
+#define CLEAR_SURFACE_FIELDS                                                                                       \
+    {                                                                                                              \
+        .z_enable = c->depth, .stencil_enable = c->stencil, .r_enable = R_ENABLE_TRUE, .g_enable = G_ENABLE_TRUE,  \
+        .b_enable = B_ENABLE_TRUE, .a_enable = A_ENABLE_TRUE, .mrt_select = c->target, .rt_array_index = c->layer, \
+    }
+    if (c->layers > 1) {
+        uint32_t payload;
+        V_NVB197_CLEAR_SURFACE(payload, CLEAR_SURFACE_FIELDS);
+        P_1INC(p, NVB197, CALL_MME_MACRO(c->layer_macro));
+        P_INLINE_DATA(p, payload);
+        P_INLINE_DATA(p, c->layers);
+    } else {
+        P_IMMD(p, NVB197, CLEAR_SURFACE, CLEAR_SURFACE_FIELDS);
+    }
+#undef CLEAR_SURFACE_FIELDS
     P_IMMD(p, NVB197, SET_RENDER_ENABLE_OVERRIDE, MODE_USE_RENDER_ENABLE);
 }
 

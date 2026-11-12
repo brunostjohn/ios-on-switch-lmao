@@ -4,6 +4,7 @@
 // the one before on the raw path (one hardware pass, no barrier, every state at Metal's default again) and a pass of its
 // own in m2v's replay, which loads what the one before stored.
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include "RawMetalArguments.h"
@@ -24,11 +25,15 @@ inline uint8_t seamStore(uint8_t passStore, size_t at, size_t count)
     return at + 1 < count ? kStoreActionStore : passStore;
 }
 
-// The words of a command buffer's extra list a command reads from Cmd::x (its record: drops them once its plan has them)
-inline size_t extraWords(Op op)
+// The words of a command buffer's extra list a command reads from Cmd::x (its record: drops them once its plan has them):
+// setViewports:count:'s six a viewport, setScissorRects:count:'s four a rectangle past one (Cmd::index the count)
+inline size_t extraWords(const Cmd &c)
 {
-    switch (op) {
+    switch (c.op) {
     case OpViewport:
+        return 6 * std::max<size_t>(c.index, 1);
+    case OpScissor:
+        return c.index > 1 ? 4 * size_t(c.index) : 0;
     case OpDispatch:
         return 6;
     case OpBlendColor:
@@ -51,7 +56,7 @@ inline Cmd spliced(Cmd c, size_t passBase, size_t chunkBase, size_t extraAt)
         c.x += passBase;
     else if (c.op == OpBytes)
         c.c += chunkBase;
-    if (extraWords(c.op))
+    if (extraWords(c))
         c.x = extraAt;
     return c;
 }

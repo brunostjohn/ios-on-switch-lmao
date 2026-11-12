@@ -71,14 +71,9 @@ bool Device::createSurfaceImage(uint64_t surfaceId, void *base, uint64_t allocBy
         return true;
     }
     case SurfaceImage::Layers:
-        t.layerBytes = c.arrayStride;
-        t.layers = c.layers;
-        break;
     case SurfaceImage::Volume:
-        t.layerBytes = c.bytes;
-        t.depth = c.depth;
-        t.blockDepth = c.zLog2;
-        break;
+        layImage(c, f, image.type, t);
+        return true;
     case SurfaceImage::Samples:
         t.layerBytes = uint64_t(l0.rowBytes) * l0.rows;
         t.samples = c.samples;

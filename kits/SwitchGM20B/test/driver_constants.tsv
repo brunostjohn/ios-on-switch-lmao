@@ -71,6 +71,7 @@ raw_mme.h	kIcbDraw	policy	raw macro slot
 raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
 raw_mme.h	kIcbGate	policy	raw macro slot
 raw_mme.h	kIcbBind	policy	raw macro slot
+raw_mme.h	kClearLayers	policy	raw macro slot
 raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, above NVK's

@@ -171,25 +171,26 @@ bool volumeRendered(MTLTextureDescriptor *d)
     return d.usage == MTLTextureUsageUnknown || (d.usage & MTLTextureUsageRenderTarget);
 }
 
-// A 3D texture the raw path keeps (raw::Device::createVolume): one level, of a format it has a header for, not extended range,
-// memory of its own. One m2v would render into must be of a format the raw path renders too: m2v's twin is laid out for
-// rendering exactly where NVK renders the format.
+// A 3D texture the raw path keeps (raw::Device::createVolume): of a format it has a header for, not extended range, memory of
+// its own, mipmapped of a format it renders (as a 2D chain is). One m2v would render into must be of a format the raw path
+// renders too: m2v's twin is laid out for rendering exactly where NVK renders the format.
 bool volumeShape(MTLTextureDescriptor *d)
 {
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
-    return d.textureType == MTLTextureType3D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
+    return d.textureType == MTLTextureType3D && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.storageMode != MTLStorageModeMemoryless && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None &&
-           f && !raw::blockCompressed(f) && (f->rt || !volumeRendered(d));
+           f && !raw::blockCompressed(f) && (f->rt || (!volumeRendered(d) && d.mipmapLevelCount <= 1));
 }
 
-// A 2D array, cube or cube array the raw path keeps (raw::Device::createArray): one level, one sample, of a format it has a
-// header for, not extended range, memory of its own; its header's type (fx::kTexTwoDArray, kTexCube, kTexCubeArray), 0: none
+// A 2D array, cube or cube array the raw path keeps (raw::Device::createArray): one sample, of a format it has a header for,
+// not extended range, memory of its own, mipmapped of a format it renders (as a 2D chain is); its header's type
+// (fx::kTexTwoDArray, kTexCube, kTexCubeArray), 0: none
 uint32_t arrayType(MTLTextureDescriptor *d)
 {
-    const bool kept =
-        d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.depth <= 1 && d.storageMode != MTLStorageModeMemoryless &&
-        raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat)) &&
-        !raw::blockCompressed(raw::formatInfo(uint32_t(d.pixelFormat)));
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
+    const bool kept = (d.mipmapLevelCount <= 1 || (f && f->rt)) && d.sampleCount <= 1 && d.depth <= 1 &&
+                      d.storageMode != MTLStorageModeMemoryless &&
+                      raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && f && !raw::blockCompressed(f);
     if (!kept)
         return 0;
     switch (d.textureType) {
@@ -234,6 +235,21 @@ bool multisampleShape(MTLTextureDescriptor *d)
     return d.textureType == MTLTextureType2DMultisample && d.mipmapLevelCount <= 1 && d.arrayLength <= 1 &&
            d.depth <= 1 && (d.sampleCount == 2 || d.sampleCount == 4) && !turned &&
            d.storageMode == MTLStorageModeMemoryless && keptFormat(d);
+}
+
+// A block-compressed 2D texture or 2D array the raw path keeps in block-linear memory of its own (raw::Device::
+// createBlockTexture): any levels and layers, private or shared (the CPU's copies move whole blocks of NIL's image), one
+// sample, no rotation; a private one of one level and one layer is rawShape's
+bool blockShape(MTLTextureDescriptor *d)
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
+    return f && raw::blockCompressed(f) &&
+           (d.textureType == MTLTextureType2D || d.textureType == MTLTextureType2DArray) && d.sampleCount <= 1 &&
+           d.depth <= 1 && !turned &&
+           (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared) && !rawShape(d);
 }
 
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
