@@ -47,10 +47,11 @@ struct MetallibFunctions {
         types.clear();
         if (!switch_metal::airSlice(file, length, at, size))
             return false;
-        const bool whole = switch_metal::forEachMetallibEntry(file + at, size, [&](const switch_metal::MetallibEntry &e) {
-            types[e.name] = e.type ? metalFunctionType(*e.type) : 0;
-            return true;
-        });
+        const bool whole =
+            switch_metal::forEachMetallibEntry(file + at, size, [&](const switch_metal::MetallibEntry &e) {
+                types[e.name] = e.type ? metalFunctionType(*e.type) : 0;
+                return true;
+            });
         if (!whole || types.empty()) {
             types.clear();
             return false;

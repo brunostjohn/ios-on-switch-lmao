@@ -82,10 +82,10 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::string _framework;
     std::shared_ptr<raw::LibrarySource> _source;
     bool _specialized;  // made with constant values (even none)
-    std::string _libraryName;           // the library function it was made from (its name unless specialized under another)
-    RMLibrary *_library;                // the library a twin is made of, while none is
+    std::string _libraryName;  // the library function it was made from (its name unless specialized under another)
+    RMLibrary *_library;       // the library a twin is made of, while none is
     MTLFunctionConstantValues *_values;  // what a specialized twin is made with
-    uint32_t _type;                     // MTLFunctionType from the metallib; 0: the twin's
+    uint32_t _type;                      // MTLFunctionType from the metallib; 0: the twin's
 }
 @property (nonatomic, copy) NSString *name;
 - (id)twinOn:(id<MTLDevice>)m2v;
@@ -184,9 +184,10 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     bool _caTransform;
     bool _asked;                             // its record asked of the runtime (completeLater)
     std::string _key;                        // its pack key (completable states')
-    MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants and a later twin are made of
-    MTLPipelineOption _twinOptions;          // a state raw draws from its creation: its twin is made at its first m2v
-    bool _twinLater;                         // replay (rmTwin), with these options
+    MTLRenderPipelineDescriptor
+        *_madeFrom;                  // completable states': what its cubic variants and a later twin are made of
+    MTLPipelineOption _twinOptions;  // a state raw draws from its creation: its twin is made at its first m2v
+    bool _twinLater;                 // replay (rmTwin), with these options
     std::mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
     raw::Obtained _obtained;  // debug builds: how its creation got its record

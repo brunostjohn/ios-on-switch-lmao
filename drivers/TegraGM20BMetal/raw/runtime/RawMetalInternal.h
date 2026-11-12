@@ -210,10 +210,10 @@ extern RawState *gRM;
 // process: what keeps its m2v device in use.
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
-#define RM_M2V(need)                              \
-    ([]() -> id<MTLDevice> {                      \
-        static std::atomic<bool> said{false};     \
-        return rmM2VFor(need, said);              \
+#define RM_M2V(need)                          \
+    ([]() -> id<MTLDevice> {                  \
+        static std::atomic<bool> said{false}; \
+        return rmM2VFor(need, said);          \
     }())
 #else
 #define RM_M2V(need) ((id<MTLDevice>)gRM->fallback)

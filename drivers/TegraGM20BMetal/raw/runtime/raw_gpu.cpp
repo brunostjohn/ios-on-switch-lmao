@@ -744,8 +744,8 @@ bool Device::heapGrow(uint64_t end)
     if (end > heapStoresAt_)
         return false;
     // a client's parts double from a quarter step, as its chunks do
-    const uint64_t step =
-        role_ == Role::Client ? std::clamp(heapBound_ - heapCopiesAt_, kHeapStep / kClientHeapFirstShare, kHeapStep)
+    const uint64_t step = role_ == Role::Client
+                              ? std::clamp(heapBound_ - heapCopiesAt_, kHeapStep / kClientHeapFirstShare, kHeapStep)
                               : kHeapStep;
     HeapPart part;
     part.offset = heapBound_;
@@ -806,7 +806,8 @@ bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 // job writes them, the CPU never changes a published slot, the kernel refuses a read-only import as a member, and a
 // connection's close kills its channels before it unbinds and unwires anything (drainResources). False: not inside the
 // file's region, or the kernel refused an import (the slot is then copied).
-bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fileOffset, uint32_t size, uint64_t &offset)
+bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fileOffset, uint32_t size,
+                          uint64_t &offset)
 {
     std::vector<ProgramPages::Grain> grains;
     if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))

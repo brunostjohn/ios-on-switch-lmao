@@ -15,62 +15,182 @@
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
 
 extern "C" {
-void tgm_cpu_clean_pages(const uint64_t *, uint32_t) {}
-int tgm_writer_done(uint32_t, uint32_t) { return 1; }
-void tgm_writer_wait(uint32_t, uint32_t) {}
-int tgm_writers_all_done(void) { return 1; }
-void proc_selfname(char *buf, int size) { snprintf(buf, size_t(size), "program_pages_test"); }
-int proc_selfpid(void) { return 1; }
-void switch_refusal(const char *, const char *, const char *, ...) {}
-int tgm_relayout_init(void) { return 0; }
-int tgm_relayout(const struct tgm_relayout_pages *, const struct tgm_relayout_pages *, const struct tgm_layout *,
-		 uint32_t, int, const struct tgm_relayout_writer *, uint32_t)
+void tgm_cpu_clean_pages(const uint64_t *, uint32_t)
+{
+}
+
+int tgm_writer_done(uint32_t, uint32_t)
+{
+	return 1;
+}
+
+void tgm_writer_wait(uint32_t, uint32_t)
+{
+}
+
+int tgm_writers_all_done(void)
+{
+	return 1;
+}
+
+void proc_selfname(char *buf, int size)
+{
+	snprintf(buf, size_t(size), "program_pages_test");
+}
+
+int proc_selfpid(void)
+{
+	return 1;
+}
+
+void switch_refusal(const char *, const char *, const char *, ...)
+{
+}
+
+int tgm_relayout_init(void)
+{
+	return 0;
+}
+
+int tgm_relayout(const struct tgm_relayout_pages *, const struct tgm_relayout_pages *,
+		 const struct tgm_layout *, uint32_t, int, const struct tgm_relayout_writer *,
+		 uint32_t)
 {
 	return -1;
 }
-int switch_gpu_backing_prepare_retirement(void) { return 0; }
-void switch_gpu_backing_schedule_retirement(void) {}
-uint64_t switch_gpu_backing_time_ns(void) { return 100; }
-void switch_gpu_backing_arm_expiry(uint64_t) {}
-void switch_gpu_backing_cache(const uint64_t *, uint32_t, uint64_t, uint64_t, int) {}
-int switch_gpu_surface_prepare(uint32_t id, void *, uint32_t, switch_gpu_backing **backing, switch_gpu_cpu_lease **owned,
-			       void **descriptor)
+
+int switch_gpu_backing_prepare_retirement(void)
+{
+	return 0;
+}
+
+void switch_gpu_backing_schedule_retirement(void)
+{
+}
+
+uint64_t switch_gpu_backing_time_ns(void)
+{
+	return 100;
+}
+
+void switch_gpu_backing_arm_expiry(uint64_t)
+{
+}
+
+void switch_gpu_backing_cache(const uint64_t *, uint32_t, uint64_t, uint64_t, int)
+{
+}
+
+int switch_gpu_surface_prepare(uint32_t id, void *, uint32_t, switch_gpu_backing **backing,
+			       switch_gpu_cpu_lease **owned, void **descriptor)
 {
 	*owned = nullptr;
 	*descriptor = nullptr;
 	*backing = switch_gpu_backing_find_surface(id);
 	return 0;
 }
-void switch_gpu_surface_finish(void *) {}
-uint32_t switch_gpu_surface_users(void *) { return 0; }
-void switch_gpu_surface_descriptor_hold(void *, int) {}
-void switch_gpu_backing_retire(void);
-#if SWITCH_GPU_PATH_STATS
-void switch_gpu_path_taken(enum switch_gpu_path, uint32_t) {}
-#endif
-void tgm_cpu_view_hold(struct tgm_cpu_view *, int) {}
-int tgm_cpu_view_live(const struct tgm_cpu_view *) { return 0; }
-int tgm_cpu_view_of(void *, uint32_t, struct tgm_cpu_view *) { return -1; }
-int tgm_cpu_view_remap(const struct tgm_cpu_view *, void *, uint64_t, int) { return -1; }
-void tgm_memory_release(void *) {}
-void tgm_relayout_by_cpu(const struct tgm_relayout_pages *, const struct tgm_relayout_pages *, const struct tgm_layout *,
-			 uint32_t, int, const struct tgm_relayout_writer *, uint32_t)
+
+void switch_gpu_surface_finish(void *)
 {
 }
-void tgm_scratch_discard(struct tgm_scratch *) {}
-struct tgm_scratch *tgm_scratch_get(uint64_t, int, struct tgm_relayout_pages *) { return nullptr; }
-void *tgm_scratch_map(struct tgm_scratch *, void **) { return nullptr; }
-void *tgm_scratch_memory(struct tgm_scratch *) { return nullptr; }
-void tgm_scratch_pages(const struct tgm_scratch *, struct tgm_relayout_pages *) {}
-void tgm_scratch_put(struct tgm_scratch *) {}
-void tgm_scratch_stats(uint64_t *held, uint64_t *peak) { *held = *peak = 0; }
-void tgm_scratch_unmap(void *) {}
-void *tgm_surface_memory(void *, uint32_t) { return nullptr; }
-uint64_t tgm_timestamp_ns(void) { return 0; }
-void tgm_writers_wait_all(void) {}
+
+uint32_t switch_gpu_surface_users(void *)
+{
+	return 0;
 }
 
-namespace {
+void switch_gpu_surface_descriptor_hold(void *, int)
+{
+}
+
+void switch_gpu_backing_retire(void);
+#if SWITCH_GPU_PATH_STATS
+void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
+{
+}
+#endif
+void tgm_cpu_view_hold(struct tgm_cpu_view *, int)
+{
+}
+
+int tgm_cpu_view_live(const struct tgm_cpu_view *)
+{
+	return 0;
+}
+
+int tgm_cpu_view_of(void *, uint32_t, struct tgm_cpu_view *)
+{
+	return -1;
+}
+
+int tgm_cpu_view_remap(const struct tgm_cpu_view *, void *, uint64_t, int)
+{
+	return -1;
+}
+
+void tgm_memory_release(void *)
+{
+}
+
+void tgm_relayout_by_cpu(const struct tgm_relayout_pages *, const struct tgm_relayout_pages *,
+			 const struct tgm_layout *, uint32_t, int,
+			 const struct tgm_relayout_writer *, uint32_t)
+{
+}
+
+void tgm_scratch_discard(struct tgm_scratch *)
+{
+}
+
+struct tgm_scratch *tgm_scratch_get(uint64_t, int, struct tgm_relayout_pages *)
+{
+	return nullptr;
+}
+
+void *tgm_scratch_map(struct tgm_scratch *, void **)
+{
+	return nullptr;
+}
+
+void *tgm_scratch_memory(struct tgm_scratch *)
+{
+	return nullptr;
+}
+
+void tgm_scratch_pages(const struct tgm_scratch *, struct tgm_relayout_pages *)
+{
+}
+
+void tgm_scratch_put(struct tgm_scratch *)
+{
+}
+
+void tgm_scratch_stats(uint64_t *held, uint64_t *peak)
+{
+	*held = *peak = 0;
+}
+
+void tgm_scratch_unmap(void *)
+{
+}
+
+void *tgm_surface_memory(void *, uint32_t)
+{
+	return nullptr;
+}
+
+uint64_t tgm_timestamp_ns(void)
+{
+	return 0;
+}
+
+void tgm_writers_wait_all(void)
+{
+}
+}
+
+namespace
+{
 
 constexpr uint64_t kGrainPages = 0x10000 / 4096;
 
@@ -121,12 +241,14 @@ void release(Import &i)
 	i = {};
 }
 
-class ProgramPages : public testing::Test {
+class ProgramPages : public testing::Test
+{
 protected:
 	void SetUp() override
 	{
 		ASSERT_EQ(tgm_coherency_init(), 0);
 	}
+
 	void TearDown() override
 	{
 		switch_gpu_backing_retire();
@@ -149,7 +271,8 @@ TEST_F(ProgramPages, TwoProcessesImportingOneGrainShareItsEntryAndBacking)
 	EXPECT_EQ(b.tracked, 0);
 	EXPECT_EQ(tgm_coh_find_pa(grain[0]), a.coh);
 	tgm_coherency_put(a.coh);
-	EXPECT_EQ(second.released, 1) << "the second pin's wiring goes at once: the first one's holds the pages";
+	EXPECT_EQ(second.released, 1)
+		<< "the second pin's wiring goes at once: the first one's holds the pages";
 	EXPECT_EQ(first.released, 0);
 
 	release(a);
@@ -172,7 +295,8 @@ TEST_F(ProgramPages, AnotherPageListFromTheSameFirstPageIsRefused)
 	Import a = import(grain, first);
 	ASSERT_EQ(a.pinned, 0);
 	Import b = import(other, second);
-	EXPECT_EQ(b.backing, nullptr) << "a different page after the same first page: refused, the slot is copied";
+	EXPECT_EQ(b.backing, nullptr)
+		<< "a different page after the same first page: refused, the slot is copied";
 	if (b.coh)
 		tgm_coherency_put(b.coh);
 	Import c = import(shorter, third);

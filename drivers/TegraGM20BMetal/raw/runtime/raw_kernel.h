@@ -107,6 +107,7 @@ public:
     // CPU at bo.cpu; an IOKit mapping counts whole in the task's phys_footprint (iokit_mapped), touched or not.
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
                bool gpuVolatile = false, bool control = false, bool cpu = true);
+
     // Memory only the GPU reads and writes (shader local memory): no CPU mapping
     bool allocGpu(uint64_t bytes, Bo &bo)
     {

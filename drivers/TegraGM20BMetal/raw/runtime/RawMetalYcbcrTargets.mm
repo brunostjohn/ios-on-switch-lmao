@@ -105,9 +105,9 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
             p->_device = self;
             p.label = d.label;
             p->_twin = [RM_M2V("a YCbCr target state's twin") newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                                   options:o
-                                                                reflection:reflection
-                                                                     error:error];
+                                                                                           options:o
+                                                                                        reflection:reflection
+                                                                                             error:error];
             return p->_twin ? (id<MTLRenderPipelineState>)p : nil;
         }
         made.colorAttachments[c].pixelFormat = MTLPixelFormat(raw::kYcbcrTargetStandIn);
@@ -126,9 +126,9 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
     MTLRenderPipelineDescriptor *twin = twinDescriptor(made);
     if (reflection)
         p->_twin = [RM_M2V("a YCbCr target state's twin") newRenderPipelineStateWithDescriptor:twin
-                                                               options:o
-                                                            reflection:reflection
-                                                                 error:error];
+                                                                                       options:o
+                                                                                    reflection:reflection
+                                                                                         error:error];
     else if (native_bridge_metal_render_pipeline_lazy)
         p->_twin = native_bridge_metal_render_pipeline_lazy(RM_M2V("a YCbCr target state's twin"), twin, o);
     if (error)

@@ -50,14 +50,10 @@ bool ledgerFootprint(Footprint &f)
                reinterpret_cast<caddr_t>(entries.data()), reinterpret_cast<caddr_t>(&entryCount)))
         return false;
     const std::pair<const char *, int64_t *> wanted[] = {
-        {"phys_footprint", &f.footprint},
-        {"internal", &f.internal},
-        {"internal_compressed", &f.compressed},
-        {"iokit_mapped", &f.iokit},
-        {"alternate_accounting", &f.alternate},
-        {"alternate_accounting_compressed", &f.alternateCompressed},
-        {"purgeable_nonvolatile", &f.purgeable},
-        {"page_table", &f.pageTable},
+        {"phys_footprint", &f.footprint},        {"internal", &f.internal},
+        {"internal_compressed", &f.compressed},  {"iokit_mapped", &f.iokit},
+        {"alternate_accounting", &f.alternate},  {"alternate_accounting_compressed", &f.alternateCompressed},
+        {"purgeable_nonvolatile", &f.purgeable}, {"page_table", &f.pageTable},
     };
     for (int i = 0; i < std::min(count, entryCount); i++)
         for (const auto &[name, value] : wanted)
@@ -136,20 +132,21 @@ void logGivenBack(size_t relieved)
     const int64_t rest = f.internal - f.alternate - int64_t(heap.size_allocated) - pool - copies;
     const int64_t iokitClaimed = int64_t(d.wcChunkBytesHeld() + d.controlMappedBytes() + m2v[0]);
     const StoreRegion store = storeRegion();
-    os_log(rawLog(),
-           "raw: idle memory given back: footprint %llu KB = internal %llu KB (malloc %llu KB in use of %llu, raw pool "
-           "%llu KB in %llu chunks with heaps %llu KB, shader heap copies %llu KB, neither malloc's "
-           "nor the raw device's %llu KB) + compressed %llu KB + IOKit %llu KB (raw write-combined %llu KB, raw tables and rings %llu KB, m2v "
-           "GPU memory %llu KB, no owner %llu KB; %llu KB of it internal too) + purgeable %llu KB + page tables %llu "
-           "KB%s; shader heap in place %llu KB (file pages: no footprint); compiler store mapped %llu KB (external pager "
-           "%d, resident %llu KB); malloc gave back %llu KB",
-           kb(f.footprint), kb(f.internal - f.alternate), kb(int64_t(heap.size_in_use)),
-           kb(int64_t(heap.size_allocated)), kb(pool), (unsigned long long)d.stats.poolChunks.load(),
-           kb(int64_t(d.arenaBytes())), kb(copies), kb(rest), kb(f.compressed - f.alternateCompressed), kb(f.iokit),
-           kb(int64_t(d.wcChunkBytesHeld())),
-           kb(int64_t(d.controlMappedBytes())), kb(int64_t(m2v[0])), kb(f.iokit - iokitClaimed),
-           kb(f.alternate + f.alternateCompressed), kb(f.purgeable), kb(f.pageTable),
-           ledgered ? "" : " (no ledger: IOKit counts page tables too)", kb(int64_t(d.heapInPlaceBytes())),
-           kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)), kb(int64_t(relieved)));
+    os_log(
+        rawLog(),
+        "raw: idle memory given back: footprint %llu KB = internal %llu KB (malloc %llu KB in use of %llu, raw pool "
+        "%llu KB in %llu chunks with heaps %llu KB, shader heap copies %llu KB, neither malloc's "
+        "nor the raw device's %llu KB) + compressed %llu KB + IOKit %llu KB (raw write-combined %llu KB, raw tables "
+        "and rings %llu KB, m2v "
+        "GPU memory %llu KB, no owner %llu KB; %llu KB of it internal too) + purgeable %llu KB + page tables %llu "
+        "KB%s; shader heap in place %llu KB (file pages: no footprint); compiler store mapped %llu KB (external pager "
+        "%d, resident %llu KB); malloc gave back %llu KB",
+        kb(f.footprint), kb(f.internal - f.alternate), kb(int64_t(heap.size_in_use)), kb(int64_t(heap.size_allocated)),
+        kb(pool), (unsigned long long)d.stats.poolChunks.load(), kb(int64_t(d.arenaBytes())), kb(copies), kb(rest),
+        kb(f.compressed - f.alternateCompressed), kb(f.iokit), kb(int64_t(d.wcChunkBytesHeld())),
+        kb(int64_t(d.controlMappedBytes())), kb(int64_t(m2v[0])), kb(f.iokit - iokitClaimed),
+        kb(f.alternate + f.alternateCompressed), kb(f.purgeable), kb(f.pageTable),
+        ledgered ? "" : " (no ledger: IOKit counts page tables too)", kb(int64_t(d.heapInPlaceBytes())),
+        kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)), kb(int64_t(relieved)));
 }
 #endif

@@ -1383,8 +1383,8 @@ public:
     // Where the shader compiler's program slots are, as this process maps its store (RawComplete.mm): a slot's bytes found
     // there in place, with that mapping's first byte and size, else null. A copied slot of a page or more is looked up
     // there first and runs in place where it is found. Null: none.
-    using SlotLookup = std::function<const uint8_t *(const uint8_t *slot, uint32_t size, const uint8_t *&mapping,
-                                                     uint64_t &bytes)>;
+    using SlotLookup =
+        std::function<const uint8_t *(const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes)>;
     void runSlotsFrom(SlotLookup lookup);
 
     // The CPU mappings of the device's tables and rings (each counts whole in the task's IOKit footprint)
@@ -1908,12 +1908,14 @@ private:
     std::vector<HeapPart> heapParts_;
     uint64_t heapCopiesAt_ = 0, heapBound_ = 0;
     ProgramPages packPages_;
+
     // each mapping of the shader compiler's store slots ran from, its pages from window offset heapStoresAt_ on, a mapping
     // after another's (a store written again is mapped again; the old mapping stays)
     struct StoreRegion {
         const uint8_t *mapping;
         ProgramPages pages;
     };
+
     std::deque<StoreRegion> storeRegions_;
     uint64_t heapStoresAt_ = 0;
     SlotLookup slotLookup_;
