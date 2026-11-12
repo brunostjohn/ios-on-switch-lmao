@@ -126,6 +126,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.fill_texture',
             'gpu.raw.storage_compressed',
             'gpu.raw.predication',
+            'gpu.raw.event_release',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
