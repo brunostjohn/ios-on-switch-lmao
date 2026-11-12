@@ -16,7 +16,7 @@ struct EventReleaseTest: HWTest {
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 90 }
 
-    static let threads = 1 << 16
+    static let threads = 1 << 14
     static let bytes = 1 << 16
     static let rounds = 3
     static let longMilliseconds = 12.0
@@ -49,6 +49,7 @@ struct EventReleaseTest: HWTest {
     }
 
     struct Round {
+        var path = ""
         var jobs = 0, released = 0, signalJobs = 0
         var heardBeforeEnd = false
         var commitToHeardMs = 0.0, heardBeforeEndMs = 0.0
@@ -70,8 +71,8 @@ struct EventReleaseTest: HWTest {
         var wrong: [String] = []
 
         let probe = try await gpu.run { work.dispatch($0, iterations: 4096) }
-        let scale = max(1.0, Self.longMilliseconds / max(probe.gpuMilliseconds, 0.01))
-        let iterations = UInt32(min(Double(1 << 22), 4096 * scale))
+        let probeMs = probe.gpuTimed ? probe.gpuMilliseconds : probe.wallMilliseconds
+        let iterations = UInt32(4096 * min(8.0, max(1.0, Self.longMilliseconds / max(probeMs, 0.01))))
         let before = try await gpu.run { work.before($0, fill: 1) }
         metrics.set("long_iterations", Int(iterations))
         metrics.set("before_wall_ms", before.wallMilliseconds, digits: 3)
@@ -82,6 +83,10 @@ struct EventReleaseTest: HWTest {
             rounds.append(try await signalled(work, event, value, iterations, waiter: round == 0 ? nil : other))
         }
         let solo = rounds[0]
+        metrics.set("path", solo.path)
+        if rounds.contains(where: { $0.path != "raw" }) {
+            return .fail("path", metrics)
+        }
         metrics.set("jobs_per_cb", solo.jobs)
         metrics.set("released_signals", rounds.map(\.released).reduce(0, +))
         metrics.set("signal_jobs", rounds.map(\.signalJobs).reduce(0, +))
@@ -138,6 +143,7 @@ struct EventReleaseTest: HWTest {
                 UnsafeRawBufferPointer(start: copy.contents(), count: Self.bytes).filter { $0 != fill }.count
         }
         if !completed || commands.status != .completed { throw TestFailure("the signalled command buffer failed") }
+        round.path = RawFacade.path(of: commands)
         let after = EventJobs.read(work.gpu.device)
         round.jobs = (after["jobs"] ?? 0) - (counters["jobs"] ?? 0) - (waiter == nil ? 0 : 1)
         round.released = (after["released_signals"] ?? 0) - (counters["released_signals"] ?? 0)
