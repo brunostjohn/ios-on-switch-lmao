@@ -6,13 +6,12 @@ import Metal
 /// Private render targets on compressed memory (drivers/TegraGM20BMetal/raw/runtime/raw_private_comp.h): a glass-like
 /// chain (a 512x512 BGRA8 pattern, a 256x256 RGBA16Float and a 128x128 BGRA8 2:1 reduction of it), each pass cleared to a
 /// ZBC value first, drawn on compressed memory and again with compression held off (switchRawProbePlainPrivate:): every
-/// byte the same. Mid-chain one command buffer that samples the first target goes to m2v (a Boolean visibility mode,
-/// which the raw path refuses): its twin needs the target's pages, so the texture moves to plain memory first, and the
-/// passes after read it there. Then 16 clear-only passes of the 512x512 target, compressed and plain, give the GPU time a
-/// ZBC clear saves.
+/// byte the same. Mid-chain one command buffer that samples the first target also writes a Boolean visibility result,
+/// and stays raw (moves counts the targets that left compressed memory meanwhile). Then 16 clear-only passes of the
+/// 512x512 target, compressed and plain, give the GPU time a ZBC clear saves.
 struct PrivateCompressionTest: HWTest {
     let id = "gpu.raw.private_compression"
-    let name = "Private targets on compressed memory: same bytes, ZBC clears, a move to plain memory for m2v"
+    let name = "Private targets on compressed memory: same bytes, ZBC clears, a Boolean visibility pass kept raw"
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 90 }
 
@@ -22,7 +21,7 @@ struct PrivateCompressionTest: HWTest {
     struct Chain {
         var bytes: [[UInt8]] = []
         var compressed: [Int] = []
-        var forcedPath = ""
+        var booleanPath = ""
         var clearMs = 0.0
     }
 
@@ -39,7 +38,7 @@ struct PrivateCompressionTest: HWTest {
         let plain = try await chain(gpu, facade, plain: true)
         var metrics = Metrics()
         var wrong: [String] = []
-        let names = ["pattern", "half", "quarter", "after_move"]
+        let names = ["pattern", "half", "quarter", "after_boolean"]
         for (i, name) in names.enumerated() {
             let differing = zip(compressed.bytes[i], plain.bytes[i]).filter { $0 != $1 }.count
             metrics.set("\(name)_bytes_differ", differing)
@@ -50,15 +49,14 @@ struct PrivateCompressionTest: HWTest {
         let moves = (after["private_moves"] ?? 0) - (before["private_moves"] ?? 0)
         metrics.set("made", (after["private_compressed"] ?? 0) - (before["private_compressed"] ?? 0))
         metrics.set("moves", moves)
-        metrics.set("forced_path", compressed.forcedPath)
+        metrics.set("boolean_path", compressed.booleanPath)
         metrics.set("zbc_hits", (zbcAfter["zbc_hits"] ?? 0) - (zbcBefore["zbc_hits"] ?? 0))
         metrics.set("zbc_misses", (zbcAfter["zbc_misses"] ?? 0) - (zbcBefore["zbc_misses"] ?? 0))
         metrics.set("clear16_compressed_gpu_ms", compressed.clearMs, digits: 3)
         metrics.set("clear16_plain_gpu_ms", plain.clearMs, digits: 3)
         if compressed.compressed.first != 1 { wrong.append("not_compressed") }
         if plain.compressed.contains(1) { wrong.append("reference_compressed") }
-        if compressed.forcedPath == "raw" { wrong.append("forced_path") }
-        if compressed.compressed.first == 1 && moves < 1 { wrong.append("no_move") }
+        if compressed.booleanPath != "raw" { wrong.append("boolean_path") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
@@ -119,7 +117,7 @@ struct PrivateCompressionTest: HWTest {
         try await gpu.run(pass(half, reduceHalf, source: first, clear: zero))
         let results = try gpu.buffer(16)
         let scratch = try gpu.texture(.bgra8Unorm, 256, 256)
-        out.forcedPath = try await gpu.run { commands in
+        out.booleanPath = try await gpu.run { commands in
             let p = MTLRenderPassDescriptor()
             p.colorAttachments[0].texture = scratch
             p.colorAttachments[0].loadAction = .clear

@@ -119,9 +119,6 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         ask.bufferLength = ask.rawBuffer ? ((RMBuffer *)results)->_raw.length : 0;
         ask.accumulate = [_pass respondsToSelector:@selector(visibilityResultType)] &&
                          [[(id)_pass valueForKey:@"visibilityResultType"] integerValue] != 0;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        ask.probed = gRM->raw->probeBooleanVisibility.load(std::memory_order_acquire);
-#endif
         if (const char *why = raw::visibilityRefusal(ask)) {
             [_cb takeReason:WhyCall why:@(why)];
             hit(_cb, PredCallVisibility, mode);

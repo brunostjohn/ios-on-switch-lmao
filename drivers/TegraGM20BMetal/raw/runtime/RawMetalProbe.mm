@@ -81,14 +81,6 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
-// Boolean visibility results take the raw path's copy-engine lowering (rule vis.boolean) while `on` is true, for HW Test
-// gpu.raw.visibility's boolean_raw arm
-- (NSString *)switchRawProbeBooleanVisibility:(NSNumber *)on
-{
-    gRM->raw->probeBooleanVisibility.store(on.boolValue, std::memory_order_release);
-    return nil;
-}
-
 // Private textures made while `on` is true stay on plain memory (raw_private_comp.h), for a probe's uncompressed
 // reference
 - (NSString *)switchRawProbePlainPrivate:(NSNumber *)on

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <vector>
 #include "raw_push.h"
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitPredicate.h"
 
 namespace raw {
 
@@ -20,21 +21,11 @@ enum : uint32_t {
     kVisibilityCounting = 2,
 };
 
-// Rule vis.boolean: a Boolean result is its count made 1 by a copy-engine constant launched under SET_RENDER_ENABLE
-// CONDITIONAL on the count. No open driver predicates the copy engine (NVK's conditional rendering copies the predicate
-// and sets the 3D engine's global enable), so Boolean offsets stay on m2v until a run of this lowering on the chip reads
-// 1 and 0 (HW Test gpu.raw.visibility's boolean arm reports which path took its offsets).
-constexpr bool copyEnginePredicates()
-{
-    return false;
-}
-
 struct VisibilityAsk {
     uint32_t mode = kVisibilityDisabled;
     uint64_t offset = 0, bufferLength = 0;
     bool rawBuffer = false;
     bool accumulate = false;  // MTLVisibilityResultTypeAccumulate (iOS 26)
-    bool probed = false;      // debug builds: a probe takes the Boolean lowering before the device proved it
 };
 
 // nullptr where the raw path writes the result, else why m2v does
@@ -45,7 +36,7 @@ constexpr uint32_t kVisibilityQueriesPerEncoder = 256;
 
 class VisibilityQueries {
 public:
-    static constexpr uint32_t kSetWords = 8, kFinishWords = 7, kResultWords = 27;
+    static constexpr uint32_t kSetWords = 8, kFinishWords = 7, kResultWords = 2 * SWITCH_GM20B_COPY_WORD_REDUCE_WORDS;
 
     enum class Set : uint8_t {
         Done,

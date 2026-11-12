@@ -19,8 +19,6 @@ const char *visibilityRefusal(const VisibilityAsk &a)
         return "a visibility offset past its buffer";
     if (a.accumulate)
         return "visibility results accumulated across passes";
-    if (a.mode == kVisibilityBoolean && !copyEnginePredicates() && !a.probed)
-        return "a Boolean visibility result (rule vis.boolean unproven)";
     return nullptr;
 }
 
@@ -65,15 +63,19 @@ void VisibilityQueries::finish(Push &p)
         kit(p, switch_gm20b_wait_for_idle);
 }
 
+// Boolean: each half of the count made at most 1 by its copy's own semaphore release (an unsigned IMIN, as predication
+// reduces a word), so the result is 1 where any sample passed and 0 where none did, written by the GPU alone
 void VisibilityQueries::finishResult(Push &p, size_t i) const
 {
     const Query &q = queries_[i];
-    kit(p, switch_gm20b_copy_bytes, q.slotVa, q.resultVa, 8u, uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED));
-    if (q.mode != kVisibilityBoolean)
+    if (q.mode != kVisibilityBoolean) {
+        kit(p, switch_gm20b_copy_bytes, q.slotVa, q.resultVa, 8u,
+            uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED));
         return;
-    kit(p, switch_gm20b_copy_predicate, q.resultVa, uint32_t(NVB0B5_SET_RENDER_ENABLE_C_MODE_CONDITIONAL));
-    kit(p, switch_gm20b_copy_u64, q.resultVa, uint64_t(1), uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
-    kit(p, switch_gm20b_copy_predicate, uint64_t(0), uint32_t(NVB0B5_SET_RENDER_ENABLE_C_MODE_TRUE));
+    }
+    for (uint32_t half : {0u, 4u})
+        kit(p, switch_gm20b_copy_word_reduce, q.slotVa + half, q.resultVa + half, 1u,
+            uint32_t(NVB0B5_LAUNCH_DMA_SEMAPHORE_REDUCTION_IMIN), false);
 }
 
 }  // namespace raw

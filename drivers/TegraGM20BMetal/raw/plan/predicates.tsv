@@ -29,7 +29,7 @@ state.foreign	record	m2v	-	an m2v pipeline state
 state.notpack	record	m2v	-	functions from another device's library: with one backend every function is this device's
 state.pack	record	layer	L4	a state the pack lacks: made at creation (compiler daemon) or the archive-miss error FailOnBinaryArchiveMiss asks for
 state.making	record	growth	-	the record completes before the command buffer's first job runs: the GPU work waits, never the CPU
-call.vis	record	gap	-	visibility results: REPORT_SEMAPHORE with reduction ADD (probe gpu.x1.visibility, d17); no planner node yet
+call.vis	record	gap	-	Counting and Boolean results on the copy engine (raw_visibility.h); accumulated results (MTLVisibilityResultTypeAccumulate): REPORT_SEMAPHORE with reduction ADD (probe gpu.x1.visibility, d17), no planner node yet
 call.buf	record	m2v	-	an m2v buffer, or setBytes with no pool memory (growth)
 call.sampler	record	gap	sampler_address_mode	mirror-clamp-to-edge and opaque borders: an address-lowering program variant (L4)
 call.dbias	record	layer	L4	an infinite or NaN depth bias: the state program's viewport Z offset, as m2v's render_state.rs does

@@ -7,10 +7,9 @@ import Metal
 /// 3D engine's sample counter, reported per mode set and copied to the offset by the copy engine at the encoder's end.
 /// Each arm's values are the samples M4 counts (m2v's visibility.rs rules): draws at one offset add up, an offset set
 /// with no draw reads 0, a draw under Disabled counts nowhere, an offset never set keeps its bytes, depth-rejected
-/// samples and 4x MSAA samples count as samples. Boolean offsets read 1 or 0 on whichever path takes them (m2v until
-/// rule vis.boolean holds). The same 32 full-target draws under Counting (raw) and under Boolean (m2v today) give each
-/// path's GPU time. On a debug facade the Boolean arm runs once more with the copy-engine lowering forced
-/// (boolean_raw_*): the device's answer for rule vis.boolean, reported without failing the test.
+/// samples and 4x MSAA samples count as samples. Boolean offsets read 1 or 0, the count's halves each made at most 1 by
+/// the copy engine. The same 32 full-target draws under Counting and under Boolean give each mode's GPU time. Every
+/// arm's command buffer must stay raw.
 struct VisibilityTest: HWTest {
     let id = "gpu.raw.visibility"
     let name = "Visibility results: Counting on the raw path, exact per offset, MSAA and depth"
@@ -77,23 +76,13 @@ struct VisibilityTest: HWTest {
             metrics.set("\(arm.name)_path", ran.path)
             metrics.set("\(arm.name)_values", ran.values)
             wrong += ran.wrong
-            let mustBeRaw = arm.name == "counting" || arm.name == "depth"
-            if mustBeRaw && ran.path != "raw" { wrong.append("\(arm.name)_path") }
+            if ran.path != "raw" { wrong.append("\(arm.name)_path") }
         }
         let (rawMs, otherMs, otherPath) = try await timed(gpu, results)
         metrics.set("counting_gpu_ms", rawMs, digits: 3)
         metrics.set("boolean_gpu_ms", otherMs, digits: 3)
-        metrics.set("boolean_path", otherPath)
-        let force = NSSelectorFromString("switchRawProbeBooleanVisibility:")
-        if let facade = gpu.device as? NSObject, facade.responds(to: force), let boolean = Self.arms.last {
-            _ = facade.perform(force, with: NSNumber(value: true))
-            let ran = try? await measure(gpu, boolean, results)
-            _ = facade.perform(force, with: NSNumber(value: false))
-            metrics.set("boolean_raw_path", ran?.path ?? "error")
-            metrics.set("boolean_raw_values", ran?.values ?? "-")
-            let held = ran.map { $0.wrong.isEmpty && $0.path == "raw" } ?? false
-            metrics.set("boolean_raw_verdict", held ? "PASS" : "FAIL")
-        }
+        metrics.set("boolean_timed_path", otherPath)
+        if otherPath != "raw" { wrong.append("boolean_timed_path") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 

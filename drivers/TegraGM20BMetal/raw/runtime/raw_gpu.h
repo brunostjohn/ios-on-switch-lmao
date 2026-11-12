@@ -2009,8 +2009,6 @@ public:
     std::atomic<bool> probeResolveExact{false};
     // storage forms view compressed attachments and storage-bound memoryless backings compress (gpu.raw.storage_compressed)
     std::atomic<bool> probeStorageCompressed{false};
-    // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
-    std::atomic<bool> probeBooleanVisibility{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
     std::atomic<uint64_t> unflushed_{0};      // signalsUnflushed
 #endif

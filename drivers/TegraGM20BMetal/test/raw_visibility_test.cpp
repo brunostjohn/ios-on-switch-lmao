@@ -77,10 +77,7 @@ TEST(RawVisibility, RefusalsNameTheirReason)
     EXPECT_NE(raw::visibilityRefusal(a), nullptr);
     a.accumulate = false;
     a.mode = raw::kVisibilityBoolean;
-    EXPECT_EQ(raw::visibilityRefusal(a) == nullptr, raw::copyEnginePredicates());
-    a.probed = true;
-    EXPECT_EQ(raw::visibilityRefusal(a), nullptr) << "a probe takes the lowering";
-    a.probed = false;
+    EXPECT_EQ(raw::visibilityRefusal(a), nullptr) << "Boolean is taken as Counting is";
     a.mode = raw::kVisibilityDisabled;
     a.rawBuffer = false;
     EXPECT_EQ(raw::visibilityRefusal(a), nullptr) << "Disabled needs no buffer";
@@ -169,7 +166,8 @@ TEST(RawVisibility, TheEndWaitsForIdleThenCopiesEachCountToItsOffset)
     EXPECT_FALSE(q.any());
 }
 
-TEST(RawVisibility, ABooleanResultIsTheCountThenOnePredicatedOnIt)
+// Each half of the count copied to its half of the offset and made at most 1 there by the copy's semaphore release
+TEST(RawVisibility, ABooleanResultIsEachHalfOfTheCountAtMostOne)
 {
     Recorder r;
     raw::VisibilityQueries q;
@@ -177,18 +175,23 @@ TEST(RawVisibility, ABooleanResultIsTheCountThenOnePredicatedOnIt)
     q.finish(r.p);
     r.take();
     q.finishResult(r.p, 0);
-    const auto m = methods(r.take());
-    const std::vector<uint32_t> numbers = methodNumbers(m);
-    const std::vector<uint32_t> after(numbers.begin() + 9, numbers.end());
-    EXPECT_EQ(after, (std::vector<uint32_t>{
-                         NVB0B5_SET_RENDER_ENABLE_A, NVB0B5_SET_RENDER_ENABLE_B, NVB0B5_SET_RENDER_ENABLE_C,
-                         NVB0B5_SET_REMAP_CONST_A, NVB0B5_SET_REMAP_CONST_B, NVB0B5_SET_REMAP_COMPONENTS,
-                         NVB0B5_OFFSET_OUT_UPPER, NVB0B5_OFFSET_OUT_LOWER, NVB0B5_LINE_LENGTH_IN, NVB0B5_LAUNCH_DMA,
-                         NVB0B5_SET_RENDER_ENABLE_A, NVB0B5_SET_RENDER_ENABLE_B, NVB0B5_SET_RENDER_ENABLE_C}));
-    EXPECT_EQ(m[11].value, NVB0B5_SET_RENDER_ENABLE_C_MODE_CONDITIONAL);
-    EXPECT_EQ(m[12].value, 1u) << "the constant: 1";
-    EXPECT_EQ(m[13].value, 0u);
-    EXPECT_EQ(m.back().value, NVB0B5_SET_RENDER_ENABLE_C_MODE_TRUE);
+    const auto words = r.take();
+    EXPECT_LE(words.size(), raw::VisibilityQueries::kResultWords);
+    const auto m = methods(words);
+    ASSERT_EQ(m.size(), 24u);
+    for (uint32_t half = 0; half < 2; half++) {
+        const Method *copy = &m[12 * half];
+        EXPECT_EQ(copy[1], (Method{4, NVB0B5_OFFSET_IN_LOWER, uint32_t(kSlot0) + 4 * half}));
+        EXPECT_EQ(copy[3], (Method{4, NVB0B5_OFFSET_OUT_LOWER, uint32_t(kResults) + 4 * half}));
+        EXPECT_EQ(copy[6], (Method{4, NVB0B5_LINE_LENGTH_IN, 4}));
+        EXPECT_EQ(copy[9], (Method{4, NVB0B5_SET_SEMAPHORE_B, uint32_t(kResults) + 4 * half}));
+        EXPECT_EQ(copy[10], (Method{4, NVB0B5_SET_SEMAPHORE_PAYLOAD, 1}));
+        ASSERT_EQ(copy[11].method, NVB0B5_LAUNCH_DMA);
+        const uint32_t launch = copy[11].value;
+        EXPECT_EQ(launch >> 14 & 0xf, uint32_t(NVB0B5_LAUNCH_DMA_SEMAPHORE_REDUCTION_IMIN)) << std::hex << launch;
+        EXPECT_EQ(launch >> 18 & 1, uint32_t(NVB0B5_LAUNCH_DMA_SEMAPHORE_REDUCTION_SIGN_UNSIGNED));
+        EXPECT_EQ(launch >> 19 & 1, 1u) << "the reduction is enabled";
+    }
 }
 
 TEST(RawVisibility, AnEncoderTakesAtMostItsQueryLimit)
