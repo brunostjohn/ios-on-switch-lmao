@@ -84,5 +84,6 @@ host_test(
         "//third_party/mesa/src/nouveau/vulkan:nvk_physical_device.c",
         "//third_party/mesa/src/nouveau/vulkan:nvk_tiled_cache.h",
     ],
+    tags = ["m2v"],
     deps = [":plan"],
 )

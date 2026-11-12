@@ -22,8 +22,10 @@
 #                     past its room the all-imports flag, its length
 #   raw_writer_promise_source_test  a command buffer held on a shared event promises the kernel its surface writes before
 #                     its waitUntilScheduled returns, its last raw range's last job keeps them, finish gives back the rest
-#   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
-#                     RawMetal), and the cross-process shared event refusal line
+#   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (RawMetal), and the
+#                     cross-process shared event refusal line
+#   m2v_source_test   what the raw path relies on in m2v and NVK while they ship (tag m2v): the frontend's plain event,
+#                     NVK's compute workgroup base in the root table
 #   raw_inline_signals_test  raw/runtime/raw_inline_signals.h and raw_event_release.h: a kernel event's signal between two
 #                     native ranges joins them into one job, released into the event's word mid-job
 #   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
@@ -996,6 +998,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_order.h",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1023,6 +1026,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_replay_twins.h",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1209,6 +1213,7 @@ host_test(
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_wait_any.h",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1223,6 +1228,7 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1237,6 +1243,7 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1269,12 +1276,24 @@ host_test(
     name = "raw_events_source_test",
     srcs = ["raw_events_source_test.cpp"],
     data = [
-        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
-        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEvents.mm",
-        "//third_party/m2v/crates/metal2vulkan-runtime:sources",
     ],
+)
+
+# What raw relies on in m2v and NVK while they ship: goes with them (tag m2v: .bazelrc's nom2v dry run leaves it out).
+host_test(
+    name = "m2v_source_test",
+    srcs = ["m2v_source_test.cpp"],
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//third_party/m2v/crates/metal2vulkan-runtime:sources",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_cmd_buffer.h",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_nir_lower_descriptors.c",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_shader.c",
+    ],
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1819,12 +1838,7 @@ host_test(
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
-    data = [
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
-        "//third_party/mesa/src/nouveau/vulkan:nvk_cmd_buffer.h",
-        "//third_party/mesa/src/nouveau/vulkan:nvk_nir_lower_descriptors.c",
-        "//third_party/mesa/src/nouveau/vulkan:nvk_shader.c",
-    ],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp"],
     deps = [
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
@@ -2690,6 +2704,7 @@ host_test(
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_submit_state.h",
     ],
     cxx_std = "c++17",
+    tags = ["m2v"],
 )
 
 host_test(
@@ -3392,6 +3407,7 @@ host_test(
         "-lobjc",
     ],
     sanitize = False,
+    tags = ["m2v"],
     deps = [":frontend_host"],
 )
 
@@ -3516,5 +3532,6 @@ host_test(
         "-lobjc",
     ],
     sanitize = False,
+    tags = ["m2v"],
     deps = [":frontend_host"],
 )

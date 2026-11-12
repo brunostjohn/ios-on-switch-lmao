@@ -72,6 +72,7 @@ py_test(
         "//drivers/TegraGM20BMetal:raw_tree",
         "//gpu:raw_stack_inputs",
     ],
+    tags = ["m2v"],
 )
 
 py_binary(

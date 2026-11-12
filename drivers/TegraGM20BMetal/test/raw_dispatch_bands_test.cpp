@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_dispatch_bands.h on the host: a long dispatch's pieces cover its grid once along its longest axis, a
-// piece count follows the budget, and the piece's base reaches the kernel where NVK's compile reads its workgroup base.
+// piece count follows the budget, and the piece's base reaches the root table's workgroup base.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -73,17 +73,10 @@ TEST(DispatchPieces, AMeasuredKernelIsCutByItsTime)
     EXPECT_EQ(raw::pieceCount(raw::estimatedNs(rate, threads, staticNs), TGM_APP_BAND_NS, 4096, 64), 6u);
 }
 
-// NVK's root table opens with cs.base_group then cs.group_count (nvk_cmd_buffer.h), every compute shader is compiled with
-// its workgroup id based there (nvk_shader.c has_base_workgroup_id, nvk_nir_lower_descriptors.c), and a launch writes the
-// piece's base and the whole grid's count into those words
+// A launch writes the piece's base and the whole grid's count into the root table's first words, where the kernel's
+// compile reads its workgroup base (m2v_source_test holds NVK's compile to reading it there)
 TEST(DispatchPieces, ThePiecesBaseIsTheKernelsWorkgroupBase)
 {
-    const std::string root = SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_cmd_buffer.h");
-    EXPECT_THAT(root, HasSubstr("struct {\n         uint32_t base_group[3];\n         uint32_t group_count[3];\n      } cs;"));
-    EXPECT_THAT(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_shader.c"),
-                HasSubstr(".has_base_workgroup_id = mesa_shader_stage_is_compute(nir->info.stage),"));
-    EXPECT_THAT(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_nir_lower_descriptors.c"),
-                HasSubstr("return lower_sysval_to_root_table(b, intrin, cs.base_group, ctx);"));
     const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
     const std::string launch = Body(compute, "bool ComputeEncoder::launch(");
     EXPECT_THAT(launch, HasSubstr("rootWords(r, piece.base.data(), grid.data(),"));
