@@ -151,8 +151,12 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr);
             return;
         }
-        bool remote = remote_->serving();
-        if (!remote && remote_->declined()) {
+        // the installed seed's, this process's or the disk's answer, which compiler_->ask then gives at once
+        RuntimeRecord known;
+        std::string why;
+        const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
+        bool remote = !found && remote_->serving();
+        if (!found && !remote && remote_->declined()) {
             pending->ready(nullptr);
             return;
         }

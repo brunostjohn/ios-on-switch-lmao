@@ -358,9 +358,17 @@ const char *rmUnsupportedComputeState(MTLComputePipelineDescriptor *d);
 id rmRefuseUnsupported(const char *why, NSError **error);
 
 // RawMetalStates.mm: the state of `d` as the pack and the archives it lists answer, nil where it is Metal's binary archive
-// miss (`*error`), never compiled; and whether the archives miss the state of `d` (its functions this device's)
+// miss (`*error`), its record made at once where neither holds it (nil where its creation fails, `*error`); and whether the
+// archives miss the state of `d` (its functions this device's)
 RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
 bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
+// rmPipelineFor's parts: the state as the pack and the archives answer, whether its record is still to be made and what to
+// ask the runtime for, and the state handed to its creator once its record is there or refused (its m2v twin made then)
+RMPipeline *rmPipelineShell(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
+bool rmNeedsRecord(RMPipeline *p);
+raw::Completion::Ask rmRecordAsk(RMPipeline *p, MTLRenderPipelineDescriptor *d);
+id<MTLRenderPipelineState> rmFinishState(RMPipeline *p, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
+                                         MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error);
 
 // RawMetalYcbcrTargets.mm: two-plane YCbCr code textures rendered into (raw_ycbcr_store.h). A target's stand-in and chroma
 // textures (Texture::planarStandIn, chromaCodes, chromaHalved), the reason a pass into one goes to m2v (null: none), its chroma

@@ -228,19 +228,30 @@ static void markProbes(raw::Pipeline *pl, NSString *label)
 }
 #endif
 
-// A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
-// creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw
-static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+bool rmNeedsRecord(RMPipeline *p)
 {
-    RAW_DIAGNOSTIC(p->_obtained.how = p->_raw ? "pack" : "none");
-    if (p->_raw || !p->_completable || !gRM->completion)
-        return;
+    return !p->_raw && p->_completable && gRM->completion;
+}
+
+raw::Completion::Ask rmRecordAsk(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+{
     raw::Completion::Ask a;
     a.descriptor = twinDescriptor(d);
     a.facade = d;
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
+    return a;
+}
+
+// A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
+// creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw
+static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+{
+    RAW_DIAGNOSTIC(p->_obtained.how = p->_raw ? "pack" : "none");
+    if (!rmNeedsRecord(p))
+        return;
+    const raw::Completion::Ask a = rmRecordAsk(p, d);
     p->_raw = gRM->completion->makeNow(a, p->_failure);
     RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
@@ -273,7 +284,7 @@ bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, 
     return renderArchiveAnswer(d, o, raw::Pack::fnv(key.data(), key.size()), error) == raw::ArchiveAnswer::Missed;
 }
 
-RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
+RMPipeline *rmPipelineShell(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
 {
     if (const char *why = rmUnsupportedRenderState(d))
         return rmRefuseUnsupported(why, error);
@@ -319,6 +330,14 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     if (answer == raw::ArchiveAnswer::Missed)
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;
+    return p;
+}
+
+RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
+{
+    RMPipeline *p = rmPipelineShell(device, d, o, error);
+    if (!p)
+        return nil;
     makeRecord(p, d);
     if (p->_failure.empty())
         return p;
@@ -396,12 +415,9 @@ static id<MTLRenderPipelineState> laterTwin(MTLRenderPipelineDescriptor *d, MTLP
 // A state of `d` under `o`: its record the pack's, or made at once, unless the archives it lists miss it as Metal's would; its
 // m2v twin made as a packed state's where the pack or an archive holds it (packedTwinDescriptor). A state raw draws from
 // its creation, asked for no reflection, gets its twin only if a command buffer that sets it goes to m2v.
-static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
-                                            MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
+id<MTLRenderPipelineState> rmFinishState(RMPipeline *p, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
+                                         MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
 {
-    RMPipeline *p = rmPipelineFor(device, d, o, error);
-    if (!p)
-        return nil;
     const bool packed = p->_raw || p->_archived;
     if (p->_raw && p->_madeFrom && !reflection) {
         p->_twinOptions = o;
@@ -425,6 +441,13 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
     return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
 }
 
+static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
+                                            MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
+{
+    RMPipeline *p = rmPipelineFor(device, d, o, error);
+    return p ? rmFinishState(p, d, o, reflection, error) : nil;
+}
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
@@ -443,46 +466,6 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
     if (ycbcrTargetFormat(d))
         return [self ycbcrTargetState:d options:o reflection:reflection error:error];
     return makeState(self, d, o, reflection, error);
-}
-
-// Made as the synchronous calls make a state (its record at its creation, its m2v twin at its first fallback), on a global queue
-// of the caller's class, which Metal calls the handler on
-static dispatch_queue_t creationQueue()
-{
-    const qos_class_t mine = qos_class_self();
-    return dispatch_get_global_queue(mine == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_USER_INITIATED : mine, 0);
-}
-
-- (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
-                           completionHandler:(MTLNewRenderPipelineStateCompletionHandler)handler
-{
-    MTLRenderPipelineDescriptor *copy = [d copy];
-    RMDevice *me = self;
-    dispatch_async(creationQueue(), ^{
-        NSError *e = nil;
-        id<MTLRenderPipelineState> state = [me newRenderPipelineStateWithDescriptor:copy error:&e];
-        handler(state, e);
-    });
-}
-
-- (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
-                                     options:(MTLPipelineOption)o
-                           completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler
-{
-    MTLRenderPipelineDescriptor *copy = [d copy];
-    RMDevice *me = self;
-    dispatch_async(creationQueue(), ^{
-        NSError *e = nil;
-        MTLAutoreleasedRenderPipelineReflection reflection = nil;
-        id<MTLRenderPipelineState> state = [me
-            newRenderPipelineStateWithDescriptor:copy
-                                         options:o
-                                      reflection:(o & (MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo))
-                                                     ? &reflection
-                                                     : nil
-                                           error:&e];
-        handler(state, reflection, e);
-    });
 }
 
 - (id)wrapCarried:(id)twin
