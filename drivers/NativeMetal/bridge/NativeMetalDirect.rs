@@ -450,7 +450,11 @@ fn probe_state(
     };
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
-        let attribute_stride = if stage == Stage::Vertex { binds.bind_stride } else { None };
+        let attribute_stride = if stage == Stage::Vertex {
+            binds.bind_stride
+        } else {
+            None
+        };
         for slot in 0..PROBE_SLOTS {
             let bound = if run == BOUND_RUN {
                 let address = 0x1_0000_0000u64 + (u64::from(stage_number(stage)) << 24) + (u64::from(slot) << 16);

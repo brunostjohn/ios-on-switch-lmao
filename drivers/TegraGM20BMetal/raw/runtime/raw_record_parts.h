@@ -43,10 +43,10 @@ struct LayoutEntry {
 };
 
 struct RecordParts {
-    const CapturedProgram *programs[2] = {};  // vertex, fragment
+    const CapturedProgram *programs[2] = {};      // vertex, fragment
     const CapturedProgram *tessPrograms[2] = {};  // a tessellation state's control and evaluation programs
     uint8_t controlWord = 0, controlPoints = 0, controlPointIndexBytes = 0;  // PackPipeline's
-    std::vector<LayoutEntry> layout;          // by offset
+    std::vector<LayoutEntry> layout;                                         // by offset
     // By set-0 byte of a buffer entry: the range its descriptor holds with 16- and 4096-byte payloads; by the value a slot's
     // residual has in the bind-offset draw (probeBindOffset, a storage slot's probeStorageCode), the root word (0x700 + 4 x
     // word) that holds it
@@ -54,7 +54,7 @@ struct RecordParts {
     uint8_t vertexSlot = 0xFF;
     uint16_t vertexStride = 0;
     bool vertexStrideDynamic = false;
-    uint8_t pulledStride[4][2] = {};  // PackPipeline's
+    uint8_t pulledStride[4][2] = {};                     // PackPipeline's
     uint8_t vertexStreams[kPackVertexStreams - 1] = {};  // PackPipeline's
     uint8_t amplificationMax = 0, amplificationIdWord = 0, amplificationCountRead = 0;
     std::map<uint32_t, uint32_t> regs;  // the 3D registers at the state's draw

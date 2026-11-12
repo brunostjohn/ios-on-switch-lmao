@@ -185,7 +185,7 @@ struct RawState {
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =
-        false;           // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
+        false;  // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
 #if SWITCH_RAW_DIAGNOSTICS
     int lastDriver = 0;
 #endif
@@ -293,8 +293,8 @@ bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
-bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
-                     void *bytes, NSUInteger row, NSUInteger image, bool write);
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice, void *bytes,
+                     NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 const tgm_layout *textureCpuImportLayout(RMTexture *texture);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
@@ -353,6 +353,7 @@ struct RMEventWaitNote {
     uint64_t value;
     uint64_t sinceUs, saidUs;
 };
+
 extern std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
 #endif
 bool waitsForEvent(RMCommandBuffer *cb);
@@ -372,7 +373,12 @@ bool sharedWaitsReady(RMCommandBuffer *cb, bool native);
 void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands);
 void publishSharedEvents(RMCommandBuffer *cb);
 void enqueueBuffer(RMCommandBuffer *cb);
-enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress = 2 };
+
+enum RMReadyDependency : uint32_t {
+    RMRawProgress = 1,
+    RMCompatibilityProgress = 2
+};
+
 void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
@@ -420,7 +426,8 @@ void queuePriorityRemove(RMQueue *queue);
 void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
-bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
+bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
+                          const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 
 // RawMetalRates.mm

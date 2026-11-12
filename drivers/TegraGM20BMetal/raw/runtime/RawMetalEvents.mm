@@ -95,15 +95,16 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_resourceReady.reset();
         if (result != KERN_SUCCESS) {
             std::lock_guard<std::mutex> lock(cb->_lock);
-            cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                               code:MTLCommandBufferErrorInternal
-                                           userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness failed before GPU submission"}];
+            cb->_segError = [NSError
+                errorWithDomain:MTLCommandBufferErrorDomain
+                           code:MTLCommandBufferErrorInternal
+                       userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness failed before GPU submission"}];
             return Readiness::ready;
         }
     }
-    const bool native = cb->_segNext < cb->_segs.size() &&
-                        (cb->_segs[cb->_segNext].raw || cb->_segs[cb->_segNext].gpuSignal ||
-                         cb->_segs[cb->_segNext].gpuWait);
+    const bool native =
+        cb->_segNext < cb->_segs.size() &&
+        (cb->_segs[cb->_segNext].raw || cb->_segs[cb->_segNext].gpuSignal || cb->_segs[cb->_segNext].gpuWait);
     if (!sharedWaitsReady(cb, native))
         return Readiness::blocked;
     if (!cb->_gpuEventWaits.empty()) {
@@ -113,8 +114,8 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
             return Readiness::blocked;
         case raw::EventDependencyState::failed:
             cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                               code:MTLCommandBufferErrorInternal
-                                           userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
+                                                code:MTLCommandBufferErrorInternal
+                                            userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
             return Readiness::ready;
         case raw::EventDependencyState::ready:
             break;
@@ -202,8 +203,7 @@ std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
         cb->_rawPrefixGeneration = cb->_channelGeneration;
     if (cb->_rawPrefixGeneration != cb->_channelGeneration)
         cb->_gpuPrefixEligible = false;
-    if (!cb->_gpuPrefixEligible || cb->_segNext + 1 >= cb->_segs.size() ||
-        !cb->_segs[cb->_segNext + 1].event)
+    if (!cb->_gpuPrefixEligible || cb->_segNext + 1 >= cb->_segs.size() || !cb->_segs[cb->_segNext + 1].event)
         return signals;
     {
         std::lock_guard<std::mutex> lock(cb->_lock);
@@ -260,8 +260,8 @@ raw::EventDependencyState validateNativeEventWaits(RMCommandBuffer *cb, uint64_t
     const raw::EventDependencyState state = raw::eventDependencies(cb->_gpuEventWaits, generation, true);
     if (state == raw::EventDependencyState::failed)
         cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                           code:MTLCommandBufferErrorInternal
-                                       userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
+                                            code:MTLCommandBufferErrorInternal
+                                        userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
     return state;
 }
 

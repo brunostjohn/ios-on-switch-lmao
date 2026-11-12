@@ -29,8 +29,8 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit :
-		     {"", "Pool", "Bo", "Channel", "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
+		for (const char *unit : {"", "Pool", "Bo", "Channel", "Submit", "Dispatch",
+					 "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../TegraGM20BUserClientInternal.h") +
 		       SourceText("../SwitchGpuClientRetirement.h");
@@ -42,8 +42,9 @@ const std::string &gpu()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire", "stats",
-					 "stats_tick", "chan", "sync", "exec", "present", "scrub", "power"})
+		for (const char *unit :
+		     {"bringup", "clock", "mem", "hang", "describe", "acquire", "stats",
+		      "stats_tick", "chan", "sync", "exec", "present", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -106,7 +107,8 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 	EXPECT_THAT(refusal, HasSubstr("compositor);"));  // the compositor keeps nvkm's floor
 	const std::string alloc =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
-	EXPECT_THAT(alloc, HasSubstr("refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, critical_);"));
+	EXPECT_THAT(alloc, HasSubstr("refused = control ? nullptr : poolRefusal(in->bytes, "
+				     "pool_bytes_, critical_);"));
 	EXPECT_THAT(alloc, HasSubstr("tgm_pool::coherentSource(refused, bo->pool_va != nullptr)"));
 	// A refusal does not fail the BO: no NoMemory between the tier check and the pool allocation.
 	EXPECT_THAT(Between(alloc, "if (!ret && (in->flags & TegraGM20BBoCoherent)) {",
@@ -162,14 +164,16 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 		    HasSubstr("cleanZeros(bmd->getBytesNoCopy(), bytes);"));
 	const std::string work = flat(definition(
 		client(), "void spareWork(thread_call_param_t param, thread_call_param_t)"));
-    EXPECT_THAT(work, HasSubstr("switch_gpu_cached_zero(s->pas"));
-    EXPECT_THAT(work, Not(HasSubstr("cleanZeros(s->bmd")));
-    const std::string completed = flat(definition(client(), "void spareZeroed(void *context, int result)"));
-    expectBefore(completed, "const bool keep = !result && !memoryPressure();", "p->ready[c] = s;");
+	EXPECT_THAT(work, HasSubstr("switch_gpu_cached_zero(s->pas"));
+	EXPECT_THAT(work, Not(HasSubstr("cleanZeros(s->bmd")));
+	const std::string completed =
+		flat(definition(client(), "void spareZeroed(void *context, int result)"));
+	expectBefore(completed, "const bool keep = !result && !memoryPressure();",
+		     "p->ready[c] = s;");
 	const std::string zeros =
 		flat(definition(client(), "void cleanZeros(void *va, uint64_t bytes)"));
 	EXPECT_THAT(zeros, HasSubstr("switch_dcache_clean_invalidate(va, bytes);"));
-    EXPECT_THAT(zeros, Not(HasSubstr("bzero")));
+	EXPECT_THAT(zeros, Not(HasSubstr("bzero")));
 	// A pool view's pages go back only once no task maps the view; a cached BO's buffer is a spare only once nothing
 	// else holds it.
 	const std::string orphans = flat(definition(client(), "void releaseOrphans()"));
@@ -181,7 +185,8 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 		    HasSubstr("bmd->getRetainCount() == 1"));
 	const std::string free =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boFree("));
-	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);", "queueZombie(bo);");
+	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);",
+		     "queueZombie(bo);");
 }
 
 // The import costs (the "imports" and "slow import" lines, the refused import's region) are the debug kernel's alone:
@@ -276,10 +281,12 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 	      "long *pa)"})
 		EXPECT_THAT(definition(shim, signature), HasSubstr("pool_zero_dirty("))
 			<< signature;
-    const std::string chunks = definition(shim, "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned long long *pas)");
-    EXPECT_THAT(chunks, HasSubstr("dirty > 0"));
-    EXPECT_THAT(chunks, Not(HasSubstr("pool_zero_dirty(")));
-    EXPECT_THAT(definition(shim, "void *nvxnu_pool_alloc_ready("), Not(HasSubstr("pool_zero_dirty(")));
+	const std::string chunks = definition(
+		shim, "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned long long *pas)");
+	EXPECT_THAT(chunks, HasSubstr("dirty > 0"));
+	EXPECT_THAT(chunks, Not(HasSubstr("pool_zero_dirty(")));
+	EXPECT_THAT(definition(shim, "void *nvxnu_pool_alloc_ready("),
+		    Not(HasSubstr("pool_zero_dirty(")));
 	const std::string zero = definition(
 		shim, "static void pool_zero_dirty(unsigned long first, unsigned long n, int all)");
 	EXPECT_THAT(zero, HasSubstr("test_bit(first + k, pool_dirty)"));
@@ -362,12 +369,14 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(scan, HasSubstr("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
-	EXPECT_THAT(Between(gpu(), "void chan_job_entry(", "\n}\n"),
-		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
+	EXPECT_THAT(
+		Between(gpu(), "void chan_job_entry(", "\n}\n"),
+		HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
 	// A job with internal fences is profiled whole: read at its last seqno, against its first's start stamp.
 	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
 		    HasSubstr("|| count > TGM_PROF_MAX || profiled))"));
-	EXPECT_THAT(Between(gpu(), "int chan_exec_body(", "\n}\n"), HasSubstr("chan->submitted + 1 + fences); /*"));
+	EXPECT_THAT(Between(gpu(), "int chan_exec_body(", "\n}\n"),
+		    HasSubstr("chan->submitted + 1 + fences); /*"));
 	EXPECT_THAT(Between(gpu(), "static inline void stats_fences(", "\n}\n"),
 		    HasSubstr("prof_collect(chan, first, fs->start.ns, st->end.ns)"));
 }
@@ -377,7 +386,8 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 // its submit lock, and a Core Animation job of segment binds (about 90 pushes) fits it.
 TEST(GM20BPushScanSource, SubmitJobScansAndProfilesItsPushes)
 {
-	const std::string run = Between(client(), "IOReturn AGXDeviceUserClient::runJobUses(", "\n}\n");
+	const std::string run =
+		Between(client(), "IOReturn AGXDeviceUserClient::runJobUses(", "\n}\n");
 	EXPECT_THAT(run, HasSubstr("scanPushes(pushes, count, profiled ? job.profile : nullptr);"));
 	EXPECT_THAT(run, HasSubstr("&seqno, prof, jobVisibility);"));
 	EXPECT_THAT(run, HasSubstr("dependencies + siblingCount, prof);"));
@@ -431,8 +441,9 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 
 	const std::string scanout =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
-	expectBefore(scanout, "#if TGM_STATS tgm_present_read reads",
-		     "#else gPresentSnapshot.done = presentDone; ret = tgm_present_copy_dependencies(");
+	expectBefore(
+		scanout, "#if TGM_STATS tgm_present_read reads",
+		"#else gPresentSnapshot.done = presentDone; ret = tgm_present_copy_dependencies(");
 	EXPECT_THAT(scanout, HasSubstr("nreads ? tgm_readback_done : presentDone"));
 	EXPECT_THAT(scanout, HasSubstr("if (ret && nreads) tgm_readback_refused();"));
 
@@ -579,12 +590,18 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 	EXPECT_THAT(order, HasSubstr("READ_ONCE(other->error)) continue;"));
 	const std::string killed = flat(definition(
 		gpu(), "int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
-	EXPECT_THAT(killed, HasSubstr("__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
+	EXPECT_THAT(
+		killed,
+		HasSubstr("__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
 	EXPECT_THAT(killed, HasSubstr("chan->kernel || !tgm_all_clients()"));
-	EXPECT_LT(killed.find("switch_gpu_timeline_failed("), killed.find("__atomic_store_n(chan->fence_cpu"));
-	const std::string freed = flat(definition(gpu(), "static void chan_free(struct tgm_chan *chan)"));
-	EXPECT_LT(freed.find("nvif_event_dtor(&chan->kill)"), freed.find("switch_gpu_timeline_close("));
-	EXPECT_LT(freed.find("nvif_event_dtor(&chan->nonstall)"), freed.find("switch_gpu_timeline_close("));
+	EXPECT_LT(killed.find("switch_gpu_timeline_failed("),
+		  killed.find("__atomic_store_n(chan->fence_cpu"));
+	const std::string freed =
+		flat(definition(gpu(), "static void chan_free(struct tgm_chan *chan)"));
+	EXPECT_LT(freed.find("nvif_event_dtor(&chan->kill)"),
+		  freed.find("switch_gpu_timeline_close("));
+	EXPECT_LT(freed.find("nvif_event_dtor(&chan->nonstall)"),
+		  freed.find("switch_gpu_timeline_close("));
 	EXPECT_THAT(flat(definition(client(), "bool AGXDeviceUserClient::bindingIdle(")),
 		    HasSubstr("!tgm_chan_error(chans_[slot])"));
 }
@@ -598,8 +615,9 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 {
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_gpu.cpp");
 	// raw_channel_recovery.h makeChannel makes the channel, then runs newContext on it
-	const std::string reopen = flat(definition(raw, "bool Device::reopen()")) +
-				   flat(definition(raw, "bool Device::newContext(uint32_t channel, uint32_t &seq)"));
+	const std::string reopen =
+		flat(definition(raw, "bool Device::reopen()")) +
+		flat(definition(raw, "bool Device::newContext(uint32_t channel, uint32_t &seq)"));
 	EXPECT_THAT(reopen, Not(HasSubstr("placed_")));
 	EXPECT_THAT(reopen, Not(HasSubstr("heapPlaced_")));
 	EXPECT_THAT(reopen, Not(HasSubstr("pipelines_")));
@@ -631,9 +649,10 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 	EXPECT_THAT(
 		flat(definition(raw, "void sampleWords(Push &p, uint32_t samples, uint64_t root,")),
 		HasSubstr("sampleLayoutMethods(p, l, kRootBytes, root);"));
-	EXPECT_THAT(flat(definition(SourceText("../../TegraGM20BMetal/raw/runtime/raw_multisample.h"),
-				    "inline void sampleLayoutMethods(")),
-		    HasSubstr("p.inc(NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,"));
+	EXPECT_THAT(
+		flat(definition(SourceText("../../TegraGM20BMetal/raw/runtime/raw_multisample.h"),
+				"inline void sampleLayoutMethods(")),
+		HasSubstr("p.inc(NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,"));
 	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
 	expectBefore(begin, "!reopen())", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
 }
@@ -643,8 +662,7 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 {
 	EXPECT_EQ(Count(gpu(), "PUSH_WAIT("), 0u);
-	EXPECT_EQ(Count(gpu(), "nvif_chan_gpfifo_wait("),
-		  3u);
+	EXPECT_EQ(Count(gpu(), "nvif_chan_gpfifo_wait("), 3u);
 	const std::string wait = flat(definition(
 		gpu(),
 		"int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
@@ -660,13 +678,18 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
 {
 	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "switch_gpu_chan_submit_enter(chan);", "switch_gpu_backing_begin_checked(");
+	expectBefore(exec, "switch_gpu_chan_submit_enter(chan);",
+		     "switch_gpu_backing_begin_checked(");
 	expectBefore(exec, "switch_gpu_backing_abort(&transaction);",
-		"switch_gpu_chan_wait_submission_room(");
-	expectBefore(exec, "switch_gpu_backing_commit(&transaction);", "switch_gpu_chan_submit_leave();");
+		     "switch_gpu_chan_wait_submission_room(");
+	expectBefore(exec, "switch_gpu_backing_commit(&transaction);",
+		     "switch_gpu_chan_submit_leave();");
 	const auto emit = flat(definition(gpu(), "int chan_exec_body("));
-	EXPECT_THAT(emit, HasSubstr("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
-	expectBefore(emit, "chan->chan.defer_kick = true;", "nvif_chan_gpfifo_wait(&chan->chan, entries, words)");
+	EXPECT_THAT(
+		emit,
+		HasSubstr("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
+	expectBefore(emit, "chan->chan.defer_kick = true;",
+		     "nvif_chan_gpfifo_wait(&chan->chan, entries, words)");
 	EXPECT_THAT(emit, HasSubstr("chan->chan.gpfifo.cur = ring_cur;"));
 }
 
@@ -675,10 +698,14 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 {
 	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
 	EXPECT_THAT(job, Not(HasSubstr("IOLockLock(lock_)")));
-	expectBefore(job, "switch_gpu_chan_submit_enter(chan);", "switch_gpu_backing_begin_checked(");
-	expectBefore(job, "switch_gpu_backing_abort(&transaction);", "switch_gpu_chan_wait_submission_room(");
-	expectBefore(job, "switch_gpu_backing_commit(&transaction);", "switch_gpu_chan_submit_leave();");
-	expectBefore(job, "switch_gpu_set_note_job(set, slot, &completion);", "switch_gpu_chan_submit_leave();");
+	expectBefore(job, "switch_gpu_chan_submit_enter(chan);",
+		     "switch_gpu_backing_begin_checked(");
+	expectBefore(job, "switch_gpu_backing_abort(&transaction);",
+		     "switch_gpu_chan_wait_submission_room(");
+	expectBefore(job, "switch_gpu_backing_commit(&transaction);",
+		     "switch_gpu_chan_submit_leave();");
+	expectBefore(job, "switch_gpu_set_note_job(set, slot, &completion);",
+		     "switch_gpu_chan_submit_leave();");
 	const auto submit = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitJob("));
 	expectBefore(submit, "submitGate_.enterFast();", "runJob(record, job, out)");
 	expectBefore(submit, "runJob(record, job, out)", "submitGate_.leaveFast(lock_);");
@@ -689,15 +716,20 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 {
 	const auto run = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJob("));
-	expectBefore(run, "switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);", "return kIOReturnNotReady;");
+	expectBefore(run, "switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);",
+		     "return kIOReturnNotReady;");
 	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
-	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);", "return kIOReturnSuccess;");
-	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);", "return kIOReturnSuccess;");
-	const auto address = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitAddress("));
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);",
+		     "return kIOReturnSuccess;");
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);",
+		     "return kIOReturnSuccess;");
+	const auto address =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::submitAddress("));
 	expectBefore(address, "result = exec(submit->channel,",
 		     "switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);");
 	const std::string paths = SourceText("../SwitchGpuPathStats.cpp");
-	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\""})
+	for (const char *name :
+	     {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\""})
 		EXPECT_THAT(paths, HasSubstr(name));
 }
 
@@ -706,8 +738,10 @@ TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 TEST(GM20BRoomSource, AWokenFenceWaitTakesNoConnectionLock)
 {
 	const auto wait = flat(definition(client(), "IOReturn AGXDeviceUserClient::waitFence("));
-	expectBefore(wait, "switch_gpu_fence_passed(record, in->seqno, waitedOn)", "IOLockLock(lock_);");
-	expectBefore(wait, "if (ret != kIOReturnSuccess) { IOLockLock(lock_);", "tgm_chan_want(chan, in->seqno);");
+	expectBefore(wait, "switch_gpu_fence_passed(record, in->seqno, waitedOn)",
+		     "IOLockLock(lock_);");
+	expectBefore(wait, "if (ret != kIOReturnSuccess) { IOLockLock(lock_);",
+		     "tgm_chan_want(chan, in->seqno);");
 }
 
 // The waiter a submitter sleeps in after -EAGAIN waits for exactly the room chan_exec then checks, computed in one place:
@@ -719,11 +753,13 @@ TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)
 	EXPECT_THAT(room, HasSubstr("5 * (TGM_ORDER_MAX + dependency_count + 1)"));
 	// SubmitJob's sibling acquires take a dependency's room; its retry asks the waiter for both together.
 	expectBefore(flat(definition(gpu(), "int chan_exec_body(")),
-		     "chan_submission_room(chan, pushes, count, dependency_count + sibling_count, fences, &prof, "
+		     "chan_submission_room(chan, pushes, count, dependency_count + sibling_count, "
+		     "fences, &prof, "
 		     "&entries, &words);",
 		     "if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;");
 	expectBefore(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")),
-		     "chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);",
+		     "chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, "
+		     "&entries, &words);",
 		     "ret = tgm_chan_wait_ready(chan, entries, words);");
 }
 
@@ -758,7 +794,8 @@ TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "error = switch_gpu_chan_exec_visibility(",
 		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
-	expectBefore(exec, "error = switch_gpu_chan_exec_visibility(", "switch_gpu_backing_commit(&transaction);");
+	expectBefore(exec, "error = switch_gpu_chan_exec_visibility(",
+		     "switch_gpu_backing_commit(&transaction);");
 	const std::string after = flat(definition(SourceText("../TegraGM20BExecSurfaces.cpp"),
 						  "void ExecSurfaces::after("));
 	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
@@ -774,7 +811,8 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "if (followed < 0) return ioreturn(followed);",
 		     "error = switch_gpu_chan_exec_visibility(");
-	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec_visibility(");
+	expectBefore(exec, "switch_gpu_backing_dependencies(",
+		     "error = switch_gpu_chan_exec_visibility(");
 	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
 	// Named uses carry no CPU exclusion unless an admission ordered them; a legacy job claims only listed imports.
 	EXPECT_THAT(exec, HasSubstr("const uint32_t claim = switch_gpu_claim_flags(admissionBegin "
@@ -789,9 +827,10 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		expectBefore(follow, "tgm_fence_wanted(", "ret = order_add(chan,");
 		expectBefore(follow, "ret = order_add(chan,", "mutex_unlock(&tgm_live_lock);");
 	}
-	const auto capabilities = flat(definition(client(), "uint32_t switch_gpu_info_flags(void)"));
+	const auto capabilities =
+		flat(definition(client(), "uint32_t switch_gpu_info_flags(void)"));
 	for (const char *capability : {"TegraGM20BInfoExecSurfaces", "TegraGM20BInfoSubmitAddress",
-				      "TegraGM20BInfoCpuAccess"})
+				       "TegraGM20BInfoCpuAccess"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
@@ -802,16 +841,21 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 // IOSurface over its creator's memory, which IOSurface's own field names at the import, as one that ends External.
 TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
 {
-	const std::string imported = flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
+	const std::string imported =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
 	expectBefore(imported, "bo->surface = switch_gpu_surface_hold(",
 		     "bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;");
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {", "unlockedWrites |= bo->unlockedReads;");
-	EXPECT_THAT(exec, HasSubstr("switch_gpu_job_visibility(visibility, events && events->signals(), "
-				    "unlockedWrites, hostWritten || transaction.host_written)"));
+	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {",
+		     "unlockedWrites |= bo->unlockedReads;");
+	EXPECT_THAT(exec,
+		    HasSubstr("switch_gpu_job_visibility(visibility, events && events->signals(), "
+			      "unlockedWrites, hostWritten || transaction.host_written)"));
 	const std::string surfaces = flat(SourceText("../TegraGM20BSurfaceClient.cpp"));
-	EXPECT_THAT(flat(definition(surfaces, "int switch_gpu_surface_client_memory(const OSObject *surface)")),
-		    HasSubstr("at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0"));
+	EXPECT_THAT(
+		flat(definition(surfaces,
+				"int switch_gpu_surface_client_memory(const OSObject *surface)")),
+		HasSubstr("at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
@@ -1022,21 +1066,26 @@ TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
 {
 	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_gpu_writes(job.written[i]);");
-	expectBefore(exec, "tgm_views_gpu_writes(job.written[i]);", "switch_gpu_chan_submit_enter(chan);");
+	expectBefore(exec, "tgm_views_gpu_writes(job.written[i]);",
+		     "switch_gpu_chan_submit_enter(chan);");
 }
 
 // The PBDMA's ACQUIRE interrupt is gpu_acquire.c's: the timeout goes off in the PBDMA before the bit is cleared (so the
 // same acquire cannot raise it again), and nvkm's handler, which would kill the waiter, never sees it.
 TEST(GM20BAcquireSource, TheAcquireInterruptIsTakenBeforeNvkmsHandler)
 {
-	const std::string runq = flat(definition(SourceText("../recover.c"),
+	const std::string runq = flat(definition(
+		SourceText("../recover.c"),
 		"static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)"));
 	expectBefore(runq, "tgm_acquire_intr(device, runq->id)",
 		     "nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_INTR_ACQUIRE)");
 	expectBefore(runq, "TGM_PBDMA_INTR_ACQUIRE)", "ctxsw.runq_nvkm->intr(runq, runl)");
-	const std::string intr = flat(definition(gpu(), "void tgm_acquire_intr(struct nvkm_device *device, int runq)"));
+	const std::string intr = flat(
+		definition(gpu(), "void tgm_acquire_intr(struct nvkm_device *device, int runq)"));
 	expectBefore(intr, "word & ~TGM_ACQUIRE_TIMEOUT_EN", "nvxnu_work_schedule(acq.work)");
-	EXPECT_THAT(intr, HasSubstr("nvkm_mask(device, PBDMA_INTR_EN_0(runq), TGM_PBDMA_INTR_ACQUIRE, 0)"));
+	EXPECT_THAT(
+		intr,
+		HasSubstr("nvkm_mask(device, PBDMA_INTR_EN_0(runq), TGM_PBDMA_INTR_ACQUIRE, 0)"));
 	EXPECT_THAT(intr, Not(HasSubstr("mutex_lock")));
 	EXPECT_THAT(flat(definition(SourceText("../recover.c"), "void tgm_recover_suspend(void)")),
 		    HasSubstr("tgm_acquire_suspend();"));
@@ -1050,7 +1099,8 @@ TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle
 	expectBefore(create, "chan->chid = args.chan.chid;", "tgm_acquire_arm(chan->chid);");
 	expectBefore(create, "tgm_acquire_arm(chan->chid);", "PUSH_KICK(push);");
 	const auto due = flat(definition(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)"));
-	expectBefore(due, "tgm_sched_loaded(tgm_gpu.device, chan->chid)", "tgm_acquire_arm(chan->chid);");
+	expectBefore(due, "tgm_sched_loaded(tgm_gpu.device, chan->chid)",
+		     "tgm_acquire_arm(chan->chid);");
 	EXPECT_EQ(Count(gpu(), "tgm_chan_ramfc_due(chan);"), 2u);
 }
 
@@ -1058,11 +1108,14 @@ TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle
 // channel parked past its timeout with no interrupt says so.
 TEST(GM20BAcquireSource, TheHangRuleReadsWhatEachCandidateWaitsOn)
 {
-	const auto recover = flat(definition(gpu(),
-		"enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)"));
+	const auto recover =
+		flat(definition(gpu(), "enum tgm_hang tgm_hang_recover(struct tgm_chan *late, "
+				       "const char *who, u32 seqno, u64 waited_ns)"));
 	EXPECT_THAT(recover, HasSubstr("candidate_wait(&waits, chan, &source)"));
 	EXPECT_THAT(recover, HasSubstr("kind = candidate_wait(&waits, chans[i], &source);"));
-	EXPECT_THAT(recover, HasSubstr("c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;"));
+	EXPECT_THAT(
+		recover,
+		HasSubstr("c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;"));
 	EXPECT_THAT(recover, HasSubstr("tgm_acquire_unfired(chans[i], now);"));
 	EXPECT_THAT(recover, Not(HasSubstr("chan->waited.cpu")));
 }
@@ -1197,12 +1250,14 @@ TEST(GM20BHangSource, OnlyAConnectionsPushesAreRead)
 	EXPECT_THAT(flat(relayout), HasSubstr("r.space.openSpace(kShape, &gRelayout)"));
 	EXPECT_THAT(relayout, Not(HasSubstr("tgm_vm_claim_connection(")));
 	const std::string copy = SourceText("../TegraGM20BCopy.cpp");
-	EXPECT_THAT(flat(definition(copy, "bool openSpace()")), HasSubstr("queue.space.openSpace(kShape, &queue)"));
+	EXPECT_THAT(flat(definition(copy, "bool openSpace()")),
+		    HasSubstr("queue.space.openSpace(kShape, &queue)"));
 	EXPECT_THAT(copy, Not(HasSubstr("tgm_vm_claim_connection(")));
 	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::free()")),
 		     "drainResources();", "IOLockFree(lock_);");
 	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::drainResources()")),
-		     "for (auto &chan : chans_) tgm_chan_del(&chan);", "thread_call_cancel_wait(retireCall_);");
+		     "for (auto &chan : chans_) tgm_chan_del(&chan);",
+		     "thread_call_cancel_wait(retireCall_);");
 	expectBefore(flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")),
 		     "mutex_lock(&tgm_live_lock); list_del(&chan->live);", "chan_free(chan);");
 }
@@ -1222,12 +1277,13 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 	EXPECT_THAT(
 		waits,
 		HasSubstr("\"gpu-order\", \"writer-unordered\", \"a kernel copy cannot acquire"));
-    EXPECT_THAT(waits, HasSubstr("return TGM_RELAYOUT_WAIT_FAILED;"));
-    EXPECT_THAT(waits, Not(HasSubstr("tgm_writer_wait(")));
+	EXPECT_THAT(waits, HasSubstr("return TGM_RELAYOUT_WAIT_FAILED;"));
+	EXPECT_THAT(waits, Not(HasSubstr("tgm_writer_wait(")));
 	const std::string move = flat(definition(relayout, "int move("));
-	EXPECT_THAT(move,
-		    HasSubstr("tgm_relayout_waits(r.space.vm, tgm_chan_uid(chan), writers, nwriters, "
-			      "waits, 0)"));
+	EXPECT_THAT(
+		move,
+		HasSubstr("tgm_relayout_waits(r.space.vm, tgm_chan_uid(chan), writers, nwriters, "
+			  "waits, 0)"));
 	// its wait is late on the writer an acquire sits on, so recovery finds that writer, not the copy behind it
 	EXPECT_THAT(move, HasSubstr("acquired[i] = {waits[i].uid, waits[i].seqno};"));
 	EXPECT_THAT(move, HasSubstr("tgm_copy_wait(tgm_chan_uid(chan), seqno, acquired, nwaits);"));
@@ -1239,11 +1295,15 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 		flat(definition(gpu(), "static void writer_wait(")),
 		HasSubstr("chan = late_writer(uid, seqno, acquired, nacquired, &late); if "
 			  "(chan) verdict = tgm_hang_recover(chan, \"IOSurface lock\", late, "));
-	EXPECT_THAT(flat(relayout), HasSubstr("{\"relayout\", TGM_FENCE_KERNEL_RELAYOUT, 1, kPushVa, 0, 1}"));
-	EXPECT_THAT(flat(definition(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")),
-		    HasSubstr("tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, &fenceOffset)"));
+	EXPECT_THAT(flat(relayout),
+		    HasSubstr("{\"relayout\", TGM_FENCE_KERNEL_RELAYOUT, 1, kPushVa, 0, 1}"));
+	EXPECT_THAT(
+		flat(definition(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")),
+		HasSubstr(
+			"tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, &fenceOffset)"));
 	const std::string copy = flat(SourceText("../TegraGM20BCopy.cpp"));
-	EXPECT_THAT(copy, HasSubstr("switch_gpu_backing_dependencies(&transaction, queue.dependencies,"));
+	EXPECT_THAT(copy,
+		    HasSubstr("switch_gpu_backing_dependencies(&transaction, queue.dependencies,"));
 	EXPECT_THAT(copy, HasSubstr("queue.events.captureDependencies(queue.dependencies, count)"));
 	EXPECT_THAT(copy, HasSubstr("switch_gpu_chan_exec_visibility("));
 	EXPECT_THAT(copy, Not(HasSubstr("tgm_writer_wait(")));
@@ -1264,7 +1324,8 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 {
 	const auto imported = flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
 	expectBefore(imported, "bo->surface = switch_gpu_surface_hold(", "tgm_coherency_add(");
-	const auto released = flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
+	const auto released =
+		flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
 	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
 }
 
@@ -1290,13 +1351,14 @@ TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEve
 
 TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuTokens)
 {
-    const auto copy = flat(definition(gpu(), "static int present_copy("));
-    EXPECT_EQ(Count(copy, "if (!exact) {"), 2u);
-    const auto exact = flat(definition(gpu(), "int tgm_present_copy_dependencies("));
-    EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count, 1)"));
-    const auto scanout = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
-    EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.add(sourceBacking)"));
-    EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.tokens, gPresentSnapshot.count"));
+	const auto copy = flat(definition(gpu(), "static int present_copy("));
+	EXPECT_EQ(Count(copy, "if (!exact) {"), 2u);
+	const auto exact = flat(definition(gpu(), "int tgm_present_copy_dependencies("));
+	EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count, 1)"));
+	const auto scanout =
+		flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
+	EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.add(sourceBacking)"));
+	EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.tokens, gPresentSnapshot.count"));
 }
 
 TEST(GM20BVmSource, MappingSerializesPerAddressSpaceWithSuspendAdmission)
@@ -1322,19 +1384,26 @@ TEST(GM20BVmSource, MappingSerializesPerAddressSpaceWithSuspendAdmission)
 TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 {
 	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	EXPECT_THAT(exec, HasSubstr("const uint32_t fenceFlag = native && scratch ? uint32_t(TegraGM20BPushFence) : 0u;"));
-	EXPECT_THAT(exec, HasSubstr("if (switch_gpu_job_fences(pushes, count, &fences)) return kIOReturnBadArgument;"));
+	EXPECT_THAT(exec, HasSubstr("const uint32_t fenceFlag = native && scratch ? "
+				    "uint32_t(TegraGM20BPushFence) : 0u;"));
+	EXPECT_THAT(exec, HasSubstr("if (switch_gpu_job_fences(pushes, count, &fences)) return "
+				    "kIOReturnBadArgument;"));
 	EXPECT_THAT(exec, HasSubstr("switch_gpu_chan_job_token(chan, fences, &completion);"));
 	EXPECT_THAT(exec, Not(HasSubstr("switch_gpu_chan_next_token(")));
 	// resolved once: a written import is marked from what the uses resolved, not looked up again
 	EXPECT_THAT(exec, HasSubstr("job.written[writtenCount++] = bo->coh;"));
-	EXPECT_THAT(exec, HasSubstr("tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);"));
+	EXPECT_THAT(
+		exec,
+		HasSubstr(
+			"tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);"));
 	EXPECT_THAT(exec, Not(HasSubstr("findAddress(")));
 	const auto emit = flat(definition(gpu(), "int chan_exec_body("));
 	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
 	EXPECT_THAT(room, HasSubstr("*entries = count + 6 + stamps + job_fences;"));
 	EXPECT_THAT(room, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;"));
-	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
+	EXPECT_THAT(
+		emit,
+		HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
 	EXPECT_THAT(flat(definition(client(), "uint32_t switch_gpu_info_flags(void)")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
 }
@@ -1343,13 +1412,15 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 // that joins bos_ joins the index, and every one that leaves it leaves the index.
 TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 {
-	const auto find = flat(definition(client(), "AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo("));
+	const auto find =
+		flat(definition(client(), "AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo("));
 	EXPECT_THAT(find, HasSubstr("return boIndex_.find(handle);"));
 	const std::string sources = client() + SourceText("../SwitchGpuNativeImport.h") +
 				    SourceText("../SwitchGpuClientRetirement.h");
 	EXPECT_EQ(Count(sources, "bos_ = bo;"), Count(sources, "boIndex_.insert(bo->handle, bo);"));
 	EXPECT_EQ(Count(sources, "boIndex_.reserve()"), 3u);
-	expectBefore(flat(definition(SourceText("../SwitchGpuClientRetirement.h"), "IOReturn AGXDeviceUserClient::boFree(")),
+	expectBefore(flat(definition(SourceText("../SwitchGpuClientRetirement.h"),
+				     "IOReturn AGXDeviceUserClient::boFree(")),
 		     "*p = bo->next;", "boIndex_.erase(bo->handle);");
 }
 
@@ -1357,12 +1428,14 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 {
 	const auto fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
 	EXPECT_THAT(fence, HasSubstr("if (external && (l2_on() || chan->kernel))"));
-	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "if (external && chan->visible_cpu)");
+	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
+		     "if (external && chan->visible_cpu)");
 	expectBefore(fence, "lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)");
 	EXPECT_THAT(fence, HasSubstr("RELEASE_WFI, EN"));
 	const auto exec = flat(definition(gpu(), "int chan_exec_body("));
 	EXPECT_THAT(exec, HasSubstr("if ((l2_on() && host_written) || tlb)"));
-	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
+	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
+		     "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
 	EXPECT_THAT(
 		exec,
 		HasSubstr(
@@ -1389,45 +1462,48 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 
 TEST(GM20BVisibilitySource, ColdGlobalInvalidationPreservesInternalDirtyData)
 {
-    const auto body = flat(definition(SourceText("../nouveau/nvkm/subdev/ltc/base.c"),
-        "nvkm_ltc_invalidate(struct nvkm_ltc *ltc)"));
-    expectBefore(body, "mutex_lock(&ltc->mutex)", "ltc->func->flush(ltc)");
-    expectBefore(body, "ltc->func->flush(ltc)", "ltc->func->invalidate(ltc)");
-    expectBefore(body, "ltc->func->invalidate(ltc)", "mutex_unlock(&ltc->mutex)");
+	const auto body = flat(definition(SourceText("../nouveau/nvkm/subdev/ltc/base.c"),
+					  "nvkm_ltc_invalidate(struct nvkm_ltc *ltc)"));
+	expectBefore(body, "mutex_lock(&ltc->mutex)", "ltc->func->flush(ltc)");
+	expectBefore(body, "ltc->func->flush(ltc)", "ltc->func->invalidate(ltc)");
+	expectBefore(body, "ltc->func->invalidate(ltc)", "mutex_unlock(&ltc->mutex)");
 }
 
 // nvkm_runl_chan_get_chid returns with spinlocks held and interrupts off; nvkm_kmap takes ltc->mutex.
 TEST(GM20BChannelSource, RamfcIsMappedOnlyAfterTheChannelLookupUnlocks)
 {
-    const auto lookup = flat(definition(gpu(), "static struct nvkm_gpuobj *chan_inst("));
-    expectBefore(lookup, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
-    for (const char *signature : {"void tgm_ramfc_write(", "static int ramfc_read_waits("}) {
-        const auto body = flat(definition(gpu(), signature));
-        expectBefore(body, "chan_inst(chid)", "nvkm_kmap(");
-        expectBefore(body, "nvkm_kmap(", "nvkm_done(");
-    }
-    EXPECT_THAT(flat(definition(gpu(), "static void chan_timeslice(")), HasSubstr("tgm_ramfc_write("));
+	const auto lookup = flat(definition(gpu(), "static struct nvkm_gpuobj *chan_inst("));
+	expectBefore(lookup, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
+	for (const char *signature : {"void tgm_ramfc_write(", "static int ramfc_read_waits("}) {
+		const auto body = flat(definition(gpu(), signature));
+		expectBefore(body, "chan_inst(chid)", "nvkm_kmap(");
+		expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+	}
+	EXPECT_THAT(flat(definition(gpu(), "static void chan_timeslice(")),
+		    HasSubstr("tgm_ramfc_write("));
 }
 
 TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedRunlist)
 {
-    const auto create = flat(definition(gpu(), "static int chan_new("));
-    EXPECT_THAT(create, HasSubstr("NV_DEVICE_HOST_RUNLIST_ENGINES_GR"));
-    EXPECT_THAT(create, HasSubstr("args.chan.runq = 0"));
-    EXPECT_THAT(create, HasSubstr("i = switch_gpu_channel_first_object(copy_only); i < 5"));
-    EXPECT_THAT(create, HasSubstr("switch_gpu_channel_bind_words(bind_words, classes, copy_only)"));
-    EXPECT_THAT(create, HasSubstr("chan_push_wait(chan, bind_count)"));
-    EXPECT_THAT(create, HasSubstr("PUSH_DATA(push, bind_words[i])"));
-    const auto objects = Between(create, "i = switch_gpu_channel_first_object(copy_only)", "host->version = 0");
-    expectBefore(objects, "if (ret)", "goto fail");
-    EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_present.vm"));
-    EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_scrub.vm"));
-    EXPECT_THAT(SourceText("../SwitchGpuKqueue.h"), HasSubstr("tgm_chan_new_copy(vm, owner"));
-    for (const char *producer : {"../TegraGM20BCopy.cpp", "../TegraGM20BRelayout.cpp", "../SwitchGpuCachedZero.cpp",
-				 "../SwitchGpuBridge.cpp"}) {
-        EXPECT_THAT(SourceText(producer), HasSubstr("space.openChannel(kShape"));
-        EXPECT_THAT(SourceText(producer), Not(HasSubstr("tgm_chan_new_copy(")));
-    }
+	const auto create = flat(definition(gpu(), "static int chan_new("));
+	EXPECT_THAT(create, HasSubstr("NV_DEVICE_HOST_RUNLIST_ENGINES_GR"));
+	EXPECT_THAT(create, HasSubstr("args.chan.runq = 0"));
+	EXPECT_THAT(create, HasSubstr("i = switch_gpu_channel_first_object(copy_only); i < 5"));
+	EXPECT_THAT(create,
+		    HasSubstr("switch_gpu_channel_bind_words(bind_words, classes, copy_only)"));
+	EXPECT_THAT(create, HasSubstr("chan_push_wait(chan, bind_count)"));
+	EXPECT_THAT(create, HasSubstr("PUSH_DATA(push, bind_words[i])"));
+	const auto objects = Between(create, "i = switch_gpu_channel_first_object(copy_only)",
+				     "host->version = 0");
+	expectBefore(objects, "if (ret)", "goto fail");
+	EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_present.vm"));
+	EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_scrub.vm"));
+	EXPECT_THAT(SourceText("../SwitchGpuKqueue.h"), HasSubstr("tgm_chan_new_copy(vm, owner"));
+	for (const char *producer : {"../TegraGM20BCopy.cpp", "../TegraGM20BRelayout.cpp",
+				     "../SwitchGpuCachedZero.cpp", "../SwitchGpuBridge.cpp"}) {
+		EXPECT_THAT(SourceText(producer), HasSubstr("space.openChannel(kShape"));
+		EXPECT_THAT(SourceText(producer), Not(HasSubstr("tgm_chan_new_copy(")));
+	}
 }
 
 // Every channel's acquire on another channel's fence reads the address space's view of the fence pool: a space without

@@ -54,11 +54,16 @@ raw::RuntimeRecord record(bool tessellates, uint64_t key, uint8_t indexBytes = 0
     r.pipeline.controlPointIndexBytes = indexBytes;
     r.pipeline.entries = raw::TessBufferCount;
     for (uint8_t k = 0; k < raw::TessBufferCount; k++)
-        r.pipeline.entry[k] = {uint16_t(16 * k), raw::EntryTessBuffer, 1, k,
-                               uint8_t(1 | (kControlWord + raw::kTessResidualWord[k]) << 2), 0, 0};
+        r.pipeline.entry[k] = {uint16_t(16 * k),
+                               raw::EntryTessBuffer,
+                               1,
+                               k,
+                               uint8_t(1 | (kControlWord + raw::kTessResidualWord[k]) << 2),
+                               0,
+                               0};
     r.pipeline.pushMask = 0x3fu << (kControlWord - 1);
-    r.extras = {{kTessParameters, 0x202}, {0x0dcc, 1}, {kShaderControl, 0x21},
-                {0x2090, 1},              {kShaderEvaluation, 0x31}, {0x20d0, 2}};
+    r.extras = {{kTessParameters, 0x202},  {0x0dcc, 1}, {kShaderControl, 0x21}, {0x2090, 1},
+                {kShaderEvaluation, 0x31}, {0x20d0, 2}};
     r.restore = {{kShaderControl, 0x20}, {kShaderEvaluation, 0x30}};
     return r;
 }
@@ -129,46 +134,55 @@ TEST_F(DeviceTessellation, AStateBindsItsControlAndEvaluationProgramsAndSwitches
 
 TEST_F(DeviceTessellation, PatchesDrawOnlyWithATessellationState)
 {
-    EXPECT_EQ(drawWith(patches, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 2, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_EQ(drawWith(patches,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 2, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(patches, [](raw::RenderEncoder &e, const char **why) {
-                  return e.draw(kTriangle, 0, 3, 1, 0, why);
-              }),
+    EXPECT_NE(drawWith(patches,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.draw(kTriangle, 0, 3, 1, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(plain, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 2, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_NE(drawWith(plain,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 2, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
-    EXPECT_EQ(drawWith(plain, [](raw::RenderEncoder &e, const char **why) {
-                  return e.draw(kTriangle, 0, 3, 1, 0, why);
-              }),
+    EXPECT_EQ(drawWith(plain,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.draw(kTriangle, 0, 3, 1, 0, why);
+                       }),
               "");
 }
 
 TEST_F(DeviceTessellation, ADrawsIndexingAndControlPointsAreTheStates)
 {
     const raw::Buffer *points = &indices;
-    EXPECT_NE(drawWith(patches, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(3, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_NE(drawWith(patches,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(3, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(patches, [points](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, points, 0, why);
-              }),
+    EXPECT_NE(drawWith(patches,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, points, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(indexed, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_NE(drawWith(indexed,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
-    EXPECT_EQ(drawWith(indexed, [points](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, points, 4, points, 2, why);
-              }),
+    EXPECT_EQ(drawWith(indexed,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, points, 4, points, 2, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(indexed, [points](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, points, 2, points, 2, why);
-              }),
+    EXPECT_NE(drawWith(indexed,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, points, 2, points, 2, why);
+                       }),
               "");
 }
 
@@ -179,9 +193,10 @@ TEST_F(DeviceTessellation, AnIndirectPatchDrawReadsItsArgumentsOnTheGpu)
     const uint32_t draw[4] = {2, 1, 0, 0};
     memcpy(arguments.cpu, draw, sizeof draw);
     const raw::Buffer *args = &arguments;
-    EXPECT_EQ(drawWith(patches, [args](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatchesIndirect(4, nullptr, 0, nullptr, 0, args, 0, why);
-              }),
+    EXPECT_EQ(drawWith(patches,
+                       [args](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatchesIndirect(4, nullptr, 0, nullptr, 0, args, 0, why);
+                       }),
               "");
 }
 

@@ -138,23 +138,25 @@ static void giveRecording(RMCommandBuffer *b)
                         const auto &record = *native->rec;
                         for (uint32_t i = 0; i < record.entries; ++i) {
                             const auto &entry = record.entry[i];
-                            if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
+                            if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 &&
+                                entry.slot < 31) {
                                 const auto &binding =
                                     _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
                                 if (binding.source == raw::BufferBinding::Source::Buffer)
-                                    bound.push_back({binding.object,
-                                                    uint8_t(raw::ResourceUse::Read |
-                                                            (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
+                                    bound.push_back(
+                                        {binding.object,
+                                         uint8_t(raw::ResourceUse::Read |
+                                                 (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
                                        entry.slot < 31) {
                                 bound.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
-                                                raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                                                 raw::ResourceUse::Read | raw::ResourceUse::Sample});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&
                                 entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
-                                bound.push_back(
-                                    {_plan.samplers[1][state.samplers[1]].objects[entry.sampler], raw::ResourceUse::Read});
+                                bound.push_back({_plan.samplers[1][state.samplers[1]].objects[entry.sampler],
+                                                 raw::ResourceUse::Read});
                         }
                         if (record.vertexSlot < 31 && record.vertexStride) {
                             const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
@@ -168,7 +170,7 @@ static void giveRecording(RMCommandBuffer *b)
         } else if (cmd.op == OpDispatch && cmd.obj2) {
             const char *why = nullptr;
             if (!admitComputeDispatch(self, _plan.size() - 1,
-                                       static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
+                                      static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
             const RMPass &pass = _passes[cmd.x];

@@ -147,10 +147,10 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, true, true), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 0, 4, 2, true, true), 0u);
 
-    EXPECT_EQ(raw::backingKind(true, false, 0, 4, 1, false), 0u);   // pitch
+    EXPECT_EQ(raw::backingKind(true, false, 0, 4, 1, false), 0u);    // pitch
     EXPECT_EQ(raw::backingKind(false, true, 260, 8, 1, false), 0u);  // compression off
-    EXPECT_EQ(raw::backingKind(true, true, 0, 2, 1, false), 0u);    // no compressible kind
-    EXPECT_EQ(raw::backingKind(true, true, 253, 1, 1, false), 0u);  // Stencil8
+    EXPECT_EQ(raw::backingKind(true, true, 0, 2, 1, false), 0u);     // no compressible kind
+    EXPECT_EQ(raw::backingKind(true, true, 253, 1, 1, false), 0u);   // Stencil8
 }
 
 // A ZBC entry holds the texel the ROP writes for the clear: packed in the format's channel order, unorm channels only at
@@ -183,7 +183,7 @@ TEST(RawComp, ZbcEntriesHoldTheTexelTheRopWrites)
     EXPECT_EQ(raw::zbcHalf(bits(65520.0f)), 0x7c00u);
     EXPECT_EQ(raw::zbcHalf(bits(5.9604645e-8f)), 1u);
     const uint32_t tenBit[4] = {bits(1.0f), bits(0.0f), bits(512 / 1023.0f), bits(2 / 3.0f)};
-    EXPECT_FALSE(raw::zbcColorEntry(90, tenBit, e));   // RGB10A2Unorm: its packing never read back
+    EXPECT_FALSE(raw::zbcColorEntry(90, tenBit, e));    // RGB10A2Unorm: its packing never read back
     EXPECT_FALSE(raw::zbcColorEntry(125, quarter, e));  // RGBA32Float: the boot table's 0 and 1 alone
     ASSERT_TRUE(raw::zbcDepthEntry(252, 0.5f, e));
     EXPECT_EQ(e.type, uint32_t(TegraGM20BZbcDepth));

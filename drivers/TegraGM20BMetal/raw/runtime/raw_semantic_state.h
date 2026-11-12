@@ -126,7 +126,8 @@ struct BufferBinding {
     uint64_t offset = 0;
     uint32_t chunk = 0;
     uint32_t length = 0;
-    uint32_t stride = kStaticStride;  // the stride forms' attributeStride (setVertexBuffer:offset:attributeStride:atIndex:)
+    uint32_t stride =
+        kStaticStride;  // the stride forms' attributeStride (setVertexBuffer:offset:attributeStride:atIndex:)
     Source source = Source::Unset;
     uint32_t shadow = 0;  // setBytes: its bytes' cached copy in the recording, + 1 (RMCommandBuffer::_shadow); 0: none
 

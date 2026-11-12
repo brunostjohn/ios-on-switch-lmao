@@ -61,7 +61,8 @@ struct NativeWideStrideTest: NativeObjectTest {
         return work
     }
 
-    func drawStatic(_ gpu: GPU, _ library: MTLLibrary, _ work: inout NativeWork, _ metrics: inout Metrics) async throws {
+    func drawStatic(_ gpu: GPU, _ library: MTLLibrary, _ work: inout NativeWork, _ metrics: inout Metrics) async throws
+    {
         let vertices = MTLVertexDescriptor()
         for (a, (format, buffer, stride)) in [
             (MTLVertexFormat.float2, 1, Self.positionStride), (.float4, 2, Self.colourStride), (.float4, 3, 16),
@@ -93,7 +94,8 @@ struct NativeWideStrideTest: NativeObjectTest {
         try await check(gpu, target, "static", &work, &metrics)
     }
 
-    func drawDynamic(_ gpu: GPU, _ library: MTLLibrary, _ work: inout NativeWork, _ metrics: inout Metrics) async throws {
+    func drawDynamic(_ gpu: GPU, _ library: MTLLibrary, _ work: inout NativeWork, _ metrics: inout Metrics) async throws
+    {
         let vertices = MTLVertexDescriptor()
         vertices.attributes[0].format = .float2
         vertices.attributes[0].bufferIndex = 1
@@ -120,7 +122,9 @@ struct NativeWideStrideTest: NativeObjectTest {
         try await check(gpu, target, "dynamic", &work, &metrics)
     }
 
-    func makeState(_ gpu: GPU, _ library: MTLLibrary, _ vertex: String, _ vertices: MTLVertexDescriptor) async throws
+    func makeState(
+        _ gpu: GPU, _ library: MTLLibrary, _ vertex: String, _ vertices: MTLVertexDescriptor
+    ) async throws
         -> MTLRenderPipelineState
     {
         let descriptor = MTLRenderPipelineDescriptor()
@@ -140,7 +144,9 @@ struct NativeWideStrideTest: NativeObjectTest {
         return pass
     }
 
-    func check(_ gpu: GPU, _ target: MTLTexture, _ form: String, _ work: inout NativeWork, _ metrics: inout Metrics)
+    func check(
+        _ gpu: GPU, _ target: MTLTexture, _ form: String, _ work: inout NativeWork, _ metrics: inout Metrics
+    )
         async throws
     {
         let pixels = try await gpu.read(target, bytesPerPixel: 4)

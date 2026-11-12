@@ -54,14 +54,13 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kIcbDrawProgram = program(switch_gm20b_macro_icb_draw),
                   kIcbDrawIndexedProgram = program(switch_gm20b_macro_icb_draw_indexed),
                   kIcbGateProgram = program(switch_gm20b_macro_icb_gate);
-constexpr size_t kContextWords = 11 * 5 + std::size(switch_gm20b_macro_draw) +
-                                 std::size(switch_gm20b_macro_draw_indexed) + std::size(switch_gm20b_macro_indirect) +
-                                 std::size(switch_gm20b_macro_indexed_indirect) +
-                                 std::size(switch_gm20b_macro_draw_params) +
-                                 std::size(switch_gm20b_macro_draw_indexed_params) +
-                                 std::size(switch_gm20b_macro_vcm_constants) + std::size(switch_gm20b_macro_icb_range) +
-                                 std::size(switch_gm20b_macro_icb_draw) + std::size(switch_gm20b_macro_icb_draw_indexed) +
-                                 std::size(switch_gm20b_macro_icb_gate);
+constexpr size_t kContextWords =
+    11 * 5 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
+    std::size(switch_gm20b_macro_indirect) + std::size(switch_gm20b_macro_indexed_indirect) +
+    std::size(switch_gm20b_macro_draw_params) + std::size(switch_gm20b_macro_draw_indexed_params) +
+    std::size(switch_gm20b_macro_vcm_constants) + std::size(switch_gm20b_macro_icb_range) +
+    std::size(switch_gm20b_macro_icb_draw) + std::size(switch_gm20b_macro_icb_draw_indexed) +
+    std::size(switch_gm20b_macro_icb_gate);
 constexpr size_t kCallWords = 4, kParamsCallWords = 6;
 
 inline void install(Push &push)

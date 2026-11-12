@@ -108,8 +108,8 @@ inline uint64_t compBytes(uint64_t bytes)
 // whose draws test in the shader (Depth32Float and multisampled Depth32Float_Stencil8: raw_shader_tests.h), so those
 // compress only where copyEngineReadsCompressed holds for their kind. A pitch backing has no compressible kind.
 // `zetaProbe`: a debug build's probe of those zetas (gpu.x1.ce_compressed_depth) gives them their kind.
-inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, uint32_t bpp, uint32_t samples, bool copied,
-                            bool zetaProbe = false)
+inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, uint32_t bpp, uint32_t samples,
+                            bool copied, bool zetaProbe = false)
 {
     if (!compression || !blockLinear)
         return 0;

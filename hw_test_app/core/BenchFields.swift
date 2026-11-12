@@ -19,7 +19,8 @@ struct BenchFields {
         guard rect[0] < rect[2], rect[2] <= width, rect[1] < rect[3], rect[3] <= height else {
             throw BenchInvalid("rect outside the target")
         }
-        let draws = try counts(fields["draws"] ?? ([1] as [Any]), nil, (kind == .noop ? 0 : 1)...BenchProtocol.maxDraws, "draws")
+        let draws = try counts(
+            fields["draws"] ?? ([1] as [Any]), nil, (kind == .noop ? 0 : 1)...BenchProtocol.maxDraws, "draws")
         guard (1...BenchProtocol.maxDrawCounts).contains(draws.count) else { throw BenchInvalid("draws: 1..16 counts") }
         let repeats = try count(fields["repeats"] ?? (1 as Any), 1...BenchProtocol.maxRepeats, "repeats")
         let warmup = try count(fields["warmup"] ?? (0 as Any), 0...BenchProtocol.maxWarmup, "warmup")
@@ -34,7 +35,9 @@ struct BenchFields {
         var fill: Data?
         if let text = fields["fill"] {
             fill = try bytes(text, "fill")
-            guard fill?.count == width * height * info.bytes else { throw BenchInvalid("fill is the whole target, packed") }
+            guard fill?.count == width * height * info.bytes else {
+                throw BenchInvalid("fill is the whole target, packed")
+            }
         }
         var program: BenchProgram?
         var threads = [1, 1, 1], groups = [1, 1, 1]
@@ -44,7 +47,8 @@ struct BenchFields {
         case .compute:
             let compute = fields["compute"] as? [String: Any] ?? [:]
             program = try self.program(compute, "compute", sph: false)
-            threads = try counts(compute["threads"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxThreads, "compute.threads")
+            threads = try counts(
+                compute["threads"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxThreads, "compute.threads")
             groups = try counts(compute["groups"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxGroups, "compute.groups")
             guard threads.reduce(1, *) <= BenchProtocol.maxThreads else { throw BenchInvalid("compute.threads > 1024") }
         case .noop, .known, .twod:

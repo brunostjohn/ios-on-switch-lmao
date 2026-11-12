@@ -76,7 +76,8 @@ struct NativeTessellationTest: NativeObjectTest {
         let device = gpu.device
         var work = NativeWork()
         let library = try await device.makeLibrary(source: Self.source, options: nil)
-        guard let post = library.makeFunction(name: "quad_post"), let factorsKernel = library.makeFunction(name: "quad_factors"),
+        guard let post = library.makeFunction(name: "quad_post"),
+            let factorsKernel = library.makeFunction(name: "quad_factors"),
             let argumentsKernel = library.makeFunction(name: "patch_arguments")
         else { throw TestFailure("missing tessellation functions") }
         let vertices = MTLVertexDescriptor()
@@ -102,7 +103,8 @@ struct NativeTessellationTest: NativeObjectTest {
             let arguments = device.makeBuffer(length: 16, options: .storageModePrivate)
         else { throw TestFailure("no private factor or argument buffer") }
         let patchOrder = try gpu.buffer([UInt32](arrayLiteral: 1, 0))
-        let indirect = (device as AnyObject as! NSObject).value(forKey: "supportsIndirectTessellation") as? Bool ?? false
+        let indirect =
+            (device as AnyObject as! NSObject).value(forKey: "supportsIndirectTessellation") as? Bool ?? false
         metrics.set("indirect", indirect ? "yes" : "no")
 
         for form in ["direct", "indexed"] + (indirect ? ["indirect"] : []) {
@@ -115,11 +117,13 @@ struct NativeTessellationTest: NativeObjectTest {
                 var level = Self.level
                 compute.setBytes(&level, length: 4, index: 1)
                 compute.dispatchThreadgroups(
-                    MTLSize(width: 2, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                    MTLSize(width: 2, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
                 compute.setComputePipelineState(argumentState)
                 compute.setBuffer(arguments, offset: 0, index: 0)
                 compute.dispatchThreadgroups(
-                    MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                    MTLSize(width: 1, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
                 compute.endEncoding()
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target

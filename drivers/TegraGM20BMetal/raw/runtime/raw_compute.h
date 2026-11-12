@@ -124,7 +124,8 @@ private:
 
         bool operator==(const Bound &b) const
         {
-            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset && resourceVa == b.resourceVa;
+            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset &&
+                   resourceVa == b.resourceVa;
         }
     };
 
@@ -148,6 +149,7 @@ private:
     std::array<uint32_t, 8> region_{};
     std::array<uint32_t, 8> stageIn_{};  // origin xyz, 0, size xyz, 0: m2v's StageInRegion field
     std::array<uint32_t, 31> strides_ = filledStrides();
+
     static constexpr std::array<uint32_t, 31> filledStrides()
     {
         std::array<uint32_t, 31> s{};
@@ -155,6 +157,7 @@ private:
             v = UINT32_MAX;
         return s;
     }
+
     void stageInWords(const PackKernel &r, uint32_t *push) const;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);

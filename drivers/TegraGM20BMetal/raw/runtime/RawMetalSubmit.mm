@@ -111,19 +111,19 @@ void planSegments(RMCommandBuffer *cb)
                [event respondsToSelector:@selector(notifyListener:atValue:block:)];
     });
     if (error != RMPlanError::None) {
-        NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder" :
-                           error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended" :
-                           @"An encoder did not end before commit";
+        NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder"
+                           : error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended"
+                                                                 : @"An encoder did not end before commit";
         failCommandBuffer(cb, reason);
         return;
     }
     for (const auto &range : plan.ranges()) {
         cb->_plan.prepareRange(range.from, range.to);
-        const bool native = range.kind == raw::ExecutionKind::native &&
-                            !cb->_plan.nativeRangeRefusal(range.from, range.to);
+        const bool native =
+            range.kind == raw::ExecutionKind::native && !cb->_plan.nativeRangeRefusal(range.from, range.to);
         cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), native,
-                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
-                             false, range.gpuWait});
+                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal, false,
+                             range.gpuWait});
     }
 }
 
@@ -167,9 +167,9 @@ bool submitRange(RMCommandBuffer *cb)
         if (event.op == OpWaitEvent)
             releaseEventWaits(cb);
         const bool unsignalled = event.op == OpSignalEvent && !range.gpuSignal;
-        const RMEventJob job = unsignalled                                  ? submitEventJobs(cb)
+        const RMEventJob job = unsignalled                                ? submitEventJobs(cb)
                                : event.op == OpWaitEvent && range.gpuWait ? submitWaitJob(cb)
-                                                                           : RMEventJob::None;
+                                                                          : RMEventJob::None;
         if (job == RMEventJob::Retry)
             return false;
         if (unsignalled && job == RMEventJob::None) {

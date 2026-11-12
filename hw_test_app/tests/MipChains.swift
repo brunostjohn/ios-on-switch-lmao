@@ -33,7 +33,8 @@ final class MipChains {
     static func probe(_ device: MTLDevice, _ on: Bool) -> Bool? {
         let selector = NSSelectorFromString("switchRawProbeMipCandidates:")
         guard let object = device as? NSObject, object.responds(to: selector) else { return nil }
-        return (object.perform(selector, with: NSNumber(value: on))?.takeUnretainedValue() as? NSNumber)?.boolValue ?? false
+        return (object.perform(selector, with: NSNumber(value: on))?.takeUnretainedValue() as? NSNumber)?.boolValue
+            ?? false
     }
 
     func pattern(_ w: Int, _ h: Int, seed: Int) -> [UInt8] {
@@ -41,7 +42,8 @@ final class MipChains {
         for y in 0..<h {
             for x in 0..<w {
                 for (i, f) in layout.fields.enumerated() {
-                    var v = UInt32(truncatingIfNeeded: x &* 73_856_093) ^ UInt32(truncatingIfNeeded: y &* 19_349_663)
+                    var v =
+                        UInt32(truncatingIfNeeded: x &* 73_856_093) ^ UInt32(truncatingIfNeeded: y &* 19_349_663)
                         ^ UInt32(truncatingIfNeeded: (seed * 8 + i + 1) &* 83_492_791)
                     v ^= v >> 13
                     v = v &* 0x5bd1_e995
@@ -91,11 +93,13 @@ final class MipChains {
         let state = try pipeline()
         var twod = Double.infinity, passes = Double.infinity
         for _ in 0..<3 {
-            twod = min(twod, try await gpu.run { commands in
-                let blit = commands.makeBlitCommandEncoder()!
-                blit.generateMipmaps(for: chain)
-                blit.endEncoding()
-            }.gpuMilliseconds)
+            twod = min(
+                twod,
+                try await gpu.run { commands in
+                    let blit = commands.makeBlitCommandEncoder()!
+                    blit.generateMipmaps(for: chain)
+                    blit.endEncoding()
+                }.gpuMilliseconds)
             passes = min(passes, try await gpu.run { draw($0, textures, state) }.gpuMilliseconds)
         }
         return (twod, passes)

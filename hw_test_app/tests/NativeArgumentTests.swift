@@ -109,8 +109,10 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
         let pipeline = try gpu.render(fragment: "argument_textures_fragment", format: .rgba8Unorm)
         let target = try gpu.texture(.rgba8Unorm, 8, 8)
         let drawn = try await gpu.run { commands in
-            for (texture, colour) in [(first, MTLClearColor(red: 1, green: 0, blue: 0, alpha: 1)),
-                                      (second, MTLClearColor(red: 0, green: 0, blue: 1, alpha: 1))] {
+            for (texture, colour) in [
+                (first, MTLClearColor(red: 1, green: 0, blue: 0, alpha: 1)),
+                (second, MTLClearColor(red: 0, green: 0, blue: 1, alpha: 1)),
+            ] {
                 let clear = MTLRenderPassDescriptor()
                 clear.colorAttachments[0].texture = texture
                 clear.colorAttachments[0].loadAction = .clear
@@ -131,7 +133,8 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
             render.endEncoding()
         }
         let pixels = try await gpu.read(target, bytesPerPixel: 4)
-        let exact = Array(pixels.pixel(1, 4, width: 8)) == [255, 0, 0, 255]
+        let exact =
+            Array(pixels.pixel(1, 4, width: 8)) == [255, 0, 0, 255]
             && Array(pixels.pixel(6, 4, width: 8)) == [0, 0, 255, 255]
         return "\(drawn.path)/\(exact ? "exact" : "wrong")"
     }

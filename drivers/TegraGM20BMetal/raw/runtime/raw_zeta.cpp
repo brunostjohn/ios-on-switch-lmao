@@ -104,6 +104,7 @@ Texture RenderEncoder::hiddenZetaShape(const PassDesc &pass) const
     shape.zeta = shape.memoryless = true;
     return shape;
 }
+
 void zetaClearValues(Push &p, bool depth, float clearDepth, bool stencil, uint32_t clearStencil)
 {
     if (depth)

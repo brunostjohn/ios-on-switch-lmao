@@ -45,8 +45,8 @@ static_assert(sizeof kProbeIds / sizeof *kProbeIds == size_t(Probe::Count), "an 
 // only (BGRA8, RGBA16F: C128, MS2/MS4 and zeta kinds unproven, so copy.ce_compressed lowers only those), mip_filter,
 // and pass_pixel_barrier's planner form (26 cells held, none failed; the strided reads at 320x180 and 1280x720 were
 // blind and are re-probed; the 0x1288 reading failed)
-constexpr uint32_t kProvenOnChip = 1u << uint32_t(Probe::CeCompressed) | 1u << uint32_t(Probe::MipFilter) |
-                                   1u << uint32_t(Probe::PassPixelBarrier);
+constexpr uint32_t kProvenOnChip =
+    1u << uint32_t(Probe::CeCompressed) | 1u << uint32_t(Probe::MipFilter) | 1u << uint32_t(Probe::PassPixelBarrier);
 
 struct RuleEvidence {
     Rule rule;

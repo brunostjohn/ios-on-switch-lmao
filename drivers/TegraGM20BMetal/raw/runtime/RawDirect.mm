@@ -83,7 +83,8 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
         cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
-    const NmbDirectBinds binds = {cubic.data(),    uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
+    const NmbDirectBinds binds = {cubic.data(),           uint32_t(cubic.size()),
+                                  formats.data(),         uint32_t(formats.size()),
                                   textures.fragmentTests, textures.bindStride};
     const bool plain = textures.cubic.empty() && !textures.fragmentTests && !textures.bindStride;
     const char *refused = nullptr;
@@ -126,9 +127,9 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
 // The probe binds every vertex buffer at a stride no fixed-function stream fetches, so m2v's plan asks for its
 // pulled-vertex-buffer variant of every per-bind layout. A twin the translation refuses leaves the state without one: its draws
 // of such a stride are refused (RenderEncoder::drawnWordsRefusal).
-CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures, const std::string &key,
-                                  const std::vector<uint32_t> &attributes, RuntimeRecord &out, std::string &why,
-                                  bool split)
+CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures,
+                                  const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                                  std::string &why, bool split)
 {
     if (!bindStrideStreams(out.pipeline))
         return CompileOutcome::Made;
@@ -136,8 +137,7 @@ CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, Probe
     auto twin = std::make_shared<RuntimeRecord>();
     std::string twinWhy;
     const bool barrier = out.pipeline.flags & PipelineBarrierForm;
-    const CompileOutcome outcome =
-        form(descriptor, barrier, textures, key, attributes, *twin, twinWhy, nullptr, split);
+    const CompileOutcome outcome = form(descriptor, barrier, textures, key, attributes, *twin, twinWhy, nullptr, split);
     if (outcome == CompileOutcome::Failed) {
         why = "its stride twin: " + twinWhy;
         return outcome;

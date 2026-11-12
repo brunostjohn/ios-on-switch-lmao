@@ -206,7 +206,7 @@ const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {13, 0, 0x6014921d, 1, false},      // R8Uint, storage/sampled
+    {13, 0, 0x6014921d, 1, false},       // R8Uint, storage/sampled
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
     {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
@@ -853,9 +853,10 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
                                           : nullptr;
         rec = usableRecord(barrier) ? barrier : nullptr;
         if (blends)
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-                         "raw: pack state %016llx computes its blend in a storage form this runtime cannot read: refused",
-                         (unsigned long long)keyHash);
+            os_log_error(
+                os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                "raw: pack state %016llx computes its blend in a storage form this runtime cannot read: refused",
+                (unsigned long long)keyHash);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (rec) {
             stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
@@ -1024,7 +1025,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
-    pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    pl.primitiveId = (sph[5] >> 24) & 1;    // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
@@ -3258,7 +3259,9 @@ CommandBuffer *Device::begin()
     if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
         return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
-        if (it->unused(channelGeneration(), [this](uint32_t seqno) { return done(seqno); })) {
+        if (it->unused(channelGeneration(), [this](uint32_t seqno) {
+                return done(seqno);
+            })) {
             set_.free(k_, it->bo);
             it = grownOut_.erase(it);
         } else {
@@ -3432,8 +3435,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     // pass however many attachments need one (the compression thread trims them under it)
     std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
     const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression, bool copied = false) {
-        if (Texture *b =
-                backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
+        if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
             return b;
         if (!backingLock.owns_lock()) {
             backingLock.lock();
@@ -3517,8 +3519,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
-    e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth;
+    e.zcull_.candidate =
+        dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 && pass.depthStencil.clearDepth;
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -3719,6 +3721,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     RAW_ENCODE_COUNT(GeometryVertices, GeometryBudget().vertices - geometryBudget_.vertices);
     if (nativeError)
         return false;
+
     struct ReleaseReads {
         CommandBuffer &cb;
 
@@ -3813,8 +3816,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
             control(*bo, true);
         for (const auto &part : d.heapParts_)
-            surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
-                (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
+            surfaces_.addAccess(part.bo.handle,
+                                TegraGM20BSurfaceRead | (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
         for (const Bo &bo : d.slmOutgrown_)
             control(bo, true);
         // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
@@ -3870,13 +3873,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     const bool pushed = segments_.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
         const bool closing = at + n == segments_.size();
-        const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy :
-            externalWrites_ && closing ? JobVisibility::External : JobVisibility::Internal;
+        const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy
+                                         : externalWrites_ && closing         ? JobVisibility::External
+                                                                              : JobVisibility::Internal;
         const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
-        const uint32_t signalCount = closing ?
-            uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
+        const uint32_t signalCount =
+            closing ? uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
+                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
         if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events))
             return false;
         waited += waitCount;
@@ -3891,10 +3895,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
         return false;
     while (waited < sharedWaits_.size() || signaled < sharedSignals_.size()) {
         const uint32_t waitCount = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
-        const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,
-                                                             TegraGM20BMaxJobEvents - waitCount));
+        const uint32_t signalCount =
+            uint32_t(std::min<size_t>(sharedSignals_.size() - signaled, TegraGM20BMaxJobEvents - waitCount));
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
+                               signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
         if (!submit(nullptr, 0, eventResources, JobVisibility::External, events))
             return false;
         waited += waitCount;
@@ -3987,7 +3991,7 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
     const Pipeline &pl = *emitted_;
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
-                                                    uint64_t(pl.fragmentInstructions) * pl.samplePasses);
+                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
     if (!cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
         return;
     if (p_.at > bodyStart_) {
@@ -4143,7 +4147,11 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                          const char **why)
 {
     if (amplifications_ > 1 && !amplifying_)
-        return amplified([&] { return draw(primitive, first, count, instances, baseInstance, why); }, why);
+        return amplified(
+            [&] {
+                return draw(primitive, first, count, instances, baseInstance, why);
+            },
+            why);
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4169,8 +4177,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #endif
             const bool reverse = runWinding_[run++];
             raster_.winding ^= reverse;
-            const bool prepared =
-                prepare(pl, primitive, first + begin, first + begin, end - begin, false, why);
+            const bool prepared = prepare(pl, primitive, first + begin, first + begin, end - begin, false, why);
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
@@ -4334,7 +4341,9 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 {
     if (amplifications_ > 1 && !amplifying_)
         return amplified(
-            [&] { return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why); },
+            [&] {
+                return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why);
+            },
             why);
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
@@ -4463,7 +4472,11 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
                              const char **why)
 {
     if (amplifications_ > 1 && !amplifying_)
-        return amplified([&] { return indirect(primitive, indexed, arguments, offset, why); }, why);
+        return amplified(
+            [&] {
+                return indirect(primitive, indexed, arguments, offset, why);
+            },
+            why);
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
@@ -4625,7 +4638,8 @@ static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uin
     for (uint64_t at = from, n = 0; at < length && n < 32; ++at, ++n)
         snprintf(hex + 3 * n, 4, "%02x ", bytes[at]);
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-           "raw: uniform probe %{public}s stage %u slot %u: %u non-finite floats and %u halves in %llu bytes, first at +%llu; "
+           "raw: uniform probe %{public}s stage %u slot %u: %u non-finite floats and %u halves in %llu bytes, first at "
+           "+%llu; "
            "+%llu: %{public}s(mach %llu)",
            pl.uniformProbe, stage, slot, found.words, found.halves, (unsigned long long)length,
            (unsigned long long)found.first, (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
@@ -4896,8 +4910,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         g.limit = {x[0], y[0], x[1], y[1]};
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    auto geometryAnalysis =
-        geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
+    auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     RAW_ENCODE_BEGIN(variantSpan, Variant);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
@@ -4929,7 +4942,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         if (!fragmentTestsMatch(pl->rec->storageTests, ds_, zeta ? zeta->format : 0)) {
             *why = "an ordered storage variant whose depth/stencil tests differ from the draw";
-            cb_->refusal = {RefDepthStencil, pl->rec->storageTests, uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
+            cb_->refusal = {RefDepthStencil, pl->rec->storageTests,
+                            uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
             return false;
         }
         // A pass that declares no attachment tests depth and stencil against its hidden one (PassDesc::hiddenZeta), which the
@@ -4974,8 +4988,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
         if (shaderTestsActive_)
             emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
-        else if (bindDepthStencil(p, bodies_, bodyStart_, dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
-                                  cb_->ds_, bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
+        else if (bindDepthStencil(p, bodies_, bodyStart_,
+                                  dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]), cb_->ds_,
+                                  bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
             cb_->segmentBinds_++;
             RAW_DIAGNOSTIC(cb_->counts_.segmentBinds++);
         }
@@ -5385,10 +5400,10 @@ uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
     for (uint32_t i = 0; i < rec.entries; i++) {
         const PackEntry &e = rec.entry[i];
         const bool buffer = e.kind == EntryUbo && e.stage < 3 && e.slot < 32 && (moved_.buffers[e.stage] >> e.slot & 1);
-        const bool texture = (e.kind == EntryTexture || e.kind == EntryTexture3d) && e.slot < 16 &&
-                             (moved_.textures >> e.slot & 1);
-        const bool sampler = e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < 16 &&
-                             (moved_.samplers >> e.sampler & 1);
+        const bool texture =
+            (e.kind == EntryTexture || e.kind == EntryTexture3d) && e.slot < 16 && (moved_.textures >> e.slot & 1);
+        const bool sampler =
+            e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < 16 && (moved_.samplers >> e.sampler & 1);
         moved |= uint32_t(buffer || texture || sampler) << i;
     }
     return moved;
@@ -5624,18 +5639,22 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     const auto image = [&](ShaderTestImage which) {
         switch (which) {
-        case ShaderTestImage::depth: return side(*shaderDepth_);
-        case ShaderTestImage::stencil: return side(*shaderStencil_);
-        case ShaderTestImage::temporary: return side(*shaderStencilTemp_);
-        case ShaderTestImage::attachment: return attachment;
+        case ShaderTestImage::depth:
+            return side(*shaderDepth_);
+        case ShaderTestImage::stencil:
+            return side(*shaderStencil_);
+        case ShaderTestImage::temporary:
+            return side(*shaderStencilTemp_);
+        case ShaderTestImage::attachment:
+            return attachment;
         }
         return attachment;
     };
     const auto copies = shaderTestTransfers(flags, shape.packedStencil, toAttachment);
     for (uint8_t at = 0; at < copies.count; ++at) {
         const auto &copy = copies.transfers[at];
-        copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height,
-                     copy.remap, copy.bytes, dev_->stats, copy.ordered);
+        copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height, copy.remap, copy.bytes,
+                     dev_->stats, copy.ordered);
     }
     RAW_DIAGNOSTIC(dev_->stats.compZetaCopies += zeta.comptags);
     p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
@@ -5799,9 +5818,8 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
     }
     const Texture &t = *selected;
     if (!t.va || t.zeta || t.samples > 1 || t.converted() || t.blockW > 1 || t.blockH > 1 ||
-        xrForm(t.format) != XrForm::None || !size[0] || !size[1] || !size[2] ||
-        origin[0] > t.width || size[0] > t.width - origin[0] ||
-        origin[1] > t.height || size[1] > t.height - origin[1])
+        xrForm(t.format) != XrForm::None || !size[0] || !size[1] || !size[2] || origin[0] > t.width ||
+        size[0] > t.width - origin[0] || origin[1] > t.height || size[1] > t.height - origin[1])
         return TextureTransferResult::Unsupported;
     const bool volume = t.type == fx::kTexThreeD;
     if (volume ? (slice || origin[2] > t.depth || size[2] > t.depth - origin[2])
@@ -6290,7 +6308,8 @@ void BlitEncoder::fillWords(uint64_t dst, uint64_t bytes, uint32_t word)
     for (uint64_t at = dst, left = bytes & ~uint64_t(3); left >= 4;) {
         const uint64_t words = left / 4;
         const uint32_t width = uint32_t(std::min<uint64_t>(words, kFillMaxDim)),
-                       height = words >= kFillMaxDim ? uint32_t(std::min<uint64_t>(words / kFillMaxDim, kFillMaxDim)) : 1;
+                       height =
+                           words >= kFillMaxDim ? uint32_t(std::min<uint64_t>(words / kFillMaxDim, kFillMaxDim)) : 1;
         fillRun(at, width, height, 4);
         at += uint64_t(width) * height * 4;
         left -= uint64_t(width) * height * 4;
@@ -6348,8 +6367,9 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
     cb_->buffersWritten_ |= !toTexture;
-    const uint32_t element = t.zeta && aspect == kAspectStencil ? 1 :
-                             t.zeta && aspect == kAspectDepth ? 4 : bufferTexelBytes(t.format, t.bpp);
+    const uint32_t element = t.zeta && aspect == kAspectStencil ? 1
+                             : t.zeta && aspect == kAspectDepth ? 4
+                                                                : bufferTexelBytes(t.format, t.bpp);
     if (w && h)
         cb_->useAddress(va, rowStorageBytes(pitch, w, h, element), !toTexture);
     cb_->use(t, toTexture);
@@ -6407,7 +6427,8 @@ void BlitEncoder::convertPlanar(const Texture &t)
     cb_->useAddress(t.planes.chroma, rowStorageBytes(t.planes.chromaPitch, t.width, t.height, 2), false);
     cb_->use(t, true);
     RAW_DIAGNOSTIC(dev_->stats.ceOps += 2);
-    RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(t.width) * t.height * 4 * 2);  // (each launch writes the image's rows, through NO_WRITE)
+    RAW_DIAGNOSTIC(dev_->stats.ceBytes +=
+                   uint64_t(t.width) * t.height * 4 * 2);  // (each launch writes the image's rows, through NO_WRITE)
     room();
     constexpr uint32_t A = 4, W = 6, one = 0 << 16, dst4 = 3u << 24;
     p_.m(CE_SET_REMAP_CONST_A, 0xff, SUBC_COPY);
@@ -6460,7 +6481,8 @@ void BlitEncoder::timestamp(uint64_t va, bool afterCopies)
     counters::emitCopy(p_, va, afterCopies);
 }
 
-void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
+void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last,
+                           [[maybe_unused]] uint32_t unproven)
 {
     Texture::Chain *c = t.chain;
     if (!c || !fmt2d || first >= last || last >= c->layout.levels)
@@ -6550,10 +6572,11 @@ bool CommandBuffer::probeResolve(const Texture &multisampled, const Texture &int
     fx::MipChain grid;
     const uint32_t fmt2d = probeTwodFormat(into.format);
     ProbeOp op;
-    if (!fmt2d || !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
-        !probeResolveOp(probeSurface(multisampled, fmt2d, multisampled.width << grid.sxLog2,
-                                     multisampled.height << grid.syLog2),
-                        grid.sxLog2, grid.syLog2, probeSurface(into, fmt2d, into.width, into.height), op))
+    if (!fmt2d ||
+        !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
+        !probeResolveOp(
+            probeSurface(multisampled, fmt2d, multisampled.width << grid.sxLog2, multisampled.height << grid.syLog2),
+            grid.sxLog2, grid.syLog2, probeSurface(into, fmt2d, into.width, into.height), op))
         return false;
     BlitEncoder *b = blit();
     b->probe(op, &multisampled, into);

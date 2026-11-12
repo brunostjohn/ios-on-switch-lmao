@@ -184,8 +184,8 @@ void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
         bindBuffer(slot, {});
         return;
     }
-    bindBuffer(slot, {b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)),
-                      b, offset});
+    bindBuffer(slot, {b->va + offset,
+                      uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset});
 }
 
 void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
@@ -339,8 +339,7 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
 
 bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why)
 {
-    const auto plan = computeDispatch({groups[0], groups[1], groups[2]},
-                                      {threads[0], threads[1], threads[2]}, false);
+    const auto plan = computeDispatch({groups[0], groups[1], groups[2]}, {threads[0], threads[1], threads[2]}, false);
     if (plan.reason != ComputeDispatch::Ready) {
         *why = "a dispatch outside the raw grid or local-size limits";
         return false;

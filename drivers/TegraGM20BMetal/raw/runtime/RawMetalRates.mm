@@ -243,10 +243,10 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     reasons(d + kTotals + raw::kFetchRefusals, raw::kFetchRefusals, raw::kFetchRefusalNames, encode, sizeof encode);
     reasons(d + kTotals + 2 * raw::kFetchRefusals, raw::kStorageFallbacks, raw::kStorageFallbackNames, storage,
             sizeof storage);
-    const int n = snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub r2=%llu r3=%llu rec=%s enc=%s sto=%s",
-                           (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2],
-                           (unsigned long long)d[3], (unsigned long long)d[4], (unsigned long long)d[5], record,
-                           encode, storage);
+    const int n =
+        snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub r2=%llu r3=%llu rec=%s enc=%s sto=%s",
+                 (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
+                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 
@@ -281,12 +281,12 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         counts[i] = double(n - lastCounts[i]) / double(encodes);
         lastCounts[i] = n;
     }
-    const double mallocs = mallocEncodes ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) /
-                                               double(mallocEncodes)
-                                         : -1.0,
-                 frees = mallocEncodes ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) /
-                                             double(mallocEncodes)
-                                       : -1.0;
+    const double mallocs = mallocEncodes
+                               ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) / double(mallocEncodes)
+                               : -1.0,
+                 frees = mallocEncodes
+                             ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) / double(mallocEncodes)
+                             : -1.0;
     const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed);
     const double wallUs = double(wall - lastWall) * usPerTick;
     lastWall = wall;
@@ -351,9 +351,8 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         count(EncodePart::GeometryAcquire), part(EncodePart::GeometryRelease), count(EncodePart::GeometryRelease),
         longestPrepareUs, part(EncodePart::Use), count(EncodePart::Use), part(EncodePart::Uniforms),
         count(EncodePart::Uniforms), part(EncodePart::Bind), part(EncodePart::Variant), part(EncodePart::PassPrologue),
-        slotsCompared, slotsInTables, spans, spanNs,
-        segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
-        (unsigned long long)fresh);
+        slotsCompared, slotsInTables, spans, spanNs, segBinds, segSkips, segWords, (unsigned long long)same,
+        (unsigned long long)recent, (unsigned long long)fresh);
     if (head <= 0 || size_t(head) >= size)
         return head > 0 ? size - 1 : 0;
     // self times: walk= the loop's own (the plan walk between its parts), res/tail= the phases', state/draw/prep/
@@ -369,9 +368,9 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
         part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
-        events(raw::EncodeCount::Locks),
-        events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
-        events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
+        events(raw::EncodeCount::Locks), events(raw::EncodeCount::Sends),
+        draws ? events(raw::EncodeCount::Applied) / draws : 0.0, events(raw::EncodeCount::UseAdds),
+        events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
         events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
     const size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
     return std::min(n, size - 1);

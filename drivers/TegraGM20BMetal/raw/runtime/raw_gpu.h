@@ -185,6 +185,7 @@ struct Texture {
         uint64_t va = 0, bytes = 0;
         bool hostVisible = false;
     } storage;
+
     StorageRange storageRange() const;
     uint64_t va = 0;
     uint8_t *cpu = nullptr;  // the CPU's view of va (null: memoryless)
@@ -198,7 +199,7 @@ struct Texture {
     bool memoryless = false;  // no memory: a pass gives it a backing (Device::backing)
     bool wc =
         false;  // its span is write-combined GPU-pool memory (createTexture wc): CPU writes need no clean (Buffer::wc)
-    uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
+    uint32_t tic = 0;  // texture header index, 0: none (not sampleable)
     uint32_t nativePlane = ~0u;
     uint64_t nativeGeneration = 0;
     Import *import = nullptr;  // surface or no-copy pages, else
@@ -399,7 +400,8 @@ struct Pipeline {
     // the constant buffer slot the vertex, pixel, tessellation init and tessellation program read set 0 at (0: none), whose
     // bind groups are kSetGroups'
     uint8_t setSlot[4] = {};
-    uint16_t streamStride[kPackVertexStreams] = {};  // each vertex stream's static stride (its SET_VERTEX_STREAM_A_FORMAT)
+    uint16_t streamStride[kPackVertexStreams] =
+        {};  // each vertex stream's static stride (its SET_VERTEX_STREAM_A_FORMAT)
 
     // the uniform buffers of set 0 its programs read as constant buffers: the group (0 vertex, 4 pixel), the slot and the set's
     // entry that names the buffer; false where a program reads one no entry names (its draws are refused)
@@ -444,7 +446,7 @@ struct Pipeline {
     // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
     bool dropsPixels = true;
     bool primitiveId = false;  // fragment input observes primitive numbering, which a split BEGIN would reset
-    uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
+    uint8_t samples = 1;       // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
@@ -665,6 +667,7 @@ public:
     bool drawPatchesIndirect(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
                              const Buffer *pointIndices, uint64_t pointIndexOffset, const Buffer *arguments,
                              uint64_t offset, const char **why);
+
     // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, drawn with the state they inherit
     // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`), or with `range` the commands of the
     // MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the buffer's). `written`: the GPU wrote some of the
@@ -679,6 +682,7 @@ public:
         const Buffer *const *indexBuffers;
         size_t indexBufferCount;
     };
+
     bool executeSlots(const IcbExecute &x, const char **why);
     // A counter sample where the pass starts: in its prologue, after the barrier to the work before
     void timestampAtStart(uint64_t va, counters::Point point);
@@ -689,16 +693,19 @@ public:
     bool setVisibility(uint32_t mode, const Buffer *results, uint64_t offset);
     // the Metal encoder's results to their offsets, at its end (a fused pass's too)
     void finishVisibility();
+
     void beginSplitPlan()
     {
         splitPlan_.clear();
     }
+
     void addSplitCandidates(Pipeline *pipeline, uint32_t draws, uint64_t pixels)
     {
         if (pipeline)
             if (const auto *source = __atomic_load_n(&pipeline->splitSource, __ATOMIC_ACQUIRE))
                 splitPlan_.add(pipeline, source->rec, draws, pixels);
     }
+
     void finishSplitPlan()
     {
         splitPlan_.finish();
@@ -778,10 +785,12 @@ private:
     void bindStreams(Push &p, const Pipeline &pl, bool indexed, uint32_t vFirst, uint32_t count);
     void bindStream(Push &p, uint32_t stream, uint8_t slot, uint32_t stride, bool bindStride, bool indexed,
                     uint32_t vFirst, uint32_t count);
+
     uint32_t vertexStride(uint32_t slot) const
     {
         return slot < 31 && vertexStrides_[slot] != UINT32_MAX ? vertexStrides_[slot] : 0;
     }
+
     static Bound boundFrom(const Buffer *buffer, uint64_t offset);
     bool bindPatches(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
                      const Buffer *pointIndices, uint64_t pointIndexOffset, const char **why);
@@ -798,22 +807,26 @@ private:
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
     PreparedDescriptors descriptors_;
     uint64_t bindingRevision_ = 0;
+
     // the bindings set 0's entries are built from that moved since the last draw's set (descriptors_)
     struct MovedBindings {
         uint32_t buffers[3] = {};
         uint16_t textures = 0, samplers = 0;
         bool all = true;
     } moved_;
+
     void bufferMoved(int stage, uint32_t slot)
     {
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
     }
+
     void textureMoved(uint32_t slot)
     {
         ++bindingRevision_;
         moved_.textures |= uint16_t(1u << slot);
     }
+
     uint32_t movedEntries(const PackPipeline &rec) const;
     DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
@@ -843,7 +856,7 @@ private:
     const DepthStencilState *dsState_ = &DepthStencilState::metalDefault();
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
-    ZcullPass zcull_;                         // raw_zcull.h
+    ZcullPass zcull_;  // raw_zcull.h
     VisibilityQueries visibility_;
     const Pipeline *zcullProgram_ = nullptr;  // the state zcull_ last saw
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
@@ -1064,11 +1077,13 @@ public:
     // false with `partial`: the kernel refused a later Exec after earlier ones were submitted; those completed before it
     // returned, and the next command buffer gets a new channel (the GPU's state after them is not what the device tracks).
     bool commit(uint32_t &seqno);
+
     void sharedEvents(std::vector<TegraGM20BAbiEventUse> waits, std::vector<TegraGM20BAbiEventUse> signals)
     {
         sharedWaits_ = std::move(waits);
         sharedSignals_ = std::move(signals);
     }
+
     bool partial = false;
     bool admissionBlocked = false;
     int nativeError = 0;
@@ -1077,6 +1092,7 @@ public:
     void requirePitch(const Import *source);
     void invalidateNativeReads();
     void releaseNativeReads();
+
     void internalCompletion()
     {
         visibility_ = JobVisibility::Internal;
@@ -1086,19 +1102,23 @@ public:
     {
         forceWholePrograms_ = force;
     }
+
     // hw_test_app's measurement of state segments: every state bound as the inline copy it was before them
     void inlineStates(bool inline_)
     {
         inlineStates_ = inline_;
     }
+
     const ProbeForms &probeForms() const
     {
         return forms_;
     }
+
     const ProbeTaken &probeTaken() const
     {
         return taken_;
     }
+
     // a multisampled attachment's resolve by the 2D engine (raw_probe_ops.h); false: none for its format or grid
     bool probeResolve(const Texture &multisampled, const Texture &into);
 #endif
@@ -1133,19 +1153,21 @@ private:
     BatchWork batchWork_;
     uint64_t batchLimit() const;
     DirtyRanges dirty_;
-    std::vector<Texture *> backings_;                            // memoryless backings it uses
+    std::vector<Texture *> backings_;  // memoryless backings it uses
     SurfaceList surfaces_;
     UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
+
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {
         uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
                  interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
     } counts_;
+
     void foldCounts();
     ProbeForms forms_;
     ProbeTaken taken_;
@@ -1228,6 +1250,7 @@ public:
 
     // the pipeline a draw of `pl` with binding facts `facts` (raw_pack.h PackAssumption) draws with (raw_variants.cpp)
     Pipeline *variant(Pipeline &pl, uint32_t facts);
+
     const Pack &pack() const
     {
         return pack_;
@@ -1237,12 +1260,14 @@ public:
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
     bool fetchFreeReachable(uint64_t keyHash) const;
+
     // A new depth/stencil state's registers into the segment heap
     void placeSegments(DepthStencilState &state)
     {
         std::lock_guard<std::mutex> l(lock_);
         state.place(segmentHeap_);
     }
+
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
@@ -1397,8 +1422,8 @@ public:
 
     void destroyTexture(Texture &t);
     TextureTransferResult transferTexture(const Texture &texture, uint32_t level, uint32_t slice,
-                                          const uint32_t origin[3], const uint32_t size[3], void *bytes,
-                                          uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
+                                          const uint32_t origin[3], const uint32_t size[3], void *bytes, uint64_t row,
+                                          uint64_t image, bool write, std::shared_ptr<void> owner);
     // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before
     bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
 
@@ -1420,8 +1445,8 @@ public:
     bool hostAccess(const Texture &texture, bool write, HostAccess &access);
     bool hostAccess(const Buffer &owner, const void *cpu, uint64_t bytes, bool write, HostAccess &access);
     bool hostAccess(const Texture &owner, const void *cpu, uint64_t bytes, bool write, HostAccess &access);
-    CpuCompletion captureCpuCompletion(uint32_t seqno, uint64_t generation,
-                                       const std::vector<const Buffer *> &buffers);
+    CpuCompletion captureCpuCompletion(uint32_t seqno, uint64_t generation, const std::vector<const Buffer *> &buffers);
+
     // A job of a channel made again since keeps nothing in the kernel to maintain its ranges against: Stale, so its buffers
     // stay GPU-dirty and their next CPU access acquires them, never a failure of a job that completed
     CpuCompletionResult completeCpu(const CpuCompletion &completion)
@@ -1434,6 +1459,7 @@ public:
         const CpuCompletionResult result = k_.completeCpu(completion);
         return result == CpuCompletionResult::Failed && retired() ? CpuCompletionResult::Stale : result;
     }
+
     void destroyBuffer(Buffer &b);
 
     // MTLHeaps (raw_arena.cpp): an arena is one GPU VA reservation bound whole to host pages of its own, under
@@ -1513,27 +1539,29 @@ public:
 
     bool done(uint32_t seqno) const
     {
-        return fence_ == &kNoFence || (int32_t(*fence_ - seqno) >= 0 &&
-                          semanticFence(seqno).status != SemanticFenceStatus::Pending);
+        return fence_ == &kNoFence ||
+               (int32_t(*fence_ - seqno) >= 0 && semanticFence(seqno).status != SemanticFenceStatus::Pending);
     }
 
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     void keepFailure(uint32_t seqno);
+
     bool wait(uint32_t seqno)
     {
         return wait(seqno, channelGeneration());
     }
+
     bool wait(uint32_t seqno, uint64_t generation)
     {
         if (channelGeneration() != generation)
             return retiredWait(seqno, generation);
         const bool success = done(seqno) && semanticFence(seqno).status != SemanticFenceStatus::Superseded
-            ? !lost(seqno) : waitFence(seqno, generation);
+                                 ? !lost(seqno)
+                                 : waitFence(seqno, generation);
         if (channelGeneration() == generation)
             return success;
         return retiredWait(seqno, generation);
     }
-
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
@@ -1716,6 +1744,7 @@ public:
     struct ProbeWords {
         std::vector<uint32_t> before, after;
     };
+
     std::atomic<bool> probeArmed{false};
     // generateMipmaps of a format no probe covered on the 2D engine as fx_mip_probe.h's surface format, recorded from now
     std::atomic<bool> probeMipCandidates{false};
@@ -1724,6 +1753,7 @@ public:
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     std::mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
+
     std::shared_ptr<const ProbeWords> armedProbe()
     {
         if (!probeArmed.load(std::memory_order_acquire))
@@ -1731,6 +1761,7 @@ public:
         std::lock_guard<std::mutex> hold(probeLock);
         return probeWords;
     }
+
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
     ProbeForms nextForms;
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
@@ -1828,8 +1859,8 @@ private:
                 *result = kIOReturnBadArgument;
             return false;
         }
-        const KernelJob made = {channel, pushes, count, uses.uses().data(), uint32_t(uses.uses().size()), 0, 0,
-                                visibility, events};
+        const KernelJob made = {channel, pushes,     count, uses.uses().data(), uint32_t(uses.uses().size()), 0,
+                                0,       visibility, events};
         return submitInSet(k_, set_, view, true, made, seqno, result);
     }
 
@@ -1842,10 +1873,10 @@ private:
         if (lastMember_.version == setView_.version && va - lastMember_.va < lastMember_.bytes &&
             bytes <= lastMember_.bytes - (va - lastMember_.va))
             return true;
-        const auto after = std::upper_bound(setView_.members.begin(), setView_.members.end(), va,
-                                            [](uint64_t at, const SetMember &m) {
-                                                return at < m.va;
-                                            });
+        const auto after =
+            std::upper_bound(setView_.members.begin(), setView_.members.end(), va, [](uint64_t at, const SetMember &m) {
+                return at < m.va;
+            });
         if (after == setView_.members.begin())
             return false;
         const SetMember &m = *std::prev(after);
@@ -1854,6 +1885,7 @@ private:
         lastMember_ = {m.va, m.bytes, setView_.version};
         return true;
     }
+
     struct {
         uint64_t va = 0, bytes = 0;
         uint32_t version = 0;
@@ -1864,6 +1896,7 @@ private:
         set_.view(setView_);
         return setView_.holds(bo);
     }
+
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
@@ -1892,6 +1925,7 @@ private:
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
     const volatile uint32_t *fence_ = &kNoFence;
     static constexpr uint32_t kNoFence = 0;
+
     SemanticFenceRead semanticFence(uint32_t seqno) const
     {
         const volatile uint32_t *fence = fence_;
@@ -1900,6 +1934,7 @@ private:
         const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
         return readSemanticFence(reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(record + 1), seqno);
     }
+
     std::mutex channelLock_;
     std::atomic<bool> channelReady_{false};
     ChannelGenerations generations_;
@@ -2120,6 +2155,7 @@ private:
     }
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
+
     // What backing() answered, kept by the encoding thread for lastBacking
     struct BackingAsk {
         uint32_t width = 0, height = 0, format = 0, tag = 0;
@@ -2135,14 +2171,17 @@ private:
                    copied == copy;
         }
     };
+
     std::array<BackingAsk, 16> asks_{};
     uint32_t nextAsk_ = 0;
     // moved, lock_ held, by everything that changes what backing() answers: memory made, a backing retired, a trim
     std::atomic<uint64_t> backingEpoch_{1};
+
     void backingsChanged()
     {
         backingEpoch_.fetch_add(1, std::memory_order_seq_cst);
     }
+
     // trimmed backings, deleted at the encoding thread's next begin(), where no lastBacking reads one
     std::vector<Backing *> trimmedBackings_;
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
@@ -2164,6 +2203,7 @@ private:
     bool reopen();
     bool newContext(uint32_t channel, uint32_t &seqno);
     bool waitFence(uint32_t seqno, uint64_t generation);
+
     // A seqno of a channel reopen() retired: as that channel ended it, its failure's error kept for lostError()
     bool retiredWait(uint32_t seqno, uint64_t generation)
     {
@@ -2173,6 +2213,7 @@ private:
         killedError_.store(error, std::memory_order_relaxed);
         return false;
     }
+
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records
 

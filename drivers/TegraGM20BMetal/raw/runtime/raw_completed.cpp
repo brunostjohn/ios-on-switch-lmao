@@ -110,7 +110,8 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         return it->second;
     PlacedProgram vs, fs, tessPlaced[2];
     if (!placeCompleted(r.programs[0], vs) || !placeCompleted(r.programs[1], fs) ||
-        (tess && (!placeCompleted(r.tessPrograms[0], tessPlaced[0]) || !placeCompleted(r.tessPrograms[1], tessPlaced[1])))) {
+        (tess &&
+         (!placeCompleted(r.tessPrograms[0], tessPlaced[0]) || !placeCompleted(r.tessPrograms[1], tessPlaced[1])))) {
         stats.heapFull++;
         why = "the shader heap is full";
         if (retry)

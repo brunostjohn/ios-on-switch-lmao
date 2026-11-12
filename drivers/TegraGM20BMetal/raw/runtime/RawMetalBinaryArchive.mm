@@ -185,11 +185,10 @@ id<MTLBinaryArchive> rmNewBinaryArchive(id device, MTLBinaryArchiveDescriptor *d
 
 raw::ArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, uint64_t key)
 {
-    return raw::archiveAnswer(
-        options & MTLPipelineOptionFailOnBinaryArchiveMiss, archives.count, [&](size_t i) {
-            id archive = archives[i];
-            return [archive isKindOfClass:[RMBinaryArchive class]] && [(RMBinaryArchive *)archive holds:key];
-        });
+    return raw::archiveAnswer(options & MTLPipelineOptionFailOnBinaryArchiveMiss, archives.count, [&](size_t i) {
+        id archive = archives[i];
+        return [archive isKindOfClass:[RMBinaryArchive class]] && [(RMBinaryArchive *)archive holds:key];
+    });
 }
 
 NSError *rmArchiveMissError(NSString *function, const char *pipeline)
@@ -221,8 +220,8 @@ bool rmTileArchiveAnswer(MTLTileRenderPipelineDescriptor *twin, MTLTileRenderPip
                          MTLPipelineOption &options, NSError **error)
 {
     RMFunction *f = own(d.tileFunction);
-    const raw::ArchiveAnswer answer = f ? rmArchiveAnswer(d.binaryArchives, options, rmArchiveKey(tileKey(d, f)))
-                                        : raw::ArchiveAnswer::NotAsked;
+    const raw::ArchiveAnswer answer =
+        f ? rmArchiveAnswer(d.binaryArchives, options, rmArchiveKey(tileKey(d, f))) : raw::ArchiveAnswer::NotAsked;
     twin.binaryArchives = nil;
     options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
     return !missed(answer, f.name, "tile", error);

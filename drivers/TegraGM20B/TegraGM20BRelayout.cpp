@@ -102,8 +102,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	int ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, surface.pas,
 					      surface.npages, true, &surfaceMap);
 	if (!ret)
-		ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, rows.pas, rows.npages,
-						  false, &rowsMap);
+		ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, rows.pas,
+						  rows.npages, false, &rowsMap);
 	if (!ret) {
 		__atomic_store_n(r.space.words + kCheckpointWord, 0u, __ATOMIC_RELEASE);
 		const tgm_relayout_move m = {surfaceMap->tiled,
@@ -113,8 +113,9 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 					     op,
 					     rowsBytes,
 					     kPushVa + uint64_t(kCheckpointWord) * 4};
-		const tgm_push push = {kPushVa, tgm_relayout_push(r.space.words, &l, &m, waits, nwaits),
-				       0, 0, 0, 0};
+		const tgm_push push = {
+			kPushVa, tgm_relayout_push(r.space.words, &l, &m, waits, nwaits), 0, 0, 0,
+			0};
 		uint32_t seqno = 0;
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 		if (!ret) {
@@ -133,7 +134,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		switch_gpu_relayout_cache_clear(r.space.vm, &gRelayout.mappings);
 		if (!flushForCpu())
 			switch_refusal("iosurface-layout", "fault-unflushed",
-				       "a faulted relayout leaves the GPU's L2 unflushed for the CPU's move: "
+				       "a faulted relayout leaves the GPU's L2 unflushed for the "
+				       "CPU's move: "
 				       "no copy channel");
 	}
 	if (finish) {

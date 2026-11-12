@@ -113,7 +113,11 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMTextureTwinOnly
 };
 
-enum class RMShareable : uint8_t { Unasked, No, Yes };
+enum class RMShareable : uint8_t {
+    Unasked,
+    No,
+    Yes
+};
 
 @interface RMTexture : RMObject {
 @public
@@ -214,6 +218,7 @@ struct RMPass {
 
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
+
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
     struct Zeta {
         __unsafe_unretained id texture;
@@ -222,12 +227,14 @@ struct RMPass {
         MTLStoreAction store;
         bool resolve;
     } zeta[2];
+
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
     raw::SamplePositions positions;
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
-    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
+    bool continues =
+        false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -284,11 +291,13 @@ struct RMSharedEventWait {
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;
     raw::ProbeTaken _probeTaken;
+
     struct ProbeOp {
         size_t at;
         raw::ProbeOp op;
         RMTexture *read, *written;
     };
+
     std::vector<ProbeOp> _probeOps;
 #endif
     std::vector<RMSegment> _segs;
@@ -308,9 +317,9 @@ struct RMSharedEventWait {
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     RMCommandPlan _plan;
-    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
+    std::vector<RMPass> _passes;               // OpRender's (Cmd::x)
     std::vector<RMCounterMark> _counterMarks;  // in tape order
-    RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    RMBytes _bytes;                            // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
     // the encode reads (the first draw's cover test) is not read from the write-combined chunk
     std::vector<uint8_t> _shadow;
@@ -415,12 +424,12 @@ uint64_t nextTraceId();
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;
     raw::Variant<raw::Pipeline> *_drawnVariant;
-    uint32_t _formats[8];   // the pass's color attachments' formats as the raw path holds them (0: none)
-    uint32_t _count;        // its attachment count (the last attachment's index + 1)
-    uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
-    uint32_t _samples;      // its color attachments' samples a pixel
-    uint8_t _turn;          // its turned attachments' rotation (raw_rotation.h; 0: none)
-    uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
+    uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
+    uint32_t _count;       // its attachment count (the last attachment's index + 1)
+    uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _samples;     // its color attachments' samples a pixel
+    uint8_t _turn;         // its turned attachments' rotation (raw_rotation.h; 0: none)
+    uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
     bool _drew;                      // a draw recorded
@@ -444,8 +453,8 @@ uint64_t nextTraceId();
 @end
 
 // RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
-id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
-                  MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
+id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
+                  MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);

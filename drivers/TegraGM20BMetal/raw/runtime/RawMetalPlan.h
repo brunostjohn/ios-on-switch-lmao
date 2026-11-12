@@ -87,12 +87,27 @@ struct RMPlanOperation {
     uint32_t uses = 0;
 };
 
-enum class RMPlanError : uint8_t { None, NestedEncoder, EventInsideEncoder, UnclosedEncoder };
+enum class RMPlanError : uint8_t {
+    None,
+    NestedEncoder,
+    EventInsideEncoder,
+    UnclosedEncoder
+};
 
-enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Count };
+enum class RMResourceKind : uint8_t {
+    Other,
+    Buffer,
+    Texture,
+    Sampler,
+    Count
+};
 
 struct RMResourceFacts {
-    enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };
+    enum Role : uint8_t {
+        Converted = 1,
+        PlanarTarget = 2
+    };
+
     void *cpuBuffer = nullptr;
     RMResourceKind kind = RMResourceKind::Other;
     uint8_t roles = 0;
@@ -131,6 +146,7 @@ class RMCommandPlan {
     Op encoder_ = OpEnd;
     RMPlanError recordingError_ = RMPlanError::None;
     size_t encoderBegin_ = 0;
+
     struct Range {
         size_t from = 0, to = 0;
         uint32_t uses = 0;
@@ -140,6 +156,7 @@ class RMCommandPlan {
         std::array<uint32_t, size_t(RMResourceKind::Count) + 1> first{};
         void *planarFeedback = nullptr;
     };
+
     // the ranges prepared, the first rangeCount_ of them live: a cleared plan keeps them, their lists' capacity too, for
     // the next command buffer's
     std::deque<Range> ranges_;
@@ -220,8 +237,9 @@ public:
 
     RMPlanError recordingError() const
     {
-        return recordingError_ != RMPlanError::None ? recordingError_ :
-            encoder_ != OpEnd ? RMPlanError::UnclosedEncoder : RMPlanError::None;
+        return recordingError_ != RMPlanError::None ? recordingError_
+               : encoder_ != OpEnd                  ? RMPlanError::UnclosedEncoder
+                                                    : RMPlanError::None;
     }
 
     const RMPlanBegin &begin(size_t at) const
@@ -290,11 +308,14 @@ public:
     }
 
     void registerResource(void *object, RMResourceFacts facts);
+
     const RMResourceFacts *factsOf(void *object) const
     {
         return resourceFacts_.find(object);
     }
+
     void *nativeRangeRefusal(size_t from, size_t to) const;
+
     template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
     {
         const auto &range = rangeAt(from, to);

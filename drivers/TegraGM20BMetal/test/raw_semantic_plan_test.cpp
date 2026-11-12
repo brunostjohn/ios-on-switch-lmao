@@ -205,7 +205,7 @@ TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
     draw(plan);
     Cmd empty = cmd(OpDraw, 3);
     empty.b = 6;
-    plan.record(empty, {}); // zero instances
+    plan.record(empty, {});  // zero instances
     plan.record(cmd(OpDrawIndirect, 3), {});
     plan.record(cmd(OpEnd), {});
     const size_t second = plan.size();
@@ -213,16 +213,22 @@ TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
     draw(plan);
     plan.record(cmd(OpEnd), {});
     std::vector<uint32_t> counts;
-    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{100, 1}));
     counts.clear();
-    plan.forEachRasterGroup(second, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(second, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{1}));
     plan.clear();
     plan.record(cmd(OpRender), {});
     draw(plan);
     counts.clear();
-    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) { counts.push_back(count); });
+    plan.forEachRasterGroup(0, [&](const auto &, uint32_t count) {
+        counts.push_back(count);
+    });
     EXPECT_EQ(counts, (std::vector<uint32_t>{1}));
 }
 
@@ -301,7 +307,9 @@ TEST(SemanticPlan, RasterAndOffsetChangesReuseResourceIdentity)
     EXPECT_EQ(plan.renderStates.size(), 10000u);
     std::map<void *, uint8_t> uses;
     plan.prepareRange(0, plan.size());
-    plan.forEachUse(0, plan.size(), [&](void *resource, uint8_t access) { uses[resource] = access; });
+    plan.forEachUse(0, plan.size(), [&](void *resource, uint8_t access) {
+        uses[resource] = access;
+    });
     EXPECT_EQ(uses, (std::map<void *, uint8_t>{{object(42), raw::ResourceUse::Read}}));
 }
 
@@ -379,7 +387,9 @@ TEST(SemanticPlan, KernelResourcePlansSurviveOffsetAndDispatchChanges)
     });
     EXPECT_EQ(builds, 2u);
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(plan.size() - 1, plan.size(), [&](void *resource, uint8_t access) { uses[resource] = access; });
+    plan.forEachUse(plan.size() - 1, plan.size(), [&](void *resource, uint8_t access) {
+        uses[resource] = access;
+    });
     EXPECT_EQ(uses[object(42)], raw::ResourceUse::Write);
 }
 
@@ -737,7 +747,7 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
     auto readSource = [&] {
         ++builds;
         return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-            {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
+                                             {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
     };
     for (unsigned i = 0; i < 10000; ++i) {
         plan.record(cmd(OpDispatch), dimensions);
@@ -750,8 +760,12 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
         return std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Read | raw::ResourceUse::Write}};
     });
     std::map<void *, uint8_t> first, last;
-    plan.forEachUse(1, boundary, [&](void *object, uint8_t access) { first[object] = access; });
-    plan.forEachUse(boundary, plan.size(), [&](void *object, uint8_t access) { last[object] = access; });
+    plan.forEachUse(1, boundary, [&](void *object, uint8_t access) {
+        first[object] = access;
+    });
+    plan.forEachUse(boundary, plan.size(), [&](void *object, uint8_t access) {
+        last[object] = access;
+    });
     ASSERT_EQ(first.size(), 2u);
     EXPECT_EQ(first[object(10)], raw::ResourceUse::Read);
     EXPECT_EQ(first[object(20)], raw::ResourceUse::Read | raw::ResourceUse::Sample);
@@ -802,7 +816,9 @@ TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
     EXPECT_EQ(plan.dispatch(1).kernel, object(200));
     EXPECT_EQ(plan.dispatch(1).surfaceSlots, 4u);
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(0, boundary, [&](void *object, uint8_t access) { uses[object] = access; });
+    plan.forEachUse(0, boundary, [&](void *object, uint8_t access) {
+        uses[object] = access;
+    });
     EXPECT_EQ(uses[object(10)], raw::ResourceUse::Read);
     EXPECT_EQ(uses[object(20)], raw::ResourceUse::Write);
     plan.clear();
@@ -820,14 +836,16 @@ TEST(SemanticPlan, ComputeAliasesUnionAccessAndExplicitWritesRemainDependencies)
     plan.record(cmd(OpDispatch), {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
     plan.setKernelUses(1, object(1), [] {
         return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-                                           {object(10), raw::ResourceUse::Write}};
+                                             {object(10), raw::ResourceUse::Write}};
     });
     auto explicitUse = binding(OpKernelUse, 3, 0, 20, 2);
     plan.record(explicitUse, {});
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, plan.size());
     std::map<void *, uint8_t> uses;
-    plan.forEachUse(0, plan.size(), [&](void *object, uint8_t access) { uses[object] = access; });
+    plan.forEachUse(0, plan.size(), [&](void *object, uint8_t access) {
+        uses[object] = access;
+    });
     EXPECT_EQ(uses[object(10)], raw::ResourceUse::Read | raw::ResourceUse::Write);
     EXPECT_EQ(uses[object(20)], raw::ResourceUse::Write | raw::ResourceUse::Explicit);
 }
@@ -952,8 +970,8 @@ struct CallLog {
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &value)
     {
         calls.push_back("b" + std::to_string(stage) + "." + std::to_string(slot) + "=" +
-                        std::to_string(reinterpret_cast<uintptr_t>(value.object)) + "+" +
-                        std::to_string(value.offset) + "/" + std::to_string(int(value.source)));
+                        std::to_string(reinterpret_cast<uintptr_t>(value.object)) + "+" + std::to_string(value.offset) +
+                        "/" + std::to_string(int(value.source)));
     }
 
     void texture(uint32_t stage, uint32_t slot, void *value)

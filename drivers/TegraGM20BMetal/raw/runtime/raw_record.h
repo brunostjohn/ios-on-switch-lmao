@@ -52,7 +52,7 @@ struct RuntimeRecord {
     std::string keyString;
     CapturedProgram programs[2];
     CapturedProgram tessPrograms[2];  // a tessellation state's (PackPipeline tessellates): control, evaluation
-    std::vector<uint32_t> blob;  // (method, value) pairs over the pack's varying registers
+    std::vector<uint32_t> blob;       // (method, value) pairs over the pack's varying registers
     // Registers outside them the state sets (its draws set them), and what every pack state leaves there (the draws after its
     // set them back)
     std::vector<std::pair<uint32_t, uint32_t>> extras, restore;
