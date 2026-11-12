@@ -77,6 +77,9 @@ typedef struct NmbDirectDraw {
     // vertex amplification: the count the draw was planned at (the descriptor's maxVertexAmplificationCount, one draw per
     // amplification), the push words + 1 of m2v's AmplificationId and AmplificationCount (0: none)
     uint32_t amplificationMax, amplificationIdWord, amplificationCountWord;
+    // and of its AmplificationLayerOffset and AmplificationViewportOffset (it is compiled for a layered pass whose
+    // mappings offset the viewport), which each amplification writes
+    uint32_t amplificationLayerWord, amplificationViewportWord;
     // push words + 1 of m2v's RenderTargetArrayLength (a vertex function that chooses its slice: compiled for a layered
     // pass) and ViewportCount (one that chooses its viewport), which each draw writes
     uint32_t arrayLengthWord, viewportCountWord;

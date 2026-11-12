@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 // raw_amplification.cpp on raw::Device: a state of vertex amplification drawn once per amplification by one amplify macro
-// call over the scratch words the encoder writes, a count the state does not take refused, a viewport offset refused,
-// and a dynamic vertex stride taken from the bind up to the stream's 12-bit field.
+// call over the scratch words the encoder writes, a count the state does not take refused, each amplification's view
+// mapping offsets in the scratch maps and the state's offset words, and a dynamic vertex stride taken from the bind up to
+// the stream's 12-bit field.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_record.h"
+#include <algorithm>
+#include <iterator>
 #include <map>
 #include <utility>
 #include <vector>
@@ -42,7 +45,7 @@ class DeviceAmplification : public harness::DeviceTest {
 protected:
     raw::Texture target;
     raw::Buffer vertices;
-    raw::Pipeline *amplified = nullptr, *counted = nullptr, *plain = nullptr, *strided = nullptr;
+    raw::Pipeline *amplified = nullptr, *counted = nullptr, *plain = nullptr, *strided = nullptr, *offsetting = nullptr;
 
     void SetUp() override
     {
@@ -58,6 +61,11 @@ protected:
         ASSERT_NE(plain, nullptr) << why;
         strided = dev.addRecord(record(0xa304, 0, false, true), false, why);
         ASSERT_NE(strided, nullptr) << why;
+        raw::RuntimeRecord viewports = record(0xa305, 2, false, false);
+        viewports.amplificationViewportWord = 6;
+        viewports.pipeline.pushMask |= 1u << 5;
+        offsetting = dev.addRecord(viewports, false, why);
+        ASSERT_NE(offsetting, nullptr) << why;
     }
 
     struct Drawn {
@@ -66,9 +74,10 @@ protected:
         std::vector<uint32_t> words;  // what the device submitted for the draw's command buffer
     };
 
-    // One draw of `pl` at amplification `count` (`viewportOffsets`: a mapping offsets the viewport), the vertex buffer at
+    // One draw of `pl` at amplification `count` under view mappings of viewport offsets `viewports`, the vertex buffer at
     // slot 1 bound at `stride`
-    Drawn drawWith(raw::Pipeline *pl, uint32_t count, bool viewportOffsets = false, uint32_t stride = UINT32_MAX)
+    Drawn drawWith(raw::Pipeline *pl, uint32_t count, std::vector<uint32_t> viewports = {},
+                   uint32_t stride = UINT32_MAX)
     {
         Drawn d;
         raw::CommandBuffer *cb = dev.begin();
@@ -85,7 +94,10 @@ protected:
         e->setPipeline(pl);
         e->setBuffer(1, 1, &vertices, 0);
         e->setVertexStride(1, stride);
-        e->setAmplification(count, viewportOffsets);
+        uint32_t offsets[raw::RenderEncoder::kAmplificationMaps] = {},
+                 layers[raw::RenderEncoder::kAmplificationMaps] = {};
+        std::copy_n(viewports.begin(), std::min<size_t>(viewports.size(), std::size(offsets)), offsets);
+        e->setAmplification(count, offsets, layers);
         const char *why = nullptr;
         const size_t jobs = kernel_model::model.jobs.size();
         const bool ok = e->draw(kTriangle, 0, 3, 1, 0, &why);
@@ -168,7 +180,8 @@ TEST_F(DeviceAmplification, TheIdWordIsTheMacrosAlone)
     ASSERT_NE(e, nullptr);
     e->setPipeline(amplified);
     e->setBuffer(1, 1, &vertices, 0);
-    e->setAmplification(2, false);
+    const uint32_t none[raw::RenderEncoder::kAmplificationMaps] = {};
+    e->setAmplification(2, none, none);
     const char *why = nullptr;
     const size_t jobs = kernel_model::model.jobs.size();
     ASSERT_TRUE(e->draw(kTriangle, 0, 3, 1, 0, &why)) << why;
@@ -234,18 +247,37 @@ TEST_F(DeviceAmplification, ACountTheStateDoesNotTakeIsRefused)
     EXPECT_EQ(drawWith(counted, 2).why, "");
 }
 
-TEST_F(DeviceAmplification, AViewportOffsetGoesElsewhere)
+// View mappings that offset the viewport: the macro's map holds each amplification's offset and its viewport scratch word
+// names the state's AmplificationViewportOffset word; one amplification draws its mapping's from the CPU
+TEST_F(DeviceAmplification, EachAmplificationsViewportOffsetIsTheStatesWord)
 {
-    EXPECT_NE(drawWith(amplified, 2, true).why, "");
-    EXPECT_EQ(drawWith(amplified, 1, true).why, "");
+    const uint32_t scratch = NVB197_SET_MME_SHADOW_SCRATCH(0);
+    std::map<uint32_t, uint32_t> words;
+    for (const auto &[m, v] : methods(drawWith(offsetting, 2, {3, 6}).words))
+        if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT && m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
+            words[(m - scratch) / 4] = v;
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORT_WORD], 0x700u + 4 * 5);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS], 3u);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS + 1], 6u);
+    uint32_t offset = 0, word = ~0u;
+    for (const auto &[m, v] : methods(drawWith(offsetting, 1, {4}).words)) {
+        if (m == NVB197_LOAD_CONSTANT_BUFFER_OFFSET) {
+            offset = v;
+        } else if (m >= NVB197_LOAD_CONSTANT_BUFFER(0) && m < NVB197_LOAD_CONSTANT_BUFFER(16)) {
+            if (offset == 0x700 + 4 * 5)
+                word = v;
+            offset += 4;
+        }
+    }
+    EXPECT_EQ(word, 4u);
 }
 
 TEST_F(DeviceAmplification, ADynamicStrideIsTheBindsUpToTheStreamField)
 {
-    EXPECT_EQ(drawWith(strided, 1, false, 16).why, "");
-    EXPECT_EQ(drawWith(strided, 1, false, 0xfff).why, "");
+    EXPECT_EQ(drawWith(strided, 1, {}, 16).why, "");
+    EXPECT_EQ(drawWith(strided, 1, {}, 0xfff).why, "");
     EXPECT_EQ(drawWith(strided, 1).why, "");
-    EXPECT_NE(drawWith(strided, 1, false, 0x1000).why, "");
+    EXPECT_NE(drawWith(strided, 1, {}, 0x1000).why, "");
 }
 
 }  // namespace

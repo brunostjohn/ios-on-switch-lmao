@@ -145,6 +145,8 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     for (const auto &[m, v] : r.restore)
         w.m(m, v);
     stored.pipeline.restore.assign(words.data(), w.at);
+    stored.pipeline.amplificationLayerWord = r.amplificationLayerWord;
+    stored.pipeline.amplificationViewportWord = r.amplificationViewportWord;
     if (r.split && !c.record.storageMask)
         offerCompletedSplit(stored, r, vs, caTransform);
     completed_[key] = &stored.pipeline;

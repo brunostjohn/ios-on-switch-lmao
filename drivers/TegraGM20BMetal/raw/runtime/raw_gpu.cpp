@@ -4276,7 +4276,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                          const char **why)
 {
     if (amplifies() && runsPerAmplification(primitive, count, instances, false))
-        return amplified([&] { return draw(primitive, first, count, instances, baseInstance, why); }, why);
+        return amplified([&] { return draw(primitive, first, count, instances, baseInstance, why); });
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4470,8 +4470,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 {
     if (amplifies() && runsPerAmplification(primitive, count, instances, true))
         return amplified(
-            [&] { return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why); },
-            why);
+            [&] { return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why); });
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4636,7 +4635,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     if (amplifies()) {
         amplificationScratch(p_, pl);
         mme::amplifyHeader(p_, indexed);
-        heldAmplifyWords(*pl.rec);
+        heldAmplifyWords(pl);
     } else {
         mme::indirectHeader(p_, indexed);
     }
@@ -4688,10 +4687,6 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 // buffer and draw parameters, which the encoder holds unknown after them; patch commands their control-stage words too.
 bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
 {
-    if (amplificationOffsets_ && amplifications_ > 1) {
-        *why = "a vertex amplification view mapping of a viewport offset: viewport arrays go to m2v";
-        return false;
-    }
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_ || !x.count)
         return true;
@@ -5317,7 +5312,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
     const bool patches = tessellates(r);
-    const bool drawnWordsDirty = ((r.amplificationIdWord || r.amplificationCountWord) && amplificationDirty_) ||
+    const bool drawnWordsDirty = ((r.amplificationIdWord || r.amplificationCountWord || pl->amplificationLayerWord ||
+                                   pl->amplificationViewportWord) &&
+                                  amplificationDirty_) ||
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || (patches && tessWordsDirty_) || drawnWordsDirty) {
@@ -5354,7 +5351,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             controlWords(r, want);
             tessWordsDirty_ = false;
         }
-        drawnWords(r, want);
+        drawnWords(*pl, want);
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
         if (r.blendColorWord && blendWordsDirty_) {

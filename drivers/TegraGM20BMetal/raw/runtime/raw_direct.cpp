@@ -408,6 +408,8 @@ bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &wh
         if (other.amplificationIdWord != d.amplificationIdWord ||
             other.amplificationCountWord != d.amplificationCountWord || other.arrayLengthWord != d.arrayLengthWord ||
             other.viewportCountWord != d.viewportCountWord ||
+            other.amplificationLayerWord != d.amplificationLayerWord ||
+            other.amplificationViewportWord != d.amplificationViewportWord ||
             memcmp(other.pulledStrides, d.pulledStrides, sizeof d.pulledStrides)) {
             why = "probe draws that place a drawn push word apart";
             return false;
@@ -596,6 +598,8 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
         return CompileOutcome::Refused;
+    out.amplificationLayerWord = uint8_t(draw.amplificationLayerWord);
+    out.amplificationViewportWord = uint8_t(draw.amplificationViewportWord);
     if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {
         why = "storage form: assembled record lost its attachment contract";
         return CompileOutcome::Refused;

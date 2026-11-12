@@ -58,6 +58,9 @@ struct RuntimeRecord {
     // Its constexpr sampler headers. A constexpr entry's sampler byte indexes them, whichever tool made the record (the
     // runtime, the native seed, the pack generator), so a record does not depend on the pack's sampler order.
     std::vector<std::array<uint32_t, 8>> samplers;
+    // An amplifying state's push words + 1 of m2v's AmplificationLayerOffset and AmplificationViewportOffset (0: none),
+    // which each amplification writes: a runtime state's, outside the pack's PackPipeline
+    uint8_t amplificationLayerWord = 0, amplificationViewportWord = 0;
     // its fragment program's split (raw_pack.h PackSplit, whose program indices it does not use): the per-pixel program,
     // then the prologue (an 80-byte header of zeros before its code, as programs.bin holds a kernel's). splitTried: the
     // split was compiled for, and is here where it saves time

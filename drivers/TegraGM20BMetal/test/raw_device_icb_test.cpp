@@ -18,15 +18,16 @@
 
 namespace {
 
-constexpr uint32_t kRGBA8 = 70, kTriangle = 3, kControlWord = 5, kIdWord = 3;
-constexpr uint32_t kControlAt = 0x700 + 4 * (kControlWord - 1), kIdAt = 0x700 + 4 * (kIdWord - 1);
+constexpr uint32_t kRGBA8 = 70, kTriangle = 3, kControlWord = 5, kIdWord = 3, kViewportWord = 4;
+constexpr uint32_t kControlAt = 0x700 + 4 * (kControlWord - 1), kIdAt = 0x700 + 4 * (kIdWord - 1),
+                   kViewportAt = 0x700 + 4 * (kViewportWord - 1);
 
 // The 3D methods a word stream sends, run as the channel would: macro calls through the simulator, constant buffer loads
 // into `memory` at the selected buffer's address, and at each draw's first BEGIN what it reads
 struct Channel {
     struct Draw {
         uint64_t set = 0;
-        uint32_t factors[3] = {}, control[6] = {}, amplification = 0;
+        uint32_t factors[3] = {}, control[6] = {}, amplification = 0, viewport = 0;
     };
 
     std::map<uint64_t, uint32_t> memory;
@@ -97,6 +98,7 @@ struct Channel {
         for (uint32_t w = 0; w < 6; w++)
             d.control[w] = word(root + kControlAt + 4 * w);
         d.amplification = word(root + kIdAt);
+        d.viewport = word(root + kViewportAt);
         draws.push_back(d);
     }
 
@@ -210,7 +212,8 @@ raw::RuntimeRecord tessellation(uint64_t key)
     return r;
 }
 
-raw::RuntimeRecord amplifying(uint64_t key)
+// A state of amplification 2 reading its id, and each amplification's viewport offset where `viewports`
+raw::RuntimeRecord amplifying(uint64_t key, bool viewports = false)
 {
     raw::RuntimeRecord r;
     r.keyString = "samples=1 c0=70:15:0 ds=0/0 ";
@@ -222,8 +225,9 @@ raw::RuntimeRecord amplifying(uint64_t key)
     r.blob = {0x1a00, 0x1111};
     r.pipeline.amplificationMax = 2;
     r.pipeline.amplificationIdWord = kIdWord;
-    r.pipeline.pushMask = 1u << (kIdWord - 1);
+    r.pipeline.pushMask = 1u << (kIdWord - 1) | (viewports ? 1u << (kViewportWord - 1) : 0);
     r.pipeline.vertexSlot = 0xff;
+    r.amplificationViewportWord = viewports ? kViewportWord : 0;
     return r;
 }
 
@@ -377,7 +381,8 @@ TEST_F(DeviceIcb, AnExecuteUnderAmplificationDrawsItsRangeOncePerAmplification)
         raw::icb::draw(reinterpret_cast<uint32_t *>(slots.cpu) + i * raw::icb::kSlotWords, i,
                        {kTriangle, 3, 1, 3 * i, 0});
     const Channel c = pass(pl, [&](raw::RenderEncoder &e) {
-        e.setAmplification(2, false);
+        const uint32_t none[raw::RenderEncoder::kAmplificationMaps] = {};
+        e.setAmplification(2, none, none);
         const char *refused = nullptr;
         EXPECT_TRUE(e.executeSlots(execute(0, 2, raw::icb::kSlotWords, kTriangle), &refused))
             << (refused ? refused : "");
@@ -389,24 +394,29 @@ TEST_F(DeviceIcb, AnExecuteUnderAmplificationDrawsItsRangeOncePerAmplification)
         EXPECT_EQ(c.draws[i].amplification, ids[i]) << i;
 }
 
-TEST_F(DeviceIcb, AnExecuteUnderAViewportOffsetIsRefused)
+// An execute under view mappings that offset the viewport: each pass of its range has its amplification's offset in the
+// state's word, as its id, and a draw after it each amplification's through the amplify macro
+TEST_F(DeviceIcb, AnExecuteUnderViewportOffsetsDrawsEachAmplificationsOffset)
 {
     std::string why;
-    raw::Pipeline *pl = dev.addRecord(amplifying(0x1cb5), false, why);
+    raw::Pipeline *pl = dev.addRecord(amplifying(0x1cb5, true), false, why);
     ASSERT_NE(pl, nullptr) << why;
-    raw::CommandBuffer *cb = dev.begin();
-    ASSERT_NE(cb, nullptr);
-    raw::PassDesc desc;
-    desc.color[0].texture = &target;
-    desc.count = 1;
-    raw::RenderEncoder *e = cb->render(desc);
-    ASSERT_NE(e, nullptr);
-    e->setPipeline(pl);
-    e->setAmplification(2, true);
-    const char *refused = nullptr;
-    EXPECT_FALSE(e->executeSlots(execute(0, 1, raw::icb::kSlotWords, kTriangle), &refused));
-    e->end();
-    cb->abandon();
+    raw::icb::draw(reinterpret_cast<uint32_t *>(slots.cpu), 0, {kTriangle, 3, 1, 0, 0});
+    const Channel c = pass(pl, [&](raw::RenderEncoder &e) {
+        const uint32_t viewports[raw::RenderEncoder::kAmplificationMaps] = {3, 6};
+        const uint32_t layers[raw::RenderEncoder::kAmplificationMaps] = {};
+        e.setAmplification(2, viewports, layers);
+        const char *refused = nullptr;
+        EXPECT_TRUE(e.executeSlots(execute(0, 1, raw::icb::kSlotWords, kTriangle), &refused))
+            << (refused ? refused : "");
+        EXPECT_TRUE(e.draw(kTriangle, 0, 3, 1, 0, &refused)) << (refused ? refused : "");
+    });
+    ASSERT_EQ(c.draws.size(), 4u) << c.summary();
+    const uint32_t ids[] = {0, 1, 0, 1}, offsets[] = {3, 6, 3, 6};
+    for (size_t i = 0; i < c.draws.size(); i++) {
+        EXPECT_EQ(c.draws[i].amplification, ids[i]) << i;
+        EXPECT_EQ(c.draws[i].viewport, offsets[i]) << i;
+    }
 }
 
 TEST_F(DeviceIcb, APatchCommandsWordsAreAnEncodersDrawsOfItsBuffers)

@@ -234,7 +234,7 @@ inline void draw(Push &push, DrawParams &held, bool indexed, uint32_t first, uin
 // Vertex amplification (raw_amplification.cpp): a draw under it is one call of an amplify macro, whose words are in
 // Vulkan's indirect order (count, instances, first, an indexed draw's vertex offset, the first instance): the call's
 // data, or for an indirect draw the GPFIFO continuation the caller appends. It leaves the draw parameters it wrote, the
-// AmplificationId word at the last amplification's id and the viewport offset word at its offset.
+// AmplificationId word at the last amplification's id and the layer and viewport offset words at its offsets.
 constexpr uint32_t kAmplifyCallWords = 6;
 // a count and its mappings, and a state's words
 constexpr uint32_t kAmplificationScratchWords = 2 + 2 * (1 + SWITCH_GM20B_AMP_MAX) + 6;

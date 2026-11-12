@@ -10,7 +10,7 @@ use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
     FieldLocation, FragmentTests, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable,
-    TextureFacts, VertexAmplification, WriteSource,
+    TextureFacts, VertexAmplification, ViewMapping, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -105,6 +105,8 @@ pub struct NmbDirectDraw {
     pub amplification_max: u32,
     pub amplification_id_word: u32,
     pub amplification_count_word: u32,
+    pub amplification_layer_word: u32,
+    pub amplification_viewport_word: u32,
     pub array_length_word: u32,
     pub viewport_count_word: u32,
     pub variant: *const c_char,
@@ -440,9 +442,11 @@ fn probe_state(
 ) -> BindState {
     let mut state = BindState::default();
     state.render_target_array_length = layers;
-    // One draw per amplification, which the raw path draws in order, into the first layer through viewport 0
+    // One draw per amplification, which the raw path draws in order, under mappings that offset the viewport (with `layers`
+    // 2, a layered pass): its vertex program writes each amplification's layer and viewport from its offset words
     if amplification > 1 {
-        state.vertex_amplification = VertexAmplification::new(amplification, Vec::new());
+        let mappings = (0..amplification).map(|a| ViewMapping::new(1, a)).collect();
+        state.vertex_amplification = VertexAmplification::new(amplification, mappings);
         state.vertex_amplification.one_at_a_time = true;
     }
     if patches {
@@ -781,6 +785,8 @@ fn draw_of(
         amplification_max: amplification,
         amplification_id_word: 0,
         amplification_count_word: 0,
+        amplification_layer_word: 0,
+        amplification_viewport_word: 0,
         array_length_word: 0,
         viewport_count_word: 0,
         variant: variant.as_ptr(),
@@ -842,8 +848,8 @@ fn draw_of(
     Ok(draw)
 }
 
-/// The push words a raw draw writes itself: each amplification's id (an amplification of the first layer through viewport 0,
-/// as the probe plans it), and each dynamic pulled layout's stride
+/// The push words a raw draw writes itself: each amplification's id, count and offsets, and each dynamic pulled layout's
+/// stride
 fn dynamic_words(run: &Run, pipeline: &RenderPipeline, draw: &mut NmbDirectDraw) -> Result<(), String> {
     let mut pulled = 0;
     for field in &run.plan.push.fields {
@@ -854,9 +860,8 @@ fn dynamic_words(run: &Run, pipeline: &RenderPipeline, draw: &mut NmbDirectDraw)
         match field.field {
             PushField::AmplificationId => draw.amplification_id_word = word,
             PushField::AmplificationCount => draw.amplification_count_word = word,
-            PushField::AmplificationLayerOffset | PushField::AmplificationViewportOffset => {
-                return Err("an amplification of a layer or viewport offset".into());
-            }
+            PushField::AmplificationLayerOffset => draw.amplification_layer_word = word,
+            PushField::AmplificationViewportOffset => draw.amplification_viewport_word = word,
             PushField::VertexBufferStride(layout)
                 if pipeline
                     .vertex_input
@@ -958,9 +963,14 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
-        // A vertex function that chooses its render target slice is compiled as for a pass of two layers: the variant
-        // that writes Layer, reading the pass's length from its push word, draws in a pass of any length
-        let layers = if chooses_layer(&base) { 2 } else { 0 };
+        // A vertex function that chooses its render target slice, or one amplified, is compiled as for a pass of two
+        // layers: the variant that writes Layer, reading the pass's length from its push word, draws in a pass of any
+        // length
+        let layers = if chooses_layer(&base) || amplification > 1 {
+            2
+        } else {
+            0
+        };
         let draw = crate::direct_tess::probe_draw(base.graphics.tessellation.as_ref());
         let patches = base.graphics.tessellation.is_some();
         let mut variants = vec![(VariantKey::new(), base)];

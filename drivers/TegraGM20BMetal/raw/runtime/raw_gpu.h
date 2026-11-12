@@ -444,6 +444,9 @@ struct Pipeline {
     bool viewportIndex = false;     // its vertex program writes ViewportIndex (SPH OMAP, raw_viewports.h)
     bool writesLayer = false;       // its last stage before the rasterizer writes Layer: SET_RT_LAYER takes it
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
+    // an amplifying runtime record's push words + 1 of m2v's AmplificationLayerOffset and AmplificationViewportOffset
+    // (RuntimeRecord's; 0: none), which each amplification writes
+    uint8_t amplificationLayerWord = 0, amplificationViewportWord = 0;
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
     bool caTransform = false;
@@ -593,8 +596,10 @@ public:
     // reads (raw_amplification.cpp)
     void setVertexStride(uint32_t slot, uint32_t stride);
     // setVertexAmplificationCount:viewMappings: (raw_amplification.cpp): each draw after draws `count` amplifications, one
-    // after another; `viewportOffsets`: a mapping moves the viewport, which needs viewport arrays the encoder forwards
-    void setAmplification(uint32_t count, bool viewportOffsets);
+    // after another, amplification a through its mapping's viewport and render target offsets (0 past the mappings)
+    static constexpr uint32_t kAmplificationMaps = SWITCH_GM20B_AMP_MAX;
+    void setAmplification(uint32_t count, const uint32_t (&viewports)[kAmplificationMaps],
+                          const uint32_t (&layers)[kAmplificationMaps]);
 
     void setTexture(uint32_t slot, const Texture *t);
 
@@ -780,7 +785,8 @@ private:
                                    UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
                                    UINT32_MAX, UINT32_MAX, UINT32_MAX};
     uint32_t amplifications_ = 1, amplification_ = 0;
-    bool amplificationOffsets_ = false, amplifying_ = false, amplificationDirty_ = true;
+    uint32_t amplificationViewports_[kAmplificationMaps] = {}, amplificationLayers_[kAmplificationMaps] = {};
+    bool amplifying_ = false, amplificationDirty_ = true;
     // what the amplify macros' scratch words hold (raw_mme.h), written before an amplified draw where they changed
     bool amplificationScratchDirty_ = true;
     mme::AmplificationWords heldAmplification_ = {~0u};
@@ -796,16 +802,12 @@ private:
     void amplificationScratch(Push &p, const Pipeline &pl);
     void amplifyCall(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
                      uint32_t root, uint32_t baseInstance);
-    // the root words an amplify call leaves: the last amplification's id, the count
-    void heldAmplifyWords(const PackPipeline &r);
+    // the root words an amplify call leaves: the last amplification's id and offsets, the count
+    void heldAmplifyWords(const Pipeline &pl);
 
-    // `draw` once per amplification, its id in the state's AmplificationId word
-    template <typename Draw> bool amplified(const Draw &draw, const char **why)
+    // `draw` once per amplification, its id and offsets in the state's words
+    template <typename Draw> bool amplified(const Draw &draw)
     {
-        if (amplificationOffsets_) {
-            *why = "a vertex amplification view mapping of a viewport offset: viewport arrays go to m2v";
-            return false;
-        }
         amplifying_ = true;
         bool drawn = true;
         for (uint32_t a = 0; drawn && a < amplifications_; a++) {
@@ -821,7 +823,7 @@ private:
 
     // What of a draw's amplification and bind strides the state does not take (null: it takes them)
     const char *drawnWordsRefusal(const PackPipeline &r) const;
-    void drawnWords(const PackPipeline &r, uint32_t (&want)[32]);
+    void drawnWords(const Pipeline &pl, uint32_t (&want)[32]);
     // The state's vertex streams at their binds (raw_vertex_streams.cpp): a stream's location and limit where its bind
     // moved, its format where its stride is its bind's, and its vertices [vFirst, vFirst + count) cleaned
     void bindStreams(Push &p, const Pipeline &pl, bool indexed, uint32_t vFirst, uint32_t count);

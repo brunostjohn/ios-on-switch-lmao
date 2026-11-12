@@ -145,11 +145,12 @@ struct NativePlanSink {
             render->setDepthBias(raw::stateFloat(next.depthBias[0]), raw::stateFloat(next.depthBias[1]),
                                  raw::stateFloat(next.depthBias[2]));
         if (rasterChanged(next, previous, R::Amplification, &R::amplification)) {
-            const uint32_t count = std::min(next.amplification[0], kAmplificationMappings);
-            bool viewportOffsets = next.amplification[0] > kAmplificationMappings;
-            for (uint32_t k = 0; k < count; k++)
-                viewportOffsets |= next.amplification[1 + 2 * k] != 0;
-            render->setAmplification(next.amplification[0], viewportOffsets);
+            uint32_t viewports[kAmplificationMappings], layers[kAmplificationMappings];
+            for (uint32_t k = 0; k < kAmplificationMappings; k++) {
+                viewports[k] = next.amplification[1 + 2 * k];
+                layers[k] = next.amplification[2 + 2 * k];
+            }
+            render->setAmplification(next.amplification[0], viewports, layers);
         }
     }
 };
