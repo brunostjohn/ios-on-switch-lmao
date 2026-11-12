@@ -6,11 +6,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
-#include <sys/mman.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 #include "../SwitchGpuWriterPromise.h"
+#include "switch_gpu_fence_model.h"
 #include "switch_gpu_interrupts_off_stubs.h"
 
 namespace
@@ -232,51 +231,7 @@ uint32_t poolOwner(uint32_t)
 
 const switch_gpu_promise_fence poolFence = {poolWord, promise_raise, poolOwner};
 
-// The fence pool as T210 has it: mapped write-combined, where only a plain store completes. The model's page is
-// read-only, so any other write (a compare-and-swap, any atomic read-modify-write) faults; the raise's own store is
-// the one write it lets through.
-struct FenceModel {
-	volatile uint32_t *page = nullptr;
-	size_t bytes = size_t(getpagesize());
-	uint32_t owner = 1;   // tgm_fence_owner
-	bool reused = false;  // handed to a connection that made no promise on it yet
-
-	FenceModel()
-	{
-		void *made =
-			mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-		page = static_cast<volatile uint32_t *>(made);
-		mprotect(made, bytes, PROT_READ);
-	}
-
-	~FenceModel()
-	{
-		munmap(const_cast<uint32_t *>(page), bytes);
-	}
-
-	void set(uint32_t offset, uint32_t value)
-	{
-		store(&page[offset / 4], value);
-	}
-
-	// its connection closed, the page goes to another, cleared (tgm_fence_page_get)
-	void reuse()
-	{
-		for (size_t i = 0; i < bytes / 4; ++i)
-			store(&page[i], 0);
-		++owner;
-		reused = true;
-	}
-
-	void store(volatile uint32_t *word, uint32_t value)
-	{
-		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ | PROT_WRITE);
-		__atomic_store_n(word, value, __ATOMIC_RELEASE);
-		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ);
-	}
-};
-
-FenceModel *model;
+fence_model::Page *model;
 
 volatile uint32_t *modelWord(uint32_t offset)
 {
@@ -351,7 +306,7 @@ TEST(WriterPromise, TheGiveUpMarksBeforeTheWordMovesAndTellsWhoWon)
 // page any compare-and-swap faults, as T210's bus answers one on the write-combined pool with an SError.
 TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 {
-	FenceModel fence;
+	fence_model::Page fence;
 	model = &fence;
 	fence.set(20, 1);
 	fence.set(24, 7);
@@ -446,7 +401,7 @@ TEST(WriterPromise, WhatBlocksThrowsOnlyWithInterruptsOff)
 // give-up is dropped, never raised (a raise would write the new owner's word), and nothing is told.
 TEST(WriterPromise, AGiveUpOnAPageAnotherConnectionOwnsNowIsDroppedNeverRaised)
 {
-	FenceModel fence;
+	fence_model::Page fence;
 	model = &fence;
 	fence.set(20, 1);
 	const uint32_t owner = fence.owner;

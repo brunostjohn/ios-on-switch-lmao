@@ -352,6 +352,7 @@ host_test(
 host_test(
     name = "switch_gpu_writer_promise_test",
     srcs = [
+        "switch_gpu_fence_model.h",
         "switch_gpu_interrupts_off_stubs.h",
         "switch_gpu_writer_promise_test.cpp",
         ":promise_raise_source",
@@ -464,6 +465,31 @@ set -e
 awk '/^int tgm_chan_note_promise\\(/ || /^void tgm_chan_park_promises\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
 grep -q tgm_promise_park $@
 """,
+)
+
+# Every driver and kit source, read for a CPU atomic read-modify-write on write-combined or uncached memory, and the
+# fence page model that faults on one. //:lint_files leaves out assembly and vendored trees (linux/, nouveau/,
+# nvidia/): each package's .S and every package with vendored code are named here.
+host_test(
+    name = "switch_wc_atomic_source_test",
+    srcs = [
+        "switch_gpu_fence_model.h",
+        "switch_wc_atomic_scan.h",
+        "switch_wc_atomic_source_test.cpp",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//:lint_files",
+        "//drivers/SwitchUSB:firmware.S",
+        "//drivers/SwitchWLAN:firmware.S",
+        "//drivers/TegraBPMP:all_files",
+        "//drivers/TegraDFLL:all_files",
+        "//drivers/TegraGM20B:all_files",
+        "//drivers/TegraNVDEC:all_files",
+        "//drivers/TegraNVENC:all_files",
+        "//drivers/TegraNVJPG:all_files",
+        "//drivers/TegraVIC:firmware.S",
+    ],
 )
 
 # Every driver and kit source, read for the one place a writer promise is given up.
