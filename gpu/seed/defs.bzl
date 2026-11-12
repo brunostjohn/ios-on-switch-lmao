@@ -4,6 +4,7 @@ the image.
   shader_crawl   the IPSW kind's crawled libraries (crawl.bzl crawls them once, in a repository) and their names
   metal_seed     resolve the corpus, plan the buckets, one precompile action per bucket, join their indexes
   seed_raw_pack  the raw GM20B path's pipeline pack, from Core Animation's corpus lines
+  sample_raw_pack  a raw pack of some of seed_raw_pack's states, made as it makes them (the record goldens' test)
   seed_tree      the seed and the raw pack laid out as the Data volume holds them (the image builder's)
 
 Every output is named below the IPSW kind (21H461/, 24B119/): a build of the other kind writes its own files, so
@@ -347,6 +348,55 @@ def _generator_files(ctx, names):
         fail("the raw pack generator's srcs lack some of " + ", ".join(names))
     return files
 
+def _raw_buckets(ctx, tools, crawl, corpora):
+    probe_inputs = depset([tools.twin] + tools.raw + ctx.files.device_libraries +
+                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.files])
+    buckets = []
+    for i, bucket_corpus in enumerate(corpora):
+        # rawpack.py knows a bucket by its directory's name (bucket0 also draws the raw path's own states).
+        bucket = ctx.actions.declare_directory(named(ctx, "_work/bucket{}".format(i)))
+        args = ctx.actions.args()
+        args.add("probe")
+        args.add("--generator", ctx.file.generator)
+        args.add("--raw", tools.raw_dir)
+        args.add("--nvk", tools.twin)
+        args.add("--qc", crawl.qc)
+        args.add("--data-dir", crawl.root + "/data")
+        args.add_all(ctx.files.device_libraries, before_each = "--data")
+        args.add("--lines", bucket_corpus)
+        args.add("--out", bucket.path)
+        ctx.actions.run(
+            executable = ctx.executable._tool,
+            arguments = [args],
+            inputs = depset([bucket_corpus], transitive = [probe_inputs]),
+            outputs = [bucket],
+            mnemonic = "MetalRawProbe",
+            progress_message = "Making the raw pack's bucket {} of {} directly".format(i + 1, len(corpora)),
+            execution_requirements = DARWIN,
+        )
+        buckets.append(bucket)
+    return buckets
+
+def _raw_link(ctx, buckets, corpus_report, archives):
+    linked = ctx.actions.declare_directory(named(ctx, "_work/linked"))
+    args = ctx.actions.args()
+    args.add("link")
+    args.add("--generator", ctx.file.generator)
+    args.add("--out", linked.path)
+    if corpus_report:
+        args.add("--corpus-report", corpus_report)
+    args.add_all(archives, before_each = "--archives")
+    args.add_all(buckets, expand_directories = False)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset(([corpus_report] if corpus_report else []) + archives + buckets + _generator_files(ctx, _RAW_LINK)),
+        outputs = [linked],
+        mnemonic = "MetalRawLink",
+        progress_message = "Linking the raw GM20B path's pipeline pack",
+    )
+    return linked
+
 def _seed_raw_pack_impl(ctx):
     tools = seed_tool_files(ctx.attr.tools)
     crawl = ctx.attr.crawl[CrawlInfo]
@@ -386,49 +436,8 @@ def _seed_raw_pack_impl(ctx):
         progress_message = "Splitting the raw pack's states into buckets",
     )
 
-    probe_inputs = depset([tools.twin] + tools.raw + ctx.files.device_libraries +
-                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.files])
-    buckets = []
-    for i, bucket_corpus in enumerate(corpora):
-        # rawpack.py knows a bucket by its directory's name (bucket0 also draws the raw path's own states).
-        bucket = ctx.actions.declare_directory(named(ctx, "_work/bucket{}".format(i)))
-        args = ctx.actions.args()
-        args.add("probe")
-        args.add("--generator", ctx.file.generator)
-        args.add("--raw", tools.raw_dir)
-        args.add("--nvk", tools.twin)
-        args.add("--qc", crawl.qc)
-        args.add("--data-dir", crawl.root + "/data")
-        args.add_all(ctx.files.device_libraries, before_each = "--data")
-        args.add("--lines", bucket_corpus)
-        args.add("--out", bucket.path)
-        ctx.actions.run(
-            executable = ctx.executable._tool,
-            arguments = [args],
-            inputs = depset([bucket_corpus], transitive = [probe_inputs]),
-            outputs = [bucket],
-            mnemonic = "MetalRawProbe",
-            progress_message = "Making the raw pack's bucket {} of {} directly".format(i + 1, _RAW_BUCKETS),
-            execution_requirements = DARWIN,
-        )
-        buckets.append(bucket)
-
-    linked = ctx.actions.declare_directory(named(ctx, "_work/linked"))
-    args = ctx.actions.args()
-    args.add("link")
-    args.add("--generator", ctx.file.generator)
-    args.add("--out", linked.path)
-    args.add("--corpus-report", corpus_report)
-    args.add_all(archives, before_each = "--archives")
-    args.add_all(buckets, expand_directories = False)
-    ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
-        inputs = depset([corpus_report] + archives + buckets + _generator_files(ctx, _RAW_LINK)),
-        outputs = [linked],
-        mnemonic = "MetalRawLink",
-        progress_message = "Linking the raw GM20B path's pipeline pack",
-    )
+    buckets = _raw_buckets(ctx, tools, crawl, corpora)
+    linked = _raw_link(ctx, buckets, corpus_report, archives)
 
     out = ctx.actions.declare_directory(named(ctx, ""))
     args = ctx.actions.args()
@@ -475,6 +484,27 @@ seed_raw_pack = rule(
             default = "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
             allow_single_file = True,
         ),
+        "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
+    },
+)
+
+def _sample_raw_pack_impl(ctx):
+    tools = seed_tool_files(ctx.attr.tools)
+    buckets = _raw_buckets(ctx, tools, ctx.attr.crawl[CrawlInfo], [ctx.file.corpus])
+    return [DefaultInfo(files = depset([_raw_link(ctx, buckets, None, [])]))]
+
+sample_raw_pack = rule(
+    implementation = _sample_raw_pack_impl,
+    doc = """A raw pack of a sample of seed_raw_pack's states: one bucket of corpus lines as seed_raw_pack's split wrote them
+    (the first bucket's warm-up line first), probed and linked as seed_raw_pack probes and links its buckets, with no
+    archive inventory and no stamp. Its records are the full pack's records of those states.""",
+    attrs = _IPSW | {
+        "tools": attr.label(mandatory = True),
+        "crawl": attr.label(mandatory = True, providers = [CrawlInfo]),
+        "device_libraries": attr.label(allow_files = True, doc = "device-compiled libraries used by native corpus states"),
+        "corpus": attr.label(mandatory = True, allow_single_file = True, doc = "split corpus lines, bucket0's"),
+        "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
+        "srcs": attr.label_list(allow_files = True, doc = "the generator's modules (raw/pack)"),
         "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
     },
 )
