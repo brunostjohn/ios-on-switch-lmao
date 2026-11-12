@@ -122,7 +122,7 @@ def library_root(qc: Path) -> str:
 
 # The Core Animation states the pack holds (ca/caset.py's tiers): every one. The runtime makes a state and places its
 # programs in the shader heap at its first lookup (raw_gpu.cpp Device::pipeline), so the pack's size is file size only.
-CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
+CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch', 'closure')
 
 
 def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = (), preferences: Path = STAGER) -> Path:

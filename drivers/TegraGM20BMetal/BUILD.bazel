@@ -275,6 +275,15 @@ py_test(
     deps = [":raw_pack"],
 )
 
+# raw/pack/ca/closure.py: the names one field away from the corpus's, manifest's and variants' names.
+py_test(
+    name = "closure_test",
+    srcs = ["raw/pack/ca/closure_test.py"],
+    data = ["raw/pack/ca/qc-24B119.json"],
+    main = "raw/pack/ca/closure_test.py",
+    deps = [":raw_pack"],
+)
+
 # raw/pack/ca/deepcolour.py: the colour precision the device's QuartzCore names Core Animation's states with, from the
 # preferences the stager writes.
 py_test(

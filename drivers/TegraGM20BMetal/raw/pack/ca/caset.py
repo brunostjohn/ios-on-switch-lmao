@@ -18,6 +18,8 @@ Tiers, each name in the first that has it:
              the state's own format where m2v draws it once (not the extended-range formats, which mkpack.py leaves out)
   fetch      every fixed-function fragment state of the tiers above with no blend of its own under every blend CA leaves
              in the fragment (framebuffer fetch: the separable and non-separable modes a compositing filter asks for)
+  closure    every name one field away from a corpus, manifest or variants name, along the fields the corpus's names
+             show QuartzCore varying on its own (closure.py: texture and image functions, image fields, fragment flags)
 A state is made from its name alone (caspec.state_fields): its descriptor is what QuartzCore makes of the name.
 
 usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (every tier when none is named)
@@ -26,10 +28,11 @@ usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (
 import sys
 
 import caspec
+import closure
 import deepcolour
 import fetchfree
 
-TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
+TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch', 'closure')
 LIFTABLE = range(1, 26)  # lift_blend_function: the blend functions above 25 stay in the fragment
 CLOSURE_FORMATS = ('BGRA',)
 SINGLE_DRAW_FORMATS = ('BGRA', 'RGBA', 'RGhA', 'RGfA')
@@ -153,6 +156,9 @@ def labels(
         'variants': lambda: variants,
         'blend': lambda: _blend_tier(tables, fragments),
         'fetch': lambda: _fetch_tier(tables, fragments),
+        'closure': lambda: closure.tier(
+            tables, list(corpus) + manifest + variants, list(corpus), cif10, lambda n: makes(tables, n)
+        ),
     }
     seen: set[str] = set()
     out: dict[str, list[str]] = {}
