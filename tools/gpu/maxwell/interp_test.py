@@ -156,6 +156,22 @@ class TextureTest(unittest.TestCase):
         want = [floats.convert(lane.r(r), floats.F32, floats.F16) for r in (4, 5, 6, 7)]
         self.assertEqual((lane.r(8), lane.r(10)), (want[0] | want[1] << 16, want[2] | want[3] << 16))
 
+    # TLDS r8:r10, r4:r5 (x, y), r6 (level) .2d.ll rgba at bound index 17 (NAK's sm50/texs.rs tlds_and_tld4s)
+    TLDS = 0xDA00_0000_0000_0000 | 1 << 59 | 5 << 53 | 4 << 50 | 17 << 36 | 10 << 28 | 6 << 20 | 4 << 8 | 8
+
+    def test_tlds_reads_the_words_its_target_names(self):
+        inputs, lane = self.lanes()
+        for r, v in ((4, 7), (5, 9), (6, 1)):
+            lane.w(r, v)
+        texture.tlds(self.TLDS, lane, inputs)
+        first = [lane.r(r) for r in (8, 9, 10, 11)]
+        lane.w(7, 123)
+        texture.tlds(self.TLDS, lane, inputs)
+        self.assertEqual([lane.r(r) for r in (8, 9, 10, 11)], first)
+        lane.w(6, 2)
+        texture.tlds(self.TLDS, lane, inputs)
+        self.assertNotEqual([lane.r(r) for r in (8, 9, 10, 11)], first)
+
 
 if __name__ == '__main__':
     unittest.main()

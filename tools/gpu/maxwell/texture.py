@@ -1,4 +1,4 @@
-"""Maxwell's texture fetches on the host: TEX (bindless and bound) and TEXS, as interp.py's lanes run them.
+"""Maxwell's texture fetches on the host: TEX (bindless and bound), TEXS and TLDS, as interp.py's lanes run them.
 
 A fetch is a pure function of a canonical key, so two programs that sample the same texel the same way get the same
 result whatever form each uses: the handle word (a bindless one's register, a bound one's constant buffer word at its
@@ -33,6 +33,20 @@ TEXS_TARGETS = {
     11: (DIM_3D, 1, False, ('a', 'a1', 'b'), None, None),
     12: (DIM_CUBE, 0, False, ('a', 'a1', 'b'), None, None),
     13: (DIM_CUBE, 3, False, ('a', 'a1', 'b'), 'b1', None),
+}
+# TLDS's targets (bits 53-56), where NAK puts each operand (nak_nir_lower_tex_sm50.c nak_nir_sm50_scalarize_tex,
+# NAK's sm50/texs.rs tlds_target): a texel load's coordinates, then its level, offset or sample index; an array's
+# index alone in register A and its coordinates in B
+TLDS_TARGETS = {
+    0: ('a',),
+    1: ('a', 'b'),
+    2: ('a', 'b'),
+    4: ('a', 'a1', 'b'),
+    5: ('a', 'a1', 'b'),
+    6: ('a', 'a1', 'b'),
+    7: ('a', 'a1', 'b'),
+    8: ('a', 'b', 'b1'),
+    12: ('a', 'a1', 'b', 'b1'),
 }
 R, G, B, A = 1, 2, 4, 8
 RG_LUT = (R, G, B, A, R | G, R | A, G | A, B | A)
@@ -73,27 +87,48 @@ def tex(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     write_compact(lane, d, mask, fetch(inputs, handle, coords, mode, level, dref, offset, dim))
 
 
+def _scalar_operand(w: int, lane: Lane, place: str | None):  # noqa: ANN202  an operand's word, or None
+    if place is None:
+        return None
+    base = bits(w, 8, 8) if place[0] == 'a' else bits(w, 20, 8)
+    return reg(lane, base + len(place) - 1 if base != RZ_REG else RZ_REG)
+
+
 def texs(w: int, lane: Lane, inputs: Inputs) -> None:
     """TEXS: its operands in registers A and B as its target places them, its components in A's pair then B's."""
     target = bits(w, 53, 4)
     if target not in TEXS_TARGETS:
         raise UnsupportedError(f'TEXS target {target}')
     dim, mode, _, where_coords, where_level, where_dref = TEXS_TARGETS[target]
-    ra, rb, da, db = bits(w, 8, 8), bits(w, 20, 8), bits(w, 0, 8), bits(w, 28, 8)
 
-    def at(place: str | None):  # noqa: ANN202  an operand's word, or None where the target has none
-        if place is None:
-            return None
-        base = ra if place[0] == 'a' else rb
-        return reg(lane, base + len(place) - 1 if base != RZ_REG else RZ_REG)
+    def at(place: str | None):  # noqa: ANN202
+        return _scalar_operand(w, lane, place)
 
     handle = inputs.cbuf(inputs.bound_cbuf, bits(w, 36, 13) * 4)
     coords = tuple(at(p) for p in where_coords)
     result = fetch(inputs, handle, coords, mode, at(where_level), at(where_dref), None, dim)
+    _write_scalar(w, lane, result, 'TEXS')
+
+
+def tlds(w: int, lane: Lane, inputs: Inputs) -> None:
+    """TLDS: a texel load of the words its target places in registers A and B (TLDS_TARGETS), written as TEXS writes.
+
+    The texel is a pure function of the handle, the target and those words.
+    """
+    target = bits(w, 53, 4)
+    if target not in TLDS_TARGETS:
+        raise UnsupportedError(f'TLDS target {target}')
+    handle = inputs.cbuf(inputs.bound_cbuf, bits(w, 36, 13) * 4)
+    operands = tuple(_scalar_operand(w, lane, p) for p in TLDS_TARGETS[target])
+    _write_scalar(w, lane, inputs.texture(('tlds', handle, target, operands)), 'TLDS')
+
+
+def _write_scalar(w: int, lane: Lane, result: list[int], name: str) -> None:
+    da, db = bits(w, 0, 8), bits(w, 28, 8)
     swizzle = bits(w, 50, 3)
     lut = RG_LUT if db == RZ_REG else RGBA_LUT
     if swizzle >= len(lut):
-        raise UnsupportedError(f'TEXS mask {swizzle}')
+        raise UnsupportedError(f'{name} mask {swizzle}')
     picked = [result[c] for c in range(4) if lut[swizzle] >> c & 1]
     targets = [da, da + 1, db, db + 1]
     if bits(w, 59, 1):

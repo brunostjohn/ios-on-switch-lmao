@@ -210,6 +210,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         texture.tex(name, w, lane, inputs, d)
     elif base == 'TEXS':
         texture.texs(w, lane, inputs)
+    elif base == 'TLDS':
+        texture.tlds(w, lane, inputs)
     elif name == 'TXQ_b':
         result = inputs.texture(('txq', lane.r(bits(w, 8, 8)), bits(w, 22, 6)))
         mask = bits(w, 31, 4)
