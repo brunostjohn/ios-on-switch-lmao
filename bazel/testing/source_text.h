@@ -16,6 +16,7 @@
 #include <cctype>
 #include <cstddef>
 #include <fstream>
+#include <memory>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -213,6 +214,25 @@ inline std::vector<bool> CodeMask(std::string_view raw)
     return code;
 }
 
+// A source squeezed and masked once: Block and Occurrences are asked of the same few large sources hundreds of times.
+struct Prepared {
+    std::string source;
+    Squeezed squeezed;
+    std::vector<bool> code;
+};
+
+inline const Prepared &Prepare(const std::string &source)
+{
+    static std::vector<std::unique_ptr<const Prepared>> cache;
+    for (const auto &prepared : cache)
+        if (prepared->source == source)
+            return *prepared;
+    if (cache.size() == 8)
+        cache.erase(cache.begin());
+    cache.push_back(std::make_unique<const Prepared>(Prepared{source, Squeeze(source, true), CodeMask(source)}));
+    return *cache.back();
+}
+
 }  // namespace source_text_detail
 
 // Code compared without its layout, so a check holds however the formatter breaks, joins, indents or aligns its lines or
@@ -353,10 +373,10 @@ private:
 // literal, or that a `;` follows first (a declaration, a call), is passed over for the next one.
 inline CodeText Block(const std::string &source, std::string_view head)
 {
-    using source_text_detail::Squeeze;
-    const source_text_detail::Squeezed squeezed = Squeeze(source, true);
-    const std::string needle = Squeeze(head, false).text;
-    const std::vector<bool> code = source_text_detail::CodeMask(source);
+    const source_text_detail::Prepared &prepared = source_text_detail::Prepare(source);
+    const source_text_detail::Squeezed &squeezed = prepared.squeezed;
+    const std::vector<bool> &code = prepared.code;
+    const std::string needle = source_text_detail::Squeeze(head, false).text;
     for (size_t at = needle.empty() ? std::string::npos : squeezed.text.find(needle); at != std::string::npos;
          at = squeezed.text.find(needle, at + 1)) {
         if (!code[squeezed.origin[at]])
@@ -398,10 +418,10 @@ struct Occurrence {
 
 inline std::vector<Occurrence> Occurrences(const std::string &source, std::string_view needle)
 {
-    using source_text_detail::Squeeze;
-    const source_text_detail::Squeezed squeezed = Squeeze(source, true);
-    const std::string squeezedNeedle = Squeeze(needle, false).text;
-    const std::vector<bool> code = source_text_detail::CodeMask(source);
+    const source_text_detail::Prepared &prepared = source_text_detail::Prepare(source);
+    const source_text_detail::Squeezed &squeezed = prepared.squeezed;
+    const std::vector<bool> &code = prepared.code;
+    const std::string squeezedNeedle = source_text_detail::Squeeze(needle, false).text;
     std::vector<size_t> sites;
     for (size_t at = squeezedNeedle.empty() ? std::string::npos : squeezed.text.find(squeezedNeedle);
          at != std::string::npos; at = squeezed.text.find(squeezedNeedle, at + squeezedNeedle.size()))

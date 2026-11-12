@@ -740,7 +740,9 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 			      "tgm_rail_up_locked(__builtin_return_address(0));"));
 	EXPECT_TRUE(Block(gpu(), "void tgm_rail_up_locked(const void *site)").Before("gate_open();", "__atomic_store_n(&tgm_gpu.railed, 0, __ATOMIC_SEQ_CST);"));
 	// tgm_rail_up_locked takes these under the caller's tgm_gpu.lock: no tgm_gpu_lock() caller may hold one
-	for (const auto &call : Occurrences(gpu(), "tgm_gpu_lock();"))
+	const auto calls = Occurrences(gpu(), "tgm_gpu_lock();");
+	EXPECT_FALSE(calls.empty());
+	for (const auto &call : calls)
 		for (const char *lock : {"(&tgm_live_lock)", "(tgm_idle.clk)", "(&tgm_gate_lock)"})
 			EXPECT_EQ(call.before.Count(std::string("mutex_lock") + lock),
 				  call.before.Count(std::string("mutex_unlock") + lock))
