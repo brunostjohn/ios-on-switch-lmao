@@ -88,29 +88,27 @@ class Seeded:
         return Inputs(attribute, cbuf, texture, bound_cbuf)
 
 
-def outputs(image: bytes) -> int:
-    return struct.unpack_from('<I', image, OMAP_TARGET_BYTE)[0].bit_count()
-
-
-def lane_result(result: tuple, widths: list) -> tuple:
+def lane_result(result: tuple, registers: list[int], widths: list) -> tuple:
     regs, killed, stores = result
     if killed:
         return killed, stores
-    return [rop.store_code(v, w) if w else v for v, w in zip(regs, widths, strict=False)], killed, stores
+    written = [regs[r] for r in registers]
+    return [rop.store_code(v, w) if w else v for v, w in zip(written, widths, strict=False)], killed, stores
 
 
 def compare(  # noqa: PLR0913, PLR0917  the inputs' seed and pins and the state's attachments
     before: tuple, after: tuple, n: int, seed: int, pinned: dict | None = None, key: str = ''
 ) -> str:
     """Compare two programs, each (image, the constant buffer its bound textures read handles from or -1)."""
-    count = outputs(before[0])
-    if count != outputs(after[0]):
+    registers = rungcheck.written_registers(before[0])
+    if registers != rungcheck.written_registers(after[0]):
         return 'different: output maps'
     widths = rop.widths(key, struct.unpack_from('<I', before[0], OMAP_TARGET_BYTE)[0])
+    count = rungcheck.nakstat_outputs(before[0])
 
     def run(program: tuple, i: int) -> list:
         quad = [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)]
-        return [lane_result(r, widths) for r in run_quad(program[0][isa.HEADER_BYTES :], quad, count)]
+        return [lane_result(r, registers, widths) for r in run_quad(program[0][isa.HEADER_BYTES :], quad, count)]
 
     for i in range(n):
         try:

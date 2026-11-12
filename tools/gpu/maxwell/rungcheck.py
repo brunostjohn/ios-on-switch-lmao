@@ -136,10 +136,19 @@ def destination(rng: random.Random) -> list[int]:
     return [rng.randrange(alpha + 1) for _ in range(3)] + [alpha]
 
 
-def target_outputs(image: bytes, colour: int) -> tuple[int, int]:
-    """Give where colour `colour`'s components start among the output registers and how many the program writes."""
+def written_targets(image: bytes) -> list[int]:
     omap = struct.unpack_from('<I', image, OMAP_TARGETS)[0]
-    first = sum((omap >> (4 * c) & 15).bit_count() for c in range(colour))
+    return [c for c in range(8) if omap >> (4 * c) & 15]
+
+
+def target_outputs(image: bytes, colour: int) -> tuple[int, int]:
+    """Give where colour `colour`'s components start among the output registers and how many the program writes.
+
+    Every colour the program writes takes a vec4 of registers whatever its omap nibble (NAK's copy_fs_outputs_nv): a
+    colour after one written in fewer than four components does not start at the count of those components.
+    """
+    omap = struct.unpack_from('<I', image, OMAP_TARGETS)[0]
+    first = 4 * sum(1 for c in written_targets(image) if c < colour)
     return first, (omap >> (4 * colour) & 15).bit_count()
 
 
@@ -288,7 +297,13 @@ def quad(seeded: Seeded, record: dict, blended: int = 0) -> list[Inputs]:
 
 
 def nakstat_outputs(image: bytes) -> int:
-    return struct.unpack_from('<I', image, OMAP_TARGETS)[0].bit_count()
+    return 4 * len(written_targets(image))
+
+
+def written_registers(image: bytes) -> list[int]:
+    """Give the output registers that hold a component the program writes (the rest of a colour's vec4 is undefined)."""
+    omap = struct.unpack_from('<I', image, OMAP_TARGETS)[0]
+    return [4 * k + c for k, t in enumerate(written_targets(image)) for c in range(4) if omap >> (4 * t + c) & 1]
 
 
 def main() -> None:

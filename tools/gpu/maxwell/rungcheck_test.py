@@ -45,11 +45,13 @@ class IteratedBlend(unittest.TestCase):
 
 
 class Outputs(unittest.TestCase):
-    def test_a_colour_starts_after_the_components_before_it(self):
+    def test_each_written_colour_takes_a_vec4(self):
         image = bytearray(80)
-        struct.pack_into('<I', image, rungcheck.OMAP_TARGETS, 0x0F7)  # colour 0: RGB, colour 1: RGBA
-        self.assertEqual(rungcheck.target_outputs(bytes(image), 0), (0, 3))
-        self.assertEqual(rungcheck.target_outputs(bytes(image), 1), (3, 4))
+        struct.pack_into('<I', image, rungcheck.OMAP_TARGETS, 0xF01)  # colour 0: R (a packed view), colour 2: RGBA
+        self.assertEqual(rungcheck.target_outputs(bytes(image), 0), (0, 1))
+        self.assertEqual(rungcheck.target_outputs(bytes(image), 2), (4, 4))
+        self.assertEqual(rungcheck.nakstat_outputs(bytes(image)), 8)
+        self.assertEqual(rungcheck.written_registers(bytes(image)), [0, 4, 5, 6, 7])
 
 
 if __name__ == '__main__':
