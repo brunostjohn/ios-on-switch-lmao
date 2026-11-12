@@ -135,7 +135,7 @@ struct RecoverKillOneTest: HWTest {
             ], metrics)
     }
 
-    private func fill(_ gpu: GPU, _ ring: MTLBuffer, slot: Int, _ ends: CompletionTimes) throws -> MTLCommandBuffer {
+    func fill(_ gpu: GPU, _ ring: MTLBuffer, slot: Int, _ ends: CompletionTimes) throws -> MTLCommandBuffer {
         guard let commands = gpu.queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else {
             throw TestFailure("no command buffer")
         }
@@ -148,7 +148,7 @@ struct RecoverKillOneTest: HWTest {
 
     /// A fill whose blit encoder ends with the illegal method (RawMetalProbe.mm switchRawProbeEngine:); the refusal
     /// where the facade took none
-    private func poison(
+    func poison(
         _ gpu: GPU, _ ring: MTLBuffer, slot: Int, _ scratch: MTLTexture, _ ends: CompletionTimes
     ) throws
         -> (MTLCommandBuffer, String?)

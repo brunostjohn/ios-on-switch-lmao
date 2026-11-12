@@ -76,5 +76,7 @@ public enum Registry {
 
     /// Reset the copy engine under the present, then kill the app's raw channel: each app runs them after all its other
     /// tests, so a failed recovery spoils none of them.
-    public static let recovery: [any HWTest] = [PresentCopyResetTest(), RecoverKillOneTest()]
+    public static let recovery: [any HWTest] = [
+        PresentCopyResetTest(), RecoverKillOneTest(), RecoverKillUnderCompositorTest(),
+    ]
 }
