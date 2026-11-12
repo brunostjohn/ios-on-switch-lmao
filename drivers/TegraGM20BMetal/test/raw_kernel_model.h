@@ -446,8 +446,11 @@ struct Model {
     }
 };
 
-inline Model model;
-inline std::mutex callLock;  // held through every call but a WaitFence, and by a test GPU's reads of the model
+// Never destroyed: a facade's work on a global queue (growBytesChunks' control buffers) may call the kernel while a
+// process that is exiting runs its static destructors, and a destroyed mutex throws (the process aborts)
+inline Model &model = *new Model;
+// held through every call but a WaitFence, and by a test GPU's reads of the model
+inline std::mutex &callLock = *new std::mutex;
 
 }  // namespace kernel_model
 
