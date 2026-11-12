@@ -33,7 +33,7 @@ struct LayoutEntry {
     uint32_t offset = 0;
     bool buffer = false;
     bool colorTable = false;      // m2v's sRGB colour table (EntryColorTable)
-    uint8_t stage = 0, slot = 0;  // a buffer's
+    uint8_t stage = 0, slot = 0;  // a buffer's; a handle's stage alone (0: the fragment stage)
     Tex tex = Tex::None;
     Smp smp = Smp::None;
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)

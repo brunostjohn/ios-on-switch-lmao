@@ -44,7 +44,6 @@ struct NativePlanSink {
             render->setBuffer(stage, slot, object ? &object->_raw : nullptr, binding.offset);
     }
 
-    // A vertex texture (stage 1) binds nothing: no raw record reads one, raw_direct.cpp refuses a vertex-stage handle
     void texture(uint32_t stage, uint32_t slot, void *value)
     {
         RAW_ENCODE_SPAN(Apply);
@@ -52,8 +51,8 @@ struct NativePlanSink {
         __unsafe_unretained RMTexture *object = (__bridge RMTexture *)value;
         if (stage == 3)
             compute->setTexture(slot, object ? &object->_raw : nullptr);
-        else if (stage == 2)
-            render->setTexture(slot, object ? &object->_raw : nullptr);
+        else
+            render->setTexture(int(stage), slot, object ? &object->_raw : nullptr);
     }
 
     void sampler(uint32_t stage, uint32_t slot, void *value)
@@ -63,8 +62,8 @@ struct NativePlanSink {
         __unsafe_unretained RMSampler *object = (__bridge RMSampler *)value;
         if (stage == 3)
             compute->setSampler(slot, object ? &object->_raw : nullptr);
-        else if (stage == 2)
-            render->setSampler(slot, object ? &object->_raw : nullptr);
+        else
+            render->setSampler(int(stage), slot, object ? &object->_raw : nullptr);
     }
 
     void kernel(const raw::KernelState &, const raw::KernelState *)

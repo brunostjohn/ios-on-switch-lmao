@@ -563,7 +563,13 @@ public:
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
 
-    void setTexture(uint32_t slot, const Texture *t);
+    // stage 1 vertex, 2 fragment; the one-argument forms bind the fragment stage
+    void setTexture(int stage, uint32_t slot, const Texture *t);
+
+    void setTexture(uint32_t slot, const Texture *t)
+    {
+        setTexture(2, slot, t);
+    }
 
     // what the pass renders color `j` into (a memoryless attachment: its backing) and its render area, kept after end()
     const Texture *target(uint32_t j) const
@@ -581,13 +587,19 @@ public:
         return areaH_;
     }
 
+    void setSampler(int stage, uint32_t slot, const Sampler *s)
+    {
+        const uint32_t at = stage == 1 ? 0 : 1;
+        if (slot < kStageSamplers && samplers_[at][slot] != s) {
+            samplers_[at][slot] = s;
+            ++bindingRevision_;
+            moved_.samplers[at] |= uint16_t(1u << slot);
+        }
+    }
+
     void setSampler(uint32_t slot, const Sampler *s)
     {
-        if (slot < 16 && samplers_[slot] != s) {
-            samplers_[slot] = s;
-            ++bindingRevision_;
-            moved_.samplers |= uint16_t(1u << slot);
-        }
+        setSampler(2, slot, s);
     }
 
     // Materializing a bound texture or sampler header must invalidate this encoder's descriptors.
@@ -694,7 +706,8 @@ private:
     // the bindings set 0's entries are built from that moved since the last draw's set (descriptors_)
     struct MovedBindings {
         uint32_t buffers[3] = {};
-        uint16_t textures = 0, samplers = 0;
+        uint32_t textures[2] = {};  // vertex, fragment (handleStage)
+        uint16_t samplers[2] = {};
         bool all = true;
     } moved_;
     void bufferMoved(int stage, uint32_t slot)
@@ -702,16 +715,27 @@ private:
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
     }
-    void textureMoved(uint32_t slot)
+    void textureMoved(uint32_t at, uint32_t slot)
     {
         ++bindingRevision_;
-        moved_.textures |= uint16_t(1u << slot);
+        moved_.textures[at] |= 1u << slot;
     }
     uint32_t movedEntries(const PackPipeline &rec) const;
     DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
-    const Texture *textures_[16] = {};
-    const Sampler *samplers_[16] = {};
+    const Texture *textures_[2][kStageTextures] = {};  // vertex, fragment (handleStage)
+    const Sampler *samplers_[2][kStageSamplers] = {};
+
+    const Texture *boundTexture(const PackEntry &e) const
+    {
+        return e.slot < kStageTextures ? textures_[handleStage(e)][e.slot] : nullptr;
+    }
+
+    const Sampler *boundSampler(const PackEntry &e) const
+    {
+        return e.sampler < kStageSamplers ? samplers_[handleStage(e)][e.sampler] : nullptr;
+    }
+
     uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
     // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of

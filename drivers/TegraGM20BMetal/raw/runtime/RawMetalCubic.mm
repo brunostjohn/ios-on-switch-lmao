@@ -2,14 +2,15 @@
 #import "RawMetalInternal.h"
 #include "raw_fragment_tests.h"
 
-raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16])
+raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16],
+                           RMTexture *const textures[raw::kStageTextures])
 {
     raw::CubicBinds b;
     const raw::PackPipeline &r = *pl.rec;
     for (uint32_t i = 0; i < r.entries; i++) {
         const raw::PackEntry &e = r.entry[i];
         if ((e.kind != raw::EntryTexture && e.kind != raw::EntrySamplerOnly) || e.samplerKind != raw::SamplerSlot ||
-            e.sampler >= 16)
+            e.stage != 2 || e.sampler >= 16)
             continue;
         RMSampler *s = samplers[e.sampler];
         if (!s || !s->_raw.desc.cubic)
@@ -20,7 +21,7 @@ raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16
             }))
             b.samplers.push_back(
                 {e.sampler, d.sAddress, d.tAddress, d.rAddress, uint8_t(s->_descriptor.borderColor & 3), !d.pixel});
-        RMTexture *t = e.kind == raw::EntryTexture && e.slot < 16 ? textures[e.slot] : nil;
+        RMTexture *t = e.kind == raw::EntryTexture && e.slot < raw::kStageTextures ? textures[e.slot] : nil;
         if (t && std::none_of(b.textures.begin(), b.textures.end(), [&](const auto &c) {
                 return c.slot == e.slot;
             }))
@@ -122,7 +123,7 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
 - (const raw::Pipeline *)drawnRecord
 {
     raw::Pipeline *base = _pipe->_raw;
-    const raw::CubicBinds binds = _cubicMask ? cubicBinds(*base, _samp, _tex) : raw::CubicBinds();
+    const raw::CubicBinds binds = _cubicMask ? cubicBinds(*base, _samp, _tex[1]) : raw::CubicBinds();
     const uint8_t tests =
         base->fetchBits && base->depthFormat && !base->storageBits ? uint8_t(raw::fragmentTests(_ds, _zeta)) : 0;
     auto *variant = (!binds.empty() || tests) ? renderVariant(_pipe, binds, tests) : nullptr;

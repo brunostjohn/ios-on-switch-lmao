@@ -156,6 +156,17 @@ class RecordsTest(unittest.TestCase):
         off, kind, stage, slot = struct.unpack_from('<HBBB', packfile.entry_bytes([ent]))
         self.assertEqual((off, kind, stage, slot), (228, 4, 2, 0xFF))
 
+    def test_a_vertex_handle_keeps_its_stage(self):
+        vertex = dict(handle(('tex3d', 0)), smp=('slot', 7), stage='v')
+        data = packfile.entry_bytes([vertex, handle(('slot', 20))])
+        self.assertEqual(struct.unpack_from('<HBBBBBB', data, 0), (228, 4, 1, 0, 1, 7, 0))
+        self.assertEqual(struct.unpack_from('<HBBBBBB', data, 8), (228, 2, 2, 20, 0, 0, 0))
+        pipeline = bytes(directlink.PIPELINE.size) + data
+        back = directlink.entries_of(pipeline, 2, [], [])
+        self.assertEqual(back[0], vertex)
+        self.assertNotIn('stage', back[1])
+        self.assertEqual(packfile.entry_bytes(back), data)
+
     def test_a_pipeline_holds_32_entries(self):
         ents = packfile.entry_bytes([handle(('slot', 3))] * 27)
         self.assertEqual(len(ents), 8 * 32)

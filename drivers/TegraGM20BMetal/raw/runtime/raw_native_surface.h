@@ -132,12 +132,13 @@ void CommandBuffer::releaseNativeReads()
     nativeReads_.clear();
 }
 
-void RenderEncoder::setTexture(uint32_t slot, const Texture *texture)
+void RenderEncoder::setTexture(int stage, uint32_t slot, const Texture *texture)
 {
     texture = cb_->readTexture(texture);
-    if (slot < 16 && textures_[slot] != texture) {
-        textures_[slot] = texture;
-        textureMoved(slot);
+    const uint32_t at = stage == 1 ? 0 : 1;
+    if (slot < kStageTextures && textures_[at][slot] != texture) {
+        textures_[at][slot] = texture;
+        textureMoved(at, slot);
     }
 }
 

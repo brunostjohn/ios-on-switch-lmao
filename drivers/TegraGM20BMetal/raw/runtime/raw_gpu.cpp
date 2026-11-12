@@ -4624,12 +4624,12 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
     }
     uint32_t sampledSlots = 0;
     for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++)
-        if (rec.entry[k].kind == EntryTexture && rec.entry[k].slot < 16)
+        if (rec.entry[k].kind == EntryTexture && rec.entry[k].stage == 2 && rec.entry[k].slot < 16)
             sampledSlots |= 1u << rec.entry[k].slot;
     char sampled[16 * 48], left[2 * 48] = "-", colour[64] = "-";
-    describeTextures(sampled, sizeof sampled, textures_, sampledSlots);
+    describeTextures(sampled, sizeof sampled, textures_[1], sampledSlots);
     if (!sampledSlots)
-        describeTextures(left, sizeof left, textures_, 3);
+        describeTextures(left, sizeof left, textures_[1], 3);
     const FillQuad &q = scan.thin ? scan.firstThin : scan.first;
     if (q.colored)
         snprintf(colour, sizeof colour, "%.5f,%.5f,%.5f,%.5f", q.color[0], q.color[1], q.color[2], q.color[3]);
@@ -4873,7 +4873,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                     cb_->use(*t, true);
                 } else if (e.kind == EntryTexture) {
-                    const Texture *t = textures_[e.slot];
+                    const Texture *t = boundTexture(e);
                     if (t && !t->tic) {
                         *why = "a texture the raw path cannot sample";
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
@@ -4908,9 +4908,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                 } else if (e.kind == EntryTexture3d) {
                     // a texture of another type there is no binding of the argument: m2v writes its neutral, raw an empty handle
-                    const Texture *t = e.slot < 16 && textures_[e.slot] && textures_[e.slot]->type == fx::kTexThreeD
-                                           ? textures_[e.slot]
-                                           : nullptr;
+                    const Texture *bound = boundTexture(e);
+                    const Texture *t = bound && bound->type == fx::kTexThreeD ? bound : nullptr;
                     if (t && !t->tic) {
                         *why = "a texture the raw path cannot sample";
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
@@ -4920,9 +4919,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->use(*t, false);
                     tic = t ? t->tic : 0;
                 }
-                const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
+                const Texture *mapped = e.kind == EntryTexture ? boundTexture(e) : nullptr;
+                const uint8_t map = mapped ? mapped->addressMap : 0;
                 if (e.samplerKind == SamplerSlot) {
-                    const Sampler *s = samplers_[e.sampler];
+                    const Sampler *s = boundSampler(e);
                     tsc = s ? (map ? s->mapped[map] : s->tsc) : d.neutralTsc_;
                     if (s && map && !tsc) {
                         *why = "a planar texture's sampler without its address map";
@@ -4952,7 +4952,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_END(descriptorSpan);
     if (!prepared)
         return false;
-    moved_ = MovedBindings{{}, 0, 0, false};
+    moved_ = MovedBindings{{}, {}, {}, false};
     const uint32_t *set = prepared->words.data();
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
@@ -5224,10 +5224,10 @@ uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
     for (uint32_t i = 0; i < rec.entries; i++) {
         const PackEntry &e = rec.entry[i];
         const bool buffer = e.kind == EntryUbo && e.stage < 3 && e.slot < 32 && (moved_.buffers[e.stage] >> e.slot & 1);
-        const bool texture = (e.kind == EntryTexture || e.kind == EntryTexture3d) && e.slot < 16 &&
-                             (moved_.textures >> e.slot & 1);
-        const bool sampler = e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < 16 &&
-                             (moved_.samplers >> e.sampler & 1);
+        const bool texture = (e.kind == EntryTexture || e.kind == EntryTexture3d) && e.slot < kStageTextures &&
+                             (moved_.textures[handleStage(e)] >> e.slot & 1);
+        const bool sampler = e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < kStageSamplers &&
+                             (moved_.samplers[handleStage(e)] >> e.sampler & 1);
         moved |= uint32_t(buffer || texture || sampler) << i;
     }
     return moved;
@@ -5701,8 +5701,10 @@ void RenderEncoder::continuePass(uint8_t stores)
     for (auto &stage : bufs_)
         for (auto &binding : stage)
             binding = {};
-    std::fill(std::begin(textures_), std::end(textures_), nullptr);
-    std::fill(std::begin(samplers_), std::end(samplers_), nullptr);
+    for (auto &stage : textures_)
+        std::fill(std::begin(stage), std::end(stage), nullptr);
+    for (auto &stage : samplers_)
+        std::fill(std::begin(stage), std::end(stage), nullptr);
     invalidateDescriptors();
     setDepthStencil(nullptr);
     setStencilReference(0, 0);
