@@ -68,7 +68,7 @@ struct CAAskedFormsTest: HWTest {
             }
         }
         metrics.set("process_pack_misses", (RawFacade.counters(of: gpu.device)["pack_misses"] ?? 0) - missesBefore)
-        metrics.set("ms", Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6)
+        metrics.set("made_ms", Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6)
         metrics.set("slowest_ms", slowest)
         metrics.set("pack_misses", missed.count)
         metrics.set("failed", failed.count)
