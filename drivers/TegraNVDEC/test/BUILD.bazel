@@ -48,6 +48,7 @@ host_test(
     srcs = [
         "switch_nvdec_output_test.cpp",
         "//drivers/TegraNVDEC:SwitchNVDECOutput.h",
+        "//drivers/TegraNVDEC:SwitchNVDECPark.h",
         "//drivers/TegraNVDEC:TegraNVDEC.h",
         "//drivers/TegraNVDEC:TegraNVDECABI.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
@@ -61,7 +62,37 @@ host_test(
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//kits/SwitchDMA:SwitchDMAPages.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraNVDEC:SwitchNVDECOutput.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraNVDEC:SwitchNVDECOutput.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECPark.cpp",
+    ],
+    deps = [":output_kernel"],
+)
+
+# SwitchNVDECPark.h: a decode session's buffers, a fixed set however many pictures its exports hold.
+host_test(
+    name = "switch_nvdec_park_test",
+    srcs = [
+        "switch_nvdec_park_test.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECOutput.h",
+        "//drivers/TegraNVDEC:SwitchNVDECPark.h",
+        "//drivers/TegraNVDEC:TegraNVDEC.h",
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:TegraVICPresent.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//kits/SwitchDMA:SwitchDMAPages.h",
+    ],
+    additional_compiler_inputs = [
+        "//drivers/TegraNVDEC:SwitchNVDECOutput.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECPark.cpp",
+    ],
     deps = [":output_kernel"],
 )
 

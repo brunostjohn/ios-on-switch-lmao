@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOLib.h>
 #include "SwitchNVDECOutput.h"
+#include "SwitchNVDECPark.h"
 #include "../TegraGM20B/SwitchGpuBacking.h"
 #include "../TegraVIC/SwitchNativeSurface.h"
 #include "../TegraVIC/TegraVICPresent.h"
@@ -17,17 +18,28 @@ bool switch_nvdec_native_output_ready()
 // A buffer is reused in place unless a CPU owner holds it (an exported picture's read lease, which a decode job may not
 // write past) or an engine still uses it that the next job's dependencies cannot order (the display). NVDEC's own jobs
 // run in order, and a VIC or GPU user becomes a syncpoint wait in the next job's stream: neither costs a new buffer.
-int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task)
+// idle: no engine has work recorded on it at all, so its memory may be given back.
+int switch_nvdec_output_reusable(const TegraNVDECBlock *block, bool *idle)
 {
-    if (!buffer || !buffer->handle || !buffer->block.backing || !buffer->map)
-        return -22;
     constexpr uint32_t kOrdered =
         1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_VIC | 1u << SWITCH_GPU_ENGINE_GM20B;
     uint32_t engines = 0, owners = 0;
-    const int read = switch_gpu_backing_pending(buffer->block.backing, SWITCH_GPU_BACKING_WRITE, &engines, &owners);
+    const int read = switch_gpu_backing_pending(block->backing, SWITCH_GPU_BACKING_WRITE, &engines, &owners);
     if (read)
         return read;
-    if (!owners && !(engines & ~kOrdered))
+    if (idle)
+        *idle = !owners && !engines;
+    return !owners && !(engines & ~kOrdered) ? 0 : -16;
+}
+
+int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task, SwitchNVDECPark *park)
+{
+    if (!buffer || !buffer->handle || !buffer->block.backing || !buffer->map)
+        return -22;
+    const int available = switch_nvdec_output_reusable(&buffer->block, nullptr);
+    if (available != -16)
+        return available;
+    if (park && switch_nvdec_park_take(park, buffer, switch_nvdec_output_reusable))
         return 0;
     TegraNVDECBlock replacement = {};
     const int allocated = tegra_nvdec_buffer_alloc(buffer->block.size, &replacement);
@@ -40,6 +52,10 @@ int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task)
     }
     const auto previous = *buffer;
     *buffer = {previous.handle, replacement, mapping};
+    if (park) {
+        switch_nvdec_park_put(park, previous.block, previous.map);
+        return 0;
+    }
     previous.map->release();
     auto old = previous.block;
     tegra_nvdec_buffer_free(&old);

@@ -3,6 +3,7 @@
 #include <cstring>
 #include "switch_nvdec_output_stubs.h"
 #include "../SwitchNVDECOutput.cpp"
+#include "../SwitchNVDECPark.cpp"
 
 namespace {
 IOBufferMemoryDescriptor oldMemory, nextMemory;

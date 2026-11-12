@@ -35,6 +35,7 @@ kernel_driver(
         "SwitchNVDECJobs.cpp",
         "SwitchNVDECSemantics.cpp",
         "SwitchNVDECOutput.cpp",
+        "SwitchNVDECPark.cpp",
         "TegraNVDECMemory.cpp",
         "TegraNVDECUserClient.cpp",
         "firmware.S",

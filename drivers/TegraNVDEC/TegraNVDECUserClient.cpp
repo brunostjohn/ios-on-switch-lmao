@@ -21,6 +21,7 @@
 #include "../TegraVIC/TegraVICPresent.h"
 #include "SwitchNVDECCompletions.h"
 #include "SwitchNVDECOutput.h"
+#include "SwitchNVDECPark.h"
 #include "SwitchNVDECProbeABI.h"
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
@@ -61,6 +62,7 @@ class AppleD5500UserClient : public IOUserClient {
     IOLock *lock_ = nullptr;
     SwitchNVDECCompletions *completions_ = nullptr;
     Buffer buffers_[kMaxBuffers] = {};
+    SwitchNVDECPark park_ = {};
     alignas(8) uint8_t input_[sizeof(TegraNVDECSubmit)] = {};  // under lock_: the record of a locked call
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
@@ -73,6 +75,7 @@ class AppleD5500UserClient : public IOUserClient {
     bool quiesce() const;
     bool bufferIdle(const Buffer &b) const;
     static void drop(Buffer *b, bool returnMemory);
+    void dropAll(bool returnMemory);
     // Wait and the probe arm take lock_ themselves; every other method runs with the caller holding it.
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolve(void *context, uint32_t handle, TegraNVDECBlock *block);
@@ -168,6 +171,16 @@ IOReturn AppleD5500UserClient::registerNotificationPort(mach_port_t port, UInt32
     return switch_nvdec_completions_listen(completions_, port, current_task());
 }
 
+// The parked buffers too (SwitchNVDECPark.h).
+void AppleD5500UserClient::dropAll(bool returnMemory)
+{
+    for (Buffer &b : buffers_) {
+        if (b.handle)
+            drop(&b, returnMemory);
+    }
+    switch_nvdec_park_drop(&park_, returnMemory);
+}
+
 IOReturn AppleD5500UserClient::clientClose()
 {
     if (completions_)
@@ -176,10 +189,13 @@ IOReturn AppleD5500UserClient::clientClose()
     const bool idle = quiesce();
     if (!idle)
         IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay wired\n");
-    for (Buffer &b : buffers_) {
-        if (b.handle)
-            drop(&b, idle);
-    }
+#if DEVELOPMENT || DEBUG
+    if (park_.recycled)
+        IOLog("TegraNVDEC: client closed: %llu recycles of an exported picture's buffer, %llu took a parked buffer, "
+              "%llu allocated one (%u parked at most)\n",
+              park_.recycled, park_.taken, park_.allocated, park_.most);
+#endif
+    dropAll(idle);
     IOLockUnlock(lock_);
     terminate();
     return kIOReturnSuccess;
@@ -188,10 +204,7 @@ IOReturn AppleD5500UserClient::clientClose()
 void AppleD5500UserClient::free()
 {
     if (lock_) {
-        for (Buffer &b : buffers_) {
-            if (b.handle)
-                drop(&b, quiesce());
-        }
+        dropAll(quiesce());
         IOLockFree(lock_);
         lock_ = nullptr;
     }
@@ -376,7 +389,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const auto *request = static_cast<const TegraNVDECBuffer *>(in);
         auto *buffer = find(request->handle);
         ret = !buffer || request->reserved ? kIOReturnBadArgument :
-            ioreturn(switch_nvdec_output_recycle(buffer, current_task()));
+            ioreturn(switch_nvdec_output_recycle(buffer, current_task(), &park_));
         if (!ret)
             *static_cast<TegraNVDECBufferReply *>(out) =
                 {buffer->handle, 0, buffer->block.size, buffer->map->getAddress()};
