@@ -82,7 +82,7 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kAmplifyProgram = program(switch_gm20b_macro_amplify),
                   kAmplifyIndexedProgram = program(switch_gm20b_macro_amplify_indexed);
 constexpr size_t kContextWords =
-    12 * 5 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
+    14 * 5 + 1 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
     std::size(switch_gm20b_macro_indirect) + std::size(switch_gm20b_macro_indexed_indirect) +
     std::size(switch_gm20b_macro_draw_params) + std::size(switch_gm20b_macro_draw_indexed_params) +
     std::size(switch_gm20b_macro_vcm_constants) + std::size(switch_gm20b_macro_icb_range) +
