@@ -72,7 +72,9 @@ struct MipTwodTest: HWTest {
             Self.report(&detail, f.name + "_odd", odd)
             Self.report(&detail, f.name + "_3d", control)
             Self.report(&detail, f.name + "_l1", level1)
-            if proven.wrong > 0 && !f.layout.fields.contains(where: { $0.kind == .float }) { wrong.append("\(f.name)_wrong") }
+            if proven.wrong > 0 && !f.layout.fields.contains(where: { $0.kind == .float }) {
+                wrong.append("\(f.name)_wrong")
+            }
             if let (twodMs, drawnMs) = try? await chains.times(1024) {
                 times.append(String(format: "%@:%.3f/%.3f", f.name, twodMs, drawnMs))
             } else {

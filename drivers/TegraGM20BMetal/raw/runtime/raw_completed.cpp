@@ -99,13 +99,19 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         why = "missing or invalid dynamic blend push metadata";
         return nullptr;
     }
+    Pipeline *strideTwin = nullptr;
+    if (r.strideTwin && !(strideTwin = addRecord(*r.strideTwin, caTransform, why, retry))) {
+        why = "its stride twin: " + why;
+        return nullptr;
+    }
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())
         return it->second;
     PlacedProgram vs, fs, tessPlaced[2];
     if (!placeCompleted(r.programs[0], vs) || !placeCompleted(r.programs[1], fs) ||
-        (tess && (!placeCompleted(r.tessPrograms[0], tessPlaced[0]) || !placeCompleted(r.tessPrograms[1], tessPlaced[1])))) {
+        (tess &&
+         (!placeCompleted(r.tessPrograms[0], tessPlaced[0]) || !placeCompleted(r.tessPrograms[1], tessPlaced[1])))) {
         stats.heapFull++;
         why = "the shader heap is full";
         if (retry)
@@ -147,6 +153,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     stored.pipeline.restore.assign(words.data(), w.at);
     stored.pipeline.amplificationLayerWord = r.amplificationLayerWord;
     stored.pipeline.amplificationViewportWord = r.amplificationViewportWord;
+    stored.pipeline.strideTwin = strideTwin;
     if (r.split && !c.record.storageMask)
         offerCompletedSplit(stored, r, vs, caTransform);
     completed_[key] = &stored.pipeline;

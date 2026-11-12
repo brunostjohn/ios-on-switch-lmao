@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include "bridge/NativeMetalDirect.h"
 #include "raw_emit.h"
 #include "raw_record_parts.h"
@@ -322,18 +323,23 @@ bool vertexStreams(const std::vector<EmitStream> &streams, RecordParts &parts, s
 }
 
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
-// unless the pack varies it, so it never costs an extra.
-bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t blended,
-             const PackRules &rules, std::map<uint32_t, uint32_t> &regs, std::vector<EmitStream> &streams,
-             std::string &why)
+// unless the pack varies it, so it never costs an extra. Fixed-function input fetches the attributes the translation does not
+// pull, at the locations m2v gives them (dense in attribute order).
+bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t pulled,
+             uint32_t blended, const PackRules &rules, std::map<uint32_t, uint32_t> &regs,
+             std::vector<EmitStream> &streams, std::string &why)
 {
     std::string fields = key.substr(0, key.find(" | "));
     while (!fields.empty() && fields.back() == ' ')
         fields.pop_back();
+    std::vector<uint32_t> fetched;
+    if (!stages.tessellates())
+        std::copy_if(attributes.begin(), attributes.end(), std::back_inserter(fetched), [&](uint32_t index) {
+            return index >= 32 || !(pulled >> index & 1);
+        });
     std::vector<EmitRegister> made;
-    const bool patches = stages.tessellates();
     if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
-        !emitVertexInput(fields, patches ? std::vector<uint32_t>() : attributes, made, streams, why))
+        !emitVertexInput(fields, fetched, made, streams, why))
         return false;
     regs = rules.context;
     for (const auto &[m, v] : rules.baseline)
@@ -363,10 +369,12 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
         residual[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
         zeroPush |= 1u << word;
     }
+
     struct Kind {
         uint32_t zeroPush;
         bool texsF16;
     };
+
     const bool f16 = kProvenChipFacts & AssumeTexsF16;
     std::vector<Kind> kinds;
     if (zeroPush && f16)
@@ -582,14 +590,18 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.sizes4096 = boundSizes(nvk, device, state.draws[2]);
     parts.residuals = residualWords(draw, state.draws[3]);
     if (draw.vertexSlot != UINT32_MAX) {
+        if (!draw.vertexStrideDynamic && draw.vertexStride > kStreamStrideField) {
+            why = "a fixed-function vertex stream of a stride past SET_VERTEX_STREAM_A_FORMAT's 12 bits";
+            return CompileOutcome::Refused;
+        }
         parts.vertexSlot = uint8_t(draw.vertexSlot);
-        parts.vertexStride = uint16_t(draw.vertexStride & 0xFFF);
+        parts.vertexStride = uint16_t(draw.vertexStride);
         parts.vertexStrideDynamic = draw.vertexStrideDynamic != 0;
     }
     if (!drawnWords(state, parts, why))
         return CompileOutcome::Refused;
     std::vector<EmitStream> streams;
-    if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, streams, why) ||
+    if (!emitted(key, stages, attributes, draw.pulledAttributes, state.blended, rules, parts.regs, streams, why) ||
         !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     for (uint32_t i = 0; i < 32; i++)

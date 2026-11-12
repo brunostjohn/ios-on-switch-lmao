@@ -31,7 +31,9 @@ size_t pass(RMCommandPlan &plan, const std::vector<raw::ResourceUse> &uses)
 std::vector<RMRangeResource> resources(const RMCommandPlan &plan, size_t from, size_t to, RMResourceKind kind)
 {
     std::vector<RMRangeResource> result;
-    plan.forEachResource(from, to, kind, [&](const auto &use) { result.push_back(use); });
+    plan.forEachResource(from, to, kind, [&](const auto &use) {
+        result.push_back(use);
+    });
     return result;
 }
 
@@ -41,8 +43,8 @@ TEST(PlanResources, OneMergedResourceCarriesItsKindAliasAndExactAccess)
     resource(plan, 1, RMResourceKind::Texture, RMResourceFacts::Converted, 2);
     resource(plan, 2, RMResourceKind::Buffer, 0, 2);
     resource(plan, 3, RMResourceKind::Sampler);
-    pass(plan, {{object(1), read | sample}, {object(2), read}, {object(1), write},
-                {object(3), read}, {object(4), read}});
+    pass(plan,
+         {{object(1), read | sample}, {object(2), read}, {object(1), write}, {object(3), read}, {object(4), read}});
     const auto textures = resources(plan, 0, plan.size(), RMResourceKind::Texture);
     ASSERT_EQ(textures.size(), 1u);
     EXPECT_EQ(textures[0].object, object(1));
@@ -62,11 +64,15 @@ TEST(PlanResources, NewRetainedObjectsPreserveCompletedEncoderSummaries)
     resource(plan, 1, RMResourceKind::Buffer, 0, 1);
     pass(plan, {{object(1), read}});
     const RMRangeResource *first = nullptr;
-    plan.forEachResource(0, 2, RMResourceKind::Buffer, [&](const auto &use) { first = &use; });
+    plan.forEachResource(0, 2, RMResourceKind::Buffer, [&](const auto &use) {
+        first = &use;
+    });
     resource(plan, 2, RMResourceKind::Texture);
     pass(plan, {{object(2), write}});
     plan.prepareRange(0, 2);
-    plan.forEachResource(0, 2, RMResourceKind::Buffer, [&](const auto &use) { EXPECT_EQ(&use, first); });
+    plan.forEachResource(0, 2, RMResourceKind::Buffer, [&](const auto &use) {
+        EXPECT_EQ(&use, first);
+    });
     plan.prepareRange(0, plan.size());
     EXPECT_EQ(resources(plan, 0, plan.size(), RMResourceKind::Buffer).size(), 1u);
     EXPECT_EQ(resources(plan, 0, plan.size(), RMResourceKind::Texture).size(), 1u);
@@ -99,7 +105,11 @@ TEST(PlanResources, PlanarFeedbackRefusesAtEncoderCloseWithoutChangingReplay)
     plan.setRefused(0, false);
     EXPECT_TRUE(plan.begin(0).refused);
     raw::ExecutionPlan execution;
-    EXPECT_EQ(makeExecutionPlan(plan, false, execution, [](const auto &) { return true; }), RMPlanError::None);
+    EXPECT_EQ(makeExecutionPlan(plan, false, execution,
+                                [](const auto &) {
+                                    return true;
+                                }),
+              RMPlanError::None);
     ASSERT_EQ(execution.ranges().size(), 1u);
     EXPECT_EQ(execution.ranges()[0].kind, raw::ExecutionKind::compatibility);
     EXPECT_EQ(plan.size(), 2u);
@@ -132,7 +142,11 @@ TEST(PlanResources, EventsSeparateConversionEpochs)
     plan.record(event, {});
     pass(plan, {{object(1), read | sample}});
     raw::ExecutionPlan execution;
-    ASSERT_EQ(makeExecutionPlan(plan, false, execution, [](const auto &) { return true; }), RMPlanError::None);
+    ASSERT_EQ(makeExecutionPlan(plan, false, execution,
+                                [](const auto &) {
+                                    return true;
+                                }),
+              RMPlanError::None);
     ASSERT_EQ(execution.ranges().size(), 3u);
     EXPECT_EQ(execution.ranges()[1].kind, raw::ExecutionKind::signal);
     EXPECT_EQ(plan.event(2).value, event.c);
@@ -169,7 +183,9 @@ TEST(PlanResources, PendingComputeDoesNotRefuseItsConservativeWritableSummary)
     EXPECT_EQ(plan.nativeRangeRefusal(0, 3), nullptr);
     plan.setRefused(0, false);
     EXPECT_FALSE(plan.begin(0).refused);
-    plan.setKernelUses(1, object(3), [] { return std::vector<raw::ResourceUse>{{object(1), read | sample}}; });
+    plan.setKernelUses(1, object(3), [] {
+        return std::vector<raw::ResourceUse>{{object(1), read | sample}};
+    });
     plan.resolveDispatch(1, object(3), 0);
     plan.invalidateUses();
     plan.prepareRange(0, 3);
@@ -177,7 +193,9 @@ TEST(PlanResources, PendingComputeDoesNotRefuseItsConservativeWritableSummary)
     const auto use = resources(plan, 0, 3, RMResourceKind::Texture);
     ASSERT_EQ(use.size(), 1u);
     EXPECT_EQ(use[0].access, read | sample);
-    plan.setKernelUses(1, object(4), [] { return std::vector<raw::ResourceUse>{{object(1), read | write | sample}}; });
+    plan.setKernelUses(1, object(4), [] {
+        return std::vector<raw::ResourceUse>{{object(1), read | write | sample}};
+    });
     plan.invalidateUses();
     plan.prepareRange(0, 3);
     EXPECT_EQ(plan.nativeRangeRefusal(0, 3), object(1));

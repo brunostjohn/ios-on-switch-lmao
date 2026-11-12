@@ -27,9 +27,9 @@ enum switch_bench_twod_op {
 
 struct switch_bench_twod {
     uint32_t op;
-    uint32_t fmt2d;         // the destination's 2D surface format; 0: the target format's (raw::probeTwodFormat)
-    uint32_t color_format;  // SET_RENDER_SOLID_PRIM_COLOR_FORMAT
-    uint32_t color[4];      // one packed word, or four floats' bits for RF32_GF32_BF32_AF32
+    uint32_t fmt2d;           // the destination's 2D surface format; 0: the target format's (raw::probeTwodFormat)
+    uint32_t color_format;    // SET_RENDER_SOLID_PRIM_COLOR_FORMAT
+    uint32_t color[4];        // one packed word, or four floats' bits for RF32_GF32_BF32_AF32
     uint64_t du, dv, sx, sy;  // 32.32 source step per destination texel and source origin
     uint32_t bilinear, corner;
 };
@@ -67,7 +67,7 @@ struct switch_bench_experiment {
     const uint32_t *restore;
     uint32_t restore_pairs;
     uint32_t single_target;  // readback: colour 0 bound alone, the template's other colours left out
-    uint64_t template_key;   // the pack state to draw with (bench_records.h fragmentTemplate); 0: the bench's own choice
+    uint64_t template_key;  // the pack state to draw with (bench_records.h fragmentTemplate); 0: the bench's own choice
     struct switch_bench_twod twod;
 };
 

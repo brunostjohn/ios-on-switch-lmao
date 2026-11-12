@@ -104,9 +104,9 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
 }
 
 - (void)setBuffers:(const id<MTLBuffer> __unsafe_unretained[])buffers
-              offsets:(const NSUInteger[])offsets
-     attributeStrides:(const NSUInteger[])strides
-            withRange:(NSRange)range
+             offsets:(const NSUInteger[])offsets
+    attributeStrides:(const NSUInteger[])strides
+           withRange:(NSRange)range
 {
     for (NSUInteger k = 0; k < range.length; k++)
         [self setBuffer:buffers[k] offset:offsets[k] attributeStride:strides[k] atIndex:range.location + k];

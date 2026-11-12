@@ -7,11 +7,15 @@
 #   bazel run //tools/gpu/maxwell:blendcheck -- <dump dir>   (storage forms whose shader computes the blend)
 #   bazel run //tools/gpu/maxwell:gate -- --rungs <dump dir> --corpus ...   (fetch-free forms through the ROP: rungcheck.py)
 #
+# direct_exec_test runs the raw path's direct compile of direct/exec.metal's states and kernels and the counter resolve
+# kernel (direct/directrun.mm, built on this Mac beside the shader tools' mock GM20B) and executes their programs here.
+#
 # opcodes.txt is yuzu's maxwell.inc, verbatim (GPL-2.0-or-later, its notice kept).
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
+load(":direct/runner.bzl", "direct_runner")
 
 lint_files(exclude = [
     "opcodes.txt",
@@ -57,6 +61,7 @@ py_library(
         "floats.py",
         "interp.py",
         "quad.py",
+        "stage.py",
         "texture.py",
     ],
     visibility = ["//tools:__subpackages__"],
@@ -132,6 +137,51 @@ py_test(
     data = ["testdata/rop_blend/states.json"],
     deps = [
         ":blendcheck",
+        ":interp",
+        ":isa",
+    ],
+)
+
+py_binary(
+    name = "direct_build",
+    srcs = ["direct/build.py"],
+    main = "direct/build.py",
+)
+
+direct_runner(
+    name = "direct_runner",
+    srcs = [
+        "direct/directrun.mm",
+        "direct/exec.metal",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//drivers/TegraGM20BMetal:raw_stack_sources",
+        "//kits/SwitchGM20B:class_headers",
+    ],
+    host_bridge = "//gpu:bridge_host",
+    metal_abi = "//drivers/NativeMetal/abi:MetalABI.h",
+    tools = "//gpu/seed:local_tools",
+)
+
+py_test(
+    name = "direct_exec_test",
+    size = "medium",
+    srcs = [
+        "direct_exec_test.py",
+        "direct_records.py",
+    ],
+    args = [
+        "$(rootpath :direct_runner)",
+        "$(rootpath //gpu/seed:local_tools)",
+    ],
+    data = [
+        ":direct_runner",
+        "//gpu/seed:local_tools",
+    ],
+    tags = [
+        "no-remote-exec",
+        "requires-darwin",
+    ],
+    deps = [
         ":interp",
         ":isa",
     ],

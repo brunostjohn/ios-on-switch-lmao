@@ -40,9 +40,9 @@ struct NativePlanSink {
             if (stage == 3)
                 compute->setBytesAt(slot, chunk.va + binding.offset, binding.length, &chunk);
             else
-                render->setBytesAt(stage, slot, chunk.va + binding.offset, binding.length,
-                                   binding.shadow ? cb->_shadow.data() + binding.shadow - 1 : chunk.cpu + binding.offset,
-                                   &chunk);
+                render->setBytesAt(
+                    stage, slot, chunk.va + binding.offset, binding.length,
+                    binding.shadow ? cb->_shadow.data() + binding.shadow - 1 : chunk.cpu + binding.offset, &chunk);
             return;
         }
         __unsafe_unretained RMBuffer *object = (__bridge RMBuffer *)binding.object;
@@ -158,11 +158,9 @@ struct NativePlanSink {
 }  // namespace
 
 // (the command buffer is its caller's, so ARC need not retain it at each command)
-__attribute__((objc_externally_retained)) void encodePlannedState(RMCommandBuffer *cb, size_t at,
-                                                                  raw::CommandBuffer &commands,
-                                                                  raw::RenderEncoder *render,
-                                                                  raw::ComputeEncoder *compute,
-                                                                  raw::StateCursor &cursor)
+__attribute__((objc_externally_retained)) void
+encodePlannedState(RMCommandBuffer *cb, size_t at, raw::CommandBuffer &commands, raw::RenderEncoder *render,
+                   raw::ComputeEncoder *compute, raw::StateCursor &cursor)
 {
     const Op op = cb->_plan.operation(at).op;
     NativePlanSink sink{cb, commands, render, compute};

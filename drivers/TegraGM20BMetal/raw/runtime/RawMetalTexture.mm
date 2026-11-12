@@ -39,20 +39,23 @@ public:
         while (texture->_kind == RMTextureView && texture->_parent)
             texture = texture->_parent;
         const bool acquired = texture->_buffer
-            ? gRM->raw->hostAccess(texture->_buffer->_raw, cpu, range.bytes, write, access_)
-            : gRM->raw->hostAccess(texture->_raw, cpu, range.bytes, write, access_);
+                                  ? gRM->raw->hostAccess(texture->_buffer->_raw, cpu, range.bytes, write, access_)
+                                  : gRM->raw->hostAccess(texture->_raw, cpu, range.bytes, write, access_);
         if (!acquired)
             [NSException raise:NSInternalInconsistencyException format:@"GPU texture CPU ownership failed"];
         native_ = true;
     }
 
-    bool native() const { return native_; }
+    bool native() const
+    {
+        return native_;
+    }
 
 private:
     raw::HostAccess access_;
     bool native_ = false;
 };
-} // namespace
+}  // namespace
 
 // Before the raw path first renders into a surface texture: the kernel takes the surface's imports as only sampled until
 // then, so a CPU lock of a surface the GPU never writes invalidates nothing.
@@ -132,7 +135,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
             break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
-            if (_raw.zeta && _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
+            if (_raw.zeta &&
+                _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
                 made = [m2v newTextureWithDescriptor:_descriptor];
                 break;
             }
@@ -410,8 +414,12 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     }
     TextureCpuAccess access(self, r, level, slice, true);
     if (!access.native()) {
-        [(id<MTLTexture>)[self rmTwin] replaceRegion:r mipmapLevel:level slice:slice
-                                         withBytes:bytes bytesPerRow:row bytesPerImage:image];
+        [(id<MTLTexture>)[self rmTwin] replaceRegion:r
+                                         mipmapLevel:level
+                                               slice:slice
+                                           withBytes:bytes
+                                         bytesPerRow:row
+                                       bytesPerImage:image];
         return;
     }
     if (_rawOk && _raw.chain) {
@@ -466,8 +474,12 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     }
     TextureCpuAccess access(self, r, level, slice, false);
     if (!access.native()) {
-        [(id<MTLTexture>)[self rmTwin] getBytes:bytes bytesPerRow:row bytesPerImage:image
-                                  fromRegion:r mipmapLevel:level slice:slice];
+        [(id<MTLTexture>)[self rmTwin] getBytes:bytes
+                                    bytesPerRow:row
+                                  bytesPerImage:image
+                                     fromRegion:r
+                                    mipmapLevel:level
+                                          slice:slice];
         return;
     }
     if (_rawOk && _raw.chain) {

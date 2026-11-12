@@ -143,12 +143,7 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             op = bits(w, 41, 2)
         lane.w(d, (x & y, x | y, x ^ y, y)[op])
     elif base in ('IADD', 'IADD32I'):
-        if base == 'IADD32I':
-            x, y = (-a if bits(w, 56, 1) else a), bits(w, 20, 32)
-        else:
-            b = operand_b(lane, w, name, inputs, i20)
-            x, y = (-a if bits(w, 49, 1) else a), (-b if bits(w, 48, 1) else b)
-        lane.w(d, x + y)
+        iadd(base, name, w, lane, inputs, a, d)
     elif base in ('SHL', 'SHR'):
         s = operand_b(lane, w, name, inputs, i20)
         s = s & 31 if bits(w, 39, 1) else min(s, 32)
@@ -214,6 +209,27 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         memory(base, w, lane, inputs, d)
     else:
         raise UnsupportedError(name)
+
+
+def iadd(base: str, name: str, w: int, lane: Lane, inputs: Inputs, a: int, d: int) -> None:  # noqa: PLR0913, PLR0917  one opcode's operands
+    """Execute IADD and IADD32I with their carry (sm50.rs: .X bit 43 or 53, .CC 47 or 52).
+
+    A negated operand is its complement plus one; .X adds the carry in and complements instead (NAK's IAdd2X: bnot);
+    .CC writes the 33rd bit.
+    """
+    if base == 'IADD32I':
+        b, neg_a, neg_b, extend, write = bits(w, 20, 32), bits(w, 56, 1), 0, bits(w, 53, 1), bits(w, 52, 1)
+    else:
+        b = operand_b(lane, w, name, inputs, i20)
+        neg_a, neg_b, extend, write = bits(w, 49, 1), bits(w, 48, 1), bits(w, 43, 1), bits(w, 47, 1)
+    mask = 0xFFFFFFFF
+    if extend:
+        total = (a ^ mask if neg_a else a) + (b ^ mask if neg_b else b) + int(lane.carry)
+    else:
+        total = ((a ^ mask) + 1 if neg_a else a) + ((b ^ mask) + 1 if neg_b else b)
+    if write:
+        lane.carry = total > mask
+    lane.w(d, total)
 
 
 def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
@@ -356,10 +372,20 @@ def branch_target(pc: int, w: int) -> int:
     return pc + 8 + off
 
 
-def run(code: bytes, inputs: Inputs, outputs: int) -> tuple[list[int], bool]:  # noqa: C901, PLR0912  every control opcode here
+def run(code: bytes, inputs: Inputs, outputs: int) -> tuple[list[int], bool]:
     """Run one invocation to EXIT; give its first `outputs` registers and whether it was killed."""
+    lane = run_lane(code, inputs)
+    return [lane.r(i) for i in range(outputs)], lane.killed
+
+
+def run_lane(code: bytes, inputs: Inputs, hook: object = None, lane: Lane | None = None) -> Lane:  # noqa: C901, PLR0912  every control opcode here
+    """Run one invocation to EXIT and give its lane.
+
+    `hook` (stage.py) executes the instructions it claims (its `claims(name)`, then `execute(name, word, lane)`): a
+    stage's attribute, system value and memory operations.
+    """
     words = isa.words_of(code)
-    lane = Lane()
+    lane = lane or Lane()
     pc, stack = 8, []
     while True:
         lane.steps += 1
@@ -369,9 +395,12 @@ def run(code: bytes, inputs: Inputs, outputs: int) -> tuple[list[int], bool]:  #
         if idx % 4 == 0:
             pc += 8
             continue
+        if idx >= len(words):
+            raise UnsupportedError('ran past the code')
         w = words[idx]
         name = isa.name(w)
-        if name.split('_', 1)[0] in LANE_OPS or name == 'UNKNOWN':
+        claimed = hook is not None and hook.claims(name)
+        if not claimed and (name.split('_', 1)[0] in LANE_OPS or name == 'UNKNOWN'):
             raise UnsupportedError(name)
         guard = lane.p(bits(w, 16, 3), bits(w, 19, 1))
         nxt = pc + 8
@@ -393,7 +422,10 @@ def run(code: bytes, inputs: Inputs, outputs: int) -> tuple[list[int], bool]:  #
             if guard:
                 if name == 'KIL':
                     lane.killed = True
-                return [lane.r(i) for i in range(outputs)], lane.killed
+                return lane
         elif name != 'NOP' and guard:
-            alu(name, w, lane, inputs)
+            if claimed:
+                hook.execute(name, w, lane)
+            else:
+                alu(name, w, lane, inputs)
         pc = nxt

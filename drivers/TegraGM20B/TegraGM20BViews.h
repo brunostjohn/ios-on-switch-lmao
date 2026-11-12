@@ -39,15 +39,19 @@ struct SwitchGpuSurfaceGeometry;
 struct switch_gpu_backing;
 struct switch_gpu_cpu_lease;
 int switch_gpu_surface_geometry(uint32_t id, void *task, const uint64_t *pages, uint32_t count,
-	struct SwitchGpuSurfaceGeometry *geometry);
+				struct SwitchGpuSurfaceGeometry *geometry);
 int switch_gpu_surface_backing(uint32_t id, void *task, struct switch_gpu_backing **backing);
 int switch_gpu_surface_prepare(uint32_t id, void *task, uint32_t options,
-        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
+			       struct switch_gpu_backing **backing,
+			       struct switch_gpu_cpu_lease **owned, void **descriptor);
 int switch_gpu_surface_prepare_cpu(void *surface, uint32_t id, void *task, uint32_t access,
-        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
+				   struct switch_gpu_backing **backing,
+				   struct switch_gpu_cpu_lease **owned, void **descriptor);
 int switch_gpu_surface_prepare_gpu(void *surface, uint32_t id, void *task, uint32_t access,
-        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
-int switch_gpu_surface_gpu_admission(void *surface, struct switch_gpu_backing *expected, uint32_t access);
+				   struct switch_gpu_backing **backing,
+				   struct switch_gpu_cpu_lease **owned, void **descriptor);
+int switch_gpu_surface_gpu_admission(void *surface, struct switch_gpu_backing *expected,
+				     uint32_t access);
 void switch_gpu_surface_finish(void *descriptor);
 int switch_gpu_surface_adopt(void *descriptor, struct switch_gpu_backing *backing);
 void switch_gpu_surface_idle(void *descriptor);

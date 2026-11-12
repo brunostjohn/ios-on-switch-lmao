@@ -146,8 +146,8 @@ inline std::string pipelineKey(MTLRenderPipelineDescriptor *d, const StageKey *v
             // MTLBufferLayoutStrideDynamic as UINT32_MAX, which raw_emit.cpp emitVertexInput reads back as the bind's
             const unsigned long stride = l.stride == MTLBufferLayoutStrideDynamic ? UINT32_MAX : l.stride;
             snprintf(head, sizeof head, "a%u=%lu:%lu:%lu:%lu:%lu:%lu ", i, (unsigned long)a.format,
-                     (unsigned long)a.offset, (unsigned long)a.bufferIndex, stride,
-                     (unsigned long)l.stepFunction, (unsigned long)l.stepRate);
+                     (unsigned long)a.offset, (unsigned long)a.bufferIndex, stride, (unsigned long)l.stepFunction,
+                     (unsigned long)l.stepRate);
             key += head;
         }
     // a tessellation state's tessellator state, and a vertex amplification count above Metal's default: no other key has them

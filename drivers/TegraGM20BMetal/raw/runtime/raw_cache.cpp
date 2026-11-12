@@ -176,56 +176,44 @@ bool readEntryHead(const std::string &bytes, Reader &r, const CacheKey &k, uint3
            !memcmp(fragmentAir, k.fragmentAir, sizeof fragmentAir) && key == k.key;
 }
 
-std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal)
+namespace {
+
+// A record's body in an entry, its stride twin's after it
+void writeRecord(Writer &w, const RuntimeRecord *record)
 {
-    Writer w;
-    writeEntryHead(w, k, record ? kKindRecord : kKindRefusal);
-    if (record) {
-        w.value(record->pipeline);
-        w.text(record->keyString);
-        writeProgram(w, record->programs[0]);
-        writeProgram(w, record->programs[1]);
-        if (tessellates(record->pipeline)) {
-            writeProgram(w, record->tessPrograms[0]);
-            writeProgram(w, record->tessPrograms[1]);
-        }
-        w.list(record->blob);
-        w.list(record->extras);
-        w.list(record->restore);
-        w.list(record->samplers);
-        w.value(record->amplificationLayerWord);
-        w.value(record->amplificationViewportWord);
-        w.value(uint8_t((record->splitTried ? kSplitTried : 0) | (record->split ? kSplit : 0)));
-        if (record->split) {
-            w.value(record->splitRecord);
-            writeProgram(w, record->splitPrograms[0]);
-            writeProgram(w, record->splitPrograms[1]);
-        }
-        w.value(uint32_t(record->variants.size()));
-        for (const RuntimeRecord::Variant &v : record->variants) {
-            w.value(v.assume);
-            writeProgram(w, v.program);
-        }
-    } else {
-        w.text(refusal);
+    w.value(record->pipeline);
+    w.text(record->keyString);
+    writeProgram(w, record->programs[0]);
+    writeProgram(w, record->programs[1]);
+    if (tessellates(record->pipeline)) {
+        writeProgram(w, record->tessPrograms[0]);
+        writeProgram(w, record->tessPrograms[1]);
     }
-    w.value(Pack::fnv(w.out.data(), w.out.size()));
-    return w.out;
+    w.list(record->blob);
+    w.list(record->extras);
+    w.list(record->restore);
+    w.list(record->samplers);
+    w.value(record->amplificationLayerWord);
+    w.value(record->amplificationViewportWord);
+    w.value(uint8_t((record->splitTried ? kSplitTried : 0) | (record->split ? kSplit : 0)));
+    if (record->split) {
+        w.value(record->splitRecord);
+        writeProgram(w, record->splitPrograms[0]);
+        writeProgram(w, record->splitPrograms[1]);
+    }
+    w.value(uint32_t(record->variants.size()));
+    for (const RuntimeRecord::Variant &v : record->variants) {
+        w.value(v.assume);
+        writeProgram(w, v.program);
+    }
+    w.value(uint8_t(record->strideTwin != nullptr));
+    if (record->strideTwin)
+        writeRecord(w, record->strideTwin.get());
 }
 
-RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, RuntimeRecord &record, std::string &refusal)
+// The record writeRecord wrote; a stride twin only where `twinned` (a twin has none)
+bool readRecord(Reader &r, RuntimeRecord &rec, bool twinned)
 {
-    Reader r(bytes);
-    uint32_t kind = 0;
-    if (!readEntryHead(bytes, r, k, kind))
-        return RecordCache::Found::None;
-    if (kind == kKindRefusal) {
-        refusal = r.text();
-        return r.ok() && r.at() == bytes.size() - 8 ? RecordCache::Found::Refusal : RecordCache::Found::None;
-    }
-    if (kind != kKindRecord)
-        return RecordCache::Found::None;
-    RuntimeRecord rec;
     rec.pipeline = r.value<PackPipeline>();
     rec.keyString = r.text();
     rec.programs[0] = readProgram(r);
@@ -255,8 +243,44 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
         v.program = readProgram(r);
     }
     if (rec.variants.size() != variants || variants != 0u + rec.pipeline.variantCount[0] + rec.pipeline.variantCount[1])
+        return false;
+    if (r.value<uint8_t>()) {
+        auto twin = std::make_shared<RuntimeRecord>();
+        if (!twinned || !readRecord(r, *twin, false))
+            return false;
+        rec.strideTwin = std::move(twin);
+    }
+    return r.ok();
+}
+
+}  // namespace
+
+std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal)
+{
+    Writer w;
+    writeEntryHead(w, k, record ? kKindRecord : kKindRefusal);
+    if (record)
+        writeRecord(w, record);
+    else
+        w.text(refusal);
+    w.value(Pack::fnv(w.out.data(), w.out.size()));
+    return w.out;
+}
+
+RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, RuntimeRecord &record, std::string &refusal)
+{
+    Reader r(bytes);
+    uint32_t kind = 0;
+    if (!readEntryHead(bytes, r, k, kind))
         return RecordCache::Found::None;
-    if (!r.ok() || r.at() != bytes.size() - 8)
+    if (kind == kKindRefusal) {
+        refusal = r.text();
+        return r.ok() && r.at() == bytes.size() - 8 ? RecordCache::Found::Refusal : RecordCache::Found::None;
+    }
+    if (kind != kKindRecord)
+        return RecordCache::Found::None;
+    RuntimeRecord rec;
+    if (!readRecord(r, rec, true) || r.at() != bytes.size() - 8)
         return RecordCache::Found::None;
     record = std::move(rec);
     return RecordCache::Found::Record;

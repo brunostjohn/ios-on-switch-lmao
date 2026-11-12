@@ -1791,7 +1791,6 @@ static uint64_t constantBytes(uint64_t type)
     default:
         return 0;
     }
-
 }
 
 #if SWITCH_FRAME_TIMELINE
@@ -2182,10 +2181,27 @@ static NSData *functionBitcode(NBFunction *function)
 }
 @end
 @implementation NBNativeComputeArtifact
-- (void)dealloc { nmb_compute_artifact_release(_artifact); }
-- (NSUInteger)maxTotalThreadsPerThreadgroup { return _info.max_threads; }
-- (NSUInteger)threadExecutionWidth { return _info.execution_width; }
-- (NSUInteger)staticThreadgroupMemoryLength { return _info.static_memory; }
+
+- (void)dealloc
+{
+    nmb_compute_artifact_release(_artifact);
+}
+
+- (NSUInteger)maxTotalThreadsPerThreadgroup
+{
+    return _info.max_threads;
+}
+
+- (NSUInteger)threadExecutionWidth
+{
+    return _info.execution_width;
+}
+
+- (NSUInteger)staticThreadgroupMemoryLength
+{
+    return _info.static_memory;
+}
+
 @end
 
 static char computeArtifactKey;
@@ -2195,9 +2211,9 @@ static dispatch_queue_t persistQueue()
     static dispatch_queue_t queue;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        queue = dispatch_queue_create("switch.native-analysis.persist",
-                                       dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
-                                                                              QOS_CLASS_UTILITY, 0));
+        queue =
+            dispatch_queue_create("switch.native-analysis.persist",
+                                  dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     });
     return queue;
 }
@@ -2393,7 +2409,9 @@ extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^obs
         return state.handle ? 1 : -1;
     std::function<void()> notify;
     if (observer)
-        notify = [observer] { observer(); };
+        notify = [observer] {
+            observer();
+        };
     return nbasync::observe(making, std::move(notify));
 }
 
@@ -3306,7 +3324,7 @@ NB_RESIDENCY_SETS(use)
     MTLWinding _winding;
     MTLTriangleFillMode _fill;
 }
-@property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
+@property (nonatomic) bool skipDraws;  // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
 @end
 @implementation NBRenderEncoder
@@ -5785,8 +5803,8 @@ extern "C" id native_bridge_metal_compute_prepare(id descriptor, NSUInteger opti
     if (reflection)
         *reflection = nil;
     auto *d = (MTLComputePipelineDescriptor *)descriptor;
-    if ((options & ~(MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo)) ||
-        d.binaryArchives.count || d.supportIndirectCommandBuffers || d.supportAddingBinaryFunctions)
+    if ((options & ~(MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo)) || d.binaryArchives.count ||
+        d.supportIndirectCommandBuffers || d.supportAddingBinaryFunctions)
         return nil;
     NmbComputePipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
@@ -6055,8 +6073,10 @@ static void compileReplyWrite(const std::string &name, NSData *metallib, NSStrin
     static const std::string osBuild = [] {
         char value[128] = {};
         size_t bytes = sizeof value;
-        return sysctlbyname("kern.osversion", value, &bytes, nullptr, 0) == 0 && bytes && bytes <= sizeof value && value[bytes - 1] == 0
-                   ? std::string(value) : std::string();
+        return sysctlbyname("kern.osversion", value, &bytes, nullptr, 0) == 0 && bytes && bytes <= sizeof value &&
+                       value[bytes - 1] == 0
+                   ? std::string(value)
+                   : std::string();
     }();
     switch_compile_reply::write(gCompileCache, name, uuid, type, request.data(), request.size(), file, metallib,
                                 osBuild, SWITCH_METAL_KIND);
@@ -7297,8 +7317,9 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     NmbComputePipeline *handle =
         nmb_compute_pipeline_new_with_options(gDevice, [(NBFunction *)function handle], &creation);
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
-    SWITCH_METAL_DIAGNOSTIC(std::string journaled = journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan,
-                                                               handle ? nullptr : nmb_last_error()));
+    SWITCH_METAL_DIAGNOSTIC(std::string journaled =
+                                journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan,
+                                                       handle ? nullptr : nmb_last_error()));
     if (!handle)
         return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
@@ -7330,7 +7351,7 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     NmbComputePipeline *handle = nmb_compute_pipeline_new_with_descriptor(gDevice, &p, &creation);
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(std::string journaled = journalComputePipeline(d, nil, options, pipelineBegan,
-                                                               handle ? nullptr : nmb_last_error()));
+                                                                           handle ? nullptr : nmb_last_error()));
     if (!handle)
         return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
@@ -7384,7 +7405,7 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(gHistPso.add(nowUs() - pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(journalRenderPipeline(d, options, pipelineBegan, handle ? nullptr : nmb_last_error(),
-                                        !journalOn() ? std::string() : NBCost::now().since(costBegan)));
+                                                  !journalOn() ? std::string() : NBCost::now().since(costBegan)));
     if (!handle)
         return failWith<id<MTLRenderPipelineState>>(error, @"render pipeline", nil);
     NBRenderPipeline *state = [NBRenderPipeline new];

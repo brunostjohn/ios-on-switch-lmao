@@ -75,7 +75,8 @@ uint32_t RMCommandPlan::captureKernel()
         return currentKernel_;
     if (savedResources_[1] != resourceRevision_[1]) {
         std::vector<raw::ResourceUse> uses;
-        appendBindings(uses, buffers[2].current(), textures[2].current(), raw::ResourceUse::Read | raw::ResourceUse::Write);
+        appendBindings(uses, buffers[2].current(), textures[2].current(),
+                       raw::ResourceUse::Read | raw::ResourceUse::Write);
         resourceUses_[1] = saveUses(uses);
         savedResources_[1] = resourceRevision_[1];
     }
@@ -326,7 +327,6 @@ void RMCommandPlan::applyRenderUses(uint32_t state, uint32_t span)
     operations_.back().uses = drawUses(renderStates[state].uses, last.indices, last.arguments);
 }
 
-
 Cmd RMCommandPlan::legacy(size_t at) const
 {
     const auto &operation = operations_[at];
@@ -418,10 +418,9 @@ size_t RMCommandPlan::storageBytes() const
         renderStates.capacity() * sizeof(raw::RenderStateRef) + kernelStates.capacity() * sizeof(raw::KernelStateRef);
     return snapshots + operations_.capacity() * sizeof(RMPlanOperation) + draws_.capacity() * sizeof(RMPlanDraw) +
            dispatches_.capacity() * sizeof(RMPlanDispatch) + patches_.capacity() * sizeof(RMPlanPatches) +
-           transfers_.capacity() * sizeof(RMPlanTransfer) +
-           controls_.capacity() * sizeof(RMPlanControl) + begins_.capacity() * sizeof(RMPlanBegin) +
-           events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse) +
-           useSpans_.capacity() * sizeof(UseSpan) +
+           transfers_.capacity() * sizeof(RMPlanTransfer) + controls_.capacity() * sizeof(RMPlanControl) +
+           begins_.capacity() * sizeof(RMPlanBegin) + events_.capacity() * sizeof(RMPlanEvent) +
+           uses_.capacity() * sizeof(raw::ResourceUse) + useSpans_.capacity() * sizeof(UseSpan) +
            rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) + rangeStorageBytes();
 }
 

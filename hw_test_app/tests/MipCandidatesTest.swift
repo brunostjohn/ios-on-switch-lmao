@@ -10,7 +10,8 @@ import Metal
 /// reports; it fails only when the work left the raw path.
 struct MipCandidatesTest: HWTest {
     let id = "gpu.raw.mip_twod_candidates"
-    let name = "generateMipmaps of the 3D engine's chain formats on the 2D engine, against Metal's step and the 3D route"
+    let name =
+        "generateMipmaps of the 3D engine's chain formats on the 2D engine, against Metal's step and the 3D route"
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 240 }
 

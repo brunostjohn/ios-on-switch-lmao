@@ -186,7 +186,7 @@ enum tgm_hang {
 struct tgm_hang_candidate {
 	uint8_t live; /* a channel of the kernel's list */
 	uint8_t stuck; /* work pending and nothing completed for the stuck time (TGM_STUCK_NS, gpu_hang.c) */
-	uint8_t kernel; /* the present's or the scrubber's */
+	uint8_t kernel;   /* the present's or the scrubber's */
 	uint8_t resident; /* an engine or PBDMA is on it (tgm_recover_suspects) */
 	uint8_t moving; /* its fence, or its GPFIFO and pushbuffer GET, moved within the stuck time */
 	uint8_t waits; /* 1 + the candidate its pending acquire waits on; 0: none */

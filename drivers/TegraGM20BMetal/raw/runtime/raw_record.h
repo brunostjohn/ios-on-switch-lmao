@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -51,7 +52,7 @@ struct RuntimeRecord {
     std::string keyString;
     CapturedProgram programs[2];
     CapturedProgram tessPrograms[2];  // a tessellation state's (PackPipeline tessellates): control, evaluation
-    std::vector<uint32_t> blob;  // (method, value) pairs over the pack's varying registers
+    std::vector<uint32_t> blob;       // (method, value) pairs over the pack's varying registers
     // Registers outside them the state sets (its draws set them), and what every pack state leaves there (the draws after its
     // set them back)
     std::vector<std::pair<uint32_t, uint32_t>> extras, restore;
@@ -76,7 +77,14 @@ struct RuntimeRecord {
     };
 
     std::vector<Variant> variants;
+    // A state of bind-stride vertex streams: the same state with every per-bind layout pulled in the shader, made with it
+    // at its creation (RawDirect.mm), which a draw of a bind stride past SET_VERTEX_STREAM_A_FORMAT's 12 bits takes. Its
+    // keyHash is its own (strideTwinKey); it has no twin.
+    std::shared_ptr<const RuntimeRecord> strideTwin;
 };
+
+// The key a stride twin of the state of key `key` is hashed by
+std::string strideTwinKey(const std::string &key);
 
 // One state's probe: its submissions with tagged payloads of 256, 16 and 4096 bytes, the index its payloads are tagged with, and
 // its key; `bound`: with 256-byte payloads each bound at its slot's own offset (pack/probe_bind.h), whose push words name each

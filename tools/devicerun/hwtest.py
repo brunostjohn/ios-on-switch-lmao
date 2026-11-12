@@ -146,6 +146,7 @@ TESTS: dict[str, bool] = {
             'metal.native.viewport_index',
             'metal.native.block_textures',
             'metal.native.depth_slices',
+            'metal.native.wide_stride',
         ],
         False,
     ),

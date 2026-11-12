@@ -83,12 +83,13 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
         cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
-    const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
-                                  textures.fragmentTests};
+    const NmbDirectBinds binds = {cubic.data(),           uint32_t(cubic.size()),
+                                  formats.data(),         uint32_t(formats.size()),
+                                  textures.fragmentTests, textures.bindStride};
+    const bool plain = textures.cubic.empty() && !textures.fragmentTests && !textures.bindStride;
     const char *refused = nullptr;
     if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples,
-                                           textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made,
-                                           &a, &refused)) {
+                                           plain ? nullptr : &binds, made, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
@@ -109,19 +110,45 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
         if (a.isActive)
             attributes.push_back(uint32_t(a.attributeIndex));
-    if (requested == PackForm::Barrier) {
-        const CompileOutcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-        if (outcome == CompileOutcome::Made)
-            out.pipeline.flags |= PipelineBarrierForm;
+    CompileOutcome outcome = CompileOutcome::Refused;
+    if (requested != PackForm::Barrier) {
+        outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
+        if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
+            return outcome == CompileOutcome::Made ? strideTwin(descriptor, textures, key, attributes, out, why, split)
+                                                   : outcome;
+    }
+    outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
+    if (outcome != CompileOutcome::Made)
+        return outcome;
+    out.pipeline.flags |= PipelineBarrierForm;
+    return strideTwin(descriptor, textures, key, attributes, out, why, split);
+}
+
+// The probe binds every vertex buffer at a stride no fixed-function stream fetches, so m2v's plan asks for its
+// pulled-vertex-buffer variant of every per-bind layout. A twin the translation refuses leaves the state without one:
+// its draws of such a stride are refused (RenderEncoder::drawnWordsRefusal).
+CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures,
+                                  const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                                  std::string &why, bool split)
+{
+    if (!bindStrideStreams(out.pipeline))
+        return CompileOutcome::Made;
+    textures.bindStride = kStreamStrideField + 1;
+    auto twin = std::make_shared<RuntimeRecord>();
+    std::string twinWhy;
+    const bool barrier = out.pipeline.flags & PipelineBarrierForm;
+    const CompileOutcome outcome = form(descriptor, barrier, textures, key, attributes, *twin, twinWhy, nullptr, split);
+    if (outcome == CompileOutcome::Failed) {
+        why = "its stride twin: " + twinWhy;
         return outcome;
     }
-    CompileOutcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
-    if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
-        return outcome;
-    outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-    if (outcome == CompileOutcome::Made)
-        out.pipeline.flags |= PipelineBarrierForm;
-    return outcome;
+    if (outcome != CompileOutcome::Made || bindStrideStreams(twin->pipeline))
+        return CompileOutcome::Made;
+    if (barrier)
+        twin->pipeline.flags |= PipelineBarrierForm;
+    twin->pipeline.keyHash = packKeyHash(strideTwinKey(key));
+    out.strideTwin = std::move(twin);
+    return CompileOutcome::Made;
 }
 
 }  // namespace raw

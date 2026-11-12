@@ -83,6 +83,9 @@ typedef struct NmbDirectDraw {
     // push words + 1 of m2v's RenderTargetArrayLength (a vertex function that chooses its slice: compiled for a layered
     // pass) and ViewportCount (one that chooses its viewport), which each draw writes
     uint32_t arrayLengthWord, viewportCountWord;
+    // the vertex attributes the translation reads in the shader, by Metal index: fixed-function input fetches the others,
+    // numbered densely in Metal attribute order (m2v link/varyings)
+    uint32_t pulledAttributes;
     const char *variant;
 } NmbDirectDraw;
 
@@ -109,9 +112,9 @@ typedef struct NmbDirectTess {
 } NmbDirectTess;
 
 typedef struct NmbDirectState {
-    uint64_t device;  // VkDevice of the stage compile
-    uint64_t layout;  // VkPipelineLayout of draw 0's variant
-    uint32_t stageCount;  // 2, or 4 for a tessellation state
+    uint64_t device;           // VkDevice of the stage compile
+    uint64_t layout;           // VkPipelineLayout of draw 0's variant
+    uint32_t stageCount;       // 2, or 4 for a tessellation state
     NmbDirectStage stages[4];  // vertex, fragment, then a tessellation state's control and evaluation stages
     NmbDirectTess tess;
     bool sampleShading;
@@ -142,6 +145,7 @@ typedef struct NmbDirectBinds {
     const NmbDirectTextureFormat *textures;
     uint32_t textureCount;
     uint32_t fragmentTests;
+    uint32_t bindStride;  // the attributeStride the probe binds every vertex buffer at (0: none)
 } NmbDirectBinds;
 
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 // raw_vertex_streams.cpp on raw::Device, read off the pushes the device submitted: a state of two fixed-function vertex
 // streams binds each stream's location and limit at its own bind, a draw after the second stream's bind moved rebinds that
-// stream alone, and a second stream of a bind stride takes its bind's stride in its format.
+// stream alone, a second stream of a bind stride takes its bind's stride in its format, and a bind stride past the
+// format's 12 bits draws the state's stride twin, which reads it from its pulled layout's push word.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_record.h"
+#include <algorithm>
 #include <map>
 
 namespace {
@@ -11,6 +13,7 @@ namespace {
 constexpr uint32_t kRGBA8 = 70, kTriangle = 3;
 constexpr uint32_t kFormat1 = 0x1c10, kLocation0 = 0x1c04, kLocation1 = 0x1c14, kLimit0 = 0x1f00, kLimit1 = 0x1f08;
 constexpr uint32_t kStreamEnable = 1u << 12;
+constexpr uint32_t kCtWrite0 = 0x1a00, kLoadOffset = 0x238c, kLoad = 0x2390;
 
 // (method, value) of every method a pushed word stream writes (raw_push.h's encodings)
 std::multimap<uint32_t, uint32_t> methods(const std::vector<uint32_t> &words)
@@ -43,6 +46,18 @@ raw::RuntimeRecord twoStreams(uint64_t key, bool bindStride)
     r.pipeline.vertexStride = 12;
     r.pipeline.vertexStreams[0] = uint8_t(2 + 1) | (bindStride ? raw::kStreamBindStride : 0);
     r.blob = {0x1a00, 0x1111, 0x1c00, kStreamEnable | 12, kFormat1, kStreamEnable | (bindStride ? 0 : 16)};
+    return r;
+}
+
+// twoStreams' stride twin: buffer 2's layout pulled in the shader, its stride in root push word 5
+raw::RuntimeRecord pulledTwin(uint64_t key)
+{
+    raw::RuntimeRecord r = twoStreams(key, false);
+    r.pipeline.vertexStreams[0] = 0;
+    r.pipeline.pulledStride[0][0] = 2;
+    r.pipeline.pulledStride[0][1] = 6;
+    r.pipeline.pushMask = 1u << 5;
+    r.blob = {kCtWrite0, 0x2222, 0x1c00, kStreamEnable | 12, kFormat1, 0};
     return r;
 }
 
@@ -133,6 +148,55 @@ TEST_F(DeviceStreams, ASecondStreamOfABindStrideTakesItsBindsStride)
     const std::vector<uint32_t> formats = values(pushed, kFormat1);
     ASSERT_FALSE(formats.empty());
     EXPECT_EQ(formats.back(), kStreamEnable | 20);
+}
+
+TEST_F(DeviceStreams, ABindStridePastTheFormatFieldDrawsTheStrideTwin)
+{
+    raw::RuntimeRecord r = twoStreams(0x57e4, true);
+    r.strideTwin = std::make_shared<raw::RuntimeRecord>(pulledTwin(0x57e5));
+    std::string why;
+    raw::Pipeline *pl = dev.addRecord(r, false, why);
+    ASSERT_NE(pl, nullptr) << why;
+    ASSERT_NE(pl->strideTwin, nullptr);
+    const auto first = drawTwice(pl, [](raw::RenderEncoder &e) {
+        e.setVertexStride(2, 0xfff);
+    });
+    EXPECT_EQ(values(first, kCtWrite0), std::vector<uint32_t>{0x1111});
+    EXPECT_EQ(values(first, kFormat1).back(), kStreamEnable | 0xfff);
+    const auto twin = drawTwice(pl, [](raw::RenderEncoder &e) {
+        e.setVertexStride(2, 0x1010);
+    });
+    const std::vector<uint32_t> written = values(twin, kCtWrite0);
+    ASSERT_FALSE(written.empty());
+    EXPECT_EQ(written.back(), 0x2222u);
+    for (const uint32_t format : values(twin, kFormat1))
+        EXPECT_NE(format & 0xfff, 0x1010u & 0xfff);
+    const std::vector<uint32_t> offsets = values(twin, kLoadOffset), loads = values(twin, kLoad);
+    EXPECT_NE(std::find(offsets.begin(), offsets.end(), 0x700u + 4 * 5), offsets.end());
+    EXPECT_NE(std::find(loads.begin(), loads.end(), 0x1010u), loads.end());
+}
+
+TEST_F(DeviceStreams, ABindStridePastTheFormatFieldOfAStateWithNoTwinIsRefused)
+{
+    std::string why;
+    raw::Pipeline *pl = dev.addRecord(twoStreams(0x57e6, true), false, why);
+    ASSERT_NE(pl, nullptr) << why;
+    raw::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    raw::PassDesc pass;
+    pass.color[0].texture = &target;
+    pass.count = 1;
+    raw::RenderEncoder *e = cb->render(pass);
+    ASSERT_NE(e, nullptr);
+    e->setPipeline(pl);
+    e->setBuffer(1, 1, &positions, 0);
+    e->setBuffer(1, 2, &colours, 0);
+    e->setVertexStride(2, 0x1000);
+    const char *refused = nullptr;
+    EXPECT_FALSE(e->draw(kTriangle, 0, 3, 1, 0, &refused));
+    EXPECT_NE(refused, nullptr);
+    e->end();
+    cb->abandon();
 }
 
 }  // namespace

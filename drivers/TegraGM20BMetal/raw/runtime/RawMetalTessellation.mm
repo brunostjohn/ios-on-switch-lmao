@@ -82,25 +82,25 @@ static RMBuffer *ownBuffer(RMCommandBuffer *cb, id<MTLBuffer> buffer)
 }
 
 - (void)drawPatches:(NSUInteger)controlPoints
-               patchStart:(NSUInteger)start
-               patchCount:(NSUInteger)count
-         patchIndexBuffer:(id<MTLBuffer>)patchIndices
+                patchStart:(NSUInteger)start
+                patchCount:(NSUInteger)count
+          patchIndexBuffer:(id<MTLBuffer>)patchIndices
     patchIndexBufferOffset:(NSUInteger)patchIndexOffset
-            instanceCount:(NSUInteger)instances
-             baseInstance:(NSUInteger)baseInstance
+             instanceCount:(NSUInteger)instances
+              baseInstance:(NSUInteger)baseInstance
 {
     [self recordPatches:OpDrawPatches
-          controlPoints:controlPoints
-                  start:start
-                  count:count
-              instances:instances
-           baseInstance:baseInstance
-           patchIndices:patchIndices
-       patchIndexOffset:patchIndexOffset
-           pointIndices:nil
-       pointIndexOffset:0
-              arguments:nil
-         argumentOffset:0];
+           controlPoints:controlPoints
+                   start:start
+                   count:count
+               instances:instances
+            baseInstance:baseInstance
+            patchIndices:patchIndices
+        patchIndexOffset:patchIndexOffset
+            pointIndices:nil
+        pointIndexOffset:0
+               arguments:nil
+          argumentOffset:0];
 }
 
 - (void)drawPatches:(NSUInteger)controlPoints
@@ -110,63 +110,63 @@ static RMBuffer *ownBuffer(RMCommandBuffer *cb, id<MTLBuffer> buffer)
       indirectBufferOffset:(NSUInteger)argumentOffset
 {
     [self recordPatches:OpDrawPatchesIndirect
-          controlPoints:controlPoints
-                  start:0
-                  count:0
-              instances:0
-           baseInstance:0
-           patchIndices:patchIndices
-       patchIndexOffset:patchIndexOffset
-           pointIndices:nil
-       pointIndexOffset:0
-              arguments:arguments
-         argumentOffset:argumentOffset];
+           controlPoints:controlPoints
+                   start:0
+                   count:0
+               instances:0
+            baseInstance:0
+            patchIndices:patchIndices
+        patchIndexOffset:patchIndexOffset
+            pointIndices:nil
+        pointIndexOffset:0
+               arguments:arguments
+          argumentOffset:argumentOffset];
 }
 
 - (void)drawIndexedPatches:(NSUInteger)controlPoints
-                         patchStart:(NSUInteger)start
-                         patchCount:(NSUInteger)count
-                   patchIndexBuffer:(id<MTLBuffer>)patchIndices
-             patchIndexBufferOffset:(NSUInteger)patchIndexOffset
-            controlPointIndexBuffer:(id<MTLBuffer>)pointIndices
-      controlPointIndexBufferOffset:(NSUInteger)pointIndexOffset
-                      instanceCount:(NSUInteger)instances
-                       baseInstance:(NSUInteger)baseInstance
+                       patchStart:(NSUInteger)start
+                       patchCount:(NSUInteger)count
+                 patchIndexBuffer:(id<MTLBuffer>)patchIndices
+           patchIndexBufferOffset:(NSUInteger)patchIndexOffset
+          controlPointIndexBuffer:(id<MTLBuffer>)pointIndices
+    controlPointIndexBufferOffset:(NSUInteger)pointIndexOffset
+                    instanceCount:(NSUInteger)instances
+                     baseInstance:(NSUInteger)baseInstance
 {
     [self recordPatches:OpDrawPatches
-          controlPoints:controlPoints
-                  start:start
-                  count:count
-              instances:instances
-           baseInstance:baseInstance
-           patchIndices:patchIndices
-       patchIndexOffset:patchIndexOffset
-           pointIndices:pointIndices
-       pointIndexOffset:pointIndexOffset
-              arguments:nil
-         argumentOffset:0];
+           controlPoints:controlPoints
+                   start:start
+                   count:count
+               instances:instances
+            baseInstance:baseInstance
+            patchIndices:patchIndices
+        patchIndexOffset:patchIndexOffset
+            pointIndices:pointIndices
+        pointIndexOffset:pointIndexOffset
+               arguments:nil
+          argumentOffset:0];
 }
 
 - (void)drawIndexedPatches:(NSUInteger)controlPoints
-                   patchIndexBuffer:(id<MTLBuffer>)patchIndices
-             patchIndexBufferOffset:(NSUInteger)patchIndexOffset
-            controlPointIndexBuffer:(id<MTLBuffer>)pointIndices
-      controlPointIndexBufferOffset:(NSUInteger)pointIndexOffset
-                     indirectBuffer:(id<MTLBuffer>)arguments
-               indirectBufferOffset:(NSUInteger)argumentOffset
+                 patchIndexBuffer:(id<MTLBuffer>)patchIndices
+           patchIndexBufferOffset:(NSUInteger)patchIndexOffset
+          controlPointIndexBuffer:(id<MTLBuffer>)pointIndices
+    controlPointIndexBufferOffset:(NSUInteger)pointIndexOffset
+                   indirectBuffer:(id<MTLBuffer>)arguments
+             indirectBufferOffset:(NSUInteger)argumentOffset
 {
     [self recordPatches:OpDrawPatchesIndirect
-          controlPoints:controlPoints
-                  start:0
-                  count:0
-              instances:0
-           baseInstance:0
-           patchIndices:patchIndices
-       patchIndexOffset:patchIndexOffset
-           pointIndices:pointIndices
-       pointIndexOffset:pointIndexOffset
-              arguments:arguments
-         argumentOffset:argumentOffset];
+           controlPoints:controlPoints
+                   start:0
+                   count:0
+               instances:0
+            baseInstance:0
+            patchIndices:patchIndices
+        patchIndexOffset:patchIndexOffset
+            pointIndices:pointIndices
+        pointIndexOffset:pointIndexOffset
+               arguments:arguments
+          argumentOffset:argumentOffset];
 }
 
 @end
@@ -175,7 +175,8 @@ bool encodePatches(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlanD
                    bool indirect, const char **why)
 {
     RMBuffer *factors = (__bridge RMBuffer *)patches.factors, *patchIndices = (__bridge RMBuffer *)draw.indices,
-             *pointIndices = (__bridge RMBuffer *)patches.pointIndices, *arguments = (__bridge RMBuffer *)draw.arguments;
+             *pointIndices = (__bridge RMBuffer *)patches.pointIndices,
+             *arguments = (__bridge RMBuffer *)draw.arguments;
     RMBuffer *const read[] = {factors, patchIndices, pointIndices, arguments};
     for (RMBuffer *b : read)
         if (b)
@@ -192,8 +193,8 @@ bool encodePatches(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlanD
         return re->drawPatchesIndirect(patches.controlPoints, patchBuffer, draw.indexOffset, pointBuffer,
                                        patches.pointIndexOffset, &arguments->_raw, draw.argumentOffset, why);
     }
-    return re->drawPatches(patches.controlPoints, draw.first, draw.count, draw.instances, draw.baseInstance, patchBuffer,
-                           draw.indexOffset, pointBuffer, patches.pointIndexOffset, why);
+    return re->drawPatches(patches.controlPoints, draw.first, draw.count, draw.instances, draw.baseInstance,
+                           patchBuffer, draw.indexOffset, pointBuffer, patches.pointIndexOffset, why);
 }
 
 void replayPatches(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const RMPlanPatches &patches,
@@ -206,12 +207,12 @@ void replayPatches(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, 
     id patchIndices = use(draw.indices), pointIndices = use(patches.pointIndices);
     if (indirect && pointIndices)
         [encoder drawIndexedPatches:patches.controlPoints
-                   patchIndexBuffer:patchIndices
-             patchIndexBufferOffset:draw.indexOffset
-            controlPointIndexBuffer:pointIndices
-      controlPointIndexBufferOffset:patches.pointIndexOffset
-                     indirectBuffer:use(draw.arguments)
-               indirectBufferOffset:draw.argumentOffset];
+                         patchIndexBuffer:patchIndices
+                   patchIndexBufferOffset:draw.indexOffset
+                  controlPointIndexBuffer:pointIndices
+            controlPointIndexBufferOffset:patches.pointIndexOffset
+                           indirectBuffer:use(draw.arguments)
+                     indirectBufferOffset:draw.argumentOffset];
     else if (indirect)
         [encoder drawPatches:patches.controlPoints
                   patchIndexBuffer:patchIndices
@@ -220,14 +221,14 @@ void replayPatches(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, 
               indirectBufferOffset:draw.argumentOffset];
     else if (pointIndices)
         [encoder drawIndexedPatches:patches.controlPoints
-                         patchStart:draw.first
-                         patchCount:draw.count
-                   patchIndexBuffer:patchIndices
-             patchIndexBufferOffset:draw.indexOffset
-            controlPointIndexBuffer:pointIndices
-      controlPointIndexBufferOffset:patches.pointIndexOffset
-                      instanceCount:draw.instances
-                       baseInstance:draw.baseInstance];
+                               patchStart:draw.first
+                               patchCount:draw.count
+                         patchIndexBuffer:patchIndices
+                   patchIndexBufferOffset:draw.indexOffset
+                  controlPointIndexBuffer:pointIndices
+            controlPointIndexBufferOffset:patches.pointIndexOffset
+                            instanceCount:draw.instances
+                             baseInstance:draw.baseInstance];
     else
         [encoder drawPatches:patches.controlPoints
                         patchStart:draw.first

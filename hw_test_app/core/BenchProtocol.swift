@@ -151,8 +151,12 @@ public struct BenchBatch: Sendable {
         guard let top = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
             throw BenchInvalid("not a JSON object")
         }
-        guard top["protocol"] as? String == BenchProtocol.version else { throw BenchInvalid("protocol is not benchloop/1") }
-        guard let name = top["batch"] as? String, BenchProtocol.validName(name) else { throw BenchInvalid("batch name") }
+        guard top["protocol"] as? String == BenchProtocol.version else {
+            throw BenchInvalid("protocol is not benchloop/1")
+        }
+        guard let name = top["batch"] as? String, BenchProtocol.validName(name) else {
+            throw BenchInvalid("batch name")
+        }
         guard let list = top["experiments"] as? [Any], (1...BenchProtocol.maxExperiments).contains(list.count) else {
             throw BenchInvalid("1...\(BenchProtocol.maxExperiments) experiments a batch")
         }

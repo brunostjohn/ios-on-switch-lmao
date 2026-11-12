@@ -72,15 +72,21 @@ struct NativeHiddenDepthTest: NativeObjectTest {
             for x in 0..<size {
                 let (name, want): (String, [UInt8]) =
                     x < size / 2
-                    ? ("left", [255, 0, 255, 255]) : y < size / 2 ? ("top_right", [255, 255, 255, 255])
-                    : ("bottom_right", [255, 255, 0, 255])
+                    ? ("left", [255, 0, 255, 255])
+                    : y < size / 2
+                        ? ("top_right", [255, 255, 255, 255])
+                        : ("bottom_right", [255, 255, 0, 255])
                 if Array(pixels.pixel(x, y, width: size)) != want { wrong[name, default: 0] += 1 }
             }
         }
         let total = wrong.values.reduce(0, +)
         metrics.set("wrong_pixels", total)
-        metrics.set("wrong", wrong.isEmpty ? "-" : wrong.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }
-            .joined(separator: ","))
+        metrics.set(
+            "wrong",
+            wrong.isEmpty
+                ? "-"
+                : wrong.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }
+                    .joined(separator: ","))
         if total != 0 { work.failures.append("\(total) pixels miss what the hidden depth and stencil decide") }
         return work
     }

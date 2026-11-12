@@ -329,8 +329,8 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
     // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
     const bool deviceArchive = p->_packable && p->_raw;
-    const raw::ArchiveAnswer answer = p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error)
-                                                                        : raw::ArchiveAnswer::NotAsked;
+    const raw::ArchiveAnswer answer =
+        p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error) : raw::ArchiveAnswer::NotAsked;
     if (answer == raw::ArchiveAnswer::Missed)
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;

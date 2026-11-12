@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 32 raw 330 read 348 refused 163 unread 145 zero 32
-# sent selectors: base 78 m2v 11 none 7 raw 540 refused 56 zero 123
+# m2v's items: base 3 m2v 3 none 32 raw 339 read 354 refused 163 unread 139 zero 24
+# sent selectors: base 78 m2v 10 none 7 raw 549 refused 56 zero 115
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -310,20 +310,20 @@ MTLComputeCommandEncoder	executeCommandsInBuffer:withRange:	executeCommandsInBuf
 MTLComputeCommandEncoder	memoryBarrierWithResources:count:	memoryBarrierWithResources:count:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	memoryBarrierWithScope:	memoryBarrierWithScope:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setBuffer:offset:atIndex:	setBuffer:offset:atIndex:	I	21H461,24B119	raw
-MTLComputeCommandEncoder	setBuffer:offset:attributeStride:atIndex:	setBuffer:offset:attributeStride:atIndex:	I	24B119	zero
+MTLComputeCommandEncoder	setBuffer:offset:attributeStride:atIndex:	setBuffer:offset:attributeStride:atIndex:	I	24B119	raw
 MTLComputeCommandEncoder	setBufferOffset:atIndex:	setBufferOffset:atIndex:	I	21H461,24B119	raw
-MTLComputeCommandEncoder	setBufferOffset:attributeStride:atIndex:	setBufferOffset:attributeStride:atIndex:	I	24B119	zero
-MTLComputeCommandEncoder	setBuffers:offsets:attributeStrides:withRange:	setBuffers:offsets:attributeStrides:withRange:	I	21H461,24B119	zero
+MTLComputeCommandEncoder	setBufferOffset:attributeStride:atIndex:	setBufferOffset:attributeStride:atIndex:	I	24B119	raw
+MTLComputeCommandEncoder	setBuffers:offsets:attributeStrides:withRange:	setBuffers:offsets:attributeStrides:withRange:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setBuffers:offsets:withRange:	setBuffers:offsets:withRange:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setBytes:length:atIndex:	setBytes:length:atIndex:	I	21H461,24B119	raw
-MTLComputeCommandEncoder	setBytes:length:attributeStride:atIndex:	setBytes:length:attributeStride:atIndex:	I	24B119	zero
+MTLComputeCommandEncoder	setBytes:length:attributeStride:atIndex:	setBytes:length:attributeStride:atIndex:	I	24B119	raw
 MTLComputeCommandEncoder	setComputePipelineState:	setComputePipelineState:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setImageblockWidth:height:	setImageblockWidth:height:	I	21H461,24B119	refused
 MTLComputeCommandEncoder	setSamplerState:atIndex:	setSamplerState:atIndex:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:	I	24B119	raw
 MTLComputeCommandEncoder	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setSamplerStates:withRange:	setSamplerStates:withRange:	I	21H461,24B119	raw
-MTLComputeCommandEncoder	setStageInRegion:	setStageInRegion:	I	21H461,24B119	m2v
+MTLComputeCommandEncoder	setStageInRegion:	setStageInRegion:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setStageInRegionWithIndirectBuffer:indirectBufferOffset:	setStageInRegionWithIndirectBuffer:indirectBufferOffset:	I	24B119	m2v
 MTLComputeCommandEncoder	setTexture:atIndex:	setTexture:atIndex:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	setTextures:withRange:	setTextures:withRange:	I	21H461,24B119	raw
@@ -391,8 +391,8 @@ MTLDepthStencilDescriptor	backFaceStencil	backFaceStencil	I	-	read
 MTLDepthStencilDescriptor	backFaceStencil	setBackFaceStencil:	I	-	read
 MTLDepthStencilDescriptor	depthCompareFunction	depthCompareFunction	I	-	read
 MTLDepthStencilDescriptor	depthCompareFunction	setDepthCompareFunction:	I	-	read
-MTLDepthStencilDescriptor	depthWriteEnabled	isDepthWriteEnabled	I	-	unread
-MTLDepthStencilDescriptor	depthWriteEnabled	setDepthWriteEnabled:	I	-	unread
+MTLDepthStencilDescriptor	depthWriteEnabled	isDepthWriteEnabled	I	-	read
+MTLDepthStencilDescriptor	depthWriteEnabled	setDepthWriteEnabled:	I	-	read
 MTLDepthStencilDescriptor	frontFaceStencil	frontFaceStencil	I	-	read
 MTLDepthStencilDescriptor	frontFaceStencil	setFrontFaceStencil:	I	-	read
 MTLDepthStencilState	-	label	-	21H461,24B119	raw
@@ -1021,13 +1021,13 @@ MTLRenderCommandEncoder	setTileVisibleFunctionTables:withBufferRange:	setTileVis
 MTLRenderCommandEncoder	setTriangleFillMode:	setTriangleFillMode:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexAmplificationCount:viewMappings:	setVertexAmplificationCount:viewMappings:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexBuffer:offset:atIndex:	setVertexBuffer:offset:atIndex:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexBuffer:offset:attributeStride:atIndex:	setVertexBuffer:offset:attributeStride:atIndex:	I	24B119	zero
+MTLRenderCommandEncoder	setVertexBuffer:offset:attributeStride:atIndex:	setVertexBuffer:offset:attributeStride:atIndex:	I	24B119	raw
 MTLRenderCommandEncoder	setVertexBufferOffset:atIndex:	setVertexBufferOffset:atIndex:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexBufferOffset:attributeStride:atIndex:	setVertexBufferOffset:attributeStride:atIndex:	I	24B119	zero
-MTLRenderCommandEncoder	setVertexBuffers:offsets:attributeStrides:withRange:	setVertexBuffers:offsets:attributeStrides:withRange:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	setVertexBufferOffset:attributeStride:atIndex:	setVertexBufferOffset:attributeStride:atIndex:	I	24B119	raw
+MTLRenderCommandEncoder	setVertexBuffers:offsets:attributeStrides:withRange:	setVertexBuffers:offsets:attributeStrides:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexBuffers:offsets:withRange:	setVertexBuffers:offsets:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexBytes:length:atIndex:	setVertexBytes:length:atIndex:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexBytes:length:attributeStride:atIndex:	setVertexBytes:length:attributeStride:atIndex:	I	24B119	zero
+MTLRenderCommandEncoder	setVertexBytes:length:attributeStride:atIndex:	setVertexBytes:length:attributeStride:atIndex:	I	24B119	raw
 MTLRenderCommandEncoder	setVertexSamplerState:atIndex:	setVertexSamplerState:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	raw
@@ -1114,8 +1114,8 @@ MTLRenderPassStencilAttachmentDescriptor	stencilResolveFilter	setStencilResolveF
 MTLRenderPassStencilAttachmentDescriptor	stencilResolveFilter	stencilResolveFilter	I	-	unread
 MTLRenderPipelineColorAttachmentDescriptor	alphaBlendOperation	alphaBlendOperation	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	alphaBlendOperation	setAlphaBlendOperation:	I	-	read
-MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	isBlendingEnabled	I	-	unread
-MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	setBlendingEnabled:	I	-	unread
+MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	isBlendingEnabled	I	-	read
+MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	setBlendingEnabled:	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationAlphaBlendFactor	destinationAlphaBlendFactor	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationAlphaBlendFactor	setDestinationAlphaBlendFactor:	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationRGBBlendFactor	destinationRGBBlendFactor	I	-	read
@@ -1300,8 +1300,8 @@ MTLSharedEventHandle	label	label	I	-	read
 MTLSharedEventListener	init	init	I	-	read
 MTLSharedTextureHandle	device	device	I	-	read
 MTLStageInputOutputDescriptor	attributes	attributes	I	-	read
-MTLStageInputOutputDescriptor	indexBufferIndex	indexBufferIndex	I	-	unread
-MTLStageInputOutputDescriptor	indexBufferIndex	setIndexBufferIndex:	I	-	unread
+MTLStageInputOutputDescriptor	indexBufferIndex	indexBufferIndex	I	-	read
+MTLStageInputOutputDescriptor	indexBufferIndex	setIndexBufferIndex:	I	-	read
 MTLStageInputOutputDescriptor	indexType	indexType	I	-	read
 MTLStageInputOutputDescriptor	indexType	setIndexType:	I	-	read
 MTLStageInputOutputDescriptor	layouts	layouts	I	-	read

@@ -216,8 +216,7 @@ bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, b
 {
     TegraGM20BAbiVmBind b = {};
     b.count = 1;
-    b.ops[0] = {gpuVolatile && exactJobs() ? TegraGM20BBindMapVolatile : TegraGM20BBindMap,
-                kind, handle, 0, va, range};
+    b.ops[0] = {gpuVolatile && exactJobs() ? TegraGM20BBindMapVolatile : TegraGM20BBindMap, kind, handle, 0, va, range};
     const size_t in = offsetof(TegraGM20BAbiVmBind, ops) + sizeof(b.ops[0]);
     if (call(TegraGM20BMethodVmBind, &b, in, nullptr, 0) != KERN_SUCCESS) {
         setError("VmBind failed");

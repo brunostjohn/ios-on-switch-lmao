@@ -35,7 +35,8 @@ struct Bo {
     uint64_t vaBase = 0;  // the bound range's start (an import's va is inside its first page)
     uint64_t mapped = 0;  // CPU mapping bytes (allocations)
     bool gpuVolatile = false;
-    bool vaReserved = false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
+    bool vaReserved =
+        false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
 };
 
 // The offset into `bo` of the CPU bytes [cpu, cpu + bytes): bo.cpu is the CPU address of bo.va, which lies bo.va - bo.vaBase
@@ -83,10 +84,12 @@ public:
     // `control`: from the kernel's control reserve (TegraGM20BBoControl, coherent kind-0 memory only)
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
                bool gpuVolatile = false, bool control = false);
+
     bool allocControl(uint64_t bytes, Bo &bo, ControlUse use)
     {
         return alloc(bytes, true, bo, 0, 0x10000, controlMapping(use) == ControlMapping::Volatile, true);
     }
+
     // Wires [addr, addr + bytes) of this task (whole pages) and binds them; bo.va/bo.cpu name addr itself.
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
@@ -227,6 +230,7 @@ private:
         std::lock_guard<std::mutex> lock(errorLock_);
         err_ = std::move(error);
     }
+
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);
     void notResponding(uint32_t channel, uint32_t opened);
     bool map(uint32_t token, bool readOnly, uint64_t &address, uint64_t &bytes);

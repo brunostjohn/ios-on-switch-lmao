@@ -31,7 +31,8 @@ std::vector<Method> decode(const uint32_t *at, const uint32_t *end)
 {
     std::vector<Method> m;
     while (at < end) {
-        const uint32_t h = *at++, op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
+        const uint32_t h = *at++, op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                       mthd = (h & 0xfff) << 2;
         if (op == 4) {
             m.push_back({subc, mthd, count});
             continue;
@@ -52,7 +53,8 @@ template <typename Emit> std::vector<Method> words(Emit emit)
 }
 
 constexpr uint32_t kWfi = 0x0110, kShaderCaches = 0x021c, kTextureDataWfi = 0x1338, kTextureDataNoWfi = 0x1288,
-                   kPixelOrdered = 0x0f74, kPixelBarrier = 0x0de0, kShaderCachesNoWfi = NVB197_INVALIDATE_SHADER_CACHES_NO_WFI;
+                   kPixelOrdered = 0x0f74, kPixelBarrier = 0x0de0,
+                   kShaderCachesNoWfi = NVB197_INVALIDATE_SHADER_CACHES_NO_WFI;
 
 // Methods that drain the pipe on their own: WAIT_FOR_IDLE, INVALIDATE_SHADER_CACHES (it waits before it flushes) and the
 // texture invalidate's waiting form, on the 3D and compute subchannels alike
@@ -104,21 +106,31 @@ TEST(ProbeForms, TodayIsWhatTheRuntimeEmittedBefore)
     const ProbeForms today;
     for (ProbeEngine before : {ProbeEngine::None, ProbeEngine::ThreeD, ProbeEngine::Copy, ProbeEngine::Compute}) {
         ProbeTaken taken;
-        EXPECT_EQ(words([&](raw::Push &p) { raw::probePassPrologue(p, today, before, taken); }),
-                  words([](raw::Push &p) { raw::probe_forms_detail::barrier(p, switch_gm20b_pass_barrier, false); }));
-        EXPECT_EQ(words([&](raw::Push &p) { raw::probeBlitOpening(p, today, before, taken); }),
+        EXPECT_EQ(words([&](raw::Push &p) {
+                      raw::probePassPrologue(p, today, before, taken);
+                  }),
+                  words([](raw::Push &p) {
+                      raw::probe_forms_detail::barrier(p, switch_gm20b_pass_barrier, false);
+                  }));
+        EXPECT_EQ(words([&](raw::Push &p) {
+                      raw::probeBlitOpening(p, today, before, taken);
+                  }),
                   (std::vector<Method>{{0, kWfi, 0}}));
         const std::vector<Method> compute = {
             {0, kWfi, 0},
-            {1, kShaderCaches, NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE) |
-                                   NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE) |
-                                   NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE)},
+            {1, kShaderCaches,
+             NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE) |
+                 NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE) |
+                 NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE)},
             {1, kTextureDataNoWfi, 0},
             {1, NVB1C0_INVALIDATE_SKED_CACHES, 0},
             {1, NVB1C0_INVALIDATE_SAMPLER_CACHE_NO_WFI, 0},
             {1, NVB1C0_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0},
         };
-        EXPECT_EQ(words([&](raw::Push &p) { raw::probeComputeOpening(p, today, before, taken); }), compute);
+        EXPECT_EQ(words([&](raw::Push &p) {
+                      raw::probeComputeOpening(p, today, before, taken);
+                  }),
+                  compute);
         EXPECT_EQ(taken.passes + taken.entries + taken.firsts + taken.switches, 0u);
     }
 }
@@ -138,7 +150,9 @@ TEST(ProbeForms, RelaxedPassBarriersAreThePlannersAndNeverIdle)
     EXPECT_TRUE(pass(PassForm::None).empty());
     ProbeTaken taken;
     const ProbeForms pixel = forms(PassForm::PixelOrdered, EntryForm::Today, SwitchForm::Today);
-    EXPECT_TRUE(idles(words([&](raw::Push &p) { raw::probePassPrologue(p, pixel, ProbeEngine::Copy, taken); })));
+    EXPECT_TRUE(idles(words([&](raw::Push &p) {
+        raw::probePassPrologue(p, pixel, ProbeEngine::Copy, taken);
+    })));
 }
 
 TEST(ProbeForms, RelaxedEngineChangesKeepTheInvalidatesAndNeverIdle)
@@ -146,10 +160,15 @@ TEST(ProbeForms, RelaxedEngineChangesKeepTheInvalidatesAndNeverIdle)
     for (SwitchForm f : {SwitchForm::NoWfi, SwitchForm::NoWfiNoFlush, SwitchForm::None}) {
         const ProbeForms relaxed = forms(PassForm::Today, EntryForm::Today, f);
         ProbeTaken taken;
-        const auto into3d = words([&](raw::Push &p) { raw::probePassPrologue(p, relaxed, ProbeEngine::Copy, taken); });
-        const auto blit = words([&](raw::Push &p) { raw::probeBlitOpening(p, relaxed, ProbeEngine::ThreeD, taken); });
-        const auto compute =
-            words([&](raw::Push &p) { raw::probeComputeOpening(p, relaxed, ProbeEngine::ThreeD, taken); });
+        const auto into3d = words([&](raw::Push &p) {
+            raw::probePassPrologue(p, relaxed, ProbeEngine::Copy, taken);
+        });
+        const auto blit = words([&](raw::Push &p) {
+            raw::probeBlitOpening(p, relaxed, ProbeEngine::ThreeD, taken);
+        });
+        const auto compute = words([&](raw::Push &p) {
+            raw::probeComputeOpening(p, relaxed, ProbeEngine::ThreeD, taken);
+        });
         EXPECT_EQ(taken.switches, 3u);
         EXPECT_FALSE(idles(into3d) || idles(blit) || idles(compute));
         EXPECT_TRUE(blit.empty());
@@ -161,7 +180,9 @@ TEST(ProbeForms, RelaxedEngineChangesKeepTheInvalidatesAndNeverIdle)
             EXPECT_EQ(into3d[1], (Method{0, kTextureDataNoWfi, 0}));
         }
         // a pass after a pass is the pass form's, today's here
-        EXPECT_TRUE(idles(words([&](raw::Push &p) { raw::probePassPrologue(p, relaxed, ProbeEngine::ThreeD, taken); })));
+        EXPECT_TRUE(idles(words([&](raw::Push &p) {
+            raw::probePassPrologue(p, relaxed, ProbeEngine::ThreeD, taken);
+        })));
     }
 }
 
@@ -185,8 +206,12 @@ TEST(ProbeForms, RelaxedEntriesInvalidateWhatTheJobReadsAndNeverIdle)
         EXPECT_EQ(texture, f == EntryForm::Planner);
         // the first encoder of a relaxed job opens with nothing
         const ProbeForms entry = forms(PassForm::Today, f, SwitchForm::Today);
-        EXPECT_TRUE(words([&](raw::Push &q) { raw::probePassPrologue(q, entry, ProbeEngine::None, taken); }).empty());
-        EXPECT_TRUE(words([&](raw::Push &q) { raw::probeBlitOpening(q, entry, ProbeEngine::None, taken); }).empty());
+        EXPECT_TRUE(words([&](raw::Push &q) {
+                        raw::probePassPrologue(q, entry, ProbeEngine::None, taken);
+                    }).empty());
+        EXPECT_TRUE(words([&](raw::Push &q) {
+                        raw::probeBlitOpening(q, entry, ProbeEngine::None, taken);
+                    }).empty());
         EXPECT_EQ(taken.firsts, 2u);
     }
 }
@@ -258,7 +283,9 @@ TEST(ProbeOps, FillNamesItsRectangleAndColour)
     op.dx = 3, op.dy = 4, op.dw = 10, op.dh = 6;
     op.colorFormat = raw::kTwodColorF32x4;
     op.color[0] = 0x3f800000, op.color[3] = 0x3f000000;
-    const auto m = words([&](raw::Push &p) { raw::emitProbeOp(p, op); });
+    const auto m = words([&](raw::Push &p) {
+        raw::emitProbeOp(p, op);
+    });
     EXPECT_NE(std::find(m.begin(), m.end(), Method{3, NV902D_SET_RENDER_SOLID_PRIM_COLOR0, 0x3f800000}), m.end());
     EXPECT_NE(std::find(m.begin(), m.end(), Method{3, NV902D_RENDER_SOLID_PRIM_MODE, 4}), m.end());
     EXPECT_EQ(m.back(), (Method{3, NV902D_RENDER_SOLID_PRIM_POINT_Y(1), 10}));

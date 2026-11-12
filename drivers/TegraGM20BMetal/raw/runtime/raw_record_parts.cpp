@@ -296,8 +296,13 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         if (e.colorTable)
             entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
         else if (e.tessBuffer >= 0 && e.tessBuffer < TessBufferCount && parts.controlWord)
-            entry = {uint16_t(e.offset), EntryTessBuffer, 1, uint8_t(e.tessBuffer),
-                     uint8_t(1 | (parts.controlWord + kTessResidualWord[e.tessBuffer]) << 2), 0, 0};
+            entry = {uint16_t(e.offset),
+                     EntryTessBuffer,
+                     1,
+                     uint8_t(e.tessBuffer),
+                     uint8_t(1 | (parts.controlWord + kTessResidualWord[e.tessBuffer]) << 2),
+                     0,
+                     0};
         else if (e.buffer)
             entry = bufferEntry(e, parts, storageCodes[probeStorageCode(e.stage, e.slot)] > 1);
         else if (!handleEntry(e, out, entry, why))
@@ -372,14 +377,19 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     for (const CapturedProgram *program :
          {&out.programs[0], &out.programs[1], &out.tessPrograms[0], &out.tessPrograms[1]})
         if (program->image.size() > kHeaderBytes)
-            p.memoryEntries |= programSetReads(program->image.data() + kHeaderBytes, program->image.size() - kHeaderBytes,
-                                               program->cbufTypes.data(), uint32_t(program->cbufTypes.size()),
-                                               program->boundTextures, p);
+            p.memoryEntries |= programSetReads(program->image.data() + kHeaderBytes,
+                                               program->image.size() - kHeaderBytes, program->cbufTypes.data(),
+                                               uint32_t(program->cbufTypes.size()), program->boundTextures, p);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))
         out.keyString.pop_back();
     return true;
+}
+
+std::string strideTwinKey(const std::string &key)
+{
+    return key + " | strides pulled";
 }
 
 uint64_t packKeyHash(const std::string &key)

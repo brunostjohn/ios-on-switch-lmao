@@ -223,35 +223,35 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
                         if (_samplers[slot])
                             ask->sampler(slot, _samplers[slot]->_descriptor);
                     RMComputeState *state = _state;
-                    completion->backgroundKernel([pending, ask, specialization, state, completion, grid, threads,
-                                                  perThread, region] {
-                        RMKernelJob::Run run{pending};
-                        const auto text = specialization.text();
-                        const auto key =
-                            raw::computeKey(state->_air, state->_constants, state->_maxThreads, state->_multipleOfWidth,
-                                            specialization.threads.data(), text.memory, text.textures, text.samplers,
-                                            specialization.regionMode);
-                        run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
-                        if (run.result.state) {
-                            run.result.retry = false;
-                            return;
-                        }
-                        uint64_t retryAtUs = 0;
-                        run.result.state = completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry,
-                                                              &retryAtUs);
-                        if (run.result.retry && retryAtUs) {
-                            run.result.deferredRetry = true;
-                            const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
-                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
-                                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                                pending->allowRetry();
-                            });
-                        }
-                        if (run.result.state && !region)
-                            native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
-                                                                 text.memory.c_str(), text.textures.c_str(),
-                                                                 text.samplers.c_str());
-                    });
+                    completion->backgroundKernel(
+                        [pending, ask, specialization, state, completion, grid, threads, perThread, region] {
+                            RMKernelJob::Run run{pending};
+                            const auto text = specialization.text();
+                            const auto key =
+                                raw::computeKey(state->_air, state->_constants, state->_maxThreads,
+                                                state->_multipleOfWidth, specialization.threads.data(), text.memory,
+                                                text.textures, text.samplers, specialization.regionMode);
+                            run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
+                            if (run.result.state) {
+                                run.result.retry = false;
+                                return;
+                            }
+                            uint64_t retryAtUs = 0;
+                            run.result.state =
+                                completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry, &retryAtUs);
+                            if (run.result.retry && retryAtUs) {
+                                run.result.deferredRetry = true;
+                                const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
+                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
+                                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                                   pending->allowRetry();
+                                               });
+                            }
+                            if (run.result.state && !region)
+                                native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
+                                                                     text.memory.c_str(), text.textures.c_str(),
+                                                                     text.samplers.c_str());
+                        });
                 });
             }
             _shape = dispatch;
@@ -267,10 +267,9 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
     Cmd m = cmd(OpDispatch, 3, perThread);
     m.c = uint64_t(t[0]) | uint64_t(t[1]) << 16 | uint64_t(t[2]) << 32;
     m.x = _cb->_extra.size();
-    for (uint64_t v :
-         {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1], groups[2],
-          uint64_t(_stageIn.origin.x), uint64_t(_stageIn.origin.y), uint64_t(_stageIn.origin.z),
-          uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth)})
+    for (uint64_t v : {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1],
+                       groups[2], uint64_t(_stageIn.origin.x), uint64_t(_stageIn.origin.y), uint64_t(_stageIn.origin.z),
+                       uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth)})
         _cb->_extra.push_back(v);
     if (kernels) {
         _cb->_computeJobs.try_emplace(kernels.get(), kernels);
@@ -368,7 +367,7 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         const MTLSize grid = MTLSizeMake(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2)),
                       threads = MTLSizeMake(c.c & 0xffff, (c.c >> 16) & 0xffff, c.c >> 32);
         [e setStageInRegion:MTLRegionMake3D(extra(cb, c.x + 6), extra(cb, c.x + 7), extra(cb, c.x + 8),
-                                             extra(cb, c.x + 9), extra(cb, c.x + 10), extra(cb, c.x + 11))];
+                                            extra(cb, c.x + 9), extra(cb, c.x + 10), extra(cb, c.x + 11))];
         if (c.index)
             [e dispatchThreads:grid threadsPerThreadgroup:threads];
         else
