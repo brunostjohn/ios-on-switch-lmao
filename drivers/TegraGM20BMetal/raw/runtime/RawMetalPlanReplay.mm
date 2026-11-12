@@ -137,7 +137,7 @@ void replayPlannedState(RMCommandBuffer *cb, size_t at, id encoder, raw::StateCu
         raw::applyRenderState(cb->_plan, cb->_plan.draw(at).state, cursor, sink);
     else if (op == OpDispatch)
         raw::applyKernelState(cb->_plan, cb->_plan.dispatch(at).state, cursor, sink);
-    else if (op == OpInvocation) {
+    else if (op == OpInvocation || op == OpExecuteKernels) {
         const auto &control = cb->_plan.control(at);
         if (control.render != raw::kNoSnapshot)
             raw::applyRenderState(cb->_plan, control.render, cursor, sink);

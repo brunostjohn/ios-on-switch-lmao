@@ -7,11 +7,11 @@
 #include "raw_compute_key.h"
 #include "raw_compute_lookup.h"
 #import "RawMetalComputeState.h"
+#import "RawMetalIndirectCompute.h"
 #include "raw_view.h"
 #include "raw_surface_view.h"
 
 using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
-using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @interface RMComputeEncoder () {
     RMComputeState *_state;
@@ -290,9 +290,18 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @end
 
+@implementation RMComputeEncoder (State)
+
+- (RMComputeState *)rmState
+{
+    return _state;
+}
+
+@end
+
 bool isKernelCommand(Op op)
 {
-    return op >= OpKernelState && op <= OpDispatch;
+    return (op >= OpKernelState && op <= OpDispatch) || op == OpExecuteKernels;
 }
 
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers)
@@ -340,6 +349,9 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
             [e dispatchThreadgroups:grid threadsPerThreadgroup:threads];
         break;
     }
+    case OpExecuteKernels:
+        replayKernelCommands(e, (__bridge RMKernelExecute *)c.obj, buffers);
+        break;
     default:
         break;
     }
@@ -382,6 +394,8 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
         e.setState(static_cast<const raw::ComputeState *>(c.obj2));
         return e.dispatch(groups, threads, why);
     }
+    case OpExecuteKernels:
+        return encodeKernelCommands(e, rc, (RMKernelExecute *)object, why);
     default:  // the state and threadgroup memory are the dispatch's kernel's; residency is every buffer's already
         break;
     }

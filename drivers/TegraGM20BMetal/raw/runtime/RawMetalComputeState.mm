@@ -65,6 +65,12 @@
     return [_metadata staticThreadgroupMemoryLength];
 }
 
+// The descriptor's, as Metal's state answers it, without making m2v's twin
+- (BOOL)supportIndirectCommandBuffers
+{
+    return _direct.supportIndirectCommandBuffers;
+}
+
 @end
 
 static bool airOf(id<MTLFunction> function, raw::AirHash &out)
