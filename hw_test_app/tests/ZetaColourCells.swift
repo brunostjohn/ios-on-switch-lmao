@@ -11,6 +11,13 @@ import Metal
 struct ZetaColourCells {
     let gpu: GPU
     let rotated: RotatedStates
+    let made = Made()
+
+    /// The pipelines and depth/stencil states the cells draw with, each made once
+    final class Made {
+        var pipelines: [String: MTLRenderPipelineState] = [:]
+        var states: [String: MTLDepthStencilState] = [:]
+    }
 
     /// Texels off the pattern: in the depth or the stencil read back, or in the passes that test the zeta
     struct Count {
@@ -47,14 +54,14 @@ struct ZetaColourCells {
         e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
         if Self.hasDepth(format) {
             e.setRenderPipelineState(
-                try gpu.render(
+                try render(
                     fragment: "zeta_depth_fragment", format: .invalid, samples: samples, depth: depth, stencil: format))
             e.setDepthStencilState(try state(depth: .always, writes: true))
             e.setFragmentBytes(&p, length: 8, index: 0)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
         e.setRenderPipelineState(
-            try gpu.render(
+            try render(
                 fragment: "zeta_bit_fragment", format: .invalid, samples: samples, depth: depth, stencil: format))
         e.setStencilReferenceValue(0xFF)
         for k in 0..<8 {
@@ -69,6 +76,8 @@ struct ZetaColourCells {
         depth: MTLCompareFunction = .always, writes: Bool = false, stencil: MTLCompareFunction? = nil,
         op: MTLStencilOperation = .keep, writeMask: UInt32 = 0
     ) throws -> MTLDepthStencilState {
+        let key = "\(depth.rawValue) \(writes) \(stencil.map { "\($0.rawValue)" } ?? "-") \(op.rawValue) \(writeMask)"
+        if let held = made.states[key] { return held }
         let d = MTLDepthStencilDescriptor()
         d.depthCompareFunction = depth
         d.isDepthWriteEnabled = writes
@@ -80,10 +89,24 @@ struct ZetaColourCells {
             d.frontFaceStencil = face
             d.backFaceStencil = face
         }
-        guard let made = gpu.device.makeDepthStencilState(descriptor: d) else {
+        guard let state = gpu.device.makeDepthStencilState(descriptor: d) else {
             throw TestFailure("makeDepthStencilState returned nil")
         }
-        return made
+        made.states[key] = state
+        return state
+    }
+
+    func render(
+        fragment: String, format: MTLPixelFormat, samples: Int = 1, depth: MTLPixelFormat, stencil: MTLPixelFormat,
+        writes: Bool = true
+    ) throws -> MTLRenderPipelineState {
+        let key = "\(fragment) \(format.rawValue) \(samples) \(depth.rawValue) \(stencil.rawValue) \(writes)"
+        if let held = made.pipelines[key] { return held }
+        let pipeline = try gpu.render(
+            fragment: fragment, format: format, samples: samples, depth: depth, stencil: stencil
+        ) { if !writes { $0.colorAttachments[0].writeMask = [] } }
+        made.pipelines[key] = pipeline
+        return pipeline
     }
 
     /// A one-sample `zeta` given the pattern of `seed`
@@ -141,10 +164,9 @@ struct ZetaColourCells {
         let zeta = try gpu.texture(format, width, height, usage: [.renderTarget])
         try await filled(zeta, seed: seed)
         let depth: MTLPixelFormat = Self.hasDepth(format) ? format : .invalid
-        let marks = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm, depth: depth, stencil: format)
-        let invert = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm, depth: depth, stencil: format) {
-            $0.colorAttachments[0].writeMask = []
-        }
+        let marks = try render(fragment: "solid_fragment", format: .bgra8Unorm, depth: depth, stencil: format)
+        let invert = try render(
+            fragment: "solid_fragment", format: .bgra8Unorm, depth: depth, stencil: format, writes: false)
         let equal = try state(stencil: .equal)
         let inverting = try state(stencil: .always, op: .invert, writeMask: 0xFF)
         let nearer = try state(depth: .less, writes: true)
@@ -240,7 +262,7 @@ struct ZetaColourCells {
     private func stencilMarks(_ zeta: MTLTexture) async throws -> [UInt32] {
         let format = zeta.pixelFormat
         let target = try gpu.texture(.r32Uint, zeta.width, zeta.height, usage: [.renderTarget])
-        let pipeline = try gpu.render(
+        let pipeline = try render(
             fragment: "integer_uint_fragment", format: .r32Uint, depth: Self.hasDepth(format) ? format : .invalid,
             stencil: format)
         let equal = try state(stencil: .equal)
@@ -269,7 +291,7 @@ struct ZetaColourCells {
     /// 1 where the zeta's depth test finds the pattern's depth under EQUAL
     private func depthMarks(_ zeta: MTLTexture, seed: UInt32) async throws -> [UInt32] {
         let target = try gpu.texture(.r32Uint, zeta.width, zeta.height, usage: [.renderTarget])
-        let pipeline = try gpu.render(
+        let pipeline = try render(
             fragment: "zeta_depth_mark_fragment", format: .r32Uint, depth: zeta.pixelFormat, stencil: zeta.pixelFormat)
         let equal = try state(depth: .equal)
         try await gpu.run { commands in
