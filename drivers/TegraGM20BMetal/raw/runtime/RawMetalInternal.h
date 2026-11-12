@@ -283,6 +283,11 @@ std::string libraryName(RMFunction *f);
 
 // RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
+// The device SPI m2v's device answers and the raw device answers too (RawMetalDevice.mm, RawMetalDeviceAnswers.mm)
+@protocol RMDeviceSPI
+- (id<MTLBuffer>)newBufferWithIOSurface:(IOSurfaceRef)surface;
+- (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
+@end
 
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
 // cubic sampler where it samples), and a packed state's variants, the pack's records of them (under its pack key's hash)
