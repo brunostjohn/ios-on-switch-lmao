@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include <gtest/gtest.h>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
 #include <new>
 #include <cstdlib>
 #include <stdexcept>
@@ -95,4 +99,42 @@ inline uint64_t mach_absolute_time()
 inline void clock_interval_to_deadline(uint32_t value, uint32_t scale, uint64_t *out)
 {
     *out = uint64_t(value) * scale;
+}
+
+using thread_call_param_t = void *;
+using thread_call_func_t = void (*)(thread_call_param_t, thread_call_param_t);
+struct thread_call {
+    thread_call_func_t fire;
+    thread_call_param_t param;
+    uint32_t entered;
+};
+using thread_call_t = thread_call *;
+constexpr int THREAD_CALL_PRIORITY_KERNEL = 0, THREAD_CALL_OPTIONS_ONCE = 1;
+
+inline thread_call_t thread_call_allocate_with_options(thread_call_func_t fire, thread_call_param_t param, int, int)
+{
+    return new thread_call{fire, param, 0};
+}
+
+inline bool thread_call_enter(thread_call_t call)
+{
+    ++call->entered;
+    return true;
+}
+
+inline std::vector<std::string> &switch_test_log()
+{
+    static std::vector<std::string> lines;
+    return lines;
+}
+
+inline void IOLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
+inline void IOLog(const char *format, ...)
+{
+    char line[2048];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    switch_test_log().emplace_back(line);
 }

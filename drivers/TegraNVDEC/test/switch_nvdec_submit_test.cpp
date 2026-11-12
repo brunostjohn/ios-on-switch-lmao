@@ -5,6 +5,9 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../SwitchNVDECJobs.cpp"
+#include "../SwitchNVDECSubmission.cpp"
+#include "../TegraNVDECCancel.cpp"
+#include "../../../kits/SwitchEngineGate/SwitchEngineGate.h"
 
 struct switch_gpu_bridge {
     std::vector<switch_gpu_backing_token> tokens;
@@ -30,6 +33,61 @@ bool semanticCapture;
 uint32_t preparedBatches;
 
 struct FakeBatch {};
+
+// The engine and host1x behind the queue: the job syncpoint's value, what the cancellation did to the channel and the
+// engine, in order, and an idle gate whose power-on proof moves the syncpoint by two as N2 does.
+uint32_t hardware;
+std::vector<std::string> engineSteps;
+bool enginePowered = true, engineBoots = true;
+IOLock *powerLock;
+
+struct TestGatePlatform {
+    void (*fire)(void *) = nullptr;
+    void *context = nullptr;
+    uint32_t armed = 0;
+
+    bool start(void (*callback)(void *), void *gate)
+    {
+        fire = callback;
+        context = gate;
+        return true;
+    }
+
+    void lock()
+    {
+        IOLockLock(powerLock);
+    }
+
+    void unlock()
+    {
+        IOLockUnlock(powerLock);
+    }
+
+    void sleep(void *)
+    {
+        throw std::runtime_error("the gate sleeps");
+    }
+
+    void wake(void *)
+    {}
+
+    void arm(uint32_t)
+    {
+        ++armed;
+    }
+
+    uint64_t nowUs()
+    {
+        return 0;
+    }
+
+    void log(const char *line)
+    {
+        switch_test_log().emplace_back(line);
+    }
+};
+
+SwitchEngineGate<TestGatePlatform> *testGate;
 }
 
 extern "C" {
@@ -231,6 +289,79 @@ int switch_gpu_backing_cpu_release(switch_gpu_backing *, uint64_t, uint64_t, uin
 
 void tegra_host1x_describe_channel(uint32_t, char *, size_t)
 {}
+
+void tegra_host1x_describe(char *buffer, size_t size)
+{
+    snprintf(buffer, size, "ch0 test");
+}
+
+uint32_t tegra_host1x_syncpt_read(uint32_t id)
+{
+    EXPECT_EQ(id, gSyncpt);
+    return hardware;
+}
+
+int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maxIncrements)
+{
+    EXPECT_EQ(id, gSyncpt);
+    const auto distance = static_cast<int32_t>(threshold - hardware);
+    if (distance > static_cast<int32_t>(maxIncrements) || maxIncrements > 2)
+        return -22;
+    if (distance > 0)
+        hardware = threshold;
+    engineSteps.emplace_back("release " + std::to_string(threshold));
+    return 0;
+}
+
+void tegra_host1x_channel_teardown(uint32_t channel)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_DEFAULT));
+    engineSteps.emplace_back("teardown");
+}
+
+void tegra_host1x_channel_restart(uint32_t channel)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_DEFAULT));
+    engineSteps.emplace_back("restart");
+}
+
+IOLock *tegra_nvdec_power_lock(void)
+{
+    return powerLock;
+}
+}
+
+bool switch_nvdec_engine_powered()
+{
+    EXPECT_TRUE(powerLock->locked);
+    return enginePowered;
+}
+
+void switch_nvdec_engine_describe(char *text, size_t size)
+{
+    snprintf(text, size, "falcon CPUCTL 0 IDLESTATE 0x31");
+}
+
+bool switch_nvdec_engine_reset()
+{
+    EXPECT_TRUE(powerLock->locked);
+    engineSteps.emplace_back("reset");
+    return true;
+}
+
+bool switch_nvdec_engine_boot()
+{
+    EXPECT_TRUE(powerLock->locked);
+    engineSteps.emplace_back("boot");
+    if (engineBoots)
+        hardware += 2;
+    return engineBoots;
+}
+
+const char *switch_nvdec_engine_wedge()
+{
+    engineSteps.emplace_back("wedge");
+    return "falcon did not answer";
 }
 
 [[noreturn]] void switch_nvdec_job_fault(uint32_t, int, uint64_t)
@@ -241,16 +372,21 @@ void tegra_host1x_describe_channel(uint32_t, char *, size_t)
 int switch_nvdec_power_use()
 {
     ++powerUses;
-    return powerError;
+    return testGate ? testGate->use() : powerError;
 }
 
 void switch_nvdec_power_done()
 {
     ++powerDones;
+    if (testGate)
+        testGate->done();
 }
 
 void switch_nvdec_power_idle()
-{}
+{
+    if (testGate)
+        testGate->idle();
+}
 
 bool switch_nvdec_semantics_start(uint32_t, void (*)(switch_gpu_event_waits *))
 {
@@ -355,7 +491,14 @@ protected:
         nextTestSequence += 4096;
         gQueue.submitted = gQueue.completed = nextTestSequence;
         gCompleted = nextTestSequence;
-        gFailed = gSuspended = false;
+        gFailed = gSuspended = gCancelling = gRecovered = gRecoveredReady = false;
+        hardware = static_cast<uint32_t>(nextTestSequence);
+        engineSteps.clear();
+        switch_test_log().clear();
+        enginePowered = engineBoots = true;
+        testGate = nullptr;
+        powerLock = IOLockAlloc();
+        ASSERT_TRUE(switch_nvdec_cancel_start(162));
         gLock = IOLockAlloc();
         switch_test_queue_lock = gLock;
         gSyncpt = 162;
@@ -384,6 +527,10 @@ protected:
         IOLockFree(gLock);
         gLock = nullptr;
         switch_test_queue_lock = nullptr;
+        EXPECT_FALSE(powerLock->locked);
+        IOLockFree(powerLock);
+        delete gCancel;
+        gCancel = nullptr;
     }
 
     int submit()
@@ -402,6 +549,32 @@ protected:
         auto *fence = fences.at(which);
         fence->state = SWITCH_HOST1X_FENCE_IDLE;
         fence->signaled(fence, 0);
+    }
+
+    // The fence's bound passed with its syncpoint short of it (host1x's bounds call, on its work loop).
+    static void outlived(size_t which)
+    {
+        auto *fence = fences.at(which);
+        ASSERT_EQ(fence->state, SWITCH_HOST1X_FENCE_QUEUED);
+        fence->state = SWITCH_HOST1X_FENCE_IDLE;
+        fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT);
+    }
+
+    // The threshold interrupt for every queued fence the syncpoint has reached.
+    static void reachedInterrupts()
+    {
+        for (auto *fence : fences)
+            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && SwitchNVDECQueue::reached(hardware, fence->threshold)) {
+                fence->state = SWITCH_HOST1X_FENCE_IDLE;
+                fence->signaled(fence, 0);
+            }
+    }
+
+    static void runCancellation()
+    {
+        ASSERT_EQ(gCancel->entered, 1u);
+        gCancel->entered = 0;
+        gCancel->fire(gCancel->param, nullptr);
     }
 
     static void bridged(size_t which, int status)
@@ -581,11 +754,114 @@ TEST_F(SwitchNVDECSubmitTest, ADecodeEndsWhenItsFenceBridgeAndSemanticOutcomeAre
     EXPECT_EQ(released, 1u);
 }
 
-TEST_F(SwitchNVDECSubmitTest, ADecodeWhoseFenceFailsFaults)
+// A decode past its bound fails, never a panic: the jobs behind it fail too, the channel is torn down and restarted
+// around the engine's reset, their fences are released, and the next decode runs on the renumbered queue.
+TEST_F(SwitchNVDECSubmitTest, AStalledDecodeIsCancelledAndTheNextDecodeRuns)
 {
     ASSERT_EQ(submit(), 0);
-    auto *failing = fences.at(0);
-    EXPECT_THROW(failing->signaled(failing, TEGRA_HOST1X_ETIMEDOUT), std::runtime_error);
+    const uint64_t stalled = gQueue.submitted;
+    ASSERT_EQ(submit(), 0);
+    const uint64_t behind = gQueue.submitted;
+    semantic(stalled);
+    semantic(behind);
+    outlived(0);
+    EXPECT_EQ(waitSequence(stalled), -5);
+    EXPECT_EQ(gQueue.count, 1u);
+    EXPECT_THROW(submit(), std::runtime_error) << "new decodes wait for the cancellation";
+    IOLockUnlock(gLock);
+    runCancellation();
+    EXPECT_EQ(engineSteps, (std::vector<std::string>{"teardown", "reset", "release " + std::to_string(uint32_t(behind)),
+                                                     "restart", "boot"}));
+    EXPECT_EQ(gQueue.count, 1u) << "the cancelled job ends on its released fence";
+    EXPECT_TRUE(gCancelling);
+    reachedInterrupts();
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(waitSequence(behind), -5);
+    EXPECT_FALSE(gCancelling);
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("TegraNVDEC: job fence " + std::to_string(uint32_t(stalled)) + " not reached"),
+              std::string::npos);
+    EXPECT_NE(switch_test_log()[0].find("engine reset: running again"), std::string::npos);
+    ASSERT_EQ(submit(), 0);
+    const uint64_t next = gQueue.submitted;
+    EXPECT_EQ(fence, uint32_t(behind) + 3) << "after the proof's two increments";
+    semantic(next);
+    hardware = fence;
+    reachedInterrupts();
+    EXPECT_EQ(waitSequence(next), 0);
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, EveryFenceOfOneStallJoinsOneCancellation)
+{
+    ASSERT_EQ(submit(), 0);
+    ASSERT_EQ(submit(), 0);
+    semantic(gQueue.submitted - 1);
+    semantic(gQueue.submitted);
+    outlived(0);
+    outlived(1);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_TRUE(gCancelling) << "the queue holds new jobs until the engine is back";
+    EXPECT_FALSE(switch_nvdec_jobs_park(false)) << "and the idle gate leaves it powered";
+    runCancellation();
+    EXPECT_FALSE(gCancelling);
+    EXPECT_EQ(switch_test_log().size(), 1u);
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence) + 5);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackRefusesTheNextDecode)
+{
+    ASSERT_EQ(submit(), 0);
+    semantic(gQueue.submitted);
+    engineBoots = false;
+    outlived(0);
+    runCancellation();
+    EXPECT_EQ(engineSteps.back(), "wedge");
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("it did not come back, NVDEC refuses work: falcon did not answer"),
+              std::string::npos);
+    EXPECT_EQ(submit(), -19);
+}
+
+// After an idle power-off (SwitchEngineGate expire), the next decode powers NVDEC on: the power-on's proof moves the
+// syncpoint by two, the queue rebases on it, and the decode runs on the next fence.
+TEST_F(SwitchNVDECSubmitTest, AnIdleGatedEngineIsPoweredOnByTheNextDecode)
+{
+    SwitchEngineGate<TestGatePlatform> gate;
+    const SwitchEngineGateOps ops = {
+        "TegraNVDEC", nullptr,
+        [](void *) -> int {
+            hardware += 2;
+            switch_nvdec_jobs_resume(true, hardware);
+            return 0;
+        },
+        [](void *, bool drain) -> int {
+            return switch_nvdec_jobs_park(drain) ? SWITCH_ENGINE_GATE_OFF : SWITCH_ENGINE_GATE_BUSY;
+        },
+    };
+    ASSERT_TRUE(gate.start(ops));
+    testGate = &gate;
+    gate.expire();
+    EXPECT_FALSE(gate.powered());
+    EXPECT_TRUE(gSuspended);
+    const TegraNVDECResolve resolve = [](void *, uint32_t, TegraNVDECBlock *) {
+        return false;
+    };
+    const Check check = [](const TegraNVDECSubmit *, const uint64_t *) -> const char * {
+        return nullptr;
+    };
+    const char *why = nullptr;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    testGate = nullptr;
+    EXPECT_TRUE(gate.powered());
+    EXPECT_FALSE(gSuspended);
+    EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence) + 3);
+    semantic(gQueue.submitted);
+    hardware = fence;
+    reachedInterrupts();
+    EXPECT_EQ(waitSequence(gQueue.submitted), 0);
+    EXPECT_EQ(gQueue.count, 0u);
 }
 
 // Idle power gating (TegraNVDEC.cpp, SwitchEngineGate.h): a run holds the powered engine across its publication, an
