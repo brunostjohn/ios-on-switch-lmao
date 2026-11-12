@@ -6,6 +6,9 @@
 // there at each execute; a kernel of no stage-in takes neither.
 #include "raw_device_harness.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20BCompute.h"
+// the class headers' nv_push_compat.h and Mesa's util/macros.h spell MIN2 and MAX2 apart
+#undef MIN2
+#undef MAX2
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
 #include "../raw/runtime/raw_compute.h"

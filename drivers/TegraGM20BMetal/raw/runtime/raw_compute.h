@@ -28,6 +28,7 @@ namespace raw {
 
 namespace icb {
 struct ComputeBind;
+struct ComputeStride;
 }
 
 constexpr uint32_t kQmdWords = 64;
