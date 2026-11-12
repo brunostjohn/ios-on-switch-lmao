@@ -22,6 +22,12 @@ public enum RawFacade {
         ask(device, "switchM2VDevice") as? MTLDevice
     }
 
+    /// Whether the facade still wraps an m2v device (a debug build that has one answers switchM2VDevice), asked
+    /// without opening it.
+    public static func wrapsM2V(_ device: MTLDevice) -> Bool {
+        (device as AnyObject).responds(to: NSSelectorFromString("switchM2VDevice"))
+    }
+
     /// The facade's record of its m2v device, read without opening it (debug builds; empty off the facade):
     /// "opened", "opens", "opened_for" and "needs" (each need the process asked it for, with its count)
     public static func m2vRecord(of device: MTLDevice) -> [String: Any] {
