@@ -35,21 +35,23 @@ struct Viewport {
     double x, y, w, h;
 };
 
-// What the reach pass reaches of a rectangle drawn in frame pixels [x0, x1] x [y0, y1]: the mask texels the conservative
-// rasteriser covers at a 32nd of the frame (each texel the rectangle touches, its far edges included, as Metal's tiles), within
-// the rounded-out scissor and viewport clip
+// What the reach pass reaches of a rectangle drawn in frame pixels [x0, x1] x [y0, y1]: the texels of its target (reachStep
+// frame pixels each, the frame's extent) the conservative rasteriser covers (each the rectangle touches, its far edges included,
+// as Metal's tiles), within the rounded-out scissor and viewport clip, as their tiles
 Tiles reached(float x0, float y0, float x1, float y1, Scissor s, Viewport v, uint32_t w, uint32_t h)
 {
-    const Rect sc = raw::reachScissor(s.x, s.y, s.w, s.h, w, h, raw::kReachTile);
-    const Rect vc = raw::reachViewportClip(v.x, v.y, v.w, v.h, raw::kReachTile);
+    const uint32_t step = raw::reachStep(w, h);
+    const Rect sc = raw::reachScissor(s.x, s.y, s.w, s.h, w, h, step);
+    const Rect vc = raw::reachViewportClip(v.x, v.y, v.w, v.h, step);
+    const float k = float(step);
     Tiles out;
-    for (uint32_t ty = 0; ty < raw::reachTiles(h); ty++)
-        for (uint32_t tx = 0; tx < raw::reachTiles(w); tx++) {
-            const bool touched = tx <= x1 / 32 && tx + 1 > x0 / 32 && ty <= y1 / 32 && ty + 1 > y0 / 32;
-            const bool inside = tx >= sc.x0 && tx < sc.x1 && ty >= sc.y0 && ty < sc.y1 && tx >= vc.x0 && tx < vc.x1 &&
-                                ty >= vc.y0 && ty < vc.y1;
+    for (uint32_t j = 0; j < h / step; j++)
+        for (uint32_t i = 0; i < w / step; i++) {
+            const bool touched = i <= x1 / k && i + 1 > x0 / k && j <= y1 / k && j + 1 > y0 / k;
+            const bool inside = i >= sc.x0 && i < sc.x1 && j >= sc.y0 && j < sc.y1 && i >= vc.x0 && i < vc.x1 &&
+                                j >= vc.y0 && j < vc.y1;
             if (touched && inside)
-                out.insert({tx, ty});
+                out.insert({i * step / raw::kReachTile, j * step / raw::kReachTile});
         }
     return out;
 }
@@ -83,6 +85,20 @@ TEST(RawReach, ScissorsAndViewportsBoundTheReachInWholeTilesAsMetalDoes)
     };
     for (const Case &c : cases)
         EXPECT_EQ(reached(c.x0, c.y0, c.x1, c.y1, c.scissor, c.viewport, 128, 96), c.metal) << c.name;
+    // a frame of no whole tiles: its own edge clips what lies past it in the tiles that overhang it
+    const Scissor odd{0, 0, 120, 90};
+    const Viewport oddFrame{0, 0, 120, 90};
+    EXPECT_EQ(reached(121, 10, 127, 20, odd, oddFrame, 120, 90), Tiles{}) << "past the frame in its last tile";
+    EXPECT_EQ(reached(100, 10, 127, 20, odd, oddFrame, 120, 90), (Tiles{{3, 0}})) << "across the frame's edge";
+    EXPECT_EQ(reached(100, 100, 300, 200, {0, 0, 1280, 720}, {0, 0, 1280, 720}, 1280, 720).size(), 7u * 4u);
+}
+
+TEST(RawReach, AFrameOfNoWholeTilesDrawsAtTheLargestStepThatDividesIt)
+{
+    EXPECT_EQ(raw::reachStep(96, 64), 32u);
+    EXPECT_EQ(raw::reachStep(1280, 720), 16u);
+    EXPECT_EQ(raw::reachStep(90, 60), 2u);
+    EXPECT_EQ(raw::reachStep(1279, 720), 1u);
 }
 
 TEST(RawReach, TheFramesResolutionTakesTheSameTiles)

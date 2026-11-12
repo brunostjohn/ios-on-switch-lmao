@@ -45,11 +45,14 @@ extension RotatedCells {
         try await gpu.upload(loaded, to: texture, bytesPerRow: w * 4)
     }
 
-    /// Tiles (1, 0) and (2, 1): a rectangle inside the first, a full-frame draw scissored into the second, and a full-frame
-    /// draw culled as back-facing that reaches nothing
+    /// Tiles (1, 0) and (2, 1): a rectangle inside the first, a full-frame draw scissored into the second, and draws that
+    /// reach nothing: a full-frame one culled as back-facing, and rectangles just past the frame's right and bottom edges
+    /// (inside a tile that overhangs the 90x60 frame)
     func partLoad() -> Pass {
         encode(load: .load) { e in
             shapes(e, rect(40, 4, 60, 24), [1, 0, 1, 1], states.plain)
+            shapes(e, rect(width + 1, 10, width + 5, 20), [1, 1, 1, 1], states.discarded)
+            shapes(e, rect(10, height + 1, 20, height + 5), [1, 1, 1, 1], states.discarded)
             e.setScissorRect(MTLScissorRect(x: 68, y: 36, width: 10, height: 10))
             shapes(e, rect(0, 0, width, height), [1, 1, 1, 1], states.discarded)
             e.setScissorRect(MTLScissorRect(x: 0, y: 0, width: width, height: height))

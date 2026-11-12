@@ -16,8 +16,8 @@
 namespace raw {
 namespace {
 
-// The reach masks' and frame-resolution images' scratch backings (raw_turned_pass.cpp's start at 48)
-constexpr uint32_t kReachMaskTag = 72, kReachFrameTag = 73;
+// The reach masks' and reach images' scratch backings (raw_turned_pass.cpp's start at 48)
+constexpr uint32_t kReachMaskTag = 72, kReachImageTag = 73;
 
 // The registers a reach twin sets over its state's: its pixel program alone writes target 0, which nothing blends, tests or
 // covers by alpha, through the conservative rasteriser
@@ -134,10 +134,12 @@ bool CommandBuffer::reach(const PassDesc &pass, uint32_t width, uint32_t height,
     out = {};
     if (!draws.any())
         return true;
-    const bool every = reachesEveryTile(pass), frame = !every && draws.atFrameResolution();
+    const bool every = reachesEveryTile(pass);
+    const uint32_t step = draws.atFrameResolution() ? 1 : reachStep(width, height);
     const uint32_t tilesX = reachTiles(width), tilesY = reachTiles(height);
+    const bool reduced = !every && step < kReachTile;
     Texture *mask = turnScratch(kReachFormat, tilesX, tilesY, kReachMaskTag);
-    Texture *image = frame ? turnScratch(kReachFormat, width, height, kReachFrameTag) : mask;
+    Texture *image = reduced ? turnScratch(kReachFormat, width / step, height / step, kReachImageTag) : mask;
     if (!mask || !image) {
         *why = "no scratch for a pass's reach";
         return false;
@@ -156,7 +158,7 @@ bool CommandBuffer::reach(const PassDesc &pass, uint32_t width, uint32_t height,
         return false;
     }
     if (!every) {
-        e->beginReach(frame ? 1 : kReachTile, width, height);
+        e->beginReach(step, width, height);
         if (!draws.replay(*e, why))
             return false;
         if (e->reachRefusal()) {
@@ -165,14 +167,14 @@ bool CommandBuffer::reach(const PassDesc &pass, uint32_t width, uint32_t height,
         }
     }
     e->end();
-    if (frame) {
+    if (reduced) {
         Pipeline *reduce = dev_->pipeline(Pack::fnv(kReachReduceState, strlen(kReachReduceState)));
         q.color[0].texture = mask;
         if (!reduce || !(e = render(q))) {
             *why = "no reach reduction state in the pack, or no pass for it";
             return false;
         }
-        const uint32_t extent[2] = {width, height};
+        const uint32_t extent[3] = {width / step, height / step, kReachTile / step};
         e->setPipeline(reduce);
         e->setTexture(0, image);
         e->setBytes(2, 0, extent, sizeof extent);

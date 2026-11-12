@@ -146,15 +146,15 @@ fragment uint4 turn_reach_frag()
     return uint4(1);
 }
 
-struct Frame {
-    uint width, height;
+struct Image {
+    uint width, height, perTile;
 };
 
-// A reach image of the frame's resolution reduced to its tiles: 1 where a texel of the tile is
+// A reach image of `perTile` x `perTile` texels a tile reduced to its tiles: 1 where a texel of the tile is
 fragment uint4 turn_reach_reduce_frag(Out in [[stage_in]], texture2d<uint, access::read> s [[texture(0)]],
-                                      constant Frame &f [[buffer(0)]])
+                                      constant Image &f [[buffer(0)]])
 {
-    const uint2 first = uint2(in.position.xy) * 32, end = min(first + 32, uint2(f.width, f.height));
+    const uint2 first = uint2(in.position.xy) * f.perTile, end = min(first + f.perTile, uint2(f.width, f.height));
     for (uint y = first.y; y < end.y; y++)
         for (uint x = first.x; x < end.x; x++)
             if (s.read(uint2(x, y)).x)

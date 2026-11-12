@@ -10,9 +10,10 @@
 // The raw path draws the pass's geometry again before the pass (CommandBuffer::reach) into an R8Uint mask of a texel a tile:
 // each draw's own vertex program and bindings, the pack's turn_reach_frag writing 1, conservative raster (NVB197
 // SET_CONSERVATIVE_RASTER), the viewport scaled to the mask, its clip rectangle and the scissor rounded out to tiles. A pass
-// with point or line draws, whose size is in raster pixels, draws at the frame's resolution and is reduced to tiles. The
-// conservative rasteriser covers a primitive's touched pixels whether or not it covers a pixel centre: such a sliver reaches
-// tiles Metal leaves alone.
+// with point or line draws, whose size is in raster pixels, draws at the frame's resolution and is reduced to tiles. So that the
+// target's own edge clips a primitive past the frame where a tile overhangs it, a frame of no whole tiles draws at the largest
+// power-of-two step that divides it (reachStep), reduced to tiles likewise. The conservative rasteriser covers a primitive's
+// touched pixels whether or not it covers a pixel centre: such a sliver reaches tiles Metal leaves alone.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -45,6 +46,15 @@ inline Rect reachTilesOf(const Rect &r, uint32_t step)
         return std::min(reachTiles(edge) * k, 65535u);
     };
     return {r.x0 / kReachTile * k, r.y0 / kReachTile * k, far(r.x1), far(r.y1)};
+}
+
+// The frame pixels a texel of a `width` x `height` frame's reach target: the largest power of two up to a tile that divides both
+inline uint32_t reachStep(uint32_t width, uint32_t height)
+{
+    uint32_t step = kReachTile;
+    while (step > 1 && ((width | height) & (step - 1)))
+        step >>= 1;
+    return step;
 }
 
 // The scissor of a reach draw in its target: Metal's, clipped to the render area, rounded out to tiles; an empty one tile (0, 0)
