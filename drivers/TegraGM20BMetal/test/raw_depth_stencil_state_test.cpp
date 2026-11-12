@@ -156,4 +156,24 @@ TEST(DepthStencilState, MetalsDefaultIsOneSharedState)
                      raw::depthStencilRegs(DepthStencilDesc(), 3, 4, true, true)));
 }
 
+TEST(DepthStencilState, HiddenZetaForEveryCompareButAlwaysAndForStencilTests)
+{
+    for (uint8_t f = 0; f < 8; f++)
+        for (bool write : {false, true}) {
+            DepthStencilDesc d;
+            d.depthCompare = f;
+            d.depthWrite = write;
+            EXPECT_EQ(raw::testsHiddenZeta(d), f != 7) << int(f) << " write " << write;
+        }
+    DepthStencilDesc stencil;
+    stencil.back.compare = 2;
+    EXPECT_TRUE(raw::testsHiddenZeta(stencil));
+    DepthStencilDesc replaces;
+    replaces.front.pass = 2;
+    EXPECT_TRUE(raw::testsHiddenZeta(replaces));
+    DepthStencilDesc failOnly;
+    failOnly.front.fail = 2;  // a compare of Always never fails
+    EXPECT_FALSE(raw::testsHiddenZeta(failOnly));
+}
+
 }  // namespace

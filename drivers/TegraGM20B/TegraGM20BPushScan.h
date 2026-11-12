@@ -35,6 +35,8 @@ struct PushParse {
 	// log2 samples, 3:0 log2 of 1 / minSampleShading), and whether this submission wrote its shading half yet
 	uint32_t antiAlias;
 	bool shadingKnown;
+	// the last method parsed for an engine (method 0x100 and up), subchannel << 16 | method; 0 before any
+	uint32_t lastEngine;
 };
 
 // Fragment shading passes per pixel, log2, as the macro derives them: log2 samples - log2(1 / minSampleShading), at least 0
@@ -47,6 +49,8 @@ inline uint32_t shadingPassesLog2(const PushParse &p)
 
 inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint32_t data)
 {
+	if (mthd >= 0x100)
+		p.lastEngine = subc << 16 | mthd;
 	if (mthd < 0x100) {                            // host methods, any subchannel
 		if (mthd == 0x001c && (data & 0xd)) {  // SEMAPHORED: ACQUIRE, ACQ_GEQ, ACQ_AND
 			c.acquires++;

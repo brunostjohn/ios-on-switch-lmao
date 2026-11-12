@@ -26,7 +26,7 @@ template <typename T> class ComputeKernelSet;
 struct ComputeState;
 }
 
-@class RMDevice, RMCommandBuffer;
+@class RMDevice, RMCommandBuffer, RMCounterSampleBuffer;
 struct SurfaceWriteCount;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
@@ -113,6 +113,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMTextureTwinOnly
 };
 
+enum class RMShareable : uint8_t { Unasked, No, Yes };
+
 @interface RMTexture : RMObject {
 @public
     raw::Texture _raw;
@@ -142,6 +144,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMHeap *_heap;
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
+    std::atomic<RMShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
 }
 @end
 
@@ -223,6 +226,8 @@ struct RMPass {
     uint32_t clearStencil;
     NSUInteger width, height;
     raw::SamplePositions positions;
+    bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
+    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -241,6 +246,15 @@ struct RMSegment {
     bool event = false;
     bool gpuSignal = false;
     bool gpuWait = false;
+};
+
+// A counter sample a pass descriptor's attachment asks for (RawMetalCounterEncode.mm): at the tape position of its encoder's
+// first command (a start) or its OpEnd (an end); the command buffer retains the buffer
+struct RMCounterMark {
+    uint32_t at;
+    raw::counters::Point point;
+    uint32_t index;
+    __unsafe_unretained RMCounterSampleBuffer *buffer;
 };
 
 struct RMSharedEventWait {
@@ -295,6 +309,7 @@ struct RMSharedEventWait {
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
+    std::vector<RMCounterMark> _counterMarks;  // in tape order
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
     // the encode reads (the first draw's cover test) is not read from the write-combined chunk
@@ -376,6 +391,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     RMCommandBuffer *_cb;
     bool _ended;
     uint64_t _traceId;
+    std::vector<RMCounterMark> _counterPending;  // its descriptor's samples not yet placed on the tape
 }
 @end
 
@@ -412,6 +428,8 @@ uint64_t nextTraceId();
 @end
 @interface RMBlitEncoder : RMEncoder
 @end
+@interface RMParallelRenderEncoder : RMEncoder  // (RawMetalParallel.mm)
+@end
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
@@ -439,6 +457,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     [cb record:m];
 }
 
+// The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
+@interface RMCommandBuffer (Encoders)
+- (void)begin:(RMEncoder *)e;
+- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
+@end
+
 @interface RMEncoder ()
 - (void)endEncoding;
 - (void)updateFence:(id<MTLFence>)fence;
@@ -447,6 +471,10 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 // `s` with a bind's LOD clamps (RawMetalBindings.mm)
 id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
+
+@interface RMRenderEncoder ()
+- (void)checkDraw;  // (RawMetalRenderEncoder.mm)
+@end
 
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;

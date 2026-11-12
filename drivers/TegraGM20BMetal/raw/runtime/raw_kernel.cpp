@@ -19,7 +19,9 @@ constexpr uint64_t kBigPageAlignment = 0x20000;
 constexpr char kNvk[] = "libvulkan_nouveau.dylib";
 
 // NVK's image: the one this process loaded already, else the one beside this image (the plugin's bundle, which the m2v device's
-// open loads NVK from: the same image then). Null: none (a host tool of the raw path alone).
+// open loads NVK from: the same image then). Null: none (a host tool of the raw path alone). A listed image is opened, never
+// looked up with RTLD_NOLOAD: a null for an image another thread is still loading would give the raw path a connection of
+// its own beside NVK's.
 void *nvkImage()
 {
     const size_t suffix = strlen(kNvk);
@@ -27,7 +29,7 @@ void *nvkImage()
         const char *name = _dyld_get_image_name(i);
         const size_t length = name ? strlen(name) : 0;
         if (length > suffix && name[length - suffix - 1] == '/' && !strcmp(name + length - suffix, kNvk))
-            return dlopen(name, RTLD_NOW | RTLD_NOLOAD);
+            return dlopen(name, RTLD_NOW | RTLD_LOCAL);
     }
     Dl_info info = {};
     if (!dladdr(reinterpret_cast<const void *>(&nvkImage), &info) || !info.dli_fname)
@@ -518,6 +520,13 @@ bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
         return true;
     st = {};
     return false;
+}
+
+bool Kernel::ptimer(uint64_t &units)
+{
+    TegraGM20BAbiTimestamp t = {};
+    units = call(TegraGM20BMethodGetTimestamp, nullptr, 0, &t, sizeof t) == KERN_SUCCESS ? t.ns : 0;
+    return units != 0;
 }
 
 // kIOReturnNotResponding is the kernel's answer for a channel it killed: one GetStatus still calls healthy is not lost

@@ -182,10 +182,12 @@ struct TexsF16In {
     float4 position [[position]];
 };
 
+/// The F16 form's bits as whole floats and the proof word's bits as a float: formats the raw path renders (RGBA32Float,
+/// R32Float), each holding every bit
 struct TexsF16Out {
     float4 f32 [[color(0)]];
-    ushort4 f16 [[color(1)]];
-    uint proof [[color(2)]];
+    float4 f16 [[color(1)]];
+    float proof [[color(2)]];
 };
 
 /// gpu.raw.texs_f16: one texel, sampled through two names of the same texture (bound textures, never one fetch), at the
@@ -196,8 +198,8 @@ static TexsF16Out texs_f16(TexsF16In in, texture2d<float> first, texture2d<float
     const float2 at = in.position.xy + offset;
     TexsF16Out out;
     out.f32 = first.sample(s, at);
-    out.f16 = as_type<ushort4>(half4(second.sample(s, at)));
-    out.proof = as_type<uint>(at.x) == TEXS_F16_PROBE_MARKER ? 0u : TEXS_F16_PROOF_MARKER;
+    out.f16 = float4(as_type<ushort4>(half4(second.sample(s, at))));
+    out.proof = as_type<float>(as_type<uint>(at.x) == TEXS_F16_PROBE_MARKER ? 0u : TEXS_F16_PROOF_MARKER);
     return out;
 }
 

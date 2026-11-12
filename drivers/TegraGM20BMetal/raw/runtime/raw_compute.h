@@ -74,9 +74,43 @@ public:
                         const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why);
     // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
     void barrier();
+    // A counter sample on the compute class now: right after the encoder's opening wait for idle, its start
+    void timestamp(uint64_t va);
     void end();
 
+    // A buffer an indirect dispatch command binds at a slot (va 0: none)
+    struct IcbBuffer {
+        uint64_t va = 0;
+        uint32_t size = 0;
+    };
+
+    // One region of an indirect dispatch command of kernel `k` (raw_icb_compute.h): its QMD, root table and set 0 written at
+    // `block` (GPU address `va`, icb::computeRegionBytes(k.rec->setBytes) long). False: refused (*why), as a dispatch is.
+    static bool icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
+                          const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
+                          const IcbBuffer (&buffers)[31], uint8_t *block, uint64_t va, const char **why);
+    // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written
+    void inheritBuffers(IcbBuffer (&out)[31]);
+    // Memory of this command buffer's upload ring the GPU reads, 256-byte aligned
+    uint8_t *upload(uint32_t bytes, uint64_t &va);
+
+    struct IcbExecute {
+        const Buffer *slots;  // the commands' words, icb::kComputeSlotWords each, command `first`'s at slot `at`
+        uint32_t at, first, count;
+        const Buffer *range;  // the execution range the GPU reads at rangeOffset; null: [first, first + count)
+        uint64_t rangeOffset;
+        bool written;  // a blit wrote the words on the GPU
+    };
+
+    // The commands by reference, ordered after this encoder's work before them as a dispatch is
+    bool executeSlots(const IcbExecute &x, const char **why);
+
 private:
+    static void rootWords(const PackKernel &r, const uint32_t groups[3], uint64_t setVa, uint32_t residualMask,
+                          const std::array<uint32_t, 32> &residuals, const uint32_t region[8], uint32_t *root);
+    static bool qmdWords(const ComputeState &k, const uint32_t groups[3], uint64_t rootVa, uint64_t setVa,
+                         uint32_t *qmd, const char **why);
+
     struct Bound {
         uint64_t va = 0;
         uint32_t size = 0;

@@ -17,6 +17,7 @@
 //    buffer, and every one committed after it while it waits, goes to the submit thread, which submits them in order once
 //    they may run; the render thread never blocks for it. waitUntilScheduled waits for the submission, so the display's
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
+#import "RawMetalIndirect.h"
 #import "RawMetalInternal.h"
 #include "raw_device_answers.h"
 #include "raw_limits_fill.h"
@@ -313,6 +314,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         free(methods);
     }
     installDeviceAnswers(cls);
+    installSharedTextureMethods(cls);
     objc_registerClassPair(cls);
     // Each facade class conforms to its Metal protocol, as the m2v objects it stands in for do (the frontend's adoptMetalProtocols).
     const std::pair<Class, Protocol *> classes[] = {
@@ -328,6 +330,9 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         {[RMCommandBuffer class], @protocol(MTLCommandBuffer)},
         {[RMEncoder class], @protocol(MTLCommandEncoder)},
         {[RMRenderEncoder class], @protocol(MTLRenderCommandEncoder)},
+        {[RMParallelRenderEncoder class], @protocol(MTLParallelRenderCommandEncoder)},
+        {[RMIndirectCommandBuffer class], @protocol(MTLIndirectCommandBuffer)},
+        {[RMIndirectRenderCommand class], @protocol(MTLIndirectRenderCommand)},
         {[RMBlitEncoder class], @protocol(MTLBlitCommandEncoder)},
         {[RMComputeEncoder class], @protocol(MTLComputeCommandEncoder)},
     };
@@ -394,6 +399,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     }
     watchFetchBarrierWay(dev);
     watchKeylineProbe();
+    watchGlassProbe(dev);
 #endif
     // what both threads hold up is the frame: they follow its committing threads (raw_follow.h)
     std::thread([] {

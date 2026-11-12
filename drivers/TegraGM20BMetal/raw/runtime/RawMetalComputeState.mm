@@ -65,6 +65,12 @@
     return [_metadata staticThreadgroupMemoryLength];
 }
 
+// The descriptor's, as Metal's state answers it, without making m2v's twin
+- (BOOL)supportIndirectCommandBuffers
+{
+    return _direct.supportIndirectCommandBuffers;
+}
+
 @end
 
 static bool airOf(id<MTLFunction> function, raw::AirHash &out)
@@ -92,7 +98,7 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
         NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
         const std::string key =
             raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
-        answer = rmArchiveAnswer(s->_direct.binaryArchives, options, false, raw::Pack::fnv(key.data(), key.size()));
+        answer = rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
     }
     options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
     s->_direct.binaryArchives = nil;
@@ -108,6 +114,8 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
 id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
                   MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
+    if (const char *why = rmUnsupportedComputeState(descriptor))
+        return rmRefuseUnsupported(why, error);
     id<MTLFunction> function = descriptor.computeFunction;
     RMComputeState *s = [RMComputeState new];
     s->_device = device;

@@ -1,7 +1,7 @@
 """A pixel program that writes each column its own colour: the readback experiments' source colours.
 
 The colours are the shader data (constant buffer 1), an RGBA32F each; the program reads its pixel's x through IPA,
-converts it, and loads that column's colour with one 128-bit LDC. Each instruction waits on the one before through
+converts it, and loads that column's colour with two 64-bit LDCs. Each instruction waits on the one before through
 barrier 0, so the program is right whatever the latencies are.
 """
 
@@ -17,19 +17,22 @@ MAX_COLUMNS = protocol.MAX_DATA // 16
 POSITION_X = 0x70
 
 
-def ldc128(d: int, offset_reg: int, bank: int) -> encode.Instr:
-    """LDC.128 as sm50.rs encodes it: four words of c[bank][offset_reg] into d..d+3."""
-    word = 0xEF90 << 48 | d | offset_reg << 8 | encode.PT << 16 | bank << 36 | 6 << 48
-    return encode.Instr(word)
+def ldc64(d: int, offset_reg: int, bank: int, offset: int) -> encode.Instr:
+    """LDC.64 as sm50.rs encodes it: two words of c[bank][offset_reg + offset] into d, d+1.
+
+    The chip has no 128-bit LDC: memory type 6 traps the warp with ILLEGAL_INSTR_ENCODING.
+    """
+    return encode.Instr(0xEF90 << 48 | d | offset_reg << 8 | encode.PT << 16 | offset << 20 | bank << 36 | 5 << 48)
 
 
 def code() -> bytes:
     through = {'wr_bar': 0, 'wait': 1, 'delay': 15}
     body = [
-        encode.ipa(4, POSITION_X).sched(wr_bar=0),
+        encode.ipa(4, POSITION_X).sched(wr_bar=0, delay=encode.BARRIER_SET_CYCLES),
         encode.f2i(4, 4, 'u32 rz').sched(**through),
         encode.shl(4, 4, encode.Imm(4)).sched(delay=15, wait=1),
-        ldc128(0, 4, DATA_BANK).sched(wr_bar=0),
+        ldc64(0, 4, DATA_BANK, 0).sched(wr_bar=0),
+        ldc64(2, 4, DATA_BANK, 8).sched(wr_bar=0, delay=encode.BARRIER_SET_CYCLES),
     ]
     return encode.bundle(encode.finish(body))
 

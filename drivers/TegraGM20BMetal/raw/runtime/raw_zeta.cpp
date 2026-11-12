@@ -3,10 +3,12 @@
 // Mesa NVK nvk_CmdBeginRendering, the state's emission nvk_flush_ds_state, the clears nvk_CmdClearAttachments (all MIT).
 #include "raw_zeta.h"
 
+#include <algorithm>
 #include <cstring>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../fx/fx_image.h"
 #include "raw_gpu.h"
+#include "raw_rotated_pass.h"
 #include "raw_samples.h"
 
 namespace raw {
@@ -86,6 +88,22 @@ bool DepthStencilRegs::operator==(const DepthStencilRegs &o) const
     return !memcmp(v, o.v, sizeof v);
 }
 
+Texture RenderEncoder::hiddenZetaShape(const PassDesc &pass) const
+{
+    Texture shape;
+    shape.width = pass.width;
+    shape.height = pass.height;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (const Texture *t = pass_.color[j].texture) {
+            shape.width = shape.width ? std::min(shape.width, t->width) : t->width;
+            shape.height = shape.height ? std::min(shape.height, t->height) : t->height;
+        }
+    shape = planeShaped(shape, rot_);
+    shape.format = kZetaFormat;
+    shape.samples = samples_;
+    shape.zeta = shape.memoryless = true;
+    return shape;
+}
 void zetaClearValues(Push &p, bool depth, float clearDepth, bool stencil, uint32_t clearStencil)
 {
     if (depth)

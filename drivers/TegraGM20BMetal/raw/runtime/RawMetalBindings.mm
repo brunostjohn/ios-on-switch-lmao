@@ -175,16 +175,15 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         [self texture:1 object:t[k] index:r.location + k];
 }
 
+// No raw record reads a vertex-stage texture or sampler (raw_direct.cpp and raw_record.cpp take stage 2's alone): a vertex
+// sampler is recorded for m2v's replay and binds nothing here, and a state whose vertex function samples is not the raw
+// path's, which its draws' state predicate decides
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index
 {
     SWITCH_API(ApiBind);
     if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
         [_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(_cb, PredCallSamplerForeign, index);
-    }
-    if (stage == 1 && s) {
-        [_cb takeReason:WhyCall why:@"a vertex sampler"];
-        hit(_cb, PredCallVertexSampler, index);
     }
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
@@ -208,6 +207,12 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
 {
     for (NSUInteger k = 0; k < r.length; k++)
         [self sampler:2 object:s[k] index:r.location + k];
+}
+
+- (void)setVertexSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:1 object:s[k] index:r.location + k];
 }
 
 // A bind's LOD clamps replace the state's (Metal's rule): the state of its descriptor with those clamps, made once per state and
@@ -257,6 +262,15 @@ id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lo
 {
     for (NSUInteger k = 0; k < r.length; k++)
         [self sampler:2 object:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k];
+}
+
+- (void)setVertexSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s
+                  lodMinClamps:(const float[])lodMin
+                  lodMaxClamps:(const float[])lodMax
+                     withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:1 object:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k];
 }
 
 @end

@@ -58,14 +58,18 @@ def clock(rows: list[dict]) -> dict:
     cycles = [r['k'] * r['delay'] for r in ladder]
     fit = stats.line(cycles, [r['ns_per_draw'] for r in ladder])
     first = stats.line(cycles, [r['first_ns'] for r in ladder])
+    overlap = _overlap(fit, first)
+    # draws of one warp overlap on the device's two SMs, so the lone draw's time is the clock then
+    used = first if overlap else fit
     return {
-        'clock_hz': 1e9 / fit.slope,
-        'ns_per_cycle': fit.slope,
-        'stderr_ns': fit.stderr,
-        'residual_ns': fit.rms,
-        'points': fit.n,
+        'clock_hz': 1e9 / used.slope,
+        'ns_per_cycle': used.slope,
+        'stderr_ns': used.stderr,
+        'residual_ns': used.rms,
+        'points': used.n,
+        'ns_per_cycle_per_draw': fit.slope,
         'ns_per_cycle_first': first.slope,
-        'overlap': _overlap(fit, first),
+        'overlap': overlap,
         'assumed': False,
     }
 

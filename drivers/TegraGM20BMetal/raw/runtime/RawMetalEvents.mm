@@ -162,6 +162,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     }
     if (cb->_eventArmed != range.from + 1) {
         cb->_eventArmed = range.from + 1;
+        RAW_DIAGNOSTIC(gRM->stats.waitsHeldOnCpu++);
         cb->_eventStart = raw::EventDeadline::Clock::now();
         cb->_eventWaits.push_back(range.from);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

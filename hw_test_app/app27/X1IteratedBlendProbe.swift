@@ -3,41 +3,93 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// METALMAP d14 and x1-glass/blend/REPORT.txt 1.1: the ROP's iterated blend (SET_ITERATED_BLEND 0x0dd0,
-/// LOAD_ITERATED_BLEND_INSTRUCTION 0x0df4), which NVN uses for advanced blending and no open driver programs. A
-/// premultiplied ramp over a premultiplied destination in BGRA8, with alpha left to the fixed-function source-over:
-/// first a one-instruction program that passes the source through (does a program's last result reach the target at
-/// all), then KHR multiply in two (Cs*Cd + Cs*(1-Ad) + Cd*(1-As)). Instruction fields are clb197.h's; that a last
-/// instruction writing PASS_OUTPUT NONE is the blend's result is inferred from Ryujinx's PBR destination.
+/// METALMAP d14: the ROP's iterated blend (SET_ITERATED_BLEND 0x0dd0, LOAD_ITERATED_BLEND_INSTRUCTION 0x0df4), which NVN
+/// uses for advanced blending. The draw raises ITERATED_BLEND_WITH_PER_TARGET_BLEND (class error 0x5d, NVIDIA
+/// open-gpu-doc gv100 dev_graphics.ref.txt) while SET_BLEND_STATE_PER_TARGET is TRUE, which NVK's context init sets
+/// and raw's channels replay, and ITERATED_BLEND_TARGET_COUNT (0x59: the bench's draws with two colour targets bound):
+/// every arm draws into one target, clears per-target blend and gives the common blend block (0x133c-0x1358) the alpha blend
+/// NVN pairs with the program. Programs are NVN's, as Ryujinx's AdvancedBlendFunctions table records them; each ends by
+/// writing TEMP0, which is the blend's result. One arm a command buffer, journaled before it runs, NVN's own sequences
+/// first and the arms expected to be refused last; a refusal ends the arm, not the probe.
 enum X1IteratedBlendProbe {
     static let size = 256
+    static let maxRefusals = 3
 
-    /// One instruction, always executed (TEST_CC TRUE), ADD_PRODUCTS: A * B + C * D into `output` (0-2 a temporary,
-    /// 3 the blend result), RGB swizzle and mask.
-    static func instruction(a: UInt32, b: UInt32, c: UInt32, d: UInt32, output: UInt32) -> UInt32 {
-        1 | a << 9 | b << 12 | c << 16 | d << 19 | output << 28
+    static let perTarget: UInt32 = 0x12e4, separateAlpha: UInt32 = 0x133c, colorOp: UInt32 = 0x1340
+    static let colorSource: UInt32 = 0x1344, colorDest: UInt32 = 0x1348, alphaOp: UInt32 = 0x134c
+    static let alphaSource: UInt32 = 0x1350, alphaDest: UInt32 = 0x1358, constantRed: UInt32 = 0x1480
+    static let add: UInt32 = 0x8006, one: UInt32 = 0x4001, oneMinusSourceAlpha: UInt32 = 0x4303
+
+    struct Arm {
+        let name: String
+        var program: [UInt32] = []
+        var enable: UInt32 = 1
+        var alphaDestFactor: UInt32 = oneMinusSourceAlpha
+        var constants: [UInt16] = []
+        var perTargetOff = true
+        var separate: UInt32 = 1
+        /// Whether the claim rests on this arm: its words decoded field by field against clb197.h here (overlay's and
+        /// plus-clamped's are Ryujinx's words with formulas of ours: reported, not judged)
+        var judged = true
+        /// RGB of a premultiplied source over a premultiplied destination, (s, sa, d, da) per channel; nil: refusal
+        /// expected, no picture judged
+        let rgb: ((Double, Double, Double, Double) -> Double)?
+        var alpha: (Double, Double) -> Double = { sa, da in sa + da * (1 - sa) }
     }
 
-    enum Operand {
-        static let srcRGB: UInt32 = 0, destRGB: UInt32 = 1, temp0AC: UInt32 = 4
-        static let zero: UInt32 = 0, one: UInt32 = 1, destRGBBD: UInt32 = 5, oneMinusSrcA: UInt32 = 4
-        static let oneMinusDestA: UInt32 = 7
-    }
-
-    static let passThrough = [
-        instruction(a: Operand.srcRGB, b: Operand.one, c: Operand.srcRGB, d: Operand.zero, output: 3)
+    static let arms: [Arm] = [
+        Arm(name: "common_only", rgb: { s, sa, d, _ in s + d * (1 - sa) }),
+        Arm(name: "pass", program: [0x0000_2029], rgb: { s, _, _, _ in s }),
+        Arm(
+            name: "plus", program: [0x0010_5029], alphaDestFactor: one, rgb: { s, _, d, _ in s + d },
+            alpha: { sa, da in sa + da }),
+        Arm(
+            name: "multiply", program: [0x0000_5001, 0x3021_7001, 0x0060_9029],
+            rgb: { s, sa, d, da in s * d + s * (1 - da) + d * (1 - sa) }),
+        Arm(
+            name: "screen", program: [0x3019_6001, 0x0028_1e09, 0x3021_7001, 0x0060_9029],
+            rgb: { s, _, d, _ in s + d - s * d }),
+        Arm(
+            name: "overlay",
+            program: [
+                0x3000_0421, 0x2000_c001, 0x3000_0621, 0x1000_c201, 0x8068_c031, 0x0056_ac05, 0x0050_1036,
+                0x3058_1036, 0x3064_c806, 0x0060_1036, 0x1021_7001, 0x3000_6401, 0x000d_c801,
+            ],
+            constants: [0x3800, 0x3800, 0x3800], judged: false,
+            rgb: { s, sa, d, da in
+                (2 * d <= da ? 2 * s * d : sa * da - 2 * (da - d) * (sa - s)) + s * (1 - da) + d * (1 - sa)
+            }),
+        Arm(
+            name: "plus_clamped_rgba", program: [0x3010_5029, 0x0000_1e11, 0x3030_3029, 0x1280_1e11, 0x0000_9029],
+            enable: 3, judged: false, rgb: { s, _, d, _ in min(s + d, 1) }, alpha: { sa, da in min(sa + da, 1) }),
+        Arm(
+            name: "multiply_two", program: [0x0038_5001, 0x000c_4201],
+            rgb: { s, sa, d, da in s * d + s * (1 - da) + d * (1 - sa) }),
+        Arm(name: "ends_in_pbr", program: [0x3000_1001], rgb: nil),
+        Arm(name: "per_target_left", program: [0x0000_2029], perTargetOff: false, rgb: nil),
+        Arm(name: "no_separate_alpha", program: [0x0000_2029], separate: 0, rgb: nil),
     ]
-    static let multiply = [
-        instruction(a: Operand.srcRGB, b: Operand.destRGBBD, c: Operand.srcRGB, d: Operand.oneMinusDestA, output: 0),
-        instruction(a: Operand.destRGB, b: Operand.oneMinusSrcA, c: Operand.temp0AC, d: Operand.one, output: 3),
-    ]
 
-    static func words(_ program: [UInt32]) -> [(UInt32, UInt32)] {
-        [(X1RawProbes.loadIteratedBlendPointer, 0)] + program.map { (X1RawProbes.loadIteratedBlendInstruction, $0) }
-            + [(X1RawProbes.setIteratedBlendPass, UInt32(program.count)), (X1RawProbes.setIteratedBlend, 1)]
+    static func words(_ arm: Arm) -> [(UInt32, UInt32)] {
+        var w: [(UInt32, UInt32)] = []
+        if arm.perTargetOff { w.append((perTarget, 0)) }
+        w += [
+            (separateAlpha, arm.separate), (colorOp, add), (colorSource, one), (colorDest, oneMinusSourceAlpha),
+            (alphaOp, add), (alphaSource, one), (alphaDest, arm.alphaDestFactor),
+        ]
+        for (j, c) in arm.constants.enumerated() {
+            w.append((constantRed + UInt32(16 * (j / 3) + 4 * (j % 3)), UInt32(c)))
+        }
+        guard !arm.program.isEmpty else { return w }
+        w.append((X1RawProbes.loadIteratedBlendPointer, 0))
+        w += arm.program.map { (X1RawProbes.loadIteratedBlendInstruction, $0) }
+        return w + [
+            (X1RawProbes.setIteratedBlendPass, UInt32(arm.program.count)), (X1RawProbes.setIteratedBlend, arm.enable),
+        ]
     }
 
-    static let restore: [(UInt32, UInt32)] = [(X1RawProbes.setIteratedBlend, 0), (X1RawProbes.setIteratedBlendPass, 0)]
+    /// Legal: PASS keeps its count (0 is INVALID_VALUE), per-target blend back on for raw's own draws
+    static let restore: [(UInt32, UInt32)] = [(X1RawProbes.setIteratedBlend, 0), (perTarget, 1)]
 
     /// The destination's premultiplied codes at (x, y): (blue, green, red, alpha) in memory order.
     static func destination(_ x: Int, _ y: Int) -> [Int] {
@@ -51,67 +103,94 @@ enum X1IteratedBlendProbe {
         return [rgba[2], rgba[1], rgba[0], rgba[3]]
     }
 
+    struct Judged {
+        var inexact = 0, beyondOne = 0, maxDiff = 0
+    }
+
+    static func judge(_ arm: Arm, _ got: [UInt8], rgb: (Double, Double, Double, Double) -> Double) -> Judged {
+        var j = Judged()
+        for p in 0..<(size * size) {
+            let (x, y) = (p % size, p / size)
+            let s = source(x, y)
+            let d = destination(x, y).map { Double($0) / 255 }
+            for c in 0..<4 {
+                let value = c == 3 ? arm.alpha(s[3], d[3]) : rgb(s[c], s[3], d[c], d[3])
+                let diff = abs(Int(got[p * 4 + c]) - X1Reference.unorm(value, top: 255))
+                if diff > 0 { j.inexact += 1 }
+                if diff > 1 { j.beyondOne += 1 }
+                j.maxDiff = max(j.maxDiff, diff)
+            }
+        }
+        return j
+    }
+
     static let probe = X1Probe(
-        id: "gpu.x1.iterated_blend", name: "Iterated blend: pass-through, then multiply as ROP microcode",
-        probe: "d14", risky: true
+        id: "gpu.x1.iterated_blend", name: "Iterated blend: NVN's advanced-blend programs with per-target blend off",
+        probe: "d14", risky: true, timeout: 180
     ) { gpu in
+        let journal = ProbeJournal(probe: "gpu.x1.iterated_blend")
         let initial = (0..<size * size).flatMap { destination($0 % size, $0 / size).map(UInt8.init) }
         let state = try gpu.render(fragment: "x1_ramp_source", format: .bgra8Unorm, configure: X1RawProbes.sourceOver)
-        var wrong: [String: Int] = [:]
         var metrics = Metrics()
+        metrics.set("rule", "fetch.iterated")
         var paths: [String] = []
-        var emitted = 0
-        var results: [String: [UInt8]] = [:]
-        for (name, program) in [("plain", [UInt32]()), ("pass", passThrough), ("multiply", multiply)] {
+        var emitted = 0, refusals = 0
+        var outcomes: [String] = []
+        var nvnAccepted = 0, nvnWithinOne = 0, nvnRun = 0
+        for arm in arms {
+            if refusals >= maxRefusals {
+                outcomes.append("\(arm.name):skipped")
+                continue
+            }
+            journal.starting(
+                "\(arm.name) words=\(words(arm).map { String(format: "%04x=%x", $0.0, $0.1) }.joined(separator: ","))")
             let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
             try await gpu.upload(initial, to: target, bytesPerRow: size * 4)
-            let draw = { (commands: MTLCommandBuffer) in
-                let encoder = commands.makeRenderCommandEncoder(descriptor: X1RawProbes.pass(target, load: .load))!
-                encoder.setRenderPipelineState(state)
-                var corners = GPU.fullScreen
-                encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                encoder.endEncoding()
-            }
-            if program.isEmpty {
-                paths.append(try await gpu.run(draw).path)
-            } else {
-                let drawn = try await RawMethods.draw(gpu, before: words(program), after: restore, draw)
+            let isNVN = !arm.program.isEmpty && arm.rgb != nil && arm.judged
+            if isNVN { nvnRun += 1 }
+            do {
+                let drawn = try await RawMethods.draw(gpu, before: words(arm), after: restore) { commands in
+                    let encoder = commands.makeRenderCommandEncoder(descriptor: X1RawProbes.pass(target, load: .load))!
+                    encoder.setRenderPipelineState(state)
+                    var corners = GPU.fullScreen
+                    encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    encoder.endEncoding()
+                }
                 paths.append(drawn.path)
                 emitted += drawn.emitted
-            }
-            results[name] = try await gpu.read(target, bytesPerPixel: 4)
-        }
-        for name in ["pass", "multiply"] {
-            let got = results[name]!
-            var exact = 0
-            var beyondOne = 0
-            var maxDiff = 0
-            for p in 0..<(size * size) {
-                let (x, y) = (p % size, p / size)
-                let s = source(x, y)
-                let d = destination(x, y).map { Double($0) / 255 }
-                for c in 0..<4 {
-                    let value: Double
-                    if c == 3 {
-                        value = s[3] + d[3] * (1 - s[3])
-                    } else if name == "pass" {
-                        value = s[c]
-                    } else {
-                        value = s[c] * d[c] + s[c] * (1 - d[3]) + d[c] * (1 - s[3])
-                    }
-                    let diff = abs(Int(got[p * 4 + c]) - X1Reference.unorm(value, top: 255))
-                    if diff > 0 { exact += 1 }
-                    if diff > 1 { beyondOne += 1 }
-                    maxDiff = max(maxDiff, diff)
+                guard let rgb = arm.rgb else {
+                    outcomes.append("\(arm.name):accepted")
+                    continue
                 }
+                let j = judge(arm, try await gpu.read(target, bytesPerPixel: 4), rgb: rgb)
+                outcomes.append("\(arm.name):accepted:\(j.inexact):\(j.beyondOne):\(j.maxDiff)")
+                if isNVN {
+                    nvnAccepted += 1
+                    if j.beyondOne == 0 { nvnWithinOne += 1 }
+                }
+            } catch {
+                refusals += 1
+                outcomes.append("\(arm.name):refused")
+                metrics.set("\(arm.name)_why", LogLine.sanitized(String(String(describing: error).prefix(80))))
             }
-            wrong[name + "_beyond_one"] = beyondOne
-            metrics.set(name + "_inexact", exact)
-            metrics.set(name + "_max_diff", maxDiff)
-            metrics.set(name + "_same_as_source_over", got == results["plain"]!)
-            metrics.set(name + "_first_pixel", got.prefix(4).map { String($0) }.joined(separator: ","))
         }
-        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics).emitting(emitted)
+        metrics.set("nvn_run", nvnRun)
+        metrics.set("nvn_accepted", nvnAccepted)
+        metrics.set("nvn_within_one", nvnWithinOne)
+        metrics.set("refusals", refusals)
+        metrics.set("arms", outcomes.joined(separator: ","))
+        let offPath = paths.filter { $0 != "raw" }
+        let verdict: ClaimVerdict =
+            emitted == 0 || !offPath.isEmpty
+            ? .inconclusive : nvnAccepted == nvnRun && nvnWithinOne == nvnRun ? .pass : .fail
+        metrics.set("emitted", emitted)
+        let note =
+            emitted == 0
+            ? "the probe's methods reached no draw"
+            : !offPath.isEmpty
+                ? "not on the raw path: \(offPath.joined(separator: ","))"
+                : verdict == .fail ? "NVN's programs refused or beyond one code: see arms" : ""
+        return ProbeFinding(verdict, metrics, note: note)
     }
 }

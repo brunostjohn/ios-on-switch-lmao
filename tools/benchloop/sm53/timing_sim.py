@@ -14,7 +14,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 
-from tools.benchloop.sm53 import operands, program
+from tools.benchloop.sm53 import encode, operands, program
 from tools.benchloop.sm53.encode import NO_BAR
 from tools.benchloop.sm53.operands import Decoded
 from tools.gpu.maxwell import execute
@@ -116,25 +116,60 @@ class _Warp:
             self.barriers[op.control.rd_bar] = max(self.barriers[op.control.rd_bar], t + READ_RELEASE)
 
 
+def branch_target(index: int, word: int) -> int:
+    """Give the instruction index a BRA at `index` jumps to."""
+    offset = word >> 20 & 0xFFFFFF
+    offset -= (offset & 1 << 23) << 1
+    target = encode.address(index) + 8 + offset
+    return target // 32 * 3 + (target % 32 - 8) // 8
+
+
+def _taken(op: Decoded, lane: Lane) -> bool:
+    return lane.p(op.word >> 16 & 7, bool(op.word >> 19 & 1))
+
+
 def run(code: bytes, data: bytes, table: Table, outputs: int = program.OUTPUT_REGISTERS) -> tuple[list[int], int]:
     """Run one warp to EXIT; give its first `outputs` registers as EXIT reads them and the cycles it took."""
     warp = _Warp(table, data)
-    for op in operands.decode(code):
+    ops = operands.decode(code)
+    i = 0
+    while i < len(ops):
+        op = ops[i]
         t, paired = warp.issue_time(op)
         warp.land(t)
         if op.base == 'EXIT':
-            return [warp.lane.r(i) for i in range(outputs)], t + 1
-        warp.execute(op, t)
+            return [warp.lane.r(k) for k in range(outputs)], t + 1
+        if op.base == 'BRA':
+            i = branch_target(i, op.word) if _taken(op, warp.lane) else i + 1
+        else:
+            warp.execute(op, t)
+            i += 1
         warp.prev = (op, t, paired)
     raise ValueError('the code has no EXIT')
 
 
-def issue_cycles(code: bytes, table: Table) -> int:
+def path(code: bytes, data: bytes = b'') -> list[Decoded]:
+    """Give the instructions one invocation issues up to EXIT, branches followed, every result visible at once."""
+    ops, lane, inputs = operands.decode(code), Lane(), program.inputs(data)
+    out, i = [], 0
+    while ops[i].base != 'EXIT':
+        op = ops[i]
+        out.append(op)
+        if len(out) > execute.MAX_STEPS:
+            raise ValueError('no EXIT')
+        if op.base == 'BRA':
+            i = branch_target(i, op.word) if _taken(op, lane) else i + 1
+            continue
+        if op.base != 'NOP' and _taken(op, lane):
+            execute.alu(op.name, op.word, lane, inputs)
+        i += 1
+    return out
+
+
+def issue_cycles(code: bytes, table: Table, data: bytes = b'') -> int:
     """Give the scheduler cycles one warp occupies when other warps fill every delay: issue costs and bank conflicts."""
     total, banks, prev, paired = 0, _Banks(), None, False
-    for op in operands.decode(code):
-        if op.base == 'EXIT':
-            break
+    for op in path(code, data):
         cost = table.issue_of(op.key) + table.bank_penalty * banks.conflicts(op)
         paired = prev is not None and table.pairs(prev, op) and not paired
         total += 0 if paired else cost

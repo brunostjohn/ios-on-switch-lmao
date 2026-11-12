@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 PROTOCOL = 'benchloop/1'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
-KINDS = ('noop', 'known', 'fragment', 'compute', 'readback')
+KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod')
+TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
 READBACK = ('none', 'summary', 'full')
 
 MAX_EXPERIMENTS = 256
@@ -42,22 +43,49 @@ FORMATS = {
     'rg32float': (105, 8),
     'rgba16float': (115, 8),
     'rgba32float': (125, 16),
+    'r8unorm': (10, 1),
+    'r16unorm': (20, 2),
+    'r16float': (25, 2),
+    'rg8unorm': (30, 2),
+    'b5g6r5unorm': (40, 2),
+    'bgr5a1unorm': (43, 2),
+    'rg16unorm': (60, 4),
+    'rg16float': (65, 4),
+    'rgba8unorm_srgb': (71, 4),
+    'bgra8unorm_srgb': (81, 4),
+    'rg11b10float': (92, 4),
+    'bgr10a2unorm': (94, 4),
+    'rgba16unorm': (110, 8),
 }
 
-# MAXWELL_B methods a readback experiment may set around its draw: the blend, iterated blend and colour write state.
+# MAXWELL_B methods a readback experiment may set around its draw: the blend, iterated blend and colour write state, and
+# every ROP option that could trade colour precision (the owner's question: is an inexact result our configuration).
 # The raw path owns everything else (raw_owned.h); hw_test_app/bench/switch_bench_methods.h holds the same ranges.
 METHOD_RANGES = (
+    (0x02E0, 0x02E4),  # DECOMPRESS_SURFACE
     (0x02F4, 0x02F8),  # SET_ITERATED_BLEND_OPTIMIZATION
+    (0x0754, 0x0758),  # SET_HYBRID_ANTI_ALIAS_CONTROL
+    (0x0D9C, 0x0DA0),  # SET_REDUCE_COLOR_THRESHOLDS_ENABLE
     (0x0DD0, 0x0DD8),  # SET_ITERATED_BLEND, SET_ITERATED_BLEND_PASS
     (0x0DF0, 0x0DF8),  # LOAD_ITERATED_BLEND_INSTRUCTION_POINTER, LOAD_ITERATED_BLEND_INSTRUCTION
+    (0x0F90, 0x0F94),  # SET_SINGLE_CT_WRITE_CONTROL
+    (0x0FAC, 0x0FB0),  # SET_CT_MRT_ENABLE
     (0x0FDC, 0x0FE0),  # SET_BLEND_OPT_CONTROL
-    (0x12E4, 0x12E8),  # SET_BLEND_STATE_PER_TARGET
+    (0x10CC, 0x10D0),  # SET_REDUCE_COLOR_THRESHOLDS_UNORM8
+    (0x10E0, 0x10F4),  # SET_REDUCE_COLOR_THRESHOLDS_UNORM10..SRGB8
+    (0x1140, 0x1144),  # SET_BLEND_PER_FORMAT_ENABLE
+    (0x1220, 0x1224),  # SET_COMPRESSION_THRESHOLD
+    (0x12E0, 0x12E8),  # SET_ALPHA_TO_COVERAGE_DITHER_CONTROL, SET_BLEND_STATE_PER_TARGET
     (0x131C, 0x132C),  # SET_BLEND_CONST_RED..ALPHA
     (0x133C, 0x1360),  # SET_BLEND_SEPARATE_FOR_ALPHA..SET_SINGLE_ROP_CONTROL
     (0x1360, 0x1380),  # SET_BLEND(i)
+    (0x13A8, 0x13AC),  # SET_PS_SATURATE
     (0x1480, 0x1500),  # SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j)
+    (0x15B8, 0x15BC),  # SET_SRGB_WRITE
+    (0x19C0, 0x19C4),  # SET_BLEND_FLOAT_OPTION
     (0x1A00, 0x1A20),  # SET_CT_WRITE(i)
     (0x1E00, 0x1F00),  # SET_BLEND_PER_TARGET_*(j)
+    (0x2600, 0x2604),  # SET_COLOR_CLAMP
 )
 
 
@@ -127,7 +155,7 @@ def instructions(code: bytes) -> int:
 
 def estimated_ms(experiment: dict) -> float:
     """Give the GPU time of the experiment's longest command buffer if every lane ran every instruction at full rate."""
-    if experiment['kind'] in ('noop', 'known'):
+    if experiment['kind'] in ('noop', 'known', 'twod'):
         return 0.0
     if experiment['kind'] == 'compute':
         c = experiment['compute']
@@ -159,6 +187,18 @@ def _program(program: object, field: str) -> None:
         )
 
 
+def _twod(t: object) -> None:
+    _require(isinstance(t, dict) and t.get('op') in ('fill', 'scale'), 'twod is an object whose op is fill or scale')
+    color = t.get('color', [0, 0, 0, 0])
+    _require(isinstance(color, list) and len(color) == 4, 'twod.color is four words')
+    for c in color:
+        _count(c, 0, 0xFFFFFFFF, 'twod.color')
+    for field in ('fmt2d', 'colorFormat'):
+        _count(t.get(field, 0), 0, 255, f'twod.{field}')
+    for field in ('du', 'dv', 'sx', 'sy'):
+        _count(t.get(field, 0), 0, (1 << 63) - 1, f'twod.{field}')
+
+
 def validate_experiment(e: dict) -> None:
     _require(isinstance(e, dict), 'an experiment is an object')
     _require(isinstance(e.get('id'), str) and bool(NAME.match(e['id'])), f'id {e.get("id")!r}')
@@ -175,6 +215,11 @@ def validate_experiment(e: dict) -> None:
     clear = e.get('clear', [0, 0, 0, 0])
     _require(isinstance(clear, list) and len(clear) == 4, 'clear is four floats')
     _require(e.get('readback', 'summary') in READBACK, 'readback is none, summary or full')
+    if 'template' in e:
+        _require(
+            isinstance(e['template'], str) and bool(TEMPLATE.match(e['template'])) and int(e['template'], 16) != 0,
+            "template is a pack state's key hash, 16 hex digits",
+        )
     if 'fill' in e:
         fill = unb64(e['fill'])
         _require(len(fill) == target.width * target.height * target.texel_bytes, 'fill is the whole target, packed')
@@ -189,11 +234,15 @@ def validate_experiment(e: dict) -> None:
             for n in v:
                 _count(n, 1, hi, f'compute.{field}')
         _require(c['threads'][0] * c['threads'][1] * c['threads'][2] <= MAX_THREADS, 'compute.threads > 1024')
+    if e['kind'] == 'twod':
+        _twod(e.get('twod'))
     if e['kind'] == 'readback':
         _pairs(e.get('methods', []), 'methods')
         _pairs(e.get('restore', []), 'restore')
+        _require(e.get('targets', 0) in (0, 1), 'targets is 1 (colour 0 bound alone) or left out')
     else:
         _require('methods' not in e and 'restore' not in e, 'only readback experiments set methods')
+        _require('targets' not in e, 'only readback experiments choose their targets')
     _require(
         estimated_ms(e) <= MAX_COMMAND_BUFFER_MS, f'{e["id"]}: a command buffer would take {estimated_ms(e):.1f} ms'
     )

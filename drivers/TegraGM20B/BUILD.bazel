@@ -81,6 +81,8 @@ kernel_driver(
         "gpu_clock.c",
         "gpu_mem.c",
         "gpu_hang.c",
+        "gpu_describe.c",
+        "gpu_acquire.c",
         "gpu_stats.c",
         "gpu_stats_tick.c",
         "gpu_chan.c",

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
+#include "raw_parallel.h"
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
 
@@ -198,10 +199,7 @@ static void giveRecording(RMCommandBuffer *b)
         if (cmd.op == OpEnd && _encOpen)
             _plan.prepareRange(_encAt, _plan.size());
     }
-    const size_t consumed = cmd.op == OpViewport || cmd.op == OpDispatch       ? 6
-                            : cmd.op == OpBlendColor                           ? 4
-                            : cmd.op == OpDepthBias || cmd.op == OpDrawIndexed ? 3
-                                                                               : 0;
+    const size_t consumed = raw::extraWords(cmd.op);
     if (consumed && cmd.x + consumed == _extra.size())
         _extra.resize(cmd.x);
 }
@@ -446,6 +444,9 @@ static void giveRecording(RMCommandBuffer *b)
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    glassProbeCommitted(self);
+#endif
     [(RMDevice *)_device rmCommit:self];
 #if SWITCH_FRAME_TIMELINE
     _frame.mark(switch_frame::Back);

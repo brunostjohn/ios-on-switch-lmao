@@ -4,9 +4,10 @@
  */
 
 /*
- * The raw path's draw macros (ABI v2: slots 11-16, R1 the first argument, no shadow scratch, constant buffer 0 left
- * selected), built with Mesa's MME builder. The slots are the ones NVK's draw macros take, so a push profile that counts
- * NVK's draw calls counts the raw path's too. The instance loops are NVK's pre-Pascal nvk_mme_build_draw_loop and
+ * The raw path's macros (ABI v4: draws at slots 11-16, R1 the first argument, constant buffer 0 left selected; the colour
+ * matrix's at 17; the indirect command buffers' at 18-21, whose range is in two shadow scratch words), built with Mesa's
+ * MME builder. The draw slots are the ones NVK's draw macros take, so a push profile that counts NVK's draw calls counts
+ * the raw path's too. The instance loops are NVK's pre-Pascal nvk_mme_build_draw_loop and
  * nvk_mme_build_draw_indexed_loop (src/nouveau/vulkan/nvk_cmd_draw.c, commit 77452b9092cc), with their Turing and
  * Pascal branches dropped; the calling convention around them is raw's (drivers/TegraGM20BMetal/raw/runtime/raw_mme.h),
  * and a zero instance count skips the loop, which on Fermi's MME tests its condition at the end.
@@ -22,6 +23,12 @@
 #include "nv_push_cl9097.h"
 #include "nv_push_clb197.h"
 #include "nv_push_clc597.h"
+
+/* Shadow scratch words no NVK macro the channel runs reads (NVK's own end at NVK_MME_NUM_SCRATCH, about 100) */
+enum {
+    SWITCH_GM20B_SCRATCH_ICB_LOCATION = 120,
+    SWITCH_GM20B_SCRATCH_ICB_LENGTH = 121
+};
 
 /* mme_tu104.c's disassembler names Turing's methods; this tool builds Fermi macros and prints none */
 const char *P_PARSE_NVC597_MTHD(uint16_t idx)
@@ -106,12 +113,10 @@ static void build_direct_params(struct mme_builder *b, bool indexed)
     }
 }
 
-/* Metal's indirect arguments, in Vulkan's order: the count, instances, first vertex or index, (vertex offset,) first
- * instance. The root table's base vertex and instance, then the base registers, then the draws. */
-static void build_indirect(struct mme_builder *b, bool indexed)
+/* Metal's indirect arguments after their count and instances, in Vulkan's order: first vertex or index, (vertex offset,)
+ * first instance. The root table's base vertex and instance, then the base registers, then the draws. */
+static void build_indirect_body(struct mme_builder *b, bool indexed, struct mme_value count, struct mme_value instances)
 {
-    struct mme_value count = mme_load(b);
-    struct mme_value instances = mme_load(b);
     struct mme_value first = mme_load(b);
     struct mme_value base = mme_load(b);
     struct mme_value base_instance = indexed ? mme_load(b) : base;
@@ -142,6 +147,13 @@ static void build_indirect(struct mme_builder *b, bool indexed)
                                     indexed ? NVB197_SET_INDEX_BUFFER_F : NVB197_SET_VERTEX_ARRAY_START);
         }
     }
+}
+
+static void build_indirect(struct mme_builder *b, bool indexed)
+{
+    struct mme_value count = mme_load(b);
+    struct mme_value instances = mme_load(b);
+    build_indirect_body(b, indexed, count, instances);
 }
 
 /* Core Animation's colour matrix blend (vcm) on the iterated blend unit, fetch rung 3
@@ -273,6 +285,60 @@ static void build_vcm_constants(struct mme_builder *b, bool unused)
     mme_emit(b, mme_imm(3));
 }
 
+/* An indirect command buffer's range, as an MTLIndirectCommandBufferExecutionRange (location, length), into the shadow
+ * scratch words the gated draws read */
+static void build_icb_range(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value location = mme_load(b);
+    struct mme_value length = mme_load(b);
+    mme_mthd(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LOCATION));
+    mme_emit(b, location);
+    mme_emit(b, length);
+}
+
+/* An indirect command: its index in its buffer, then an indirect draw's arguments. Outside the range in scratch (index -
+ * location unsigned not below length) its instance count is zero, so it loads its arguments and draws nothing: the mask is
+ * the borrow of (index - location) - length, all ones where it is below. Fermi's MME compares for equality alone. */
+static void build_icb_draw(struct mme_builder *b, bool indexed)
+{
+    struct mme_value index = mme_load(b);
+    struct mme_value location = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LOCATION));
+    mme_sub_to(b, index, index, location);
+    mme_free_reg(b, location);
+    struct mme_value length = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LENGTH));
+    struct mme_value64 below = mme_sub64(b, mme_value64(index, mme_zero()), mme_value64(length, mme_zero()));
+    mme_free_reg(b, index);
+    mme_free_reg(b, length);
+    mme_free_reg(b, below.lo);
+    struct mme_value count = mme_load(b);
+    struct mme_value instances = mme_load(b);
+    mme_and_to(b, instances, instances, below.hi);
+    mme_free_reg(b, below.hi);
+    build_indirect_body(b, indexed, count, instances);
+}
+
+/* An indirect command buffer's dispatch: its index. The global render enable, which the compute class's launches obey
+ * (NVK's conditional rendering of dispatches), is TRUE inside the range in scratch and FALSE outside it, from the same
+ * borrow as build_icb_draw's; the execute sets it TRUE again after its commands. */
+static void build_icb_gate(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value index = mme_load(b);
+    struct mme_value location = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LOCATION));
+    mme_sub_to(b, index, index, location);
+    mme_free_reg(b, location);
+    struct mme_value length = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LENGTH));
+    struct mme_value64 below = mme_sub64(b, mme_value64(index, mme_zero()), mme_value64(length, mme_zero()));
+    mme_free_reg(b, index);
+    mme_free_reg(b, length);
+    mme_free_reg(b, below.lo);
+    mme_and_to(b, below.hi, below.hi, mme_imm(NVB197_SET_GLOBAL_RENDER_ENABLE_C_MODE_TRUE));
+    mme_mthd(b, NVB197_SET_GLOBAL_RENDER_ENABLE_C);
+    mme_emit(b, below.hi);
+    mme_free_reg(b, below.hi);
+}
+
 static void write_macro(FILE *out, const char *name, void (*build)(struct mme_builder *, bool), bool indexed,
                         const struct nv_device_info *dev)
 {
@@ -308,13 +374,19 @@ int main(int argc, char **argv)
     fprintf(out,
             "// Generated by kits/SwitchGM20BEmit/mme/switch_gm20b_macros.c with Mesa's MME builder: do not edit.\n"
             "#ifndef SWITCH_GM20B_MACROS_H\n#define SWITCH_GM20B_MACROS_H\n\n#include <stdint.h>\n\n"
-            "// The raw path's macro slots (ABI v3): NVK's draw macros' slots, then the colour matrix's\nenum {\n"
+            "// The raw path's macro slots (ABI v4): NVK's draw macros' slots, the colour matrix's, then the indirect command\n"
+            "// buffers'\nenum {\n"
             "    SWITCH_GM20B_MACRO_DRAW = 11,\n    SWITCH_GM20B_MACRO_DRAW_INDEXED,\n"
             "    SWITCH_GM20B_MACRO_INDIRECT,\n    SWITCH_GM20B_MACRO_INDEXED_INDIRECT,\n"
             "    SWITCH_GM20B_MACRO_DRAW_PARAMS,\n    SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS,\n"
-            "    SWITCH_GM20B_MACRO_VCM_CONSTANTS,\n};\n"
+            "    SWITCH_GM20B_MACRO_VCM_CONSTANTS,\n    SWITCH_GM20B_MACRO_ICB_RANGE,\n"
+            "    SWITCH_GM20B_MACRO_ICB_DRAW,\n    SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,\n"
+            "    SWITCH_GM20B_MACRO_ICB_GATE,\n};\n"
             "\n// SWITCH_GM20B_MACRO_VCM_CONSTANTS's arguments: the colour matrix uniform's words\n"
-            "#define SWITCH_GM20B_MACRO_VCM_ARGUMENTS 11u\n");
+            "#define SWITCH_GM20B_MACRO_VCM_ARGUMENTS 11u\n"
+            "\n// The shadow scratch words the indirect command buffer macros keep their range in\n"
+            "enum {\n    SWITCH_GM20B_SCRATCH_ICB_LOCATION = %u,\n    SWITCH_GM20B_SCRATCH_ICB_LENGTH = %u,\n};\n",
+            SWITCH_GM20B_SCRATCH_ICB_LOCATION, SWITCH_GM20B_SCRATCH_ICB_LENGTH);
     write_macro(out, "draw", draw, false, &dev);
     write_macro(out, "draw_indexed", draw, true, &dev);
     write_macro(out, "indirect", build_indirect, false, &dev);
@@ -322,6 +394,10 @@ int main(int argc, char **argv)
     write_macro(out, "draw_params", build_direct_params, false, &dev);
     write_macro(out, "draw_indexed_params", build_direct_params, true, &dev);
     write_macro(out, "vcm_constants", build_vcm_constants, false, &dev);
+    write_macro(out, "icb_range", build_icb_range, false, &dev);
+    write_macro(out, "icb_draw", build_icb_draw, false, &dev);
+    write_macro(out, "icb_draw_indexed", build_icb_draw, true, &dev);
+    write_macro(out, "icb_gate", build_icb_gate, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

@@ -234,6 +234,8 @@ TEST(EmitMme, TheMacrosTakeNvksDrawSlots)
     EXPECT_EQ(SWITCH_GM20B_MACRO_DRAW, 11);
     EXPECT_EQ(SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, 16);
     EXPECT_EQ(SWITCH_GM20B_MACRO_VCM_CONSTANTS, 17);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_ICB_RANGE, 18);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_ICB_GATE, 21);
 }
 
 TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
@@ -241,7 +243,9 @@ TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
     const size_t words = count(switch_gm20b_macro_draw) + count(switch_gm20b_macro_draw_indexed) +
                          count(switch_gm20b_macro_indirect) + count(switch_gm20b_macro_indexed_indirect) +
                          count(switch_gm20b_macro_draw_params) + count(switch_gm20b_macro_draw_indexed_params) +
-                         count(switch_gm20b_macro_vcm_constants);
+                         count(switch_gm20b_macro_vcm_constants) + count(switch_gm20b_macro_icb_range) +
+                         count(switch_gm20b_macro_icb_draw) + count(switch_gm20b_macro_icb_draw_indexed) +
+                         count(switch_gm20b_macro_icb_gate);
     EXPECT_LE(words, 2048u);
 }
 

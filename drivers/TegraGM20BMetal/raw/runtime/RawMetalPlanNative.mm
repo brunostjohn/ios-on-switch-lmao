@@ -130,6 +130,8 @@ __attribute__((objc_externally_retained)) void encodePlannedState(RMCommandBuffe
         raw::applyRenderState(cb->_plan, cb->_plan.draw(at).state, cursor, sink);
     else if (op == OpDispatch)
         raw::applyKernelState(cb->_plan, cb->_plan.dispatch(at).state, cursor, sink);
+    else if (op == OpExecuteKernels && cb->_plan.control(at).compute != raw::kNoSnapshot)
+        raw::applyKernelState(cb->_plan, cb->_plan.control(at).compute, cursor, sink);
     else if (op == OpRender || op == OpCompute || op == OpEnd)
         cursor.reset();
 }

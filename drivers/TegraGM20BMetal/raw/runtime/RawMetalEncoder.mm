@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import "RawMetalRotated.h"
 
@@ -97,6 +98,8 @@ uint64_t nextTraceId()
     if (_ended)
         return;
     _ended = true;
+    if (!_counterPending.empty())
+        rmPlaceCounterMarks(_cb, self, _cb->_plan.size(), false);
     [_cb record:cmd(OpEnd)];
     _cb->_active = nil;
 }
@@ -178,13 +181,25 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 
 // A resolve the raw path draws after the pass (the pack's resolve state of its format, RawMetalEncode.mm): of a multisampled
 // attachment into level, slice and depth plane 0 of a one-sample 2D texture of its format the raw path renders to
-static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *from)
+// A probe's command buffer that resolves by the 2D engine (hw_test_app gpu.x1.twod_resolve) needs no resolve state
+static bool resolvesByTwoD(RMCommandBuffer *cb, uint32_t format)
+{
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    return cb->_probeForms.resolveTwoD && raw::probeTwodFormat(format);
+#else
+    (void)cb, (void)format;
+    return false;
+#endif
+}
+
+static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescriptor *a, RMTexture *from)
 {
     RMTexture *r = (RMTexture *)a.resolveTexture;
     return from->_raw.samples > 1 && [(id)r isKindOfClass:[RMTexture class]] && r->_rawOk &&
            (r->_raw.renderable || r->_raw.shadowTarget) && !r->_raw.planar && !r->_raw.ycbcr &&
            r->_raw.type == raw::fx::kTexTwoD && r->_raw.samples == 1 && r->_raw.format == from->_raw.format &&
-           !a.resolveLevel && !a.resolveSlice && !a.resolveDepthPlane && gRM->raw->resolvePipeline(from->_raw.format);
+           !a.resolveLevel && !a.resolveSlice && !a.resolveDepthPlane &&
+           (gRM->raw->resolvePipeline(from->_raw.format) || resolvesByTwoD(cb, from->_raw.format));
 }
 
 @implementation RMCommandBuffer (Encoders)
@@ -249,7 +264,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c | uint64_t(a.loadAction) << 8);
         } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
-                   (pass.colorAttachments[c].resolveTexture && !rawResolve(pass.colorAttachments[c], x)) ||
+                   (pass.colorAttachments[c].resolveTexture && !rawResolve(self, pass.colorAttachments[c], x)) ||
                    (x->_raw.type != raw::fx::kTexTwoD && x->_raw.type != raw::fx::kTexOneD) ||
                    (pass.colorAttachments[c].level &&
                     (!x->_raw.chain || pass.colorAttachments[c].level >= x->_raw.chain->layout.levels))) {
@@ -300,7 +315,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
     [self retain:pass.visibilityResultBuffer];
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
     if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap ||
-        (positions && !passSamplePositions(pass, e->_samples, facts.positions))) {
+        (positions && !passSamplePositions(pass, positions, e->_samples, facts.positions))) {
         [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
         hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
     }
@@ -308,6 +323,8 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
     m.obj = (__bridge void *)pass;
     m.x = e->_passAt;
     [self record:m];
+    rmCounterMarks(self, e, pass);
+    rmPlaceCounterMarks(self, e, _encAt, true);
     return (id<MTLRenderCommandEncoder>)e;
 }
 
@@ -321,8 +338,10 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
 
 - (id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:(MTLBlitPassDescriptor *)d
 {
-    (void)d;
-    return [self blitCommandEncoder];
+    RMBlitEncoder *e = (RMBlitEncoder *)[self blitCommandEncoder];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLBlitCommandEncoder>)e;
 }
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
@@ -343,7 +362,10 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:(MTLComputePassDescriptor *)d
 {
-    return [self computeCommandEncoderWithDispatchType:d.dispatchType];
+    RMComputeEncoder *e = (RMComputeEncoder *)[self computeCommandEncoderWithDispatchType:d.dispatchType];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLComputeCommandEncoder>)e;
 }
 
 @end

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
+#import "RawMetalIndirect.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -31,7 +33,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     const uint64_t generation = d.channelGeneration();
     rc->internalCompletion();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    rc->forceWholePrograms(cb->_forceWholePrograms);
+    rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
@@ -92,6 +94,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
+    RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
@@ -190,11 +193,14 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             p.width = width;
             p.height = height;
             useTexture(rc, r.into, true);
+            raw::Pipeline *resolve = d.resolvePipeline(r.into->_raw.format);
+            if (!resolve)
+                return fail(PredEncPassRender, "a resolve format with no resolve state", r.attachment);
             raw::RenderEncoder *e = rc->render(p);
             if (!e)
                 return fail(PredEncPassRender, "a resolve texture the raw path cannot render", r.attachment);
             const uint32_t samples = from[r.attachment]->samples;
-            e->setPipeline(d.resolvePipeline(r.into->_raw.format));
+            e->setPipeline(resolve);
             e->setTexture(0, from[r.attachment]);
             e->setBytes(2, 0, &samples, sizeof samples);
             if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -373,7 +379,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     RAW_ENCODE_BEGIN(loopSpan, Loop);
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
-        if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit)
+        if ((c.op == OpRender && !rmContinuesPass(cb, at)) || c.op == OpCompute || c.op == OpBlit)
             encoder = at;
         if (c.op == OpDispatch) {
             RAW_ENCODE_SPAN(Compute);
@@ -437,6 +443,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
+            counters.started(at, *ce);
             break;
         case OpRender: {
             RAW_ENCODE_SPAN(Pass);
@@ -452,11 +459,16 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 planSplitPrograms(cb, at, *re);
                 break;
             }
-            if (cb->_sampledShadows)
-                refresh(at);
-            if (cb->_standIns && !standIns(at))
-                return false;
             raw::PassDesc p;
+            for (size_t sub = at; sub == at || (sub < to && rmContinuesPass(cb, sub));
+                 sub = cb->_plan.encoderEnd(sub)) {
+                if (cb->_sampledShadows)
+                    refresh(sub);
+                if (cb->_standIns && !standIns(sub))
+                    return false;
+                p.storageMask |= passStorageMask(cb, sub);
+                p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
+            }
             for (unsigned j = 0; j < 8; j++) {
                 const RMPass::Color &a = pass.color[j];
                 __unsafe_unretained RMTexture *t = (RMTexture *)a.texture;
@@ -517,7 +529,6 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
-            p.storageMask = passStorageMask(cb, at);
             p.positions = pass.positions;
             for (__unsafe_unretained RMTexture *t : standInLoads)
                 if (standInPass(t, false))
@@ -525,6 +536,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             standInLoads.clear();
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
             break;
         }
@@ -535,18 +547,26 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (o.at == at)
                     be->probe(o.op, o.read ? &o.read->_raw : nullptr, o.written->_raw);
 #endif
+            counters.started(at, *be);
             break;
         case OpEnd:
             if (re)
                 re->finishVisibility();
             if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender) {
-                // the next pass's facts are the next boundary's first pass's
-                const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
-                fused = fusionPass(cb, at + 1);
-                fusedAt = at + 1;
-                if (raw::canFusePasses(first, fused)) {
+                if (rmContinuesPass(cb, at + 1)) {
                     continuing = true;
                     break;
+                }
+                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && !counters.at(at) &&
+                    !counters.at(at + 1)) {
+                    // the next pass's facts are the next boundary's first pass's
+                    const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
+                    fused = fusionPass(cb, at + 1);
+                    fusedAt = at + 1;
+                    if (raw::canFusePasses(first, fused)) {
+                        continuing = true;
+                        break;
+                    }
                 }
             }
             if (re)
@@ -563,6 +583,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (standInPass(t, true))
                     return false;
             standInStores.clear();
+            counters.ended(at);
             re = nullptr;
             be = nullptr;
             break;
@@ -607,16 +628,18 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 return refused();
             break;
         }
+        case OpExecuteCommands:
+            if (!encodeCommands(re, rc, cb->_plan.draw(at), why))
+                return refused();
+            break;
+        case OpResetCommands:
+        case OpCopyCommands:
+            encodeCommandsBlit(be, c);
+            break;
         case OpMipmaps: {
             RAW_ENCODE_SPAN(Blit);
-            if (!((__bridge RMTexture *)c.obj)->_raw.chain->fmt2d) {  // the 3D engine's passes (decided at record)
-                be->end();
-                if (!mipPasses(rc, (__bridge RMTexture *)c.obj, why))
-                    return refused();
-                be = rc->blit();
-                break;
-            }
-            encodeBlit(cb, c, rc, be, fresh, standInFresh);
+            if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, uint32_t(c.c), be, why))
+                return refused();
             break;
         }
         case OpCopyTexture:
