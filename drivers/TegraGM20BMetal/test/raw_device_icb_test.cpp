@@ -35,6 +35,17 @@ struct Channel {
     std::vector<uint32_t> arguments;
     size_t consumed = 0;
     std::vector<Draw> draws;
+    std::map<uint32_t, uint32_t> calls;  // macro slot: calls, for a failure's message
+    size_t words = 0;
+
+    std::string summary() const
+    {
+        std::string out = std::to_string(words) + " words; macro calls";
+        for (const auto &[slot, n] : calls)
+            out += " " + std::to_string(slot) + "x" + std::to_string(n);
+        return out + "; range " + std::to_string(scratch[raw::mme::kScratchLocation]) + "+" +
+               std::to_string(scratch[raw::mme::kScratchLength]);
+    }
 
     // The word the GPU reads at `at`: the last constant buffer load there, else what the CPU wrote (the model's memory)
     uint32_t word(uint64_t at) const
@@ -116,6 +127,7 @@ struct Channel {
 
     void macro(uint32_t slot)
     {
+        calls[slot]++;
         namespace mme = raw::mme;
         const std::map<uint32_t, mme::Program> programs = {{mme::kDraw, mme::kDrawProgram},
                                                            {mme::kDrawIndexed, mme::kIndexedProgram},
@@ -140,6 +152,7 @@ struct Channel {
     // Headers as raw_push.h writes them: 1 INC, 3 NON_INC, 4 IMMD, 5 ONE_INC; other subchannels' methods pass by
     void run(const std::vector<uint32_t> &w)
     {
+        words += w.size();
         for (size_t i = 0; i < w.size();) {
             const uint32_t h = w[i++], op = h >> 29, count = h >> 16 & 0x1fff, subc = h >> 13 & 7, m = (h & 0xfff) << 2;
             if (op == 4) {
@@ -271,9 +284,10 @@ protected:
 
     raw::RenderEncoder::IcbExecute execute(uint32_t at, uint32_t count, uint32_t words, uint32_t primitive)
     {
-        static const raw::Buffer *const reads[] = {&first, &second};
         return {&slots, at, count, words, nullptr, 0, primitive, false, false, reads, 2};
     }
+
+    const raw::Buffer *reads[2] = {&first, &second};
 };
 
 void expectDrawn(const Channel::Draw &d, const raw::icb::PatchDraw &command)
@@ -300,7 +314,7 @@ TEST_F(DeviceIcb, EachPatchCommandDrawsWithItsOwnFactorsAndControlWords)
         EXPECT_TRUE(e.executeSlots(execute(0, 2, raw::icb::kPatchSlotWords, raw::icb::kPatchPrimitive), &refused))
             << (refused ? refused : "");
     });
-    ASSERT_EQ(c.draws.size(), 5u);
+    ASSERT_EQ(c.draws.size(), 5u) << c.summary();
     expectDrawn(c.draws[0], a);
     expectDrawn(c.draws[1], b);
     expectDrawn(c.draws[3], a);
@@ -328,7 +342,7 @@ TEST_F(DeviceIcb, APatchCommandOutsideTheRangeDrawsNothing)
         raw::RenderEncoder::IcbExecute x = execute(1, 1, raw::icb::kPatchSlotWords, raw::icb::kPatchPrimitive);
         EXPECT_TRUE(e.executeSlots(x, &refused)) << (refused ? refused : "");
     });
-    ASSERT_EQ(c.draws.size(), 1u);
+    ASSERT_EQ(c.draws.size(), 1u) << c.summary();
     expectDrawn(c.draws[0], b);
 }
 
@@ -367,7 +381,7 @@ TEST_F(DeviceIcb, AnExecuteUnderAmplificationDrawsItsRangeOncePerAmplification)
             << (refused ? refused : "");
         EXPECT_TRUE(e.draw(kTriangle, 0, 3, 1, 0, &refused)) << (refused ? refused : "");
     });
-    ASSERT_EQ(c.draws.size(), 4u + 2u);
+    ASSERT_EQ(c.draws.size(), 4u + 2u) << c.summary();
     const uint32_t ids[] = {0, 0, 1, 1, 0, 1};
     for (size_t i = 0; i < c.draws.size(); i++)
         EXPECT_EQ(c.draws[i].amplification, ids[i]) << i;
