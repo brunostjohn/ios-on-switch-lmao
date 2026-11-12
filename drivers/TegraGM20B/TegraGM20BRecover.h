@@ -310,6 +310,17 @@ static inline int tgm_pbdma_acquiring(uint32_t method0, uint32_t data0)
  * gives the promise up at about TGM_PRESENT_NS (1 s), when a watched present gives its promise up. */
 #define TGM_PROMISE_FIRST_LOOK_NS (TGM_STUCK_NS + 10ull * 1000 * 1000)
 
+/* The next hang check of a wait (tgm_chan_check_progress). One whose channel acquires an unkept writer promise is
+ * looked at as a present's is (TGM_PROMISE_FIRST_LOOK_NS, then TGM_STUCK_NS after its first strike): its promise is
+ * given up at about 1 s. Any other wait keeps its period, hang_ns. Keyed on what the wait is on, never on how long it
+ * has waited. */
+static inline uint64_t tgm_hang_check_interval(int waits_promise, uint32_t strikes, uint64_t hang_ns)
+{
+	if (!waits_promise)
+		return hang_ns;
+	return strikes ? TGM_STUCK_NS : TGM_PROMISE_FIRST_LOOK_NS;
+}
+
 static inline int tgm_stuck(int dead, uint32_t completed, uint32_t submitted, uint64_t now,
 			    uint64_t progress_ns)
 {

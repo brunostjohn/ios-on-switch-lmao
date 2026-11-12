@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// A fence-only present parked on a writer promise nobody keeps, from its deadline to the panel: the deadline's looks and
-// re-arms (gpu_present_deadline.c), the hang rule's strikes (tgm_hang_confirm, tgm_hang_blame), its raise
-// (switch_gpu_promise_waits_release) with gpu_promise.c's step handling, the PROMISE token's status
-// (SwitchGpuWriterPromise.cpp) and the display's handling of TEGRA_SCANOUT_SOURCE_LOST (dropLostFrame keeps the frame on
-// the panel). A real hang of the present's producer is the control.
+// A present or a wait parked on a writer promise nobody keeps, from its first look to the panel: the present
+// deadline's looks and re-arms (gpu_present_deadline.c) and a wait's hang checks (tgm_hang_check_interval), the hang
+// rule's strikes (tgm_hang_confirm, tgm_hang_blame), its raise (switch_gpu_promise_waits_release) with gpu_promise.c's
+// step handling, the PROMISE token's status (SwitchGpuWriterPromise.cpp) and the display's handling of
+// TEGRA_SCANOUT_SOURCE_LOST (dropLostFrame keeps the frame on the panel). A real hang, not on a promise, is the
+// control.
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@ namespace
 {
 constexpr uint64_t kMs = 1000 * 1000;
 constexpr uint64_t kPresentNs = 1000 * kMs;  // TGM_PRESENT_NS: the deadline, and its re-arm after a look
+constexpr uint64_t kHangNs = 2000 * kMs;     // TGM_HANG_NS: a wait's hang check period
 constexpr uint32_t kOffset = 2052, kValue = 9;
 constexpr int kSourceLost = -5;
 
@@ -123,6 +125,13 @@ protected:
 		next = TGM_PROMISE_FIRST_LOOK_NS;
 	}
 
+	// tgm_chan_check_progress of a wait on the channel (a fence wait, the bridge's): its next check, then the look
+	enum tgm_hang waitCheck()
+	{
+		now += tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word), p.strikes, kHangNs);
+		return p.look();
+	}
+
 	enum tgm_hang deadline()
 	{
 		now += next;
@@ -171,6 +180,36 @@ TEST_F(Strike, APresentBehindAProducerParkedOnAPromiseGivesUpAtOneSecond)
 	ASSERT_EQ(p.lines.size(), 1u);
 	EXPECT_EQ(p.finishComposite(), 0);
 	EXPECT_EQ(p.shown, 1);
+}
+
+// A client's own wait on its job parked on the promise (a Metal blit's fence wait, VIC's bridge) checks as a present
+// does: struck at 0.51 s and given up at 1.01 s, one line, not after two TGM_HANG_NS checks.
+TEST_F(Strike, AWaitOnAJobParkedOnAPromiseGivesUpAtOneSecond)
+{
+	p.producerParked = true;
+	parkOnThePromise();
+	EXPECT_EQ(waitCheck(), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS);
+	EXPECT_TRUE(p.lines.empty());
+	EXPECT_EQ(waitCheck(), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS + TGM_STUCK_NS);
+	ASSERT_EQ(p.lines.size(), 1u);
+	EXPECT_EQ(tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word), p.strikes, kHangNs), kHangNs)
+		<< "a raised word is no longer a promise wait";
+}
+
+// A wait on a client stuck on its own work, no promise: its checks keep TGM_HANG_NS, struck at 2 s and recovered at
+// 4 s.
+TEST_F(Strike, APlainStuckClientStillTakesTwoChecksTwoSecondsApart)
+{
+	p.producerHung = true;
+	EXPECT_EQ(waitCheck(), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(now, kHangNs);
+	EXPECT_EQ(waitCheck(), TGM_HANG_RECOVERING);
+	EXPECT_EQ(now, 2 * kHangNs);
+	EXPECT_TRUE(p.lines.empty());
+	EXPECT_EQ(tgm_hang_check_interval(0, 0, kHangNs), kHangNs);
+	EXPECT_EQ(tgm_hang_check_interval(0, 1, kHangNs), kHangNs);
 }
 
 // A real hang, not on a promise: the producer is struck at the deadline and again a whole deadline later (2 s), then

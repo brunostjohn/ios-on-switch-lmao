@@ -63,9 +63,9 @@ final class PromiseSafetyCancel: @unchecked Sendable {
 ///   so the display's present waits behind that job. Its deadline's first look comes once the job has been stuck for
 ///   TGM_STUCK_NS, as the job's acquires include the promise, and the next TGM_STUCK_NS later gives it up
 ///   (gpu_present_deadline.c): composite_ms about 1010.
-/// - copy: the Metal device's blit of the surface (another connection's job). Its own wait's hang checks come every
-///   TGM_HANG_NS (2 s), so the confirmed strike is the second: copy_ms about 4000. After the raise the parked channel
-///   must see the CPU-written word within one strike (raise_to_end_ms under TGM_STUCK_NS), the hang rule's DSB.
+/// - copy: the Metal device's blit of the surface (another connection's job). Its own wait's hang checks key on the
+///   promise as the present's deadline does (tgm_hang_check_interval): copy_ms about 1010. After the raise the parked
+///   channel must see the CPU-written word within one strike (raise_to_end_ms under TGM_STUCK_NS), the hang rule's DSB.
 ///   Alongside it a CPU lock of the surface sleeps behind the same promise; the give-up wakes it, with no cancel or
 ///   close, and it reads the frame before (cpu_reader_woken_ms about copy_ms).
 /// Each gives up exactly one promise (d_abandoned 1).
@@ -75,7 +75,7 @@ struct PromiseUnkeptPathTest: GPUPathTest {
     let counters = ["writer_promises", "promise_waits"]
     static let size = 64
     static let fill: [UInt8] = [0, 0, 255, 255]  // BGRA red: the frame before the promised one
-    static let compositeLimitMs = 1200.0, copyLimitMs = 4800.0, oneStrikeMs = 500.0, safetySeconds = 8.0
+    static let compositeLimitMs = 1200.0, copyLimitMs = 1200.0, oneStrikeMs = 500.0, safetySeconds = 8.0
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let rowBytes = Self.size * 4

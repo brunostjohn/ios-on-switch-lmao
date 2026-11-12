@@ -8,9 +8,9 @@ import Metal
 /// (drivers/TegraGM20B/SwitchGpuWriterPromise.h): the release is a store to the write-combined fence page, which the
 /// parked PBDMA reads from DRAM only once a DSB has completed it. Repeats gpu.path.promise_cancel's park and cancel
 /// rounds times: the Metal device's blit of a surface the test's connection promised parks on the promise's word, and
-/// 5 ms later the test cancels the promise. A release the GPU never saw would leave its copy parked until the copy's
-/// own hang checks (TGM_HANG_NS apart) gave the promise up, so each copy must end within lostMs of its cancel (lost:
-/// those that did not, judged zero), and the releases counted (promise_cpu_releases) must equal the copies that ended.
+/// 5 ms later the test cancels the promise. A release the GPU never saw would leave its copy parked past it, so each
+/// copy must end within lostMs of its cancel (lost: those that did not, judged zero), and the releases counted
+/// (promise_cpu_releases) must equal the copies that ended.
 /// gpu.path.promise_unkept judges the hang rule's own raise the same way (raise_to_end_ms).
 struct PromiseReleaseOrderPathTest: GPUPathTest {
     let id = "gpu.path.promise_release_order"

@@ -215,6 +215,14 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
 	// a producer the present waits for whose own acquires include an unkept promise counts too, read without a
 	// timeline's status under tgm_live_lock
+	// a wait's hang checks take one interval rule (tgm_hang_check_interval): TGM_HANG_NS unless the waited channel
+	// acquires an unkept promise
+	const std::string progress = Body(unit("gpu_hang.c"), "uint64_t tgm_chan_check_progress(");
+	expectBefore(progress, "u64 interval = check_interval(chan);", "tgm_chan_stalled(chan, who, seqno, stalled);");
+	EXPECT_EQ(Count(progress, "TGM_HANG_NS"), 0u);
+	EXPECT_THAT(Body(unit("gpu_hang.c"), "static u64 check_interval("),
+		    HasSubstr("tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes), "
+			      "TGM_HANG_NS)"));
 	const std::string waits = Body(unit("gpu_promise.c"), "int tgm_present_waits_promise(");
 	expectBefore(waits, "switch_gpu_present_tokens_promised(tokens)", "mutex_lock(&tgm_live_lock);");
 	expectBefore(waits, "switch_gpu_backing_token_status(", "mutex_lock(&tgm_live_lock);");

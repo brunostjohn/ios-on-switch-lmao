@@ -4,12 +4,18 @@
 #include "../../kits/SwitchLinux/SwitchLinux.h"
 
 /* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
+static u64 check_interval(const struct tgm_chan *chan)
+{
+	return tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes), TGM_HANG_NS);
+}
+
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
 {
 	u32 done = tgm_chan_completed(chan);
 	u64 now = nvxnu_nanotime();
 	u64 since = READ_ONCE(chan->stall_ns);
 	u64 held = tgm_hold_held_ns(chan->chid, now);
+	u64 interval = check_interval(chan);
 	u64 stalled = 0;
 
 	if ((s32)(done - chan->submitted) >= 0) {
@@ -20,15 +26,15 @@ uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_
 		WRITE_ONCE(chan->stall_done, done);
 		WRITE_ONCE(chan->stall_held, held);
 		WRITE_ONCE(chan->stall_ns, now);
-		return TGM_HANG_NS;
+		return interval;
 	}
 	stalled = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
-	if (stalled < TGM_HANG_NS)
-		return TGM_HANG_NS - stalled;
+	if (stalled < interval)
+		return interval - stalled;
 	tgm_chan_stalled(chan, who, seqno, stalled);
 	WRITE_ONCE(chan->stall_held, held);
 	WRITE_ONCE(chan->stall_ns, now);
-	return TGM_HANG_NS;
+	return check_interval(chan);
 }
 
 int tgm_all_clients(void)
