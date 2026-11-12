@@ -34,7 +34,9 @@ tools alone):
        rawpack.py --split --qc <default.metallib> --corpus <corpus.log> [--ca-names <ca-names/<build>.txt>] --out <dir>
            writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
-           makes one bucket in place: records.bin (its states' and kernels' records) and bucket 0's warm.{out,log}
+                  [--root <dir>]
+           makes one bucket in place: records.bin (its states' and kernels' records) and bucket 0's warm.{out,log};
+           a line's lib= path is under --root (the crawl's root/ with the build's applications), else QuartzCore's
        rawpack.py --link --out <dir> [--stack <hex key>] [--archives <inventory.tsv>] <bucket dir>...
            directlink.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them, with the
            archive inventory's declared states (archives.py)
@@ -93,11 +95,11 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'directpack', 'native-seed', 'libmock_iokit.dylib', 'own.metallib')
-# Another framework's states, and a bundle's or a framework resource library's (their lines keep lib=,
-# tools/gpu/rawpack.py framework_line): the probe loads that library from the crawl's root
+# Another framework's states, a bundle's or a framework resource library's, and our own apps' (their lines keep lib=,
+# tools/gpu/rawpack.py framework_line and app_line): the probe loads that library from the crawl's root
 FRAMEWORK = re.compile(
-    r' lib=/System/Library/(?:(?:Private)?Frameworks/\w+\.framework/default|\S+?\.(?:bundle|framework/Resources)/\S+)'
-    r'\.metallib '
+    r' lib=(?:/System/Library/(?:(?:Private)?Frameworks/\w+\.framework/default'
+    r'|\S+?\.(?:bundle|framework/Resources)/\S+)|/Applications/Switch\w*\.app/default)\.metallib '
 )
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
 LIBRARY = re.compile(r' lib=(\S+)')
@@ -370,7 +372,7 @@ def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> st
     Bucket 0 draws its first state, the warm-up, once on the mock GPU (warm.out, warm.log): the context init and the
     registers every record is laid over (directlink.py).
     """
-    root = library_root(qc)
+    root = env.get('PROBE_LIB_ROOT') or library_root(qc)
     env = dict(env, PROBE_LIB_ROOT=root, PROBE_DATA_LIBS=env.get('PROBE_DATA_LIBS', str(Path(root).parent / 'data')))
     corpus = d / 'corpus.log'
     cache = d / 'cache'
@@ -403,7 +405,10 @@ def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> st
 
 
 def probe_env() -> dict[str, str]:
-    """Give the probe's environment: this process's, less every knob of the stack, plus the probe's own."""
+    """Give the probe's environment: this process's, less every knob of the stack, plus the probe's own.
+
+    PROBE_LIB_ROOT is --root where the command line names one.
+    """
     env = {
         k: v
         for k, v in os.environ.items()
@@ -422,6 +427,8 @@ def probe_env() -> dict[str, str]:
         NMB_ASYNC_PSO_API='0',
         NMB_CACHE_MB='65536',
     )
+    if option('--root', False):
+        env['PROBE_LIB_ROOT'] = str(Path(option('--root')).resolve())
     return env
 
 

@@ -339,11 +339,13 @@ def _seed_raw_pack_impl(ctx):
     corpus_report = ctx.actions.declare_file(named(ctx, "_work/corpus-report.txt"))
     kind = ctx.attr.ipsw[IpswInfo].kind
     archives = [f for f in ctx.files.archives if f.basename == kind + ".tsv"]
+    app_states = [f for f in ctx.files.app_states if f.basename == kind + ".log"]
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = ["corpus", "--corpus", ctx.file.corpus.path, "--out", lines.path, "--report", corpus_report.path] +
-                    ["--build", ctx.attr.ipsw[IpswInfo].build] + ["--archives=" + f.path for f in archives],
-        inputs = [ctx.file.corpus] + archives,
+                    ["--build", ctx.attr.ipsw[IpswInfo].build] + ["--archives=" + f.path for f in archives] +
+                    ["--app-states=" + f.path for f in app_states],
+        inputs = [ctx.file.corpus] + archives + app_states,
         outputs = [lines, corpus_report],
         mnemonic = "MetalRawCorpus",
         progress_message = "Picking the raw pack's corpus lines",
@@ -382,6 +384,7 @@ def _seed_raw_pack_impl(ctx):
         args.add("--nvk", tools.twin)
         args.add("--qc", crawl.qc)
         args.add("--data-dir", crawl.root + "/data")
+        args.add("--root", crawl.root + "/root")
         args.add_all(ctx.files.device_libraries, before_each = "--data")
         args.add("--lines", bucket_corpus)
         args.add("--out", bucket.path)
@@ -449,6 +452,10 @@ seed_raw_pack = rule(
         "ca_names": attr.label_list(
             allow_files = [".txt"],
             doc = "Core Animation states devices named missing (precompile/ca-names/<build>.txt): the IPSW kind's",
+        ),
+        "app_states": attr.label_list(
+            allow_files = [".log"],
+            doc = "our own apps' states the pack holds (precompile/app-states/<build>.log): the IPSW kind's",
         ),
         "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
         "srcs": attr.label_list(allow_files = True, doc = "the generator's modules and QuartzCore tables (raw/pack)"),

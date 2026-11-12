@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.gpu.rawpack import framework_line, library_view, own_build
+from tools.gpu.rawpack import app_line, app_states, framework_line, library_view, own_build, probe_lines
 
 
 class NativeLibraries(unittest.TestCase):
@@ -81,6 +81,33 @@ class Lookups(unittest.TestCase):
     def test_a_bundle_state_links_nothing(self):
         linked = f'| fl c lib={self.BUNDLE} '
         self.assertFalse(framework_line(lines_of(self.BUNDLE, self.BUNDLE, linked)))
+
+
+class AppStates(unittest.TestCase):
+    APP = '/Applications/SwitchHWTest.app/default.metallib'
+    OTHER = '/Applications/SwitchOther.app/default.metallib'
+
+    def test_an_apps_state_is_one_app_library_linking_nothing(self):
+        self.assertTrue(app_line(lines_of(self.APP, self.APP)))
+        for vertex, fragment, linked in [
+            (self.APP, self.OTHER, ''),
+            (self.APP, Lookups.FRAMEWORK, ''),
+            ('/Applications/SwitchHWTest.app/Frameworks/x.metallib',) * 2 + ('',),
+            (self.APP, self.APP, f'| fl c lib={self.APP} '),
+            ('/Applications/MTLReplayer.app/default.metallib',) * 2 + ('',),
+        ]:
+            self.assertFalse(app_line(lines_of(vertex, fragment, linked)), (vertex, fragment, linked))
+
+    def test_the_corpus_takes_no_apps_state_or_kernel(self):
+        shape = 'D ok=1 tg=8,8,1 edge=0,0,0 threads=1 | form=f opt=0 | k {} lib={}  |'
+        framework = shape.format('blur', Lookups.FRAMEWORK)
+        corpus = '\n'.join([lines_of(self.APP, self.APP), shape.format('multiply_add', self.APP), framework])
+        self.assertEqual(probe_lines(corpus), [framework])
+
+    def test_an_app_states_file_is_only_apps_states(self):
+        self.assertEqual(app_states(lines_of(self.APP, self.APP) + '\n\n'), [lines_of(self.APP, self.APP)])
+        with self.assertRaises(SystemExit):
+            app_states(lines_of(Lookups.FRAMEWORK, Lookups.FRAMEWORK))
 
 
 if __name__ == '__main__':

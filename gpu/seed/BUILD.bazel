@@ -111,6 +111,7 @@ metal_seed(
 seed_raw_pack(
     name = "raw_pack",
     srcs = [GM20B_METAL + ":raw_pack_generator"],
+    app_states = [GM20B_METAL + ":app_state_lists"],
     archives = [GM20B_METAL + ":archive_inventories"],
     ca_names = [GM20B_METAL + ":ca_name_lists"],
     corpus = GM20B_METAL + ":precompile/corpus.log",

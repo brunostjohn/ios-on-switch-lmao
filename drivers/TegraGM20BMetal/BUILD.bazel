@@ -301,6 +301,12 @@ filegroup(
     srcs = glob(["precompile/ca-names/*.txt"]),
 )
 
+# Our own apps' render states the raw pack holds, per IPSW kind (//gpu/seed:raw_pack, tools/gpu/rawpack.py app_states).
+filegroup(
+    name = "app_state_lists",
+    srcs = glob(["precompile/app-states/*.log"]),
+)
+
 py_library(
     name = "archives",
     srcs = glob(
