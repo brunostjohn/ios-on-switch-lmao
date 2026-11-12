@@ -2181,6 +2181,12 @@ nak_postprocess_nir(nir_shader *nir,
       OPT(nir, nir_split_conversions, &split_conv_opts);
    }
 
+   /* ios-on-switch-lmao: SM50's seven predicates
+    * (nak_nir_rematerialize_compares.c)
+    */
+   if (nak->sm < 70 && OPT(nir, nak_nir_rematerialize_compares))
+      OPT(nir, nir_opt_dce);
+
    /* Re-materialize load_const instructions in the blocks that use them.
     * This is both a register pressure optimization and a ensures correctness
     * in the presence of all of the control flow modifications we're about to

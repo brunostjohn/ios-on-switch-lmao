@@ -449,6 +449,7 @@ nak_const_offsets(const struct nak_compiler* nak, bool is_graphics)
    }
 }
 
+bool nak_nir_rematerialize_compares(nir_shader *nir);
 bool nak_nir_rematerialize_load_const(nir_shader *nir);
 bool nak_nir_mark_lcssa_invariants(nir_shader *nir);
 bool nak_nir_lower_non_uniform_ldcx(nir_shader *nir, const struct nak_compiler *nak);

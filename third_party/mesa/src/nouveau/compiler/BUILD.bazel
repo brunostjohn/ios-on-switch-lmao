@@ -148,6 +148,7 @@ mesa_cc_library(
         "nak_nir_lower_tex_sm50.c",
         "nak_nir_lower_vtg_io.c",
         "nak_nir_mark_lcssa_invariants.c",
+        "nak_nir_rematerialize_compares.c",
         "nak_nir_rematerialize_load_const.c",
         "//third_party/mesa/src/nouveau/headers:nv_push.c",
     ],
