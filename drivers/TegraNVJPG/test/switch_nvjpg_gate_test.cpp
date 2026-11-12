@@ -357,6 +357,28 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// The stream is the job's: the selector the request came through only names it in a stall line. Two decodes of one
+// picture differ in their PICTURE_INDEX value alone.
+TEST_F(NVJPGGate, TheStreamIsTheSameWhicheverSelectorTheJobCameThrough)
+{
+    TegraNVJPGJob first = decodeJob(), seventh = decodeJob();
+    first.selector = 1;
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&first, &status, nullptr), 0);
+    const std::vector<uint32_t> one = gEngine.streams.back();
+    ASSERT_EQ(tegra_nvjpg_run(&seventh, &status, nullptr), 0);
+    const std::vector<uint32_t> seven = gEngine.streams.back();
+    ASSERT_EQ(one.size(), seven.size());
+    ASSERT_EQ(one.size(), 29u);  // SETCLASS, 9 methods of 3 words for two planes, OP_DONE: T-v3a's 0x74 bytes
+    for (size_t i = 0; i < one.size(); i++) {
+        if (i > 0 && one[i - 1] == NVE7D0_SET_PICTURE_INDEX / 4) {
+            EXPECT_EQ(seven[i], one[i] + 1);
+            continue;
+        }
+        EXPECT_EQ(one[i], seven[i]) << "word " << i;
+    }
+}
+
 TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackRefusesTheNextJob)
 {
     gEngine.stallDecodes = true;
