@@ -1835,6 +1835,7 @@ host_test(
     srcs = [
         "predication_model.h",
         "loop_program.h",
+        "loop_tape.h",
         "raw_loop_continuation_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_loop_copies.cpp",
@@ -2769,6 +2770,50 @@ host_test(
     deps = [
         ":raw_facade_host",
         ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
+# MTLComputeCommandEncoder's predicated loops through the raw facade's submission, each job run by the model GPU
+host_test(
+    name = "raw_facade_loops_test",
+    srcs = [
+        "loop_tape.h",
+        "made_metallib.h",
+        "model_gpu.h",
+        "predication_model.h",
+        "raw_facade_compute.h",
+        "raw_facade_harness.h",
+        "raw_facade_loops_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_host",
+        ":raw_runtime_host",
+        "//kits/SwitchGM20B:classes",
         "//kits/SwitchRefusal:switch_refusal",
     ] + RAW_HOST_DEPS,
 )

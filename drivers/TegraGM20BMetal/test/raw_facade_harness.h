@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -106,43 +107,53 @@ inline std::vector<uint8_t> slot(uint32_t k)
 }
 
 // A pack of this build's version holding the state of `key`: vertex program slot 0, fragment slot 1, each kSlot bytes in
-// the heap section at kHeap, so a page-multiple slot of the pack's own pages
-inline std::string writePack(const std::string &key)
+// the heap section at kHeap, so a page-multiple slot of the pack's own pages; and `kernels`, each with a program slot of
+// its own after those (its `program` set here)
+inline std::string writePack(const std::string &key, std::vector<raw::PackKernel> kernels = {})
 {
-    std::vector<uint8_t> file(kHeap + 2 * kSlot + 0x1000, 0);
+    constexpr uint64_t kPrograms = 0x100, kPipelines = 0x800, kStrings = 0xe00, kKernels = 0x2000;
+    const uint32_t programs = 2 + uint32_t(kernels.size());
+    std::vector<uint8_t> file(kHeap + programs * kSlot + 0x1000, 0);
     raw::PackHeader h = {};
     memcpy(h.magic, "GM20BPK1", 8);
     h.version = raw::kPackVersion;
-    h.programs = 2;
+    h.programs = programs;
     h.pipelines = 1;
     const std::string fields = key.substr(0, key.find(" | v"));
     std::vector<char> strings(1, 0);
     strings.insert(strings.end(), fields.begin(), fields.end());
     strings.push_back(0);
-    h.section[raw::PackPrograms] = {0x100, 2 * sizeof(raw::PackProgram)};
-    h.section[raw::PackPipelines] = {0x200, sizeof(raw::PackPipeline)};
-    h.section[raw::PackStrings] = {0x800, strings.size()};
-    h.section[raw::PackHeap] = {kHeap, 2 * kSlot + 0x1000};
+    h.section[raw::PackPrograms] = {kPrograms, programs * sizeof(raw::PackProgram)};
+    h.section[raw::PackPipelines] = {kPipelines, sizeof(raw::PackPipeline)};
+    h.section[raw::PackStrings] = {kStrings, strings.size()};
+    h.section[raw::PackKernels] = {kKernels, kernels.size() * sizeof(raw::PackKernel)};
+    h.section[raw::PackHeap] = {kHeap, programs * kSlot + 0x1000};
     memcpy(file.data(), &h, sizeof h);
-    for (uint32_t k = 0; k < 2; k++) {
+    for (uint32_t k = 0; k < programs; k++) {
         raw::PackProgram p = {};
         p.heapOffset = uint32_t(k * kSlot);
         p.program = p.heapOffset + 0x30;
         p.bytes = uint32_t(kSlot);
         p.cbufs = 1;
         p.cbufType[0] = raw::CbufRoot;
-        p.gprs = 8;
-        memcpy(file.data() + 0x100 + k * sizeof p, &p, sizeof p);
+        p.gprs = k < 2 ? 8 : 0;
+        memcpy(file.data() + kPrograms + k * sizeof p, &p, sizeof p);
         const std::vector<uint8_t> bytes = slot(k);
         memcpy(file.data() + kHeap + k * kSlot, bytes.data(), bytes.size());
+    }
+    std::sort(kernels.begin(), kernels.end(),
+              [](const raw::PackKernel &a, const raw::PackKernel &b) { return a.keyHash < b.keyHash; });
+    for (size_t i = 0; i < kernels.size(); i++) {
+        kernels[i].program = uint16_t(2 + i);
+        memcpy(file.data() + kKernels + i * sizeof(raw::PackKernel), &kernels[i], sizeof(raw::PackKernel));
     }
     raw::PackPipeline pp = {};
     pp.keyHash = raw::Pack::fnv(key.data(), key.size());
     pp.keyString = 1;
     pp.vs = 0;
     pp.fs = 1;
-    memcpy(file.data() + 0x200, &pp, sizeof pp);
-    memcpy(file.data() + 0x800, strings.data(), strings.size());
+    memcpy(file.data() + kPipelines, &pp, sizeof pp);
+    memcpy(file.data() + kStrings, strings.data(), strings.size());
     const std::string path = dir() + "/pack.bin";
     std::ofstream(path, std::ios::binary)
         .write(reinterpret_cast<const char *>(file.data()), std::streamsize(file.size()));
@@ -163,8 +174,9 @@ inline std::string writeMetallib()
 // What the opener was asked: each process's m2v device opens once, at most
 inline int gOpens = 0;
 
-// A raw device over the pack of the BGRA8 state, NVK's connection the fake's, the m2v device the stand-in
-inline id<MTLDevice> open(const std::string &pack, Class methods = [HarnessM2VMethods class])
+// A raw device over the pack of the BGRA8 state, NVK's connection the fake's, the m2v device the stand-in (`standIn`'s)
+inline id<MTLDevice> open(const std::string &pack, Class methods = [HarnessM2VMethods class],
+                          Class standIn = [HarnessM2V class])
 {
     const char *nvk = getenv("SWITCH_FAKE_NVK");
     if (!nvk || !dlopen(nvk, RTLD_NOW | RTLD_LOCAL))
@@ -173,7 +185,7 @@ inline id<MTLDevice> open(const std::string &pack, Class methods = [HarnessM2VMe
     m2v.open = ^id<MTLDevice>
     {
         gOpens++;
-        return (id<MTLDevice>)[HarnessM2V new];
+        return (id<MTLDevice>)[standIn new];
     };
     m2v.methods = methods;
     NSString *why = nil;

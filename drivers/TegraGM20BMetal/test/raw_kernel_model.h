@@ -3,7 +3,8 @@
 // raw path's channel recovery and resource set tests. Channels live in the slots of one fence page: a channel takes the
 // lowest free slot, and a slot's seqnos go on across the channels it holds, so a channel made again can land in a slot
 // whose fence is behind the old one. Jobs (SubmitAddress, SubmitJob) complete as they are submitted, or stay in flight
-// until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does. Memory a
+// until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does, or with
+// a test's GPU (model_gpu.h) complete as it runs them, a WaitFence waiting for that. Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
 // (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
 // a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
@@ -17,7 +18,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <vector>
 
 namespace kernel_model {
@@ -94,6 +97,9 @@ struct Model {
     }
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
+    // A test's GPU: each job is in flight until it ran, and a WaitFence on it waits up to then (false: it timed out)
+    std::function<void()> jobAdded;
+    std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
     uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
     int refusal = kIOReturnNoResources;
@@ -178,7 +184,7 @@ struct Model {
                 staleReads++;
         }
         jobs.push_back(job);
-        if (!inFlight)
+        if (!inFlight && !jobAdded)
             fence(channel - 1).completed = job.seqno;
         reply = {job.seqno, 0};
         return KERN_SUCCESS;
@@ -199,7 +205,10 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        return run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        const int kr = run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        if (jobAdded)
+            jobAdded();
+        return kr;
     }
 
     int submitJob(const TegraGM20BAbiSubmitAddress &address, TegraGM20BAbiExecReply &reply)
@@ -268,6 +277,8 @@ struct Model {
         const int kr = run(*s, head->channel, std::move(uses), reply);
         const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
         jobs.back().pushes.assign(pushes, pushes + head->push_count);
+        if (jobAdded)
+            jobAdded();
         return kr;
     }
 
@@ -367,6 +378,8 @@ struct Model {
             notResponding--;
             return kIOReturnNotResponding;
         }
+        if (blockUntil && int32_t(fence(in.channel - 1).completed - in.seqno) < 0)
+            return blockUntil(in.channel, in.seqno) ? KERN_SUCCESS : kIOReturnTimeout;
         return int32_t(fence(in.channel - 1).completed - in.seqno) >= 0 ? KERN_SUCCESS : kIOReturnTimeout;
     }
 
@@ -381,6 +394,7 @@ struct Model {
 };
 
 inline Model model;
+inline std::mutex callLock;  // held through every call but a WaitFence, and by a test GPU's reads of the model
 
 }  // namespace kernel_model
 
@@ -388,6 +402,9 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
                                                    void *output, size_t *)
 {
     using kernel_model::model;
+    std::unique_lock<std::mutex> hold(kernel_model::callLock, std::defer_lock);
+    if (method != TegraGM20BMethodWaitFence)
+        hold.lock();
     switch (method) {
     case TegraGM20BMethodGetInfo: {
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);

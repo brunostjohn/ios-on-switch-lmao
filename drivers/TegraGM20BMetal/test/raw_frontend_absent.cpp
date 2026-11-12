@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 // The frontend's and the bridge's entry points the raw facade links (NativeBridgeMetalFrontend.h, bridge/NativeMetalObjects.h)
 // for a process whose m2v device is a stand-in (raw_facade_harness.h): each answers as the frontend does with no device of
-// its own open, so nothing the facade asks of m2v is answered by anything but the stand-in it opened.
+// its own open, so nothing the facade asks of m2v is answered by anything but the stand-in it opened. A stand-in's function
+// (raw_facade_compute.h) answers for itself: its metallib, its library name and its compute state.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalBlend.h"
 #include "bridge/NativeMetalObjects.h"
+
+static id standInAnswer(id object, const char *selector)
+{
+    const SEL s = sel_registerName(selector);
+    return [object respondsToSelector:s] ? ((id (*)(id, SEL))objc_msgSend)(object, s) : nil;
+}
 
 extern "C" {
 
@@ -27,19 +35,24 @@ bool native_bridge_metal_compute_direct(id, const struct NmbDirectDispatch *,
     return false;
 }
 
-id native_bridge_metal_compute_prepare(id, NSUInteger, id *, NSError **)
+id native_bridge_metal_compute_prepare(id descriptor, NSUInteger, id *, NSError **)
 {
-    return nil;
+    return standInAnswer([(MTLComputePipelineDescriptor *)descriptor computeFunction], "harnessComputeState");
 }
 
-NSString *native_bridge_metal_function_library_name(id)
+NSString *native_bridge_metal_function_library_name(id function)
 {
-    return nil;
+    return standInAnswer(function, "harnessName");
 }
 
-id native_bridge_metal_function_metallib(id, const void **, size_t *)
+id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length)
 {
-    return nil;
+    NSData *metallib = standInAnswer(function, "harnessMetallib");
+    if (metallib) {
+        *bytes = metallib.bytes;
+        *length = metallib.length;
+    }
+    return metallib;
 }
 
 void native_bridge_metal_journal_dispatch(id, MTLSize, MTLSize, bool, const char *, const char *, const char *)
