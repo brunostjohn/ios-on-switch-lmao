@@ -104,6 +104,7 @@ cc_binary(
 py_library(
     name = "draw_goldens",
     srcs = [
+        "compute_goldens.py",
         "draw_goldens.py",
         "eq_fields.py",
         "eq_rules.py",
@@ -141,7 +142,38 @@ py_test(
         ":raw_pack_report",
         ":rawframe",
         "//gpu/seed:raw_pack",
-    ] + glob(["testdata/*"]),
+    ] + glob(
+        ["testdata/*"],
+        exclude = ["testdata/compute_*"],
+    ),
+    # m2v: //gpu/seed:raw_pack's probe runs NVK until the pack generator stops needing it
+    tags = [
+        "m2v",
+        "pack",
+    ],
+    deps = [":draw_goldens"],
+)
+
+py_test(
+    name = "computeeq_test",
+    srcs = ["computeeq_test.py"],
+    args = [
+        "$(rootpath :computeframe)",
+        "$(rootpath //gpu/seed:raw_pack)/pack.bin",
+    ] + select({
+        "//ipsw:21H461": [
+            "21H461",
+            "drivers/TegraGM20BMetal/test/eq/testdata",
+        ],
+        "//ipsw:24B119": [
+            "24B119",
+            "drivers/TegraGM20BMetal/test/eq/testdata",
+        ],
+    }),
+    data = [
+        ":computeframe",
+        "//gpu/seed:raw_pack",
+    ] + glob(["testdata/**"]),
     # m2v: //gpu/seed:raw_pack's probe runs NVK until the pack generator stops needing it
     tags = [
         "m2v",
