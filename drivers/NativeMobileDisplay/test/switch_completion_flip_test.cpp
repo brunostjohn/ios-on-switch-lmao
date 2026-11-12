@@ -286,6 +286,8 @@ TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
 // on window A) withdraw an armed flip before they write its assembly copy, and none arms while they own window A.
 TEST(CompletionFlipSource, WindowAsOtherWritersWithdrawFirst)
 {
+    using switch_ios::test::Between;
+    using switch_ios::test::SourceText;
     const std::string scan = SourceText("../NativeColumnScanDisplay.h");
     const std::string probe = SourceText("../DisplayWindowProbeDisplay.h");
     const std::string landscape = SourceText("../SwitchLandscapeDisplay.h");
