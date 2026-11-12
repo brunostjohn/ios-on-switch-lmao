@@ -87,17 +87,31 @@ static void coalesceBytes(RMBytes &s)
 }
 
 // Finished command buffers' setBytes chunks for the next to fill, given back at completion rather than with the recording
-// at dealloc: command buffers an app keeps after they complete hold none of the GPU pool's control memory
+// at dealloc: command buffers an app keeps after they complete hold none of the GPU pool's control memory. As many are kept
+// as were in flight at once, up to kChunksKept and kChunkBytesKept bytes, each up to kChunkMost (a command buffer of more
+// setBytes frees its own, as its recording); gRawRelease gives back all but kChunksIdle.
 static constexpr uint32_t kChunksKept = 64, kChunksIdle = 4;
+static constexpr uint64_t kChunkMost = 1 << 20, kChunkBytesKept = 16 << 20;
 static raw::TakePool<raw::Buffer, kChunksKept> &gBytesChunks = *new raw::TakePool<raw::Buffer, kChunksKept>;
+static std::atomic<uint64_t> gBytesChunkBytes{0};
 
 static std::atomic<bool> gBytesGrowing{false};
+
+// The length of the chunk taken last, up to kChunkMost: what a chunk made ahead for the pool is made at. A recording that
+// coalesced past 64 KB (coalesceBytes) given a 64 KB one outgrows it and coalesces again at its completion, making and
+// freeing control buffers on the completion thread.
+static std::atomic<uint64_t> gBytesChunkLength{kRMBytesChunk};
 
 static void keepBytesChunk(const raw::Buffer &chunk)
 {
     uint32_t node;
-    raw::Buffer *slot = chunk.va ? gBytesChunks.room(node) : nullptr;
+    const bool fits =
+        chunk.va && chunk.length <= kChunkMost &&
+        gBytesChunkBytes.fetch_add(chunk.length, std::memory_order_relaxed) + chunk.length <= kChunkBytesKept;
+    raw::Buffer *slot = fits ? gBytesChunks.room(node) : nullptr;
     if (!slot) {
+        if (chunk.va && chunk.length <= kChunkMost)
+            gBytesChunkBytes.fetch_sub(chunk.length, std::memory_order_relaxed);
         RMBytes one;
         one.chunks.push_back(chunk);
         dropBytes(one);
@@ -110,7 +124,7 @@ static void keepBytesChunk(const raw::Buffer &chunk)
 static void growBytesChunks(void *)
 {
     raw::Buffer chunk;
-    if (gRM->raw->createControlBuffer(kRMBytesChunk, chunk))
+    if (gRM->raw->createControlBuffer(gBytesChunkLength.load(std::memory_order_relaxed), chunk))
         keepBytesChunk(chunk);
     gBytesGrowing.store(false, std::memory_order_release);
 }
@@ -134,6 +148,8 @@ bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk)
             chunk = *kept;
             *kept = {};
             gBytesChunks.giveBack(node);
+            gBytesChunkBytes.fetch_sub(chunk.length, std::memory_order_relaxed);
+            gBytesChunkLength.store(std::min(chunk.length, kChunkMost), std::memory_order_relaxed);
             if (!gBytesChunks.kept() && !gBytesGrowing.exchange(true, std::memory_order_acq_rel))
                 dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), nullptr, growBytesChunks);
             return true;
@@ -186,6 +202,7 @@ void releaseRecordings()
         raw::Buffer *kept = gBytesChunks.take(node);
         if (!kept)
             break;
+        gBytesChunkBytes.fetch_sub(kept->length, std::memory_order_relaxed);
         RMBytes one;
         one.chunks.push_back(*kept);
         dropBytes(one);
