@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // The system shader compiler's process (TegraGM20BCompilerABI.h), run by /usr/libexec/SwitchShaderCompiler from inside the
 // GPU plugin. Once the GPU's service is up it reads the installed pack, opens its store (compiler_store.h) and registers it
-// with the kernel, so every GPU client reads the store from then on; then it opens the m2v device it compiles with, enters
-// its sandbox, makes the requests an earlier build's store had (compiler_log.h) again at the background class, and takes
+// with the kernel, so every GPU client reads the store from then on; then it enters its sandbox, makes the requests an
+// earlier build's store had (compiler_log.h) again at the background class, and takes
 // requests one by one on a thread that sleeps in the kernel between them. A request is prepared there (compiler_request.h),
 // answered from the store when its entry is in, and otherwise handed to the pool (compiler_pool.h), which makes each
-// record once for every process that asks, at the class of its most urgent waiter.
+// record once for every process that asks, at the class of its most urgent waiter. The m2v device it compiles with is
+// opened at the first compile (compiler_engine.h), inside the sandbox: a compiler whose store holds every state asked of
+// it never opens one.
 #import <Foundation/Foundation.h>
 
 #include <IOKit/IOKitLib.h>
@@ -307,7 +309,7 @@ bool Service::open(uint64_t stack)
     root_ = geteuid() ? kMobileRoot : kSystemRoot;
     std::string why;
     if (!connect(why) || !engine_.open(stack, why) || !store_.open(root_, stack, engine_.rules(), why) ||
-        !registerStore(stack, why) || !engine_.openDevice(why)) {
+        !registerStore(stack, why)) {
         os_log_error(logger(), "SwitchShaderCompiler: not serving: %{public}s", why.c_str());
         decline();
         return false;

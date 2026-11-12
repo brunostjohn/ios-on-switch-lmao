@@ -17,7 +17,8 @@ public:
 
     // The installed pack read: what the store is named by
     bool open(uint64_t stack, std::string &why);
-    // The m2v device and NVK opened: what compiles
+    // The m2v device and NVK opened: what compiles. compile() opens it at the first compile that needs it, so a compiler
+    // that serves its store alone has none (the device's runtime is most of the process's footprint)
     bool openDevice(std::string &why);
     // The installed pack's rules (raw_record.h PackRules), as the store is named by them
     raw::Digest rules() const;
