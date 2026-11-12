@@ -13,7 +13,8 @@
 // One line per stage ("TegraNVJPG: J1 ok ..."), or the failing stage's FAIL line and nothing after it. Until J3
 // publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
 // off, and nothing is published (CMPhoto and VideoToolbox find no hardware JPEG codec and decode on the CPU). No job
-// runs before J3, and from then a job past its bound panics with one line, and a lost syncpoint interrupt panics in
+// runs before J3. From then a job past its bound is cancelled with one line (channel torn down, memory client flushed,
+// engine reset, falcon rebooted and proven) and fails, and the next job runs; a lost syncpoint interrupt panics in
 // TegraHost1x.
 //
 // What the engine does (kTraits) is what the unit measured on every boot of 11-05 and 11-06 (23 boots), decoding
@@ -104,7 +105,11 @@ enum : uint32_t {
 
 enum : uint32_t {                                 // the SMMU's own registers are TegraSMMU.h's
     TRANSLATION_NVJPG = (1u << 30) | (1u << 31),  // nvjpgsrd, nvjpgswr (MC_SMMU_TRANSLATION_ENABLE_3)
+    MC_INTSTATUS = 0x0,
+    MC_ERR_STATUS = 0x8,
+    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL_1 = 0x970,
+    MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVJPG = 1u << 8,
 };
 
@@ -140,6 +145,8 @@ IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // power transitions against jobs
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
+uint32_t gPowerOns;     // by the idle gate, since boot
+uint64_t gPoweredAtUs;  // the last of them
 bool gUp, gWedged, gSuspended;
 TegraNVJPGBuffer gSetup, gStatus;
 const TegraNVJPGTraits kTraits = {
@@ -334,12 +341,60 @@ void park()
     engineOff();
 }
 
-[[noreturn]] void timedOut(uint32_t fence, uint64_t us)
+// The memory controller stops taking NVJPG's requests and drains those in flight (tegra_mc_flush), so the reset cannot
+// cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the flush
+// has no interrupt. NVDEC's power path writes the same register: the caller holds tegra_nvdec_power_lock.
+void flushMemoryClient()
+{
+    switch_mmio_write32(gMc, MC_HOTRESET_CTRL_1, switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) | MC_HOTRESET_NVJPG);
+    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS_1) & MC_HOTRESET_NVJPG); ++i)
+        IODelay(1);
+}
+
+// A job past its bound: the engine stopped making progress on it (a lost interrupt panics in TegraHost1x instead).
+// As L4T's nvhost does on a channel timeout, the job is cancelled, not the engine: channel 3 is torn down so nothing of
+// the stream reaches the engine again, the memory client is flushed, the engine reset (its partition stays on), the
+// falcon rebooted and proven as at J2, and the job fails; the next one runs. One line per cancellation, with what the
+// falcon and the memory controller held. gStateLock held, and gJobLock (the caller's): no NVJPG power transition can
+// be waiting for gStateLock while this takes the power lock (gateOn runs only in a job, gateOff only with no user, and
+// suspend first takes gJobLock).
+int cancelled(uint32_t fence, uint64_t us)
 {
     char host[200];
+    char falcon[400];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
-    panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
-          tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
+    switch_falcon_stall(gJpg, falcon, sizeof(falcon));
+    const uint32_t mcStatus = switch_mmio_read32(gMc, MC_INTSTATUS), mcError = switch_mmio_read32(gMc, MC_ERR_STATUS),
+                   mcAddress = switch_mmio_read32(gMc, MC_ERR_ADR);
+    tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVJPG);
+    IOLock *power = tegra_nvdec_power_lock();
+    IOLockLock(power);
+    flushMemoryClient();
+    bool wasOn = false;
+    gLine[0] = 0;
+    const bool reset = powerUp(&wasOn);
+    tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
+    const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+    const char *stage = nullptr;
+    const bool back = reset && bootFalcon() && !answer(gSyncpt, from, &stage);
+    IOLockUnlock(power);
+    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    gWedged = !back;
+    if (!back)
+        engineOff();
+    IOLog("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u; powered on by the idle gate %u times, "
+          "the last %llu ms ago); %s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x; %s; job cancelled, engine reset: "
+          "%s%s\n",
+          fence, us / 1000, gSyncpt, reached, gPowerOns,
+          gPowerOns ? static_cast<unsigned long long>((switch_now_us() - gPoweredAtUs) / 1000) : 0ULL, falcon, mcStatus,
+          mcError, mcAddress, host,
+          back ? "running again" : "it did not come back, NVJPG refuses work (decodes go to the CPU): ",
+          back ? ""
+               : (gLine[0] ? gLine
+                  : stage  ? stage
+                           : "falcon"));
+    return -5;
 }
 
 void engineSuspend();
@@ -572,7 +627,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
-            timedOut(fence, switch_now_us() - start);
+            ret = cancelled(fence, switch_now_us() - start);
     }
     if (busyUs)
         *busyUs = switch_now_us() - start;
@@ -612,6 +667,8 @@ int gateOn(void *)
         engineOff();
         IOLog("TegraNVJPG: power-on FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine[0] ? gLine : "J1");
     }
+    gPowerOns++;
+    gPoweredAtUs = switch_now_us();
     gNext = tegra_host1x_syncpt_read(gSyncpt);
     gSuspended = false;
     IOLockWakeup(gStateLock, &gSuspended, false);
