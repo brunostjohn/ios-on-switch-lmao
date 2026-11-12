@@ -225,6 +225,20 @@ TEST_F(SwitchVICTransformTest, NativeInputQueuesBothReadAuthoritiesWithoutPitchM
     EXPECT_EQ(notifications, 1);
 }
 
+// A job VIC cancelled at its bound, or that ran on a cancelled producer's memory, completes with the failure, which
+// the IOSurfaceAccelerator client's transform hears (its async result: kIOReturnAborted).
+TEST_F(SwitchVICTransformTest, ACancelledJobsFailureReachesTheTransformsCaller)
+{
+    static int heard;
+    heard = 1;
+    ASSERT_EQ(switch_vic_transform(&source, &destination, &plan, 0,
+                                   [](void *, int status) { heard = status; }, nullptr),
+              1);
+    ASSERT_NE(pending, nullptr);
+    pending(pendingContext, -5);
+    EXPECT_EQ(heard, -5);
+}
+
 TEST_F(SwitchVICTransformTest, CompletionCanRaceSubmissionReturnWithoutFreeingCallerState)
 {
     immediate = true;

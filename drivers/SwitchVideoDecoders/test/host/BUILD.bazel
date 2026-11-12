@@ -308,6 +308,27 @@ host_library(
 )
 
 host_library(
+    name = "nvdec_listener",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
+        "//drivers/SwitchVideoDecoders:AVD/NVDECListener.c",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+        "//kits/SwitchRefusal:SwitchRefusal.c",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+    ],
+    hdrs = ["//drivers/SwitchVideoDecoders:AVD/NVDECListener.h"],
+    deps = [":nvdec_check"],
+)
+
+# NVDECListener.c on a real Mach port, the completion messages as the kernel sends them.
+host_test(
+    name = "nvdec_listener_test",
+    srcs = ["nvdec_listener_test.cpp"],
+    deps = [":nvdec_listener"],
+)
+
+host_library(
     name = "avd_register_host",
     srcs = [
         "avd_register_host.c",

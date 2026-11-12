@@ -4,13 +4,18 @@
 // order; then the job's physical result is published. That and the job's semantic completion (the events' retirement)
 // finish in either order and end the job.
 //
-// A job whose fence failed, or that cancel() failed, ends with kCancelled whatever its GPU producer reports.
+// A job whose fence failed, or that cancel() failed, ends with kCancelled whatever its GPU producer reports. A job
+// whose stream waited for another host1x engine's job that failed ends with that failure, as its semantic batch would
+// later: a cancelled job's syncpoint is released by the CPU, so a job that read what it was to write ran on memory it
+// never wrote. The engine records the cancellation before that release, so it is known by the time this job's fence
+// is reached.
 //
 // Engine supplies, each called once per job, without the engine's lock and never inside start:
 //   static void fault(uint32_t slot, int status, int producers);  the fence failed: its bound outlived, or (before
 //                                                                  strict) its interrupt lost; on host1x's work loop,
 //                                                                  so it takes no lock and never sleeps
-//   static void physical(uint32_t slot, int result);              result: 1, the GPU producer's failure or kCancelled
+//   static void physical(uint32_t slot, int result);              result: 1, the GPU producer's failure, a host1x
+//                                                                  producer's, or kCancelled
 //   static void ended(uint32_t slot, int result);                 result: physical()'s, for the engine to join with
 //                                                                  its semantic outcome
 #pragma once
@@ -18,8 +23,39 @@
 #include "SwitchHost1xFence.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
 
+// The other host1x engines' jobs a job's stream waits for by syncpoint: the newest of each engine's, since a
+// cancellation fails every job queued behind the one that stalled.
+struct SwitchHost1xProducers {
+    static constexpr uint32_t kMax = 3;  // NVDEC, VIC and NVENC, a syncpoint each
+    switch_gpu_backing_token tokens[kMax] = {};
+    uint32_t count = 0;
+
+    void add(const switch_gpu_backing_token &token)
+    {
+        for (uint32_t i = 0; i < count; ++i)
+            if (tokens[i].engine == token.engine && tokens[i].queue == token.queue) {
+                if (token.value > tokens[i].value)
+                    tokens[i] = token;
+                return;
+            }
+        if (count < kMax)
+            tokens[count++] = token;
+    }
+
+    int failure() const
+    {
+        for (uint32_t i = 0; i < count; ++i) {
+            const int physical = switch_gpu_backing_token_physical_status(&tokens[i], 0);
+            if (physical < 0 && physical != SWITCH_GPU_BACKING_STALE)
+                return physical;
+        }
+        return 0;
+    }
+};
+
 struct SwitchHost1xStage {
     switch_host1x_fence fence;
+    SwitchHost1xProducers producers;
     uint32_t hardware, final, boundUs;
     int physical;
     bool ended;
@@ -33,10 +69,12 @@ public:
     // Under the engine's lock, once the job's slot is published and its batch committed. A job with a bridge has its
     // bound started by the bridge's completion, so a GPU producer that is slow, or killed by the GPU's recovery, fails
     // only its own consumer (D8); it cannot end before bridged() is called.
-    static int start(uint32_t slot, uint32_t syncpt, uint32_t threshold, bool bridge, bool semantic, uint32_t boundUs)
+    static int start(uint32_t slot, uint32_t syncpt, uint32_t threshold, bool bridge, bool semantic, uint32_t boundUs,
+                     const SwitchHost1xProducers &producers)
     {
         auto &stage = stages[slot];
         switch_host1x_fence_init(&stage.fence, syncpt, threshold, signaled);
+        stage.producers = producers;
         stage.hardware = bridge ? 2 : 1;
         stage.final = semantic ? 2 : 1;
         stage.boundUs = boundUs;
@@ -97,6 +135,10 @@ private:
     {
         if (__atomic_sub_fetch(&stage.hardware, 1u, __ATOMIC_ACQ_REL))
             return;
+        int ran = 1;
+        if (__atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) == ran)
+            if (const int failed = stage.producers.failure())
+                __atomic_compare_exchange_n(&stage.physical, &ran, failed, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
         Engine::physical(slotOf(stage), stage.physical);
         finalStep(stage);
     }

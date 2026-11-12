@@ -5,10 +5,12 @@
 #include <tuple>
 #include <vector>
 #include "../SwitchHost1xTokenFence.cpp"
+#include "../SwitchHost1xResults.h"
 
 namespace {
 using Key = std::tuple<uint32_t, uint32_t, uint64_t>;
-std::map<Key, int> gStatus;
+std::map<Key, int> gStatus, gPhysical;
+int (*gStatusOf)(const switch_gpu_backing_token *), (*gPhysicalOf)(const switch_gpu_backing_token *);
 std::vector<switch_host1x_fence *> gAdded;
 uint32_t gSyncpoint[192];
 int gAddError;
@@ -41,7 +43,13 @@ void deliver(size_t which, int status = 0)
 
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *token)
 {
-    return gStatus[key(*token)];
+    return gStatusOf ? gStatusOf(token) : gStatus[key(*token)];
+}
+
+extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *token, int external)
+{
+    EXPECT_EQ(external, 0);
+    return gPhysicalOf ? gPhysicalOf(token) : gPhysical[key(*token)];
 }
 
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
@@ -73,6 +81,8 @@ struct TokenFence : testing::Test {
     void SetUp() override
     {
         gStatus.clear();
+        gPhysical.clear();
+        gStatusOf = gPhysicalOf = nullptr;
         gAdded.clear();
         gAddError = 0;
         gAddsBeforeError = UINT32_MAX;
@@ -185,5 +195,66 @@ TEST_F(TokenFence, EveryFlipSlotInUseIsBusy)
     for (size_t i = 0; i < gAdded.size(); ++i)
         deliver(i);
     EXPECT_EQ(h.calls, static_cast<int>(kJoins));
+}
+
+// A producer its engine cancelled is recorded failed before the CPU releases its syncpoint; its result waits for its
+// semantic outcome, which is retired later on another thread. The release that reaches the flip's fence fails it.
+TEST_F(TokenFence, ACancelledProducersReleaseFailsTheFlipBeforeItsResultIsFiled)
+{
+    Heard h;
+    ASSERT_EQ(switch_host1x_token_fence(&kDecode, 1, heard, &h), 0);
+    gPhysical[key(kDecode)] = -5;
+    deliver(0);
+    EXPECT_EQ(h.calls, 1);
+    EXPECT_EQ(h.status, -5);
+}
+
+// VIC's job that ran on a cancelled decode's picture (the overlay composite, a placement) has that failure as its
+// hardware outcome when its own fence comes in, ahead of the flip's on VIC's syncpoint.
+TEST_F(TokenFence, AVicJobThatRanOnACancelledDecodeFailsTheFlip)
+{
+    const switch_gpu_backing_token both[] = {kDecode, kConvert};
+    Heard h;
+    ASSERT_EQ(switch_host1x_token_fence(both, 2, heard, &h), 0);
+    deliver(0);
+    gPhysical[key(kConvert)] = -5;
+    deliver(1);
+    EXPECT_EQ(h.calls, 1);
+    EXPECT_EQ(h.status, -5);
+}
+
+TEST_F(TokenFence, AProducerCancelledBeforeTheFlipIsArmedIsRefused)
+{
+    Heard h;
+    gPhysical[key(kConvert)] = -5;
+    EXPECT_EQ(switch_host1x_token_fence(&kConvert, 1, heard, &h), -5);
+    EXPECT_TRUE(gAdded.empty());
+    EXPECT_EQ(h.calls, 0);
+}
+
+SwitchHost1xResultState gDecodeState;
+using DecodeResults = SwitchHost1xResults<SWITCH_GPU_ENGINE_NVDEC, gDecodeState>;
+
+// The same over NVDEC's own records: switch_nvdec_jobs_cancel records the job failed (physical), then the CPU releases
+// the syncpoint, while the job's result is filed only with its semantic outcome.
+TEST_F(TokenFence, TheReleaseOfACancelledDecodeFailsItsFlipOverTheEnginesRecords)
+{
+    ASSERT_TRUE(DecodeResults::start(162));
+    gStatusOf = DecodeResults::status;
+    gPhysicalOf = DecodeResults::physicalStatus;
+    auto *record = DecodeResults::allocate();
+    switch_gpu_backing_token decode = {};
+    ASSERT_EQ(DecodeResults::prepare(record, 41, 41, &decode), 0);
+    Heard h;
+    ASSERT_EQ(switch_host1x_token_fence(&decode, 1, heard, &h), 0);
+    ASSERT_EQ(gAdded.size(), 1u);
+    EXPECT_EQ(gAdded[0]->syncpt, 162u);
+    EXPECT_EQ(gAdded[0]->threshold, 41u);
+    DecodeResults::physical(record, -5);
+    EXPECT_EQ(DecodeResults::status(&decode), 0) << "the result waits for the semantic outcome";
+    deliver(0);
+    EXPECT_EQ(h.calls, 1);
+    EXPECT_EQ(h.status, -5);
+    DecodeResults::complete(&record, -5);
 }
 }  // namespace

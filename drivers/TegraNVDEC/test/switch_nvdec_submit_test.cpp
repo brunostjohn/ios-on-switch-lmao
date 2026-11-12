@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "switch_nvdec_submit_stubs.h"
 #include <algorithm>
+#include <map>
+#include <utility>
 #include <vector>
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
@@ -21,6 +23,7 @@ uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submit
 int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
+std::map<std::pair<uint32_t, uint64_t>, int> producerPhysical;  // by engine and value; absent: ran
 
 struct Notification {
     void (*completed)(void *, int);
@@ -108,6 +111,13 @@ int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
 int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *)
 {
     return statusError;
+}
+
+int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *token, int external)
+{
+    EXPECT_EQ(external, 0);
+    const auto at = producerPhysical.find({token->engine, token->value});
+    return at == producerPhysical.end() ? 1 : at->second;
 }
 
 int switch_gpu_backing_token_retain(const switch_gpu_backing_token *)
@@ -518,6 +528,7 @@ protected:
         fences.clear();
         fenceBounds.clear();
         watchedBounds.clear();
+        producerPhysical.clear();
         notifications.clear();
         for (auto &stage : Stages::stages)
             stage = {};
@@ -1010,6 +1021,68 @@ TEST_F(SwitchNVDECSubmitTest, AFailedProducersJobCompletesWithItsError)
     semantic(sequence);
     ASSERT_EQ(completed.size(), 1u);
     EXPECT_EQ(completed[0].result, -5);
+}
+
+// The AVD plug-in's pictures of a stalled decode and of the decodes queued behind it fail and none is left unanswered:
+// each job's completion runs once with the failure, off the queue lock, from its fence (the stalled one's bound, the
+// others' released fences) and its semantic outcome in either order.
+TEST_F(SwitchNVDECSubmitTest, AStalledDecodeAndTheDecodesBehindItCompleteWithTheFailure)
+{
+    completed.clear();
+    uint64_t stalled = nextTestSequence + 1, behind = nextTestSequence + 2, after = nextTestSequence + 3;
+    ASSERT_EQ(submit({recordCompletion, &stalled}), 0);
+    ASSERT_EQ(submit({recordCompletion, &behind}), 0);
+    ASSERT_EQ(submit({recordCompletion, &after}), 0);
+    semantic(behind);
+    outlived(0);
+    EXPECT_TRUE(completed.empty()) << "the stalled decode's semantic outcome is not in yet";
+    semantic(stalled);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].fence, uint32_t(stalled));
+    EXPECT_EQ(completed[0].result, -5);
+    EXPECT_FALSE(completed[0].queueLocked);
+    runCancellation();
+    reachedInterrupts();
+    ASSERT_EQ(completed.size(), 2u) << "the decode whose semantic outcome came first ends on its released fence";
+    EXPECT_EQ(completed[1].fence, uint32_t(behind));
+    EXPECT_EQ(completed[1].result, -5);
+    EXPECT_TRUE(gCancelling) << "the last cancelled decode has not ended";
+    semantic(after);
+    ASSERT_EQ(completed.size(), 3u) << "the decode whose semantic outcome came last ends on it";
+    EXPECT_EQ(completed[2].fence, uint32_t(after));
+    EXPECT_EQ(completed[2].result, -5);
+    for (const auto &job : completed)
+        EXPECT_FALSE(job.queueLocked);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_FALSE(gCancelling);
+    uint64_t next = 0;
+    ASSERT_EQ(submit({recordCompletion, &next}), 0);
+    next = gQueue.submitted;
+    semantic(next);
+    hardware = fence;
+    reachedInterrupts();
+    ASSERT_EQ(completed.size(), 4u);
+    EXPECT_EQ(completed[3].result, 0) << "the decode after the cancellation";
+}
+
+// A decode whose stream waited for a picture VIC wrote, in a VIC job VIC then cancelled, ran on memory VIC never wrote:
+// the job ends with VIC's failure, recorded before VIC's syncpoint was released.
+TEST_F(SwitchNVDECSubmitTest, ADecodeAfterACancelledVicJobEndsWithItsFailure)
+{
+    completed.clear();
+    const switch_gpu_backing_token placed = {0x200000009ULL, 1, SWITCH_GPU_ENGINE_VIC, 161};
+    sourceTokens = {placed};
+    uint64_t sequence = nextTestSequence + 1;
+    ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    producerPhysical[{SWITCH_GPU_ENGINE_VIC, placed.value}] = -5;
+    interrupt(0);
+    semantic(sequence);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].result, -5);
+    const switch_gpu_backing_token decode = {sequence, switch_nvdec_result_state.generation, SWITCH_GPU_ENGINE_NVDEC,
+                                             gSyncpt};
+    EXPECT_EQ(Results::physicalStatus(&decode), -5);
+    EXPECT_EQ(waitSequence(sequence), -5);
 }
 
 // A client whose ring of input buffers is one deeper than the queue never writes one a job still reads: the submit that
