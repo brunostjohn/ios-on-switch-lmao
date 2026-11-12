@@ -299,6 +299,12 @@ void Placer::run(const JobContext &job)
         } else {
             need = crossNode(head, end, edges);
         }
+        for (const FenceEdge &f : g_.fences)
+            if (f.waiter >= head && f.waiter < end) {
+                need |= kFenceWait;
+                if (std::find(edges.begin(), edges.end(), f.updater) == edges.end())
+                    edges.push_back(f.updater);
+            }
         const bool switched = switchDrains(previous, node.engine);
         if (switched && trustSwitch && (need & WaitForIdle) && !(need & FlushShaderData))
             need = Barriers((need & ~WaitForIdle) | EngineSwitch);

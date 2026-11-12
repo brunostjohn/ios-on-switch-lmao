@@ -189,6 +189,8 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 							nullptr};
 	}
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
+	for (uint32_t i = 0; i < writtenCount; ++i)
+		tgm_views_gpu_writes(job.written[i]);
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;
 	int error = events->sequence(eventChannels_[slot]);

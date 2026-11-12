@@ -5814,6 +5814,20 @@ extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct N
     return false;
 }
 
+extern "C" bool native_bridge_metal_argument_layouts(id function, NSUInteger index,
+                                                     bool (*each)(const struct NmbArgumentLayout *, uint32_t, void *),
+                                                     void *ctx, const char **why)
+{
+    if (![function isKindOfClass:[NBFunction class]] || index > UINT32_MAX) {
+        *why = "a function of another device";
+        return false;
+    }
+    if (nmb_function_argument_layouts(((NBFunction *)function).handle, uint32_t(index), each, ctx))
+        return true;
+    *why = nmb_last_error();
+    return false;
+}
+
 // ---- binary archives ----
 @interface NBBinaryArchive : NBObject
 @property (nonatomic) NmbBinaryArchive *handle;

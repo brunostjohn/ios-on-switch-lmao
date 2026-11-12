@@ -108,6 +108,11 @@ raw::RuntimeRecord madeUp(uint32_t n)
     r.programs[1].data.assign(256, 0x5A);
     r.programs[1].cbufTypes = {1, 2, 3};
     r.blob = {0x1A00, n, 0x1E08, n + 1};
+    if (n % 2 == 1) {
+        r.pipeline.spillEntry[1] = 1;
+        r.pipeline.spillWords[1] = 4;
+        r.spill = {n, n + 1, n + 2, n + 3};
+    }
     if (n % 3 == 0) {
         r.extras = {{0x1340, n}};
         r.restore = {{0x1340, 0}};
@@ -247,6 +252,9 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     r.cbufs = 2;
     r.keyString = made.key;
     r.samplers.push_back({1, 2, 3, 4, 5, 6, 7, 8});
+    r.kernel.spillEntry = 1;
+    r.kernel.spillWords = 2;
+    r.spill = {0x51, 0x52};
     ASSERT_TRUE(cache.storeKernel(made, &r, ""));
     ASSERT_TRUE(cache.storeKernel(refused, nullptr, "a texture slot the dispatch leaves unbound at 0"));
     raw::ComputeRecord back;
@@ -259,6 +267,7 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     EXPECT_EQ(back.cbufs, r.cbufs);
     EXPECT_EQ(back.keyString, r.keyString);
     EXPECT_EQ(back.samplers, r.samplers);
+    EXPECT_EQ(back.spill, r.spill);
     EXPECT_EQ(cache.loadKernel(refused, back, why), raw::RecordCache::Found::Refusal);
     EXPECT_EQ(why, "a texture slot the dispatch leaves unbound at 0");
     raw::RuntimeRecord state;

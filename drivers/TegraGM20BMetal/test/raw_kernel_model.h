@@ -24,7 +24,8 @@ constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFe
 
 struct BoState {
     bool import = false, cached = false;
-    uint32_t set = 0;  // the set it is a member of, 0: none
+    uint32_t set = 0;                 // the set it is a member of, 0: none
+    uint64_t address = 0, bytes = 0;  // an import's host range
 };
 
 struct SetState {
@@ -37,6 +38,7 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    uint32_t flags = 0;  // SubmitAddress: TegraGM20BAbiSubmit.surface_flags; SubmitJob: TegraGM20BAbiJob.flags
 };
 
 struct Slot {
@@ -61,6 +63,7 @@ struct Model {
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     unsigned creates = 0, destroys = 0, staleReads = 0;
+    std::vector<uint64_t> freed;  // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
 
     TegraGM20BAbiFence &fence(uint32_t slot)
@@ -126,11 +129,12 @@ struct Model {
         return 0;
     }
 
-    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply)
+    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply,
+            uint32_t flags)
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses)};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -159,7 +163,7 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        return run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        return run(*s, head->channel, {uses, uses + head->surface_count}, reply, head->surface_flags);
     }
 
     int submitJob(const TegraGM20BAbiSubmitAddress &address, TegraGM20BAbiExecReply &reply)
@@ -197,7 +201,7 @@ struct Model {
             setJobs++;
         }
         submitJobs++;
-        return run(*s, head->channel, std::move(uses), reply);
+        return run(*s, head->channel, std::move(uses), reply, head->flags);
     }
 
     void endGeneration(uint32_t index)
@@ -303,11 +307,12 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
+        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
+                     TegraGM20BInfoCpuAccess;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
-        info.va_end = 0x100000000;
+        info.va_end = uint64_t(1) << 40;  // a raw::Device's shader heap reserves a 4 GiB program window
         info.page_size = 4096;
         return KERN_SUCCESS;
     }
@@ -319,11 +324,14 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodBoImport:
-        model.bos[model.nextHandle] = {true, true, 0};
+    case TegraGM20BMethodBoImport: {
+        const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
+        model.bos[model.nextHandle] = {true, true, 0, in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodBoFree:
+        model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;
     case TegraGM20BMethodVmBind: {
@@ -368,7 +376,14 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     case TegraGM20BMethodGetStatus:
         return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
                             *static_cast<TegraGM20BAbiStatus *>(output));
+    case TegraGM20BMethodCpuComplete: {
+        const auto &in = *static_cast<const TegraGM20BAbiCpuComplete *>(input);
+        *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodUnmap:
+    case TegraGM20BMethodCpuAcquire:
+    case TegraGM20BMethodCpuRelease:
         return KERN_SUCCESS;
     default:
         return kIOReturnUnsupported;

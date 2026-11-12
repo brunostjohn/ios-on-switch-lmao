@@ -324,6 +324,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredStateForeign);
     }
     _ds = [(id)s isKindOfClass:[RMDepthStencil class]] ? ((RMDepthStencil *)s)->_raw.desc() : raw::DepthStencilDesc();
+    if (raw::testsHiddenZeta(_ds))
+        _cb->_passes[_passAt].testsHiddenZeta = true;
     setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
 }
 
@@ -525,15 +527,17 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [self useResource:resource usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
+// The heap as one use for reading (an argument buffer may reach any of its resources): its jobs name what it holds when
+// they are submitted (raw_heap_members.h), whatever it holds
 - (void)useHeap:(id<MTLHeap>)heap
 {
-    (void)heap;  // the facade's heaps hold ordinary resources: nothing to make resident
+    [self useHeap:heap stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
-    (void)heap;
-    (void)stages;
+    if ([(id)heap isKindOfClass:[RMHeap class]])
+        [self useResource:(id<MTLResource>)heap usage:MTLResourceUsageRead stages:stages];
 }
 
 - (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
@@ -554,15 +558,14 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
 {
-    (void)heaps;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k]];
 }
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count stages:(MTLRenderStages)stages
 {
-    (void)heaps;
-    (void)count;
-    (void)stages;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k] stages:stages];
 }
 
 // A barrier on some resources is the scope barrier over all of them (iOS's texture scope covers render attachments)

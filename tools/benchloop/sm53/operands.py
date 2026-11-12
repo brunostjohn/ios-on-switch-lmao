@@ -17,7 +17,7 @@ READS_C = {'FFMA', 'HFMA2', 'PRMT', 'IPA'}
 WRITES_PRED = {'FSETP', 'ISETP'}
 NO_DESTINATION = {'NOP', 'EXIT'}
 # ir.rs has_fixed_latency for SM5x: these finish whenever they finish and use a scoreboard; the rest do not
-VARIABLE = {'MUFU', 'RRO', 'F2F', 'F2I', 'I2F', 'I2I', 'IMUL', 'FLO', 'POPC', 'BREV', 'IPA'}
+VARIABLE = {'MUFU', 'RRO', 'F2F', 'F2I', 'I2F', 'I2I', 'IMUL', 'FLO', 'POPC', 'BREV', 'IPA', 'LDC'}
 MUFU_FUNCS = {0: 'COS', 1: 'SIN', 2: 'EX2', 3: 'LG2', 4: 'RCP', 5: 'RSQ', 8: 'SQRT'}
 
 

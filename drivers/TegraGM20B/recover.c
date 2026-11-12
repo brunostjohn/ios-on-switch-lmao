@@ -141,6 +141,10 @@ static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)
 	u32 intr1 = nvkm_rd32(device, PBDMA_INTR_1(runq->id)) &
 		    nvkm_rd32(device, PBDMA_INTR_EN_1(runq->id));
 
+	if (intr0 & TGM_PBDMA_INTR_ACQUIRE) {
+		tgm_acquire_intr(device, runq->id);
+		nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_INTR_ACQUIRE);
+	}
 	if (intr0 & TGM_PBDMA_ENG_RESET) {
 		nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_ENG_RESET);
 		nvxnu_log("tegra-gm20b: PBDMA%d was on channel %u when a recovery reset its engine "
@@ -294,6 +298,7 @@ void tgm_recover_init(struct nvkm_device *device)
 	ctxsw.work = nvxnu_work_alloc(ctxsw_work, NULL);
 	if (!ctxsw.work)
 		return;
+	tgm_acquire_init();
 	ctxsw.nvkm = func->intr_ctxsw_timeout;
 	func->intr_ctxsw_timeout = ctxsw_tick;
 	ctxsw.fifo_intr = func->intr;
@@ -322,6 +327,7 @@ void tgm_recover_suspend(void)
 	nvxnu_work_cancel_wait(ctxsw.work);
 	__atomic_store_n(&ctxsw.engm, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&ctxsw.resume, 0, __ATOMIC_RELAXED);
+	tgm_acquire_suspend();
 }
 
 void tgm_recover_arm(struct nvkm_device *device)

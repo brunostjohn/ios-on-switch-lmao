@@ -70,6 +70,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 @public
     std::string _constants;
     std::string _framework;
+    uint8_t _argumentBuffers;  // whether it takes an argument buffer at a buffer index: 0 not asked yet, 1 no, 2 yes
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -83,6 +84,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::atomic<uint64_t> _used;  // what its resources made outside its arena hold
     uint32_t _arena;              // its arena + 1; 0: none
     std::atomic<int> _purgeable;  // the MTLPurgeableState asked last (0: never asked)
+    // what a command buffer that uses it names (raw_heap_members.h): its arena, and the resources it made outside it
+    std::shared_ptr<raw::HeapMembers> _members;
 }
 @end
 
@@ -96,6 +99,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     uint64_t _heapBytes;  // what it counts against its heap outside the arena
     bool _aliasable;
     MTLPurgeableState _purgeable;
+    // an argument encoder wrote into it: the raw device's resource IDs and addresses, which no m2v twin reads
+    bool _rawArguments;
 }
 @end
 @interface RMBuffer (Textures)
@@ -142,6 +147,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMHeap *_heap;
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
+    std::atomic<bool> _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (RawMetalResourceIds.mm)
 }
 @end
 
@@ -149,6 +155,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @public
     raw::Sampler _raw;
     MTLSamplerDescriptor *_descriptor;
+    std::atomic<bool> _idNamed;
+    raw::Sampler _normalized;  // a pixel-coordinate sampler's twin of normalized coordinates, what a heap holds of it
     NSMutableDictionary<NSValue *, id<MTLSamplerState>> *_clamped;  // its descriptor's with a bind's LOD clamps
 }
 @end
@@ -223,6 +231,8 @@ struct RMPass {
     uint32_t clearStencil;
     NSUInteger width, height;
     raw::SamplePositions positions;
+    bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
+    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -412,6 +422,8 @@ uint64_t nextTraceId();
 @end
 @interface RMBlitEncoder : RMEncoder
 @end
+@interface RMParallelRenderEncoder : RMEncoder  // (RawMetalParallel.mm)
+@end
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
@@ -439,6 +451,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     [cb record:m];
 }
 
+// The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
+@interface RMCommandBuffer (Encoders)
+- (void)begin:(RMEncoder *)e;
+- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
+@end
+
 @interface RMEncoder ()
 - (void)endEncoding;
 - (void)updateFence:(id<MTLFence>)fence;
@@ -447,6 +465,10 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 // `s` with a bind's LOD clamps (RawMetalBindings.mm)
 id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
+
+@interface RMRenderEncoder ()
+- (void)checkDraw;  // (RawMetalRenderEncoder.mm)
+@end
 
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;

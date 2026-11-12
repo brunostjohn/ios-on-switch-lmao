@@ -76,6 +76,12 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
     }
     if (pp.pushes != rp.pushes || pp.pushMask != rp.pushMask || memcmp(pp.pushWords, rp.pushWords, sizeof pp.pushWords))
         why += " push";
+    const uint32_t spillWords = uint32_t(pp.spillWords[0]) + pp.spillWords[1];
+    const uint32_t *spills = pack.spills(pp);
+    if (memcmp(pp.spillEntry, rp.spillEntry, sizeof pp.spillEntry) ||
+        memcmp(pp.spillWords, rp.spillWords, sizeof pp.spillWords) || r.spill.size() != spillWords ||
+        (spillWords && (!spills || memcmp(spills, r.spill.data(), 4 * spillWords))))
+        why += " spills";
     if (pp.vertexSlot != rp.vertexSlot || pp.vertexStride != rp.vertexStride)
         why += " vertex";
     if (pp.setBytes != rp.setBytes)

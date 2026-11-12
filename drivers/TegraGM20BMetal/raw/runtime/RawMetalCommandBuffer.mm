@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
+#include "raw_parallel.h"
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
 
@@ -115,6 +116,8 @@ static void giveRecording(RMCommandBuffer *b)
         facts.surfaceWrites = root->_surfaceWrites;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
+    else if ([object isKindOfClass:[RMHeap class]])
+        facts.kind = RMResourceKind::Heap;
     _plan.registerResource((__bridge void *)object, facts);
 }
 
@@ -163,6 +166,15 @@ static void giveRecording(RMCommandBuffer *b)
                             if (binding.source == raw::BufferBinding::Source::Buffer)
                                 bound.push_back({binding.object, raw::ResourceUse::Read});
                         }
+                        // the buffer slots a stage reaches through its root table, which may be written there too
+                        for (uint32_t stage = 0; stage < 2; ++stage)
+                            for (uint32_t slots = record.rootSlots[stage]; slots; slots &= slots - 1) {
+                                const auto &binding =
+                                    _plan.buffers[stage][state.buffers[stage]][__builtin_ctz(slots)];
+                                if (binding.source == raw::BufferBinding::Source::Buffer)
+                                    bound.push_back({binding.object,
+                                                    uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Write)});
+                            }
                         return bound;
                     });
                 }
@@ -201,10 +213,7 @@ static void giveRecording(RMCommandBuffer *b)
         if (cmd.op == OpEnd && _encOpen)
             _plan.prepareRange(_encAt, _plan.size());
     }
-    const size_t consumed = cmd.op == OpViewport || cmd.op == OpDispatch       ? 6
-                            : cmd.op == OpBlendColor                           ? 4
-                            : cmd.op == OpDepthBias || cmd.op == OpDrawIndexed ? 3
-                                                                               : 0;
+    const size_t consumed = raw::extraWords(cmd.op);
     if (consumed && cmd.x + consumed == _extra.size())
         _extra.resize(cmd.x);
 }
@@ -449,6 +458,9 @@ static void giveRecording(RMCommandBuffer *b)
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    glassProbeCommitted(self);
+#endif
     [(RMDevice *)_device rmCommit:self];
 #if SWITCH_FRAME_TIMELINE
     _frame.mark(switch_frame::Back);

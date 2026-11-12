@@ -352,7 +352,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	}
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
 		 rangedUses = 0, nativeReads = 0;
-	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
+	bool hostWritten = switch_gpu_submit_acquires_host_writes(visibility);
 	bool unlockedWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
@@ -453,6 +453,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	bool ownershipBusy = false, ownershipFailed = false;
 	// The active-submit gate pins this channel, its bindings and BOs while other channels and CPU releases proceed.
 	IOLockUnlock(lock_);
+	for (uint32_t i = 0; i < writtenCount; ++i)
+		tgm_views_gpu_writes(job.written[i]);
 	if (scratch)
 		scratch->phases.end(TGM_SUBMIT_RESOLVE);
 	uint32_t leaseCount = 0;

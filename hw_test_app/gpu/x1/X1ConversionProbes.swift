@@ -17,6 +17,8 @@ public enum X1ConversionProbes {
         /// Codes off the reference that still count as its: the sRGB formula's, which an M-series Mac's own encode
         /// misses by one at 1,643 of the halves (X1ProbeTests).
         var tolerance = 0
+        /// GM20B's own store rule for the format (X1Reference.store), where one is known
+        var chip: ((Float16) -> Int)?
     }
 
     static func u16(_ bytes: [UInt8], _ at: Int) -> Int { Int(bytes[at]) | Int(bytes[at + 1]) << 8 }
@@ -24,16 +26,19 @@ public enum X1ConversionProbes {
     static let targets: [Target] = [
         Target(
             name: "unorm8", format: .bgra8Unorm, bytesPerPixel: 4, stored: { Int($0[$1 * 4]) },
-            want: { X1Reference.unorm(Double($0), top: 255) }, tie: { X1Reference.tie(Double($0), top: 255) }),
+            want: { X1Reference.unorm(Double($0), top: 255) }, tie: { X1Reference.tie(Double($0), top: 255) },
+            chip: { X1Reference.store(Double($0), bits: 8) }),
         Target(
             name: "unorm16", format: .rgba16Unorm, bytesPerPixel: 8, stored: { u16($0, $1 * 8) },
-            want: { X1Reference.unorm(Double($0), top: 65535) }, tie: { X1Reference.tie(Double($0), top: 65535) }),
+            want: { X1Reference.unorm(Double($0), top: 65535) }, tie: { X1Reference.tie(Double($0), top: 65535) },
+            chip: { X1Reference.store(Double($0), bits: 16) }),
         Target(
             name: "srgb8", format: .bgra8Unorm_srgb, bytesPerPixel: 4, stored: { Int($0[$1 * 4]) },
             want: { X1Reference.srgb8(Double($0)) }, tie: { _ in false }, tolerance: 1),
         Target(
             name: "rgb10a2", format: .rgb10a2Unorm, bytesPerPixel: 4, stored: { u16($0, $1 * 4) & 0x3ff },
-            want: { X1Reference.unorm(Double($0), top: 1023) }, tie: { X1Reference.tie(Double($0), top: 1023) }),
+            want: { X1Reference.unorm(Double($0), top: 1023) }, tie: { X1Reference.tie(Double($0), top: 1023) },
+            chip: { X1Reference.store(Double($0), bits: 10) }),
         Target(
             name: "half", format: .rgba16Float, bytesPerPixel: 8, stored: { u16($0, $1 * 8) },
             want: { $0.isNaN || $0 <= 0 ? 0 : Int($0.bitPattern) }, tie: { _ in false }),
@@ -73,9 +78,11 @@ public enum X1ConversionProbes {
             var ties = 0
             var byOne = 0
             var first: String?
+            var chipMisses = 0
             for i in 0..<65536 {
                 let h = Float16(bitPattern: UInt16(i))
                 let (have, want) = (target.stored(bytes, i), target.want(h))
+                if let chip = target.chip, have != chip(h) { chipMisses += 1 }
                 guard have != want else { continue }
                 if target.tie(h) { ties += 1 }
                 if abs(have - want) == 1 { byOne += 1 }
@@ -86,6 +93,7 @@ public enum X1ConversionProbes {
             wrong[target.name + "_wrong"] = count
             metrics.set(target.name + "_ties", ties)
             metrics.set(target.name + "_by_one", byOne)
+            if target.chip != nil { metrics.set(target.name + "_chip_misses", chipMisses) }
             if let first { metrics.set(target.name + "_first", first) }
         }
         return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)

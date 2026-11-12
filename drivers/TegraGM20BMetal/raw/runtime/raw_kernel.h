@@ -61,6 +61,7 @@ struct KernelJob {
     uint32_t set = 0, generation = 0;
     JobVisibility visibility = JobVisibility::External;
     JobEvents events;
+    bool hostWritten = false;  // the CPU wrote memory a member of the set holds since the last job that said so
 };
 
 class Kernel {

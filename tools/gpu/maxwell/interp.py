@@ -39,6 +39,7 @@ class Lane:
     regs: list[int] = field(default_factory=lambda: [0] * 256)
     preds: list[bool] = field(default_factory=lambda: [False] * 7 + [True])
     killed: bool = False
+    carry: int = 0  # the condition code's carry, which IADD.CC writes and IADD.X adds
     steps: int = 0
     stores: list = field(default_factory=list)
     local: dict = field(default_factory=dict)  # LDL and STL's memory, a word per byte address

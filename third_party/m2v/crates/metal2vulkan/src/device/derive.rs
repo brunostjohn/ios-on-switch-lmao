@@ -175,6 +175,16 @@ impl Device {
         Device(Arc::new(inner))
     }
 
+    /// This device with every set-1 heap array at most `elements` long (0: the limits' own), as
+    /// a consumer whose heap holds each texture at its header index and each sampler at its
+    /// sampler header's needs no more: its arrays then take that many elements.
+    pub fn with_heap_elements(&self, elements: u32) -> Device {
+        let mut inner = (*self.0).clone();
+        inner.profile.fields.descriptors.heap_elements = elements;
+        inner.fingerprint = inner.profile.fingerprint();
+        Device(Arc::new(inner))
+    }
+
     /// The translation-relevant profile.
     pub fn profile(&self) -> &DeviceProfile {
         &self.0.profile
@@ -338,6 +348,7 @@ fn derive_fields(
         // Push descriptors are unconditionally required by Vulkan 1.4 (vk.xml VK_VERSION_1_4).
         push_descriptor: ext(VkExtension::KhrPushDescriptor) || v1_4,
         null_descriptor: has(VkFeature::NullDescriptor),
+        heap_elements: 0,
     };
     let fragment = FragmentCaps {
         demote_to_helper: has(VkFeature::ShaderDemoteToHelperInvocation),

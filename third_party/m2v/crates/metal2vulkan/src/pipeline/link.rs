@@ -933,6 +933,9 @@ fn heap_capacity(
         ),
     ];
     let mut capacity = u64::from(crate::memory::handles::TABLE_CAPACITY);
+    if p.fields().descriptors.heap_elements != 0 {
+        capacity = capacity.min(u64::from(p.fields().descriptors.heap_elements));
+    }
     // `limit` holds `used + arrays · capacity`.
     let mut bound = |limit: VkLimit, available: u32, used: u64, arrays: u64| -> Result<(), Error> {
         if arrays == 0 {

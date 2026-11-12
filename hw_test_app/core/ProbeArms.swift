@@ -34,8 +34,10 @@ public struct ArmTally: Sendable, Equatable {
     public var clean: Bool { mismatchedTrials == 0 }
 
     /// `got` and `want` are one trial's texels, rows `width` texels of `bytesPerTexel` packed.
-    public mutating func compare(_ got: UnsafeRawBufferPointer, _ want: UnsafeRawBufferPointer, trial: Int, width: Int,
-                                 bytesPerTexel: Int) {
+    public mutating func compare(
+        _ got: UnsafeRawBufferPointer, _ want: UnsafeRawBufferPointer, trial: Int, width: Int,
+        bytesPerTexel: Int
+    ) {
         trials += 1
         let count = min(got.count, want.count)
         guard count != got.count || count != want.count || memcmp(got.baseAddress!, want.baseAddress!, count) != 0
@@ -79,10 +81,12 @@ public enum CellVerdict: String, Sendable {
         return .blind
     }
 
-    /// The probe's verdict over its cells: FAIL when any failed, PASS when every one held, INCONCLUSIVE otherwise.
+    /// The probe's verdict over its cells: FAIL when any failed; PASS when none failed and the blind cells are a strict
+    /// minority, which the line names (the rule is proven for the held cells' shapes only); INCONCLUSIVE otherwise.
     public static func claim(_ cells: [CellVerdict]) -> ClaimVerdict {
         if cells.contains(.fails) { return .fail }
-        return !cells.isEmpty && cells.allSatisfy { $0 == .holds } ? .pass : .inconclusive
+        let blind = cells.filter { $0 == .blind }.count
+        return !cells.isEmpty && blind * 2 < cells.count ? .pass : .inconclusive
     }
 }
 

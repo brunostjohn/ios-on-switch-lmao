@@ -127,4 +127,24 @@ TEST_F(BenchRecords, ColourZeroIsWrittenWholeWhateverTheTemplateWrote)
     EXPECT_NE(r.keyString.find(" c0=125:15:"), std::string::npos) << r.keyString;
 }
 
+TEST_F(BenchRecords, ATemplateIsTakenByItsKeyOnlyWhenPlain)
+{
+    EXPECT_EQ(bench::fragmentTemplate(pack_, kTemplateKey), bench::fragmentTemplate(pack_));
+    EXPECT_EQ(bench::fragmentTemplate(pack_, 0x0123456789abcdefull), nullptr);
+}
+
+TEST_F(BenchRecords, FirstColourOnlyDropsTheOtherColours)
+{
+    EXPECT_EQ(bench::withoutOtherColours("samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31"),
+              "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 a0=31");
+    EXPECT_EQ(bench::withoutOtherColours("c0=80:15:0 c1=115:0:0 c2=55:0:0"), "c0=80:15:0");
+    raw::RuntimeRecord r;
+    std::string why;
+    ASSERT_TRUE(bench::fragmentRecord(pack_, *bench::fragmentTemplate(pack_), known(), kRgbaFloat32,
+                                      0xbe7c000000000002ull, {}, {}, r, why, true))
+        << why;
+    EXPECT_EQ(r.keyString.find(" c1="), std::string::npos) << r.keyString;
+    EXPECT_NE(r.keyString.find(" c0=125:15:"), std::string::npos) << r.keyString;
+}
+
 }  // namespace

@@ -672,13 +672,9 @@ id openDevice(unsigned port)
         // (drivers/SwitchAccelStub) that only ends QuartzCore's accelerator poll. Set before the raw path's setup below, which
         // may be the first to open NVK's connection.
         setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
-        // The render server's raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside
-        // the m2v device's open below; raw_metal_device_open takes what it made, so its first frame waits for neither twice.
         const bool rawWanted = knobOn("TEGRA_RAW_METAL", true);
         char pack[1100] = "";
         const char *packRefusal = rawWanted ? rawPackRefusal(pack, sizeof pack) : nullptr;
-        if (renderServer && rawWanted && !packRefusal)
-            raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
         if (!renderServer)
             setenv("NMB_MEMO_MB", "32", 0);  // read by the bridge
         // Read by the runtime. In the render server too: its pools double their blocks, and each block is one BoAlloc on the
@@ -723,6 +719,17 @@ id openDevice(unsigned port)
         setenv("NMB_SHADOW_LOG", "0",
                0);  // the bridge's shadow.log and its every-texture announcements: nothing reads them
 #endif
+        // NVK holds the process's one GPU connection, which the raw path shares: loaded here, once, with the
+        // environment set, before the raw path's setup looks for it on its own thread, so that lookup never races
+        // the m2v device's load of the same image.
+        if (!dlopen(loader, RTLD_NOW | RTLD_LOCAL)) {
+            os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s: %{public}s", getprogname(), dlerror());
+            return nil;
+        }
+        // The render server's raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside
+        // the m2v device's open below; raw_metal_device_open takes what it made, so its first frame waits for neither twice.
+        if (renderServer && rawWanted && !packRefusal)
+            raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
         uint64_t bridgeNs = 0;
         char candidates[6][512] = {};
         unsigned count = 0;

@@ -37,16 +37,17 @@ bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::T
     return made;
 }
 
-bool passSamplePositions(MTLRenderPassDescriptor *pass, uint32_t samples, raw::SamplePositions &out)
+bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out)
 {
-    MTLSamplePosition at[8];
-    const NSUInteger count = [pass getSamplePositions:at count:8];
-    float xy[16] = {};
-    for (NSUInteger i = 0; i < count && i < 8; i++) {
-        xy[2 * i] = at[i].x;
-        xy[2 * i + 1] = at[i].y;
-    }
-    if (!raw::takeSamplePositions(xy, uint32_t(std::min<NSUInteger>(count, 9)), samples, out))
+    const auto read = [pass](float *xy, uint32_t n) {
+        MTLSamplePosition at[8];
+        [pass getSamplePositions:at count:n];
+        for (uint32_t i = 0; i < n; i++) {
+            xy[2 * i] = at[i].x;
+            xy[2 * i + 1] = at[i].y;
+        }
+    };
+    if (!raw::readSamplePositions(uint32_t(std::min<NSUInteger>(count, 9)), samples, read, out))
         return false;
     static std::atomic<bool> said{false};
     if (!said.exchange(true))
@@ -62,7 +63,7 @@ static bool ownedZeta(void *object)
     if (![o isKindOfClass:[RMTexture class]])
         return false;
     const RMTexture *t = (RMTexture *)o;
-    return t->_rawOk && t->_raw.zeta && t->_raw.samples > 1;
+    return t->_rawOk && t->_raw.zeta && (t->_raw.samples > 1 || t->_raw.arena);
 }
 
 // Whether every pass of the range that attaches `t` neither loads nor stores it: m2v's own texture of its descriptor then
@@ -121,9 +122,9 @@ void failOwnedZeta(RMCommandBuffer *cb, RMTexture *t)
         "%u samples whose memory m2v has no texture of",
         t->_raw.width, t->_raw.height, unsigned(t->_raw.samples));
     NSString *text = [NSString
-        stringWithFormat:
-            @"The multisampled depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
-            [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height, (unsigned long)t->_descriptor.pixelFormat];
+        stringWithFormat:@"The depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
+                         [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height,
+                         (unsigned long)t->_descriptor.pixelFormat];
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                          code:MTLCommandBufferErrorInternal
                                      userInfo:@{NSLocalizedDescriptionKey : text}];

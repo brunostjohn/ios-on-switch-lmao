@@ -16,7 +16,8 @@ enum RawProbe {
 
     static func call(_ object: AnyObject, _ selector: Selector, _ argument: Any? = nil) throws -> String? {
         guard let object = object as? NSObject, object.responds(to: selector) else {
-            throw TestFailure("the facade has no \(NSStringFromSelector(selector)) (a release plug-in or another device)")
+            throw TestFailure(
+                "the facade has no \(NSStringFromSelector(selector)) (a release plug-in or another device)")
         }
         let answer = argument == nil ? object.perform(selector) : object.perform(selector, with: argument)
         return answer?.takeUnretainedValue() as? String
@@ -96,6 +97,27 @@ extension GPU {
     }
 }
 
+extension GPU {
+    /// Command buffers under `forms` committed back to back and awaited together, so each starts as the one before
+    /// it ends: the last one's GPU time, the first path off the raw path (else raw), and the forms' effect in all.
+    func runBackToBack(forms: String, _ encodes: [(MTLCommandBuffer) throws -> Void]) throws -> ArmBatch {
+        let buffers = try encodes.map { encode in
+            try commit { commands in
+                if !forms.isEmpty { try RawProbe.forms(commands, forms) }
+                try encode(commands)
+            }
+        }
+        try finish(buffers)
+        var batch = ArmBatch()
+        if let last = buffers.last { batch.gpuMilliseconds = max(0, last.gpuEndTime - last.gpuStartTime) * 1000 }
+        batch.path = buffers.map(RawFacade.path(of:)).first { $0 != "raw" } ?? "raw"
+        for buffer in buffers {
+            for (key, value) in try RawProbe.taken(buffer) { batch.taken[key, default: 0] += value }
+        }
+        return batch
+    }
+}
+
 /// A probe's tallies by cell and arm, and the line fields they make: per cell <cell>=<H|F|B>:<trials>:<mismatched
 /// trials> for each relaxed arm, the first difference anywhere, the arms' GPU time, and where the forms took effect.
 struct ProbeLedger {
@@ -128,17 +150,22 @@ struct ProbeLedger {
         for (index, arm) in relaxed.enumerated() {
             var verdicts: [CellVerdict] = []
             var cellsText: [String] = []
+            var blindCells: [String] = []
             var minTrials = Int.max
             for cell in cells {
                 guard let tally = tallies[cell]?[arm] else { continue }
                 let v = CellVerdict.of(relaxed: tally, unguarded: none.flatMap { tallies[cell]?[$0] })
                 verdicts.append(v)
+                if v == .blind { blindCells.append(cell) }
                 cellsText.append("\(cell):\(v.rawValue):\(tally.trials):\(tally.mismatchedTrials)")
                 minTrials = min(minTrials, tally.trials)
-                if let first = tally.first, metrics["\(arm)_first"] == nil { metrics.set("\(arm)_first", "\(cell)@\(first)") }
+                if let first = tally.first, metrics["\(arm)_first"] == nil {
+                    metrics.set("\(arm)_first", "\(cell)@\(first)")
+                }
             }
             let claim = CellVerdict.claim(verdicts)
             metrics.set("\(arm)_verdict", claim.rawValue)
+            metrics.set("\(arm)_blind_cells", blindCells.isEmpty ? "-" : blindCells.joined(separator: ","))
             metrics.set("\(arm)_cells", cellsText.joined(separator: ","))
             metrics.set("\(arm)_held", verdicts.filter { $0 == .holds }.count)
             metrics.set("\(arm)_failed", verdicts.filter { $0 == .fails }.count)

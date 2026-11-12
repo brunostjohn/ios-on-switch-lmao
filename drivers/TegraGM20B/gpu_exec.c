@@ -402,7 +402,7 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 		return ret;
 	if (may_wait) {
 		idle_wake();
-		tgm_chan_timeslice_due(chan);
+		tgm_chan_ramfc_due(chan);
 	}
 	/* from its first submission: a channel made before its connection's GPU priority came (the compositor's, at boot)
 	 * is never held for the compositor's own frame */
@@ -554,7 +554,7 @@ void switch_gpu_chan_submit_enter(struct tgm_chan *chan)
 {
 	tgm_gate_enter();
 	idle_wake();
-	tgm_chan_timeslice_due(chan);
+	tgm_chan_ramfc_due(chan);
 }
 
 void switch_gpu_chan_submit_leave(void)

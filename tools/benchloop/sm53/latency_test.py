@@ -45,7 +45,7 @@ class LatencyTest(unittest.TestCase):
     def test_variable_chains_wait_on_the_previous_link(self):
         prog = latency.chain([ops.RECIPES['IMUL']])[0]['program']
         links = [d for d in operands.decode(protocol.unb64(prog['code'])) if d.base == 'IMUL']
-        self.assertEqual([(d.control.wr_bar, d.control.wait) for d in links[:3]], [(0, 0), (1, 1), (0, 2)])
+        self.assertEqual([(d.control.wr_bar, d.control.wait) for d in links[:3]], [(0, 2), (1, 1), (0, 2)])
 
 
 if __name__ == '__main__':

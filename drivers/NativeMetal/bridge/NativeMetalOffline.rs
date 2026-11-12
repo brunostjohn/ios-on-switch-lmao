@@ -4,6 +4,7 @@
 //! of a Vulkan query, and libraries and functions made by the translator alone. nmb_compile_profile_check holds a live
 //! runtime to the profile; nmb_compile_profile_freeze writes the profile of one.
 
+use crate::direct::RAW_HEAP_ELEMENTS;
 use crate::objects::{
     DescriptorFunction, NmbComputePipelineDescriptorOf, NmbConstant, NmbDevice, NmbRenderPipelineDescriptorOf,
     attribute_out, compute_descriptor, e, get, guard, release, specialization,
@@ -51,8 +52,11 @@ impl Devices {
 
 fn devices(p: &Profile) -> Result<Devices, String> {
     let made = |d: Result<Device, metal2vulkan::error::Error>| {
-        d.map(|d| d.with_native_target(NativeShaderTarget::Sm53))
-            .map_err(e("compile device"))
+        d.map(|d| {
+            d.with_native_target(NativeShaderTarget::Sm53)
+                .with_heap_elements(RAW_HEAP_ELEMENTS)
+        })
+        .map_err(e("compile device"))
     };
     let mut barrier = p.enabled.clone();
     barrier.extensions.remove(&VkExtension::ExtFragmentShaderInterlock);
@@ -62,7 +66,9 @@ fn devices(p: &Profile) -> Result<Devices, String> {
     ordered.framebuffer_fetch = FramebufferFetchPolicy::RequireOrdered;
     let runtime = Device::new(p.enabled.clone(), p.policy).map_err(e("compile device"))?;
     Ok(Devices {
-        native: runtime.with_native_target(NativeShaderTarget::Sm53),
+        native: runtime
+            .with_native_target(NativeShaderTarget::Sm53)
+            .with_heap_elements(RAW_HEAP_ELEMENTS),
         barrier: made(Device::new(barrier, p.policy))?,
         ordered: made(Device::new_with_center_fragment_depth(p.enabled.clone(), ordered))?,
         runtime,

@@ -10,6 +10,7 @@
 #include <set>
 #include "raw_owned.h"
 #include "raw_set_reads.h"
+#include "raw_spill_table.h"
 
 namespace raw {
 namespace {
@@ -28,13 +29,13 @@ uint32_t valueOf(const std::map<uint32_t, uint32_t> &regs, uint32_t m)
     return it == regs.end() ? 0 : it->second;
 }
 
-// mkpack.py raw_bindable
-bool rawBindable(const CapturedProgram &p)
+// mkpack.py raw_bindable: set 1 (the heap's arrays) only for a state whose record describes them
+bool rawBindable(const CapturedProgram &p, bool heap)
 {
     const std::vector<uint8_t> &t = p.cbufTypes;
     if (t.empty() || t[0] != CbufRoot)
         return false;
-    bool data = false, set = false;
+    bool data = false, set = false, heapSet = false;
     uint32_t ubos = 0;
     for (size_t i = 1; i < t.size(); i++) {
         if (cbufKind(t[i]) == CbufUbo) {
@@ -42,6 +43,10 @@ bool rawBindable(const CapturedProgram &p)
             if (ubos & bit)
                 return false;
             ubos |= bit;
+            continue;
+        }
+        if (heap && t[i] == kCbufHeapSet && !heapSet) {
+            heapSet = true;
             continue;
         }
         if ((t[i] != CbufShaderData && t[i] != CbufSet) || (t[i] == CbufShaderData ? data : set))
@@ -59,8 +64,7 @@ bool ubosNamed(const CapturedProgram &p, const PackPipeline &pipe)
             continue;
         bool named = false;
         for (uint32_t k = 0; k < pipe.entries && !named; k++)
-            named = pipe.entry[k].kind == EntryUbo && !bufferStorage(pipe.entry[k]) &&
-                    pipe.entry[k].offset == cbufUboOffset(p.cbufTypes[i]);
+            named = uniformEntry(pipe.entry[k]) && pipe.entry[k].offset == cbufUboOffset(p.cbufTypes[i]);
         if (!named)
             return false;
     }
@@ -93,8 +97,13 @@ PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts, bool codeS
     p.slot = e.slot;
     p.samplerKind = s16 < 256 ? 1 : 0;
     const uint32_t value = p.samplerKind ? probeStorageCode(e.stage, e.slot) : probeBindOffset(e.stage, e.slot);
-    if (const auto at = parts.residuals.find(value); at != parts.residuals.end() && !(p.samplerKind && codeShared))
+    if (parts.residualsPlanned) {
+        if (e.stage >= 1 && e.stage <= 2 && e.slot < 32)
+            p.samplerKind |= uint8_t(parts.residualWord[e.stage - 1][e.slot] << 2);
+    } else if (const auto at = parts.residuals.find(value);
+               at != parts.residuals.end() && !(p.samplerKind && codeShared)) {
         p.samplerKind |= uint8_t(((at->second - 0x700) / 4 + 1) << 2);
+    }
     p.sampler = uint8_t(window / 16);
     p.pad = uint8_t(window / 16 >> 8);
     return p;
@@ -214,9 +223,9 @@ bool programsBindable(const RecordParts &parts, std::string &why)
             why = "unknown program";
             return false;
         }
-        if (!rawBindable(*p)) {
+        if (!rawBindable(*p, parts.heap.arrays != 0)) {
             why = "a program reads constant buffers " + cbufList(p->cbufTypes) +
-                  ", the raw path binds root, shader data, set 0 and its uniform buffers";
+                  ", the raw path binds root, shader data, set 0, its uniform buffers and a heap's set 1";
             return false;
         }
         constexpr size_t kPackCbufs = sizeof(PackProgram::cbufType);
@@ -274,7 +283,8 @@ static void describeReads(RuntimeRecord &out, const std::string &key)
     if (!fs.boundTextures || fs.boundTextures > fs.cbufTypes.size() || fs.cbufTypes[fs.boundTextures - 1] != CbufSet)
         return;
     for (uint32_t k = 0; k < p.entries; k++)
-        if (p.entry[k].kind != EntryUbo && p.entry[k].kind != EntryColorTable)
+        if (p.entry[k].kind != EntryUbo && p.entry[k].kind != EntryColorTable && p.entry[k].kind != EntryTextureTable &&
+            p.entry[k].kind != EntrySamplerTable && p.entry[k].kind != EntrySpillTable)
             p.boundEntries |= 1u << k;
 }
 
@@ -303,6 +313,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         PackEntry &entry = p.entry[p.entries++];
         if (e.colorTable)
             entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
+        else if (e.table)
+            entry = {uint16_t(e.offset), e.table, e.stage, 0, 0, 0, 0};
         else if (e.buffer)
             entry = bufferEntry(e, parts, storageCodes[probeStorageCode(e.stage, e.slot)] > 1);
         else if (!handleEntry(e, out, entry, why))
@@ -360,6 +372,24 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.storageBlendModel = parts.storageBlendModel;
     p.shaderTests = parts.shaderTests;
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
+    memcpy(p.rootTableWord, parts.heap.rootTableWord, sizeof p.rootTableWord);
+    memcpy(p.statusWord, parts.heap.statusWord, sizeof p.statusWord);
+    memcpy(p.rootSlots, parts.heap.rootSlots, sizeof p.rootSlots);
+    p.heapArrays = parts.heap.arrays;
+    p.heapBytes = parts.heap.bytes;
+    memcpy(p.heap, parts.heap.array, sizeof p.heap);
+    out.spill.clear();
+    for (uint32_t k = 0; k < 2; k++) {
+        for (uint32_t i = 0; i < p.entries; i++)
+            if (p.entry[i].kind == EntrySpillTable && p.entry[i].stage == k + 1)
+                p.spillEntry[k] = uint8_t(i + 1);
+        if (bool(p.spillEntry[k]) != !parts.spill[k].empty() || parts.spill[k].size() > kSpillWordsMax) {
+            why = "an argument table its layout and its words disagree on";
+            return false;
+        }
+        p.spillWords[k] = uint8_t(parts.spill[k].size());
+        out.spill.insert(out.spill.end(), parts.spill[k].begin(), parts.spill[k].end());
+    }
     describeReads(out, key);
     constexpr size_t kHeaderBytes = 0x50;
     for (const CapturedProgram &program : out.programs)

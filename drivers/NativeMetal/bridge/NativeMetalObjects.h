@@ -442,6 +442,26 @@ bool nmb_argument_encoder_set_compute_pipeline(NmbArgumentEncoder *, NmbComputeP
 void *nmb_argument_encoder_constant_data(const NmbArgumentEncoder *,
                                          uint32_t index); /* NULL before an argument buffer is set */
 NmbArgumentEncoder *nmb_argument_encoder_new_nested(const NmbArgumentEncoder *, uint32_t index);
+
+/* The raw path's encoder of a function's argument buffer (raw_argument_layout.h): the layout of the one the function takes at
+ * buffer_index, then each one its pointers point to, as flat runs of leaf arguments (metal2vulkan bind/argument_runs.rs).
+ * A run covers `count` elements of `ids_per_element` ids from `id`, the first `width` of them arguments of `kind`
+ * (raw::ArgumentKind) at offset + element * stride + w * element_stride; `nested`: a pointer's layout index + 1, 0 none.
+ * The layouts are valid during `each`; false with nmb_last_error where Metal makes no encoder, or each's false. */
+struct NmbArgumentRun {
+    uint32_t id, count, ids_per_element, width, kind, nested;
+    uint64_t offset, stride, element_stride, size;
+};
+
+struct NmbArgumentLayout {
+    uint64_t encoded_length, alignment;
+    const struct NmbArgumentRun *runs;
+    uint32_t run_count, reserved;
+};
+
+bool nmb_function_argument_layouts(NmbFunction *, uint32_t buffer_index,
+                                   bool (*each)(const struct NmbArgumentLayout *layouts, uint32_t count, void *ctx),
+                                   void *ctx);
 #ifdef __cplusplus
 }
 #endif

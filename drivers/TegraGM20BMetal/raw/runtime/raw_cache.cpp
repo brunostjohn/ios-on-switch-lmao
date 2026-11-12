@@ -200,6 +200,7 @@ std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const st
             w.value(v.assume);
             writeProgram(w, v.program);
         }
+        w.list(record->spill);
     } else {
         w.text(refusal);
     }
@@ -243,6 +244,9 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
         v.program = readProgram(r);
     }
     if (rec.variants.size() != variants || variants != 0u + rec.pipeline.variantCount[0] + rec.pipeline.variantCount[1])
+        return RecordCache::Found::None;
+    rec.spill = r.list<uint32_t>();
+    if (rec.spill.size() != 0u + rec.pipeline.spillWords[0] + rec.pipeline.spillWords[1])
         return RecordCache::Found::None;
     if (!r.ok() || r.at() != bytes.size() - 8)
         return RecordCache::Found::None;

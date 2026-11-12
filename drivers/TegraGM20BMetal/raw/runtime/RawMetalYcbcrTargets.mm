@@ -82,6 +82,8 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
                                     reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                          error:(NSError **)error
 {
+    if (const char *why = rmUnsupportedRenderState(d))
+        return rmRefuseUnsupported(why, error);
     if (rmRenderArchiveMissed(d, o, error))
         return nil;
     o &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;

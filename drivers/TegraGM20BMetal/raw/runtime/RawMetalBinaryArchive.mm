@@ -4,8 +4,9 @@
 // archiveFile) holds the states the pack declares for that file (raw_pack.h PackArchive), and nothing else of this GPU's;
 // an archive file m2v wrote holds nothing of this GPU's; a file of no archive format, or none, is
 // MTLBinaryArchiveErrorInvalidFile. A creation under
-// MTLPipelineOptionFailOnBinaryArchiveMiss that lists archives none of which holds its state, and the pack does not, is nil
-// with the target driver's error, before any compile (an M4 Max: AGXMetalG16X code 3).
+// MTLPipelineOptionFailOnBinaryArchiveMiss that lists archives none of which holds its state is nil with the target
+// driver's error, before any compile (an M4 Max: AGXMetalG16X code 3), but for a framework's state the pack holds, the
+// device's own archive hit (RawMetalStates.mm rmPipelineFor).
 #import "RawMetalBinaryArchive.h"
 #import "RawMetalInternal.h"
 
@@ -91,6 +92,8 @@ static RMFunction *own(id<MTLFunction> function)
 {
     if (!own(d.vertexFunction) || (d.fragmentFunction && !own(d.fragmentFunction)))
         return failed(error, MTLBinaryArchiveErrorUnexpectedElement, @"a function of another device");
+    if (const char *why = rmUnsupportedRenderState(d))
+        return failed(error, MTLBinaryArchiveErrorCompilationFailure, @(why));
     return [self add:rmArchiveKey(raw_metal_pipeline_key(d).UTF8String)];
 }
 
@@ -99,6 +102,8 @@ static RMFunction *own(id<MTLFunction> function)
     RMFunction *f = own(d.computeFunction);
     if (!f)
         return failed(error, MTLBinaryArchiveErrorUnexpectedElement, @"a function of another device");
+    if (const char *why = rmUnsupportedComputeState(d))
+        return failed(error, MTLBinaryArchiveErrorCompilationFailure, @(why));
     return [self add:rmArchiveKey(computeKey(d, f))];
 }
 
@@ -178,10 +183,10 @@ id<MTLBinaryArchive> rmNewBinaryArchive(id device, MTLBinaryArchiveDescriptor *d
     return archive;
 }
 
-raw::ArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, bool packed, uint64_t key)
+raw::ArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, uint64_t key)
 {
     return raw::archiveAnswer(
-        options & MTLPipelineOptionFailOnBinaryArchiveMiss, archives.count, packed, [&](size_t i) {
+        options & MTLPipelineOptionFailOnBinaryArchiveMiss, archives.count, [&](size_t i) {
             id archive = archives[i];
             return [archive isKindOfClass:[RMBinaryArchive class]] && [(RMBinaryArchive *)archive holds:key];
         });
@@ -216,7 +221,7 @@ bool rmTileArchiveAnswer(MTLTileRenderPipelineDescriptor *twin, MTLTileRenderPip
                          MTLPipelineOption &options, NSError **error)
 {
     RMFunction *f = own(d.tileFunction);
-    const raw::ArchiveAnswer answer = f ? rmArchiveAnswer(d.binaryArchives, options, false, rmArchiveKey(tileKey(d, f)))
+    const raw::ArchiveAnswer answer = f ? rmArchiveAnswer(d.binaryArchives, options, rmArchiveKey(tileKey(d, f)))
                                         : raw::ArchiveAnswer::NotAsked;
     twin.binaryArchives = nil;
     options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;

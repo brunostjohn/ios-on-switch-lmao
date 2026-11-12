@@ -535,7 +535,7 @@ class AGXDeviceUserClient : public IOUserClient
 public:
 	bool setUp(task_t task);
 	int hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
-			   uint64_t *interlocks);
+			   uint64_t *interlocks, uint32_t *lastEngine);
 
 	void countConnection()
 	{

@@ -87,6 +87,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
     d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
+    d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
+    d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
+    d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
@@ -137,7 +140,8 @@ static const char *zetaMemoryRefusal(int asked)
 
 // hw_test_app's gpu.compression_churn and gpu.raw.compressed_targets: the raw device's compressed memory (raw_comp.h).
 // held, held_bytes and views are now; made and refused count since the device opened, and so do the clears of compressed
-// targets the ZBC table held or not and the entries this process added (raw_zbc.h).
+// targets the ZBC table held or not and the entries this process added (raw_zbc.h); ce_copies: a shadow's fills and stores
+// through compressed memory; storage_fallback_compressed: draws whose storage form a compressed attachment turned away.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCompression
 {
     const auto &s = gRM->raw->stats;
@@ -151,7 +155,10 @@ static const char *zetaMemoryRefusal(int asked)
         @"zbc_misses" : @(s.zbcMisses.load()),
         @"zbc_added" : @(s.zbcAdded.load()),
         @"zbc_full" : @(s.zbcFull.load()),
-        @"zbc_inexact" : @(s.zbcInexact.load())
+        @"zbc_inexact" : @(s.zbcInexact.load()),
+        @"ce_copies" : @(s.compCopies.load()),
+        @"zeta_ce_copies" : @(s.compZetaCopies.load()),
+        @"storage_fallback_compressed" : @(s.fetch.storageFallback[size_t(raw::StorageFallback::Compressed)].load())
     };
 }
 
@@ -227,6 +234,13 @@ static const char *zetaMemoryRefusal(int asked)
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (rmZeroNewBuffers() && b->_raw.cpu) {
+        memset(b->_raw.cpu, 0, b->_raw.length);
+        if (!b->_raw.wc)
+            cacheLines(b->_raw.cpu, b->_raw.length, false);
+    }
+#endif
     return (id<MTLBuffer>)b;
 }
 

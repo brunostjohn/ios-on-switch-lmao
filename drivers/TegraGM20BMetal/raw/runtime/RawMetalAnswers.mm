@@ -94,20 +94,21 @@
 
 @end
 
-// The facade's heaps hold ordinary resources: nothing to make resident (RMRenderEncoder's are the same)
+// The heap as one use for reading, as RMRenderEncoder's
 @interface RMComputeEncoder (Answers)
 @end
 @implementation RMComputeEncoder (Answers)
 
 - (void)useHeap:(id<MTLHeap>)heap
 {
-    (void)heap;
+    if ([(id)heap isKindOfClass:[RMHeap class]])
+        [(id<MTLComputeCommandEncoder>)self useResource:(id<MTLResource>)heap usage:MTLResourceUsageRead];
 }
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
 {
-    (void)heaps;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k]];
 }
 
 - (void)setSamplerState:(id<MTLSamplerState>)sampler

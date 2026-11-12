@@ -36,6 +36,7 @@ py_library(
         "report.py",
         "rop.py",
         "session.py",
+        "sweeps.py",
         "texels.py",
         "transport.py",
     ],
@@ -86,6 +87,7 @@ APP_SOURCES = [
         "known_test",
         "loop_test",
         "rop_test",
+        "sweeps_test",
         "transport_test",
     ]
 ]

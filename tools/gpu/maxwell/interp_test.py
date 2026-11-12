@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tools.gpu.maxwell import floats, gate, isa, texture
 from tools.gpu.maxwell.execute import alu, run
-from tools.gpu.maxwell.interp import Lane
+from tools.gpu.maxwell.interp import Lane, UnsupportedError
 
 FIXTURE = Path(__file__).with_name('testdata') / 'image_draw_fragment.hex'
 F2F_NEG = 1 << 45
@@ -183,6 +183,84 @@ class LocalTest(unittest.TestCase):
             alu(isa.name(w), w, lane, inputs)
         self.assertEqual((lane.r(8), lane.r(9), lane.r(10)), (7, 9, 0))
         self.assertEqual(lane.local, {0xF8: 7, 0xFC: 9})
+
+
+class AddressTest(unittest.TestCase):
+    """The 64-bit address arithmetic and texel fetch m2v's argument-buffer reads compile to (NAK sm50.rs encodings)."""
+
+    @staticmethod
+    def shf(opcode: int, kind: int, shift: int, high: bool = False) -> int:
+        return opcode << 48 | high << 48 | kind << 37 | shift << 20 | 1 << 39 | 0 << 8 | 2
+
+    def test_shf_funnels_the_high_word_into_the_low(self):
+        for opcode, kind, shift, high, want in (
+            (0x38F8, 2, 4, False, 0x21234567),  # SHF.R.U64: (r1:r0) >> 4, its low word
+            (0x38F8, 2, 4, True, 0x00BCDEF1),  # .HI
+            (0x36F8, 2, 4, False, 0xBCDEF121),  # SHF.L.U64: (r1:r0) << 4, its high word
+            (0x38F8, 3, 36, True, 0xFFFFFFFF),  # SHF.R.S64 .HI past 32: the sign
+        ):
+            lane = Lane()
+            lane.w(0, 0x12345678)
+            lane.w(1, 0xABCDEF12 if kind == 3 else 0xBCDEF12)
+            alu('SHF_r_imm' if opcode == 0x38F8 else 'SHF_l_imm', self.shf(opcode, kind, shift, high), lane, None)
+            self.assertEqual(lane.r(2), want, (hex(opcode), kind, shift, high))
+
+    def test_a_64_bit_sum_carries_from_its_low_word_into_its_high(self):
+        lane = Lane()
+        for r, v in enumerate((0xFFF00040, 0xFFFFFFFF, 0x02100000, 0)):
+            lane.w(r, v)
+        # IADD.CC r4 = r0 + r2, then IADD.X r5 = r1 + r3 + carry: 0xFFFFFFFF_FFF00040 + 0x02100000 wraps to 0x2000040
+        alu('IADD_reg', 0x5C10 << 48 | 1 << 47 | 2 << 20 | 0 << 8 | 4, lane, None)
+        alu('IADD_reg', 0x5C10 << 48 | 1 << 43 | 3 << 20 | 1 << 8 | 5, lane, None)
+        self.assertEqual((lane.r(4), lane.r(5)), (0x02000040, 0))
+        # a subtraction carries where it does not borrow: 5 - 5 with the second operand negated
+        lane.w(6, 5)
+        alu('IADD_reg', 0x5C10 << 48 | 1 << 47 | 1 << 48 | 6 << 20 | 6 << 8 | 7, lane, None)
+        self.assertEqual((lane.r(7), lane.carry), (0, 1))
+
+    def test_a_bindless_texel_fetch_takes_its_handle_from_register_b(self):
+        seen = []
+        inputs = gate.Seeded(3, 0).inputs(0)
+        inputs.texture = lambda key: seen.append(key) or [1, 2, 3, 4]
+        lane = Lane()
+        lane.w(4, 7)
+        lane.w(5, 9)
+        lane.w(8, 0x300005)
+        # TLD.B 2D (dim 1), RGBA (mask 15), level zero: coordinates r4, r5, handle r8, results from r10
+        word = 0xDD38 << 48 | 15 << 31 | 1 << 28 | 8 << 20 | 4 << 8 | 10
+        texture.tld('TLD_b', word, lane, inputs, 10)
+        self.assertEqual(seen, [('tld', 0x300005, (7, 9), None, None, None, 1)])
+        self.assertEqual([lane.r(r) for r in (10, 11, 12, 13)], [1, 2, 3, 4])
+
+
+class AttributeTest(unittest.TestCase):
+    """A vertex stage's ALD and AST as NAK sm50.rs encodes them: 0xefd8 and 0xeff0, the byte address in bits 20-29."""
+
+    @staticmethod
+    def word(opcode: int, reg: int, index: int, address: int, comps: int) -> int:
+        output = 1 << 32 if opcode == 0xEFF0 else 0
+        return opcode << 48 | (comps - 1) << 47 | 0xFF << 39 | output | address << 20 | index << 8 | reg
+
+    def test_a_load_reads_consecutive_words_from_its_address_plus_its_index(self):
+        inputs = gate.Seeded(3, 0).inputs(0)
+        inputs.attribute = lambda at: 0x1000 + at
+        lane = Lane()
+        lane.w(2, 0x10)
+        alu('ALD', self.word(0xEFD8, 4, 255, 0x80, 4), lane, inputs)
+        self.assertEqual([lane.r(r) for r in range(4, 8)], [0x1080, 0x1084, 0x1088, 0x108C])
+        alu('ALD', self.word(0xEFD8, 8, 2, 0x2F0, 1), lane, inputs)
+        self.assertEqual(lane.r(8), 0x1300)
+
+    def test_a_store_records_each_word_at_its_address(self):
+        lane = Lane()
+        for r, v in enumerate((5, 6, 7, 8)):
+            lane.w(10 + r, v)
+        alu('AST', self.word(0xEFF0, 10, 255, 0x70, 4), lane, None)
+        self.assertEqual(lane.stores, [('ast', 0x70, 5), ('ast', 0x74, 6), ('ast', 0x78, 7), ('ast', 0x7C, 8)])
+
+    def test_a_patch_or_a_vertex_register_is_not_modelled(self):
+        with self.assertRaises(UnsupportedError):
+            alu('ALD', self.word(0xEFD8, 4, 255, 0x80, 1) | 1 << 31, Lane(), None)
 
 
 if __name__ == '__main__':

@@ -78,6 +78,13 @@ bool native_bridge_metal_compute_save(id artifact, const char *directory, char *
 bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
                                         bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
                                         const char **why);
+// The layouts of the argument buffer `function` (this device's) takes at buffer `index`, as its AIR lays them out, for the raw
+// GM20B path's encoder (bridge/NativeMetalObjects.h nmb_function_argument_layouts): false with `why` (valid until the next
+// call on the thread) where Metal makes no encoder, or `each` returns false
+struct NmbArgumentLayout;
+bool native_bridge_metal_argument_layouts(id function, NSUInteger index,
+                                          bool (*each)(const struct NmbArgumentLayout *, uint32_t count, void *),
+                                          void *ctx, const char **why);
 // A dispatch of compute `state` (this device's) the raw GM20B path ran instead, journaled as its own dispatches are (a D line)
 void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTLSize group, bool threads, const char *memory,
                                           const char *textures, const char *samplers);

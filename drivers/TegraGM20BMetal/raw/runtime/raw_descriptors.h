@@ -3,11 +3,13 @@
 
 #include <array>
 #include <cstdint>
+#include "raw_spill_table.h"
 
 namespace raw {
 
-// A render state's set 0: its NVK layout's size (PackPipeline::setBytes) in 256-byte blocks, at most two. The words past a
-// state's own size stay zero, so two builds of a set compare whole.
+// A render state's set 0: its NVK layout's size (PackPipeline::setBytes) in 256-byte blocks, at most two (its record's
+// kPackEntries entries, 16 bytes each at most). The words past a state's own size stay zero, so two builds of a set
+// compare whole.
 using DescriptorWords = std::array<uint32_t, 128>;
 constexpr uint32_t kRenderSetBytes = sizeof(DescriptorWords);
 
@@ -19,13 +21,15 @@ constexpr uint32_t renderSetBytes(uint32_t layoutBytes)
 // The upload allocations must remain immutable and live until every draw using this encoder has retired.
 class DescriptorSnapshot {
 public:
-    template <typename Upload> uint64_t resolve(const DescriptorWords &words, Upload upload)
+    // `bytes`: the upload's size; a set of other bytes is uploaded again whatever its words
+    template <typename Upload> uint64_t resolve(const DescriptorWords &words, Upload upload, uint32_t bytes = 256)
     {
-        if (!address_ || words_ != words) {
+        if (!address_ || words_ != words || bytes_ != bytes) {
             const uint64_t address = upload(words);
             if (!address)
                 return 0;
             words_ = words;
+            bytes_ = bytes;
             address_ = address;
         }
         return address_;
@@ -33,6 +37,7 @@ public:
 
 private:
     DescriptorWords words_ = {};
+    uint32_t bytes_ = 0;
     uint64_t address_ = 0;
 };
 
@@ -40,6 +45,7 @@ struct PreparedDescriptorWords {
     DescriptorWords words{};
     std::array<uint32_t, 32> residuals{};
     uint32_t residualMask = 0;
+    SpillResiduals spilled[2];  // the vertex and the fragment argument tables' (raw_spill_table.h)
     uint64_t address = 0;
 };
 
@@ -51,7 +57,7 @@ class PreparedDescriptors {
 public:
     template <typename Build, typename Upload>
     const PreparedDescriptorWords *resolve(const void *pipeline, uint32_t moved, uint32_t memory, Build build,
-                                           Upload upload)
+                                           Upload upload, uint32_t bytes = 256)
     {
         const bool same = value_.address && pipeline_ == pipeline;
         if (same && !moved)
@@ -62,7 +68,7 @@ public:
         if (!build(value_, same ? moved : ~0u))
             return nullptr;
         if (!same || (moved & memory)) {
-            const uint64_t address = snapshot_.resolve(value_.words, upload);
+            const uint64_t address = snapshot_.resolve(value_.words, upload, bytes);
             if (!address)
                 return nullptr;
             value_.address = address;

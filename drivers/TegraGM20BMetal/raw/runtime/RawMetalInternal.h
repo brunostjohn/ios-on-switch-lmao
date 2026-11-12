@@ -78,6 +78,16 @@ static constexpr auto kWaitLimit = std::chrono::seconds(20);
 
 os_log_t rawLog();
 void once(NSString *text);
+// The device's handle tables of argument buffers (RawMetalResourceIds.mm): which texture a heap array holds, and an object
+// whose ID was named going
+bool rmHeapHolds(uint32_t heapClass, const raw::HeapTextureFacts *facts);
+void rmHeapForgetTexture(RMTexture *t);
+void rmHeapForgetSampler(RMSampler *s);
+// A resource a heap made outside its arena (RawMetalHeap.mm): a member of what a job names of the heap until it goes
+void rmHeapHold(RMHeap *heap, const raw::HeapMember &member);
+void rmHeapForget(RMHeap *heap, uint64_t va);
+// newArgumentEncoderWithBufferIndex: of a function (RawMetalArgumentEncoder.mm): nil where Metal makes no encoder
+id<MTLArgumentEncoder> rmFunctionArgumentEncoder(RMFunction *function, NSUInteger index);
 double hostSeconds();
 uint64_t nowUs();
 
@@ -88,6 +98,8 @@ struct Stats {
     // shared event signals published as their raw work completes (publishRawEventSignals), those the CPU set after the head
     // waited for its own work, and native event waits that went on a submitted command buffer's promise
     std::atomic<uint64_t> signalsPublished{0}, signalsAfterWork{0}, waitsOnPromise{0};
+    // event waits the scheduler held its queue for on the CPU (a listener armed): no submitted producer, or a timeout
+    std::atomic<uint64_t> waitsHeldOnCpu{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
@@ -262,6 +274,8 @@ void noteReplayShape(RMCommandBuffer *cb, size_t from, size_t to);
 #endif
 // A heap's pages back if it was purged (an m2v twin aliases them); true without a heap or an arena
 bool heapResident(RMHeap *h);
+// The device's ask of `d` in an arena of `blockLinear` (a private heap's): every kind the raw path keeps; false: none
+bool heapTextureAsk(MTLTextureDescriptor *d, bool blockLinear, raw::TextureAsk &ask);
 
 // RawMetalTexture.mm
 void declareGpuWrites(RMTexture *t);
@@ -277,9 +291,12 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
 // `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)
 void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
                 std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh);
-// A chain's generateMipmapsForTexture: of a format the 2D engine does not filter as Metal does (fmt2d 0): a pass of the pack's
-// mip state a level (raw_mip.h); false where the pack has none or a pass is refused (*why)
-bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, const char **why);
+// Levels first + 1 .. last of a chain by a pass of the pack's mip state a level (raw_mip.h); false where the pack has none or a
+// pass is refused (*why)
+bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, uint32_t first, uint32_t last, const char **why);
+// A chain's generateMipmapsForTexture: each step on the 2D engine or by mipPasses (raw/fx/fx_mip_route.h); `be` is the blit
+// encoder encoding goes on with; `probe2d` the command's probe format (fx_mip_probe.h), 0 for none
+bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::BlitEncoder *&be, const char **why);
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
@@ -293,6 +310,12 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
 
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
+
+// RawMetalUnsupported.mm: why the device has no form of a state of `d` (null: it has), and that refusal as a creation answers
+// it (nil, its error)
+const char *rmUnsupportedRenderState(MTLRenderPipelineDescriptor *d);
+const char *rmUnsupportedComputeState(MTLComputePipelineDescriptor *d);
+id rmRefuseUnsupported(const char *why, NSError **error);
 
 // RawMetalStates.mm: the state of `d` as the pack and the archives it lists answer, nil where it is Metal's binary archive
 // miss (`*error`), never compiled; and whether the archives miss the state of `d` (its functions this device's)
@@ -313,6 +336,13 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d);
                                     reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                          error:(NSError **)error;
 @end
+
+// RawMetalParallel.mm: the command at `at` is a pass that continues the one before it (a parallel encoder's sub-encoder after
+// its first); the pass at `begin` is one of such a group (pass fusion's body checks see one pass of it, not the group); and
+// where the passes that continue the one at `begin` end (its own end if none does)
+bool rmContinuesPass(RMCommandBuffer *cb, size_t at);
+bool rmGroupedPass(RMCommandBuffer *cb, size_t begin);
+size_t rmPassGroupEnd(RMCommandBuffer *cb, size_t begin);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
@@ -402,4 +432,9 @@ int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 void rawStallTick();
 void watchFetchBarrierWay(raw::Device *dev);
 void watchKeylineProbe();
+// RawMetalGlassProbe.mm
+void watchGlassProbe(raw::Device *dev);
+void glassProbeCommitted(RMCommandBuffer *cb);
+bool rmWholePrograms();
+bool rmZeroNewBuffers();
 #endif

@@ -31,6 +31,7 @@ struct Asked {
     std::map<uint32_t, uint32_t> *registers;
     bool split;
     bool variants;
+    BoundDraw *bound;
     std::string why;
     CompileOutcome outcome = CompileOutcome::Failed;
 };
@@ -40,6 +41,13 @@ bool made(const NmbDirectState *state, void *ctx)
     Asked &a = *static_cast<Asked *>(ctx);
     a.outcome =
         directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split, a.variants);
+    if (a.bound) {
+        const NmbDirectDraw &d = state->draws[3];
+        a.bound->pushMask = d.pushMask;
+        memcpy(a.bound->push, d.push, sizeof a.bound->push);
+        for (uint32_t k = 0; k < 2; k++)
+            a.bound->spill[k].assign(d.spill[k], d.spill[k] + d.spillWords[k]);
+    }
     return true;
 }
 
@@ -84,7 +92,9 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                             std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
-    Asked a = {nvk_, rules_, key, attributes, out, registers, split, variants_, {}};
+    Asked a = {nvk_, rules_, key, attributes, out, registers, split, variants_, keepBound_ ? &bound_ : nullptr, {}};
+    if (keepBound_)
+        bound_ = {};
     std::vector<NmbDirectCubicSampler> cubic;
     std::vector<NmbDirectTextureFormat> formats;
     for (const CubicBinds::Sampler &c : textures.cubic.samplers)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A blit encoder's commands of the tape onto the copy engine (and the 2D engine's mip chains): see encodeRaw.
 #import "RawMetalInternal.h"
+#include "../fx/fx_mip_route.h"
 
 // What stands for a texture's memory in its blit encoder's order (raw::BlitEncoder::access): its surface, its buffer, or the
 // texture a view views
@@ -90,13 +91,6 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
                            fx, fy, layerOrPlane(t->_raw, ds, dz + k), ew, eh);
         break;
     }
-    case OpMipmaps: {  // a chain's levels from level 0 (decided at record)
-        RMTexture *t = (__bridge RMTexture *)c.obj;
-        useTexture(rc, t, true);
-        be->access(memoryOf(t), memoryOf(t));
-        be->generate(t->_raw);
-        break;
-    }
     case OpCopyBuffer: {
         RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
         useBuffer(rc, s, false);
@@ -162,18 +156,17 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
     }
 }
 
-// generateMipmapsForTexture: of a chain whose format has no 2D-engine filtering that matches Metal's: one pass a level of the
-// pack's mip state (raw_mip.h), level l + 1 drawn from a header of level l alone. Each pass's prologue barrier orders its reads
-// after the pass before wrote.
-bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, const char **why)
+// Levels first + 1 .. last of a chain by the pack's mip state (raw_mip.h): one pass a level, level l + 1 drawn from a header of
+// level l alone. Each pass's prologue barrier orders its reads after the pass before wrote.
+bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, uint32_t first, uint32_t last, const char **why)
 {
     raw::Device &d = *gRM->raw;
     raw::Pipeline *mip = d.mipPipeline(t->_raw.format);
     const raw::fx::MipChain &c = t->_raw.chain->layout;
-    if (!mip)
+    if (!mip || last >= c.levels)
         return false;
     useTexture(rc, t, true);
-    for (uint32_t l = 0; l + 1 < c.levels; l++) {
+    for (uint32_t l = first; l < last; l++) {
         raw::Texture from = t->_raw, to;
         from.tic = d.levelTic(t->_raw, l);
         if (!from.tic || !raw::chainLevelTarget(t->_raw, l + 1, to))
@@ -197,5 +190,32 @@ bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, const char **why)
             return false;
         e->end();
     }
+    RAW_DIAGNOSTIC(d.stats.mip3dLevels += last - first);
     return true;
+}
+
+// generateMipmapsForTexture: each run of the chain's steps on its engine (fx_mip_route.h, decided at record), the blit
+// encoder ended around 3D runs and `be` the one encoding goes on with. `probe2d`: a debug build's probe of a format no probe
+// covered yet, every step on the 2D engine as that surface format (fx_mip_probe.h)
+bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::BlitEncoder *&be, const char **why)
+{
+    const raw::Texture::Chain &chain = *t->_raw.chain;
+    const uint32_t fmt2d = probe2d ? probe2d : chain.fmt2d;
+    bool ok = true;
+    const bool routed = raw::fx::eachMipRun(
+        chain.layout, fmt2d != 0, !probe2d && gRM->raw->mipPipeline(t->_raw.format) != nullptr,
+        [&](const raw::fx::MipRun &run) {
+            if (!ok)
+                return;
+            if (run.engine == raw::fx::MipEngine::TwoD) {
+                useTexture(rc, t, true);
+                be->access(memoryOf(t), memoryOf(t));
+                be->generate(t->_raw, fmt2d, run.first, run.last, run.unproven);
+                return;
+            }
+            be->end();
+            ok = mipPasses(rc, t, run.first, run.last, why);
+            be = rc->blit();
+        });
+    return routed && ok;
 }

@@ -9,20 +9,20 @@ use crate::offline::{NmbOfflineRenderPipelineDescriptor, offline_devices};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
-    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
-    FieldLocation, FragmentTests, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable,
-    TextureFacts, WriteSource,
+    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorBytes, DescriptorRange, DrawCall,
+    DrawCommands, FieldLocation, FragmentTests, ImageSource, NeutralResource, PushHole, SamplerDescriptor,
+    SamplerSource, StageTable, TextureFacts, WriteSource, heap_class_code,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
-use metal2vulkan::error::Retry;
+use metal2vulkan::error::{BindError, Retry};
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter, TextureType,
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType, SlotClass,
-    SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot,
+    BindingSource, GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType,
+    SlotClass, SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, SyntheticBinding, TextureSlot,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,10 @@ const PROBE_TAGGED: u32 = 16;
 const RUN_BYTES: [u32; 4] = [256, 16, 4096, 256];
 const BOUND_RUN: usize = 3;
 const MAX_WRITES: usize = 64;
+pub(crate) const HEAP_ARRAYS: usize = 8;
+/// The raw path's texture header pool (raw_heap_tables.h kHeapElements): its heap holds texture header i and sampler header
+/// i at element i, so no array needs more elements
+pub(crate) const RAW_HEAP_ELEMENTS: u32 = 8192;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -63,6 +67,8 @@ pub enum NmbDirectSource {
     Other,
     DepthStandIn,
     StencilStandIn,
+    TextureTable,
+    SamplerTable,
     ArgumentTable,
 }
 
@@ -178,9 +184,19 @@ pub struct NmbDirectDraw {
     pub depth_test_word: u32,
     pub stencil_test_word: u32,
     pub push_holes: u32,
+    pub root_table_word: [u8; 2],
+    pub status_word: [u8; 2],
+    pub other_holes: u32,
+    pub root_slots: [u32; 2],
+    pub set1: u64,
+    pub heap_arrays: u32,
+    pub heap_class: [u32; HEAP_ARRAYS],
     pub vertex_slot: u32,
     pub vertex_stride: u32,
     pub variant: *const c_char,
+    pub spill: [*const u32; 2],
+    pub spill_words: [u32; 2],
+    pub residual_word: [[u8; 32]; 2],
 }
 
 #[repr(C)]
@@ -348,7 +364,11 @@ pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan:
     if let Some((_, device)) = kept.as_ref().filter(|(of, _)| *of == fingerprint) {
         return Ok(device.clone());
     }
-    let device = Arc::new(compile.with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53));
+    let device = Arc::new(
+        compile
+            .with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53)
+            .with_heap_elements(RAW_HEAP_ELEMENTS),
+    );
     *kept = Some((fingerprint, device.clone()));
     Ok(device)
 }
@@ -394,7 +414,8 @@ fn specialized_device(nmb: &NmbDevice, barrier: bool) -> Result<Arc<metal2vulkan
     let device = Arc::new(
         device
             .map_err(e("native compile device"))?
-            .with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53),
+            .with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53)
+            .with_heap_elements(RAW_HEAP_ELEMENTS),
     );
     *kept = Some((id, device.clone()));
     Ok(device)
@@ -503,9 +524,15 @@ fn declared_facts(t: &TextureSlot, own: Option<PixelFormat>, format: PixelFormat
     facts
 }
 
+/// The probe's address of a buffer at slot `slot` of `stage` (1 vertex, 2 fragment)
+fn probe_address(stage: u32, slot: u32) -> u64 {
+    0x1_0000_0000u64 + (u64::from(stage) << 24) + (u64::from(slot) << 16)
+}
+
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and `samples` and 16 samplers at the fragment stage, a
-/// texture of its declaration at each of `declared` and a sampler at each of `vertex_samplers`, `binds`' in their places
+/// buffers at each slot's own offset; a buffer of the run's bytes at a slot of `addressed`, which m2v reaches by its
+/// device address), 16 textures of `format` and `samples` and 16 samplers at the fragment stage, a texture of its
+/// declaration at each of `declared` and a sampler at each of `vertex_samplers`, `binds`' in their places
 fn probe_state(
     run: usize,
     format: PixelFormat,
@@ -513,6 +540,7 @@ fn probe_state(
     declared: &[(Stage, u32, TextureSlot)],
     vertex_samplers: &[u32],
     binds: &Binds,
+    addressed: &[SlotRef],
 ) -> BindState {
     let mut state = BindState::default();
     state.fragment_tests = match binds.fragment_tests {
@@ -525,11 +553,20 @@ fn probe_state(
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
         for slot in 0..PROBE_SLOTS {
+            let address = probe_address(stage_number(stage), slot);
+            let reached = addressed.iter().any(|a| a.stage == stage && a.index == slot);
             let bound = if run == BOUND_RUN {
-                let address = 0x1_0000_0000u64 + (u64::from(stage_number(stage)) << 24) + (u64::from(slot) << 16);
                 BoundBuffer::Buffer {
                     length: 256 + u64::from(RUN_BYTES[run]),
                     offset: probe_bind_offset(stage_number(stage), slot),
+                    gpu_address: address,
+                    device_address: Some(address),
+                    attribute_stride: None,
+                }
+            } else if reached {
+                BoundBuffer::Buffer {
+                    length: u64::from(RUN_BYTES[run]),
+                    offset: 0,
                     gpu_address: address,
                     device_address: Some(address),
                     attribute_stride: None,
@@ -698,14 +735,197 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
             out.source = NmbDirectSource::ColorTable;
             out.stage = 2;
         }
-        WriteSource::ArgumentTable { stage, bytes_len } => {
-            out.source = NmbDirectSource::ArgumentTable;
+        WriteSource::HandleTable { stage, bytes_len } | WriteSource::ArgumentTable { stage, bytes_len } => {
+            out.source = if matches!(w.source, WriteSource::ArgumentTable { .. }) {
+                NmbDirectSource::ArgumentTable
+            } else {
+                NmbDirectSource::TextureTable
+            };
             out.stage = stage_number(*stage);
             out.range = u64::from(*bytes_len);
         }
         _ => {}
     }
     out
+}
+
+/// A handle table's write as its binding's synthetic kind names it, not by its size or place: the texture table or the
+/// sampler table
+fn table_of(mut write: NmbDirectWrite, layout: &PipelineLayout) -> NmbDirectWrite {
+    if write.source != NmbDirectSource::TextureTable {
+        return write;
+    }
+    let source = layout
+        .sets
+        .iter()
+        .filter(|s| s.set == write.set)
+        .flat_map(|s| &s.bindings)
+        .find(|b| b.binding == write.binding)
+        .map(|b| &b.source);
+    write.source = match source {
+        Some(BindingSource::Synthetic {
+            binding: SyntheticBinding::SamplerTable,
+            ..
+        }) => NmbDirectSource::SamplerTable,
+        Some(BindingSource::Synthetic {
+            binding: SyntheticBinding::HandleTable,
+            ..
+        }) => NmbDirectSource::TextureTable,
+        _ => NmbDirectSource::Other,
+    };
+    write
+}
+
+/// The words instantiation gave `stage`'s argument table (m2v's push fields past the stage's push window), empty where its
+/// placement spilled none
+pub(crate) fn spill_table(plan: &BindingPlan, bytes: &[DescriptorBytes], stage: Stage) -> Vec<u32> {
+    let Some(write) = plan
+        .descriptors
+        .iter()
+        .find(|w| matches!(w.source, WriteSource::ArgumentTable { stage: s, .. } if s == stage))
+    else {
+        return Vec::new();
+    };
+    bytes
+        .iter()
+        .find(|b| b.set == write.set && b.binding == write.binding)
+        .map_or_else(Vec::new, |b| {
+            b.bytes
+                .chunks(4)
+                .map(|w| {
+                    w.iter()
+                        .enumerate()
+                        .fold(0u32, |v, (k, byte)| v | u32::from(*byte) << (8 * k))
+                })
+                .collect()
+        })
+}
+
+/// By buffer slot, the record's word + 1 of each SlotBindOffset residual of `stage` as the plan places it: a root push
+/// word (1 to 32), or the stage's argument table word + 33 (33 to 63). The probe's codes cannot name a storage residual
+/// whose slot shares its code with another.
+pub(crate) fn residual_words(plan: &BindingPlan, stage: Stage) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for field in plan.push.fields.iter().filter(|f| f.stage == stage) {
+        let PushField::SlotBindOffset(slot) = field.field else {
+            continue;
+        };
+        if slot.class != SlotClass::Buffer || slot.index >= 32 {
+            continue;
+        }
+        let word = match field.location {
+            FieldLocation::PushWindow { offset } if offset / 4 < 32 => offset / 4 + 1,
+            FieldLocation::ArgumentTable { offset } if offset / 4 < 31 => offset / 4 + 33,
+            _ => continue,
+        };
+        out[slot.index as usize] = word as u8;
+    }
+    out
+}
+
+/// Set 0's samplers that take no write: a heap image's constexpr sampler (BindingSource::HeapSampler's immutable one), whose
+/// descriptor NVK writes into the set from its layout
+fn immutable_samplers(layout: &PipelineLayout, written: &[NmbDirectWrite]) -> Vec<NmbDirectWrite> {
+    let mut out = Vec::new();
+    for b in layout.sets.iter().filter(|s| s.set == 0).flat_map(|s| &s.bindings) {
+        let sampler = avk::DescriptorType::from(b.ty) == avk::DescriptorType::SAMPLER;
+        if !sampler || b.immutable_sampler.is_none() || written.iter().any(|w| w.binding == b.binding) {
+            continue;
+        }
+        for element in 0..b.count {
+            out.push(NmbDirectWrite {
+                set: 0,
+                binding: b.binding,
+                element,
+                ty: avk::DescriptorType::SAMPLER.as_raw(),
+                source: NmbDirectSource::Sampler,
+                stage: 2,
+                slot: 0,
+                sampler: NMB_DIRECT_IMMUTABLE,
+                range: 0,
+                view_type: -1,
+            });
+        }
+    }
+    out
+}
+
+/// The stages of a hole's flags as raw_direct.cpp numbers them: bit 0 vertex, bit 1 fragment
+fn hole_stages(stages: metal2vulkan::vk::ShaderStageFlags) -> u32 {
+    use metal2vulkan::vk::ShaderStageFlags as S;
+    u32::from(stages.contains(S::VERTEX)) | u32::from(stages.contains(S::FRAGMENT)) << 1
+}
+
+/// The holes of `commands` the raw path fills into `draw` (each stage's root-table and ExecutionStatus address, as push word
+/// + 1), the others counted; and the buffer slots each stage's root table holds an entry for, as the bound run names them
+fn holes_of(commands: &DrawCommands, draw: &mut NmbDirectDraw) -> Result<(), String> {
+    for hole in &commands.push_holes {
+        let (word, stages, offset) = match *hole {
+            PushHole::RootTableAddress { stages, offset } => (&mut draw.root_table_word, stages, offset),
+            PushHole::ExecutionStatusAddress { stages, offset } => (&mut draw.status_word, stages, offset),
+            _ => {
+                draw.other_holes += 1;
+                continue;
+            }
+        };
+        if offset % 4 != 0 || offset > 128 - 8 {
+            return Err("an address push hole outside the root push window".into());
+        }
+        let encoded = (offset / 4 + 1) as u8;
+        for k in 0..2 {
+            if hole_stages(stages) >> k & 1 == 0 {
+                continue;
+            }
+            if word[k] != 0 && word[k] != encoded {
+                return Err("a stage's address push hole at two places".into());
+            }
+            word[k] = encoded;
+        }
+    }
+    for (stages, table) in &commands.root_tables {
+        let field = |root: usize, at: usize| {
+            table
+                .bytes
+                .get(32 * root + at..32 * root + at + 8)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0, u64::from_le_bytes)
+        };
+        let first = (field(1, 8) as usize).min(table.bytes.len() / 32);
+        for root in 2..first {
+            if field(root, 0) == 0 {
+                continue;
+            }
+            let slot = root - 2;
+            if slot >= 31 {
+                return Err("a root table entry past the buffer slots".into());
+            }
+            for k in 0..2 {
+                if hole_stages(*stages) >> k & 1 != 0 {
+                    draw.root_slots[k] |= 1 << slot;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The variant's set-1 heap: its set layout on the runtime's device (0 with none) and each array's class word, by
+/// binding
+fn heap_of(pipeline: &RenderPipeline, layout: &Layout<'_>, draw: &mut NmbDirectDraw) {
+    let Some((at, set)) = pipeline.layout.sets.iter().enumerate().find(|(_, s)| s.set == 1) else {
+        return;
+    };
+    draw.set1 = layout.sets.get(at).map_or(0, |s| avk::Handle::as_raw(*s));
+    draw.heap_arrays = set.bindings.len() as u32;
+    for b in &set.bindings {
+        let code = match &b.source {
+            BindingSource::Heap(class) => heap_class_code(class).unwrap_or(0),
+            _ => 0,
+        };
+        if let Some(slot) = draw.heap_class.get_mut(b.binding as usize) {
+            *slot = code;
+        }
+    }
 }
 
 /// A variant's layout as data, and as the runtime makes it on its device where there is one (pipeline/objects.rs
@@ -862,6 +1082,11 @@ impl<'d> Layout<'d> {
     pub(crate) fn set0(&self) -> u64 {
         self.sets.first().map_or(0, |s| avk::Handle::as_raw(*s))
     }
+
+    /// The handle of the `at`th set layout, 0: none
+    pub(crate) fn set_at(&self, at: usize) -> u64 {
+        self.sets.get(at).map_or(0, |s| avk::Handle::as_raw(*s))
+    }
 }
 
 impl Drop for Layout<'_> {
@@ -889,15 +1114,31 @@ struct Run {
     plan: BindingPlan,
 }
 
+/// Why a probe draw did not settle: a buffer slot m2v reaches by its device address was bound without one (the probe binds
+/// it a buffer then), or the translator's refusal
+enum Unsettled {
+    Address(SlotRef),
+    Refused(String),
+}
+
+impl From<String> for Unsettled {
+    fn from(why: String) -> Unsettled {
+        Unsettled::Refused(why)
+    }
+}
+
 fn settle(
     compile: &metal2vulkan::device::Device,
     descriptor: &RenderPipelineDescriptor,
     variants: &mut Vec<(VariantKey, RenderPipeline)>,
     state: &BindState,
     budget: &Budget,
-) -> Result<Run, String> {
+) -> Result<Run, Unsettled> {
     let shape = state.shape();
-    let plan = variants[0].1.plan(compile, &shape).map_err(e("plan"))?;
+    let plan = match variants[0].1.plan(compile, &shape) {
+        Err(BindError::MissingDeviceAddress { slot }) => return Err(Unsettled::Address(slot)),
+        plan => plan.map_err(e("plan"))?,
+    };
     let (variant, plan) = if plan.variant == variants[0].0 {
         (0, plan)
     } else {
@@ -911,7 +1152,10 @@ fn settle(
                 variants.len() - 1
             }
         };
-        (at, variants[at].1.plan(compile, &shape).map_err(e("plan variant"))?)
+        match variants[at].1.plan(compile, &shape) {
+            Err(BindError::MissingDeviceAddress { slot }) => return Err(Unsettled::Address(slot)),
+            plan => (at, plan.map_err(e("plan variant"))?),
+        }
     };
     let commands = plan.instantiate_draw(state, &PROBE_DRAW).map_err(e("instantiate"))?;
     Ok(Run {
@@ -926,6 +1170,7 @@ fn draw_of(
     pipeline: &RenderPipeline,
     layout: &Layout<'_>,
     writes: &[NmbDirectWrite],
+    spills: &[Vec<u32>; 2],
     variant: &CString,
 ) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
@@ -941,25 +1186,53 @@ fn draw_of(
         depth_test_word: 0,
         stencil_test_word: 0,
         push_holes: run.commands.push_holes.len() as u32,
+        root_table_word: [0; 2],
+        status_word: [0; 2],
+        other_holes: 0,
+        root_slots: [0; 2],
+        set1: 0,
+        heap_arrays: 0,
+        heap_class: [0; HEAP_ARRAYS],
         vertex_slot: u32::MAX,
         vertex_stride: 0,
         variant: variant.as_ptr(),
+        spill: [spills[0].as_ptr(), spills[1].as_ptr()],
+        spill_words: [spills[0].len() as u32, spills[1].len() as u32],
+        residual_word: [
+            residual_words(&run.plan, Stage::Vertex),
+            residual_words(&run.plan, Stage::Fragment),
+        ],
     };
+    holes_of(&run.commands, &mut draw)?;
+    heap_of(pipeline, layout, &mut draw);
     for field in &run.plan.push.fields {
         let (word, bytes) = match field.field {
+            // a static root's guest address, which the probe's draws fill with their own
+            PushField::SlotGuestBase(_) => {
+                draw.other_holes += 1;
+                continue;
+            }
             PushField::BlendColor => (&mut draw.blend_color_word, 32),
             PushField::HalfBlendColor => (&mut draw.half_blend_color_word, 16),
             PushField::ShaderTestsState => (&mut draw.depth_test_word, 16),
             PushField::ShaderStencilState => (&mut draw.stencil_test_word, 16),
             _ => continue,
         };
-        let FieldLocation::PushWindow { offset } = field.location else {
-            return Err("dynamic state outside the root push window".into());
+        // a field past the window is a word of the fragment stage's argument table: raw_spill_table.h numbers it from 32
+        let (offset, first, end) = match field.location {
+            FieldLocation::PushWindow { offset } => (offset, 0, 128),
+            FieldLocation::ArgumentTable { offset } if field.stage == Stage::Fragment => {
+                (offset, 128, 4 * spills[1].len() as u32)
+            }
+            FieldLocation::ArgumentTable { .. } => {
+                return Err("a vertex stage's dynamic state in its argument table".into());
+            }
+            _ => return Err("dynamic state at a push location the raw path does not know".into()),
         };
-        if field.size != bytes || offset % 4 != 0 || offset > 128 - bytes {
+        if field.size != bytes || offset % 4 != 0 || offset > end.saturating_sub(bytes) {
             return Err("invalid dynamic state push placement".into());
         }
-        let encoded = offset / 4 + 1;
+        let encoded = (first + offset) / 4 + 1;
         if *word != 0 && *word != encoded {
             return Err("multiple dynamic state push placements".into());
         }
@@ -1103,16 +1376,31 @@ fn translate(
     let declared = declared_slots(&base);
     let samplers = vertex_samplers(&base);
     let mut variants = vec![(VariantKey::new(), base)];
-    let mut runs = Vec::with_capacity(RUN_BYTES.len());
-    for run in 0..RUN_BYTES.len() {
-        runs.push(settle(
-            compile,
-            descriptor,
-            &mut variants,
-            &probe_state(run, format, texture_samples.max(1), &declared, &samplers, binds),
-            &budget,
-        )?);
-    }
+    let mut addressed: Vec<SlotRef> = Vec::new();
+    let runs = 'settled: loop {
+        let mut runs = Vec::with_capacity(RUN_BYTES.len());
+        for run in 0..RUN_BYTES.len() {
+            let state = probe_state(
+                run,
+                format,
+                texture_samples.max(1),
+                &declared,
+                &samplers,
+                binds,
+                &addressed,
+            );
+            match settle(compile, descriptor, &mut variants, &state, &budget) {
+                Ok(settled) => runs.push(settled),
+                Err(Unsettled::Address(slot)) if !addressed.contains(&slot) => {
+                    addressed.push(slot);
+                    continue 'settled;
+                }
+                Err(Unsettled::Address(slot)) => return Err(format!("plan: no device address at {slot:?}")),
+                Err(Unsettled::Refused(why)) => return Err(why),
+            }
+        }
+        break runs;
+    };
     let layouts = variants
         .iter()
         .map(|(_, pipeline)| Layout::new(vulkan, &pipeline.layout))
@@ -1120,12 +1408,23 @@ fn translate(
     let writes: Vec<Vec<NmbDirectWrite>> = runs
         .iter()
         .map(|run| {
-            run.plan
+            let layout = &variants[run.variant].1.layout;
+            let mut writes: Vec<NmbDirectWrite> = run
+                .plan
                 .descriptors
                 .iter()
+                .filter(|w| w.set == 0)
                 .take(MAX_WRITES)
-                .map(|w| write_of(w, &run.commands.descriptor_ranges))
-                .collect()
+                .map(|w| table_of(write_of(w, &run.commands.descriptor_ranges), layout))
+                .collect();
+            writes.extend(immutable_samplers(layout, &writes));
+            writes
+        })
+        .collect();
+    let spills: Vec<[Vec<u32>; 2]> = runs
+        .iter()
+        .map(|run| {
+            [Stage::Vertex, Stage::Fragment].map(|stage| spill_table(&run.plan, &run.commands.descriptor_bytes, stage))
         })
         .collect();
     let names: Vec<CString> = runs
@@ -1141,6 +1440,7 @@ fn translate(
                 &variants[run.variant].1,
                 &layouts[run.variant],
                 &writes[k],
+                &spills[k],
                 &names[k],
             )
         })

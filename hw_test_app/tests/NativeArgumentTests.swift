@@ -7,7 +7,13 @@ import Metal
 /// argument's place are Metal's (an M3 Max's and an M4's: a pointer, a texture, a sampler, a float and a float4 take
 /// 0, 8, 16, 24 and 32 of 48 bytes aligned to 16), a buffer is written as its GPU address plus the offset, a texture and
 /// a sampler as real resource IDs (nonzero, distinct, past every ID m2v hands out), and an array's elements at their own
-/// places. A pass whose fragments read a colour through an argument buffer's pointer logs where it was drawn.
+/// places. Five passes read through argument buffers, each drawn on the raw path with the exact colours: a colour behind a
+/// pointer; two textures and a sampler written by the fragment function's own encoder (its buffer index form), so a draw
+/// that reads texture 0 for every ID cannot pass; an array of three textures sampled through an array of two samplers of
+/// other address modes (NativeArgumentDraws.swift); one pointer that is a bound buffer or an argument buffer's by pixel;
+/// a texture and a colour behind a pointer to an argument buffer that the nested encoder wrote; and fourteen fragment or
+/// thirteen vertex buffers (and twenty-eight kernel buffers) bound beside an argument buffer, whose last offsets m2v places
+/// in the stage's argument table (NativeArgumentSpills.swift).
 struct NativeArgumentEncoderTest: NativeObjectTest {
     let id = "metal.native.argument_encoder"
     let name = "Argument encoders are the device's own and write addresses and real resource IDs where Metal lays them"
@@ -68,6 +74,15 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
         if encoder.makeArgumentEncoderForBuffer(atIndex: 0) != nil {
             work.failures.append("a descriptor layout answered a nested encoder")
         }
+        if let function = gpu.library.makeFunction(name: "argument_nested_fragment") {
+            let outer = function.makeArgumentEncoder(bufferIndex: 0)
+            work.objects.append(outer)
+            if let inner = outer.makeArgumentEncoderForBuffer(atIndex: 0) {
+                work.objects.append(inner)
+            } else {
+                work.failures.append("a function's pointer to an argument buffer answered no nested encoder")
+            }
+        }
         let ids = Set(textures.map { $0.gpuResourceID._impl })
         if ids.count != textures.count || ids.contains(0) { work.failures.append("textures share a resource ID") }
         let arrayBuffer = try gpu.buffer(256)
@@ -78,13 +93,78 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
         if placed != textures.map({ $0.gpuResourceID._impl }) + [samplerID, samplerID] {
             work.failures.append("an array's elements are not at their places")
         }
+        let draws: [(String, (GPU) async throws -> String)] = [
+            ("draw_path", drawThroughArguments), ("texture_draw_path", drawTexturesThroughArguments),
+            ("array_draw_path", drawArraysThroughArguments), ("slot_draw_path", drawSlotThroughArguments),
+            ("kernel_path", dispatchThroughArguments),
+            ("spill_draw_path", { try await drawSpillThroughArguments($0, .fragment) }),
+            ("spill_vertex_draw_path", { try await drawSpillThroughArguments($0, .vertex) }),
+            ("spill_both_draw_path", { try await drawSpillThroughArguments($0, .both) }),
+            ("spill_kernel_path", dispatchSpillThroughArguments),
+        ]
+        for (key, draw) in draws {
+            var path = "error"
+            do {
+                path = try await draw(gpu)
+            } catch {
+                metrics.set("draw_error", "\(error)".replacingOccurrences(of: " ", with: "_"))
+            }
+            metrics.set(key, path)
+            if path != "raw/exact" { work.failures.append("\(key) \(path), not raw/exact") }
+        }
+        var nested = "error"
         do {
-            metrics.set("draw_path", try await drawThroughArguments(gpu))
+            nested = try await drawNestedThroughArguments(gpu, &metrics)
         } catch {
-            metrics.set("draw_path", "error")
             metrics.set("draw_error", "\(error)".replacingOccurrences(of: " ", with: "_"))
         }
+        metrics.set("nested_draw_path", nested)
+        if nested != "raw/exact" { work.failures.append("nested_draw_path \(nested), not raw/exact") }
+        await heapUseCost(gpu, &metrics, &work.failures)
         return work
+    }
+
+    /// Where a pass that samples two textures through an argument buffer the fragment function's encoder wrote went, and
+    /// whether each half drew its own texture's colour
+    func drawTexturesThroughArguments(_ gpu: GPU) async throws -> String {
+        guard let function = gpu.library.makeFunction(name: "argument_textures_fragment"),
+            let sampler = gpu.device.makeSamplerState(descriptor: MTLSamplerDescriptor())
+        else { return "no_function" }
+        let encoder = function.makeArgumentEncoder(bufferIndex: 0)
+        let first = try gpu.texture(.rgba8Unorm, 4, 4), second = try gpu.texture(.rgba8Unorm, 4, 4)
+        let arguments = try gpu.buffer(max(encoder.encodedLength, 16))
+        encoder.setArgumentBuffer(arguments, offset: 0)
+        encoder.setTexture(first, index: 0)
+        encoder.setTexture(second, index: 1)
+        encoder.setSamplerState(sampler, index: 2)
+        let pipeline = try gpu.render(fragment: "argument_textures_fragment", format: .rgba8Unorm)
+        let target = try gpu.texture(.rgba8Unorm, 8, 8)
+        let drawn = try await gpu.run { commands in
+            for (texture, colour) in [(first, MTLClearColor(red: 1, green: 0, blue: 0, alpha: 1)),
+                                      (second, MTLClearColor(red: 0, green: 0, blue: 1, alpha: 1))] {
+                let clear = MTLRenderPassDescriptor()
+                clear.colorAttachments[0].texture = texture
+                clear.colorAttachments[0].loadAction = .clear
+                clear.colorAttachments[0].clearColor = colour
+                commands.makeRenderCommandEncoder(descriptor: clear)!.endEncoding()
+            }
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            let render = commands.makeRenderCommandEncoder(descriptor: pass)!
+            render.setRenderPipelineState(pipeline)
+            render.useResource(first, usage: .read, stages: .fragment)
+            render.useResource(second, usage: .read, stages: .fragment)
+            var corners = GPU.fullScreen
+            render.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * corners.count, index: 0)
+            render.setFragmentBuffer(arguments, offset: 0, index: 0)
+            render.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            render.endEncoding()
+        }
+        let pixels = try await gpu.read(target, bytesPerPixel: 4)
+        let exact = Array(pixels.pixel(1, 4, width: 8)) == [255, 0, 0, 255]
+            && Array(pixels.pixel(6, 4, width: 8)) == [0, 0, 255, 255]
+        return "\(drawn.path)/\(exact ? "exact" : "wrong")"
     }
 
     /// Where a pass that reads its colour through an argument buffer's pointer went, and whether it drew that colour

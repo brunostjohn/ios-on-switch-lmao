@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 19;
+constexpr uint32_t kPackVersion = 20;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -186,7 +186,13 @@ enum PackEntryKind : uint8_t {
     // buffer descriptor of the device's own copy
     EntryColorTable = 5,
     EntryDepthTest = 6,
-    EntryStencilTest = 7
+    EntryStencilTest = 7,
+    // m2v's handle tables of argument-buffer textures and samplers (bind/heap.rs): a storage buffer descriptor of the
+    // device's own table, every texture's by its header index, every sampler's by its sampler header's (raw_heap_tables.h)
+    EntryTextureTable = 8,
+    EntrySamplerTable = 9,
+    // m2v's ArgumentTable of stage `stage` (raw_spill_table.h): a uniform buffer descriptor of the words the encoder uploads
+    EntrySpillTable = 10
 };
 
 constexpr uint8_t kNoSlot = 0xFF;
@@ -221,6 +227,12 @@ inline uint32_t handleStage(const PackEntry &e)
 inline bool bufferStorage(const PackEntry &e)
 {
     return e.samplerKind & 1;
+}
+
+// An entry a program may read as a constant buffer (PackCbufType CbufUbo): a uniform buffer, or an argument table
+inline bool uniformEntry(const PackEntry &e)
+{
+    return (e.kind == EntryUbo && !bufferStorage(e)) || e.kind == EntrySpillTable;
 }
 
 // A buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the record
@@ -270,19 +282,34 @@ constexpr uint8_t cbufKind(uint8_t type)
     return type & 7;
 }
 
+// A program's constant buffer of set 1, the heap's arrays (nvk_switch_capture.c switch_nvk_cbuf_code: the set in bits 3-7)
+constexpr uint8_t kCbufHeapSet = CbufSet | 1 << 3;
+
 constexpr uint32_t cbufUboOffset(uint8_t type)
 {
     return uint32_t(type >> 3) * 16;
 }
 
-// Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27
-constexpr uint32_t kPackEntries = 32;
+// Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27; and the bytes of its set 0,
+// every entry's 16-byte descriptor at most (RenderEncoder::prepare's)
+constexpr uint32_t kPackEntries = 32, kSetMaxBytes = 16 * kPackEntries;
 
 struct PackShaderTests {
     uint8_t depthWord, stencilWord, flags, reserved;
     uint32_t depthTic, stencilTic;
     uint32_t reservedTail;
 };
+
+// One set-1 heap array of a state (m2v's argument-buffer textures and samplers, bind/heap.rs): its class as the bridge words
+// it (metal2vulkan heap_class_code), and the byte of set 1 its element 0 is at in NVK's layout. Every element is 4 bytes
+// (nvk_sampled_image_descriptor), element i the descriptor of texture header i (an image class) or sampler header i.
+struct PackHeapArray {
+    uint32_t heapClass, offset;
+};
+
+constexpr uint32_t kPackHeapArrays = 8;
+// Every heap array's elements: the texture header pool's (Device kTicCount), which the sampler header pool's fits
+constexpr uint32_t kPackHeapElements = 8192;
 
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
@@ -313,6 +340,18 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
+    // What m2v's reads through argument buffers take of a draw (raw_heap_tables.h): each stage's push word + 1 of the root
+    // table's address and of the ExecutionStatus buffer's (0: none), and the buffer slots its root table holds
+    // (bit n: [[buffer(n)]], m2v's BufferForm::Psb), vertex then fragment
+    uint8_t rootTableWord[2], statusWord[2];
+    uint32_t rootSlots[2];
+    uint8_t heapArrays, heapReserved[3];
+    uint32_t heapBytes;  // set 1's size in NVK's layout
+    PackHeapArray heap[kPackHeapArrays];
+    // m2v's ArgumentTable of each stage, vertex then fragment (raw_spill_table.h): its EntrySpillTable's index + 1 (0: none),
+    // its words, and the first of them in the blob section (the vertex table's first, then the fragment table's)
+    uint8_t spillEntry[2], spillWords[2];
+    uint32_t spillAt;
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -321,7 +360,12 @@ struct PackPipeline {
 enum PackKernelEntryKind : uint8_t {
     KernelBuffer,
     KernelTexture,
-    KernelSampler
+    KernelSampler,
+    // m2v's handle tables of argument-buffer textures and samplers: a storage buffer descriptor of the device's own
+    // (EntryTextureTable, EntrySamplerTable)
+    KernelTextureTable,
+    KernelSamplerTable,
+    KernelSpillTable  // m2v's ArgumentTable (EntrySpillTable)
 };
 
 // A word range of set 0 and the Metal argument it holds: a buffer's {address, range} descriptor (its range the bound bytes
@@ -348,6 +392,8 @@ inline int kernelResidualWord(const PackKernelEntry &e)
     return int(e.window >> 24) - 1;
 }
 
+constexpr uint32_t kKernelEntries = 64;
+
 struct PackKernel {
     uint64_t keyHash;
     uint32_t keyString;
@@ -356,15 +402,26 @@ struct PackKernel {
     int8_t regionWord;  // root push word of m2v's DispatchRegion field (two uvec4: base, nominal size, grid), -1: none
     uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
     uint16_t setBytes;  // set 0's size in the root table's set address
-    uint16_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
+    uint64_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
     uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
-    PackKernelEntry entry[16];
+    // a kernel whose bind offsets spill past its push window binds more than 28 buffers (raw_spill_table.h)
+    PackKernelEntry entry[kKernelEntries];
+    // What m2v's reads through argument buffers take of a dispatch, as PackPipeline's for the kernel stage: the push word + 1
+    // of the root table's address and of the ExecutionStatus buffer's (0: none), the buffer slots its root table holds, and
+    // its set-1 heap arrays
+    uint8_t rootTableWord, statusWord, heapArrays, argumentsReserved;
+    uint32_t rootSlots, heapBytes;
+    PackHeapArray heap[kPackHeapArrays];
+    // its ArgumentTable as PackPipeline's: the KernelSpillTable entry's index + 1, its words, their first in the blob
+    uint8_t spillEntry, spillWords;
+    uint16_t spillReserved;
+    uint32_t spillAt;
 };
 
 inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
 {
-    return !(kernel.readOnlyEntries & (1u << entry));
+    return !(kernel.readOnlyEntries & (1ull << entry));
 }
 
 struct SplitCost {
@@ -428,13 +485,16 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4, "pack layout");
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92, "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
+static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipeline, heap) == 564 &&
+                  offsetof(PackPipeline, spillEntry) == 628,
+              "pack layout: packfile.py PIPELINE_V20");
 static_assert(sizeof(PackProgram) == 44, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 32 + 48 + 4 * kIteratedProgramWords, "pack layout");
 
@@ -469,6 +529,9 @@ public:
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
     const PackArchive *archive(uint64_t pathHash) const;              // nullptr: the pack lists no such archive
     const PackIteratedBlend *iterated(const PackPipeline &pp) const;  // nullptr: it names none
+    // `pp`'s or `k`'s ArgumentTable words (PackPipeline::spillAt); nullptr: none, or past the section
+    const uint32_t *spills(const PackPipeline &pp) const;
+    const uint32_t *spills(const PackKernel &k) const;
     bool declares(const PackArchive &archive, uint64_t keyHash) const;
 
     const char *string(uint32_t off) const

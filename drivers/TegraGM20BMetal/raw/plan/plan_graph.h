@@ -161,11 +161,21 @@ struct Node {
     Barriers before = 0;
 };
 
+// An MTLFence's waitForFence: in node `waiter`, of the update node `updater` made before it. A fence orders what its encoders
+// touch that no use names (an argument buffer's resources, an untracked heap's), so the wait takes a full drain.
+struct FenceEdge {
+    uint32_t waiter = kNone, updater = kNone;
+};
+
+constexpr Barriers kFenceWait =
+    WaitForIdle | FlushShaderData | InvalidateShaderData | InvalidateConstants | InvalidateTextureData;
+
 struct WorkGraph {
     std::vector<Node> nodes;
     std::vector<Use> uses;
     std::vector<uint32_t> edges;
     std::vector<DrawRun> runs;
+    std::vector<FenceEdge> fences;
     Barriers entry = 0, exit = 0;
 };
 

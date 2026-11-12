@@ -33,13 +33,24 @@ enum class Smp : uint8_t {
 struct LayoutEntry {
     uint32_t offset = 0;
     bool buffer = false;
-    bool colorTable = false;      // m2v's sRGB colour table (EntryColorTable)
+    bool colorTable = false;  // m2v's sRGB colour table (EntryColorTable)
+    // a handle table (EntryTextureTable, EntrySamplerTable) or argument table (EntrySpillTable) of stage `stage`
+    uint8_t table = 0;
     uint8_t stage = 0, slot = 0;  // a buffer's; a handle's stage alone (0: the fragment stage)
     Tex tex = Tex::None;
     Smp smp = Smp::None;
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
     bool headerKnown = false;          // a constexpr sampler's header
     std::array<uint32_t, 8> header = {};
+};
+
+// What a state's reads through argument buffers take of a draw: PackPipeline's root-table and heap fields
+struct RecordHeap {
+    uint8_t rootTableWord[2] = {}, statusWord[2] = {};
+    uint32_t rootSlots[2] = {};
+    uint8_t arrays = 0;
+    uint32_t bytes = 0;
+    PackHeapArray array[kPackHeapArrays] = {};
 };
 
 struct RecordParts {
@@ -60,6 +71,12 @@ struct RecordParts {
     uint8_t storageBlendMask = 0, storageBlendModel = 0;
     uint32_t storageTic[8] = {};
     PackShaderTests shaderTests = {};
+    RecordHeap heap;
+    std::vector<uint32_t> spill[2];  // each stage's argument table words (raw_spill_table.h), vertex then fragment
+    // by stage and buffer slot, the record's word + 1 of the slot's residual as m2v's plan places it (NmbDirectDraw's
+    // residualWord); where the plan names them, `residuals` (the probe's codes) names none
+    uint8_t residualWord[2][32] = {};
+    bool residualsPlanned = false;
 };
 
 // The color attachments a key names, bit j its c<j> (mkpack.py targets)

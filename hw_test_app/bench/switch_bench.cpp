@@ -10,6 +10,7 @@
 #include <vector>
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_compute.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_gpu.h"
+#include "drivers/TegraGM20BMetal/raw/runtime/raw_probe_ops.h"
 #include "hw_test_app/bench/bench_known.h"
 #include "hw_test_app/bench/bench_records.h"
 
@@ -234,6 +235,23 @@ public:
         return finish(cb, gpu, wall);
     }
 
+    bool twod(const raw::ProbeOp &op, const raw::Texture *read, const raw::Texture &written, uint64_t &gpu,
+              uint64_t &wall)
+    {
+        raw::Device &d = *b_.device;
+        raw::CommandBuffer *cb = d.begin();
+        if (!cb)
+            return error("no channel: " + d.channelError());
+        raw::BlitEncoder *e = cb->blit();
+        if (!e) {
+            cb->abandon();
+            return refused("the raw path opened no blit encoder");
+        }
+        e->probe(op, read, written);
+        e->end();
+        return finish(cb, gpu, wall);
+    }
+
     bool dispatch(const raw::ComputeState *state, uint32_t dispatches, uint64_t &gpu, uint64_t &wall)
     {
         raw::Device &d = *b_.device;
@@ -294,6 +312,16 @@ private:
         return false;
     }
 };
+
+// A trap in a lone command buffer can land after its fence (the channel is killed while the wait already returned), so
+// one more empty pass on the channel: it never completes on a killed one
+void checkAlive(switch_bench &b, const switch_bench_experiment &x, Target &t, switch_bench_result &r)
+{
+    uint64_t gpu = 0, wall = 0;
+    if (Submission(b, x, r).render(t, nullptr, 0, gpu, wall) || r.status != SWITCH_BENCH_KILLED)
+        return;
+    snprintf(r.why, sizeof r.why, "the channel was dead after the experiment's last fence (a trap the fence missed)");
+}
 
 bool readsPositionW(const uint8_t *sph)
 {
@@ -384,23 +412,26 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
 {
     raw::Device &d = *b.device;
     raw::Pipeline *pipeline = nullptr;
+    const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key) : b.fragment;
     if (x.kind != SWITCH_BENCH_NOOP) {
-        if (!b.fragment)
+        if (!tpl && x.template_key)
+            return fail(r, SWITCH_BENCH_INVALID, "no plain pack state has the template key");
+        if (!tpl)
             return fail(r, SWITCH_BENCH_ERROR, "the pack has no state the bench can take as a template");
         raw::RuntimeRecord record;
         std::string why;
         const uint64_t key = kKeyBase | ++b.records;
-        if (!bench::fragmentRecord(d.pack(), *b.fragment, program(x), x.format, key, pairs(x.methods, x.method_pairs),
-                                   pairs(x.restore, x.restore_pairs), record, why))
+        if (!bench::fragmentRecord(d.pack(), *tpl, program(x), x.format, key, pairs(x.methods, x.method_pairs),
+                                   pairs(x.restore, x.restore_pairs), record, why, x.single_target != 0))
             return fail(r, SWITCH_BENCH_INVALID, why);
         if (!(pipeline = d.addRecord(record, false, why)))
             return fail(r, SWITCH_BENCH_REFUSED, why);
-        r.template_key = b.fragment->keyHash;
+        r.template_key = tpl->keyHash;
     }
     const uint32_t bpp = raw::formatInfo(x.format)->bpp;
     Target t;
     std::vector<uint32_t> others =
-        b.fragment ? otherFormats(d.pack().string(b.fragment->keyString)) : std::vector<uint32_t>();
+        tpl && !x.single_target ? otherFormats(d.pack().string(tpl->keyString)) : std::vector<uint32_t>();
     t.others.resize(x.kind == SWITCH_BENCH_NOOP ? 0 : others.size());
     const bool colorMade = d.createTexture(x.width, x.height, x.format, t.color, true);
     size_t othersMade = 0;
@@ -409,12 +440,81 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
         othersMade++;
     if (!colorMade || othersMade < t.others.size())
         fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
-    else if (timeDraws(b, x, t, pipeline, r))
+    else if (timeDraws(b, x, t, pipeline, r)) {
         readBack(t.color, x, bpp, r);
+        if (x.kind != SWITCH_BENCH_NOOP)
+            checkAlive(b, x, t, r);
+    }
     for (size_t i = 0; i < othersMade; i++)
         d.destroyTexture(t.others[i]);
     if (colorMade)
         d.destroyTexture(t.color);
+}
+
+raw::ProbeSurface twodSurface(const raw::Texture &t, uint32_t fmt2d)
+{
+    raw::ProbeSurface s;
+    s.va = t.va;
+    s.fmt2d = fmt2d ? fmt2d : raw::probeTwodFormat(t.format);
+    s.pitch = t.pitch;
+    s.width = t.width;
+    s.height = t.height;
+    s.blockLinear = t.blockLinear;
+    s.blockHeight = t.blockHeight;
+    return s;
+}
+
+// One 2D-engine operation a command buffer, so a rejected one names itself in the kernel's kill line
+void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+{
+    raw::Device &d = *b.device;
+    const switch_bench_twod &w = x.twod;
+    raw::ProbeOp op;
+    op.kind = w.op == SWITCH_BENCH_TWOD_FILL ? raw::ProbeOpKind::Fill : raw::ProbeOpKind::Scale;
+    op.dx = x.rect[0];
+    op.dy = x.rect[1];
+    op.dw = x.rect[2] - x.rect[0];
+    op.dh = x.rect[3] - x.rect[1];
+    op.du = w.du;
+    op.dv = w.dv;
+    op.sx = w.sx;
+    op.sy = w.sy;
+    op.bilinear = w.bilinear != 0;
+    op.corner = w.corner != 0;
+    op.colorFormat = w.color_format;
+    memcpy(op.color, w.color, sizeof op.color);
+    const raw::Texture *read = op.kind == raw::ProbeOpKind::Scale ? &b.image : nullptr;
+    if (read)
+        op.src = twodSurface(*read, 0);
+    raw::Texture t;
+    if (!d.createTexture(x.width, x.height, x.format, t, true))
+        return fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
+    op.dst = twodSurface(t, w.fmt2d);
+    const uint32_t bpp = raw::formatInfo(x.format)->bpp;
+    Submission s(b, x, r);
+    bool ran = op.dst.fmt2d != 0;
+    if (!ran)
+        fail(r, SWITCH_BENCH_INVALID, "a format the 2D engine names none of");
+    for (uint32_t c = 0; ran && c < x.draw_counts; c++)
+        for (uint32_t k = 0; ran && k < x.warmup + x.repeats; k++) {
+            uint64_t gpu = 0, wall = 0;
+            if (x.fill)
+                fill(t, x, bpp);
+            else
+                memset(t.cpu, 0, size_t(t.pitch) * x.height);
+            ran = s.twod(op, read, t, gpu, wall);
+            if (ran && k >= x.warmup) {
+                r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
+                r.wall_ns[c * x.repeats + k - x.warmup] = wall;
+            }
+        }
+    if (ran) {
+        readBack(t, x, bpp, r);
+        Target alive;
+        alive.color = t;
+        checkAlive(b, x, alive, r);
+    }
+    d.destroyTexture(t);
 }
 
 void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
@@ -511,6 +611,8 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
         return;
     if (x->kind == SWITCH_BENCH_COMPUTE)
         runCompute(*b, *x, *r);
+    else if (x->kind == SWITCH_BENCH_TWOD)
+        runTwod(*b, *x, *r);
     else
         runRender(*b, *x, *r);
     if (r->status == SWITCH_BENCH_KILLED)

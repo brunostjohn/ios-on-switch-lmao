@@ -326,7 +326,8 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpKernelUse:
         if ([object isKindOfClass:[RMBuffer class]])
             buffers.insert((RMBuffer *)object);
-        [e useResource:twinOf(object) usage:MTLResourceUsage(c.c)];
+        if (![object isKindOfClass:[RMHeap class]])
+            [e useResource:twinOf(object) usage:MTLResourceUsage(c.c)];
         break;
     case OpKernelBarrier:
         [e memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];

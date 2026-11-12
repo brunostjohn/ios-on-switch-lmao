@@ -84,6 +84,20 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# The raw path's argument buffers: a layout's flat runs against its own lookup, and a heap class's word
+rust_test(
+    name = "argument_runs_test",
+    args = [
+        "argument_runs",
+        "heap_code",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = ["@gpu_llvm_as//:bin/llvm-as"],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 rust_test(
     name = "center_fragment_depth_test",
     args = ["device::tests::profile::center_fragment_depth_contract_is_explicit_and_keys_the_profile"],

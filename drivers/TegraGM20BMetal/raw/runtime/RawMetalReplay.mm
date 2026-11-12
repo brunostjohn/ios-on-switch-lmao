@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalMultisample.h"
 #import "RawMetalPlanAdapters.h"
+#import "RawMetalIndirect.h"
+#include "NativeBridgeMetalFrontend.h"
 #include "raw_replay_twins.h"
 
 // ---- object mapping for the m2v replay ----
@@ -81,6 +83,92 @@ static void failMissingTwin(RMCommandBuffer *cb, id object)
         cb->_segError = error;
 }
 
+static bool takesArgumentBuffers(id<MTLFunction> f)
+{
+    if (![(id)f isKindOfClass:[RMFunction class]])
+        return false;
+    RMFunction *function = (RMFunction *)f;
+    if (!function->_argumentBuffers) {
+        bool takes = false;
+        for (NSUInteger index = 0; index < 31 && !takes; index++) {
+            const char *why = nullptr;
+            takes = native_bridge_metal_argument_layouts(
+                function->_twin, index,
+                [](const NmbArgumentLayout *, uint32_t, void *) {
+                    return true;
+                },
+                nullptr, &why);
+        }
+        function->_argumentBuffers = takes ? 2 : 1;
+    }
+    return function->_argumentBuffers == 2;
+}
+
+// Whether a render state reads through argument buffers: its record names the device's root table, status buffer, handle
+// tables or set 1, or (a state with no record yet) one of its functions takes an argument buffer
+static bool readsArguments(RMPipeline *p)
+{
+    if (p->_raw && p->_raw->rec) {
+        const raw::PackPipeline &r = *p->_raw->rec;
+        bool tables = false;
+        for (uint32_t i = 0; i < r.entries; i++)
+            tables |= r.entry[i].kind == raw::EntryTextureTable || r.entry[i].kind == raw::EntrySamplerTable;
+        return tables || r.heapArrays || r.rootTableWord[0] || r.rootTableWord[1] || r.statusWord[0] || r.statusWord[1];
+    }
+    MTLRenderPipelineDescriptor *d = p->_madeFrom;
+    return d && (takesArgumentBuffers(d.vertexFunction) || takesArgumentBuffers(d.fragmentFunction));
+}
+
+// What a range reads that m2v's twins cannot (raw_replay_twins.h): a buffer RawMetalArgumentEncoder.mm wrote, or a facade
+// heap beside a render state that reads argument buffers, whose IDs the app took of the raw device (gpuResourceID)
+static id rawArgumentsIn(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    return (__bridge id)raw::rawArgumentsIn(
+        [&](auto &&visit) {
+            cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
+                visit(value);
+            });
+        },
+        [](void *value) {
+            id o = (__bridge id)value;
+            if ([o isKindOfClass:[RMHeap class]])
+                return raw::ReplayUse::Heap;
+            if ([o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)
+                return raw::ReplayUse::WrittenArguments;
+            return raw::ReplayUse::Other;
+        },
+        [&](auto &&visit) {
+            for (size_t at = from; at < to; at++)
+                if (const Cmd c = cb->_plan.legacy(at); c.op == OpPipeline)
+                    visit(c.obj);
+        },
+        [](void *state) {
+            id s = (__bridge id)state;
+            return [s isKindOfClass:[RMPipeline class]] && readsArguments((RMPipeline *)s);
+        });
+}
+
+// The command buffer's error for a range replay could not draw as Metal does: it reads through the raw device's argument
+// buffers (rawArgumentsIn)
+static void failRawArguments(RMCommandBuffer *cb, id object)
+{
+    const bool heap = [object isKindOfClass:[RMHeap class]];
+    const char *label = [object label].UTF8String ?: "-";
+    SWITCH_REFUSE_DETAIL("raw", "replay.arguments", heap,
+                         "a command buffer range failed before m2v encoded it: it reads the raw device's %s %s, which "
+                         "no m2v twin reads",
+                         heap ? "heap" : "argument buffer", label);
+    NSString *text =
+        [NSString stringWithFormat:@"The %s %s is read through argument buffers the compatibility path cannot read",
+                                   heap ? "heap" : "argument buffer", label];
+    NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                         code:MTLCommandBufferErrorInternal
+                                     userInfo:@{NSLocalizedDescriptionKey : text}];
+    std::lock_guard<std::mutex> l(cb->_lock);
+    if (!cb->_segError)
+        cb->_segError = error;
+}
+
 // An invocation recorded on a facade encoder or command buffer, sent to the m2v one: object arguments become their twins.
 static void replayInvocation(NSInvocation *inv, id target)
 {
@@ -101,6 +189,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     }
     if (RMTexture *owned = ownedZetaIn(cb, from, to)) {
         failOwnedZeta(cb, owned);
+        return nil;
+    }
+    if (id arguments = rawArgumentsIn(cb, from, to)) {
+        failRawArguments(cb, arguments);
         return nil;
     }
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
@@ -236,7 +328,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                            beforeStages:MTLRenderStages(c.c)];
             break;
         case OpUse:
-            [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
+            // a range that uses a facade heap fails before it is encoded (rawArgumentsIn)
+            if (![(__bridge id)c.obj isKindOfClass:[RMHeap class]])
+                [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
             break;
         case OpUpdateFence:
             updated.insert(c.obj);
@@ -407,6 +501,17 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                       indirectBufferOffset:draw.argumentOffset];
             break;
         }
+        case OpExecuteCommands:
+            for (auto &stage : bound)
+                for (RMBuffer *buffer : stage)
+                    if (buffer)
+                        buffers.insert(buffer);
+            replayCommands(enc, cb->_plan.draw(at), use);
+            break;
+        case OpResetCommands:
+        case OpCopyCommands:
+            encodeCommandsBlit(nullptr, c);
+            break;
         default:  // a compute encoder's: replayKernel, above
             break;
         }

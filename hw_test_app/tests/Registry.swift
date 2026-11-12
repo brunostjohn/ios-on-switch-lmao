@@ -12,7 +12,7 @@ public enum Registry {
         MetalIOSurfaceTest(), SurfaceTiledDefaultTest(), YcbcrTargetTest(), XRTwoPlaneTest(), MPSBlurTest(),
         MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), BlendKillTest(),
-        Float32FilterTest(), CompressedTargetsTest(), ZcullTest(),
+        Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
         VisibilityTest(), FixedBlendRuleTest(), FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(),
     ]
 
@@ -53,7 +53,7 @@ public enum Registry {
 
     public static let all: [any HWTest] =
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + GPUPathTests.all + NativeObjectTests.all
-        + video + images + audio
+        + NativeCallTests.all + video + images + audio
         + display + compositor + sensorsAndInput + connectivityAndStorage
         + cpuAndSystem + [RawShareTest()]
         // Drives an NVDEC output mode nothing else uses: after every shared test.

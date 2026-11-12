@@ -387,11 +387,12 @@ struct Candidates {
 	}
 };
 
-// live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index)
-constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0},
-			     kNone = {0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0},
-			     kMovingResident = {1, 1, 0, 1, 1, 0},
-			     kStuckKernel = {1, 1, 1, 1, 0, 0}, kBusyKernel = {1, 0, 1, 0, 0, 0};
+// live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index),
+// victim
+constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0, 0},
+			     kNone = {0, 0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0, 0},
+			     kMovingResident = {1, 1, 0, 1, 1, 0, 0},
+			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0}, kBusyKernel = {1, 0, 1, 0, 0, 0, 0};
 
 constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
 {
@@ -427,6 +428,56 @@ TEST(HangBlame, AChannelOnAnEndlessAcquireBlamesItself)
 	EXPECT_EQ(blame, 1);
 }
 
+constexpr tgm_hang_candidate victim(tgm_hang_candidate c)
+{
+	c.victim = 1;
+	return c;
+}
+
+// An acquire timeout (gpu_acquire.c): the waiter is the late channel and its RAMFC names the producer, which sits on no
+// engine and completes nothing: the producer is killed, never the waiter that waited for it.
+TEST(HangBlame, AnAcquireTimeoutKillsTheProducerNotTheWaiter)
+{
+	Candidates k{{kNone, kStuckClient, waiting(kStuckClient, 1)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
+	EXPECT_EQ(blame, 1);
+}
+
+TEST(HangBlame, AWaiterOnAProducerThatMovesIsLeftAlone)
+{
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0}, waiting(kStuckClient, 1)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
+}
+
+// A bind epoch the kernel's retirement releases, or a host1x syncpoint (a display that is off, a decoder): the channel
+// waits on no work of its own and is never killed for it.
+TEST(HangBlame, AChannelOnAKernelOrHost1xReleaseIsAVictim)
+{
+	Candidates k{{kNone, victim(kStuckClient)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
+	Candidates chain{{kNone, victim(kStuckClient), waiting(kStuckClient, 1)}};
+	EXPECT_EQ(chain.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
+}
+
+// A kernel channel on a display's syncpoint while the display is off: nothing else progresses, and nothing is wrong.
+TEST(HangBlame, ALateKernelVictimIsNeverFatal)
+{
+	Candidates k{{kNone, victim(kBusyKernel)}};
+	k.c[1].stuck = 1;
+	k.late_kernel = 1;
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
+	k.c[1].victim = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK);
+}
+
 // iconservicesagent's channel 20 on slice B's boot: GR and PBDMA0 on another process's long 3D work that keeps going,
 // channel 20 not resident with work pending behind it, and the late sibling's order acquire on channel 20.
 TEST(HangBlame, ChannelsWaitingBehindAnEngineThatMovesAreNotKilled)
@@ -456,7 +507,7 @@ TEST(HangBlame, WithNoEngineOnThemTheBlameFollowsTheAcquiresToTheEnd)
 
 TEST(HangBlame, AnAcquireOnASourceThatMovesIsSlowWork)
 {
-	Candidates k{{kNone, {1, 1, 0, 0, 1, 0}, waiting(kStuckClient, 1)}};
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0}, waiting(kStuckClient, 1)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);

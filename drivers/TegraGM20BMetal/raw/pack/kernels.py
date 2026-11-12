@@ -13,8 +13,9 @@ CONSTEXPR = 0x80  # PackKernelEntry.slot of a constexpr sampler: its index in th
 BUFFER, TEXTURE, SAMPLER = 0, 1, 2  # runtime/raw_pack.h PackKernelEntryKind
 HEAD = struct.Struct('<QIIBb')
 ENTRY = struct.Struct('<HBBI')
-ENTRIES = 16
-KERNEL_BYTES = HEAD.size + 64 * 4 + 8 + 32 * 4 + ENTRIES * ENTRY.size
+ENTRIES = packfile.KERNEL_ENTRIES
+COUNTS = struct.Struct('<HQI')  # setBytes, readOnlyEntries, pushMask
+KERNEL_BYTES = HEAD.size + 64 * 4 + COUNTS.size + 32 * 4 + ENTRIES * ENTRY.size + packfile.KERNEL_V20.size
 
 
 def entry(fields: tuple[int, int, int, int], headers: list[list[int]], constexpr_tsc: list[list[int]]) -> dict:
@@ -42,11 +43,20 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     k = rec['kernel']
     _hash, _key, _program, count, region = HEAD.unpack_from(k)
     qmd = list(struct.unpack_from('<64I', k, HEAD.size))
-    set_bytes, read_only, mask = struct.unpack_from('<HHI', k, HEAD.size + 256)
-    words = struct.unpack_from('<32I', k, HEAD.size + 264)
-    at = HEAD.size + 264 + 128
+    set_bytes, read_only, mask = COUNTS.unpack_from(k, HEAD.size + 256)
+    words = struct.unpack_from('<32I', k, HEAD.size + 256 + COUNTS.size)
+    at = HEAD.size + 256 + COUNTS.size + 128
     entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
+    root, status, arrays, _, slots, heap_bytes, *pairs = packfile.KERNEL_V20.unpack_from(k, at + ENTRIES * ENTRY.size)
+    pairs, (spill_entry, spill_words, _, _) = pairs[:16], pairs[16:]
     return {
+        'root_table_word': root,
+        'status_word': status,
+        'root_slots': slots,
+        'heap': [{'class': pairs[2 * i], 'offset': pairs[2 * i + 1]} for i in range(arrays)],
+        'heap_bytes': heap_bytes,
+        'spill_entry': spill_entry,
+        'spill': rec.get('spill', [])[:spill_words],
         'key': rec['key'],
         'region': region,
         'set_bytes': set_bytes,

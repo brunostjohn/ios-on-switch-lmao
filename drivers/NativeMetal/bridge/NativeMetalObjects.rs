@@ -1398,6 +1398,12 @@ pub struct NmbLibrary(Library, Vec<String>);
 /// A function and the specialized name a pipeline links it under, where it was made with one.
 pub struct NmbFunction(Function, Option<String>);
 
+impl NmbFunction {
+    pub(crate) fn function(&self) -> &Function {
+        &self.0
+    }
+}
+
 /// # Safety
 /// `bytes` holds `length` bytes.
 #[unsafe(no_mangle)]

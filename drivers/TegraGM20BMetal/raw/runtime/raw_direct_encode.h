@@ -42,6 +42,37 @@ struct Set0 {
     }
 };
 
+// The first `arrays` heap arrays of `layout`'s set 1 (m2v's layouts hold their sets in set order) as NVK lays out the
+// bridge's bindings, each the raw heap's 4-byte elements, and the set's bytes; null: why not
+inline const char *heapSetArrays(const NmbDirectLayout *layout, uint32_t arrays, const uint32_t (&heapClass)[8],
+                                 PackHeapArray (&out)[kPackHeapArrays], uint32_t &bytes)
+{
+    if (!layout || layout->setCount < 2)
+        return "heap arrays without their set";
+    if (arrays > kPackHeapArrays)
+        return "more set-1 heap arrays than a record holds";
+    const NmbDirectSet &set = layout->sets[1];
+    std::vector<SetBinding> b(set.bindingCount);
+    for (uint32_t i = 0; i < set.bindingCount; i++)
+        b[i] = {set.bindings[i].binding, set.bindings[i].type, set.bindings[i].count, set.bindings[i].flags};
+    std::vector<SetSlot> slots;
+    uint32_t fixed = 0;
+    if (!setSlots(b.data(), set.bindingCount, slots, fixed))
+        return "a set-1 descriptor type NVK lays out by another rule";
+    for (uint32_t a = 0; a < arrays; a++) {
+        if (!heapClass[a])
+            return "a set-1 heap array of a class the bridge cannot word";
+        const SetBinding *binding = nullptr;
+        for (const SetBinding &x : b)
+            binding = x.binding == a ? &x : binding;
+        if (!binding || slots[a].stride != 4 || binding->count != kPackHeapElements)
+            return "a set-1 heap array off the raw heap's 4-byte elements";
+        out[a] = {heapClass[a], slots[a].offset};
+    }
+    bytes = setBytes(fixed);
+    return nullptr;
+}
+
 // A variant's layout as nvk_switch_offline.h takes it: every set laid out by raw_set_layout.h
 struct NakLayoutData {
     std::vector<std::vector<NakBinding>> bindings;
@@ -124,9 +155,10 @@ inline switch_gm20b_qmd_info qmdInfo(const NvkStage &stage)
 
 constexpr uint32_t kRootTableBytes = 0x800, kMaxCbufBytes = 1u << 16;
 
-// The QMD of a dispatch of `stage` with set 0 of `setBytes` (nvk_cmd_upload_qmd's): its program, grid and constant
-// buffers at 0. False where it reads a constant buffer other than the root table, set 0 and its shader data.
-inline bool computeQmd(const NvkStage &stage, uint32_t setBytes, uint32_t qmd[64])
+// The QMD of a dispatch of `stage` with set 0 of `setBytes` and set 1 (argument buffers' heap arrays) of `heapBytes`
+// (nvk_cmd_upload_qmd's): its program, grid and constant buffers at 0. False where it reads a constant buffer other
+// than the root table, those sets and its shader data.
+inline bool computeQmd(const NvkStage &stage, uint32_t setBytes, uint32_t heapBytes, uint32_t qmd[64])
 {
     switch_gm20b_qmd_info q = qmdInfo(stage);
     q.smem_size = stage.smemSize;
@@ -152,6 +184,11 @@ inline bool computeQmd(const NvkStage &stage, uint32_t setBytes, uint32_t qmd[64
             if (stage.cbufSets[c] != 0)
                 return false;
             q.cbuf_size[c] = setBytes ? aligned(setBytes) : 0;
+            break;
+        case kCbufHeapSet:
+            if (stage.cbufSets[c] != 1 || !heapBytes)
+                return false;
+            q.cbuf_size[c] = aligned(heapBytes);
             break;
         default:
             return false;

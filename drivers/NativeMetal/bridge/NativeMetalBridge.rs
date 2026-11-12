@@ -14,6 +14,10 @@ pub mod direct;
 pub mod direct_compute;
 #[path = "NativeMetalOffline.rs"]
 pub mod offline;
+#[path = "NativeMetalHeap.rs"]
+mod heap;
+#[path = "NativeMetalArguments.rs"]
+mod arguments;
 #[path = "NativeMetalComputeArtifact.rs"]
 pub mod compute_artifact;
 #[path = "NativeMetalReflection.rs"]
