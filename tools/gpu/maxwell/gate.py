@@ -110,12 +110,19 @@ def compare(before: tuple, after: tuple, n: int, seed: int, pinned: dict | None 
             return f'unsupported: {e}'
         if a != b:
             lane = next(k for k in range(LANES) if a[k] != b[k])
-            return f'different: quad {i} lane {lane}: {describe(a[lane])} vs {describe(b[lane])}'
+            return f'different: quad {i} lane {lane}: {describe(a[lane], b[lane])}'
     return 'identical'
 
 
-def describe(result: tuple) -> str:
-    return 'killed' if result[0] is True else str([hex(x) for x in result[0]])
+def describe(a: tuple, b: tuple) -> str:
+    """Where two lanes' results part: a kill, the output registers, or the first store that differs."""
+    if a[0] is True or b[0] is True or a[0] != b[0]:
+        name = lambda r: 'killed' if r[0] is True else str([hex(x) for x in r[0]])  # noqa: E731
+        return f'{name(a)} vs {name(b)}'
+    sa, sb = a[2], b[2]
+    at = next((k for k in range(min(len(sa), len(sb))) if sa[k] != sb[k]), min(len(sa), len(sb)))
+    store = lambda s: str(s[at]) if at < len(s) else 'none'  # noqa: E731
+    return f'store {at}: {store(sa)} vs {store(sb)}'
 
 
 def main() -> None:

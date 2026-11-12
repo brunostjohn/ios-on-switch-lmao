@@ -11,6 +11,7 @@ STUB_INSTRUCTIONS writes constants; the corpus totals leave those out.
 
 import argparse
 import json
+import re
 import struct
 import sys
 from collections import Counter
@@ -123,9 +124,18 @@ def fnv(b: bytes) -> int:
     return h
 
 
+# A framework's default library other than QuartzCore's: its states' keys end with " | l <framework>"
+FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
+LIBRARY = re.compile(r' lib=\S+')
+# The segments after a line's functions that name one of its state's variants, kept in its key (raw/pack/rawpack.py)
+VARIANT_SEGMENTS = ('cubic ', 'xrs=', 'wtex=')
+
+
 def state_key(line: str) -> str:
-    """Give the pack key of a corpus R line (rawpack.py state_key, for lines without lib= or linked functions)."""
-    line = line.rstrip('\n').rstrip()
+    """Give the pack key of a corpus R line (raw/pack/rawpack.py state_key, for lines that link no function)."""
+    found = FRAMEWORK_LIBRARY.search(line)
+    framework = found[1] if found and found[1] != 'QuartzCore' else ''
+    line = LIBRARY.sub('', line.rstrip('\n')).rstrip()
     if line.endswith('|'):
         line = line[:-1].rstrip()
     bar1, bar2 = line.find(' | v '), line.find(' | f ')
@@ -137,7 +147,10 @@ def state_key(line: str) -> str:
         for h in line[:bar1].split()
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
-    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    key = (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    segments = line[bar3 + 3 :].split(' | ') if bar3 >= 0 else []
+    variant = ''.join(' | ' + ' '.join(t.split()) for t in segments if t.startswith(VARIANT_SEGMENTS))
+    return key + (f' | l {framework}' if framework else '') + variant
 
 
 # raw_pack.h by version: PackPipeline and PackProgram sizes, sections. From 15 a program's register count is its own.
@@ -216,7 +229,7 @@ def labelled(corpora: list[Path]) -> list[tuple[str, str]]:
     out = []
     for path in corpora:
         for line in path.read_text().splitlines():
-            if line.startswith('R ') and ' lib=' not in line:
+            if line.startswith('R ') and (' lib=' not in line or FRAMEWORK_LIBRARY.search(line)):
                 label = line.split('label=')[1].split()[0].removeprefix('com.apple.coreanimation.')
                 out.append((label, state_key(line)))
     return out
