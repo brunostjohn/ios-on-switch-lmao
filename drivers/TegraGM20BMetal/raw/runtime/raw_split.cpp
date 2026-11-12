@@ -126,7 +126,8 @@ SplitState *Device::makeSplit(Pipeline &pl)
     s.prologue = prologue;
     s.prologueData = prologueData;
     s.prologueDataBytes = prologueDataBytes;
-    build(s.pipeline, *source->pp, source->vs, fs, source->blob, source->keyString, source->caTransform);
+    // a state with argument tables is never split (raw_direct.cpp directRecord)
+    build(s.pipeline, *source->pp, source->vs, fs, source->blob, source->keyString, source->caTransform, nullptr);
     s.pipeline.memoryEntries |= placedSetReads(fs.header, *fs.record, *source->pp);
     if (!bindsAsWhole(s.pipeline, pl)) {
         splitStates_.pop_back();

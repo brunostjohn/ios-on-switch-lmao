@@ -75,6 +75,13 @@ struct DeviceHarness {
         memcpy(w.data(), d.tic_.cpu + 32 * tic, sizeof w);
         return w;
     }
+
+    // What the root table holds at push word `word` after the command buffer's work encoded so far
+    static uint32_t rootPush(const CommandBuffer &cb, uint32_t word)
+    {
+        return cb.rootPush_[word];
+    }
+
     // Where the encoder's last upload of stage `k`'s argument table lies (raw_spill_table.h), 0: none
     static uint64_t spillTable(const RenderEncoder &e, uint32_t k)
     {

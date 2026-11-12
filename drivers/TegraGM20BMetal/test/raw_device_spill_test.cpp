@@ -120,7 +120,7 @@ TEST_F(DeviceSpill, EachStagesTableHoldsItsRecordsWordsAndItsSpilledResiduals)
     EXPECT_EQ(table(1) % 256, 0u);
     EXPECT_EQ(words(0), (std::vector<uint32_t>{24, 0xaa, 0, 0}));
     EXPECT_EQ(words(1), (std::vector<uint32_t>{20, 36, kConstant, 0, 0, 0, 0, 0}));
-    EXPECT_EQ(raw::DeviceHarness::rootPush(dev, 4), 300u % 256);
+    EXPECT_EQ(raw::DeviceHarness::rootPush(*cb, 4), 300u % 256);
     end();
 }
 
@@ -178,10 +178,10 @@ TEST_F(DeviceSpill, AnAlignedRebindClearsTheResidualAWordHeld)
 {
     begin();
     ASSERT_EQ(draw(), "");
-    EXPECT_EQ(raw::DeviceHarness::rootPush(dev, 4), 44u);
+    EXPECT_EQ(raw::DeviceHarness::rootPush(*cb, 4), 44u);
     e->setBufferOffset(2, 1, 512);
     ASSERT_EQ(draw(), "");
-    EXPECT_EQ(raw::DeviceHarness::rootPush(dev, 4), 0u);
+    EXPECT_EQ(raw::DeviceHarness::rootPush(*cb, 4), 0u);
     e->setBufferOffset(2, 13, 256);
     ASSERT_EQ(draw(), "");
     EXPECT_EQ(words(1)[0], 0u);

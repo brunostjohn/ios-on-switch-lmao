@@ -4348,6 +4348,7 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
 {
     depthRange_[0] = float(znear);
     depthRange_[1] = float(zfar);
+    spillDirty_ = true;
     vp_[0] = x;
     vp_[1] = y;
     vp_[2] = w;
@@ -4375,6 +4376,7 @@ void RenderEncoder::setBlendColor(const float rgba[4])
         memcpy(blendColor_, v, sizeof v);
         blendColorDirty_ = true;
         blendWordsDirty_ = true;
+        spillDirty_ = true;
     }
 }
 
@@ -4384,6 +4386,7 @@ void RenderEncoder::setDepthStencil(const DepthStencilState *s)
     ds_ = dsState_->desc();
     compatible_ = nullptr;
     dsDirty_ = true;
+    spillDirty_ = true;
 }
 
 void RenderEncoder::setStencilReference(uint32_t front, uint32_t back)
@@ -4391,6 +4394,7 @@ void RenderEncoder::setStencilReference(uint32_t front, uint32_t back)
     stencilRef_[0] = front;
     stencilRef_[1] = back;
     dsDirty_ = true;
+    spillDirty_ = true;
 }
 
 // The full barrier m2v puts between passes: the shaders' data writes flushed (storage buffers and textures; ROP writes are
@@ -4481,7 +4485,6 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 {
     static thread_local Runs runs;
     runs.clear();
-    spillDirty_ = true;
     runWinding_.fill(false);
     const bool indexed = drawIndices_ != nullptr;
     const FetchDraw shape = {primitive, count, instances, false, indexed};
@@ -4509,7 +4512,6 @@ const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, con
 #endif
     return &runs;
 }
-        spillDirty_ = true;
 
 StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 {
@@ -4519,7 +4521,6 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
         twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
         return StorageFallback::ReadOnly;
     StorageFallback reason = StorageFallback::None;
-    spillDirty_ = true;
     for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
         if (const Texture *t = pass_.color[slot].texture; t && (pl.storageBits >> slot & 1))
             reason = storageViewMismatch(texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, *t);
@@ -4527,7 +4528,6 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 }
 
 // The colour targets the pass binds: through its last attachment (CommandBuffer::render's targets)
-    spillDirty_ = true;
 uint32_t RenderEncoder::colorTargets() const
 {
     uint32_t count = 0;
@@ -5158,6 +5158,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    if ((r.spillEntry[0] && !pl->spill[0]) || (r.spillEntry[1] && !pl->spill[1])) {
+        *why = "an argument table whose words its record does not hold";
+        cb_->refusal = {};
+        return false;
+    }
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, movedEntries(r), pl->memoryEntries,
@@ -5170,6 +5175,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     continue;
                 const PackEntry &e = r.entry[i];
                 uint32_t *at = set + e.offset / 4;
+                if (e.kind == EntrySpillTable)
+                    continue;
                 if (e.kind == EntryColorTable) {
                     at[0] = uint32_t(d.colorTable_.va);
                     at[1] = uint32_t(d.colorTable_.va >> 32);
@@ -5295,11 +5302,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
                     if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
-    if ((r.spillEntry[0] && !pl->spill[0]) || (r.spillEntry[1] && !pl->spill[1])) {
-        *why = "an argument table whose words its record does not hold";
-        cb_->refusal = {};
-        return false;
-    }
                         *why = "a planar texture sampled through a constexpr sampler";
                         return false;
                     }
@@ -5312,8 +5314,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         [&](const DescriptorWords &words) {
             RAW_ENCODE_COUNT(DescriptorUploads);
             uint64_t address = 0;
-                if (e.kind == EntrySpillTable)
-                    continue;
             uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
             memcpy(upload, words.data(), sizeof(words));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -5325,6 +5325,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (!prepared)
         return false;
     moved_ = MovedBindings{{}, 0, 0, false};
+    spillDirty_ = false;
     const uint32_t *set = prepared->words.data();
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
@@ -5448,7 +5449,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
     }
     bool selected = false;
-    spillDirty_ = false;
     if (descriptorBinding_.changed(pl, setVa)) {
         const HeapSet *heap = pl->heapSet;
         const uint64_t heapVa = heap ? heap->memory.va : 0;
@@ -5608,6 +5608,55 @@ uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
     return moved;
 }
 
+// The extended blend colour's words (switch_nmb_blend_color_words) where `r` reads them, made again after the colour moved
+bool RenderEncoder::blendWords(const PackPipeline &r, const char **why)
+{
+    if (!r.blendColorWord || !blendWordsDirty_)
+        return true;
+#if defined(SWITCH_RAW_HARNESS_MARKS)
+    if (!switch_nmb_blend_color_words) {
+        *why = "extended blend color conversion unavailable";
+        return false;
+    }
+#endif
+    float color[4];
+    memcpy(color, blendColor_, sizeof color);
+    switch_nmb_blend_color_words(color, blendWords_);
+    blendWordsDirty_ = false;
+    return true;
+}
+
+// `pl`'s argument tables (raw_spill_table.h) whose entries moved: the record's words with the spilled bind offsets'
+// residuals and a fragment table's dynamic words, uploaded where they differ from the encoder's last upload, named in set 0
+bool RenderEncoder::fillSpills(const Pipeline &pl, uint32_t moved, PreparedDescriptorWords &prepared, uint32_t *set,
+                               const char **why)
+{
+    const PackPipeline &r = *pl.rec;
+    Device &d = *dev_;
+    for (uint32_t k = 0; k < 2; k++) {
+        const uint32_t entry = r.spillEntry[k], count = r.spillWords[k];
+        if (!entry || entry > r.entries || !(moved >> (entry - 1) & 1))
+            continue;
+        uint32_t words[kSpillWordsMax];
+        composeSpill(pl.spill[k], count, prepared.spilled[k], words);
+        if (k == 1) {
+            if (!blendWords(r, why))
+                return false;
+            patchBlendPush(r, blendColor_, blendWords_, words, kRootPushWords, count);
+            patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, words, kRootPushWords, count);
+        }
+        const uint64_t va = spillUploads_[k].resolve(words, count, [&](const uint32_t *from, uint32_t n) {
+            RAW_ENCODE_COUNT(DescriptorUploads);
+            uint64_t address = 0;
+            uint8_t *upload = d.alloc(d.upload_, spillRange(n), 256, address);
+            memcpy(upload, from, n * sizeof(uint32_t));
+            return address;
+        });
+        spillDescriptor(va, count, set + r.entry[entry - 1].offset / 4);
+    }
+    return true;
+}
+
 DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
                                      const PixelBox &limit)
 {
@@ -5741,55 +5790,6 @@ constexpr uint32_t remapOf(uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint3
 }
 
 // `w` x `h` texels by nouveau_copy_rect (raw_kit.h): a remap of components (`bytes` of each texel moved). `ordered`: after
-// The extended blend colour's words (switch_nmb_blend_color_words) where `r` reads them, made again after the colour moved
-bool RenderEncoder::blendWords(const PackPipeline &r, const char **why)
-{
-    if (!r.blendColorWord || !blendWordsDirty_)
-        return true;
-#if defined(SWITCH_RAW_HARNESS_MARKS)
-    if (!switch_nmb_blend_color_words) {
-        *why = "extended blend color conversion unavailable";
-        return false;
-    }
-#endif
-    float color[4];
-    memcpy(color, blendColor_, sizeof color);
-    switch_nmb_blend_color_words(color, blendWords_);
-    blendWordsDirty_ = false;
-    return true;
-}
-
-// `pl`'s argument tables (raw_spill_table.h) whose entries moved: the record's words with the spilled bind offsets'
-// residuals and a fragment table's dynamic words, uploaded where they differ from the encoder's last upload, named in set 0
-bool RenderEncoder::fillSpills(const Pipeline &pl, uint32_t moved, PreparedDescriptorWords &prepared, uint32_t *set,
-                               const char **why)
-{
-    const PackPipeline &r = *pl.rec;
-    Device &d = *dev_;
-    for (uint32_t k = 0; k < 2; k++) {
-        const uint32_t entry = r.spillEntry[k], count = r.spillWords[k];
-        if (!entry || entry > r.entries || !(moved >> (entry - 1) & 1))
-            continue;
-        uint32_t words[kSpillWordsMax];
-        composeSpill(pl.spill[k], count, prepared.spilled[k], words);
-        if (k == 1) {
-            if (!blendWords(r, why))
-                return false;
-            patchBlendPush(r, blendColor_, blendWords_, words, kRootPushWords, count);
-            patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, words, kRootPushWords, count);
-        }
-        const uint64_t va = spillUploads_[k].resolve(words, count, [&](const uint32_t *from, uint32_t n) {
-            RAW_ENCODE_COUNT(DescriptorUploads);
-            uint64_t address = 0;
-            uint8_t *upload = d.alloc(d.upload_, spillRange(n), 256, address);
-            memcpy(upload, from, n * sizeof(uint32_t));
-            return address;
-        });
-        spillDescriptor(va, count, set + r.entry[entry - 1].offset / 4);
-    }
-    return true;
-}
-
 // every earlier copy has completed (one that reads what the copy before it wrote)
 void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
                   [[maybe_unused]] Device::Stats &stats, bool ordered = false)
