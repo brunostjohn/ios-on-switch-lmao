@@ -879,6 +879,8 @@ private:
     PassDesc pass_;
     Push p_;
     uint32_t reachStep_ = 0, reachW_ = 0, reachH_ = 0;
+    uint32_t reachScissor_[4] = {};  // a reach draw's Metal scissor and viewport, each bounding the other
+    double reachViewport_[4] = {};
     const char *reachWhy_ = nullptr;
     const Pipeline *reachTwin_ = nullptr;  // the twin takeReachTwin set
     bool reachCover_ = false;
@@ -1270,9 +1272,10 @@ public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     // raw_turn_copy.h: each texel of `dst` from `src`'s at `map`, both of one texel size or depth format (a pass of the pack's
-    // turn copy state; `src` given a texture header where it has none); false: *why
+    // turn copy state; `src` given a texture header where it has none), over `dst`'s first width x height (0: all of an axis);
+    // false: *why
     bool turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
-                  const TurnMask *mask = nullptr);
+                  const TurnMask *mask = nullptr, uint32_t width = 0, uint32_t height = 0);
     // raw_reach.h: the tiles of the `width` x `height` frame of `pass` that its draws reach, drawn again from `draws`; false: *why
     bool reach(const PassDesc &pass, uint32_t width, uint32_t height, DrawReplay &draws, PassReach &out,
                const char **why);

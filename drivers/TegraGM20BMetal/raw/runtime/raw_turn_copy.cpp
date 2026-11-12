@@ -10,7 +10,7 @@
 namespace raw {
 
 bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
-                             const TurnMask *mask)
+                             const TurnMask *mask, uint32_t width, uint32_t height)
 {
     static const DepthStencilState depthWrites = [] {
         DepthStencilDesc desc;
@@ -43,6 +43,8 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         return false;
     }
     PassDesc p;
+    p.width = width;
+    p.height = height;
     if (dst.zeta) {
         p.depthStencil.texture = &target;
     } else {

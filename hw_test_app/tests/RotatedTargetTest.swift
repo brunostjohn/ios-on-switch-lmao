@@ -15,11 +15,9 @@ import Metal
 /// the reference pass loading pass 1's frame flipped top to bottom, every tile reached by a full-frame draw whose fragments
 /// are discarded), loads whose draws reach some tiles alone (RotatedReachCells.swift: rotation 4's plane and a second
 /// plane of rotation 4 beside the target), a load with no draw, which leaves the plane as it is, a second plane of another
-/// turn and frame beside it and private textures of other sizes (each landing by its own store map over the render area, the rest kept): those
-/// cells FAIL when they run anywhere else (path= other than raw).
-/// frames_wrong and sized_wrong count the pixels a second plane of another frame and private textures of other sizes come
-/// out off the plain run: Metal on an M-series Mac draws such passes over an area that is not the attachments' intersection
-/// (out/agent-scratch/x1-targets2/swiftcheck), so neither is required yet.
+/// turn and frame beside it and private textures of other sizes (RotatedMixedCells.swift: each landing by its own store map
+/// over the render area, a turned attachment of a frame past the area loaded as Metal loads it): those cells FAIL when they
+/// run anywhere else (path= other than raw).
 /// native_cells / native_raw count the required cells and those that ran raw; tie_wrong counts the pixels the plane's
 /// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too); r4_edge_wrong
 /// those of a rotation-4 load whose rectangle ends on tile edges, which Metal's reach takes past them.
@@ -44,7 +42,7 @@ struct RotatedTargetTest: HWTest {
         var metrics = Metrics()
         var failures: [String] = []
         var r4Load = PathTally()
-        var native = 0, nativeRaw = 0, tieWrong = 0, framesWrong = 0, sizedWrong = 0, edgeWrong = 0
+        var native = 0, nativeRaw = 0, tieWrong = 0, edgeWrong = 0
         for turn in 1...4 {
             for shape in Self.shapes {
                 let cells = RotatedCells(
@@ -66,12 +64,7 @@ struct RotatedTargetTest: HWTest {
                         }
                         if result.wrong != 0 { failures.append("\(name): \(result.wrong) pixels off Metal's store") }
                     case .informational:
-                        switch cell {
-                        case .frames: framesWrong += result.wrong
-                        case .sized: sizedWrong += result.wrong
-                        case .edgeLoad: edgeWrong += result.wrong
-                        default: tieWrong += result.wrong
-                        }
+                        if cell == .edgeLoad { edgeWrong += result.wrong } else { tieWrong += result.wrong }
                     }
                 }
             }
@@ -79,8 +72,6 @@ struct RotatedTargetTest: HWTest {
         metrics.set("native_cells", native)
         metrics.set("native_raw", nativeRaw)
         metrics.set("tie_wrong", tieWrong)
-        metrics.set("frames_wrong", framesWrong)
-        metrics.set("sized_wrong", sizedWrong)
         metrics.set("r4_edge_wrong", edgeWrong)
         metrics.set("r4_load_paths", r4Load.isEmpty ? "-" : r4Load.text)
         metrics.set("paths", gpu.paths.text)
@@ -95,7 +86,7 @@ enum RotatedCell: String, CaseIterable {
 
     enum Kind { case native, informational }
 
-    var kind: Kind { [.tie, .edgeLoad, .frames, .sized].contains(self) ? .informational : .native }
+    var kind: Kind { [.tie, .edgeLoad].contains(self) ? .informational : .native }
 }
 
 struct RotatedStates {
@@ -206,7 +197,7 @@ struct RotatedCells {
         beside.second = nil
         beside.plainSecond = nil
         for (n, pass) in passes(cell).enumerated() {
-            if n == 1 { try await transposedLoad(cell, into: reference) }
+            if n > 0 { try await loadAsMetal(cell, before: n, into: reference) }
             beside.turnedRun = false
             let plain = try await gpu.run { pass($0, reference) }.path
             beside.turnedRun = true
@@ -305,11 +296,11 @@ struct RotatedCells {
         case .keptDepth:
             return [keptDepth]
         case .turns:
-            return [{ mixedTurns($0, $1, larger: false) }]
+            return mixedTurns(larger: false)
         case .frames:
-            return [{ mixedTurns($0, $1, larger: true) }]
+            return mixedTurns(larger: true)
         case .sized:
-            return [mixedSizes]
+            return mixedSizes()
         case .keptStencil:
             return [keptStencil]
         case .tie:

@@ -5,8 +5,10 @@
 //  - a primitive reaches each tile its area touches, its far edges included (a rectangle to x = 64 reaches the tile from 64),
 //    after face culling and depth clipping; one that covers no pixel centre reaches nothing;
 //  - the scissor and the viewport bound it in whole tiles, each rounded out to the tiles it touches (a primitive outside the
-//    scissor in a tile the scissor touches reaches that tile); an empty scissor is tile (0, 0);
-//  - every tile when another colour attachment clears and stores, none in a pass without a draw.
+//    scissor in a tile the scissor touches reaches that tile); an empty scissor is tile (0, 0), and so is one wholly outside
+//    the viewport;
+//  - every tile when another colour attachment clears and stores, none in a pass without a draw call unless a turned colour
+//    attachment clears and stores (raw_area_load.h).
 // The raw path draws the pass's geometry again before the pass (CommandBuffer::reach) into an R8Uint mask of a texel a tile:
 // each draw's own vertex program and bindings, the pack's turn_reach_frag writing 1, conservative raster (NVB197
 // SET_CONSERVATIVE_RASTER), the viewport scaled to the mask, its clip rectangle and the scissor rounded out to tiles. A pass
@@ -66,6 +68,15 @@ inline Rect reachScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_
     const uint32_t x1 = uint32_t(std::min<uint64_t>(uint64_t(x) + w, areaW)),
                    y1 = uint32_t(std::min<uint64_t>(uint64_t(y) + h, areaH));
     return reachTilesOf(x1 > x0 && y1 > y0 ? Rect{x0, y0, x1, y1} : Rect{0, 0, 1, 1}, step);
+}
+
+// Whether a scissor lies wholly outside a viewport's pixels, where Metal's reach takes it as an empty one
+inline bool scissorOutsideViewport(uint32_t x, uint32_t y, uint32_t w, uint32_t h, double vx, double vy, double vw,
+                                   double vh)
+{
+    const double x0 = std::floor(std::min(vx, vx + vw)), x1 = std::ceil(std::max(vx, vx + vw));
+    const double y0 = std::floor(std::min(vy, vy + vh)), y1 = std::ceil(std::max(vy, vy + vh));
+    return double(x) >= x1 || double(x) + w <= x0 || double(y) >= y1 || double(y) + h <= y0;
 }
 
 // The viewport's clip rectangle in a reach draw's target: Metal's viewport rounded out to tiles (empty where it is)
