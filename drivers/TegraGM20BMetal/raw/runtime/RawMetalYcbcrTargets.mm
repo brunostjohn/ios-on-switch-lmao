@@ -12,13 +12,12 @@
 void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat, const raw::YcbcrStoreShape &store)
 {
     raw::Device &d = *gRM->raw;
-    const bool wide = store.max > 255;
     const auto rendered = [](const raw::Texture *x) {
         return x && (x->renderable || x->shadowTarget);
     };
     raw::Texture *standIn = new raw::Texture;
-    if (!rendered(t.luma) || !rendered(t.chroma) || !d.ycbcrStorePipeline(false, wide) ||
-        !d.ycbcrStorePipeline(true, wide) ||
+    if (!rendered(t.luma) || !rendered(t.chroma) || !d.ycbcrStorePipeline(false, store) ||
+        !d.ycbcrStorePipeline(true, store) ||
         !d.createMemoryless(t.width, t.height, raw::kYcbcrTargetStandIn, *standIn)) {
         delete standIn;
         SWITCH_REFUSE_DETAIL("raw", "ycbcr.target", pixelFormat,
@@ -46,7 +45,6 @@ const char *ycbcrTargetPassRefusal(const raw::Texture &t, MTLRenderPassColorAtta
 int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::Texture &standIn, const char **why)
 {
     raw::Device &d = *gRM->raw;
-    const bool wide = t.ycbcrStore->max > 255;
     for (const bool chroma : {false, true}) {
         raw::PassDesc p;
         p.color[0].texture = chroma ? t.chroma : t.luma;
@@ -58,7 +56,7 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
             *why = "a YCbCr texture's plane the raw path cannot render";
             return 1;
         }
-        e->setPipeline(d.ycbcrStorePipeline(chroma, wide));
+        e->setPipeline(d.ycbcrStorePipeline(chroma, *t.ycbcrStore));
         e->setTexture(0, &standIn);
         e->setBytes(2, 0, t.ycbcrStore, sizeof *t.ycbcrStore);
         if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -71,7 +69,9 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
                "raw: YCbCr target stored on the GPU (first: %ux%u, chroma %ux%u, %u-bit %{public}s): pass into a "
                "memoryless stand-in, luma and chroma blocks drawn by the pack's store states",
                t.width, t.height, t.chroma->width, t.chroma->height, t.ycbcrStore->max > 255 ? 10u : 8u,
-               t.ycbcrStore->converted ? "converted" : "codes");
+               t.ycbcrStore->srgb        ? "sRGB"
+               : t.ycbcrStore->converted ? "converted"
+                                         : "codes");
     return 0;
 }
 

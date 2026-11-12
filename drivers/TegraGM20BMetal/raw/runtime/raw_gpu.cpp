@@ -2616,19 +2616,30 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
 
 Pipeline *Device::ycbcrPipeline(uint8_t output)
 {
-    static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
-                                        "raw.ycbcr.ycbcr_codes_frag", "raw.ycbcr.ycbcr_codes10_frag"};
-    if (!output || output > 4)
+    static const char *const names[] = {"",
+                                        "raw.ycbcr.ycbcr_converted_frag",
+                                        "raw.ycbcr.ycbcr_srgb_frag",
+                                        "raw.ycbcr.ycbcr_codes_frag",
+                                        "raw.ycbcr.ycbcr_codes10_frag",
+                                        "raw.ycbcr.ycbcr_packed_converted_frag",
+                                        "raw.ycbcr.ycbcr_packed_srgb_frag",
+                                        "raw.ycbcr.ycbcr_packed_codes10_frag"};
+    if (!output || output >= sizeof names / sizeof *names)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
-Pipeline *Device::ycbcrStorePipeline(bool chroma, bool wide)
+Pipeline *Device::ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store)
 {
-    static const char *const names[2][2] = {
-        {"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
-        {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}};
-    const char *name = names[chroma][wide];
+    static const char *const names[2][2][2] = {
+        {{"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}},
+        {{"raw.ycbcr_store.ycbcr_store_luma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_luma16_srgb_frag"},
+         {"raw.ycbcr_store.ycbcr_store_chroma8_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma16_srgb_frag"}}};
+    static const char *const packed[2][2] = {
+        {"raw.ycbcr_store.ycbcr_store_luma_packed_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_frag"},
+        {"raw.ycbcr_store.ycbcr_store_luma_packed_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_srgb_frag"}};
+    const char *name = store.packed ? packed[store.srgb != 0][chroma] : names[store.srgb != 0][chroma][store.max > 255];
     return pipeline(Pack::fnv(name, strlen(name)));
 }
 
@@ -2683,7 +2694,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
             }
         return false;
     };
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, width, height, plan.lumaPitch,
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, plan.lumaWidth, height, plan.lumaPitch,
                               plan.lumaFormat, *y))
         return undo();
     if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,

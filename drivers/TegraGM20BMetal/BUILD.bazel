@@ -9,9 +9,11 @@ load("//kits/SwitchGM20BEmit:defs.bzl", "EMIT_SOURCES")
 
 package(default_visibility = ["//visibility:public"])
 
-# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.h is m2v's SRGB_KNOTS table, generated.
+# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.h is m2v's SRGB_KNOTS table and srgb_encode.h its
+# inverse (raw_ycbcr_converted_store_test holds it to the rule), generated.
 lint_files(exclude = [
     "raw/pack/mesa/**",
+    "raw/pack/srgb_encode.h",
     "raw/pack/srgb_knots.h",
 ])
 

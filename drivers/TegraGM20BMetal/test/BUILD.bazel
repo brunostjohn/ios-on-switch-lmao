@@ -61,6 +61,8 @@
 #   raw_ycbcr_store_test  raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment (an M4
 #                     Max's bytes; every byte of its passes: raw/test/ycbcrstoreoracle.mm), the pack's store states' codes
 #                     (ycbcrStoreDrawn) against it, and the targets planYcbcr takes
+#   raw_ycbcr_converted_store_test  the same of the converted and sRGB targets (raw_ycbcr_store_rule.h), and the sRGB
+#                     encode table (raw/pack/srgb_encode.h) against its rule over the read's knots
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
 #                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
 #   raw_xr_planes_test  raw/runtime/raw_xr_planes.h: a two-plane XR surface's merge and split launches, run over bytes with
@@ -844,6 +846,19 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store_rule.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_ycbcr_converted_store_test",
+    srcs = [
+        "raw_ycbcr_converted_store_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/srgb_encode.h",
+        "//drivers/TegraGM20BMetal:raw/pack/srgb_knots.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store_rule.h",
     ],
     cxx_std = "c++17",
 )
@@ -855,6 +870,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store_rule.h",
     ],
     copts = [
         "-I",

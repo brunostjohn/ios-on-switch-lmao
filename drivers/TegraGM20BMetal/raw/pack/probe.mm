@@ -159,6 +159,7 @@ int main(int argc, char **argv)
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
             {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)},
+            {"f ycbcr_packed_", tagged(MTLPixelFormatR32Uint)},
             {"f turn_copy", tagged(MTLPixelFormatR32Uint)},
             {"f turn_depth", tagged(MTLPixelFormatDepth32Float)},
             {"f stencil_bits_", tagged(MTLPixelFormatR32Uint)}};
