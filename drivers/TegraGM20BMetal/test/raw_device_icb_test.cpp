@@ -412,8 +412,9 @@ TEST_F(DeviceIcb, APatchCommandsWordsAreAnEncodersDrawsOfItsBuffers)
     EXPECT_EQ(d.first, 3u);
     EXPECT_FALSE(
         raw::RenderEncoder::icbPatchDraw(dev, {0, 1, 1, 0, &first, 0, 0, 0.0f, nullptr, 0, nullptr, 0}, d, &why));
-    EXPECT_FALSE(
+    ASSERT_TRUE(
         raw::RenderEncoder::icbPatchDraw(dev, {0, 1, 1, 0, &first, 0, 0, 1.0f, &second, 2, nullptr, 0}, d, &why));
+    EXPECT_EQ(d.control[raw::kTessResidualWord[raw::TessPatchIndices]], 0u) << "patch indices from 2 read from 0";
 }
 
 }  // namespace

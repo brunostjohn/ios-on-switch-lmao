@@ -67,25 +67,27 @@ void RenderEncoder::setTessellationFactorScale(float scale)
 }
 
 // The draw's patch and control-point index buffers into set 0, and whether it binds a patch index buffer into the control
-// stage's words; false: a draw the state does not take (`why`), as m2v's binder refuses it
+// stage's words; false: a draw the state does not take (`why`), as m2v's binder refuses it. As Metal draws them (m2v
+// render.rs draw_patches, measured): with the state's control points whatever the draw names, the patch indices from
+// their offset rounded down to 4, every control point's index 0 where the state has an index type and the draw binds no
+// control-point index buffer (the zero page), and one the draw binds unread where the state has none
 bool RenderEncoder::bindPatches(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
                                 const Buffer *pointIndices, uint64_t pointIndexOffset, const char **why)
 {
+    (void)controlPoints;
     const Pipeline *pl = formFor(pipeline_);
     if (!pl || !tessellates(*pl->rec)) {
         *why = "patches drawn with a state of no post-tessellation vertex function";
         return false;
     }
     const PackPipeline &r = *pl->rec;
-    if (r.controlPoints && controlPoints != r.controlPoints) {
-        *why = "patches of another control point count than the function's";
+    if (!r.controlPointIndexBytes)
+        pointIndices = nullptr;
+    if (pointIndices && pointIndexOffset % r.controlPointIndexBytes) {
+        *why = "control-point indices at an offset that is not a multiple of their size";
         return false;
     }
-    if (bool(pointIndices) != bool(r.controlPointIndexBytes) ||
-        (pointIndices && pointIndexOffset % r.controlPointIndexBytes) || (patchIndices && patchIndexOffset % 4)) {
-        *why = "patch or control-point indices the state does not draw";
-        return false;
-    }
+    patchIndexOffset &= ~uint64_t(3);
     if (!tess_.scaleValid) {
         *why = "a tessellation factor scale that is not a positive half";
         return false;
@@ -149,8 +151,8 @@ void RenderEncoder::controlWords(const PackPipeline &r, uint32_t (&want)[32]) co
 }
 
 // As setTessellationFactors: and bindPatches bind an encoder's draw: the factors from their offset's low 32 bits rounded
-// down to 2 (m2v keeps a command's offsets so) and the stride down to 4; a buffer the command names none of, or one past
-// its bytes, is the zero page
+// down to 2 (m2v keeps a command's offsets so) and the stride down to 4, the patch indices from theirs rounded down to 4;
+// a buffer the command names none of, or one past its bytes, is the zero page
 bool RenderEncoder::icbPatchDraw(const Device &dev, const IcbPatches &in, icb::PatchDraw &out, const char **why)
 {
     uint32_t scale = 0;
@@ -158,13 +160,9 @@ bool RenderEncoder::icbPatchDraw(const Device &dev, const IcbPatches &in, icb::P
         *why = "a tessellation factor scale that is not a positive half";
         return false;
     }
-    if (in.patchIndices && in.patchIndexOffset % 4) {
-        *why = "patch indices at an offset that is not a multiple of 4";
-        return false;
-    }
     const Bound bound[TessBufferCount] = {boundFrom(in.factors, uint32_t(in.factorOffset) & ~1u),
-                                          boundFrom(in.patchIndices, in.patchIndexOffset),
-                                          boundFrom(in.pointIndices, in.pointIndexOffset)};
+                                          boundFrom(in.patchIndices, uint32_t(in.patchIndexOffset) & ~3u),
+                                          boundFrom(in.pointIndices, uint32_t(in.pointIndexOffset))};
     out = {in.count, in.instances, in.first, in.baseInstance, {}, {}};
     for (uint8_t k = 0; k < TessBufferCount; k++) {
         const bool zero = !bound[k].va;

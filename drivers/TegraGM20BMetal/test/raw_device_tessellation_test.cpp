@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // raw_tessellation.cpp and a tessellation state's record on raw::Device: its control and evaluation programs bound at their
 // stages beside its tessellator registers, the stages switched off again after it, patches drawn only with it and
-// primitives only without it, a draw's control-point indexing held to the state's, and Metal's factor scale as m2v's control
-// stage takes it.
+// primitives only without it, a draw's indexing and control points as Metal draws them for the state, and Metal's factor
+// scale as m2v's control stage takes it.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_icb.h"
 #include "../raw/runtime/raw_record.h"
@@ -147,28 +147,40 @@ TEST_F(DeviceTessellation, PatchesDrawOnlyWithATessellationState)
               "");
 }
 
+// As Metal draws them (m2v render.rs draw_patches): the state's control points whatever the draw names, a control-point
+// index buffer the state has no index type for unread, none where it has one read as index 0, patch indices from their
+// offset rounded down to 4; control-point indices off their size are refused
 TEST_F(DeviceTessellation, ADrawsIndexingAndControlPointsAreTheStates)
 {
     const raw::Buffer *points = &indices;
-    EXPECT_NE(drawWith(patches, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(3, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_EQ(drawWith(patches,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(3, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(patches, [points](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, points, 0, why);
-              }),
+    EXPECT_EQ(drawWith(patches,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, points, 0, why);
+                       }),
               "");
-    EXPECT_NE(drawWith(indexed, [](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
-              }),
+    EXPECT_EQ(drawWith(indexed,
+                       [](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, nullptr, 0, nullptr, 0, why);
+                       }),
               "");
     EXPECT_EQ(drawWith(indexed, [points](raw::RenderEncoder &e, const char **why) {
                   return e.drawPatches(4, 0, 1, 1, 0, points, 4, points, 2, why);
               }),
               "");
-    EXPECT_NE(drawWith(indexed, [points](raw::RenderEncoder &e, const char **why) {
-                  return e.drawPatches(4, 0, 1, 1, 0, points, 2, points, 2, why);
-              }),
+    EXPECT_EQ(drawWith(indexed,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, points, 2, points, 2, why);
+                       }),
+              "");
+    EXPECT_NE(drawWith(indexed,
+                       [points](raw::RenderEncoder &e, const char **why) {
+                           return e.drawPatches(4, 0, 1, 1, 0, points, 4, points, 1, why);
+                       }),
               "");
 }
 
