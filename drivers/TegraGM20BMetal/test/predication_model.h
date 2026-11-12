@@ -27,7 +27,10 @@ constexpr uint32_t bits(uint32_t v, uint32_t hi, uint32_t lo)
 }
 
 struct Gpu {
-    std::vector<uint8_t> memory = std::vector<uint8_t>(1 << 20);
+    explicit Gpu(size_t bytes = 1 << 16) : memory(bytes)
+    {}
+
+    std::vector<uint8_t> memory;
     std::vector<uint32_t> launched;
     std::function<void(uint32_t)> onLaunch;  // what a launch's program does to memory
     bool enabled = true;

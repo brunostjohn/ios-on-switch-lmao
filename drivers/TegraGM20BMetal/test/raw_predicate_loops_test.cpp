@@ -37,7 +37,7 @@ uint64_t word(uint32_t i)
 
 // The compute encoder's words for one command buffer, over the model's memory: launches named 1, 2, ... in encode order
 struct LoopProgram {
-    Gpu gpu;
+    Gpu gpu{1 << 20};
     raw::Predication predication;
     raw::LoopCopies loops;
     raw::PushBatches entries;
