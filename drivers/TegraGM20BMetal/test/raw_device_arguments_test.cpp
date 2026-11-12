@@ -162,8 +162,7 @@ TEST_F(DeviceArguments, AJobAfterTheTablesChangedIsHostWrittenAndTheNextIsNot)
         ASSERT_EQ(draw(explicitly), "");
         const kernel_model::Job &changed = kernel_model::model.jobs.back();
         EXPECT_TRUE(changed.flags & TegraGM20BJobHostWritten) << explicitly;
-        for (const auto &use : changed.uses)
-            EXPECT_NE(use.handle, raw::DeviceHarness::handleTables(dev).handle);
+        EXPECT_NE(kernel_model::model.bos.at(raw::DeviceHarness::handleTables(dev).handle).set, 0u);
         ASSERT_EQ(draw(explicitly), "");
         EXPECT_FALSE(kernel_model::model.jobs.back().flags & TegraGM20BJobHostWritten) << explicitly;
     }
