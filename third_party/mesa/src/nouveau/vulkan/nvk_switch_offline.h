@@ -13,6 +13,7 @@
 #include "nvk_switch_compile.h"
 
 #include "compiler/spirv/nir_spirv.h"
+#include "compiler/spirv/spirv_info.h"
 #include "nv_device_info.h"
 #include "vk_pipeline.h"
 

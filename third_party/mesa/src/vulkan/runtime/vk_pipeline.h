@@ -246,6 +246,8 @@ typedef struct nir_shader *(*vk_native_nir_builder)(
    const struct spirv_to_nir_options *address_options,
    const VkSpecializationInfo *specialization);
 
+struct vk_pipeline_layout;
+
 /* ios-on-switch-lmao: the shader flags a pipeline's stage compiles with */
 VkShaderCreateFlagsEXT
 vk_pipeline_to_shader_flags(VkPipelineCreateFlags2KHR pipeline_flags,

@@ -334,7 +334,7 @@ lower_load_intrinsic(nir_builder *b, nir_intrinsic_instr *load,
 
    case nir_intrinsic_load_global_constant_bounded:
       /* Handled inside nak_nir_lower_load_store */
-      if (pdev->info.sm >= 73)
+      if (info->sm >= 73)
          return false;
       FALLTHROUGH;
    case nir_intrinsic_load_global_constant_offset: {

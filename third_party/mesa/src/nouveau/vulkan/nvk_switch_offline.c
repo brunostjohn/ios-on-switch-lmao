@@ -14,11 +14,13 @@
 #include "nvk_descriptor_set_layout.h"
 #include "nvk_device.h"
 #include "nvk_shader.h"
+#include "nvk_switch_capture.h"
 #include "nvk_switch_ir.h"
 #include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_split.h"
 
+#include "vk_graphics_state.h"
 #include "vk_nir.h"
 #include "vk_nir_lower_descriptor_heaps.h"
 #include "vk_pipeline.h"
