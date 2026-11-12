@@ -49,6 +49,7 @@ void tgm_present_redo_work(void *unused)
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);
+	tgm_present.recheck = TGM_PRESENT_NS;
 	nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 	chan_fence_volatile(chan);
 #if TGM_STATS

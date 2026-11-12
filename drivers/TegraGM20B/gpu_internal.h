@@ -658,7 +658,7 @@ struct present_state {
 	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
-	u64 recheck;   /* the deadline's next look after `recovered` */
+	u64 recheck;   /* the deadline's next look after `queued` or, later, `recovered` */
 	u64 late;      /* when the deadline first found the watch's interrupt due (gpu_present_deadline.c), 0: not */
 
 	/* the copy of the present in flight (valid: it copies), for a redo after a copy engine reset */

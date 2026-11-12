@@ -46,6 +46,17 @@ static inline int switch_gpu_present_pending_matches(const struct switch_gpu_pre
 	       token->value <= UINT32_MAX && (int32_t)(completed - (uint32_t)token->value) < 0;
 }
 
+/* A writer promise among them still unkept: the present's job parks on its word */
+static inline int switch_gpu_present_tokens_promised(const struct switch_gpu_present_tokens *held)
+{
+	uint32_t i;
+	for (i = 0; i < held->count; ++i)
+		if (held->tokens[i].engine == SWITCH_GPU_ENGINE_PROMISE &&
+		    switch_gpu_backing_token_status(&held->tokens[i]) == 0)
+			return 1;
+	return 0;
+}
+
 static inline void switch_gpu_present_tokens_drop(struct switch_gpu_present_tokens *held)
 {
 	while (held->count)

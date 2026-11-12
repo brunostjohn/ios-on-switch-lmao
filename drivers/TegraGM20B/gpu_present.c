@@ -347,9 +347,10 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
-	nvxnu_work_schedule_after(
-		tgm_present.deadline_work,
-		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
+	tgm_present.recheck = switch_gpu_present_tokens_promised(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS
+										      : TGM_PRESENT_NS;
+	/* before the kick, so the completion cancels it */
+	nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
 	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's
 	 * volatile PTEs (tgm_present_map); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
 	if (dst_va)
@@ -440,6 +441,7 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.queued = nvxnu_nanotime();
 		tgm_present.late = 0;
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
+		tgm_present.recheck = TGM_PRESENT_NS;
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 		if (tgm_present.tokens.tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE) {
 			switch_gpu_present_watch_promise(&tgm_present.watch, &tgm_present.tokens.tokens[0]);

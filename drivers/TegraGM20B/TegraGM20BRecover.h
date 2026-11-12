@@ -305,6 +305,10 @@ static inline int tgm_pbdma_acquiring(uint32_t method0, uint32_t data0)
  * and every late wait). Above any finite drain seen (backboardd's two 144 ms m2v passes a frame), below TGM_HANG_NS and the
  * present's 1 s, so the channels a late wait finds stuck at its deadline were stuck for most of it. */
 #define TGM_STUCK_NS (500ull * 1000 * 1000)
+/* A present's first look when its job parks on an unkept writer promise: stuck since its submission, which comes just
+ * after the look is armed, so a few ms past TGM_STUCK_NS. Its second look, TGM_STUCK_NS later, confirms the strike that
+ * gives the promise up at about TGM_PRESENT_NS (1 s), when a watched present gives its promise up. */
+#define TGM_PROMISE_FIRST_LOOK_NS (TGM_STUCK_NS + 10ull * 1000 * 1000)
 
 static inline int tgm_stuck(int dead, uint32_t completed, uint32_t submitted, uint64_t now,
 			    uint64_t progress_ns)

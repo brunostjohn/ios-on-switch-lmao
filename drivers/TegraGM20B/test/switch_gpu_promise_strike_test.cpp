@@ -105,9 +105,11 @@ protected:
 		pool[kOffset / 4] = kValue - 1;
 	}
 
+	// the present's job acquires the promise (present_copy: its first look at TGM_PROMISE_FIRST_LOOK_NS)
 	void parkOnThePromise()
 	{
 		ASSERT_EQ(switch_gpu_promise_waits_note(&p.waits, word, kOffset, kValue), 0);
+		next = TGM_PROMISE_FIRST_LOOK_NS;
 	}
 
 	enum tgm_hang deadline()
@@ -119,19 +121,20 @@ protected:
 	}
 };
 
-// The first deadline (1 s after the offer) takes the first strike: the present goes on waiting, and a kernel channel
-// that is a victim is never STUCK (no panic). It looks again once the wait has been stuck for TGM_STUCK_NS, as it
-// waits on a promise word, and that look (1.5 s) confirms the strike: the promise is marked given up, its word raised,
-// and one line names its writer. The present finishes TEGRA_SCANOUT_SOURCE_LOST and the panel keeps the frame before
-// it.
-TEST_F(Strike, AnUnkeptPromiseKeepsThePreviousFrameAndNamesItsWriterOnceAtOneAndAHalfSeconds)
+// The first look, once the parked job has been stuck for TGM_STUCK_NS, takes the first strike: the present goes on
+// waiting, and a kernel channel that is a victim is never STUCK (no panic). It looks again TGM_STUCK_NS later, as it
+// waits on a promise word, and that look (about 1 s after the offer, as a watched present gives up) confirms the
+// strike: the promise is marked given up, its word raised, and one line names its writer. The present finishes
+// TEGRA_SCANOUT_SOURCE_LOST and the panel keeps the frame before it.
+TEST_F(Strike, AnUnkeptPromiseKeepsThePreviousFrameAndNamesItsWriterOnceAtOneSecond)
 {
 	parkOnThePromise();
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
 	EXPECT_TRUE(p.lines.empty());
 	EXPECT_EQ(pool[kOffset / 4], kValue - 1);
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
-	EXPECT_EQ(now, kPresentNs + TGM_STUCK_NS);
+	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS + TGM_STUCK_NS);
+	EXPECT_LE(now, kPresentNs + 10 * kMs);
 	ASSERT_EQ(p.lines.size(), 1u);
 	EXPECT_NE(p.lines[0].find("writer-app's writer promise"), std::string::npos);
 	EXPECT_EQ(pool[kOffset / 4], kValue);
