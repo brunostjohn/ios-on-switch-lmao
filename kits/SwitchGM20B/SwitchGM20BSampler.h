@@ -34,10 +34,10 @@ struct switch_gm20b_sampler_state {
     bool anisotropy;
     float max_anisotropy;
     bool compare;
-    uint32_t compare_op;           // VkCompareOp
-    uint32_t border_color;         // VkBorderColor
-    uint32_t reduction;            // VkSamplerReductionMode
-    uint32_t border_components[4]; // VkComponentSwizzle of r, g, b, a (identity: no border mapping)
+    uint32_t compare_op;            // VkCompareOp
+    uint32_t border_color;          // VkBorderColor
+    uint32_t reduction;             // VkSamplerReductionMode
+    uint32_t border_components[4];  // VkComponentSwizzle of r, g, b, a (identity: no border mapping)
     bool unnormalized;
 };
 
@@ -46,7 +46,7 @@ static inline void switch_gm20b_tsc_put(uint32_t *word, uint32_t value, unsigned
     *word |= (value & (uint32_t)(~0ull >> (63 - (hi - lo)))) << lo;
 }
 
-#define SWITCH_GM20B_TSC(w, i, FIELD, v)                                                                             \
+#define SWITCH_GM20B_TSC(w, i, FIELD, v) \
     switch_gm20b_tsc_put(&(w)[i], (v), DRF_LO(NVB197_TEXSAMP##i##_##FIELD), DRF_HI(NVB197_TEXSAMP##i##_##FIELD))
 
 static inline uint32_t switch_gm20b_tsc_fixed(float v, unsigned lo, unsigned hi, bool sign)
@@ -108,8 +108,10 @@ static inline bool switch_gm20b_sampler_header(const struct switch_gm20b_sampler
         if (s->border_components[i] > SWITCH_GM20B_SWIZZLE_A)
             return false;
     static const uint8_t address[] = {
-        NVB197_TEXSAMP0_ADDRESS_U_WRAP,          NVB197_TEXSAMP0_ADDRESS_U_MIRROR,
-        NVB197_TEXSAMP0_ADDRESS_U_CLAMP_TO_EDGE, NVB197_TEXSAMP0_ADDRESS_U_BORDER,
+        NVB197_TEXSAMP0_ADDRESS_U_WRAP,
+        NVB197_TEXSAMP0_ADDRESS_U_MIRROR,
+        NVB197_TEXSAMP0_ADDRESS_U_CLAMP_TO_EDGE,
+        NVB197_TEXSAMP0_ADDRESS_U_BORDER,
         NVB197_TEXSAMP0_ADDRESS_U_MIRROR_ONCE_CLAMP_TO_EDGE,
     };
     SWITCH_GM20B_TSC(w, 0, ADDRESS_U, address[s->address[0]]);
