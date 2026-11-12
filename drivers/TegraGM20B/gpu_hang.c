@@ -473,6 +473,9 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		kind = candidate_wait(&waits, chans[i], &source);
 		c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;
 		tgm_acquire_unfired(chans[i], now);
+#if TGM_STATS
+		tgm_acquire_probe_look(chans[i], now);
+#endif
 		for (j = 0; source && j <= n; j++)
 			if (j != i && chans[j] == source)
 				c[i].waits = (u8)(j + 1);

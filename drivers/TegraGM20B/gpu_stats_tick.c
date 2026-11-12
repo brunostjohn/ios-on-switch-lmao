@@ -395,6 +395,9 @@ void tgm_stats_tick(void)
 	nvxnu_stats("tegra-gm20b: stats %s", line);
 	stats_deadline(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: deadline %s", line);
+	tgm_acquire_probe_window(line, sizeof(line), now);
+	if (line[0])
+		nvxnu_stats("tegra-gm20b: acquire probe: %s", line);
 	switch_gpu_compositor_sync_window(line, sizeof(line));
 	if (line[0])
 		nvxnu_stats("tegra-gm20b: compositor sync pushes in profiled frames: %s", line);

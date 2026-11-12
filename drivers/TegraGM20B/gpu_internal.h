@@ -293,6 +293,11 @@ struct tgm_chan {
 	u64 acquire_check_ns;
 	u32 acquire_done;
 	int acquire_unfired;
+#if TGM_STATS
+	/* the ACQUIRE probe: the first look that found it parked on an acquire, and what it had completed then */
+	u64 acquire_probe_ns;
+	u32 acquire_probe_done;
+#endif
 	u32 acquire_unread; /* checks since its interrupt that found RAMFC naming nothing yet */
 
 	/* its last jobs; high channels': each job's kick, the app channel it was queued behind and when that one was asked to
@@ -398,6 +403,12 @@ enum tgm_wait_source {
 enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source,
 					  char *what, unsigned int len);
 void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
+#if TGM_STATS
+/* gpu_acquire.c's ACQUIRE probe: a look at a channel (tgm_live_lock held), and the window's line, after a look at every
+ * live channel */
+void tgm_acquire_probe_look(struct tgm_chan *chan, u64 now);
+void tgm_acquire_probe_window(char *line, unsigned int len, u64 now);
+#endif
 
 /* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is

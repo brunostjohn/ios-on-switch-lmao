@@ -265,6 +265,84 @@ void tgm_acquire_unfired(struct tgm_chan *chan, u64 now)
 		  (unsigned long long)(TGM_ACQUIRE_NS / NSEC_PER_MSEC));
 }
 
+#if TGM_STATS
+/* The ACQUIRE probe, under tgm_live_lock: the looks this window that found a channel parked on an acquire (a hang
+ * check's candidates, the stats window's live channels) against the ACQUIRE interrupts that came. Boot 18 had two ~2 s
+ * promise parks and no "semaphore acquire timed out" line. A park seen at one look and still there TGM_ACQUIRE_NS
+ * later with no interrupt since is logged once a boot, with whether the PBDMA was timing it. A line, not a panic: the
+ * lost-interrupt rule applies once a boot shows which it is. */
+static struct {
+	u32 parks, fired;
+	int logged;
+} probe;
+
+static const char *const probe_where_names[] = {
+	"switched out", "interrupt lost", "on PBDMA0 with its timeout off",
+	"neither on PBDMA0 at an acquire nor switched out on one"};
+
+void tgm_acquire_probe_look(struct tgm_chan *chan, u64 now)
+{
+	struct nvkm_device *device = tgm_gpu.device;
+	const u32 done = tgm_chan_completed(chan);
+	u32 ccsr = 0;
+	u32 method0 = 0;
+	u32 data0 = 0;
+	u32 acquire = 0;
+	u32 pbdma = 0;
+
+	if (READ_ONCE(chan->error) || (s32)(done - chan->submitted) >= 0) {
+		chan->acquire_probe_ns = 0;
+		return;
+	}
+	ccsr = nvkm_rd32(device, TGM_CCSR_CHANNEL(chan->chid));
+	if (!chan_parked(chan->chid, ccsr)) {
+		chan->acquire_probe_ns = 0;
+		return;
+	}
+	probe.parks++;
+	if (!chan->acquire_probe_ns || chan->acquire_probe_done != done ||
+	    chan->acquire_fired_ns >= chan->acquire_probe_ns) {
+		chan->acquire_probe_ns = now;
+		chan->acquire_probe_done = done;
+		return;
+	}
+	if (probe.logged || now - chan->acquire_probe_ns < TGM_ACQUIRE_NS)
+		return;
+	probe.logged = 1;
+	pbdma = PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(0)));
+	method0 = nvkm_rd32(device, PBDMA_METHOD0(0));
+	data0 = nvkm_rd32(device, PBDMA_DATA0(0));
+	acquire = nvkm_rd32(device, TGM_PBDMA_ACQUIRE(0));
+	nvxnu_log("tegra-gm20b: acquire probe: %s (channel %u) parked on an acquire "
+		  "over %llu ms with no ACQUIRE interrupt: %s (CCSR %08x; PBDMA0 on "
+		  "channel %u at method %08x data %08x, ACQUIRE_SWITCH %s, ACQUIRE %08x)\n",
+		  chan->owner, chan->chid, (now - chan->acquire_probe_ns) / NSEC_PER_MSEC,
+		  probe_where_names[tgm_acquire_probe_where(
+			  chan->chid, ccsr, pbdma, tgm_pbdma_acquiring(method0, data0), acquire)],
+		  ccsr, pbdma, method0, data0, data0 & (1u << 12) ? "on" : "off", acquire);
+}
+
+void tgm_acquire_probe_window(char *line, unsigned int len, u64 now)
+{
+	struct tgm_chan *chan = NULL;
+
+	line[0] = 0;
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
+	{
+		tgm_acquire_probe_look(chan, now);
+	}
+	if (probe.parks || probe.fired)
+		scnprintf(
+			line, len,
+			"%u looks found a channel parked on an acquire, %u ACQUIRE interrupts came",
+			probe.parks, probe.fired);
+	probe.parks = 0;
+	probe.fired = 0;
+	mutex_unlock(&tgm_live_lock);
+}
+
+#endif
 /* tgm_live_lock held: the rule for a channel parked on an acquire past its timeout. While it waits on another channel and
  * the GPU progresses, a check is due again (the rule's second look at the producer); a wait on what the kernel or a
  * host1x engine releases is left to that releaser, with no check repeating. Returns the verdict; the caller panics on
@@ -307,6 +385,9 @@ static void acquire_timed_out(u32 chid, const struct acquire_record *r)
 	}
 	WRITE_ONCE(chan->acquire_due, 1);
 	chan->acquire_fired_ns = r->ns;
+#if TGM_STATS
+	probe.fired++;
+#endif
 	chan->acquire_unread = 0;
 	kind = tgm_chan_wait_source(chan, &source, what, sizeof(what));
 	if (PBDMA_METHOD_ADDR(r->method0) == TGM_HOST_SYNCPOINTB) {

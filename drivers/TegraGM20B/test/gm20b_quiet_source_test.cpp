@@ -241,6 +241,16 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	expectBefore(deadline, "tgm_present.recheck = TGM_PRESENT_NS;",
 		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
 	EXPECT_THAT(deadline, Not(HasSubstr("promise")));
+	// The ACQUIRE probe is a debug kernel's line, never a panic: looked at by the hang checks and the stats window.
+	const std::string acquire_c = unit("gpu_acquire.c");
+	expectBefore(acquire_c, "#if TGM_STATS\n/* The ACQUIRE probe", "void tgm_acquire_probe_look(");
+	expectBefore(acquire_c, "void tgm_acquire_probe_window(", "#endif\n/* tgm_live_lock held: the rule for a channel");
+	EXPECT_THAT(Body(acquire_c, "void tgm_acquire_probe_look("), Not(HasSubstr("panic")));
+	EXPECT_THAT(Body(acquire_c, "static void acquire_timed_out("), HasSubstr("#if TGM_STATS\n\tprobe.fired++;\n#endif"));
+	EXPECT_THAT(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
+		    HasSubstr("#if TGM_STATS\n\t\ttgm_acquire_probe_look(chans[i], now);\n#endif"));
+	EXPECT_THAT(Body(unit("gpu_stats_tick.c"), "void tgm_stats_tick(void)"),
+		    HasSubstr("tgm_acquire_probe_window(line, sizeof(line), now);"));
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));
