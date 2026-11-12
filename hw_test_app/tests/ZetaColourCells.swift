@@ -128,12 +128,13 @@ struct ZetaColourCells {
             try pattern(e, format, samples: 4, seed: seed)
             e.endEncoding()
         }
-        return try await check(into, seed: seed, inverted: false, "resolve_\(Self.name(format))_\(width)x\(height)")
+        return try await check(into, seed: seed, cell: "resolve_\(Self.name(format))_\(width)x\(height)")
     }
 
     /// A zeta of the frame beside a turned drawable (rotation 1): given the pattern, loaded into the pass's plane-shaped
-    /// stand-in and stored back by the route's turn copies, where a draw of each stencil value marks the drawable and a
-    /// draw inverts the stencil. The drawable holds each frame texel's stencil; the zeta, read back, the inverted one.
+    /// stand-in and stored back by the route's turn copies, where a draw of each stencil value marks the drawable, a draw
+    /// inverts the stencil and a draw at depth 0.5 under LESS writes it where it is nearer. The drawable holds each frame
+    /// texel's stencil; the zeta, read back, the inverted one and the nearer depth.
     func turn(_ format: MTLPixelFormat, _ width: Int, _ height: Int, seed: UInt32) async throws -> Count? {
         let cells = RotatedCells(gpu: gpu, states: rotated, turn: 1, width: width, height: height, aligned: true)
         guard let plane = try cells.makePlane() else { return nil }
@@ -146,6 +147,7 @@ struct ZetaColourCells {
         }
         let equal = try state(stencil: .equal)
         let inverting = try state(stencil: .always, op: .invert, writeMask: 0xFF)
+        let nearer = try state(depth: .less, writes: true)
         try await gpu.run { commands in
             let pass = Self.zetaPass(zeta, load: .load, store: .store)
             pass.colorAttachments[0].texture = plane.texture
@@ -162,10 +164,14 @@ struct ZetaColourCells {
             e.setRenderPipelineState(invert)
             e.setDepthStencilState(inverting)
             GPU.draw(e, corners: GPU.fullScreen, color: SIMD4(0, 0, 0, 0))
+            if Self.hasDepth(format) {
+                e.setDepthStencilState(nearer)
+                GPU.draw(e, corners: GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: Self.nearer), color: SIMD4(0, 0, 0, 0))
+            }
             e.endEncoding()
         }
         let cell = "turn_\(Self.name(format))_\(width)x\(height)"
-        var count = try await check(zeta, seed: seed, inverted: true, cell)
+        var count = try await check(zeta, seed: seed, cell: cell, inverted: true, nearer: Self.nearer)
         guard plane.surface.lock(options: .readOnly, seed: nil) == 0 else { throw TestFailure("IOSurfaceLock failed") }
         defer { plane.surface.unlock(options: .readOnly, seed: nil) }
         for y in 0..<height {
@@ -183,9 +189,14 @@ struct ZetaColourCells {
         return count
     }
 
-    /// `zeta` against the pattern of `seed` (its stencil inverted where `inverted`): its depth and stencil copied out,
-    /// then marked by a draw of each stencil value under EQUAL and by the pattern's depth under EQUAL
-    func check(_ zeta: MTLTexture, seed: UInt32, inverted: Bool, _ cell: String) async throws -> Count {
+    static let nearer: Float = 0.5
+
+    /// `zeta` against the pattern of `seed` (its stencil inverted where `inverted`, its depth at most `nearer`): its depth
+    /// and stencil copied out, then marked by a draw of each stencil value under EQUAL and by the pattern's depth under
+    /// EQUAL (a mark where the pattern's depth is what it holds)
+    func check(
+        _ zeta: MTLTexture, seed: UInt32, cell: String, inverted: Bool = false, nearer: Float = 1
+    ) async throws -> Count {
         let w = zeta.width, h = zeta.height, format = zeta.pixelFormat
         var count = Count()
         let want = { (x: Int, y: Int) in inverted ? ~Self.stencil(x, y, seed) : Self.stencil(x, y, seed) }
@@ -209,14 +220,16 @@ struct ZetaColourCells {
         let equal = try await depthMarks(zeta, seed: seed)
         for y in 0..<h {
             for x in 0..<w {
-                let got = depths.loaded(as: Float.self, at: y * w + x)
-                if got.bitPattern != Self.depth(x, y, seed).bitPattern {
+                let got = depths.loaded(as: Float.self, at: y * w + x), pattern = Self.depth(x, y, seed)
+                let want = min(pattern, nearer)
+                if got.bitPattern != want.bitPattern {
                     count.depth += 1
-                    count.miss("depth", cell, x, y, "\(got)", "\(Self.depth(x, y, seed))")
+                    count.miss("depth", cell, x, y, "\(got)", "\(want)")
                 }
-                if equal[y * w + x] != 1 {
+                let mark: UInt32 = pattern <= nearer ? 1 : 0
+                if equal[y * w + x] != mark {
                     count.tested += 1
-                    count.miss("depth_equal", cell, x, y, "\(equal[y * w + x])", "1")
+                    count.miss("depth_equal", cell, x, y, "\(equal[y * w + x])", "\(mark)")
                 }
             }
         }
