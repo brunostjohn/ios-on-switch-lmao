@@ -126,7 +126,6 @@ private:
     std::atomic<bool> stopping_{false};
     raw::Mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
-    std::set<uint64_t> notTaken_;    // by CacheKey::name, the states the compiler did not take: made here
     raw::Mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
@@ -139,21 +138,25 @@ private:
 
     // RawCompleteRemote.mm: the system shader compiler's side
     void compiledHere(InProcess::Why why);
-    bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name);
+    // `every`: each library's bytes, a system one's too, as a data library
+    bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name,
+                       bool every = false);
     RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);
-    enum class Asked : uint8_t {
-        Answered,  // `state` is the compiler's answer
-        Here,      // a state the compiler cannot take, for a reason logged once: made here
-        Gone,      // no compiler comes this boot
-    };
-    // The state made by the compiler while this thread sleeps
-    Asked remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record);
+    // Why a state's creation fails where no compiler makes it (makeNow's `failure`)
+    static constexpr const char kNoCompilerComes[] =
+        "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
+    static constexpr const char kInexpressible[] = "a function no compile request can name: another device's";
+    static constexpr const char kNotTaken[] = "the shader compiler did not take the state";
+    static constexpr const char kNotStored[] = "the shader compiler's store does not keep the state";
+    // The state made by the compiler while this thread sleeps; false: the creation fails with `failure`
+    bool remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record,
+                   std::string &failure);
     // The state made on this thread, a failed compile tried once more
     Compiler::State madeHere(const CacheKey &k, RuntimeRecord &record, std::string &why);
-    // The state asked of the compiler with `done` called once it answers; false: not asked
+    // The state asked of the compiler with `done` called once it answers, null where it made none
     bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done);
-    // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: not
-    // taken (made here instead)
+    // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: none
+    // made (the kernel is refused: no process compiles one itself while a compiler serves)
     Compiler::Outcome remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,
                                    const NmbDirectDispatch &dispatch, const CacheKey &k, ComputeRecord &record,
                                    std::string &why, bool &taken);

@@ -41,9 +41,9 @@ void logHarvestParts(uint64_t name, NSString *label, const std::string &key)
 
 // A function of this facade as a request's stage, its library added to `r` once (`ids` beside it); false: one no request
 // can name (another device's, or one neither the facade nor m2v keeps a metallib of). The bytes are the AIR slice the
-// facade read, else m2v's library's.
+// facade read, else m2v's library's; `every` sends a system library's too, as a data library.
 bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<const LibrarySource *, uint32_t> &seen,
-              const char *tag, id function, bool bytes)
+              const char *tag, id function, bool bytes, bool every = false)
 {
     if (![function isKindOfClass:[RMFunction class]])
         return false;
@@ -58,7 +58,7 @@ bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<con
             return false;
         RequestLibrary library;
         library.path = f->_source->path;
-        library.system = f->_source->system;
+        library.system = f->_source->system && !every;
         if (bytes && !library.system)
             library.bytes.assign(static_cast<const char *>(data), length);
         r.libraries.push_back(std::move(library));
@@ -96,7 +96,7 @@ void Completion::compiledHere(InProcess::Why why)
                      InProcess::text(why));
 }
 
-bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name)
+bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name, bool every)
 {
     MTLRenderPipelineDescriptor *d = a.facade;
     if (!d)
@@ -110,8 +110,8 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     std::vector<LibraryIdentity> ids;
     std::map<const LibrarySource *, uint32_t> seen;
     @autoreleasepool {
-        if (!addStage(r, ids, seen, "v", d.vertexFunction, bytes) ||
-            !addStage(r, ids, seen, "f", d.fragmentFunction, bytes))
+        if (!addStage(r, ids, seen, "v", d.vertexFunction, bytes, every) ||
+            !addStage(r, ids, seen, "f", d.fragmentFunction, bytes, every))
             return false;
         const std::pair<const char *, NSArray *> linked[] = {{"vl", d.vertexLinkedFunctions.functions},
                                                              {"vp", d.vertexLinkedFunctions.privateFunctions},
@@ -119,7 +119,7 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
                                                              {"fp", d.fragmentLinkedFunctions.privateFunctions}};
         for (const auto &[tag, functions] : linked)
             for (id f in functions)
-                if (!addStage(r, ids, seen, tag, f, bytes))
+                if (!addStage(r, ids, seen, tag, f, bytes, every))
                     return false;
     }
     if (r.stages.size() > kRequestStageLimit)
@@ -157,62 +157,52 @@ void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found f
 #endif
 }
 
-Completion::Asked Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record)
+bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record,
+                           std::string &failure)
 {
     CompileRequest r;
     Digest name;
-    if (!renderRequest(a, k, false, r, name)) {
-        compiledHere(InProcess::NoRequest);
-        return Asked::Here;
-    }
+    if (!renderRequest(a, k, false, r, name))
+        return failure = kInexpressible, false;
     std::string why;
     RecordCache::Found found = fromStore(name, k, record, why);
     const uint64_t began = nowUs();
     RAW_DIAGNOSTIC(tObtained = {"store", 0, uint32_t(qos_class_self()), 0});
     if (found == RecordCache::Found::None) {
-        if (!remote_->taking()) {
-            if (remote_->declined())
-                return Asked::Gone;
-            compiledHere(InProcess::NotTaken);
-            return Asked::Here;
-        }
-        if (!renderRequest(a, k, true, r, name)) {
-            compiledHere(InProcess::NoRequest);
-            return Asked::Here;
-        }
+        if (!remote_->taking() || !renderRequest(a, k, true, r, name))
+            return failure = remote_->taking() ? kInexpressible : kNoCompilerComes, false;
         uint32_t how = 0;
-        const Remote::Answer answer = remote_->compile(encodeRequest(r), &how);
+        Remote::Answer answer = remote_->compile(encodeRequest(r), &how);
+        // a system library the compiler could not resolve is sent as the library's bytes
+        if (answer == Remote::Answer::Unavailable && !remote_->declined() && renderRequest(a, k, true, r, name, true))
+            answer = remote_->compile(encodeRequest(r), &how);
+        if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused) {
+            found = fromStore(name, k, record, why);
+            // put in the store and retired from it before this thread read it: asked once more
+            if (found == RecordCache::Found::None && remote_->compile(encodeRequest(r), &how) == answer)
+                found = fromStore(name, k, record, why);
+        }
 #if SWITCH_RAW_DIAGNOSTICS
         static const char *const kinds[] = {"compiled", "joined", "stored"};
         tObtained.how = (how & 0xff) < 3 ? kinds[how & 0xff] : "?";
         tObtained.waitUs = nowUs() - began;
         tObtained.ran = how;
 #endif
-        switch (answer) {
-        case Remote::Answer::Made:
-        case Remote::Answer::Refused:
-            break;
-        case Remote::Answer::Failed:
+        if (answer == Remote::Answer::Failed) {
             state = Compiler::State::Failed;
-            return Asked::Answered;
-        case Remote::Answer::Unavailable:
-            if (remote_->declined())
-                return Asked::Gone;
-            compiledHere(InProcess::NotTaken);
-            return Asked::Here;
+            return true;
         }
-        found = fromStore(name, k, record, why);
-        if (found == RecordCache::Found::None) {
-            compiledHere(InProcess::NotInStore);
-            return Asked::Here;
-        }
+        if (answer == Remote::Answer::Unavailable)
+            return failure = remote_->declined() ? kNoCompilerComes : kNotTaken, false;
+        if (found == RecordCache::Found::None)
+            return failure = kNotStored, false;
         logRemote(a, k, found, "by the shader compiler", nowUs() - began);
     } else {
         logRemote(a, k, found, "from the shader compiler's store", 0);
     }
     compiler_->keep(k, found, record, why);
     state = found == RecordCache::Found::Record ? Compiler::State::Ready : Compiler::State::Refused;
-    return Asked::Answered;
+    return true;
 }
 
 bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done)
@@ -220,8 +210,8 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
     CompileRequest r;
     Digest name;
     if (!renderRequest(a, k, true, r, name)) {
-        compiledHere(InProcess::NoRequest);
-        return false;
+        done(nullptr);
+        return true;
     }
     // the record as the process table keeps it, so it outlives this answer for place()
     const auto settle = [this, k, done](RecordCache::Found found, const RuntimeRecord &record, const std::string &why) {
@@ -244,38 +234,26 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
         return true;
     }
     if (!remote_->taking()) {
-        compiledHere(InProcess::NotTaken);
-        return false;
+        done(nullptr);
+        return true;
     }
     const uint64_t began = nowUs();
     const Ask asked = a;
     const bool sent = remote_->compileAsync(
         encodeRequest(r), true, a.qos, [this, asked, k, name, began, settle, done](Remote::Answer answer) {
-            if (answer == Remote::Answer::Failed || (answer == Remote::Answer::Unavailable && remote_->declined()))
+            if (answer == Remote::Answer::Failed || answer == Remote::Answer::Unavailable)
                 return done(nullptr);
             RuntimeRecord made;
             std::string refusal;
-            const RecordCache::Found found =
-                answer == Remote::Answer::Unavailable ? RecordCache::Found::None : fromStore(name, k, made, refusal);
-            if (found == RecordCache::Found::None) {
-                compiledHere(answer == Remote::Answer::Unavailable ? InProcess::NotTaken : InProcess::NotInStore);
-                const RuntimeRecord *kept = nullptr;
-                const Compiler::State state = compiler_->ask(
-                    k,
-                    [done](const RuntimeRecord *m, const std::string &) {
-                        done(m);
-                    },
-                    &kept);
-                if (state == Compiler::State::Ready || state == Compiler::State::Refused)
-                    done(state == Compiler::State::Ready ? kept : nullptr);
-                return;
-            }
+            const RecordCache::Found found = fromStore(name, k, made, refusal);
+            if (found == RecordCache::Found::None)
+                return done(nullptr);
             logRemote(asked, k, found, "by the shader compiler", nowUs() - began);
             settle(found, made, refusal);
         });
     if (!sent)
-        compiledHere(InProcess::NoCompiler);
-    return sent;
+        done(nullptr);
+    return true;
 }
 
 Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,
@@ -298,10 +276,8 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     std::vector<LibraryIdentity> ids;
     std::map<const LibrarySource *, uint32_t> seen;
     if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
-        !addStage(r, ids, seen, "k", facadeFunction, true)) {
-        compiledHere(InProcess::NoRequest);
+        !addStage(r, ids, seen, "k", facadeFunction, true))
         return Compiler::Outcome::Failed;
-    }
     const Digest name = storeName(k, r, ids);
     const auto stored = [&]() {
         std::string bytes;
@@ -311,10 +287,8 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     };
     RecordCache::Found found = stored();
     if (found == RecordCache::Found::None) {
-        if (!remote_->taking()) {
-            compiledHere(InProcess::NotTaken);
+        if (!remote_->taking())
             return Compiler::Outcome::Failed;
-        }
         switch (remote_->compile(encodeRequest(r))) {
         case Remote::Answer::Made:
         case Remote::Answer::Refused:
@@ -323,14 +297,13 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
             taken = true;
             return Compiler::Outcome::Failed;
         case Remote::Answer::Unavailable:
-            compiledHere(InProcess::NotTaken);
             return Compiler::Outcome::Failed;
         }
         found = stored();
-        if (found == RecordCache::Found::None) {
-            compiledHere(InProcess::NotInStore);
+        if (found == RecordCache::Found::None && remote_->compile(encodeRequest(r)) == Remote::Answer::Made)
+            found = stored();
+        if (found == RecordCache::Found::None)
             return Compiler::Outcome::Failed;
-        }
     }
     taken = true;
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;

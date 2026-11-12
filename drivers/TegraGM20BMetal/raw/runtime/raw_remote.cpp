@@ -294,12 +294,6 @@ const char *InProcess::text(Why why)
     switch (why) {
     case NoCompiler:
         return "no shader compiler runs this boot";
-    case NoRequest:
-        return "a state of functions no request can name";
-    case NotTaken:
-        return "the shader compiler did not take a state";
-    case NotInStore:
-        return "a record the shader compiler made is not in its store";
     }
     return "?";
 }

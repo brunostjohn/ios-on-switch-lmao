@@ -108,14 +108,12 @@ private:
     static void delivered(void *refcon, int result, void *cookie, void *word);
 };
 
-// The states a process compiles itself, and why: each reason's first is the one to log
+// The states a process compiles itself, and why: each reason's first is the one to log. A process compiles none while a
+// compiler serves the boot: a state no request can name, or one the compiler does not take or store, fails its creation.
 class InProcess {
 public:
     enum Why : uint32_t {
-        NoCompiler = 1u << 0,
-        NoRequest = 1u << 1,
-        NotTaken = 1u << 2,
-        NotInStore = 1u << 3,
+        NoCompiler = 1u << 0,  // the boot has none (switch-no-bt on iOS 17 hides its launcher)
     };
 
     // A state about to be compiled here for `why`: true the first time `why` is given

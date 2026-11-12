@@ -18,7 +18,9 @@
 namespace raw {
 
 constexpr uint64_t kRequestLimit = uint64_t(256) << 20;  // TegraGM20BCompilerABI.h TegraGM20BCompileRequestLimit
-constexpr uint32_t kRequestStageLimit = 64, kRequestLibraryLimit = 16, kRequestBindLimit = 31;
+// A state's stages and libraries are bounded by the request's bytes alone: these only keep a decode's counts sane, above any
+// state Metal makes (its linked functions are unbounded). Bindings are Metal's own per-stage limit.
+constexpr uint32_t kRequestStageLimit = 1u << 16, kRequestLibraryLimit = 1u << 16, kRequestBindLimit = 31;
 
 using Digest = std::array<uint8_t, 32>;
 

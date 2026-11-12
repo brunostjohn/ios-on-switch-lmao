@@ -70,9 +70,6 @@ std::string constantsLast(const std::string &key)
            key.substr(constants + 2, shape - constants - 2);
 }
 
-constexpr const char kNoCompiler[] =
-    "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
-
 }  // namespace
 
 Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir)
@@ -176,7 +173,7 @@ void Completion::create(Ask asked, Ready ready)
 std::string Completion::failureOf(const CacheKey &k)
 {
     if (remote_->declined())
-        return kNoCompiler;
+        return kNoCompilerComes;
     RuntimeRecord record;
     std::string why;
     return compiler_->lookup(k, record, why) == RecordCache::Found::Refusal ? std::string()
@@ -200,15 +197,14 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         RuntimeRecord known;
         std::string why;
         const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
-        bool remote = !found && remote_->serving();
+        const bool remote = !found && remote_->serving();
         if (!found && !remote && remote_->declined()) {
-            pending->ready(nullptr, pending->creation ? kNoCompiler : "");
+            pending->ready(nullptr, pending->creation ? kNoCompilerComes : "");
             return;
         }
         {
             std::lock_guard<raw::Mutex> l(lock_);
             asked_[k.name()] = a;
-            remote &= !notTaken_.count(k.name());
         }
         const bool caTransform = a.caTransform;
         if (remote && remoteLater(a, k, [this, k, caTransform, pending](const RuntimeRecord *record) {
@@ -294,28 +290,15 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     case RecordCache::Found::None:
         if (!remote_->serving()) {
             if (remote_->declined()) {
-                failure = kNoCompiler;
+                failure = kNoCompilerComes;
                 return nullptr;
             }
             compiledHere(InProcess::NoCompiler);
             state = madeHere(k, record, why);
             break;
         }
-        switch (remoteNow(a, k, state, record)) {
-        case Asked::Answered:
-            break;
-        case Asked::Here: {
-            {
-                std::lock_guard<raw::Mutex> l(lock_);
-                notTaken_.insert(k.name());
-            }
-            state = madeHere(k, record, why);
-            break;
-        }
-        case Asked::Gone:
-            failure = kNoCompiler;
+        if (!remoteNow(a, k, state, record, failure))
             return nullptr;
-        }
         break;
     }
     if (state == Compiler::State::Failed) {
@@ -432,12 +415,13 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                 break;
             case RecordCache::Found::None: {
                 bool taken = false;
-                if (remote_->serving())
+                if (remote_->serving()) {
                     outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
-                else
-                    compiledHere(InProcess::NoCompiler);
-                if (taken)
+                    if (!taken)
+                        outcome = Compiler::Outcome::Refused;
                     break;
+                }
+                compiledHere(InProcess::NoCompiler);
 #if SWITCH_RAW_DIAGNOSTICS
                 const uint64_t began = nowUs();
 #endif
