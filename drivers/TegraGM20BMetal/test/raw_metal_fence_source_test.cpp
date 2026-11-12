@@ -23,9 +23,12 @@ TEST(RawMetalFenceSource, EveryRawEncoderOpensWithADrain)
     EXPECT_THAT(Body(gpu, "BlitEncoder *CommandBuffer::blit()"), HasSubstr("e.p_.m(WAIT_FOR_IDLE, 0);"));
     EXPECT_THAT(Between(Body(gpu, "void RenderEncoder::end()"), "// pass prologue:", "for (uint32_t j = 0;"),
                 HasSubstr("kit(p, switch_gm20b_pass_barrier, false);"));
+    // the compute encoder drains through the waiting INVALIDATE_SHADER_CACHES (raw_compute_opening_test pins its methods)
     const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
     EXPECT_THAT(Body(compute, "ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev)"),
-                HasSubstr("p_.m(WAIT_FOR_IDLE, 0);"));
+                HasSubstr("computeOpeningFlush(p_);"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_compute_opening.h"), "inline void computeOpeningFlush(Push &p)"),
+                HasSubstr("p.m(NVB1C0_INVALIDATE_SHADER_CACHES, "));
 }
 
 TEST(RawMetalFenceSource, TheRawEncodeEmitsNothingForAFence)
