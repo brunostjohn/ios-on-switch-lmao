@@ -5201,17 +5201,14 @@ bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
     if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && b.cpu)
         cb_->clean(b.cpu + pl.freeForm.matrixOffset, 4 * words);
     mme::matrixHeader(p_);
-    bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-    const uint32_t clampFollows = words < kMatrixWords ? TegraGM20BPushIncomplete : 0u;
-    bodies_.push_back(
-        PushBody::resident(b.va + pl.freeForm.matrixOffset, words, TegraGM20BPushNoPrefetch | clampFollows));
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-    if (clampFollows) {
-        uint64_t va = 0;
-        auto *clamp = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, 4 * (kMatrixWords - words), 4, va));
-        std::fill(clamp, clamp + (kMatrixWords - words), 0u);
-        bodies_.push_back(PushBody::resident(va, kMatrixWords - words, TegraGM20BPushNoPrefetch));
+    const uint32_t clampWords = kMatrixWords - words;
+    uint64_t clampVa = 0;
+    if (clampWords) {
+        auto *clamp = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, 4 * clampWords, 4, clampVa));
+        std::fill(clamp, clamp + clampWords, 0u);
     }
+    matrixCall(bodies_, bodyStart_, p_.at, b.va + pl.freeForm.matrixOffset, words, clampVa, clampWords);
     bodyStart_ = nullptr;
     reserve();
     return true;

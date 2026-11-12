@@ -53,6 +53,18 @@ void bindSegment(std::vector<PushBody> &bodies, uint32_t *&start, uint32_t *at, 
     start = at;
 }
 
+void matrixCall(std::vector<PushBody> &bodies, uint32_t *start, uint32_t *at, uint64_t uniformVa, uint32_t words,
+                uint64_t clampVa, uint32_t clampWords)
+{
+    PushBody header{start, at};
+    header.incomplete = true;
+    bodies.push_back(header);
+    bodies.push_back(PushBody::resident(uniformVa, words,
+                                        TegraGM20BPushNoPrefetch | (clampWords ? TegraGM20BPushIncomplete : 0u)));
+    if (clampWords)
+        bodies.push_back(PushBody::resident(clampVa, clampWords, TegraGM20BPushNoPrefetch));
+}
+
 uint64_t appendBodies(PushBatches &pushes, const std::vector<PushBody> &bodies, const uint8_t *ringCpu, uint64_t ringVa)
 {
     uint64_t words = 0;
