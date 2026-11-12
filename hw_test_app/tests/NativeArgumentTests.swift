@@ -113,6 +113,7 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
         }
         metrics.set("nested_draw_path", nested)
         if nested != "raw/exact" { work.failures.append("nested_draw_path \(nested), not raw/exact") }
+        await heapUseCost(gpu, &metrics, &work.failures)
         return work
     }
 

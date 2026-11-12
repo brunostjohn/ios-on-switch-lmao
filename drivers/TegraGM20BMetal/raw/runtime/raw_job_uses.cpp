@@ -21,10 +21,13 @@ void CommandBuffer::nameHeaps()
         const uint32_t written = heap->hostVisible() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u;
         if (heap->arena() < d.arenas_.size()) {
             const Device::Arena &a = d.arenas_[heap->arena()];
-            if (a.used && !a.purged && !d.member(a.bo))
+            if (a.used && !a.purged && !d.member(a.bo)) {
+                RAW_ENCODE_COUNT(UseAdds);
                 surfaces_.addAccess(a.bo.handle, TegraGM20BSurfaceRead | written);
+            }
         }
         heap->each([&](const HeapMember &m) {
+            RAW_ENCODE_COUNT(UseAdds);
             if (!d.member(m.va, m.bytes))
                 surfaces_.addAddress(m.va, m.bytes, false,
                                      (m.hostVisible ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u) |
