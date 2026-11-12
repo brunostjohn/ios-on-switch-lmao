@@ -1326,6 +1326,19 @@ host_test(
 )
 
 host_test(
+    name = "raw_cbuf_test",
+    srcs = [
+        "raw_cbuf_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cbuf.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+    ],
+)
+
+host_test(
     name = "raw_events_source_test",
     srcs = ["raw_events_source_test.cpp"],
     data = [

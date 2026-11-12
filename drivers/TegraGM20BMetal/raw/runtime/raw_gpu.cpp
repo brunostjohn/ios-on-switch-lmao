@@ -23,6 +23,7 @@
 #include "raw_mip.h"
 #include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
+#include "raw_cbuf.h"
 #include "raw_residual.h"
 #include "raw_multisample.h"
 #include "raw_rotated_pass.h"
@@ -127,7 +128,6 @@ enum : uint32_t {
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 // The bind groups of Pipeline::setSlot's programs (nvk_pipeline_bind_group): vertex, pixel, tessellation init, tessellation
 constexpr uint8_t kSetGroups[4] = {0, 4, 1, 2};
-constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
@@ -790,7 +790,7 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
             setSlot = c;
         if (prog.cbufType[c] != CbufShaderData)
             continue;
-        w.inc(CB_SELECTOR_A, {std::min(prog.dataBytes, kMaxCbufBytes), uint32_t(data >> 32), uint32_t(data)});
+        w.inc(CB_SELECTOR_A, {cbufBindBytes(prog.dataBytes), uint32_t(data >> 32), uint32_t(data)});
         w.m(BIND_GROUP_CB + 0x20 * group, 1 | uint32_t(c) << 4);
         w.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
     }
@@ -5454,7 +5454,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         if (!descriptorBinding_.uboMoved(u, desc))
             continue;
         if (desc[2]) {
-            p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
+            p.inc(CB_SELECTOR_A, {cbufBindBytes(desc[2]), desc[1], desc[0]});
             p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
             selected = true;
         } else {
