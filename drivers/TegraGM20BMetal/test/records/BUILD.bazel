@@ -2,22 +2,29 @@
 # compile path, encoders or context init made without NVK) once nothing else can make the records to compare with.
 #
 #   bazel test //drivers/TegraGM20BMetal/test/records:record_digest_test        the digest itself, over packs it writes
-#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_sample_test   builds the pack: the sampled
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_sample_test   the sample pack: the sampled
 #                                                                               records, section by section
-#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_corpus_test   builds the pack: every record
-#   bazel run --config=ios27 //drivers/TegraGM20BMetal/test/records:record_goldens -- <pack.bin> 24B119   rewrites the
-#                                                                               kind's goldens from a pack
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_corpus_test   builds the full pack: every
+#                                                                               record (manual)
+#   bazel run --config=ios27 //drivers/TegraGM20BMetal/test/records:record_goldens   builds the full pack and rewrites
+#                                                                               the kind's goldens and sample corpus
 #
-# The goldens are 9da14c602's packs (pack v19), made while NVK's compile still vouched for every record.
+# The goldens are 9da14c602's packs (pack v19), made while NVK's compile still vouched for every record. The sample pack
+# makes only the sampled records' states (their split corpus lines, records_<kind>_sample.corpus) with the full pack's
+# probe and link (//gpu/seed:defs.bzl), a few minutes where the full pack takes an hour.
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
+load("//gpu/seed:defs.bzl", "sample_raw_pack")
 
 lint_files()
 
 KINDS = ("21H461", "24B119")
+
+GM20B_METAL = "//drivers/TegraGM20BMetal"
 
 cc_library(
     name = "records",
@@ -40,10 +47,38 @@ cc_library(
 )
 
 cc_binary(
-    name = "record_goldens",
-    srcs = ["record_goldens.cpp"],
+    name = "write_goldens",
+    srcs = ["write_goldens.cpp"],
     copts = ["-std=c++17"],
     deps = [":records"],
+)
+
+filegroup(
+    name = "raw_pack_report",
+    srcs = ["//gpu/seed:raw_pack"],
+    output_group = "report",
+    tags = ["manual"],
+)
+
+py_binary(
+    name = "record_goldens",
+    srcs = ["record_goldens.py"],
+    args = select({
+        "//ipsw:" + kind: [
+            "$(rootpath :write_goldens)",
+            "$(rootpath //gpu/seed:raw_pack)",
+            kind,
+            "$(rootpaths :raw_pack_report)",
+        ]
+        for kind in KINDS
+    }),
+    data = [
+        ":raw_pack_report",
+        ":write_goldens",
+        "//gpu/seed:raw_pack",
+        GM20B_METAL + ":raw_pack_generator",
+    ],
+    tags = ["manual"],
 )
 
 cc_binary(
@@ -60,6 +95,16 @@ host_test(
     deps = [":records"],
 )
 
+sample_raw_pack(
+    name = "sample_pack",
+    srcs = [GM20B_METAL + ":raw_pack_generator"],
+    corpus = select({"//ipsw:" + kind: "testdata/records_%s_sample.corpus" % kind for kind in KINDS}),
+    crawl = "//gpu/seed:crawl",
+    device_libraries = "@gpu_device_data//:libraries",
+    generator = GM20B_METAL + ":raw/pack/rawpack.py",
+    tools = "//gpu/seed:tools",
+)
+
 GOLDENS = select({
     "//ipsw:" + kind: [
         "testdata/records_%s.bin" % kind,
@@ -68,7 +113,18 @@ GOLDENS = select({
     for kind in KINDS
 })
 
-ARGS = select({
+SAMPLE_ARGS = select({
+    "//ipsw:" + kind: [
+        "$(rootpath :sample_pack)/pack.bin",
+        "$(rootpath testdata/records_%s.bin)" % kind,
+        "$(rootpath testdata/records_%s_sample.tsv)" % kind,
+        kind,
+        "--sample",
+    ]
+    for kind in KINDS
+})
+
+CORPUS_ARGS = select({
     "//ipsw:" + kind: [
         "$(rootpath //gpu/seed:raw_pack)/pack.bin",
         "$(rootpath testdata/records_%s.bin)" % kind,
@@ -78,26 +134,23 @@ ARGS = select({
     for kind in KINDS
 })
 
-# Both build the pack (//gpu/seed:raw_pack, the probes on NVK's host twin until x1-nomvk replaces them): manual, run by
-# the gate that packages a build
+# The sample pack's tools are the full pack's, NVK's host twin among them (until x1-nomvk replaces its compile): m2v
 cc_test(
     name = "record_sample_test",
     srcs = ["record_check.cpp"],
-    args = ARGS + ["--sample"],
+    args = SAMPLE_ARGS,
     copts = ["-std=c++17"],
-    data = GOLDENS + ["//gpu/seed:raw_pack"],
-    tags = [
-        "manual",
-        "pack",
-    ],
+    data = GOLDENS + [":sample_pack"],
+    tags = ["m2v"],
     deps = [":records"],
 )
 
+# The full pack (//gpu/seed:raw_pack): manual, run by the gate that packages a build
 cc_test(
     name = "record_corpus_test",
     size = "medium",
     srcs = ["record_check.cpp"],
-    args = ARGS,
+    args = CORPUS_ARGS,
     copts = ["-std=c++17"],
     data = GOLDENS + ["//gpu/seed:raw_pack"],
     tags = [

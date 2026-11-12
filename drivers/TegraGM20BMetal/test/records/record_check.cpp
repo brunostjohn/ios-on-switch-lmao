@@ -20,8 +20,8 @@ std::string slurp(const char *path)
 
 void regenerate(const char *kind)
 {
-    printf("a pack whose records moved on purpose: bazel run //drivers/TegraGM20BMetal/test/records:record_goldens -- "
-           "<its pack.bin> %s\n",
+    printf("records that moved on purpose: bazel run //drivers/TegraGM20BMetal/test/records:record_goldens with this "
+           "test's --config (it builds //gpu/seed:raw_pack and rewrites testdata/records_%s*)\n",
            kind);
 }
 
@@ -87,7 +87,6 @@ int corpus(const std::vector<records::Record> &all, const std::string &bytes, co
             printf("%s kind %d: not in the goldens\n", records::keyText(id.first).c_str(), int(id.second));
     printf("%zu records: %d moved, %d missing, %d new\n", want.size(), moved, missing, extra);
     if (moved || missing || extra) {
-        printf("rerun the dump on both packs for the moved records' sections (record_goldens writes them)\n");
         regenerate(kind);
     }
     return moved || missing || extra ? 1 : 0;
