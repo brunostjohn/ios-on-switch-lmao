@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
-// A kernel event's signal released mid-job into its word (drivers/TegraGM20B/TegraGM20BJobABI.h method 40): the host's wait
-// for idle and the L2's dirty lines to DRAM, as the kernel's external job end makes them for a CPU reader (gpu_exec.c
-// tgm_chan_fence_job), then the 4-byte release and the nonstall interrupt the kernel completes the signal on. The engines'
-// own releases (3D and compute SET_REPORT_SEMAPHORE with AWAKEN, the copy engine's) would save nothing here: the signal is
-// every engine's work before it, and the L2 flush a listener needs waits for idle first.
+// A kernel event's signal released mid-job into its word (drivers/TegraGM20B/TegraGM20BJobABI.h method 40): the 4-byte host
+// release after the wait for idle (RELEASE_WFI), then the nonstall interrupt the kernel completes the signal on. The word
+// needs no flush: the fence pool is mapped volatile (gpu_chan.c tgm_fences_map). What the work before it wrote does, for a
+// CPU reader, when that is host-visible memory: the GPU's L2 holds it under l2_on() and the CPU does not snoop the L2, and
+// only the host's MEM_OP_D L2_FLUSH_DIRTY (clb06f.h) writes it back, after a wait for idle; the engines' own releases (3D and
+// compute SET_REPORT_SEMAPHORE_D, the copy engine's LAUNCH_DMA semaphore) carry no L2 writeback. So a release `publishes`
+// (the flush first, as the kernel's external job end makes it, gpu_exec.c tgm_chan_fence_job) only where host-visible
+// memory was written since the last one that did, by the job end's own rule (CommandBuffer::use). Other readers of the
+// word (another channel's acquire, the kernel) read it, and what the GPU wrote, through the same L2.
 #pragma once
 #include <cstdint>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
@@ -13,12 +17,33 @@ namespace raw {
 
 constexpr uint32_t kEventReleaseWords = 16;
 
-inline void emitEventRelease(Push &p, uint64_t va, uint32_t payload)
+// Host-visible memory written since the last publishing release: whether the next release publishes
+class EventPublication {
+public:
+    void wrote(bool hostVisible)
+    {
+        pending_ |= hostVisible;
+    }
+
+    bool take()
+    {
+        const bool publish = pending_;
+        pending_ = false;
+        return publish;
+    }
+
+private:
+    bool pending_ = false;
+};
+
+inline void emitEventRelease(Push &p, uint64_t va, uint32_t payload, bool publish)
 {
-    p.inc(NVB06F_WFI, {0});
-    p.inc(NVB06F_FB_FLUSH, {0});
-    p.inc(NVB06F_MEM_OP_C, {0, NVDEF(NVB06F, MEM_OP_D, OPERATION, L2_FLUSH_DIRTY)});
-    p.inc(NVB06F_FB_FLUSH, {0});
+    if (publish) {
+        p.inc(NVB06F_WFI, {0});
+        p.inc(NVB06F_FB_FLUSH, {0});
+        p.inc(NVB06F_MEM_OP_C, {0, NVDEF(NVB06F, MEM_OP_D, OPERATION, L2_FLUSH_DIRTY)});
+        p.inc(NVB06F_FB_FLUSH, {0});
+    }
     p.inc(NVB06F_SEMAPHOREA,
           {uint32_t(va >> 32) & 0xff, uint32_t(va), payload,
            NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) | NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) |

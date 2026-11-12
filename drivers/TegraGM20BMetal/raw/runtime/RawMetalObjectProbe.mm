@@ -26,7 +26,8 @@
 
 // The jobs of no work made since the device opened that signal or wait, the waits retired with the channel's last submission,
 // the signals whose value the CPU set after the work before them (an event the kernel does not hold), the waits the
-// scheduler held on the CPU, the jobs the raw channel submitted and the signals they released mid-job
+// scheduler held on the CPU, the jobs the raw channel submitted, the signals they released mid-job and how many of those
+// went without the L2 flush (no host-visible memory written before them)
 @implementation RMDevice (EventProbe)
 
 - (NSDictionary<NSString *, NSNumber *> *)switchRawEvents
@@ -39,6 +40,7 @@
         @"cpu_waits" : @(gRM->stats.waitsHeldOnCpu.load()),
         @"jobs" : @(gRM->raw->jobsSubmitted()),
         @"released_signals" : @(gRM->raw->signalsReleased()),
+        @"unflushed_signals" : @(gRM->raw->signalsUnflushed()),
     };
 }
 

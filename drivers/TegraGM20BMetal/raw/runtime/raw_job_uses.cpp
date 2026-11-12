@@ -38,6 +38,8 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     RAW_ENCODE_COUNT(Uses);
+    // Ahead of the memo: a buffer named once is written again after a release, which then has host-visible data to flush
+    publication_.wrote(write && buffer.hostVisible);
     if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
@@ -58,7 +60,10 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
 void CommandBuffer::use(const Texture &texture, bool write)
 {
     RAW_ENCODE_COUNT(Uses);
-    if (named_.named(&texture, texture.va, texture.storageRange().bytes, texture.import, write))
+    const auto range = texture.storageRange();
+    if (write)
+        publication_.wrote(range.hostVisible || (texture.import && !texture.import->id));
+    if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
     const Texture *view = write ? &texture : readTexture(&texture);

@@ -3420,6 +3420,7 @@ CommandBuffer *Device::begin()
     cb.predication_.endUnit();
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
+    cb.publication_ = {};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
     cb.foldCounts();
@@ -3674,8 +3675,13 @@ void CommandBuffer::releaseEvent(uint64_t va, uint32_t payload)
     uint64_t pushVa;
     auto *words = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, kEventReleaseWords * 4, 4, pushVa));
     Push p{words, words + kEventReleaseWords};
-    emitEventRelease(p, va, payload);
+    const bool publish = publication_.take();
+    emitEventRelease(p, va, payload, publish);
     segment(words, p.at);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (!publish)
+        dev_->unflushed_.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 BlitEncoder *CommandBuffer::blit()

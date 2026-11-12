@@ -42,11 +42,11 @@ TEST(RawInlineSignals, SignalsBetweenNativeRangesJoinThem)
     EXPECT_EQ(two[1].last, 6u);
 }
 
-TEST(RawInlineSignals, ReleaseIsTheKernelsExternalFenceIntoTheWord)
+TEST(RawInlineSignals, AReleaseAfterHostVisibleWritesIsTheKernelsExternalFenceIntoTheWord)
 {
     uint32_t words[kEventReleaseWords];
     Push p{words, words + kEventReleaseWords};
-    emitEventRelease(p, 0xff'fffe'0840ull, 9);
+    emitEventRelease(p, 0xff'fffe'0840ull, 9, true);
     ASSERT_EQ(p.at, words + kEventReleaseWords);
     EXPECT_EQ(words[0], Push::hdr(1, 0, NVB06F_WFI, 1));
     EXPECT_EQ(words[2], Push::hdr(1, 0, NVB06F_FB_FLUSH, 1));
@@ -64,6 +64,37 @@ TEST(RawInlineSignals, ReleaseIsTheKernelsExternalFenceIntoTheWord)
     for (const char *step : {"NVB06F_WFI", "NVB06F_FB_FLUSH", "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
                              "NON_STALL_INTERRUPT"})
         EXPECT_THAT(fence, HasSubstr(step));
+}
+
+TEST(RawInlineSignals, AReleaseWithNothingHostVisibleWrittenIsTheHostsReleaseAlone)
+{
+    uint32_t words[kEventReleaseWords];
+    Push p{words, words + kEventReleaseWords};
+    emitEventRelease(p, 0xff'fffe'0840ull, 9, false);
+    ASSERT_EQ(p.at, words + 7);
+    EXPECT_EQ(words[0], Push::hdr(1, 0, NVB06F_SEMAPHOREA, 4));
+    EXPECT_EQ(words[3], 9u);
+    EXPECT_EQ(words[4], NVB06F_SEMAPHORED_OPERATION_RELEASE | NVB06F_SEMAPHORED_RELEASE_SIZE_4BYTE << 24);
+    EXPECT_EQ(words[5], Push::hdr(1, 0, NVB06F_NON_STALL_INTERRUPT, 1));
+    const std::string map = Body(SourceText("../../TegraGM20B/SwitchGpuVmMap.h"), "int tgm_vm_kmap_raw(");
+    EXPECT_THAT(map, HasSubstr(".vol = 1"));
+}
+
+TEST(RawInlineSignals, OnlyHostVisibleWritesSinceTheLastFlushMakeAReleaseFlush)
+{
+    EventPublication p;
+    EXPECT_FALSE(p.take());
+    p.wrote(false);
+    EXPECT_FALSE(p.take());
+    p.wrote(true);
+    p.wrote(false);
+    EXPECT_TRUE(p.take());
+    EXPECT_FALSE(p.take());
+    // Noted ahead of the use memo, which names an object once a command buffer however often it is written
+    const std::string use = SourceText("../raw/runtime/raw_job_uses.cpp");
+    EXPECT_THAT(use, HasSubstr("publication_.wrote(write && buffer.hostVisible);\n    if (named_.named(&buffer"));
+    EXPECT_THAT(use, HasSubstr("publication_.wrote(range.hostVisible || (texture.import && !texture.import->id));\n"
+                               "    if (named_.named(&texture"));
 }
 
 TEST(RawInlineSignals, PayloadIsTheValueAboveTheBaseInsideTheWindow)

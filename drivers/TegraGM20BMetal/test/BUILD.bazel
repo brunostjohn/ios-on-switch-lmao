@@ -2200,9 +2200,11 @@ host_test(
     ],
     cxx_std = "c++17",
     data = [
+        "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:gpu_exec.c",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
     ],
     deps = ["//kits/SwitchGM20B:classes"],
 )

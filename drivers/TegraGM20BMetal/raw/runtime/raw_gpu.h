@@ -31,6 +31,7 @@
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
+#include "raw_event_release.h"
 #include "raw_predication.h"
 #include "raw_visibility.h"
 #include <array>
@@ -1100,6 +1101,7 @@ private:
     UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
+    EventPublication publication_;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
@@ -1696,6 +1698,12 @@ public:
     {
         return k_.signalsReleased();
     }
+
+    // Of those, the ones released without the L2 flush: nothing host-visible written since the last flush
+    uint64_t signalsUnflushed() const
+    {
+        return unflushed_.load(std::memory_order_relaxed);
+    }
 #endif
 
     // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
@@ -1848,6 +1856,7 @@ public:
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
     std::atomic<bool> probeBooleanVisibility{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
+    std::atomic<uint64_t> unflushed_{0};      // signalsUnflushed
 #endif
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

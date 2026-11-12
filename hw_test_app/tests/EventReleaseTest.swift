@@ -10,7 +10,8 @@ import Metal
 /// value while the work before the signal still runs (the kernel's events line counts its wait on the word), must copy the
 /// fill. Reports the command buffer's jobs alone (the facade's jobs counter: one, where the signal
 /// used to end a job and start another), the signals released mid-job, and how long after the work before the signal the
-/// listener heard it.
+/// listener heard it. The rounds after those write only private memory before the signal, so the release goes without
+/// the L2 flush (raw_event_release.h), and the waiter must still copy the fill: unflushed_signals counts them.
 struct EventReleaseTest: HWTest {
     let id = "gpu.raw.event_release"
     let name = "A mid-command-buffer shared-event signal: one job, heard before the command buffer completes"
@@ -83,6 +84,16 @@ struct EventReleaseTest: HWTest {
             let value = UInt64(round + 1)
             rounds.append(try await signalled(work, event, value, iterations, waiter: round == 0 ? nil : other))
         }
+        guard let privateData = gpu.device.makeBuffer(length: Self.threads * 4, options: .storageModePrivate),
+              let privateSource = gpu.device.makeBuffer(length: Self.bytes, options: .storageModePrivate)
+        else { throw TestFailure("no private buffers") }
+        let privateWork = Work(gpu: gpu, kernel: work.kernel, data: privateData, source: privateSource)
+        let unflushedBefore = EventJobs.read(gpu.device)["unflushed_signals"] ?? 0
+        for round in 0..<Self.rounds {
+            let value = UInt64(Self.rounds + round + 1)
+            rounds.append(try await signalled(privateWork, event, value, iterations, waiter: round == 0 ? nil : other))
+        }
+        let unflushed = (EventJobs.read(gpu.device)["unflushed_signals"] ?? 0) - unflushedBefore
         let solo = rounds[0]
         metrics.set("path", solo.path)
         if rounds.contains(where: { $0.path != "raw" }) {
@@ -99,7 +110,9 @@ struct EventReleaseTest: HWTest {
         if rounds.contains(where: { $0.released != 1 }) { wrong.append("released") }
         if rounds.contains(where: { !$0.heardBeforeEnd }) { wrong.append("heard_after_end") }
         if rounds.dropFirst().contains(where: { !$0.waiterDone || $0.waiterWrong != 0 }) { wrong.append("waiter") }
-        if event.signaledValue != UInt64(Self.rounds) { wrong.append("final_value") }
+        metrics.set("unflushed_signals", unflushed)
+        if unflushed != Self.rounds { wrong.append("unflushed_signals") }
+        if event.signaledValue != UInt64(2 * Self.rounds) { wrong.append("final_value") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
