@@ -22,6 +22,8 @@
 #                     its waitUntilScheduled returns, its last raw range's last job keeps them, finish gives back the rest
 #   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
 #                     RawMetal), and the cross-process shared event refusal line
+#   raw_inline_signals_test  raw/runtime/raw_inline_signals.h and raw_event_release.h: a kernel event's signal between two
+#                     native ranges joins them into one job, released into the event's word mid-job
 #   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
 #                     and how the raw path's twin and record key take them
 #   raw_encode_profile_test  raw/runtime/raw_encode_profile.h: a debug build's encode spans count only inside an
@@ -2185,6 +2187,23 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
     ],
     cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "raw_inline_signals_test",
+    srcs = [
+        "raw_inline_signals_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_event_release.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_inline_signals.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20B:gpu_exec.c",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
+    ],
     deps = ["//kits/SwitchGM20B:classes"],
 )
 

@@ -143,6 +143,13 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         ++model.cancellations;
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodEventWord: {
+        const auto &r = request<TegraGM20BAbiEventWord>(input, size);
+        check(r.handle == 99 && r.channel == 3 && !r.reserved && outputSize &&
+              *outputSize == sizeof(TegraGM20BAbiEventWordReply), "event word framing");
+        *static_cast<TegraGM20BAbiEventWordReply *>(output) = {0xfffff800, (uint64_t(1) << 48) + 10, 4, 0};
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodResourceObserve: {
         const auto &r = request<TegraGM20BAbiResourceObserve>(input, size);
         check(r.cookie && !r.uses_address && !r.use_count && !r.reserved &&
@@ -507,6 +514,45 @@ static void resourceReadiness(bool tunnel)
     check(wakes == 2 && model.destroyed == 1, "late resource notification cannot access closed transport");
 }
 
+// A job's signals released mid-job: one SignalRelease per signal after them, Released only on those its pushes release
+static void releases(bool tunnel)
+{
+    model = {};
+    model.tunnel = tunnel;
+    raw::Kernel kernel;
+    std::string error;
+    check(kernel.open(error), "release Kernel opens");
+    uint64_t address = 0, base = 0;
+    uint32_t floor = 0;
+    check(kernel.eventWord(99, 3, address, base, floor) == KERN_SUCCESS && address == 0xfffff800 &&
+          base == (uint64_t(1) << 48) + 10 && floor == 4, "event word reply");
+    raw::SurfaceList resources;
+    resources.add(9, false);
+    const TegraGM20BAbiPush push{0x10000, 24, 0};
+    const TegraGM20BAbiEventUse signals[2] = {{99, base + 5}, {98, 7}};
+    const uint32_t payloads[2] = {5, 0};
+    uint32_t sequence = 0;
+    int result = 0;
+    check(submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal,
+                    {nullptr, signals, 0, 2, payloads}), "released signals submit");
+    const auto &header = *reinterpret_cast<const TegraGM20BAbiJob *>(model.submitted.data());
+    const size_t offset = sizeof header + sizeof push + sizeof(TegraGM20BAbiSurfaceUse) +
+        sizeof(TegraGM20BAbiSubmitEvents) + sizeof signals;
+    check((header.flags & TegraGM20BJobEventReleases) && (header.flags & TegraGM20BJobHasEvents) &&
+          model.submitted.size() == offset + 2 * sizeof(TegraGM20BAbiSignalRelease), "release records follow the signals");
+    const auto *records = reinterpret_cast<const TegraGM20BAbiSignalRelease *>(model.submitted.data() + offset);
+    check(records[0].payload == 5 && records[0].flags == TegraGM20BSignalReleased && !records[1].payload &&
+          !records[1].flags, "only the released signal is marked");
+    const uint32_t none[2] = {0, 0};
+    check(submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal,
+                    {nullptr, signals, 0, 2, none}) &&
+              !(reinterpret_cast<const TegraGM20BAbiJob *>(model.submitted.data())->flags & TegraGM20BJobEventReleases) &&
+              model.submitted.size() == offset, "a job releasing nothing carries no records");
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    check(kernel.jobsSubmitted() == 2 && kernel.signalsReleased() == 1, "jobs and released signals counted");
+#endif
+}
+
 static void cpuCompletion(bool tunnel)
 {
     model = {};
@@ -551,6 +597,8 @@ int main()
     batchSubmission(false, false);
     rangeSubmission(false);
     rangeSubmission(true);
+    releases(false);
+    releases(true);
     cpuCompletion(false);
     cpuCompletion(true);
     printf("PASS: %u shared-event transport checks\n", checks);

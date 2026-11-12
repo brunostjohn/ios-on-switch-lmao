@@ -8,6 +8,7 @@
 #include "raw_nonfinite.h"
 #include "raw_clear.h"
 #include "raw_icb.h"
+#include "raw_event_release.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
@@ -3415,6 +3416,7 @@ CommandBuffer *Device::begin()
     cb.named_.clear();
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
+    cb.sharedReleases_.clear();
     cb.predication_.endUnit();
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
@@ -3665,6 +3667,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     extrasLive_ = nullptr;
     passes++;
     return &e;
+}
+
+void CommandBuffer::releaseEvent(uint64_t va, uint32_t payload)
+{
+    uint64_t pushVa;
+    auto *words = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, kEventReleaseWords * 4, 4, pushVa));
+    Push p{words, words + kEventReleaseWords};
+    emitEventRelease(p, va, payload);
+    segment(words, p.at);
 }
 
 BlitEncoder *CommandBuffer::blit()
@@ -3998,7 +4009,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         const uint32_t signalCount = closing ?
             uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
+                              signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount,
+                              signalCount ? sharedReleases_.data() : nullptr};
         const bool last = closing && waited + waitCount == sharedWaits_.size() &&
                           signaled + signalCount == sharedSignals_.size();
         if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
@@ -4018,7 +4030,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,
                                                              TegraGM20BMaxJobEvents - waitCount));
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
-                              signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
+                              signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount,
+                              signalCount ? sharedReleases_.data() + signaled : nullptr};
         const bool last = waited + waitCount == sharedWaits_.size() && signaled + signalCount == sharedSignals_.size();
         if (!submit(nullptr, 0, eventResources, JobVisibility::External, events, last))
             return false;

@@ -1008,11 +1008,17 @@ public:
     // false with `partial`: the kernel refused a later Exec after earlier ones were submitted; those completed before it
     // returned, and the next command buffer gets a new channel (the GPU's state after them is not what the device tracks).
     bool commit(uint32_t &seqno);
-    void sharedEvents(std::vector<TegraGM20BAbiEventUse> waits, std::vector<TegraGM20BAbiEventUse> signals)
+    // releases: one per signal, the payload releaseEvent put in the pushes for it (0: its job's end signals it)
+    void sharedEvents(std::vector<TegraGM20BAbiEventUse> waits, std::vector<TegraGM20BAbiEventUse> signals,
+                      std::vector<uint32_t> releases = {})
     {
         sharedWaits_ = std::move(waits);
         sharedSignals_ = std::move(signals);
+        sharedReleases_ = std::move(releases);
+        sharedReleases_.resize(sharedSignals_.size());
     }
+    // A kernel event's signal here, after the work encoded so far: `payload` into its word at `va` (raw_event_release.h)
+    void releaseEvent(uint64_t va, uint32_t payload);
     bool partial = false;
     bool admissionBlocked = false;
     // the commit's last job is quiet too (raw_completion_source.h quietEnd); every job before it always is
@@ -1076,6 +1082,7 @@ private:
     friend class Device;
     friend struct DeviceHarness;
     std::vector<TegraGM20BAbiEventUse> sharedWaits_, sharedSignals_;
+    std::vector<uint32_t> sharedReleases_;
     friend class RenderEncoder;
     friend class BlitEncoder;
     friend class ComputeEncoder;
@@ -1671,6 +1678,25 @@ public:
     {
         (void)k_.cancelPromise(id);
     }
+
+    // TegraGM20BJobABI.h method 40 on this device's channel: the kern_return_t
+    int eventWord(uint64_t handle, uint64_t &address, uint64_t &base, uint32_t &floor)
+    {
+        if (!ensureChannel())
+            return kIOReturnNotReady;
+        return k_.eventWord(handle, channel_, address, base, floor);
+    }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t jobsSubmitted() const
+    {
+        return k_.jobsSubmitted();
+    }
+
+    uint64_t signalsReleased() const
+    {
+        return k_.signalsReleased();
+    }
+#endif
 
     // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
     // channel acquire each wait's producer, and releases the signals once every earlier submission of this channel and what

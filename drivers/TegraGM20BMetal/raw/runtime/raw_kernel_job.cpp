@@ -32,6 +32,14 @@ bool fits(const KernelJob &job, uint32_t maxFences)
             return false;
     return true;
 }
+
+uint32_t releasedSignals(const JobEvents &events)
+{
+    uint32_t released = 0;
+    for (uint32_t i = 0; events.releases && i < events.signalCount; ++i)
+        released += events.releases[i] != 0;
+    return released;
+}
 }  // namespace
 
 bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
@@ -45,10 +53,12 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
         return false;
     }
     const bool events = !job.events.empty();
+    const uint32_t released = releasedSignals(job.events);
     const size_t pushBytes = job.pushCount * sizeof(TegraGM20BAbiPush);
     const size_t useBytes = job.useCount * sizeof(TegraGM20BAbiSurfaceUse);
     const size_t eventBytes = events ? sizeof(TegraGM20BAbiSubmitEvents) +
-                                           (job.events.waitCount + job.events.signalCount) * sizeof(TegraGM20BAbiEventUse)
+                                           (job.events.waitCount + job.events.signalCount) * sizeof(TegraGM20BAbiEventUse) +
+                                           (released ? job.events.signalCount * sizeof(TegraGM20BAbiSignalRelease) : 0)
                                      : 0;
     const size_t admissionBytes = job.admission ? sizeof(TegraGM20BAbiSubmitAdmission) : 0;
     const size_t promiseBytes = job.promiseCount ? sizeof(TegraGM20BAbiJobPromises) : 0;
@@ -60,6 +70,7 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
     const uint32_t flags = (job.visibility != JobVisibility::Internal ? uint32_t(TegraGM20BJobExternal) : 0u) |
                            (job.hostWritten ? uint32_t(TegraGM20BJobHostWritten) : 0u) |
                            (events ? uint32_t(TegraGM20BJobHasEvents) : 0u) |
+                           (released ? uint32_t(TegraGM20BJobEventReleases) : 0u) |
                            (job.quiet ? uint32_t(TegraGM20BJobQuiet) : 0u) |
                            (job.promiseCount ? uint32_t(TegraGM20BJobFulfills) : 0u) | job.admissionFlags;
     const TegraGM20BAbiJob header = {job.channel, job.pushCount, job.set, job.generation, job.useCount, flags};
@@ -91,6 +102,12 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
         at += job.events.waitCount * sizeof(TegraGM20BAbiEventUse);
         if (job.events.signalCount)
             memcpy(at, job.events.signals, job.events.signalCount * sizeof(TegraGM20BAbiEventUse));
+        at += job.events.signalCount * sizeof(TegraGM20BAbiEventUse);
+        for (uint32_t i = 0; released && i < job.events.signalCount; ++i) {
+            const uint32_t payload = job.events.releases[i];
+            const TegraGM20BAbiSignalRelease record{payload, payload ? uint32_t(TegraGM20BSignalReleased) : 0u};
+            memcpy(at + i * sizeof record, &record, sizeof record);
+        }
     }
     const TegraGM20BAbiSubmitAddress address = {uint64_t(reinterpret_cast<uintptr_t>(storage.data())), uint32_t(bytes),
                                                 0};
@@ -101,6 +118,10 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
         *result = kr;
     if (kr == KERN_SUCCESS) {
         seqno = reply.seqno;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        jobs_.fetch_add(1, std::memory_order_relaxed);
+        released_.fetch_add(released, std::memory_order_relaxed);
+#endif
         return true;
     }
     if (kr == kIOReturnNotResponding)
@@ -131,6 +152,17 @@ int Kernel::cancelPromise(uint32_t promise)
     const TegraGM20BAbiWriterPromise in = {0, TegraGM20BPromiseCancel, 0, promise, 0};
     TegraGM20BAbiWriterPromiseReply reply = {};
     return call(TegraGM20BMethodWriterPromise, &in, sizeof in, &reply, sizeof reply);
+}
+
+int Kernel::eventWord(uint64_t handle, uint32_t channel, uint64_t &address, uint64_t &base, uint32_t &floor)
+{
+    const TegraGM20BAbiEventWord in = {handle, channel, 0};
+    TegraGM20BAbiEventWordReply reply = {};
+    const int kr = call(TegraGM20BMethodEventWord, &in, sizeof in, &reply, sizeof reply);
+    address = reply.address;
+    base = reply.base;
+    floor = reply.floor;
+    return kr;
 }
 
 int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,

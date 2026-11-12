@@ -168,6 +168,7 @@ struct RMRawRetirement {
 struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
+    std::atomic<bool> eventWords{true};  // the kernel has TegraGM20BJobABI.h method 40 (kernel events' words)
     RawM2V m2v;              // how the m2v device is opened (RawMetalM2V.mm)
     id<MTLDevice> fallback;  // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
     std::atomic<bool> m2vOpened{false};
@@ -407,6 +408,17 @@ int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool nat
 bool sharedWaitsReady(RMCommandBuffer *cb, bool native);
 void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands);
 void publishSharedEvents(RMCommandBuffer *cb);
+// A kernel event's word for a mid-job release of `value` on the raw channel (submit thread, while a range is encoded): false
+// where the signal goes at its job's end
+bool sharedEventWord(id event, uint64_t value, uint64_t inlineStamp, uint64_t &address, uint32_t &payload);
+// RawMetalInlineSignals.mm: a signal of a kernel event between two native ranges joins them (planSegments); at encode, its
+// release into the event's word after the work before it
+void inlineSignals(RMCommandBuffer *cb);
+// `range`, now m2v's: its inline signals back as event ranges of their own between compatibility ranges (one part: it has none)
+std::vector<RMSegment> compatibilityParts(RMCommandBuffer *cb, const RMSegment &range);
+void beginInlineSignals(RMCommandBuffer *cb);
+bool isInlineSignal(RMCommandBuffer *cb, size_t at);
+bool releaseInlineSignal(RMCommandBuffer *cb, size_t at, raw::CommandBuffer *commands);
 void enqueueBuffer(RMCommandBuffer *cb);
 enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress = 2 };
 void wakeSubmit(void *queue, uint32_t dependencies = 0);

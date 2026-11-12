@@ -315,6 +315,10 @@ struct RMSharedEventWait {
     std::vector<raw::EventTimeline::Promise> _gpuEventWaits;
     std::vector<RMSharedEventWait> _sharedEventWaits;
     std::vector<size_t> _sharedSignalRanges;
+    // Kernel events' signals inside native ranges (RawMetalInlineSignals.mm), by tape index, and those the range being encoded
+    // released into their words (payload) or left to its job's end (0)
+    std::vector<size_t> _inlineSignals;
+    std::vector<std::pair<size_t, uint32_t>> _released;
     std::shared_ptr<raw::SharedEventWatch> _sharedEventWatch;
     std::shared_ptr<raw::ResourceReadyCompletion> _resourceReady;
     void *_nativeWaitEvent;

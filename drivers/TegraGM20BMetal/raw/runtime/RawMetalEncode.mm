@@ -42,6 +42,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     }
     const uint64_t generation = d.channelGeneration();
     rc->internalCompletion();
+    beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
     rc->inlineStates(cb->_inlineStates);
@@ -684,6 +685,15 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
         }
+        case OpSignalEvent:
+            if (!isInlineSignal(cb, at))
+                break;
+            xrPlanes.flush();
+            if (!releaseInlineSignal(cb, at, rc)) {
+                encoder = to;
+                return fail(PredEvent, "a signal inside a raw range whose event the kernel no longer holds");
+            }
+            break;
         default:  // states, fences, events, resources the raw path needs nothing for
             break;
         }
@@ -783,6 +793,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
         bool stale = false;
         if (encodeRawAttempt(cb, from, to, why, stale, refusedEncoder))
             return true;
+        cb->_released.clear();
         if (!stale)
             return false;
     }

@@ -133,6 +133,7 @@ void planSegments(RMCommandBuffer *cb)
                              range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
                              false, range.gpuWait});
     }
+    inlineSignals(cb);
 }
 
 // The raw path refused `encoder` of the native range being submitted (a draw of it, found while encoding): only that
@@ -301,6 +302,12 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         folded();
 #endif
     } else {
+        const std::vector<RMSegment> parts = compatibilityParts(cb, range);
+        if (parts.size() > 1) {
+            cb->_segs.erase(cb->_segs.begin() + ptrdiff_t(cb->_segNext));
+            cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext), parts.begin(), parts.end());
+            return false;
+        }
         cb->_gpuPrefixEligible = false;
         rmRangePlain(cb, range.from, range.to);
         if (r.gpuOrder && r.rawSinceM2v) {

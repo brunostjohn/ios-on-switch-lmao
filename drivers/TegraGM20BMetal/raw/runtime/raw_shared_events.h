@@ -88,6 +88,9 @@ private:
 struct JobEvents {
     const TegraGM20BAbiEventUse *waits = nullptr, *signals = nullptr;
     uint32_t waitCount = 0, signalCount = 0;
+    // One per signal (null: none): the payload the job's pushes release into the event's word for it, 0 where its job's end
+    // signals it (TegraGM20BJobABI.h method 40)
+    const uint32_t *releases = nullptr;
     bool empty() const { return !waitCount && !signalCount; }
 };
 }

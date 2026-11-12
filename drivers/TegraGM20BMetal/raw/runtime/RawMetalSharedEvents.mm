@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #import "SwitchSharedEvent.h"
+#include "raw_event_release.h"
 
 @interface NSObject (SwitchSharedEventPort)
 - (mach_port_t)eventPort;
@@ -11,6 +12,10 @@
 @public
     std::shared_ptr<raw::SharedEventLease> lease;
     std::atomic<uint64_t> submittedValue;
+    // The submit thread's: the event's word on the raw channel of `wordGeneration` (method 40), the last payload a submitted
+    // job released into it, and the one the range being encoded (`wordStamp`) did
+    uint64_t wordAddress, wordBase, wordGeneration, wordStamp;
+    uint32_t wordFloor, wordPending;
 }
 @end
 @implementation SwitchSharedEventBinding
@@ -44,6 +49,41 @@ std::shared_ptr<raw::SharedEventLease> sharedEventLease(id event)
 {
     SwitchSharedEventBinding *binding = eventBinding(event);
     return binding ? binding->lease : nullptr;
+}
+
+// Asked again on a new channel, or for a value past the word's window when no earlier release of this range is at the old
+// base: the kernel moves the base only while none of the word's releases is outstanding
+bool sharedEventWord(id event, uint64_t value, uint64_t inlineStamp, uint64_t &address, uint32_t &payload)
+{
+    SwitchSharedEventBinding *b = eventBinding(event);
+    if (!b || !gRM->eventWords.load(std::memory_order_relaxed))
+        return false;
+    const uint64_t generation = gRM->raw->channelGeneration();
+    const bool encoding = b->wordStamp == inlineStamp;
+    uint32_t p = b->wordGeneration == generation
+        ? raw::eventReleasePayload(value, b->wordBase, encoding ? b->wordPending : b->wordFloor)
+        : 0;
+    if (!p && !encoding && (b->wordGeneration != generation || value - b->wordBase >= (uint64_t(1) << 31))) {
+        uint64_t base = 0;
+        uint32_t floor = 0;
+        const int kr = gRM->raw->eventWord(b->lease->handle(), address, base, floor);
+        if (kr == kIOReturnUnsupported)
+            gRM->eventWords.store(false, std::memory_order_relaxed);
+        if (kr != KERN_SUCCESS)
+            return false;
+        b->wordAddress = address;
+        b->wordBase = base;
+        b->wordFloor = floor;
+        b->wordGeneration = generation;
+        p = raw::eventReleasePayload(value, base, floor);
+    }
+    if (!p)
+        return false;
+    address = b->wordAddress;
+    payload = p;
+    b->wordStamp = inlineStamp;
+    b->wordPending = p;
+    return true;
 }
 
 static void eventFailure(RMCommandBuffer *cb, NSString *message)
@@ -117,9 +157,15 @@ bool sharedWaitsReady(RMCommandBuffer *cb, bool native)
 void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands)
 {
     std::vector<TegraGM20BAbiEventUse> waits, signals;
+    std::vector<uint32_t> releases;
     waits.reserve(cb->_sharedEventWaits.size());
     for (const auto &wait : cb->_sharedEventWaits)
         waits.push_back({wait.lease->handle(), wait.value});
+    for (const auto &[at, payload] : cb->_released) {
+        const Cmd event = cb->_plan.legacy(at);
+        signals.push_back({sharedEventLease((__bridge id)event.obj)->handle(), event.c});
+        releases.push_back(payload);
+    }
     cb->_sharedSignalRanges.clear();
     if (cb->_gpuPrefixEligible) {
         for (size_t at = cb->_segNext + 1; at < cb->_segs.size(); ++at) {
@@ -136,7 +182,15 @@ void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands)
             cb->_sharedSignalRanges.push_back(at);
         }
     }
-    commands->sharedEvents(std::move(waits), std::move(signals));
+    commands->sharedEvents(std::move(waits), std::move(signals), std::move(releases));
+}
+
+static void submittedUpTo(SwitchSharedEventBinding *binding, uint64_t value)
+{
+    uint64_t old = binding->submittedValue.load(std::memory_order_relaxed);
+    while (old < value &&
+           !binding->submittedValue.compare_exchange_weak(old, value, std::memory_order_release, std::memory_order_relaxed)) {
+    }
 }
 
 void publishSharedEvents(RMCommandBuffer *cb)
@@ -144,13 +198,17 @@ void publishSharedEvents(RMCommandBuffer *cb)
     for (size_t at : cb->_sharedSignalRanges) {
         cb->_segs[at].gpuSignal = true;
         const Cmd event = cb->_plan.legacy(cb->_segs[at].from);
-        SwitchSharedEventBinding *binding = eventBinding((__bridge id)event.obj);
-        if (binding) {
-            uint64_t old = binding->submittedValue.load(std::memory_order_relaxed);
-            while (old < event.c && !binding->submittedValue.compare_exchange_weak(
-                old, event.c, std::memory_order_release, std::memory_order_relaxed)) {}
-        }
+        if (SwitchSharedEventBinding *binding = eventBinding((__bridge id)event.obj))
+            submittedUpTo(binding, event.c);
     }
+    for (const auto &[at, payload] : cb->_released) {
+        const Cmd event = cb->_plan.legacy(at);
+        SwitchSharedEventBinding *binding = eventBinding((__bridge id)event.obj);
+        submittedUpTo(binding, event.c);
+        if (payload)
+            binding->wordFloor = std::max(binding->wordFloor, payload);
+    }
+    cb->_released.clear();
     cb->_sharedSignalRanges.clear();
     cb->_sharedEventWaits.clear();
 }

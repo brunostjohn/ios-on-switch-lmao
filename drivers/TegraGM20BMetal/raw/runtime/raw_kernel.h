@@ -205,6 +205,21 @@ public:
     int cancelPromise(uint32_t promise);
 
     std::shared_ptr<SharedEvents> sharedEvents();
+    // TegraGM20BJobABI.h method 40: where `channel` releases the event of `handle` mid-job, and the payloads it may release.
+    // The kern_return_t.
+    int eventWord(uint64_t handle, uint32_t channel, uint64_t &address, uint64_t &base, uint32_t &floor);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // hw_test_app's gpu.raw.event_release: the jobs this connection submitted, and the signals they released mid-job
+    uint64_t jobsSubmitted() const
+    {
+        return jobs_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t signalsReleased() const
+    {
+        return released_.load(std::memory_order_relaxed);
+    }
+#endif
 
     uint64_t nextAdmission()
     {
@@ -273,6 +288,9 @@ public:
     }
 
 private:
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    std::atomic<uint64_t> jobs_{0}, released_{0};
+#endif
     void setError(std::string error)
     {
         std::lock_guard<std::mutex> lock(errorLock_);
