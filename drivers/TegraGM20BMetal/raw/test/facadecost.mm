@@ -12,6 +12,7 @@
 #import <Metal/Metal.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <objc/runtime.h>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -27,6 +28,20 @@ using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 
 @interface NSObject (SwitchRawEncodeProfile)
 - (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile;  // RawMetalEncodeCounters.mm (debug builds)
+@end
+
+// Signals when the object it is associated with is destroyed, after that object's own ivars are released.
+@interface FacadeCostGone : NSObject
+@property (nonatomic, strong) dispatch_semaphore_t gone;
+@end
+
+@implementation FacadeCostGone
+
+- (void)dealloc
+{
+    dispatch_semaphore_signal(_gone);
+}
+
 @end
 
 namespace {
@@ -167,7 +182,8 @@ void printSites(SitesFn sites, unsigned buffers)
 
 NSDictionary<NSString *, NSNumber *> *profile(id<MTLDevice> device)
 {
-    return [(id)device respondsToSelector:@selector(switchRawEncodeProfile)] ? [(id)device switchRawEncodeProfile] : @{};
+    return [(id)device respondsToSelector:@selector(switchRawEncodeProfile)] ? [(id)device switchRawEncodeProfile]
+                                                                             : @{};
 }
 
 }  // namespace
@@ -255,6 +271,10 @@ int main(int argc, char **argv)
             [cb commit];
             return cb;
         };
+        // A batch ends when its last command buffer is destroyed, not when it completes: the completion thread
+        // releases it (and frees what it owned) after waitUntilCompleted returns, which would land a varying part of
+        // one command buffer's frees in the next window.
+        static char goneKey;
         auto batch = [&](unsigned draws, unsigned count) {
             id<MTLCommandBuffer> last = nil;
             for (unsigned i = 0; i < count; i++)
@@ -262,7 +282,19 @@ int main(int argc, char **argv)
                     last = encode(draws);
                 }
             [last waitUntilCompleted];
-            return last.status == MTLCommandBufferStatusCompleted;
+            const bool completed = last.status == MTLCommandBufferStatusCompleted;
+            dispatch_semaphore_t gone = dispatch_semaphore_create(0);
+            @autoreleasepool {
+                FacadeCostGone *sentinel = [FacadeCostGone new];
+                sentinel.gone = gone;
+                objc_setAssociatedObject(last, &goneKey, sentinel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                last = nil;
+            }
+            if (dispatch_semaphore_wait(gone, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC))) {
+                fprintf(stderr, "the last command buffer outlived its completion by 5 s\n");
+                return false;
+            }
+            return completed;
         };
         const unsigned arms[2] = {8, 16};
         std::map<std::string, double> counted[2];
@@ -272,7 +304,7 @@ int main(int argc, char **argv)
                 return 1;
             }
             NSDictionary<NSString *, NSNumber *> *before = profile(device);
-            batch(arms[a], buffers);
+            failures += !batch(arms[a], buffers);
             NSDictionary<NSString *, NSNumber *> *after = profile(device);
             const double encodes = after[@"encodes"].doubleValue - before[@"encodes"].doubleValue;
             const double mallocEncodes = after[@"malloc_encodes"].doubleValue - before[@"malloc_encodes"].doubleValue;
@@ -294,7 +326,7 @@ int main(int argc, char **argv)
             uint64_t mine0, others0, mine1, others1;
             cpuNs(mine0, others0);
             start();
-            batch(arms[a], buffers);
+            failures += !batch(arms[a], buffers);
             stop(&c);
             cpuNs(mine1, others1);
             printf(
