@@ -351,13 +351,5 @@ inline constexpr size_t kindIndex()
 static_assert(kindIndex() < std::size(kKinds), "no device answers for this kind (raw_device_answers.h)");
 inline constexpr const Kind &kThisKind = kKinds[kindIndex()];
 
-// The identity's answer to an NSUInteger or BOOL query of its table (0: none)
-constexpr uint64_t countAnswer(std::string_view selector)
-{
-    for (size_t i = 0; i < kThisKind.countCount; i++)
-        if (selector == kThisKind.counts[i].selector)
-            return kThisKind.counts[i].value;
-    return 0;
-}
 
 }  // namespace raw::answers
