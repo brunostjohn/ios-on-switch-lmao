@@ -1637,7 +1637,10 @@ static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
     return out;
 }
 
-@implementation NBFunction
+@implementation NBFunction {
+    std::once_flag _tessRead;
+    switch_metal::FunctionTess _tess;
+}
 
 - (void)dealloc
 {
@@ -1647,6 +1650,25 @@ static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
 - (NSString *)libraryName
 {
     return _libraryName ?: _name;
+}
+
+// Its library's function list entry's TESS tag (the library's bytes are the AIR slice Metal reads)
+- (switch_metal::FunctionTess)tess
+{
+    std::call_once(_tessRead, [self] {
+        switch_metal::metallibFunctionTess(_library.bytes, _library.length, self.libraryName.UTF8String ?: "", _tess);
+    });
+    return _tess;
+}
+
+- (MTLPatchType)patchType
+{
+    return MTLPatchType([self tess].patchType);
+}
+
+- (NSInteger)patchControlPointCount
+{
+    return [self tess].controlPoints;
 }
 
 // MPS reads its kernels' constants (kMPSDeviceCaps, MPSMaxBatchSize, ...) here before specializing them.

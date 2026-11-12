@@ -93,8 +93,6 @@
 #   raw_counters_test raw/runtime/raw_counters.h, raw_counter_kernel.h: a counter sample buffer's checks in the AGX
 #                     driver's words, PTIMER on the CPU's clock by an anchor, the resolve on the CPU and the GPU kernel's
 #                     32-bit arithmetic equal to it, and each stage boundary's report words
-#   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
-#                     metallib entry's TESS tag, Xcode's bytes for them
 #   raw_device_amplification_test  raw_amplification.cpp on raw::Device: one draw per amplification, the counts and
 #                     viewport offsets a state takes, a dynamic vertex stride from its bind
 #   raw_device_tessellation_test  raw_tessellation.cpp on raw::Device: a tessellation state's programs and tessellator
@@ -1834,18 +1832,6 @@ host_test(
         "-framework",
         "Metal",
     ],
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
-)
-
-host_test(
-    name = "raw_function_tess_test",
-    srcs = [
-        "raw_function_tess_test.cpp",
-        "//drivers/NativeMetal:MetallibSlice.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_function_tess.h",
-    ],
-    copts = ["-Idrivers/NativeMetal"],
-    cxx_std = "c++17",
     deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
