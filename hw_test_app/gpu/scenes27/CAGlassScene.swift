@@ -7,7 +7,8 @@ import Metal
 /// QuartzCore's own library exactly as these corpus lines say. They are caspec27_test.py's GLASS and DOWNSAMPLE
 /// (drivers/TegraGM20BMetal/raw/pack/ca), which caspec.state_line makes from qc-24B119.json. 27's raw pack holds every
 /// glass variant, so on the facade each pass must take the raw path: an m2v path fails. Their uniforms are zero, as
-/// the pack's probe binds them, so the pictures have no CPU model: each pass's is held to the Mac's (ds4_rgba16f, glass),
+/// the pack's probe binds them, except the glass's own parameter block (CAUniforms, so its draw shows), and the pictures
+/// have no CPU model: each pass's is held to the Mac's (ds4_rgba16f, glass),
 /// t_<pass>= is the GPU time in ms (the median of three). iOS 27's app runs it (Scenes.glass).
 struct CAGlassScene: GPUScene {
     let id = "gpu.ca.glass"
@@ -45,6 +46,11 @@ struct CAGlassScene: GPUScene {
         try await gpu.upload(
             Patterns.bytes(Patterns.busy(width: size, height: size, channels: 4), .bgra8Unorm), to: source,
             bytesPerRow: size * 4)
+        let sdf = try gpu.texture(.rgba16Float, size, size, usage: [.shaderRead])
+        let field = Raster(width: size, height: size, channels: 4) { x, y, _ in
+            (hypotf(Float(x - size / 2), Float(y - size / 2)) - Float(size) / 3) / Float(size)
+        }
+        try await gpu.upload(Patterns.bytes(field, .rgba16Float), to: sdf, bytesPerRow: size * 8)
         let onFacade = RawFacade.kind(of: gpu.device) == "raw"
         for (short, text) in Self.passes {
             guard let line = PipelineLine(text) else {
@@ -81,6 +87,7 @@ struct CAGlassScene: GPUScene {
                     CAState.bind(
                         encoder, vertices: CAState.rectangle(x0: -1, y0: -1, x1: 1, y1: 1, color: SIMD4(1, 1, 1, 1)),
                         source: source)
+                    if short == "glass" { CAUniforms.bindGlass(encoder, source: source, sdf: sdf) }
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                     encoder.endEncoding()
                 }

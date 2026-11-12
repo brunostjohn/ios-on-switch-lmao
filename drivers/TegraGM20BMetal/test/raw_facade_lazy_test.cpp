@@ -227,6 +227,56 @@ void ownDevice()
     EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
 }
 
+// An event signalled between two raw passes is released by the GPU where it falls (raw_inline_signals.h): the command
+// buffer goes to the kernel as the same jobs it makes with no signal, rather than split at the signal, and stays raw
+void signalBetweenPasses()
+{
+    const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
+    ASSERT_TRUE(device != nil && library != nil);
+    NSError *error = nil;
+    id<MTLRenderPipelineState> state = [device newRenderPipelineStateWithDescriptor:descriptor(library, kPacked)
+                                                                              error:&error];
+    ASSERT_TRUE(state != nil) << text(error);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kPacked
+                                                                                  width:64
+                                                                                 height:64
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    id<MTLTexture> target = [device newTextureWithDescriptor:td];
+    id<MTLEvent> event = [device newEvent];
+    ASSERT_TRUE(event != nil);
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const auto jobs = [&](bool signal) {
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        for (int pass = 0; pass < 2; pass++) {
+            MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+            p.colorAttachments[0].texture = target;
+            p.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            p.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:p];
+            [e setRenderPipelineState:state];
+            const float vertices[12] = {-1, -1, 0, 1, 3, -1, 0, 1, -1, 3, 0, 1};
+            [e setVertexBytes:vertices length:sizeof vertices atIndex:0];
+            [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [e endEncoding];
+            if (signal && !pass)
+                [cb encodeSignalEvent:event value:1];
+        }
+        const size_t before = kernel_model::model.jobs.size();
+        [cb commit];
+        [cb waitUntilCompleted];
+        EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << text(cb.error);
+        return kernel_model::model.jobs.size() - before;
+    };
+    jobs(false);
+    const size_t plain = jobs(false);
+    EXPECT_GE(plain, 1u);
+    EXPECT_EQ(jobs(true), plain);
+    EXPECT_EQ([counters(device)[@"m2v"] intValue], 0) << text(counters(device));
+    EXPECT_EQ(gOpens, 0);
+}
+
 // A fence and a binary archive are the device's own objects (RMFence, RMBinaryArchive), made without asking m2v
 void fenceAndArchive()
 {
@@ -287,4 +337,9 @@ TEST(RawFacadeLazy, DeviceIsItsOwn)
 TEST(RawFacadeLazy, FenceAndBinaryArchiveAreTheDevicesOwn)
 {
     switch_ios::test::ExpectPassesInFreshProcess(fenceAndArchive);
+}
+
+TEST(RawFacadeLazy, ASignalBetweenTwoPassesSplitsNoJob)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(signalBetweenPasses);
 }

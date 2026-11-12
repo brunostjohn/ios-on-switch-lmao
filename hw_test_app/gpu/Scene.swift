@@ -39,8 +39,8 @@ public struct SceneCheck: Sendable {
 /// What one run of a scene found: each comparison, extra measurements (GPU times, readback agreement), notes on
 /// what was left out (a format the device lacks) and the run's own failures that are not picture comparisons.
 /// A picture with no CPU model, held to the Mac's golden of `golden` (its own label unless another case draws what it
-/// must draw). `cleared`: the colour its target was cleared to (RGBA), so a golden that is only that colour shows the
-/// scene cannot tell a draw from none.
+/// must draw). What its target held before the draw, `before` (its bytes) or `cleared` (a clear colour, RGBA): a golden
+/// equal to that shows the scene cannot tell a draw from none.
 public struct ScenePicture: Sendable {
     public let label: String
     public let golden: String
@@ -49,10 +49,12 @@ public struct ScenePicture: Sendable {
     public let bytes: [UInt8]
     public let width: Int
     public let height: Int
+    public let before: [UInt8]?
     public let cleared: [Float]?
 
-    /// The picture's target as it was cleared, nil without a clear or a format the signature decodes.
+    /// The picture's target before the draw, nil when the scene names neither or its format does not decode.
     public var blank: Signature? {
+        if let before { return Signature(bytes: before, metalFormat: metalFormat, width: width, height: height) }
         guard let cleared, let format = Signature.format(metal: metalFormat), metalFormat != Signature.twoPlaneXR
         else { return nil }
         let texel = format.encode(Array(cleared.prefix(format.channels)))
@@ -73,13 +75,13 @@ public struct SceneResult: Sendable {
     /// A read-back attachment the CPU cannot model; hash_<label>= is its bytes' FNV-1a.
     public mutating func picture(
         _ label: String, bytes: [UInt8], metalFormat: UInt, width: Int, height: Int, golden: String? = nil,
-        cleared: [Float]? = nil
+        before: [UInt8]? = nil, cleared: [Float]? = nil
     ) {
         let signature = Signature(bytes: bytes, metalFormat: metalFormat, width: width, height: height)
         pictures.append(
             ScenePicture(
                 label: label, golden: golden ?? label, metalFormat: metalFormat, signature: signature, bytes: bytes,
-                width: width, height: height, cleared: cleared))
+                width: width, height: height, before: before, cleared: cleared))
         metrics.set("hash_" + label, String(signature.hash, radix: 16))
     }
 

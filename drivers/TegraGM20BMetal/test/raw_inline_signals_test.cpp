@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw_inline_signals.h and raw_event_release.h: a kernel event's signal between two native ranges joins them into one job,
-// its release the kernel's external fence sequence into the event's word; and the window a payload must fall in. The source
-// half holds the facade to that plan: the encoder releases at the signal (m2v_source_test holds the split of a joined
-// range m2v takes).
+// its release the kernel's external fence sequence into the event's word; and the window a payload must fall in. That the
+// facade keeps such a command buffer whole is raw_facade_lazy_test's ASignalBetweenTwoPassesSplitsNoJob.
 #include <cstdint>
 #include <string>
 #include <gmock/gmock.h>
@@ -106,15 +105,6 @@ TEST(RawInlineSignals, PayloadIsTheValueAboveTheBaseInsideTheWindow)
     EXPECT_EQ(eventReleasePayload(10 + (uint64_t(1) << 31), 10, 0), 0u);
     EXPECT_EQ(eventReleasePayload(9 + (uint64_t(1) << 31), 10, 0), 0x7fffffffu);
     EXPECT_EQ(eventReleasePayload(3, ~uint64_t(0) - 4, 0), 8u);
-}
-
-TEST(RawInlineSignals, TheFacadeReleasesAtTheSignal)
-{
-    const std::string encode = SourceText("../raw/runtime/RawMetalEncode.mm");
-    EXPECT_THAT(encode, HasSubstr("case OpSignalEvent:\n            if (!isInlineSignal(cb, at))"));
-    EXPECT_THAT(encode, HasSubstr("beginInlineSignals(cb);"));
-    const std::string submit = SourceText("../raw/runtime/RawMetalSubmit.mm");
-    EXPECT_THAT(Body(submit, "void planSegments(RMCommandBuffer *cb)"), HasSubstr("inlineSignals(cb);"));
 }
 
 }  // namespace
