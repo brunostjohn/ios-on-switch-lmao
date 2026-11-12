@@ -110,7 +110,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     RAW_DIAGNOSTIC(dev.stats.programsPlaced++);
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
-    c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
+    c.data = r.data.empty() ? 0 : dev.heap_.va + at + computeSlotDataAt(r);
     ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
     placed.rec = &placed.placed;
     return &placed;
