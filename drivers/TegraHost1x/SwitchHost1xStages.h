@@ -4,6 +4,12 @@
 // order; then the job's physical result is published. That and the job's semantic completion (the events' retirement)
 // finish in either order and end the job.
 //
+// A job's bound counts from when its inputs are in, the moment the engine could have started it: its GPU producer's
+// bridge, its other host1x producers' fences, and the inputs of the job queued ahead of it on the same serialized
+// channel. A job held up by an upstream stall is not stalled itself: the producer's own bound cancels the producer,
+// whose released syncpoint lets the job's stream on and starts its bound. Each input is also a hardware step, so a
+// job never ends, and its slot is never reused, before every input has come in.
+//
 // A job whose fence failed, or that cancel() failed, ends with kCancelled whatever its GPU producer reports. A job
 // whose stream waited for another host1x engine's job that failed ends with that failure, as its semantic batch would
 // later: a cancelled job's syncpoint is released by the CPU, so a job that read what it was to write ran on memory it
@@ -53,10 +59,16 @@ struct SwitchHost1xProducers {
     }
 };
 
+struct SwitchHost1xInputFence {
+    switch_host1x_fence fence;
+    uint32_t slot;
+};
+
 struct SwitchHost1xStage {
     switch_host1x_fence fence;
     SwitchHost1xProducers producers;
-    uint32_t hardware, final, boundUs;
+    SwitchHost1xInputFence produced[SwitchHost1xProducers::kMax];
+    uint32_t hardware, inputs, successor, final, boundUs;
     int physical;
     bool ended;
 };
@@ -66,21 +78,53 @@ public:
     static constexpr int kCancelled = -5;
     inline static SwitchHost1xStage stages[Slots] = {};
 
-    // Under the engine's lock, once the job's slot is published and its batch committed. A job with a bridge has its
-    // bound started by the bridge's completion, so a GPU producer that is slow, or killed by the GPU's recovery, fails
-    // only its own consumer (D8); it cannot end before bridged() is called.
+    // Under the engine's lock, once the job's slot is published and its batch committed; `ahead` is the slot of the
+    // job queued just before it, or Slots. A job with a bridge has its bound started by the bridge's completion, so a
+    // GPU producer that is slow, or killed by the GPU's recovery, fails only its own consumer (D8); it cannot end
+    // before bridged() is called.
     static int start(uint32_t slot, uint32_t syncpt, uint32_t threshold, bool bridge, bool semantic, uint32_t boundUs,
-                     const SwitchHost1xProducers &producers)
+                     const SwitchHost1xProducers &producers, uint32_t ahead)
     {
         auto &stage = stages[slot];
         switch_host1x_fence_init(&stage.fence, syncpt, threshold, signaled);
         stage.producers = producers;
-        stage.hardware = bridge ? 2 : 1;
+        const uint32_t own = (bridge ? 1 : 0) + producers.count;
+        stage.hardware = 1 + own;
+        stage.inputs = own + 1;  // and start's own hold on them, given back once every input is armed
+        stage.successor = kNoSuccessor;
         stage.final = semantic ? 2 : 1;
         stage.boundUs = boundUs;
         stage.physical = 1;
         stage.ended = false;
-        return switch_host1x_fence_add(&stage.fence, bridge ? 0 : boundUs);
+        bool behind = false;
+        if (ahead < Slots) {
+            ++stage.inputs;
+            ++stage.hardware;
+            uint32_t expected = kNoSuccessor;
+            behind = __atomic_compare_exchange_n(&stages[ahead].successor, &expected, slot, false, __ATOMIC_ACQ_REL,
+                                                 __ATOMIC_ACQUIRE);
+            if (!behind) {
+                --stage.inputs;
+                --stage.hardware;
+            }
+        }
+        if (!own && !behind) {
+            stage.inputs = 0;
+            stage.successor = kInputsReady;
+            return switch_host1x_fence_add(&stage.fence, boundUs);
+        }
+        if (const int error = switch_host1x_fence_add(&stage.fence, 0))
+            return error;
+        for (uint32_t i = 0; i < producers.count; ++i) {
+            auto &input = stage.produced[i];
+            input.slot = slot;
+            switch_host1x_fence_init(&input.fence, producers.tokens[i].queue,
+                                     static_cast<uint32_t>(producers.tokens[i].value), produced);
+            if (const int error = switch_host1x_fence_add(&input.fence, 0))
+                return error;
+        }
+        inputStep(stage);
+        return 0;
     }
 
     // After the engine's lock: the bridge's lock is held across a GPU submission's wait for channel room.
@@ -107,6 +151,8 @@ public:
     }
 
 private:
+    static constexpr uint32_t kNoSuccessor = Slots, kInputsReady = Slots + 1;
+
     static uint32_t slotOf(const SwitchHost1xStage &stage)
     {
         return static_cast<uint32_t>(&stage - stages);
@@ -127,8 +173,29 @@ private:
         auto &stage = *static_cast<SwitchHost1xStage *>(context);
         if (status < 0 && __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) != kCancelled)
             __atomic_store_n(&stage.physical, status, __ATOMIC_RELEASE);
-        switch_host1x_fence_watch(&stage.fence, stage.boundUs);
+        inputStep(stage);
         hardwareStep(stage);
+    }
+
+    // A host1x producer's fence: reached, or released by the CPU when its engine cancelled it.
+    static void produced(switch_host1x_fence *fence, int)
+    {
+        auto &stage = stages[reinterpret_cast<SwitchHost1xInputFence *>(fence)->slot];
+        inputStep(stage);
+        hardwareStep(stage);
+    }
+
+    // The last input starts the bound, and is the next job's input from the job ahead of it.
+    static void inputStep(SwitchHost1xStage &stage)
+    {
+        if (__atomic_sub_fetch(&stage.inputs, 1u, __ATOMIC_ACQ_REL))
+            return;
+        switch_host1x_fence_watch(&stage.fence, stage.boundUs);
+        const uint32_t next = __atomic_exchange_n(&stage.successor, kInputsReady, __ATOMIC_ACQ_REL);
+        if (next < Slots) {
+            inputStep(stages[next]);
+            hardwareStep(stages[next]);
+        }
     }
 
     static void hardwareStep(SwitchHost1xStage &stage)

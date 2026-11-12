@@ -610,11 +610,12 @@ protected:
         fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT);
     }
 
-    // The threshold interrupt for every queued fence the syncpoint has reached.
+    // The threshold interrupt for every queued fence of the engine's syncpoint that it has reached.
     static void reachedInterrupts()
     {
         for (auto *fence : fences)
-            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && SwitchNVDECQueue::reached(hardware, fence->threshold)) {
+            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && fence->syncpt == gSyncpt &&
+                SwitchNVDECQueue::reached(hardware, fence->threshold)) {
                 fence->state = SWITCH_HOST1X_FENCE_IDLE;
                 fence->signaled(fence, 0);
             }
@@ -1074,7 +1075,11 @@ TEST_F(SwitchNVDECSubmitTest, ADecodeAfterACancelledVicJobEndsWithItsFailure)
     sourceTokens = {placed};
     uint64_t sequence = nextTestSequence + 1;
     ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    ASSERT_EQ(fences.size(), 2u) << "the decode's fence and VIC's";
+    EXPECT_EQ(fences[1]->syncpt, 161u);
+    EXPECT_EQ(fences[1]->threshold, 9u);
     producerPhysical[{SWITCH_GPU_ENGINE_VIC, placed.value}] = -5;
+    interrupt(1);
     interrupt(0);
     semantic(sequence);
     ASSERT_EQ(completed.size(), 1u);
@@ -1083,6 +1088,49 @@ TEST_F(SwitchNVDECSubmitTest, ADecodeAfterACancelledVicJobEndsWithItsFailure)
                                              gSyncpt};
     EXPECT_EQ(Results::physicalStatus(&decode), -5);
     EXPECT_EQ(waitSequence(sequence), -5);
+}
+
+// A decode behind a stalled VIC job is held up upstream: no bound runs for it, or for the decode queued behind it,
+// until VIC's fence comes in (VIC's cancellation releasing it), so NVDEC is never reset for VIC's stall.
+TEST_F(SwitchNVDECSubmitTest, AnUpstreamStallNeverResetsNVDEC)
+{
+    completed.clear();
+    const switch_gpu_backing_token placed = {0x200000009ULL, 1, SWITCH_GPU_ENGINE_VIC, 161};
+    sourceTokens = {placed};
+    uint64_t first = nextTestSequence + 1, second = nextTestSequence + 2;
+    ASSERT_EQ(submit({recordCompletion, &first}), 0);
+    sourceTokens.clear();
+    ASSERT_EQ(submit({recordCompletion, &second}), 0);
+    ASSERT_EQ(fences.size(), 3u);
+    EXPECT_EQ(fenceBounds, (std::vector<uint32_t>{0, 0, 0})) << "no bound runs while VIC's job has not come in";
+    EXPECT_TRUE(watchedBounds.empty());
+    producerPhysical[{SWITCH_GPU_ENGINE_VIC, placed.value}] = -5;
+    interrupt(1);
+    EXPECT_EQ(watchedBounds, (std::vector<uint32_t>{kWaitBoundUs, kWaitBoundUs}));
+    semantic(first);
+    semantic(second);
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    ASSERT_EQ(completed.size(), 2u);
+    EXPECT_EQ(completed[0].result, -5);
+    EXPECT_EQ(completed[1].result, 0);
+    EXPECT_EQ(gCancel->entered, 0u);
+    EXPECT_TRUE(engineSteps.empty());
+}
+
+// The decode whose VIC input came in and which then stops making progress is NVDEC's own stall: it is cancelled.
+TEST_F(SwitchNVDECSubmitTest, AStallAfterTheInputsCameInStillResetsNVDEC)
+{
+    sourceTokens = {{0x200000009ULL, 1, SWITCH_GPU_ENGINE_VIC, 161}};
+    ASSERT_EQ(submit(), 0);
+    semantic(gQueue.submitted);
+    interrupt(1);
+    ASSERT_EQ(watchedBounds, std::vector<uint32_t>{kWaitBoundUs});
+    outlived(0);
+    EXPECT_EQ(waitSequence(gQueue.submitted), -5);
+    runCancellation();
+    EXPECT_EQ(engineSteps.front(), "teardown");
+    EXPECT_NE(std::find(engineSteps.begin(), engineSteps.end(), "reset"), engineSteps.end());
 }
 
 // A client whose ring of input buffers is one deeper than the queue never writes one a job still reads: the submit that

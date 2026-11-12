@@ -591,11 +591,12 @@ protected:
         fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT);
     }
 
-    // The threshold interrupt for every queued fence the syncpoint has reached.
+    // The threshold interrupt for every queued fence of the engine's syncpoint that it has reached.
     static void reachedInterrupts()
     {
         for (auto *fence : fences)
-            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && SwitchVICQueue::reached(hardware, fence->threshold)) {
+            if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && fence->syncpt == gSyncpt &&
+                SwitchVICQueue::reached(hardware, fence->threshold)) {
                 fence->state = SWITCH_HOST1X_FENCE_IDLE;
                 fence->signaled(fence, 0);
             }
@@ -799,19 +800,68 @@ TEST_F(SwitchVICJobsTest, AJobThatRanOnACancelledDecodesPictureEndsWithTheDecode
     const switch_gpu_backing_token decode = {0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
     sourceTokens = {decode, {decode.value - 1, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
     int heard = 1;
-    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    ASSERT_EQ(submit(1, nullptr, record, &heard), 0);
     const uint64_t placed = gQueue.submitted;
     const switch_gpu_backing_token token = {placed, switch_vic_result_state.generation, SWITCH_GPU_ENGINE_VIC, gSyncpt};
+    ASSERT_EQ(fences.size(), 2u) << "the job's fence and the newest decode's";
+    EXPECT_EQ(fences[1]->syncpt, 162u);
+    EXPECT_EQ(fences[1]->threshold, 0x81234567u);
     producerPhysical[{SWITCH_GPU_ENGINE_NVDEC, decode.value}] = -5;
+    interrupt(1);
     interrupt(0);
     EXPECT_EQ(heard, -5);
     EXPECT_EQ(Results::physicalStatus(&token), -5);
     EXPECT_EQ(waitSequence(placed), -5);
 
     sourceTokens = {{decode.value + 1, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
+    ASSERT_EQ(submit(1, nullptr, record, &heard), 0);
+    interrupt(3);
+    interrupt(2);
+    EXPECT_EQ(heard, 0) << "a later decode that ran is not this job's failure";
+}
+
+// A job behind a stalled decode is held up upstream, not stalled: its bound, and that of the job queued behind it,
+// starts only once the decode's fence comes in (here NVDEC's cancellation releasing it), so NVDEC's own bound decides
+// and VIC is never reset for it. The jobs then run and fail with the decode's failure, and the one behind runs.
+TEST_F(SwitchVICJobsTest, AnUpstreamStallNeverResetsVic)
+{
+    const switch_gpu_backing_token decode = {0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
+    sourceTokens = {decode};
+    int placed = 1, behind = 1;
+    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    ASSERT_EQ(submit(1, nullptr, record, &placed), 0);
+    sourceTokens.clear();
+    ASSERT_EQ(submit(1, nullptr, record, &behind), 0);
+    ASSERT_EQ(fences.size(), 3u);
+    EXPECT_EQ(fenceBounds, (std::vector<uint32_t>{0, 0, 0})) << "no bound runs while the decode has not come in";
+    EXPECT_TRUE(watchedBounds.empty());
+    producerPhysical[{SWITCH_GPU_ENGINE_NVDEC, decode.value}] = -5;
+    interrupt(1);
+    EXPECT_EQ(watchedBounds.size(), 2u) << "both bounds start with the decode's released fence";
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    EXPECT_EQ(placed, -5);
+    EXPECT_EQ(behind, 0);
+    EXPECT_EQ(gCancel->entered, 0u);
+    EXPECT_TRUE(engineSteps.empty());
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+// The same job whose decode came in and which then stops making progress is VIC's own stall: its bound runs from the
+// decode's fence, and when it passes VIC is reset and the job fails.
+TEST_F(SwitchVICJobsTest, AStallAfterTheInputsCameInStillResetsVic)
+{
+    sourceTokens = {{0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
+    int heard = 1;
     ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
     interrupt(1);
-    EXPECT_EQ(heard, 0) << "a later decode that ran is not this job's failure";
+    ASSERT_EQ(watchedBounds.size(), 1u);
+    outlived(0);
+    EXPECT_EQ(heard, -5);
+    runCancellation();
+    EXPECT_EQ(engineSteps.front(), "teardown");
+    EXPECT_NE(std::find(engineSteps.begin(), engineSteps.end(), "reset"), engineSteps.end());
 }
 
 // The bound times VIC alone: it starts when the GPU producer is done (D8), whichever of the two finishes first.
