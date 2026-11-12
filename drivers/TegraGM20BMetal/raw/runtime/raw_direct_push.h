@@ -33,10 +33,11 @@ inline uint32_t controlPushMask(const NmbDirectState &state)
     return pushFieldMask(state.tess.controlWord, kControlWords);
 }
 
-// The words a raw draw writes itself: each amplification's id and each dynamic pulled layout's stride
+// The words a raw draw writes itself: each amplification's id, the draw's amplification count and each dynamic pulled
+// layout's stride
 inline uint32_t drawnPushMask(const NmbDirectDraw &d)
 {
-    uint32_t mask = pushFieldMask(d.amplificationIdWord, 1);
+    uint32_t mask = pushFieldMask(d.amplificationIdWord, 1) | pushFieldMask(d.amplificationCountWord, 1);
     for (const auto &pulled : d.pulledStrides)
         mask |= pushFieldMask(pulled[1], 1);
     return mask;

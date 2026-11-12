@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
-// raw_amplification.cpp on raw::Device: a state of vertex amplification drawn once per amplification, a count the state
-// does not take refused, a viewport offset refused, and a dynamic vertex stride taken from the bind up to the stream's
-// 12-bit field.
+// raw_amplification.cpp on raw::Device: a state of vertex amplification drawn once per amplification by one amplify macro
+// call over the scratch words the encoder writes, a count the state does not take refused, a viewport offset refused,
+// and a dynamic vertex stride taken from the bind up to the stream's 12-bit field.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_record.h"
+#include <map>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -21,8 +24,8 @@ raw::RuntimeRecord record(uint64_t key, uint8_t amplificationMax, bool countRead
     r.blob = {0x1a00, 0x1111};
     r.pipeline.amplificationMax = amplificationMax;
     r.pipeline.amplificationIdWord = amplificationMax ? 3 : 0;
-    r.pipeline.amplificationCountRead = countRead;
-    r.pipeline.pushMask = amplificationMax ? 1u << 2 : 0;
+    r.pipeline.amplificationCountWord = countRead ? 4 : 0;
+    r.pipeline.pushMask = (amplificationMax ? 1u << 2 : 0) | (countRead ? 1u << 3 : 0);
     if (dynamicStride) {
         r.pipeline.vertexSlot = 1;
         r.pipeline.vertexStrideDynamic = 1;
@@ -60,6 +63,7 @@ protected:
     struct Drawn {
         std::string why;
         uint32_t draws = 0;
+        std::vector<uint32_t> words;  // what the device submitted for the draw's command buffer
     };
 
     // One draw of `pl` at amplification `count` (`viewportOffsets`: a mapping offsets the viewport), the vertex buffer at
@@ -83,6 +87,7 @@ protected:
         e->setVertexStride(1, stride);
         e->setAmplification(count, viewportOffsets);
         const char *why = nullptr;
+        const size_t jobs = kernel_model::model.jobs.size();
         const bool ok = e->draw(kTriangle, 0, 3, 1, 0, &why);
         e->end();
         d.draws = cb->draws;
@@ -91,6 +96,9 @@ protected:
             cb->abandon();
             d.why = why ? why : "not committed";
         }
+        for (size_t j = jobs; j < kernel_model::model.jobs.size(); j++)
+            d.words.insert(d.words.end(), kernel_model::model.jobs[j].words.begin(),
+                           kernel_model::model.jobs[j].words.end());
         return d;
     }
 };
@@ -105,12 +113,79 @@ TEST_F(DeviceAmplification, EachAmplificationIsADrawOfItsOwn)
     EXPECT_EQ(one.draws, 1u);
 }
 
+// (method, value) of every method a pushed word stream writes (raw_push.h's encodings: 1 incrementing, 3 non-incrementing,
+// 4 immediate, 5 the first word to the method and the rest to the next)
+std::vector<std::pair<uint32_t, uint32_t>> methods(const std::vector<uint32_t> &words)
+{
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    for (size_t i = 0; i < words.size();) {
+        const uint32_t h = words[i++], op = h >> 29, count = (h >> 16) & 0x1fff, method = (h & 0x1fff) << 2;
+        if (op == 4) {
+            out.emplace_back(method, count);
+            continue;
+        }
+        for (uint32_t k = 0; k < count && i < words.size(); k++)
+            out.emplace_back(op == 1 ? method + 4 * k : op == 5 && k ? method + 4 : method, words[i++]);
+    }
+    return out;
+}
+
+TEST_F(DeviceAmplification, AnAmplifiedDrawIsOneMacroCallOverTheScratchWords)
+{
+    const Drawn two = drawWith(amplified, 2);
+    ASSERT_EQ(two.why, "");
+    const uint32_t call = NVB197_CALL_MME_MACRO(SWITCH_GM20B_MACRO_AMPLIFY);
+    const uint32_t scratch = NVB197_SET_MME_SHADOW_SCRATCH(0);
+    std::vector<uint32_t> calls, data;
+    std::map<uint32_t, uint32_t> words;
+    for (const auto &[m, v] : methods(two.words)) {
+        if (m == call)
+            calls.push_back(v);
+        else if (m == call + 4)
+            data.push_back(v);
+        else if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT && m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
+            words[(m - scratch) / 4] = v;
+    }
+    EXPECT_EQ(calls, std::vector<uint32_t>{3});  // its vertex count, then instances, first, the first instance
+    EXPECT_EQ(data, (std::vector<uint32_t>{1, 0, 0}));
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_COUNT], 2u);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_ID_WORD], 0x700u + 4 * 2);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_BARRIER], 0u);
+    for (const auto &[m, v] : methods(drawWith(amplified, 1).words))
+        EXPECT_NE(m, call) << "one amplification draws as any draw";
+}
+
+// A state reading [[amplification_count]] draws at any count up to its maximum: the plain draw's count word is 1, the
+// amplify call's the count it writes (its scratch word names the word)
+TEST_F(DeviceAmplification, ACountReadingStateTakesEachDrawsCount)
+{
+    const uint32_t root = 0x700 + 4 * 3;
+    std::vector<uint32_t> one;
+    uint32_t offset = 0;
+    for (const auto &[m, v] : methods(drawWith(counted, 1).words)) {
+        if (m == NVB197_LOAD_CONSTANT_BUFFER_OFFSET)
+            offset = v;
+        else if (m >= NVB197_LOAD_CONSTANT_BUFFER(0) && m < NVB197_LOAD_CONSTANT_BUFFER(16)) {
+            if (offset == root)
+                one.push_back(v);
+            offset += 4;
+        }
+    }
+    EXPECT_EQ(one, std::vector<uint32_t>{1});
+    uint32_t countWord = 0;
+    const uint32_t scratch = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD);
+    for (const auto &[m, v] : methods(drawWith(counted, 2).words))
+        if (m == scratch)
+            countWord = v;
+    EXPECT_EQ(countWord, root);
+}
+
 TEST_F(DeviceAmplification, ACountTheStateDoesNotTakeIsRefused)
 {
     EXPECT_NE(drawWith(amplified, 3).why, "");
     EXPECT_NE(drawWith(plain, 2).why, "");
     EXPECT_EQ(drawWith(plain, 1).why, "");
-    EXPECT_NE(drawWith(counted, 1).why, "");
+    EXPECT_EQ(drawWith(counted, 1).why, "");
     EXPECT_EQ(drawWith(counted, 2).why, "");
 }
 

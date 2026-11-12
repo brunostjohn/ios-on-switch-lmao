@@ -763,6 +763,23 @@ private:
                                    UINT32_MAX, UINT32_MAX, UINT32_MAX};
     uint32_t amplifications_ = 1, amplification_ = 0;
     bool amplificationOffsets_ = false, amplifying_ = false, amplificationDirty_ = true;
+    // what the amplify macros' scratch words hold (raw_mme.h), written before an amplified draw where they changed
+    bool amplificationScratchDirty_ = true;
+    mme::AmplificationWords heldAmplification_ = {~0u};
+
+    // A draw under vertex amplification is one amplify macro call (raw_amplification.cpp), but where runs of its
+    // primitives are drawn apart with barriers between: that draw is drawn once per amplification
+    bool amplifies() const
+    {
+        return amplifications_ > 1 && !amplifying_;
+    }
+
+    bool runsPerAmplification(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed);
+    void amplificationScratch(Push &p, const Pipeline &pl);
+    void amplifyCall(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
+                     uint32_t root, uint32_t baseInstance);
+    // the root words an amplify call leaves: the last amplification's id, the count
+    void heldAmplifyWords(const PackPipeline &r);
 
     // `draw` once per amplification, its id in the state's AmplificationId word
     template <typename Draw> bool amplified(const Draw &draw, const char **why)

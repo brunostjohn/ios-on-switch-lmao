@@ -72,6 +72,16 @@ filegroup(
 )
 
 rust_test(
+    name = "amplification_test",
+    args = ["tests::engine_amplification::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = ["@gpu_llvm_as//:bin/llvm-as"],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+rust_test(
     name = "bound_alignment_test",
     args = ["tests::engine_bound_alignment::"],
     compile_data = glob(["tests/**"]),

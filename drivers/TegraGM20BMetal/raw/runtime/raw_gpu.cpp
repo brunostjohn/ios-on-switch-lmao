@@ -4142,7 +4142,7 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
-    if (amplifications_ > 1 && !amplifying_)
+    if (amplifies() && runsPerAmplification(primitive, count, instances, false))
         return amplified([&] { return draw(primitive, first, count, instances, baseInstance, why); }, why);
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
@@ -4196,13 +4196,16 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     if (probe)
         dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
 #endif
-    mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
+    if (amplifies())
+        amplifyCall(*pl, false, first, count, instances, first, baseInstance);
+    else
+        mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probe && !probe->after.empty())
         p_.raw(probe->after.data(), uint32_t(probe->after.size()));
 #endif
-    cb_->draws++;
-    finishDraw(count, instances);
+    cb_->draws += amplifies() ? amplifications_ : 1;
+    finishDraw(count, amplifies() ? instances * amplifications_ : instances);
     return true;
 }
 
@@ -4332,7 +4335,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
-    if (amplifications_ > 1 && !amplifying_)
+    if (amplifies() && runsPerAmplification(primitive, count, instances, true))
         return amplified(
             [&] { return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why); },
             why);
@@ -4450,10 +4453,13 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         }
         if (p_.room() < kInstanceWords)
             reserve();
-        mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
-        finishDraw(end - begin, instances);
+        if (amplifies())
+            amplifyCall(*pl, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
+        else
+            mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
+        finishDraw(end - begin, amplifies() ? instances * amplifications_ : instances);
     }
-    cb_->draws++;
+    cb_->draws += amplifies() ? amplifications_ : 1;
     return true;
 }
 
@@ -4462,8 +4468,6 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset,
                              const char **why)
 {
-    if (amplifications_ > 1 && !amplifying_)
-        return amplified([&] { return indirect(primitive, indexed, arguments, offset, why); }, why);
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
@@ -4490,20 +4494,26 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     cb_->use(*arguments, false);
     if (arguments->hostVisible && !arguments->wc && arguments->cpu)
         cb_->clean(arguments->cpu + offset, bytes);
-    if (p_.room() < 8)
+    if (p_.room() < 8 + mme::kAmplificationScratchWords + mme::kAmplifyCallWords)
         reserve();
     // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
     p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
-    mme::indirectHeader(p_, indexed);
+    if (amplifies()) {
+        amplificationScratch(p_, pl);
+        mme::amplifyHeader(p_, indexed);
+        heldAmplifyWords(*pl.rec);
+    } else {
+        mme::indirectHeader(p_, indexed);
+    }
     bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
     bodies_.push_back(PushBody::resident(arguments->va + offset, bytes / 4, TegraGM20BPushNoPrefetch));
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
     params_.unknown = true;
-    ++cb_->draws;
+    cb_->draws += amplifies() ? amplifications_ : 1;
     finishDraw(0, 0, true);
     return true;
 }
@@ -5161,7 +5171,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
     const bool patches = tessellates(r);
-    const bool drawnWordsDirty = (r.amplificationIdWord && amplificationDirty_) || r.pulledStride[0][1];
+    const bool drawnWordsDirty =
+        ((r.amplificationIdWord || r.amplificationCountWord) && amplificationDirty_) || r.pulledStride[0][1];
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {

@@ -75,8 +75,8 @@ typedef struct NmbDirectDraw {
     // a pulled vertex buffer layout of a dynamic stride: its Metal buffer index and m2v's VertexBufferStride push word + 1
     uint32_t pulledStrides[4][2];
     // vertex amplification: the count the draw was planned at (the descriptor's maxVertexAmplificationCount, one draw per
-    // amplification), the push word + 1 of m2v's AmplificationId, whether a stage specializes [[amplification_count]]
-    uint32_t amplificationMax, amplificationIdWord, amplificationCountRead;
+    // amplification), the push words + 1 of m2v's AmplificationId and AmplificationCount (0: none)
+    uint32_t amplificationMax, amplificationIdWord, amplificationCountWord;
     const char *variant;
 } NmbDirectDraw;
 
