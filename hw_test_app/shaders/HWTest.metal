@@ -9,6 +9,13 @@ kernel void multiply_add(device const float *a [[buffer(0)]], device const float
     atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
 
+// Each element folds `value` in, so two dispatches over the same elements leave a result that shows their order
+kernel void icb_fold(device uint *data [[buffer(0)]], device const uint &value [[buffer(1)]],
+                     uint id [[thread_position_in_grid]])
+{
+    data[id] = data[id] * 3 + value;
+}
+
 kernel void fma_loop(device float4 *data [[buffer(0)]], constant uint &iterations [[buffer(1)]],
                      uint id [[thread_position_in_grid]])
 {

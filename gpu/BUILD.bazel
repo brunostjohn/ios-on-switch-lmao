@@ -193,6 +193,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",
         GM20B_METAL + ":raw/runtime/raw_compute.cpp",
+        GM20B_METAL + ":raw/runtime/raw_icb_compute.cpp",
         GM20B_METAL + ":raw/runtime/raw_semantic_plan.cpp",
         GM20B_METAL + ":raw/runtime/raw_semantic_resources.cpp",
         GM20B_METAL + ":raw/runtime/raw_semantic_setters.cpp",
