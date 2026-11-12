@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #include "raw_ycbcr_store_rule.h"
 
@@ -185,6 +186,40 @@ inline bool ycbcrStoreDrawn(const YcbcrStoreShape &s, const uint16_t *encode, co
             uint16_t *out = &chroma[2 * (y * cw + x)];
             out[0] = s.converted ? encoded(1, cb, k) : uint16_t((uint32_t(cb) + n / 2) / n);
             out[1] = s.converted ? encoded(2, cr, k) : uint16_t((uint32_t(cr) + n / 2) / n);
+        }
+    return true;
+}
+
+// The _packed states' words of a pass's stand-in, as pack/ycbcr_store.metal packedLuma and packedChroma assemble them over
+// ycbcrStoreDrawn's codes: luma word x of a row holds codes 3 x .. 3 x + 2, chroma word x the codes of the pairs of blocks
+// 3 x / 2 and the one after it, Cb at an even code and Cr at an odd one, a slot past the row's last code 0
+inline bool ycbcrStoreDrawnPacked(const YcbcrStoreShape &s, const uint16_t *encode, const float *rgba, uint32_t width,
+                                  uint32_t height, uint32_t *lumaWords, uint32_t *chromaWords)
+{
+    const uint32_t blocks = s.across ? width / 2 : width, rows = s.down ? height / 2 : height;
+    std::vector<uint16_t> luma(size_t(width) * height), chroma(2 * size_t(blocks) * rows);
+    if (!ycbcrStoreDrawn(s, encode, rgba, width, height, luma.data(), chroma.data()))
+        return false;
+    const uint32_t lumaRow = (width + 2) / 3, chromaRow = (2 * blocks + 2) / 3;
+    for (uint32_t y = 0; y < height; y++)
+        for (uint32_t x = 0; x < lumaRow; x++) {
+            uint32_t word = 0;
+            for (uint32_t i = 0; i < 3 && 3 * x + i < width; i++)
+                word |= uint32_t(luma[y * width + 3 * x + i]) << (10 * i);
+            lumaWords[y * lumaRow + x] = word;
+        }
+    for (uint32_t y = 0; y < rows; y++)
+        for (uint32_t x = 0; x < chromaRow; x++) {
+            const uint32_t first = 3 * x, block = first / 2;
+            const uint16_t *pairs[2] = {block < blocks ? &chroma[2 * (y * blocks + block)] : nullptr,
+                                        block + 1 < blocks ? &chroma[2 * (y * blocks + block + 1)] : nullptr};
+            uint32_t word = 0;
+            for (uint32_t i = 0; i < 3; i++) {
+                const uint32_t code = first + i;
+                if (const uint16_t *pair = pairs[code / 2 - block])
+                    word |= uint32_t(pair[code & 1]) << (10 * i);
+            }
+            chromaWords[y * chromaRow + x] = word;
         }
     return true;
 }

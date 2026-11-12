@@ -418,6 +418,41 @@ TEST(RawYcbcrConvertedStore, APackedRowIsThreeCodesAWordFromBitZero)
     EXPECT_EQ(memcmp(&packed, &twin, sizeof twin), 0);
 }
 
+// The rule's words of a packed target: its twin's codes, three to a word a row
+std::vector<uint32_t> packedRows(const std::vector<uint16_t> &codes, uint32_t perRow, uint32_t rows)
+{
+    std::vector<uint32_t> words((perRow + 2) / 3 * rows);
+    for (uint32_t y = 0; y < rows; y++)
+        raw::ycbcrPackRow(&codes[y * perRow], perRow, &words[y * ((perRow + 2) / 3)]);
+    return words;
+}
+
+TEST(RawYcbcrConvertedStore, ThePackedStatesStoreTheirTwinsCodesThreeAWord)
+{
+    const struct {
+        uint32_t format;
+        bool across, down;
+    } twins[] = {{505, true, true},   {506, true, false}, {507, false, false}, {525, true, true},  {526, true, false},
+                 {527, false, false}, {543, true, true},  {544, true, false},  {545, false, false}};
+
+    for (const auto &twin : twins)
+        for (uint32_t w : {34u, 38u}) {  // rows ending in a partial word, luma and chroma
+            constexpr uint32_t h = 6;
+            const raw::YcbcrStoreShape shape =
+                twin.format >= 540 ? raw::ycbcrCodesShape(10, twin.across, twin.down)
+                                   : raw::ycbcrConvertedShape(targetOf(twin.format, true, raw::YcbcrMatrix::Bt709));
+            const uint32_t blocks = twin.across ? w / 2 : w, rows = twin.down ? h / 2 : h;
+            const std::vector<float> rgba = passTexels(w, h, twin.format + w);
+            std::vector<uint16_t> luma(w * h), chroma(2 * blocks * rows);
+            ASSERT_TRUE(raw::ycbcrStoreDrawn(shape, kEncode, rgba.data(), w, h, luma.data(), chroma.data()));
+            std::vector<uint32_t> lumaWords((w + 2) / 3 * h), chromaWords((2 * blocks + 2) / 3 * rows);
+            ASSERT_TRUE(raw::ycbcrStoreDrawnPacked(raw::ycbcrPackedShape(shape), kEncode, rgba.data(), w, h,
+                                                   lumaWords.data(), chromaWords.data()));
+            EXPECT_EQ(lumaWords, packedRows(luma, w, h)) << twin.format << " " << w;
+            EXPECT_EQ(chromaWords, packedRows(chroma, 2 * blocks, rows)) << twin.format << " " << w;
+        }
+}
+
 TEST(RawYcbcrConvertedStore, ThirtyTwoBitStepsScaleAsTheSixtyFourBitProduct)
 {
     std::mt19937 rng(20);

@@ -187,8 +187,9 @@ inline void ycbcrConvertedRows(const YcbcrConvertedTarget &t, int64_t rows[3][3]
         offsets[code] = code ? 1 << (t.bits - 1) : t.full ? 0 : 16 << (t.bits - 8);
         const int64_t scale = code ? 1 << t.bits : (1 << t.bits) - 1;
         for (int c = 0; c < 3; c++)
-            rows[code][c] = t.full ? kYcbcrRowsQ15[i][code][c] * scale
-                                   : int64_t(kYcbcrRowsVideo[i][code][c]) << (26 - kYcbcrRowsVideo[i][code][3] + ten);
+            rows[code][c] =
+                t.full ? kYcbcrRowsQ15[i][code][c] * scale
+                       : kYcbcrRowsVideo[i][code][c] * (int64_t(1) << (26 - kYcbcrRowsVideo[i][code][3] + ten));
     }
 }
 

@@ -217,11 +217,13 @@ struct YcbcrPackedTargetTest: HWTest {
                     }
                     let stored = line.loadUnaligned(fromByteOffset: 4 * x, as: UInt32.self)
                     wrong[plane] += stored == want ? 0 : 1
-                    if y == 0 && x < 3 { first.append(String(stored, radix: 16)) }
+                    if y == 0 && x < 3 {
+                        first.append((x == 0 ? (plane == 0 ? "y:" : "c:") : "") + String(stored, radix: 16))
+                    }
                 }
             }
         }
-        words = first.joined(separator: " ")
+        words = first.joined(separator: ",")
         return wrong
     }
 }
