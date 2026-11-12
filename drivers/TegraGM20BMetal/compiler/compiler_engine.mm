@@ -5,19 +5,16 @@
 
 #include <dlfcn.h>
 #include <os/log.h>
-#include <deque>
-#include <map>
 #include <mutex>
 #include "NativeBridgeMetalFrontend.h"
 #include "TegraGM20BCompilerABI.h"
+#include "compiler_libraries.h"
 #include "compiler_record.h"
 #include "../raw/runtime/RawDirect.h"
 #include "../raw/runtime/raw_pack.h"
 
 namespace switch_compiler {
 namespace {
-
-constexpr size_t kDataLibraries = 16;
 
 os_log_t logger()
 {
@@ -67,52 +64,7 @@ struct Engine::State {
     raw::Pack pack;
     raw::Digest rules{};
     std::unique_ptr<raw::Direct> direct;
-    std::mutex lock;
-    std::map<std::string, id<MTLLibrary>> system;
-    std::map<raw::Digest, id<MTLLibrary>> data;
-    std::deque<raw::Digest> dataOrder;
-
-    id<MTLLibrary> library(const raw::RequestLibrary &l, std::string &why)
-    {
-        std::string real;
-        if (l.system && !SystemLibraries::resolve(inputs.systemRoot, l.path, real, why))
-            return nil;
-        const raw::Digest digest = l.system ? raw::Digest{} : raw::sha256(l.bytes.data(), l.bytes.size());
-        {
-            std::lock_guard<std::mutex> g(lock);
-            if (l.system) {
-                if (const auto found = system.find(real); found != system.end())
-                    return found->second;
-            } else if (const auto found = data.find(digest); found != data.end()) {
-                return found->second;
-            }
-        }
-        NSError *error = nil;
-        id<MTLLibrary> made = nil;
-        if (l.system) {
-            made = native_bridge_metal_compile_library(real.c_str(), nil, &error);
-        } else {
-            dispatch_data_t bytes =
-                dispatch_data_create(l.bytes.data(), l.bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-            made = native_bridge_metal_compile_library(nullptr, bytes, &error);
-        }
-        if (!made) {
-            why = std::string("m2v refused the library ") + (l.path.empty() ? "of its data" : l.path) +
-                  (error ? std::string(": ") + error.localizedDescription.UTF8String : "");
-            return nil;
-        }
-        std::lock_guard<std::mutex> g(lock);
-        if (l.system) {
-            system[real] = made;
-        } else if (data.emplace(digest, made).second) {
-            dataOrder.push_back(digest);
-            if (dataOrder.size() > kDataLibraries) {
-                data.erase(dataOrder.front());
-                dataOrder.pop_front();
-            }
-        }
-        return made;
-    }
+    std::shared_ptr<LibraryCache> libraries;
 };
 
 Engine::Engine() : state_(std::make_unique<State>())
@@ -134,6 +86,7 @@ bool Engine::open(uint64_t stack, const EngineInputs &inputs, std::string &why)
     if (!s.pack.load(inputs.pack.c_str(), stack, why))
         return why = "the raw pack: " + why, false;
     s.rules = rulesDigest(raw::PackRules::of(s.pack));
+    s.libraries = std::make_shared<LibraryCache>(inputs.systemRoot);
     return true;
 }
 
@@ -170,10 +123,14 @@ int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
     if (!openCompiler(why))
         return TegraGM20BCompileUnavailable;
     State &s = *state_;
-    const Libraries libraries = [&s](const raw::RequestLibrary &l, std::string &failed) {
-        return s.library(l, failed);
+    LibraryCache &cache = *s.libraries;
+    const Libraries libraries = [&cache](const raw::RequestLibrary &l, std::string &failed) {
+        return cache.library(l, failed);
     };
-    return makeEntry(p, libraries, *s.direct, s.stack, entry, why);
+    cache.began();
+    const int32_t result = makeEntry(p, libraries, *s.direct, s.stack, entry, why);
+    cache.ended();
+    return result;
 }
 
 }  // namespace switch_compiler

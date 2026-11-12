@@ -2,12 +2,13 @@
 // What the system shader compiler holds as it serves boot 12's requests (compiler_boot12.log), each run a process of its
 // own over the mock GM20B, as compiler_service.mm opens and serves: the pack, the store, the request log an earlier boot
 // left (boot 12's 13 replayed requests), the take buffer and the pool's workers; the log replayed at the background
-// class; the 2 requests clients then asked; the pool idle. Once with the m2v device the compiler opened before its compile
+// class; the 2 requests clients then asked; the compiler at rest (its libraries let go: compiler_libraries.h), and the
+// heap relieved (malloc_zone_pressure_relief). Once with the m2v device the compiler opened before its compile
 // context (its libraries cached as compiler_engine.mm cached them), once with the engine. Each step's line: the heap in
 // use and allocated (the device's footprint line's figures), phys_footprint and its peak, and what grew, by image and VM
 // tag (footprint_breakdown.h). Run by hand: SWITCH_HWTEST_METALLIB names the HW Test app's library (its states are left
 // out without it), SWITCH_PACK a raw pack, and with MallocStackLogging=1, COMPILER_FOOTPRINT_SITES=<dir> keeps
-// malloc_history's allocations by size at each step there.
+// malloc_history's allocations by size and vmmap's summary at each step there.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <malloc/malloc.h>
@@ -25,8 +26,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <gtest/gtest.h>
+#include <chrono>
 #include <fstream>
 #include <mutex>
+#include <thread>
 #include "TegraGM20BCompilerABI.h"
 
 namespace {
@@ -77,10 +80,9 @@ struct Steps {
         std::ofstream(dir() + "/" + mode + ".txt", std::ios::app) << line << footprint::growth(owners, now) << "\n";
         owners = now;
         if (const char *sites = getenv("COMPILER_FOOTPRINT_SITES")) {
-            const std::string out = std::string(sites) + "/" + mode + "-" + what + ".txt";
-            const std::string command =
-                "/usr/bin/malloc_history " + std::to_string(getpid()) + " -allBySize > '" + out + "' 2>&1";
-            system(command.c_str());
+            const std::string out = std::string(sites) + "/" + mode + "-" + what, pid = std::to_string(getpid());
+            system(("/usr/bin/malloc_history " + pid + " -allBySize > '" + out + ".sites' 2>&1").c_str());
+            system(("/usr/bin/vmmap -summary " + pid + " > '" + out + ".vmmap' 2>&1").c_str());
         }
     }
 };
@@ -217,8 +219,10 @@ struct Serving {
         }
         pool->drain();
         steps.step("served the clients");
+        std::this_thread::sleep_for(std::chrono::seconds(6));
+        steps.step("at rest");
         malloc_zone_pressure_relief(nullptr, 0);
-        steps.step("idle");
+        steps.step("relieved");
     }
 };
 
