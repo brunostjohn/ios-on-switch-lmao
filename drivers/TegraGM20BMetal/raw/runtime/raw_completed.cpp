@@ -86,11 +86,15 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
 {
     if (retry)
         *retry = false;
-    for (const auto &program : r.programs)
-        if (program.image.size() < sizeof CompletedProgram::header) {
+    const bool tess = tessellates(r.pipeline);
+    for (const CapturedProgram *program : {&r.programs[0], &r.programs[1], &r.tessPrograms[0], &r.tessPrograms[1]}) {
+        if (!tess && (program == &r.tessPrograms[0] || program == &r.tessPrograms[1]))
+            continue;
+        if (program->image.size() < sizeof CompletedProgram::header) {
             why = "missing shader program header";
             return nullptr;
         }
+    }
     if (!usableDynamicPush(r.pipeline, r.keyString.c_str())) {
         why = "missing or invalid dynamic blend push metadata";
         return nullptr;
@@ -99,8 +103,9 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())
         return it->second;
-    PlacedProgram vs, fs;
-    if (!placeCompleted(r.programs[0], vs) || !placeCompleted(r.programs[1], fs)) {
+    PlacedProgram vs, fs, tessPlaced[2];
+    if (!placeCompleted(r.programs[0], vs) || !placeCompleted(r.programs[1], fs) ||
+        (tess && (!placeCompleted(r.tessPrograms[0], tessPlaced[0]) || !placeCompleted(r.tessPrograms[1], tessPlaced[1])))) {
         stats.heapFull++;
         why = "the shader heap is full";
         if (retry)
@@ -133,7 +138,8 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         return nullptr;
     }
     Completed &stored = completedStore_.emplace_back(std::move(c));
-    build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform);
+    build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform,
+          tess ? tessPlaced : nullptr);
     std::vector<uint32_t> words(2 * r.restore.size() + 2);
     Push w{words.data(), words.data() + words.size()};
     for (const auto &[m, v] : r.restore)

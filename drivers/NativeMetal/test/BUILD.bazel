@@ -12,6 +12,8 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 #                           CoreImage.metallib and QuartzCore library
 #   core_image_probe_test   the selected IPSW's Core Image libraries: the kernels Core Image asks ci_stdlib for first are
 #                           ci_filters', so a real device misses there too (NBLibrary answers that miss as Metal does)
+#   native_tess_modes_test  NativeMetalTessModes.rs: a tessellation state's SET_TESSELLATION_PARAMETERS, and its evaluation
+#                           stage's module with the control stage's modes, as the raw path's direct compile needs them
 #   journal_source_test     NativeBridgeMetalFrontend.mm: a raw-made state's journal line is written on the persist queue,
 #                           not on its creating thread
 #
@@ -24,6 +26,12 @@ lint_files()
 rust_test(
     name = "native_variants_test",
     srcs = ["//drivers/NativeMetal:bridge/NativeMetalVariants.rs"],
+    edition = "2024",
+)
+
+rust_test(
+    name = "native_tess_modes_test",
+    srcs = ["//drivers/NativeMetal:bridge/NativeMetalTessModes.rs"],
     edition = "2024",
 )
 

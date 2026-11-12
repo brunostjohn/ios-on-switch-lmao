@@ -12,6 +12,10 @@
 pub mod direct;
 #[path = "NativeMetalDirectCompute.rs"]
 pub mod direct_compute;
+#[path = "NativeMetalDirectTess.rs"]
+mod direct_tess;
+#[path = "NativeMetalTessModes.rs"]
+mod tess_modes;
 #[path = "NativeMetalComputeArtifact.rs"]
 pub mod compute_artifact;
 #[path = "NativeMetalReflection.rs"]

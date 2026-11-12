@@ -110,11 +110,11 @@ public:
     CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
                            uint32_t zeroPush = 0, bool texsF16 = false)
     {
-        if (state.stageCount != 2) {
+        if (state.stageCount != 2 && !(state.stageCount == 4 && state.tess.parameters && state.tess.controlWord)) {
             why = std::to_string(state.stageCount) + " stages";
             return CompileOutcome::Refused;
         }
-        for (uint32_t k = 0; k < 2; k++) {
+        for (uint32_t k = 0; k < state.stageCount; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
@@ -162,6 +162,11 @@ public:
         return programs_[k];
     }
 
+    bool tessellates() const
+    {
+        return made_[3].owner != nullptr;
+    }
+
     EmitProgram emit(int k) const
     {
         return {made_[k].header, made_[k].numGprs, made_[k].earlyFragmentTests, made_[k].interlockControl,
@@ -176,8 +181,8 @@ public:
 private:
     const DirectNvk &nvk_;
     void *device_;
-    NvkStage made_[2] = {};
-    CapturedProgram programs_[2];
+    NvkStage made_[4] = {};
+    CapturedProgram programs_[4];
 };
 
 // The set-0 byte of `w` in the draw's layout
@@ -201,6 +206,14 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
         if (!offsetOf(nvk, d, w, e.offset)) {
             why = "set 0 binding " + std::to_string(w.binding) + " not in its layout";
             return false;
+        }
+        if (w.source == NmbDirectTessFactors || w.source == NmbDirectPatchIndices ||
+            w.source == NmbDirectControlPointIndices) {
+            e.tessBuffer = int8_t(w.source == NmbDirectTessFactors    ? TessFactors
+                                  : w.source == NmbDirectPatchIndices ? TessPatchIndices
+                                                                      : TessControlPointIndices);
+            out.push_back(e);
+            continue;
         }
         if (w.type == StorageBuffer && w.source == NmbDirectColorTable) {
             e.colorTable = true;
@@ -300,8 +313,9 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     while (!fields.empty() && fields.back() == ' ')
         fields.pop_back();
     std::vector<EmitRegister> made;
+    const bool patches = stages.tessellates();
     if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
-        !emitVertexInput(fields, attributes, made, why))
+        !emitVertexInput(fields, patches ? std::vector<uint32_t>() : attributes, made, why))
         return false;
     regs = rules.context;
     for (const auto &[m, v] : rules.baseline)
@@ -366,6 +380,46 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
         out.pipeline.variantCount[k] = uint8_t(made[k].size());
         out.variants.insert(out.variants.end(), made[k].begin(), made[k].end());
     }
+}
+
+// The push words the probe draws agree a raw draw writes itself (raw_direct_push.h drawnPushMask), into the record
+bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &why)
+{
+    const NmbDirectDraw &d = state.draws[0];
+    for (const NmbDirectDraw &other : state.draws)
+        if (other.amplificationIdWord != d.amplificationIdWord ||
+            memcmp(other.pulledStrides, d.pulledStrides, sizeof d.pulledStrides)) {
+            why = "probe draws that place a drawn push word apart";
+            return false;
+        }
+    if (d.amplificationMax > 0xFF) {
+        why = "a vertex amplification count past 255";
+        return false;
+    }
+    parts.amplificationMax = uint8_t(d.amplificationMax > 1 ? d.amplificationMax : 0);
+    parts.amplificationIdWord = uint8_t(d.amplificationIdWord);
+    parts.amplificationCountRead = uint8_t(d.amplificationCountRead != 0);
+    for (size_t k = 0; k < 4; k++) {
+        parts.pulledStride[k][0] = uint8_t(d.pulledStrides[k][0]);
+        parts.pulledStride[k][1] = uint8_t(d.pulledStrides[k][1]);
+    }
+    return true;
+}
+
+// A tessellation state's registers its draws set and the draws after it set back: its domain, spacing and output primitives,
+// patches of one control point, and the control and evaluation stages on at bind groups 1 and 2 (nvk_pipeline_bind_group)
+void tessellationRegisters(const NmbDirectTess &tess, RuntimeRecord &out)
+{
+    constexpr uint32_t kTessellationParameters = 0x0320, kPatch = 0x0dcc;
+    constexpr uint32_t kShader = 0x2000, kBinding = 0x2010, kStride = 0x40, kControl = 2, kEvaluation = 3;
+    out.extras.insert(out.extras.end(), {{kTessellationParameters, tess.parameters},
+                                         {kPatch, 1},
+                                         {kShader + kStride * kControl, 1 | kControl << 4},
+                                         {kBinding + kStride * kControl, 1},
+                                         {kShader + kStride * kEvaluation, 1 | kEvaluation << 4},
+                                         {kBinding + kStride * kEvaluation, 2}});
+    out.restore.insert(out.restore.end(), {{kShader + kStride * kControl, kControl << 4},
+                                           {kShader + kStride * kEvaluation, kEvaluation << 4}});
 }
 
 // The fragment program's split as a record holds it (NVK made none where it saves nothing)
@@ -458,7 +512,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     }
     Stages stages(nvk, device);
     if (const CompileOutcome compiled =
-            stages.compile(state, halfFloatTargets(key), split && !storage.storageMask, why);
+            stages.compile(state, halfFloatTargets(key), split && !storage.storageMask && state.stageCount == 2, why);
         compiled != CompileOutcome::Made)
         return compiled;
     const uint32_t interlock = stages.emit(1).interlockControl;
@@ -491,6 +545,13 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.halfBlendColorWord = uint8_t(draw.halfBlendColorWord);
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
+    if (state.stageCount == 4) {
+        parts.tessPrograms[0] = &stages.program(2);
+        parts.tessPrograms[1] = &stages.program(3);
+        parts.controlWord = uint8_t(state.tess.controlWord);
+        parts.controlPoints = uint8_t(state.tess.controlPoints);
+        parts.controlPointIndexBytes = uint8_t(state.tess.indexBytes);
+    }
     if (!programsBindable(parts, why) || !layout(nvk, device, draw, parts.layout, why))
         return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
@@ -499,7 +560,10 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     if (draw.vertexSlot != UINT32_MAX) {
         parts.vertexSlot = uint8_t(draw.vertexSlot);
         parts.vertexStride = uint16_t(draw.vertexStride & 0xFFF);
+        parts.vertexStrideDynamic = draw.vertexStrideDynamic != 0;
     }
+    if (!drawnWords(state, parts, why))
+        return CompileOutcome::Refused;
     if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, why))
         return CompileOutcome::Refused;
     for (uint32_t i = 0; i < 32; i++)
@@ -512,12 +576,14 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         why = "storage form: assembled record lost its attachment contract";
         return CompileOutcome::Refused;
     }
+    if (state.stageCount == 4)
+        tessellationRegisters(state.tess, out);
     if (registers)
         *registers = parts.regs;
-    out.splitTried = split;
-    if (split && !storage.storageMask)
+    out.splitTried = split && state.stageCount == 2;
+    if (split && !storage.storageMask && state.stageCount == 2)
         splitInto(nvk, stages.split(1), out);
-    if (variants)
+    if (variants && state.stageCount == 2)
         programVariants(state, nvk, device, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }

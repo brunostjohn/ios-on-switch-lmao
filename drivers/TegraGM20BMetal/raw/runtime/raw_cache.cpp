@@ -185,6 +185,10 @@ std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const st
         w.text(record->keyString);
         writeProgram(w, record->programs[0]);
         writeProgram(w, record->programs[1]);
+        if (tessellates(record->pipeline)) {
+            writeProgram(w, record->tessPrograms[0]);
+            writeProgram(w, record->tessPrograms[1]);
+        }
         w.list(record->blob);
         w.list(record->extras);
         w.list(record->restore);
@@ -224,6 +228,10 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
     rec.keyString = r.text();
     rec.programs[0] = readProgram(r);
     rec.programs[1] = readProgram(r);
+    if (tessellates(rec.pipeline)) {
+        rec.tessPrograms[0] = readProgram(r);
+        rec.tessPrograms[1] = readProgram(r);
+    }
     rec.blob = r.list<uint32_t>();
     rec.extras = r.list<std::pair<uint32_t, uint32_t>>();
     rec.restore = r.list<std::pair<uint32_t, uint32_t>>();

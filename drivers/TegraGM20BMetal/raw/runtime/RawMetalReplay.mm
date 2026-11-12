@@ -198,6 +198,8 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             const auto &dispatch = cb->_plan.dispatch(at);
             const MTLSize grid = MTLSizeMake(dispatch.grid[0], dispatch.grid[1], dispatch.grid[2]);
             const MTLSize threads = MTLSizeMake(dispatch.threads[0], dispatch.threads[1], dispatch.threads[2]);
+            const auto &in = dispatch.stageIn;
+            [enc setStageInRegion:MTLRegionMake3D(in[0], in[1], in[2], in[3], in[4], in[5])];
             if (dispatch.perThread)
                 [enc dispatchThreads:grid threadsPerThreadgroup:threads];
             else
@@ -416,6 +418,14 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                     if (buffer)
                         buffers.insert(buffer);
             replayCommands(enc, cb->_plan.draw(at), use);
+            break;
+        case OpDrawPatches:
+        case OpDrawPatchesIndirect:
+            for (auto &stage : bound)
+                for (RMBuffer *buffer : stage)
+                    if (buffer)
+                        buffers.insert(buffer);
+            replayPatches(enc, cb->_plan.draw(at), cb->_plan.patches(at), c.op == OpDrawPatchesIndirect, use);
             break;
         case OpResetCommands:
         case OpCopyCommands:

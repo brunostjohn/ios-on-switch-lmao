@@ -50,7 +50,7 @@ TEST(RawParallel, CommandsTakeTheParallelCommandBuffersPassesChunksAndWords)
 TEST(RawParallel, ExtraWordsAreTheRecordedOnes)
 {
     EXPECT_EQ(raw::extraWords(OpViewport), 6u);
-    EXPECT_EQ(raw::extraWords(OpDispatch), 6u);
+    EXPECT_EQ(raw::extraWords(OpDispatch), 12u);
     EXPECT_EQ(raw::extraWords(OpBlendColor), 4u);
     EXPECT_EQ(raw::extraWords(OpDepthBias), 3u);
     EXPECT_EQ(raw::extraWords(OpDrawIndexed), 3u);

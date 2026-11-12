@@ -5336,6 +5336,20 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
     p->samples = d.rasterSampleCount;
     p->topology = d.inputPrimitiveTopology;
     p->rasterization = d.rasterizationEnabled;
+    // Metal's defaults are what the bridge takes without it (m2v TessellationDescriptor::default)
+    if (d.maxTessellationFactor != 16 || d.tessellationPartitionMode || d.tessellationFactorFormat ||
+        d.tessellationFactorStepFunction || d.tessellationOutputWindingOrder || d.tessellationControlPointIndexType ||
+        d.tessellationFactorScaleEnabled) {
+        p->tessellation = 1;
+        p->max_tessellation_factor = d.maxTessellationFactor;
+        p->partition_mode = d.tessellationPartitionMode;
+        p->factor_format = d.tessellationFactorFormat;
+        p->factor_step_function = d.tessellationFactorStepFunction;
+        p->winding = d.tessellationOutputWindingOrder;
+        p->control_point_index_type = d.tessellationControlPointIndexType;
+        p->factor_scale_enabled = d.tessellationFactorScaleEnabled;
+    }
+    p->max_amplification = d.maxVertexAmplificationCount;
     if (MTLVertexDescriptor *v = d.vertexDescriptor) {
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = v.attributes[i];
@@ -5692,20 +5706,21 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbComputePipelin
             *error = nbError(@"foreign compute function");
         return false;
     }
-    // Metal may materialize empty stage/linked descriptors on access. Preserve the
-    // default meaning while refusing state this frontend cannot yet represent.
-    MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor;
-    bool empty = !stage || (stage.indexType == MTLIndexTypeUInt16 && stage.indexBufferIndex == 0);
-    for (NSUInteger index = 0; stage && index < 31; ++index) {
-        MTLAttributeDescriptor *a = stage.attributes[index];
-        MTLBufferLayoutDescriptor *b = stage.layouts[index];
-        empty = empty && a.format == MTLAttributeFormatInvalid && !a.offset && !a.bufferIndex && !b.stride &&
-                b.stepFunction == MTLStepFunctionPerVertex && b.stepRate == 1;
-    }
-    if (!empty) {
-        if (error)
-            *error = nbError(@"compute stage inputs are not implemented");
-        return false;
+    // Metal materializes an empty stage input descriptor on access: no attribute set is none
+    if (MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor) {
+        for (NSUInteger index = 0; index < 31; ++index) {
+            MTLAttributeDescriptor *a = stage.attributes[index];
+            if (a.format == MTLAttributeFormatInvalid)
+                continue;
+            p->stage_inputs = 1;
+            p->stage_attributes[index] = {(uint64_t)a.format, a.offset, a.bufferIndex};
+            if (a.bufferIndex < 31) {
+                MTLBufferLayoutDescriptor *l = stage.layouts[a.bufferIndex];
+                p->stage_layouts[a.bufferIndex] = {l.stride, (uint64_t)l.stepFunction, l.stepRate};
+            }
+        }
+        p->stage_index_type = stage.indexType;
+        p->stage_index_buffer = stage.indexBufferIndex;
     }
     // Visible functions the kernel calls by name (MPS's ND-array kernels import their prologue and epilogue, prefixPrimary_f and the like,
     // through these); binary functions, call-site groups and dynamic libraries are not represented yet.

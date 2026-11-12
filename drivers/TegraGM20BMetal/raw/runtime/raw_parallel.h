@@ -29,13 +29,19 @@ inline size_t extraWords(Op op)
 {
     switch (op) {
     case OpViewport:
-    case OpDispatch:
         return 6;
+    case OpDispatch:
+        return 12;
     case OpBlendColor:
         return 4;
     case OpDepthBias:
     case OpDrawIndexed:
         return 3;
+    case OpDrawPatches:
+    case OpDrawPatchesIndirect:
+        return PatchExtraWords;
+    case OpAmplification:
+        return kAmplificationExtraWords;
     default:
         return 0;
     }

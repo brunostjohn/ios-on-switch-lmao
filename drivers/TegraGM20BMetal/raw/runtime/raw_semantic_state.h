@@ -112,6 +112,9 @@ template <typename T> bool assignState(T &to, const T &from)
     return true;
 }
 
+// A bind's attributeStride where it sets none (MTLAttributeStrideStatic)
+constexpr uint32_t kStaticStride = UINT32_MAX;
+
 struct BufferBinding {
     enum class Source : uint8_t {
         Unset,
@@ -123,13 +126,14 @@ struct BufferBinding {
     uint64_t offset = 0;
     uint32_t chunk = 0;
     uint32_t length = 0;
+    uint32_t stride = kStaticStride;  // the stride forms' attributeStride (setVertexBuffer:offset:attributeStride:atIndex:)
     Source source = Source::Unset;
     uint32_t shadow = 0;  // setBytes: its bytes' cached copy in the recording, + 1 (RMCommandBuffer::_shadow); 0: none
 
     bool operator==(const BufferBinding &b) const
     {
         return object == b.object && offset == b.offset && chunk == b.chunk && length == b.length &&
-               source == b.source && shadow == b.shadow;
+               stride == b.stride && source == b.source && shadow == b.shadow;
     }
 
     bool operator!=(const BufferBinding &b) const
@@ -174,6 +178,7 @@ struct RasterState {
         Stencil = 1u << 8,
         DepthBias = 1u << 9,
         Visibility = 1u << 10,
+        Amplification = 1u << 11,
     };
 
     uint32_t set = 0;
@@ -188,6 +193,8 @@ struct RasterState {
     std::array<uint32_t, 2> stencil{};
     uint32_t cull = 0, winding = 0, fill = 0, visibility = 0;
     uint64_t visibilityOffset = 0;
+    // the vertex amplification count, then its view mappings' viewport and render target offsets
+    std::array<uint32_t, 17> amplification{1};
 };
 
 struct KernelState {

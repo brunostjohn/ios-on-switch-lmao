@@ -10,8 +10,9 @@ MAGIC = b'GM20BPK1'
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
-# forms and their iterated blend programs
-VERSION = 18
+# forms and their iterated blend programs; 20: the runtime records' tessellation, amplification, dynamic stride and
+# stage-in fields (every pack state's are 0)
+VERSION = 20
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
 # constant[8][3], program[128]
@@ -24,6 +25,12 @@ PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 # PackPipeline's record-v18 tail: memoryEntries
 PIPELINE_V18 = struct.Struct('<I')
 ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
+# Its record-v20 tail: controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic, amplificationWord[4],
+# pulledStride[4][2], reserved[8]
+PIPELINE_V20 = struct.Struct('<24s')
+RUNTIME_ONLY = bytes(PIPELINE_V20.size)
+# PackKernel's record-v20 tail: stageInRegionWord, stageInStride[4][2], reserved
+KERNEL_V20 = struct.Struct('<B8s3x')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -217,7 +224,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         name_offset,
     )
     v18 = PIPELINE_V18.pack(rec.get('memory_entries', ALL_ENTRIES))
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + RUNTIME_ONLY
 
 
 def kernel_window(e: dict) -> int:
@@ -240,6 +247,7 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
         + struct.pack('<HHI', k['set_bytes'], k.get('read_only_entries', 0), mask)
         + struct.pack('<32I', *words)
         + entries
+        + KERNEL_V20.pack(k.get('stage_in_region', 0), k.get('stage_in_strides', bytes(8)))
     )
 
 

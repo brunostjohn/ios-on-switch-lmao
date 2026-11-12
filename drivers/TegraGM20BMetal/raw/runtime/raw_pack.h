@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 18;
+constexpr uint32_t kPackVersion = 20;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -182,8 +182,24 @@ enum PackEntryKind : uint8_t {
     // buffer descriptor of the device's own copy
     EntryColorTable = 5,
     EntryDepthTest = 6,
-    EntryStencilTest = 7
+    EntryStencilTest = 7,
+    // A tessellation state's control-stage storage buffer (PackTessBuffer at `slot`), its residual word the control stage's.
+    // 8 and 9 are argument buffers' (pack v19).
+    EntryTessBuffer = 10
 };
+
+// What an EntryTessBuffer binds: the encoder's factor buffer, the draw's patch index buffer, its control-point index buffer
+enum PackTessBuffer : uint8_t {
+    TessFactors,
+    TessPatchIndices,
+    TessControlPointIndices,
+    TessBufferCount
+};
+
+// The control stage's push words (m2v control::PUSH_FIELDS) from its first: each buffer's residual, then the factors'
+// instance stride, the scale and whether a patch index buffer is bound
+constexpr uint8_t kTessResidualWord[TessBufferCount] = {0, 3, 5};
+constexpr uint8_t kTessInstanceStrideWord = 1, kTessScaleWord = 2, kTessIndexedWord = 4;
 
 constexpr uint8_t kNoSlot = 0xFF;
 
@@ -299,7 +315,25 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
+    // v20, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's push word of its
+    // control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation programs are
+    // RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
+    // vertexStrideDynamic: the vertex stream's stride is its bind's (MTLBufferLayoutStrideDynamic).
+    uint8_t controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic;
+    // A state of vertex amplification: its maxVertexAmplificationCount (0: 1), the push word + 1 of m2v's AmplificationId
+    // (0: none), which each amplification's draw writes, and whether its functions read [[amplification_count]] (m2v
+    // specializes it: the state's count is the only one its draws take)
+    uint8_t amplificationMax, amplificationIdWord, amplificationCountRead, amplificationReserved;
+    // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
+    // index and push word + 1 (0: none)
+    uint8_t pulledStride[4][2];
+    uint8_t v20Reserved[8];
 };
+
+inline bool tessellates(const PackPipeline &p)
+{
+    return p.controlWord != 0;
+}
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
 // computeKeyHash. Its program is a PackProgram whose code starts its slot (no shader header); its constant buffers are the
@@ -346,6 +380,11 @@ struct PackKernel {
     uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
     PackKernelEntry entry[16];
+    // A stage-in kernel's (v20): the push word + 1 of m2v's StageInRegion field (origin and size, two uvec4; 0: none), and
+    // each layout of a dynamic stride's Metal buffer index and StageInStride push word + 1, which each dispatch writes
+    uint8_t stageInRegionWord;
+    uint8_t stageInStride[4][2];
+    uint8_t stageInReserved[3];
 };
 
 inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
@@ -410,13 +449,13 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4, "pack layout");
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 24, "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128 + 12, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
 

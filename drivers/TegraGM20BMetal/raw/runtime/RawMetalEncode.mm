@@ -413,6 +413,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 copyShadows(false);
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const auto &regions = dispatch.regions;
+            ce->setStageInRegion(dispatch.stageIn);
             if (!kernels || kernels->count != regions.count)
                 return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
             for (uint8_t region = 0; region < regions.count; ++region) {
@@ -630,6 +631,11 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         }
         case OpExecuteCommands:
             if (!encodeCommands(re, rc, cb->_plan.draw(at), why))
+                return refused();
+            break;
+        case OpDrawPatches:
+        case OpDrawPatchesIndirect:
+            if (!encodePatches(re, rc, cb->_plan.draw(at), cb->_plan.patches(at), c.op == OpDrawPatchesIndirect, why))
                 return refused();
             break;
         case OpResetCommands:

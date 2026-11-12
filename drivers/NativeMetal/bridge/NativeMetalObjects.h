@@ -219,6 +219,10 @@ struct NmbRenderPipelineDescriptor {
     uint64_t fragment_linked_count;
     NmbFunction *const *fragment_private_linked;
     uint64_t fragment_private_count;
+    /* the descriptor's tessellator state, as MTLRenderPipelineDescriptor's (0: Metal's defaults) */
+    uint64_t tessellation, max_tessellation_factor, partition_mode, factor_format, factor_step_function, winding,
+        control_point_index_type, factor_scale_enabled;
+    uint64_t max_amplification; /* maxVertexAmplificationCount */
 };
 
 NmbRenderPipeline *nmb_render_pipeline_new(NmbDevice *, const struct NmbRenderPipelineDescriptor *);
@@ -241,6 +245,12 @@ struct NmbComputePipelineDescriptor {
     uint64_t linked_count;
     NmbFunction *const *private_linked;
     uint64_t private_count;
+    /* stageInputDescriptor (stage_inputs 0: none): its attributes by index (format 0: none) and layouts by buffer index
+     * (stride UINT64_MAX: MTLBufferLayoutStrideDynamic), its index type and index buffer */
+    uint64_t stage_inputs;
+    struct NmbVertexAttribute stage_attributes[31];
+    struct NmbVertexLayout stage_layouts[31];
+    uint64_t stage_index_type, stage_index_buffer;
 };
 
 NmbComputePipeline *nmb_compute_pipeline_new_with_options(NmbDevice *, NmbFunction *,

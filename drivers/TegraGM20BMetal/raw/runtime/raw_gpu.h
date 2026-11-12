@@ -37,6 +37,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -395,7 +396,9 @@ struct Pipeline {
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
-    uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
+    // the constant buffer slot the vertex, pixel, tessellation init and tessellation program read set 0 at (0: none), whose
+    // bind groups are kSetGroups'
+    uint8_t setSlot[4] = {};
 
     // the uniform buffers of set 0 its programs read as constant buffers: the group (0 vertex, 4 pixel), the slot and the set's
     // entry that names the buffer; false where a program reads one no entry names (its draws are refused)
@@ -403,7 +406,7 @@ struct Pipeline {
         uint8_t group, slot, entry;
     };
 
-    UboCbuf ubos[2 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
+    UboCbuf ubos[4 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
     uint8_t uboCount = 0;
     bool ubosNamed = true;
     // set 0's entries its programs read from the set's upload: the record's (PackPipeline::memoryEntries), and those a
@@ -570,6 +573,12 @@ public:
                     const Buffer *allocation = nullptr);
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
+    // A vertex buffer slot's bind stride (UINT32_MAX: none, MTLAttributeStrideStatic), which a state of a dynamic stride
+    // reads (raw_amplification.cpp)
+    void setVertexStride(uint32_t slot, uint32_t stride);
+    // setVertexAmplificationCount:viewMappings: (raw_amplification.cpp): each draw after draws `count` amplifications, one
+    // after another; `viewportOffsets`: a mapping moves the viewport, which needs viewport arrays the encoder forwards
+    void setAmplification(uint32_t count, bool viewportOffsets);
 
     void setTexture(uint32_t slot, const Texture *t);
 
@@ -641,6 +650,17 @@ public:
     bool drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why);
     bool drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices, uint64_t indexOffset,
                              const Buffer *arguments, uint64_t argumentOffset, const char **why);
+    // A tessellation state's draws (raw_tessellation.cpp): the encoder's factor buffer (null: none, whose patches are
+    // culled) and scale, and patches of `controlPoints` each, from the draw's patch and control-point index buffers (null:
+    // none)
+    void setTessellationFactors(const Buffer *buffer, uint64_t offset, uint64_t instanceStride);
+    void setTessellationFactorScale(float scale);
+    bool drawPatches(uint32_t controlPoints, uint32_t start, uint32_t count, uint32_t instances, uint32_t baseInstance,
+                     const Buffer *patchIndices, uint64_t patchIndexOffset, const Buffer *pointIndices,
+                     uint64_t pointIndexOffset, const char **why);
+    bool drawPatchesIndirect(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
+                             const Buffer *pointIndices, uint64_t pointIndexOffset, const Buffer *arguments,
+                             uint64_t offset, const char **why);
     // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, drawn with the state they inherit
     // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`), or with `range` the commands of the
     // MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the buffer's). `written`: the GPU wrote some of the
@@ -707,6 +727,36 @@ private:
     bool indirectGeometry_ = false;
     mme::DrawParams params_;  // what the channel holds: the context's zeros at a pass's start, put back at its end
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
+
+    struct Tessellation {
+        Bound buffers[TessBufferCount];
+        uint32_t instanceStride = 0, scaleBits = 0x3f800000, indexed = 0;
+        bool scaleValid = true;
+    };
+
+    Tessellation tess_;
+    bool tessWordsDirty_ = true;
+    uint32_t vertexStrides_[31] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    uint32_t amplifications_ = 1, amplification_ = 0;
+    bool amplificationOffsets_ = false, amplifying_ = false, amplificationDirty_ = true;
+    // `draw` once per amplification, its id in the state's AmplificationId word
+    bool amplified(const std::function<bool()> &draw, const char **why);
+    // What of a draw's amplification and bind strides the state does not take (null: it takes them)
+    const char *drawnWordsRefusal(const PackPipeline &r) const;
+    void drawnWords(const PackPipeline &r, uint32_t (&want)[32]);
+    uint32_t vertexStride(uint32_t slot) const
+    {
+        return slot < 31 && vertexStrides_[slot] != UINT32_MAX ? vertexStrides_[slot] : 0;
+    }
+    static Bound boundFrom(const Buffer *buffer, uint64_t offset);
+    bool bindPatches(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
+                     const Buffer *pointIndices, uint64_t pointIndexOffset, const char **why);
+    Bound tessBuffer(uint8_t which) const;
+    void controlWords(const PackPipeline &r, uint32_t (&want)[32]) const;
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
@@ -1853,8 +1903,9 @@ private:
     bool heapGrow(uint64_t end);
     const HeapPart *heapPartAt(uint64_t at) const;
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
+    // `tess`: a tessellation state's control and evaluation programs (null: not one)
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-               const uint32_t *blob, const char *keyString, bool caTransform);
+               const uint32_t *blob, const char *keyString, bool caTransform, const PlacedProgram *tess = nullptr);
     // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads
     bool usableRecord(const PackPipeline *rec) const;
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
@@ -2183,5 +2234,8 @@ private:
 
 // NV topology for an MTLPrimitiveType (point, line, lineStrip, triangle, triangleStrip)
 uint32_t nvTopology(uint32_t mtlPrimitive);
+// The tessellation factor scale m2v's control stage takes (raw_tessellation.cpp): Metal's, rounded to half; false where it is
+// not a positive half
+bool tessellationScaleBits(float scale, uint32_t &bits);
 
 }  // namespace raw

@@ -38,7 +38,11 @@ typedef enum NmbDirectSource : uint32_t {
     NmbDirectColorTable,  // m2v's sRGB colour table (bind::color_write_table), the same bytes for every state
     NmbDirectOther,
     NmbDirectDepthStandIn,
-    NmbDirectStencilStandIn
+    NmbDirectStencilStandIn,
+    // a tessellation state's control stage: the encoder's factor buffer, the draw's patch and control-point index buffers
+    NmbDirectTessFactors,
+    NmbDirectPatchIndices,
+    NmbDirectControlPointIndices
 } NmbDirectSource;
 
 #define NMB_DIRECT_IMMUTABLE UINT32_MAX
@@ -67,6 +71,12 @@ typedef struct NmbDirectDraw {
     uint32_t pushHoles;   // push words the consumer fills with addresses
     uint32_t vertexSlot;  // the first fixed-function vertex buffer's Metal slot (UINT32_MAX: none) and stride
     uint32_t vertexStride;
+    uint32_t vertexStrideDynamic;  // that buffer's stride is its bind's (MTLBufferLayoutStrideDynamic)
+    // a pulled vertex buffer layout of a dynamic stride: its Metal buffer index and m2v's VertexBufferStride push word + 1
+    uint32_t pulledStrides[4][2];
+    // vertex amplification: the count the draw was planned at (the descriptor's maxVertexAmplificationCount, one draw per
+    // amplification), the push word + 1 of m2v's AmplificationId, whether a stage specializes [[amplification_count]]
+    uint32_t amplificationMax, amplificationIdWord, amplificationCountRead;
     const char *variant;
 } NmbDirectDraw;
 
@@ -80,11 +90,24 @@ typedef struct NmbDirectStorage {
     uint32_t blendMask, blendModel;
 } NmbDirectStorage;
 
+// A tessellation state's draws (m2v link/tessellation): each patch one control point of a PATCH_LIST of one. `parameters`:
+// SET_TESSELLATION_PARAMETERS as NVK's NVK_MME_SET_TESS_PARAMS makes it of the control stage's modes; `controlWord`: the
+// push word of the control stage's first field + 1 (control::PUSH_FIELDS: factor residual, instance stride, scale, patch
+// index residual, patch index bound, control-point index residual); `controlPoints`: the function's [[patch(_, N)]] N (0:
+// unstated); `indexBytes`: its control-point index size (0: none)
+typedef struct NmbDirectTess {
+    uint32_t parameters;
+    uint32_t controlWord;
+    uint32_t controlPoints;
+    uint32_t indexBytes;
+} NmbDirectTess;
+
 typedef struct NmbDirectState {
     uint64_t device;  // VkDevice of the stage compile
     uint64_t layout;  // VkPipelineLayout of draw 0's variant
-    uint32_t stageCount;
-    NmbDirectStage stages[2];
+    uint32_t stageCount;  // 2, or 4 for a tessellation state
+    NmbDirectStage stages[4];  // vertex, fragment, then a tessellation state's control and evaluation stages
+    NmbDirectTess tess;
     bool sampleShading;
     bool storageForm;  // the fragment function reads color attachments through storage under the interlock
     NmbDirectStorage storage;
@@ -169,6 +192,10 @@ typedef struct NmbDirectKernel {
     uint32_t pushHoles;  // push words the consumer fills with addresses
     const char *variant;
     uint32_t bufferReads, bufferWrites, textureReads, textureWrites;
+    // a stage-in kernel's: the push word of m2v's StageInRegion field (two uvec4: origin, size; -1: none), and each layout
+    // of a dynamic stride's Metal buffer index and StageInStride push word + 1
+    int32_t stageInRegionWord;
+    uint32_t stageInStrides[4][2];
 } NmbDirectKernel;
 
 // `descriptor`'s compute state as the translator makes it for a dispatch of `dispatch`'s threadgroup shape and bindings, handed

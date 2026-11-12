@@ -206,7 +206,7 @@ bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &
         unsigned stride = 0;
         for (const auto &[i, a] : descriptor)
             if (a.buffer == buffer)
-                stride = a.stride;
+                stride = a.stride == UINT32_MAX ? 0 : a.stride;  // RawPipelineKey.h's dynamic stride: the draw's
         out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (stride & 0xfff), true});
     }
     return true;

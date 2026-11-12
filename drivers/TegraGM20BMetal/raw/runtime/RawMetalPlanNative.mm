@@ -17,6 +17,10 @@ struct NativePlanSink {
     {
         RAW_ENCODE_SPAN(Apply);
         RAW_ENCODE_COUNT(Applied);
+        if (stage == 3)
+            compute->setBufferStride(slot, binding.stride);
+        else if (stage == 1)
+            render->setVertexStride(slot, binding.stride);
         if (binding.source == raw::BufferBinding::Source::Offset) {
             if (stage == 3)
                 compute->setBufferOffset(slot, binding.offset);
@@ -112,6 +116,13 @@ struct NativePlanSink {
         if (rasterChanged(next, previous, R::DepthBias, &R::depthBias))
             render->setDepthBias(raw::stateFloat(next.depthBias[0]), raw::stateFloat(next.depthBias[1]),
                                  raw::stateFloat(next.depthBias[2]));
+        if (rasterChanged(next, previous, R::Amplification, &R::amplification)) {
+            const uint32_t count = std::min(next.amplification[0], kAmplificationMappings);
+            bool viewportOffsets = next.amplification[0] > kAmplificationMappings;
+            for (uint32_t k = 0; k < count; k++)
+                viewportOffsets |= next.amplification[1 + 2 * k] != 0;
+            render->setAmplification(next.amplification[0], viewportOffsets);
+        }
     }
 };
 

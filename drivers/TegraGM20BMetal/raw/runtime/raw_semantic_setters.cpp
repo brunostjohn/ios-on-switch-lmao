@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "RawMetalPlan.h"
 
+// A binding command's attributeStride: its x holds the stride + 1 (0: a form of none, MTLAttributeStrideStatic)
+static uint32_t bindStride(const Cmd &c)
+{
+    return c.x && c.x <= raw::kStaticStride ? uint32_t(c.x - 1) : raw::kStaticStride;
+}
+
 bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
 {
     const bool compute = c.op >= OpKernelState && c.op <= OpKernelMemory;
@@ -21,6 +27,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 value.offset = value.source == raw::BufferBinding::Source::Bytes ? c.a : c.c;
                 value.chunk = static_cast<uint32_t>(c.c);
                 value.length = c.b;
+                value.stride = bindStride(c);
                 if (value.source == raw::BufferBinding::Source::Buffer)
                     value.chunk = 0;
                 else
@@ -37,6 +44,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
         if (stage < 3 && c.index < 31)
             changed = buffers[stage].update(c.index, [&](auto &bindings) {
                 bool changed = raw::assignState(bindings[c.index].offset, c.c);
+                changed |= raw::assignState(bindings[c.index].stride, bindStride(c));
                 if (bindings[c.index].source == raw::BufferBinding::Source::Unset) {
                     bindings[c.index].source = raw::BufferBinding::Source::Offset;
                     changed = true;
@@ -91,6 +99,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpStencilRef:
     case OpDepthBias:
     case OpVisibility:
+    case OpAmplification:
         changed = raster.update([&](raw::RasterState &state) {
             using R = raw::RasterState;
             uint32_t bit = 0;
@@ -155,6 +164,14 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 difference = raw::assignState(state.visibility, c.a);
                 difference |= raw::assignState(state.visibilityOffset, c.c);
                 break;
+            case OpAmplification: {
+                bit = R::Amplification;
+                std::array<uint32_t, 17> value{c.a};
+                for (size_t i = 0; i < kAmplificationExtraWords; ++i)
+                    value[1 + i] = uint32_t(extra[c.x + i]);
+                difference = raw::assignState(state.amplification, value);
+                break;
+            }
             default:
                 break;
             }

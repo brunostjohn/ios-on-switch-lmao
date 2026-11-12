@@ -13,6 +13,10 @@ struct ReplayPlanSink {
 
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &binding)
     {
+        if (binding.stride != raw::kStaticStride && (stage == 1 || stage == 3)) {
+            stridedBuffer(stage, slot, binding);
+            return;
+        }
         if (binding.source == raw::BufferBinding::Source::Offset) {
             if (stage < 3)
                 offsets[stage][slot] = binding.offset;
@@ -50,6 +54,44 @@ struct ReplayPlanSink {
             [encoder setFragmentBuffer:twinOf(object) offset:binding.offset atIndex:slot];
         else
             [encoder setBuffer:twinOf(object) offset:binding.offset atIndex:slot];
+    }
+
+    // The stride forms (setVertexBuffer:offset:attributeStride:atIndex: and the compute encoder's), whose stride a layout of
+    // MTLBufferLayoutStrideDynamic reads
+    void stridedBuffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &binding)
+    {
+        const NSUInteger stride = binding.stride;
+        id<MTLRenderCommandEncoder> render = encoder;
+        id<MTLComputeCommandEncoder> compute = encoder;
+        if (binding.source == raw::BufferBinding::Source::Offset) {
+            if (stage == 1) {
+                offsets[stage][slot] = binding.offset;
+                [render setVertexBufferOffset:binding.offset attributeStride:stride atIndex:slot];
+            } else
+                [compute setBufferOffset:binding.offset attributeStride:stride atIndex:slot];
+            return;
+        }
+        if (binding.source == raw::BufferBinding::Source::Bytes) {
+            const void *bytes = cb->_bytes.chunks[binding.chunk].cpu + binding.offset;
+            if (stage == 1) {
+                bound[stage][slot] = nil;
+                [render setVertexBytes:bytes length:binding.length attributeStride:stride atIndex:slot];
+            } else {
+                [compute setBytes:bytes length:binding.length attributeStride:stride atIndex:slot];
+            }
+            return;
+        }
+        id object = (__bridge id)binding.object;
+        RMBuffer *buffer = [object isKindOfClass:[RMBuffer class]] ? object : nil;
+        if (stage == 1) {
+            bound[stage][slot] = buffer;
+            offsets[stage][slot] = binding.offset;
+            [render setVertexBuffer:twinOf(object) offset:binding.offset attributeStride:stride atIndex:slot];
+        } else {
+            if (buffer)
+                buffers.insert(buffer);
+            [compute setBuffer:twinOf(object) offset:binding.offset attributeStride:stride atIndex:slot];
+        }
     }
 
     void texture(uint32_t stage, uint32_t slot, void *object)
@@ -122,6 +164,12 @@ struct ReplayPlanSink {
         if (rasterChanged(next, previous, R::Visibility, &R::visibility) ||
             rasterChanged(next, previous, R::Visibility, &R::visibilityOffset))
             [encoder setVisibilityResultMode:MTLVisibilityResultMode(next.visibility) offset:next.visibilityOffset];
+        if (rasterChanged(next, previous, R::Amplification, &R::amplification)) {
+            MTLVertexAmplificationViewMapping mappings[kAmplificationMappings];
+            for (uint32_t k = 0; k < kAmplificationMappings; k++)
+                mappings[k] = {next.amplification[1 + 2 * k], next.amplification[2 + 2 * k]};
+            [encoder setVertexAmplificationCount:next.amplification[0] viewMappings:mappings];
+        }
     }
 };
 

@@ -38,11 +38,14 @@ struct LayoutEntry {
     Smp smp = Smp::None;
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
     bool headerKnown = false;          // a constexpr sampler's header
+    int8_t tessBuffer = -1;            // a tessellation state's control-stage buffer (PackTessBuffer)
     std::array<uint32_t, 8> header = {};
 };
 
 struct RecordParts {
     const CapturedProgram *programs[2] = {};  // vertex, fragment
+    const CapturedProgram *tessPrograms[2] = {};  // a tessellation state's control and evaluation programs
+    uint8_t controlWord = 0, controlPoints = 0, controlPointIndexBytes = 0;  // PackPipeline's
     std::vector<LayoutEntry> layout;          // by offset
     // By set-0 byte of a buffer entry: the range its descriptor holds with 16- and 4096-byte payloads; by the value a slot's
     // residual has in the bind-offset draw (probeBindOffset, a storage slot's probeStorageCode), the root word (0x700 + 4 x
@@ -50,6 +53,9 @@ struct RecordParts {
     std::map<uint32_t, uint32_t> sizes16, sizes4096, residuals;
     uint8_t vertexSlot = 0xFF;
     uint16_t vertexStride = 0;
+    bool vertexStrideDynamic = false;
+    uint8_t pulledStride[4][2] = {};  // PackPipeline's
+    uint8_t amplificationMax = 0, amplificationIdWord = 0, amplificationCountRead = 0;
     std::map<uint32_t, uint32_t> regs;  // the 3D registers at the state's draw
     std::map<uint32_t, uint32_t> push;  // the root words [0x700, 0x780) the draw writes
     uint16_t setBytes = 0;

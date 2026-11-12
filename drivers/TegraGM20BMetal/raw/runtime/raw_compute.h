@@ -64,6 +64,10 @@ public:
                     const Buffer *allocation = nullptr);  // bytes already where the GPU reads them
     void setBuffer(uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(uint32_t slot, uint64_t offset);
+    // A stage-in kernel's: a buffer slot's bind stride (UINT32_MAX: none), which a layout of a dynamic stride reads, and
+    // setStageInRegion:'s origin and size, both written into its push words at each dispatch
+    void setBufferStride(uint32_t slot, uint32_t stride);
+    void setStageInRegion(const std::array<uint32_t, 6> &region);
     void setTexture(uint32_t slot, const Texture *t);
     void setSampler(uint32_t slot, const Sampler *s);
 
@@ -142,6 +146,16 @@ private:
     uint64_t setVa_ = 0, rootVa_ = 0;
     std::array<uint32_t, 3> grid_{};
     std::array<uint32_t, 8> region_{};
+    std::array<uint32_t, 8> stageIn_{};  // origin xyz, 0, size xyz, 0: m2v's StageInRegion field
+    std::array<uint32_t, 31> strides_ = filledStrides();
+    static constexpr std::array<uint32_t, 31> filledStrides()
+    {
+        std::array<uint32_t, 31> s{};
+        for (uint32_t &v : s)
+            v = UINT32_MAX;
+        return s;
+    }
+    void stageInWords(const PackKernel &r, uint32_t *push) const;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);

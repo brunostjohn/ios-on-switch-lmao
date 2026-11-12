@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 32 raw 324 read 336 refused 163 unread 157 zero 38
-# sent selectors: base 78 m2v 11 none 7 raw 534 refused 56 zero 129
+# m2v's items: base 3 m2v 4 none 32 raw 330 read 348 refused 163 unread 145 zero 32
+# sent selectors: base 78 m2v 11 none 7 raw 540 refused 56 zero 123
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -935,8 +935,8 @@ MTLRenderCommandEncoder	-	setViewportTransformEnabled:	-	21H461,24B119	raw
 MTLRenderCommandEncoder	-	useResidencySet:	-	24B119	raw
 MTLRenderCommandEncoder	-	useResidencySets:count:	-	24B119	raw
 MTLRenderCommandEncoder	dispatchThreadsPerTile:	dispatchThreadsPerTile:	I	21H461,24B119	refused
-MTLRenderCommandEncoder	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	zero
-MTLRenderCommandEncoder	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	raw
+MTLRenderCommandEncoder	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	I	21H461,24B119	raw
@@ -944,8 +944,8 @@ MTLRenderCommandEncoder	drawIndexedPrimitives:indexType:indexBuffer:indexBufferO
 MTLRenderCommandEncoder	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
-MTLRenderCommandEncoder	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	zero
-MTLRenderCommandEncoder	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	raw
+MTLRenderCommandEncoder	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	drawPrimitives:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:	drawPrimitives:vertexStart:vertexCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:	drawPrimitives:vertexStart:vertexCount:instanceCount:	I	21H461,24B119	raw
@@ -1003,8 +1003,8 @@ MTLRenderCommandEncoder	setStencilFrontReferenceValue:backReferenceValue:	setSte
 MTLRenderCommandEncoder	setStencilReferenceValue:	setStencilReferenceValue:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setStencilStoreAction:	setStencilStoreAction:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setStencilStoreActionOptions:	setStencilStoreActionOptions:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	setTessellationFactorBuffer:offset:instanceStride:	setTessellationFactorBuffer:offset:instanceStride:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	setTessellationFactorScale:	setTessellationFactorScale:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	setTessellationFactorBuffer:offset:instanceStride:	setTessellationFactorBuffer:offset:instanceStride:	I	21H461,24B119	raw
+MTLRenderCommandEncoder	setTessellationFactorScale:	setTessellationFactorScale:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setThreadgroupMemoryLength:offset:atIndex:	setThreadgroupMemoryLength:offset:atIndex:	I	21H461,24B119	zero
 MTLRenderCommandEncoder	setTileBuffer:offset:atIndex:	setTileBuffer:offset:atIndex:	I	21H461,24B119	refused
 MTLRenderCommandEncoder	setTileBufferOffset:atIndex:	setTileBufferOffset:atIndex:	I	24B119	refused
@@ -1175,18 +1175,18 @@ MTLRenderPipelineDescriptor	supportAddingVertexBinaryFunctions	setSupportAddingV
 MTLRenderPipelineDescriptor	supportAddingVertexBinaryFunctions	supportAddingVertexBinaryFunctions	I	-	refused
 MTLRenderPipelineDescriptor	supportIndirectCommandBuffers	setSupportIndirectCommandBuffers:	I	-	read
 MTLRenderPipelineDescriptor	supportIndirectCommandBuffers	supportIndirectCommandBuffers	I	-	read
-MTLRenderPipelineDescriptor	tessellationControlPointIndexType	setTessellationControlPointIndexType:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationControlPointIndexType	tessellationControlPointIndexType	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorFormat	setTessellationFactorFormat:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorFormat	tessellationFactorFormat	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	isTessellationFactorScaleEnabled	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	setTessellationFactorScaleEnabled:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorStepFunction	setTessellationFactorStepFunction:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorStepFunction	tessellationFactorStepFunction	I	-	unread
-MTLRenderPipelineDescriptor	tessellationOutputWindingOrder	setTessellationOutputWindingOrder:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationOutputWindingOrder	tessellationOutputWindingOrder	I	-	unread
-MTLRenderPipelineDescriptor	tessellationPartitionMode	setTessellationPartitionMode:	I	-	unread
-MTLRenderPipelineDescriptor	tessellationPartitionMode	tessellationPartitionMode	I	-	unread
+MTLRenderPipelineDescriptor	tessellationControlPointIndexType	setTessellationControlPointIndexType:	I	-	read
+MTLRenderPipelineDescriptor	tessellationControlPointIndexType	tessellationControlPointIndexType	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorFormat	setTessellationFactorFormat:	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorFormat	tessellationFactorFormat	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	isTessellationFactorScaleEnabled	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	setTessellationFactorScaleEnabled:	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorStepFunction	setTessellationFactorStepFunction:	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorStepFunction	tessellationFactorStepFunction	I	-	read
+MTLRenderPipelineDescriptor	tessellationOutputWindingOrder	setTessellationOutputWindingOrder:	I	-	read
+MTLRenderPipelineDescriptor	tessellationOutputWindingOrder	tessellationOutputWindingOrder	I	-	read
+MTLRenderPipelineDescriptor	tessellationPartitionMode	setTessellationPartitionMode:	I	-	read
+MTLRenderPipelineDescriptor	tessellationPartitionMode	tessellationPartitionMode	I	-	read
 MTLRenderPipelineDescriptor	vertexBuffers	vertexBuffers	I	-	unread
 MTLRenderPipelineDescriptor	vertexDescriptor	setVertexDescriptor:	I	-	read
 MTLRenderPipelineDescriptor	vertexDescriptor	vertexDescriptor	I	-	read

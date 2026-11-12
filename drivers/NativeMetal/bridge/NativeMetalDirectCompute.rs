@@ -14,11 +14,14 @@ use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, Dispatch, DispatchCommands, FieldLocation,
-    ImageSource, NeutralResource, SamplerSource, StageTable, TextureFacts, UseTarget, WriteSource,
+    ImageSource, NeutralResource, SamplerSource, StageInRegion, StageTable, TextureFacts, UseTarget, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, NativePipeline, NativeProgram, NativeRecord, PushField, SlotClass, Stage, StageSource};
+use metal2vulkan::pipeline::{
+    ComputePipeline, ComputePipelineDescriptor, NativePipeline, NativeProgram, NativeRecord, PushField, SlotClass,
+    Stage, StageSource,
+};
 use std::ffi::{CString, c_void};
 use std::sync::Arc;
 
@@ -88,6 +91,8 @@ pub struct NmbDirectKernel {
     pub buffer_writes: u32,
     pub texture_reads: u32,
     pub texture_writes: u32,
+    pub stage_in_region_word: i32,
+    pub stage_in_strides: [[u32; 2]; 4],
 }
 
 fn access_masks(plans: [&BindingPlan; 3]) -> [u32; 4] {
@@ -143,7 +148,7 @@ fn facts_of(t: &NmbDirectBoundTexture) -> Result<TextureFacts, String> {
     Ok(facts)
 }
 
-fn bind_state(run: Run, dispatch: &NmbDirectDispatch) -> Result<BindState, String> {
+fn bind_state(run: Run, dispatch: &NmbDirectDispatch, stage_in: bool) -> Result<BindState, String> {
     let mut table = StageTable::default();
     for slot in 0..SLOTS {
         let bound = if run == Run::Bytes {
@@ -185,6 +190,9 @@ fn bind_state(run: Run, dispatch: &NmbDirectDispatch) -> Result<BindState, Strin
     }
     let mut state = BindState::default();
     state.stages.insert(Stage::Kernel, table);
+    if stage_in {
+        state.stage_in_region = Some(StageInRegion::new([0; 3], [1; 3]));
+    }
     Ok(state)
 }
 
@@ -205,8 +213,12 @@ pub(crate) fn compiled(
     let function = compile
         .compile_native_function(function, &inputs, budget)
         .map_err(compile_error("compile kernel"))?;
-    let pipeline = function.into_pipeline(compile, descriptor).map_err(compile_error("link native kernel"))?;
-    Ok(NativeComputePipeline { pipeline: Arc::new(pipeline) })
+    let pipeline = function
+        .into_pipeline(compile, descriptor)
+        .map_err(compile_error("link native kernel"))?;
+    Ok(NativeComputePipeline {
+        pipeline: Arc::new(pipeline),
+    })
 }
 
 #[derive(Clone)]
@@ -216,7 +228,9 @@ pub(crate) struct NativeComputePipeline {
 
 impl std::ops::Deref for NativeComputePipeline {
     type Target = ComputePipeline;
-    fn deref(&self) -> &Self::Target { &self.pipeline.metadata }
+    fn deref(&self) -> &Self::Target {
+        &self.pipeline.metadata
+    }
 }
 
 struct Settled {
@@ -297,6 +311,28 @@ fn layout_of(plan: &BindingPlan) -> Vec<(u32, u32, u32, i32, u32)> {
             )
         })
         .collect()
+}
+
+/// A stage-in kernel's push words the raw dispatch writes: its StageInRegion's and each dynamic layout's StageInStride
+fn stage_in_words(plan: &BindingPlan) -> Result<(i32, [[u32; 2]; 4]), String> {
+    let (mut region, mut strides, mut n) = (-1, [[0u32; 2]; 4], 0);
+    for p in &plan.push.fields {
+        let FieldLocation::PushWindow { offset } = p.location else {
+            continue;
+        };
+        match p.field {
+            PushField::StageInRegion => region = (offset / 4) as i32,
+            PushField::StageInStride(index) => {
+                if n == strides.len() {
+                    return Err("more than four stage-in layouts of a dynamic stride".into());
+                }
+                strides[n] = [index, offset / 4 + 1];
+                n += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok((region, strides))
 }
 
 fn region_word(plan: &BindingPlan) -> i32 {
@@ -496,16 +532,25 @@ fn direct(
     let runtime = nmb.device();
     let budget = Budget::standard();
     let call = if ask.region_mode != 0 {
-        Dispatch::ThreadgroupRange { groups: GRID, first: [0; 3], count: GRID, threads_per_group: ask.threads }
+        Dispatch::ThreadgroupRange {
+            groups: GRID,
+            first: [0; 3],
+            count: GRID,
+            threads_per_group: ask.threads,
+        }
     } else {
-        Dispatch::Threadgroups { groups: GRID, threads_per_group: ask.threads }
+        Dispatch::Threadgroups {
+            groups: GRID,
+            threads_per_group: ask.threads,
+        }
     };
-    let state = bind_state(Run::Bytes, ask)?;
+    let stage_in = descriptor.stage_input.is_some();
+    let state = bind_state(Run::Bytes, ask, stage_in)?;
     let plain = settle(compile, descriptor, &state, &call, &budget, artifact)?;
     let moved = settle(
         compile,
         descriptor,
-        &bind_state(Run::Moved, ask)?,
+        &bind_state(Run::Moved, ask, stage_in)?,
         &call,
         &budget,
         artifact,
@@ -513,7 +558,7 @@ fn direct(
     let bound = settle(
         compile,
         descriptor,
-        &bind_state(Run::Bound, ask)?,
+        &bind_state(Run::Bound, ask, stage_in)?,
         &call,
         &budget,
         artifact,
@@ -525,6 +570,7 @@ fn direct(
             && layout_of(&s.plan) == layout_of(&plain.plan)
     };
     let (push_mask, push) = push_words(&plain.commands);
+    let (stage_in_region_word, stage_in_strides) = stage_in_words(&plain.plan)?;
     let (moved_mask, moved_push) = push_words(&moved.commands);
     let (bound_mask, bound_push) = push_words(&bound.commands);
     let ranges = |s: &Settled| -> Vec<(u32, u32, u64)> {
@@ -578,7 +624,9 @@ fn direct(
             } else {
                 (&info as *const avk::SpecializationInfo<'_>).cast()
             },
-            semantic: semantic.as_ref().map_or(std::ptr::null(), |p| (p as *const SemanticView).cast()),
+            semantic: semantic
+                .as_ref()
+                .map_or(std::ptr::null(), |p| (p as *const SemanticView).cast()),
             portable_context: Arc::as_ptr(&plain.pipeline.pipeline).cast(),
             portable: Some(materialize_portable),
         },
@@ -600,6 +648,8 @@ fn direct(
         buffer_writes,
         texture_reads,
         texture_writes,
+        stage_in_region_word,
+        stage_in_strides,
     };
     // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
     Ok(unsafe { each(&kernel, ctx) })
@@ -608,7 +658,9 @@ fn direct(
 unsafe extern "C" fn materialize_portable(context: *const c_void, words: *mut *const u32, bytes: *mut usize) -> bool {
     guard(false, || {
         let pipeline = get(context.cast::<NativePipeline>())?;
-        let portable = pipeline.portable_words().map_err(compile_error("portable native fallback"))?;
+        let portable = pipeline
+            .portable_words()
+            .map_err(compile_error("portable native fallback"))?;
         // SAFETY: NVK supplies both output fields, and the pipeline owns the returned words through the callback.
         unsafe {
             *words.as_mut().ok_or("null portable words")? = portable.as_ptr();
@@ -635,9 +687,14 @@ impl SemanticView {
     fn of(program: &NativeProgram) -> Self {
         Self {
             version: NativeProgram::VERSION,
-            types: program.types, values: program.values, blocks: program.blocks, entry: program.entry,
-            record_count: program.records.len() as u32, operand_count: program.operands.len() as u32,
-            records: program.records.as_ptr(), operands: program.operands.as_ptr(),
+            types: program.types,
+            values: program.values,
+            blocks: program.blocks,
+            entry: program.entry,
+            record_count: program.records.len() as u32,
+            operand_count: program.operands.len() as u32,
+            records: program.records.as_ptr(),
+            operands: program.operands.as_ptr(),
         }
     }
 }

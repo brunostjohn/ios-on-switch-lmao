@@ -8,14 +8,17 @@ use metal2vulkan::bind::{ArgumentDescriptor, SamplerDescriptor};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
-    BarrierScope, BindingAccess, BlendFactor, BlendOperation, ColorWriteMask, CompareFunction, CullMode, DataType,
-    DepthClipMode, DispatchType, IndexType, PixelFormat, PrimitiveTopologyClass, PrimitiveType, RenderStages,
-    ResourceUsage, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter, StencilOperation,
-    TextureType, TextureUsage, TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
+    AttributeFormat, BarrierScope, BindingAccess, BlendFactor, BlendOperation, ColorWriteMask, CompareFunction,
+    CullMode, DataType, DepthClipMode, DispatchType, IndexType, PixelFormat, PrimitiveTopologyClass, PrimitiveType,
+    RenderStages, ResourceUsage, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
+    StencilOperation, StepFunction, TessellationControlPointIndexType, TessellationFactorFormat,
+    TessellationFactorStepFunction, TessellationPartitionMode, TextureType, TextureUsage, TriangleFillMode,
+    VertexFormat, VertexStepFunction, Winding,
 };
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, LinkedFunctions, RenderPipelineDescriptor, StageSource,
-    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, LinkedFunctions, RenderPipelineDescriptor,
+    StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor, StageSource,
+    TessellationDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use metal2vulkan_runtime::{
     ArgumentEncoder, BinaryArchive, BinaryArchiveDescriptor, BlitCommandEncoder, BlitOption, Buffer, ClearColor,
@@ -1688,6 +1691,43 @@ pub struct NmbComputePipelineDescriptor {
     pub linked_count: u64,
     pub private_linked: *const *mut NmbFunction,
     pub private_count: u64,
+    pub stage_inputs: u64,
+    pub stage_attributes: [NmbVertexAttribute; 31],
+    pub stage_layouts: [NmbVertexLayout; 31],
+    pub stage_index_type: u64,
+    pub stage_index_buffer: u64,
+}
+
+/// A compute descriptor's stage input (`stageInputDescriptor`): its set attributes, their layouts (a dynamic stride as
+/// `None`), its index type and index buffer
+fn stage_input(d: &NmbComputePipelineDescriptor) -> Result<StageInputDescriptor, String> {
+    let mut out = StageInputDescriptor::new();
+    for (i, a) in d.stage_attributes.iter().enumerate() {
+        if a.format == 0 {
+            continue;
+        }
+        let buffer = u32::try_from(a.buffer).map_err(e("stage input buffer"))?;
+        out.attributes.insert(
+            i as u32,
+            StageInputAttributeDescriptor::new(
+                raw::<AttributeFormat>(a.format, "attribute format")?,
+                u32::try_from(a.offset).map_err(e("stage input offset"))?,
+                buffer,
+            ),
+        );
+        let l = d
+            .stage_layouts
+            .get(buffer as usize)
+            .ok_or("a stage input buffer past 30")?;
+        let stride = (l.stride != u64::MAX).then_some(l.stride as u32);
+        let mut layout = StageInputLayoutDescriptor::new(stride);
+        layout.step_function = raw::<StepFunction>(l.step_function, "step function")?;
+        layout.step_rate = l.step_rate as u32;
+        out.layouts.insert(buffer, layout);
+    }
+    out.index_type = raw::<IndexType>(d.stage_index_type, "stage input index type")?;
+    out.index_buffer_index = u32::try_from(d.stage_index_buffer).map_err(e("stage input index buffer"))?;
+    Ok(out)
 }
 
 /// The functions of a counted handle array, each as a stage links it (`Function::linked_function`), under its specialized name.
@@ -1733,6 +1773,9 @@ pub(crate) fn compute_descriptor(
     out.support_indirect_command_buffers = d.indirect != 0;
     out.max_call_stack_depth = u32::try_from(d.max_call_stack_depth).map_err(e("compute stack depth"))?;
     out.support_adding_binary_functions = d.adding_binary_functions != 0;
+    if d.stage_inputs != 0 {
+        out.stage_input = Some(stage_input(d)?);
+    }
     for (index, &mutability) in d.mutability.iter().enumerate() {
         if mutability != 0 {
             out.buffers.insert(
@@ -1831,6 +1874,15 @@ pub struct NmbRenderPipelineDescriptor {
     pub fragment_linked_count: u64,
     pub fragment_private_linked: *const *mut NmbFunction,
     pub fragment_private_count: u64,
+    pub tessellation: u64,
+    pub max_tessellation_factor: u64,
+    pub partition_mode: u64,
+    pub factor_format: u64,
+    pub factor_step_function: u64,
+    pub winding: u64,
+    pub control_point_index_type: u64,
+    pub factor_scale_enabled: u64,
+    pub max_amplification: u64,
 }
 
 fn optional_format(value: u64) -> Result<Option<PixelFormat>, String> {
@@ -1968,7 +2020,9 @@ pub(crate) fn render_descriptor(
                 ),
             );
             if let Some(l) = d.layouts.get(a.buffer as usize) {
-                let mut layout = VertexBufferLayoutDescriptor::new(Some(l.stride as u32));
+                // MTLBufferLayoutStrideDynamic (NSUIntegerMax): the stride each bind sets
+                let stride = (l.stride != u64::MAX).then_some(l.stride as u32);
+                let mut layout = VertexBufferLayoutDescriptor::new(stride);
                 layout.step_function = raw::<VertexStepFunction>(l.step_function, "step function")?;
                 layout.step_rate = l.step_rate as u32;
                 inputs.layouts.insert(a.buffer as u32, layout);
@@ -1976,6 +2030,19 @@ pub(crate) fn render_descriptor(
         }
         out.vertex_descriptor = Some(inputs);
     }
+    if d.tessellation != 0 {
+        let mut t = TessellationDescriptor::default();
+        t.max_tessellation_factor = d.max_tessellation_factor as u32;
+        t.partition_mode = raw::<TessellationPartitionMode>(d.partition_mode, "partition mode")?;
+        t.factor_format = raw::<TessellationFactorFormat>(d.factor_format, "factor format")?;
+        t.factor_step_function = raw::<TessellationFactorStepFunction>(d.factor_step_function, "factor step")?;
+        t.output_winding_order = raw::<Winding>(d.winding, "winding")?;
+        t.control_point_index_type =
+            raw::<TessellationControlPointIndexType>(d.control_point_index_type, "control point index type")?;
+        t.factor_scale_enabled = d.factor_scale_enabled != 0;
+        out.tessellation = Some(t);
+    }
+    out.max_vertex_amplification_count = d.max_amplification.max(1) as u32;
     Ok(out)
 }
 

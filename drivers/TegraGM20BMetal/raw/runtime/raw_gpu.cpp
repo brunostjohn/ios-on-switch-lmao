@@ -69,6 +69,10 @@ enum : uint32_t {
     PIXEL_SHADER_INTERLOCK_CONTROL = NVB197_SET_PIXEL_SHADER_INTERLOCK_CONTROL,
     PIPELINE_REGISTER_COUNT_VERTEX = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_VERTEX),
     PIPELINE_REGISTER_COUNT_PIXEL = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_PIXEL),
+    PIPELINE_PROGRAM_TESS = NVB197_SET_PIPELINE_PROGRAM(NVB197_SET_PIPELINE_SHADER_TYPE_TESSELLATION_INIT),
+    PIPELINE_REGISTER_COUNT_TESS =
+        NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_TESSELLATION_INIT),
+    kPipelineStageStride = NVB197_SET_PIPELINE_SHADER(1) - NVB197_SET_PIPELINE_SHADER(0),
     BINDLESS_TEXTURE = NVB197_SET_BINDLESS_TEXTURE,
     DEPTH_TEST = NVB197_SET_DEPTH_TEST,
     STENCIL_TEST = NVB197_SET_STENCIL_TEST,
@@ -101,6 +105,8 @@ enum : uint32_t {
     COLOR_COMPRESSION = NVB197_SET_COLOR_COMPRESSION(0),
     CT_WRITE = NVB197_SET_CT_WRITE(0),
     VERTEX_STREAM_LOCATION = NVB197_SET_VERTEX_STREAM_A_LOCATION_A(0),
+    VERTEX_STREAM_FORMAT = NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
+    VERTEX_STREAM_ENABLE = NVDEF(NVB197, SET_VERTEX_STREAM_A_FORMAT, ENABLE, TRUE),
     VERTEX_STREAM_LIMIT = NVB197_SET_VERTEX_STREAM_LIMIT_A_A(0),
     CB_SELECTOR_A = NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
     LOAD_CB_OFFSET = NVB197_LOAD_CONSTANT_BUFFER_OFFSET,
@@ -120,6 +126,8 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+// The bind groups of Pipeline::setSlot's programs (nvk_pipeline_bind_group): vertex, pixel, tessellation init, tessellation
+constexpr uint8_t kSetGroups[4] = {0, 4, 1, 2};
 constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
@@ -903,7 +911,7 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
 // lock_ held: `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
 // and whose key's attachment and vertex fields are `keyString`
 void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-                   const uint32_t *blob, const char *keyString, bool caTransform)
+                   const uint32_t *blob, const char *keyString, bool caTransform, const PlacedProgram *tess)
 {
     auto instructions = [](const PackProgram &program) {
         const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;
@@ -912,7 +920,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
     pl.memoryEntries = pp.memoryEntries;
-    std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
+    std::vector<uint32_t> words(64 + 16 + (tess ? 64 : 0) + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
     uint32_t interlockControl = 0;
@@ -949,10 +957,19 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
     if (fs.record->boundTextures)
         w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
-    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
-    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, 4, fs.data, root_.va);
-    for (const auto &[prog, group] : {std::pair{vs.record, uint8_t(0)}, std::pair{fs.record, uint8_t(4)}})
-        for (uint8_t c = 1; c < prog->cbufs; c++) {
+    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va);
+    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va);
+    const PackProgram *programs[4] = {vs.record, fs.record};
+    for (uint32_t k = 0; tess && k < 2; k++) {
+        w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
+        w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
+        pl.setSlot[2 + k] = bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va);
+        programs[2 + k] = tess[k].record;
+    }
+    for (uint32_t k = 0; k < 4; k++)
+        for (uint8_t c = 1; programs[k] && c < programs[k]->cbufs; c++) {
+            const PackProgram *prog = programs[k];
+            const uint8_t group = kSetGroups[k];
             if (cbufKind(prog->cbufType[c]) != CbufUbo)
                 continue;
             uint8_t entry = 0;
@@ -4123,6 +4140,8 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
+    if (amplifications_ > 1 && !amplifying_)
+        return amplified([&] { return draw(primitive, first, count, instances, baseInstance, why); }, why);
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4311,6 +4330,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
+    if (amplifications_ > 1 && !amplifying_)
+        return amplified(
+            [&] { return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why); },
+            why);
     RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
@@ -4437,6 +4460,8 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset,
                              const char **why)
 {
+    if (amplifications_ > 1 && !amplifying_)
+        return amplified([&] { return indirect(primitive, indexed, arguments, offset, why); }, why);
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
@@ -4518,6 +4543,10 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 // encoder holds unknown after them.
 bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
 {
+    if (amplifications_ > 1) {
+        *why = "an indirect command buffer executed under vertex amplification";
+        return false;
+    }
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_ || !x.count)
         return true;
@@ -4828,6 +4857,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             bool indexed, const char **why)
 {
     RAW_ENCODE_SPAN(Prepare);
+    if (tessellates(*pl->rec) != (primitive == icb::kPatchPrimitive)) {
+        *why = "primitives drawn with a tessellation state";
+        cb_->refusal = {};
+        return false;
+    }
+    if (const char *refused = drawnWordsRefusal(*pl->rec)) {
+        *why = refused;
+        cb_->refusal = {};
+        return false;
+    }
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
@@ -4973,8 +5012,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     at[3] = 0;
                     continue;
                 }
-                if (e.kind == EntryUbo) {
-                    const Bound &b = bufs_[e.stage][e.slot];
+                if (e.kind == EntryUbo || e.kind == EntryTessBuffer) {
+                    const Bound b = e.kind == EntryUbo ? bufs_[e.stage][e.slot] : tessBuffer(e.slot);
                     cb_->buffersWritten_ |= bufferStorage(e);
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
@@ -5108,8 +5147,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_BEGIN(bindSpan, Bind);
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
+    const bool patches = tessellates(r);
+    const bool drawnWordsDirty = (r.amplificationIdWord && amplificationDirty_) || r.pulledStride[0][1];
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
-        r.shaderTests.flags) {
+        r.shaderTests.flags || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -5134,6 +5175,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         // run of words that change
         uint32_t want[32];
         memcpy(want, pl->push, sizeof want);
+        if (patches) {
+            controlWords(r, want);
+            tessWordsDirty_ = false;
+        }
+        drawnWords(r, want);
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
         if (r.blendColorWord && blendWordsDirty_) {
@@ -5218,11 +5264,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             vbVa_ = location;
             vbLimit_ = limit;
         }
-        if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && r.vertexStride) {
-            const uint64_t from =
-                std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * r.vertexStride), b.buffer->length);
+        const uint32_t stride = r.vertexStrideDynamic ? vertexStride(r.vertexSlot) : r.vertexStride;
+        if (r.vertexStrideDynamic)
+            p.m(VERTEX_STREAM_FORMAT, VERTEX_STREAM_ENABLE | stride);
+        if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && stride) {
+            const uint64_t from = std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * stride), b.buffer->length);
             const uint64_t bytes =
-                std::min<uint64_t>(indexed ? b.size : uint64_t(count) * r.vertexStride, b.buffer->length - from);
+                std::min<uint64_t>(indexed ? b.size : uint64_t(count) * stride, b.buffer->length - from);
             cb_->clean(b.buffer->cpu + from, bytes);
         }
     }
@@ -5231,12 +5279,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, 4);
-        if (pl->setSlot[0] || pl->setSlot[1]) {
+        const bool setRead = pl->setSlot[0] || pl->setSlot[1] || pl->setSlot[2] || pl->setSlot[3];
+        if (setRead) {
             p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-            if (pl->setSlot[0])
-                p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
-            if (pl->setSlot[1])
-                p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
+            for (uint32_t k = 0; k < 4; k++)
+                if (pl->setSlot[k])
+                    p.m(BIND_GROUP_CB + 0x20 * kSetGroups[k], 1 | uint32_t(pl->setSlot[k]) << 4);
             selected = true;
         }
     }

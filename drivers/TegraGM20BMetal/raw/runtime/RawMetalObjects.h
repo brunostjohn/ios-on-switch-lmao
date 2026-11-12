@@ -424,6 +424,12 @@ uint64_t nextTraceId();
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
     bool _drew;                      // a draw recorded
+    // setTessellationFactorBuffer:offset:instanceStride: and setTessellationFactorScale:, which its patch draws record
+    // (RawMetalTessellation.mm; unretained: each draw retains what it reads)
+    RMBuffer *_tessFactors;
+    NSUInteger _tessFactorOffset, _tessFactorStride;
+    float _tessScale;
+    BOOL _tessScaleSet;
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -433,6 +439,7 @@ uint64_t nextTraceId();
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
+    MTLRegion _stageIn;  // setStageInRegion:, which each dispatch records (a stage-in kernel's [[stage_in]] grid)
 }
 @end
 

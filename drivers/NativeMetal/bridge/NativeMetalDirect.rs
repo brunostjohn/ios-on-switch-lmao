@@ -10,7 +10,7 @@ use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
     FieldLocation, FragmentTests, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable,
-    TextureFacts, WriteSource,
+    TextureFacts, VertexAmplification, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -21,7 +21,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{
     GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType, SlotClass,
-    SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot,
+    SlotInterface, SlotRef, SpecKey, Stage, StandInView, StorageAttachmentView, TextureSlot, VertexStride,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -62,6 +62,9 @@ pub enum NmbDirectSource {
     Other,
     DepthStandIn,
     StencilStandIn,
+    TessFactors,
+    PatchIndices,
+    ControlPointIndices,
 }
 
 pub const NMB_DIRECT_IMMUTABLE: u32 = u32::MAX;
@@ -97,6 +100,11 @@ pub struct NmbDirectDraw {
     pub push_holes: u32,
     pub vertex_slot: u32,
     pub vertex_stride: u32,
+    pub vertex_stride_dynamic: u32,
+    pub pulled_strides: [[u32; 2]; 4],
+    pub amplification_max: u32,
+    pub amplification_id_word: u32,
+    pub amplification_count_read: u32,
     pub variant: *const c_char,
 }
 
@@ -228,11 +236,21 @@ fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NmbDirectTess {
+    pub parameters: u32,
+    pub control_word: u32,
+    pub control_points: u32,
+    pub index_bytes: u32,
+}
+
+#[repr(C)]
 pub struct NmbDirectState {
     pub device: u64,
     pub layout: u64,
     pub stage_count: u32,
-    pub stages: [NmbDirectStage; 2],
+    pub stages: [NmbDirectStage; 4],
+    pub tess: NmbDirectTess,
     pub sample_shading: bool,
     pub storage_form: bool,
     pub storage: NmbDirectStorage,
@@ -407,8 +425,18 @@ fn probe_state(
     samples: u32,
     declared: &[(u32, TextureSlot)],
     binds: &Binds,
+    patches: bool,
+    amplification: u32,
 ) -> BindState {
     let mut state = BindState::default();
+    // One draw per amplification, which the raw path draws in order, into the first layer through viewport 0
+    if amplification > 1 {
+        state.vertex_amplification = VertexAmplification::new(amplification, Vec::new());
+        state.vertex_amplification.one_at_a_time = true;
+    }
+    if patches {
+        crate::direct_tess::bind_factors(&mut state);
+    }
     state.fragment_tests = match binds.fragment_tests {
         1 => FragmentTests::Pass,
         2 => FragmentTests::Drop,
@@ -464,13 +492,6 @@ fn probe_state(
     }
     state
 }
-
-const PROBE_DRAW: DrawCall = DrawCall::Primitives {
-    vertex_start: 0,
-    vertex_count: 4,
-    instance_count: 1,
-    base_instance: 0,
-};
 
 pub(crate) fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
@@ -567,6 +588,18 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
         WriteSource::ColorWriteTable => {
             out.source = NmbDirectSource::ColorTable;
             out.stage = 2;
+        }
+        WriteSource::TessellationFactors | WriteSource::PatchIndices { .. } | WriteSource::ControlPointIndices => {
+            out.source = match w.source {
+                WriteSource::TessellationFactors => NmbDirectSource::TessFactors,
+                WriteSource::PatchIndices { .. } => NmbDirectSource::PatchIndices,
+                _ => NmbDirectSource::ControlPointIndices,
+            };
+            out.stage = 1;
+            out.range = ranges
+                .iter()
+                .find(|r| r.set == w.set && r.binding == w.binding)
+                .map_or(0, |r| r.range.range);
         }
         _ => {}
     }
@@ -683,6 +716,7 @@ fn settle(
     descriptor: &RenderPipelineDescriptor,
     variants: &mut Vec<(VariantKey, RenderPipeline)>,
     state: &BindState,
+    draw: &DrawCall,
     budget: &Budget,
 ) -> Result<Run, String> {
     let shape = state.shape();
@@ -702,7 +736,7 @@ fn settle(
         };
         (at, variants[at].1.plan(compile, &shape).map_err(e("plan variant"))?)
     };
-    let commands = plan.instantiate_draw(state, &PROBE_DRAW).map_err(e("instantiate"))?;
+    let commands = plan.instantiate_draw(state, draw).map_err(e("instantiate"))?;
     Ok(Run {
         variant,
         commands,
@@ -716,6 +750,7 @@ fn draw_of(
     layout: &Layout<'_>,
     writes: &[NmbDirectWrite],
     variant: &CString,
+    amplification: u32,
 ) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
         set0: layout.set0(),
@@ -730,8 +765,19 @@ fn draw_of(
         push_holes: run.commands.push_holes.len() as u32,
         vertex_slot: u32::MAX,
         vertex_stride: 0,
+        vertex_stride_dynamic: 0,
+        pulled_strides: [[0; 2]; 4],
+        amplification_max: amplification,
+        amplification_id_word: 0,
+        amplification_count_read: pipeline.stages.iter().any(|s| {
+            s.specialization
+                .constants
+                .iter()
+                .any(|c| c.key == SpecKey::AmplificationCount)
+        }) as u32,
         variant: variant.as_ptr(),
     };
+    dynamic_words(run, pipeline, &mut draw)?;
     for field in &run.plan.push.fields {
         let (word, bytes) = match field.field {
             PushField::BlendColor => (&mut draw.blend_color_word, 32),
@@ -771,17 +817,52 @@ fn draw_of(
         {
             Some(b) => match b.stride {
                 metal2vulkan::pipeline::VertexStride::Static(stride) => stride,
-                _ => run
-                    .commands
-                    .vertex_strides
-                    .iter()
-                    .find(|(at, _)| *at == first.binding)
-                    .map_or(0, |(_, s)| *s),
+                _ => {
+                    draw.vertex_stride_dynamic = 1;
+                    run.commands
+                        .vertex_strides
+                        .iter()
+                        .find(|(at, _)| *at == first.binding)
+                        .map_or(0, |(_, s)| *s)
+                }
             },
             None => 0,
         };
     }
     Ok(draw)
+}
+
+/// The push words a raw draw writes itself: each amplification's id (an amplification of the first layer through viewport 0,
+/// as the probe plans it), and each dynamic pulled layout's stride
+fn dynamic_words(run: &Run, pipeline: &RenderPipeline, draw: &mut NmbDirectDraw) -> Result<(), String> {
+    let mut pulled = 0;
+    for field in &run.plan.push.fields {
+        let FieldLocation::PushWindow { offset } = field.location else {
+            continue;
+        };
+        let word = offset / 4 + 1;
+        match field.field {
+            PushField::AmplificationId => draw.amplification_id_word = word,
+            PushField::AmplificationLayerOffset | PushField::AmplificationViewportOffset => {
+                return Err("an amplification of a layer or viewport offset".into());
+            }
+            PushField::VertexBufferStride(layout)
+                if pipeline
+                    .vertex_input
+                    .pulled
+                    .iter()
+                    .any(|a| a.buffer_index == layout && a.stride == VertexStride::PerBind) =>
+            {
+                if pulled == draw.pulled_strides.len() {
+                    return Err("more than four pulled vertex buffers of a dynamic stride".into());
+                }
+                draw.pulled_strides[pulled] = [layout, word];
+                pulled += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// The words used by Metal extended-range blending for `setBlendColorRed:green:blue:alpha:`.
@@ -797,6 +878,33 @@ pub unsafe extern "C" fn switch_nmb_blend_color_words(color: *const f32, words: 
             .cast::<[u32; 8]>()
             .write(metal2vulkan::bind::extended_blend_color_words(color));
     }
+}
+
+/// The pipeline's stages in NmbDirectState's order: vertex and fragment, then a tessellation state's control and evaluation
+fn stage_order(pipeline: &RenderPipeline) -> Result<Vec<usize>, String> {
+    let wanted: &[avk::ShaderStageFlags] = if pipeline.graphics.tessellation.is_some() {
+        &[
+            avk::ShaderStageFlags::VERTEX,
+            avk::ShaderStageFlags::FRAGMENT,
+            avk::ShaderStageFlags::TESSELLATION_CONTROL,
+            avk::ShaderStageFlags::TESSELLATION_EVALUATION,
+        ]
+    } else {
+        &[avk::ShaderStageFlags::VERTEX, avk::ShaderStageFlags::FRAGMENT]
+    };
+    if pipeline.stages.len() != wanted.len() {
+        return Err(format!("{} stages", pipeline.stages.len()));
+    }
+    wanted
+        .iter()
+        .map(|&flag| {
+            pipeline
+                .stages
+                .iter()
+                .position(|s| avk::ShaderStageFlags::from(s.stage) == flag)
+                .ok_or_else(|| format!("no stage of flags {:#x}", flag.as_raw()))
+        })
+        .collect()
 }
 
 /// `texture_format`, `texture_samples`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm) and sample count, as
@@ -821,6 +929,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let nmb = get(device)?;
         let runtime = nmb.device();
         let descriptor = render_descriptor(descriptor)?;
+        let amplification = descriptor.max_vertex_amplification_count.max(1);
         // Every raw form of a state (default, storage, ordered, barrier) and every compute kernel lowers half on SM53, so
         // a storage form and its barrier twin round alike. m2v's own twin stays on the Vulkan target (no float16 below SM70).
         let compile = if barrier || binds.fragment_tests != 0 {
@@ -838,6 +947,8 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
+        let draw = crate::direct_tess::probe_draw(base.graphics.tessellation.as_ref());
+        let patches = base.graphics.tessellation.is_some();
         let mut variants = vec![(VariantKey::new(), base)];
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
         for run in 0..RUN_BYTES.len() {
@@ -845,7 +956,16 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &declared, &binds),
+                &probe_state(
+                    run,
+                    format,
+                    texture_samples.max(1),
+                    &declared,
+                    &binds,
+                    patches,
+                    amplification,
+                ),
+                &draw,
                 &budget,
             )?);
         }
@@ -880,6 +1000,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     &layouts[run.variant],
                     &writes[k],
                     &names[k],
+                    amplification,
                 )
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -921,13 +1042,23 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     .data(&specialization.data)
             })
             .collect();
-        if pipeline.stages.len() > 2 {
-            return Err(format!("{} stages", pipeline.stages.len()));
-        }
+        let order = stage_order(pipeline)?;
+        let tess = pipeline.graphics.tessellation.as_ref();
+        let modes = match tess {
+            Some(_) => crate::tess_modes::control_modes(&pipeline.stages[order[2]].spirv),
+            None => Vec::new(),
+        };
+        let evaluation = match tess {
+            Some(_) => Some(
+                crate::tess_modes::evaluation_with_modes(&pipeline.stages[order[3]].spirv, &modes)
+                    .ok_or("a tessellation state's evaluation stage without its entry point")?,
+            ),
+            None => None,
+        };
         let mut state = NmbDirectState {
             device: avk::Handle::as_raw(handles.device.handle()),
             layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
-            stage_count: pipeline.stages.len() as u32,
+            stage_count: order.len() as u32,
             stages: [NmbDirectStage {
                 spirv: std::ptr::null(),
                 spirv_bytes: 0,
@@ -939,7 +1070,13 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 semantic: std::ptr::null(),
                 portable_context: std::ptr::null(),
                 portable: None,
-            }; 2],
+            }; 4],
+            tess: tess.map_or(NmbDirectTess::default(), |t| NmbDirectTess {
+                parameters: crate::tess_modes::parameters(&modes),
+                control_word: t.push_offset / 4 + 1,
+                control_points: t.control_points,
+                index_bytes: crate::direct_tess::index_bytes(t),
+            }),
             sample_shading: pipeline.graphics.sample_shading,
             storage_form: storage.mask != 0,
             storage,
@@ -952,10 +1089,15 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 .fold(0, |mask, (j, _)| mask | 1 << j),
             draws: [draws[0], draws[1], draws[2], draws[3]],
         };
-        for (k, stage) in pipeline.stages.iter().enumerate() {
-            state.stages[k] = NmbDirectStage {
-                spirv: stage.spirv.as_ptr(),
-                spirv_bytes: stage.spirv.len() * 4,
+        for (slot, &k) in order.iter().enumerate() {
+            let stage = &pipeline.stages[k];
+            let spirv: &[u32] = match &evaluation {
+                Some(words) if slot == 3 => words,
+                _ => &stage.spirv,
+            };
+            state.stages[slot] = NmbDirectStage {
+                spirv: spirv.as_ptr(),
+                spirv_bytes: spirv.len() * 4,
                 entry: entries[k].as_ptr(),
                 stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
                 flags: avk::PipelineShaderStageCreateFlags::from(stage.stage_flags).as_raw(),

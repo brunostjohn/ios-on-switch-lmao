@@ -15,6 +15,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -273,6 +274,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 // RawMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
 void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write);
 void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
+// RawMetalTessellation.mm: a patch draw on the raw encoder, and its replay on m2v's
+bool encodePatches(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlanDraw &draw, const RMPlanPatches &patches,
+                   bool indirect, const char **why);
+void replayPatches(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const RMPlanPatches &patches,
+                   bool indirect, const std::function<id(void *)> &use);
 
 // RawMetalEncodeBlit.mm: a blit encoder's command of the tape onto the raw path's copy engine; a texture it writes leaves
 // `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)

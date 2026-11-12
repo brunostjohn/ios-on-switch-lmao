@@ -30,10 +30,15 @@ struct IndexedDraw {
     uint32_t baseInstance;
 };
 
+// The raw path's primitive past MTLPrimitiveType's: a tessellation state's patches, each one control point of a patch list
+// (m2v link/tessellation), which Metal's tessellator turns into triangles
+constexpr uint32_t kPatchPrimitive = 5;
+
 inline uint32_t topology(uint32_t primitive)
 {
-    constexpr uint32_t kTopology[] = {1, 2, 3, 4, 5};  // point, line, line strip, triangle, triangle strip
-    return primitive < 5 ? kTopology[primitive] : 4;
+    // point, line, line strip, triangle, triangle strip, patch
+    constexpr uint32_t kTopology[] = {1, 2, 3, 4, 5, 0xe};
+    return primitive <= kPatchPrimitive ? kTopology[primitive] : 4;
 }
 
 inline bool restarts(uint32_t primitive)
@@ -44,7 +49,7 @@ inline bool restarts(uint32_t primitive)
 // Metal biases the depth of triangles alone (RenderEncoder::rasterFor): commands of both kinds need different raster state
 inline bool triangles(uint32_t primitive)
 {
-    return primitive == 3 || primitive == 4;
+    return primitive == 3 || primitive == 4 || primitive == kPatchPrimitive;
 }
 
 inline void empty(uint32_t *slot)
