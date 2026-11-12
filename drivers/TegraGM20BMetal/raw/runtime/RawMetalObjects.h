@@ -23,6 +23,7 @@
 #include "raw_retirement.h"
 #include "raw_variant.h"
 #include "raw_library_source.h"
+#include "raw_metallib_functions.h"
 #include "raw_obtained.h"
 
 namespace raw {
@@ -63,14 +64,17 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled;
 @end
 
-// ---- functions and libraries: the m2v library and functions, with the name and constants text the pack keys by ----
+// ---- functions and libraries: the name and constants text the pack keys by, and m2v's objects once something needs them ----
 // The libraries the pack's states come from are frameworks' default.metallib (QuartzCore's, RenderBox's): a state of their
-// functions is looked up by its key, which names the framework but QuartzCore's (raw_metal_pipeline_key)
+// functions is looked up by its key, which names the framework but QuartzCore's (raw_metal_pipeline_key). A library the
+// facade read itself (_functions listed) makes its m2v twin, and each function its own, only when one is asked for.
 @interface RMLibrary : RMObject {
 @public
     std::string _framework;  // "QuartzCore", "RenderBox"...; empty: not a framework's default library (never looked up)
     std::shared_ptr<raw::LibrarySource> _source;
+    raw::MetallibFunctions _functions;  // empty: an m2v library from its creation
 }
+- (id)twinOn:(id<MTLDevice>)m2v;
 @end
 @interface RMFunction : RMObject {
 @public
@@ -78,8 +82,13 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::string _framework;
     std::shared_ptr<raw::LibrarySource> _source;
     bool _specialized;  // made with constant values (even none)
+    std::string _libraryName;           // the library function it was made from (its name unless specialized under another)
+    RMLibrary *_library;                // the library a twin is made of, while none is
+    MTLFunctionConstantValues *_values;  // what a specialized twin is made with
+    uint32_t _type;                     // MTLFunctionType from the metallib; 0: the twin's
 }
 @property (nonatomic, copy) NSString *name;
+- (id)twinOn:(id<MTLDevice>)m2v;
 @end
 
 // ---- resources ----
@@ -175,7 +184,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     bool _caTransform;
     bool _asked;                             // its record asked of the runtime (completeLater)
     std::string _key;                        // its pack key (completable states')
-    MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
+    MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants and a later twin are made of
+    MTLPipelineOption _twinOptions;          // a state raw draws from its creation: its twin is made at its first m2v
+    bool _twinLater;                         // replay (rmTwin), with these options
     std::mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
     raw::Obtained _obtained;  // debug builds: how its creation got its record

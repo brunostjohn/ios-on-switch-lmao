@@ -1875,6 +1875,20 @@ host_test(
 )
 
 host_test(
+    name = "raw_metallib_functions_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_metallib_functions_test.cpp",
+        "//drivers/NativeMetal:MetallibEntries.h",
+        "//drivers/NativeMetal:MetallibSlice.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib_functions.h",
+    ],
+    copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+host_test(
     name = "raw_split_reuse_test",
     srcs = [
         "raw_split_reuse_test.cpp",

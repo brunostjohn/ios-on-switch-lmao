@@ -39,11 +39,22 @@
 
 @end
 
+static id<MTLRenderPipelineState> laterTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o);
+
 @implementation RMPipeline
 
 + (Class)twinClass
 {
     return NSClassFromString(@"NBRenderPipeline");
+}
+
+- (id)rmTwin
+{
+    @synchronized(self) {
+        if (_twin || !_twinLater)
+            return _twin;
+    }
+    return twinPublish(self, _twin, laterTwin(_madeFrom, _twinOptions));
 }
 
 - (NSUInteger)maxTotalThreadsPerThreadgroup
@@ -119,42 +130,6 @@
         return (id<MTLSamplerState>)o;
     }
     return (id<MTLSamplerState>)r;
-}
-
-- (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error
-{
-    id<MTLDevice> m2v = RM_M2V("a library from a URL");
-    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithURL:url error:error], url.path);
-}
-
-- (id<MTLLibrary>)newLibraryWithFile:(NSString *)path error:(NSError **)error
-{
-    id<MTLDevice> m2v = RM_M2V("a library from a file");
-    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithFile:path error:error], path);
-}
-
-- (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error
-{
-    return (id<MTLLibrary>)wrapLibrary(self, [RM_M2V("a library from data") newLibraryWithData:data error:error], nil);
-}
-
-- (id<MTLLibrary>)newDefaultLibrary
-{
-    return (id<MTLLibrary>)wrapLibrary(self, [RM_M2V("the main bundle's default library") newDefaultLibrary], nil);
-}
-
-- (id<MTLLibrary>)newDefaultLibraryWithBundle:(NSBundle *)bundle error:(NSError **)error
-{
-    id<MTLDevice> m2v = RM_M2V("a bundle's default library");
-    return (id<MTLLibrary>)wrapLibrary(self, [m2v newDefaultLibraryWithBundle:bundle error:error],
-                                       [bundle.bundlePath stringByAppendingString:@"/default.metallib"]);
-}
-
-- (id<MTLLibrary>)newLibraryWithSource:(NSString *)source options:(MTLCompileOptions *)options error:(NSError **)error
-{
-    id<MTLDevice> m2v = RM_M2V("a library from source");
-    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithSource:source options:options error:error],
-                                       nil);
 }
 
 // A stage's linked functions as their twins; `l` itself while one has none (m2v then refuses it as another device's)
@@ -396,8 +371,21 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                                            error:error];
 }
 
+// The twin of a state raw drew from its creation, made when a command buffer that sets it first goes to m2v
+static id<MTLRenderPipelineState> laterTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o)
+{
+    id<MTLDevice> m2v = RM_M2V("a raw state's twin, at its first m2v replay");
+    if (native_bridge_metal_render_pipeline_lazy)
+        return native_bridge_metal_render_pipeline_lazy(m2v, packedTwinDescriptor(d, true), packedTwinOptions(o, true));
+    return [m2v newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, true)
+                                             options:packedTwinOptions(o, true)
+                                          reflection:nil
+                                               error:nil];
+}
+
 // A state of `d` under `o`: its record the pack's, or made at once, unless the archives it lists miss it as Metal's would; its
-// m2v twin made as a packed state's where the pack or an archive holds it (packedTwinDescriptor)
+// m2v twin made as a packed state's where the pack or an archive holds it (packedTwinDescriptor). A state raw draws from
+// its creation, asked for no reflection, gets its twin only if a command buffer that sets it goes to m2v.
 static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
                                             MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
 {
@@ -405,6 +393,13 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
     if (!p)
         return nil;
     const bool packed = p->_raw || p->_archived;
+    if (p->_raw && p->_madeFrom && !reflection) {
+        p->_twinOptions = o;
+        p->_twinLater = true;
+        if (error)
+            *error = nil;
+        return (id<MTLRenderPipelineState>)p;
+    }
     if (reflection) {
         id<MTLDevice> m2v = RM_M2V("a render state's twin with its reflection");
         p->_twin = [m2v newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
