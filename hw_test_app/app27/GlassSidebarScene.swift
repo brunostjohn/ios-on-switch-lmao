@@ -4,16 +4,18 @@ import UIKit
 /// Settings' sidebar as ui.glass_sidebar builds it: a double-column split view showing the sidebar beside the detail,
 /// a sidebar-appearance list of symbol-and-title rows, and a detail of horizontal white and grey stripes (the detail
 /// scrolls vertically) in a scroll view as wide as the screen, so it reaches under the floating sidebar wherever UIKit
-/// lets the detail column extend. Dark, as Settings ran.
+/// lets the detail column extend. Dark, as Settings ran. With a pane (ui.glass_settings), a Liquid Glass panel stands
+/// over the detail, hidden until a phase shows it: Settings' glass bars and buttons over its right column.
 @MainActor
 final class SidebarScene {
     let host = SidebarHost()
     let split = UISplitViewController(style: .doubleColumn)
     let list: UICollectionView
     let detail = UIScrollView()
+    let pane: UIView?
     private let rows = SidebarRows()
 
-    init() {
+    init(pane withPane: Bool = false) {
         let sidebar = UICollectionViewController(
             collectionViewLayout: UICollectionViewCompositionalLayout.list(
                 using: UICollectionLayoutListConfiguration(appearance: .sidebar)))
@@ -35,7 +37,22 @@ final class SidebarScene {
         detail.showsHorizontalScrollIndicator = false
         detail.backgroundColor = stripes.backgroundColor
         let secondary = UIViewController()
-        secondary.view = detail
+        if withPane {
+            let column = UIView()
+            detail.frame = column.bounds
+            detail.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            column.addSubview(detail)
+            let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+            glass.isHidden = true
+            column.addSubview(glass)
+            secondary.view = column
+            pane = glass
+            split.minimumPrimaryColumnWidth = 200
+            split.preferredPrimaryColumnWidthFraction = 0.3
+        } else {
+            secondary.view = detail
+            pane = nil
+        }
         split.preferredDisplayMode = .oneBesideSecondary
         split.preferredSplitBehavior = .tile
         split.setViewController(sidebar, for: .primary)
@@ -52,17 +69,21 @@ final class SidebarScene {
 
     /// The scene presented over the app without animation; nil when the app has no key window or UIKit refused the
     /// presentation.
-    static func present() -> SidebarScene? {
+    static func present(pane: Bool = false) -> SidebarScene? {
         let roots = UIApplication.shared.connectedScenes.compactMap {
             ($0 as? UIWindowScene)?.keyWindow?.rootViewController
         }
         guard var top = roots.first else { return nil }
         while let presented = top.presentedViewController { top = presented }
-        let scene = SidebarScene()
+        let scene = SidebarScene(pane: pane)
         top.present(scene.host, animated: false)
         guard scene.host.presentingViewController != nil else { return nil }
         scene.split.show(.primary)
         scene.host.view.layoutIfNeeded()
+        if let glass = scene.pane, let column = glass.superview {
+            let screen = scene.host.view.window?.bounds ?? UIScreen.main.bounds
+            glass.frame = Snapshots.aligned(column.convert(SidebarLayout.paneRect(in: screen.size), from: nil))
+        }
         return scene
     }
 
@@ -86,6 +107,14 @@ final class SidebarScene {
     }
 }
 
+/// A band the reader judges, as fractions of the UI's width and height: where it sits when the buffer runs with the
+/// UI's x and when it runs against it, and its rows (symmetric about the middle row, so a turn leaves them).
+struct SidebarBand {
+    let x: ClosedRange<Double>
+    let mirroredX: ClosedRange<Double>
+    let y: ClosedRange<Double>
+}
+
 /// Where ui.glass_sidebar judges the sidebar: the trailing part of its rows (x 62% to 88% of the list's width; the
 /// titles are short and the rows carry no accessory, selection or scroll indicator), over the middle 40% of the
 /// screen's height. That band is symmetric about the screen's middle row, so the two ways the panel's portrait buffer
@@ -106,6 +135,17 @@ struct SidebarLayout {
     var x: ClosedRange<Double> { Double(region.minX / screen.width)...Double(region.maxX / screen.width) }
     var mirroredX: ClosedRange<Double> { (1 - x.upperBound)...(1 - x.lowerBound) }
     var y: ClosedRange<Double> { 0.3...0.7 }
+    var band: SidebarBand { SidebarBand(x: x, mirroredX: mirroredX, y: y) }
+
+    /// The pane, in the middle of the screen both ways so that a turn of the buffer leaves it where it was, and the
+    /// band judged inside it, clear of its rounded corners and rim
+    static func paneRect(in screen: CGSize) -> CGRect {
+        CGRect(x: screen.width * 0.38, y: screen.height * 0.3, width: screen.width * 0.24, height: screen.height * 0.4)
+    }
+    static let paneBand = SidebarBand(x: 0.42...0.58, mirroredX: 0.42...0.58, y: 0.36...0.64)
+
+    /// The pane stands over the detail alone, the sidebar clear of it.
+    var paneClear: Bool { sidebar.maxX <= Self.paneRect(in: screen).minX }
 
     /// The detail's stripes are behind the judged band.
     var under: Bool { detail.contains(region) }
@@ -149,19 +189,22 @@ final class SidebarRows: NSObject, UICollectionViewDataSource {
 }
 
 /// Scrolls its scroll views a few points every display frame, back and forth over `swing` points from where each
-/// started.
+/// started, and shows or hides `appearing` every `appearEvery` frames.
 @MainActor
 final class SidebarDriver: NSObject {
     static let pointsPerFrame = 3
     static let swing = 240
+    static let appearEvery = 12
 
     let scrolls: [UIScrollView]
     let starts: [CGFloat]
+    let appearing: UIView?
     private var link: CADisplayLink?
     private var tick = 0
 
-    init(_ scrolls: [UIScrollView]) {
+    init(_ scrolls: [UIScrollView], appearing: UIView? = nil) {
         self.scrolls = scrolls
+        self.appearing = appearing
         starts = scrolls.map(\.contentOffset.y)
         super.init()
         let link = CADisplayLink(target: self, selector: #selector(step))
@@ -174,6 +217,7 @@ final class SidebarDriver: NSObject {
         let phase = tick * Self.pointsPerFrame % (2 * Self.swing)
         let offset = CGFloat(phase < Self.swing ? phase : 2 * Self.swing - phase)
         for (scroll, start) in zip(scrolls, starts) { scroll.contentOffset.y = start + offset }
+        if let appearing, tick % Self.appearEvery == 0 { appearing.isHidden.toggle() }
     }
 
     func stop() {

@@ -58,7 +58,7 @@ struct UIGlassSidebarTest: HWTest {
             await MainActor.run { scene.dismiss() }
             return .skip("the split view showed no sidebar beside the detail (collapsed=\(layout.collapsed))")
         }
-        var run = SidebarRun(session: session, layout: layout, directory: directory)
+        var run = SidebarRun(session: session, test: id, layout: layout, band: layout.band, directory: directory)
         for step in Self.steps where run.stopped == nil {
             let scrolls = await MainActor.run { scene.scrolls(sidebar: step.sidebar, detail: step.detail) }
             await run.phase(step.name, seconds: step.seconds, scrolls: scrolls)
@@ -75,10 +75,13 @@ struct UIGlassSidebarTest: HWTest {
     }
 }
 
-/// The phases ui.glass_sidebar ran, the probe words read at their boundaries and each moving phase's frames.
+/// The phases ui.glass_sidebar (or ui.glass_settings) ran, the probe words read at their boundaries and each moving
+/// phase's frames.
 struct SidebarRun {
     let session: ScanoutSession
+    let test: String
     let layout: SidebarLayout
+    let band: SidebarBand
     let directory: URL
     private(set) var phases: [GlassSidebarVerdict.Phase] = []
     private(set) var reads: [GlassMemWords] = [.read()]
@@ -94,24 +97,26 @@ struct SidebarRun {
         return String(format: "%.2f/%.2f", mean { $0.a.mean }, mean { $0.b.mean })
     }
 
-    /// An idle phase (no scroll views) only waits: no display link, timer or read-back runs, so nothing commits.
-    mutating func phase(_ name: String, seconds: TimeInterval, scrolls: [UIScrollView]) async {
-        guard !scrolls.isEmpty else {
+    /// An idle phase (no scroll views and nothing appearing) only waits: no display link, timer or read-back runs, so
+    /// nothing commits.
+    mutating func phase(_ name: String, seconds: TimeInterval, scrolls: [UIScrollView], appearing: UIView? = nil) async
+    {
+        guard !scrolls.isEmpty || appearing != nil else {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9))
             phases.append(.init(name: name, moving: false))
             reads.append(.read())
             return
         }
         GlassProbe.arm(lines: false)
-        let (session, layout, directory) = (self.session, self.layout, self.directory)
+        let (session, test, band, directory) = (self.session, self.test, self.band, self.directory)
         let reader = await MainActor.run {
-            SidebarReader(session: session, phase: name, layout: layout, directory: directory)
+            SidebarReader(session: session, test: test, phase: name, band: band, directory: directory)
         }
         guard session.rearm() else {
             stopped = "\(name):arm"
             return
         }
-        let driver = await MainActor.run { SidebarDriver(scrolls) }
+        let driver = await MainActor.run { SidebarDriver(scrolls, appearing: appearing) }
         await reader.run(until: Date().addingTimeInterval(seconds))
         await MainActor.run { driver.stop() }
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -143,9 +148,9 @@ struct SidebarRun {
         let rect = { (r: CGRect) in [r.minX, r.minY, r.width, r.height].map(Double.init) }
         let record = Record(
             sidebar: rect(layout.sidebar), detail: rect(layout.detail), region: rect(layout.region),
-            bandX: [layout.x.lowerBound, layout.x.upperBound],
-            mirroredX: [layout.mirroredX.lowerBound, layout.mirroredX.upperBound],
-            bandY: [layout.y.lowerBound, layout.y.upperBound], reads: reads.map { [$0.mem, $0.pool] },
+            bandX: [band.x.lowerBound, band.x.upperBound],
+            mirroredX: [band.mirroredX.lowerBound, band.mirroredX.upperBound],
+            bandY: [band.y.lowerBound, band.y.upperBound], reads: reads.map { [$0.mem, $0.pool] },
             phases: frames.map { Phase(name: $0.0, frames: $0.1) })
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

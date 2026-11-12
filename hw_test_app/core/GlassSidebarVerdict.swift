@@ -44,9 +44,10 @@ public enum GlassSidebarVerdict {
     }
 
     /// `scene` holds what the test measured of its split view, logged after the totals; `stopped` names the phase
-    /// whose read-back failed and why.
+    /// whose read-back failed and why; `subject` is what the judged band shows (ui.glass_settings: its glass pane).
     public static func outcome(
-        _ phases: [Phase], reads: [GlassMemWords], scene: Metrics, pngs: [String], stopped: String?
+        _ phases: [Phase], reads: [GlassMemWords], scene: Metrics, pngs: [String], stopped: String?,
+        subject: String = "sidebar"
     ) -> Outcome {
         let probe = reads.contains(where: \.published)
         let moving = phases.filter(\.moving)
@@ -70,7 +71,7 @@ public enum GlassSidebarVerdict {
                 if let first = phase.black.first { metrics.set(phase.name + "_first", Int(first)) }
                 if !phase.black.isEmpty {
                     reasons.append(
-                        "\(phase.name): \(phase.black.count) of \(phase.frames) frames show the sidebar black")
+                        "\(phase.name): \(phase.black.count) of \(phase.frames) frames show the \(subject) black")
                 }
             }
             guard probe, index + 1 < reads.count else { continue }
@@ -82,7 +83,7 @@ public enum GlassSidebarVerdict {
                     phase.name + "_pool", GlassPool(word: reads[index].pool).text + ">" + GlassPool(word: after).text)
             }
         }
-        if partial > 0 { reasons.append("\(partial) frames show the sidebar partly black") }
+        if partial > 0 { reasons.append("\(partial) frames show the \(subject) partly black") }
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(3).joined(separator: ",").prefix(120)))
         if let stopped { metrics.set("stopped", stopped) }
         if !reasons.isEmpty { return .fail(LogLine.fitted(reasons, budget: 160), metrics) }

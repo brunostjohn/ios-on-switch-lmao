@@ -3,16 +3,17 @@ import HWTestCore
 import UIKit
 import os
 
-/// ui.glass_sidebar's read-back of one moving phase, on a thread of its own as ui.glass_live's LiveReader: each
-/// presented frame read in place, the sidebar band judged in both places the turned buffer may put it (and, with a live
+/// ui.glass_sidebar's (and ui.glass_settings') read-back of one moving phase, on a thread of its own as ui.glass_live's
+/// LiveReader: each presented frame read in place, the band judged in both places the turned buffer may put it (and, with a live
 /// kernel, the frame before as it was scanned at the end of its time on screen), the read-back armed again. The caller
 /// arms the read-back before the phase's first commit, so the first frame after an idle phase is the first one read.
 final class SidebarReader {
     private static let logger = Logger(subsystem: "com.brunostjohn.switch.hwtest", category: "glass_sidebar")
 
     let session: ScanoutSession
+    let test: String
     let phase: String
-    let layout: SidebarLayout
+    let band: SidebarBand
     let directory: URL
     let uiPixels: (width: Int, height: Int)
     private(set) var frames: [SidebarFrame] = []
@@ -23,10 +24,11 @@ final class SidebarReader {
     private var saveNext = false
 
     @MainActor
-    init(session: ScanoutSession, phase: String, layout: SidebarLayout, directory: URL) {
+    init(session: ScanoutSession, test: String, phase: String, band: SidebarBand, directory: URL) {
         self.session = session
+        self.test = test
         self.phase = phase
-        self.layout = layout
+        self.band = band
         self.directory = directory
         let size = UIScreen.main.nativeBounds.size
         let (w, h) = (Int(size.width), Int(size.height))
@@ -73,8 +75,8 @@ final class SidebarReader {
     private func judge(_ frame: ScanoutSession.Frame, ms: Double) {
         let turned = frame.width == uiPixels.height && frame.height == uiPixels.width
         let image = LiveImage(base: frame.first, width: frame.width, height: frame.height, turned: turned)
-        let a = image.rect(uiX: layout.x, uiY: layout.y)
-        let b = image.rect(uiX: layout.mirroredX, uiY: layout.y)
+        let a = image.rect(uiX: band.x, uiY: band.y)
+        let b = image.rect(uiX: band.mirroredX, uiY: band.y)
         var end: (LiveImage.Glass, LiveImage.Glass)?
         if frame.previous != nil {
             let second = LiveImage(base: frame.second, width: frame.width, height: frame.height, turned: turned)
@@ -98,7 +100,7 @@ final class SidebarReader {
         let low = ticks & ((1 << 40) - 1)
         Self.logger.notice(
             """
-            ui.glass_sidebar black phase=\(self.phase, privacy: .public) seq=\(sequence, privacy: .public) \
+            \(self.test, privacy: .public) black phase=\(self.phase, privacy: .public) seq=\(sequence, privacy: .public) \
             ticks=\(ticks, privacy: .public) ticks40=\(low, privacy: .public) at=\(at, privacy: .public) \
             a=\(a.black, privacy: .public) b=\(b.black, privacy: .public)
             """)
@@ -135,7 +137,8 @@ final class SidebarReader {
 }
 
 /// What ui.glass_sidebar saw of one presented frame. `a` is the band where the sidebar sits when the buffer runs
-/// with the UI's x, `b` where it sits when it runs against it; the other one holds the detail's bright stripes.
+/// with the UI's x, `b` where it sits when it runs against it; the other one holds the detail's bright stripes. For
+/// ui.glass_settings both are the pane's middle.
 struct SidebarFrame: Codable {
     struct Band: Codable {
         let verdict: String

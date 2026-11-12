@@ -125,6 +125,22 @@ final class GlassSidebarVerdictTests: XCTestCase {
                 + "1 frames show the sidebar partly black")
     }
 
+    /// ui.glass_settings judges its glass pane, phases with no idle between them
+    func testTheReasonNamesWhatTheBandShows() {
+        let run = [
+            Phase(name: "scroll", moving: true, frames: 180),
+            Phase(name: "appear", moving: true, frames: 180, black: [812], partial: 3),
+        ]
+        let reads = [0, 100, 200].map { GlassMemWords(mem: Self.mem(cbs: $0), pool: Self.busy) }
+        let outcome = GlassSidebarVerdict.outcome(
+            run, reads: reads, scene: Metrics(), pngs: [], stopped: nil, subject: "glass pane")
+        XCTAssertEqual(outcome.verdict, .fail)
+        XCTAssertEqual(outcome.metrics["reclaim"], .text("-"))
+        XCTAssertEqual(
+            outcome.detail,
+            "appear: 1 of 180 frames show the glass pane black; 3 frames show the glass pane partly black")
+    }
+
     func testNoFrameIsASkipAndAStoppedReadBackNeverPasses() {
         let empty = phases().map { Phase(name: $0.name, moving: $0.moving) }
         let release = Array(repeating: GlassMemWords(mem: 0, pool: 0), count: 6)
