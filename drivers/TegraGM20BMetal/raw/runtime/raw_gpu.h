@@ -1388,9 +1388,10 @@ public:
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
     // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
     // allocation both drivers render, sample and copy in place), laid out as `m` says, with a texture header of its depth where
-    // `sampled`; false where it is not a layout the raw path renders (*why says which way)
+    // `sampled`; false where it is not a layout the raw path renders (*why says which way). A 2D array or cube of `layers`
+    // layers, layerBytes apart, is rendered alone (no header)
     bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled, Texture &t,
-                        const char **why);
+                        const char **why, uint32_t layers = 1);
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
     bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);

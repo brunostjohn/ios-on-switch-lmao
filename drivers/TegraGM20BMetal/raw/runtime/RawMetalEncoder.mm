@@ -171,9 +171,10 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         (depth && std::isnan(d.clearDepth)))
         return false;
     MTLRenderPassAttachmentDescriptor *aspects[2] = {depth ? d : nil, stencil ? s : nil};
+    const NSUInteger slice = depth ? d.slice : s.slice;
     for (MTLRenderPassAttachmentDescriptor *a : aspects)
         if (a &&
-            (a.level || a.slice || a.depthPlane || a.resolveTexture ||
+            (a.level || a.slice != slice || slice >= std::max(t->_raw.layers, 1u) || a.depthPlane || a.resolveTexture ||
              (t->_raw.memoryless && (a.storeAction != MTLStoreActionDontCare ||
                                      (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))) ||
              (a.storeAction != MTLStoreActionDontCare && a.storeAction != MTLStoreActionStore)))
@@ -290,6 +291,7 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         hit(self, PredPassRotated, uint64_t(turned));
     }
     facts.depth = zetaAttachment(pass);
+    facts.depthSlice = pass.depthAttachment.texture ? pass.depthAttachment.slice : pass.stencilAttachment.slice;
     facts.depthLoad = pass.depthAttachment.loadAction;
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;

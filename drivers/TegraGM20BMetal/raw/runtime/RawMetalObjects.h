@@ -239,6 +239,7 @@ struct RMPass {
     } color[8];
 
     __unsafe_unretained id depth;
+    NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
     struct Zeta {
