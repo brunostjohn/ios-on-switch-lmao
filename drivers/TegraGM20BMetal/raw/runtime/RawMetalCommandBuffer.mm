@@ -12,6 +12,7 @@ struct RMRecording {
     RMCommandPlan plan;
     std::vector<RMPass> passes;
     RMBytes bytes;
+    std::deque<raw::RetirementWrites> retirements;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
     std::unordered_set<void *> ownerKeys;
@@ -29,6 +30,7 @@ static void takeRecording(RMCommandBuffer *b)
             std::swap(b->_plan, r.plan);
             b->_passes.swap(r.passes);
             std::swap(b->_bytes, r.bytes);
+            b->_retirements.swap(r.retirements);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
             b->_ownerKeys.swap(r.ownerKeys);
@@ -64,6 +66,7 @@ static void giveRecording(RMCommandBuffer *b)
     std::swap(r.plan, b->_plan);
     r.passes.swap(b->_passes);
     std::swap(r.bytes, b->_bytes);
+    r.retirements.swap(b->_retirements);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
     r.ownerKeys.swap(b->_ownerKeys);

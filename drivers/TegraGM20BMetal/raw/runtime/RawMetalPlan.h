@@ -258,6 +258,11 @@ public:
     }
 
     void registerResource(void *object, RMResourceFacts facts);
+    const RMResourceFacts *factsOf(void *object) const
+    {
+        const auto found = resourceFacts_.find(object);
+        return found != resourceFacts_.end() ? &found->second : nullptr;
+    }
     void *nativeRangeRefusal(size_t from, size_t to) const;
     template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
     {

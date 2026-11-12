@@ -47,22 +47,32 @@ void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to)
     markWritten(*captureWrittenRange(cb, from, to), false);
 }
 
-std::shared_ptr<const raw::RetirementWrites> captureWrittenRange(RMCommandBuffer *cb, size_t from, size_t to)
+// The range's written resources, in a list of the command buffer's own for this range: later kernels can still replace
+// plan summaries while its completion runs. Their kinds and CPU buffers are the facts its recording took of them.
+const raw::RetirementWrites *captureWrittenRange(RMCommandBuffer *cb, size_t from, size_t to)
 {
-    // Later kernels can still replace plan summaries while this range's completion runs.
-    return std::make_shared<const raw::RetirementWrites>(raw::RetirementWrites::capture(
-        [&](auto visit) { cb->_plan.forEachWritten(from, to, visit); },
-        [](void *value) {
-            id object = (__bridge id)value;
-            return raw::RetirementWrites::Target{(__bridge void *)cpuBufferOfResource(object),
-                [object isKindOfClass:[RMTexture class]] ? value : nullptr};
-        }));
+    if (cb->_retired == cb->_retirements.size())
+        cb->_retirements.emplace_back();
+    raw::RetirementWrites &writes = cb->_retirements[cb->_retired++];
+    const RMCommandPlan &plan = cb->_plan;
+    writes.captureInto([&](auto visit) { plan.forEachWritten(from, to, visit); },
+                       [&](void *value) {
+                           if (const RMResourceFacts *facts = plan.factsOf(value))
+                               return raw::RetirementWrites::Target{
+                                   facts->cpuBuffer, facts->kind == RMResourceKind::Texture ? value : nullptr};
+                           id object = (__bridge id)value;
+                           return raw::RetirementWrites::Target{(__bridge void *)cpuBufferOfResource(object),
+                                                                [object isKindOfClass:[RMTexture class]] ? value
+                                                                                                         : nullptr};
+                       });
+    return &writes;
 }
 
 void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
 {
-    auto writes = captureWrittenRange(cb, from, to);
-    std::vector<const raw::Buffer *> cached;
+    const raw::RetirementWrites *writes = captureWrittenRange(cb, from, to);
+    static thread_local std::vector<const raw::Buffer *> cached;
+    cached.clear();
     for (void *object : writes->buffers) {
         const raw::Buffer &buffer = ((__bridge RMBuffer *)object)->_raw;
         if (buffer.hostVisible && !buffer.wc && buffer.cpu)
@@ -78,7 +88,7 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
     const bool quiet = cb->_rangeQuiet;
     {
         std::lock_guard<std::mutex> l(gRM->doneLock);
-        gRM->inflight.push_back({cb, cb->_seqno, std::move(writes), std::move(signals), cb->_gpuEventWaits,
+        gRM->inflight.push_back({cb, cb->_seqno, writes, std::move(signals), cb->_gpuEventWaits,
                                  cb->_channelGeneration, std::move(cpu), quiet});
         gRM->submitPromised = quiet;
     }

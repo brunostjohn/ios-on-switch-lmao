@@ -154,7 +154,7 @@ struct RMNativeEventSignal {
 struct RMRawRetirement {
     RMCommandBuffer *buffer;
     uint32_t seqno;
-    std::shared_ptr<const raw::RetirementWrites> writes;
+    const raw::RetirementWrites *writes;  // the command buffer's (RMCommandBuffer::_retirements)
     std::vector<RMNativeEventSignal> signals;
     std::vector<raw::EventTimeline::Promise> waits;
     uint64_t generation = 0;
@@ -391,7 +391,7 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
                       const std::vector<raw::EventTimeline::Promise> &waits = {},
                       const raw::CpuCompletion *cpu = nullptr);
 void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to);
-std::shared_ptr<const raw::RetirementWrites> captureWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
+const raw::RetirementWrites *captureWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void completionLoop();
 

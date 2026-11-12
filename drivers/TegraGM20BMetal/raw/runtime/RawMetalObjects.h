@@ -4,6 +4,7 @@
 #import <Metal/Metal.h>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include "raw_handler_order.h"
 #include "raw_submit_queue.h"
 #include "raw_event_timeline.h"
+#include "raw_retirement.h"
 #include "raw_variant.h"
 #include "raw_library_source.h"
 #include "raw_obtained.h"
@@ -301,6 +303,9 @@ struct RMSharedEventWait {
     std::vector<RMTexture *> _plainForStorage;
     bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    // each submitted range's written resources, for its completion (captureWrittenRange): the first _retired of them
+    std::deque<raw::RetirementWrites> _retirements;
+    size_t _retired;
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;
     std::unordered_set<void *> _ownerKeys;  // everything the tape names, retained until completion
