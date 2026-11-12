@@ -623,8 +623,9 @@ int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push
 
 int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *pushes, u32 count,
 	const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
-	const struct switch_gpu_sibling_wait *siblings, u32 sibling_count, u32 *seqno, u32 visibility)
+	const struct switch_gpu_sibling_wait *siblings, u32 sibling_count, u32 *seqno,
+	const struct tgm_prof *prof, u32 visibility)
 {
-	return chan_exec_body(chan, pushes, count, seqno, NULL, dependencies, dependency_count, 0, visibility,
+	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0, visibility,
 			      siblings, sibling_count);
 }

@@ -2,14 +2,6 @@
 // CPU access, job scratch, and submission (submitAddress, exec).
 #include "TegraGM20BUserClientInternal.h"
 
-namespace
-{
-constexpr bool pushScanOn()
-{
-	return TGM_STATS != 0;
-}
-}  // namespace
-
 void AGXDeviceUserClient::releaseCpuLeases()
 {
 	while (cpuLeases_) {
@@ -319,11 +311,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return kIOReturnBadArgument;
 	tgm_prof prof;
-	bool profiled = false;
-	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
-		profiled = count <= TGM_PROF_MAX && pushScans_++ % kProfileEvery == 0;
-		scanPushes(pushes, count, profiled ? &prof : nullptr);
-	}
+	const tgm_prof *profile = scanSubmission(pushes, count, prof);
 	uint32_t seqno = 0;
 	uint32_t baseUses = native ? useCount + count : 0;
 	if (!native)
@@ -525,7 +513,7 @@ refresh:
 								  hostWritten || transaction.host_written);
 			error = switch_gpu_chan_exec_visibility(chan, pushes, count, job.dependencies,
 								dependencies, &seqno,
-								profiled ? &prof : nullptr, jobVisibility);
+								profile, jobVisibility);
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}
@@ -533,7 +521,7 @@ refresh:
 			break;
 		switch_gpu_backing_abort(&transaction);
 		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies,
-							     profiled ? &prof : nullptr);
+							     profile);
 		if (error)
 			break;
 	}

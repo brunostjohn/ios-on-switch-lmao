@@ -148,6 +148,12 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	uint32_t fences = 0;
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return kIOReturnBadArgument;
+#if TGM_STATS
+	tgm_prof prof;
+	const tgm_prof *profile = scanSubmission(pushes, count, prof);
+#else
+	const tgm_prof *profile = nullptr;
+#endif
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
 		 rangedUses = 0, nativeReads = 0;
 	bool hostWritten = (head.flags & TegraGM20BJobHostWritten) || (set && switch_gpu_set_take_host_written(set));
@@ -295,14 +301,14 @@ refresh:
 							  hostWritten || transaction.host_written) |
 				(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
 			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
-							 siblings, siblingCount, &seqno, jobVisibility);
+							 siblings, siblingCount, &seqno, profile, jobVisibility);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);
 		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies + siblingCount,
-							     nullptr);
+							     profile);
 		if (error)
 			break;
 	}

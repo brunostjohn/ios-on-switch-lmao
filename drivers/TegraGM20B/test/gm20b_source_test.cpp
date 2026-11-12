@@ -380,6 +380,25 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		    HasSubstr("if (dst_va) tgm_present_push_copy(push);"));
 }
 
+// gpu.poster_targets reads each process's largest colour target, which the stats' push scan records (debug kernels).
+// Every submission path takes the scan before its kick and hands its profile to the kick, so raw's SubmitJob jobs
+// (57b71739d) are read as its Exec jobs were; the scan's counts are atomic, as SubmitJob runs without the connection lock.
+TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
+{
+	const std::string job =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,"));
+	expectBefore(job, "const tgm_prof *profile = scanSubmission(pushes, count, prof);", "switch_gpu_chan_exec_job(");
+	EXPECT_THAT(job, HasSubstr("&seqno, profile, jobVisibility);"));
+	const std::string exec =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input,"));
+	expectBefore(exec, "const tgm_prof *profile = scanSubmission(pushes, count, prof);",
+		     "switch_gpu_chan_exec_visibility(");
+	EXPECT_THAT(exec, HasSubstr("&seqno, profile, jobVisibility);"));
+	EXPECT_EQ(Count(client(), "scanPushes(pushes, count,"), 1u);
+	EXPECT_THAT(flat(definition(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")),
+		    HasSubstr("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % kScanEvery"));
+}
+
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
 // does not flush again. A fence-only present (direct scanout of a frame the GPU drew through the L2) keeps the fence's.
 TEST(GM20BPresentSource, OneL2FlushPerPresent)

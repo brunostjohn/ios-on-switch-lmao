@@ -338,8 +338,21 @@ extern "C" int tgm_client_interlocks(const void *client, const uint64_t *va, con
 		->hungInterlocks(va, dwords, n, interlocks, last_engine);
 }
 
-// The stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
-// BOs they lie in (pool BOs write-combined, cached BOs their kernel mapping); every 5 s the window's line.
+// The stats' read of a submission before its kick, by every submission path (exec, SubmitJob): every kScanEvery-th one
+// is scanned (scanPushes: its counts and its process's target peak), every kProfileEvery-th scan also profiled, whose
+// profile the kick stamps. Channels of one connection submit at once with no connection lock: the counts are atomic.
+const tgm_prof *AGXDeviceUserClient::scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof)
+{
+	if (!TGM_STATS || !count || __atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % kScanEvery)
+		return nullptr;
+	const bool profiled =
+		count <= TGM_PROF_MAX && __atomic_fetch_add(&pushScans_, 1u, __ATOMIC_RELAXED) % kProfileEvery == 0;
+	scanPushes(pushes, count, profiled ? &prof : nullptr);
+	return profiled ? &prof : nullptr;
+}
+
+// The stats: count what this submission's pushes ask of the GPU, through the kernel's view of the BOs they lie in (pool
+// BOs write-combined, cached BOs their kernel mapping); every 5 s the window's line.
 void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof)
 {
 	if (!TGM_STATS)
