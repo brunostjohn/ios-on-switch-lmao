@@ -303,6 +303,8 @@ TEST_F(ProgramPages, AnotherPageListFromTheSameFirstPageIsRefused)
 	EXPECT_EQ(c.backing, a.backing) << "a prefix of the grain's pages is the same backing";
 	release(c);
 	release(a);
+	switch_gpu_backing_retire();
+	EXPECT_EQ(first.released, 1) << "the backing goes, and releases its owner, while the owner is still there";
 }
 
 }  // namespace
