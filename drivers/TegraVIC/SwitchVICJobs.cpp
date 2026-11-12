@@ -216,7 +216,7 @@ int switch_vic_submit_owned(const TegraVICJob *jobs, uint32_t count, const Tegra
 
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
-                              uint32_t *fence, SwitchVICEvents *events)
+                              uint32_t *fence, SwitchVICEvents *events, switch_gpu_backing_token *written)
 {
     auto *uses = ownership.uses;
     uint32_t useCount = ownership.useCount;
@@ -467,6 +467,8 @@ retry:
         switch_vic_events_commit(events);
         if (fence)
             *fence = static_cast<uint32_t>(gQueue.submitted);
+        if (written)
+            *written = token;
         end = gQueue.last();
         const auto &last = gQueue.jobs[end];
         bridge = last.bridge;
@@ -482,6 +484,13 @@ retry:
         if (const int error = Stages::notify(end, bridge))
             Retirement::unarmed(end, error);
     return status;
+}
+
+int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
+                              const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
+                              uint32_t *fence, SwitchVICEvents *events)
+{
+    return switch_vic_submit_checked(jobs, count, acquire, ownership, completion, context, fence, events, nullptr);
 }
 
 extern "C" int switch_vic_wait(uint32_t fence)

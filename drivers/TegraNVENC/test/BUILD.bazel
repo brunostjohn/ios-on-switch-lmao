@@ -1,0 +1,21 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "inputs_kernel",
+    headers = ["IOKit/IOLocks.h"],
+    stubs = "tegra_nvenc_inputs_stubs.h",
+)
+
+# An encode's verdict on what it read: VIC's input picture, a native picture's NVDEC and VIC producers.
+host_test(
+    name = "tegra_nvenc_inputs_test",
+    srcs = [
+        "tegra_nvenc_inputs_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraNVENC:TegraNVENCInputs.h",
+    ],
+    deps = [":inputs_kernel"],
+)

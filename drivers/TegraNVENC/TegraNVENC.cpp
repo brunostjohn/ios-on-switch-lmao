@@ -56,6 +56,7 @@
 #include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
+#include "TegraNVENCInputs.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -129,6 +130,8 @@ uint8_t gJobCodec[kSetupSlots];    // by setup slot: the codec of the job using 
 bool gUp, gWedged, gSuspended, gFailed;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
+TegraNVENCInputs gInputs;
+static_assert(TegraNVENCInputs::kProducers == TEGRA_NVENC_ORDER_WAITS + 1, "the order's producers and VIC's input");
 
 const char *falconState()
 {
@@ -352,8 +355,8 @@ void bringUp(void *, wait_result_t)
     gNvenc = switch_mmio_map(kNvencPA, kNvencSize);
     gMc = switch_mmio_map(kMcPA, 0x1000);
     gEngineLock = IOLockAlloc();
-    if (!gNvenc || !gMc || !gEngineLock) {
-        IOLog("TegraNVENC: E1 FAIL no mapping\n");
+    if (!gNvenc || !gMc || !gEngineLock || !gInputs.start()) {
+        IOLog("TegraNVENC: E1 FAIL no mapping or lock\n");
         return;
     }
     gLine[0] = 0;
@@ -562,6 +565,13 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
     const int ret =
         switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first, gSyncpt, gBase + job);
     if (!ret) {
+        switch_gpu_backing_token producers[TegraNVENCInputs::kProducers];
+        uint32_t count = 0;
+        if (after)
+            producers[count++] = after->producer;
+        for (uint32_t k = 0; k < orderedCount; k++)
+            producers[count++] = ordered[k].producer;
+        gInputs.record(gBase + job, producers, count);
         __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
         *fence = gBase + job;
     }
@@ -608,6 +618,11 @@ extern "C" int tegra_nvenc_wait(uint32_t fence)
     if (drained())
         gGate.idle();
     return !ret && failedFence(fence) ? -5 : ret;
+}
+
+extern "C" int tegra_nvenc_input_failure(uint32_t fence)
+{
+    return gInputs.failure(fence);
 }
 
 namespace {

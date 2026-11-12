@@ -88,10 +88,11 @@ int tegra_nvenc_source(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, voi
     input.matrix = source.matrix;
     input.after = last ? &previous : nullptr;
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
-    const int error = switch_vic_encode_input(source.surface_id, task, &input, &fence, &bounced, why);
+    const int error = switch_vic_encode_input(source.surface_id, task, &input, &fence, &written, &bounced, why);
     if (!error) {
-        *after = {tegra_vic_syncpt(), fence};
+        *after = {tegra_vic_syncpt(), fence, written};
         *route = bounced ? TEGRA_NVENC_INPUT_BOUNCED : TEGRA_NVENC_INPUT_VIC;
     }
     return error;

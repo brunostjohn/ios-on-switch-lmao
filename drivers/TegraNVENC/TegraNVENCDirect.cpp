@@ -3,9 +3,10 @@
 // linear, 2-GOB blocks: NVENC's code 0, NVIDIA's driver's own input) is mapped read-only into NVENC's address space,
 // and the job's input relocations point at its planes, input_cfg rewritten to the picture's pitch and block height
 // (TegraNVENCDirectPlan.h). The read is a use in SwitchGpuBacking under engine SWITCH_GPU_ENGINE_NVENC: the job waits on
-// the hardware for the picture's producers (NVDEC and VIC by their syncpoints), and later writers of the picture wait
-// for the job's fence (VIC, NVDEC and the GPU by host1x waits, the CPU by tegra_nvenc_wait). A producer that only the
-// GPU's bridge orders (GM20B) sends the picture through VIC instead.
+// the hardware for the picture's producers (NVDEC and VIC by their syncpoints; a producer's failure is the job's,
+// TegraNVENCInputs.h), and later writers of the picture wait for the job's fence (VIC, NVDEC and the GPU by host1x
+// waits, the CPU by tegra_nvenc_wait). A producer that only the GPU's bridge orders (GM20B) sends the picture through
+// VIC instead.
 #include <IOKit/IOLib.h>
 #include "TegraNVENC.h"
 #include "TegraNVENCDirect.h"
@@ -46,7 +47,8 @@ int begin(void *context, uint32_t fence, TegraNVENCAfter *waits, uint32_t *count
         const auto &producer = producers[i];
         const int wait = tegra_nvenc_direct_producer(&producer, switch_gpu_backing_token_external_status(&producer));
         if (wait == 1 && *count < TEGRA_NVENC_ORDER_WAITS)
-            waits[(*count)++] = {static_cast<uint32_t>(producer.queue), static_cast<uint32_t>(producer.value)};
+            waits[(*count)++] = {static_cast<uint32_t>(producer.queue), static_cast<uint32_t>(producer.value),
+                                 producer};
         else if (wait)
             error = wait == 1 ? -11 : wait;
     }
