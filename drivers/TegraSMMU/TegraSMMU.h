@@ -81,6 +81,9 @@ void tegra_smmu_detach(uint32_t asid, uint32_t asidReg);
 void tegra_smmu_flush(uint32_t asid);
 // The MC register at offset (for a driver's own checks and FAIL lines).
 uint32_t tegra_smmu_read(uint32_t offset);
+// Sets or clears a memory client's hot-reset bit in MC_CLIENT_HOTRESET_CTRL (0x200) or CTRL_1 (0x970); the flush has
+// drained once its bit reads set in the matching STATUS register (tegra_smmu_read).
+void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on);
 // After SC7, before any translated client runs (SwitchSuspend's wake): every attached swgroup programmed again.
 // Returns how many could not be (one line each); their clients then fault at the MC instead of translating.
 int tegra_smmu_resume(void);

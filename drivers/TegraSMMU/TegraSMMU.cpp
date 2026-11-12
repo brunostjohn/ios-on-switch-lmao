@@ -149,6 +149,19 @@ extern "C" uint32_t tegra_smmu_read(uint32_t offset)
     return ready() ? r32(offset) : 0;
 }
 
+// One register holds the hot-reset bits of clients different drivers power (NVDEC, NVJPG and the GPU share
+// MC_CLIENT_HOTRESET_CTRL_1; VIC and NVENC CTRL): each read-modify-write is under the MC's lock.
+extern "C" void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
+{
+    if (!ready())
+        return;
+    IOSimpleLockLock(gLock);
+    const uint32_t value = r32(ctrl);
+    w32(ctrl, on ? value | bit : value & ~bit);
+    (void)r32(ctrl);
+    IOSimpleLockUnlock(gLock);
+}
+
 extern "C" int tegra_smmu_resume(void)
 {
     if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE) || !ready())
