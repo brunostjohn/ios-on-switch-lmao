@@ -18,7 +18,7 @@ constexpr bool twodFillHolds(uint32_t format)
     case 71:  // RGBA8Unorm_sRGB
         return false;
     case 80:  // BGRA8Unorm
-        return false;
+        return true;
     case 81:  // BGRA8Unorm_sRGB
         return false;
     default:

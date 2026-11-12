@@ -17,8 +17,9 @@ TEST(TwodFill, WordsInTheUnormViewsPacking)
 
 TEST(TwodFill, NoFormatHoldsBeforeTheChipsCells)
 {
-    for (uint32_t f : {70u, 71u, 80u, 81u, 115u})
+    for (uint32_t f : {70u, 71u, 81u, 115u})
         EXPECT_FALSE(raw::twodFillHolds(f)) << f;
+    EXPECT_TRUE(raw::twodFillHolds(80u));
 }
 
 }  // namespace
