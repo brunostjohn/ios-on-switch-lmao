@@ -35,14 +35,16 @@ struct FetchFreeForm {
     uint8_t rung = FetchNone;  // FetchBlend or FetchIteratedBlend; FetchNone: not a fetch-free form
     uint8_t colour = 0;        // the colour it blends
     uint8_t programWords = 0, constants = 0;
-    // a colour matrix form's: the fragment buffer the matrix is in and its bytes from the bind offset, which each draw's
-    // macro call reads (kNoUniform: the program is the record's)
+    // a colour matrix form's: the fragment buffer the matrix is in, its bytes from the bind offset and its words there,
+    // which each draw's macro call reads (kNoUniform: the program is the record's)
     uint8_t matrixSlot = kNoUniform;
     uint16_t matrixOffset = 0;
+    uint8_t matrixWords = 0;
 };
 
-// The colour matrix macro's program at its longest (programs_long.py vcm.scale) and its constants
-constexpr uint8_t kMatrixProgramWords = 38, kMatrixConstants = 8;
+// The colour matrix macro's program at its longest (programs_long.py vcm.scale) and its constants; its uniform's five
+// half4 rows, which the clamp pair follows where the build's QuartzCore has one (pack/fetchfree_link.py)
+constexpr uint8_t kMatrixProgramWords = 38, kMatrixConstants = 8, kMatrixRowWords = 10, kMatrixWords = 11;
 
 // The form a record describes; rung FetchNone where it is not one, or names an iterated program the pack lacks
 inline FetchFreeForm fetchFreeForm(const PackPipeline &pp, const PackIteratedBlend *iterated)
@@ -63,8 +65,11 @@ inline FetchFreeForm fetchFreeForm(const PackPipeline &pp, const PackIteratedBle
         f.programWords = rung != FetchIteratedBlend ? 0 : matrix ? kMatrixProgramWords : iterated->count;
         f.constants = rung != FetchIteratedBlend ? 0 : matrix ? kMatrixConstants : iterated->constants;
         if (matrix) {
+            if (iterated->uniformWords < kMatrixRowWords || iterated->uniformWords > kMatrixWords)
+                return FetchFreeForm{};
             f.matrixSlot = iterated->uniformSlot;
             f.matrixOffset = iterated->uniformOffset;
+            f.matrixWords = iterated->uniformWords;
         }
         return f;
     }

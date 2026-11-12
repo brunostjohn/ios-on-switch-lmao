@@ -289,6 +289,14 @@ py_test(
     deps = [":raw_pack"],
 )
 
+# raw/pack/fetchfree_link.py: where a colour matrix form's draws read the matrix uniform.
+py_test(
+    name = "fetchfree_link_test",
+    srcs = ["raw/pack/fetchfree_link_test.py"],
+    main = "raw/pack/fetchfree_link_test.py",
+    deps = [":raw_pack"],
+)
+
 # raw/pack/iterated: every iterated blend program a fetch-free form names, against QuartzCore's formula.
 py_test(
     name = "iterated_table_test",

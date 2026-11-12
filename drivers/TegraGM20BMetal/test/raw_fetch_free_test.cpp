@@ -52,6 +52,23 @@ TEST(RawFetchFree, AnIteratedFormWithoutItsProgramIsNone)
     EXPECT_EQ(raw::fetchFreeForm(storage, nullptr).rung, raw::FetchNone);
 }
 
+TEST(RawFetchFree, AColourMatrixFormReadsItsRowsAndTheClampPairWhereItsUniformHasOne)
+{
+    raw::PackIteratedBlend matrix = {};
+    matrix.uniformSlot = 1;
+    matrix.uniformOffset = 0xb0;
+    for (const uint8_t words : {uint8_t(10), uint8_t(11)}) {
+        matrix.uniformWords = words;
+        const raw::FetchFreeForm f = raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &matrix);
+        EXPECT_EQ(f.rung, raw::FetchIteratedBlend);
+        EXPECT_EQ(f.matrixSlot, 1);
+        EXPECT_EQ(f.matrixOffset, 0xb0);
+        EXPECT_EQ(f.matrixWords, words);
+    }
+    matrix.uniformWords = 9;
+    EXPECT_EQ(raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &matrix).rung, raw::FetchNone);
+}
+
 TEST(RawFetchFree, TheIteratedWordsEnableTheColoursBlendLoadTheProgramAndTurnOffAfter)
 {
     std::vector<uint32_t> on, off;

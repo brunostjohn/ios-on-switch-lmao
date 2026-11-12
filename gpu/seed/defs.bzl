@@ -326,6 +326,11 @@ _RAW_PROBE = ["rawpack.py"]
 _RAW_LINK = [
     "rawpack.py",
     "directlink.py",
+    "fetchfree_link.py",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
     "mkpack.py",
     "kernels.py",
     "layouts.py",

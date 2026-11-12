@@ -13,9 +13,9 @@ MAGIC = b'GM20BPK1'
 # forms and their iterated blend programs
 VERSION = 17
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
-# PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
-# constant[8][3], program[128]
-ITERATED = struct.Struct('<BBBBHHII24H128I')
+# PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
+# alphaDest, constant[8][3], program[128]
+ITERATED = struct.Struct('<BBBBHBBII24H128I')
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
@@ -298,6 +298,7 @@ def iterated_bytes(programs: list[dict]) -> bytes:
             len(p['constants']),
             p.get('uniform_slot', 0xFF),
             p.get('uniform_offset', 0),
+            p.get('uniform_words', 0),
             0,
             p['alpha_source'],
             p['alpha_dest'],

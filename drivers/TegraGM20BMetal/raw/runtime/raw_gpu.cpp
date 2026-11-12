@@ -5149,24 +5149,29 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 }
 
 // A colour matrix form's draw: its iterated blend program and constants from the matrix uniform the draw binds, which
-// the GPU's macro reads through a non-prefetched GPFIFO entry over the uniform's bytes (the CPU reads none of them)
+// the GPU's macro reads through a non-prefetched GPFIFO entry over the uniform's bytes (the CPU reads none of them). A
+// uniform of the rows alone (a QuartzCore whose matrix has no clamp) is followed by a clamp pair of 0, the next body's
+// first word: the macro's method data runs on across the entries.
 bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
 {
+    static_assert(kMatrixWords == SWITCH_GM20B_MACRO_VCM_ARGUMENTS, "the colour matrix macro's arguments");
     const Bound &b = bufs_[2][pl.freeForm.matrixSlot];
-    constexpr uint32_t kWords = SWITCH_GM20B_MACRO_VCM_ARGUMENTS;
-    if (!b.va || uint64_t(pl.freeForm.matrixOffset) + 4 * kWords > b.size || ((b.va + pl.freeForm.matrixOffset) & 3)) {
+    const uint32_t words = pl.freeForm.matrixWords;
+    if (!b.va || uint64_t(pl.freeForm.matrixOffset) + 4 * words > b.size || ((b.va + pl.freeForm.matrixOffset) & 3)) {
         *why = "a colour matrix form's draw binds no uniform buffer that holds the matrix";
         cb_->refusal = {};
         return false;
     }
     if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && b.cpu)
-        cb_->clean(b.cpu + pl.freeForm.matrixOffset, 4 * kWords);
+        cb_->clean(b.cpu + pl.freeForm.matrixOffset, 4 * words);
     mme::matrixHeader(p_);
     bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-    bodies_.push_back({nullptr, nullptr, b.va + pl.freeForm.matrixOffset, kWords, false});
+    bodies_.push_back({nullptr, nullptr, b.va + pl.freeForm.matrixOffset, words, false});
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
+    for (uint32_t w = words; w < kMatrixWords; w++)
+        *p_.at++ = 0;
     return true;
 }
 
