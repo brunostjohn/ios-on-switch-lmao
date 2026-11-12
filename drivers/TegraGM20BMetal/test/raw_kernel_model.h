@@ -68,16 +68,25 @@ struct Model {
     // Where the host holds the BO bound at `va` (its allocation, or the pages an import named), null: none bound there
     uint8_t *host(uint64_t va)
     {
+        return host(va, 1);
+    }
+
+    // [va, va + bytes) in the host memory of the one bind that holds all of it; null where it does not
+    uint8_t *host(uint64_t va, uint64_t bytes)
+    {
         auto bound = binds.upper_bound(va);
         if (bound == binds.begin())
             return nullptr;
         --bound;
         const uint64_t offset = va - bound->first, handle = bound->second.first;
-        if (offset >= bound->second.second)
+        const auto within = [&](uint64_t size) {
+            return offset < size && bytes <= size - offset;
+        };
+        if (!within(bound->second.second))
             return nullptr;
-        if (const auto held = memory.find(uint32_t(handle)); held != memory.end() && offset < held->second.size())
+        if (const auto held = memory.find(uint32_t(handle)); held != memory.end() && within(held->second.size()))
             return held->second.data() + offset;
-        if (const auto pages = imports.find(handle); pages != imports.end() && offset < pages->second.second)
+        if (const auto pages = imports.find(handle); pages != imports.end() && within(pages->second.second))
             return reinterpret_cast<uint8_t *>(uintptr_t(pages->second.first)) + offset;
         return nullptr;
     }

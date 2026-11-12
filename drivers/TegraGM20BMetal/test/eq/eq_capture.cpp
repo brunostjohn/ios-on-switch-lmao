@@ -65,8 +65,8 @@ private:
         auto &d = decoders_[channel];
         if (!d) {
             d = std::make_unique<nvdec::Decoder>(
-                [](uint64_t va, uint64_t) -> const uint8_t * {
-                    return kernel_model::model.host(va);
+                [](uint64_t va, uint64_t bytes) -> const uint8_t * {
+                    return kernel_model::model.host(va, bytes);
                 },
                 log_);
             d->vaKind = [this](uint64_t va) {
@@ -129,7 +129,7 @@ private:
         nvdec::Decoder &d = decoder(job.channel);
         d.submitBegin();
         for (const TegraGM20BAbiPush &push : job.pushes)
-            if (const uint8_t *words = kernel_model::model.host(push.va))
+            if (const uint8_t *words = kernel_model::model.host(push.va, uint64_t(push.dwords) * 4))
                 d.push(reinterpret_cast<const uint32_t *>(words), push.dwords);
         d.submitEnd();
         fflush(log_);
