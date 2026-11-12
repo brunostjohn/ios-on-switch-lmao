@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from tools.benchloop import rop, sweeps, twod, units
+from tools.benchloop import qmdchain, rop, sweeps, twod, units
 
 GENERATORS: dict[str, Callable[[], list[dict]]] = {
     'precision': sweeps.precision,
@@ -11,4 +11,5 @@ GENERATORS: dict[str, Callable[[], list[dict]]] = {
     'store16': rop.generate16,
     'compressed': units.compressed,
     'cstall': units.cstall,
+    'qmdchain': qmdchain.generate,
 }

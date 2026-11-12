@@ -17,6 +17,7 @@
 // invalidated (what the 3D and copy engines read next was written through L2).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include "raw_band_rates.h"
@@ -90,6 +91,11 @@ public:
     Predication::Answer startDoWhile();
     Predication::Answer endDoWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
     void end();
+#if defined(SWITCH_RAW_HARNESS_MARKS)
+    // The bench's QMD chains (hw_test_app/bench qmdchain): each launch's QMD as built, before its upload, to patch;
+    // false holds the launch back, the QMD then only a copy another QMD names dependent
+    std::function<bool(uint32_t *qmd)> benchQmd;
+#endif
 
 private:
     struct Bound {

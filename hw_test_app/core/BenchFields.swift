@@ -44,6 +44,7 @@ struct BenchFields {
         var program: BenchProgram?
         var threads = [1, 1, 1], groups = [1, 1, 1]
         var outputBytes = 0
+        var chain: ([BenchProgram], UInt32) = ([], 0)
         switch kind {
         case .fragment, .readback:
             program = try self.program(fields["program"], "program", sph: true)
@@ -55,6 +56,10 @@ struct BenchFields {
             groups = try counts(compute["groups"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxGroups, "compute.groups")
             guard threads.reduce(1, *) <= BenchProtocol.maxThreads else { throw BenchInvalid("compute.threads > 1024") }
             outputBytes = try output(compute, program!)
+            chain = try self.chain(compute, outputBytes)
+            if !chain.0.isEmpty, draws != [1] || repeats != 1 || warmup != 0 {
+                throw BenchInvalid("compute.chain: one command buffer (draws [1], repeats 1, no warmup)")
+            }
         case .noop, .known, .twod:
             break
         }
@@ -76,13 +81,14 @@ struct BenchFields {
             }
             templateKey = key
         }
-        let experiment = BenchExperiment(
+        var experiment = BenchExperiment(
             id: id, kind: kind, format: format, formatRaw: info.raw, texelBytes: info.bytes, width: UInt32(width),
             height: UInt32(height), rect: rect.map(UInt32.init), clear: clear, fill: fill, program: program,
             threads: threads.map(UInt32.init), groups: groups.map(UInt32.init), draws: draws.map(UInt32.init),
             repeats: UInt32(repeats), warmup: UInt32(warmup), methods: methods, restore: restore, readback: readback,
             singleTarget: targets == 1, templateKey: templateKey, twod: forms.twod, source: forms.source,
             compare: forms.compare, compressed: forms.compressed, outputBytes: outputBytes)
+        (experiment.chain, experiment.chainSchedule) = chain
         guard Self.estimatedMs(experiment) <= BenchProtocol.maxCommandBufferMs else {
             throw BenchInvalid("a command buffer would run past \(BenchProtocol.maxCommandBufferMs) ms")
         }
@@ -131,6 +137,31 @@ struct BenchFields {
             flat += words.map(UInt32.init)
         }
         return flat
+    }
+
+    /// protocol.py _chain: the kernels of the QMDs after the experiment's own, and which QMD schedules the next
+    private func chain(_ compute: [String: Any], _ outputBytes: Int) throws -> ([BenchProgram], UInt32) {
+        guard let value = compute["chain"] else {
+            guard compute["schedule"] == nil else { throw BenchInvalid("compute.schedule: only with compute.chain") }
+            return ([], 0)
+        }
+        guard let links = value as? [Any], (1...BenchProtocol.maxChain).contains(links.count) else {
+            throw BenchInvalid("compute.chain: 1..\(BenchProtocol.maxChain) kernels")
+        }
+        guard outputBytes > 0 else { throw BenchInvalid("compute.chain: an output buffer for the QMDs' releases") }
+        let programs = try links.enumerated().map { try program($1, "compute.chain[\($0)]", sph: false) }
+        guard programs.allSatisfy({ $0.data.count >= 16 }) else {
+            throw BenchInvalid("compute.chain: each kernel's shader data holds the output's and the QMDs' addresses")
+        }
+        guard let flags = compute["schedule"] as? [Any], flags.count == programs.count else {
+            throw BenchInvalid("compute.schedule: one flag per chain kernel")
+        }
+        var bits: UInt32 = 0
+        for (i, flag) in flags.enumerated() {
+            guard let on = flag as? Bool else { throw BenchInvalid("compute.schedule: true or false") }
+            if on { bits |= 1 << UInt32(i) }
+        }
+        return (programs, bits)
     }
 
     private func output(_ compute: [String: Any], _ program: BenchProgram) throws -> Int {

@@ -110,7 +110,7 @@ EXPERIMENT_KEYS |= {'program', 'compute', 'twod', 'methods', 'restore', 'targets
 EXPERIMENT_KEYS |= {'meta', 'expect'}
 TARGET_KEYS = {'format', 'width', 'height'}
 PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
-COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output'}
+COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output', 'chain', 'schedule'}
 TWOD_KEYS = {'op', 'fmt2d', 'colorFormat', 'color', 'du', 'dv', 'sx', 'sy', 'bilinear', 'corner'}
 TWOD_KEYS |= {'reference', 'bracketed', 'samples'}
 SOURCE_KEYS = {'format', 'width', 'height', 'data'}
@@ -125,6 +125,8 @@ PICTURE = ('bgra8unorm', 64, 64)
 # compare: the same operation again through another unit, both results and their difference returned
 COMPARES = {'twod': ('program', 'copy', 'resolve3d'), 'readback': ('plain',)}
 MAX_OUTPUT = 64 * 1024
+# QMDs a compute experiment's own one may name dependent, one after another (hw_test_app/bench switch_bench.h)
+MAX_CHAIN = 3
 
 
 class InvalidError(ValueError):
@@ -324,6 +326,20 @@ def _compute(c: object) -> None:
         )
 
 
+def _chain(c: dict) -> None:
+    """Check a QMD chain: the kernels after the experiment's own, and per QMD before the last whether it schedules it."""
+    chain = c.get('chain')
+    _require(isinstance(chain, list) and 1 <= len(chain) <= MAX_CHAIN, f'compute.chain: 1..{MAX_CHAIN} kernels')
+    _require('output' in c, "compute.chain: an output buffer for the QMDs' releases")
+    for i, link in enumerate(chain):
+        _program(link, f'compute.chain[{i}]')
+        _require(len(unb64(link.get('data', ''))) >= 16, "compute.chain: each kernel's data holds two addresses")
+    schedule = c.get('schedule')
+    _require(isinstance(schedule, list) and len(schedule) == len(chain), 'compute.schedule: one flag per chain kernel')
+    for flag in schedule:
+        _require(isinstance(flag, bool), 'compute.schedule: true or false')
+
+
 def _forms(e: dict, target: Target) -> None:
     """Check the source, compressed and compare fields: which kinds take them and what each needs."""
     if e['kind'] == 'twod':
@@ -367,6 +383,9 @@ def validate_experiment(e: dict) -> None:
         _program(e.get('program'), 'program')
     if e['kind'] == 'compute':
         _compute(e.get('compute'))
+        if 'chain' in e['compute'] or 'schedule' in e['compute']:
+            _chain(e['compute'])
+            _require(draws == [1] and repeats == 1 and warmup == 0, 'compute.chain: one command buffer')
     _forms(e, target)
     if e['kind'] == 'readback':
         _pairs(e.get('methods', []), 'methods')

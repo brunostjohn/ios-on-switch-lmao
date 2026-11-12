@@ -62,7 +62,11 @@ public enum BenchProtocol {
     ]
     public static let targetKeys: Set<String> = ["format", "width", "height"]
     public static let programKeys: Set<String> = ["code", "data", "sph", "gprs"]
-    public static let computeKeys: Set<String> = ["code", "data", "gprs", "threads", "groups", "output"]
+    public static let computeKeys: Set<String> = [
+        "code", "data", "gprs", "threads", "groups", "output", "chain", "schedule",
+    ]
+    /// QMDs a compute experiment's own one may name dependent, one after another (protocol.py MAX_CHAIN)
+    public static let maxChain = 3
     public static let twodKeys: Set<String> = [
         "op", "fmt2d", "colorFormat", "color", "du", "dv", "sx", "sy", "bilinear", "corner", "reference", "bracketed",
         "samples",
@@ -175,6 +179,10 @@ public struct BenchExperiment: Equatable, Sendable {
     public let compressed: Bool
     /// Bytes of the buffer a kernel writes, whose address is the first 8 bytes of its shader data; 0: none
     public let outputBytes: Int
+    /// The kernels of the QMDs after the experiment's own; only its own is launched (hw_test_app/bench switch_bench.h)
+    public var chain: [BenchProgram] = []
+    /// Bit i: QMD i (0 the experiment's own) schedules QMD i + 1 when it completes
+    public var chainSchedule: UInt32 = 0
 
     public var commandBuffers: Int { draws.count * Int(repeats + warmup) }
 }

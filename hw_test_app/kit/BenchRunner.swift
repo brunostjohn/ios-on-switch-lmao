@@ -85,6 +85,12 @@ final class BenchRunner {
         x.compare = (e.compare.flatMap { Self.compares[$0] } ?? SWITCH_BENCH_COMPARE_NONE).rawValue
         x.compressed = e.compressed ? 1 : 0
         x.output_bytes = UInt32(e.outputBytes)
+        x.chain = pinned.programs(e.chain.map { link in
+            switch_bench_program(
+                sph: nil, code: pinned.bytes(link.code), code_bytes: link.code.count, data: pinned.bytes(link.data),
+                data_bytes: link.data.count, gprs: link.gprs)
+        })
+        (x.chain_links, x.chain_schedule) = (UInt32(e.chain.count), e.chainSchedule)
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()
@@ -151,6 +157,13 @@ private final class Pinned {
         let buffer = allocate(values.count * 4)
         values.withUnsafeBytes { buffer.copyMemory(from: $0) }
         return UnsafePointer(buffer.baseAddress!.assumingMemoryBound(to: UInt32.self))
+    }
+
+    func programs(_ values: [switch_bench_program]) -> UnsafePointer<switch_bench_program>? {
+        guard !values.isEmpty else { return nil }
+        let buffer = allocate(values.count * MemoryLayout<switch_bench_program>.stride)
+        values.withUnsafeBytes { buffer.copyMemory(from: $0) }
+        return UnsafePointer(buffer.baseAddress!.assumingMemoryBound(to: switch_bench_program.self))
     }
 
     func zeroed<T>(_: T.Type, _ count: Int) -> UnsafeMutablePointer<T> {

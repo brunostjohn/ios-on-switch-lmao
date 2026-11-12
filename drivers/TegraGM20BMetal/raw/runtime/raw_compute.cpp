@@ -477,6 +477,10 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
         qmd[qmdCbufLo(i)] = uint32_t(va);
         qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
     }
+#if defined(SWITCH_RAW_HARNESS_MARKS)
+    if (benchQmd && !benchQmd(qmd))
+        return true;
+#endif
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);

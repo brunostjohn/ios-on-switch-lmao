@@ -92,6 +92,11 @@ struct switch_bench_experiment {
     uint32_t compare;       // switch_bench_compare
     uint32_t compressed;    // readback: colour 0 in compressible memory, its texels in and out through the copy engine
     uint32_t output_bytes;  // compute: a buffer of this size, its address the shader data's first 8 bytes
+    // compute: the QMDs a chain names dependent after the experiment's own (QMD 0), each kernel's shader data bytes 8-15
+    // the address of QMD 1 (QMD i at 256 * (i - 1) past it). Only QMD 0 is launched; bit i of chain_schedule: QMD i
+    // schedules QMD i + 1 when it completes. Every QMD's release adds 1 to the output's last word.
+    const struct switch_bench_program *chain;
+    uint32_t chain_links, chain_schedule;
 };
 
 // What the app did, so a result proves its own form

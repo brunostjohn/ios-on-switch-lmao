@@ -21,6 +21,13 @@ constexpr uint64_t kKeyBase = 0xbe7c000000000000ull;
 // Placed programs stay in the device's shader heap for its life: a long session starts a fresh device now and then
 constexpr uint64_t kRecordsPerDevice = 4096;
 constexpr uint8_t kUnwritten = 0xa5;  // an output buffer's bytes before a kernel runs, so a word it never wrote shows
+// QMDV01_07 (clb1c0qmd.h) for a chain: DEPENDENT_QMD_POINTER (word 5); word 6's SEMAPHORE_RELEASE_ENABLE0 (bit 202) and
+// DEPENDENT_QMD_SCHEDULE_ENABLE, DEPENDENT_QMD_TYPE GRID and DEPENDENT_QMD_FIELD_COPY (205-207, NAK's QMD 1.7 form,
+// qmd.rs set_dependent_qmd_schedule_pre_v02_04); RELEASE0_ADDRESS (words 23-24) with REDUCTION_ENABLE (794) and
+// STRUCTURE_SIZE ONE_WORD (799), REDUCTION_OP RED_ADD and FORMAT UNSIGNED_32 both 0, and RELEASE0_PAYLOAD (word 25)
+constexpr uint32_t kQmdDependent = 5, kQmdFlags = 6, kQmdRelease0 = 23, kQmdChainMax = 3, kQmdBytes = 256;
+constexpr uint32_t kQmdReleaseEnable0 = 1u << 10, kQmdScheduleDependent = 7u << 13;
+constexpr uint32_t kRelease0AddOneWord = 1u << 26 | 1u << 31;
 
 // placeCompute caches a placed kernel by its record's address for the device's life, so a record's address must never
 // name another kernel: the records outlive every device the bench opens
@@ -292,6 +299,90 @@ void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_
         snprintf(r.why, sizeof r.why, "the channel was dead after the kernel's last fence (a trap the fence missed)");
     if (output.va)
         d.destroyBuffer(output);
+}
+
+// Only QMD 0 is launched: the others are the chain's, held in a buffer of the bench's (the address every kernel's
+// shader data names), each patched to schedule the next where chain_schedule says
+void runChain(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+{
+    if (!b.kernel)
+        return bench::fail(r, SWITCH_BENCH_ERROR, "the pack has no kernel the bench can take as a template");
+    if (!x.chain || x.chain_links > kQmdChainMax || x.output_bytes < 16)
+        return bench::fail(r, SWITCH_BENCH_INVALID, "chain: 1..3 QMDs after the experiment's and an output buffer");
+    raw::Device &d = *b.device;
+    raw::Buffer output, qmds;
+    if (!d.createBuffer(x.output_bytes, output, true) || !d.createBuffer(kQmdChainMax * kQmdBytes, qmds, true) ||
+        (qmds.va & (kQmdBytes - 1))) {
+        if (output.va)
+            d.destroyBuffer(output);
+        if (qmds.va)
+            d.destroyBuffer(qmds);
+        return bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the output or the chain's QMDs");
+    }
+    std::vector<const raw::ComputeState *> states;
+    for (uint32_t i = 0; i <= x.chain_links; i++) {
+        switch_bench_experiment link = x;
+        if (i)
+            link.program = x.chain[i - 1];
+        bench::Program p = program(link);
+        if (p.data.size() < 16) {
+            bench::fail(r, SWITCH_BENCH_INVALID, "chain: each kernel's shader data holds the output's and QMDs' addresses");
+            break;
+        }
+        memcpy(p.data.data(), &output.va, 8);
+        memcpy(p.data.data() + 8, &qmds.va, 8);
+        raw::ComputeRecord &record = kernelRecords().emplace_back();
+        std::string why;
+        if (!bench::kernelRecord(*b.kernel, p, x.threads, record, why)) {
+            bench::fail(r, SWITCH_BENCH_INVALID, why);
+            break;
+        }
+        const raw::ComputeState *state = raw::placeCompute(d, record);
+        if (!state) {
+            bench::fail(r, SWITCH_BENCH_REFUSED, "no room for the kernel in the shader heap");
+            break;
+        }
+        states.push_back(state);
+    }
+    const uint64_t counter = output.va + x.output_bytes - 4;
+    bench::Submission s(b, x, r);
+    uint64_t gpu = 0, wall = 0;
+    memset(output.cpu, kUnwritten, x.output_bytes);
+    memset(output.cpu + x.output_bytes - 4, 0, 4);
+    const bool ran = states.size() == x.chain_links + 1 && s.record([&](raw::CommandBuffer &cb) {
+        raw::ComputeEncoder ce(cb, d);
+        bool ok = true;
+        for (uint32_t i = x.chain_links + 1; ok && i-- > 0;) {
+            ce.setState(states[i]);
+            ce.benchQmd = [&, i](uint32_t *qmd) {
+                if (i < x.chain_links && (x.chain_schedule >> i & 1)) {
+                    qmd[kQmdDependent] = uint32_t((qmds.va + uint64_t(i) * kQmdBytes) >> 8);
+                    qmd[kQmdFlags] |= kQmdScheduleDependent;
+                }
+                qmd[kQmdFlags] |= kQmdReleaseEnable0;
+                qmd[kQmdRelease0] = uint32_t(counter);
+                qmd[kQmdRelease0 + 1] = (uint32_t(counter >> 32) & 0xff) | kRelease0AddOneWord;
+                qmd[kQmdRelease0 + 2] = 1;
+                if (i)
+                    memcpy(qmds.cpu + uint64_t(i - 1) * kQmdBytes, qmd, kQmdBytes);
+                return i == 0;
+            };
+            const char *why = nullptr;
+            ok = ce.dispatch(x.groups, x.threads, &why);
+            if (!ok)
+                s.refused(std::string("dispatch refused: ") + (why ? why : "?"));
+        }
+        ce.end();
+        return ok;
+    }, gpu, wall);
+    if (ran) {
+        r.gpu_ns[0] = gpu;
+        r.wall_ns[0] = wall;
+        if (r.output && r.output_bytes >= x.output_bytes)
+            memcpy(r.output, output.cpu, x.output_bytes);
+    }
+    d.destroyBuffer(output);
+    d.destroyBuffer(qmds);
 }
 
 }  // namespace
@@ -640,7 +731,9 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
         return bench::fail(*r, SWITCH_BENCH_ERROR, "no raw device: " + b->error);
     if (!valid(*x, *r))
         return;
-    if (x->kind == SWITCH_BENCH_COMPUTE)
+    if (x->kind == SWITCH_BENCH_COMPUTE && x->chain_links)
+        runChain(*b, *x, *r);
+    else if (x->kind == SWITCH_BENCH_COMPUTE)
         runCompute(*b, *x, *r);
     else if (x->kind == SWITCH_BENCH_TWOD)
         bench::runTwod(*b, *x, *r);
