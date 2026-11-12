@@ -59,6 +59,7 @@ struct tgm_coh {
 	int gpuWrites;  // atomic: an import or a SurfaceWrites says the GPU may write it, so submissions mark it
 	int cleaned;   // atomic: an import of it finished its own clean
 	int gpuDirty;  // atomic: the GPU may have written it since the last CPU lock
+	uint64_t written;  // atomic: submissions that may have written it
 	// atomic: the surface's layout once decided (TegraGM20BTiled.cpp), null before
 	tgm_tiled *tiled;
 	uint32_t
@@ -466,6 +467,7 @@ static void wrote(tgm_coh *c, uint32_t uid, uint32_t seqno)
 {
 	if (!noteWriter(c->writers, uid, seqno))
 		__atomic_store_n(&c->writersLost, 1, __ATOMIC_RELEASE);
+	__atomic_add_fetch(&c->written, 1, __ATOMIC_ACQ_REL);
 	__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
 }
 
@@ -760,6 +762,14 @@ extern "C" void tgm_coh_put_asker(struct tgm_coh *c)
 extern "C" uint32_t tgm_coh_surface_id(const struct tgm_coh *c)
 {
 	return c->surfaceId;
+}
+
+extern "C" uint64_t tgm_coh_written(const struct tgm_coh *c)
+{
+	switch_gpu_backing_info info = {};
+	if (c->backing)
+		switch_gpu_backing_describe(c->backing, &info);
+	return __atomic_load_n(&c->written, __ATOMIC_ACQUIRE) + info.content_generation;
 }
 
 extern "C" void tgm_coh_wait_visible(struct tgm_coh *c)

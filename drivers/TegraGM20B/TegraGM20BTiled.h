@@ -31,6 +31,9 @@ struct tgm_tiled {
 	struct tgm_scratch *scratch;
 	uint32_t locks;
 	int wrote, stranded;
+	/* the scratch the last read-only locks gave back, its handing out then, and the GPU writes it holds the rows of */
+	struct tgm_scratch *kept;
+	uint64_t kept_handout, kept_written, filled_written;
 
 	struct {
 		struct tgm_cpu_view view;
@@ -60,6 +63,9 @@ uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out, uin
 /* Until the GPU's writes to the pinned surface are in DRAM, which a CPU move reads and writes behind the L2 */
 void tgm_coh_wait_visible(struct tgm_coh *c);
 uint32_t tgm_coh_surface_id(const struct tgm_coh *c);
+/* Every submission that may write the surface (tgm_coherency_wrote) and every write its backing records (an engine's
+ * job, a CPU writer's release): unchanged, nothing wrote it since */
+uint64_t tgm_coh_written(const struct tgm_coh *c);
 /* The block-linear entry of surface `id` with a reference (tgm_coherency_put drops it); null: none */
 struct tgm_coh *tgm_coh_find_tiled(uint32_t id);
 /* The same by a physical address inside the surface (any page of it): *offset its byte offset in the surface */
@@ -78,6 +84,9 @@ void tgm_coh_put_asker(struct tgm_coh *c);
 struct tgm_scratch;
 struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int for_task, struct tgm_relayout_pages *pages);
 void tgm_scratch_put(struct tgm_scratch *scratch);
+/* The scratch put back after handing out `handout` again, if no one took it since: *intact, its pages kept their bytes */
+struct tgm_scratch *tgm_scratch_reclaim(struct tgm_scratch *scratch, uint64_t handout, int *intact);
+uint64_t tgm_scratch_handout(const struct tgm_scratch *scratch);
 void tgm_scratch_stats(uint64_t *held, uint64_t *peak);
 void tgm_scratch_pages(const struct tgm_scratch *scratch, struct tgm_relayout_pages *pages);
 void tgm_tiled_free(struct tgm_tiled *t);
