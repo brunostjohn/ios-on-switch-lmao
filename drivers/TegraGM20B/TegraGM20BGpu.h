@@ -271,6 +271,8 @@ void switch_gpu_fence_put(const volatile uint32_t *fence);
  * base), or NULL; and the offset of one */
 volatile uint32_t *tgm_fence_word(uint32_t offset);
 uint32_t tgm_fence_offset(const volatile uint32_t *word);
+/* The owner of the fence page holding the word at `offset`: a page freed and handed to another connection changes it */
+uint32_t tgm_fence_owner(uint32_t offset);
 /* Writer promises given up on before their job wrote the surface (SwitchGpuWriterPromise.h): marked, and whether one is;
  * and, for a direct present watching one (SwitchGpuPresentWatch.h), the job that keeps it submitted, or its word
  * released from the CPU */

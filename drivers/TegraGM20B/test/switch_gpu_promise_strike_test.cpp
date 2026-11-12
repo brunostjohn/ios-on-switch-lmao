@@ -36,7 +36,12 @@ int raise(volatile uint32_t *at, uint32_t value)
 	return 1;
 }
 
-const switch_gpu_promise_fence fence = {word, raise};
+uint32_t owner(uint32_t)
+{
+	return 1;
+}
+
+const switch_gpu_promise_fence fence = {word, raise, owner};
 
 struct Present {
 	switch_gpu_promise_waits waits = {};
@@ -88,7 +93,7 @@ struct Present {
 	// the deadline's next look after one that was not fatal
 	uint64_t recheck() const
 	{
-		return switch_gpu_promise_waits_pending(&waits, word) ? TGM_STUCK_NS : kPresentNs;
+		return switch_gpu_promise_waits_pending(&waits, &fence) ? TGM_STUCK_NS : kPresentNs;
 	}
 
 	// SwitchGpuWriterPromise.cpp status
@@ -135,14 +140,14 @@ protected:
 	// the present's job acquires the promise (present_copy: its first look at TGM_PROMISE_FIRST_LOOK_NS)
 	void parkOnThePromise()
 	{
-		ASSERT_EQ(switch_gpu_promise_waits_note(&p.waits, word, kOffset, kValue), 0);
+		ASSERT_EQ(switch_gpu_promise_waits_note(&p.waits, &fence, kOffset, kValue), 0);
 		next = TGM_PROMISE_FIRST_LOOK_NS;
 	}
 
 	// tgm_chan_check_progress of a wait on the channel (a fence wait, the bridge's): its next check, then the look
 	enum tgm_hang waitCheck()
 	{
-		now += tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word),
+		now += tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, &fence),
 					       p.strikes, kHangNs);
 		return p.look();
 	}
@@ -209,7 +214,7 @@ TEST_F(Strike, AWaitOnAJobParkedOnAPromiseGivesUpAtOneSecond)
 	EXPECT_EQ(waitCheck(), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS + TGM_STUCK_NS);
 	ASSERT_EQ(p.lines.size(), 1u);
-	EXPECT_EQ(tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, word),
+	EXPECT_EQ(tgm_hang_check_interval(switch_gpu_promise_waits_pending(&p.waits, &fence),
 					  p.strikes, kHangNs),
 		  kHangNs)
 		<< "a raised word is no longer a promise wait";

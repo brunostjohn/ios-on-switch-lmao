@@ -474,6 +474,7 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 			continue;
 		__atomic_fetch_or(&tgm_fence_pages.used, BIT_ULL(i), __ATOMIC_ACQ_REL);
 		__atomic_store_n(&tgm_fence_pages.refs[i], 1, __ATOMIC_RELEASE);
+		__atomic_store_n(&tgm_fence_pages.owner[i], tgm_fence_pages.owner[i] + 1, __ATOMIC_RELEASE);
 		tgm_fence_pages.next = i + 1;
 		memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
 		tgm_clock_anchors_fill(i);
@@ -504,6 +505,13 @@ volatile uint32_t *tgm_fence_word(uint32_t offset)
 	return tgm_fence_pages.va && offset < TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT && !(offset & 3)
 		       ? (volatile uint32_t *)((u8 *)tgm_fence_pages.va + offset)
 		       : NULL;
+}
+
+uint32_t tgm_fence_owner(uint32_t offset)
+{
+	return offset < TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT
+		       ? __atomic_load_n(&tgm_fence_pages.owner[offset / TGM_FENCE_SLOT], __ATOMIC_ACQUIRE)
+		       : 0;
 }
 
 uint32_t tgm_fence_offset(const volatile uint32_t *word)

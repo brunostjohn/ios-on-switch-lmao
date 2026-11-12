@@ -3,6 +3,8 @@
 // kernel and a present of the surface it writes: the present's acquires are the pending promises, a job's fence releases
 // the ones it keeps after its writes, and a cancel, a kill or a close release them from the CPU.
 #include <gtest/gtest.h>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -200,7 +202,12 @@ volatile uint32_t *poolWord(uint32_t offset)
 	return offset && offset / 4 < 64 ? &pool[offset / 4] : nullptr;
 }
 
-const switch_gpu_promise_fence poolFence = {poolWord, promise_raise};
+uint32_t poolOwner(uint32_t)
+{
+	return 1;
+}
+
+const switch_gpu_promise_fence poolFence = {poolWord, promise_raise, poolOwner};
 
 // The fence pool as T210 has it: mapped write-combined, where only a plain store completes. The model's page is
 // read-only, so any other write (a compare-and-swap, any atomic read-modify-write) faults; the raise's own store is
@@ -208,6 +215,8 @@ const switch_gpu_promise_fence poolFence = {poolWord, promise_raise};
 struct FenceModel {
 	volatile uint32_t *page = nullptr;
 	size_t bytes = size_t(getpagesize());
+	uint32_t owner = 1;   // tgm_fence_owner
+	bool reused = false;  // handed to a connection that made no promise on it yet
 
 	FenceModel()
 	{
@@ -227,6 +236,15 @@ struct FenceModel {
 		store(&page[offset / 4], value);
 	}
 
+	// its connection closed, the page goes to another, cleared (tgm_fence_page_get)
+	void reuse()
+	{
+		for (size_t i = 0; i < bytes / 4; ++i)
+			store(&page[i], 0);
+		++owner;
+		reused = true;
+	}
+
 	void store(volatile uint32_t *word, uint32_t value)
 	{
 		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ | PROT_WRITE);
@@ -244,13 +262,22 @@ volatile uint32_t *modelWord(uint32_t offset)
 
 int modelRaise(volatile uint32_t *word, uint32_t value)
 {
+	if (model->reused) {
+		std::fputs("raise into a fence page another connection owns now\n", stderr);
+		std::abort();
+	}
 	if (int32_t(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) >= 0)
 		return 0;
 	model->store(word, value);
 	return 1;
 }
 
-const switch_gpu_promise_fence modelFence = {modelWord, modelRaise};
+uint32_t modelOwner(uint32_t)
+{
+	return model->owner;
+}
+
+const switch_gpu_promise_fence modelFence = {modelWord, modelRaise, modelOwner};
 
 using Released = std::vector<std::pair<uint32_t, uint32_t>>;
 
@@ -283,7 +310,7 @@ TEST(WriterPromise, TheReleaseMarksBeforeTheWordMovesAndTellsWhoWon)
 	switch_gpu_promise_waits waits = {};
 	Steps raised, kept;
 	pool[5] = 1;
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 20, 2), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 20, 2), 0);
 	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, stepped, &raised), 1u);
 	EXPECT_EQ(raised.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
@@ -306,8 +333,8 @@ TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 	fence.set(20, 1);
 	fence.set(24, 7);
 	switch_gpu_promise_waits waits = {};
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, modelWord, 20, 2), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, modelWord, 24, 7), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20, 2), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 24, 7), 0);
 	Released released;
 	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &modelFence, told, &released), 1u);
 	EXPECT_EQ(released, (Released{{20, 2}}));
@@ -387,6 +414,33 @@ TEST(WriterPromise, WhatBlocksThrowsOnlyWithInterruptsOff)
 	EXPECT_EQ(interrupts_off::depth, 0);
 }
 
+// The maker closed and its fence page went to another connection, cleared: a wait recorded before is not on that page
+// any more. It is neither pending nor raised (a raise would write the new owner's word), and its record is free again.
+TEST(WriterPromise, AWaitOnAPageAnotherConnectionOwnsNowIsDroppedNeverRaised)
+{
+	FenceModel fence;
+	model = &fence;
+	fence.set(20, 1);
+	switch_gpu_promise_waits waits = {};
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20, 2), 0);
+	ASSERT_TRUE(switch_gpu_promise_waits_pending(&waits, &modelFence));
+	fence.reuse();
+	EXPECT_FALSE(switch_gpu_promise_waits_pending(&waits, &modelFence));
+	EXPECT_EXIT(
+		{
+			Released released;
+			const uint32_t raised = switch_gpu_promise_waits_release(
+				&waits, &modelFence, told, &released);
+			std::exit(raised == 0 && released.empty() && fence.page[5] == 0 ? 0 : 1);
+		},
+		testing::ExitedWithCode(0), "");
+	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS; ++i)
+		ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20 + 4 * i, 1), 0)
+			<< "the stale record is free";
+	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 400, 1), -28);
+	model = nullptr;
+}
+
 // An abandoned promise is found until the maker's own release takes it back; the set keeps the latest ones.
 TEST(WriterPromise, TheAbandonedSetNamesEachPromiseByWordAndValue)
 {
@@ -412,10 +466,10 @@ TEST(WriterPromise, TheHangRuleReleasesOnlyThePromisesAStuckReaderStillWaitsFor)
 	pool[1] = 4;
 	pool[2] = 7;
 	pool[3] = 9;
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 4, 5), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 4, 5), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 8, 7), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 12, 10), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 5), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 5), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 8, 7), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 12, 10), 0);
 	pool[3] = 11;
 	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, told, &released), 1u);
 	EXPECT_EQ(pool[1], 5u);
@@ -432,13 +486,13 @@ TEST(WriterPromise, AChannelRecordsEachPendingPromiseOnce)
 	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS + 1; ++i)
 		pool[i] = 0;
 	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS; ++i)
-		ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, i * 4, 1), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 4, 1), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, poolWord,
+		ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, i * 4, 1), 0);
+	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 1), 0);
+	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence,
 						(SWITCH_GPU_PROMISE_WAITS + 1) * 4, 1),
 		  -28);
 	pool[1] = 1;
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, poolWord,
+	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence,
 						(SWITCH_GPU_PROMISE_WAITS + 1) * 4, 1),
 		  0);
 }

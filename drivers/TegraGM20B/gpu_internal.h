@@ -556,6 +556,7 @@ struct fences_state {
 	u64 pa;
 	u64 used; /* bitmap of pages in use */
 	u32 refs[TGM_FENCE_USER_PAGES];
+	u32 owner[TGM_FENCE_USER_PAGES]; /* bumped each time a page is handed out (tgm_fence_owner) */
 	u32 next;
 };
 extern struct fences_state tgm_fence_pages;

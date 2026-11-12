@@ -56,7 +56,6 @@ drivers/TegraGM20B/SwitchGpuOwnership.cpp
 drivers/TegraGM20B/SwitchGpuPathStats.cpp
 drivers/TegraGM20B/SwitchGpuPresentTokens.h
 drivers/TegraGM20B/SwitchGpuVmMap.h
-drivers/TegraGM20B/SwitchGpuWriterPromise.h
 drivers/TegraGM20B/TegraGM20BCopy.cpp
 drivers/TegraGM20B/TegraGM20BExecSurfaces.cpp
 drivers/TegraGM20B/TegraGM20BGpu.h
