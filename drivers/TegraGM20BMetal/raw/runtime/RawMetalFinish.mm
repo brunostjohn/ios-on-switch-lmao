@@ -433,8 +433,18 @@ void completionLoop()
                 std::lock_guard<std::mutex> l(r.doneLock);
                 r.inflight.pop_front();
             }
-            segmentCompleted(cb, ok ? nil : killError(r.raw->lostError()), *retired.writes, RMRawProgress,
-                             retired.signals, retired.waits, &retired.cpu);
+            NSError *error = ok ? nil : killError(r.raw->lostError());
+            if (!error && cb->_predicates.loops() && r.raw->loopOverflowed(cb->_stamp)) {
+                os_log_error(rawLog(), "raw: command buffer %u failed: a predicated loop would have run past its copies",
+                             retired.seqno);
+                error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                            code:MTLCommandBufferErrorInternal
+                                        userInfo:@{
+                                            NSLocalizedDescriptionKey :
+                                                @"A predicated loop ran past the copies the raw path lays down"
+                                        }];
+            }
+            segmentCompleted(cb, error, *retired.writes, RMRawProgress, retired.signals, retired.waits, &retired.cpu);
         }
     }
 }

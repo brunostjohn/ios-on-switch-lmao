@@ -24,6 +24,7 @@
 #include "raw_dispatch_bands.h"
 #include "raw_dispatch_regions.h"
 #include "raw_gpu.h"
+#include "raw_loop_copies.h"
 
 namespace raw {
 
@@ -81,6 +82,13 @@ public:
     Predication::Answer startIf(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
     Predication::Answer startElse();
     Predication::Answer endIf();
+    // Loops (raw_predication.h, raw_loop_copies.h): a While's word at `wordVa`, a DoWhile's at its end. Misused: a loop the
+    // raw path cannot lay down (deeper than LoopCopies::kMaxDepth, a body of more than kMaxSegments segments or one that
+    // left the encoder, no copies within the entry budget), nothing more encoded
+    Predication::Answer startWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
+    Predication::Answer endWhile();
+    Predication::Answer startDoWhile();
+    Predication::Answer endDoWhile(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
     void end();
 
 private:
@@ -115,6 +123,7 @@ private:
     uint64_t setVa_ = 0, rootVa_ = 0;
     std::array<uint32_t, 3> grid_{}, base_{};
     std::array<uint32_t, 8> region_{};
+    LoopCopies loops_;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);
@@ -123,6 +132,9 @@ private:
     void cutBatch();
     bool measureDispatch(uint64_t units, DrawTiming &t);
     void stampDispatch(const DrawTiming &t, bool end);
+    LoopStream stream();
+    Predication::Answer startLoop(bool doWhile, uint64_t wordVa, const PredicateTest *test);
+    Predication::Answer endLoop(uint64_t wordVa, const PredicateTest *test);
 };
 
 }  // namespace raw

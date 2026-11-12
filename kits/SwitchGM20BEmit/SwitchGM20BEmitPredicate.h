@@ -29,6 +29,17 @@ void switch_gm20b_render_enable_always(struct nv_push *p);
 // One 32-bit word written by the compute class's inline-to-memory unit, flushed to L2; skipped where render enable fails
 void switch_gm20b_compute_inline_word(struct nv_push *p, uint64_t va, uint32_t value);
 
+#define SWITCH_GM20B_INLINE_WORDS_WORDS(count) (7u + (count))
+
+// `count` 32-bit words written from `words` as one inline-to-memory line, flushed to L2; skipped where render enable fails
+void switch_gm20b_compute_inline_words(struct nv_push *p, uint64_t va, const uint32_t *words, uint32_t count);
+
+#define SWITCH_GM20B_FETCH_AFTER_IDLE_WORDS 1u
+
+// Host waits until the engines are idle before it takes the methods after this one, so a pushbuffer segment fetched
+// with NO_PREFETCH after it (GP_ENTRY1_SYNC_WAIT) sees what the work before wrote (NVK's pre-Hopper host WFI)
+void switch_gm20b_fetch_after_idle(struct nv_push *p);
+
 #define SWITCH_GM20B_COMPUTE_IDLE_WORDS 2u
 
 // The compute work before has finished and its stores reached L2, for the copy engine to read

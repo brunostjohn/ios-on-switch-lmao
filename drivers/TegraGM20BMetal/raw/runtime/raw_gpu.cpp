@@ -3459,6 +3459,7 @@ CommandBuffer *Device::begin()
         RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     }
     cb.timings.clear();
+    cb.loopsLaid = false;
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
     // texture caches, and the instruction caches where commit finds the heap grew
     uint64_t va;
@@ -3943,6 +3944,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
     // The cleans and WC ring writes complete before the kernel rings GP_PUT.
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
+    // A loop's copies end with the GPU's writes into the push ring (raw_loop_copies.h): the ring is a member the set
+    // otherwise names read-only
+    if (loopsLaid) {
+        useAddress(d.push_.bo.va, d.push_.bo.bytes, true);
+        for (const Bo &bo : d.push_.outgrown)
+            useAddress(bo.va, bo.bytes, true);
+    }
     if (geometryWritable())
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     if (!batchWork_.operations)
@@ -4075,6 +4083,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
     releaseNativeReads();
     RAW_DIAGNOSTIC(d.stats.commits++);
     return true;
+}
+
+uint64_t Device::loopOverflowVa(uint32_t stamp) const
+{
+    return stamps_.va + loopOverflowOffset(stamp);
+}
+
+bool Device::loopOverflowed(uint32_t stamp) const
+{
+    if (!stamp || !stamps_.cpu)
+        return false;
+    return *reinterpret_cast<const volatile uint32_t *>(stamps_.cpu + loopOverflowOffset(stamp)) == stamp;
 }
 
 bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const

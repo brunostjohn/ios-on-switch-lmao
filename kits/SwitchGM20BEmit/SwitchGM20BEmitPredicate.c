@@ -3,6 +3,7 @@
 // nvk_cmd_copy.c), MIT.
 #include "SwitchGM20BEmitPredicate.h"
 
+#include "nv_push_clb06f.h"
 #include "nv_push_clb0b5.h"
 #include "nv_push_clb1c0.h"
 
@@ -37,6 +38,27 @@ void switch_gm20b_compute_inline_word(struct nv_push *p, uint64_t va, uint32_t v
                                .completion_type = COMPLETION_TYPE_FLUSH_ONLY,
                            });
     P_INLINE_DATA(p, value);
+}
+
+void switch_gm20b_compute_inline_words(struct nv_push *p, uint64_t va, const uint32_t *words, uint32_t count)
+{
+    assert(!(va & 3) && count && count < NV_PUSH_MAX_COUNT);
+    P_MTHD(p, NVB1C0, LINE_LENGTH_IN);
+    P_NVB1C0_LINE_LENGTH_IN(p, 4 * count);
+    P_NVB1C0_LINE_COUNT(p, 1);
+    P_NVB1C0_OFFSET_OUT_UPPER(p, va >> 32);
+    P_NVB1C0_OFFSET_OUT(p, va & 0xffffffff);
+    P_1INC(p, NVB1C0, LAUNCH_DMA);
+    P_NVB1C0_LAUNCH_DMA(p, {
+                               .dst_memory_layout = DST_MEMORY_LAYOUT_PITCH,
+                               .completion_type = COMPLETION_TYPE_FLUSH_ONLY,
+                           });
+    P_INLINE_ARRAY(p, words, (int)count);
+}
+
+void switch_gm20b_fetch_after_idle(struct nv_push *p)
+{
+    __push_immd(p, SUBC_NVB1C0, NVB06F_SET_REFERENCE, 0);
 }
 
 void switch_gm20b_compute_idle_flushed(struct nv_push *p)

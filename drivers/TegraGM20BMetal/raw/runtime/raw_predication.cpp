@@ -10,7 +10,6 @@
 namespace raw {
 namespace {
 
-constexpr uint32_t kOperandsAt = 0, kWordBAt = 16, kLiveAt = 32, kHoldsAt = 36, kKeyAt = 48;
 constexpr uint32_t kIfEqual = NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_RENDER_IF_EQUAL,
                    kIfNotEqual = NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_RENDER_IF_NOT_EQUAL;
 
@@ -72,6 +71,34 @@ bool predicateRuns(const PredicateTest &t, uint32_t word)
     return t.equal ? a == b : a != b;
 }
 
+void Predication::copyOperands(Push &p, uint64_t slotVa, uint64_t wordVa, const PredicateTest &test)
+{
+    kit(p, switch_gm20b_compute_idle_flushed);
+    if (test.reduce)
+        kit(p, switch_gm20b_copy_word_reduce, wordVa, slotVa + kOperandsAt, test.payload, test.reduction, false);
+    else
+        kit(p, switch_gm20b_copy_bytes, wordVa, slotVa + kOperandsAt, 4u,
+            uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
+    if (test.wordInB)
+        kit(p, switch_gm20b_copy_bytes, wordVa, slotVa + kWordBAt, 4u,
+            uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
+    kit(p, switch_gm20b_compute_idle_flushed);
+}
+
+void Predication::testWord(Push &p, uint64_t slotVa, const PredicateTest &test, bool holds, uint64_t va, uint32_t value)
+{
+    kit(p, switch_gm20b_render_enable, slotVa + kOperandsAt, mode(holds ? test.equal : !test.equal));
+    kit(p, switch_gm20b_compute_inline_word, va, value);
+}
+
+void Predication::resetInLoop(Push &p, PredicateSlot slot, uint32_t live, uint32_t holds) const
+{
+    if (!inLoop())
+        return;
+    const uint32_t words[2] = {live, holds};
+    kit(p, switch_gm20b_compute_inline_words, slot.va + kLiveAt, words, 2u);
+}
+
 void Predication::initSlot(PredicateSlot slot, uint32_t live, uint32_t holds, uint32_t reference) const
 {
     const uint32_t words[16] = {0, 0, 0, 0, reference, 0, 0, 0, live, holds, 0, 0, 1, 1, 0, 0};
@@ -90,40 +117,30 @@ Predication::Answer Predication::startIf(Push &p, PredicateSlot slot, uint64_t w
 {
     const bool outermost = levels_.empty();
     initSlot(slot, outermost, 0, test.wordInB ? 0 : test.reference);
-    if (!test.never) {
-        kit(p, switch_gm20b_compute_idle_flushed);
-        if (test.reduce)
-            kit(p, switch_gm20b_copy_word_reduce, wordVa, slot.va + kOperandsAt, test.payload, test.reduction, false);
-        else
-            kit(p, switch_gm20b_copy_bytes, wordVa, slot.va + kOperandsAt, 4u,
-                uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
-        if (test.wordInB)
-            kit(p, switch_gm20b_copy_bytes, wordVa, slot.va + kWordBAt, 4u,
-                uint8_t(NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED));
-        kit(p, switch_gm20b_compute_idle_flushed);
-    }
+    resetInLoop(p, slot, 0, 0);
+    if (!test.never)
+        copyOperands(p, slot.va, wordVa, test);
     if (!outermost)
         markLive(p, slot);
-    if (!test.never) {
-        kit(p, switch_gm20b_render_enable, slot.va + kOperandsAt, mode(test.equal));
-        kit(p, switch_gm20b_compute_inline_word, slot.va + kHoldsAt, 1u);
-    }
+    if (!test.never)
+        testWord(p, slot.va, test, true, slot.va + kHoldsAt, 1u);
     if (!outermost || !test.never) {
         kit(p, switch_gm20b_render_enable_always);
         kit(p, switch_gm20b_compute_idle_flushed);
     }
-    levels_.push_back({slot.va + kOperandsAt, slot.va + kLiveAt, test, false});
+    levels_.push_back({slot.va + kOperandsAt, slot.va + kLiveAt, test, Level::If, slot.cpu, wordVa});
     return Answer::Done;
 }
 
 Predication::Answer Predication::startElse(Push &p, PredicateSlot slot)
 {
-    if (levels_.empty() || levels_.back().inElse)
+    if (levels_.empty() || levels_.back().kind != Level::If)
         return Answer::Misused;
     const Level open = levels_.back();
     levels_.pop_back();
     const bool outermost = levels_.empty();
     initSlot(slot, outermost, open.test.never, 0);
+    resetInLoop(p, slot, 0, open.test.never);
     if (!outermost)
         markLive(p, slot);
     if (!open.test.never) {
@@ -134,13 +151,13 @@ Predication::Answer Predication::startElse(Push &p, PredicateSlot slot)
         kit(p, switch_gm20b_render_enable_always);
         kit(p, switch_gm20b_compute_idle_flushed);
     }
-    levels_.push_back({open.ifVa, slot.va + kLiveAt, open.test, true});
+    levels_.push_back({open.ifVa, slot.va + kLiveAt, open.test, Level::Else, slot.cpu, open.wordVa});
     return Answer::Done;
 }
 
 Predication::Answer Predication::endIf()
 {
-    if (levels_.empty())
+    if (levels_.empty() || (levels_.back().kind != Level::If && levels_.back().kind != Level::Else))
         return Answer::Misused;
     levels_.pop_back();
     return Answer::Done;

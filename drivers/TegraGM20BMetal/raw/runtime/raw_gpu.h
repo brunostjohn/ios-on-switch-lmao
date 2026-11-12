@@ -1078,6 +1078,7 @@ public:
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
     std::vector<DrawTiming> timings;  // its measured draws, for Device::learnDrawTimes once it completed
+    bool loopsLaid = false;  // a predicated loop's copies: the GPU writes the push ring
 
 private:
     friend class Device;
@@ -1601,6 +1602,9 @@ public:
         return k_.debugCall(method, in, inSize, out, outSize);
     }
 #endif
+    // Where the command buffer of `stamp` marks a loop that ran past its copies, and whether one did once it completed
+    uint64_t loopOverflowVa(uint32_t stamp) const;
+    bool loopOverflowed(uint32_t stamp) const;
 
     bool lost(uint32_t seqno) const
     {

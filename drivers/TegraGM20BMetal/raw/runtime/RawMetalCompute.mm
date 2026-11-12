@@ -288,12 +288,11 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 {
     const bool answer = _cb->_predicates.record(kind);
     const bool rawBuffer = [(id)buffer isKindOfClass:[RMBuffer class]];
-    if (_cb->_predicates.loops())
+    const bool readsWord = kind == raw::PredicateRecords::StartIf || kind == raw::PredicateRecords::StartWhile ||
+                           kind == raw::PredicateRecords::EndDoWhile;
+    if (_cb->_predicates.misused())
         hit(_cb, PredComputePredicate, kind);
-    else if (_cb->_predicates.misused())
-        hit(_cb, PredComputePredicate, kind);
-    else if (kind == raw::PredicateRecords::StartIf &&
-             (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
+    else if (readsWord && (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
         [self refuse:PredComputePredicate value:offset why:@"a predicate word outside a raw buffer"];
     Cmd m = cmd(OpPredicate, uint8_t(kind));
     m.obj = (__bridge void *)buffer;
@@ -418,27 +417,41 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     }
 }
 
-static bool encodePredicate(raw::ComputeEncoder &e, RMCommandBuffer *cb, const Cmd &c, const char **why)
+static bool encodePredicate(raw::ComputeEncoder &e, const Cmd &c, const char **why)
 {
-    (void)cb;
+    const uint64_t wordVa = c.obj ? ((__bridge RMBuffer *)c.obj)->_raw.va + c.c : 0;
+    const auto compare = raw::PredicateCompare(c.a);
     raw::Predication::Answer answer = raw::Predication::Answer::Misused;
     switch (c.stage) {
-    case raw::PredicateRecords::StartIf: {
-        RMBuffer *b = (__bridge RMBuffer *)c.obj;
-        answer = e.startIf(b->_raw.va + c.c, raw::PredicateCompare(c.a), c.b);
+    case raw::PredicateRecords::StartIf:
+        answer = e.startIf(wordVa, compare, c.b);
         break;
-    }
     case raw::PredicateRecords::StartElse:
         answer = e.startElse();
         break;
     case raw::PredicateRecords::EndIf:
         answer = e.endIf();
         break;
+    case raw::PredicateRecords::StartWhile:
+        answer = e.startWhile(wordVa, compare, c.b);
+        break;
+    case raw::PredicateRecords::EndWhile:
+        answer = e.endWhile();
+        break;
+    case raw::PredicateRecords::StartDoWhile:
+        answer = e.startDoWhile();
+        break;
+    case raw::PredicateRecords::EndDoWhile:
+        answer = e.endDoWhile(wordVa, compare, c.b);
+        break;
     default:
         break;
     }
     if (answer != raw::Predication::Answer::Done)
-        *why = "a predication record the raw path cannot run";
+        *why = c.stage >= raw::PredicateRecords::StartWhile
+                   ? "a predicated loop the raw path cannot lay down (deeper than two, a body of more than eight push "
+                     "segments, one that left its compute encoder, or more GP entries than one nest takes)"
+                   : "a predication record the raw path cannot run";
     return answer == raw::Predication::Answer::Done;
 }
 
@@ -473,7 +486,7 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
         e.barrier();
         break;
     case OpPredicate:
-        return encodePredicate(e, cb, c, why);
+        return encodePredicate(e, c, why);
     case OpDispatch: {
         const uint32_t groups[3] = {uint32_t(extra(cb, c.x + 3)), uint32_t(extra(cb, c.x + 4)),
                                     uint32_t(extra(cb, c.x + 5))},

@@ -5,13 +5,13 @@ import Metal
 
 /// Metal's command predication SPI on the raw path (drivers/TegraGM20BMetal/raw/runtime/raw_predication.h): each of the
 /// six compares at its edge values, two levels of If/Else, a block spanning two compute encoders of its unit, and the
-/// draw, clear and blit after a failed block, all in one command buffer. Every predicate word is written by a dispatch
+/// draw, clear and blit after a failed block, all in one command buffer; then the loops (PredicationLoops.swift). Every predicate word is written by a dispatch
 /// before its record, so neither the CPU nor the test reads or writes it, but for one buffer the CPU writes and nothing
 /// else binds; marks says which branch each case ran. Metal has no predication on render or blit encoders (no such
 /// selector on 21H461 or 24B119) and either one ends the unit, so the draw, clear and blit are the work after a block.
 struct PredicationTest: HWTest {
     let id = "gpu.raw.predication"
-    let name = "Predicated dispatches on render enable: every compare, nesting, spanning encoders, work after"
+    let name = "Predicated dispatches on render enable: every compare, nesting, spanning encoders, work after, loops"
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 60 }
 
@@ -158,6 +158,8 @@ struct PredicationTest: HWTest {
         if !clearedOk { wrong.append("clear_after") }
         if !copiedOk { wrong.append("blit_after") }
         if enc.ends.contains(false) { wrong.append("ends") }
+        var loops = try PredicationLoops(gpu)
+        wrong += try await loops.run(&metrics)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 

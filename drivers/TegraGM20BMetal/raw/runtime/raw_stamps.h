@@ -70,7 +70,10 @@ inline void emitEndStamp(Push &p, uint64_t slots, uint32_t stamp)
 // wait for idle would. The tiled cache is flushed ahead of each, or a binned draw's pixels could land after its stamp.
 constexpr uint32_t kDrawStampSlots = 256;
 constexpr uint64_t kDrawStampBase = kStampSlots * sizeof(StampSlot);
-constexpr uint64_t kStampBytes = kDrawStampBase + kDrawStampSlots * sizeof(StampSlot);
+// After the measured draws' stamps, a word per command buffer slot: the stamp of the command buffer whose predicated
+// loop ran past its copies (raw_predication.h endLoop)
+constexpr uint64_t kLoopWordsBase = kDrawStampBase + kDrawStampSlots * sizeof(StampSlot);
+constexpr uint64_t kStampBytes = kLoopWordsBase + kStampSlots * 4;
 constexpr uint32_t kDrawStampWords = 5;
 constexpr uint32_t kDrawStampRelease =
     NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, OPERATION, RELEASE) |
@@ -83,6 +86,11 @@ inline uint64_t drawStampOffset(uint32_t slot, bool end)
 {
     return kDrawStampBase + uint64_t(slot % kDrawStampSlots) * sizeof(StampSlot) +
            (end ? offsetof(StampSlot, end) : offsetof(StampSlot, start));
+}
+
+inline uint64_t loopOverflowOffset(uint32_t stamp)
+{
+    return kLoopWordsBase + uint64_t((stamp - 1) % kStampSlots) * 4;
 }
 
 inline void emitDrawStamp(Push &p, uint64_t stampsVa, uint32_t slot, bool end, uint32_t payload)

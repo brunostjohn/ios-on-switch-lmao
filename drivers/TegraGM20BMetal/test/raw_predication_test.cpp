@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// raw's command predication run on a model of the units it drives: the copy engine's copies and reducing semaphore
-// releases, the compute class's render enable (two 64-bit operands, read when the mode is set), its inline writes and
-// launches gated by it. Each program's launches must be the ones Metal runs.
+// raw's command predication run on a model of the units it drives (predication_model.h). Each program's launches must be
+// the ones Metal runs.
 #include <cstdint>
 #include <cstring>
 #include <random>
@@ -11,160 +10,15 @@
 
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_predicate_records.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_predication.h"
+#include "drivers/TegraGM20BMetal/test/predication_model.h"
 #include "kits/SwitchGM20B/SwitchGM20B.h"
-#include "kits/SwitchGM20BEmit/SwitchGM20BPushDecode.h"
 
 namespace {
 
-constexpr uint64_t kBase = 0x0310000000ull;
-constexpr uint32_t kCompute = 1, kCopy = 4;
+using predication_model::Gpu;
+using predication_model::kBase;
+using predication_model::kCompute;
 constexpr uint32_t kEdges[] = {0, 1, 2, 7, 0x7fffffffu, 0x80000000u, 0xfffffffeu, 0xffffffffu};
-
-// NVB0B5_LAUNCH_DMA's fields: DATA_TRANSFER_TYPE 1:0, SEMAPHORE_TYPE 4:3, SEMAPHORE_REDUCTION 17:14, its SIGN 18:18 and
-// ENABLE 19:19
-constexpr uint32_t bits(uint32_t v, uint32_t hi, uint32_t lo)
-{
-    return v >> lo & ((1u << (hi - lo + 1)) - 1);
-}
-
-struct Gpu {
-    std::vector<uint8_t> memory = std::vector<uint8_t>(1 << 16);
-    std::vector<uint32_t> launched;
-    bool enabled = true;
-    uint64_t enableVa = 0, ceIn = 0, ceOut = 0, ceSemaphore = 0, i2mOut = 0;
-    uint32_t ceLength = 0, cePayload = 0, i2mLength = 0, pcas = 0;
-
-    uint8_t *at(uint64_t va)
-    {
-        EXPECT_GE(va, kBase);
-        EXPECT_LT(va - kBase, memory.size());
-        return memory.data() + (va - kBase);
-    }
-
-    uint32_t word(uint64_t va)
-    {
-        uint32_t v;
-        memcpy(&v, at(va), 4);
-        return v;
-    }
-
-    uint64_t dword(uint64_t va)
-    {
-        return uint64_t(word(va)) | uint64_t(word(va + 4)) << 32;
-    }
-
-    void put(uint64_t va, uint32_t v)
-    {
-        memcpy(at(va), &v, 4);
-    }
-
-    void copyEngine(uint32_t m, uint32_t v)
-    {
-        switch (m) {
-        case NVB0B5_OFFSET_IN_UPPER:
-            ceIn = uint64_t(v) << 32 | (ceIn & 0xffffffff);
-            break;
-        case NVB0B5_OFFSET_IN_LOWER:
-            ceIn = (ceIn & ~0xffffffffull) | v;
-            break;
-        case NVB0B5_OFFSET_OUT_UPPER:
-            ceOut = uint64_t(v) << 32 | (ceOut & 0xffffffff);
-            break;
-        case NVB0B5_OFFSET_OUT_LOWER:
-            ceOut = (ceOut & ~0xffffffffull) | v;
-            break;
-        case NVB0B5_LINE_LENGTH_IN:
-            ceLength = v;
-            break;
-        case NVB0B5_SET_SEMAPHORE_A:
-            ceSemaphore = uint64_t(v) << 32 | (ceSemaphore & 0xffffffff);
-            break;
-        case NVB0B5_SET_SEMAPHORE_B:
-            ceSemaphore = (ceSemaphore & ~0xffffffffull) | v;
-            break;
-        case NVB0B5_SET_SEMAPHORE_PAYLOAD:
-            cePayload = v;
-            break;
-        case NVB0B5_LAUNCH_DMA: {
-            if (bits(v, 1, 0) != NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NONE)
-                memmove(at(ceOut), at(ceIn), ceLength);
-            if (bits(v, 4, 3) != NVB0B5_LAUNCH_DMA_SEMAPHORE_TYPE_NONE) {
-                uint32_t next = cePayload;
-                if (bits(v, 19, 19)) {
-                    EXPECT_EQ(bits(v, 18, 18), uint32_t(NVB0B5_LAUNCH_DMA_SEMAPHORE_REDUCTION_SIGN_UNSIGNED));
-                    const uint32_t old = word(ceSemaphore);
-                    next = bits(v, 17, 14) == NVB0B5_LAUNCH_DMA_SEMAPHORE_REDUCTION_IMIN ? std::min(old, cePayload)
-                                                                                         : std::max(old, cePayload);
-                }
-                put(ceSemaphore, next);
-            }
-            break;
-        }
-        default:
-            break;
-        }
-    }
-
-    void compute(uint32_t m, uint32_t v)
-    {
-        switch (m) {
-        case NVB1C0_SET_GLOBAL_RENDER_ENABLE_A:
-            enableVa = uint64_t(v) << 32 | (enableVa & 0xffffffff);
-            break;
-        case NVB1C0_SET_GLOBAL_RENDER_ENABLE_B:
-            enableVa = (enableVa & ~0xffffffffull) | v;
-            break;
-        case NVB1C0_SET_GLOBAL_RENDER_ENABLE_C:
-            if (v == NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_TRUE)
-                enabled = true;
-            else if (v == NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_RENDER_IF_EQUAL)
-                enabled = dword(enableVa) == dword(enableVa + 16);
-            else if (v == NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_RENDER_IF_NOT_EQUAL)
-                enabled = dword(enableVa) != dword(enableVa + 16);
-            else
-                ADD_FAILURE() << "render enable mode " << v;
-            break;
-        case NVB1C0_LINE_LENGTH_IN:
-            i2mLength = v;
-            break;
-        case NVB1C0_OFFSET_OUT_UPPER:
-            i2mOut = uint64_t(v) << 32 | (i2mOut & 0xffffffff);
-            break;
-        case NVB1C0_OFFSET_OUT:
-            i2mOut = (i2mOut & ~0xffffffffull) | v;
-            break;
-        case NVB1C0_LOAD_INLINE_DATA:
-            EXPECT_EQ(i2mLength, 4u);
-            if (enabled)
-                put(i2mOut, v);
-            break;
-        case NVB1C0_SEND_PCAS_A:
-            pcas = v;
-            break;
-        case NVB1C0_SEND_SIGNALING_PCAS_B:
-            if (enabled)
-                launched.push_back(pcas);
-            break;
-        default:
-            break;
-        }
-    }
-
-    void run(const std::vector<uint32_t> &words)
-    {
-        std::vector<switch_gm20b_method> m(words.size() * 2 + 1);
-        const long n = switch_gm20b_push_decode(words.data(), words.size(), m.data(), m.size());
-        ASSERT_GE(n, 0);
-        for (long i = 0; i < n; i++) {
-            if (m[size_t(i)].subchannel == kCopy)
-                copyEngine(m[size_t(i)].method, m[size_t(i)].value);
-            else if (m[size_t(i)].subchannel == kCompute)
-                compute(m[size_t(i)].method, m[size_t(i)].value);
-            else
-                ADD_FAILURE() << "subchannel " << m[size_t(i)].subchannel;
-        }
-    }
-};
 
 // A command buffer's compute words: the predication and launches named 1, 2, ... in encode order
 struct Program {

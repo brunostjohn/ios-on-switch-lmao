@@ -3,6 +3,8 @@
 #include "raw_compute.h"
 #include "raw_compute_slot.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitPredicate.h"
+#include "raw_kit.h"
 #include "raw_compute_visibility.h"
 #include "raw_dispatch_bands.h"
 #include "raw_stamps.h"
@@ -142,11 +144,17 @@ void ComputeEncoder::room(uint32_t words)
 {
     if (p_.room() >= words + 16)
         return;
-    cb_.segment(start_, p_.at);
+    loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     uint64_t va;
-    start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
-    p_ = Push{start_, start_ + kEncoderWords};
+    auto *chunk = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
+    p_ = Push{chunk, chunk + kEncoderWords};
+    loops_.openSegment(stream());
+}
+
+LoopStream ComputeEncoder::stream()
+{
+    return {p_, start_, cb_.segments_, dev_.push_.bo.cpu, dev_.push_.bo.va};
 }
 
 void ComputeEncoder::setBytes(uint32_t slot, const void *bytes, uint32_t length)
@@ -370,8 +378,11 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     for (uint32_t axis = 0; axis < 3; ++axis)
         units = laneWork(laneWork(units, groups[axis]), threads[axis]);
     const uint8_t axis = pieceAxis(grid);
+    // A loop's body is laid down once and listed per copy (raw_loop_copies.h): no band cuts a batch inside it, and its
+    // copies end the batches between them
+    const bool looping = loops_.open();
     const uint32_t pieces =
-        dev_.compositorClass()
+        dev_.compositorClass() || looping
             ? 1
             : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
                          dev_.bandBudgetNs(), grid[axis], kBandsPerCommandBuffer - cb_.bands);
@@ -381,7 +392,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     if (pieces > 1 && cb_.batchWork_.operations)
         cutBatch();
     DrawTiming timing;
-    const bool measured = measureDispatch(pieces > 1 ? units / pieces : units, timing);
+    const bool measured = !looping && measureDispatch(pieces > 1 ? units / pieces : units, timing);
     for (uint32_t i = 0; i < pieces; i++) {
         if (measured && i == 0)
             stampDispatch(timing, false);
@@ -402,7 +413,9 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     for (uint32_t a = 0; a < 3; ++a)
         work = BatchWork::product(BatchWork::product(work, groups[a]), threads[a]);
     apiWork_ = std::min(BatchWork::kSaturated, (first ? 0 : apiWork_) + work);
-    if (pieces < 2 && last && cb_.batchWork_.add(apiWork_, cb_.batchLimit()))
+    if (pieces < 2 && last && looping)
+        loops_.addWork(apiWork_);
+    else if (pieces < 2 && last && cb_.batchWork_.add(apiWork_, cb_.batchLimit()))
         cutBatch();
     RAW_DIAGNOSTIC(dev_.stats.dispatches++);
     return true;
@@ -467,7 +480,14 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);
-    room(8 + Predication::kGuardWords + Predication::kReleaseWords);
+    const bool looping = loops_.open();
+    room(8 + Predication::kGuardWords + Predication::kReleaseWords +
+         (looping ? SWITCH_GM20B_INLINE_WORDS_WORDS(kQmdWords) : 0));
+    // Every copy of a loop launches this QMD: QMDV01_07 has words only the hardware writes (HW_ONLY_*, clb1c0qmd.h:429),
+    // so each launch takes the CPU's bytes again, written in the stream before SEND_PCAS invalidates the scheduler's copy
+    // as NVK writes an indirect dispatch's grid (nvk_CmdDispatchIndirect2KHR)
+    if (looping)
+        kit(p_, switch_gm20b_compute_inline_words, qmdVa, qmd, kQmdWords);
     cb_.predication_.guard(p_);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
@@ -504,7 +524,7 @@ void ComputeEncoder::end()
 {
     room(8);
     computeToGraphics(p_, true);
-    cb_.segment(start_, p_.at);
+    loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     RAW_DIAGNOSTIC(dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }
