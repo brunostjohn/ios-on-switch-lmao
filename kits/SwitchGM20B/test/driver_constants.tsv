@@ -1,6 +1,5 @@
 # file	name	nv|tegra|mismatch|policy	expression or reason	note
 raw_gpu.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
-raw_gpu.cpp	kSetBytes	policy	NVK's descriptor set slot
 raw_gpu.cpp	kUboChunk	policy	upload granule
 raw_gpu.cpp	kMaxCbufBytes	policy	NVK_MAX_CBUF_SIZE (the class takes up to 64 KiB per binding)
 raw_gpu.cpp	kRootInterlockTickets	policy	offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
