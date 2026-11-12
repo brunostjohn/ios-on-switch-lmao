@@ -785,8 +785,10 @@ private:
         bool own = false;  // cleared by a pass of its own before this one (a Clear load reaching past the render area)
     };
 
-    std::vector<Clear> clears() const;
+    // the pass's clears into `out`; the tiles its draws reach in tiles_ (both keep the last pass's capacity)
+    void clears(std::vector<Clear> &out);
     std::vector<Clear> initialClears_;
+    std::vector<bool> tiles_;
     bool clearsSealed_ = false;
 
     // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
@@ -993,6 +995,7 @@ private:
     std::vector<NativeSurface *> nativeSurfaces_;
     std::vector<const Import *> pitchImports_;
     GeometryBudget geometryBudget_;
+    GeometrySnapshotPool geometryPool_;
 
     struct GeometryRead {
         Bo bo;

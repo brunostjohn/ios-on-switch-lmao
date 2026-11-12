@@ -8,7 +8,7 @@ constexpr const char *kPartNames[] = {
     "resources", "loop", "state", "pass", "split_plan", "fusion", "pass_end", "draw", "prepare", "geometry",
     "descriptors", "barriers", "split_launch", "blit", "compute", "tail", "commit", "prologues", "kernel", "exec",
     "geometry_acquire", "geometry_release", "use", "uniforms", "bind", "variant", "pass_prologue", "apply", "textures",
-    "retire"};
+    "retire", "pass_begin"};
 static_assert(sizeof kPartNames / sizeof *kPartNames == raw::kEncodeParts);
 
 constexpr const char *kCountNames[] = {"mallocs", "frees", "locks", "sends", "applied", "uses", "use_adds",

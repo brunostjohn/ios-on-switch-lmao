@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <vector>
 
 #include "raw_geometry.h"
 
@@ -24,10 +25,21 @@ public:
 
     void clear()
     {
-        for (uint32_t i = 0; i < count_; ++i)
-            draws_[i].reset();
-        count_ = 0;
+        draws_.clear();
         overflow_ = false;
+    }
+
+    // the list, its capacity for another region (the render encoder's next pass: no allocation a steady frame)
+    std::vector<Analysis> release()
+    {
+        clear();
+        return std::move(draws_);
+    }
+
+    void adopt(std::vector<Analysis> &&storage)
+    {
+        draws_ = std::move(storage);
+        clear();
     }
 
     void add(const DrawGeometry &g)
@@ -39,11 +51,11 @@ public:
     {
         if (analysis.geometry().limit.empty())
             return;
-        if (count_ == kMaxDraws) {
+        if (draws_.size() == kMaxDraws) {
             overflow_ = true;
             return;
         }
-        draws_[count_++].emplace(analysis);
+        draws_.push_back(analysis);
     }
 
     // Whether `g`'s pixels may meet a pixel written since the last clear
@@ -63,8 +75,8 @@ public:
         PixelBox box;
         if (!analysis.bounds(box))
             box = g.limit;
-        for (uint32_t i = count_; i-- > 0;) {
-            auto &draw = *draws_[i];
+        for (size_t i = draws_.size(); i-- > 0;) {
+            auto &draw = draws_[i];
             PixelBox written;
             if (!draw.bounds(written))
                 written = draw.geometry().limit;
@@ -89,8 +101,7 @@ public:
     }
 
 private:
-    std::array<std::optional<Analysis>, kMaxDraws> draws_;
-    uint32_t count_ = 0;
+    std::vector<Analysis> draws_;
     bool overflow_ = false;
 };
 
