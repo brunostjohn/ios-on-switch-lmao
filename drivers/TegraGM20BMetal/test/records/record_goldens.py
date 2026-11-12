@@ -6,7 +6,7 @@ write_goldens writes testdata/records_<kind>.bin, _sample.tsv and _sample_states
 pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. A bucket begins
 with the warm-up state (rawpack.py split_buckets), which the probe draws first, so the first bucket's first line leads.
 Then every R line whose state key, less a variant's name, hashes (packfile.fnv of rawpack.state_key) to a sampled state,
-and every D line (the kernels' dispatch shapes, a few dozen), each once.
+every R line of a bundle's library, and every D line (the kernels' dispatch shapes, a few dozen), each once.
 """
 
 import os
@@ -19,6 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'raw/pack'))
 import packfile
 import rawpack
 
+# A bundle's or a framework resource library's state is filed under its functions' AIR (runtime/RawRenderKey.h), which
+# its line does not give (tools/gpu/rawpack.py OS_LIBRARY): every such line is taken
+AIR_KEYED = re.compile(r' lib=/System/Library/\S+?\.(?:bundle|framework/Resources)/\S+\.metallib')
+
 
 def pick(states: set[int], logs: list[Path]) -> list[str]:
     lines: list[str] = []
@@ -29,7 +33,7 @@ def pick(states: set[int], logs: list[Path]) -> list[str]:
             if not lead and line.startswith('R '):
                 # a variant's line (cubic binds) is its state's: its record files under the state's key
                 state = packfile.VARIANT_NAME.sub('', rawpack.state_key(line))
-                if packfile.fnv(state.encode()) not in states:
+                if not AIR_KEYED.search(line) and packfile.fnv(state.encode()) not in states:
                     continue
             elif not lead and not line.startswith('D '):
                 continue
