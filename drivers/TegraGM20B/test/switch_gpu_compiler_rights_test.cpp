@@ -95,11 +95,16 @@ protected:
 			  kIOReturnSuccess);
 	}
 
-	// The device's boot: a compiler lost a third time, so every later close declines until the next registers
+	// A crash loop: a compiler lost a third time in a row before any registers, so every later close declines until one
+	// registers
 	void loseThreeCompilers()
 	{
+		const TegraGM20BAbiCompilerAnnounce in = {TegraGM20BCompilerRestarts, 0};
 		for (int lost = 0; lost < 3; ++lost) {
-			registerCompiler();
+			ASSERT_EQ(syncCall(kCompiler, &gCompilerTask,
+					   TegraGM20BMethodCompilerAnnounce, &in, sizeof in,
+					   nullptr, 0),
+				  kIOReturnSuccess);
 			switch_gpu_compiler_close(kCompiler);
 		}
 		ASSERT_TRUE(gBroker.declined);
@@ -135,7 +140,7 @@ TEST_F(CompilerRights, ACompileInTheWindowAfterADeclinedCloseLeavesTheRightToMig
 TEST_F(CompilerRights, AQueuedCompileAnsweredAtTheCompilersCloseReleasesItsRightOnce)
 {
 	loseThreeCompilers();
-	registerCompiler();
+	registerCompiler(false);
 	ASSERT_EQ(compile(kClientA, kPortA, 7), kIOReturnSuccess);
 	ASSERT_EQ(compile(kClientA, kPortA, 8), kIOReturnSuccess);
 	EXPECT_EQ(gRights.rights[kPortA], 2);

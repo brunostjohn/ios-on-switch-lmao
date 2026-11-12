@@ -36,8 +36,8 @@ struct Broker {
 	IOMemoryDescriptor *store;
 	uint64_t storeBytes, stack, nextId, nextClient;
 	uint32_t generation, pending, losses;
-	uint32_t
-		lossesInARow;  // SwitchGpuShaderCompilerPolicy.h: those since the last registration
+	// SwitchGpuShaderCompilerPolicy.h: the losses since the last registration
+	uint32_t lossesInARow;
 	int32_t compilerPid;  // debug kernels' kern.switch_shader_compiler (SWITCH_GPU_COMPILER_LINE)
 	uint64_t queuedBytes;
 	bool declined, restarts;

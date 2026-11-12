@@ -14,7 +14,6 @@
 // include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
-#include "TegraGM20BCompilerABI.h"
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
 #include <algorithm>
@@ -106,10 +105,6 @@ struct Model {
     // A test's GPU: each job is in flight until it ran, and a WaitFence on it waits up to then (false: it timed out)
     std::function<void()> jobAdded;
     std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
-    // the shader compiler broker (SwitchGpuShaderCompiler.cpp): none (0), else its info flags and every compile's result
-    uint32_t compilerFlags = 0;
-    int32_t compileResult = TegraGM20BCompileUnavailable;
-    unsigned compiles = 0;
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
     uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
     int refusal = kIOReturnNoResources;
@@ -534,21 +529,6 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     }
     case TegraGM20BMethodUnmap:
         return KERN_SUCCESS;
-    case TegraGM20BMethodCompilerInfo: {
-        if (!model.compilerFlags)
-            return kIOReturnUnsupported;
-        auto &info = *static_cast<TegraGM20BAbiCompilerInfoReply *>(output);
-        info = {};
-        info.flags = model.compilerFlags;
-        return KERN_SUCCESS;
-    }
-    case TegraGM20BMethodCompile: {
-        model.compiles++;
-        auto &reply = *static_cast<TegraGM20BAbiCompileReply *>(output);
-        reply = {};
-        reply.result = model.compileResult;
-        return KERN_SUCCESS;
-    }
     default:
         return kIOReturnUnsupported;
     }
