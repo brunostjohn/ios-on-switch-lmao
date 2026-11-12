@@ -74,7 +74,7 @@ MODELS = {
     'rg32float': {'fp32_nearest': fp32_nearest, 'fp32_flushed': fp32_flushed},
     'rgba16float': {'fp16_single': fp16_single, 'fp16_double': fp16_double, 'fp16_via_fp32': fp16_via_fp32},
 }
-# The model the shader's own arithmetic is, which the rewrite needs the ROP to be
+# The shader's own sum: an accumulator's draw can leave its fetch to the ROP only where the ROP adds alike
 SHADER = {'rg32float': 'fp32_nearest', 'rgba16float': 'fp16_single'}
 
 

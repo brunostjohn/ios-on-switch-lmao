@@ -48,20 +48,28 @@ def fragment_banks(pipe: dict) -> dict[int, int]:
 def matrix_uniform(storage: dict, free: dict) -> tuple[int, int, int] | None:
     """Give the colour matrix uniform's (fragment buffer index, byte offset, words), None where no buffer shows it.
 
-    Its words: the rows and the clamp pair where the storage form reads the pair too, else the rows alone.
+    The rows: five half4 rows from a 16-byte boundary the storage form reads, none of which the fetch-free form reads,
+    else (a texture function reading the same words, 21H461's c33, c4b, 3dl, mpc and opa) the rows holding every word
+    the storage form reads there and the fetch-free form does not. Its words: the rows and the clamp pair where the
+    storage form reads the pair too, else the rows alone.
     `storage`, `free`: each a pipeline's 'uniform' and 'entries' and its fragment program's 'fs_image'.
     """
     free_banks = fragment_banks(free)
+    found = []
     for slot, bank in fragment_banks(storage).items():
         read = loads(storage['fs_image'], bank)
         theirs = loads(free['fs_image'], free_banks[slot]) if slot in free_banks else set()
         for offset in sorted(read):
             rows = {offset + 4 * k for k in range(ROW_WORDS)}
-            if offset % 16 or not rows <= read or rows & theirs:
+            if offset % 16 or not rows <= read:
                 continue
             clamp = offset + 4 * ROW_WORDS
-            return slot, offset, ROW_WORDS + (CLAMP_WORDS if clamp in read and clamp not in theirs else 0)
-    return None
+            words = ROW_WORDS + (CLAMP_WORDS if clamp in read and clamp not in theirs else 0)
+            if not rows & theirs:
+                return slot, offset, words
+            if read - theirs and read - theirs <= rows | {clamp}:
+                found.append((slot, offset, words))
+    return found[0] if found else None
 
 
 def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]]:
