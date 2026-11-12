@@ -35,12 +35,16 @@ IOLock *lock()
     return gLock;
 }
 
-// The engine's own record of the job (SwitchHost1xResults): 0 pending, 1 done, or its failure.
+// The engine's own record of the job (SwitchHost1xResults): 0 pending, 1 done, or its failure. Its hardware outcome is
+// read first. A cancelled job is recorded failed before the CPU releases its syncpoint, and a job that ran on a failed
+// producer's memory once its own fence (queued on the syncpoint ahead of this one) is in; the job's result waits for
+// its semantic outcome, which is retired on another thread after this fence.
 int status(const switch_gpu_backing_token &token)
 {
     if (token.engine != SWITCH_GPU_ENGINE_VIC && token.engine != SWITCH_GPU_ENGINE_NVDEC)
         return -22;
-    return switch_gpu_backing_token_status(&token);
+    const int physical = switch_gpu_backing_token_physical_status(&token, 0);
+    return physical < 0 ? physical : switch_gpu_backing_token_status(&token);
 }
 
 void signaled(switch_host1x_fence *fence, int failure)

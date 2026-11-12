@@ -15,7 +15,8 @@ enum { SWITCH_HOST1X_TOKEN_FENCE_MAX = 4 };
 
 // tokens: producers of the surface (a view's producer), each a VIC or NVDEC job's. Returns 0 when completed(context,
 // status) will run once, on host1x's interrupt work loop, after every token's job has finished on its engine: status 0,
-// or a failure one of those jobs had reported by then (a failure reported later is not seen). It never runs inside this
+// or a failure one of those jobs had reported by then: its cancellation, its hardware's failure or a producer's it ran
+// after, or a semantic failure already retired (one retired later is not seen). It never runs inside this
 // call, even when every job is already done. Otherwise nothing runs: -22 for a token that is not a VIC or NVDEC job's
 // (the GPU's go through switch_gpu_bridge_fence), -16 when every flip slot is in use, SWITCH_GPU_BACKING_STALE for a
 // token from before a reset, a job's failure when it already failed, -19 while host1x is down.
