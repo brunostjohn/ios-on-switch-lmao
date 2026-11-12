@@ -273,6 +273,9 @@ TEST_F(FacadeCopies, EveryLayoutMetalTakesOnATextureTheRawPathHoldsIsItsToo)
     printf("textures the raw path does not hold:%s\n", unheld.c_str());
     EXPECT_TRUE(refused.empty()) << refused.size() << " layouts answered unlike Metal:" << list;
     EXPECT_GE(held.size(), 30u);
+    for (const std::string &n : notHeld)
+        EXPECT_TRUE(n.find("depth") == std::string::npos && n.find("stencil") == std::string::npos)
+            << n << ": a stored depth/stencil texture is the raw path's own";
 }
 
 }  // namespace

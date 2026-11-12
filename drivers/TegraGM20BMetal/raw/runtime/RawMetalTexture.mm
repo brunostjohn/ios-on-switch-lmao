@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalMultisample.h"
 #import "RawMetalXrPlanes.h"
 #include "raw_texture_cpu_range.h"
 
@@ -135,6 +136,10 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             rmTexturePlain(self);
             if (_raw.zeta && _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
                 made = [m2v newTextureWithDescriptor:_descriptor];
+                break;
+            }
+            if (zetaDescriptor(_descriptor)) {  // a stored one-sample zeta, moved into the twin's image (storedZetaTwin)
+                made = _rawOk ? storedZetaTwin(self, m2v, &why) : [m2v newTextureWithDescriptor:_descriptor];
                 break;
             }
             const size_t page = size_t(getpagesize());

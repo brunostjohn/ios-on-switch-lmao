@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalMultisample.h"
+#include "NativeBridgeMetalFrontend.h"
 
 RMStoredSamples storedMultisampleKind(MTLTextureDescriptor *d)
 {
@@ -35,6 +36,95 @@ bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::T
                (unsigned long long)(zeta ? t.storage.bytes : t.span.bytes),
                zeta ? "zeta memory, no m2v twin" : "block-linear memory, m2v's twin NVK's image over it");
     return made;
+}
+
+static const char *zetaMemoryRefusal(int asked)
+{
+    switch (asked) {
+    case -3:
+        return "m2v made no texture";
+    case -1:
+        return "the frontend or NVK has no texture memory accessor";
+    case -2:
+        return "its texels are no one NVK image's";
+    case 2:
+        return "NVK's image has more than one plane";
+    case 3:
+        return "NVK's image is not bound";
+    case 4:
+        return "NVK's image has more than one level";
+    case 5:
+        return "NVK's image has more than one layer";
+    case 6:
+        return "NVK's image is multisampled";
+    default:
+        return "NVK names no image";
+    }
+}
+
+bool makeStoredZeta(MTLTextureDescriptor *d, raw::Texture &t)
+{
+    const uint32_t width = uint32_t(d.width), height = uint32_t(d.height), format = uint32_t(d.pixelFormat);
+    const uint32_t layers =
+        raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048)));
+    const bool made =
+        gRM->raw->createOwnedZeta(width, height, format, 1, (d.usage & MTLTextureUsageShaderRead) != 0, t, layers);
+    static std::atomic<bool> said{false};
+    if (made && !said.exchange(true))
+        os_log(rawLog(),
+               "raw: stored one-sample depth/stencil on (first %ux%u format %u, %u layers: %llu bytes of %{public}s zeta "
+               "memory, no m2v twin)",
+               width, height, format, layers, (unsigned long long)t.storage.bytes, t.comptags ? "compressed" : "plain");
+    if (!made)
+        SWITCH_REFUSE_DETAIL("raw", "zeta.owned", d.pixelFormat,
+                             "a stored %lux%lu depth/stencil texture of format %lu stays m2v's: no zeta memory",
+                             (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat);
+    return made;
+}
+
+void rmStoredZetaForM2v(RMTexture *t)
+{
+    if (t && t->_rawOk && t->_raw.zeta && t->_raw.samples == 1 && zetaDescriptor(t->_descriptor))
+        (void)[t rmTwin];
+}
+
+id storedZetaTwin(RMTexture *t, id<MTLDevice> m2v, const char **why)
+{
+    std::lock_guard<std::recursive_mutex> l(submitLock());
+    @synchronized(t) {
+        if (t->_twin)
+            return t->_twin;
+    }
+    if (tRawEncoding) {
+        *why = "it was asked for inside a raw encode";
+        return nil;
+    }
+    id twin = [m2v newTextureWithDescriptor:t->_descriptor];
+    struct switch_nvk_image_memory m;
+    const int asked = !twin                                 ? -3
+                      : !native_bridge_metal_texture_memory ? -1
+                                                            : native_bridge_metal_texture_memory(twin, &m);
+    if (asked) {
+        *why = zetaMemoryRefusal(asked);
+        return nil;
+    }
+    raw::ZetaMemory z;
+    z.va = m.addr;
+    z.bytes = m.size_B;
+    z.layerBytes = m.array_stride_B;
+    z.pitch = m.row_stride_B;
+    z.bpp = m.texel_B;
+    z.blockHeight = m.y_log2;
+    z.blockDepth = m.z_log2;
+    z.tiled = m.tiled;
+    z.compressed = m.compressed;
+    @synchronized(t) {
+        if (!gRM->raw->moveOwnedZeta(t->_raw, z, why))
+            return nil;
+    }
+    gRM->rawSinceM2v = true;
+    // published under the submit lock, so a caller that waited on it finds this twin rather than moving again
+    return twinPublish(t, t->_twin, twin);
 }
 
 bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out)

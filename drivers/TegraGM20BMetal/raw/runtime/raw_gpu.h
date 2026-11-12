@@ -1370,6 +1370,8 @@ public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
     bool probeCompressible(const tgm_layout &bl, Texture &t);
+    // createOwnedZeta's one-sample zeta over compressible memory of its own (probeCompressNext), under lock_
+    bool probeCompressibleZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t);
 #endif
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
@@ -1478,10 +1480,16 @@ public:
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
     bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
-    // A stored multisampled depth/stencil texture in zeta memory of its own (raw_multisample.cpp), with a header where
-    // `sampled`. It has no m2v twin: NVK neither views zeta memory it did not make nor answers where a multisampled
-    // image's is.
-    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t);
+    // A stored depth/stencil texture of `samples` samples in zeta memory of its own (raw_multisample.cpp), with a header
+    // where `sampled`; a one-sample 2D array or cube of `layers` layers, layerBytes apart, has none (as createZetaOver's).
+    // NVK views no zeta memory it did not make: a multisampled one never has an m2v twin, a one-sample one only once a
+    // range replays on m2v (moveOwnedZeta).
+    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t,
+                         uint32_t layers = 1);
+    // A one-sample owned zeta's texels, every layer, copied into NVK's image `m` (its m2v twin's, made for a replay), the
+    // texture over that image from then on. Its own memory and header stay until it is destroyed: the copy and the work before it may
+    // still use them. False (*why): the texture keeps its own memory.
+    bool moveOwnedZeta(Texture &t, const ZetaMemory &m, const char **why);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
@@ -2015,7 +2023,8 @@ public:
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
     ProbeForms nextForms;
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
-    // target, which probeCompressed holds until destroyTexture; any other texture takes the flag and stays plain
+    // target, as the next createOwnedZeta does for a one-sample zeta, which probeCompressed holds until destroyTexture;
+    // any other texture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
     // split draws the capture still takes (raw_split_capture.h); 0: disarmed
     std::atomic<uint32_t> splitCaptureLeft{0};
@@ -2456,8 +2465,21 @@ private:
     // freeSpan() take for block-linear colour memory
     std::map<uint64_t, std::pair<uint32_t, Span>> ownedZeta_;
 
+    // moveOwnedZeta's textures by their new address: their own memory's address and their header before the move
+    struct MovedZeta {
+        uint64_t ownedVa;
+        uint32_t staleTic;
+    };
+    std::map<uint64_t, MovedZeta> movedZeta_;
+
     void freeOwnedZeta(uint64_t va)  // lock_ held
     {
+        if (const auto moved = movedZeta_.find(va); moved != movedZeta_.end()) {
+            if (moved->second.staleTic)
+                freeTic(moved->second.staleTic);
+            va = moved->second.ownedVa;
+            movedZeta_.erase(moved);
+        }
         const auto at = ownedZeta_.find(va);
         if (at == ownedZeta_.end())
             return;

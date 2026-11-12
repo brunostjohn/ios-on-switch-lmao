@@ -2,6 +2,7 @@
 // The facade's half of private textures on compressed memory (raw_private_comp.h): which descriptors qualify, and the
 // move to plain memory before anything names a texture's pages another way.
 #import "RawMetalInternal.h"
+#import "RawMetalMultisample.h"
 #include <algorithm>
 #include <mutex>
 #include "raw_storage_form.h"
@@ -70,7 +71,15 @@ void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to)
         while (t && t->_kind == RMTextureView)
             t = t->_parent;
         rmTexturePlain(t);
+        rmStoredZetaForM2v(t);
     });
+    for (size_t at = from; at < to; at++)
+        if (cb->_plan.operation(at).op == OpRender) {
+            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)cb->_plan.legacy(at).obj;
+            for (id<MTLTexture> zeta : {pass.depthAttachment.texture, pass.stencilAttachment.texture})
+                if ([(id)zeta isKindOfClass:[RMTexture class]])
+                    rmStoredZetaForM2v((RMTexture *)zeta);
+        }
 }
 
 // A pipeline binding's raw pipeline (raster.pipeline, .nativePipeline, .nativeVariant as OpPipeline sets them); `pending`:

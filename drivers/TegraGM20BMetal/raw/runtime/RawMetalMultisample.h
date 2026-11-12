@@ -14,6 +14,15 @@ enum class RMStoredSamples : uint8_t {
 RMStoredSamples storedMultisampleKind(MTLTextureDescriptor *d);
 bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::Texture &t);
 
+// A stored one-sample depth/stencil texture (zetaDescriptor's, not memoryless) in zeta memory of its own, no m2v twin
+bool makeStoredZeta(MTLTextureDescriptor *d, raw::Texture &t);
+// m2v's twin of stored one-sample depth/stencil texture `t`, made at the first replay that needs it: NVK's image, with
+// `t`'s texels copied into it and `t` over it from then on (raw::Device::moveOwnedZeta); nil, *why, where it cannot be
+id storedZetaTwin(RMTexture *t, id<MTLDevice> m2v, const char **why);
+// Before a range replays on m2v and m2v is ordered after the raw path's work (rmRangePlain): `t`'s twin, if it is a stored
+// one-sample depth/stencil texture, so its move's copy is work m2v is ordered after
+void rmStoredZetaForM2v(RMTexture *t);
+
 // The pass's own `count` sample positions (getSamplePositions:nil count:0) for a pass of `samples` samples
 // (raw_sample_positions.h); false: ones the raw path keeps Metal's refusal of
 bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out);

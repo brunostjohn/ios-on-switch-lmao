@@ -209,8 +209,8 @@ uint32_t arrayType(MTLTextureDescriptor *d)
 
 // A depth/stencil texture of a format the raw path renders (raw_zeta.h kZetaFormatInfo), one level, no rotation: memoryless, 2D
 // of one sample or 2D multisampled of 2 or 4; or stored (private), 2D of one sample, a render target that may also be sampled:
-// m2v's texture, which the raw path renders, samples and copies in place (one allocation for both drivers, NVK's image). A
-// stored 2D array or cube is rendered in place too, a slice at a time or layered (sampled by m2v)
+// in the raw path's own zeta memory (makeStoredZeta), a 2D array or cube rendered there a slice at a time or layered, moved
+// into NVK's image only if a replay needs m2v's twin
 bool zetaDescriptor(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");

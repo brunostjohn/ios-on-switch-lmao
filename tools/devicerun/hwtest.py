@@ -114,6 +114,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.mip_twod',
             'gpu.raw.mip_twod_candidates',
             'gpu.raw.visibility',
+            'gpu.raw.stored_depth',
             'gpu.raw.fixed_blend_rule',
             'gpu.raw.private_compression',
             'gpu.raw.alpha_to_coverage',
