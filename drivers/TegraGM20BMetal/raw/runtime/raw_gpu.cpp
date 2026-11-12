@@ -5060,8 +5060,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                         return false;
                     }
+                    const bool written = pl->writtenSlots >> e.slot & 1;
+                    if (written && t && t->format != pl->rec->writtenFormat[e.slot]) {
+                        *why = "a written texture of another format than its program stores";
+                        cb_->refusal = {RefWrittenTexture, e.slot, t->format, pl->rec->writtenFormat[e.slot]};
+                        return false;
+                    }
                     if (t)
-                        cb_->use(*t, false);
+                        cb_->use(*t, written);
                     tic = t ? t->tic : 0;
                 }
                 const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
