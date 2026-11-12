@@ -1441,6 +1441,9 @@ public:
     bool restoreArena(uint32_t arena);
 
     uint64_t arenaBytes();  // bound: purged arenas' are not
+    // Of arenaBytes, what their resources are placed in (the rest holds no resource: what an idle give-back could return
+    // of a heap kept non-volatile) and what is in heaps made volatile
+    void arenaUse(uint64_t &placed, uint64_t &volatileBytes);
 
     uint32_t purgedArenas() const
     {

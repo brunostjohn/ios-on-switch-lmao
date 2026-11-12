@@ -237,6 +237,17 @@ uint64_t Device::arenaBytes()
     return bytes;
 }
 
+void Device::arenaUse(uint64_t &placed, uint64_t &volatileBytes)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    placed = volatileBytes = 0;
+    for (const Arena &a : arenas_)
+        if (a.used && !a.purged) {
+            placed += std::min(a.place.used(), a.bytes);
+            volatileBytes += a.isVolatile ? a.bytes : 0;
+        }
+}
+
 bool Device::arenaPurged(uint32_t arena)
 {
     std::lock_guard<std::mutex> l(lock_);
