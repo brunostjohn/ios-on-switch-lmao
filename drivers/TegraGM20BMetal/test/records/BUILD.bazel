@@ -1,0 +1,108 @@
+# The raw pack's records held to checked-in goldens (golden_files.h): the identity oracle of a pack generator change (a
+# compile path, encoders or context init made without NVK) once nothing else can make the records to compare with.
+#
+#   bazel test //drivers/TegraGM20BMetal/test/records:record_digest_test        the digest itself, over packs it writes
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_sample_test   builds the pack: the sampled
+#                                                                               records, section by section
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/records:record_corpus_test   builds the pack: every record
+#   bazel run --config=ios27 //drivers/TegraGM20BMetal/test/records:record_goldens -- <pack.bin> 24B119   rewrites the
+#                                                                               kind's goldens from a pack
+#
+# The goldens are 9da14c602's packs (pack v19), made while NVK's compile still vouched for every record.
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+KINDS = ("21H461", "24B119")
+
+cc_library(
+    name = "records",
+    srcs = [
+        "golden_files.cpp",
+        "record_digest.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+    ],
+    hdrs = [
+        "golden_files.h",
+        "record_digest.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+)
+
+cc_binary(
+    name = "record_goldens",
+    srcs = ["record_goldens.cpp"],
+    copts = ["-std=c++17"],
+    deps = [":records"],
+)
+
+cc_binary(
+    name = "record_check",
+    srcs = ["record_check.cpp"],
+    copts = ["-std=c++17"],
+    deps = [":records"],
+)
+
+host_test(
+    name = "record_digest_test",
+    srcs = ["record_digest_test.cpp"],
+    cxx_std = "c++17",
+    deps = [":records"],
+)
+
+GOLDENS = select({
+    "//ipsw:" + kind: [
+        "testdata/records_%s.bin" % kind,
+        "testdata/records_%s_sample.tsv" % kind,
+    ]
+    for kind in KINDS
+})
+
+ARGS = select({
+    "//ipsw:" + kind: [
+        "$(rootpath //gpu/seed:raw_pack)/pack.bin",
+        "$(rootpath testdata/records_%s.bin)" % kind,
+        "$(rootpath testdata/records_%s_sample.tsv)" % kind,
+        kind,
+    ]
+    for kind in KINDS
+})
+
+# Both build the pack (//gpu/seed:raw_pack, the probes on NVK's host twin until x1-nomvk replaces them): manual, run by
+# the gate that packages a build
+cc_test(
+    name = "record_sample_test",
+    srcs = ["record_check.cpp"],
+    args = ARGS + ["--sample"],
+    copts = ["-std=c++17"],
+    data = GOLDENS + ["//gpu/seed:raw_pack"],
+    tags = [
+        "manual",
+        "pack",
+    ],
+    deps = [":records"],
+)
+
+cc_test(
+    name = "record_corpus_test",
+    size = "medium",
+    srcs = ["record_check.cpp"],
+    args = ARGS,
+    copts = ["-std=c++17"],
+    data = GOLDENS + ["//gpu/seed:raw_pack"],
+    tags = [
+        "manual",
+        "pack",
+    ],
+    deps = [":records"],
+)
