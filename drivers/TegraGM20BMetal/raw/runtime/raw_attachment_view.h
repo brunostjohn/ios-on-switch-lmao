@@ -75,7 +75,7 @@ inline bool ownViewHeader(const uint32_t own[8], const AttachmentView &v, uint32
     viewHeader(own, v.word0, out);
     out[4] |= uint32_t(v.srgb) << 22;  // S_R_G_B_CONVERSION (bit 150)
     if (v.arrayed) {
-        out[4] = (out[4] & ~(15u << 23)) | fx::kTexTwoDArray << 23;            // TEXTURE_TYPE (bits 151-154)
+        out[4] = (out[4] & ~(15u << 23)) | fx::kTexTwoDArray << 23;              // TEXTURE_TYPE (bits 151-154)
         out[5] = (out[5] & ~(0x3fffu << 16)) | ((v.layers - 1) & 0x3fff) << 16;  // DEPTH_MINUS_ONE (bits 176-189)
     }
     return true;

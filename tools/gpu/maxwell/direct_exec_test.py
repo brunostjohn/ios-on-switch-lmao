@@ -6,7 +6,8 @@ path binds it (direct_records.py) and fed the words a draw or dispatch writes fr
 word, amplification id word, pulled stride words, stage-in region word). Every expected value is the Metal source's
 arithmetic on the CPU, on inputs a zero or a stub would not pass: patch factors culled, clamped and kept, tessellation
 coordinates off the corners, amplification 1, a stage-in origin past 0, a stride past 4095 bytes, buffers across a
-4 GiB boundary, and counter spans across 2^32.
+4 GiB boundary, counter spans across 2^32, and a fragment quad's storage image texels in each layer of a layered pass
+(quad.py), every layer's its own.
 
 usage: direct_exec_test.py <direct_runner dir> <shader tools dir>
 """
@@ -22,7 +23,8 @@ import unittest
 from pathlib import Path
 
 from tools.gpu.maxwell import direct_records as dr
-from tools.gpu.maxwell.interp import UnsupportedError
+from tools.gpu.maxwell.interp import Inputs, UnsupportedError
+from tools.gpu.maxwell.quad import run_quad
 
 RECORDS: dict = {}
 ATTR_LAYER, ATTR_VIEWPORT, ATTR_POSITION, ATTR_GENERIC = 0x64, 0x68, 0x70, 0x80
@@ -195,6 +197,92 @@ class Amplification(Records):
                 self.assertEqual(outputs(environment, ATTR_GENERIC, 4), [float(amplification), float(vid), 0.0, 1.0])
                 self.assertEqual(environment.outputs[(0, ATTR_LAYER)], layer if layer < layers else 0)
                 self.assertEqual(environment.outputs[(0, ATTR_VIEWPORT)], viewport if viewport < viewports else 0)
+
+
+class LayeredFetch(Records):
+    """A slice-choosing state of m2v's layered storage form, whose fragment function fetches [[color(0)]].
+
+    The vertex program stores instance i as Layer below the pass's length word (an index at or past it as 0). The
+    fragment program, run on quads of each layer of passes of 2 and 6 layers, reads its Layer input and loads and stores
+    the attachment's storage image, a 2D array (SULD and SUST of three coordinates), at (x, y, Layer): each layer's own
+    texel with its channels rotated, as the Metal source computes it on the CPU.
+    """
+
+    HEADER = 0x123  # the attachment view's header index set 0 holds (raw_gpu.cpp: tic | tsc << 20, no sampler)
+    QUADS = ((2, 4), (13, 7))
+
+    @staticmethod
+    def texel(x: int, y: int, layer: int) -> list[int]:
+        """Give the storage image's texel (x, y) of `layer` as SULD.P loads an RGBA8Unorm one, each layer's its own."""
+        codes = ((7 * x + 31 * layer) & 255, (5 * y + 47 * layer) & 255, (x + y + 90 * layer) & 255, 200 + layer)
+        return [dr.f32(c / 255) for c in codes]
+
+    def setUp(self) -> None:
+        self.record = self.state('layered_fetch')
+        storage_mask, _writes, _view = self.record['storage']
+        self.assertEqual(storage_mask, 1, 'the storage form')
+        self.length_word = self.record['pass_words'][0]
+        self.assertTrue(0 < self.length_word <= 32, 'the layered form names its length word')
+
+    def binding(self, layers: int) -> dr.Binding:
+        binding = dr.Binding()
+        push = dr.record_push(self.record)
+        push[self.length_word - 1] = layers
+        set0 = dr.render_set(self.record, binding, {0: self.HEADER})
+        binding.tables(dr.root_table(push, self.record['set_bytes']), set0)
+        return binding
+
+    def layer_of(self, binding: dr.Binding, instance: int) -> int:
+        program = self.record['programs'][0]
+        environment = dr.stage(program, binding, attributes({ATTR_VERTEX_ID: 0, ATTR_INSTANCE_ID: instance}), {})
+        dr.execute(program, environment)
+        return environment.outputs[(0, ATTR_LAYER)]
+
+    def lane(self, banks: dr.Stage, pixel: tuple[int, int], layer: int, loads: list) -> Inputs:
+        x, y = pixel
+        words = {ATTR_LAYER: layer, ATTR_POSITION: dr.f32(x + 0.5), ATTR_POSITION + 4: dr.f32(y + 0.5)}
+        words.update({ATTR_POSITION + 8: dr.f32(0.0), ATTR_POSITION + 12: dr.f32(1.0)})
+
+        def attribute(address: int) -> int:
+            if address not in words:
+                raise UnsupportedError(f'IPA {address:#x}, an input the test gave no word for')
+            return words[address]
+
+        def surface(op: tuple) -> list[int]:
+            if op[0] != 'suld':
+                raise UnsupportedError(f'{op[0]}, a read the test gave no memory for')
+            loads.append((op[1], op[2]))
+            return self.texel(*op[2]) if len(op[2]) == 3 else [0, 0, 0, 0]
+
+        return Inputs(attribute, banks.cbuf, surface)
+
+    def test_the_vertex_program_writes_each_instances_layer_below_the_length(self):
+        for layers in (2, 6):
+            binding = self.binding(layers)
+            for instance in range(layers + 1):
+                want = instance if instance < layers else 0
+                self.assertEqual(self.layer_of(binding, instance), want, f'{layers} layers, instance {instance}')
+
+    def test_each_layers_fragments_fetch_and_store_their_own_texel(self):
+        program = self.record['programs'][1]
+        for layers in (2, 6):
+            binding = self.binding(layers)
+            banks = dr.stage(program, binding, attributes({}), {})
+            for instance in range(layers):
+                layer = self.layer_of(binding, instance)
+                for x0, y0 in self.QUADS:
+                    pixels = [(x0 + k % 2, y0 + k // 2) for k in range(4)]
+                    loads: list[list] = [[] for _ in pixels]
+                    lanes = [self.lane(banks, p, layer, loads[k]) for k, p in enumerate(pixels)]
+                    for (x, y), loaded, (_, killed, stores) in zip(
+                        pixels, loads, run_quad(dr.code(program), lanes, 0), strict=True
+                    ):
+                        at = (x, y, layer)
+                        self.assertFalse(killed, f'{layers} layers: {at}')
+                        self.assertEqual(loaded, [(self.HEADER, at)], f'{layers} layers: the loads at {at}')
+                        r, g, b, a = self.texel(*at)
+                        want = [(self.HEADER, at, (g, b, r, a))]
+                        self.assertEqual(stores, want, f'{layers} layers: the store at {at}')
 
 
 class WideStride(Records):

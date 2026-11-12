@@ -51,8 +51,8 @@ template <class Header> const char *qualifyStorage(const NmbDirectState &state, 
                 return "storage form: attachment descriptor does not match its storage view";
             if (w.viewType != attachmentView)
                 return w.viewType == kViewType2DArray
-                           ? "storage form: a layered storage view in a record not of a slice-choosing state's layered form"
-                           : "storage form: a slice-choosing state's layered form whose storage view is one 2D layer";
+                           ? "storage form: a layered storage view in a record not of the layered form"
+                           : "storage form: a record of the layered form whose storage view is one 2D layer";
             bound |= 1u << w.slot;
         }
         if (bound != s.mask)

@@ -25,6 +25,9 @@ from tools.gpu.maxwell.interp import (
 from tools.gpu.maxwell.isa import field as bits
 
 LANE_OPS = ('SHFL', 'FSWZADD', 'VOTE', 'ATOMS', 'STG', 'BAR')
+# SULD and SUST coordinate registers by their dimension (sm50.rs set_image_dim): a 2D array's (x, y, layer) and a 3D
+# image's (x, y, z); every other dimension's key keeps two words
+SURFACE_COORDS = {4: 3, 5: 3}
 FORMATS = {0: None, 1: F16, 2: F32}
 
 
@@ -238,7 +241,8 @@ def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     if base == 'ATOM':
         lane.w(d, 0)
         return
-    coords = tuple(lane.r(bits(w, 8, 8) + k) for k in range(2))
+    dimension = 2 if base == 'LDG' else SURFACE_COORDS.get(bits(w, 33, 3), 2)
+    coords = tuple(lane.r(bits(w, 8, 8) + k) for k in range(dimension))
     if base == 'LDG':
         count = {4: 1, 5: 2, 6: 4}.get(bits(w, 48, 3), 1)
         result = inputs.texture(('ldg', coords, bits(w, 20, 24)))

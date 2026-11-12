@@ -15,7 +15,7 @@ from tools.gpu.maxwell.stage import Memory, Stage
 
 ROOT_BYTES, ROOT_SETS, ROOT_PUSH = 0x800, 0x38, 0x700
 CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET = 1, 2, 3
-ENTRY_UBO, ENTRY_TESS_BUFFER = 1, 10
+ENTRY_UBO, ENTRY_FETCH, ENTRY_TESS_BUFFER = 1, 3, 10
 KERNEL_BUFFER = 0
 SET_ADDRESS = 0xF0_0000_0000
 ROOT_ADDRESS = 0xF1_0000_0000
@@ -84,15 +84,19 @@ class Binding:
         return struct.pack('<IIII', address & MASK, address >> 32, descriptor_range(storage, window, size), 0)
 
 
-def render_set(record: dict, binding: Binding) -> bytes:
+def render_set(record: dict, binding: Binding, attachments: dict[int, int] | None = None) -> bytes:
+    """Give set 0: each buffer's descriptor, and each framebuffer fetch's header index of `attachments` by color."""
     data = bytearray(max(256, record['set_bytes']))
     for offset, kind, stage, slot, sampler_kind, sampler, pad in record['entries']:
+        if kind == ENTRY_FETCH and attachments is not None and slot in attachments:
+            struct.pack_into('<I', data, offset, attachments[slot])
+            continue
         if kind == ENTRY_UBO:
             key = (stage, slot)
         elif kind == ENTRY_TESS_BUFFER:
             key = ('tess', slot)
         else:
-            raise ValueError(f'a set-0 entry of kind {kind}: these states bind no texture')
+            raise ValueError(f'a set-0 entry of kind {kind} the test bound nothing at')
         data[offset : offset + 16] = binding.descriptor(key, bool(sampler_kind & 1), (sampler | pad << 8) * 16)
     return bytes(data)
 

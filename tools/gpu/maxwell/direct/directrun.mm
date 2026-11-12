@@ -83,6 +83,7 @@ NSDictionary *stateJson(const raw::RuntimeRecord &r)
         @"amplification" : @[ @(p.amplificationMax), @(p.amplificationIdWord), @(p.amplificationCountWord) ],
         @"amplification_offsets" : @[ @(r.amplificationLayerWord), @(r.amplificationViewportWord) ],
         @"pass_words" : @[ @(p.arrayLengthWord), @(p.viewportCountWord) ],
+        @"storage" : @[ @(p.storageMask), @(p.storageWriteMask), @(p.storageTic[0]) ],
         @"control" : @[ @(p.controlWord), @(p.controlPoints), @(p.controlPointIndexBytes) ],
         @"blob" : words(r.blob.data(), r.blob.size()),
         @"extras" : extras,
@@ -196,6 +197,9 @@ void make(Runner &run)
     });
     run.state(@"amplification", @"amp_vertex", @"amp_fragment", ^(MTLRenderPipelineDescriptor *d) {
         d.maxVertexAmplificationCount = 2;
+    });
+    run.state(@"layered_fetch", @"layered_fetch_vertex", @"layered_fetch_fragment", ^(MTLRenderPipelineDescriptor *d) {
+        d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
     });
     run.state(@"wide_static", @"wide_vertex", @"wide_fragment", ^(MTLRenderPipelineDescriptor *d) {
         MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];

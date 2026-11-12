@@ -75,6 +75,21 @@ fragment float4 wide_fragment(Shaded in [[stage_in]])
     return in.colour;
 }
 
+struct LayeredFetch {
+    float4 position [[position]];
+    uint layer [[render_target_array_index]];
+};
+
+vertex LayeredFetch layered_fetch_vertex(uint vid [[vertex_id]], uint iid [[instance_id]])
+{
+    return {float4(float(vid & 1) - 0.5f, float(vid >> 1) - 0.5f, 0, 1), iid};
+}
+
+fragment float4 layered_fetch_fragment(float4 c [[color(0)]])
+{
+    return float4(c.g, c.b, c.r, c.a);
+}
+
 struct StageIn {
     float2 value [[attribute(0)]];
 };
