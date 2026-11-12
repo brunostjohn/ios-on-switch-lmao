@@ -325,7 +325,8 @@ fn stage_number(stage: Stage) -> u32 {
     }
 }
 
-/// probe.mm's sampler at fragment slot `s`: linear filters when s&1, a repeating U when s&2, max LOD 1 + s/2
+/// probe.mm's sampler at slot `s` (of the fragment stage, or a vertex one): linear filters when s&1, a repeating U when
+/// s&2, max LOD 1 + s/2
 fn probe_sampler(s: u32) -> SamplerDescriptor {
     let mut d = SamplerDescriptor::new();
     let filter = if s & 1 != 0 {
@@ -356,25 +357,43 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     }
 }
 
-/// The fragment texture slots the probe binds whose arguments the state's functions declare other than a single-sample
-/// `texture2d` of floats: a texture of the declared type (Core Animation's colour cubes a 3D one, a `texture2d_ms` or a
-/// `depth2d_ms` a multisampled one), sampled type and comparison is bound there, so that each gets its own write at its
-/// own Metal index where a `texture2d` would get the declaration's neutral
-fn declared_slots(pipeline: &RenderPipeline) -> Vec<(u32, TextureSlot)> {
+/// The texture slots the probe binds by their declarations: each the state's functions declare at the vertex stage or at
+/// a fragment slot past the tagged ones, and each tagged fragment one declared other than a single-sample `texture2d` of
+/// floats. A texture of the declared type (Core Animation's colour cubes a 3D one, a `texture2d_ms` or a `depth2d_ms` a
+/// multisampled one), sampled type and comparison is bound there, so that each gets its own write at its own Metal index
+/// where an unbound or mistyped slot would get the declaration's neutral
+fn declared_slots(pipeline: &RenderPipeline) -> Vec<(Stage, u32, TextureSlot)> {
     pipeline
         .interface
         .slots
         .iter()
         .filter_map(|(slot, interface)| match interface {
             SlotInterface::Texture(t)
-                if slot.stage == Stage::Fragment
-                    && slot.class == SlotClass::Texture
-                    && slot.index < PROBE_TAGGED
-                    && (t.texture_type != TextureType::Type2D
-                        || t.sampled_type != SampledType::Float
-                        || t.depth_compare) =>
+                if slot.class == SlotClass::Texture
+                    && (slot.stage == Stage::Vertex
+                        || (slot.stage == Stage::Fragment
+                            && (slot.index >= PROBE_TAGGED
+                                || t.texture_type != TextureType::Type2D
+                                || t.sampled_type != SampledType::Float
+                                || t.depth_compare))) =>
             {
-                Some((slot.index, *t))
+                Some((slot.stage, slot.index, *t))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The vertex sampler slots the state's functions declare: the probe binds its sampler of each index there, as it does at
+/// every fragment one
+fn vertex_samplers(pipeline: &RenderPipeline) -> Vec<u32> {
+    pipeline
+        .interface
+        .slots
+        .iter()
+        .filter_map(|(slot, interface)| match interface {
+            SlotInterface::Sampler(_) if slot.stage == Stage::Vertex && slot.class == SlotClass::Sampler => {
+                Some(slot.index)
             }
             _ => None,
         })
@@ -402,13 +421,14 @@ fn declared_facts(t: &TextureSlot, own: Option<PixelFormat>, format: PixelFormat
 }
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and `samples` (of their declarations at `declared`) and 16
-/// samplers at the fragment stage, `binds`' in their places
+/// buffers at each slot's own offset), 16 textures of `format` and `samples` and 16 samplers at the fragment stage, a
+/// texture of its declaration at each of `declared` and a sampler at each of `vertex_samplers`, `binds`' in their places
 fn probe_state(
     run: usize,
     format: PixelFormat,
     samples: u32,
-    declared: &[(u32, TextureSlot)],
+    declared: &[(Stage, u32, TextureSlot)],
+    vertex_samplers: &[u32],
     binds: &Binds,
 ) -> BindState {
     let mut state = BindState::default();
@@ -439,11 +459,35 @@ fn probe_state(
             };
             table.buffers.insert(slot, bound);
         }
+        let own_format = |t: u32| {
+            binds
+                .textures
+                .iter()
+                .find(|(slot, _)| stage == Stage::Fragment && *slot == t)
+                .map(|(_, f)| *f)
+        };
+        for (_, t, d) in declared
+            .iter()
+            .filter(|(at, t, _)| *at == stage && (stage == Stage::Vertex || *t >= PROBE_TAGGED))
+        {
+            table.textures.insert(
+                *t,
+                BoundTexture::Texture {
+                    facts: declared_facts(d, own_format(*t), format, samples),
+                    resource_id: None,
+                },
+            );
+        }
+        if stage == Stage::Vertex {
+            for &s in vertex_samplers {
+                table.samplers.insert(s, BoundSampler::new(probe_sampler(s)));
+            }
+        }
         if stage == Stage::Fragment {
             for t in 0..PROBE_TAGGED {
-                let own = binds.textures.iter().find(|(slot, _)| *slot == t).map(|(_, f)| *f);
+                let own = own_format(t);
                 let mut facts = TextureFacts::new(TextureType::Type2D, own.unwrap_or(format));
-                if let Some((_, d)) = declared.iter().find(|(slot, _)| *slot == t) {
+                if let Some((_, _, d)) = declared.iter().find(|(at, slot, _)| *at == stage && *slot == t) {
                     facts = declared_facts(d, own, format, samples);
                 } else if samples > 1 {
                     facts.texture_type = TextureType::Type2DMultisample;
@@ -846,6 +890,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
+        let samplers = vertex_samplers(&base);
         let mut variants = vec![(VariantKey::new(), base)];
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
         for run in 0..RUN_BYTES.len() {
@@ -853,7 +898,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &declared, &binds),
+                &probe_state(run, format, texture_samples.max(1), &declared, &samplers, &binds),
                 &budget,
             )?);
         }
