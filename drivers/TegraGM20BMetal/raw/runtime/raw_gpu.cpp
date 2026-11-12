@@ -4740,7 +4740,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::icbRange(p_, x.first, x.count);
     }
     for (uint32_t a = 0; a < amplifications_; a++) {
-        if (a)
+        if (amplifications_ > 1)
             icbAmplification(a);
         if (p_.at > bodyStart_)
             bodies_.push_back({bodyStart_, p_.at});
