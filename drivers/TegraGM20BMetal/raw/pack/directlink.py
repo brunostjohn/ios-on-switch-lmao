@@ -30,7 +30,14 @@ PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
 PIPELINE_BYTES = (
-    PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
+    PIPELINE.size
+    + packfile.PACK_ENTRIES * 8
+    + 4
+    + 32 * 4
+    + 4
+    + 36
+    + 16
+    + packfile.PIPELINE_V15.size
     + packfile.PIPELINE_V18.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
