@@ -48,6 +48,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
+    rc->splitProbe(rmSplitProbe());
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {

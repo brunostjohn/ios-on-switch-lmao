@@ -3560,6 +3560,7 @@ CommandBuffer *Device::begin()
     cb.publication_ = {};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
+    cb.splitProbe_ = SplitProbe::Twin;
     cb.foldCounts();
 #endif
     cb.draws = cb.passes = cb.blits = cb.bands = 0;
@@ -5367,10 +5368,18 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     auto geometryAnalysis =
         geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     RAW_ENCODE_BEGIN(variantSpan, Variant);
-    if (!indirectGeometry_)
-        pl = splitTwin(pl, geometryAnalysis);
+    Pipeline *twin = indirectGeometry_ ? pl : splitTwin(pl, geometryAnalysis);
+    const Pipeline *launchOnly = nullptr;
+    bool generic = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (twin->splitOf && cb_->splitProbe_ == SplitProbe::LaunchOnly)
+        launchOnly = twin;
+    generic = twin->splitOf && (cb_->splitProbe_ == SplitProbe::Generic || launchOnly);
+#endif
+    if (!generic)
+        pl = twin;
     // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
-    if (!pl->splitOf)
+    if (!pl->splitOf && !generic)
         pl = dev_->variant(*pl, bindingFacts(*pl));
     RAW_ENCODE_END(variantSpan);
     if (!whole_) {
@@ -5762,6 +5771,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     if (pl->splitOf)
         launchSplit(p, *pl, set);
+    else if (launchOnly)
+        launchSplit(p, *launchOnly, set);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif

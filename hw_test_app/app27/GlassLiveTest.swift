@@ -11,9 +11,12 @@ import UIKit
 /// frame read, the dot toggling on: the frames ui.glass_first's unchanged-tree snapshot reuses the backdrop of), server
 /// (Core Animation animates the stripes in the render server), scroll (the app scrolls the stripes every display
 /// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame), plain (scroll without the
-/// read-back: the frame rate it costs), and appear_whole and glass_whole: appear and glass with every raw process drawing
-/// whole programs (debug switch whole-programs), so a split program's prologue, launched ahead of its command buffer,
-/// is ruled in or out for the glass that is new or moves. After each variant `<variant>_rest=<last>/<after>`: the glass
+/// read-back: the frame rate it costs), and appear and glass again under each debug switch of a split draw, in every raw
+/// process: _whole (whole-programs: no split, variants as they are), _generic (split-generic: the generic whole program
+/// where a draw would split), _launch (split-launch-only: the prologue runs, the generic whole program draws) and, for
+/// glass, _noreuse (split-no-reuse: each split draw's frontier from its own prologue). Partial black gone under _generic
+/// but not _launch puts it on the compute segment at the command buffer's start; gone under _launch puts it on the
+/// frontier; gone under _noreuse puts it on the frontier's reuse; present under _generic puts it on the generic program. After each variant `<variant>_rest=<last>/<after>`: the glass
 /// left on screen when the motion stopped against the glass once the backdrop under it is captured again.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
@@ -27,7 +30,7 @@ struct UIGlassLiveTest: HWTest {
     let id = "ui.glass_live"
     let name = "Liquid Glass on screen over a moving backdrop, read back per presented frame"
     let subsystem = Subsystem.compositor
-    var timeout: TimeInterval { 150 }
+    var timeout: TimeInterval { 240 }
     static let seconds: TimeInterval = 3.5
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -40,7 +43,7 @@ struct UIGlassLiveTest: HWTest {
         var pngs: [String] = []
         var stopped: String?
         for variant in LiveVariant.allCases where stopped == nil {
-            if variant.whole { GlassProbe.post("whole-programs-on") }
+            if let forced = variant.forced { GlassProbe.post(forced + "-on") }
             let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant.appears)
             }
             await Snapshots.settle()
@@ -62,7 +65,7 @@ struct UIGlassLiveTest: HWTest {
                 regenerated: read.regenerated, seconds: Date().timeIntervalSince(start))
             summary.rest = rest
             summaries.append(summary)
-            if variant.whole { GlassProbe.post("whole-programs-off") }
+            if let forced = variant.forced { GlassProbe.post(forced + "-off") }
             pngs += reader?.saved ?? []
             stopped = reader?.failure.map { "\(variant.rawValue):\($0)" }
         }
@@ -126,10 +129,26 @@ enum LiveVariant: String, CaseIterable {
     case still, appear, server, scroll, glass, slow, plain
     case appearWhole = "appear_whole"
     case glassWhole = "glass_whole"
+    case appearGeneric = "appear_generic"
+    case glassGeneric = "glass_generic"
+    case appearLaunch = "appear_launch"
+    case glassLaunch = "glass_launch"
+    case glassNoReuse = "glass_noreuse"
 
     var readsBack: Bool { self != .plain }
-    var appears: Bool { self == .appear || self == .appearWhole }
-    var whole: Bool { self == .appearWhole || self == .glassWhole }
+    var appears: Bool { [.appear, .appearWhole, .appearGeneric, .appearLaunch].contains(self) }
+    var moves: Bool { [.glass, .glassWhole, .glassGeneric, .glassLaunch, .glassNoReuse].contains(self) }
+
+    /// The raw path's debug switch the variant runs under (RawMetalGlassProbe.mm), posted -on before it and -off after
+    var forced: String? {
+        switch self {
+        case .appearWhole, .glassWhole: return "whole-programs"
+        case .appearGeneric, .glassGeneric: return "split-generic"
+        case .appearLaunch, .glassLaunch: return "split-launch-only"
+        case .glassNoReuse: return "split-no-reuse"
+        default: return nil
+        }
+    }
 }
 
 /// The stage of ui.glass_live, laid out symmetric about the screen's centre (LiveImage): stripes in a scroll view
@@ -199,15 +218,16 @@ final class LiveDriver: NSObject {
         let width = scene.stripes.bounds.width / 3
         switch variant {
         case .still: scene.dot.alpha = tick % 2 == 0 ? 1 : 0.9
-        case .appear, .appearWhole:
+        case _ where variant.appears:
             scene.dot.alpha = tick % 2 == 0 ? 1 : 0.9
             if tick == 6 { scene.glass.isHidden = false }
         case .scroll, .plain:
             scene.scroll.contentOffset.x = width + CGFloat(tick * 4 % Int(width))
         case .slow:
             if tick % 4 == 0 { scene.scroll.contentOffset.x = width + CGFloat(tick % Int(width)) }
-        case .glass, .glassWhole: scene.glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(tick % 16) - 8)
-        case .server: break
+        case _ where variant.moves:
+            scene.glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(tick % 16) - 8)
+        default: break
         }
     }
 

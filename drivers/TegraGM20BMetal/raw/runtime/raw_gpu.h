@@ -1084,6 +1084,11 @@ public:
     {
         forceWholePrograms_ = force;
     }
+
+    void splitProbe(SplitProbe probe)
+    {
+        splitProbe_ = probe;
+    }
     // hw_test_app's measurement of state segments: every state bound as the inline copy it was before them
     void inlineStates(bool inline_)
     {
@@ -1148,6 +1153,7 @@ private:
     EventPublication publication_;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
+    SplitProbe splitProbe_ = SplitProbe::Twin;
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {

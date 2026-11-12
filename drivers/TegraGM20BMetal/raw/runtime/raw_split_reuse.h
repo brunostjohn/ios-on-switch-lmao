@@ -8,6 +8,17 @@
 
 namespace raw {
 
+// DEVELOPMENT: what a draw the split plan takes draws with (HW Test's debug switches split-generic, split-launch-only,
+// split-no-reuse): its twin, as shipped; the generic whole program with no variant and no prologue; the prologue launched
+// and its frontier written but the generic whole program drawn; or its twin with a frontier of its own, not one an
+// earlier draw of the command buffer made
+enum class SplitProbe : uint8_t {
+    Twin,
+    Generic,
+    LaunchOnly,
+    NoReuse,
+};
+
 struct SplitInputs {
     const void *program = nullptr;
     std::array<uint32_t, 32> push{};

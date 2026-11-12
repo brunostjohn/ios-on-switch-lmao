@@ -188,6 +188,10 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
     std::copy(std::begin(l.cbufBytes), std::end(l.cbufBytes), inputs.bytes.begin());
     // splitTwin already excludes GPU-written inputs; push words and bindings are CPU-cached snapshots.
     uint64_t frontier = cb_->splitReuse_.find(inputs);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (cb_->splitProbe_ == SplitProbe::NoReuse)
+        frontier = 0;
+#endif
     if (!frontier) {
         d.alloc(d.upload_, (uint32_t(s.rec.frontierBytes) + 255) & ~255u, 256, frontier);
         if (s.rec.batchVersion == 1) {
