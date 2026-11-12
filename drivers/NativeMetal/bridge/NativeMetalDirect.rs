@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The raw GM20B path's direct compile of a render state (NativeMetalDirect.h): what m2v's translator makes of the state for
 //! each of the pack generator's probe draws (drivers/TegraGM20BMetal/raw/pack/probe.mm), with no pipeline state, command
-//! buffer or capture. Only the translator's public API is used; the runtime device lends its compile device and its Vulkan
-//! device, on which the variants' layouts are made for NVK's stage compile.
+//! buffer or capture. Only the translator's public API is used; a host (DirectHost: a runtime device, or the system shader
+//! compiler's compile context) lends its compile device and the Vulkan device the variants' layouts are made on for NVK's
+//! stage compile.
 
 use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor};
 use ash::vk as avk;
@@ -13,7 +14,7 @@ use metal2vulkan::bind::{
     TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
+use metal2vulkan::device::{DeviceDescription, EnableSet, VkExtension, VkFeature};
 use metal2vulkan::error::Retry;
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter, TextureType,
@@ -249,15 +250,53 @@ pub(crate) fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::err
     }
 }
 
+/// The Vulkan objects of a direct compile's host: what m2v's description is queried on, and the device NVK compiles the
+/// stages and makes the variants' layouts and samplers on
+pub(crate) struct Vulkan<'a> {
+    pub(crate) instance: &'a ash::Instance,
+    pub(crate) physical: avk::PhysicalDevice,
+    pub(crate) api: metal2vulkan::vk::ApiVersion,
+    pub(crate) device: &'a ash::Device,
+}
+
+/// What a direct compile takes of where it runs: the compile device and enable set a runtime device made, and its Vulkan
+/// objects. A record depends on nothing else of the host, so a host holding the same ones makes the same records.
+pub(crate) trait DirectHost {
+    fn compile_device(&self) -> &metal2vulkan::device::Device;
+    fn enabled(&self) -> &EnableSet;
+    fn vulkan(&self) -> Vulkan<'_>;
+}
+
+impl DirectHost for NmbDevice {
+    fn compile_device(&self) -> &metal2vulkan::device::Device {
+        self.device().compile_device()
+    }
+
+    fn enabled(&self) -> &EnableSet {
+        self.device().enabled()
+    }
+
+    fn vulkan(&self) -> Vulkan<'_> {
+        // SAFETY: the live runtime device's own handles, used while it lives and never destroyed here.
+        let handles = unsafe { self.device().raw() };
+        Vulkan {
+            instance: handles.instance,
+            physical: handles.physical_device,
+            api: handles.instance_api_version,
+            device: handles.device,
+        }
+    }
+}
+
 /// The compile device of the probe's barrier form: the runtime's enabled description without the pixel interlock, as the
 /// pack's barrier probe ran NVK with it hidden (NVK_DEBUG=no_fsi). One per process, made at its first ask.
 static BARRIER: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 static ORDERED: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 static COMPUTE: Mutex<Option<([u8; 32], Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 
-pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, String> {
+pub(crate) fn native_compute_device(host: &dyn DirectHost) -> Result<Arc<metal2vulkan::device::Device>, String> {
     let mut kept = COMPUTE.lock().map_err(|_| "native compute device lock")?;
-    let compile = nmb.device().compile_device();
+    let compile = host.compile_device();
     let fingerprint = compile.profile_fingerprint();
     if let Some((_, device)) = kept.as_ref().filter(|(of, _)| *of == fingerprint) {
         return Ok(device.clone());
@@ -267,28 +306,29 @@ pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan:
     Ok(device)
 }
 
-fn specialized_device(nmb: &NmbDevice, barrier: bool) -> Result<Arc<metal2vulkan::device::Device>, String> {
+pub(crate) fn specialized_device(
+    host: &dyn DirectHost,
+    barrier: bool,
+) -> Result<Arc<metal2vulkan::device::Device>, String> {
     let mut kept = if barrier { &BARRIER } else { &ORDERED }
         .lock()
         .map_err(|_| "native compile device lock")?;
-    let id = nmb as *const NmbDevice as usize;
+    let id = host as *const dyn DirectHost as *const () as usize;
     if let Some((of, device)) = kept.as_ref().filter(|(of, _)| *of == id) {
         let _ = of;
         return Ok(device.clone());
     }
-    let runtime = nmb.device();
-    // SAFETY: the handles are the live runtime device's, used only for this query.
-    let handles = unsafe { runtime.raw() };
-    let description =
-        unsafe { DeviceDescription::query(handles.instance, handles.physical_device, handles.instance_api_version) }
-            .map_err(e("device description"))?;
+    let vulkan = host.vulkan();
+    // SAFETY: the host's live instance and its physical device, used only for this query.
+    let description = unsafe { DeviceDescription::query(vulkan.instance, vulkan.physical, vulkan.api) }
+        .map_err(e("device description"))?;
     let mut enabled = description
-        .with_enabled(runtime.enabled())
+        .with_enabled(host.enabled())
         .map_err(e("enabled description"))?;
     enabled.generated_commands = None;
-    let mut policy = *runtime.compile_device().policy();
+    let mut policy = *host.compile_device().policy();
     let same = metal2vulkan::device::Device::new(enabled.clone(), policy).map_err(e("compile device"))?;
-    if same.profile_fingerprint() != runtime.compile_device().profile_fingerprint() {
+    if same.profile_fingerprint() != host.compile_device().profile_fingerprint() {
         return Err("the runtime's compile device is not its enabled description's".into());
     }
     if barrier {
@@ -815,18 +855,47 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
     each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe {
+        render_direct(
+            || Ok(get(device)? as &dyn DirectHost),
+            descriptor,
+            barrier,
+            texture_format,
+            texture_samples,
+            binds,
+            each,
+            ctx,
+        )
+    }
+}
+
+/// nmb_render_pipeline_direct on `host`'s compile devices and Vulkan device
+///
+/// # Safety
+/// As nmb_render_pipeline_direct's.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn render_direct<'h>(
+    host: impl FnOnce() -> Result<&'h dyn DirectHost, String>,
+    descriptor: *const NmbRenderPipelineDescriptor,
+    barrier: bool,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: *const NmbDirectBinds,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> bool {
     guard(false, || {
         // SAFETY: the caller's contract.
         let binds = unsafe { Binds::of(binds) }?;
-        let nmb = get(device)?;
-        let runtime = nmb.device();
+        let host = host()?;
         let descriptor = render_descriptor(descriptor)?;
         // Every raw form of a state (default, storage, ordered, barrier) and every compute kernel lowers half on SM53, so
         // a storage form and its barrier twin round alike. m2v's own twin stays on the Vulkan target (no float16 below SM70).
         let compile = if barrier || binds.fragment_tests != 0 {
-            specialized_device(nmb, barrier)?
+            specialized_device(host, barrier)?
         } else {
-            native_compute_device(nmb)?
+            native_compute_device(host)?
         };
         let compile = compile.as_ref();
         let format = match texture_format {
@@ -849,11 +918,10 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 &budget,
             )?);
         }
-        // SAFETY: the runtime device's own handles, used while it lives.
-        let handles = unsafe { runtime.raw() };
+        let vulkan = host.vulkan();
         let layouts = variants
             .iter()
-            .map(|(_, pipeline)| Layout::new(handles.device, &pipeline.layout))
+            .map(|(_, pipeline)| Layout::new(vulkan.device, &pipeline.layout))
             .collect::<Result<Vec<_>, String>>()?;
         let writes: Vec<Vec<NmbDirectWrite>> = runs
             .iter()
@@ -925,7 +993,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             return Err(format!("{} stages", pipeline.stages.len()));
         }
         let mut state = NmbDirectState {
-            device: avk::Handle::as_raw(handles.device.handle()),
+            device: avk::Handle::as_raw(vulkan.device.handle()),
             layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
             stage_count: pipeline.stages.len() as u32,
             stages: [NmbDirectStage {

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! The raw GM20B path's direct compile of a compute state at one dispatch shape (NativeMetalDirect.h): what m2v's translator
 //! makes of the kernel for the three dispatches the pack's kernel probe ran (drivers/TegraGM20BMetal/raw/pack/kernels.py),
-//! with no pipeline state, command buffer or capture. Only the translator's public API is used; the runtime device lends its
-//! compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
+//! with no pipeline state, command buffer or capture. Only the translator's public API is used; the host (DirectHost) lends
+//! its compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
 
 use crate::compute_artifact::NmbComputeArtifact;
-use crate::direct::{Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of};
+use crate::direct::{
+    DirectHost, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of,
+};
 use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
     sampler_descriptor,
@@ -452,12 +454,23 @@ pub unsafe extern "C" fn nmb_compute_pipeline_direct(
     ctx: *mut c_void,
 ) -> bool {
     guard(false, || {
-        let nmb = get(device)?;
-        let native = crate::direct::native_compute_device(nmb)?;
-        let descriptor = compute_descriptor(descriptor)?;
-        let ask = get(dispatch)?;
-        direct(nmb, &native, &descriptor, None, ask, each, ctx)
+        let host: &dyn DirectHost = get(device)?;
+        pipeline_direct(host, descriptor, dispatch, each, ctx)
     })
+}
+
+/// nmb_compute_pipeline_direct on `host`
+pub(crate) fn pipeline_direct(
+    host: &dyn DirectHost,
+    descriptor: *const NmbComputePipelineDescriptor,
+    dispatch: *const NmbDirectDispatch,
+    each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    let native = crate::direct::native_compute_device(host)?;
+    let descriptor = compute_descriptor(descriptor)?;
+    let ask = get(dispatch)?;
+    direct(host, &native, &descriptor, None, ask, each, ctx)
 }
 
 /// # Safety
@@ -485,7 +498,7 @@ pub unsafe extern "C" fn nmb_compute_artifact_direct(
 }
 
 fn direct(
-    nmb: &NmbDevice,
+    host: &dyn DirectHost,
     compile: &metal2vulkan::device::Device,
     descriptor: &ComputePipelineDescriptor,
     artifact: Option<&NmbComputeArtifact>,
@@ -493,7 +506,6 @@ fn direct(
     each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> Result<bool, String> {
-    let runtime = nmb.device();
     let budget = Budget::standard();
     let call = if ask.region_mode != 0 {
         Dispatch::ThreadgroupRange { groups: GRID, first: [0; 3], count: GRID, threads_per_group: ask.threads }
@@ -536,11 +548,10 @@ fn direct(
     };
     let moved_same = same(&moved) && ranges(&moved) == ranges(&plain);
 
-    // SAFETY: the runtime device's own handles, used while it lives.
-    let handles = unsafe { runtime.raw() };
-    let layout = Layout::new(handles.device, &plain.pipeline.layout)?;
+    let vulkan = host.vulkan();
+    let layout = Layout::new(vulkan.device, &plain.pipeline.layout)?;
     let mut samplers = Samplers {
-        device: handles.device,
+        device: vulkan.device,
         made: Vec::new(),
     };
     let writes = plain
@@ -563,7 +574,7 @@ fn direct(
     let [buffer_reads, buffer_writes, texture_reads, texture_writes] =
         access_masks([&plain.plan, &moved.plan, &bound.plan]);
     let kernel = NmbDirectKernel {
-        device: avk::Handle::as_raw(handles.device.handle()),
+        device: avk::Handle::as_raw(vulkan.device.handle()),
         layout: avk::Handle::as_raw(layout.pipeline),
         set0: layout.set0(),
         stage: NmbDirectStage {

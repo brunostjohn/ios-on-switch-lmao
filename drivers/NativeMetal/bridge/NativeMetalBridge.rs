@@ -8,6 +8,8 @@
 //! host pages imported without a copy (the IOSurface path), and translation of the target's own QuartzCore library into
 //! A740 pipelines. Each step reports a marker before it starts so a hang names the step.
 
+#[path = "NativeMetalCompile.rs"]
+pub mod compile;
 #[path = "NativeMetalDirect.rs"]
 pub mod direct;
 #[path = "NativeMetalDirectCompute.rs"]
@@ -20,6 +22,8 @@ mod reflection;
 mod variants;
 #[path = "NativeMetalFailure.rs"]
 mod failure;
+#[path = "NativeMetalFunctions.rs"]
+mod functions;
 #[path = "NativeMetalObjects.rs"]
 pub mod objects;
 #[path = "NativeMetalTarget.rs"]

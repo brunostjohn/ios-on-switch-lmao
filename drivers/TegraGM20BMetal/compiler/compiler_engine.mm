@@ -3,20 +3,15 @@
 #import <Metal/Metal.h>
 #import "compiler_engine.h"
 
-#include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
 #include <os/log.h>
-#include <cstring>
 #include <deque>
 #include <map>
 #include <mutex>
 #include "NativeBridgeMetalFrontend.h"
 #include "TegraGM20BCompilerABI.h"
-#include "../raw/runtime/RawCompileRequest.h"
+#include "compiler_record.h"
 #include "../raw/runtime/RawDirect.h"
-#include "../raw/runtime/RawPipelineKey.h"
-#include "../raw/runtime/RawRenderKey.h"
-#include "../raw/runtime/raw_cache.h"
 #include "../raw/runtime/raw_pack.h"
 
 namespace switch_compiler {
@@ -30,65 +25,16 @@ os_log_t logger()
     return l;
 }
 
-void missing(const char *cls, const char *selector)
-{
-    os_log_error(logger(), "SwitchShaderCompiler: unimplemented -[%{public}s %{public}s]", cls, selector);
-}
-
 // <Extensions>/TegraGM20BMetal.bundle/<name>, and with `up` <Extensions>/<name>: what the runtime opens beside the plugin
 std::string besidePlugin(const char *name, bool up = false)
 {
     Dl_info info = {};
-    if (!dladdr(reinterpret_cast<const void *>(&missing), &info) || !info.dli_fname)
+    if (!dladdr(reinterpret_cast<const void *>(&logger), &info) || !info.dli_fname)
         return std::string();
     std::string path = info.dli_fname;
     for (int i = 0; i < (up ? 2 : 1); ++i)
         path.erase(path.rfind('/') == std::string::npos ? 0 : path.rfind('/'));
     return path + "/" + name;
-}
-
-uint64_t acceleratorId()
-{
-    uint64_t id = 0;
-    if (io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"))) {
-        IORegistryEntryGetRegistryEntryID(service, &id);
-        IOObjectRelease(service);
-    }
-    return id;
-}
-
-id<MTLFunction> function(id<MTLLibrary> library, const raw::RequestStage &s, std::string &why)
-{
-    MTLFunctionConstantValues *values = nil;
-    if (s.specialized && !(values = raw::constantValuesOf(s.constants)))
-        return why = "constants it cannot read: " + s.constants, nil;
-    if (!s.specialized && !s.constants.empty())
-        return why = "constants of a function made without them", nil;
-    NSError *error = nil;
-    NSString *name = @(s.function.c_str());
-    id<MTLFunction> made = nil;
-    if (s.name != s.function) {
-        MTLFunctionDescriptor *d = [MTLFunctionDescriptor functionDescriptor];
-        d.name = name;
-        d.specializedName = @(s.name.c_str());
-        d.constantValues = values;
-        made = [library newFunctionWithDescriptor:d error:&error];
-    } else {
-        made = values ? [library newFunctionWithName:name constantValues:values error:&error]
-                      : [library newFunctionWithName:name];
-    }
-    if (!made)
-        why = "no function " + s.function + (error ? std::string(": ") + error.localizedDescription.UTF8String : "");
-    else if (raw::constantsText(values) != s.constants)
-        return why = "constants that do not read back as given", nil;
-    return made;
-}
-
-int32_t resultOf(raw::CompileOutcome outcome)
-{
-    return outcome == raw::CompileOutcome::Made      ? TegraGM20BCompileMade
-           : outcome == raw::CompileOutcome::Refused ? TegraGM20BCompileRefused
-                                                     : TegraGM20BCompileFailed;
 }
 
 raw::Digest rulesDigest(const raw::PackRules &r)
@@ -114,9 +60,9 @@ raw::Digest rulesDigest(const raw::PackRules &r)
 
 struct Engine::State {
     std::mutex opening;
-    bool opened = false;
+    bool opened = false, compiles = false;
     std::string openRefusal;
-    id<MTLDevice> device = nil;
+    EngineInputs inputs;
     uint64_t stack = 0;
     raw::Pack pack;
     raw::Digest rules{};
@@ -129,7 +75,7 @@ struct Engine::State {
     id<MTLLibrary> library(const raw::RequestLibrary &l, std::string &why)
     {
         std::string real;
-        if (l.system && !SystemLibraries::resolve(l.path, real, why))
+        if (l.system && !SystemLibraries::resolve(inputs.systemRoot, l.path, real, why))
             return nil;
         const raw::Digest digest = l.system ? raw::Digest{} : raw::sha256(l.bytes.data(), l.bytes.size());
         {
@@ -144,11 +90,11 @@ struct Engine::State {
         NSError *error = nil;
         id<MTLLibrary> made = nil;
         if (l.system) {
-            made = [device newLibraryWithURL:[NSURL fileURLWithPath:@(real.c_str())] error:&error];
+            made = native_bridge_metal_compile_library(real.c_str(), nil, &error);
         } else {
             dispatch_data_t bytes =
                 dispatch_data_create(l.bytes.data(), l.bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-            made = [device newLibraryWithData:bytes error:&error];
+            made = native_bridge_metal_compile_library(nullptr, bytes, &error);
         }
         if (!made) {
             why = std::string("m2v refused the library ") + (l.path.empty() ? "of its data" : l.path) +
@@ -167,88 +113,6 @@ struct Engine::State {
         }
         return made;
     }
-
-    bool functions(const raw::CompileRequest &r, std::vector<id<MTLFunction>> &out, std::string &why)
-    {
-        std::vector<id<MTLLibrary>> libraries;
-        for (const raw::RequestLibrary &l : r.libraries) {
-            id<MTLLibrary> made = library(l, why);
-            if (!made)
-                return false;
-            libraries.push_back(made);
-        }
-        for (const raw::RequestStage &s : r.stages) {
-            id<MTLFunction> f = function(libraries[s.library], s, why);
-            if (!f)
-                return false;
-            out.push_back(f);
-        }
-        return true;
-    }
-
-    // `p`'s descriptor over this device's functions, checked to key as `p` was keyed
-    MTLRenderPipelineDescriptor *descriptor(const Prepared &p, std::string &why)
-    {
-        const raw::CompileRequest &r = p.request;
-        std::vector<id<MTLFunction>> made;
-        if (!functions(r, made, why))
-            return nil;
-        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-        raw::applyFields(r.fields, d);
-        d.vertexFunction = made[0];
-        d.fragmentFunction = made[1];
-        NSMutableDictionary<NSString *, NSMutableArray *> *linked = [NSMutableDictionary dictionary];
-        for (size_t i = 2; i < r.stages.size(); ++i) {
-            NSString *tag = @(r.stages[i].tag.c_str());
-            if (!linked[tag])
-                linked[tag] = [NSMutableArray array];
-            [linked[tag] addObject:made[i]];
-        }
-        d.vertexLinkedFunctions.functions = linked[@"vl"];
-        d.vertexLinkedFunctions.privateFunctions = linked[@"vp"];
-        d.fragmentLinkedFunctions.functions = linked[@"fl"];
-        d.fragmentLinkedFunctions.privateFunctions = linked[@"fp"];
-        bool own = false;
-        raw::requestPackKey(r, own);
-        raw::CacheKey runtime;
-        if (!raw::renderCacheKey(d, p.packKey, own, stack, runtime) || runtime.key != p.key.key ||
-            memcmp(runtime.vertexAir, p.key.vertexAir, sizeof runtime.vertexAir) ||
-            memcmp(runtime.fragmentAir, p.key.fragmentAir, sizeof runtime.fragmentAir))
-            return why = "functions m2v keys otherwise than their libraries", nil;
-        return d;
-    }
-
-    int32_t render(const Prepared &p, std::string &entry, std::string &why)
-    {
-        MTLRenderPipelineDescriptor *d = descriptor(p, why);
-        if (!d)
-            return TegraGM20BCompileUnavailable;
-        raw::ProbeTextures textures;
-        textures.cubic = p.request.cubic;
-        textures.fragmentTests = p.request.fragmentTests;
-        raw::RuntimeRecord record;
-        const raw::CompileOutcome outcome = direct->make(d, p.packKey, record, why, textures);
-        if (outcome != raw::CompileOutcome::Failed)
-            entry = raw::encodeEntry(p.key, outcome == raw::CompileOutcome::Made ? &record : nullptr, why);
-        return resultOf(outcome);
-    }
-
-    int32_t kernel(const Prepared &p, std::string &entry, std::string &why)
-    {
-        std::vector<id<MTLFunction>> made;
-        if (!functions(p.request, made, why))
-            return TegraGM20BCompileUnavailable;
-        MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
-        d.computeFunction = made[0];
-        d.maxTotalThreadsPerThreadgroup = p.request.kernel.maxThreads;
-        d.threadGroupSizeIsMultipleOfThreadExecutionWidth = p.request.kernel.multipleOfWidth;
-        const NmbDirectDispatch dispatch = p.request.kernel.dispatch();
-        raw::ComputeRecord record;
-        const raw::CompileOutcome outcome = direct->kernel(d, dispatch, p.packKey, record, why);
-        if (outcome != raw::CompileOutcome::Failed)
-            entry = raw::encodeKernelEntry(p.key, outcome == raw::CompileOutcome::Made ? &record : nullptr, why);
-        return resultOf(outcome);
-    }
 };
 
 Engine::Engine() : state_(std::make_unique<State>())
@@ -256,42 +120,41 @@ Engine::Engine() : state_(std::make_unique<State>())
 
 Engine::~Engine() = default;
 
-bool Engine::open(uint64_t stack, std::string &why)
+EngineInputs EngineInputs::installed()
+{
+    return {besidePlugin("TegraGM20BMetal.raw/pack.bin", true), besidePlugin("libvulkan_nouveau.dylib"), ""};
+}
+
+bool Engine::open(uint64_t stack, const EngineInputs &inputs, std::string &why)
 {
     State &s = *state_;
     s.stack = stack;
+    s.inputs = inputs;
     setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
-    setenv("NMB_SHADOW_LOG", "0", 0);
-    const std::string pack = besidePlugin("TegraGM20BMetal.raw/pack.bin", true);
-    if (!s.pack.load(pack.c_str(), stack, why))
+    if (!s.pack.load(inputs.pack.c_str(), stack, why))
         return why = "the raw pack: " + why, false;
     s.rules = rulesDigest(raw::PackRules::of(s.pack));
     return true;
 }
 
-bool Engine::openDevice(std::string &why)
+bool Engine::openCompiler(std::string &why)
 {
     State &s = *state_;
     std::lock_guard<std::mutex> l(s.opening);
     if (s.opened)
-        return s.device ? true : (why = s.openRefusal, false);
+        return s.compiles ? true : (why = s.openRefusal, false);
     s.opened = true;
 #if SWITCH_DEBUG
     const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
-    const std::string loader = besidePlugin("libvulkan_nouveau.dylib");
-    @try {
-        s.device = native_bridge_metal_open(loader.c_str(), nullptr, acceleratorId(), missing);
-    } @catch (NSException *exception) {
-        s.device = nil;
-    }
-    if (!s.device) {
-        s.openRefusal = std::string("no m2v device: ") + nmb_last_error();
+    if (!native_bridge_metal_compile_open(s.inputs.nvk.c_str())) {
+        s.openRefusal = std::string("no compile context: ") + nmb_last_error();
         return why = s.openRefusal, false;
     }
     s.direct = std::make_unique<raw::Direct>(s.pack);
+    s.compiles = true;
 #if SWITCH_DEBUG
-    os_log(logger(), "SwitchShaderCompiler: m2v device opened for its first compile in %llu ms",
+    os_log(logger(), "SwitchShaderCompiler: compile context opened for its first compile in %llu ms",
            (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
 #endif
     return true;
@@ -304,12 +167,13 @@ raw::Digest Engine::rules() const
 
 int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
 {
-    if (!openDevice(why))
+    if (!openCompiler(why))
         return TegraGM20BCompileUnavailable;
-    @autoreleasepool {
-        return p.request.kind == raw::RequestKind::Kernel ? state_->kernel(p, entry, why)
-                                                          : state_->render(p, entry, why);
-    }
+    State &s = *state_;
+    const Libraries libraries = [&s](const raw::RequestLibrary &l, std::string &failed) {
+        return s.library(l, failed);
+    };
+    return makeEntry(p, libraries, *s.direct, s.stack, entry, why);
 }
 
 }  // namespace switch_compiler

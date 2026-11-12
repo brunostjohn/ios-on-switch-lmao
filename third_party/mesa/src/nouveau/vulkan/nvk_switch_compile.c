@@ -227,10 +227,18 @@ switch_nvk_set_layout_size(VkDevice _device, VkDescriptorSetLayout _layout)
    return align(layout->non_variable_descriptor_buffer_size, align_B);
 }
 
+/* A device of no queues has no sampler table: its samplers keep their
+ * headers themselves (nvk_CreateSampler), the bytes the table would hold.
+ */
 static bool
 sampler_header(const struct nvk_device *dev, const struct nvk_sampler *sampler,
                uint32_t header[8])
 {
+   STATIC_ASSERT(sizeof(sampler->planes[0].header) == 32);
+   if (dev->nvkmd == NULL) {
+      memcpy(header, &sampler->planes[0].header, 32);
+      return true;
+   }
    const struct nvk_descriptor_table *table = &dev->samplers;
    const uint64_t addr = nvk_descriptor_table_base_address(
       (struct nvk_descriptor_table *)table) +

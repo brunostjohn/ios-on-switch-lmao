@@ -4,6 +4,7 @@
 //! checked conversions; a value it does not know fails the call (never a substitute). Failures leave their reason in a per-thread
 //! string, and no call unwinds into C.
 
+use crate::functions::{FunctionOf, LibraryOf};
 use metal2vulkan::bind::{ArgumentDescriptor, SamplerDescriptor};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
@@ -20,9 +21,9 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_runtime::{
     ArgumentEncoder, BinaryArchive, BinaryArchiveDescriptor, BlitCommandEncoder, BlitOption, Buffer, ClearColor,
     CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputePipelineState, DebugMessage, DepthStencilState, Device,
-    DeviceOptions, Event, EventRef, FamilyRow, FeatureRow, Fence, Function, GpuFamily, Heap, HeapDescriptor, HeapType,
-    HostMemory, IoSurfacePlane, IoSurfaceYCbCr, Library, LoadAction, MAX_COLOR_ATTACHMENTS, MessageSeverity,
-    MessageSink, MetalLevel, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, Origin, PipelineOption,
+    DeviceOptions, Event, EventRef, FamilyRow, FeatureRow, Fence, GpuFamily, Heap, HeapDescriptor, HeapType,
+    HostMemory, IoSurfacePlane, IoSurfaceYCbCr, LoadAction, MAX_COLOR_ATTACHMENTS, MessageSeverity, MessageSink,
+    MetalLevel, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, Origin, PipelineOption,
     PipelineOptions, PrivateCount, PrivateFlag, PrivateProperties, PurgeableState, Region, RenderCommandEncoder,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, RowState, SamplerState, ScissorRect,
     SharedEvent, SharedEventListener, Size, StoreAction, SubmissionMemoryHook, SurfaceYCbCrMatrix, Texture,
@@ -182,6 +183,13 @@ impl NmbDevice {
     }
 }
 
+/// The policy every runtime device's compile device is made with, and the compile context's (NativeMetalCompile.rs)
+pub(crate) fn device_policy() -> metal2vulkan::device::DevicePolicy {
+    let mut policy = DeviceOptions::default().policy;
+    policy.framebuffer_fetch = metal2vulkan::device::FramebufferFetchPolicy::AcceptUnordered;
+    policy
+}
+
 /// Whether the environment variable `name` is set to something other than 0.
 fn env_on(name: &str, otherwise: bool) -> bool {
     std::env::var(name).map_or(otherwise, |value| value != "0")
@@ -215,7 +223,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
             ))
         };
         let mut options = DeviceOptions::default();
-        options.policy.framebuffer_fetch = metal2vulkan::device::FramebufferFetchPolicy::AcceptUnordered;
+        options.policy = device_policy();
         options.loader = Some(PathBuf::from(loader.to_string_lossy().into_owned()));
         options.metal_level = Some(MetalLevel::NEWEST);
         options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(
@@ -1394,9 +1402,9 @@ pub unsafe extern "C" fn nmb_texture_get_bytes(
 
 // ---- libraries and functions ----
 
-pub struct NmbLibrary(Library, Vec<String>);
+pub struct NmbLibrary(LibraryOf, Vec<String>);
 /// A function and the specialized name a pipeline links it under, where it was made with one.
-pub struct NmbFunction(Function, Option<String>);
+pub struct NmbFunction(FunctionOf, Option<String>);
 
 /// # Safety
 /// `bytes` holds `length` bytes.
@@ -1421,9 +1429,13 @@ pub unsafe extern "C" fn nmb_library_new(
                 .new_library_with_data(crate::air_slice(bytes).ok_or("metallib without an AIR64 slice")?)
                 .map_err(e("metallib"))?
         };
-        let names = library.function_names();
-        Ok(boxed(NmbLibrary(library, names)))
+        Ok(library_handle(LibraryOf::Runtime(library)))
     })
+}
+
+pub(crate) fn library_handle(library: LibraryOf) -> *mut NmbLibrary {
+    let names = library.function_names();
+    boxed(NmbLibrary(library, names))
 }
 
 #[unsafe(no_mangle)]
@@ -1459,10 +1471,7 @@ pub unsafe extern "C" fn nmb_function_new(library: *mut NmbLibrary, name: *const
         }
         // SAFETY: the caller's contract.
         let name = unsafe { CStr::from_ptr(name) }.to_str().map_err(e("function name"))?;
-        Ok(boxed(NmbFunction(
-            get(library)?.0.new_function_with_name(name).map_err(e("function"))?,
-            None,
-        )))
+        Ok(boxed(NmbFunction(get(library)?.0.function(name, "function")?, None)))
     })
 }
 
@@ -1515,10 +1524,7 @@ pub unsafe extern "C" fn nmb_function_new_specialized(
                 values.by_name.insert(key.to_string(), value);
             }
         }
-        let function = get(library)?
-            .0
-            .new_function_with_name_constant_values(name, &values)
-            .map_err(e("specialized function"))?;
+        let function = get(library)?.0.specialized(name, &values, "specialized function")?;
         let specialized = if specialized_name.is_null() {
             None
         } else {
@@ -1539,8 +1545,7 @@ pub extern "C" fn nmb_function_constant_count(function: *const NmbFunction) -> u
     guard(0, || {
         Ok(get(function)?
             .0
-            .function_constants_dictionary()
-            .map_err(e("function constants"))?
+            .function_constants_dictionary("function constants")?
             .len() as u32)
     })
 }
@@ -1557,10 +1562,7 @@ pub extern "C" fn nmb_function_constant(
         if info.is_null() {
             return Err("null constant info".into());
         }
-        let constants = get(function)?
-            .0
-            .function_constants_dictionary()
-            .map_err(e("function constants"))?;
+        let constants = get(function)?.0.function_constants_dictionary("function constants")?;
         let c = constants
             .values()
             .nth(at as usize)
@@ -1581,13 +1583,12 @@ fn attributes(
     function: *const NmbFunction,
     stage_input: bool,
 ) -> Result<Option<Vec<metal2vulkan::reflection::Attribute>>, String> {
-    let f = &get(function)?.0;
-    let attributes = if stage_input {
-        f.stage_input_attributes().map_err(e("stage input attributes"))?
+    let what = if stage_input {
+        "stage input attributes"
     } else {
-        f.vertex_attributes().map_err(e("vertex attributes"))?
+        "vertex attributes"
     };
-    Ok(attributes)
+    get(function)?.0.attributes(stage_input, what)
 }
 
 /// How many attributes `vertexAttributes` (`stage_input` false) or `stageInputAttributes` (true)
@@ -1638,7 +1639,7 @@ pub extern "C" fn nmb_function_release(function: *mut NmbFunction) {
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_function_type(function: *const NmbFunction) -> u64 {
     guard(0, || {
-        Ok(get(function)?.0.function_type().map_err(e("function type"))?.as_raw() as u64)
+        Ok(get(function)?.0.function_type("function type")?.as_raw() as u64)
     })
 }
 
@@ -1670,7 +1671,7 @@ pub unsafe extern "C" fn nmb_compute_pipeline_new_with_options(
         let resolved = unsafe { pipeline_options(options)? };
         let state = get(device)?
             .0
-            .new_compute_pipeline_state_with_function(&get(function)?.0, &resolved);
+            .new_compute_pipeline_state_with_function(get(function)?.0.runtime()?, &resolved);
         Ok(boxed(NmbComputePipeline(state.map_err(e("compute pipeline"))?)))
     })
 }
@@ -3456,6 +3457,7 @@ pub extern "C" fn nmb_function_new_argument_encoder(function: *mut NmbFunction, 
         Ok(boxed(NmbArgumentEncoder(
             get(function)?
                 .0
+                .runtime()?
                 .new_argument_encoder_with_buffer_index(index)
                 .map_err(e("argument encoder"))?,
         )))
