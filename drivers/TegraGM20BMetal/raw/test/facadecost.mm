@@ -39,8 +39,9 @@ extern "C" void mock_iokit_report(void);  // the mock kernel's: facadecount_mock
 using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 
 @interface NSObject (SwitchRawEncodeProfile)
-- (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile;  // RawMetalEncodeCounters.mm (debug builds)
-- (NSArray<NSNumber *> *)switchRawBytesChunks;                     // RawMetalCommandBuffer.mm (debug builds)
+- (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile;    // RawMetalEncodeCounters.mm (debug builds)
+- (NSArray<NSNumber *> *)switchRawBytesChunks;                       // RawMetalCommandBuffer.mm (debug builds)
++ (NSDictionary<NSString *, NSNumber *> *)switchRawBytesChunkStats;  // RawMetalCommandBuffer.mm (debug builds)
 @end
 
 // Signals when the object it is associated with is destroyed, after that object's own ivars are released.
@@ -114,6 +115,15 @@ void printPools()
                "calloc+free %.1f\n",
                name, bytes, made, freed, pooled, unpooled, zeroed, callocFree);
     }
+}
+
+// RawMetalCommandBuffer.mm's setBytes chunk counts (debug builds): misses and those made ahead so far, live bytes now
+uint64_t chunkStat(NSString *name)
+{
+    Class cls = NSClassFromString(@"RMCommandBuffer");
+    if (![cls respondsToSelector:@selector(switchRawBytesChunkStats)])
+        return 0;
+    return [[(id)cls switchRawBytesChunkStats][name] unsignedLongLongValue];
 }
 
 double blocksInUse()
@@ -363,6 +373,7 @@ int main(int argc, char **argv)
         // a held batch's growth of the blocks in use in every zone over its recording, per command buffer: what
         // gpu.path.encode_cost bounds on the device
         double heldBlocks = 0;
+        uint64_t heldChunkBytes = 0;  // the setBytes chunks' live bytes at the end of a held batch's recording
         std::map<std::string, unsigned> paths;  // the held batch's command buffers by switchRawPath
         auto batch = [&](unsigned draws, unsigned count, bool hold) {
             id<MTLCommandBuffer> last = nil;
@@ -375,6 +386,8 @@ int main(int argc, char **argv)
                         [held addObject:last];
                 }
             heldBlocks = (blocksInUse() - blocks) / count;
+            if (hold)
+                heldChunkBytes = chunkStat(@"live_bytes");
             bool completed = true;
             paths.clear();
             for (id<MTLCommandBuffer> b in held) {
@@ -449,6 +462,7 @@ int main(int argc, char **argv)
             for (const bool hold : {false, true, true}) {
                 facadecount c{};
                 uint64_t mine0, others0, mine1, others1;
+                const uint64_t misses = chunkStat(@"misses"), ahead = chunkStat(@"made_ahead");
                 cpuNs(mine0, others0);
                 if (counting)
                     start();
@@ -468,6 +482,12 @@ int main(int argc, char **argv)
                     double(others1 - others0) / 1e3 / buffers);
                 printf("facadecost d%u %s: the mock kernel's under facade calls: locks %.2f mallocs %.2f\n", arms[a],
                        shape, double(mockLocks) / buffers, double(mockMallocs) / buffers);
+                printf(
+                    "facadecost d%u %s chunks: misses %.1f and made ahead %.1f per 1000 command buffers, %llu KiB live "
+                    "at the end of recording\n",
+                    arms[a], shape, double(chunkStat(@"misses") - misses) * 1000 / buffers,
+                    double(chunkStat(@"made_ahead") - ahead) * 1000 / buffers,
+                    (unsigned long long)(hold ? heldChunkBytes >> 10 : 0));
                 if (!hold)
                     continue;
                 const std::pair<const char *, double> counts[] = {{"held sends", double(c.sends)},

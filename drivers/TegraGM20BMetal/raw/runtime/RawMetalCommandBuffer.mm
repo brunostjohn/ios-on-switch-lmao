@@ -58,12 +58,22 @@ static void takeRecording(RMCommandBuffer *b)
     gRecordings.giveBack(node);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// facadecost's: setBytes chunks made for a command buffer the pool had none for, and made ahead, and the bytes of every
+// setBytes chunk alive (kept, in a recording or in flight)
+static std::atomic<uint64_t> gChunkMisses{0}, gChunksMadeAhead{0}, gChunkBytesLive{0};
+#define RM_CHUNK_COUNT(counter, value) counter.fetch_add(uint64_t(value), std::memory_order_relaxed)
+#else
+#define RM_CHUNK_COUNT(counter, value)
+#endif
+
 static void dropBytes(RMBytes &s)
 {
     for (raw::Buffer &k : s.chunks)
-        if (k.va)
+        if (k.va) {
+            RM_CHUNK_COUNT(gChunkBytesLive, -k.length);
             gRM->raw->destroyBuffer(k);
-        else
+        } else
             free(k.cpu);
     s = {};
 }
@@ -83,6 +93,7 @@ static void coalesceBytes(RMBytes &s)
     raw::Buffer one;
     if (!gRM->raw->createControlBuffer(length, one))
         return;
+    RM_CHUNK_COUNT(gChunkBytesLive, one.length);
     dropBytes(s);
     s.chunks.push_back(one);
 }
@@ -125,9 +136,20 @@ static void keepBytesChunk(const raw::Buffer &chunk)
 static void growBytesChunks(void *)
 {
     raw::Buffer chunk;
-    if (gRM->raw->createControlBuffer(gBytesChunkLength.load(std::memory_order_relaxed), chunk))
+    if (gRM->raw->createControlBuffer(gBytesChunkLength.load(std::memory_order_relaxed), chunk)) {
+        RM_CHUNK_COUNT(gChunksMadeAhead, 1);
+        RM_CHUNK_COUNT(gChunkBytesLive, chunk.length);
         keepBytesChunk(chunk);
+    }
     gBytesGrowing.store(false, std::memory_order_release);
+}
+
+// The pool is grown by a chunk once it is down to its last (or had none), on the utility queue: a command buffer recorded
+// after a burst takes the one made meanwhile instead of making its own on its recording thread
+static void growBytesChunksAhead()
+{
+    if (gBytesChunks.kept() <= 1 && !gBytesGrowing.exchange(true, std::memory_order_acq_rel))
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), nullptr, growBytesChunks);
 }
 
 void rmBytesDone(RMCommandBuffer *cb)
@@ -151,13 +173,17 @@ bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk)
             gBytesChunks.giveBack(node);
             gBytesChunkBytes.fetch_sub(chunk.length, std::memory_order_relaxed);
             gBytesChunkLength.store(std::min(chunk.length, kChunkMost), std::memory_order_relaxed);
-            if (!gBytesChunks.kept() && !gBytesGrowing.exchange(true, std::memory_order_acq_rel))
-                dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), nullptr, growBytesChunks);
+            growBytesChunksAhead();
             return true;
         }
         gBytesChunks.keep(node);
     }
-    return gRM->raw->createControlBuffer(std::max(length, gBytesChunkLength.load(std::memory_order_relaxed)), chunk);
+    growBytesChunksAhead();
+    if (!gRM->raw->createControlBuffer(std::max(length, gBytesChunkLength.load(std::memory_order_relaxed)), chunk))
+        return false;
+    RM_CHUNK_COUNT(gChunkMisses, 1);
+    RM_CHUNK_COUNT(gChunkBytesLive, chunk.length);
+    return true;
 }
 
 static void giveRecording(RMCommandBuffer *b)
@@ -727,6 +753,16 @@ void rmPoolCommandBuffers()
     for (const raw::Buffer &k : _bytes.chunks)
         [vas addObject:@(k.va)];
     return vas;
+}
+
+// facadecost's: the setBytes chunks' misses and those made ahead since the process began, and their live bytes now
++ (NSDictionary<NSString *, NSNumber *> *)switchRawBytesChunkStats
+{
+    return @{
+        @"misses" : @(gChunkMisses.load(std::memory_order_relaxed)),
+        @"made_ahead" : @(gChunksMadeAhead.load(std::memory_order_relaxed)),
+        @"live_bytes" : @(gChunkBytesLive.load(std::memory_order_relaxed)),
+    };
 }
 #endif
 
