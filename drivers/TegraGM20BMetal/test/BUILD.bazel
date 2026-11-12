@@ -70,8 +70,12 @@
 #                     files are m2v's own, and the path an archive inventory names a file by
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
-#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: no amplification above one view, and NO
-#                     for predication, dynamic attribute stride, shared texture handles and tessellation
+#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: no amplification above one view, NO for
+#                     predication, dynamic attribute stride and tessellation, YES for shared texture handles
+#   raw_shared_texture_test  raw/runtime/raw_shared_texture.h and RawMetalSharedTexture.h, every kind: a shared texture's
+#                     IOSurface creation properties from its descriptor (Metal's keys, the surface's rows and room for
+#                     the kernel's block-linear layout), the descriptor read back from them, refused for another device's
+#                     registry ID or a missing key
 #   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
 #                     metallib entry's TESS tag, Xcode's bytes for them
 #   raw_icb_test      raw/runtime/raw_icb.h: an indirect command buffer's command words through the FIFO's decoding and the
@@ -1449,6 +1453,36 @@ host_test(
         "//drivers/NativeMetal/abi:metal_abi",
         "//kits/SwitchGM20B:caps",
     ],
+)
+
+host_test(
+    name = "raw_shared_texture_test",
+    srcs = [
+        "raw_shared_texture_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSharedTexture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_texture.h",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/NativeMetal/abi:kinds/21H461.json",
+        "//drivers/NativeMetal/abi:kinds/24B119.json",
+    ],
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "Metal",
+    ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(

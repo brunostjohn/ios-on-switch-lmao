@@ -41,9 +41,15 @@ TEST(RawDeviceAnswers, FeaturesWithNoFormHereAreNo)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds)
         for (const char *selector : {"maxPredicatedNestingDepth", "supportsDynamicAttributeStride",
-                                     "supportsSharedTextureHandles", "supportsTessellation",
-                                     "supportsIndirectTessellation", "maxTessellationFactor"})
+                                     "supportsTessellation", "supportsIndirectTessellation", "maxTessellationFactor"})
             EXPECT_EQ(count(k, selector), 0u) << k.kind << " " << selector;
+}
+
+// Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
+TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsSharedTextureHandles"), 1u) << k.kind;
 }
 
 }  // namespace

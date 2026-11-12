@@ -345,11 +345,6 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     return 0;
 }
 
-- (BOOL)isShareable
-{
-    return NO;
-}
-
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
     if (_heap)
