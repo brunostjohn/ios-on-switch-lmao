@@ -62,3 +62,19 @@ TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)
 	ASSERT_FALSE(abi.empty());
 	EXPECT_EQ(abi.find("TegraGM20BJobABI.h"), std::string::npos);
 }
+
+// What attachSet and the raw kernel model refuse a method 31 record for before its BO lookup
+TEST(JobAbi, ASetRecordIsRefusedForItsReservedWordOrAccess)
+{
+	const auto refusal = [](uint32_t access, uint32_t reserved) {
+		const TegraGM20BAbiSurfaceUse use = {7, access, reserved};
+		return switch_gpu_set_record_refusal(&use);
+	};
+	EXPECT_EQ(refusal(TegraGM20BSurfaceRead, 0), 0u);
+	EXPECT_EQ(refusal(TegraGM20BSurfaceWrite | TegraGM20BSurfaceGpuAddress, 0), 0u);
+	EXPECT_EQ(refusal(TegraGM20BSurfaceRead, 1), uint32_t(TegraGM20BSetRefusedReserved));
+	EXPECT_EQ(refusal(0, 0), uint32_t(TegraGM20BSetRefusedAccess));
+	EXPECT_EQ(refusal(TegraGM20BSurfaceGpuAddress, 0), uint32_t(TegraGM20BSetRefusedAccess));
+	EXPECT_EQ(refusal(TegraGM20BSurfaceRead | TegraGM20BSurfaceHostWritten, 0),
+		  uint32_t(TegraGM20BSetRefusedAccess));
+}
