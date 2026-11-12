@@ -349,14 +349,27 @@ int tgm_recover_engines(struct nvkm_device *device)
 	return reset;
 }
 
-int tgm_recover_engine_contexts(struct nvkm_device *device, int *chids, int max)
+static int add_once(int *chids, int n, int max, int chid)
+{
+	int i = 0;
+
+	for (i = 0; i < n; i++) {
+		if (chids[i] == chid)
+			return n;
+	}
+	if (n < max)
+		chids[n++] = chid;
+	return n;
+}
+
+int tgm_recover_resident(struct nvkm_device *device, int *chids, int max)
 {
 	struct nvkm_runl *runl = NULL;
 	struct nvkm_engn *engn = NULL;
+	struct nvkm_runq *runq = NULL;
 	int held[2];
 	int n = 0;
 	int i = 0;
-	int j = 0;
 	int k = 0;
 
 	nvkm_runl_foreach(runl, device->fifo)
@@ -366,12 +379,16 @@ int tgm_recover_engine_contexts(struct nvkm_device *device, int *chids, int max)
 		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 		{
 			k = tgm_engine_contexts(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), held);
-			for (i = 0; i < k; i++) {
-				for (j = 0; j < n && chids[j] != held[i]; j++)
-					;
-				if (j == n && n < max)
-					chids[n++] = held[i];
-			}
+			for (i = 0; i < k; i++)
+				n = add_once(chids, n, max, held[i]);
+		}
+		for (i = 0; i < runl->runq_nr; i++) {
+			runq = runl->runq[i];
+			if (runq && (nvkm_rd32(device, PBDMA_STATUS(runq->id)) & PBDMA_BUSY) &&
+			    !tgm_pbdma_acquiring(nvkm_rd32(device, PBDMA_METHOD0(runq->id)),
+						 nvkm_rd32(device, PBDMA_DATA0(runq->id))))
+				n = add_once(chids, n, max,
+					     PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))));
 		}
 	}
 	return n;

@@ -289,8 +289,9 @@ void tgm_recover_stats(char *buf, unsigned int len);
  * as nvkm's own recovery picks it), then each busy PBDMA's that is not parked on a semaphore acquire
  * (tgm_pbdma_acquiring). Returns how many, at most max. */
 int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max);
-/* recover_engine.c: the channels the busy or switching engines hold (tgm_engine_contexts), each once; up to max */
-int tgm_recover_engine_contexts(struct nvkm_device *device, int *chids, int max);
+/* recover_engine.c: the channels whose contexts the GPU holds, each once, up to max: those the busy or switching engines
+ * hold (tgm_engine_contexts) and the one each busy PBDMA feeds, unless it waits in an acquire */
+int tgm_recover_resident(struct nvkm_device *device, int *chids, int max);
 
 /* A PBDMA on a host semaphore acquire that has not passed (NV906F SEMAPHORED with an ACQUIRE, ACQ_GEQ or ACQ_AND
  * operation): its channel waits for another one's release, and the PBDMA switches between such channels
@@ -382,9 +383,9 @@ static inline enum tgm_ctxsw tgm_kernel_stall_verdict(int idle, int load, int no
 	return idle ? TGM_CTXSW_RESET : TGM_CTXSW_REDO;
 }
 
-/* Whether the client contexts resident on the engines are killed before that reset: when the last reset did not free the
- * engine, or when the kernel channel is stuck again before its redone work landed (again). An idle kernel channel's
- * stall kills no one. */
+/* Whether the client contexts the GPU holds (tgm_recover_resident) are killed before that reset: when the last reset did
+ * not free the engine, or when the kernel channel is stuck again before its redone work landed (again). An idle kernel
+ * channel's stall kills no one. */
 static inline int tgm_kernel_stall_kills(int idle, int again, int not_back, int clients)
 {
 	return clients && (not_back || (again && !idle));

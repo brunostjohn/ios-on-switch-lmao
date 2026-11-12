@@ -235,7 +235,7 @@ TEST(KernelStall, AnIdleKernelChannelIsResetAtEveryStallAndKillsNoOne)
 }
 
 // The present's copy cut by an engine reset is redone; stuck again before the redo landed (T-v4: fatal), the client
-// contexts the engines hold are killed and the engine reset again.
+// contexts the GPU holds are killed and the engine reset again.
 TEST(KernelStall, AKernelChannelStuckAgainWithItsWorkKillsTheResidentClientsAndRedoes)
 {
 	EXPECT_EQ(tgm_kernel_stall_verdict(0, 0, 0, 1), TGM_CTXSW_REDO);

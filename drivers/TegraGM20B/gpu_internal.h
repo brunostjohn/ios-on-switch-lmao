@@ -714,7 +714,7 @@ int tgm_scrub_redo(u32 through);
 /* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) */
 void tgm_ctxsw_redo_mark(struct tgm_chan *chan);
 /* gpu_reload.c, tgm_live_lock held: an engine stuck switching off (or loading, load) kernel channel chan, stuck again
- * before its redone work landed (again). tgm_kernel_stall_verdict, after the client contexts the engines hold are killed
+ * before its redone work landed (again). tgm_kernel_stall_verdict, after the client contexts the GPU holds are killed
  * where tgm_kernel_stall_kills says so (*killed: how many) and, for TGM_CTXSW_REDO, chan's work marked to be redone.
  * TGM_CTXSW_FATAL panics unless fatal_ok is 0 (the HW Test hook), which gets it back. */
 enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine, int again, int load, int fatal_ok,

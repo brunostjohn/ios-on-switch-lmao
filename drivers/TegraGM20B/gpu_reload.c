@@ -8,11 +8,11 @@
 /* tgm_live_lock: the line names the channel and every engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
 static char load_line[1024];
 
-/* tgm_live_lock held: the live client channels whose contexts the engines hold */
+/* tgm_live_lock held: the live client channels whose contexts the GPU holds */
 static int resident_clients(struct tgm_chan **out, int max)
 {
 	int chids[8];
-	const int held = tgm_recover_engine_contexts(tgm_gpu.device, chids, ARRAY_SIZE(chids));
+	const int held = tgm_recover_resident(tgm_gpu.device, chids, ARRAY_SIZE(chids));
 	struct tgm_chan *chan = NULL;
 	int n = 0;
 	int i = 0;
@@ -84,8 +84,8 @@ enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine
 	chan->ctxsw_clean_ns = n ? 0 : now;
 	chan->ctxsw_clean_done = done;
 	scnprintf(load_line, sizeof(load_line),
-		  "tegra-gm20b: %s stuck %s %s's channel %u%s: the engine reset%s, %u client channels on the "
-		  "engines killed, %d resident: %s; engines %s\n",
+		  "tegra-gm20b: %s stuck %s %s's channel %u%s: the engine reset%s, %u client channels killed of "
+		  "%d resident: %s; engines %s\n",
 		  engine, load ? "loading" : "switching off", chan->owner, chan->chid, again ? " again" : "",
 		  verdict == TGM_CTXSW_REDO ? ", its work redone on the GPU" : "", *killed, n, state, engines);
 	switch_linux_log_line(load_line);
