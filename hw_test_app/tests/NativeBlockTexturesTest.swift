@@ -6,7 +6,7 @@ import Metal
 /// Block-compressed textures of several levels or layers, and shared ones, in the device's own memory: NIL's image
 /// (fx::blockChainLayout). A shared one's CPU writes (replaceRegion) are read back by the copy engine and by getBytes; a
 /// private one's level and slice are written and read by the copy engine. ETC2 and EAC are GM20B's own texture formats
-/// (NIL's MaxwellA rows), as ASTC is.
+/// (NIL's MaxwellA rows), as ASTC is: a known ETC2 block is sampled and every texel checked.
 struct NativeBlockTexturesTest: NativeObjectTest {
     let id = "metal.native.block_textures"
     let name = "Block-compressed textures of levels and layers, shared or private, every block written and read back"
@@ -43,8 +43,43 @@ struct NativeBlockTexturesTest: NativeObjectTest {
         return (bytes, row, down)
     }
 
+    /// An ETC2 RGB8 block in individual mode with every base colour 0x8 (0x88 expanded), table 0 and every index 0: each
+    /// texel is 0x88 + 2 = 138 in red, green and blue (ETC1's modifier +2), alpha 255. Sampled by the texture unit, not
+    /// the copy engine: GM20B's own ETC2 decode.
+    static let etcBlock: [UInt8] = [0x88, 0x88, 0x88, 0, 0, 0, 0, 0]
+
+    static func decodeWrong(_ gpu: GPU, paths: inout [String]) async throws -> Int {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .etc2_rgb8, width: 4, height: 4, mipmapped: false)
+        d.usage = .shaderRead
+        d.storageMode = .shared
+        guard let t = gpu.device.makeTexture(descriptor: d) else { throw TestFailure("no ETC2 RGB8 texture") }
+        Self.etcBlock.withUnsafeBytes {
+            t.replace(
+                region: MTLRegionMake2D(0, 0, 4, 4), mipmapLevel: 0, slice: 0, withBytes: $0.baseAddress!,
+                bytesPerRow: 8, bytesPerImage: 0)
+        }
+        let out = try gpu.buffer(16 * 16)
+        let pipeline = try gpu.compute("sample_texture")
+        let timing = try await gpu.run { commands in
+            let e = commands.makeComputeCommandEncoder()!
+            e.setComputePipelineState(pipeline)
+            e.setTexture(t, index: 0)
+            e.setBuffer(out, offset: 0, index: 0)
+            e.dispatchThreads(
+                MTLSize(width: 4, height: 4, depth: 1), threadsPerThreadgroup: MTLSize(width: 4, height: 4, depth: 1))
+            e.endEncoding()
+        }
+        paths.append(timing.path)
+        let texels = UnsafeBufferPointer(
+            start: out.contents().bindMemory(to: SIMD4<Float>.self, capacity: 16), count: 16)
+        return texels.filter { Array($0).map { Int(($0 * 255).rounded()) } != [138, 138, 138, 255] }.count
+    }
+
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         var work = NativeWork()
+        let decoded = try await Self.decodeWrong(gpu, paths: &work.paths)
+        metrics.set("wrong_etc2_decode", decoded)
+        if decoded != 0 { work.failures.append("\(decoded) ETC2 texels the texture unit decodes otherwise") }
         for s in Self.shapes {
             let d = MTLTextureDescriptor()
             d.textureType = s.type
