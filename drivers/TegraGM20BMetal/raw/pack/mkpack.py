@@ -98,6 +98,24 @@ RELOC_CODE = {
     'tsc_max': 12,
 }
 
+# The root table's interlock ticket buffer (nvk_root_descriptor_table.interlock_ticket_buffer): the two words NVK's init
+# loads after LOAD_CONSTANT_BUFFER_OFFSET 0x260, PackReloc 13 and 14 (the kit's context.tsv tickets_lo and tickets_hi)
+RELOC_TICKETS = (13, 14)
+
+
+def init_relocations(init: list[tuple[int, int, int]]) -> list[tuple[int, int, int, int]]:
+    """Give the init's methods with their PackReloc codes: RELOC's by method, the ticket words by their place."""
+    out, ticket = [], None
+    for sc, m, d in init:
+        code = RELOC_CODE.get(RELOC.get((sc, m)), 0)
+        if sc == 0 and m == 0x238C:
+            ticket = 0 if d == 0x260 else None
+        elif sc == 0 and m == 0x2390 and ticket is not None and ticket < len(RELOC_TICKETS):
+            code = RELOC_TICKETS[ticket]
+            ticket += 1
+        out.append((sc, m, d, code))
+    return out
+
 
 def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
     """Give mkprograms.py's programs by the id nvdec names a bound one with: the FNV-1a of its header, code and data."""
@@ -621,7 +639,7 @@ def main() -> None:
     pipes.sort(key=packfile.key_hash)
     computes: list[dict] = []
     # init template with relocations (submissions 1-3 as NVK recorded them)
-    init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
+    init_recs = init_relocations(init)
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
     pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes)
     data, blob = packfile.pack_bytes(pack)
