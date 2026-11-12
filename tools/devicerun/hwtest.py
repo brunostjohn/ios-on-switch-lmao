@@ -101,6 +101,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.visibility',
             'gpu.raw.fixed_blend_rule',
             'gpu.raw.fetch_rung2',
+            'gpu.raw.blend_twin',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',

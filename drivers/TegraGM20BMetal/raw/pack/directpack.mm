@@ -170,9 +170,9 @@ void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std:
     record(w, key, raw::CompileOutcome::Made, why, rec, registers, form.rung == 3 ? form.program : "");
 }
 
-// A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
-// gives one that computes it none: raw_gpu.cpp Device::pipeline), and one per test class its draws can ask for (named
-// " | tests=<class>" after its key, as the runtime names them)
+// A state's records: its own, its barrier form where its own is the storage form (one that computes the pipeline's blend
+// has its twin only for a debug build's probe: raw_gpu.cpp Device::pipeline), and one per test class its draws can ask for
+// (named " | tests=<class>" after its key, as the runtime names them)
 void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::string &line, raw::ProbeTextures textures,
                const probe::State &s, Counts &n)
 {
@@ -190,7 +190,7 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
     if (outcome != raw::CompileOutcome::Made)
         return;
     n.split += rec.split;
-    if ((rec.pipeline.flags & raw::PipelineStorageMetadata) && !rec.pipeline.storageBlendMask) {
+    if (rec.pipeline.flags & raw::PipelineStorageMetadata) {
         raw::RuntimeRecord barrier;
         make(s.key, raw::PackForm::Barrier, barrier);
     }
