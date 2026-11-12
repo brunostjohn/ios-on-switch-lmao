@@ -264,6 +264,7 @@ void submitLoop()
                     break;
                 }
                 closePromise();
+                r.progress.idle(r.waiting.parked() != 0);
                 const auto due = r.waiting.deadline();
                 dispatch_time_t until = DISPATCH_TIME_FOREVER;
                 if (due != raw::EventDeadline::Time::max()) {
@@ -274,6 +275,7 @@ void submitLoop()
                 }
                 r.schedule.sleep(until);
             }
+            const uint64_t judged = r.progress.visit();
             RMCommandBuffer *cb = ticket.value;
             auto deadline = raw::EventDeadline::Time::max();
             uint32_t dependencies = 0;
@@ -343,6 +345,10 @@ void submitLoop()
                 }
             }
             if (blocked) {
+                if (!r.progress.mayPark(judged)) {  // a completion came since it was judged
+                    r.waiting.yield(ticket);
+                    continue;
+                }
                 r.waiting.park(ticket, dependencies, deadline);
                 if (raw::holds(wait))
                     r.waiting.hold(ticket.key, marked);

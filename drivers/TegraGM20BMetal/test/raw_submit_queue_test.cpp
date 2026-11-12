@@ -34,6 +34,31 @@ TEST(SubmitQueue, ProducerBypassesParkedConsumer)
     EXPECT_EQ(q.next().value, 11);
 }
 
+// What the submit worker tells raw_progress_gate.h before it sleeps: heads parked until their wake, their progress or
+// their deadline
+TEST(SubmitQueue, ParkedCountsHeadsUntilAWakeTheirProgressOrTheirDeadline)
+{
+    Queue q;
+    commit(q, 1, 10);
+    commit(q, 2, 20);
+    commit(q, 3, 30);
+    ASSERT_TRUE(q.park(q.next()));
+    ASSERT_TRUE(q.park(q.next(), 1));
+    const auto now = Queue::Time::clock::now();
+    ASSERT_TRUE(q.park(q.next(), 0, now));
+    EXPECT_EQ(q.parked(), 3u);
+    q.wake(1);
+    EXPECT_EQ(q.parked(), 2u);
+    q.wakeDependencies(1);
+    EXPECT_EQ(q.parked(), 1u);
+    q.expire(now);
+    EXPECT_EQ(q.parked(), 0u);
+    auto t = q.next();
+    q.wake(t.key);
+    EXPECT_FALSE(q.park(t)) << "a head woken while judged is judged again, not parked";
+    EXPECT_EQ(q.parked(), 0u);
+}
+
 TEST(SubmitQueue, EnqueueReservesOrderBeforeCommit)
 {
     Queue q;

@@ -195,7 +195,8 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
             cb->_segError = error;
     }
     const bool last = cb->_finishState.completed();
-    wakeSubmit((__bridge void *)cb->_queue, dependencies);
+    if (gRM->progress.progressed())  // a queue head is parked: it is judged again (raw_progress_gate.h)
+        wakeSubmit((__bridge void *)cb->_queue, dependencies);
     if (last)
         finished(cb);
 }

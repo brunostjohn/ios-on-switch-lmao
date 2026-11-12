@@ -57,7 +57,7 @@ private:
         typename Deadlines::iterator deadline;
         uint64_t revision = 0, head = 0;
         uint64_t reservationGeneration = 0, reserved = 0, retired = 0;
-        bool visiting = false, timed = false;
+        bool visiting = false, timed = false, parked = false;
         bool held = false;  // its head waits for what Metal's GPU, not its scheduler, waits for (hold)
     };
 
@@ -68,7 +68,7 @@ private:
     std::array<uint64_t, 2> dependencies_{};
     uint64_t revision_ = 0;
     uint64_t reservationGeneration_ = 0;
-    size_t size_ = 0;
+    size_t size_ = 0, parked_ = 0;
 
     void unlink(Queue &q, unsigned chain)
     {
@@ -111,6 +111,10 @@ private:
 
     void activate(Queue &q)
     {
+        if (q.parked) {
+            q.parked = false;
+            --parked_;
+        }
         clearWait(q);
         if (!q.visiting && !q.entries.empty() && q.entries.front().committed)
             append(q, 0);
@@ -263,6 +267,8 @@ public:
             q->deadline = deadlines_.emplace(due, q);
             q->timed = true;
         }
+        q->parked = true;
+        ++parked_;
         return true;
     }
 
@@ -322,6 +328,12 @@ public:
     size_t size() const
     {
         return size_;
+    }
+
+    // queue heads parked (park), until a wake, a dependency's progress or their deadline activates them
+    size_t parked() const
+    {
+        return parked_;
     }
 
     // jobs committed and not retired (reserved ones not committed yet are no work of the scheduler's)

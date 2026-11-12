@@ -34,6 +34,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_handoff_queue.h"
+#include "raw_progress_gate.h"
 #include "TegraGM20BLayout.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "RawMetalObjects.h"
@@ -225,6 +226,7 @@ struct RawState {
     std::atomic<bool> submitPromised{false};
     std::atomic<uint32_t> completionWaiters{0};
     dispatch_queue_t handlers;           // where scheduled handlers run (in order, never inside commit)
+    raw::ProgressGate progress;          // whether a completion wakes the submit worker (raw_progress_gate.h)
     std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
     std::unique_ptr<raw::Completion> completion;  // the states the pack lacks (raw_metal_complete_states)
