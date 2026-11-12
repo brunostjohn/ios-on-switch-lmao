@@ -113,6 +113,11 @@ struct Model {
     unsigned creates = 0, destroys = 0, staleReads = 0;
     std::vector<uint64_t> freed;  // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
+    // Kernel events (EventImport, EventWord): off, the kernel answers neither, as one without them does
+    bool kernelEvents = false;
+    std::map<uint64_t, uint32_t> events;  // handle: the port imported
+    uint64_t nextEvent = 1;
+    std::vector<uint64_t> eventWords;  // EventWord's handles, in order
 
     TegraGM20BAbiFence &fence(uint32_t slot)
     {
@@ -529,6 +534,27 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     }
     case TegraGM20BMethodUnmap:
         return KERN_SUCCESS;
+    case TegraGM20BMethodEventImport: {
+        if (!model.kernelEvents)
+            return kIOReturnUnsupported;
+        model.events[model.nextEvent] = static_cast<const TegraGM20BAbiEventImport *>(input)->port;
+        *static_cast<TegraGM20BAbiEventImportReply *>(output) = {model.nextEvent++, 0};
+        return KERN_SUCCESS;
+    }
+    case TegraGM20BMethodEventRelease:
+        return model.events.erase(static_cast<const TegraGM20BAbiEventRelease *>(input)->handle) ? KERN_SUCCESS
+                                                                                                : kIOReturnBadArgument;
+    case TegraGM20BMethodEventWord: {
+        const auto &in = *static_cast<const TegraGM20BAbiEventWord *>(input);
+        if (!model.kernelEvents)
+            return kIOReturnUnsupported;
+        if (!model.events.count(in.handle) || in.handle >= TegraGM20BEventWords)
+            return kIOReturnNoResources;
+        model.eventWords.push_back(in.handle);
+        const uint64_t word = kernel_model::kFenceToken + 4 * (TegraGM20BEventWordFirst + in.handle);
+        *static_cast<TegraGM20BAbiEventWordReply *>(output) = {word, 0, 0, 0};
+        return KERN_SUCCESS;
+    }
     default:
         return kIOReturnUnsupported;
     }

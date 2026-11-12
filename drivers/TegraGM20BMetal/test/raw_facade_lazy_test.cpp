@@ -227,8 +227,9 @@ void ownDevice()
     EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
 }
 
-// An event signalled between two raw passes is released by the GPU where it falls (raw_inline_signals.h): the command
-// buffer goes to the kernel as the same jobs it makes with no signal, rather than split at the signal, and stays raw
+// An event signalled between two raw passes is released by the GPU where it falls (raw_inline_signals.h) on a kernel with
+// event words: the command buffer goes to the kernel as the same jobs it makes with no signal, and stays raw. On a kernel
+// without them the signal ends its job
 void signalBetweenPasses()
 {
     const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
@@ -247,7 +248,7 @@ void signalBetweenPasses()
     id<MTLEvent> event = [device newEvent];
     ASSERT_TRUE(event != nil);
     id<MTLCommandQueue> queue = [device newCommandQueue];
-    const auto jobs = [&](bool signal) {
+    const auto jobs = [&](uint64_t signal) {
         id<MTLCommandBuffer> cb = [queue commandBuffer];
         for (int pass = 0; pass < 2; pass++) {
             MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -261,7 +262,7 @@ void signalBetweenPasses()
             [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
             [e endEncoding];
             if (signal && !pass)
-                [cb encodeSignalEvent:event value:1];
+                [cb encodeSignalEvent:event value:signal];
         }
         const size_t before = kernel_model::model.jobs.size();
         [cb commit];
@@ -269,10 +270,14 @@ void signalBetweenPasses()
         EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << text(cb.error);
         return kernel_model::model.jobs.size() - before;
     };
-    jobs(false);
-    const size_t plain = jobs(false);
+    jobs(0);
+    const size_t plain = jobs(0);
     EXPECT_GE(plain, 1u);
-    EXPECT_EQ(jobs(true), plain);
+    EXPECT_EQ(jobs(1), plain + 1) << "a kernel without event words: the signal ends its job";
+    EXPECT_TRUE(kernel_model::model.eventWords.empty());
+    kernel_model::model.kernelEvents = true;
+    EXPECT_EQ(jobs(2), plain);
+    EXPECT_FALSE(kernel_model::model.eventWords.empty());
     EXPECT_EQ([counters(device)[@"m2v"] intValue], 0) << text(counters(device));
     EXPECT_EQ(gOpens, 0);
 }
