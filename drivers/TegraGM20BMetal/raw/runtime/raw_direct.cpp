@@ -398,7 +398,9 @@ bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &wh
     }
     parts.amplificationMax = uint8_t(d.amplificationMax > 1 ? d.amplificationMax : 0);
     parts.amplificationIdWord = uint8_t(d.amplificationIdWord);
-    parts.amplificationCountRead = uint8_t(d.amplificationCountRead != 0);
+    // A state of one amplification draws only one, the count its [[amplification_count]] was specialized to: nothing to hold
+    // its draws to, so a pack state (RealityKit's read the count) keeps the runtime-only field 0
+    parts.amplificationCountRead = uint8_t(d.amplificationCountRead != 0 && d.amplificationMax > 1);
     for (size_t k = 0; k < 4; k++) {
         parts.pulledStride[k][0] = uint8_t(d.pulledStrides[k][0]);
         parts.pulledStride[k][1] = uint8_t(d.pulledStrides[k][1]);
