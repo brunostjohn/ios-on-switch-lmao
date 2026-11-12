@@ -176,7 +176,7 @@ cc_test(
 
 # raw_emit's vertex input registers of each QuartzCore state of the sample corpus, its vertex function made with this
 # Mac's Metal, against the sample pack's record (raw/test/vertexcheck.mm). cc_test takes no .mm: a copy as .cpp,
-# compiled as Objective-C++, its includes found from raw/test.
+# compiled as Objective-C++, its ../pack and ../runtime includes found from raw/runtime.
 genrule(
     name = "vertexcheck_source",
     srcs = [GM20B_METAL + ":raw/test/vertexcheck.mm"],
@@ -210,7 +210,7 @@ cc_test(
         "objective-c++",
         "-std=c++17",
         "-fobjc-arc",
-        "-Idrivers/TegraGM20BMetal/raw/test",
+        "-Idrivers/TegraGM20BMetal/raw/runtime",
     ],
     data = [
         ":sample_pack",
