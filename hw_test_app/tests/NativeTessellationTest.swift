@@ -110,8 +110,8 @@ struct NativeTessellationTest: NativeObjectTest {
             (device as AnyObject as! NSObject).value(forKey: "supportsIndirectTessellation") as? Bool ?? false
         metrics.set("indirect", indirect ? "yes" : "no")
 
-        let commands = indirect ? try Self.commands(device, factors, patchOrder) : nil
-        if let commands { work.objects.append(commands) }
+        let patchCommands = indirect ? try Self.commands(device, factors, patchOrder) : nil
+        if let patchCommands { work.objects.append(patchCommands) }
         for form in ["direct", "indexed"] + (indirect ? ["indirect", "icb", "icb_indexed"] : []) {
             let target = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
             let seen = try gpu.buffer([UInt32](repeating: 0, count: Self.grid * Self.grid))
@@ -152,7 +152,7 @@ struct NativeTessellationTest: NativeObjectTest {
                 case "icb", "icb_indexed":
                     encoder.useResource(factors, usage: .read, stages: .vertex)
                     encoder.useResource(patchOrder, usage: .read, stages: .vertex)
-                    encoder.executeCommandsInBuffer(commands!, range: form == "icb" ? 0..<1 : 1..<2)
+                    encoder.executeCommandsInBuffer(patchCommands!, range: form == "icb" ? 0..<1 : 1..<2)
                 default:
                     encoder.drawPatches(
                         numberOfPatchControlPoints: 4, patchIndexBuffer: nil, patchIndexBufferOffset: 0,

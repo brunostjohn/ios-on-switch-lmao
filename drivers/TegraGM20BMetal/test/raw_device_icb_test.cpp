@@ -6,6 +6,9 @@
 // encoder's own again from a set 0 of its own, and the buffer executed again after that draw draws its commands again. Under vertex amplification an execute draws its range once per
 // amplification, each with its id in the state's AmplificationId word.
 #include "raw_device_harness.h"
+// the class headers' nv_push_compat.h and Mesa's util/macros.h spell MIN2 and MAX2 apart
+#undef MIN2
+#undef MAX2
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
 #include "../raw/runtime/raw_icb.h"
