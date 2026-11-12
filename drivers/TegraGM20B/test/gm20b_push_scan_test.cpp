@@ -155,6 +155,18 @@ TEST(GM20BPushScan, PixelShaderBarrierAndInterlock)
 	CHECK(e.cls[0] == TGM_PC_SYNC && e.cls[1] == TGM_PC_STATE);
 }
 
+// A hang's line names the last engine method of the hung submission: F-v1's twod_clear ended on the 2D engine's
+// RENDER_SOLID_PRIM_POINT_Y (subchannel 3, 0x060c); host methods (a semaphore after it) do not replace it.
+TEST(GM20BPushScan, TheLastEngineMethodSurvivesHostMethodsAfterIt)
+{
+	Push fill = {inc(3, 0x0600, 4), 1, 1, 39, 23, immd(0, 0x0078, 0)};
+	PushCounts c = {};
+	PushParse p = {};
+	CHECK(p.lastEngine == 0);
+	pushParse(c, p, fill.data(), fill.size());
+	CHECK(p.lastEngine == (3u << 16 | 0x060cu));
+}
+
 TEST(GM20BPushScan, UnreadablePushEndsTheStamps)
 {
 	const CoreAnimation ca;

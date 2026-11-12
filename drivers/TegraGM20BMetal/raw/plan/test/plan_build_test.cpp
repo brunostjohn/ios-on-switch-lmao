@@ -3,6 +3,7 @@
 // makes it; draw runs carry the fetch rung and variant; fused passes are marked.
 #include "fixtures.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 
 namespace raw::plan::test {
 namespace {
@@ -206,6 +207,68 @@ TEST(Build, FusesAPassThatContinuesTheOneBefore)
     EXPECT_TRUE(b.graph.nodes[1].continues);
     EXPECT_EQ(b.graph.nodes[1].before, 0);
     EXPECT_FALSE(b.graph.nodes[2].continues) << "it samples its own target";
+}
+
+Control fence(Control::Kind kind, uint32_t id)
+{
+    Control c;
+    c.kind = kind;
+    c.resource = id;
+    return c;
+}
+
+TEST(Build, AFenceWaitDrainsBehindItsUpdate)
+{
+    OnePass f;
+    const uint32_t written = f.rec.buffer(256);
+    f.rec.blit();
+    Transfer t;
+    t.kind = Transfer::FillBuffer;
+    t.destination = written;
+    t.bytes = 256;
+    f.rec.transfer(t);
+    f.rec.control(fence(Control::UpdateFence, 7));
+    f.rec.end();
+    f.rec.render(pass({colour(f.target, Load::Clear, Store::Store)}, 64, 64));
+    f.rec.control(fence(Control::WaitFence, 7));
+    f.rec.draw(f.rec.state(f.program, {}));
+    f.rec.end();
+    const Built b = plan(f.rec.r, chipCaps(), JobContext{});
+    ASSERT_EQ(b.graph.fences.size(), 1u);
+    const Node &waiter = b.graph.nodes[b.graph.fences[0].waiter];
+    EXPECT_EQ(waiter.kind, NodeKind::RenderPass);
+    EXPECT_EQ(waiter.before & kFenceWait, kFenceWait);
+    const uint32_t *edges = b.graph.edges.data() + waiter.after.first;
+    EXPECT_NE(std::find(edges, edges + waiter.after.count, b.graph.fences[0].updater), edges + waiter.after.count);
+}
+
+TEST(Build, AFenceNothingUpdatedOrdersNothing)
+{
+    OnePass f;
+    f.rec.render(pass({colour(f.target, Load::Clear, Store::Store)}, 64, 64));
+    f.rec.control(fence(Control::WaitFence, 9));
+    f.rec.draw(f.rec.state(f.program, {}));
+    f.rec.end();
+    const Built b = plan(f.rec.r, chipCaps(), JobContext{});
+    EXPECT_TRUE(b.graph.fences.empty());
+}
+
+TEST(Build, APassThatWaitsForAFenceIsNeverFused)
+{
+    OnePass f;
+    const uint32_t s = f.rec.state(f.program, {});
+    f.rec.render(pass({colour(f.target, Load::Clear, Store::Store)}, 64, 64));
+    f.rec.draw(s);
+    f.rec.control(fence(Control::UpdateFence, 3));
+    f.rec.end();
+    f.rec.render(pass({colour(f.target, Load::Load, Store::Store)}, 64, 64));
+    f.rec.control(fence(Control::WaitFence, 3));
+    f.rec.draw(s);
+    f.rec.end();
+    const Built b = plan(f.rec.r, chipCaps(), JobContext{});
+    ASSERT_EQ(b.graph.nodes.size(), 2u);
+    EXPECT_FALSE(b.graph.nodes[1].continues);
+    EXPECT_EQ(b.graph.nodes[1].before & kFenceWait, kFenceWait);
 }
 
 TEST(Build, AClearOnlyPassIsAClearNode)

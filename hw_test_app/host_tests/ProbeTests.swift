@@ -19,6 +19,21 @@ final class ProbeTests: XCTestCase {
                 + "hw=GM20B ms=1.0 why=wrong:_unorm16_wrong")
     }
 
+    func testLongFieldsGoToTheReportAndTheLineKeepsTheVerdicts() {
+        var metrics = Metrics()
+        metrics.set("rule", "copy.twod")
+        metrics.set("cells", String(repeating: "bgra8_1to1_point:exact:0,", count: 80))
+        metrics.set("exact_cells", 80)
+        let outcome = ProbeFinding(.pass, metrics).outcome(probe: "copy.twod", base: Metrics(), proof: "GM20B")
+        let text = LogLine.format(id: "gpu.x1.twod_scale", outcome: outcome, milliseconds: 1)
+        XCTAssertLessThan(text.count, 1000)
+        XCTAssertEqual(
+            text,
+            "HWTEST gpu.x1.twod_scale PASS probe=copy.twod claim_verdict=PASS rule=copy.twod exact_cells=80 "
+                + "report_only=1 hw=GM20B ms=1.0")
+        XCTAssertEqual(outcome.metrics["cells"], .text(String(repeating: "bgra8_1to1_point:exact:0,", count: 80)))
+    }
+
     func testNoWrongCountPasses() {
         XCTAssertEqual(ProbeFinding.counted(["a_wrong": 0], paths: ["raw", "raw"]).verdict, .pass)
     }

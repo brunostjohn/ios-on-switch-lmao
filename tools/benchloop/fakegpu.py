@@ -111,7 +111,7 @@ class Gpu:
         regs, cycles = timing_sim.run(code, data, self.table)
         x0, y0, x1, y1 = protocol.rect_of(e, protocol.target_of(e))
         per_draw = timing_sim.draw_ns(
-            cycles, (x1 - x0) * (y1 - y0), CLOCK_HZ, timing_sim.issue_cycles(code, self.table)
+            cycles, (x1 - x0) * (y1 - y0), CLOCK_HZ, timing_sim.issue_cycles(code, self.table, data)
         )
         texel = self._words(regs, e['target']['format'])
         return per_draw, lambda *_: texel

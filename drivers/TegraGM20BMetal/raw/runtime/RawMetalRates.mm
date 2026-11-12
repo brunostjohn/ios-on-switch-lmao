@@ -493,21 +493,31 @@ void rawStallTick()
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The fetch barrier's way, switched from the Mac within one boot (`idevicenotificationproxy -u <udid> post
-// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none>`), to measure what the barrier costs: the shipped barrier and
-// texture invalidate (ps) against the barrier alone (psonly) and nothing (none). Measurement only: psonly and none let a
-// fetching draw read colors still being written
+// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none>`), to measure what the barrier costs: the shipped barrier
+// and texture invalidate (ps) against the barrier alone (psonly) and nothing (none). Measurement only: psonly and none
+// let a fetching draw read colors still being written. wfi, HW Test's ui.glass_ab, goes back to ps after a minute
+// unless another way was posted since
 void watchFetchBarrierWay(raw::Device *dev)
 {
     using Way = raw::Device::FetchBarrier;
-    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None}) {
+    static std::atomic<uint32_t> posted{0};
+    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None, Way::WaitForIdle}) {
         char name[96];
         snprintf(name, sizeof name, "com.brunostjohn.switch.debug.fetch-barrier-%s",
                  raw::Device::fetchBarrierName(way));
         int token;
         notify_register_dispatch(name, &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
             dev->fetchBarrier.store(way, std::memory_order_relaxed);
+            const uint32_t at = posted.fetch_add(1, std::memory_order_relaxed) + 1;
             os_log(rawLog(), "raw: fetch barrier way %{public}s (debug notification)",
                    raw::Device::fetchBarrierName(way));
+            if (way != Way::WaitForIdle)
+                return;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                               if (posted.load(std::memory_order_relaxed) == at)
+                                   dev->fetchBarrier.store(Way::PixelShader, std::memory_order_relaxed);
+                           });
         });
     }
 }

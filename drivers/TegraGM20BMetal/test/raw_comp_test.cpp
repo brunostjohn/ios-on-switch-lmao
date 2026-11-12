@@ -113,25 +113,44 @@ TEST(RawComp, MemoryIsWholeComptagLines)
     EXPECT_EQ(raw::compBytes(1280u * 720u * 8u), 0x720000u);
 }
 
-TEST(RawComp, OnlyZetaAndMemorylessColourBackingsCompress)
+// What the copy engine fills or drains compresses only at the kinds gpu.x1.ce_compressed proved (one-sample C32 and C64)
+TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
 {
-    constexpr uint32_t memoryless = 9;
-    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, 0, memoryless), 0xceu);
-    EXPECT_EQ(raw::backingKind(true, true, 250, 2, 4, 0, memoryless), 0x04u);
-    // the shader's depth tests copy these with the copy engine
-    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, 0, memoryless), raw::kCopyEngineReadsCompressed ? 0x86u : 0u);
-    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, 0, memoryless), raw::kCopyEngineReadsCompressed ? 0xcfu : 0u);
-    EXPECT_EQ(raw::backingKind(true, true, 0, 8, 1, memoryless, memoryless), 0xe9u);
-    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 1, memoryless + 7, memoryless), 0xdbu);
-    for (uint32_t shadow = 1; shadow < memoryless; shadow++)  // the copy engine fills and drains a shadow
-        EXPECT_EQ(raw::backingKind(true, true, 0, 4, 1, shadow, memoryless),
-                  raw::kCopyEngineReadsCompressed ? 0xdbu : 0u)
-            << shadow;
-    EXPECT_EQ(raw::backingKind(true, false, 0, 4, 1, memoryless, memoryless), 0u);  // pitch
-    EXPECT_EQ(raw::backingKind(false, true, 260, 8, 1, 0, memoryless), 0u);         // compression off
-    EXPECT_EQ(raw::backingKind(true, true, 0, 2, 1, memoryless, memoryless), 0u);   // no compressible kind
-    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 4, memoryless, memoryless), 0xe2u);  // multisampled
-    EXPECT_EQ(raw::backingKind(true, true, 253, 1, 1, 0, memoryless), 0u);  // Stencil8
+    EXPECT_TRUE(raw::copyEngineReadsCompressed(0xdb));
+    EXPECT_TRUE(raw::copyEngineReadsCompressed(0xe9));
+    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x02u, 0x86u, 0xceu, 0xcfu, 0xd0u})
+        EXPECT_FALSE(raw::copyEngineReadsCompressed(kind)) << std::hex << kind;
+
+    // memoryless: the copy engine never reaches them
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 1, false), 0xdbu);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 8, 1, false), 0xe9u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, false), 0xf5u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 4, false), 0xe2u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 8, 2, false), 0xcdu);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, false), 0xceu);
+    EXPECT_EQ(raw::backingKind(true, true, 250, 2, 4, false), 0x04u);
+    // shadows: the copy engine fills and stores them
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 1, true), 0xdbu);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 8, 1, true), 0xe9u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, true), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 2, true), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 8, 4, true), 0u);
+    // zetas the shader's depth tests copy with the copy engine: no zeta kind is proven
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 4, false), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, true), 0u);
+
+    // a debug build's gpu.x1.ce_compressed_depth probe gives those zetas their kinds, and nothing else
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false, true), 0x86u);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false, true), 0xcfu);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, true, true), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 2, true, true), 0u);
+
+    EXPECT_EQ(raw::backingKind(true, false, 0, 4, 1, false), 0u);   // pitch
+    EXPECT_EQ(raw::backingKind(false, true, 260, 8, 1, false), 0u);  // compression off
+    EXPECT_EQ(raw::backingKind(true, true, 0, 2, 1, false), 0u);    // no compressible kind
+    EXPECT_EQ(raw::backingKind(true, true, 253, 1, 1, false), 0u);  // Stencil8
 }
 
 // A ZBC entry holds the texel the ROP writes for the clear: packed in the format's channel order, unorm channels only at

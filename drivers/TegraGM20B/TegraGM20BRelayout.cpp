@@ -297,6 +297,19 @@ extern "C" void tgm_scratch_pages(const struct tgm_scratch *s, struct tgm_relayo
 	*pages = {s->pas, s->npages};
 }
 
+extern "C" void *tgm_scratch_map(struct tgm_scratch *s, void **map)
+{
+	IOMemoryMap *mapped = s->memory->map();
+	*map = mapped;
+	return mapped ? reinterpret_cast<void *>(mapped->getVirtualAddress()) : nullptr;
+}
+
+extern "C" void tgm_scratch_unmap(void *map)
+{
+	if (map)
+		static_cast<IOMemoryMap *>(map)->release();
+}
+
 extern "C" void tgm_scratch_stats(uint64_t *held, uint64_t *peak)
 {
 	switch_scratch_stats(held, peak);

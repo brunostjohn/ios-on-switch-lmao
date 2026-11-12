@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstring>
+#include <iterator>
 #include "../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../raw/runtime/raw_depth_stencil_state.h"
 
@@ -154,6 +156,84 @@ TEST(DepthStencilState, MetalsDefaultIsOneSharedState)
     EXPECT_EQ(&DepthStencilState::metalDefault(), &DepthStencilState::metalDefault());
     EXPECT_TRUE(same(DepthStencilState::metalDefault().regs(true, true, 3, 4),
                      raw::depthStencilRegs(DepthStencilDesc(), 3, 4, true, true)));
+}
+
+// A segment word as the class decodes it: an immediate method (SEND_INC_IMMD) and its value
+struct Immediate {
+    uint32_t method, value;
+};
+
+Immediate decode(uint32_t word)
+{
+    EXPECT_EQ(word >> 29, 4u);
+    EXPECT_EQ((word >> 13) & 7, 0u);
+    return {(word & 0x1fff) << 2, (word >> 16) & 0x1fff};
+}
+
+TEST(DepthStencilState, SegmentWordsAreEveryRegisterButTheReferencesAsImmediateMethods)
+{
+    const uint32_t refs[] = {0, 0x5a, 0xff, 0x100};
+    for (uint32_t seed = 0; seed < (1u << 16); seed += 211) {
+        const DepthStencilDesc d = varied(seed * 2654435761u);
+        const DepthStencilState state(d);
+        for (uint32_t aspects = 0; aspects < 4; aspects++)
+            for (uint32_t front : refs)
+                for (uint32_t back : refs) {
+                    const bool depth = aspects & 1, stencil = aspects & 2;
+                    const DepthStencilRegs want = state.regs(depth, stencil, front, back);
+                    uint32_t words[raw::kDepthStencilRegs];
+                    ASSERT_EQ(raw::depthStencilStateWords(want, words), raw::kDepthStencilRegs - 2);
+                    DepthStencilRegs got;
+                    bool seen[raw::kDepthStencilRegs] = {};
+                    for (const uint32_t reference : {raw::kFrontStencilReference, raw::kBackStencilReference}) {
+                        got.v[reference] = want.v[reference];
+                        seen[reference] = true;
+                    }
+                    for (uint32_t w = 0; w < raw::kDepthStencilRegs - 2; w++) {
+                        const Immediate m = decode(words[w]);
+                        const auto *at = std::find(std::begin(raw::kDepthStencilMethods),
+                                                   std::end(raw::kDepthStencilMethods), m.method);
+                        ASSERT_NE(at, std::end(raw::kDepthStencilMethods)) << std::hex << m.method;
+                        const size_t i = size_t(at - std::begin(raw::kDepthStencilMethods));
+                        EXPECT_FALSE(seen[i]);
+                        seen[i] = true;
+                        got.v[i] = m.value;
+                    }
+                    EXPECT_TRUE(same(got, want)) << "seed " << seed << " aspects " << aspects;
+                }
+    }
+}
+
+TEST(DepthStencilState, SegmentWordsLeaveTheReferencesToTheDraw)
+{
+    const DepthStencilState state(varied(0x9e3779b9u));
+    uint32_t words[raw::kDepthStencilRegs];
+    const uint32_t n = raw::depthStencilStateWords(state.regs(true, true, 0x5a, 0xa5), words);
+    for (uint32_t w = 0; w < n; w++) {
+        const uint32_t method = decode(words[w]).method;
+        EXPECT_NE(method, uint32_t(NVB197_SET_STENCIL_FUNC_REF));
+        EXPECT_NE(method, uint32_t(NVB197_SET_BACK_STENCIL_FUNC_REF));
+    }
+}
+
+TEST(DepthStencilState, HiddenZetaForEveryCompareButAlwaysAndForStencilTests)
+{
+    for (uint8_t f = 0; f < 8; f++)
+        for (bool write : {false, true}) {
+            DepthStencilDesc d;
+            d.depthCompare = f;
+            d.depthWrite = write;
+            EXPECT_EQ(raw::testsHiddenZeta(d), f != 7) << int(f) << " write " << write;
+        }
+    DepthStencilDesc stencil;
+    stencil.back.compare = 2;
+    EXPECT_TRUE(raw::testsHiddenZeta(stencil));
+    DepthStencilDesc replaces;
+    replaces.front.pass = 2;
+    EXPECT_TRUE(raw::testsHiddenZeta(replaces));
+    DepthStencilDesc failOnly;
+    failOnly.front.fail = 2;  // a compare of Always never fails
+    EXPECT_FALSE(raw::testsHiddenZeta(failOnly));
 }
 
 }  // namespace

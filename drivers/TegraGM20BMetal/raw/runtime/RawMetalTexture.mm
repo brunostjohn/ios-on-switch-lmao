@@ -402,6 +402,9 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 {
     if (!r.size.width || !r.size.height || !r.size.depth)
         return;
+#if SWITCH_RAW_DIAGNOSTICS
+    _raw.probeWritten = true;
+#endif
     if (_surfaceWrites)
         noteSurfaceWrite(_surfaceWrites);
     if (transferTexture(self, r, level, slice, const_cast<void *>(bytes), row, image, true))

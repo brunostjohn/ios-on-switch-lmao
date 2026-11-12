@@ -2,6 +2,7 @@
 /* What the GPU is stuck on (recover.c), for gpu_hang.c's client fault isolation. */
 #pragma once
 #include <stdint.h>
+#include "TegraGM20BAcquire.h"
 #include "TegraGM20BHost.h"
 
 struct nvkm_device;
@@ -116,11 +117,18 @@ static inline int tgm_engine_holds(uint32_t status, int chid)
  * counts no error for the bit; nvkm's would report it as the channel's error and replace that method with a NOP. */
 #define TGM_PBDMA_ENG_RESET 0x01000000u
 
-/* The PBDMA_INTR_0 bits nvkm's handler still gets. */
+/* The PBDMA_INTR_0 bits nvkm's handler still gets. ACQUIRE is gpu_acquire.c's: nvkm's would kill the waiting channel and
+ * write a NOP over the acquire it waits on. */
 static inline uint32_t tgm_pbdma_for_nvkm(uint32_t intr0)
 {
-	return intr0 & ~TGM_PBDMA_ENG_RESET;
+	return intr0 & ~(TGM_PBDMA_ENG_RESET | TGM_PBDMA_INTR_ACQUIRE);
 }
+
+/* gpu_acquire.c: the PBDMA's acquire timeout (its interrupt from recover.c's handler, its work items from
+ * tgm_recover_init, cancelled with tgm_recover_suspend). */
+void tgm_acquire_intr(struct nvkm_device *device, int runq);
+void tgm_acquire_init(void);
+void tgm_acquire_suspend(void);
 
 /* Fault every busy engine off hardware channel chid (as a context-switch timeout's recovery does), so a recovery of a
  * channel an engine hangs on does not wait for that engine to drain. */
@@ -181,7 +189,8 @@ struct tgm_hang_candidate {
 	uint8_t kernel; /* the present's or the scrubber's */
 	uint8_t resident; /* an engine or PBDMA is on it (tgm_recover_suspects) */
 	uint8_t moving; /* its fence, or its GPFIFO and pushbuffer GET, moved within the stuck time */
-	uint8_t waits; /* 1 + the candidate its pending order acquire waits on; 0: none */
+	uint8_t waits; /* 1 + the candidate its pending acquire waits on; 0: none */
+	uint8_t victim; /* its acquire waits on what the kernel or a host1x engine releases, never on its own work */
 };
 
 /* A long single job and a hung one look alike for the whole check: the PBDMA's GET stops once the engine's method FIFO is
@@ -203,13 +212,13 @@ static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t
 	return 0;
 }
 
-/* Candidates in order: tgm_recover_suspects' channels, the channels the late one waits on through order acquires, the late
+/* Candidates in order: tgm_recover_suspects' channels, the channels the late one waits on through acquires, the late
  * one (last). A channel an engine is on that is stuck and does not move is to blame (*blame, its index; else -1): a
  * client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is busy, not hung,
  * and nothing is killed, whatever waits behind it. With no engine on any of them, the blame follows the late one's
  * acquires to the channel at the end of that chain, and only a stuck one that does not move is killed; a chain through
- * a source that moves is slow work. A dead late channel is recovered already, and late kernel work with nothing
- * progressing anywhere is fatal. */
+ * a source that moves is slow work, and a chain that ends on a victim kills nothing and is never fatal. A dead late
+ * channel is recovered already, and other late kernel work with nothing progressing anywhere is fatal. */
 static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
 					   int late_kernel, int any_progress, int *blame)
 {
@@ -232,7 +241,7 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 		if (!c[at].live || c[at].moving)
 			return late_dead ? TGM_HANG_RECOVERING : TGM_HANG_PROGRESSING;
 	}
-	if (n && c[at].live && c[at].stuck && !c[at].moving) {
+	if (n && c[at].live && c[at].stuck && !c[at].moving && !c[at].victim) {
 		if (c[at].kernel)
 			return TGM_HANG_STUCK;
 		*blame = at;
@@ -240,7 +249,7 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 	}
 	if (late_dead)
 		return TGM_HANG_RECOVERING;
-	if (late_kernel && !any_progress)
+	if (late_kernel && !any_progress && !(n && c[at].victim))
 		return TGM_HANG_STUCK;
 	return TGM_HANG_PROGRESSING;
 }

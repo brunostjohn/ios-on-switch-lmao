@@ -26,13 +26,13 @@ public enum ScanoutReadback {
         case unavailable(String)
     }
 
-    static let method: UInt32 = 0x5242
-    static let disarm: UInt32 = 0
-    static let arm: UInt32 = 1
-    static let query: UInt32 = 2
-    static let armed: Int32 = 1
-    static let inFlight: Int32 = 2
-    static let done: Int32 = 3
+    public static let method: UInt32 = 0x5242
+    public static let disarm: UInt32 = 0
+    public static let arm: UInt32 = 1
+    public static let query: UInt32 = 2
+    public static let armed: Int32 = 1
+    public static let inFlight: Int32 = 2
+    public static let done: Int32 = 3
 
     public static func capture(nudge: @escaping @MainActor () -> Void) async -> Result {
         guard let gpu = GPUConnection() else { return .unavailable("no_connection") }

@@ -67,7 +67,9 @@ struct UIGlassTest: HWTest {
 /// ui.glass while the stripes under the glass and the glass itself move, so the render server captures and blurs a new
 /// backdrop for each frame. In every one of the composited frames the glass over the grey must not be black. Each black
 /// frame is listed (black=) with its time from the first frame's snapshot (black_at_ms=, frames_ms= the last one's), so
-/// it can be found among the render server's command buffers, and saved as black-<frame>.png.
+/// it can be found among the render server's command buffers, and saved as black-<frame>.png with the frames either
+/// side (frame-<n>.png). encodings= is each frame's encoding (GlassRecording: A regenerated the backdrop pyramid, B
+/// reused it, - unrecorded) and black_sig= the first black frame's command buffers (draws/encoders[Llevels]).
 struct UIGlassMotionTest: HWTest {
     let id = "ui.glass_motion"
     let name = "UIGlassEffect while its backdrop and the glass move"
@@ -75,65 +77,73 @@ struct UIGlassMotionTest: HWTest {
     static let frames = 24
 
     func run(_ context: TestContext) async throws -> Outcome {
-        let (root, stripes, glass) = await context.onStage(fullScreen: true) { stage -> (UIView, UIView, UIView) in
-            let screen = UIScreen.main.bounds
-            let root = UIView(frame: Snapshots.aligned(screen))
-            let stripes = BackdropStripes(
-                frame: CGRect(x: -64, y: 0, width: screen.width / 2 + 64, height: screen.height))
-            root.addSubview(stripes)
-            let grey = UIView(frame: CGRect(x: screen.width / 2, y: 0, width: screen.width / 2, height: screen.height))
-            grey.backgroundColor = UIColor(white: 0.5, alpha: 1)
-            root.addSubview(grey)
-            let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-            glass.frame = Snapshots.aligned(
-                CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2))
-            root.addSubview(glass)
-            stage.addSubview(root)
-            return (root, stripes, glass)
-        }
+        let stage = await context.onStage(fullScreen: true) { GlassStage($0) }
         await Snapshots.settle()
         var black: [Int] = []
         var blackAt: [Int] = []
         var darkest: Float = 3
+        var encodings = ""
+        var blackSignature: String?
+        var saved: [String] = []
+        var previous: Raster?
+        var saveNext = false
         let started = Date()
         let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
         for frame in 0..<Self.frames {
-            let composited = await MainActor.run { () -> Raster in
-                stripes.transform = CGAffineTransform(translationX: CGFloat(frame % 8) * 8, y: 0)
-                glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(frame % 4) * 4)
-                return Snapshots.composited(root)
+            let (composited, recording) = await MainActor.run { () -> (Raster, GlassRecording) in
+                stage.stripes.transform = CGAffineTransform(translationX: CGFloat(frame % 8) * 8, y: 0)
+                stage.glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(frame % 4) * 4)
+                return GlassRecording.around { Snapshots.composited(stage.root) }
             }
-            let inset = composited.height / 16
-            let (top, height, half) =
-                (composited.height / 4 + inset + 16, composited.height / 2 - 2 * inset - 16, composited.width / 2)
-            let grey = Backdrop.overUniform(
-                composited.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height))
-            let level = grey.mean.prefix(3).reduce(0, +)
+            encodings += recording.encoding
+            let level = GlassStage.level(composited)
             darkest = min(darkest, level)
-            if level <= 0.12 {
+            let isBlack = GlassStage.black(level)
+            if isBlack || saveNext {
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            if isBlack {
                 black.append(frame)
                 blackAt.append(Int(Date().timeIntervalSince(started) * 1000))
-                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try? composited.png()?.write(to: directory.appendingPathComponent("black-\(frame).png"))
+                blackSignature = blackSignature ?? recording.signature
+                if let previous, frame > 0, !black.contains(frame - 1) {
+                    saved.append(Self.save(previous, "frame-\(frame - 1).png", directory))
+                }
+                saved.append(Self.save(composited, "black-\(frame).png", directory))
+            } else if saveNext {
+                saved.append(Self.save(composited, "frame-\(frame).png", directory))
             }
+            saveNext = isBlack
+            previous = composited
         }
+        await context.clearStage()
         var metrics = Metrics()
-        metrics.set("frames", Self.frames)
         metrics.set("black_frames", black.count)
+        metrics.set("frames", Self.frames)
         metrics.set("first_black", black.first ?? -1)
         metrics.set("black", black.isEmpty ? "-" : black.map(String.init).joined(separator: ","))
+        metrics.set("encodings", encodings)
+        metrics.set("black_sig", blackSignature ?? "-")
         metrics.set("black_at_ms", blackAt.isEmpty ? "-" : blackAt.map(String.init).joined(separator: ","))
         metrics.set("frames_ms", Int(Date().timeIntervalSince(started) * 1000))
         metrics.set("darkest", Int((darkest / 3 * 255).rounded()))
+        metrics.set("pngs", saved.isEmpty ? "-" : String(saved.joined(separator: ",").prefix(200)))
         return black.isEmpty
             ? .pass(metrics)
             : .fail("\(black.count) of \(Self.frames) frames show the glass over the grey black", metrics)
+    }
+
+    static func save(_ picture: Raster, _ name: String, _ directory: URL) -> String {
+        try? picture.png()?.write(to: directory.appendingPathComponent(name))
+        return name
     }
 }
 
 /// ui.glass_motion's black frames came first after the stage was built: each round here builds a new glass hierarchy,
 /// waits as ui.glass_motion does and composites it once. Black in every round makes the first frame of a new glass layer
-/// the trigger; black in none puts it on what moves.
+/// the trigger; black in none puts it on what moves. encodings= is each round's encoding (GlassRecording: A regenerated
+/// the backdrop pyramid, B reused it) and sigs= each round's render server command buffers (draws/encoders[Llevels]);
+/// each black round is saved as black-<round>.png (pngs=).
 struct UIGlassFirstFrameTest: HWTest {
     let id = "ui.glass_first"
     let name = "UIGlassEffect's first composited frame, over a newly built hierarchy each round"
@@ -143,45 +153,29 @@ struct UIGlassFirstFrameTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         var black: [Int] = []
         var darkest: Float = 3
+        var encodings = ""
+        var signatures: [String] = []
+        var saved: [String] = []
         let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
         for round in 0..<Self.rounds {
-            let root = await context.onStage(fullScreen: true) { stage -> UIView in
-                let screen = UIScreen.main.bounds
-                let root = UIView(frame: Snapshots.aligned(screen))
-                root.addSubview(
-                    BackdropStripes(frame: CGRect(x: -64, y: 0, width: screen.width / 2 + 64, height: screen.height)))
-                let grey = UIView(
-                    frame: CGRect(x: screen.width / 2, y: 0, width: screen.width / 2, height: screen.height))
-                grey.backgroundColor = UIColor(white: 0.5, alpha: 1)
-                root.addSubview(grey)
-                let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-                glass.frame = Snapshots.aligned(
-                    CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2))
-                root.addSubview(glass)
-                stage.addSubview(root)
-                return root
-            }
-            await Snapshots.settle()
-            let composited = await MainActor.run { Snapshots.composited(root) }
-            await context.clearStage()
-            let inset = composited.height / 16
-            let (top, height, half) =
-                (composited.height / 4 + inset + 16, composited.height / 2 - 2 * inset - 16, composited.width / 2)
-            let level = Backdrop.overUniform(
-                composited.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height)
-            ).mean.prefix(3).reduce(0, +)
-            darkest = min(darkest, level)
-            if level <= 0.12 {
+            let result = await GlassRound.run(context)
+            darkest = min(darkest, result.level)
+            encodings += result.recording.encoding
+            signatures.append(result.recording.signature)
+            if result.black {
                 black.append(round)
                 try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try? composited.png()?.write(to: directory.appendingPathComponent("black-\(round).png"))
+                saved.append(UIGlassMotionTest.save(result.picture, "black-\(round).png", directory))
             }
         }
         var metrics = Metrics()
-        metrics.set("rounds", Self.rounds)
         metrics.set("black_rounds", black.count)
+        metrics.set("rounds", Self.rounds)
         metrics.set("black", black.isEmpty ? "-" : black.map(String.init).joined(separator: ","))
+        metrics.set("encodings", encodings)
         metrics.set("darkest", Int((darkest / 3 * 255).rounded()))
+        metrics.set("sigs", String(signatures.joined(separator: ";").prefix(480)))
+        metrics.set("pngs", saved.isEmpty ? "-" : saved.joined(separator: ","))
         return black.isEmpty
             ? .pass(metrics)
             : .fail("\(black.count) of \(Self.rounds) first frames show the glass over the grey black", metrics)

@@ -63,6 +63,16 @@ void tgm_scratch_pages(const struct tgm_scratch *, struct tgm_relayout_pages *pa
 	pages->npages = 0;
 }
 
+void *tgm_scratch_map(struct tgm_scratch *, void **map)
+{
+	*map = nullptr;
+	return nullptr;
+}
+
+void tgm_scratch_unmap(void *)
+{
+}
+
 void *tgm_scratch_memory(struct tgm_scratch *)
 {
 	return nullptr;

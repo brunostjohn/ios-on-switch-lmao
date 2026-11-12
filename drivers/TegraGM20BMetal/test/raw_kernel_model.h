@@ -63,6 +63,7 @@ struct Model {
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     unsigned creates = 0, destroys = 0, staleReads = 0;
+    std::vector<uint64_t> freed;  // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
 
     TegraGM20BAbiFence &fence(uint32_t slot)
@@ -330,6 +331,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodBoFree:
+        model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;
     case TegraGM20BMethodVmBind: {

@@ -83,6 +83,31 @@ TEST(SamplePositions, TakenAtTheCountsMetalTakes)
     }
 }
 
+// The pass's positions are read at exactly the count it holds (Metal's getSamplePositions:count: asserts on any other
+// non-zero count: the stored_msaa scene's 2x pass of its own positions aborted HW Test when 8 were asked of 2)
+TEST(SamplePositions, ReadAtTheCountThePassHolds)
+{
+    const float own[] = {0.125f, 0.875f, 0.8125f, 0.3125f, 0.0625f, 0.0625f, 0.9375f, 0.1875f};
+    for (uint32_t held : {2u, 4u}) {
+        std::vector<uint32_t> asked;
+        const auto read = [&](float *xy, uint32_t n) {
+            asked.push_back(n);
+            for (uint32_t i = 0; i < 2 * n; i++)
+                xy[i] = own[i];
+        };
+        raw::SamplePositions p;
+        EXPECT_TRUE(raw::readSamplePositions(held, 4, read, p));
+        EXPECT_EQ(asked, std::vector<uint32_t>{held});
+        EXPECT_EQ(p.count, held);
+    }
+    for (uint32_t held : {0u, 9u, 16u}) {
+        bool called = false;
+        raw::SamplePositions p;
+        EXPECT_FALSE(raw::readSamplePositions(held, 4, [&](float *, uint32_t) { called = true; }, p));
+        EXPECT_FALSE(called) << held;
+    }
+}
+
 TEST(SampleLayout, StandardPositionsUnchanged)
 {
     for (uint32_t samples : {1u, 2u, 4u, 8u}) {

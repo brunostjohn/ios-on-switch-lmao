@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "plan_build.h"
+#include <map>
 #include "plan_builder.h"
 #include "plan_fusion.h"
 #include "plan_key.h"
@@ -288,6 +289,16 @@ void boundary(Builder &b, uint32_t at)
     }
 }
 
+// The fences encoder `e` waits for (at its start) or updates (at its end): their controls' resources
+std::vector<uint32_t> fencesOf(const Recording &r, const Encoder &e, Control::Kind kind)
+{
+    std::vector<uint32_t> out;
+    for (uint32_t k = 0; k < e.ops.count; ++k)
+        if (const Op &op = r.ops[e.ops.first + k]; op.kind == OpKind::Control && r.controls[op.payload].kind == kind)
+            out.push_back(r.controls[op.payload].resource);
+    return out;
+}
+
 }  // namespace
 
 Built build(const Recording &r, const Caps &caps)
@@ -295,6 +306,7 @@ Built build(const Recording &r, const Caps &caps)
     Built out;
     Builder b(r, caps, out.graph);
     Walk walk;
+    std::map<uint32_t, uint32_t> updated;  // fence: the last node of the encoder that last updated it
     const auto boundaries = [&](uint32_t after) {
         for (uint32_t i = 0; i < r.boundaries.size(); ++i)
             if (r.boundaries[i].afterEncoder == after)
@@ -303,6 +315,13 @@ Built build(const Recording &r, const Caps &caps)
     boundaries(0);
     for (uint32_t i = 0; i < r.encoders.size(); ++i) {
         const Encoder &e = r.encoders[i];
+        const uint32_t first = uint32_t(out.graph.nodes.size());
+        std::vector<uint32_t> waited;
+        for (uint32_t fence : fencesOf(r, e, Control::WaitFence))
+            if (const auto it = updated.find(fence); it != updated.end())
+                waited.push_back(it->second);
+        if (!waited.empty())
+            walk.lastPassNode = kNone;
         if (e.kind == EncoderKind::Render) {
             render(b, i, walk);
         } else {
@@ -316,6 +335,12 @@ Built build(const Recording &r, const Caps &caps)
             }
         }
         const size_t nodes = out.graph.nodes.size();
+        if (nodes > first) {
+            for (uint32_t updater : waited)
+                out.graph.fences.push_back({first, updater});
+            for (uint32_t fence : fencesOf(r, e, Control::UpdateFence))
+                updated[fence] = uint32_t(nodes - 1);
+        }
         boundaries(i + 1);
         if (out.graph.nodes.size() != nodes)
             walk.lastPassNode = kNone;

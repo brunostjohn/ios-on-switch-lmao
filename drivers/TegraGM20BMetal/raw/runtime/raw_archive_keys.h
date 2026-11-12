@@ -113,17 +113,15 @@ inline ArchiveFile archiveFile(const uint8_t *bytes, size_t length)
 
 enum class ArchiveAnswer : uint8_t {
     NotAsked,  // no FailOnBinaryArchiveMiss, or no archive listed: the state is made
-    Declared,  // the pack holds it (the device's own archive), or a listed archive does: made
+    Declared,  // a listed archive holds it: made
     Missed,    // nil and Metal's error, never compiled
 };
 
 // `holds(i)`: whether listed archive i holds the state
-template <typename Holds> ArchiveAnswer archiveAnswer(bool failOnMiss, size_t archives, bool packed, Holds holds)
+template <typename Holds> ArchiveAnswer archiveAnswer(bool failOnMiss, size_t archives, Holds holds)
 {
     if (!failOnMiss || !archives)
         return ArchiveAnswer::NotAsked;
-    if (packed)
-        return ArchiveAnswer::Declared;
     for (size_t i = 0; i < archives; i++)
         if (holds(i))
             return ArchiveAnswer::Declared;

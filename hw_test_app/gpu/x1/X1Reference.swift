@@ -30,9 +30,54 @@ public enum X1Reference {
     /// The half nearest code / top, as a unorm texel reads in a shader.
     static func texel(_ code: Int, top: Double) -> Double { Double(Float16(Double(code) / top)) }
 
+    /// GM20B's unorm store (the bench's rop1, 254,892 of 254,892 readings): the value truncated to bits + 4
+    /// fractional bits, then nearest with ties down
+    public static func store(_ value: Double, bits: Int = 8) -> Int {
+        let top = (1 << bits) - 1
+        if value.isNaN || value <= 0 { return 0 }
+        if value >= 1 { return top }
+        let u = Int((value * Double(1 << (bits + 4))).rounded(.down))
+        return (u * top + (1 << (bits + 3)) - 1) >> (bits + 4)
+    }
+
+    /// GM20B's BGRA8 blend (tools/benchloop/blend_models.py chip): the source and its alpha as stored codes, factors as
+    /// codes, S * Fs + D * Fd divided by 255 and rounded once
+    static func chipBlend(_ s: Int, _ fs: Int, _ d: Int, _ fd: Int) -> Int {
+        min(255, (2 * (s * fs + d * fd) + 255) / 510)
+    }
+
+    /// The same with each product rounded on its own
+    static func perProductBlend(_ s: Int, _ fs: Int, _ d: Int, _ fd: Int) -> Int {
+        min(255, (2 * s * fs + 255) / 510 + (2 * d * fd + 255) / 510)
+    }
+
     /// MTLBlendFactor's value for one channel.
     enum Factor: String, CaseIterable {
         case zero, one, sa, oneMinusSa, da, oneMinusDa
+
+        /// As a code of 255: the source alpha's stored code, the destination alpha's code
+        func code(sa: Int, da: Int) -> Int {
+            switch self {
+            case .zero: return 0
+            case .one: return 255
+            case .sa: return sa
+            case .oneMinusSa: return 255 - sa
+            case .da: return da
+            case .oneMinusDa: return 255 - da
+            }
+        }
+
+        /// The exact value: 1 - x unrounded, the destination alpha's code / 255
+        func exact(sa: Double, da: Int) -> Double {
+            switch self {
+            case .zero: return 0
+            case .one: return 1
+            case .sa: return sa
+            case .oneMinusSa: return 1 - sa
+            case .da: return Double(da) / 255
+            case .oneMinusDa: return 1 - Double(da) / 255
+            }
+        }
 
         func value(sa: Double, da: Double) -> Double {
             switch self {

@@ -276,6 +276,15 @@ struct tgm_chan {
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
 	u32 timeslice_due; /* RAMFC timeslice for a level change, written once the host holds the channel no more */
+	/* gpu_acquire.c: its RAMFC ACQUIRE has the timeout off since an ACQUIRE interrupt (written again once the host
+	 * holds the channel no more); that interrupt's time; the last check of its acquire while it stays parked (0: none)
+	 * and the seqno completed then; a parked acquire that never interrupted was logged (tgm_live_lock) */
+	int acquire_due;
+	u64 acquire_fired_ns;
+	u64 acquire_check_ns;
+	u32 acquire_done;
+	int acquire_unfired;
+	u32 acquire_unread; /* checks since its interrupt that found RAMFC naming nothing yet */
 
 	/* its last jobs; high channels': each job's kick, the app channel it was queued behind and when that one was asked to
 	 * leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
@@ -332,8 +341,26 @@ extern struct list_head tgm_live_chans;
 extern struct mutex tgm_live_lock;
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
+/* GR's, FECS's and PBDMA0's state for a context switch that timed out (TegraGM20BHangDecode.h tgm_engine_format) */
+void tgm_engine_state(char *buf, unsigned int len);
 
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
+
+/* gpu_acquire.c: a semaphore or syncpoint acquire still waiting this long after it began interrupts (RAMFC ACQUIRE).
+ * Above any wait a working GPU makes (TGM_STUCK_NS), at the present's own limit (TGM_PRESENT_NS). */
+#define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
+void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
+void tgm_acquire_arm(u32 chid);
+enum tgm_wait_source {
+	TGM_WAITS_NONE,
+	TGM_WAITS_CHANNEL, /* a live channel's fence */
+	TGM_WAITS_VICTIM,  /* a word the kernel releases (a bind epoch) or a host1x syncpoint */
+	TGM_WAITS_UNKNOWN, /* an acquire on an address only its own pushes name */
+	TGM_WAITS_UNREAD,  /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
+};
+enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source, char *what,
+					  unsigned int len);
+void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
 
 /* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is
@@ -459,7 +486,7 @@ extern u64 tgm_high_end_ns, tgm_high_end_pt;
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
 static void scrub_fenced(struct tgm_chan *chan);
-void tgm_chan_timeslice_due(struct tgm_chan *chan);
+void tgm_chan_ramfc_due(struct tgm_chan *chan);
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
 

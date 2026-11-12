@@ -166,10 +166,10 @@ public struct PacingTest: HWTest {
         metrics.set("present_latency_p95_ms", Stats.percentile(latencies, 0.95), digits: 2)
         return .judged(
             [
-                ("5 s of display-link frames", link.frames >= 290),
-                ("the app missed no frame (link_missed 0)", link.missed == 0),
-                ("most probe frames presented with a time", shown.frames >= link.frames / 2),
-                ("the display missed no frame (present_missed 0)", shown.missed == 0),
+                ("\(link.frames) display-link frames in 5 s, under 290", link.frames >= 290),
+                ("the app missed \(link.missed) frames (link_missed)", link.missed == 0),
+                ("\(shown.frames) of \(link.frames) probe frames shown with a time", shown.frames >= link.frames / 2),
+                ("the display missed \(shown.missed) frames (present_missed)", shown.missed == 0),
             ], metrics)
     }
 }

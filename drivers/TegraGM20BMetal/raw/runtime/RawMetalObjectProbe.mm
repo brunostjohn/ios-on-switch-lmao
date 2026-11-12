@@ -24,13 +24,20 @@
 
 @end
 
-// The signal jobs of no work made since the device opened, and the signals whose value the CPU set after the work before them
-// (an event the kernel does not hold)
+// The jobs of no work made since the device opened that signal or wait, the waits retired with the channel's last submission,
+// the signals whose value the CPU set after the work before them (an event the kernel does not hold), and the waits the
+// scheduler held on the CPU
 @implementation RMDevice (EventProbe)
 
 - (NSDictionary<NSString *, NSNumber *> *)switchRawEvents
 {
-    return @{@"signal_jobs" : @(eventJobsSubmitted()), @"cpu_signals" : @(gRM->stats.signalsAfterWork.load())};
+    return @{
+        @"signal_jobs" : @(eventJobsSubmitted()),
+        @"wait_jobs" : @(waitJobsSubmitted()),
+        @"promise_waits" : @(promiseWaitsRetired()),
+        @"cpu_signals" : @(gRM->stats.signalsAfterWork.load()),
+        @"cpu_waits" : @(gRM->stats.waitsHeldOnCpu.load()),
+    };
 }
 
 @end

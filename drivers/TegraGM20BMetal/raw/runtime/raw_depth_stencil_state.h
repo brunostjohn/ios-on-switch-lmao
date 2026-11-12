@@ -76,6 +76,14 @@ inline DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t ref
     return r;
 }
 
+// In a pass without a depth/stencil attachment plain Metal tests a depth compare other than Always (Never: every fragment
+// fails) and a stencil test against hidden ones, depth 1.0 and stencil 0 at the pass's start, kept through the pass for its
+// later draws (metal2vulkan depth_stencil.rs depth_without_attachment, measured); Always with no stencil test tests nothing
+inline bool testsHiddenZeta(const DepthStencilDesc &d)
+{
+    return d.depthCompare != 7 || !(stencilNoop(d.front) && stencilNoop(d.back));
+}
+
 // A draw whose depth/stencil tests run in its program (raw_shader_tests.h): the hardware tests nothing, depth only kept on
 inline DepthStencilRegs shaderDepthStencilRegs(bool depth)
 {

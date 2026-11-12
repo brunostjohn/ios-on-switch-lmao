@@ -36,6 +36,20 @@ inline bool takeSamplePositions(const float *xy, uint32_t count, uint32_t sample
     return true;
 }
 
+// The `count` positions a pass holds (getSamplePositions:nil count:0), read by `read(xy, count)`. Metal's
+// getSamplePositions:count: asserts unless a non-zero count is exactly the number the pass holds, so exactly `count` are
+// read, and none past eight.
+template <typename Read>
+inline bool readSamplePositions(uint32_t count, uint32_t samples, Read &&read, SamplePositions &out)
+{
+    out = SamplePositions();
+    if (!count || count > 8)
+        return false;
+    float xy[16] = {};
+    read(xy, count);
+    return takeSamplePositions(xy, count, samples, out);
+}
+
 // `p` over a layout of `samples` samples: the sixteen hardware locations (the pixel's, repeated over the 2x2 quad) and the
 // root table's first two words (eight locations); nothing for the standard positions
 inline void placeSamplePositions(const SamplePositions &p, uint32_t samples, uint32_t hardware[4], uint32_t root[2])

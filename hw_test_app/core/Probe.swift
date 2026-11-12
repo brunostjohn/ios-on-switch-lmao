@@ -34,13 +34,18 @@ public struct ProbeFinding: Sendable {
         return ProbeFinding(failed.isEmpty ? .pass : .fail, metrics, note: note)
     }
 
-    /// The probe's fields in front of its own: probe=<id> claim_verdict=<verdict>.
+    /// The probe's fields in front of its own: probe=<id> claim_verdict=<verdict>; the longest of its own go to the
+    /// report alone where the line would pass os_log's ~1 KiB.
     public func outcome(probe: String, base: Metrics, proof: String) -> Outcome {
         var all = Metrics()
         all.set("probe", probe)
         all.set("claim_verdict", verdict.rawValue)
         all.merge(base)
         all.merge(metrics)
-        return .pass(all, proof: proof, detail: note)
+        all.fitLog(within: Self.fieldBudget, keeping: ["probe", "claim_verdict", "rule", "dev", "paths"])
+        return .pass(all, proof: proof, detail: String(note.prefix(Self.noteBudget)))
     }
+
+    static let fieldBudget = 720
+    static let noteBudget = 160
 }

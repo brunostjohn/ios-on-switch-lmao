@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalMultisample.h"
 #import "RawMetalPlanAdapters.h"
+#import "RawMetalIndirect.h"
 #include "raw_replay_twins.h"
 
 // ---- object mapping for the m2v replay ----
@@ -449,6 +450,17 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                       indirectBufferOffset:draw.argumentOffset];
             break;
         }
+        case OpExecuteCommands:
+            for (auto &stage : bound)
+                for (RMBuffer *buffer : stage)
+                    if (buffer)
+                        buffers.insert(buffer);
+            replayCommands(enc, cb->_plan.draw(at), use);
+            break;
+        case OpResetCommands:
+        case OpCopyCommands:
+            encodeCommandsBlit(nullptr, c);
+            break;
         default:  // a compute encoder's: replayKernel, above
             break;
         }

@@ -9,7 +9,7 @@ import statistics
 import struct
 from pathlib import Path
 
-from tools.benchloop import blend, rop
+from tools.benchloop import blend, rop, sweeps
 
 
 def per_draw(result: dict) -> tuple[float | None, float | None, float | None]:
@@ -69,7 +69,8 @@ def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs
         }
     if command == 'rop':
         return {'rop': [rop.check(e, results.get(e['id'], {'status': 'missing'})) for e in planned]}
-    return {}
+    sweep = {'precision': sweeps.analyse_precision, 'iterated': sweeps.analyse_iterated, 'twod': sweeps.analyse_twod}
+    return {command: sweep[command](planned, results)} if command in sweep else {}
 
 
 def write(command: str, planned: list[dict], results: dict[str, dict], out: Path, inputs: list[Path]) -> str:

@@ -86,7 +86,7 @@ TEST(ExecutionPlan, EmptyAndEventOnlyCommandBuffersKeepExactPositions)
     EXPECT_EQ(empty.ranges()[1].from, 1u);
 }
 
-TEST(ExecutionPlan, ConsecutiveNativeWaitsAvoidCpuRetirement)
+TEST(ExecutionPlan, EveryWaitIsOneTheGpuMayTake)
 {
     raw::ExecutionPlan plan;
     plan.append(0, 1, ExecutionKind::wait);
@@ -99,10 +99,8 @@ TEST(ExecutionPlan, ConsecutiveNativeWaitsAvoidCpuRetirement)
     plan.append(10, 11, ExecutionKind::wait);
     const auto &ranges = plan.ranges();
     ASSERT_EQ(ranges.size(), 8);
-    EXPECT_TRUE(ranges[0].gpuWait);
-    EXPECT_TRUE(ranges[1].gpuWait);
-    for (size_t at = 2; at < ranges.size(); ++at)
-        EXPECT_FALSE(ranges[at].gpuWait);
+    for (const raw::ExecutionRange &range : ranges)
+        EXPECT_EQ(range.gpuWait, range.kind == ExecutionKind::wait) << range.from;
 }
 
 raw::ExecutionAttribution routeOf(const std::vector<raw::ExecutionRange> &ranges)

@@ -134,7 +134,7 @@ void planSegments(RMCommandBuffer *cb)
 static void isolateRefused(RMCommandBuffer *cb, size_t encoder)
 {
     const RMSegment range = cb->_segs[cb->_segNext];
-    const size_t end = encoder < range.to ? cb->_plan.encoderEnd(encoder) : range.to;
+    const size_t end = encoder < range.to ? rmPassGroupEnd(cb, encoder) : range.to;
     std::vector<RMSegment> parts;
     for (const raw::ExecutionRange &part :
          raw::isolate({range.from, range.to, raw::ExecutionKind::native}, encoder, end))
@@ -167,7 +167,9 @@ bool submitRange(RMCommandBuffer *cb)
         if (event.op == OpWaitEvent)
             releaseEventWaits(cb);
         const bool unsignalled = event.op == OpSignalEvent && !range.gpuSignal;
-        const RMEventJob job = unsignalled ? submitEventJobs(cb) : RMEventJob::None;
+        const RMEventJob job = unsignalled                                  ? submitEventJobs(cb)
+                               : event.op == OpWaitEvent && range.gpuWait ? submitWaitJob(cb)
+                                                                           : RMEventJob::None;
         if (job == RMEventJob::Retry)
             return false;
         if (unsignalled && job == RMEventJob::None) {

@@ -14,14 +14,19 @@ import Metal
 /// reads a line job 0 left copies the last seed. Writers: the ROP, the copy engine, the SMs' stores, the CPU, the copy
 /// channel's replaceRegion (a second GPU channel). Readers: the texture unit, the SMs' data cache, the constant cache.
 /// injob_none runs the three steps in one command buffer with no barrier between them: the cell can see a stale or
-/// early read at all. CPU and copy-channel cells have no such arm: their counts are reported apart, not judged.
+/// early read at all. CPU and copy-channel cells have no such arm: their counts are reported apart, not judged. A GPU
+/// writer's three jobs are committed back to back, so job 2's entry follows job 1's end on the GPU, not seconds later.
+/// Where injob_none never differs the hazard is unobservable here and the line says so (observable=0): the end of
+/// each job (RELEASE_WFI, the kernel's WAIT_FOR_IDLE and L2 flush) leaves the entry nothing to find.
 enum X1JobBoundaryProbe {
     static let probe = X1Probe(
         id: "gpu.x1.job_boundary_idle", name: "A job after the last one's fence needs no drain at its entry",
         probe: "barrier.entry_no_drain", timeout: 240, body: run)
 
-    static let arms = [("control", "entry=today pass=none"), ("planner", "entry=planner pass=none"),
-                       ("bare", "entry=bare pass=none"), ("injob_none", "pass=none switch=none")]
+    static let arms = [
+        ("control", "entry=today pass=none"), ("planner", "entry=planner pass=none"),
+        ("bare", "entry=bare pass=none"), ("injob_none", "pass=none switch=none"),
+    ]
     static let batch = 8
     static let side = 16
     static let words = 256
@@ -63,24 +68,34 @@ enum X1JobBoundaryProbe {
                 }
                 let first = trial[step.cell]
                 let seeds = (0..<batch).map { probeSeed(trial: first + $0, cell: index, seeds: 16) }
-                let ran = arm == "injob_none"
+                let ran =
+                    arm == "injob_none"
                     ? try await work.inJob(forms: forms, seeds: seeds) : try await work.jobs(forms: forms, seeds: seeds)
                 var tally = (gpuWritten ? judged : cpuSide).tally(name, arm)
                 for k in 0..<batch {
                     let want = work.expected(seeds[k])
                     want.withUnsafeBytes {
-                        tally.compare(work.result(k), $0, trial: first + k, width: work.resultWidth,
-                                      bytesPerTexel: 4)
+                        tally.compare(
+                            work.result(k), $0, trial: first + k, width: work.resultWidth,
+                            bytesPerTexel: 4)
                     }
                 }
                 trial[step.cell] += batch
                 if gpuWritten { judged.store(name, arm, tally, ran) } else { cpuSide.store(name, arm, tally, ran) }
             }
         }
-        var finding = judged.finding(relaxed: ["planner", "bare"], none: "injob_none", control: "control",
-                                     takenKey: "entries", rule: "barrier.entry_no_drain")
+        var finding = judged.finding(
+            relaxed: ["planner", "bare"], none: "injob_none", control: "control",
+            takenKey: "entries", rule: "barrier.entry_no_drain")
+        let observable = judged.cells.contains { !(judged.tallies[$0]?["injob_none"]?.clean ?? true) }
+        finding.metrics.set("observable", observable ? 1 : 0)
+        if !observable {
+            finding.note = "unobservable: injob_none never differed, so no entry form can be judged here"
+        }
         for arm in ["control", "planner", "bare"] {
-            let cells = cpuSide.cells.compactMap { c in cpuSide.tallies[c]?[arm].map { "\(c):\($0.trials):\($0.mismatchedTrials)" } }
+            let cells = cpuSide.cells.compactMap { c in
+                cpuSide.tallies[c]?[arm].map { "\(c):\($0.trials):\($0.mismatchedTrials)" }
+            }
             finding.metrics.set("cpu_\(arm)_cells", cells.joined(separator: ","))
         }
         let controlWrong = (judged.cells + cpuSide.cells).compactMap {
@@ -109,7 +124,9 @@ enum X1JobBoundaryProbe {
         let primeAtlas: MTLTexture, atlas: MTLTexture
         let primeOut: MTLBuffer, out: MTLBuffer
 
-        init(_ kit: BarrierKit, _ pipelines: [String: MTLComputePipelineState], _ writer: Writer, _ reader: Reader)
+        init(
+            _ kit: BarrierKit, _ pipelines: [String: MTLComputePipelineState], _ writer: Writer, _ reader: Reader
+        )
             throws
         {
             self.kit = kit
@@ -117,7 +134,8 @@ enum X1JobBoundaryProbe {
             self.writer = writer
             self.reader = reader
             let gpu = kit.gpu, n = X1JobBoundaryProbe.batch, side = X1JobBoundaryProbe.side
-            textures = reader == .tex
+            textures =
+                reader == .tex
                 ? try (0..<n).map { _ in
                     try gpu.texture(
                         .bgra8Unorm, side, side, usage: [.renderTarget, .shaderRead],
@@ -134,15 +152,18 @@ enum X1JobBoundaryProbe {
         var resultWidth: Int { reader == .tex ? BarrierKit.tile : X1JobBoundaryProbe.words }
 
         func result(_ k: Int) -> UnsafeRawBufferPointer {
-            reader == .tex ? kit.tile(out, k)
-                : UnsafeRawBufferPointer(start: out.contents() + k * X1JobBoundaryProbe.words * 4,
-                                         count: X1JobBoundaryProbe.words * 4)
+            reader == .tex
+                ? kit.tile(out, k)
+                : UnsafeRawBufferPointer(
+                    start: out.contents() + k * X1JobBoundaryProbe.words * 4,
+                    count: X1JobBoundaryProbe.words * 4)
         }
 
         func expected(_ seed: Int) -> [UInt8] {
             if reader == .tex {
-                return kit.expectedTap(seed: seed, base: SIMD2(0, 0), step: SIMD2(1, 1), width: X1JobBoundaryProbe.side,
-                                       height: X1JobBoundaryProbe.side)
+                return kit.expectedTap(
+                    seed: seed, base: SIMD2(0, 0), step: SIMD2(1, 1), width: X1JobBoundaryProbe.side,
+                    height: X1JobBoundaryProbe.side)
             }
             return (0..<X1JobBoundaryProbe.words).flatMap { i -> [UInt8] in
                 withUnsafeBytes(of: probeHash(UInt32(i), 0, UInt32(seed)).littleEndian, Array.init)
@@ -177,7 +198,9 @@ enum X1JobBoundaryProbe {
         func write(_ commands: MTLCommandBuffer, _ seeds: [Int], concurrent: MTLComputeCommandEncoder? = nil) {
             switch writer {
             case .rop:
-                for (k, t) in textures.enumerated() { kit.seed(commands, t, seed: seeds[k], spin: 8) }
+                for (k, t) in textures.enumerated() {
+                    kit.seed(commands, t, seed: seeds[k], spin: [0, 6, 34, 80][k % 4])
+                }
             case .ce:
                 let blit = commands.makeBlitCommandEncoder()!
                 for (k, t) in textures.enumerated() {
@@ -229,11 +252,13 @@ enum X1JobBoundaryProbe {
         /// Three jobs under the arm's entry: job 0 reads, job 1 (or the CPU) writes, job 2 reads; job 2's GPU time
         func jobs(forms: String, seeds: [Int]) async throws -> ArmBatch {
             let gpu = kit.gpu
+            if writer == .rop || writer == .ce || writer == .sto {
+                writeFromCPU(seeds)
+                return try gpu.runBackToBack(
+                    forms: forms, [{ read($0, results: false) }, { write($0, seeds) }, { read($0, results: true) }])
+            }
             _ = try await gpu.run(forms: forms) { read($0, results: false) }
             writeFromCPU(seeds)
-            if writer == .rop || writer == .ce || writer == .sto {
-                _ = try await gpu.run(forms: forms) { write($0, seeds) }
-            }
             return try await gpu.run(forms: forms) { read($0, results: true) }
         }
 

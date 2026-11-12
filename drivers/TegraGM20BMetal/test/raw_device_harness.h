@@ -7,6 +7,7 @@
 #include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_gpu.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -152,6 +153,12 @@ protected:
     {
         kernel_model::Slot *s = liveSlot();
         return s ? uint32_t(s - kernel_model::model.slots) + 1 : 0;
+    }
+
+    bool freed(uint64_t handle) const
+    {
+        const auto &f = kernel_model::model.freed;
+        return std::find(f.begin(), f.end(), handle) != f.end();
     }
 };
 

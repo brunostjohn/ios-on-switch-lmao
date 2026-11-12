@@ -80,12 +80,15 @@ VARIABLE_OPS = (
     Recipe('MUFU.LG2', 'MuFu', lambda d, s: e.mufu(d, s, 'lg2', 'abs'), f32(3.0), exact=False),
     Recipe('MUFU.SIN', 'MuFu', lambda d, s: e.mufu(d, s, 'sin'), f32(1.0), exact=False),
     Recipe('MUFU.COS', 'MuFu', lambda d, s: e.mufu(d, s, 'cos'), f32(1.0), exact=False),
+    Recipe('MUFU.SQRT', 'MuFu', lambda d, s: e.mufu(d, s, 'sqrt'), f32(3.0), exact=False),
     Recipe('RRO', 'Rro', e.rro, f32(1.0), exact=False),
     Recipe('F2F', 'F2F', lambda d, s: e.f2f(d, s, 'round'), f32(2.5)),
     Recipe('F2I', 'F2I', lambda d, s: e.f2i(d, s, 'rz'), f32(1.5e9)),
     Recipe('I2F', 'I2F', e.i2f, 0x12345678),
     Recipe('IMUL', 'IMul', lambda d, s: e.imul(d, s, K1), 0x12345679, (3, 0)),
     Recipe('FLO', 'Flo', e.flo, 0x40000000),
+    # c[1][0] is the first constant (0): every link loads address 0 into the chain register
+    Recipe('LDC', 'Ldc', lambda d, s: e.ldc(d, s, 1), 0),
 )
 
 RECIPES = {r.key: r for r in FIXED + VARIABLE_OPS}

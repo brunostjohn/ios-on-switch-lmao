@@ -17,6 +17,10 @@ RZ = 255
 PT = 7
 NO_BAR = 7
 ALL_BARRIERS = 0x3F
+# A barrier an instruction sets is not up until this many cycles after it issues: a wait on it sooner passes at once
+# and reads the register before the write lands (measured: IPA then a waiting MOV, FADD or F2I at delay 1; NAK's
+# calc_instr_deps keeps the same two cycles)
+BARRIER_SET_CYCLES = 2
 MASK32 = 0xFFFFFFFF
 OPCODES = {p.name: p.value for p in isa.PATTERNS}
 ROUND = {'rn': 0, 'rm': 1, 'rp': 2, 'rz': 3}
@@ -25,7 +29,7 @@ FLOAT_CMP |= {'ltu': 9, 'equ': 10, 'leu': 11, 'gtu': 12, 'neu': 13, 'geu': 14, '
 INT_CMP = {'f': 0, 'lt': 1, 'eq': 2, 'le': 3, 'gt': 4, 'ne': 5, 'ge': 6, 't': 7}
 COMBINE = {'and': 0, 'or': 1, 'xor': 2}
 LOGIC = {'and': 0, 'or': 1, 'xor': 2, 'passb': 3}
-MUFU = {'cos': 0, 'sin': 1, 'ex2': 2, 'lg2': 3, 'rcp': 4, 'rsq': 5}
+MUFU = {'cos': 0, 'sin': 1, 'ex2': 2, 'lg2': 3, 'rcp': 4, 'rsq': 5, 'sqrt': 8}
 SWIZZLE = {'h1h0': 0, 'f32': 1, 'h0h0': 2, 'h1h1': 3}
 FLOAT_WIDTH = {'f16': 1, 'f32': 2}
 FREQ = {'pass': 0, 'mulw': 1, 'const': 2, 'state': 3}
@@ -390,6 +394,22 @@ def ipa(d: int, addr: int, mods: str = '', inv_w: int = RZ) -> Instr:
     return w.flag(51, 'sat' in m).put(52, 2, _pick(m, LOCATION)).put(54, 2, _pick(m, FREQ)).instr()
 
 
+def bra(offset: int, pred: int = PT, neg: bool = False) -> Instr:
+    """Give a branch `offset` bytes from the next instruction, guarded by `pred`."""
+    word = OPCODES['BRA'] | (pred | int(neg) << 3) << 16 | (offset & 0xFFFFFF) << 20 | 0xF
+    return Instr(word)
+
+
+def address(index: int) -> int:
+    """Give the byte address of the index-th instruction once bundle() puts a scheduling word ahead of each three."""
+    return index // 3 * 32 + 8 + index % 3 * 8
+
+
+def ldc(d: int, offset_reg: int, bank: int, offset: int = 0, size: int = 4) -> Instr:
+    """LDC as sm50.rs encodes it; `size` is the memory type (4: 32-bit, 5: 64-bit; 6, 128-bit, traps on GM20B)."""
+    return Instr(OPCODES['LDC'] | d | offset_reg << 8 | PT << 16 | offset << 20 | bank << 36 | size << 48)
+
+
 def nop() -> Instr:
     return _Word('NOP').put(8, 4, 0xF).instr()
 
@@ -403,8 +423,21 @@ def finish(instrs: list[Instr]) -> list[Instr]:
     return [*instrs, exit_().sched(delay=13, wait=ALL_BARRIERS), nop().sched(delay=2)]
 
 
+def barrier_hazards(instrs: list[Instr]) -> list[int]:
+    """Give the indices of instructions that wait on a barrier the instruction just before set too recently."""
+    out = []
+    for k in range(1, len(instrs)):
+        before, c = instrs[k - 1].control, instrs[k].control
+        set_bars = {b for b in (before.wr_bar, before.rd_bar) if b != NO_BAR}
+        if before.delay < BARRIER_SET_CYCLES and any(c.wait >> b & 1 for b in set_bars):
+            out.append(k)
+    return out
+
+
 def bundle(instrs: list[Instr]) -> bytes:
     """Give `instrs` as machine code: a scheduling word ahead of each three, NOPs filling the last bundle."""
+    if hazards := barrier_hazards(instrs):
+        raise ValueError(f'instructions {hazards} wait on a barrier set less than {BARRIER_SET_CYCLES} cycles before')
     padded = list(instrs) + [nop()] * (-len(instrs) % 3)
     words = []
     for i in range(0, len(padded), 3):

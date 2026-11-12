@@ -14,9 +14,9 @@ enum class RMStoredSamples : uint8_t {
 RMStoredSamples storedMultisampleKind(MTLTextureDescriptor *d);
 bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::Texture &t);
 
-// The pass's own sample positions for a pass of `samples` samples (raw_sample_positions.h); false: ones the raw path keeps
-// Metal's refusal of
-bool passSamplePositions(MTLRenderPassDescriptor *pass, uint32_t samples, raw::SamplePositions &out);
+// The pass's own `count` sample positions (getSamplePositions:nil count:0) for a pass of `samples` samples
+// (raw_sample_positions.h); false: ones the raw path keeps Metal's refusal of
+bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out);
 
 // The first stored multisampled depth/stencil texture, or depth/stencil texture of an MTLHeap (its arena's zeta view), range
 // [from, to) of `cb` loads, stores, binds or copies: m2v's twin of
