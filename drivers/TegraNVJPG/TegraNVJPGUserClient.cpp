@@ -714,11 +714,17 @@ IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, U
     (void)type, (void)refCon;
     IOLockLock(lock_);
     const bool busy = port_ != MACH_PORT_NULL && port_ != port;
+    const bool kept = port_ == port;
     if (!busy)
         port_ = port;
     IOLockUnlock(lock_);
     // A refused port's right is the MIG server's to destroy: it does so when this returns an error.
-    return busy ? kIOReturnError : kIOReturnSuccess;
+    if (busy)
+        return kIOReturnError;
+    // Each registration brings its own right: a second one to the port already kept is released here
+    if (kept)
+        IOUserClient::releaseNotificationPort(port);
+    return kIOReturnSuccess;
 }
 
 // Queued decodes hold the connection; closing waits for them (each is bounded by the engine), so no completion
