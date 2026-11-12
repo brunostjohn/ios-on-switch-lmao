@@ -686,6 +686,9 @@ private:
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     uint32_t bindingFacts(const Pipeline &pl);
+#if SWITCH_RAW_DIAGNOSTICS
+    void logUniformTuple(const Pipeline &pl) const;
+#endif
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;

@@ -4611,6 +4611,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
     if (!pl->splitOf)
         pl = dev_->variant(*pl, bindingFacts(*pl));
+    RAW_DIAGNOSTIC(logUniformTuple(*pl));
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
