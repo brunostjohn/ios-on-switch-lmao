@@ -28,7 +28,7 @@ public:
 	void attachWords(volatile uint32_t *page, uint64_t gpu, uint64_t pool, void (*hold)(const volatile uint32_t *),
 			 void (*put)(const volatile uint32_t *));
 	// TegraGM20BJobABI.h method 40
-	int word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base);
+	int word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base, uint32_t *floor);
 	// The handle's word, retained, or null when method 40 never made it
 	switch_gpu_event_word *wordOf(uint64_t handle);
 

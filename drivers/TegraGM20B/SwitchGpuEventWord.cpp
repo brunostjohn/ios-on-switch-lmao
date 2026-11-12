@@ -53,7 +53,7 @@ void switch_gpu_event_word_release(switch_gpu_event_word **owned)
 }
 
 int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *event, uint32_t channel,
-			      uint64_t *base)
+			      uint64_t *base, uint32_t *floor)
 {
 	auto *s = switch_gpu_events_state();
 	if (!s || !word || !event || !channel)
@@ -75,6 +75,7 @@ int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *eve
 		word->armed = true;
 	}
 	*base = word->base;
+	*floor = word->last > word->poisoned ? word->last : word->poisoned;
 	IOLockUnlock(s->lock);
 	return result;
 }

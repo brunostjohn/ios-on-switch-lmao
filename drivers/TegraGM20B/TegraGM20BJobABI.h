@@ -137,13 +137,13 @@ enum {
 };
 
 /* Method 40. The word one channel of the connection releases an imported event's values into, mid-job: a signal of value v
- * goes to the GPU as payload = v - base (mod 2^64), 0 < payload < TegraGM20BEventReleaseLimit, released at `address`
+ * goes to the GPU as payload = v - base (mod 2^64), floor < payload < TegraGM20BEventReleaseLimit, released at `address`
  * (NV906F SEMAPHORED, 4 bytes) after the wait for idle and the L2 flush a CPU reader needs, then NON_STALL_INTERRUPT.
  * The kernel completes such a signal once the word holds its payload, as the job's end completes the others, and other
- * jobs waiting for a value it produces acquire on the word. The channel's payloads must grow from one released signal to
- * the next. A call while none of the word's signals is outstanding binds the word to `channel` and moves base to the
- * event's value less the word's (the word never goes back); otherwise it answers the current base, or kIOReturnBusy while
- * another channel's are outstanding. kIOReturnNoResources: the word passed half its range. */
+ * jobs waiting for a value it produces acquire on the word. Each released payload is the channel's new floor. A call
+ * while none of the word's signals is outstanding binds the word to `channel` and moves base to the event's value less
+ * the word's (the word never goes back); otherwise it answers the current base and floor, or kIOReturnBusy while another
+ * channel's are outstanding. kIOReturnNoResources: the word passed half its range. */
 struct TegraGM20BAbiEventWord {
 	uint64_t handle;
 	uint32_t channel, reserved;
@@ -151,6 +151,7 @@ struct TegraGM20BAbiEventWord {
 
 struct TegraGM20BAbiEventWordReply {
 	uint64_t address, base;
+	uint32_t floor, reserved;
 };
 
 /* With SubmitEventReleases or JobEventReleases, one per signal after the signals. Released: the job's pushes release
@@ -174,7 +175,7 @@ TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromise, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromiseReply, 8);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJobPromises, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiEventWord, 16);
-TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiEventWordReply, 16);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiEventWordReply, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiSignalRelease, 8);
 #undef TEGRA_GM20B_JOB_ASSERT
 #endif

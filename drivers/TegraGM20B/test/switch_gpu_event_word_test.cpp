@@ -24,10 +24,12 @@ protected:
 		switch_gpu_event_word_release(&word);
 	}
 
+	uint32_t floor = 0;
+
 	uint64_t arm(uint32_t channel = 1, int expected = 0)
 	{
 		uint64_t base = ~0ull;
-		EXPECT_EQ(switch_gpu_event_word_arm(word, event, channel, &base), expected);
+		EXPECT_EQ(switch_gpu_event_word_arm(word, event, channel, &base, &floor), expected);
 		return base;
 	}
 
@@ -179,9 +181,11 @@ TEST_F(EventWords, ArmMovesBaseOnlyWhenIdle)
 	switch_gpu_event_signal_commit(&s);
 	arm(2, -16);
 	EXPECT_EQ(arm(1), 10u);
+	EXPECT_EQ(floor, 2u);
 	gpuWrites(2);
 	native->value = 50;
 	EXPECT_EQ(arm(2), 48u);
+	EXPECT_EQ(floor, 2u);
 	s = released(51, t, 3, 2);
 	switch_gpu_event_signal_commit(&s);
 	gpuWrites(3);

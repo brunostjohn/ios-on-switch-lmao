@@ -469,13 +469,15 @@ void switch_gpu_event_word_release(switch_gpu_event_word **word)
 	*word = nullptr;
 }
 
-int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *, uint32_t channel, uint64_t *base)
+int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *, uint32_t channel, uint64_t *base,
+			      uint32_t *floor)
 {
 	if (word->pending && word->channel != channel)
 		return -16;
 	word->armed = true;
 	word->channel = channel;
 	*base = word->base = 40;
+	*floor = word->last;
 	return 0;
 }
 
@@ -1005,7 +1007,8 @@ TEST_F(EventClient, EventWordIsTheSlotsWordInTheFencePageAndOutlivesItsHandle)
 {
 	client.attachWords(fencePage, 0x7000, 0x40000, holdWord, putWord);
 	uint64_t address = 0, base = 0;
-	ASSERT_EQ(client.word(handle, 2, &address, &base), 0);
+	uint32_t floor = 0;
+	ASSERT_EQ(client.word(handle, 2, &address, &base, &floor), 0);
 	const uint32_t slot = uint32_t(handle % 256);
 	EXPECT_EQ(address, 0x7000u + (TegraGM20BEventWordFirst + slot) * 4);
 	EXPECT_EQ(base, 40u);
@@ -1014,7 +1017,7 @@ TEST_F(EventClient, EventWordIsTheSlotsWordInTheFencePageAndOutlivesItsHandle)
 	ASSERT_NE(word, nullptr);
 	EXPECT_EQ(word->cpu, &fencePage[TegraGM20BEventWordFirst + slot]);
 	EXPECT_EQ(word->pool, 0x40000u + (TegraGM20BEventWordFirst + slot) * 4);
-	EXPECT_EQ(client.word(handle + 1, 2, &address, &base), -22);
+	EXPECT_EQ(client.word(handle + 1, 2, &address, &base, &floor), -22);
 	++word->pending;
 	ASSERT_EQ(client.release(handle), 0);
 	EXPECT_EQ(client.wordOf(handle), nullptr);
@@ -1035,7 +1038,8 @@ TEST_F(EventClient, JobReleasesItsSignalIntoTheWordAndWaitsOnAProducersWord)
 {
 	client.attachWords(fencePage, 0x7000, 0x40000, holdWord, putWord);
 	uint64_t address = 0, base = 0;
-	ASSERT_EQ(client.word(handle, 2, &address, &base), 0);
+	uint32_t floor = 0;
+	ASSERT_EQ(client.word(handle, 2, &address, &base, &floor), 0);
 	struct {
 		TegraGM20BAbiSubmitEvents header;
 		TegraGM20BAbiEventUse uses[2];

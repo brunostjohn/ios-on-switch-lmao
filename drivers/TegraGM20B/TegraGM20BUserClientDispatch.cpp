@@ -276,7 +276,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		*reply = {};
 		if (input->reserved || !input->channel || input->channel > kMaxChannels)
 			return kIOReturnBadArgument;
-		return ioreturn(events_.word(input->handle, input->channel, &reply->address, &reply->base));
+		return ioreturn(
+			events_.word(input->handle, input->channel, &reply->address, &reply->base, &reply->floor));
 	}
 	if (method == TegraGM20BMethodSubmitAddress)
 		return submitAddress(static_cast<const TegraGM20BAbiSubmitAddress *>(in),

@@ -13,7 +13,8 @@ void SwitchGpuEventClient::attachWords(volatile uint32_t *page, uint64_t gpu, ui
 	IOLockUnlock(lock_);
 }
 
-int SwitchGpuEventClient::word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base)
+int SwitchGpuEventClient::word(uint64_t handle, uint32_t channel, uint64_t *address, uint64_t *base,
+			       uint32_t *floor)
 {
 	IOLockLock(lock_);
 	const uint32_t slot = uint32_t(handle % kHandles);
@@ -37,7 +38,7 @@ int SwitchGpuEventClient::word(uint64_t handle, uint32_t channel, uint64_t *addr
 	IOLockUnlock(lock_);
 	if (!word)
 		return result;
-	result = switch_gpu_event_word_arm(word, event, channel, base);
+	result = switch_gpu_event_word_arm(word, event, channel, base, floor);
 	*address = gpu;
 	switch_gpu_event_release(&event);
 	switch_gpu_event_word_release(&word);

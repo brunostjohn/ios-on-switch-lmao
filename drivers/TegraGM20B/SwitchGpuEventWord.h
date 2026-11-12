@@ -28,9 +28,9 @@ switch_gpu_event_word *switch_gpu_event_word_create(volatile uint32_t *cpu, uint
 						    void (*put)(const volatile uint32_t *));
 void switch_gpu_event_word_retain(switch_gpu_event_word *word);
 void switch_gpu_event_word_release(switch_gpu_event_word **word);
-// 0 with *base; -16: another channel's signals are outstanding; -28: the word passed half its range
+// 0 with *base and *floor; -16: another channel's signals are outstanding; -28: the word passed half its range
 int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *event, uint32_t channel,
-			      uint64_t *base);
+			      uint64_t *base, uint32_t *floor);
 // No signal released here is outstanding; once a word's handle is released this stays true
 bool switch_gpu_event_word_idle(const switch_gpu_event_word *word);
 // An idle word given to its slot's next handle: nothing releases into it before that handle's method 40
