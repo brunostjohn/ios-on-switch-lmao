@@ -461,22 +461,3 @@ TEST(WriterPromise, AGiveUpRaisesOnlyAWordStillShortOfItsValue)
 	EXPECT_EQ(pool[3], 11u);
 	EXPECT_EQ(released, (Released{{4, 5}}));
 }
-
-// Every frame of a compositor that reads the surface acquires the same promise: one record. A record of a released
-// promise is reused; past SWITCH_GPU_PROMISE_WAITS pending ones the acquire is refused, never left unrecorded.
-TEST(WriterPromise, AChannelRecordsEachPendingPromiseOnce)
-{
-	switch_gpu_promise_waits waits = {};
-	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS + 1; ++i)
-		pool[i] = 0;
-	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS; ++i)
-		ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, i * 4, 1), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 1), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence,
-						(SWITCH_GPU_PROMISE_WAITS + 1) * 4, 1),
-		  -28);
-	pool[1] = 1;
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence,
-						(SWITCH_GPU_PROMISE_WAITS + 1) * 4, 1),
-		  0);
-}

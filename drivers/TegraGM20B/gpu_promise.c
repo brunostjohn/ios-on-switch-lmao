@@ -8,8 +8,6 @@ int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value
 {
 	const struct switch_gpu_giveup_job reader = {(u32)chan->id, chan->submitted + 1};
 
-	(void)switch_gpu_promise_waits_note(&chan->promise_waits, &tgm_promise_fence, offset,
-					    value);
 	return tgm_promise_park(offset, value, chan->owner,
 				chan == tgm_present.chan ? "a present job" : "a GPU job", &reader,
 				0);
@@ -24,40 +22,6 @@ void tgm_chan_park_promises(struct tgm_chan *chan, const struct switch_gpu_backi
 		if (tokens[i].engine == SWITCH_GPU_ENGINE_PROMISE &&
 		    !switch_gpu_backing_token_status(&tokens[i]))
 			tgm_chan_note_promise(chan, tokens[i].queue, (u32)tokens[i].value);
-}
-
-int tgm_chan_waits_promise(const struct tgm_chan *chan)
-{
-	return switch_gpu_promise_waits_pending(&chan->promise_waits, &tgm_promise_fence);
-}
-
-/* tgm_present.lock held: the present's job parks on an unkept promise, its own acquire's or that of a GM20B producer it
- * waits for (whose channel's acquires include one), so its deadline's first look comes once that wait has been stuck
- * for TGM_STUCK_NS */
-int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens)
-{
-	u32 producers[SWITCH_GPU_PRESENT_MAX_DEPENDENCIES];
-	u32 count = 0;
-	u32 i;
-	int waits = 0;
-
-	if (switch_gpu_present_tokens_promised(tokens))
-		return 1;
-	/* their status may take a timeline's lock, which tgm_live_lock is never held around */
-	for (i = 0; i < tokens->count; i++)
-		if (tokens->tokens[i].engine == SWITCH_GPU_ENGINE_GM20B &&
-		    !switch_gpu_backing_token_status(&tokens->tokens[i]))
-			producers[count++] = i;
-	mutex_lock(&tgm_live_lock);
-	for (i = 0; i < count && !waits; i++) {
-		const struct switch_gpu_backing_token *token = &tokens->tokens[producers[i]];
-		const struct tgm_chan *chan = live_by_uid(token->queue);
-
-		waits = chan && switch_gpu_quiet_token_on(token, chan->id) &&
-			tgm_chan_waits_promise(chan);
-	}
-	mutex_unlock(&tgm_live_lock);
-	return waits;
 }
 
 #if TGM_STATS

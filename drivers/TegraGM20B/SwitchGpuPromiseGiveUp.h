@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
-/* The give-up of a writer promise nobody keeps (SwitchGpuWriterPromise.h): the one place a promise is given up.
+/* The give-up of a writer promise nobody keeps (SwitchGpuWriterPromise.h): the one place a promise is given up
+ * (switch_promise_giveup_site_test fails on a second).
  *
  * A reader parks on a pending promise word in one of three ways: a GPU job that acquires it, once kicked; a CPU reader
  * asleep behind it; the display's direct present watching it. The first one to park arms one call,

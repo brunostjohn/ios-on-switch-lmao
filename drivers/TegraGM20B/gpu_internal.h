@@ -303,7 +303,6 @@ struct tgm_chan {
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
 	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
 	struct switch_gpu_quiet quiet;
-	struct switch_gpu_promise_waits promise_waits;
 	void (*wake)(void *arg, u32 tag); /* tgm_chan_on_wake: the owner's ask for a wake entry */
 	void *wake_arg;
 	u32 wake_tag;
@@ -618,9 +617,6 @@ void tgm_idle_settle(void *arg);
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value);
 void tgm_chan_park_promises(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			    u32 count);
-/* whether one of the promises the channel acquires is still unkept (atomic reads: the caller keeps the channel) */
-int tgm_chan_waits_promise(const struct tgm_chan *chan);
-int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens);
 /* tgm_live_lock held: the process whose fence page holds the word at `offset` */
 const char *tgm_promise_maker(uint32_t offset);
 void tgm_promise_kept_first(uint32_t offset, uint32_t value);

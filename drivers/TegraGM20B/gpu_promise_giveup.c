@@ -79,11 +79,11 @@ static void giveup_report(uint32_t offset, uint32_t value, const struct switch_g
 	switch_gpu_path_promise_abandoned(waited_ns);
 	if (e->display)
 		switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_GIVEN_UP);
-	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s "
-		  "waited %llu ms for "
-		  "it in %s; it goes on without the promised writes, and a present of the surface "
-		  "is dropped\n",
-		  tgm_promise_maker(offset), offset, value, e->waiter, waited_ns / 1000000, e->who);
+	nvxnu_log(
+		"tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: "
+		"%s waited %llu ms for it in %s; "
+		"it goes on without the promised writes, and a present of the surface is dropped\n",
+		tgm_promise_maker(offset), offset, value, e->waiter, waited_ns / 1000000, e->who);
 }
 
 /* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so a reader's PBDMA

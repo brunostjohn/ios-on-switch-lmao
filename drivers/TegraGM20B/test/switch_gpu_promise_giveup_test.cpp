@@ -87,7 +87,6 @@ protected:
 		chan.asked.clear();
 		std::strncpy(chan.owner, owner, sizeof(chan.owner) - 1);
 		switch_gpu_jobs_init(&chan.jobs, done);
-		chan.promise_waits = {};
 	}
 
 	// The reader's job, its acquire on the promise kicked: chan_exec parks it, then fences the job

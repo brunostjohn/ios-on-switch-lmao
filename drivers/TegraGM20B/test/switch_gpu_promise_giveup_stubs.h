@@ -45,7 +45,6 @@ struct Chan {
 	switch_gpu_jobs jobs = {};
 	char owner[17] = {};
 	uint32_t submitted = 0;
-	switch_gpu_promise_waits promise_waits = {};
 	// the hang rule's bookkeeping as the deferred call's checks see it (tgm_chan_check_progress_locked)
 	uint64_t stall_ns = 0;
 	uint32_t stall_done = 0, strikes = 0;

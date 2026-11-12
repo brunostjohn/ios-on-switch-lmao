@@ -282,6 +282,7 @@ static struct tgm_chan *late_writer(u32 uid, u32 seqno, const struct tgm_relayou
 static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
 			u32 nacquired)
 {
+	const u64 start = nvxnu_nanotime();
 	struct tgm_chan *chan = NULL;
 	enum tgm_hang verdict = TGM_HANG_STUCK;
 	u32 late = 0;
@@ -306,10 +307,10 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 		mutex_lock(&tgm_live_lock);
 		chan = late_writer(uid, seqno, acquired, nacquired, &late);
 		if (chan)
-			verdict =
-				tgm_hang_recover(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
+			verdict = tgm_hang_recover(chan, "IOSurface lock", late,
+						   nvxnu_nanotime() - start);
 		if (verdict == TGM_HANG_STUCK)
-			tgm_chan_hung(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
+			tgm_chan_hung(chan, "IOSurface lock", late, nvxnu_nanotime() - start);
 		mutex_unlock(&tgm_live_lock);
 	}
 }

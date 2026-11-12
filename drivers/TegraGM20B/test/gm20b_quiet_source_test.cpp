@@ -222,35 +222,25 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	EXPECT_EQ(Count(stepped, "giveup_report("), 1u);
 	// the call's look at the end of every GPU interrupt pass, after the present's
 	expectBefore(unit("shim/xnu_glue.cpp"), "tgm_present_pass();\n\ttgm_promise_pass();", "nvxnu_wake();");
-	// a present whose job parks on an unkept promise is first looked at once stuck for TGM_STUCK_NS and struck again
-	// TGM_STUCK_NS later, a real hang at the deadline and a whole deadline later; the deadline's own wait is that
-	// interval (switch_gpu_promise_strike_test models both)
+	// The give-up is the promise's one cadence: a present's deadline and a wait's hang checks keep their own period
+	// whatever the waited channel acquires, and nothing in the hang rule reads a promise.
 	const std::string copy = Body(unit("gpu_present.c"), "static int present_copy(");
-	expectBefore(copy, "tgm_present_waits_promise(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS",
+	expectBefore(copy, "tgm_present.recheck = TGM_PRESENT_NS;",
 		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
-	// a producer the present waits for whose own acquires include an unkept promise counts too, read without a
-	// timeline's status under tgm_live_lock
-	// a wait's hang checks take one interval rule (tgm_hang_check_interval): TGM_HANG_NS unless the waited channel
-	// acquires an unkept promise
-	const std::string progress = Body(unit("gpu_hang.c"), "static u64 progress_step(");
-	EXPECT_THAT(progress, HasSubstr("u64 interval = check_interval(chan);"));
-	EXPECT_EQ(Count(progress, "TGM_HANG_NS"), 0u);
-	EXPECT_THAT(Body(unit("gpu_hang.c"), "uint64_t tgm_chan_check_progress("),
-		    HasSubstr("tgm_chan_stalled(chan, who, seqno, stalled);"));
-	EXPECT_THAT(Body(unit("gpu_hang.c"), "static u64 check_interval("),
-		    HasSubstr("tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes), "
-			      "TGM_HANG_NS)"));
-	const std::string waits = Body(unit("gpu_promise.c"), "int tgm_present_waits_promise(");
-	expectBefore(waits, "switch_gpu_present_tokens_promised(tokens)", "mutex_lock(&tgm_live_lock);");
-	expectBefore(waits, "switch_gpu_backing_token_status(", "mutex_lock(&tgm_live_lock);");
-	expectBefore(waits, "mutex_lock(&tgm_live_lock);", "tgm_chan_waits_promise(chan)");
 	expectBefore(copy, "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);",
 		     "chan_fence(chan);");
+	const std::string progress = Body(unit("gpu_hang.c"), "static u64 progress_step(");
+	EXPECT_THAT(progress, HasSubstr("return TGM_HANG_NS;"));
+	EXPECT_THAT(Body(unit("gpu_hang.c"), "uint64_t tgm_chan_check_progress("),
+		    HasSubstr("tgm_chan_stalled(chan, who, seqno, stalled);"));
+	EXPECT_THAT(unit("gpu_hang.c"), Not(HasSubstr("promise")));
+	EXPECT_THAT(unit("TegraGM20BRecover.h"), Not(HasSubstr("promise")));
 	const std::string deadline = Body(unit("gpu_present_deadline.c"), "void tgm_present_deadline(void *arg)");
 	expectBefore(deadline, "if (age < tgm_present.recheck) {",
 		     "tgm_hang_recover(late, \"present\"");
-	expectBefore(deadline, "tgm_present.recheck = tgm_chan_waits_promise(late) ? TGM_STUCK_NS : TGM_PRESENT_NS;",
+	expectBefore(deadline, "tgm_present.recheck = TGM_PRESENT_NS;",
 		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
+	EXPECT_THAT(deadline, Not(HasSubstr("promise")));
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));

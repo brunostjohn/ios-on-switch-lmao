@@ -3,22 +3,15 @@
 #include "gpu_internal.h"
 #include "../../kits/SwitchLinux/SwitchLinux.h"
 
-/* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
-static u64 check_interval(const struct tgm_chan *chan)
-{
-	return tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes),
-				       TGM_HANG_NS);
-}
-
-/* The rule's bookkeeping at a check: the next check's interval, and in *stalled the time the channel has completed
- * nothing when that is the interval or more (the hang rule's look is due) */
+/* The rule's bookkeeping at a check, every TGM_HANG_NS: the next check's interval, and in *stalled the time the channel
+ * has completed nothing when that is TGM_HANG_NS or more (the hang rule's look is due). The time the hold kept the
+ * channel off the GPU is not the channel's: it never counts toward a stall. */
 static u64 progress_step(struct tgm_chan *chan, u64 *stalled)
 {
 	u32 done = tgm_chan_completed(chan);
 	u64 now = nvxnu_nanotime();
 	u64 since = READ_ONCE(chan->stall_ns);
 	u64 held = tgm_hold_held_ns(chan->chid, now);
-	u64 interval = check_interval(chan);
 	u64 unheld = 0;
 
 	*stalled = 0;
@@ -30,15 +23,15 @@ static u64 progress_step(struct tgm_chan *chan, u64 *stalled)
 		WRITE_ONCE(chan->stall_done, done);
 		WRITE_ONCE(chan->stall_held, held);
 		WRITE_ONCE(chan->stall_ns, now);
-		return interval;
+		return TGM_HANG_NS;
 	}
 	unheld = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
-	if (unheld < interval)
-		return interval - unheld;
+	if (unheld < TGM_HANG_NS)
+		return TGM_HANG_NS - unheld;
 	*stalled = unheld;
 	WRITE_ONCE(chan->stall_held, held);
 	WRITE_ONCE(chan->stall_ns, now);
-	return interval;
+	return TGM_HANG_NS;
 }
 
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
@@ -46,10 +39,9 @@ uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_
 	u64 stalled = 0;
 	const u64 next = progress_step(chan, &stalled);
 
-	if (!stalled)
-		return next;
-	tgm_chan_stalled(chan, who, seqno, stalled);
-	return check_interval(chan);
+	if (stalled)
+		tgm_chan_stalled(chan, who, seqno, stalled);
+	return next;
 }
 
 uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, uint32_t seqno)
@@ -57,11 +49,9 @@ uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, 
 	u64 stalled = 0;
 	const u64 next = progress_step(chan, &stalled);
 
-	if (!stalled)
-		return next;
-	if (tgm_hang_recover(chan, who, seqno, stalled) == TGM_HANG_STUCK)
+	if (stalled && tgm_hang_recover(chan, who, seqno, stalled) == TGM_HANG_STUCK)
 		tgm_chan_hung(chan, who, seqno, stalled);
-	return check_interval(chan);
+	return next;
 }
 
 int tgm_all_clients(void)

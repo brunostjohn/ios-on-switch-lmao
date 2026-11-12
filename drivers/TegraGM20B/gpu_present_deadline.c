@@ -134,9 +134,7 @@ void tgm_present_deadline(void *arg)
 	late = waited ? waited : tgm_present.chan;
 	if (tgm_hang_recover(late, "present", waited ? seqno : tgm_present.pending, age) !=
 	    TGM_HANG_STUCK) {
-		/* A wait on an unkept promise is struck again once it has been stuck for TGM_STUCK_NS, not a deadline later:
-		 * the second strike is the one that gives the promise up (TGM_PROMISE_FIRST_LOOK_NS). */
-		tgm_present.recheck = tgm_chan_waits_promise(late) ? TGM_STUCK_NS : TGM_PRESENT_NS;
+		tgm_present.recheck = TGM_PRESENT_NS;
 		mutex_unlock(&tgm_live_lock);
 		tgm_present.recovered = nvxnu_nanotime();
 		nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);

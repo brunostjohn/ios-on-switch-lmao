@@ -453,6 +453,14 @@ grep -q tgm_promise_park $@
 """,
 )
 
+# Every driver and kit source, read for the one place a writer promise is given up.
+host_test(
+    name = "switch_promise_giveup_site_test",
+    srcs = ["switch_promise_giveup_site_test.cpp"],
+    cxx_std = "c++17",
+    data = ["//:lint_files"],
+)
+
 host_test(
     name = "switch_gpu_promise_giveup_test",
     srcs = [
@@ -692,6 +700,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
         "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",

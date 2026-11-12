@@ -127,77 +127,18 @@ static inline void switch_gpu_promise_kept(struct switch_gpu_promise_slot *slot,
 	slot->channel = (uint8_t)channel;
 }
 
-/* The promises a channel's pushes acquired, each offset << 32 | value (0: none; a promise word is never at offset 0),
- * and the owner of the word's fence page then. The channel's submitter is the one writer. */
-#define SWITCH_GPU_PROMISE_WAITS 16
-
-struct switch_gpu_promise_waits {
-	uint64_t wait[SWITCH_GPU_PROMISE_WAITS];
-	uint32_t owner[SWITCH_GPU_PROMISE_WAITS];
-};
-
 typedef volatile uint32_t *(*switch_gpu_promise_word)(uint32_t offset);
 
 /* The fence pool as the give-up's raise reaches it: words are read through `word` and written only by `raise`, which
  * stores `value` when the word is still below it (1) and leaves it otherwise (0). The kernel maps the pool
  * write-combined (Normal Non-cacheable), where no exclusive access (a compare-and-swap, any atomic read-modify-write)
  * completes on T210: its bus answers with an SError. `owner` names a fence page's owner: a page freed with its
- * connection and handed to another (cleared) is a new owner, and a wait recorded before is no longer on it. */
+ * connection and handed to another (cleared) is a new owner, and a promise of the old one is no longer on it. */
 struct switch_gpu_promise_fence {
 	switch_gpu_promise_word word;
 	int (*raise)(volatile uint32_t *word, uint32_t value);
 	uint32_t (*owner)(uint32_t offset);
 };
-
-/* Wait i still short of its value on the page it was recorded on: a word of a page another connection owns now is not
- * the promise's, whatever it holds. */
-static inline volatile uint32_t *
-switch_gpu_promise_pending(const struct switch_gpu_promise_fence *fence,
-			   const struct switch_gpu_promise_waits *waits, int i)
-{
-	const uint64_t wait = __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED);
-	const uint32_t offset = (uint32_t)(wait >> 32);
-	volatile uint32_t *at = wait ? fence->word(offset) : 0;
-
-	if (!at || fence->owner(offset) != __atomic_load_n(&waits->owner[i], __ATOMIC_RELAXED) ||
-	    (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - (uint32_t)wait) >= 0)
-		return 0;
-	return at;
-}
-
-/* A recorded wait still short of its value: the channel may be parked on a promise word. */
-static inline int switch_gpu_promise_waits_pending(const struct switch_gpu_promise_waits *waits,
-						   const struct switch_gpu_promise_fence *fence)
-{
-	for (int i = 0; i < SWITCH_GPU_PROMISE_WAITS; ++i)
-		if (switch_gpu_promise_pending(fence, waits, i))
-			return 1;
-	return 0;
-}
-
-/* 0, or -28 with SWITCH_GPU_PROMISE_WAITS others pending. */
-static inline int switch_gpu_promise_waits_note(struct switch_gpu_promise_waits *waits,
-						const struct switch_gpu_promise_fence *fence,
-						uint32_t offset, uint32_t value)
-{
-	const uint64_t wait = (uint64_t)offset << 32 | value;
-	const uint32_t owner = fence->owner(offset);
-	int free = -1;
-
-	for (int i = 0; i < SWITCH_GPU_PROMISE_WAITS; ++i) {
-		const uint64_t held = __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED);
-
-		if (held == wait && __atomic_load_n(&waits->owner[i], __ATOMIC_RELAXED) == owner)
-			return 0;
-		if (free < 0 && !switch_gpu_promise_pending(fence, waits, i))
-			free = i;
-	}
-	if (free < 0)
-		return -28;
-	__atomic_store_n(&waits->owner[free], owner, __ATOMIC_RELAXED);
-	__atomic_store_n(&waits->wait[free], wait, __ATOMIC_RELAXED);
-	return 0;
-}
 
 /* How a give-up went, as switch_gpu_promise_give_up tells it */
 enum {
