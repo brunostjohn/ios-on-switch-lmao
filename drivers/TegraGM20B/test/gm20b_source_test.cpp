@@ -387,13 +387,13 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 {
 	const std::string job =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,"));
-	expectBefore(job, "const tgm_prof *profile = scanSubmission(pushes, count, prof);", "switch_gpu_chan_exec_job(");
-	EXPECT_THAT(job, HasSubstr("&seqno, profile, jobVisibility);"));
+	expectBefore(job, "const tgm_prof *profile = scanSubmission(pushes, count, prof);", "switch_gpu_chan_exec_events(");
+	EXPECT_THAT(job, HasSubstr("&seqno, profile, jobVisibility, releases, keptCount);"));
 	const std::string exec =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input,"));
 	expectBefore(exec, "const tgm_prof *profile = scanSubmission(pushes, count, prof);",
-		     "switch_gpu_chan_exec_visibility(");
-	EXPECT_THAT(exec, HasSubstr("&seqno, profile, jobVisibility);"));
+		     "switch_gpu_chan_exec_events(");
+	EXPECT_THAT(exec, HasSubstr("&seqno, profile, jobVisibility, nullptr, 0);"));
 	EXPECT_EQ(Count(client(), "scanPushes(pushes, count,"), 1u);
 	EXPECT_THAT(flat(definition(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")),
 		    HasSubstr("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % kScanEvery"));
@@ -1103,7 +1103,7 @@ TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,"));
 	expectBefore(job, "job.written[writtenCount++] = bo->coh;", "tgm_views_job_writes(job.written, writtenCount);");
 	expectBefore(job, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_submit_enter(chan);");
-	expectBefore(job, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_exec_job(");
+	expectBefore(job, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_exec_events(");
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "job.written[writtenCount++] = bo->coh;", "tgm_views_job_writes(job.written, writtenCount);");
 	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_job_writes(job.written, writtenCount);");
