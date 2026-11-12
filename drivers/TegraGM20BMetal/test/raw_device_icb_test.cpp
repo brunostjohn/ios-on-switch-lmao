@@ -138,7 +138,9 @@ struct Channel {
                                                            {mme::kIcbRange, mme::kIcbRangeProgram},
                                                            {mme::kIcbDraw, mme::kIcbDrawProgram},
                                                            {mme::kIcbDrawIndexed, mme::kIcbDrawIndexedProgram},
-                                                           {mme::kIcbPatches, mme::kIcbPatchesProgram}};
+                                                           {mme::kIcbPatches, mme::kIcbPatchesProgram},
+                                                           {mme::kAmplify, mme::kAmplifyProgram},
+                                                           {mme::kAmplifyIndexed, mme::kAmplifyIndexedProgram}};
         const auto found = programs.find(slot);
         ASSERT_NE(found, programs.end()) << "macro " << slot;
         std::vector<mme_fermi_inst> decoded(found->second.size);
