@@ -2277,6 +2277,7 @@ host_test(
     name = "raw_set_reads_test",
     srcs = [
         "raw_set_reads_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_set_reads.h",
     ],
