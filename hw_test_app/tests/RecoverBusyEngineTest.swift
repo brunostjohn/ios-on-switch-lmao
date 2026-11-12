@@ -26,19 +26,18 @@ struct RecoverBusyEngineTest: HWTest {
         guard RawFacade.kind(of: gpu.device) == "raw" else {
             return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")
         }
-        guard let m2v = RawFacade.m2vDevice(of: gpu.device), let m2vQueue = m2v.makeCommandQueue() else {
-            return .fail("no m2v device for the compositor probe")
-        }
         let runner: BenchRunner
+        let probeBench: BenchRunner
         let fills: [BenchExperiment]
         do {
             runner = try BenchRunner.open()
+            probeBench = try BenchRunner.open()
             fills = try Self.experiments()
         } catch {
             return .fail("the bench did not open: \(error)")
         }
         let compositor = await context.onStage { stage -> RecoverCompositorProbe in
-            let probe = RecoverCompositorProbe(device: m2v, queue: m2vQueue)
+            let probe = RecoverCompositorProbe(device: gpu.device, bench: probeBench)
             probe.probe.frame = CGRect(x: stage.bounds.width - 58, y: 10, width: 48, height: 48)
             probe.probe.contentsScale = UIScreen.main.scale
             stage.layer.addSublayer(probe.probe)
@@ -59,6 +58,7 @@ struct RecoverBusyEngineTest: HWTest {
         }
         await MainActor.run { compositor.stop() }
         let presented = await MainActor.run { compositor.presented }
+        let fillErrors = await MainActor.run { compositor.fillErrors }
         await context.clearStage()
 
         let shown = Pacing(times: presented.sorted(), period: 1.0 / 60)
@@ -69,10 +69,12 @@ struct RecoverBusyEngineTest: HWTest {
         metrics.set("present_gap_ms", gapMs, digits: 1)
         metrics.set("gap_bound_ms", Self.gapBoundMs, digits: 0)
         metrics.set("present_frames", shown.frames)
+        metrics.set("probe_fill_errors", fillErrors)
         return .judged(
             [
                 ("every bench run returned", statuses.count == Self.rounds * fills.count),
                 ("the compositor kept presenting within the bound", shown.frames > 0 && gapMs <= Self.gapBoundMs),
+                ("the probe's own raw device filled every frame", fillErrors == 0),
             ], metrics)
     }
 
