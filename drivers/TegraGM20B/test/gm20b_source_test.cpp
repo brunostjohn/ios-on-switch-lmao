@@ -42,8 +42,9 @@ const std::string &gpu()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire", "stats",
-					 "stats_tick", "chan", "sync", "exec", "present", "scrub", "power"})
+		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire",
+					 "stats", "stats_tick", "chan", "sync", "exec", "present",
+					 "present_redo", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -375,8 +376,8 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
 TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 {
-	expectBefore(Between(gpu(), "static int present_copy(", "\n}\n"), "if (dst_va) {",
-		     "tgm_copy_texels(");
+	EXPECT_THAT(flat(Between(gpu(), "static int present_copy(", "\n}\n")),
+		    HasSubstr("if (dst_va) tgm_present_push_copy(push);"));
 }
 
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
@@ -384,8 +385,10 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 TEST(GM20BPresentSource, OneL2FlushPerPresent)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	expectBefore(copy, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels(");
-	EXPECT_THAT(copy, HasSubstr("if (dst_va) chan_fence_volatile(chan); else chan_fence(chan);"));
+	expectBefore(flat(Between(gpu(), "void tgm_present_push_copy(", "\n}\n")),
+		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels(");
+	EXPECT_THAT(copy,
+		    HasSubstr("if (dst_va) chan_fence_volatile(chan); else chan_fence(chan);"));
 	const std::string fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
 	expectBefore(fence, "NVB06F_FB_FLUSH, 0); if (external != TGM_FENCE_VOLATILE_WRITES) {",
 		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY");
@@ -421,7 +424,8 @@ TEST(GM20BPresentSource, PresentWaitsForTheSurfacesProducersOnly)
 TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	expectBefore(copy, "if (dst_va) {", "present_push_reads(push, reads, nreads);");
+	expectBefore(copy, "if (dst_va) tgm_present_push_copy(push);",
+		     "present_push_reads(push, reads, nreads);");
 	expectBefore(copy, "present_push_reads(push, reads, nreads);", "chan_fence(chan);");
 	EXPECT_THAT(copy, HasSubstr("nreads * TGM_COPY_RECT_DWORDS"));
 	const std::string reads = flat(Between(gpu(), "static void present_push_reads(", "\n}\n"));
@@ -474,11 +478,11 @@ TEST(GM20BPresentSource, LiveReadbackRereadsTheFrameShownBefore)
 // from how one client bound it.
 TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 {
-	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	EXPECT_THAT(
-		copy,
-		HasSubstr("const u32 src_pitch = src_block_log2 >= 0 ? width * 4 : (u32)stride;"));
-	EXPECT_THAT(copy, HasSubstr("{src_va, src_pitch, src_block_log2}"));
+	const std::string copy = flat(Between(gpu(), "void tgm_present_push_copy(", "\n}\n"));
+	EXPECT_THAT(copy, HasSubstr("const u32 src_pitch = tgm_present.copy.src_block_log2 >= 0 ? "
+				    "tgm_present.copy.width * 4 : (u32)tgm_present.copy.stride;"));
+	EXPECT_THAT(copy, HasSubstr("{tgm_present.copy.src_va, src_pitch, "
+				    "tgm_present.copy.src_block_log2}"));
 	const std::string scanout =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
 	EXPECT_THAT(
@@ -1353,6 +1357,32 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 	EXPECT_THAT(offer, HasSubstr("ret = watch ? presentWatched() : 1;"));
 }
 
+// A context-switch timeout on the present's channel resets the copy engine and copies the frame again on the GPU: the cut
+// present's completion waits for the redo, so the display never gets a partial-frame status and never copies on the CPU.
+// Scrub jobs a reset cut go back dirty.
+TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
+{
+	const auto fenced = flat(definition(gpu(), "static inline void present_fenced("));
+	expectBefore(fenced,
+		     "if (__atomic_load_n(&tgm_present.redo, __ATOMIC_SEQ_CST) == pending) {",
+		     "nvxnu_work_schedule(tgm_present.completion_work);");
+	expectBefore(fenced, "nvxnu_work_schedule(tgm_present.redo_work); return; }",
+		     "nvxnu_work_schedule(tgm_present.completion_work);");
+	const auto redo = flat(definition(gpu(), "void tgm_present_redo_work("));
+	expectBefore(redo, "tgm_present_push_copy(push);", "chan_fence_volatile(chan);");
+	EXPECT_THAT(redo, Not(HasSubstr("done(arg")));
+	EXPECT_THAT(redo, Not(HasSubstr("tgm_present.done")));
+	EXPECT_THAT(redo, Not(HasSubstr("SEMAPHORED")));
+	const auto mark = flat(definition(gpu(), "void tgm_present_redo("));
+	expectBefore(mark, "__atomic_store_n(&tgm_present.redo, pending, __ATOMIC_SEQ_CST);",
+		     "if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) != pending)");
+	EXPECT_THAT(flat(definition(gpu(), "static inline void scrub_fenced(")),
+		    HasSubstr("nvxnu_pool_free_dirty(tgm_scrub.job[slot].pa, "
+			      "tgm_scrub.job[slot].bytes);"));
+	expectBefore(flat(definition(gpu(), "enum tgm_ctxsw tgm_ctxsw_decide(")),
+		     "tgm_ctxsw_redo_mark(chan);", "nvxnu_panic(");
+}
+
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
 	const auto irq = flat(definition(gpu(), "static inline void present_fenced("));
@@ -1367,7 +1397,7 @@ TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEve
 	expectBefore(
 		copy,
 		"tgm_backing_dependencies(chan, tgm_present.tokens.tokens, dependency_count, 1)",
-		"if (dst_va) {");
+		"if (dst_va) tgm_present_push_copy(push);");
 	expectBefore(copy, "&tgm_present.typed_pending, 1", "chan_fence(chan);");
 	EXPECT_THAT(copy, HasSubstr("dependency_count * 5"));
 	EXPECT_THAT(copy, HasSubstr("push->cur = push_start"));

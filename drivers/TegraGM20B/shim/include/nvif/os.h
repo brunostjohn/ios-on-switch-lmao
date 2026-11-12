@@ -1212,6 +1212,7 @@ unsigned long nvxnu_pool_ready_pages(void);
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long long *pa);
 void *nvxnu_pool_alloc_ready(unsigned long size, unsigned long align, unsigned long reserve, unsigned long long *pa);
 void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size);
+void nvxnu_pool_free_dirty(unsigned long long pa, unsigned long size);
 /* `count` zeroed 128 KiB chunks for a compressible BO (TegraGM20BComp.h tgm_comp_pick_chunks): the address of each of their
  * 4 KiB pages, chunk by chunk, in `pas`. -ENOMEM, with nothing taken, when the pool has fewer free chunks. */
 int nvxnu_pool_alloc_chunks(unsigned long count, unsigned long long *pas);

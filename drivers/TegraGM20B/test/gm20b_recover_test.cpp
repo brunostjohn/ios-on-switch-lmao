@@ -100,30 +100,54 @@ TEST(Unbind, AnIdleEngineOrATsgIdHoldsNoChannel)
 TEST(Ctxsw, Boot7sKilledChannelOnGrIsReset)
 {
 	// iconservicesagent's channel 9, killed after the ENG_RESET; GR still switching its context at every tick
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 1, 0, 0), TGM_CTXSW_RESET);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 1, 0, 1), TGM_CTXSW_RESET);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 1, 0, 0, 0), TGM_CTXSW_RESET);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 1, 0, 1, 0), TGM_CTXSW_RESET);
 }
 
 TEST(Ctxsw, AContextOfNoChannelIsReset)
 {
-	EXPECT_EQ(tgm_ctxsw_verdict(0, 0, 0, 0), TGM_CTXSW_RESET);
+	EXPECT_EQ(tgm_ctxsw_verdict(0, 0, 0, 0, 0), TGM_CTXSW_RESET);
 }
 
 TEST(Ctxsw, ALiveChannelStillDrainingIsWaitedFor)
 {
 	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
 	const int stuck = tgm_stuck(0, 90, 92, request + kTick, lastDone);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck), TGM_CTXSW_WAIT);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck), TGM_CTXSW_WAIT);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck, 0), TGM_CTXSW_WAIT);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, 0), TGM_CTXSW_WAIT);
 }
 
-TEST(Ctxsw, AStuckClientIsKilledAndAStuckKernelChannelIsFatal)
+TEST(Ctxsw, AStuckClientIsKilledAndAStuckKernelChannelIsRedone)
 {
 	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
 	const int stuck = tgm_stuck(0, 90, 93, request + 2 * kTick, lastDone);
 	ASSERT_TRUE(stuck);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck), TGM_CTXSW_KILL);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck), TGM_CTXSW_FATAL);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck, 0), TGM_CTXSW_KILL);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, 0), TGM_CTXSW_REDO);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck, 1), TGM_CTXSW_KILL)
+		<< "a client's channel has no redo";
+}
+
+// T-v3 251 s: the copy engine could not switch off the present's channel 22, fence 12/13, kicked 717 ms before. The
+// engine is reset after the present's job 13 is marked to be redone: the reset lets 13 complete (12 -> 13), and the copy
+// redone as 14. Only a timeout on the present again before 14 completes is fatal.
+TEST(Ctxsw, TvThreePresentTimeoutResetsAndRedoesThenPanicsOnlyIfTheRedoHangsToo)
+{
+	const uint32_t completed = 12, submitted = 13;
+	const int stuck = tgm_stuck(0, completed, submitted, 1717 * kMs, 1000 * kMs);
+	ASSERT_TRUE(stuck);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(0, 0, completed)),
+		  TGM_CTXSW_REDO);
+	const uint32_t resetAfter = submitted;
+	EXPECT_TRUE(tgm_ctxsw_redo_pending(1, resetAfter, 12));
+	EXPECT_TRUE(tgm_ctxsw_redo_pending(1, resetAfter, 13))
+		<< "the interrupted job's own fence is not the redo";
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, 1, tgm_ctxsw_redo_pending(1, resetAfter, 13)),
+		  TGM_CTXSW_FATAL);
+	EXPECT_FALSE(tgm_ctxsw_redo_pending(1, resetAfter, 14)) << "the redone copy landed";
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, 1, tgm_ctxsw_redo_pending(1, resetAfter, 14)),
+		  TGM_CTXSW_REDO);
+	EXPECT_FALSE(tgm_ctxsw_redo_pending(1, 0xffffffffu, 0u)) << "across the fence word's wrap";
 }
 
 TEST(PbdmaIntr, Boot7sEngResetOnBackboarddLeavesNvkmNothing)
@@ -160,7 +184,7 @@ TEST(Ctxsw, FV1sTwodClearSaveTimeoutKillsOnlyTheClient)
 		0x8000001du, 0x00000002u));  // a release waiting for idle, not an acquire
 	const int stuck = tgm_stuck(0, 92920, 92921, 517 * kMs, 0);
 	ASSERT_TRUE(stuck);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck), TGM_CTXSW_KILL);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck, 0), TGM_CTXSW_KILL);
 }
 
 TEST(Ctxsw, TheEngineLineNamesGrFecsTheTrappedClassAndThePbdma)

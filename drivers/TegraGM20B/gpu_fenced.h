@@ -219,6 +219,12 @@ static inline void present_fenced(struct tgm_chan *chan)
 		return;
 	}
 	nvxnu_work_cancel(tgm_present.deadline_work);
+	if (__atomic_load_n(&tgm_present.redo, __ATOMIC_SEQ_CST) == pending) {
+		/* a copy engine reset cut its copy: tgm_present_redo_work copies it again, and the claim on completing stays */
+		__atomic_store_n(&tgm_present.redo, 0, __ATOMIC_RELEASE);
+		nvxnu_work_schedule(tgm_present.redo_work);
+		return;
+	}
 	if (stats_on()) {
 		__atomic_fetch_add(&tgm_present.presents, 1, __ATOMIC_RELAXED);
 		stats_add(&tgm_present.lat_sum, &tgm_present.lat_max,
@@ -238,7 +244,8 @@ static inline void present_watch_fenced(struct tgm_chan *chan, int killed)
 		nvxnu_work_schedule(tgm_present.watch_work);
 }
 
-/* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean; then more claims. */
+/* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean, or dirty when a copy engine
+ * reset may have cut its zeroing (tgm_scrub_redo); then more claims. */
 static inline void scrub_fenced(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
@@ -247,10 +254,14 @@ static inline void scrub_fenced(struct tgm_chan *chan)
 	u64 now = stats_on() ? nvxnu_nanotime() : 0;
 	u64 took = 0;
 	int freed = 0;
+	int redo = __atomic_load_n(&tgm_scrub.redo, __ATOMIC_ACQUIRE) != 0;
 
 	while (tail != head && (s32)(done - tgm_scrub.job[tail % SCRUB_JOBS].seqno) >= 0) {
 		u32 slot = tail % SCRUB_JOBS;
-		nvxnu_pool_free_zeroed(tgm_scrub.job[slot].pa, tgm_scrub.job[slot].bytes);
+		if (redo && (s32)(tgm_scrub.redo_through - tgm_scrub.job[slot].seqno) >= 0)
+			nvxnu_pool_free_dirty(tgm_scrub.job[slot].pa, tgm_scrub.job[slot].bytes);
+		else
+			nvxnu_pool_free_zeroed(tgm_scrub.job[slot].pa, tgm_scrub.job[slot].bytes);
 		__atomic_fetch_sub(&tgm_scrub.inflight, tgm_scrub.job[slot].bytes,
 				   __ATOMIC_RELAXED);
 		if (stats_on()) {
@@ -263,6 +274,8 @@ static inline void scrub_fenced(struct tgm_chan *chan)
 		__atomic_store_n(&tgm_scrub.tail, ++tail, __ATOMIC_RELEASE);
 		freed = 1;
 	}
+	if (redo && (s32)(done - tgm_scrub.redo_through) >= 0)
+		__atomic_store_n(&tgm_scrub.redo, 0, __ATOMIC_RELEASE);
 	if (tail == head)
 		nvxnu_work_cancel(tgm_scrub.deadline);
 	if (freed && nvxnu_pool_dirty_free_pages())

@@ -919,6 +919,14 @@ void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size)
 	spin_unlock(&pool_lock);
 }
 
+/* A range a scrub claimed but cannot vouch for goes back dirty, to be claimed and zeroed again. */
+void nvxnu_pool_free_dirty(unsigned long long pa, unsigned long size)
+{
+	long i = pool_index(pa);
+	if (i >= 0)
+		pool_free((unsigned long)i, PAGE_ALIGN(size) >> PAGE_SHIFT);
+}
+
 dma_addr_t dma_map_page(struct device *dev, struct page *page, size_t off, size_t size,
 			enum dma_data_direction dir)
 {

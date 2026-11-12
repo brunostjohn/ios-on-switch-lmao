@@ -247,6 +247,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 		goto out;
 	tgm_fence_page_put(probe);
 	tgm_present.deadline_work = nvxnu_work_alloc(present_deadline, NULL);
+	tgm_present.redo_work = nvxnu_work_alloc(tgm_present_redo_work, NULL);
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
 	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
 	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work
@@ -385,20 +386,17 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 				   offsetof(struct tgm_stamps, start),
 			   tgm_present.stamped);
 	}
-	if (dst_va) {
-		PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);
-		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
-			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
-		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		if (stats_on())
-			__atomic_fetch_add(&tgm_stats.present_flushes, 1, __ATOMIC_RELAXED);
-		const u32 src_pitch = src_block_log2 >= 0 ? width * 4 : (u32)stride;
-		const struct tgm_copy_side src = {src_va, src_pitch, src_block_log2};
-		const struct tgm_copy_side dst = {dst_va, dst_pitch, (int32_t)block_height_log2};
-
-		push->cur += tgm_copy_texels(push->cur, &src, &dst, width, height);
-	}
+	tgm_present.copy.valid = dst_va != 0;
+	tgm_present.copy.src_va = src_va;
+	tgm_present.copy.stride = stride;
+	tgm_present.copy.src_block_log2 = src_block_log2;
+	tgm_present.copy.width = width;
+	tgm_present.copy.height = height;
+	tgm_present.copy.dst_va = dst_va;
+	tgm_present.copy.dst_pitch = dst_pitch;
+	tgm_present.copy.block_height_log2 = block_height_log2;
+	if (dst_va)
+		tgm_present_push_copy(push);
 #if TGM_STATS
 	if (nreads)
 		present_push_reads(push, reads, nreads);

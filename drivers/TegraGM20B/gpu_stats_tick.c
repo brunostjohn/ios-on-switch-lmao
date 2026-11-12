@@ -294,7 +294,7 @@ void tgm_stats_tick(void)
 	char clk[120];
 	char scrubbed[200];
 	char sched[120];
-	char recov[80];
+	char recov[128];
 
 	__atomic_fetch_add(&tgm_stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {

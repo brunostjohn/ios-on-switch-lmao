@@ -486,11 +486,21 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 /* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
 static char ctxsw_line[1024];
 
+void tgm_ctxsw_redo_mark(struct tgm_chan *chan)
+{
+	chan->ctxsw_reset = 1;
+	chan->ctxsw_reset_after = chan->submitted;
+	if (chan->kernel == CHAN_SCRUB)
+		tgm_scrub_redo(chan->submitted);
+	else
+		tgm_present_redo();
+}
+
 /* A client's context that cannot switch is the only one lost: nvkm's recovery (nvkm_runl_rc) takes that channel off
  * the runlist and resets the engines still on its group; every other channel's context lives in its own instance
  * block, GR's reset reloads its firmware with clock gating off (tgm_clkgate_guard_reset) and ZBC from nvkm's tables, and
  * the runlist goes on without the dead channel. */
-enum tgm_ctxsw tgm_ctxsw_decide(int chid)
+enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name)
 {
 	struct tgm_chan *chan = NULL;
 	char report[sizeof(chan->fault)];
@@ -503,15 +513,30 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 	mutex_lock(&tgm_live_lock);
 	chan = live_by(0, chid);
 	if (chan) {
-		verdict = tgm_ctxsw_verdict(1, READ_ONCE(chan->error) != 0, chan->kernel,
-					    chan_stuck(chan, now));
+		verdict = tgm_ctxsw_verdict(
+			1, READ_ONCE(chan->error) != 0, chan->kernel, chan_stuck(chan, now),
+			tgm_ctxsw_redo_pending(chan->ctxsw_reset, chan->ctxsw_reset_after,
+					       tgm_chan_completed(chan)));
+		if (verdict == TGM_CTXSW_REDO) {
+			tgm_chan_describe(chan, state, sizeof(state));
+			tgm_engines_line(engines, sizeof(engines));
+			tgm_ctxsw_redo_mark(chan);
+			scnprintf(ctxsw_line, sizeof(ctxsw_line),
+				  "tegra-gm20b: context switch timed out on %s's channel %u on %s: "
+				  "the engine reset, its work redone on the GPU, nothing killed: %s; "
+				  "engines %s\n",
+				  chan->owner, chan->chid, engine_name, state, engines);
+			switch_linux_log_line(ctxsw_line);
+		}
 		if (verdict == TGM_CTXSW_FATAL) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			tgm_engine_state(engine, sizeof(engine));
 			tgm_engines_line(engines, sizeof(engines));
-			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s; "
-				    "engines %s; %s",
-				    chan->owner, state, engines, engine);
+			nvxnu_panic(
+				"tegra-gm20b: context switch timed out on %s's channel on %s again "
+				"before the work redone after its engine reset landed: %s; "
+				"engines %s; %s",
+				chan->owner, engine_name, state, engines, engine);
 		}
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
 			tgm_chan_describe(chan, state, sizeof(state));

@@ -330,6 +330,9 @@ struct tgm_chan {
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
 	u32 fault_seqno;             /* faulted: the seqno a GR error stopped in (gpu_fault.c) */
 	int faulted;
+	/* a kernel channel's engine reset for a context-switch timeout, and what it had submitted then (tgm_ctxsw_decide) */
+	int ctxsw_reset;
+	u32 ctxsw_reset_after;
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
@@ -605,9 +608,32 @@ struct present_state {
 	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
+
+	/* the copy of the present in flight (valid: it copies), for a redo after a copy engine reset */
+	struct {
+		u64 src_va, stride, dst_va;
+		s32 src_block_log2;
+		u32 width, height, dst_pitch, block_height_log2;
+		int valid;
+	} copy;
+
+	u32 redo; /* seqno of a present whose copy a reset cut: redone when it completes (atomic) */
+	void *redo_work;
 };
 extern struct present_state tgm_present;
 void tgm_present_stats(u32 *presents, u64 *sum, u64 *max);
+/* tgm_ctxsw_decide, tgm_live_lock held, before the engine on the present's channel is reset: the present in flight, if it
+ * copies, is copied again once its fence completes, and the display gets its completion only from that copy. */
+void tgm_present_redo(void);
+/* gpu_present_redo.c: tgm_present.copy's L2 flush and copy (tgm_present.lock held), and the work item that redoes it */
+#define TGM_PRESENT_COPY_DWORDS (9 + TGM_COPY_RECT_DWORDS)
+void tgm_present_push_copy(struct nvif_push *push);
+void tgm_present_redo_work(void *unused);
+/* the same for the pool scrubber: its jobs up to `through` go back to the pool dirty, to be scrubbed again */
+void tgm_scrub_redo(u32 through);
+/* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) and a
+ * second context-switch timeout before the redo lands is fatal (tgm_ctxsw_decide) */
+void tgm_ctxsw_redo_mark(struct tgm_chan *chan);
 
 /* pool scrub: the copy engine zeroes pool pages:
  * The CPU would spend 0.3 s of every boot zeroing the pool at M1 (256 MiB through the write-combined aperture), and a
@@ -645,6 +671,8 @@ struct scrub_state {
 		tail; /* job[tail % SCRUB_JOBS .. head) queued; head moves under lock, tail in scrub_fenced only */
 	u64 inflight;  /* bytes queued (atomic) */
 	int boot_done; /* the boot scrub found nothing left to claim */
+	u32 redo,
+		redo_through; /* tgm_scrub_redo: jobs up to redo_through a copy engine reset cut (atomic) */
 	u64 boot_start, boot_bytes;
 	/* stats: this window's ranges zeroed, their bytes and queue-to-done time (ns) */
 	u64 n, bytes, ns, max_ns;

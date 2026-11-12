@@ -92,6 +92,7 @@ kernel_driver(
         "gpu_sync.c",
         "gpu_exec.c",
         "gpu_present.c",
+        "gpu_present_redo.c",
         "gpu_scrub.c",
         "gpu_power.c",
         "gpu_zcull.c",

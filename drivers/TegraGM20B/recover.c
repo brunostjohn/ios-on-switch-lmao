@@ -46,7 +46,7 @@ static struct {
 	void *work;
 	u32 engm;   /* engines whose switch timed out since the work last ran (atomic) */
 	u32 resume; /* a scheduler error came since the work last ran (atomic) */
-	u32 waited, recovered, reset;
+	u32 waited, recovered, reset, redone;
 } ctxsw;
 
 struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo)
@@ -264,22 +264,28 @@ static void ctxsw_work(void *arg)
 			id = engn->func->cxid(engn, &cgid);
 			if (id < 0)
 				continue;
-			verdict = cgid ? TGM_CTXSW_KILL : tgm_ctxsw_decide(id);
+			verdict = cgid ? TGM_CTXSW_KILL
+				       : tgm_ctxsw_decide(id, engn->engine->subdev.name);
 			switch (verdict) {
 			case TGM_CTXSW_KILL:
 				stuck |= BIT((u32)engn->id);
 				resume &= ~BIT((u32)runl->id);
 				break;
 			case TGM_CTXSW_RESET:
+			case TGM_CTXSW_REDO:
 				mutex_lock(&runl->mutex);
 				if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)),
 						     id)) {
 					engine_reset_locked(
 						runl, engn, id,
-						"stuck switching the context of killed or "
-						"unknown");
+						verdict == TGM_CTXSW_REDO
+							? "stuck switching the context of kernel"
+							: "stuck switching the context of killed "
+							  "or unknown");
 				}
 				mutex_unlock(&runl->mutex);
+				if (verdict == TGM_CTXSW_REDO && TGM_STATS)
+					__atomic_fetch_add(&ctxsw.redone, 1, __ATOMIC_RELAXED);
 				break;
 			case TGM_CTXSW_WAIT:
 			case TGM_CTXSW_FATAL:
@@ -405,10 +411,12 @@ int tgm_recover_residue(struct nvkm_device *device, int chid)
 void tgm_recover_stats(char *buf, unsigned int len)
 {
 	scnprintf(buf, len,
-		  "%u context-switch timeout ticks waited out, %u recovered, %u engines reset",
+		  "%u context-switch timeout ticks waited out, %u recovered, %u engines reset, "
+		  "%u kernel works redone",
 		  __atomic_exchange_n(&ctxsw.waited, 0, __ATOMIC_RELAXED),
 		  __atomic_exchange_n(&ctxsw.recovered, 0, __ATOMIC_RELAXED),
-		  __atomic_exchange_n(&ctxsw.reset, 0, __ATOMIC_RELAXED));
+		  __atomic_exchange_n(&ctxsw.reset, 0, __ATOMIC_RELAXED),
+		  __atomic_exchange_n(&ctxsw.redone, 0, __ATOMIC_RELAXED));
 }
 
 static int add(int *chids, int n, int max, int chid)

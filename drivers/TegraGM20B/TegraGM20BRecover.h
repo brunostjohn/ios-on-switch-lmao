@@ -24,22 +24,37 @@ enum tgm_ctxsw {
 	TGM_CTXSW_KILL, /* a live client's channel is stuck: it is killed, and nvkm's recovery faults the engine off it */
 	TGM_CTXSW_RESET, /* the context is a killed channel's or no channel's: nvkm finds no channel group left to recover
 			  * (nvkm_runl_rc_engn), so recover.c resets the engine */
-	TGM_CTXSW_FATAL, /* a kernel channel is stuck */
+	TGM_CTXSW_REDO, /* a kernel channel is stuck: the engine is reset and the work it was on redone, nothing killed */
+	TGM_CTXSW_FATAL, /* a kernel channel is stuck again before any work submitted after its last reset completed */
 };
 
-/* known: one of gpu_chan.c's channels; dead: killed already; stuck: tgm_stuck. */
-static inline enum tgm_ctxsw tgm_ctxsw_verdict(int known, int dead, int kernel, int stuck)
+/* known: one of gpu_chan.c's channels; dead: killed already; stuck: tgm_stuck; reset_pending: a kernel channel whose
+ * engine was reset for it has completed nothing submitted after that reset (tgm_ctxsw_redo_pending). */
+static inline enum tgm_ctxsw tgm_ctxsw_verdict(int known, int dead, int kernel, int stuck,
+					       int reset_pending)
 {
 	if (!known || dead)
 		return TGM_CTXSW_RESET;
 	if (!stuck)
 		return TGM_CTXSW_WAIT;
-	return kernel ? TGM_CTXSW_FATAL : TGM_CTXSW_KILL;
+	if (!kernel)
+		return TGM_CTXSW_KILL;
+	return reset_pending ? TGM_CTXSW_FATAL : TGM_CTXSW_REDO;
 }
 
-/* gpu_hang.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid. A stuck client channel is
- * being killed on return; a stuck kernel channel panics. */
-enum tgm_ctxsw tgm_ctxsw_decide(int chid);
+/* A kernel channel's engine was reset after it had submitted reset_after: until a later seqno completes, the redone work
+ * has not landed. */
+static inline int tgm_ctxsw_redo_pending(int reset, uint32_t reset_after, uint32_t completed)
+{
+	return reset && (int32_t)(completed - reset_after) <= 0;
+}
+
+/* gpu_hang.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid, switched on the engine
+ * named `engine`. A stuck client channel is being killed on return. For TGM_CTXSW_REDO the kernel channel's work is
+ * marked to be redone (gpu_present.c, gpu_scrub.c) before the caller resets the engine; a second timeout before that
+ * work lands panics. */
+enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine);
+
 
 /* NV_PFIFO_INTR_SCHED_ERROR_CODE as NVIDIA's open gv100 dev_fifo.ref names it. gm20b's nvgpu header names only
  * CTXSW_TIMEOUT, 0x0a there as well, so the rest of Maxwell's encoding is taken to be the same. */
