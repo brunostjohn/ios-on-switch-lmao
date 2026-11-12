@@ -2,11 +2,16 @@
 // What raw::Device submits, decoded by nvdec as raw/pack's mock kernel (mock_iokit.c, cap.cpp) decodes NVK's
 // submissions for nvkframe: the kernel model (raw_kernel_model.h, whose IOKit calls replace the framework's) answers the
 // device, every job it takes is decoded against the model's memory as the device left it, and completes. A binary
-// links this unit to draw raw's side of eq (test/eq): RAWCAP_LOG, RAWCAP_PROGRAMS and NVDEC_REGS as cap.cpp reads them.
+// links this unit to draw raw's side of eq (test/eq): RAWCAP_LOG, RAWCAP_LAYOUTS and NVDEC_REGS as cap.cpp reads them,
+// and RAWCAP_PROGRAMS a colon-separated list (the pack's own programs.bin names raw's programs and their constant buffers).
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
+#include <string>
+#include <vector>
 #include "../../raw/pack/nvdec.h"
 #include "../raw_kernel_model.h"
 
@@ -44,6 +49,17 @@ public:
     }
 
 private:
+    static std::vector<std::string> split(const char *paths)
+    {
+        std::vector<std::string> out;
+        for (const char *at = paths; *at;) {
+            const char *end = strchr(at, ':');
+            out.emplace_back(at, end ? end - at : strlen(at));
+            at = end ? end + 1 : at + strlen(at);
+        }
+        return out;
+    }
+
     nvdec::Decoder &decoder(uint32_t channel)
     {
         auto &d = decoders_[channel];
@@ -56,10 +72,40 @@ private:
             d->vaKind = [this](uint64_t va) {
                 return kind(va);
             };
-            if (const char *path = getenv("RAWCAP_PROGRAMS"); path && !d->loadPrograms(path))
-                fprintf(stderr, "eq_capture: cannot read programs %s\n", path);
+            if (const char *paths = getenv("RAWCAP_PROGRAMS"))
+                for (const std::string &path : split(paths))
+                    if (!d->loadPrograms(path.c_str()))
+                        fprintf(stderr, "eq_capture: cannot read programs %s\n", path.c_str());
+            if (const char *path = getenv("RAWCAP_LAYOUTS"); path && !d->loadLayouts(path))
+                fprintf(stderr, "eq_capture: cannot read layouts %s\n", path);
+            if (getenv("EQ_DUMP_DRAWS"))
+                d->onDraw = [this](nvdec::Decoder &at) {
+                    dumpBindings(at);
+                };
         }
         return *d;
+    }
+
+    // EQ_DUMP_DRAWS=<i>,<j>...: those draws' bound constant buffers of the vertex and pixel groups, word by word, to stderr
+    void dumpBindings(nvdec::Decoder &d)
+    {
+        const unsigned draw = draws_++;
+        const std::string wanted = "," + std::string(getenv("EQ_DUMP_DRAWS")) + ",";
+        if (wanted.find("," + std::to_string(draw) + ",") == std::string::npos)
+            return;
+        for (const int group : {0, 4})
+            for (int slot = 0; slot < 18; slot++) {
+                uint64_t addr = 0;
+                uint32_t bytes = 0;
+                if (!d.bound(group, slot, addr, bytes))
+                    continue;
+                std::vector<uint32_t> words(std::min<uint32_t>(bytes, 0x800) / 4);
+                d.gpuRead(addr, words.data(), words.size() * 4);
+                fprintf(stderr, "draw %u group %d cb%d va %llx size %x:", draw, group, slot, (unsigned long long)addr, bytes);
+                for (const uint32_t w : words)
+                    fprintf(stderr, " %08x", w);
+                fprintf(stderr, "\n");
+            }
     }
 
     void decode(const kernel_model::Job &job)
@@ -76,6 +122,7 @@ private:
     }
 
     FILE *log_ = nullptr;
+    unsigned draws_ = 0;
     std::map<uint32_t, std::unique_ptr<nvdec::Decoder>> decoders_;
     std::map<uint64_t, std::pair<uint64_t, uint32_t>> kinds_;  // va: the bind's range and PTE kind
 };
