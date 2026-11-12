@@ -26,8 +26,12 @@ bool CommandBuffer::stencilBits(RenderEncoder &e, const Texture &src, Texture &v
     }();
     Pipeline *pl = src.format == format ? dev_->stencilBitsPipeline(format, src.samples, pick) : nullptr;
     const uint32_t word0 = stencilViewWord0(format);
-    if (!pl || !word0 || !src.tic) {
+    if (!pl || !word0) {
         *why = "no stencil bits state for the attachment's format";
+        return false;
+    }
+    if (!src.tic) {
+        *why = "a stencil source without a texture header";
         return false;
     }
     view = src;
