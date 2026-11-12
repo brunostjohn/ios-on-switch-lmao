@@ -23,8 +23,8 @@ static inline bool mediaFlipsRefused = false;
 static inline int mediaFlipUnverified = PlaneCommits::kNone;  // the latch entry the completion requested, unjudged
 static inline uint64_t mediaFlipRequestedSeq = 0;  // the set finishPlaneFence requested: planeOut writes nothing for it
 #if SWITCH_FRAME_TIMELINE
-static constexpr unsigned kMediaFlipTotals = 4;
-static inline uint32_t mediaFlipTotals[kMediaFlipTotals] = {};  // completion, withdrawn, refused, lead us
+static constexpr unsigned kMediaFlipTotals = 5;
+static inline uint32_t mediaFlipTotals[kMediaFlipTotals] = {};  // completion, withdrawn, refused, lead us, armed
 static inline struct sysctl_oid mediaFlipTotalOids[kMediaFlipTotals] = {};
 #endif
 
@@ -117,6 +117,8 @@ bool armMediaFlip(const PlaneSet &p)
     }
     mediaFlip.arm(update, request);
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
+    if (SWITCH_FRAME_TIMELINE)
+        noteMediaFlipTotal(4, 1);
     return true;
 }
 
@@ -297,13 +299,14 @@ static int mediaFlipTotalSysctl(struct sysctl_oid *, void *, int which, struct s
 static void mediaFlipTotalsRegister()
 {
     static const char *const names[kMediaFlipTotals] = {"switch_media_flips_completion", "switch_media_flips_withdrawn",
-                                                        "switch_media_flips_refused", "switch_media_flips_lead_us"};
+                                                        "switch_media_flips_refused", "switch_media_flips_lead_us",
+                                                        "switch_media_flips_armed"};
     for (unsigned i = 0; i < kMediaFlipTotals; ++i) {
         switch_sysctl_oid(&mediaFlipTotalOids[i], &sysctl__kern_children, names[i],
                           static_cast<int>(CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED), mediaFlipTotalSysctl, "I",
                           "windows B and C since boot: media plane sets their producers' completions wrote, ones "
                           "withdrawn before their completion, ones that did not latch as written, microseconds the "
-                          "completions' writes came before the gate took them");
+                          "completions' writes came before the gate took them, sets armed for their completion");
         mediaFlipTotalOids[i].oid_arg2 = static_cast<int>(i);
         sysctl_register_oid(&mediaFlipTotalOids[i]);
     }

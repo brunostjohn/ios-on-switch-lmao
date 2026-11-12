@@ -59,6 +59,7 @@
 #include "../TegraGM20B/SwitchGpuBridge.h"
 #include "../TegraGM20B/SwitchGpuReady.h"
 #include "../TegraHost1x/SwitchHost1xTokenFence.h"
+#include "../TegraHost1x/TegraHost1x.h"
 #include "SwitchNativePlane.h"
 #include "SwitchPlaneSlot.h"
 #include "TegraDisplayColor.h"
@@ -3428,6 +3429,7 @@ public:
         if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
+            dcClassRegister();
             planeTotalsRegister();
         }
         return true;
@@ -4797,6 +4799,7 @@ public:
 #include "SwitchPlaneSurfaceUseDisplay.h"
 #include "SwitchVICScanoutDisplay.h"
 #include "NativeColumnScanDisplay.h"
+#include "SwitchDcHost1xClassProbe.h"
 #include "DisplayWindowProbeDisplay.h"
 #include "SwitchLandscapeRunDisplay.h"
 #include "SwitchPaletteDisplay.h"

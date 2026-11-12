@@ -68,6 +68,8 @@ public enum Registry {
         + cpuAndSystem + [RawShareTest()]
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
+        // May stop NVJPG's host1x channel for 50 ms: last.
+        + [DcHost1xClassTest()]
 
     /// Reset the copy engine under the present, then kill the app's raw channel: each app runs them after all its other
     /// tests, so a failed recovery spoils none of them.

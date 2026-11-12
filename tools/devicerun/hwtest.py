@@ -237,6 +237,7 @@ TESTS: dict[str, bool] = {
     'gpu.raw_share': False,
     'gpu.present.copy_reset': False,
     'gpu.recover.kill_one': False,
+    'gpu.x1.dc_host1x_class': False,
     'input.controllers': False,
     'input.joycon': False,
     'input.focus_idle': False,
