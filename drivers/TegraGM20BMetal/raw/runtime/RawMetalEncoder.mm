@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import "RawMetalRotated.h"
 
@@ -97,6 +98,8 @@ uint64_t nextTraceId()
     if (_ended)
         return;
     _ended = true;
+    if (!_counterPending.empty())
+        rmPlaceCounterMarks(_cb, self, _cb->_plan.size(), false);
     [_cb record:cmd(OpEnd)];
     _cb->_active = nil;
 }
@@ -315,6 +318,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     m.obj = (__bridge void *)pass;
     m.x = e->_passAt;
     [self record:m];
+    rmCounterMarks(self, e, pass);
+    rmPlaceCounterMarks(self, e, _encAt, true);
     return (id<MTLRenderCommandEncoder>)e;
 }
 
@@ -328,8 +333,10 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
 
 - (id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:(MTLBlitPassDescriptor *)d
 {
-    (void)d;
-    return [self blitCommandEncoder];
+    RMBlitEncoder *e = (RMBlitEncoder *)[self blitCommandEncoder];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLBlitCommandEncoder>)e;
 }
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
@@ -350,7 +357,10 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:(MTLComputePassDescriptor *)d
 {
-    return [self computeCommandEncoderWithDispatchType:d.dispatchType];
+    RMComputeEncoder *e = (RMComputeEncoder *)[self computeCommandEncoderWithDispatchType:d.dispatchType];
+    rmCounterMarks(self, e, d);
+    rmPlaceCounterMarks(self, e, _encAt, true);
+    return (id<MTLComputeCommandEncoder>)e;
 }
 
 @end

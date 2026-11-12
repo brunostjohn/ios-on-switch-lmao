@@ -3262,6 +3262,23 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
     segments_.append({va, uint32_t(to - from), 0});
 }
 
+void CommandBuffer::timestamps(const counters::Stamp *stamps, size_t count)
+{
+    if (!count)
+        return;
+    const uint32_t words = uint32_t(count) * counters::kTimestampWords;
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, words * 4, 256, va));
+    Push p{start, start + words};
+    for (size_t i = 0; i < count; i++) {
+        useAddress(stamps[i].va, counters::kRecordBytes, true);
+        counters::emit(p, stamps[i]);
+    }
+    checkRoom(p, "counter samples");
+    segment(start, p.at);
+    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - dev_->push_.bo.cpu);
+}
+
 void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 {
     dirty_.add(cpu, bytes, invalidate);
@@ -5675,6 +5692,14 @@ void RenderEncoder::emitSwizzle(Push &p, uint32_t word)
     kit(p, switch_gm20b_viewport_swizzle, 0u, word);
 }
 
+void RenderEncoder::timestampAtStart(uint64_t va, counters::Point point)
+{
+    if (startStampCount_ == startStamps_.size())
+        return;
+    startStamps_[startStampCount_++] = {va, point};
+    cb_->useAddress(va, counters::kRecordBytes, true);
+}
+
 void RenderEncoder::continuePass(uint8_t stores)
 {
     // Clear reach is a Metal encoder property, including its empty-draw behavior.
@@ -5772,7 +5797,8 @@ void RenderEncoder::end()
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size());
+                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size()) +
+                          startStampCount_ * counters::kTimestampWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -5783,6 +5809,8 @@ void RenderEncoder::end()
 #else
     kit(p, switch_gm20b_pass_barrier, false);
 #endif
+    for (uint8_t i = 0; i < startStampCount_; i++)
+        counters::emit(p, startStamps_[i]);
     if (rot_.turned())
         emitSwizzle(p, rot_.swizzle());
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
@@ -6264,6 +6292,13 @@ void BlitEncoder::barrier()
     p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
     constexpr uint32_t kNonPipelined = 2, kFlush = 1u << 2, kPitchToPitch = 1u << 7 | 1u << 8, kRemap = 1u << 10;
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
+}
+
+void BlitEncoder::timestamp(uint64_t va, bool afterCopies)
+{
+    room(counters::kTimestampWords);
+    cb_->useAddress(va, counters::kRecordBytes, true);
+    counters::emitCopy(p_, va, afterCopies);
 }
 
 void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)

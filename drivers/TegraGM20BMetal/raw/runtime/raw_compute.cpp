@@ -415,6 +415,13 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     return true;
 }
 
+void ComputeEncoder::timestamp(uint64_t va)
+{
+    room(counters::kTimestampWords);
+    cb_.useAddress(va, counters::kRecordBytes, true);
+    counters::emitCompute(p_, va);
+}
+
 void ComputeEncoder::end()
 {
     room(8);

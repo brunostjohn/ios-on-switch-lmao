@@ -113,6 +113,7 @@ TESTS: dict[str, bool] = {
             'metal.native.fence',
             'metal.native.argument_encoder',
             'metal.native.binary_archive',
+            'metal.native.counters',
         ],
         False,
     ),

@@ -5,9 +5,9 @@ import Metal
 
 /// The features the device has no form of are NO wherever Metal lets a caller ask, and every creation past a NO fails:
 /// one view of amplification, no predication, no dynamic attribute stride (render or compute stage-in), no shared
-/// texture handles, no counter sets, no tessellation (a post-tessellation vertex function reads as one, and its state
-/// is refused). Linear textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults
-/// to, 1, draws on the raw path.
+/// texture handles, no tessellation (a post-tessellation vertex function reads as one, and its state is refused).
+/// Linear textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults to, 1, draws on
+/// the raw path.
 struct NativeUnsupportedTest: NativeObjectTest {
     let id = "metal.native.unsupported"
     let name = "Features the device has no form of answer NO and refuse their creations; amplification 1 draws raw"
@@ -55,16 +55,6 @@ struct NativeUnsupportedTest: NativeObjectTest {
         if Self.answer(device, "maxVertexAmplificationCount") != 1 { work.failures.append("amplification above 1") }
         if !device.supportsVertexAmplificationCount(1) || device.supportsVertexAmplificationCount(2) {
             work.failures.append("supportsVertexAmplificationCount: is not 1 alone")
-        }
-        let points: [MTLCounterSamplingPoint] = [
-            .atStageBoundary, .atDrawBoundary, .atDispatchBoundary, .atTileDispatchBoundary, .atBlitBoundary,
-        ]
-        if !(device.counterSets ?? []).isEmpty || points.contains(where: device.supportsCounterSampling) {
-            work.failures.append("counter sets or a sampling point answered")
-        }
-        let counters = MTLCounterSampleBufferDescriptor()
-        if Self.refused({ _ = try device.makeCounterSampleBuffer(descriptor: counters) }) == nil {
-            work.failures.append("a counter sample buffer was made")
         }
         let shared = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: 16, height: 16, mipmapped: false)

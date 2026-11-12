@@ -26,7 +26,7 @@ template <typename T> class ComputeKernelSet;
 struct ComputeState;
 }
 
-@class RMDevice, RMCommandBuffer;
+@class RMDevice, RMCommandBuffer, RMCounterSampleBuffer;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
 // object's lock is never held across a call into m2v: a thread inside m2v holding one of its locks (its handlers run Core
@@ -235,6 +235,15 @@ struct RMSegment {
     bool gpuWait = false;
 };
 
+// A counter sample a pass descriptor's attachment asks for (RawMetalCounterEncode.mm): at the tape position of its encoder's
+// first command (a start) or its OpEnd (an end); the command buffer retains the buffer
+struct RMCounterMark {
+    uint32_t at;
+    raw::counters::Point point;
+    uint32_t index;
+    __unsafe_unretained RMCounterSampleBuffer *buffer;
+};
+
 struct RMSharedEventWait {
     void *event;
     std::shared_ptr<raw::SharedEventLease> lease;
@@ -287,6 +296,7 @@ struct RMSharedEventWait {
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
+    std::vector<RMCounterMark> _counterMarks;  // in tape order
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;
@@ -365,6 +375,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     RMCommandBuffer *_cb;
     bool _ended;
     uint64_t _traceId;
+    std::vector<RMCounterMark> _counterPending;  // its descriptor's samples not yet placed on the tape
 }
 @end
 

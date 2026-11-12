@@ -666,6 +666,13 @@ bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
     return false;
 }
 
+bool Kernel::ptimer(uint64_t &units)
+{
+    TegraGM20BAbiTimestamp t = {};
+    units = call(TegraGM20BMethodGetTimestamp, nullptr, 0, &t, sizeof t) == KERN_SUCCESS ? t.ns : 0;
+    return units != 0;
+}
+
 // kIOReturnNotResponding is the kernel's answer for a channel it killed: one GetStatus still calls healthy is not lost
 void Kernel::notResponding(uint32_t channel, uint32_t opened)
 {

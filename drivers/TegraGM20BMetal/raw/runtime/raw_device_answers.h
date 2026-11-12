@@ -3,8 +3,9 @@
 // 21H461, iPad12,1's A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's
 // device answers them today, but where the device has no form of a feature m2v's answers claim: no vertex amplification
 // above 1, predication, dynamic attribute stride, shared texture handles or tessellation (RawMetalUnsupported.mm refuses
-// their creations). raw/test/selcover holds every other capability equal to the m2v device's on the host, for the kind
-// its bridge was built for.
+// their creations), and where it has one m2v's lack: counter sampling at stage boundaries, as the identity's AGX driver
+// answers it (raw_counters.h). raw/test/selcover holds every other capability equal to the m2v device's on the host, for
+// the kind its bridge was built for.
 // An argument answer holds `value` for every argument in [first, last] and 0 elsewhere.
 #pragma once
 #include <cstddef>
@@ -183,6 +184,7 @@ inline constexpr ArgRange kArgs21H461[] = {
     {"supportsTextureSampleCount:", true, 4, 4, 1},
     {"supportsVertexAmplificationCount:", true, 0, 1, 1},
     {"supportsRasterizationRateMapWithLayerCount:", true, 1, 2, 1},
+    {"supportsCounterSampling:", true, 0, 0, 1},
     {"supportsFamily:", true, 1001, 1003, 1},
     {"supportsFamily:", true, 3001, 3002, 1},
     {"supportsPrimitiveType:", true, 0, 4, 1},
@@ -320,6 +322,7 @@ inline constexpr ArgRange kArgs24B119[] = {
     {"supportsTextureSampleCount:", true, 4, 4, 1},
     {"supportsVertexAmplificationCount:", true, 0, 1, 1},
     {"supportsRasterizationRateMapWithLayerCount:", true, 1, 2, 1},
+    {"supportsCounterSampling:", true, 0, 0, 1},
     {"supportsFamily:", true, 1001, 1003, 1},
     {"supportsFamily:", true, 3001, 3003, 1},
     {"supportsPrimitiveType:", true, 0, 4, 1},
