@@ -42,7 +42,9 @@ TEST(TegraDisplayPalette, ChannelsThatDifferBecomePaletteWords)
 
 TEST(TegraDisplayPalette, AgreeingChannelsStayInLut2)
 {
-    const auto t = table([](unsigned, unsigned point) -> uint32_t { return gammaIdentity(point) / 2; });
+    const auto t = table([](unsigned, unsigned point) -> uint32_t {
+        return gammaIdentity(point) / 2;
+    });
     EXPECT_FALSE(channelsDiffer(t.data()));
     auto u = t;
     u[2 * kGammaPoints + 256] += 1;  // the last point of blue alone
