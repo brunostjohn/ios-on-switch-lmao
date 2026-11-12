@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 20;
+constexpr uint32_t kPackVersion = 21;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -184,7 +184,7 @@ enum PackEntryKind : uint8_t {
     EntryDepthTest = 6,
     EntryStencilTest = 7,
     // A tessellation state's control-stage storage buffer (PackTessBuffer at `slot`), its residual word the control stage's.
-    // 8 and 9 are argument buffers' (pack v19).
+    // 8 and 9 are argument buffers' (pack v20).
     EntryTessBuffer = 10
 };
 
@@ -315,7 +315,7 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
-    // v20, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's push word of its
+    // v21, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's push word of its
     // control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation programs are
     // RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
     // vertexStrideDynamic: the vertex stream's stride is its bind's (MTLBufferLayoutStrideDynamic).
@@ -327,7 +327,7 @@ struct PackPipeline {
     // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
     // index and push word + 1 (0: none)
     uint8_t pulledStride[4][2];
-    uint8_t v20Reserved[8];
+    uint8_t v21Reserved[8];
 };
 
 inline bool tessellates(const PackPipeline &p)
@@ -380,7 +380,7 @@ struct PackKernel {
     uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
     PackKernelEntry entry[16];
-    // A stage-in kernel's (v20): the push word + 1 of m2v's StageInRegion field (origin and size, two uvec4; 0: none), and
+    // A stage-in kernel's (v21): the push word + 1 of m2v's StageInRegion field (origin and size, two uvec4; 0: none), and
     // each layout of a dynamic stride's Metal buffer index and StageInStride push word + 1, which each dispatch writes
     uint8_t stageInRegionWord;
     uint8_t stageInStride[4][2];

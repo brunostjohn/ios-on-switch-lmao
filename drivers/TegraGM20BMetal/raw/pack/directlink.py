@@ -39,7 +39,7 @@ PIPELINE_BYTES = (
     + 16
     + packfile.PIPELINE_V15.size
     + packfile.PIPELINE_V18.size
-    + packfile.PIPELINE_V20.size
+    + packfile.PIPELINE_V21.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
@@ -163,9 +163,11 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    if p[PIPELINE_BYTES - packfile.PIPELINE_V20.size :] != packfile.RUNTIME_ONLY:
-        raise ValueError('a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none')
-    tail = PIPELINE_BYTES - packfile.PIPELINE_V20.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+    if p[PIPELINE_BYTES - packfile.PIPELINE_V21.size :] != packfile.RUNTIME_ONLY:
+        raise ValueError(
+            'a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none'
+        )
+    tail = PIPELINE_BYTES - packfile.PIPELINE_V21.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
