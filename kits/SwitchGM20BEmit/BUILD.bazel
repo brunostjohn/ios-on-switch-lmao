@@ -116,6 +116,7 @@ cc_binary(
         "SwitchGM20BMacroSlots.h",
         "mme/switch_gm20b_macros.c",
         ":push_headers_mesa",
+        "//kits/SwitchGM20B:SwitchGM20BTegra.h",
     ],
     copts = MESA_MME_COPTS,
     tags = ["no-lint"],

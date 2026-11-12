@@ -24,6 +24,7 @@
 #include "nv_push_clb197.h"
 #include "nv_push_clc597.h"
 
+#include "../../SwitchGM20B/SwitchGM20BTegra.h"
 #include "../SwitchGM20BMacroSlots.h"
 
 /* mme_tu104.c's disassembler names Turing's methods; this tool builds Fermi macros and prints none */
@@ -141,6 +142,134 @@ static void build_indirect_body(struct mme_builder *b, bool indexed, struct mme_
         {
             nvk_mme_build_draw_loop(b, instances, first, count,
                                     indexed ? NVB197_SET_INDEX_BUFFER_F : NVB197_SET_VERTEX_ARRAY_START);
+        }
+    }
+}
+
+#define AMP_SCRATCH(word) NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_##word)
+
+/* The root word at the byte offset a scratch word names, where it names one: `value` */
+static void amplification_word(struct mme_builder *b, struct mme_value offset, struct mme_value value)
+{
+    mme_if(b, ine, offset, mme_zero())
+    {
+        mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
+        mme_emit(b, offset);
+        mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
+        mme_emit(b, value);
+    }
+}
+
+/* Amplification `a`'s words: a pixel barrier after the one before where the state's fetches need it, its id, its
+ * viewport offset, and its render target offset as the state's layer word or as SET_RT_LAYER's layer */
+static void amplification_words(struct mme_builder *b, struct mme_value a)
+{
+    struct mme_value word = mme_state(b, AMP_SCRATCH(BARRIER));
+    mme_if(b, ine, word, mme_zero())
+    {
+        mme_if(b, ine, a, mme_zero())
+        {
+            mme_mthd(b, NVB197_PIXEL_SHADER_BARRIER);
+            mme_emit(b, mme_imm(NVB197_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_FALSE));
+            mme_mthd(b, SWITCH_NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED);
+            mme_emit(b, mme_zero());
+        }
+    }
+    mme_state_to(b, word, AMP_SCRATCH(ID_WORD));
+    amplification_word(b, word, a);
+    mme_state_to(b, word, AMP_SCRATCH(VIEWPORT_WORD));
+    mme_if(b, ine, word, mme_zero())
+    {
+        struct mme_value offset = mme_state_arr(b, AMP_SCRATCH(VIEWPORTS), a);
+        mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
+        mme_emit(b, word);
+        mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
+        mme_emit(b, offset);
+        mme_free_reg(b, offset);
+    }
+    mme_state_to(b, word, AMP_SCRATCH(LAYER));
+    mme_if(b, ieq, word, mme_imm(SWITCH_GM20B_AMP_LAYER_RT))
+    {
+        struct mme_value layer = mme_state_arr(b, AMP_SCRATCH(LAYERS), a);
+        mme_mthd(b, NVB197_SET_RT_LAYER);
+        mme_emit(b, layer);
+        mme_free_reg(b, layer);
+    }
+    mme_if(b, ine, word, mme_imm(SWITCH_GM20B_AMP_LAYER_RT))
+    {
+        mme_if(b, ine, word, mme_zero())
+        {
+            struct mme_value offset = mme_state_arr(b, AMP_SCRATCH(LAYERS), a);
+            mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
+            mme_emit(b, word);
+            mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
+            mme_emit(b, offset);
+            mme_free_reg(b, offset);
+        }
+    }
+    mme_free_reg(b, word);
+}
+
+/* A draw under vertex amplification as one call, as NVK's pre-Turing multiview draws one (nvk_mme_build_draw's view
+ * loop): its words in Vulkan's indirect order (count, instances, first, an indexed draw's vertex offset, the first
+ * instance), the call's data or a GPFIFO continuation over Metal's indirect arguments. The draw parameters and the
+ * state's AmplificationCount word once, then each amplification in order, its words and then the draw, so that every
+ * primitive of one amplification is drawn before the next's, as Metal draws them. The count, the state's word offsets and
+ * the mappings are the scratch words; a count of 0 draws nothing. SET_RT_LAYER is left at the first layer. */
+static void build_amplify(struct mme_builder *b, bool indexed)
+{
+    struct mme_value count = mme_load(b);
+    struct mme_value instances = mme_load(b);
+    struct mme_value first = mme_load(b);
+    struct mme_value base = mme_load(b);
+    struct mme_value base_instance = indexed ? mme_load(b) : base;
+    struct mme_value base_vertex = indexed ? base : mme_zero();
+
+    mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
+    mme_emit(b, mme_zero());
+    mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
+    mme_emit(b, indexed ? base_vertex : first);
+    mme_emit(b, base_instance);
+    mme_mthd(b, NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX);
+    mme_emit(b, base_instance);
+    mme_mthd(b, NVB197_SET_GLOBAL_BASE_VERTEX_INDEX);
+    mme_emit(b, base_vertex);
+    mme_mthd(b, NVB197_SET_VERTEX_ID_BASE);
+    mme_emit(b, base_vertex);
+    mme_free_reg(b, base);
+    if (indexed)
+        mme_free_reg(b, base_instance);
+
+    struct mme_value word = mme_state(b, AMP_SCRATCH(COUNT_WORD));
+    struct mme_value amplifications = mme_state(b, AMP_SCRATCH(COUNT));
+    amplification_word(b, word, amplifications);
+    mme_free_reg(b, word);
+
+    /* Fermi's MME tests a loop's condition at its end: each loop runs only where its count is not 0 */
+    mme_if(b, ine, count, mme_zero())
+    {
+        mme_if(b, ine, instances, mme_zero())
+        {
+            mme_if(b, ine, amplifications, mme_zero())
+            {
+                mme_while(b, ine, amplifications, mme_zero())
+                {
+                    struct mme_value a = mme_state(b, AMP_SCRATCH(COUNT));
+                    mme_sub_to(b, a, a, amplifications);
+                    amplification_words(b, a);
+                    mme_free_reg(b, a);
+                    nvk_mme_build_draw_loop(b, instances, first, count,
+                                            indexed ? NVB197_SET_INDEX_BUFFER_F : NVB197_SET_VERTEX_ARRAY_START);
+                    mme_sub_to(b, amplifications, amplifications, mme_imm(1));
+                }
+                word = mme_state(b, AMP_SCRATCH(LAYER));
+                mme_if(b, ieq, word, mme_imm(SWITCH_GM20B_AMP_LAYER_RT))
+                {
+                    mme_mthd(b, NVB197_SET_RT_LAYER);
+                    mme_emit(b, mme_zero());
+                }
+                mme_free_reg(b, word);
+            }
         }
     }
 }
@@ -446,6 +575,8 @@ int main(int argc, char **argv)
     write_macro(out, "icb_draw_indexed", build_icb_draw, true, &dev);
     write_macro(out, "icb_gate", build_icb_gate, false, &dev);
     write_macro(out, "icb_patches", build_icb_patches, false, &dev);
+    write_macro(out, "amplify", build_amplify, false, &dev);
+    write_macro(out, "amplify_indexed", build_amplify, true, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

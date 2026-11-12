@@ -239,7 +239,9 @@ TEST(EmitMme, TheMacrosTakeNvksDrawSlots)
     EXPECT_EQ(SWITCH_GM20B_MACRO_ICB_GATE, 21);
     EXPECT_EQ(SWITCH_GM20B_MACRO_ICB_BIND, 22);
     EXPECT_EQ(SWITCH_GM20B_MACRO_ICB_PATCHES, 23);
-    EXPECT_EQ(SWITCH_GM20B_MACRO_RAW_END, 24);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_AMPLIFY, 24);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_AMPLIFY_INDEXED, 25);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_RAW_END, 26);
 }
 
 TEST(EmitMme, TheScratchRangesAreTheTables)
@@ -249,6 +251,9 @@ TEST(EmitMme, TheScratchRangesAreTheTables)
     EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_BUFFERS, 128);
     EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_SET_HI, 221);
     EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_CONTROL, 228);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_COUNT, 229);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_LAYERS, 235);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_END, 251);
 }
 
 TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
@@ -258,7 +263,9 @@ TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
                          count(switch_gm20b_macro_draw_params) + count(switch_gm20b_macro_draw_indexed_params) +
                          count(switch_gm20b_macro_vcm_constants) + count(switch_gm20b_macro_icb_range) +
                          count(switch_gm20b_macro_icb_draw) + count(switch_gm20b_macro_icb_draw_indexed) +
-                         count(switch_gm20b_macro_icb_gate) + count(switch_gm20b_macro_icb_patches);
+                         count(switch_gm20b_macro_icb_gate) + count(switch_gm20b_macro_icb_patches) +
+                         count(switch_gm20b_macro_amplify) + count(switch_gm20b_macro_amplify_indexed);
+    RecordProperty("words", int(words));
     EXPECT_LE(words, 2048u);
 }
 

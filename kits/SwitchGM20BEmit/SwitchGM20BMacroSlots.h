@@ -32,6 +32,9 @@ enum {
     SWITCH_GM20B_MACRO_ICB_GATE,
     SWITCH_GM20B_MACRO_ICB_BIND,
     SWITCH_GM20B_MACRO_ICB_PATCHES,
+    // a draw under vertex amplification, of vertices and of indices: draws past the slots the push profile counts
+    SWITCH_GM20B_MACRO_AMPLIFY,
+    SWITCH_GM20B_MACRO_AMPLIFY_INDEXED,
     SWITCH_GM20B_MACRO_RAW_END,  // one past the raw path's last slot
 };
 
@@ -53,6 +56,20 @@ enum {
     SWITCH_GM20B_SCRATCH_ICB_ENTRY = SWITCH_GM20B_SCRATCH_ICB_ROOT_HI + 2,
     SWITCH_GM20B_SCRATCH_ICB_CONTROL = SWITCH_GM20B_SCRATCH_ICB_ENTRY + 3,
     SWITCH_GM20B_SCRATCH_ICB_PATCHES_END = SWITCH_GM20B_SCRATCH_ICB_CONTROL + 1,
+    // vertex amplification's, which the amplify macros read (the raw path's RenderEncoder writes them where the count, the
+    // mapping or the bound state changes): the count, the state's root byte offsets of its AmplificationCount,
+    // AmplificationId and AmplificationViewportOffset words (0: none), its layer (SWITCH_GM20B_AMP_LAYER_*, else the root
+    // byte offset of its AmplificationLayerOffset word), whether its fetches need a pixel barrier between two
+    // amplifications (its barrier form's), then each amplification's render target and viewport offsets
+    SWITCH_GM20B_SCRATCH_AMP_COUNT = SWITCH_GM20B_SCRATCH_ICB_PATCHES_END,
+    SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD,
+    SWITCH_GM20B_SCRATCH_AMP_ID_WORD,
+    SWITCH_GM20B_SCRATCH_AMP_VIEWPORT_WORD,
+    SWITCH_GM20B_SCRATCH_AMP_LAYER,
+    SWITCH_GM20B_SCRATCH_AMP_BARRIER,
+    SWITCH_GM20B_SCRATCH_AMP_LAYERS,
+    SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS = SWITCH_GM20B_SCRATCH_AMP_LAYERS + 8,
+    SWITCH_GM20B_SCRATCH_AMP_END = SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS + 8,
 };
 
 // What the patch macro's words name: a layout entry of no buffer, the constant buffer sizes it selects (NVK's
@@ -63,6 +80,14 @@ enum {
     SWITCH_GM20B_ICB_ROOT_BYTES = 0x800,
     SWITCH_GM20B_ICB_PATCH_BUFFERS = 3,
     SWITCH_GM20B_ICB_PATCH_CONTROL_WORDS = 6,
+};
+
+// SWITCH_GM20B_SCRATCH_AMP_LAYER's modes besides a word: the draws render the pass's first layer, or SET_RT_LAYER takes
+// each amplification's render target offset (V_SELECTS_LAYER). No root word lies at either byte offset.
+enum {
+    SWITCH_GM20B_AMP_LAYER_FIRST = 0,
+    SWITCH_GM20B_AMP_LAYER_RT = 1,
+    SWITCH_GM20B_AMP_MAX = 8,  // Metal's largest amplification count
 };
 
 #ifdef __cplusplus
@@ -78,8 +103,12 @@ SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_LOCATION >= SWITCH_GM20B_SCRA
                               SWITCH_GM20B_SCRATCH_ICB_LENGTH < SWITCH_GM20B_SCRATCH_ICB_BUFFERS &&
                               SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END <= SWITCH_GM20B_SCRATCH_ICB_SET_HI,
                           "no two scratch ranges overlap, nor one NVK's");
-SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_PATCHES_END <= SWITCH_GM20B_SCRATCH_WORDS,
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_END <= SWITCH_GM20B_SCRATCH_WORDS,
                           "every scratch word is a SET_MME_SHADOW_SCRATCH");
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS - SWITCH_GM20B_SCRATCH_AMP_LAYERS ==
+                                  SWITCH_GM20B_AMP_MAX &&
+                              SWITCH_GM20B_SCRATCH_AMP_END - SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS == SWITCH_GM20B_AMP_MAX,
+                          "a mapping word for each amplification");
 
 #undef SWITCH_GM20B_SLOTS_ASSERT
 
