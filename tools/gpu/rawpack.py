@@ -205,8 +205,9 @@ def link(args: argparse.Namespace, generator: list[str], env: dict[str, str], wo
     print('\n'.join(line for line in report.splitlines() if not line.startswith('  skipped')))
     print(f'{len(skipped)} states left out, each named in report.txt')
     out = fresh(Path(args.out))
-    shutil.copyfile(linked / 'pack.bin', out / 'pack.bin')
-    shutil.copyfile(linked / 'report.txt', out / 'report.txt')
+    # pack.json, layouts.txt and programs.bin name the pack's programs and set-0 layouts for nvdec (test/eq)
+    for name in ('pack.bin', 'report.txt', 'pack.json', 'layouts.txt', 'programs.bin'):
+        shutil.copyfile(linked / name, out / name)
 
 
 def stamp(args: argparse.Namespace, generator: list[str], env: dict[str, str], _work: Path) -> None:
