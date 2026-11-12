@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_direct_storage.h"
+#include "../raw/runtime/raw_draw_interlock.h"
 #include "../raw/runtime/raw_emit.h"
 #include "../raw/runtime/raw_fragment_tests.h"
 #include "../raw/runtime/raw_direct_push.h"

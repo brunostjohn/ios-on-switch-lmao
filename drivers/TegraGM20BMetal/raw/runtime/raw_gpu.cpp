@@ -29,6 +29,7 @@
 #include "raw_residual.h"
 #include "raw_multisample.h"
 #include "raw_rotated_pass.h"
+#include "raw_draw_interlock.h"
 #include "raw_fragment_tests.h"
 #include "raw_shader_tests.h"
 #include "raw_shader_test_push.h"
