@@ -4220,18 +4220,6 @@ host_test(
     deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
-# raw/runtime/raw_remote_ask.h: every answer of the shader compiler, and what a client's ask does next
-host_test(
-    name = "raw_remote_ask_test",
-    srcs = [
-        "raw_remote_ask_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_remote_ask.h",
-        "//kits/SwitchSeedPack:SwitchSeedStore.h",
-    ] + RAW_HOST_HEADERS,
-    copts = RAW_HOST_COPTS,
-    cxx_std = "c++17",
-)
-
 host_test(
     name = "raw_remote_test",
     srcs = [
@@ -5234,4 +5222,16 @@ host_test(
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
     ] + RAW_HOST_DEPS,
+)
+
+# raw/runtime/raw_remote_ask.h: every answer of the shader compiler, and what a client's ask does next
+host_test(
+    name = "raw_remote_ask_test",
+    srcs = [
+        "raw_remote_ask_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_remote_ask.h",
+        "//kits/SwitchSeedPack:SwitchSeedStore.h",
+    ] + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS,
+    cxx_std = "c++17",
 )
