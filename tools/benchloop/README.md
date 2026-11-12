@@ -24,6 +24,7 @@ bazel run //tools/benchloop -- latency                 # SM53 latency, throughpu
 bazel run //tools/benchloop -- latency --family stall --op FFMA
 bazel run //tools/benchloop -- blend "$PWD/table.json" --blend-enable both
 bazel run //tools/benchloop -- rop                     # float to unorm rounding
+bazel run //tools/benchloop -- floatadd                # the ROP's fp32 and fp16 ONE, ONE, ADD against the shader's sum
 bazel run //tools/benchloop -- run "$PWD/batch.json"   # any batch in protocol.py's format
 bazel run //tools/benchloop -- latency --fake /tmp/fake  # the same loop against fakedevice.py, no Switch needed
 ```

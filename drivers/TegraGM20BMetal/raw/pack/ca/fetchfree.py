@@ -46,7 +46,13 @@ def classify(tables: caspec.Tables, name: str, line: str) -> tuple[int, str]:
     except (KeyError, IndexError, ValueError):
         return 0, 'name'
     colors = _colors(line)
-    why = _foreign(tables, name, line) or _kept_in_fragment(tables, s) or _unproven(tables, s) or _target(s, colors)
+    why = (
+        _no_blend_constant(line)
+        or _foreign(tables, line)
+        or _kept_in_fragment(tables, s)
+        or _unproven(tables, s)
+        or _target(s, colors)
+    )
     if why:
         return 0, why
     if s.fragB in FIXED_FUNCTION_BLENDS:
@@ -84,15 +90,16 @@ def _kept_in_fragment(tables: caspec.Tables, s: caspec.Spec) -> str:
     return 'destination function' if s.D else ''
 
 
-def _foreign(tables: caspec.Tables, name: str, line: str) -> str:
+def _no_blend_constant(line: str) -> str:
+    """Give why the state's fragment function takes no blend to set to none ('' where it takes one)."""
+    if all(re.search(rf'\b{constant}:\d+:', line) for constant in ('fc_blend_function', 'fc_dest_count')):
+        return ''
+    return 'its fragment function sets no fragment blend'
+
+
+def _foreign(tables: caspec.Tables, line: str) -> str:
     """Give why the line is not this QuartzCore's state of its name, '' where it is."""
-
-    def constants(fields: str) -> list[str]:
-        return sorted(t for t in fields.split() if t.startswith('fc_'))
-
-    if constants(caspec.state_fields(tables, name)) != constants(line):
-        return "constants not this QuartzCore's of its name"
-    return ''
+    return '' if caspec.made_of_name(tables, line) else "constants not this QuartzCore's of its name"
 
 
 def _unproven(tables: caspec.Tables, s: caspec.Spec) -> str:

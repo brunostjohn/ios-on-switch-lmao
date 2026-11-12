@@ -37,6 +37,25 @@ class Lines(unittest.TestCase):
         )
         self.assertNotEqual(key, harvest.normal(line.replace(' os=24B119', ' os=21H461'))[1])
 
+    def test_a_journal_line_names_the_build_it_was_journaled_under(self):
+        render = (
+            'R ok=1 label=x samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 | v a lib=/l.metallib  | f b lib=/l.m  | '
+        )
+        dispatch = 'D ok=1 tg=32,8,1 edge=0,0,0 threads=0 | form=d opt=0 | k ci lib=/l.metallib  |'
+        self.assertEqual(harvest.normal(render, '24B119')[0], render.replace(' samples=', ' os=24B119 samples=', 1))
+        self.assertEqual(harvest.normal(dispatch, '24B119')[0], dispatch.replace(' | form', ' os=24B119 | form', 1))
+        tagged = render.replace(' samples=', ' os=21H461 samples=', 1)
+        self.assertEqual(harvest.normal(tagged, '24B119')[0], tagged)
+
+    def test_a_merge_tags_the_journals_lines_but_leaves_the_corpus_as_it_was(self):
+        with tempfile.TemporaryDirectory() as d:
+            corpus = Path(d) / 'corpus.log'
+            old = 'D ok=1 tg=1,1,1 edge=0,0,0 threads=0 os=21H461 | form=d | k a lib=/l.metallib  |'
+            corpus.write_text(old + '\n')
+            journal = 'D ok=1 tg=2,1,1 edge=0,0,0 threads=0 | form=d | k a lib=/l.metallib  |'
+            lines = harvest.merge(corpus, [('j', journal + '\n')], '24B119')
+            self.assertEqual(lines, [old, journal.replace(' | form', ' os=24B119 | form', 1)])
+
 
 class Caches(unittest.TestCase):
     def test_a_closed_system_container_is_opened_by_its_identifier(self):

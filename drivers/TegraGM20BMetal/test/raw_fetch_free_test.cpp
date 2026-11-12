@@ -22,6 +22,7 @@ raw::PackIteratedBlend multiply()
     raw::PackIteratedBlend b = {};
     b.count = 2;
     b.enable = 1;
+    b.name = raw::iteratedProgramName("mpy");
     b.alphaSource = 0x4001;
     b.alphaDest = 0x4303;
     b.program[0] = 0x00091001;
@@ -50,6 +51,23 @@ TEST(RawFetchFree, AnIteratedFormWithoutItsProgramIsNone)
     raw::PackPipeline storage = formRecord(0, raw::FetchBlend);
     storage.flags = raw::PipelineStorageMetadata;
     EXPECT_EQ(raw::fetchFreeForm(storage, nullptr).rung, raw::FetchNone);
+}
+
+TEST(RawFetchFree, AColourMatrixFormReadsItsRowsAndTheClampPairWhereItsUniformHasOne)
+{
+    raw::PackIteratedBlend matrix = {};
+    matrix.uniformSlot = 1;
+    matrix.uniformOffset = 0xb0;
+    for (const uint8_t words : {uint8_t(10), uint8_t(11)}) {
+        matrix.uniformWords = words;
+        const raw::FetchFreeForm f = raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &matrix);
+        EXPECT_EQ(f.rung, raw::FetchIteratedBlend);
+        EXPECT_EQ(f.matrixSlot, 1);
+        EXPECT_EQ(f.matrixOffset, 0xb0);
+        EXPECT_EQ(f.matrixWords, words);
+    }
+    matrix.uniformWords = 9;
+    EXPECT_EQ(raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &matrix).rung, raw::FetchNone);
 }
 
 TEST(RawFetchFree, TheIteratedWordsEnableTheColoursBlendLoadTheProgramAndTurnOffAfter)
@@ -90,7 +108,8 @@ TEST(RawFetchFree, Rung3WaitsForItsPassesToBeProvenUnlessAProbeForcesIt)
 {
     const raw::PackIteratedBlend b = multiply();
     const raw::FetchFreeForm f = raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &b);
-    EXPECT_EQ(raw::iteratedPassesProven(f), f.programWords <= raw::kIteratedBlendPasses);
+    EXPECT_EQ(f.program, b.name);
+    EXPECT_EQ(raw::iteratedPassesProven(f), raw::iteratedProgramProven(b.name));
     EXPECT_EQ(raw::fetchFreeTaken(f, {80, false, 0}), raw::iteratedPassesProven(f));
     EXPECT_TRUE(raw::fetchFreeTaken(f, {80, false, 0}, 3));
     EXPECT_EQ(raw::fetchFreeTaken(f, {80, false, 0}, 2), raw::iteratedPassesProven(f));

@@ -108,6 +108,14 @@ static const char *zetaMemoryRefusal(int asked)
     for (int p = 1; p < PredCount; p++)
         if (const uint64_t n = gPredCbs[p].load(std::memory_order_relaxed))
             d[[NSString stringWithFormat:@"pred.%s", kPredNames[p]]] = @(n);
+#if SWITCH_RAW_DIAGNOSTICS
+    // states created that the pack lacked: found in this build's record cache or compiled (states_compiled)
+    if (gRM->completion) {
+        const raw::Compiler::Stats made = gRM->completion->stats();
+        d[@"pack_misses"] = @(made.hits + made.misses);
+        d[@"states_compiled"] = @(made.misses);
+    }
+#endif
     return d;
 }
 

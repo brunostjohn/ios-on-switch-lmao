@@ -5,7 +5,9 @@
 //   AssumeTexsF16: SwitchHWTest gpu.raw.texs_f16: every unorm8_* and rgba16f_* "_f16_wrong" 0, its "_proof" 0x5346....
 //   AssumeRopRounding: no probe yet (COMPILER.md E3)
 #pragma once
+#include <array>
 #include <cstdint>
+#include <string_view>
 
 namespace raw {
 
@@ -20,9 +22,11 @@ enum ProvenUnit : uint32_t {
 
 constexpr uint32_t kProvenUnits = ProvenFixedBlend;
 
-// The longest iterated blend program, in passes, the device showed within its bound of the storage form and faster than
-// it: SwitchHWTest gpu.raw.fetch_rung3 "passes_ceiling" (no beyond=), with gpu.x1.iterated_blend "nvn_within_one" equal
-// to "nvn_run". 0: no program has been, so none is taken.
-constexpr uint32_t kIteratedBlendPasses = 0;
+// The iterated blend programs (pack/iterated/table.py's names; vcm, the colour matrix macro's, and vcm.rows, its route
+// for a QuartzCore whose matrix has no clamp: pack/fetchfree_link.py) the device showed within their bound of the
+// storage form and faster than it, each by its own measured cost, not by a pass count: SwitchHWTest
+// gpu.raw.fetch_rung3 "proven" (every state of the program within the bound and faster), with gpu.x1.iterated_blend
+// "nvn_within_one" equal to "nvn_run". None has been, so rung 3 takes no draw.
+inline constexpr std::array<std::string_view, 0> kIteratedProven = {};
 
 }  // namespace raw

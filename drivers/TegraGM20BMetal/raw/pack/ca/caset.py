@@ -4,7 +4,9 @@
 Tiers, each name in the first that has it:
   corpus     every Core Animation state the device's journals hold (precompile/corpus.log), by name
   manifest   QuartzCore's offline compilation manifest (CA::OGL::MetalContext::offline_compilation_manifest: the states
-             Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot). CA
+             Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot), each
+             as Apple names it and as this device's QuartzCore does (deepcolour.py: Apple names them for its
+             extended-colour devices). CA
              makes a generic state (g: the uber shader) only out of its binary archive, failing on a miss; the raw
              runtime answers such a creation from the pack as the device's archive would. QuartzCore 27 asks for every
              generic state of its manifest at boot (17 F "Metal failed to load render pipeline" lines each iOS 27 boot
@@ -16,6 +18,8 @@ Tiers, each name in the first that has it:
              the state's own format where m2v draws it once (not the extended-range formats, which mkpack.py leaves out)
   fetch      every fixed-function fragment state of the tiers above with no blend of its own under every blend CA leaves
              in the fragment (framebuffer fetch: the separable and non-separable modes a compositing filter asks for)
+  closure    every name one field away from a corpus, manifest or variants name, along the fields the corpus's names
+             show QuartzCore varying on its own (closure.py: texture and image functions, image fields, fragment flags)
 A state is made from its name alone (caspec.state_fields): its descriptor is what QuartzCore makes of the name.
 
 usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (every tier when none is named)
@@ -24,9 +28,11 @@ usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (
 import sys
 
 import caspec
+import closure
+import deepcolour
 import fetchfree
 
-TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
+TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch', 'closure')
 LIFTABLE = range(1, 26)  # lift_blend_function: the blend functions above 25 stay in the fragment
 CLOSURE_FORMATS = ('BGRA',)
 SINGLE_DRAW_FORMATS = ('BGRA', 'RGBA', 'RGhA', 'RGfA')
@@ -87,6 +93,15 @@ def _fragments(tables: caspec.Tables, seeds: list[str]) -> list[tuple[str, str]]
     return list(out.items())
 
 
+# QuartzCore sets a state's x (fc_extended_range) from its target alone, an extended-range format (MTLPixelFormat
+# 550-555; get_pipeline_spec: 24B119 0x184388160, 21H461 0x18942f218): a fragment carried onto another format takes its.
+EXTENDED_RANGE = range(550, 556)
+
+
+def _on_format(tables: caspec.Tables, fragment: str, fmt: int) -> str:
+    return deepcolour.fragment_with_flag(tables, fragment, 'x', fmt in EXTENDED_RANGE)
+
+
 def _formats(prefix: str) -> tuple[str, ...]:
     own = prefix[1:5]
     return tuple(dict.fromkeys((own, *CLOSURE_FORMATS) if own in SINGLE_DRAW_FORMATS else CLOSURE_FORMATS))
@@ -97,8 +112,9 @@ def _blend_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
     for fragment, prefix in fragments:
         flags = ''.join(sorted(caspec.decode(tables, prefix + '_' + fragment).pflags))
         for fmt in _formats(prefix):
-            blends = [b for b in LIFTABLE if lifted(tables, fragment, codes[fmt], b)]
-            names += [prefix_of(tables, fmt, b, flags) + '_' + fragment for b in (tables.none_blend, *blends)]
+            on = _on_format(tables, fragment, codes[fmt])
+            blends = [b for b in LIFTABLE if lifted(tables, on, codes[fmt], b)]
+            names += [prefix_of(tables, fmt, b, flags) + '_' + on for b in (tables.none_blend, *blends)]
     return names
 
 
@@ -111,17 +127,26 @@ def _fetch_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
         flags = ''.join(sorted(s.pflags))
         for fmt in _formats(prefix):
             head = prefix_of(tables, fmt, tables.none_blend, flags) + '_'
-            blends = [b for b in range(tables.none_blend) if not lifted(tables, fragment, codes[fmt], b)]
-            names += [head + with_fragment_blend(tables, fragment, b) for b in blends]
+            on = _on_format(tables, fragment, codes[fmt])
+            blends = [b for b in range(tables.none_blend) if not lifted(tables, on, codes[fmt], b)]
+            names += [head + with_fragment_blend(tables, on, b) for b in blends]
     return names
 
 
-def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS) -> dict[str, list[str]]:
-    """Give every tier's names, in order, each name in the first tier that has it."""
+def labels(
+    tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS, cif10: bool | None = None
+) -> dict[str, list[str]]:
+    """Give every tier's names, in order, each name in the first tier that has it.
+
+    `cif10`: CADeviceUseCIF10 on the device (deepcolour.cif10), None where it is not known: each manifest state goes
+    in as Apple names it and as the device's QuartzCore does (deepcolour.asked), so the tiers made of them hold the
+    device's too.
+    """
     manifest = [
-        m[0]
+        form
         for m in tables.t['manifest']
         if m[0][0] == 'P' and (tables.v27 or not caspec.decode(tables, m[0]).flag('g'))
+        for form in dict.fromkeys([m[0], *deepcolour.asked(tables, m[0], cif10)])
     ]
     variants = _variant_tier(tables, list(corpus) + manifest)
     fragments = _fragments(tables, list(corpus) + manifest + variants)
@@ -131,6 +156,9 @@ def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TI
         'variants': lambda: variants,
         'blend': lambda: _blend_tier(tables, fragments),
         'fetch': lambda: _fetch_tier(tables, fragments),
+        'closure': lambda: closure.tier(
+            tables, list(corpus) + manifest + variants, list(corpus), cif10, lambda n: makes(tables, n)
+        ),
     }
     seen: set[str] = set()
     out: dict[str, list[str]] = {}
@@ -187,15 +215,16 @@ def with_fetch_rung(tables: caspec.Tables, line: str, why: dict[str, int] | None
 
 
 def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:
-    """Give the corpus's Core Animation names; with `tables`, only those whose line this QuartzCore makes of the name.
+    """Give the corpus's Core Animation names; with `tables`, only those this QuartzCore makes a state of.
 
-    A corpus journaled under another IPSW's QuartzCore names states this one makes differently, or not at all.
+    A name another IPSW's journal holds names a state this QuartzCore makes otherwise (its own constants and flags):
+    that state, which its devices ask for under the same name, is the one made of it.
     """
     names: dict[str, None] = {}
     with open(path) as f:
         for line in f:
-            name, fields = caspec.corpus_fields(line)
-            if name and (tables is None or _made_here(tables, name, fields)):
+            name, _fields = caspec.corpus_fields(line)
+            if name and (tables is None or makes(tables, name)):
                 names[name] = None
     return list(names)
 
@@ -207,13 +236,6 @@ def makes(tables: caspec.Tables, name: str) -> bool:
     except (KeyError, IndexError, ValueError):
         return False
     return True
-
-
-def _made_here(tables: caspec.Tables, name: str, fields: str | None) -> bool:
-    try:
-        return caspec.state_fields(tables, name) == fields
-    except (KeyError, IndexError, ValueError):
-        return False
 
 
 def main() -> None:

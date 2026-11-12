@@ -2,9 +2,10 @@
 
 A rung-3 form names its program (ca/fetchfree.py, iterated/table.py). The colour matrix (vcm) has no fixed program: the
 GPU's macro loads it and its constants from the uniform each draw binds, so its form also names where that uniform is:
-the fragment buffer whose 44 bytes from a 16-byte boundary (five half4 rows, then the clamp pair) the storage form's
-program loads and the fetch-free form's does not (QuartzCore's at 0x60 of buffer 1, where its texture function leaves
-them there). Loads are LDCs of the buffer's constant bank, read off the machine code.
+the fragment buffer whose bytes from a 16-byte boundary the storage form's program loads and the fetch-free form's does
+not, five half4 rows then the clamp pair (QuartzCore 24B119's 44 bytes at 0x60 of buffer 1, where its texture function
+leaves them there), or the five rows alone (21H461's 40 bytes at 0xb0: its matrix has no clamp, the macro's clamp pair
+is then 0, its form without one). Loads are LDCs of the buffer's constant bank, read off the machine code.
 """
 
 import struct
@@ -12,7 +13,11 @@ import struct
 import table
 
 MATRIX = 'vcm'
-MATRIX_WORDS = 11
+ROW_WORDS = 10  # five half4 rows
+CLAMP_WORDS = 1  # the clamp pair (p3, p4) as two halves
+# A rows-only matrix's name: its draws feed the macro a clamp pair of 0 (raw_gpu.cpp matrixConstants), a route of its
+# own that raw_chip_facts.h kIteratedProven proves apart from vcm's
+ROWS_ONLY = 'vcm.rows'
 HEADER_BYTES = 0x50  # a graphics program's shader program header, ahead of its code
 LDC_OPCODE = 0x1DF2  # bits 63-51 of an LDC (opcodes.txt: 1110 1111 1001 0)
 # PackUniformRange: entry, bank, first, end
@@ -43,20 +48,31 @@ def fragment_banks(pipe: dict) -> dict[int, int]:
     return out
 
 
-def matrix_uniform(storage: dict, free: dict) -> tuple[int, int] | None:
-    """Give the colour matrix uniform's (fragment buffer index, byte offset), None where no buffer shows it.
+def matrix_uniform(storage: dict, free: dict) -> tuple[int, int, int] | None:
+    """Give the colour matrix uniform's (fragment buffer index, byte offset, words), None where no buffer shows it.
 
+    The rows: five half4 rows from a 16-byte boundary the storage form reads, none of which the fetch-free form reads,
+    else (a texture function reading the same words, 21H461's c33, c4b, 3dl, mpc and opa) the rows holding every word
+    the storage form reads there and the fetch-free form does not. Its words: the rows and the clamp pair where the
+    storage form reads the pair too, else the rows alone.
     `storage`, `free`: each a pipeline's 'uniform' and 'entries' and its fragment program's 'fs_image'.
     """
     free_banks = fragment_banks(free)
+    found = []
     for slot, bank in fragment_banks(storage).items():
         read = loads(storage['fs_image'], bank)
         theirs = loads(free['fs_image'], free_banks[slot]) if slot in free_banks else set()
         for offset in sorted(read):
-            words = {offset + 4 * k for k in range(MATRIX_WORDS)}
-            if offset % 16 == 0 and words <= read and not words & theirs:
-                return slot, offset
-    return None
+            rows = {offset + 4 * k for k in range(ROW_WORDS)}
+            if offset % 16 or not rows <= read:
+                continue
+            clamp = offset + 4 * ROW_WORDS
+            words = ROW_WORDS + (CLAMP_WORDS if clamp in read and clamp not in theirs else 0)
+            if not rows & theirs:
+                return slot, offset, words
+            if read - theirs and read - theirs <= rows | {clamp}:
+                found.append((slot, offset, words))
+    return found[0] if found else None
 
 
 def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]]:
@@ -80,7 +96,7 @@ def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]
                 unplaced += 1
                 continue
             record = {
-                'name': name,
+                'name': name if found[2] == ROW_WORDS + CLAMP_WORDS else ROWS_ONLY,
                 'words': [],
                 'enable': 3,
                 'constants': {},
@@ -88,12 +104,13 @@ def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]
                 'alpha_dest': 0x4000,
                 'uniform_slot': found[0],
                 'uniform_offset': found[1],
+                'uniform_words': found[2],
             }
         elif name in table.PROGRAMS:
             record = table.record(table.PROGRAMS[name])
         else:
             raise ValueError(f'a fetch-free form names an iterated blend program iterated/table.py lacks: {name}')
-        identity = (name, record.get('uniform_slot'), record.get('uniform_offset'))
+        identity = (name, record.get('uniform_slot'), record.get('uniform_offset'), record.get('uniform_words'))
         if identity not in programs:
             programs[identity] = len(records)
             records.append(record)

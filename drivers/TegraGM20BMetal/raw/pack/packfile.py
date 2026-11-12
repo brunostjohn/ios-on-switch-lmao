@@ -10,12 +10,13 @@ MAGIC = b'GM20BPK1'
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
-# forms and their iterated blend programs
-VERSION = 18
+# forms and their iterated blend programs; 18: a record's set-0 entries read from memory; 19: an iterated blend
+# program's name and its matrix's words
+VERSION = 19
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
-# PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
-# constant[8][3], program[128]
-ITERATED = struct.Struct('<BBBBHHII24H128I')
+# PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
+# alphaDest, name, reservedName, constant[8][3], program[128]
+ITERATED = struct.Struct('<BBBBHBBIIQQ24H128I')
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
@@ -302,9 +303,12 @@ def iterated_bytes(programs: list[dict]) -> bytes:
             len(p['constants']),
             p.get('uniform_slot', 0xFF),
             p.get('uniform_offset', 0),
+            p.get('uniform_words', 0),
             0,
             p['alpha_source'],
             p['alpha_dest'],
+            fnv(p['name'].encode()),
+            0,
             *constants,
             *words,
         )

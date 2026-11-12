@@ -172,18 +172,22 @@ def pipe(record: dict) -> dict:
     return {'uniform': uniform, 'entries': entries, 'fs_image': bytes.fromhex(record['fs'])}
 
 
-def matrix_words(stored: dict, free: dict) -> tuple[int, int, int] | None:
-    """Give the (constant buffer bank, byte offset, fragment buffer) the storage form reads the colour matrix at."""
+def matrix_words(stored: dict, free: dict) -> tuple[int, int, int, int] | None:
+    """Give the colour matrix the storage form reads: (constant buffer bank, byte offset, fragment buffer, words)."""
     found = fetchfree_link.matrix_uniform(pipe(stored), pipe(free))
     if not found:
         return None
-    return fetchfree_link.fragment_banks(pipe(stored))[found[0]], found[1], found[0]
+    return fetchfree_link.fragment_banks(pipe(stored))[found[0]], found[1], found[0], found[2]
 
 
-def matrix_program(seeded: Seeded, at: tuple[int, int, int]) -> object:
-    """Give the program and constants SWITCH_GM20B_MACRO_VCM_CONSTANTS makes of the matrix uniform's 11 words."""
+def matrix_program(seeded: Seeded, at: tuple[int, int, int, int]) -> object:
+    """Give the program and constants SWITCH_GM20B_MACRO_VCM_CONSTANTS makes of the matrix uniform's 11 arguments.
+
+    A uniform of the rows alone is followed by a clamp pair of 0 (raw_gpu.cpp matrixConstants).
+    """
     lanes = seeded.inputs(0, -1, {at[0]: at[2]})
-    words = [lanes.cbuf(at[0], at[1] + 4 * k) for k in range(11)]
+    words = [lanes.cbuf(at[0], at[1] + 4 * k) for k in range(at[3])]
+    words += [0] * (fetchfree_link.ROW_WORDS + fetchfree_link.CLAMP_WORDS - len(words))
     halves = [half_value(w >> s & 0xFFFF) for w in words for s in (0, 16)]
     rows = [halves[4 * j : 4 * j + 4] for j in range(5)]
     return programs_long.vcm(rows, halves[20], halves[21])

@@ -28,6 +28,7 @@ py_library(
         "fakeblend.py",
         "fakedevice.py",
         "fakegpu.py",
+        "floatadd.py",
         "formula.py",
         "golden.py",
         "known.py",
@@ -50,7 +51,7 @@ py_library(
     ],
 )
 
-# bazel run //tools/benchloop -- doctor | latency | blend <table> | rop | run <batch> (README.md)
+# bazel run //tools/benchloop -- doctor | latency | blend <table> | rop | floatadd | run <batch> (README.md)
 py_binary(
     name = "benchloop",
     srcs = ["benchloop.py"],
@@ -80,6 +81,7 @@ APP_SOURCES = [
         "agreement_test",
         "blend_models_test",
         "blend_test",
+        "floatadd_test",
         "golden_test",
         "known_test",
         "loop_test",

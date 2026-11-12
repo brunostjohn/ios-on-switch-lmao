@@ -310,11 +310,28 @@ metal_seed = rule(
 _RAW_BUCKETS = 16
 
 # The generator's modules each step runs (rawpack.py imports or runs them by path, beside it).
-_RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
+_RAW_SPLIT = [
+    "rawpack.py",
+    "ca/caset.py",
+    "ca/caspec.py",
+    "ca/caspec27.py",
+    "ca/closure.py",
+    "ca/deepcolour.py",
+    "ca/fetchfree.py",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
+]
 _RAW_PROBE = ["rawpack.py"]
 _RAW_LINK = [
     "rawpack.py",
     "directlink.py",
+    "fetchfree_link.py",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
     "mkpack.py",
     "kernels.py",
     "layouts.py",
@@ -359,11 +376,12 @@ def _seed_raw_pack_impl(ctx):
     args.add("--qc", crawl.qc)
     args.add("--corpus", lines)
     args.add_all(names, before_each = "--ca-names")
+    args.add("--ca-preferences", ctx.file._ca_preferences)
     args.add_all("--out", corpora)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset([lines] + qc + tables + names + _generator_files(ctx, _RAW_SPLIT)),
+        inputs = depset([lines, ctx.file._ca_preferences] + qc + tables + names + _generator_files(ctx, _RAW_SPLIT)),
         outputs = corpora,
         mnemonic = "MetalRawSplit",
         progress_message = "Splitting the raw pack's states into buckets",
@@ -452,6 +470,12 @@ seed_raw_pack = rule(
         ),
         "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
         "srcs": attr.label_list(allow_files = True, doc = "the generator's modules and QuartzCore tables (raw/pack)"),
+        # The Core Animation preferences the device runs with decide which colour precision its QuartzCore names
+        # states with (raw/pack/ca/deepcolour.py)
+        "_ca_preferences": attr.label(
+            default = "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
+            allow_single_file = True,
+        ),
         "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
     },
 )

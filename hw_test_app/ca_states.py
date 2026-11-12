@@ -1,14 +1,15 @@
 """The corpus's Core Animation states this IPSW makes.
 
-ca_states.py <corpus.log> <QuartzCore default.metallib> <qc-<build>.json> <out>. The corpus holds both iOS versions'
-states and does not say which made a line, so a state is this IPSW's when its QuartzCore declares both functions and
-every constant the line sets on them, and the constants' values are those its QuartzCore makes of the state's name
-(raw/pack/ca/caspec.py with this IPSW's tables). iOS 17's path_stroke_* states fail the first on iOS 27, whose
-QuartzCore has no such functions; most of iOS 17's other lines fail the second there (a memoryless index past the
-pass's attachments, another build's blend function codes), drawing states iOS 27 never makes.
+ca_states.py <corpus.log> <QuartzCore default.metallib> <qc-<build>.json> <out>. A state is this IPSW's where its line
+names the IPSW's build (os=), its QuartzCore declares both functions and every constant the line sets on them, and the
+constants' values are those its QuartzCore makes of the state's name (raw/pack/ca/caspec.py with this IPSW's tables).
+iOS 17's path_stroke_* states fail the second on iOS 27, whose QuartzCore has no such functions; most of iOS 17's other
+lines fail the third there (a memoryless index past the pass's attachments, another build's blend function codes),
+states iOS 27 never makes.
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(importlib.util.find_spec('drivers.TegraGM20BMetal.ra
 import caspec
 
 PREFIX = 'R ok=1 label=com.apple.coreanimation.'
+OS_BUILDS = re.compile(r' os=(\S+)')
 
 
 def stage(segment: str, tag: str) -> tuple[str, set[str]] | None:
@@ -42,17 +44,10 @@ def made_here(line: str, declared: dict[str, set[str]]) -> bool:
     return True
 
 
-def made_of_name(line: str, tables: caspec.Tables) -> bool:
-    """Whether the line's constants are those this QuartzCore makes of its name; a name it does not decode is kept."""
-
-    def constants(fields: str) -> list[str]:
-        return sorted(t for t in fields.split() if t.startswith('fc_'))
-
-    try:
-        made = caspec.state_fields(tables, caspec.corpus_fields(line)[0])
-    except (KeyError, IndexError, ValueError):
-        return True
-    return constants(made) == constants(line)
+def tagged(line: str, build: str) -> bool:
+    """Whether the line names `build` among the OS builds it is a state of."""
+    tag = OS_BUILDS.search(line.split(' | ', 1)[0])
+    return bool(tag) and build in tag[1].split(',')
 
 
 def states(corpus: str, library: bytes, tables: caspec.Tables) -> list[str]:
@@ -64,7 +59,10 @@ def states(corpus: str, library: bytes, tables: caspec.Tables) -> list[str]:
     return [
         line
         for line in corpus.splitlines()
-        if line.startswith(PREFIX) and made_here(line, declared) and made_of_name(line, tables)
+        if line.startswith(PREFIX)
+        and tagged(line, tables.t['build'])
+        and made_here(line, declared)
+        and caspec.made_of_name(tables, line)
     ]
 
 

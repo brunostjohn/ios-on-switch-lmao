@@ -71,6 +71,11 @@ public enum RawFacade {
         ask(buffer, "switchGpuClock") as? String
     }
 
+    /// Whether a render state's record came out of the raw pack at its creation (nil off the facade or in a release build).
+    public static func packHit(_ state: MTLRenderPipelineState) -> Bool? {
+        (ask(state, "switchPackHit") as? NSNumber)?.boolValue
+    }
+
     public static func wholePrograms(in buffer: MTLCommandBuffer) -> Bool {
         (ask(buffer, "switchRawWholePrograms") as? NSNumber)?.boolValue ?? false
     }

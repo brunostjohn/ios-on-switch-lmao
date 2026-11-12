@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 18;
+constexpr uint32_t kPackVersion = 19;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -155,8 +155,11 @@ struct PackIteratedBlend {
     uint8_t constants;       // constant slots it reads, from 0
     uint8_t uniformSlot;     // the colour matrix's: the fragment buffer index it is in; kNoUniform: none
     uint16_t uniformOffset;  // the matrix's bytes from the buffer's bind offset
-    uint16_t reserved;
+    uint8_t uniformWords;    // the matrix's words there: five half4 rows, then the clamp pair where its QuartzCore has one
+    uint8_t reserved;
     uint32_t alphaSource, alphaDest;           // SET_BLEND_ALPHA_SOURCE_COEFF, SET_BLEND_ALPHA_DEST_COEFF (OGL values)
+    uint64_t name;  // FNV-1a 64 of the program's name (pack/iterated/table.py; vcm), which raw_chip_facts.h proves
+    uint64_t reservedName;
     uint16_t constant[kIteratedConstants][3];  // SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j): half floats
     uint32_t program[kIteratedProgramWords];   // LOAD_ITERATED_BLEND_INSTRUCTION words, the first count of them
 };
@@ -418,7 +421,7 @@ static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
-static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
+static_assert(sizeof(PackIteratedBlend) == 32 + 48 + 4 * kIteratedProgramWords, "pack layout");
 
 class Pack {
 public:
