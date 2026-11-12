@@ -5,9 +5,10 @@ import UIKit
 
 /// An icon render the way a helper asks for one: IconServices draws Settings' icon at the home screen's size in
 /// iconservicesagent (ISIcon -prepareImageForDescriptor:, which crosses to the agent), timed cold and warm, with the
-/// agent's phys_footprint, resident size and lifetime peak before and after (proc_pid_rusage), against
-/// its jetsam InactiveHard limit of 15 MB. A footprint above the limit after the render fails: the agent would be killed
-/// as soon as it goes inactive.
+/// agent's phys_footprint, resident size and lifetime peak before and after (proc_pid_rusage), and once more when its
+/// GPU's idle memory went back (the raw device's give-back, a second after its GPU idles), against its jetsam
+/// InactiveHard limit of 15 MB. A settled footprint above the limit fails: the agent would be killed as soon as it goes
+/// inactive. The agent's own log line ("raw: idle memory given back: footprint ...") names each term's owner.
 struct IconRenderTest: HWTest {
     let id = "ui.icon_render"
     let name = "An icon render keeps iconservicesagent within its inactive memory limit"
@@ -15,6 +16,8 @@ struct IconRenderTest: HWTest {
 
     static let agent = "iconservicesagent"
     static let inactiveHardMB = 15
+    // NMB_IDLE_RELEASE_MS outside the render server (TegraGM20BMetalPlugin.mm) and the give-back's own work after it
+    static let giveBackNs: UInt64 = 2_500_000_000
 
     func run(_ context: TestContext) async throws -> Outcome {
         var metrics = Metrics()
@@ -25,21 +28,23 @@ struct IconRenderTest: HWTest {
         let cold = Self.render(icon, descriptor)
         let warm = Self.render(icon, descriptor)
         let after = Self.footprint(Self.agent)
+        try await Task.sleep(nanoseconds: Self.giveBackNs)
+        let settled = Self.footprint(Self.agent)
         metrics.set("cold_ms", cold.ms, digits: 1)
         metrics.set("warm_ms", warm.ms, digits: 1)
         metrics.set("rendered", cold.rendered && warm.rendered)
-        for (label, reading) in [("before", before), ("after", after)] {
+        for (label, reading) in [("before", before), ("after", after), ("settled", settled)] {
             guard let reading else { continue }
             metrics.set("\(label)_footprint_mb", reading.footprintMB, digits: 1)
             metrics.set("\(label)_resident_mb", reading.residentMB, digits: 1)
             metrics.set("\(label)_peak_mb", reading.peakMB, digits: 1)
         }
-        guard let after else { return .skip("\(Self.agent)'s rusage is unreadable from this app", metrics) }
+        guard let settled else { return .skip("\(Self.agent)'s rusage is unreadable from this app", metrics) }
         if !cold.rendered { return .fail("no image for Settings' icon", metrics) }
-        if after.footprintMB > Double(Self.inactiveHardMB) {
+        if settled.footprintMB > Double(Self.inactiveHardMB) {
             return .fail(
-                "\(Self.agent) holds \(Int(after.footprintMB)) MB after an icon render, over its \(Self.inactiveHardMB) MB "
-                    + "inactive limit", metrics)
+                "\(Self.agent) holds \(Int(settled.footprintMB)) MB once its GPU memory went back after an icon render, "
+                    + "over its \(Self.inactiveHardMB) MB inactive limit", metrics)
         }
         return .pass(metrics)
     }
