@@ -185,13 +185,18 @@ int main(int argc, char **argv)
                 }
                 const size_t named = raw::variantNameAt(key);
                 const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
-                const raw::PackPipeline *pp =
-                    named < key.size() ? pack.variantRecord(keyHash, key.substr(named)) : pack.find(keyHash);
+                // DIRECTCHECK_BARRIER=1: each state's barrier form against the pack's
+                const bool barrierForm = getenv("DIRECTCHECK_BARRIER") && *getenv("DIRECTCHECK_BARRIER") == '1';
+                const raw::PackPipeline *pp = named < key.size() ? pack.variantRecord(keyHash, key.substr(named))
+                                              : barrierForm      ? pack.find(keyHash, raw::PackForm::Barrier)
+                                                                 : pack.find(keyHash);
                 const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
                 raw::RuntimeRecord rec;
                 std::string why;
                 const auto began = std::chrono::steady_clock::now();
-                const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, nullptr, true);
+                const raw::CompileOutcome outcome =
+                    direct.make(s.d, key, rec, why, textures, nullptr, true,
+                                barrierForm ? raw::PackForm::Barrier : raw::PackForm::Default);
                 if (pp && named < key.size()) {
                     rec.pipeline.keyHash = keyHash;
                     rec.pipeline.flags |= raw::PipelineVariantRecord;

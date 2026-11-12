@@ -72,4 +72,12 @@ bool programsBindable(const RecordParts &parts, std::string &why);
 bool assembleRecord(const RecordParts &parts, const std::string &key, const PackRules &rules, RuntimeRecord &out,
                     std::string &why);
 
+// The set-0 entries the record's final programs read: its two programs' (PackPipeline::memoryEntries), its variants'
+// and its split's
+uint32_t recordSetReads(const RuntimeRecord &rec);
+// A fetch whose set-0 words none of the record's programs reads fetches nothing (the compiler removed every access):
+// it leaves the record with the colour's storage view and rung, and the record fetches only where another one stays.
+// Returns the colours dropped.
+uint8_t dropUnreadFetches(RuntimeRecord &rec);
+
 }  // namespace raw

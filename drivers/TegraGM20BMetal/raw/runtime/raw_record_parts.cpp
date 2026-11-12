@@ -360,6 +360,59 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     return true;
 }
 
+uint32_t recordSetReads(const RuntimeRecord &rec)
+{
+    constexpr size_t kHeaderBytes = 0x50;
+    const PackPipeline &p = rec.pipeline;
+    uint32_t reads = p.memoryEntries;
+    const auto add = [&](const CapturedProgram &program) {
+        if (program.image.size() > kHeaderBytes)
+            reads |=
+                programSetReads(program.image.data() + kHeaderBytes, program.image.size() - kHeaderBytes,
+                                program.cbufTypes.data(), uint32_t(program.cbufTypes.size()), program.boundTextures, p);
+    };
+    for (const RuntimeRecord::Variant &v : rec.variants)
+        add(v.program);
+    if (rec.split) {
+        add(rec.splitPrograms[0]);
+        add(rec.splitPrograms[1]);
+    }
+    return reads;
+}
+
+uint8_t dropUnreadFetches(RuntimeRecord &rec)
+{
+    PackPipeline &p = rec.pipeline;
+    const uint32_t reads = recordSetReads(rec);
+    uint8_t unread = 0, read = 0;
+    for (uint32_t k = 0; k < p.entries && k < kPackEntries; k++) {
+        const PackEntry &e = p.entry[k];
+        if (e.kind == EntryFetch && e.slot < 8)
+            (reads >> k & 1 ? read : unread) |= uint8_t(1u << e.slot);
+    }
+    const uint8_t dropped = unread & ~read;
+    if (!dropped)
+        return 0;
+    for (uint32_t k = 0; k < p.entries && k < kPackEntries; k++) {
+        PackEntry &e = p.entry[k];
+        if (e.kind == EntryFetch && e.slot < 8 && (dropped >> e.slot & 1))
+            e = {e.offset, EntrySamplerOnly, e.stage, 0, SamplerNone, 0, 0};
+    }
+    p.storageMask &= uint8_t(~dropped);
+    p.storageWriteMask &= uint8_t(~dropped);
+    p.storageBlendMask &= uint8_t(~dropped);
+    if (!p.storageBlendMask)
+        p.storageBlendModel = 0;
+    for (uint32_t c = 0; c < 8; c++)
+        if (dropped >> c & 1) {
+            p.storageTic[c] = 0;
+            p.fetchRung[c] = FetchNone;
+        }
+    if (!read)
+        p.flags &= ~uint32_t(PipelineFetches);
+    return dropped;
+}
+
 uint64_t packKeyHash(const std::string &key)
 {
     const size_t vertexAt = key.find(" | v "), fragmentAt = key.find(" | f ");
