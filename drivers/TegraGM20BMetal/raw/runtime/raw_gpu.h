@@ -1315,6 +1315,12 @@ public:
     // The CPU mappings of the device's tables and rings (each counts whole in the task's IOKit footprint)
     uint64_t controlMappedBytes();
 
+    // The GPU memory the device's connection allocated and holds
+    uint64_t allocatedBytes() const
+    {
+        return k_.allocatedBytes();
+    }
+
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     bool createControlBuffer(uint64_t length, Buffer &buffer);
     bool hostAccess(const Buffer &buffer, bool write, HostAccess &access);

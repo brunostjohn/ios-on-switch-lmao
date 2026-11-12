@@ -131,15 +131,21 @@
 #                     encoded, when an attachment of one of its passes has no twin
 #   nak_fp32_flush_test  NAK's fp32 flush elision (nak_nir_algebraic.py): a flushed source under fneg or fabs feeds an FTZ
 #                     instruction as its source does, and no FTZ result or widened half is a denormal
+#   raw_facade_lazy_test  the raw facade (RawMetal.h) over the kernel model with a pack of one state (raw_facade_harness.h):
+#                     a packed state's draw opens no m2v device and runs its programs in place from the pack's pages;
+#                     an unpacked state, a reflection, a foreign sampler and a method only m2v's device class has each open
+#                     it once, naming what for
 #   raw_multisample_test  raw/runtime/raw_multisample.h, raw_sample_positions.h: a stored multisampled texture's header
 #                     (NIL's) and target (its sample grid), and a pass's sample layout at the standard positions or its
 #                     own, rounded as Metal samples them, as the methods NVK writes
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load(":defs.bzl", "objcxx_units")
 
 lint_files()
 
@@ -1908,4 +1914,173 @@ host_test(
         "-framework",
         "CoreFoundation",
     ],
+)
+
+# The raw facade and runtime as //gpu:plugin builds them, for this Mac (raw_facade_harness.h): the facade's Objective-C++ units
+# through .cpp units of their own (defs.bzl), the runtime's C++ units, the shader compiler's, and the emitters
+RAW_HOST_UNITS = [
+    "//drivers/TegraGM20BMetal:raw/runtime/" + u
+    for u in [
+        "raw_gpu.cpp",
+        "raw_draw_bands.cpp",
+        "raw_transfer.cpp",
+        "raw_split.cpp",
+        "raw_variants.cpp",
+        "raw_alias.cpp",
+        "raw_arena.cpp",
+        "raw_kernel.cpp",
+        "raw_kernel_job.cpp",
+        "raw_resource_set.cpp",
+        "raw_shared_events.cpp",
+        "raw_pack.cpp",
+        "raw_ycbcr.cpp",
+        "raw_xr_planes.cpp",
+        "raw_zeta.cpp",
+        "raw_visibility.cpp",
+        "raw_visibility_pass.cpp",
+        "raw_private_comp.cpp",
+        "raw_multisample.cpp",
+        "raw_comp.cpp",
+        "raw_record_parts.cpp",
+        "raw_direct.cpp",
+        "raw_direct_compute.cpp",
+        "raw_emit.cpp",
+        "raw_cache.cpp",
+        "raw_kernel_cache.cpp",
+        "raw_compiler.cpp",
+        "raw_metallib.cpp",
+        "raw_completed.cpp",
+        "raw_compute.cpp",
+        "raw_semantic_plan.cpp",
+        "raw_semantic_resources.cpp",
+        "raw_semantic_setters.cpp",
+        "raw_compile_request.cpp",
+        "raw_remote.cpp",
+    ]
+] + [
+    "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+    "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+    "//drivers/TegraGM20BMetal:compiler_cc_srcs",
+]
+
+RAW_HOST_HEADERS = [
+    "//drivers/NativeMetal:frontend_headers",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
+    "//drivers/TegraGM20B:TegraGM20BHost.h",
+    "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+    "//drivers/TegraGM20BMetal:compiler_headers",
+    "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    "//kits/SwitchGM20B:class_headers",
+    "//kits/SwitchGM20BEmit:emit_headers",
+    "//kits/SwitchRefusal:SwitchRefusal.h",
+    "//kits/SwitchRefusal:SwitchRefusalSite.h",
+    "//kits/SwitchSeedPack:SwitchSeedStore.h",
+]
+
+RAW_HOST_COPTS = [
+    "-Idrivers/NativeMetal",
+    "-Idrivers/TegraGM20B",
+    "-Idrivers/TegraGM20BMetal/raw/runtime",
+    "-Ikits/SwitchRefusal",
+    "-Ikits/SwitchGM20BEmit/mesa",
+    "-I$(GENDIR)/kits/SwitchGM20BEmit/gen",
+    "-Ithird_party/mesa/src/nouveau/headers",
+    "-I$(GENDIR)/kits/SwitchGM20B",
+    "-Wno-deprecated-declarations",
+    # the plugin's key (gpu/defs.bzl): any, as a host test's pack takes
+    "-DTEGRA_RAW_STACK=0ull",
+]
+
+RAW_HOST_DEPS = [
+    "//drivers/NativeMetal/abi:metal_abi",
+    "//kits/SwitchGM20B:caps",
+    "//kits/SwitchGM20BEmit:macros_h",
+]
+
+objcxx_units(
+    name = "raw_facade_units",
+    testonly = True,
+    srcs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ],
+)
+
+host_library(
+    name = "raw_facade_host",
+    srcs = [":raw_facade_units"],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        # an included .mm is a header to clang, which asks a header that annotates some pointers to annotate them all
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS,
+)
+
+host_library(
+    name = "raw_runtime_host",
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+)
+
+# NVK's shared connection, as the raw path looks it up in a loaded image of NVK's name (raw_facade_harness.h loads it)
+cc_binary(
+    name = "libvulkan_nouveau.dylib",
+    testonly = True,
+    srcs = ["fake_nvk_connection.c"],
+    linkshared = True,
+)
+
+host_test(
+    name = "raw_facade_lazy_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_facade_harness.h",
+        "raw_facade_lazy_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_host",
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
 )

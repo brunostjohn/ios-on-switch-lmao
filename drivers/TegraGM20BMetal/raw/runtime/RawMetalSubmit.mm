@@ -262,7 +262,8 @@ bool submitRange(RMCommandBuffer *cb)
         cb->_frame.mark(switch_frame::ReplayStart);
         tTwinTicks = 0;
 #endif
-        id<MTLCommandBuffer> m = r.fallback ? replay(cb, range.from, range.to, true) : nil;
+        id<MTLCommandBuffer> m =
+            RM_M2V("a command buffer replayed on m2v") ? replay(cb, range.from, range.to, true) : nil;
 #if SWITCH_FRAME_TIMELINE
         cb->_frame.mark(switch_frame::ReplayEnd);
         cb->_frame.set(switch_frame::Twins, tTwinTicks);
