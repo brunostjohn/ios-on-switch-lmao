@@ -58,6 +58,7 @@ seed_tools(
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
     abi_header = "//drivers/TegraGM20B:TegraGM20BABI.h",
+    context_header = "//kits/SwitchGM20BEmit:context",
     frontend = METAL + ":NativeBridgeMetalFrontend.mm",
     host_bridge = "//gpu:bridge_host",
     metal_abi = METAL + "/abi:MetalABI.h",

@@ -44,6 +44,15 @@ py_binary(
     srcs = ["rawpack.py"],
 )
 
+# The compile profile the shader tools' bridge is built with, held to their runtime device
+py_test(
+    name = "compile_profile_test",
+    srcs = ["compile_profile_test.py"],
+    data = ["//gpu/seed:local_tools"],
+    env = {"COMPILE_PROFILE_TOOLS": "$(rootpath //gpu/seed:local_tools)"},
+    tags = ["requires-darwin"],
+)
+
 # Its steps, for the pack's coverage test (//drivers/TegraGM20BMetal:archive_coverage_test: archive_lines)
 py_library(
     name = "rawpack_steps",

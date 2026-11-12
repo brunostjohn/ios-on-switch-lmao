@@ -258,6 +258,9 @@ bool nmb_render_pipeline_offline(const NmbOfflineRenderPipelineDescriptor *descr
 bool nmb_compute_pipeline_offline(const NmbOfflineComputePipelineDescriptor *descriptor,
                                   const NmbDirectDispatch *dispatch,
                                   bool (*each)(const NmbDirectKernel *kernel, void *ctx), void *ctx);
+// Whether the m2v runtime's own compile device compiles `descriptor`'s kernel, as its compute state creation does (false
+// with nmb_last_error)
+bool nmb_offline_compute_pipeline_compiles(const NmbOfflineComputePipelineDescriptor *descriptor);
 
 // The build's compile profile held to `device`'s runtime (false: they differ, nmb_last_error says how), and the profile of
 // `device`'s runtime as JSON into `out` (`length` bytes, unterminated): its length, 0 on failure

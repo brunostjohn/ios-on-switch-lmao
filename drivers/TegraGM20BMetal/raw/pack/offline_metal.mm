@@ -394,6 +394,20 @@ bool compute(id descriptor, const NmbDirectDispatch *dispatch, bool (*each)(cons
 
 }  // namespace
 
+bool kernelMade(MTLComputePipelineDescriptor *descriptor, std::string &why)
+{
+    NmbOfflineComputePipelineDescriptor p = {};
+    std::vector<NmbOfflineFunction *> linked;
+    if (!computeDescriptor(descriptor, p, linked)) {
+        why = "a function of another device, or what the frontend does not represent";
+        return false;
+    }
+    if (nmb_offline_compute_pipeline_compiles(&p))
+        return true;
+    why = nmb_last_error();
+    return false;
+}
+
 raw::DirectTranslator translator(const char *nvk)
 {
     gNvk = dlopen(nvk, RTLD_NOW | RTLD_LOCAL);

@@ -26,6 +26,8 @@
 #include "vk_pipeline.h"
 #include "vk_pipeline_layout.h"
 
+#include "compiler/glsl_types.h"
+
 #include <pthread.h>
 
 #define SWITCH_EXPORT __attribute__((visibility("default")))
@@ -35,9 +37,14 @@ static struct nv_device_info frozen_info;
 static pthread_once_t frozen_once = PTHREAD_ONCE_INIT;
 static const struct switch_nak_frozen *frozen_table;
 
+/* With no vk_instance in the process, nothing else holds the GLSL type
+ * singleton spirv_to_nir makes types in (vk_instance_init takes it): the
+ * offline compile holds it for the process.
+ */
 static void
 make_nak(void)
 {
+   glsl_type_singleton_init_or_ref();
    frozen_info = frozen_table->info;
    frozen_nak = nak_compiler_create(&frozen_info);
 }

@@ -5,6 +5,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <string>
 #include "../runtime/RawDirect.h"
 
 // The device calls the line parsers make of a library: newLibraryWithURL:error: and newLibraryWithData:error:
@@ -17,5 +18,9 @@ namespace offline {
 
 // The direct compile of descriptors of RawOfflineDevice's functions, NVK's exports looked up in the dylib at `nvk`
 raw::DirectTranslator translator(const char *nvk);
+
+// Whether the m2v runtime makes a compute state of `descriptor` (of RawOfflineDevice's functions): its own compile
+// device compiles the kernel. False with `why`.
+bool kernelMade(MTLComputePipelineDescriptor *descriptor, std::string &why);
 
 }  // namespace offline

@@ -338,6 +338,7 @@ _RAW_LINK = [
     "probelog.py",
     "splits.py",
     "archives.py",
+    "draw_context.txt",
 ]
 
 def _generator_files(ctx, names):

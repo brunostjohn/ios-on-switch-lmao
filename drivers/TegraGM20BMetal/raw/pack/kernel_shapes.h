@@ -295,11 +295,11 @@ inline id<MTLComputePipelineState> state(id<MTLDevice> dev, const Shape &s, id<M
     return made;
 }
 
-// The shape's textures, each of its tag size, (16 + slot) x (8 + slot), read and written where its format allows
-inline NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<raw::BoundTexture> &bound,
-                                         std::string &why)
+// The shape's textures, each of its tag size, (16 + slot) x (8 + slot), read and written but for a swizzled one, which
+// Metal writes through no shader (read only)
+inline NSArray<MTLTextureDescriptor *> *textures(const std::vector<raw::BoundTexture> &bound)
 {
-    NSMutableArray<id<MTLTexture>> *out = [NSMutableArray array];
+    NSMutableArray<MTLTextureDescriptor *> *out = [NSMutableArray array];
     for (const raw::BoundTexture &b : bound) {
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(b.pixelFormat)
                                                                                      width:16 + b.slot
@@ -307,17 +307,10 @@ inline NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<ra
                                                                                  mipmapped:NO];
         d.swizzle = MTLTextureSwizzleChannelsMake(MTLTextureSwizzle(b.swizzle[0]), MTLTextureSwizzle(b.swizzle[1]),
                                                   MTLTextureSwizzle(b.swizzle[2]), MTLTextureSwizzle(b.swizzle[3]));
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-        id<MTLTexture> t = [dev newTextureWithDescriptor:d];
-        if (!t) {
-            d.usage = MTLTextureUsageShaderRead;
-            t = [dev newTextureWithDescriptor:d];
-        }
-        if (!t) {
-            why = "no texture of format " + std::to_string(b.pixelFormat);
-            return nil;
-        }
-        [out addObject:t];
+        const bool swizzled = b.swizzle[0] != MTLTextureSwizzleRed || b.swizzle[1] != MTLTextureSwizzleGreen ||
+                              b.swizzle[2] != MTLTextureSwizzleBlue || b.swizzle[3] != MTLTextureSwizzleAlpha;
+        d.usage = MTLTextureUsageShaderRead | (swizzled ? 0 : MTLTextureUsageShaderWrite);
+        [out addObject:d];
     }
     return out;
 }

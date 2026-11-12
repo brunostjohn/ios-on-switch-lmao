@@ -6,7 +6,7 @@
 
 use crate::objects::{
     DescriptorFunction, NmbComputePipelineDescriptorOf, NmbConstant, NmbDevice, NmbRenderPipelineDescriptorOf,
-    attribute_out, e, get, guard, release, specialization,
+    attribute_out, compute_descriptor, e, get, guard, release, specialization,
 };
 use metal2vulkan::Budget;
 use metal2vulkan::device::{
@@ -27,11 +27,13 @@ struct Profile {
 }
 
 /// The direct compile's three devices: the default render and compute form, the barrier form (no pixel interlock), the
-/// ordered form (`RequireOrdered`, centre fragment depth)
+/// ordered form (`RequireOrdered`, centre fragment depth); and the runtime's own compile device, which its states compile
+/// on
 pub(crate) struct Devices {
     pub(crate) native: Device,
     pub(crate) barrier: Device,
     pub(crate) ordered: Device,
+    pub(crate) runtime: Device,
 }
 
 impl Devices {
@@ -58,10 +60,12 @@ fn devices(p: &Profile) -> Result<Devices, String> {
     barrier.features.remove(&VkFeature::FragmentShaderSampleInterlock);
     let mut ordered = p.policy;
     ordered.framebuffer_fetch = FramebufferFetchPolicy::RequireOrdered;
+    let runtime = Device::new(p.enabled.clone(), p.policy).map_err(e("compile device"))?;
     Ok(Devices {
-        native: made(Device::new(p.enabled.clone(), p.policy))?,
+        native: runtime.with_native_target(NativeShaderTarget::Sm53),
         barrier: made(Device::new(barrier, p.policy))?,
         ordered: made(Device::new_with_center_fragment_depth(p.enabled.clone(), ordered))?,
+        runtime,
     })
 }
 
@@ -270,6 +274,19 @@ fn properties(function: *const NmbOfflineFunction, what: &'static str) -> Result
 pub extern "C" fn nmb_offline_function_type(function: *const NmbOfflineFunction) -> u64 {
     guard(0, || {
         Ok(properties(function, "function type")?.function_type().as_raw() as u64)
+    })
+}
+
+/// Whether the runtime's compile device compiles `descriptor`'s kernel, as its compute state creation does
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_offline_compute_pipeline_compiles(descriptor: *const NmbOfflineComputePipelineDescriptor) -> bool {
+    guard(false, || {
+        let descriptor = compute_descriptor(descriptor)?;
+        offline_devices()?
+            .runtime
+            .compile_compute_pipeline(&descriptor, &Budget::standard())
+            .map_err(e("compute pipeline"))?;
+        Ok(true)
     })
 }
 

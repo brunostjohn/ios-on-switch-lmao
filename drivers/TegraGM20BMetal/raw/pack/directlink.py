@@ -2,13 +2,13 @@
 """directlink: the raw pack (runtime/raw_pack.h) from the direct compile's records (directpack.mm), by mkpack's rules.
 
 A record holds the 3D registers raw_emit makes for its state. Every other register is the context a draw meets: the
-warm-up draw's registers (one probe draw: the context init and what NVK writes alike for every state), over which each
-state's own are laid as the probe saw them. mkpack.py's split_registers then tells the per-pipeline registers from the
-baseline, and the programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
+channel's registers after its context init (context.log), with what draw_context.txt changes of them, over which each
+state's own are laid. mkpack.py's split_registers then tells the per-pipeline registers from the baseline, and the
+programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
 
 usage: directlink.py <out dir> [--archives <inventory.tsv>] <bucket dir>...
-(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds warm.out and warm.log; the inventory gives
-the binary archives' declared states, archives.py)
+(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds context.log, the context init as nvdec ran
+it: context_state.cpp; the inventory gives the binary archives' declared states, archives.py)
 writes <out dir>/pack.bin, pack.json, layouts.txt, programs.bin (every render program, for nvdec) and report.txt
 """
 
@@ -23,7 +23,6 @@ import fetchfree_link
 import kernels
 import mkpack
 import packfile
-import probelog
 import splits
 
 PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
@@ -232,12 +231,19 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     }
 
 
-def warm_registers(out_path: str, log_path: str) -> dict[int, int]:
-    """Give the registers the warm-up probe's draw met (its context: every register a state does not set)."""
-    for p in probelog.load(out_path, log_path):
-        if p['records']:
-            return p['records'][0]['regs']
-    raise ValueError(f'{log_path}: no draw')
+def draw_context(post: dict[int, int]) -> dict[int, int]:
+    """Give the registers a state's draw meets but does not set: post-init's, as draw_context.txt changes them."""
+    context = dict(post)
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'draw_context.txt')) as f:
+        for line in f:
+            if not line.strip() or line.startswith('#'):
+                continue
+            method, value = line.split()
+            if value == '-':
+                context.pop(int(method, 16), None)
+            else:
+                context[int(method, 16)] = int(value, 16)
+    return context
 
 
 def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], list[dict]]:
@@ -348,10 +354,9 @@ def main() -> None:
         with open(buckets[at + 1]) as f:
             inventory = f.read()
         del buckets[at : at + 2]
-    warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'warm.log')))
-    warm_log = os.path.join(warm, 'warm.log')
-    init, post = mkpack.load_init(warm_log)
-    states, refused = gather(buckets, warm_registers(os.path.join(warm, 'warm.out'), warm_log))
+    warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
+    init, post = mkpack.load_init(os.path.join(warm, 'context.log'))
+    states, refused = gather(buckets, draw_context(post[0]))
     programs = {program_id(p): p for rec in states for p in rec['programs']}
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]

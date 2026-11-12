@@ -144,6 +144,7 @@ raw_stack(
     include_markers = [
         METAL + ":NativeBridgeMetalFrontend.h",
         GM20B_ABI,
+        "//kits/SwitchGM20BEmit:context",
         # where NVIDIA's class headers find "nvtypes.h" (raw/pack/nvdec.cpp)
         "//third_party/mesa/src/nouveau/headers:nvtypes.h",
     ],

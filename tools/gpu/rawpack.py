@@ -24,7 +24,8 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
     rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
                      --lines <bucket corpus> --out <dir named bucket<i>>
         one bucket's states and kernels made directly through the shader tools (raw/ holds directpack, the probe, the
-        mock and own.metallib; the NVK twin), with bucket 0's warm-up draw over the mock GM20B
+        mock, own.metallib and context.log; the NVK twin, whose offline compile directpack calls), with bucket 0's
+        context.log: the channel's context init as nvdec runs it
     rawpack.py link --generator <rawpack.py> --out <dir> [--corpus-report <file>] [--archives <build>.tsv]
                     <bucket dir>...
         the pack made from the buckets' records, unstamped: <out>/pack.bin and report.txt, with the archive
@@ -53,7 +54,7 @@ LIBRARY = re.compile(r' lib=\S+')
 # A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."), which any library may hold
 LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 # What the link reads of a bucket (directlink.py)
-KEPT = ('records.bin', 'warm.out', 'warm.log')
+KEPT = ('records.bin', 'context.log')
 FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
 # A bundle's library or a framework's resource library (VideoProcessors' *.bundle, AppleCVAPhoto's Resources/): the
 # runtime keys its states by their functions' AIR
@@ -187,6 +188,7 @@ def build(args: argparse.Namespace, generator: list[str], env: dict[str, str], r
     xcode = dict(line.split('=', 1) for line in Path(args.xcode_env).read_text().splitlines() if '=' in line)
     env['DEVELOPER_DIR'] = xcode['DEVELOPER_DIR']
     arguments = ['--build-only', '--bridge', root / args.host_bridge, '--metal-abi', root / args.metal_abi]
+    arguments += ['--context-header', root / args.context_header]
     arguments += ['--out', root / args.out]
     generate(generator, arguments, env, "the pack generator's tools")
 
@@ -262,7 +264,7 @@ def stamp(args: argparse.Namespace, generator: list[str], env: dict[str, str], _
 
 
 STEPS = {
-    'build': ('xcode-env', 'host-bridge', 'metal-abi', 'generator', 'tree', 'out'),
+    'build': ('xcode-env', 'host-bridge', 'metal-abi', 'context-header', 'generator', 'tree', 'out'),
     'split': ('generator', 'qc', 'corpus'),
     'probe': ('generator', 'raw', 'nvk', 'qc', 'lines', 'out'),
     'link': ('generator', 'out'),

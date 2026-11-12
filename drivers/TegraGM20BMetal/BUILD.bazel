@@ -128,6 +128,7 @@ filegroup(
         "raw/fx/test/twod_sim.h",  # the 2D engine nvdec executes (pack/nvdec.cpp)
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
         "//kits/SwitchGM20B:class_headers",  # pack/nvdec.cpp's method numbers
+        "//kits/SwitchGM20BEmit:context",  # the channel's context init pack/context_state.cpp runs
     ],
 )
 
