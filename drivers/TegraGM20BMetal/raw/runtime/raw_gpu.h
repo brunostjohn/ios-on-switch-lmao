@@ -1119,6 +1119,12 @@ public:
         return std::move(splitCaptures_);
     }
 
+    // The batch records of this command buffer's split draws (raw_split_batch.h), one a prologue launch, until its commit
+    const std::vector<SplitBatchRecord> &splitRecords() const
+    {
+        return splitRecords_;
+    }
+
     // HW Test's bench: each prologue launch's frontier (its address, its bytes), until the next begin()
     std::vector<std::pair<uint64_t, uint32_t>> splitFrontiers() const
     {
