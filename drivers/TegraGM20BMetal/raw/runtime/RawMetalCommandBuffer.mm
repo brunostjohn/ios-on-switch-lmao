@@ -98,9 +98,9 @@ static std::atomic<uint64_t> gBytesChunkBytes{0};
 
 static std::atomic<bool> gBytesGrowing{false};
 
-// The length of the chunk taken last, up to kChunkMost: what a chunk made ahead for the pool is made at. A recording that
-// coalesced past 64 KB (coalesceBytes) given a 64 KB one outgrows it and coalesces again at its completion, making and
-// freeing control buffers on the completion thread.
+// The length of the chunk taken last, up to kChunkMost: what a chunk made for the pool, or for a command buffer it had none
+// for, is made at. A recording that coalesced past 64 KB (coalesceBytes) given a 64 KB one outgrows it and coalesces
+// again at its completion, making and freeing control buffers on the completion thread.
 static std::atomic<uint64_t> gBytesChunkLength{kRMBytesChunk};
 
 static void keepBytesChunk(const raw::Buffer &chunk)
@@ -157,7 +157,7 @@ bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk)
         }
         gBytesChunks.keep(node);
     }
-    return gRM->raw->createControlBuffer(length, chunk);
+    return gRM->raw->createControlBuffer(std::max(length, gBytesChunkLength.load(std::memory_order_relaxed)), chunk);
 }
 
 static void giveRecording(RMCommandBuffer *b)
