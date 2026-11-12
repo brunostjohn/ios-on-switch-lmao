@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Every Core Animation and other framework render state of the corpus made on the raw facade over the kernel model, with
-// a device build's pack (SWITCH_REAL_PACK) and the IPSW crawl's libraries (SWITCH_LIB_ROOT, the crawl's root/): which
-// states open m2v and for what, by library. Skipped where either is not given.
+// Every Core Animation and other framework render state of the corpus, and Core Animation's compute states, made on the
+// raw facade over the kernel model with a device build's pack (SWITCH_REAL_PACK, of the OS build SWITCH_PACK_BUILD) and
+// the IPSW crawl's libraries (SWITCH_LIB_ROOT, the crawl's root/): which states open m2v and for what, by library.
+// Skipped where the pack or the libraries are not given.
 #include "raw_facade_harness.h"
 #include "../raw/pack/probe_states.h"
 
@@ -65,7 +66,12 @@ void corpusNeeds()
     Tally tally;
     const char *out = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
     std::ofstream rows(std::string(out ? out : harness::dir().c_str()) + "/states.tsv");
+    // a line tagged with another OS build than the pack's (SWITCH_PACK_BUILD) is that build's pack's state
+    const char *build = getenv("SWITCH_PACK_BUILD");
+    const std::string ours = std::string(" os=") + (build ? build : "") + " ";
     for (const std::string &line : probe::corpusLines(text, false)) {
+        if (build && line.find(" os=") != std::string::npos && line.find(ours) == std::string::npos)
+            continue;
         if (line.rfind("@L ", 0)) {
             tallyState(device, qc, "QuartzCore", line, "", tally, rows);
             continue;
@@ -75,6 +81,35 @@ void corpusNeeds()
         const std::string framework = probe::frameworkName(path);
         tallyState(device, probe::frameworkLibrary(device, path), framework.empty() ? path : framework,
                    line.substr(space + 1), framework, tally, rows);
+    }
+    // Core Animation's compute states (the corpus's C lines of QuartzCore's functions, no constants), as it makes them
+    for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
+        if (![l hasPrefix:@"C ok=1 "] || ![l containsString:@"/QuartzCore.framework/"] || [l containsString:@" #"])
+            continue;
+        const std::string line = l.UTF8String;
+        const size_t at = line.find(" | k ") + 5;
+        const std::string function = line.substr(at, line.find(' ', at) - at);
+        MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
+        d.computeFunction = [qc newFunctionWithName:@(function.c_str())];
+        if (line.find(" label=") != std::string::npos)
+            d.label = @(function.c_str());
+        const auto before = needsOf(device);
+        @autoreleasepool {
+            NSError *made = nil;
+            if (line.find(" form=f ") != std::string::npos)
+                (void)[device newComputePipelineStateWithFunction:d.computeFunction error:&made];
+            else
+                (void)[device newComputePipelineStateWithDescriptor:d
+                                                            options:MTLPipelineOptionNone
+                                                         reflection:nil
+                                                              error:&made];
+        }
+        std::string asked;
+        for (const auto &[need, count] : needsOf(device))
+            if (count > (before.count(need) ? before.at(need) : 0))
+                asked += (asked.empty() ? "" : "; ") + need;
+        tally["QuartzCore compute"][asked.empty() ? "none" : asked]++;
+        rows << "QuartzCore compute\t" << (asked.empty() ? "none" : asked) << "\t" << function << "\n";
     }
     for (const auto &[library, needs] : tally)
         for (const auto &[need, states] : needs)
