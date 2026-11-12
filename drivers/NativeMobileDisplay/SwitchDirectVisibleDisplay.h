@@ -5,7 +5,10 @@
 // that no engine wrote) flips from the kick itself; one whose producer is still running keeps the fence-only present.
 // A window B change going out with the frame keeps the present when it has writers of its own to wait for. A producer
 // still running at the offer, past the slot's first frame, is watched instead: its own interrupt pass completes the
-// fence-only offer with no present job (TEGRA_SCANOUT_COPY_PRODUCER_WATCH).
+// fence-only offer with no present job (TEGRA_SCANOUT_COPY_PRODUCER_WATCH). A surface with a writer promise pending
+// (SwitchGpuWriterPromise.h) neither flips from the kick nor is watched: the DC's flip is a register write with no GPU
+// work in front of it to acquire the promise in, and the promised job does not exist yet for a watch to arm on, so the
+// fence-only present job acquires the promise on the GPU and its completion flips.
 // Included in the class body after SwitchDirectSlots.h; under the gate.
 
 switch_gpu_backing *scanoutHeld[kSlots] = {};
@@ -49,7 +52,8 @@ bool directFrameVisible(int entry) const
     if (!read || !read->lease || planeNextAlsoWritten() || (planeNextSet && planeFenced(planeNext)))
         return false;
     const auto &producer = read->view.producer;
-    return !producer.engine || switch_gpu_backing_token_external_status(&producer) == 1;
+    return !switch_gpu_backing_promised(read->view.native) &&
+           (!producer.engine || switch_gpu_backing_token_external_status(&producer) == 1);
 }
 
 // offerDirect's first step once the slot is mapped: true when the frame went to window A from here.

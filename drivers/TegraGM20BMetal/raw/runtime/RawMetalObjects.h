@@ -293,6 +293,12 @@ struct RMSharedEventWait {
     // a drawable present was added (its completion is observed); the range being submitted ends quiet
     // (raw_completion_source.h)
     bool _presents, _rangeQuiet;
+    // writer promises (Device::promise) made when it counted as scheduled before its work reached the kernel, under
+    // _lock; taken once its last raw range carries them to the kernel or finish() cancels them. _promised: any were
+    // asked for, read without the lock by the frame path
+    std::vector<uint32_t> _promises;
+    std::atomic<bool> _promised;
+    bool _promisesTaken;
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
@@ -330,7 +336,6 @@ struct RMSharedEventWait {
     // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
     // handlers still wait for its submission (raw_scheduled_wait.h)
     bool _held;
-    std::atomic<uint64_t> _promise;  // the kernel's writer promise for the surfaces it writes, from its hold to unhold()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
 #endif

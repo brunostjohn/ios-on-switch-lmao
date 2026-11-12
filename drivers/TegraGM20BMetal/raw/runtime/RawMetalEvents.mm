@@ -69,7 +69,6 @@ bool waitsForEvent(RMCommandBuffer *cb)
 
 void unhold(RMCommandBuffer *cb)
 {
-    endWriterPromise(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::lock_guard<std::mutex> l(gHoldersLock);
     gHolders.erase(cb);

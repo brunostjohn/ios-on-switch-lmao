@@ -680,7 +680,7 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
 	expectBefore(flat(definition(gpu(), "static u32 chan_fence_job(struct tgm_chan *chan, int "
-					    "external, u32 first, u32 next, int quiet)")),
+					    "external, u32 first, u32 next, int quiet,")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
@@ -1359,21 +1359,25 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
 }
 
-// A held command buffer's writer promise (TegraGM20BMethodWriterPromise) is the connection's: method 34 reaches it, it
-// names writes of the connection's imports only, and the connection's close ends every one it still has.
+// A held command buffer's writer promise (TegraGM20BMethodWriterPromise) is the connection's: method 34 reaches it under
+// the connection lock with the submit gate open, it names writes of the connection's IOSurface imports only, and each
+// release from the CPU reaches a parked GPU reader through the write-combined fence page.
 TEST(GM20BJobSource, AWriterPromiseIsTheConnectionsAndEndsWithIt)
 {
 	const std::string run = flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
-	EXPECT_THAT(run, HasSubstr("case TegraGM20BMethodWriterPromise: wantIn = sizeof(TegraGM20BAbiWriterPromise);"));
-	EXPECT_THAT(run, HasSubstr("return writerPromise(static_cast<const TegraGM20BAbiWriterPromise *>(in));"));
+	EXPECT_THAT(run, HasSubstr("case TegraGM20BMethodWriterPromise: wantIn = sizeof(TegraGM20BAbiWriterPromise); "
+				   "wantOut = sizeof(TegraGM20BAbiWriterPromiseReply);"));
+	EXPECT_THAT(run, HasSubstr("submitGate_.closed() ? kIOReturnNotOpen : writerPromise("));
+	const std::string promises = SourceText("../TegraGM20BUserClientPromise.cpp");
 	const std::string promise = flat(definition(
-		client(), "IOReturn AGXDeviceUserClient::promiseWrites(const TegraGM20BAbiWriterPromise *in,"));
-	EXPECT_THAT(promise, HasSubstr("uses[i].access != TegraGM20BSurfaceWrite"));
-	EXPECT_THAT(promise, HasSubstr("const Bo *bo = findBo(uses[i].handle); if (!bo || !bo->backing) return "
-				       "kIOReturnNotFound;"));
-	EXPECT_THAT(promise, HasSubstr("promises_[slot].promise(backings, in->count)"));
-	const std::string retire = flat(client());
-	EXPECT_THAT(retire, HasSubstr("for (auto &promise : promises_) promise.end(); bzero(promiseCookies_,"));
+		promises, "IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in,"));
+	EXPECT_THAT(promise, HasSubstr("if (!bo || !bo->backing || !bo->surface || uses[i].access != TegraGM20BSurfaceWrite"));
+	EXPECT_THAT(promise, Not(HasSubstr("switch_gpu_promise_release(")));
+	const std::string release = flat(definition(promises, "void AGXDeviceUserClient::releasePromise(uint32_t promise)"));
+	expectBefore(release, "switch_gpu_promise_release(&promises_[promise], promiseWord(promise))",
+		     "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
+	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::drainResources()")), "releasePromises(true);",
+		     "tgm_chan_del(&chan);");
 }
 
 // A direct present whose producer still runs at the offer has no job (SwitchGpuPresentWatch.h): the producer's own
@@ -1552,7 +1556,7 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 		HasSubstr("*entries = count + 6 + stamps + job_fences + CHAN_WAKE_ENTRIES + 1;"));
 	EXPECT_THAT(
 		room,
-		HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16;"));
+		HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16 +"));
 	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
 	EXPECT_THAT(flat(definition(client(), "uint32_t switch_gpu_info_flags(void)")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
@@ -1582,8 +1586,11 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	const auto exec = flat(definition(gpu(), "int chan_exec_body("));
 	EXPECT_THAT(exec, HasSubstr("if ((l2_on() && host_written) || tlb)"));
 	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
-	EXPECT_THAT(exec, HasSubstr("*seqno = chan_fence_job(chan, external, chan->submitted + 1, "
-				    "last, quiet);"));
+	EXPECT_THAT(
+		exec,
+		HasSubstr(
+			"*seqno = chan_fence_job(chan, external, chan->submitted + 1, last, quiet, "
+			"releases, release_count);"));
 	// A batch's internal fence orders execution only: no L2 flush, no visible release, no interrupt. Its kick is the
 	// GPFIFO entry that keeps it between the batches; the job's own kick writes GP_PUT.
 	const auto internal = flat(definition(gpu(), "static void chan_job_fence("));

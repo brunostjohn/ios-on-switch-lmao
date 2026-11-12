@@ -395,8 +395,6 @@ public:
 	} admissions_[kMaxChannels];
 
 	uint64_t admissionCookies_[kMaxChannels] = {};
-	Admission promises_[4];
-	uint64_t promiseCookies_[4] = {};
 	IOLock storage;
 	IOLock *lock_ = &storage;
 	void *vm_ = nullptr;
@@ -436,6 +434,7 @@ public:
 	thread_call_t retireCall_ = &call;
 	Call wakeStorage;
 	thread_call_t wakeCall_ = &wakeStorage;
+	uint32_t promisesKept_ = 0;
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 		 retirementStopped_ = 0;
 	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0;
@@ -455,6 +454,10 @@ public:
 	}
 
 	void destroySets()
+	{
+	}
+
+	void releasePromises(bool)
 	{
 	}
 

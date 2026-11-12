@@ -408,6 +408,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	int j = 0;
 	int b = 0;
 	int progress = 0;
+	u32 released = 0;
 
 	if (tgm_gpu.stage < 3 || !tgm_iso.deadline)
 		return TGM_HANG_STUCK;
@@ -459,6 +460,14 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
 	}
+	/* A stuck reader of a surface whose promised writer never ran goes on with what the surface holds, at the first
+	 * look: its caller's own bound has passed, and a wait on a promise is never the GPU's hang (a kernel channel's
+	 * unconfirmed one with nothing else progressing is otherwise fatal below). */
+	for (i = 0; i <= n; i++)
+		if (chans[i] && !c[i].moving && chan_stuck(chans[i], now))
+			released += tgm_chan_release_promises(chans[i], who, waited_ns);
+	if (released)
+		return TGM_HANG_PROGRESSING;
 	/* each candidate's engine reset is tried at most once a check */
 	for (;;) {
 		verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel,

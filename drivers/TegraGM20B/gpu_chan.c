@@ -497,6 +497,18 @@ void switch_gpu_fence_hold(const volatile uint32_t *va)
 				   __ATOMIC_ACQ_REL);
 }
 
+volatile uint32_t *tgm_fence_word(uint32_t offset)
+{
+	return tgm_fence_pages.va && offset < TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT && !(offset & 3)
+		       ? (volatile uint32_t *)((u8 *)tgm_fence_pages.va + offset)
+		       : NULL;
+}
+
+uint32_t tgm_fence_offset(const volatile uint32_t *word)
+{
+	return (uint32_t)((uintptr_t)word - (uintptr_t)tgm_fence_pages.va);
+}
+
 void switch_gpu_fence_put(const volatile uint32_t *va)
 {
 	uintptr_t off = (uintptr_t)va - (uintptr_t)tgm_fence_pages.va;

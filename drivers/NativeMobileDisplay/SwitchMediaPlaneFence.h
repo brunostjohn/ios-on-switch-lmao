@@ -13,7 +13,7 @@
 // False: a producer is the GPU's, or every flip slot is in use; the bridge fence takes the set.
 bool planeMediaFence(const PlaneSet &p)
 {
-    switch_gpu_backing_token producers[2] = {};
+    switch_gpu_backing_token producers[kPlaneDependencies] = {};
     const unsigned count = planeDependencies(p, producers);
     if (!count)
         return false;

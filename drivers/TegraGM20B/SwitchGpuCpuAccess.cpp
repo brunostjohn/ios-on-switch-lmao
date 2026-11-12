@@ -17,8 +17,8 @@ bool valid_range(switch_gpu_backing *backing, uint64_t offset, uint64_t bytes, u
 {
 	const uint64_t size = uint64_t(backing->pages->count) << 12;
 	return (access & (kRead | kWrite)) &&
-	       !(access &
-		 ~(kRead | kWrite | kAvoid | kDiscard | kNoCache | kConcurrent | kPreserve)) &&
+	       !(access & ~(kRead | kWrite | kAvoid | kDiscard | kNoCache | kConcurrent |
+			    kPreserve | SWITCH_GPU_BACKING_PROMISED)) &&
 	       bytes && offset <= size && bytes <= size - offset &&
 	       (!(access & kPreserve) || access == (kRead | kAvoid | kPreserve)) &&
 	       (!(access & kConcurrent) || (!offset && bytes == size)) &&
@@ -88,7 +88,8 @@ bool cpu_conflicts(const switch_gpu_backing *backing, uint32_t access)
 		backing->cpu_writers - (concurrent ? backing->concurrent_writers : 0);
 	const uint32_t readers =
 		backing->cpu_readers - (concurrent ? backing->concurrent_readers : 0);
-	return writers || backing->gpu_admission_writers || backing->promised_writers ||
+	return writers || backing->gpu_admission_writers ||
+	       switch_gpu_backing_promise_pending_locked(backing) ||
 	       ((access & kWrite) && (readers || backing->gpu_admission_readers));
 }
 
@@ -107,6 +108,8 @@ void release_cpu_locked(switch_gpu_backing *backing, uint32_t access)
 		--backing->cpu_writers;
 	else
 		--backing->cpu_readers;
+	if (access & SWITCH_GPU_BACKING_PROMISED)
+		--backing->promised_readers;
 	IOLockWakeup(backing->lock, &backing->cpu_writers, false);
 	switch_gpu_admission_changed();
 }
@@ -129,7 +132,9 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 		return -22;
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
-	int result = valid_range(backing, offset, bytes, access) ? 0 : -22;
+	const bool valid =
+		valid_range(backing, offset, bytes, access) && !(access & SWITCH_GPU_BACKING_PROMISED);
+	int result = valid ? 0 : -22;
 	while (!result && cpu_conflicts(backing, access)) {
 		if (access & kAvoid)
 			result = -16;

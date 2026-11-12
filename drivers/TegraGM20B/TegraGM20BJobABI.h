@@ -13,14 +13,17 @@ enum {
 	TegraGM20BMethodSubmitJob = 33,
 	TegraGM20BMethodWriterPromise = 34,
 
-	TegraGM20BMaxWriterPromises = 16,
-	TegraGM20BMaxPromisedWrites = 32,
-
 	TegraGM20BMaxResourceSets = 16,
 	TegraGM20BMaxSetMembers = 4096,
 	/* The connection's fence page (ChannelCreate's fence_token) holds each set's generation at this word plus its id
 	 * minus one, so a client that gets kIOReturnNotReady can tell a stale set from a stale native view. */
 	TegraGM20BSetGenerationWord = 768,
+	/* Writer promises (method 34): promise i is released when the fence page's word TegraGM20BPromiseWord + i
+	 * reaches its value */
+	TegraGM20BPromiseWord = 512,
+	TegraGM20BMaxPromises = 32,
+	TegraGM20BMaxPromiseUses = 8,
+	TegraGM20BMaxJobPromises = 4,
 };
 
 /* Method 31. Members are the BOs a SubmitJob names by set instead of by use, named as TegraGM20BAbiSurfaceUse records
@@ -75,6 +78,36 @@ enum {
 	TegraGM20BJobAdmissionCancel = 1u << 7,
 	TegraGM20BJobAdmission = TegraGM20BJobAdmissionBegin | TegraGM20BJobAdmissionContinue |
 				 TegraGM20BJobAdmissionEnd | TegraGM20BJobAdmissionCancel,
+	/* the job keeps writer promises (method 34): a TegraGM20BAbiJobPromises follows the admission record (or the
+	 * shared uses), and the job's end releases them */
+	TegraGM20BJobFulfills = 1u << 8,
+};
+
+/* Method 34, reply TegraGM20BAbiWriterPromiseReply. A command buffer counted as scheduled before its jobs reach the
+ * kernel promises its writes of the IOSurfaces it names (TegraGM20BAbiSurfaceUse handles, Write): until the promise is
+ * released, a present of one of them and every job of another connection that uses one wait for it on the GPU, and a
+ * CPU lock of one waits for the job that keeps it. Make:
+ * `uses_address`/`count`, `channel` the channel whose job will keep it; the reply names the promise. Cancel: `promise`,
+ * released at once. A job that names it (TegraGM20BJobFulfills) releases it at its end; a kill of the channel it was
+ * kept on and the connection's close release it too. */
+enum {
+	TegraGM20BPromiseMake = 0,
+	TegraGM20BPromiseCancel = 1,
+};
+
+struct TegraGM20BAbiWriterPromise {
+	uint64_t uses_address;
+	uint32_t op, count;
+	uint32_t promise, channel;
+};
+
+struct TegraGM20BAbiWriterPromiseReply {
+	uint32_t promise, reserved;
+};
+
+struct TegraGM20BAbiJobPromises {
+	uint32_t count, reserved;
+	uint32_t promise[TegraGM20BMaxJobPromises];
 };
 
 /* Method 33, reply TegraGM20BAbiExecReply. Pushes and shared uses are as SubmitAddress's (TegraGM20BPushFence allowed);
@@ -91,26 +124,6 @@ struct TegraGM20BAbiJob {
 	uint32_t shared_count, flags;
 };
 
-/* TegraGM20BAbiWriterPromise.flags: exactly one */
-enum {
-	TegraGM20BPromiseBegin = 1u << 0,
-	TegraGM20BPromiseEnd = 1u << 1,
-};
-
-/* Method 34. A command buffer that counts as scheduled before its work reaches the kernel (its queue waits on a shared
- * event its committer may be about to signal) promises the surfaces it will write, as an Apple GPU's scheduled command
- * buffer already holds them: until the promise ends no present latches one of them (the display defers it, as for a CPU
- * writer) and a CPU lock of one waits. Begin: count records (TegraGM20BAbiSurfaceUse, handles of the connection's
- * imports, TegraGM20BSurfaceWrite) at uses_address and a cookie the connection has no promise under. End (count 0,
- * uses_address 0): the promise under cookie ends, once the job that writes them has returned from its submission or
- * never will. kIOReturnNotFound: a handle is not an import of the connection's. No CPU owner refuses a promise, and
- * the promised job's own submission (its conversions, layouts and imports) never waits for it. Closing the connection
- * ends its promises. */
-struct TegraGM20BAbiWriterPromise {
-	uint64_t cookie, uses_address;
-	uint32_t count, flags;
-};
-
 #ifdef __cplusplus
 #define TEGRA_GM20B_JOB_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -121,5 +134,7 @@ TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiResourceSetCreateReply, 16);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiResourceSetRelease, 8);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJob, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromise, 24);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromiseReply, 8);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJobPromises, 24);
 #undef TEGRA_GM20B_JOB_ASSERT
 #endif

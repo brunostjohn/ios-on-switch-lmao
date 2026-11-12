@@ -66,6 +66,9 @@ struct KernelJob {
     uint64_t admission = 0;
     uint32_t admissionFlags = 0;
     bool quiet = false;  // its end raises no interrupt unless a wait asks for one (TegraGM20BJobQuiet)
+    // writer promises (method 34) the job keeps: its end releases them
+    const uint32_t *promises = nullptr;
+    uint32_t promiseCount = 0;
 };
 
 class Kernel {
@@ -188,14 +191,12 @@ public:
     // id and generation; `mirror`, the generation's word in the fence page. The kern_return_t.
     int resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
                     const volatile uint32_t *&mirror);
+    // Method 34: a writer promise of `channel`'s job for the IOSurface imports `handles` (Make), or its release (Cancel).
+    // The kern_return_t.
+    int promise(uint32_t channel, const std::vector<uint64_t> &handles, uint32_t &promise);
+    int cancelPromise(uint32_t promise);
 
     std::shared_ptr<SharedEvents> sharedEvents();
-
-    // WriterPromise (method 34): the imports a command buffer will write, named before its job exists, so that no present
-    // latches one of them ahead of that writer. The cookie to end it with; 0: none taken (refused, or more than the kernel
-    // takes at once).
-    uint64_t promiseWrites(const uint64_t *handles, uint32_t count);
-    void endPromise(uint64_t cookie);
 
     uint64_t nextAdmission()
     {
@@ -250,7 +251,6 @@ public:
     }
 
 private:
-    std::atomic<uint64_t> promiseCookie_{1};
     void setError(std::string error)
     {
         std::lock_guard<std::mutex> lock(errorLock_);

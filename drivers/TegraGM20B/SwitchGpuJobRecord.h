@@ -11,13 +11,17 @@ struct SwitchGpuJobRecord {
 	const TegraGM20BAbiSurfaceUse *uses;
 	const TegraGM20BAbiSubmitEvents *events;
 	uint64_t admission;  // the admission cookie, 0: none
+	const TegraGM20BAbiJobPromises *promises;  // the writer promises it keeps, or null
 
 	static constexpr uint32_t kFlags = TegraGM20BJobExternal | TegraGM20BJobHostWritten |
-					   TegraGM20BJobHasEvents | TegraGM20BJobQuiet | TegraGM20BJobAdmission;
-	static constexpr size_t kMaxBytes = sizeof(TegraGM20BAbiJob) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
-					    TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) +
-					    sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiSubmitEvents) +
-					    TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse);
+					   TegraGM20BJobHasEvents | TegraGM20BJobQuiet |
+					   TegraGM20BJobAdmission | TegraGM20BJobFulfills;
+	static constexpr size_t kMaxBytes =
+		sizeof(TegraGM20BAbiJob) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
+		TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) +
+		sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises) +
+		sizeof(TegraGM20BAbiSubmitEvents) +
+		TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse);
 
 	static SwitchGpuJobRecord parse(void *bytes, size_t size)
 	{
@@ -51,6 +55,17 @@ struct SwitchGpuJobRecord {
 			expected += sizeof(*lease);
 			after += sizeof(*lease);
 		}
+		const TegraGM20BAbiJobPromises *promises = nullptr;
+		if (job->flags & TegraGM20BJobFulfills) {
+			if (size < expected + sizeof(TegraGM20BAbiJobPromises))
+				return record;
+			promises = reinterpret_cast<const TegraGM20BAbiJobPromises *>(after);
+			if (!promises->count || promises->count > TegraGM20BMaxJobPromises ||
+			    promises->reserved)
+				return record;
+			expected += sizeof(*promises);
+			after += sizeof(*promises);
+		}
 		const TegraGM20BAbiSubmitEvents *events = nullptr;
 		if (job->flags & TegraGM20BJobHasEvents) {
 			if (size < expected + sizeof(TegraGM20BAbiSubmitEvents))
@@ -68,7 +83,7 @@ struct SwitchGpuJobRecord {
 		}
 		if (size != expected)
 			return record;
-		return {job, pushes, uses, events, cookie};
+		return {job, pushes, uses, events, cookie, promises};
 	}
 
 	bool valid() const

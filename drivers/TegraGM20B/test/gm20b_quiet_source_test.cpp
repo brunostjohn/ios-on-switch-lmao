@@ -160,3 +160,44 @@ TEST(GM20BQuietSource, TheIdleClockSettlesQuietEnds)
 		     "tgm_chan_need(chan, READ_ONCE(chan->submitted));");
 	EXPECT_THAT(settle, Not(HasSubstr("nvxnu_idle(")));
 }
+
+// Writer promises (SwitchGpuWriterPromise.h): a present and another connection's job wait for them on the GPU; the job
+// that keeps one releases it after its own fence; the CPU releases the rest; nothing waits for its own promise; no lease
+// a present or a display slot took behind one holds the promised job's write off; a CPU reader waits for the promised
+// job.
+TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
+{
+	expectBefore(Body(unit("SwitchGpuScanoutSnapshot.h"), "int add(switch_gpu_backing *backing)"),
+		     "switch_gpu_backing_snapshot_read_promises(", "tokens + count,");
+	const std::string job = unit("TegraGM20BUserClientJobSubmit.cpp");
+	expectBefore(job, "keepPromises(record.promises, releases)",
+		     "switch_gpu_chan_submit_enter(chan);");
+	expectBefore(job, "events->captureDependencies(job.dependencies, dependencies);",
+		     "job.uses[i].backing, ownPromises,");
+	expectBefore(job, "job.uses[i].backing, ownPromises,", "switch_gpu_chan_exec_job(");
+	expectBefore(job, "switch_gpu_backing_commit(&transaction);",
+		     "keptPromises(record.promises, slot);");
+	const std::string fence = Body(unit("gpu_exec.c"), "static u32 chan_fence_job(");
+	expectBefore(fence, "lower_32_bits(chan->fence_gpu)", "releases[s].value");
+	const std::string acquire = Body(unit("gpu_exec.c"), "int tgm_backing_dependencies(");
+	expectBefore(acquire, "token->engine == SWITCH_GPU_ENGINE_PROMISE",
+		     "tgm_chan_note_promise(chan, token->queue,");
+	expectBefore(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
+		     "tgm_chan_release_promises(chans[i], who, waited_ns);",
+		     "verdict = tgm_hang_blame(");
+	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
+	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
+	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));
+	EXPECT_THAT(Body(unit("SwitchGpuCpuAccess.cpp"), "bool cpu_conflicts("),
+		    HasSubstr("switch_gpu_backing_promise_pending_locked(backing)"));
+	expectBefore(Body(unit("SwitchGpuCpuLease.cpp"), "static int snapshot_read("), "while (!avoid &&",
+		     "switch_gpu_backing_promise_pending_locked(backing)))");
+	const std::string retirement = unit("SwitchGpuClientRetirement.h");
+	expectBefore(Body(retirement, "void AGXDeviceUserClient::drainResources()"),
+		     "releasePromises(true);", "tgm_chan_del(&chan);");
+	EXPECT_THAT(Body(retirement, "void AGXDeviceUserClient::retireBatch()"),
+		    HasSubstr("releasePromises(false);"));
+	EXPECT_THAT(Body(unit("TegraGM20BUserClientChannel.cpp"),
+			 "IOReturn AGXDeviceUserClient::channelDestroy("),
+		    HasSubstr("releasePromises(false);"));
+}

@@ -993,8 +993,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint64_t kPlaneSlotSpan = switch_window_caps::kPlaneSlotSpan,
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
-    // An overlay's picture producer and a recorded turn's request waits (src and dst), for each of two overlays.
-    static constexpr unsigned kPlaneOverlayDependencies = 3, kPlaneDependencies = 2 * kPlaneOverlayDependencies;
+    // An overlay's picture producer, a recorded turn's request waits (src and dst) and its surface's writer promises, for
+    // each of two overlays.
+    static constexpr unsigned kPlaneOverlayDependencies = 3 + SWITCH_GPU_BACKING_PROMISES,
+                              kPlaneDependencies = 2 * kPlaneOverlayDependencies;
 
     using PlaneSlot = switch_display::PlaneSlot;
 

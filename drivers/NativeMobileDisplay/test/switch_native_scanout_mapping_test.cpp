@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
 #include <array>
+#include <vector>
 #define IONewZero(type, count) new (std::nothrow) type[count]()
 class OSObject {
 public:
@@ -78,6 +79,16 @@ int switch_native_scanout_pitch(OSObject *, SwitchNativeScanout *out)
 int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *token)
 {
     return token->value <= completedThrough ? 1 : 0;
+}
+std::vector<switch_gpu_backing_token> promised;  // the overlay surface's pending writer promises
+int switch_gpu_backing_promise_tokens(switch_gpu_backing *, uint32_t, uint32_t, switch_gpu_backing_token *tokens,
+                                      uint32_t capacity)
+{
+    if (promised.size() > capacity)
+        return -28;
+    for (size_t i = 0; i < promised.size(); ++i)
+        tokens[i] = promised[i];
+    return int(promised.size());
 }
 void switch_native_scanout_deliver(SwitchNativeScanout *value)
 {
@@ -296,6 +307,28 @@ TEST_F(NativeScanoutMapping, ARecordedTurnsRequestWaitsOrderTheSetLikeItsProduce
     EXPECT_TRUE(display->planeOverlayWaits(*display->planeSlots[0].native));
     completedThrough = 301;
     EXPECT_FALSE(display->planeOverlayWaits(*display->planeSlots[0].native));
+}
+
+// A GPU-rendered overlay whose command buffer was held on a shared event: the set's fence acquires its writer promise.
+TEST_F(NativeScanoutMapping, AnOverlaysWriterPromiseIsOneOfItsDependencies)
+{
+    ASSERT_EQ(admit(), 0);
+    display->planeSlots[0].native->view.native = reinterpret_cast<switch_gpu_backing *>(0x1000);
+    promised = {{100, 0, SWITCH_GPU_ENGINE_PROMISE, 2048}};
+    display->planeNextSet = true;
+    display->planeNext.window[0].on = true;
+    display->planeNext.window[0].slot = 0;
+    TegraScanoutCopy copy = {};
+    switch_gpu_backing_token tokens[6] = {};
+    display->planeNextDependencies(copy, tokens);
+    ASSERT_EQ(copy.dependencyCount, 2u);
+    EXPECT_EQ(copy.dependencies[1].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+    completedThrough = 73;
+    EXPECT_TRUE(display->planeOverlayWaits(*display->planeSlots[0].native));
+    completedThrough = 100;
+    EXPECT_FALSE(display->planeOverlayWaits(*display->planeSlots[0].native));
+    promised.clear();
+    display->planeSlots[0].native->view.native = nullptr;
 }
 
 // The signals go when the set showing the frame latches, and a frame dropped before it was shown still delivers them

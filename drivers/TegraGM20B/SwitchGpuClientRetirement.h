@@ -42,9 +42,13 @@ void AGXDeviceUserClient::scheduleRetirement()
 	thread_call_enter(retireCall_);
 }
 
+// A kept writer promise is released by its job's end or, after a kill of its channel, by retirement.
 void AGXDeviceUserClient::retirementFence(void *owner)
 {
-	static_cast<AGXDeviceUserClient *>(owner)->scheduleRetirement();
+	auto *client = static_cast<AGXDeviceUserClient *>(owner);
+	if (__atomic_load_n(&client->promisesKept_, __ATOMIC_RELAXED))
+		__atomic_store_n(&client->retirementPending_, 1u, __ATOMIC_RELEASE);
+	client->scheduleRetirement();
 }
 
 void AGXDeviceUserClient::retirementWork(thread_call_param_t owner, thread_call_param_t)
@@ -99,6 +103,7 @@ void AGXDeviceUserClient::retireBatch()
 	}
 	auto *ready = unmapping_;
 	logFaultBindings();
+	releasePromises(false);
 	IOLockUnlock(lock_);
 	IOLockLock(unmapLock_);
 	for (auto *record = ready; record; record = record->next)
@@ -406,6 +411,7 @@ void AGXDeviceUserClient::drainResources()
 #endif
 	IOLockLock(lock_);
 	releaseCpuLeases();
+	releasePromises(true);
 	hangHolder_ = current_thread();
 	for (auto &chan : chans_)
 		tgm_chan_del(&chan);
@@ -415,9 +421,6 @@ void AGXDeviceUserClient::drainResources()
 	for (auto &admission : admissions_)
 		admission.end();
 	bzero(admissionCookies_, sizeof(admissionCookies_));
-	for (auto &promise : promises_)
-		promise.end();
-	bzero(promiseCookies_, sizeof(promiseCookies_));
 	hangHolder_ = nullptr;
 	IOLockUnlock(lock_);
 	// Channel destruction drains the callbacks before their preallocated work is cancelled.

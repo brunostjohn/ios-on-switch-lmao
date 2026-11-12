@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <vector>
 #include "drivers/TegraGM20B/SwitchGpuScanoutSnapshot.h"
 
 struct switch_gpu_backing {
 	switch_gpu_backing_token producer;
 	int error = 0;
 	unsigned users = 0;
+	std::vector<switch_gpu_backing_token> promises = {};  // pending writer promises (SwitchGpuWriterPromise.h)
 };
 
 struct switch_gpu_cpu_lease {
@@ -23,6 +25,32 @@ extern "C" int switch_gpu_backing_snapshot_read(switch_gpu_backing *backing,
 	++backing->users;
 	return 0;
 }
+
+extern "C" int switch_gpu_backing_snapshot_read_promises(switch_gpu_backing *backing,
+							 switch_gpu_backing_token *producer,
+							 switch_gpu_cpu_lease **lease,
+							 switch_gpu_backing_token *tokens,
+							 uint32_t capacity)
+{
+	if (backing->promises.size() > capacity)
+		return -28;
+	const int result = switch_gpu_backing_snapshot_read(backing, producer, lease);
+	if (result)
+		return result;
+	for (size_t i = 0; i < backing->promises.size(); ++i)
+		tokens[i] = backing->promises[i];
+	return int(backing->promises.size());
+}
+
+#if SWITCH_GPU_PATH_STATS
+unsigned promiseWaits;
+
+extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
+{
+	if (path == SWITCH_GPU_PATH_PROMISE_WAIT)
+		promiseWaits += count;
+}
+#endif
 
 extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **lease, int wrote)
 {
@@ -111,4 +139,21 @@ TEST(ScanoutSnapshot, CompletionReleasesOwnershipBeforeCallingDisplayAndAllowsNe
 	EXPECT_EQ(context.calls, 1u);
 	EXPECT_EQ(snapshot.active, 1u);
 	snapshot.cancel();
+}
+
+// A surface a held command buffer promised: the present acquires the promises beside the producer.
+TEST(ScanoutSnapshot, APromisedSurfaceAddsItsPromises)
+{
+	SwitchGpuScanoutSnapshot snapshot = {};
+	switch_gpu_backing drawable{{20, 3, SWITCH_GPU_ENGINE_GM20B, 4}};
+	drawable.promises = {{8, 0, SWITCH_GPU_ENGINE_PROMISE, 2048},
+			     {9, 0, SWITCH_GPU_ENGINE_PROMISE, 2052}};
+	ASSERT_EQ(snapshot.begin(nullptr, 0), 0);
+	ASSERT_EQ(snapshot.add(&drawable), 0);
+	ASSERT_EQ(snapshot.count, 3u);
+	EXPECT_EQ(snapshot.tokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+	EXPECT_EQ(snapshot.tokens[1].queue, 2052u);
+	EXPECT_EQ(snapshot.tokens[2].engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
+	snapshot.cancel();
+	EXPECT_EQ(drawable.users, 0u);
 }

@@ -23,6 +23,7 @@ constexpr IOReturn kIOReturnSuccess = 0;
 
 struct switch_gpu_backing {
     unsigned refs = 1, holds = 0;
+    int promises = 0;
 };
 
 namespace {
@@ -33,6 +34,7 @@ extern "C" void switch_gpu_backing_retain(switch_gpu_backing *b) { ++b->refs; }
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *b) { --b->refs; }
 extern "C" void switch_gpu_backing_scanout(switch_gpu_backing *b, int add) { add ? ++b->holds : --b->holds; }
 extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *) { return visible; }
+extern "C" int switch_gpu_backing_promised(switch_gpu_backing *b) { return b ? b->promises : 0; }
 
 namespace {
 struct OriginalLegacySwapRequest {};
@@ -117,6 +119,18 @@ TEST_F(DirectVisible, AProducerNotYetInDramKeepsThePresentJob)
     EXPECT_FALSE(display.presentDirectVisible(&request, NativeLegacyDisplay::kSlot0 + 1, 1280, 720, 5));
     EXPECT_TRUE(display.presented.empty());
     EXPECT_EQ(display.taken, 0u);
+}
+
+// The DC's flip has no GPU work in front of it to acquire a writer promise in: the fence-only present job does.
+TEST_F(DirectVisible, APromisedSurfaceKeepsThePresentJobWhateverItsProducer)
+{
+    backing.promises = 1;
+    EXPECT_FALSE(display.presentDirectVisible(&request, NativeLegacyDisplay::kSlot0 + 1, 1280, 720, 5));
+    display.reads[1].view.producer = {};
+    EXPECT_FALSE(display.presentDirectVisible(&request, NativeLegacyDisplay::kSlot0 + 1, 1280, 720, 5));
+    EXPECT_TRUE(display.presented.empty());
+    backing.promises = 0;
+    EXPECT_TRUE(display.presentDirectVisible(&request, NativeLegacyDisplay::kSlot0 + 1, 1280, 720, 5));
 }
 
 TEST_F(DirectVisible, NoEngineWriterFlipsAndNoLeaseDoesNot)

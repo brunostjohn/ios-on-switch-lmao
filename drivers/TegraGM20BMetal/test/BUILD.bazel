@@ -19,7 +19,7 @@
 #   nvk_surfaces_test nvkmd_darwin's ExecSurfaces record (nvkmd_darwin_surfaces.h): each BO once with its accesses merged,
 #                     past its room the all-imports flag, its length
 #   raw_writer_promise_source_test  a command buffer held on a shared event promises the kernel its surface writes before
-#                     its waitUntilScheduled returns, and ends the promise once they reached the kernel or never will
+#                     its waitUntilScheduled returns, its last raw range's last job keeps them, finish gives back the rest
 #   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
 #                     RawMetal), and the cross-process shared event refusal line
 #   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
@@ -718,10 +718,12 @@ host_test(
     name = "raw_writer_promise_source_test",
     srcs = ["raw_writer_promise_source_test.cpp"],
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEvents.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFinish.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSchedule.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
     ],
 )
 

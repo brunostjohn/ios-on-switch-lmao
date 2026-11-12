@@ -265,6 +265,7 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
 	logFaultBindings();
+	releasePromises(false);
 	if (tgm_chan_error(chans_[in->channel - 1]))
 		for (auto *set : sets_)
 			if (set)

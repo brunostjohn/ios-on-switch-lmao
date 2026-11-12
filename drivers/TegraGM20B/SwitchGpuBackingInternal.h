@@ -5,6 +5,7 @@
 #include "SwitchGpuBacking.h"
 #include "SwitchGpuWriterRanges.h"
 #include "SwitchGpuResourceSet.h"
+#include "SwitchGpuWriterPromise.h"
 
 struct switch_gpu_backing_pages {
 	switch_gpu_backing_pages *older;
@@ -52,9 +53,10 @@ struct switch_gpu_backing {
 	bool shared;
 	bool cpu_reached;  // a CPU lease or CpuComplete named it: sticky, and it is never a set member again
 	uint32_t scanout_holds;  // atomic: switch_gpu_backing_scanout
-	// Writers promised before their jobs exist (SwitchGpuAdmission::promise): snapshots and CPU locks wait them out; the
-	// conversion, layout and registration checks the promised job's own submission passes through never read it.
-	uint32_t promised_writers;
+	// writer promises on it (SwitchGpuWriterPromise.h), and the display leases taken behind them, which no admission
+	// waits for
+	switch_gpu_promise_ref promises[SWITCH_GPU_BACKING_PROMISES];
+	uint32_t promise_count, promised_readers;
 };
 
 struct switch_gpu_cpu_lease {
@@ -99,6 +101,38 @@ void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 extern uint32_t switch_gpu_cpu_sleepers;
 void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
 extern "C" int switch_gpu_ready_waiting(void);
+
+// Writer promises (SwitchGpuWriterPromise.h), under the backing's lock: the pending ones but the asking connection's own
+// as tokens (at most capacity, -28 past it), or with no tokens their count. A CPU reader cannot acquire one on the GPU:
+// it sleeps as for a CPU writer until the promised job is submitted or the promise is given back.
+inline int switch_gpu_backing_promises_locked(const switch_gpu_backing *backing, uint32_t own_first,
+					      uint32_t own_end, switch_gpu_backing_token *tokens,
+					      uint32_t capacity)
+{
+	uint32_t offsets[SWITCH_GPU_BACKING_PROMISES], values[SWITCH_GPU_BACKING_PROMISES];
+	const int pending = switch_gpu_promise_ref_pending(backing->promises, backing->promise_count,
+							   own_first, own_end, offsets, values,
+							   SWITCH_GPU_BACKING_PROMISES);
+	if (pending <= 0 || !tokens)
+		return pending;
+	if (uint32_t(pending) > capacity)
+		return -28;
+	for (int i = 0; i < pending; ++i)
+		tokens[i] = {values[i], 0, SWITCH_GPU_ENGINE_PROMISE, offsets[i]};
+	return pending;
+}
+
+inline bool switch_gpu_backing_promise_pending_locked(const switch_gpu_backing *backing)
+{
+	return backing->promise_count && switch_gpu_backing_promises_locked(backing, 0, 0, nullptr, 0) > 0;
+}
+
+// CPU readers a GPU write is held off by: a display lease taken behind writer promises is not one, as its reader orders
+// behind the promised job on the GPU.
+inline uint32_t switch_gpu_backing_exclusive_readers(const switch_gpu_backing *backing)
+{
+	return backing->cpu_readers - backing->promised_readers;
+}
 
 bool switch_gpu_backing_cpu_current_prepare_locked(switch_gpu_backing *);
 void switch_gpu_backing_cpu_cache_locked(switch_gpu_backing *, uint64_t offset, uint64_t bytes, int operation);

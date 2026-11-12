@@ -29,6 +29,7 @@ int switch_host1x_token_fence(const switch_gpu_backing_token *tokens, uint32_t c
 }
 
 struct Display {
+    static constexpr unsigned kPlaneDependencies = 2;
     struct PlaneSet {
         switch_gpu_backing_token producers[2];
         unsigned count;

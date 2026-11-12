@@ -249,7 +249,8 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 			result = SWITCH_GPU_BACKING_STALE;
 	for (uint32_t i = 0; !result && i < unique; ++i) {
 		auto *backing = uses[i].backing;
-		uint32_t readers = backing->cpu_readers, writers = backing->cpu_writers;
+		uint32_t readers = switch_gpu_backing_exclusive_readers(backing),
+			 writers = backing->cpu_writers;
 		uint32_t owned = 0;
 		for (uint32_t j = 0; j < lease_count; ++j) {
 			const auto *lease =

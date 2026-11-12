@@ -1,0 +1,182 @@
+// SPDX-License-Identifier: MIT
+// Writer promises on a backing (SwitchGpuWriterPromise.h): a display snapshot takes them as GPU tokens behind a lease the
+// promised job's write admission does not wait for, and a CPU reader (a CPU lock, a waiting snapshot) sleeps until the
+// promised job is submitted.
+#include "switch_gpu_backing_fixture.h"
+#include "drivers/TegraGM20B/SwitchGpuAdmission.h"
+#include "drivers/TegraGM20B/SwitchGpuWriterPromise.h"
+
+namespace
+{
+constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
+constexpr uint32_t avoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
+constexpr uint32_t kOffset = 2048;
+
+uint32_t fence[1024];
+int holds;
+}  // namespace
+
+extern "C" volatile uint32_t *tgm_fence_word(uint32_t offset)
+{
+	return offset < sizeof(fence) && !(offset & 3) ? &fence[offset / 4] : nullptr;
+}
+
+extern "C" void switch_gpu_fence_hold(const volatile uint32_t *)
+{
+	++holds;
+}
+
+extern "C" void switch_gpu_fence_put(const volatile uint32_t *)
+{
+	--holds;
+}
+
+namespace
+{
+switch_gpu_backing *promised(uint32_t value = 1)
+{
+	auto *b = backing();
+	fence[kOffset / 4] = value - 1;
+	const switch_gpu_promise_ref ref = {tgm_fence_word(kOffset), kOffset, value};
+	EXPECT_EQ(switch_gpu_backing_promise_add(b, &ref), 0);
+	return b;
+}
+
+TEST_F(Backing, ADisplaySnapshotTakesThePromisesBehindALeaseTheWriteAdmissionIgnores)
+{
+	auto *b = promised();
+	switch_gpu_backing_token producer = {}, tokens[4] = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	ASSERT_EQ(switch_gpu_backing_snapshot_read_promises(b, &producer, &lease, tokens, 4), 1);
+	EXPECT_EQ(tokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+	EXPECT_EQ(tokens[0].queue, kOffset);
+	EXPECT_EQ(tokens[0].value, 1u);
+	SwitchGpuAdmission admission;
+	const switch_gpu_backing_use write{b, kWrite, 0};
+	EXPECT_EQ(switch_gpu_backing_admission_ready(b, kWrite), 1);
+	ASSERT_EQ(admission.begin(&write, 1, nullptr, 0, nullptr, 0), 0);
+	admission.end();
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	ASSERT_EQ(switch_gpu_backing_snapshot_read(b, &producer, &lease), 0);
+	EXPECT_EQ(admission.begin(&write, 1, nullptr, 0, nullptr, 0), -16);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_release(b);
+}
+
+// The promised job's own submission (its write ownership, a conversion it reserves) goes through while the display holds
+// a lease taken behind the promise, which waits for that job on the GPU; any other lease holds the write off.
+TEST_F(Backing, ThePromisedJobsOwnSubmissionGoesThroughAPromisedDisplayLease)
+{
+	auto *b = promised();
+	switch_gpu_backing_token producer = {}, tokens[4] = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	ASSERT_EQ(switch_gpu_backing_snapshot_read_promises(b, &producer, &lease, tokens, 4), 1);
+	EXPECT_EQ(switch_gpu_backing_conversion_ready(b, kWrite), 1);
+	switch_gpu_cpu_lease *conversion = nullptr;
+	ASSERT_EQ(switch_gpu_backing_conversion_reserve(b, kWrite, 1, &conversion), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&conversion, 0), 0);
+	const auto job = token(3, 4);
+	EXPECT_EQ(publish(b, kWrite, job), 0);
+	complete(job);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	ASSERT_EQ(switch_gpu_backing_snapshot_read(b, &producer, &lease), 0);
+	EXPECT_EQ(publish(b, kWrite, token(3, 5)), -16);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_release(b);
+}
+
+TEST_F(Backing, APlainSnapshotOfAPromisedSurfaceIsAPromisedLeaseToo)
+{
+	auto *b = promised();
+	switch_gpu_backing_token producer = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	ASSERT_EQ(switch_gpu_backing_snapshot_read(b, &producer, &lease), 0);
+	EXPECT_EQ(switch_gpu_backing_promised(b), 1);
+	SwitchGpuAdmission admission;
+	const switch_gpu_backing_use write{b, kWrite, 0};
+	EXPECT_EQ(admission.begin(&write, 1, nullptr, 0, nullptr, 0), 0);
+	admission.end();
+	switch_gpu_backing_token tokens[1] = {};
+	switch_gpu_cpu_lease *second = nullptr;
+	EXPECT_EQ(switch_gpu_backing_snapshot_read_promises(b, &producer, &second, tokens, 0), -28);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	EXPECT_EQ(switch_gpu_backing_promised(b), 0);
+	switch_gpu_backing_release(b);
+}
+
+TEST_F(Backing, ACpuLockWaitsForThePromisedJobAndAvoidingASyncIsBusy)
+{
+	auto *b = promised();
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead | avoid), -16);
+	std::atomic<int> locked{1};
+	std::thread reader([&] { locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	EXPECT_EQ(locked.load(), 1);
+	const auto job = token(3, 7);
+	ASSERT_EQ(publish(b, kWrite | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, job), 0);
+	complete(job);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	reader.join();
+	EXPECT_EQ(locked.load(), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, kRead), 0);
+	switch_gpu_backing_release(b);
+}
+
+// The CPU copy and VIC read through a waiting snapshot: it sleeps until the promised job is submitted and names it.
+TEST_F(Backing, AWaitingSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
+{
+	auto *b = promised();
+	std::atomic<int> result{1};
+	switch_gpu_backing_token producer = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	std::thread copy([&] { result = switch_gpu_backing_snapshot_read_wait(b, &producer, &lease); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	EXPECT_EQ(result.load(), 1);
+	ASSERT_EQ(publish(b, kWrite | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, token(3, 9)), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	copy.join();
+	EXPECT_EQ(result.load(), 0);
+	EXPECT_EQ(producer.value, 9u);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_release(b);
+}
+
+// The hang rule raises a word a stuck reader waits for without dropping the surface's ref: nothing waits for it after.
+TEST_F(Backing, APromiseWhoseWordWasRaisedHoldsNothingOff)
+{
+	auto *b = promised();
+	fence[kOffset / 4] = 1;
+	EXPECT_EQ(switch_gpu_backing_promised(b), 0);
+	switch_gpu_backing_token producer = {}, tokens[4] = {};
+	switch_gpu_cpu_lease *lease = nullptr;
+	EXPECT_EQ(switch_gpu_backing_snapshot_read_promises(b, &producer, &lease, tokens, 4), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead | avoid), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, kRead | avoid), 0);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
+// A connection's own promises are never its jobs' to wait for; the engine's token is the word reaching the value.
+TEST_F(Backing, AConnectionsOwnPromisesAreNotItsTokensAndTheTokenIsTheWord)
+{
+	auto *b = promised(5);
+	switch_gpu_backing_token tokens[4] = {};
+	EXPECT_EQ(switch_gpu_backing_promise_tokens(b, kOffset, kOffset + 128, tokens, 4), 0);
+	ASSERT_EQ(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 4), 1);
+	ASSERT_EQ(switch_gpu_promise_engine(), 0);
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 0);
+	EXPECT_EQ(switch_gpu_backing_token_wait(&tokens[0]), -95);
+	ASSERT_EQ(switch_gpu_backing_token_retain(&tokens[0]), 0);
+	EXPECT_EQ(holds, 1);
+	switch_gpu_backing_token_release(&tokens[0]);
+	EXPECT_EQ(holds, 0);
+	fence[kOffset / 4] = 5;
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 1);
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+}  // namespace

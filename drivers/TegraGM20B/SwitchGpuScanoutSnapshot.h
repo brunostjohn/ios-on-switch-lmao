@@ -2,6 +2,7 @@
 #pragma once
 #include "SwitchGpuBacking.h"
 #include "SwitchGpuPresentTokens.h"
+#include "SwitchGpuPathStats.h"
 
 struct SwitchGpuScanoutSnapshot {
 	switch_gpu_backing_token tokens[SWITCH_GPU_PRESENT_MAX_DEPENDENCIES];
@@ -24,16 +25,21 @@ struct SwitchGpuScanoutSnapshot {
 		return 0;
 	}
 
+	// A surface with writer promises pending: the present acquires them on the GPU, behind a lease their jobs'
+	// admissions do not wait for (SwitchGpuWriterPromise.h).
 	int add(switch_gpu_backing *backing)
 	{
 		if (leaseCount == 2)
 			return -28;
 		switch_gpu_backing_token producer = {};
-		const int result =
-			switch_gpu_backing_snapshot_read(backing, &producer, &leases[leaseCount]);
-		if (result)
-			return result;
+		const int promised = switch_gpu_backing_snapshot_read_promises(
+			backing, &producer, &leases[leaseCount], tokens + count,
+			SWITCH_GPU_PRESENT_MAX_DEPENDENCIES - count);
+		if (promised < 0)
+			return promised;
 		++leaseCount;
+		count += uint32_t(promised);
+		switch_gpu_path_taken(SWITCH_GPU_PATH_PROMISE_WAIT, promised ? 1 : 0);
 		if (producer.engine) {
 			if (count == SWITCH_GPU_PRESENT_MAX_DEPENDENCIES)
 				return -28;

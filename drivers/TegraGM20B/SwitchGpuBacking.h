@@ -14,7 +14,9 @@ enum {
 	SWITCH_GPU_ENGINE_NVDEC = 4,
 	SWITCH_GPU_ENGINE_DISPLAY = 5,
 	SWITCH_GPU_ENGINE_NVENC = 6,
-	SWITCH_GPU_ENGINE_COUNT = 7,
+	/* a writer promise (SwitchGpuWriterPromise.h): queue is its word's byte offset in the fence pool */
+	SWITCH_GPU_ENGINE_PROMISE = 7,
+	SWITCH_GPU_ENGINE_COUNT = 8,
 	SWITCH_GPU_BACKING_READ = 1u << 0,
 	SWITCH_GPU_BACKING_WRITE = 1u << 1,
 	SWITCH_GPU_BACKING_CPU_AVOID_SYNC = 1u << 2,
@@ -24,6 +26,8 @@ enum {
 	SWITCH_GPU_BACKING_CPU_PRESERVE_DIRTY = 1u << 6,
 	SWITCH_GPU_BACKING_UNLISTED = 1u << 7,
 	SWITCH_GPU_BACKING_NO_CPU_EXCLUSION = 1u << 8,
+	/* a display read lease taken behind writer promises: no admission waits for it (SwitchGpuWriterPromise.h) */
+	SWITCH_GPU_BACKING_PROMISED = 1u << 9,
 	SWITCH_GPU_CACHE_CLEAN = 0,
 	SWITCH_GPU_CACHE_INVALIDATE = 1,
 	SWITCH_GPU_CACHE_CLEAN_INVALIDATE = 2,
@@ -33,6 +37,9 @@ enum {
 	SWITCH_GPU_BACKING_BLOCK_LINEAR = 1,
 	SWITCH_GPU_BACKING_MAX_PLANES = 4,
 };
+
+/* writer promises a backing holds pending at once (SwitchGpuWriterPromise.h) */
+#define SWITCH_GPU_BACKING_PROMISES 4
 
 struct switch_gpu_backing;
 struct switch_gpu_cpu_lease;
@@ -210,10 +217,31 @@ int switch_gpu_backing_conversion_reserve(struct switch_gpu_backing *backing, ui
  * the backing transaction; this lease cannot authorize a conversion write or direct CPU access to pending bytes. */
 int switch_gpu_backing_export_read(struct switch_gpu_backing *backing,
         struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
-/* A retained immutable physical view; a zero producer means current CPU-authored bytes, cleaned for engines. */
+/* A retained immutable physical view; a zero producer means current CPU-authored bytes, cleaned for engines. A surface
+ * with writer promises pending (SwitchGpuWriterPromise.h) is snapshotted at once, behind a lease no admission of the
+ * promised job waits for: the reader orders behind the promises on the GPU or does not show the frame from the CPU. */
 int switch_gpu_backing_snapshot_read(struct switch_gpu_backing *backing,
     struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
-/* Thread-context admission: sleeps only for CPU writers; a GPU producer remains a retained hardware dependency. */
+/* The same with the pending promises as tokens the reader acquires on the GPU: their count (at most capacity), or an
+ * error (-28: more are pending). */
+int switch_gpu_backing_snapshot_read_promises(struct switch_gpu_backing *backing,
+					      struct switch_gpu_backing_token *producer,
+					      struct switch_gpu_cpu_lease **lease,
+					      struct switch_gpu_backing_token *promises, uint32_t capacity);
+/* Writer promises (SwitchGpuWriterPromise.h): the engine registered once; a surface's ref to one added (-28: it has
+ * SWITCH_GPU_BACKING_PROMISES pending) or dropped by the word's fence-pool offset; the tokens of the ones pending but
+ * the asking connection's own (fence-pool offsets [own_first, own_end)), the count or -28; and how many are pending. */
+struct switch_gpu_promise_ref;
+int switch_gpu_promise_engine(void);
+int switch_gpu_backing_promise_add(struct switch_gpu_backing *backing,
+				   const struct switch_gpu_promise_ref *ref);
+void switch_gpu_backing_promise_drop(struct switch_gpu_backing *backing, uint32_t offset);
+int switch_gpu_backing_promise_tokens(struct switch_gpu_backing *backing, uint32_t own_first,
+				      uint32_t own_end, struct switch_gpu_backing_token *tokens,
+				      uint32_t capacity);
+int switch_gpu_backing_promised(struct switch_gpu_backing *backing);
+/* Thread-context admission: sleeps for CPU writers and for a writer promise until its job is submitted (or the promise
+ * is given back), whose CPU or VIC reader cannot acquire it; a GPU producer remains a retained hardware dependency. */
 int switch_gpu_backing_snapshot_read_wait(struct switch_gpu_backing *backing,
     struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
 /* Consumes a full owned NO_CACHE lease into an ordinary CPU reservation without dropping ownership or its backing pin.

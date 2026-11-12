@@ -37,8 +37,11 @@ TEST(JobAbi, RecordsKeepTheirLayout)
 	EXPECT_EQ(offsetof(TegraGM20BAbiJob, flags), 20u);
 	EXPECT_EQ(sizeof(TegraGM20BAbiJob) % 8, 0u);
 	EXPECT_EQ(offsetof(TegraGM20BAbiResourceSetCreateReply, generation_offset), 12u);
-	EXPECT_EQ(offsetof(TegraGM20BAbiWriterPromise, count), 16u);
+	EXPECT_EQ(offsetof(TegraGM20BAbiWriterPromise, count), 12u);
+	EXPECT_EQ(offsetof(TegraGM20BAbiWriterPromise, channel), 20u);
 	EXPECT_EQ(sizeof(TegraGM20BAbiWriterPromise) % 8, 0u);
+	EXPECT_EQ(offsetof(TegraGM20BAbiJobPromises, promise), 8u);
+	EXPECT_LT(uint32_t(TegraGM20BPromiseWord + TegraGM20BMaxPromises), uint32_t(TegraGM20BSetGenerationWord));
 }
 
 TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)

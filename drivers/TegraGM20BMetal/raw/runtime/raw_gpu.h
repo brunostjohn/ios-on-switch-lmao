@@ -934,6 +934,9 @@ public:
     bool admissionBlocked = false;
     // the commit's last job is quiet too (raw_completion_source.h quietEnd); every job before it always is
     bool quietEnd = false;
+    // the writer promises its last job keeps (Device::promise), and whether a job of the commit carried them
+    std::vector<uint32_t> promises;
+    bool promisesKept = false;
     int nativeError = 0;
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
@@ -1462,16 +1465,6 @@ public:
         return k_.canOrder();
     }
 
-    uint64_t promiseWrites(const uint64_t *handles, uint32_t count)
-    {
-        return k_.promiseWrites(handles, count);
-    }
-
-    void endPromise(uint64_t cookie)
-    {
-        k_.endPromise(cookie);
-    }
-
     // A channel the kernel killed is made again first (between command buffers, as begin() would), so one GPU fault does not
     // leave the process ordered on the CPU for good
     int orderAfterOthers(uint32_t &waits)
@@ -1497,6 +1490,18 @@ public:
             return KERN_SUCCESS;
         const int kr = k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
         return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
+    }
+
+    // A writer promise (TegraGM20BJobABI.h method 34) of the device's channel for the IOSurface imports `handles`, kept by
+    // the job that names it (CommandBuffer::promises) or cancelled
+    bool promise(const std::vector<uint64_t> &handles, uint32_t &id)
+    {
+        return ensureChannel() && k_.promise(channel_, handles, id) == KERN_SUCCESS;
+    }
+
+    void cancelPromise(uint32_t id)
+    {
+        (void)k_.cancelPromise(id);
     }
 
     // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
@@ -1712,10 +1717,24 @@ private:
     bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses,
              JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {},
              const std::vector<SetUse> *recorded = nullptr, uint32_t removals = 0, bool hostWritten = false,
-             uint64_t admission = 0, uint32_t admissionFlags = 0, bool quiet = false)
+             uint64_t admission = 0, uint32_t admissionFlags = 0, bool quiet = false,
+             const std::vector<uint32_t> *promises = nullptr)
     {
-        const KernelJob made = {channel, pushes,      count,     nullptr,        0,    0, 0, visibility,
-                                events,  hostWritten, admission, admissionFlags, quiet};
+        const KernelJob made = {channel,
+                                pushes,
+                                count,
+                                nullptr,
+                                0,
+                                0,
+                                0,
+                                visibility,
+                                events,
+                                hostWritten,
+                                admission,
+                                admissionFlags,
+                                quiet,
+                                promises ? promises->data() : nullptr,
+                                promises ? uint32_t(promises->size()) : 0};
         return submitInSet(k_, set_, view, true, made, seqno, result, &uses, recorded, removals);
     }
 

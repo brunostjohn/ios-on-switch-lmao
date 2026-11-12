@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #import "RawMetalEventJobs.h"
 #include "raw_scheduled_wait.h"
+#include "TegraGM20BJobABI.h"
 
 void wakeSubmit(void *queue, uint32_t dependencies)
 {
@@ -25,10 +26,7 @@ void enqueueBuffer(RMCommandBuffer *cb)
         cb->_status = MTLCommandBufferStatusEnqueued;
 }
 
-// unhold() ran: a promise the kernel takes after it is ended at once
-constexpr uint64_t kPromiseEnded = UINT64_MAX;
-
-// The imports of the surfaces it writes. Only while the submit thread cannot take it: under the schedule lock, or on
+// The imports of the IOSurfaces it writes. Only while the submit thread cannot take it: under the schedule lock, or on
 // the submit thread.
 static std::vector<uint64_t> writtenSurfaces(RMCommandBuffer *cb)
 {
@@ -48,32 +46,56 @@ static std::vector<uint64_t> writtenSurfaces(RMCommandBuffer *cb)
     return handles;
 }
 
-// Before its waitUntilScheduled may return held: the surfaces it writes are the kernel's promised writes, so a present of
-// one waits for this command buffer's job as it would for a scheduled one on Apple's GPU.
+// Before its waitUntilScheduled may return held (raw_scheduled_wait.h): its writes of IOSurfaces are promised, so a
+// present or another process's job that uses one waits for its job on the GPU, as for a scheduled command buffer on
+// Apple's GPU. Its last raw range's last job keeps the promises; one made once that range had gone is given back.
 static void promiseWrites(RMCommandBuffer *cb, const std::vector<uint64_t> &handles)
 {
-    if (handles.empty() || cb->_promise.load(std::memory_order_acquire))
+    if (handles.empty())
         return;
-    const uint64_t cookie = gRM->raw->promiseWrites(handles.data(), uint32_t(handles.size()));
-    if (!cookie) {
-        static std::atomic<bool> logged{false};
-        if (!logged.exchange(true))
-            os_log_error(rawLog(),
-                         "raw: the kernel took no writer promise for %zu surfaces of a command buffer held on a shared "
-                         "event: a present may show them before it is submitted",
-                         handles.size());
-        return;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
+            return;
+        cb->_promised.store(true, std::memory_order_release);
     }
-    uint64_t none = 0;
-    if (!cb->_promise.compare_exchange_strong(none, cookie, std::memory_order_acq_rel))
-        gRM->raw->endPromise(cookie);
+    std::vector<uint32_t> made;
+    for (size_t at = 0; at < handles.size() && made.size() < TegraGM20BMaxJobPromises; at += TegraGM20BMaxPromiseUses) {
+        const std::vector<uint64_t> part(handles.begin() + ptrdiff_t(at),
+                                         handles.begin() +
+                                             ptrdiff_t(std::min(handles.size(), at + TegraGM20BMaxPromiseUses)));
+        uint32_t id = 0;
+        if (gRM->raw->promise(part, id))
+            made.push_back(id);
+        else
+            once(@"the kernel took no writer promise for surfaces of a command buffer held on a shared event: a present "
+                 @"may show them before it is submitted");
+    }
+    bool late;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        late = cb->_promisesTaken;
+        if (!late)
+            cb->_promises = made;
+    }
+    if (late)
+        for (uint32_t id : made)
+            gRM->raw->cancelPromise(id);
 }
 
-void endWriterPromise(RMCommandBuffer *cb)
+// finish(): what its last raw range did not carry to the kernel, after all its work completed
+void cancelPromises(RMCommandBuffer *cb)
 {
-    const uint64_t cookie = cb->_promise.exchange(kPromiseEnded, std::memory_order_acq_rel);
-    if (cookie && cookie != kPromiseEnded)
-        gRM->raw->endPromise(cookie);
+    if (!cb->_promised.load(std::memory_order_acquire))
+        return;
+    std::vector<uint32_t> left;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        cb->_promisesTaken = true;
+        left.swap(cb->_promises);
+    }
+    for (uint32_t id : left)
+        gRM->raw->cancelPromise(id);
 }
 
 void commitBuffer(RMCommandBuffer *cb)

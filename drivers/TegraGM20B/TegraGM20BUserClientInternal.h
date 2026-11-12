@@ -34,6 +34,7 @@
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuBoIndex.h"
 #include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
@@ -70,11 +71,12 @@ namespace tgm_uc
 {
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 16 bytes each in the connection's fence page
 constexpr uint32_t kJobBytes =
-	(sizeof(TegraGM20BAbiJob) > sizeof(TegraGM20BAbiSubmit) ? sizeof(TegraGM20BAbiJob) : sizeof(TegraGM20BAbiSubmit)) +
+	(sizeof(TegraGM20BAbiJob) > sizeof(TegraGM20BAbiSubmit) ? sizeof(TegraGM20BAbiJob)
+								: sizeof(TegraGM20BAbiSubmit)) +
 	TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
 	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
 	TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse) +
-	sizeof(TegraGM20BAbiSubmitAdmission);
+	sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises);
 constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;
 // GPU pool pages are outside the VM (arm_vm_init.c switch_ram_init), so the kernel reports them as device
@@ -376,8 +378,6 @@ class AGXDeviceUserClient : public IOUserClient
     SwitchGpuEventClient events_;
     SwitchGpuResourceClient resources_;
     SwitchGpuAdmission admissions_[kMaxChannels];
-    SwitchGpuAdmission promises_[TegraGM20BMaxWriterPromises];
-    uint64_t promiseCookies_[TegraGM20BMaxWriterPromises] = {};
     uint64_t admissionCookies_[kMaxChannels] = {}, lastAdmissionCookies_[kMaxChannels] = {};
     SwitchGpuEventChannel eventChannels_[kMaxChannels];
 
@@ -430,6 +430,13 @@ class AGXDeviceUserClient : public IOUserClient
     // quiet job ends (SwitchGpuQuiet.h): the channel slots a waiter asked a wake entry for, pushed by wakeCall_
     thread_call_t wakeCall_ = nullptr;
     uint32_t wakeSlots_ = 0;
+    // writer promises (SwitchGpuWriterPromise.h, method 34), under lock_: each one's state and the surfaces that keep a
+    // ref to it until its job is submitted; promisesKept_ (atomic): kept ones a kill or destruction of their channel
+    // may leave unreleased
+    switch_gpu_promise_slot promises_[TegraGM20BMaxPromises] = {};
+    switch_gpu_backing *promiseSurfaces_[TegraGM20BMaxPromises][TegraGM20BMaxPromiseUses] = {};
+    uint8_t promiseSurfaceCount_[TegraGM20BMaxPromises] = {};
+    uint32_t promisesKept_ = 0;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 	     retirementStopped_ = 0;
     uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0;
@@ -536,9 +543,21 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,
 			   switch_gpu_set_member *members, TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
-	IOReturn writerPromise(const TegraGM20BAbiWriterPromise *in);
-	IOReturn promiseWrites(const TegraGM20BAbiWriterPromise *in, const TegraGM20BAbiSurfaceUse *uses);
 	IOReturn submitJob(const TegraGM20BAbiSubmitAddress *in, TegraGM20BAbiExecReply *out);
+	IOReturn writerPromise(const TegraGM20BAbiWriterPromise *in,
+			       TegraGM20BAbiWriterPromiseReply *out);
+
+	volatile uint32_t *promiseWord(uint32_t promise) const
+	{
+		return fence_va_ + TegraGM20BPromiseWord + promise;
+	}
+
+	void dropPromiseSurfaces(uint32_t promise);
+	void releasePromise(uint32_t promise);
+	void releasePromises(bool all);
+	IOReturn keepPromises(const TegraGM20BAbiJobPromises *promises,
+			      switch_gpu_release *releases);
+	void keptPromises(const TegraGM20BAbiJobPromises *promises, uint32_t slot);
 	IOReturn runJob(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out);
 	IOReturn runJobUses(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out,
 			    switch_gpu_resource_set *set, const switch_gpu_sibling_wait *siblings,

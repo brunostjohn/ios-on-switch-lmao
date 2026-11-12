@@ -97,8 +97,13 @@ extern "C" int switch_gpu_backing_cpu_publish_generation(switch_gpu_backing *bac
 	return result;
 }
 
+// A reader that does not wait (the display) snapshots a surface with writer promises pending at once, with them as
+// tokens when it asks (`promises`), behind a lease the promised job's admission does not wait for; one that waits (the
+// CPU copy, VIC) sleeps until the promised job is submitted.
 static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *producer,
-			 switch_gpu_cpu_lease **out, bool allow_cpu, bool avoid)
+			 switch_gpu_cpu_lease **out, bool allow_cpu, bool avoid,
+			 switch_gpu_backing_token *promises = nullptr, uint32_t capacity = 0,
+			 uint32_t *promised = nullptr)
 {
 	if (!backing || !producer || !out)
 		return -22;
@@ -109,20 +114,16 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 		return -12;
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
-	while ((backing->cpu_writers || backing->gpu_admission_writers || backing->promised_writers) &&
-	       !avoid)
+	while (!avoid && (backing->cpu_writers || backing->gpu_admission_writers ||
+			  switch_gpu_backing_promise_pending_locked(backing)))
 		switch_gpu_backing_sleep_cpu_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
-		backing->promised_writers || backing->cpu_readers == UINT32_MAX ? -16 : 0;
-#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
-	static bool promiseRefusalLogged;
-	if (result && backing->promised_writers && !promiseRefusalLogged) {
-		promiseRefusalLogged = true;
-		IOLog("SwitchGpu: first snapshot of surface %u held off by a writer promise: the present waits for the "
-		      "promised job\n",
-		      backing->surface_id);
+		backing->cpu_readers == UINT32_MAX ? -16 : 0;
+	int pending = 0;
+	if (!result && backing->promise_count) {
+		pending = switch_gpu_backing_promises_locked(backing, 0, 0, promises, capacity);
+		result = pending < 0 ? pending : 0;
 	}
-#endif
 	const switch_gpu_backing_access *writer = nullptr;
 	bool failed_writer = false;
 	for (uint32_t i = 0; !result && i < backing->access_count; ++i) {
@@ -153,15 +154,19 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 			backing->initial_clean = true;
 		}
 		++backing->cpu_readers;
+		backing->promised_readers += pending > 0;
 		*lease = {backing->cpu_leases,
 			  backing,
 			  0,
 			  uint64_t(backing->pages->count) << 12,
-			  SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_NO_CACHE,
+			  SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_NO_CACHE |
+				  (pending > 0 ? uint32_t(SWITCH_GPU_BACKING_PROMISED) : 0u),
 			  writer ? writer->token : switch_gpu_backing_token{}};
 		backing->cpu_leases = lease;
 		*producer = lease->producer;
 		*out = lease;
+		if (promised)
+			*promised = promises && pending > 0 ? uint32_t(pending) : 0u;
 	}
 	IOLockUnlock(backing->lock);
 	if (result) {
@@ -183,6 +188,18 @@ extern "C" int switch_gpu_backing_snapshot_read(switch_gpu_backing *backing,
 						switch_gpu_cpu_lease **out)
 {
 	return snapshot_read(backing, producer, out, true, true);
+}
+
+extern "C" int switch_gpu_backing_snapshot_read_promises(switch_gpu_backing *backing,
+							 switch_gpu_backing_token *producer,
+							 switch_gpu_cpu_lease **out,
+							 switch_gpu_backing_token *promises,
+							 uint32_t capacity)
+{
+	uint32_t promised = 0;
+	const int result =
+		snapshot_read(backing, producer, out, true, true, promises, capacity, &promised);
+	return result ? result : int(promised);
 }
 
 extern "C" int switch_gpu_backing_snapshot_read_wait(switch_gpu_backing *backing,
@@ -208,7 +225,7 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
 	const bool write = access == SWITCH_GPU_BACKING_WRITE;
 	int result = 0;
 	while (backing->cpu_writers || backing->gpu_admission_writers ||
-	       (write && (backing->cpu_readers || backing->gpu_admission_readers))) {
+	       (write && (switch_gpu_backing_exclusive_readers(backing) || backing->gpu_admission_readers))) {
 		if (avoid) {
 			result = -16;
 			break;

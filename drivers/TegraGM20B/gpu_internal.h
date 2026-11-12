@@ -71,6 +71,7 @@
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuQuiet.h"
+#include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuJobTiming.h"
 #include "SwitchGpuProfileSequence.h"
 #include "SwitchGpuTimeline.h"
@@ -297,6 +298,7 @@ struct tgm_chan {
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
 	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
 	struct switch_gpu_quiet quiet;
+	struct switch_gpu_promise_waits promise_waits;
 	void (*wake)(void *arg, u32 tag); /* tgm_chan_on_wake: the owner's ask for a wake entry */
 	void *wake_arg;
 	u32 wake_tag;
@@ -591,6 +593,10 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
 /* gpu_quiet.c: a wake entry behind the newest job, by the submission's owner inside the gate; the idle clock's settle */
 void tgm_chan_wake_push(struct tgm_chan *chan);
 void tgm_idle_settle(void *arg);
+/* gpu_promise.c: a writer promise a channel acquired, noted for the hang rule, which releases the ones a stuck channel
+ * waits for */
+int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value);
+uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns);
 void tgm_chan_need_id(u64 id, u32 seqno);
 int tgm_chan_announced_id(u64 id, u32 seqno);
 int tgm_chan_announced_uid(u32 uid, u32 seqno);

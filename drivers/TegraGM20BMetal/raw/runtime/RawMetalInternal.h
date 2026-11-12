@@ -358,6 +358,8 @@ void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
 bool submitRange(RMCommandBuffer *cb, bool followed);
+void cancelPromises(RMCommandBuffer *cb);
+void unhold(RMCommandBuffer *cb);
 
 // RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of compressed private textures take the submit
 // lock; a move inside a raw encode is refused
@@ -373,9 +375,6 @@ void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &bi
 // Before a raw range encodes, which may not ask for a move: those move to plain memory, and their shape is made plain
 // from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
-void unhold(RMCommandBuffer *cb);
-// RawMetalSchedule.mm: the writer promise a held command buffer made, ended once its writes reached the kernel or never will
-void endWriterPromise(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));

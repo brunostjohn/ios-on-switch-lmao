@@ -3244,6 +3244,8 @@ CommandBuffer *Device::begin()
     cb.partial = false;
     cb.admissionBlocked = false;
     cb.quietEnd = false;
+    cb.promises.clear();
+    cb.promisesKept = false;
     cb.nativeError = 0;
     cb.nativeReads_.clear();
     cb.nativeSurfaces_.clear();
@@ -3767,9 +3769,9 @@ bool CommandBuffer::commit(uint32_t &seqno)
                       : 0u;
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed =
-            d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events, &memberUses_,
-                  memberRemovals_, invalidates || memberHostWritten_, admission, admissionFlags, !last || quietEnd);
+        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events,
+                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_, admission,
+                                    admissionFlags, !last || quietEnd, last && !promises.empty() ? &promises : nullptr);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;
@@ -3791,6 +3793,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         }
         published = true;
+        promisesKept |= last && !promises.empty();
         admissionHeld = admission && !last;
         d.lastSeqno_ = seq;
         return true;

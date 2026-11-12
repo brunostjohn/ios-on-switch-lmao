@@ -674,6 +674,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
     rc->quietEnd = cb->_rangeQuiet;
+    const bool lastRange =
+        cb->_segNext + 1 == cb->_segs.size() && cb->_promised.load(std::memory_order_acquire);
+    if (lastRange) {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        cb->_promisesTaken = true;
+        rc->promises = cb->_promises;
+    }
     if (!rc->commit(seq)) {
         cb->_partial = rc->partial;
         if (rc->admissionBlocked) {
@@ -701,6 +708,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         return fail(PredEncKernel, "the kernel refused the submission");
     }
     publishSharedEvents(cb);
+    if (rc->promisesKept) {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        cb->_promises.clear();
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb->_probeTaken.add(rc->probeTaken());
 #endif

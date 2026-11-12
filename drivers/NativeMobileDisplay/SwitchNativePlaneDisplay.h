@@ -118,12 +118,24 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
     return victim;
 }
 
-// A picture's producer, or a recorded turn's request wait, not complete yet: the set goes out once the GPU has seen
-// them complete (planeFence), never before.
+// What the overlay's scanout is ordered after: its picture's (switch_native_scanout_dependencies), then its surface's
+// writer promises (SwitchGpuWriterPromise.h), which the set's GPU fence acquires.
+static uint32_t planeOverlayDependencies(const SwitchNativeScanout &native, switch_gpu_backing_token *tokens)
+{
+    const uint32_t count = switch_native_scanout_dependencies(native, tokens, kPlaneOverlayDependencies);
+    const int promised = native.view.native
+                             ? switch_gpu_backing_promise_tokens(native.view.native, 0, 0, tokens + count,
+                                                                 kPlaneOverlayDependencies - count)
+                             : 0;
+    return count + (promised > 0 ? uint32_t(promised) : 0u);
+}
+
+// A picture's producer, a recorded turn's request wait or a writer promise not complete yet: the set goes out once the
+// GPU has seen them complete (planeFence), never before.
 static bool planeOverlayWaits(const SwitchNativeScanout &native)
 {
     switch_gpu_backing_token tokens[kPlaneOverlayDependencies];
-    const uint32_t count = switch_native_scanout_dependencies(native, tokens, kPlaneOverlayDependencies);
+    const uint32_t count = planeOverlayDependencies(native, tokens);
     for (uint32_t i = 0; i < count; ++i)
         if (switch_gpu_backing_token_external_status(&tokens[i]) != 1)
             return true;
@@ -138,7 +150,7 @@ unsigned planeDependencies(const PlaneSet &set, switch_gpu_backing_token tokens[
             continue;
         const auto *native = planeSlots[overlay.slot].native;
         if (native && native->lease)
-            count += switch_native_scanout_dependencies(*native, tokens + count, kPlaneOverlayDependencies);
+            count += planeOverlayDependencies(*native, tokens + count);
     }
     return count;
 }

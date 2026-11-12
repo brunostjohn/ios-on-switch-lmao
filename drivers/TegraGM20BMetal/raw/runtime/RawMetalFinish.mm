@@ -257,6 +257,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
         return;
     }
     RAW_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
+    cancelPromises(cb);
     releaseEventWaits(cb);
     unhold(cb);
     // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
