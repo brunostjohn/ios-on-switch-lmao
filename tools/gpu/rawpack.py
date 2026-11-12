@@ -13,8 +13,8 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         run's input as it was; with the render states Apple's archives declare for the
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. A line journaled
         under another build (os=<build> in its head) is left out; one with no os= is taken, and both are counted in
-        <report>, which the link puts at the end of the pack's report. A state of two-plane YCbCr code attachments is
-        taken as the one the runtime makes for it (ycbcr_stand_in)
+        <report>, which the link puts at the end of the pack's report. A state of two-plane YCbCr attachments is taken
+        as the one the runtime makes for it (ycbcr_stand_in)
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
                      --out <bucket corpus>...
         the states of each of the generator's buckets, with the Core Animation states a device's logs named
@@ -62,10 +62,14 @@ STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
 OS_BUILD = re.compile(r' os=(\S+)')
 # A colour attachment of an R line's head: its index, MTLPixelFormat, write mask and blending
 COLOR = re.compile(r' c(\d)=(\d+):(\d+):(\d+):')
-# Two-plane YCbCr code formats (raw/runtime/raw_ycbcr_store.h ycbcrCodeFormat: RGB*_2P but RGB8_444_2P), of which the
-# raw path renders the 8-bit RGB8_420_2P and RGB8_422_2P into RGBA32Float (ycbcrTargetRefusal, kYcbcrTargetStandIn)
-YCBCR_CODE_FORMATS = frozenset({540, 541, 543, 544, 545, 546, 547, 548})
-YCBCR_RENDERED = frozenset({540, 541})
+# raw/runtime/raw_ycbcr_store.h: the formats whose attachments RawMetalYcbcrTargets.mm ycbcrTargetState takes
+# (ycbcrRenderedFormat), and those of them it renders into the RGBA32Float stand-in (ycbcrTargetRefusal,
+# kYcbcrTargetStandIn)
+YCBCR_TARGETS = frozenset(range(500, 549)) - {542}
+YCBCR_RENDERED = frozenset(
+    {500, 502, 503, 505, 506, 507, 508, 509, 510, 520, 522, 523, 525, 526, 527, 528, 529, 530}
+    | {540, 541, 543, 544, 545, 546, 547, 548}
+)
 YCBCR_STAND_IN = 125
 RGB_WRITES = 0b1110  # MTLColorWriteMaskRed | Green | Blue
 
@@ -99,14 +103,15 @@ def probe_lines(corpus: str) -> list[str]:
 
 
 def ycbcr_stand_in(line: str) -> str:
-    """Give the line of the state the runtime makes for a render state of two-plane YCbCr code attachments.
+    """Give the line of the state the runtime makes for a render state of two-plane YCbCr attachments.
 
     RawMetalYcbcrTargets.mm ycbcrTargetState makes it with each such attachment's format the stand-in's, where every one
-    is an 8-bit code format, unblended, writing red, green and blue; m2v alone answers any other (it renders into no
-    code target), so its line stays the app's. The archives' declared keys stay the app's (raw/pack/archives.py).
+    is a format it renders (codes, converted, sRGB or packed, 8- or 10-bit), unblended, writing red, green and blue;
+    m2v alone answers any other (it renders into no YCbCr target), so its line stays the app's. The archives' declared
+    keys stay the app's (raw/pack/archives.py).
     """
     head, bar, tail = line.partition(' | ')
-    targets = [m for m in COLOR.finditer(head) if int(m[2]) in YCBCR_CODE_FORMATS]
+    targets = [m for m in COLOR.finditer(head) if int(m[2]) in YCBCR_TARGETS]
     if not targets or any(
         int(m[2]) not in YCBCR_RENDERED or int(m[3]) & RGB_WRITES != RGB_WRITES or m[4] != '0' for m in targets
     ):
@@ -114,6 +119,21 @@ def ycbcr_stand_in(line: str) -> str:
     for m in reversed(targets):
         head = head[: m.start(2)] + str(YCBCR_STAND_IN) + head[m.end(2) :]
     return head + bar + tail
+
+
+def stand_in_lines(lines: list[str]) -> list[str]:
+    """Give `lines` through ycbcr_stand_in, a line it maps left out where an earlier line is already that state's.
+
+    The archives declare one state for each of a pass's code formats (VideoStabilizationV2's fragmentBlur into
+    RGB8_420_2P, RGB10_420_2P and RGB10_420_2P_PACKED), which the stand-in makes one state.
+    """
+    out, seen = [], set()
+    for line in lines:
+        mapped = ycbcr_stand_in(line)
+        if mapped == line or mapped not in seen:
+            out.append(mapped)
+            seen.add(mapped)
+    return out
 
 
 def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
@@ -279,7 +299,7 @@ def main() -> None:
         if args.archives:
             harvested = set(lines)
             lines += [line for line in archive_lines(Path(args.archives).read_text()) if line not in harvested]
-        lines = [ycbcr_stand_in(line) for line in lines]
+        lines = stand_in_lines(lines)
         Path(args.out).write_text(''.join(line + '\n' for line in lines))
         Path(args.report).write_text(''.join(line + '\n' for line in report))
         print('\n'.join(report))

@@ -1,9 +1,18 @@
 import hashlib
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.gpu.rawpack import framework_line, library_view, own_build, ycbcr_stand_in
+from tools.gpu.rawpack import (
+    YCBCR_RENDERED,
+    YCBCR_TARGETS,
+    framework_line,
+    library_view,
+    own_build,
+    stand_in_lines,
+    ycbcr_stand_in,
+)
 
 
 class NativeLibraries(unittest.TestCase):
@@ -54,27 +63,46 @@ class BuildTags(unittest.TestCase):
 
 
 class YcbcrStandIn(unittest.TestCase):
-    """A state of 8-bit two-plane code attachments is the runtime's state of their RGBA32Float stand-in."""
+    """A state of YCbCr attachments the runtime renders is the runtime's state of their RGBA32Float stand-in."""
 
     TAIL = ' a0=29:0:0:8:1:1 | v vertexBlur  | f fragmentBlur #0:53:01 | '
+    HEAD = 'R ok=1 label=- samples=1 topo=0 ds=0/0 '
 
-    def test_an_8_bit_code_target_takes_the_stand_in(self):
-        line = 'R ok=1 label=- samples=1 topo=0 ds=0/0 c0=540:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
+    def test_every_format_the_runtime_renders_takes_the_stand_in(self):
+        for fmt in (500, 503, 507, 508, 520, 527, 530, 540, 541, 543, 544, 545, 546, 547, 548):
+            line = f'{self.HEAD}c0={fmt}:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
+            self.assertEqual(
+                ycbcr_stand_in(line), f'{self.HEAD}c0=125:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
+            )
+        line = f'{self.HEAD}c0=540:15:0:1:0:0:1:0:0 c2=546:14:0:1:0:0:1:0:0' + self.TAIL
         self.assertEqual(
-            ycbcr_stand_in(line),
-            'R ok=1 label=- samples=1 topo=0 ds=0/0 c0=125:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL,
+            ycbcr_stand_in(line), f'{self.HEAD}c0=125:15:0:1:0:0:1:0:0 c2=125:14:0:1:0:0:1:0:0' + self.TAIL
         )
 
     def test_a_state_the_runtime_leaves_to_m2v_keeps_its_formats(self):
         for colors in (
-            'c0=543:15:0:1:0:0:1:0:0',
+            'c0=501:15:0:1:0:0:1:0:0',
             'c0=540:15:1:1:5:0:1:5:0',
-            'c0=541:8:0:1:0:0:1:0:0',
-            'c0=540:15:0:1:0:0:1:0:0 c1=544:15:0:1:0:0:1:0:0',
+            'c0=543:8:0:1:0:0:1:0:0',
+            'c0=540:15:0:1:0:0:1:0:0 c1=521:15:0:1:0:0:1:0:0',
+            'c0=542:15:0:1:0:0:1:0:0',
             'c0=80:15:0:1:0:0:1:0:0',
         ):
-            line = f'R ok=1 label=- samples=1 topo=0 ds=0/0 {colors}' + self.TAIL
+            line = f'{self.HEAD}{colors}' + self.TAIL
             self.assertEqual(ycbcr_stand_in(line), line)
+
+    def test_two_formats_states_are_one_stand_in_state(self):
+        lines = [f'{self.HEAD}c0={fmt}:15:0:1:0:0:1:0:0' + self.TAIL for fmt in (540, 80, 543, 546)]
+        stand_in = f'{self.HEAD}c0=125:15:0:1:0:0:1:0:0' + self.TAIL
+        self.assertEqual(stand_in_lines(lines), [stand_in, lines[1]])
+        self.assertEqual(stand_in_lines([lines[1], lines[1]]), [lines[1], lines[1]])
+
+    def test_the_formats_are_the_runtimes(self):
+        header = Path('drivers/TegraGM20BMetal/raw/runtime/raw_ycbcr_store.h').read_text()
+        body = header[header.index('inline const char *ycbcrTargetRefusal') :]
+        body = body[: body.index('default:')]
+        self.assertEqual({int(c) for c in re.findall(r'case (\d+):', body)}, YCBCR_RENDERED)
+        self.assertLessEqual(YCBCR_RENDERED, YCBCR_TARGETS)
 
 
 def lines_of(vertex: str, fragment: str, linked: str = '') -> str:

@@ -53,6 +53,7 @@ py_library(
 py_test(
     name = "rawpack_test",
     srcs = ["rawpack_test.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h"],
     deps = [":rawpack_steps"],
 )
 
