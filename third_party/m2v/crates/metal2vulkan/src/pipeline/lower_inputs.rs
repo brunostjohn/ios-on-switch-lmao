@@ -45,6 +45,14 @@ pub struct LoweringInputs {
     /// function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub dropped_vertex_layer: bool,
+    /// A fragment function's storage-form images (its interlocked attachments, their extended-range
+    /// shadows, the shader-side stencil's shadow) are 2D arrays of a layered pass's layers, each
+    /// access at the texel of the invocation's pixel in the layer its primitive renders (its
+    /// `Layer` input; `VariantKey::layered_storage`): the variant a pass of more than one layer
+    /// runs on. Such a function depends on `RuntimeFact::LayeredStorage`; any other compiles as
+    /// without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub layered_storage: bool,
     /// A kernel's stage-input descriptor (`MTLComputePipelineDescriptor.stageInputDescriptor`): how
     /// each `[[stage_in]]` attribute is fetched from its buffer. A kernel reading a stage-in
     /// attribute needs it (`NeedsInput(StageInputDescriptor)` without it);

@@ -1288,6 +1288,22 @@ pub(super) fn plan_sample(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Plan the invocation's layer for a function compiled for a layered pass
+/// (`LoweringInputs::layered_storage`), at which each storage-form image is addressed; nothing
+/// otherwise. A multisampled function's storage form in a layered pass is not implemented (its
+/// sample planes are an image's layers already).
+pub(super) fn plan_layer(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    if !cx.inputs.layered_storage || cx.families.fragment.fetch_layer.is_some() {
+        return Ok(());
+    }
+    if cx.inputs.multisampled {
+        return Err(not_implemented().into());
+    }
+    cx.families.fragment.fetch_layer = Some(stage_io::layer(cx)?);
+    cx.facts.insert(RuntimeFact::LayeredStorage);
+    Ok(())
+}
+
 /// Whether the function reads color attachment `color` in the storage form.
 pub(crate) fn is_storage(cx: &SelectCx<'_>, color: u32) -> bool {
     cx.families.fragment.fetch.contains_key(&color)
@@ -1332,6 +1348,7 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
     }
     plan_sample(cx)?;
+    plan_layer(cx)?;
     let coord = stage_io::frag_coord(cx);
     cx.families.fragment.fetch_coord = Some(coord);
     Ok(())
@@ -1452,6 +1469,7 @@ pub fn select_output(
         }));
     }
     plan_sample(cx)?;
+    plan_layer(cx)?;
     // The write rounds to the code Metal stores where the format converts it; an sRGB attachment's
     // write encodes its bytes itself (`math::pack` of a `float` or `half` output), and records the
     // pipeline's map, which link checks, without rounding a lane.
@@ -1593,14 +1611,19 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
 
 /// Declare storage-form attachment `color`'s storage image: a 2D storage image of its declared
 /// format and its numeric type, multisampled or arrayed as it holds the samples
-/// ([`StorageSamples`]).
-pub(super) fn declare(mb: &mut ModuleBuilder, color: u32, sc: &StorageColor) -> BResult<GlobalId> {
+/// ([`StorageSamples`]), or arrayed over a layered pass's layers (`layered`).
+pub(super) fn declare(
+    mb: &mut ModuleBuilder,
+    color: u32,
+    sc: &StorageColor,
+    layered: bool,
+) -> BResult<GlobalId> {
     let sampled_type = scalar_type(mb, sc.view.numeric)?;
     let ty = mb.ty(SType::Image(ImageType {
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: sc.view.samples == StorageSamples::Planes,
+        arrayed: sc.view.samples == StorageSamples::Planes || layered,
         multisampled: sc.view.samples == StorageSamples::Multisampled,
         usage: ImageUsage::Storage,
         format: sc.view.declared,
@@ -1617,13 +1640,13 @@ pub(super) fn declare(mb: &mut ModuleBuilder, color: u32, sc: &StorageColor) -> 
 /// instance holds (`StorageColor::shadowed`): a single-sample 2D `Rgba16f` storage image of
 /// `float` texels (`ResourceKind::ExtendedShadow`), each Metal's tile value of the texel. Every
 /// value it holds is a `half`, so the device's conversions both ways are exact.
-pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32) -> BResult<GlobalId> {
+pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32, layered: bool) -> BResult<GlobalId> {
     let sampled_type = mb.ty(SType::Float { width: 32 })?;
     let ty = mb.ty(SType::Image(ImageType {
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: false,
+        arrayed: layered,
         multisampled: false,
         usage: ImageUsage::Storage,
         format: crate::spv::ImageFormat::Rgba16f,
@@ -1655,8 +1678,8 @@ fn shadow_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
-    let pixel = pixel(cx, fb)?;
-    Ok((image, pixel))
+    let texel = storage_texel(cx, fb)?;
+    Ok((image, texel))
 }
 
 /// The tile value the shadow of attachment `color`, held in `range`, holds at the invocation's
@@ -1705,7 +1728,7 @@ fn image_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
-    let pixel = pixel(cx, fb)?;
+    let pixel = storage_texel(cx, fb)?;
     if samples != StorageSamples::Planes {
         let ops = operands(cx, fb)?;
         return Ok((image, pixel, ops));
@@ -1769,6 +1792,26 @@ pub(super) fn pixel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResul
     let x = fb.convert(ConvOp::ConvertFToU, fx, u32_)?;
     let y = fb.convert(ConvOp::ConvertFToU, fy, u32_)?;
     fb.composite_construct(uvec2, &[x, y])
+}
+
+/// The texel of a storage-form image at the invocation's pixel: the [`pixel`], and under the
+/// layered storage form (`FragmentPlan::fetch_layer`) the layer its primitive renders as well.
+pub(super) fn storage_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+    let pixel = pixel(cx, fb)?;
+    let Some(object) = cx.plan.families.fragment.fetch_layer else {
+        return Ok(pixel);
+    };
+    let g = stage_io::object_global(cx, object)?;
+    let p = fb.module().global_value(g)?;
+    let layer = fb.load(p, MemAccess::default())?;
+    let u32_ = fb.module().ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let uvec3 = fb.module().ty(SType::Vector { elem: u32_, len: 3 })?;
+    let x = fb.composite_extract(pixel, &[0])?;
+    let y = fb.composite_extract(pixel, &[1])?;
+    fb.composite_construct(uvec3, &[x, y, layer])
 }
 
 /// A `uvec4` of a signed-integer texel's bits, or the texel itself.

@@ -310,7 +310,8 @@ pub(super) fn words(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
 /// function (`multisampled`), or its storage image in the interlocked storage form (`fetch`), which
 /// holds the samples as its view states; the storage image of every other attachment in that form
 /// (one the function only writes); and the input attachment of every extended-range attachment
-/// whose blend the function computes over it (`input_blend`).
+/// whose blend the function computes over it (`input_blend`). Storage images are arrays of the
+/// pass's layers under the layered storage form (`layered`).
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     colors: &[ColorInput],
@@ -319,6 +320,7 @@ pub(super) fn declare(
         &BTreeMap<u32, super::InputBlend>,
     ),
     multisampled: bool,
+    layered: bool,
 ) -> BResult<BTreeMap<u32, GlobalId>> {
     let mut out = BTreeMap::new();
     for c in colors {
@@ -326,7 +328,7 @@ pub(super) fn declare(
             continue;
         }
         if let Some(sc) = storage.get(&c.color) {
-            out.insert(c.color, super::fetch::declare(mb, c.color, sc)?);
+            out.insert(c.color, super::fetch::declare(mb, c.color, sc, layered)?);
             continue;
         }
         // An extended-range attachment's image holds the raw format's `uint` texels.
@@ -337,7 +339,7 @@ pub(super) fn declare(
     // attachment whose blend the shader computes from the texel.
     for (&color, sc) in storage {
         if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
-            e.insert(super::fetch::declare(mb, color, sc)?);
+            e.insert(super::fetch::declare(mb, color, sc, layered)?);
         }
     }
     for (&color, _) in blends.iter().filter(|(_, ib)| ib.blend.is_some()) {

@@ -189,6 +189,7 @@ pub fn select_output(cx: &mut SelectCx<'_>, field: u32, ty: AirTypeId) -> Result
         return Err(cx.invariant("a second stencil output"));
     }
     let coord = stage_io::frag_coord(cx);
+    super::fetch::plan_layer(cx)?;
     let front_facing = stage_io::front_facing(cx);
     let samples = multisampled.then(|| {
         let (covered, kept) = stage_io::sample_masks(cx);
@@ -242,10 +243,11 @@ pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
 }
 
 /// Declare the shadow: a 2D `uint` storage image of the planned declaration, multisampled for the
-/// multisampled form.
+/// multisampled form, arrayed over a layered pass's layers (`layered`).
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     plan: Option<&ShadowStencil>,
+    layered: bool,
 ) -> BResult<Option<GlobalId>> {
     let Some(plan) = plan else {
         return Ok(None);
@@ -258,7 +260,7 @@ pub(super) fn declare(
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: false,
+        arrayed: layered,
         multisampled: plan.samples.is_some(),
         usage: ImageUsage::Storage,
         format: plan.declared,
@@ -508,7 +510,7 @@ pub(super) fn emit_return(
     let reference = fb.binary(BinOp::BitwiseAnd, output, max)?;
     let state = cx.push_field(fb, PushField::ShadowStencilState)?;
     let facing = stage_io::object_global(cx, plan.front_facing)?;
-    let pixel = super::fetch::pixel(cx, fb)?;
+    let pixel = super::fetch::storage_texel(cx, fb)?;
     let mem = memory_model::coherence(cx.plan).texel(fb)?;
     let masks = match plan.samples {
         // The coverage word, from the entry's copy inside an interlocked body.

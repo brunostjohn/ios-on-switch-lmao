@@ -830,18 +830,15 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     {
         return Err(not_implemented(Feature::Imageblocks));
     }
-    // An attachment read in the interlocked storage form is one 2D view: what a layered pass, or an
-    // amplified draw, reads and writes of each layer or view is not modelled.
-    if !p.graphics.storage_attachments.is_empty()
-        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
-    {
+    // An attachment read in the interlocked storage form is one view of the pass's layers, each
+    // access at its primitive's layer in a layered pass (`VariantKey::layered_storage`): what an
+    // amplified draw reads and writes of each view is not modelled.
+    if !p.graphics.storage_attachments.is_empty() && shape.vertex_amplification.count > 1 {
         return Err(not_implemented(Feature::FramebufferFetch));
     }
-    // The shader-side stencil's shadow is one 2D image: the same holds.
+    // The shader-side stencil's shadow is one image of the pass's layers: the same holds.
     let shadow = shadow_template(p);
-    if shadow.is_some()
-        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
-    {
+    if shadow.is_some() && shape.vertex_amplification.count > 1 {
         return Err(not_implemented(Feature::StencilExport));
     }
     // A fragment function's tile threadgroup memory is the pass's, every tile's in one buffer:
@@ -938,12 +935,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         return Err(not_implemented(Feature::MeshShading));
     }
     // Nor a multisampled draw's, whose storage form reads and writes the attachment per sample,
-    // which runs the function per sample where a plain writer runs it per pixel; nor a layered
-    // pass's or an amplified draw's, whose storage form is one 2D view (above).
+    // which runs the function per sample where a plain writer runs it per pixel; nor an amplified
+    // draw's (above).
     if !interlocked_colors.is_empty()
-        && (p.graphics.rasterization_samples.as_raw() > 1
-            || shape.render_target_array_length > 1
-            || shape.vertex_amplification.count > 1)
+        && (p.graphics.rasterization_samples.as_raw() > 1 || shape.vertex_amplification.count > 1)
     {
         return Err(not_implemented(Feature::FramebufferFetch));
     }
@@ -975,11 +970,21 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     if !extended_shadows.is_empty()
         && (mesh
             || p.graphics.rasterization_samples.as_raw() > 1
-            || shape.render_target_array_length > 1
             || shape.vertex_amplification.count > 1)
     {
         return Err(not_implemented(Feature::FramebufferFetch));
     }
+    // In a pass of more than one layer the storage form's images are arrays of its layers, each
+    // access at its primitive's layer: the variant compiled for it, and only there.
+    let layered_storage = shape.render_target_array_length > 1
+        && (!p.graphics.storage_attachments.is_empty()
+            || shadow.is_some()
+            || !interlocked_colors.is_empty()
+            || !extended_shadows.is_empty());
+    let compiled_layered_storage = p
+        .dependencies
+        .iter()
+        .any(|d| matches!(d.fact, RuntimeFact::LayeredStorage));
     let compiled_shadows: std::collections::BTreeSet<u32> = p
         .layout
         .sets
@@ -1964,6 +1969,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     }
     variant.pulled_vertex_buffers = pulled_vertex_buffers;
     variant.dropped_vertex_layer = dropped_vertex_layer;
+    variant.layered_storage = layered_storage;
     variant.amplification_draws = amplification_draws;
     variant.viewport_compensation = viewport_compensation;
     // The pipeline compiled under other zeroed or dropped colors (or none) is the other variant.
@@ -2010,6 +2016,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 .then_some(limits.max_multiview_instance_index),
             other_layer_variant: vertex_layer
                 .is_some_and(|dropped| dropped != dropped_vertex_layer)
+                || compiled_layered_storage != layered_storage
                 || compiled_draws != amplification_draws
                 || compiled_compensation != viewport_compensation
                 || other_colors

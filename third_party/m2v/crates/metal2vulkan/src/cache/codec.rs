@@ -1177,6 +1177,7 @@ codec_enum! {
         StorageTextureIntegerChannels { slot },
         HeapHalfTexelWrites { stage, packed },
         MovableStorageWrites { early_variant },
+        LayeredStorage,
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {
