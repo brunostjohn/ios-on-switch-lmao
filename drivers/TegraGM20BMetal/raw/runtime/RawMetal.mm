@@ -259,6 +259,7 @@ static Class deviceClass(const RawM2V &m2v, NSString **error)
                         method_getTypeEncoding(methods[i]));
     free(methods);
     installDeviceAnswers(cls);
+    installSharedTextureMethods(cls);
     installM2VForwarders(cls, m2v);
     class_addProtocol(cls, @protocol(MTLDevice));
     // _MTLAddDevice asserts the private device protocol too, which the target's own drivers get from their IOGPU base class

@@ -482,6 +482,9 @@ void fillDeviceLimits(id device);
 void installDeviceAnswers(Class cls);
 uint64_t deviceAnswer(SEL selector, uint64_t argument);
 
+// RawMetalSharedTextures.mm: the shared texture methods only some kinds' Metal has (raw_shared_texture.h), on `cls`
+void installSharedTextureMethods(Class cls);
+
 // RawMetalQueuePriority.mm
 void queuePriorityAdd(RMQueue *queue);
 void queuePriorityRemove(RMQueue *queue);

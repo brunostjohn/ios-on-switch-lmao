@@ -131,6 +131,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMTextureTwinOnly
 };
 
+enum class RMShareable : uint8_t { Unasked, No, Yes };
+
 @interface RMTexture : RMObject {
 @public
     raw::Texture _raw;
@@ -161,6 +163,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     RMHeap *_heap;
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
+    std::atomic<RMShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
 }
 @end
 

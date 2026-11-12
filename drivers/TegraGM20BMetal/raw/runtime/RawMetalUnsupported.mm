@@ -68,32 +68,6 @@ id rmRefuseUnsupported(const char *why, NSError **error)
     return nil;
 }
 
-// supportsSharedTextureHandles answers NO: no texture of this device crosses a process by handle (each answers isShareable NO)
-- (id<MTLTexture>)newSharedTextureWithDescriptor:(MTLTextureDescriptor *)d
-{
-    SWITCH_REFUSE("raw", "texture.shared", "newSharedTextureWithDescriptor: %lux%lu format %lu: no shared texture handles",
-                  (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat);
-    return nil;
-}
-
-- (id<MTLTexture>)newSharedTextureWithHandle:(MTLSharedTextureHandle *)handle
-{
-    (void)handle;
-    SWITCH_REFUSE("raw", "texture.shared", "newSharedTextureWithHandle:: no shared texture handles");
-    return nil;
-}
-
-@end
-
-@interface RMTexture (Unsupported)
-@end
-@implementation RMTexture (Unsupported)
-
-- (MTLSharedTextureHandle *)newSharedTextureHandle
-{
-    return nil;
-}
-
 @end
 
 @interface RMRenderEncoder (Amplification)

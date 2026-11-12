@@ -4,10 +4,10 @@ import HWTestGPU
 import Metal
 
 /// The features the device has no form of are NO wherever Metal lets a caller ask, and every creation past a NO fails:
-/// one view of amplification, no predication, no dynamic attribute stride (render or compute stage-in), no shared
-/// texture handles, no counter sets, no tessellation (a post-tessellation vertex function reads as one, and its state
-/// is refused). Linear textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults
-/// to, 1, draws on the raw path.
+/// one view of amplification, no predication, no dynamic attribute stride (render or compute stage-in), no counter
+/// sets, no tessellation (a post-tessellation vertex function reads as one, and its state is refused). Linear
+/// textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults to, 1, draws on the
+/// raw path.
 struct NativeUnsupportedTest: NativeObjectTest {
     let id = "metal.native.unsupported"
     let name = "Features the device has no form of answer NO and refuse their creations; amplification 1 draws raw"
@@ -46,8 +46,7 @@ struct NativeUnsupportedTest: NativeObjectTest {
         let device = gpu.device
         var work = NativeWork()
         let zeroes = [
-            "maxPredicatedNestingDepth", "supportsDynamicAttributeStride", "supportsSharedTextureHandles",
-            "supportsTessellation", "maxTessellationFactor",
+            "maxPredicatedNestingDepth", "supportsDynamicAttributeStride", "supportsTessellation", "maxTessellationFactor",
         ]
         for selector in zeroes where Self.answer(device, selector) != 0 {
             work.failures.append("\(selector) answers \(Self.answer(device, selector).map(String.init) ?? "nothing")")
@@ -66,10 +65,6 @@ struct NativeUnsupportedTest: NativeObjectTest {
         if Self.refused({ _ = try device.makeCounterSampleBuffer(descriptor: counters) }) == nil {
             work.failures.append("a counter sample buffer was made")
         }
-        let shared = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm, width: 16, height: 16, mipmapped: false)
-        if device.makeSharedTexture(descriptor: shared) != nil { work.failures.append("a shared texture was made") }
-
         let patchLibrary = try await device.makeLibrary(source: Self.patchSource, options: nil)
         guard let post = patchLibrary.makeFunction(name: "tri_post") else { throw TestFailure("no tri_post") }
         metrics.set("patch", "\(post.patchType.rawValue)x\(post.patchControlPointCount)")

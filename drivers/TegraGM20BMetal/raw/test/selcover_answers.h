@@ -61,7 +61,6 @@ inline unsigned differ(id raw, id m2v, unsigned &compared)
                                                  "supportsVertexAmplificationCount:",
                                                  "maxPredicatedNestingDepth",
                                                  "supportsDynamicAttributeStride",
-                                                 "supportsSharedTextureHandles",
                                                  "supportsTessellation",
                                                  "supportsIndirectTessellation",
                                                  "maxTessellationFactor"};

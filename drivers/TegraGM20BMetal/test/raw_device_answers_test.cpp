@@ -40,8 +40,8 @@ TEST(RawDeviceAnswers, AmplificationIsOneViewAndEveryQuerySaysSo)
 TEST(RawDeviceAnswers, FeaturesWithNoFormHereAreNo)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds)
-        for (const char *selector : {"supportsDynamicAttributeStride", "supportsSharedTextureHandles",
-                                     "supportsTessellation", "supportsIndirectTessellation", "maxTessellationFactor"})
+        for (const char *selector : {"supportsDynamicAttributeStride", "supportsTessellation",
+                                     "supportsIndirectTessellation", "maxTessellationFactor"})
             EXPECT_EQ(count(k, selector), 0u) << k.kind << " " << selector;
 }
 
@@ -50,6 +50,13 @@ TEST(RawDeviceAnswers, PredicationNestsAsDeepAsTheLoopsLaidDown)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds)
         EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 8u) << k.kind;
+}
+
+// Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
+TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsSharedTextureHandles"), 1u) << k.kind;
 }
 
 }  // namespace
