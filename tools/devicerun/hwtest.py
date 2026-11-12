@@ -142,6 +142,7 @@ TESTS: dict[str, bool] = {
             'metal.native.layered_clear',
             'metal.native.layered_memoryless',
             'metal.native.layered_vertex',
+            'metal.native.layered_fetch',
             'metal.native.viewports',
             'metal.native.viewport_index',
             'metal.native.block_textures',
