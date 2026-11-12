@@ -4842,6 +4842,8 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (!prepared)
         return false;
     cb_->use(*x.slots, false);
+    if (x.slots->hostVisible && !x.slots->wc && x.slots->cpu)
+        cb_->clean(x.slots->cpu + offset, bytes);
     for (size_t i = 0; i < x.indexBufferCount; i++) {
         const Buffer &ib = *x.indexBuffers[i];
         cb_->use(ib, false);
