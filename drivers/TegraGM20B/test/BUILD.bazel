@@ -775,6 +775,20 @@ host_test(
     ],
 )
 
+# An ownership transaction's lifetime: the caller's use array kept until commit or abort, a refused begin empty, commit
+# and abort of an empty transaction nothing, a debug kernel refusing a use array that changed since begin.
+host_test(
+    name = "switch_gpu_transaction_test",
+    srcs = [
+        "switch_gpu_transaction_test.cpp",
+        "switch_gpu_backing_fixture.h",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
 host_test(
     name = "switch_gpu_resource_set_test",
     srcs = [

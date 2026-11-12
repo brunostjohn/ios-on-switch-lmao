@@ -165,10 +165,16 @@ struct switch_gpu_backing_transaction {
 	/* switch_gpu_backing_promise_dependencies ran: the writer promises outside [promise_first, promise_end) its reads
 	 * order behind */
 	uint32_t promised, promise_first, promise_end;
+	/* debug kernels: what begin left in `uses`, which commit and abort check before they trust it */
+	uint64_t uses_check;
 };
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
  * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
+ * The transaction keeps the caller's array, not a copy: commit and abort find the backings to record and unlock in it,
+ * so it must stay as begin left it until then (an array in a frame that returns before the commit is a dangling one;
+ * debug kernels refuse it with one line). A begin that fails leaves the transaction empty, and commit and abort of an
+ * empty transaction do nothing.
  * Failed work fails no later use: its records retire as completed ones do, and what a failed writer wrote is undefined
  * (logged once). Nothing here, in dependencies, or in a CPU acquire, wait or snapshot returns its errno.
  * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU

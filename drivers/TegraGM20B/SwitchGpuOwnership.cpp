@@ -193,6 +193,37 @@ bool sweep_wanted(const switch_gpu_backing_use *uses, uint32_t count)
 	return false;
 }
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+uint64_t uses_digest(const switch_gpu_backing_use *uses, uint32_t count)
+{
+	uint64_t digest = 0xcbf29ce484222325ull ^ uintptr_t(uses);
+	for (uint32_t i = 0; i < count; ++i) {
+		digest = (digest ^ uintptr_t(uses[i].backing)) * 0x100000001b3ull;
+		digest = (digest ^ uses[i].access) * 0x100000001b3ull;
+	}
+	return digest | 1;
+}
+#endif
+
+// Debug kernels: the use array still holds what begin left in it, or the transaction is not touched (its backings stay
+// locked) rather than unlocked and recorded through whatever the array now holds.
+bool uses_intact(const switch_gpu_backing_transaction *transaction, const char *step)
+{
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+	if (!transaction->uses_check ||
+	    uses_digest(transaction->uses, transaction->count) == transaction->uses_check)
+		return true;
+	IOLog("SwitchGpu: engine %u queue %u job %llu: its %u uses changed between begin and %s (the caller's array went "
+	      "away); nothing is recorded or unlocked\n",
+	      transaction->completion.engine, transaction->completion.queue, transaction->completion.value,
+	      transaction->count, step);
+	return false;
+#else
+	(void)transaction, (void)step;
+	return true;
+#endif
+}
+
 void unlock_transaction(switch_gpu_backing_transaction *transaction)
 {
 	while (transaction->locked)
@@ -208,8 +239,10 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 		 const switch_gpu_backing_token *completion,
 		 switch_gpu_backing_transaction *transaction)
 {
-	if (!transaction || !completion || (count && !uses) || (lease_count && !leases) ||
-	    (guard_count && !guards))
+	if (!transaction)
+		return -22;
+	*transaction = {};
+	if (!completion || (count && !uses) || (lease_count && !leases) || (guard_count && !guards))
 		return -22;
 	for (uint32_t i = 0; i < lease_count; ++i) {
 		if (!leases[i])
@@ -218,7 +251,6 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 			if (leases[i] == leases[j])
 				return -22;
 	}
-	*transaction = {};
 	const auto *ops = switch_gpu_backing_engine_ops(completion->engine);
 	if (!ops)
 		return -19;
@@ -329,6 +361,10 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 		result = -22;
 	if (result)
 		switch_gpu_backing_abort(transaction);
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+	else
+		transaction->uses_check = uses_digest(transaction->uses, transaction->count);
+#endif
 	return result;
 }
 
@@ -448,7 +484,7 @@ extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transa
 extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transaction)
 {
 	if (!transaction || transaction->locked != transaction->count ||
-	    transaction->prepared != transaction->count)
+	    transaction->prepared != transaction->count || !uses_intact(transaction, "commit"))
 		return;
 	for (uint32_t i = 0; i < transaction->count; ++i) {
 		auto *backing = transaction->uses[i].backing;
@@ -485,7 +521,7 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 
 extern "C" void switch_gpu_backing_abort(switch_gpu_backing_transaction *transaction)
 {
-	if (!transaction)
+	if (!transaction || !uses_intact(transaction, "abort"))
 		return;
 	while (transaction->prepared) {
         switch_gpu_backing_writer_abort_locked(transaction->uses[transaction->prepared - 1].backing);
