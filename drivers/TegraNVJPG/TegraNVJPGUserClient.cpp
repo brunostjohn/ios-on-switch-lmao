@@ -586,6 +586,8 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         }
         job->engine.planes = job->plan.planes;
         job->engine.pixels = static_cast<uint64_t>(img.mcusX) * img.mcuW * img.mcusY * img.mcuH;
+        job->engine.selector = kind == kSelector1 ? 1 : kind == kSelector5 ? 5 : 7;
+        job->engine.target = job->plan.target.format;
     }
     if (ret) {
         if (why)

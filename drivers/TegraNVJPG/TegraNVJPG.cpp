@@ -359,10 +359,19 @@ void flushMemoryClient()
 // falcon and the memory controller held. gStateLock held, and gJobLock (the caller's): no NVJPG power transition can
 // be waiting for gStateLock while this takes the power lock (gateOn runs only in a job, gateOff only with no user, and
 // suspend first takes gJobLock).
-int cancelled(uint32_t fence, uint64_t us)
+int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
 {
     char host[200];
     char falcon[400];
+    char what[200];
+    const nvjpg_dec_drv_pic_setup_s &s = job->setup;
+    snprintf(
+        what, sizeof(what),
+        "selector %u, %dx%d (MCU %dx%d), stream chroma %d to chroma %d pixel format %d memory mode %d block height "
+        "%d, %d bitstream bytes, %u planes, target format %u",
+        job->selector, s.frame_width, s.frame_height, s.mcu_width, s.mcu_height, s.stream_chroma_mode,
+        s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.block_linear_height, s.bitstream_size,
+        job->planes, job->target);
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
     switch_falcon_stall(gJpg, falcon, sizeof(falcon));
@@ -385,11 +394,11 @@ int cancelled(uint32_t fence, uint64_t us)
     if (!back)
         engineOff();
     IOLog("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u; powered on by the idle gate %u times, "
-          "the last %llu ms ago); %s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x; %s; job cancelled, engine reset: "
-          "%s%s\n",
+          "the last %llu ms ago); job %s; %s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x; %s; job cancelled, engine "
+          "reset: %s%s\n",
           fence, us / 1000, gSyncpt, reached, gPowerOns,
-          gPowerOns ? static_cast<unsigned long long>((switch_now_us() - gPoweredAtUs) / 1000) : 0ULL, falcon, mcStatus,
-          mcError, mcAddress, host,
+          gPowerOns ? static_cast<unsigned long long>((switch_now_us() - gPoweredAtUs) / 1000) : 0ULL, what, falcon,
+          mcStatus, mcError, mcAddress, host,
           back ? "running again" : "it did not come back, NVJPG refuses work (decodes go to the CPU): ",
           back ? ""
                : (gLine[0] ? gLine
@@ -633,7 +642,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
-            ret = cancelled(fence, switch_now_us() - start);
+            ret = cancelled(job, fence, switch_now_us() - start);
     }
     if (busyUs)
         *busyUs = switch_now_us() - start;
