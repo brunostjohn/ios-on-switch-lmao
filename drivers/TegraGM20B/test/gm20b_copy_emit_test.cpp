@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // gpu_present.c's and gpu_scrub.c's present, read-back and pool-scrub pushes (TegraGM20BCopyEmit.c, on kits/SwitchGM20BEmit) against the
-// hand-encoded words the kernel wrote for the same inputs before it moved onto the kit; the present's copies now go
-// around the L2.
+// hand-encoded words the kernel wrote for the same inputs before it moved onto the kit.
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -43,12 +42,11 @@ std::vector<uint32_t> texels(const tgm_copy_side &src, const tgm_copy_side &dst,
 }
 
 // Every method the hand-encoded copy wrote, with its value, but a block-linear side's pitch, which the copy engine reads
-// only for a pitch-linear side, and LAUNCH_DMA's BYPASS_L2 FORCE_VOLATILE (bit 20), which the present now sets
+// only for a pitch-linear side
 void expectSameCopy(const std::vector<uint32_t> &ours, const std::vector<uint32_t> &hand,
 		    bool srcBlock, bool dstBlock)
 {
 	Methods a = methods(ours), b = methods(hand);
-	b[kLaunch] |= 1u << 20;
 	EXPECT_EQ(a.count(kPitchIn), 1u);
 	EXPECT_EQ(a.count(kPitchOut), 1u);
 	if (srcBlock)
@@ -56,11 +54,10 @@ void expectSameCopy(const std::vector<uint32_t> &ours, const std::vector<uint32_
 	if (dstBlock)
 		a.erase(kPitchOut), b.erase(kPitchOut);
 	EXPECT_EQ(a, b);
-	ASSERT_GE(ours.size(), 2u);
-	EXPECT_EQ(ours[ours.size() - 2], 0x200180c0u)
-		<< "LAUNCH_DMA last, as a method and its word: bit 20 is no immediate";
-	EXPECT_LE(ours.size(), size_t(TGM_COPY_RECT_DWORDS));
-	EXPECT_LE(ours.size(), hand.size());
+	EXPECT_EQ(a.at(kLaunch) & (1u << 20), 0u)
+		<< "BYPASS_L2 stays USE_PTE_SETTING, as nvgpu and NVK leave it";
+	EXPECT_EQ(ours.back() >> 29, 4u) << "LAUNCH_DMA in its one-word form";
+	EXPECT_LT(ours.size(), hand.size());
 }
 
 TEST(CopyEmit, PresentFromRowsIsTheHandEncodedCopy)

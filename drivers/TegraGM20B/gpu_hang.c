@@ -495,6 +495,7 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 	char report[sizeof(chan->fault)];
 	char state[TGM_HANG_LINE];
 	char engine[TGM_HANG_LINE];
+	char engines[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
 	enum tgm_ctxsw verdict = TGM_CTXSW_RESET;
 
@@ -506,18 +507,21 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 		if (verdict == TGM_CTXSW_FATAL) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			tgm_engine_state(engine, sizeof(engine));
-			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s; %s",
-				    chan->owner, state, engine);
+			tgm_engines_line(engines, sizeof(engines));
+			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s; "
+				    "engines %s; %s",
+				    chan->owner, state, engines, engine);
 		}
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
 			tgm_chan_isolate(chan, report, now);
 			tgm_engine_state(engine, sizeof(engine));
+			tgm_engines_line(engines, sizeof(engines));
 			scnprintf(ctxsw_line, sizeof(ctxsw_line),
-				  "tegra-gm20b: context switch timed out, recovering %s (channel %u): "
-				  "%s; %s\n",
-				  chan->owner, chan->chid, state, engine);
+				  "tegra-gm20b: context switch timed out, recovering %s (channel "
+				  "%u): %s; engines %s; %s\n",
+				  chan->owner, chan->chid, state, engines, engine);
 			switch_linux_log_line(ctxsw_line);
 		}
 	}

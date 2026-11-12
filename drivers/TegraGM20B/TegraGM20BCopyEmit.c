@@ -34,27 +34,10 @@ static struct switch_gm20b_copy_surface tgm_side(const struct tgm_copy_side *s, 
 	return c;
 }
 
-/* The copy's LAUNCH_DMA, its last method, with BYPASS_L2 FORCE_VOLATILE (clb0b5.h, bit 20; neither nvgpu nor NVK sets
- * it): its accesses go around the L2 whatever their PTEs say. Bit 20 does not fit an immediate, so a one-word launch
- * becomes a method and its data word. */
-static uint32_t tgm_launch_volatile(uint32_t *w, uint32_t n)
-{
-	const uint32_t last = w[n - 1];
-	const uint32_t bypass = NVB0B5_LAUNCH_DMA_BYPASS_L2_FORCE_VOLATILE << 20;
-	struct nv_push p;
-
-	if (n >= 2 && (w[n - 2] & 0x1fff) == NVB0B5_LAUNCH_DMA >> 2 && (w[n - 2] >> 29) == 1) {
-		w[n - 1] |= bypass;
-		return n;
-	}
-	nv_push_init(&p, w + n - 1, 2, SUBC_MASK_ALL);
-	P_MTHD(&p, NVB0B5, LAUNCH_DMA);
-	nv_push_val(&p, NVB0B5_LAUNCH_DMA, ((last >> 16) & 0x1fff) | bypass);
-	return n + 1;
-}
-
-/* The present's copy and its read-backs, into memory only the display or the CPU reads: written around the L2, so the
- * present's fence needs no L2 flush for them (chan_fence_volatile). */
+/* The present's copy and its read-backs. LAUNCH_DMA's BYPASS_L2 stays USE_PTE_SETTING, as nvgpu and NVK leave it: the
+ * present's mappings are volatile PTEs already (gpu_present.c tgm_present_map), so its writes reach DRAM at the fence's
+ * FB_FLUSH with no L2 flush (chan_fence_volatile). Device boot T-v3 set FORCE_VOLATILE here and its copy engine never
+ * finished switching off the present's context once another copy channel wanted the engine. */
 uint32_t tgm_copy_texels(uint32_t *w, const struct tgm_copy_side *src,
 			 const struct tgm_copy_side *dst, uint32_t width, uint32_t height)
 {
@@ -64,7 +47,7 @@ uint32_t tgm_copy_texels(uint32_t *w, const struct tgm_copy_side *src,
 	copy.extent_el.width = width;
 	copy.extent_el.height = height;
 	copy.extent_el.depth = copy.extent_el.array_len = 1;
-	return tgm_launch_volatile(w, tgm_copy(w, &copy));
+	return tgm_copy(w, &copy);
 }
 
 uint32_t tgm_copy_rows(uint32_t *w, uint64_t src, uint32_t src_pitch, uint64_t dst,

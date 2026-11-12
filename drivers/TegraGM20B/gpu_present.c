@@ -379,8 +379,8 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	nvxnu_work_schedule_after(
 		tgm_present.deadline_work,
 		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
-	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write around the L2
-	 * (tgm_copy_texels); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
+	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's
+	 * volatile PTEs (tgm_present_map); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
 	if (dst_va)
 		chan_fence_volatile(chan);
 	else

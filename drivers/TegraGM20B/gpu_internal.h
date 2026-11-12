@@ -462,6 +462,7 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
 void tgm_clk_measure(char *buf, unsigned int len);
+void tgm_engines_line(char *buf, unsigned int len);
 /* Debug kernels: a map's bytes in 4 KiB and in 128 KiB PTEs, and of its 4 KiB ones those 128 KiB PTEs could have mapped */
 void tgm_stats_map(u64 small, u64 big, u64 could_be_big);
 void tgm_stats_gr_bind(struct tgm_chan *chan);
