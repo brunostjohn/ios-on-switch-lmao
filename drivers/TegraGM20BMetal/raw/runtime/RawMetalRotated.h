@@ -10,7 +10,8 @@ bool rotatedShape(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw
 // Such a texture over the plane's own memory, its rotation kept (Texture::rotation)
 bool createRotated(RMTexture *t, MTLTextureDescriptor *d, IOSurfaceRef s, const raw::Rotation &r);
 
-// Why the raw path does not draw `pass` straight into its turned planes, None where it does or nothing is turned
-raw::RotatedRefusal rotatedPassRefusal(MTLRenderPassDescriptor *pass);
-// The rotation of `pass`'s turned colour attachments, 0 for none
-uint8_t passTurn(MTLRenderPassDescriptor *pass);
+// Why the raw path does not draw a pass of attachments `pass` straight into its turned planes, None where it does or nothing
+// is turned
+raw::RotatedRefusal rotatedPassRefusal(const RMPass &pass);
+// The rotation of the pass's turned colour attachments, 0 for none
+uint8_t passTurn(const RMPass &pass);

@@ -49,39 +49,39 @@ bool createRotated(RMTexture *t, MTLTextureDescriptor *d, IOSurfaceRef s, const 
     return true;
 }
 
-raw::RotatedRefusal rotatedPassRefusal(MTLRenderPassDescriptor *pass)
+raw::RotatedRefusal rotatedPassRefusal(const RMPass &pass)
 {
     raw::PassDesc p;
-    const auto rawOf = [](id<MTLTexture> x) -> raw::Texture * {
+    const auto rawOf = [](id x) -> raw::Texture * {
         RMTexture *t = (RMTexture *)x;
-        return [(id)t isKindOfClass:[RMTexture class]] && t->_rawOk ? &t->_raw : nullptr;
+        return [x isKindOfClass:[RMTexture class]] && t->_rawOk ? &t->_raw : nullptr;
     };
     bool any = false;
     for (unsigned c = 0; c < 8; c++) {
-        MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[c];
+        const RMPass::Color &a = pass.color[c];
         if (!a.texture)
             continue;
         p.color[c].texture = rawOf(a.texture);
-        p.color[c].load = a.loadAction == MTLLoadActionLoad    ? raw::ColorAttachment::Load
-                          : a.loadAction == MTLLoadActionClear ? raw::ColorAttachment::Clear
-                                                               : raw::ColorAttachment::DontCare;
+        p.color[c].load = a.load == MTLLoadActionLoad    ? raw::ColorAttachment::Load
+                          : a.load == MTLLoadActionClear ? raw::ColorAttachment::Clear
+                                                         : raw::ColorAttachment::DontCare;
         p.count = c + 1;
         any |= p.color[c].texture && p.color[c].texture->rotation;
-        if (raw::Texture *r = rawOf(a.resolveTexture); r && r->rotation)
+        if (raw::Texture *r = rawOf(a.resolve); r && r->rotation)
             return raw::RotatedRefusal::Resolve;
     }
     if (!any)
         return raw::RotatedRefusal::None;
-    p.depthStencil.texture = rawOf(pass.depthAttachment.texture ?: pass.stencilAttachment.texture);
+    p.depthStencil.texture = rawOf(pass.zeta[0].texture ?: pass.zeta[1].texture);
     raw::Rotation r;
     return raw::passRotation(p, r);
 }
 
-uint8_t passTurn(MTLRenderPassDescriptor *pass)
+uint8_t passTurn(const RMPass &pass)
 {
-    for (unsigned c = 0; c < 8; c++) {
-        RMTexture *t = (RMTexture *)pass.colorAttachments[c].texture;
-        if ([(id)t isKindOfClass:[RMTexture class]] && t->_rawOk && t->_raw.rotation)
+    for (const RMPass::Color &a : pass.color) {
+        RMTexture *t = (RMTexture *)a.texture;
+        if ([a.texture isKindOfClass:[RMTexture class]] && t->_rawOk && t->_raw.rotation)
             return t->_raw.rotation;
     }
     return 0;

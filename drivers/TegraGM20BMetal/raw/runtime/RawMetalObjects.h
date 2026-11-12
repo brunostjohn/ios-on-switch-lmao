@@ -428,8 +428,9 @@ struct RMSharedEventWait {
 - (void)takeReason:(RMReason)reason why:(NSString *)why;
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why;
 - (void)closeEncoder;
-- (void)record:(const Cmd &)cmd;
-- (void)retain:(id)object;
+// direct (no message): every recorded command and every object a command names goes through them
+- (void)record:(const Cmd &)cmd __attribute__((objc_direct));
+- (void)retain:(id)object __attribute__((objc_direct));
 @end
 
 // A refusal predicate hit while recording (or encoding) `cb`: into its mask; the first one's values kept; the process's first hit
@@ -548,7 +549,7 @@ id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lo
 @end
 
 @interface RMRenderEncoder (Cubic)
-- (const raw::Pipeline *)drawnRecord;  // (RawMetalCubic.mm)
+- (const raw::Pipeline *)drawnRecord __attribute__((objc_direct));  // (RawMetalCubic.mm)
 @end
 
 #if SWITCH_FRAME_TIMELINE

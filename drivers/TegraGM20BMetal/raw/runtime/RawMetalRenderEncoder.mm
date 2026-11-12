@@ -27,6 +27,10 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
     hit(e->_cb, PredEncGeometry, type, uint32_t(count) | uint64_t(uint32_t(instances)) << 32);
 }
 
+@interface RMRenderEncoder ()
+- (void)checkDraw __attribute__((objc_direct));  // every draw's: a direct call, no message
+@end
+
 @implementation RMRenderEncoder
 
 + (Class)twinClass

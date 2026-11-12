@@ -236,18 +236,18 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         id<MTLTexture> t = a.texture;
         if (!t)
             continue;
+        id<MTLTexture> resolve = a.resolveTexture;
         const bool volume = t.textureType == MTLTextureType3D;
         const NSUInteger slice = volume ? a.depthPlane : a.slice;
-        facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, a.resolveTexture};
+        facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, resolve};
         if ([(id)t isKindOfClass:[RMTexture class]] && ((RMTexture *)t)->_rawOk && ((RMTexture *)t)->_raw.comptags)
             facts.compressed |= uint8_t(1u << c);
         [self retain:t];
-        [self retain:pass.colorAttachments[c].resolveTexture];
+        [self retain:resolve];
         RMTexture *x = (RMTexture *)t;
         if ([(id)x isKindOfClass:[RMTexture class]])
             declareGpuWrites(x);
-        if (RMTexture *r = (RMTexture *)pass.colorAttachments[c].resolveTexture;
-            [(id)r isKindOfClass:[RMTexture class]])
+        if (RMTexture *r = (RMTexture *)resolve; [(id)r isKindOfClass:[RMTexture class]])
             declareGpuWrites(r);
         if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
@@ -267,28 +267,23 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
             }
             hit(self, PredPassAttFormat, t.pixelFormat, b);
         } else if ((x->_raw.planar && !x->_raw.planarStandIn) ||
-                   (x->_raw.ycbcr && ycbcrTargetPassRefusal(x->_raw, pass.colorAttachments[c]))) {
+                   (x->_raw.ycbcr && ycbcrTargetPassRefusal(x->_raw, a))) {
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c | uint64_t(a.loadAction) << 8);
         } else if (raw::Texture part;
                    (volume ? a.slice : a.depthPlane) || a.level >= raw::fx::kMaxLevels || slice > UINT32_MAX ||
-                   (a.resolveTexture &&
+                   (resolve &&
                     (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) || !rawResolve(self, a, x))) ||
                    (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) &&
                     !raw::attachmentTarget(x->_raw, uint32_t(a.level), uint32_t(slice), part))) {
             // a level, slice or depth plane is a block-linear image's (raw_attachment_target.h), resolved from no layer
             [self takeReason:WhyPass why:@"a color attachment level, slice, depth plane or resolve"];
-            hit(self, PredPassAttLevel, a.level | slice << 8, a.resolveTexture != nil);
+            hit(self, PredPassAttLevel, a.level | slice << 8, resolve != nil);
         } else {
             e->_formats[c] = x->_raw.planarStandIn ? x->_raw.planarStandIn->format : x->_raw.format;
             e->_count = c + 1;
             e->_samples = x->_raw.samples;
         }
-    }
-    e->_turn = passTurn(pass);
-    if (const raw::RotatedRefusal turned = rotatedPassRefusal(pass); turned != raw::RotatedRefusal::None) {
-        [self takeReason:WhyPass why:@(raw::rotatedRefusalText(turned))];
-        hit(self, PredPassRotated, uint64_t(turned));
     }
     facts.depth = zetaAttachment(pass);
     facts.depthSlice = pass.depthAttachment.texture ? pass.depthAttachment.slice : pass.stencilAttachment.slice;
@@ -300,6 +295,11 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
                      depth.resolveTexture != nil};
     facts.zeta[1] = {stencil.texture, stencil.level, stencil.slice, stencil.loadAction, stencil.storeAction,
                      stencil.resolveTexture != nil};
+    e->_turn = passTurn(facts);
+    if (const raw::RotatedRefusal turned = rotatedPassRefusal(facts); turned != raw::RotatedRefusal::None) {
+        [self takeReason:WhyPass why:@(raw::rotatedRefusalText(turned))];
+        hit(self, PredPassRotated, uint64_t(turned));
+    }
     facts.clearDepth = pass.depthAttachment.clearDepth;
     facts.clearStencil = pass.stencilAttachment.clearStencil;
     facts.width = pass.renderTargetWidth;
