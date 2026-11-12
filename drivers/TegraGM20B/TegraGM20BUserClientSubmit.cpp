@@ -116,6 +116,12 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		if (job.events)
 			*job.events = {};
 	}
+#if TGM_STATS
+	if (!job.profile)
+		job.profile = IONew(tgm_prof, 1);
+	if (!job.profile)
+		return false;
+#endif
 	if (!job.bytes || !job.dependencies || !job.events)
 		return false;
 	if (uses > job.capacity) {
@@ -170,6 +176,9 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 	IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 	IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
 	IODelete(job.written, tgm_coh *, job.capacity);
+#if TGM_STATS
+	IODelete(job.profile, tgm_prof, 1);
+#endif
 	job = {};
 }
 
@@ -245,6 +254,7 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 						tgm_stats_submit(chans_[slot], job.phases.ns);
 					}
 #endif
+					switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);
 					submitGate_.leave(lock_);
 				} else {
 					result = kIOReturnNotOpen;

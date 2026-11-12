@@ -207,6 +207,7 @@ int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_me
 #define CHAN_PROF                              \
 	(CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + \
 	 0x1000) /* one 16-byte stamp per push, TGM_PROF_MAX */
+_Static_assert(TGM_PROF_MAX * 16 <= 0x1000, "the push profile's stamps fit the channel's semaphore page above CHAN_PROF");
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 

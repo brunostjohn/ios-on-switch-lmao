@@ -13,7 +13,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpBytes:
     case OpKernelBytes:
         if (stage < 3 && c.index < 31)
-            changed = buffers[stage].update([&](auto &bindings) {
+            changed = buffers[stage].update(c.index, [&](auto &bindings) {
                 raw::BufferBinding value;
                 value.source = c.op == OpBytes || c.op == OpKernelBytes ? raw::BufferBinding::Source::Bytes
                                                                         : raw::BufferBinding::Source::Buffer;
@@ -23,6 +23,8 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 value.length = c.b;
                 if (value.source == raw::BufferBinding::Source::Buffer)
                     value.chunk = 0;
+                else
+                    value.shadow = uint32_t(c.x);
                 const auto resource = [](const auto &binding) {
                     return binding.source == raw::BufferBinding::Source::Buffer ? binding.object : nullptr;
                 };
@@ -33,7 +35,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpBufferOffset:
     case OpKernelBufferOffset:
         if (stage < 3 && c.index < 31)
-            changed = buffers[stage].update([&](auto &bindings) {
+            changed = buffers[stage].update(c.index, [&](auto &bindings) {
                 bool changed = raw::assignState(bindings[c.index].offset, c.c);
                 if (bindings[c.index].source == raw::BufferBinding::Source::Unset) {
                     bindings[c.index].source = raw::BufferBinding::Source::Offset;
@@ -45,7 +47,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpTexture:
     case OpKernelTexture:
         if (stage < 3)
-            changed = textures[stage].update([&](auto &bindings) {
+            changed = textures[stage].update(c.index, [&](auto &bindings) {
                 return bindings.bind(c.index, c.obj);
             });
         resourcesChanged = changed;
@@ -53,7 +55,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpSampler:
     case OpKernelSampler:
         if (stage < 3)
-            changed = samplers[stage].update([&](auto &bindings) {
+            changed = samplers[stage].update(c.index, [&](auto &bindings) {
                 return bindings.bind(c.index, c.obj);
             });
         resourcesChanged = changed;

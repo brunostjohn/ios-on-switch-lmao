@@ -2,8 +2,10 @@
 #pragma once
 #include "raw_dispatch_regions.h"
 #include "RawMetalArguments.h"
+#include "raw_pointer_map.h"
 #include "raw_semantic_state.h"
 #include <algorithm>
+#include <deque>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -83,6 +85,7 @@ struct RMResourceFacts {
     void *cpuBuffer = nullptr;
     RMResourceKind kind = RMResourceKind::Other;
     uint8_t roles = 0;
+    void *surfaceWrites = nullptr;  // a texture over a surface: the surface's write count (RawMetalSurfaceWrites.mm)
 };
 
 struct RMRangeResource {
@@ -100,7 +103,6 @@ class RMCommandPlan {
     std::vector<RMPlanBegin> begins_;
     std::vector<RMPlanDraw> draws_;
     std::vector<RMPlanRasterGroup> rasterGroups_;
-    std::unordered_map<uint32_t, uint32_t> rasterGroupIndex_;
     uint32_t lastRasterGroup_ = raw::kNoSnapshot;
     std::vector<RMPlanDispatch> dispatches_;
     std::vector<RMPlanTransfer> transfers_;
@@ -118,6 +120,7 @@ class RMCommandPlan {
     RMPlanError recordingError_ = RMPlanError::None;
     size_t encoderBegin_ = 0;
     struct Range {
+        size_t from = 0, to = 0;
         uint32_t uses = 0;
         std::vector<void *> pipelines, variants;
         std::vector<size_t> computes;
@@ -125,8 +128,20 @@ class RMCommandPlan {
         std::array<uint32_t, size_t(RMResourceKind::Count) + 1> first{};
         void *planarFeedback = nullptr;
     };
-    std::map<std::pair<size_t, size_t>, Range> ranges_;
-    std::unordered_map<void *, RMResourceFacts> resourceFacts_;
+    // the ranges prepared, the first rangeCount_ of them live: a cleared plan keeps them, their lists' capacity too, for
+    // the next command buffer's
+    std::deque<Range> ranges_;
+    size_t rangeCount_ = 0;
+    raw::PointerMap<RMResourceFacts> resourceFacts_;
+    // prepareRange's and saveUses' working lists, kept from one call to the next
+    std::vector<uint32_t> spanMarks_;
+    uint32_t spanStamp_ = 0;
+    std::vector<raw::ResourceUse> mergedUses_;
+    std::vector<void *> mergedPipelines_, mergedVariants_;
+    std::vector<size_t> mergedComputes_;
+    raw::PointerMap<uint32_t> usePositions_;
+    const Range *findRange(size_t from, size_t to) const;
+    const Range &rangeAt(size_t from, size_t to) const;
     void classifyRange(Range &range);
     size_t rangeStorageBytes() const;
     std::map<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t> drawUseSpans_;
@@ -142,7 +157,7 @@ class RMCommandPlan {
     bool setter(const Cmd &c, const std::vector<uint64_t> &extra);
 
 public:
-    raw::StateSnapshots<raw::BufferBindings> buffers[3];
+    raw::BufferSnapshots buffers[3];
     raw::StateSnapshots<raw::TextureBindings> textures[3];
     raw::StateSnapshots<raw::SamplerBindings> samplers[3];
     raw::StateSnapshots<raw::RasterState> raster;
@@ -236,7 +251,7 @@ public:
 
     void invalidateUses()
     {
-        ranges_.clear();
+        rangeCount_ = 0;
     }
 
     const RMPlanControl &control(size_t at) const
@@ -258,13 +273,28 @@ public:
     }
 
     void registerResource(void *object, RMResourceFacts facts);
+    const RMResourceFacts *factsOf(void *object) const
+    {
+        return resourceFacts_.find(object);
+    }
     void *nativeRangeRefusal(size_t from, size_t to) const;
     template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
     {
-        const auto &range = ranges_.at({from, to});
+        const auto &range = rangeAt(from, to);
         const size_t index = size_t(kind);
         for (uint32_t i = range.first[index]; i < range.first[index + 1]; ++i)
             visit(range.resources[i]);
+    }
+
+    // every resource of the range [from, to) prepareRange cached, with its facts; false: none cached
+    template <typename F> bool forEachRangeResource(size_t from, size_t to, F visit) const
+    {
+        const Range *found = findRange(from, to);
+        if (!found)
+            return false;
+        for (const RMRangeResource &resource : found->resources)
+            visit(resource);
+        return true;
     }
 
     void addUses(size_t at, const std::vector<raw::ResourceUse> &uses);
@@ -288,17 +318,17 @@ public:
 
     const std::vector<void *> &renderPipelines(size_t from, size_t to) const
     {
-        return ranges_.at({from, to}).pipelines;
+        return rangeAt(from, to).pipelines;
     }
 
     const std::vector<void *> &renderVariants(size_t from, size_t to) const
     {
-        return ranges_.at({from, to}).variants;
+        return rangeAt(from, to).variants;
     }
 
     const std::vector<size_t> &pendingComputes(size_t from, size_t to) const
     {
-        return ranges_.at({from, to}).computes;
+        return rangeAt(from, to).computes;
     }
 
     size_t storageBytes() const;
@@ -306,8 +336,8 @@ public:
 
     template <typename F> void forEachUse(size_t from, size_t to, F visit) const
     {
-        if (const auto found = ranges_.find({from, to}); found != ranges_.end()) {
-            const UseSpan span = useSpans_[found->second.uses];
+        if (const Range *found = findRange(from, to)) {
+            const UseSpan span = useSpans_[found->uses];
             for (uint32_t i = 0; i < span.count; ++i) {
                 const auto &use = uses_[span.begin + i];
                 visit(use.object, use.access);

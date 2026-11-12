@@ -36,11 +36,6 @@ static bool markWritten(const raw::RetirementWrites &writes, bool success, const
     return result != raw::CpuCompletionResult::Failed;
 }
 
-void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *))
-{
-    cb->_plan.forEachWritten(from, to, written);
-}
-
 void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to)
 {
     markWritten(*captureWrittenRange(cb, from, to), false);

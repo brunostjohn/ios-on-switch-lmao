@@ -165,6 +165,7 @@ host_test(
     copts = MESA_MME_COPTS,
     deps = [
         ":mesa_mme_sim",
+        "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:macros_h",
     ],
 )

@@ -6,6 +6,8 @@
 #include <limits>
 #include <vector>
 
+#include "raw_slot_snapshots.h"
+
 namespace raw {
 
 constexpr uint32_t kNoSnapshot = std::numeric_limits<uint32_t>::max();
@@ -16,6 +18,8 @@ template <typename T> class StateSnapshots {
     uint64_t captured_ = std::numeric_limits<uint64_t>::max();
     uint32_t index_ = kNoSnapshot;
     std::vector<T> values_;
+    std::vector<uint32_t> changed_;  // each value's slots that may differ from the value before it
+    uint32_t pending_ = ~0u;         // the slots edited since the last capture
 
 public:
     const T &current() const
@@ -48,6 +52,17 @@ public:
         if (!edit(current_))
             return false;
         ++generation_;
+        pending_ = ~0u;
+        return true;
+    }
+
+    // An edit of slot `slot` alone
+    template <typename Edit> bool update(uint32_t slot, Edit edit)
+    {
+        if (!edit(current_))
+            return false;
+        ++generation_;
+        pending_ |= slot < 32 ? 1u << slot : ~0u;
         return true;
     }
 
@@ -56,20 +71,32 @@ public:
         if (captured_ != generation_) {
             index_ = static_cast<uint32_t>(values_.size());
             values_.push_back(current_);
+            changed_.push_back(pending_);
+            pending_ = 0;
             captured_ = generation_;
         }
         return index_;
+    }
+
+    // The slots in which value `index` may differ from value `from`: exactly the edited ones where `index` was captured
+    // next after `from`, every slot otherwise
+    uint32_t changedFrom(uint32_t from, uint32_t index) const
+    {
+        return index == from + 1 ? changed_[index] : ~0u;
     }
 
     void resetCurrent()
     {
         current_ = {};
         ++generation_;
+        pending_ = ~0u;
     }
 
     void clear()
     {
         values_.clear();
+        changed_.clear();
+        pending_ = ~0u;
         current_ = {};
         generation_ = 0;
         captured_ = std::numeric_limits<uint64_t>::max();
@@ -97,10 +124,12 @@ struct BufferBinding {
     uint32_t chunk = 0;
     uint32_t length = 0;
     Source source = Source::Unset;
+    uint32_t shadow = 0;  // setBytes: its bytes' cached copy in the recording, + 1 (RMCommandBuffer::_shadow); 0: none
 
     bool operator==(const BufferBinding &b) const
     {
-        return object == b.object && offset == b.offset && chunk == b.chunk && length == b.length && source == b.source;
+        return object == b.object && offset == b.offset && chunk == b.chunk && length == b.length &&
+               source == b.source && shadow == b.shadow;
     }
 
     bool operator!=(const BufferBinding &b) const
@@ -110,6 +139,7 @@ struct BufferBinding {
 };
 
 using BufferBindings = std::array<BufferBinding, 31>;
+using BufferSnapshots = SlotSnapshots<BufferBinding, 31>;
 
 template <size_t N> struct ObjectBindings {
     std::array<void *, N> objects{};
@@ -199,6 +229,8 @@ struct ResourceUse {
 struct StateCursor {
     uint32_t render = kNoSnapshot;
     uint32_t compute = kNoSnapshot;
+    // binding slots compared since the cursor was made, and the slots of the tables compared (a full comparison's)
+    uint64_t slotsCompared = 0, slotsInTables = 0;
 
     void reset()
     {

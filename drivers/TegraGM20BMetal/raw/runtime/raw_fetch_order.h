@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// A draw that fetches a color it writes through the texture unit (not inside the pixel interlock) keeps Metal's raster
-// order on the raw path by drawing one triangle at a time behind the fetch barrier (TriangleRuns::sequential), which
-// reads no vertex; Core Animation's transform first lets RenderEncoder::selfRuns try to prove larger runs (raw_overlap.h).
-// The draws refused before any vertex is read are decided by fetchRefusal as each draw is recorded, so only their encoder
-// goes to m2v; FetchRefusal::Geometry, which depends on what the CPU can read at submission, is selfRuns' alone.
+// A draw that fetches a color it writes takes its state's storage form, inside the pixel interlock, whole. Only a state
+// m2v gives no storage form, or a draw whose attachments its storage form cannot view (raw_storage_form.h), fetches
+// through the texture unit: it keeps Metal's raster order by drawing one triangle at a time behind the fetch barrier
+// (TriangleRuns::sequential), which reads no vertex, and the shapes that cannot be so drawn are refused by fetchRefusal as
+// each draw is recorded, so only their encoder goes to m2v.
 #pragma once
 #include <atomic>
 #include <cstddef>
@@ -21,7 +21,7 @@ enum class FetchRefusal : uint8_t {
     Restart,      // an indexed strip: where its triangles restart only its indices say
     Long,         // more triangles than a draw is split into (kSequentialTriangles)
     PrimitiveId,  // its fragments read the primitive ID, which each triangle's draw would restart
-    Geometry,     // its vertices unreadable or too many, or its runs would restart a fragment primitive ID
+    Geometry,     // a shape TriangleRuns::sequential does not split
     Count
 };
 
@@ -32,14 +32,11 @@ constexpr const char *kFetchRefusalNames[kFetchRefusals] = {"-",       "indirect
 // The triangles a draw is split into at most, one draw and one fetch barrier each
 constexpr uint32_t kSequentialTriangles = 96;
 
-// Fetching draws by how they kept raster order since the device opened, counted in debug builds only: drawn whole on the
-// CPU's proof that no two of their triangles share a pixel, with the vertices and bytes the proof read; drawn a triangle
+// Fetching draws by how they kept raster order since the device opened, counted in debug builds only: drawn a triangle
 // at a time (no vertex read) and those triangles; fetched inside the pixel interlock, and of those the draws whose shader
-// computes the fixed-function blend there; refused, by reason, as recorded
-// (the encoder to m2v) and at encoding
+// computes the fixed-function blend there; refused, by reason, as recorded (the encoder to m2v) and at encoding
 struct FetchCounts {
-    std::atomic<uint64_t> provenWhole{0}, proofVertices{0}, proofBytes{0}, sequential{0}, sequentialTriangles{0},
-        interlocked{0}, interlockedBlends{0};
+    std::atomic<uint64_t> sequential{0}, sequentialTriangles{0}, interlocked{0}, interlockedBlends{0};
     // drawn by their state's fetch-free form instead: through the ROP's blend (rung 2), its iterated blend (rung 3)
     std::atomic<uint64_t> fetchFree[2]{};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
@@ -83,7 +80,7 @@ constexpr FetchRefusal sequentialRefusal(bool primitiveId, const FetchDraw &d)
     return primitiveId ? FetchRefusal::PrimitiveId : FetchRefusal::None;
 }
 
-constexpr FetchRefusal fetchRefusal(bool fetchesOwn, bool caTransform, bool primitiveId, const FetchDraw &d)
+constexpr FetchRefusal fetchRefusal(bool fetchesOwn, bool primitiveId, const FetchDraw &d)
 {
     if (!fetchesOwn)
         return FetchRefusal::None;
@@ -95,7 +92,7 @@ constexpr FetchRefusal fetchRefusal(bool fetchesOwn, bool caTransform, bool prim
         return FetchRefusal::Topology;
     if (d.instances != 1)
         return FetchRefusal::Instances;
-    return caTransform ? FetchRefusal::None : sequentialRefusal(primitiveId, d);
+    return sequentialRefusal(primitiveId, d);
 }
 
 constexpr const char *fetchRefusalWhy(FetchRefusal r)

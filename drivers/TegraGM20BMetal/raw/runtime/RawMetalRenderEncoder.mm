@@ -15,8 +15,8 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
         return;
     const raw::FetchRefusal refusal =
-        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->caTransform,
-                          pl->primitiveId, {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
+        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId,
+                          {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
     if (refusal == raw::FetchRefusal::None)
         return;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -56,6 +56,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 - (void)setDepthStoreAction:(MTLStoreAction)action
 {
     _pass.depthAttachment.storeAction = action;
+    _cb->_passes[_passAt].zeta[0].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
         [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
         hit(_cb, PredPassDepthStencil, _zeta, action);
@@ -65,6 +66,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 - (void)setStencilStoreAction:(MTLStoreAction)action
 {
     _pass.stencilAttachment.storeAction = action;
+    _cb->_passes[_passAt].zeta[1].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
         [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
         hit(_cb, PredPassDepthStencil, _zeta, action);
@@ -221,6 +223,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
 - (void)checkDraw
 {
+    _drew = true;
     // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)

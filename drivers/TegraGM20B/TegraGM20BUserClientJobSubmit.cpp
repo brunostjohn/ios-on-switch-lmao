@@ -73,6 +73,7 @@ IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratc
 		return kIOReturnBadArgument;
 	if (set && !switch_gpu_set_enter(set, head.set_generation)) {
 		switch_gpu_job_stale();
+		switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);
 		return kIOReturnNotReady;
 	}
 	switch_gpu_sibling_wait siblings[SWITCH_GPU_SET_SLOTS];
@@ -124,6 +125,14 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	uint32_t fences = 0;
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return kIOReturnBadArgument;
+	const tgm_prof *prof = nullptr;
+#if TGM_STATS
+	if (count && job.scanSubmits++ % kScanEvery == 0) {
+		const bool profiled = count <= TGM_PROF_MAX && job.scans++ % kProfileEvery == 0;
+		scanPushes(pushes, count, profiled ? job.profile : nullptr);
+		prof = profiled ? job.profile : nullptr;
+	}
+#endif
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
 		 rangedUses = 0, nativeReads = 0;
 	bool hostWritten = (head.flags & TegraGM20BJobHostWritten) || (set && switch_gpu_set_take_host_written(set));
@@ -242,14 +251,13 @@ refresh:
 			jobVisibility = switch_gpu_job_visibility(submit, events->signals(), unlockedWrites,
 								  hostWritten || transaction.host_written);
 			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
-							 siblings, siblingCount, &seqno, jobVisibility);
+							 siblings, siblingCount, &seqno, prof, jobVisibility);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);
-		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies + siblingCount,
-							     nullptr);
+		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies + siblingCount, prof);
 		if (error)
 			break;
 	}
@@ -282,6 +290,8 @@ refresh:
 #if TGM_STATS
 	switch_gpu_job_submitted(job.phases.ns, set != nullptr, head.shared_count, siblingCount);
 #endif
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

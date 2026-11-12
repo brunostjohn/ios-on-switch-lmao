@@ -61,10 +61,16 @@ private:
     uint64_t revision_ = 0;
 };
 
+// What the last draw bound of set 0: its address, and each uniform buffer's constant buffer (the descriptor's base and
+// range). A draw of another pipeline binds all of them again; one of the same pipeline only those that moved.
 class DescriptorBinding {
 public:
+    static constexpr uint32_t kUbos = 32;
+
     bool changed(const void *pipeline, uint64_t address)
     {
+        if (pipeline_ != pipeline)
+            ubosBound_ = 0;
         if (pipeline_ == pipeline && address_ == address)
             return false;
         pipeline_ = pipeline;
@@ -72,9 +78,23 @@ public:
         return true;
     }
 
+    bool uboMoved(uint32_t ubo, const uint32_t *descriptor)
+    {
+        const std::array<uint32_t, 3> bound = {descriptor[0], descriptor[1], descriptor[2]};
+        if (ubo >= kUbos)
+            return true;
+        if ((ubosBound_ >> ubo & 1) && ubos_[ubo] == bound)
+            return false;
+        ubos_[ubo] = bound;
+        ubosBound_ |= 1u << ubo;
+        return true;
+    }
+
 private:
     const void *pipeline_ = nullptr;
     uint64_t address_ = 0;
+    uint32_t ubosBound_ = 0;
+    std::array<std::array<uint32_t, 3>, kUbos> ubos_{};
 };
 
 }  // namespace raw

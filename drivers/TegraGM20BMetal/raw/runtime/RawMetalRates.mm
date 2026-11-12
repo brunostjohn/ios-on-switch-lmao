@@ -118,7 +118,7 @@ size_t raw_metal_rates(char *out, size_t size)
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
                  " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/o%llu/f%llu sbf=%llu"
-                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus zero=%llu",
+                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu zero=%llu",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
@@ -130,9 +130,6 @@ size_t raw_metal_rates(char *out, size_t size)
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
                  raw::Device::fetchBarrierName(gRM->raw->fetchBarrier.load(std::memory_order_relaxed)),
                  (unsigned long long)k.clears.exchange(0), (unsigned long long)k.clearsElided.exchange(0),
-                 (unsigned long long)k.selfOverlapSplit.exchange(0), (unsigned long long)k.selfOverlapRuns.exchange(0),
-                 (unsigned long long)k.selfOverlapUnbounded.exchange(0),
-                 (unsigned long long)(k.selfOverlapNs.exchange(0) / 1000),
                  (unsigned long long)s.zeroAnswers.exchange(0));
     }
 #endif
@@ -203,20 +200,19 @@ size_t raw_metal_rates(char *out, size_t size)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// "fetch whole=W/Vv/BB seq=S/Tt ilk=I/Bb r2=F r3=G rec=<reason>:n,... enc=<reason>:n,...": drawn whole on the CPU's proof
-// (the vertices and bytes it read for it), a triangle at a time (the triangles), inside the pixel interlock (B of them with
-// the fixed-function blend computed in the shader), by their state's fetch-free form through the ROP's blend (r2) or its
-// iterated blend (r3), and refused as recorded and at encoding by reason ("-" for none).
+// "fetch seq=S/Tt ilk=I/Bb r2=F r3=G rec=<reason>:n,... enc=<reason>:n,... sto=<reason>:n,...": drawn a triangle at a time
+// (the triangles), inside the pixel interlock (B of them with the fixed-function blend computed in the shader), by their
+// state's fetch-free form through the ROP's blend (r2) or its iterated blend (r3), refused as recorded and at encoding by
+// reason, and storage forms left for their barrier form by reason ("-" for none).
 // The plugin's rates timer only (its 5 s windows).
 size_t raw_metal_fetch_rates(char *out, size_t size)
 {
     if (!gRM || !size)
         return 0;
     const raw::FetchCounts &k = gRM->raw->stats.fetch;
-    constexpr size_t kTotals = 9, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
+    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
     static uint64_t last[kAll];
-    uint64_t now[kAll] = {k.provenWhole.load(),       k.proofVertices.load(),       k.proofBytes.load(),
-                          k.sequential.load(),        k.sequentialTriangles.load(), k.interlocked.load(),
+    uint64_t now[kAll] = {k.sequential.load(),        k.sequentialTriangles.load(), k.interlocked.load(),
                           k.interlockedBlends.load(), k.fetchFree[0].load(),        k.fetchFree[1].load()};
     for (size_t r = 0; r < raw::kFetchRefusals; ++r) {
         now[kTotals + r] = k.refusedAtRecord[r].load();
@@ -229,7 +225,7 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     for (size_t i = 0; i < kAll; ++i) {
         d[i] = now[i] - last[i];
         last[i] = now[i];
-        any |= d[i] && i != 1 && i != 2;
+        any |= d[i] != 0;
     }
     if (!any)
         return 0;
@@ -247,11 +243,10 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     reasons(d + kTotals + raw::kFetchRefusals, raw::kFetchRefusals, raw::kFetchRefusalNames, encode, sizeof encode);
     reasons(d + kTotals + 2 * raw::kFetchRefusals, raw::kStorageFallbacks, raw::kStorageFallbackNames, storage,
             sizeof storage);
-    const int n = snprintf(
-        out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu/%llub r2=%llu r3=%llu rec=%s enc=%s sto=%s",
-        (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
-        (unsigned long long)d[4], (unsigned long long)d[5], (unsigned long long)d[6], (unsigned long long)d[7],
-        (unsigned long long)d[8], record, encode, storage);
+    const int n = snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub r2=%llu r3=%llu rec=%s enc=%s sto=%s",
+                           (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2],
+                           (unsigned long long)d[3], (unsigned long long)d[4], (unsigned long long)d[5], record,
+                           encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 
@@ -266,49 +261,120 @@ size_t raw_metal_encode_rates(char *out, size_t size)
     if (!encodes)
         return 0;
     lastEncodes += encodes;
-    mach_timebase_info_data_t base;
-    mach_timebase_info(&base);
-    const double tickUs = double(base.numer) / double(base.denom) / 1000.0, usPerTick = tickUs / double(encodes);
-    double us[raw::kEncodeParts], calls[raw::kEncodeParts];
+    const double tickUs = 1.0 / raw::encodeTicksPerUs(), usPerTick = tickUs / double(encodes);
+    static uint64_t lastSelf[raw::kEncodeParts], lastCounts[raw::kEncodeCounts], lastMallocEncodes;
+    double us[raw::kEncodeParts], self[raw::kEncodeParts], calls[raw::kEncodeParts], counts[raw::kEncodeCounts];
     for (size_t i = 0; i < raw::kEncodeParts; ++i) {
-        const uint64_t t = k.ticks[i].load(std::memory_order_relaxed), n = k.calls[i].load(std::memory_order_relaxed);
+        const uint64_t t = k.ticks[i].load(std::memory_order_relaxed), n = k.calls[i].load(std::memory_order_relaxed),
+                       s = k.self[i].load(std::memory_order_relaxed);
         us[i] = double(t - lastTicks[i]) * usPerTick;
+        self[i] = double(s - lastSelf[i]) * usPerTick;
         calls[i] = double(n - lastCalls[i]) / double(encodes);
         lastTicks[i] = t;
+        lastSelf[i] = s;
         lastCalls[i] = n;
     }
+    const uint64_t mallocEncodes = k.mallocEncodes.load(std::memory_order_relaxed) - lastMallocEncodes;
+    lastMallocEncodes += mallocEncodes;
+    for (size_t i = 0; i < raw::kEncodeCounts; ++i) {
+        const uint64_t n = k.counts[i].load(std::memory_order_relaxed);
+        counts[i] = double(n - lastCounts[i]) / double(encodes);
+        lastCounts[i] = n;
+    }
+    const double mallocs = mallocEncodes ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) /
+                                               double(mallocEncodes)
+                                         : -1.0,
+                 frees = mallocEncodes ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) /
+                                             double(mallocEncodes)
+                                       : -1.0;
     const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed);
     const double wallUs = double(wall - lastWall) * usPerTick;
     lastWall = wall;
-    static uint64_t lastExecUses;
-    const uint64_t usesNow = k.execUses.load(std::memory_order_relaxed);
+    static uint64_t lastExecUses, lastExecPushes;
+    const uint64_t usesNow = k.execUses.load(std::memory_order_relaxed),
+                   pushesNow = k.execPushes.load(std::memory_order_relaxed);
     const double execs = calls[size_t(EncodePart::Exec)] * double(encodes),
-                 execUses = execs ? double(usesNow - lastExecUses) / execs : 0.0;
+                 execUses = execs ? double(usesNow - lastExecUses) / execs : 0.0,
+                 execPushes = execs ? double(pushesNow - lastExecPushes) / execs : 0.0;
     lastExecUses = usesNow;
+    lastExecPushes = pushesNow;
+    double spans = 0;
+    for (size_t i = 0; i < raw::kEncodeParts; ++i)
+        spans += calls[i];
+    const double spanNs = double(raw::spanCostTicksPer1024()) * tickUs * 1000.0 / 1024.0;
     const double longestPrepareUs =
         double(gRM->raw->stats.encode.longestPrepare.exchange(0, std::memory_order_relaxed)) * tickUs;
+    // per encode: state segment binds, binds of the segment the channel held, and the inline words the binds replaced;
+    // per window: command buffers whose structure was the last one's, one of the three before, or new (raw_replay_shape.h)
+    raw::Device::Stats &st = gRM->raw->stats;
+    auto since = [](const std::atomic<uint64_t> &v, uint64_t &last) {
+        const uint64_t now = v.load(std::memory_order_relaxed), d = now - last;
+        last = now;
+        return d;
+    };
+    static uint64_t lastBinds, lastSkips, lastWords, lastSame, lastRecent, lastFresh, lastCompared, lastInTables;
+    const double segBinds = double(since(st.segmentBinds, lastBinds)) / double(encodes),
+                 segSkips = double(since(st.segmentSkips, lastSkips)) / double(encodes),
+                 segWords = double(since(st.segmentWords, lastWords)) / double(encodes);
+    const uint64_t same = since(st.replay.same, lastSame), recent = since(st.replay.recent, lastRecent),
+                   fresh = since(st.replay.fresh, lastFresh);
+    const double slotsCompared = double(since(st.slotsCompared, lastCompared)) / double(encodes),
+                 slotsInTables = double(since(st.slotsInTables, lastInTables)) / double(encodes);
     auto part = [&](EncodePart p) {
         return us[size_t(p)];
     };
     auto count = [&](EncodePart p) {
         return calls[size_t(p)];
     };
-    const int n = snprintf(
+    auto own = [&](EncodePart p) {
+        return self[size_t(p)];
+    };
+    auto events = [&](raw::EncodeCount c) {
+        return counts[size_t(c)];
+    };
+    const double draws = count(EncodePart::Draw);
+    const int head = snprintf(
         out, size,
         "encode n=%llu wall=%.0f res=%.0f loop=%.0f state=%.0f pass=%.0f splan=%.0f fuse=%.0f pend=%.0f/%.1f "
         "draw=%.0f/%.1f prep=%.0f geo=%.0f desc=%.0f bar=%.0f slaunch=%.0f/%.1f blit=%.0f comp=%.0f tail=%.0f "
-        "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f kern=%.0f/%.1f gacq=%.0f/%.1f grel=%.0f/%.1f pmax=%.0f",
+        "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f pushes=%.0f kern=%.0f/%.1f gacq=%.0f/%.1f grel=%.0f/%.1f "
+        "pmax=%.0f use=%.0f/%.1f uni=%.0f/%.1f bind=%.0f var=%.0f pprol=%.0f slots=%.0f/%.0f spans=%.0f@%.0fns "
+        "seg=%.1f/%.1f segw=%.0f replay=%llu/%llu/%llu",
         (unsigned long long)encodes, wallUs, part(EncodePart::Resources), part(EncodePart::Loop),
         part(EncodePart::State), part(EncodePart::Pass), part(EncodePart::SplitPlan), part(EncodePart::Fusion),
         part(EncodePart::PassEnd), count(EncodePart::PassEnd), part(EncodePart::Draw), count(EncodePart::Draw),
         part(EncodePart::Prepare), part(EncodePart::Geometry), part(EncodePart::Descriptors),
         part(EncodePart::Barriers), part(EncodePart::SplitLaunch), count(EncodePart::SplitLaunch),
         part(EncodePart::Blit), part(EncodePart::Compute), part(EncodePart::Tail), part(EncodePart::Commit),
-        part(EncodePart::Prologues), part(EncodePart::Exec), count(EncodePart::Exec), execUses,
+        part(EncodePart::Prologues), part(EncodePart::Exec), count(EncodePart::Exec), execUses, execPushes,
         part(EncodePart::Kernel), count(EncodePart::Kernel), part(EncodePart::GeometryAcquire),
         count(EncodePart::GeometryAcquire), part(EncodePart::GeometryRelease), count(EncodePart::GeometryRelease),
-        longestPrepareUs);
-    return n > 0 ? std::min(size_t(n), size - 1) : 0;
+        longestPrepareUs, part(EncodePart::Use), count(EncodePart::Use), part(EncodePart::Uniforms),
+        count(EncodePart::Uniforms), part(EncodePart::Bind), part(EncodePart::Variant), part(EncodePart::PassPrologue),
+        slotsCompared, slotsInTables, spans, spanNs,
+        segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
+        (unsigned long long)fresh);
+    if (head <= 0 || size_t(head) >= size)
+        return head > 0 ? size - 1 : 0;
+    // self times: walk= the loop's own (the plan walk between its parts), res/tail= the phases', state/draw/prep/
+    // pend= theirs without the parts nested in them; apply= the planned bindings applied, tex= a binding table's texture
+    // and sampler entries, retire= the facade's after the encode; per command buffer the events of
+    // raw_encode_profile.h EncodeCount (mal/free -1: not counted), applied= per draw, useadd= the uses that reached
+    // the job's list
+    const int tail = snprintf(
+        out + head, size - head,
+        " walk=%.0f rself=%.0f tself=%.0f sself=%.0f dself=%.0f pself=%.0f eself=%.0f apply=%.0f tex=%.0f retire=%.0f "
+        "pbeg=%.0f "
+        "mal=%.1f free=%.1f lk=%.1f snd=%.1f applied=%.2f/d useadd=%.1f/%.1f descb=%.1f descu=%.1f geov=%.1f",
+        own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
+        own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
+        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
+        events(raw::EncodeCount::Locks),
+        events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
+        events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
+        events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
+    const size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
+    return std::min(n, size - 1);
 }
 
 size_t raw_metal_fetch_keys(char *out, size_t size)

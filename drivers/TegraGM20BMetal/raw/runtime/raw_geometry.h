@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -63,6 +64,16 @@ public:
 
     explicit GeometrySnapshot(const DrawGeometry &g, GeometryBudget *budget = nullptr) : source(g), budget_(budget)
     {}
+
+    // another draw's, its lists keeping their capacity
+    void reset(const DrawGeometry &g, GeometryBudget *budget)
+    {
+        source = g;
+        budget_ = budget;
+        points.clear();
+        runs.clear();
+        evaluated = valid = exactX = exactY = runsEvaluated = runsValid = false;
+    }
 
     bool evaluate()
     {
@@ -248,9 +259,34 @@ private:
     bool evaluated_ = false, valid_ = false;
 };
 
+// A command buffer's snapshots, reused by the next one: every analysis that names one is its encoders', and they are
+// all made again before the pool is cleared at the next command buffer's begin. The pointers it hands out own nothing
+// (an empty owner: no allocation, no reference counts).
+class GeometrySnapshotPool {
+public:
+    void clear()
+    {
+        used_ = 0;
+    }
+
+    std::shared_ptr<GeometrySnapshot> take(const DrawGeometry &g, GeometryBudget *budget)
+    {
+        if (used_ == snapshots_.size())
+            snapshots_.emplace_back(g, budget);
+        else
+            snapshots_[used_].reset(g, budget);
+        return std::shared_ptr<GeometrySnapshot>(std::shared_ptr<GeometrySnapshot>(), &snapshots_[used_++]);
+    }
+
+private:
+    std::deque<GeometrySnapshot> snapshots_;
+    size_t used_ = 0;
+};
+
 class GeometryCache {
 public:
-    GeometryAnalysis analysis(const DrawGeometry &g, uint64_t revision, GeometryBudget &budget)
+    GeometryAnalysis analysis(const DrawGeometry &g, uint64_t revision, GeometryBudget &budget,
+                              GeometrySnapshotPool *pool = nullptr)
     {
         if (!g.bounded)
             return GeometryAnalysis(g, nullptr, 0);
@@ -259,7 +295,7 @@ public:
             if (entry.snapshot && entry.revision == revision && entry.snapshot->contains(g, begin))
                 return GeometryAnalysis(g, entry.snapshot, begin);
         }
-        auto snapshot = std::make_shared<GeometrySnapshot>(g, &budget);
+        auto snapshot = pool ? pool->take(g, &budget) : std::make_shared<GeometrySnapshot>(g, &budget);
         entries_[next_] = {revision, snapshot};
         next_ = (next_ + 1) % entries_.size();
         return GeometryAnalysis(g, std::move(snapshot), 0);

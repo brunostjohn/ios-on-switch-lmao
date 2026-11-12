@@ -35,7 +35,7 @@ bool makeXrPlanes(RMTexture *t, IOSurfaceRef s)
         return false;
     }
     keepExtendedRange(d, t->_raw, false);
-    surfaceConverted(s, true);
+    surfaceConverted(t->_surfaceWrites, true);
     static std::atomic<bool> said{false};
     if (!said.exchange(true))
         os_log(rawLog(), "raw: two-plane XR on (%ux%u '%c%c%c%c', planes merged and split on the copy engine)",
@@ -45,7 +45,7 @@ bool makeXrPlanes(RMTexture *t, IOSurfaceRef s)
     return true;
 }
 
-XrPlaneSync::Entry *XrPlaneSync::entry(RMTexture *t)
+__attribute__((objc_externally_retained)) XrPlaneSync::Entry *XrPlaneSync::entry(RMTexture *t)
 {
     if (!t || !xrOverPlanes(t->_raw))
         return nullptr;
@@ -53,7 +53,7 @@ XrPlaneSync::Entry *XrPlaneSync::entry(RMTexture *t)
         if (e.t == t)
             return &e;
     const uint32_t seed = IOSurfaceGetSeed(t->_surface);
-    const uint64_t writes = surfaceWrites(t->_surface);
+    const uint64_t writes = surfaceWrites(t->_surfaceWrites);
     const bool fresh = t->_imageCurrent && t->_imageSeed == seed && t->_imageWrites == writes;
     return &entries_.emplace_back(Entry{t, seed, writes, fresh, false});
 }
@@ -73,7 +73,7 @@ void XrPlaneSync::merge(Entry &e, raw::BlitEncoder *open)
     b->end();
 }
 
-void XrPlaneSync::read(RMTexture *t, raw::BlitEncoder *open)
+__attribute__((objc_externally_retained)) void XrPlaneSync::read(RMTexture *t, raw::BlitEncoder *open)
 {
     if (Entry *e = entry(t))
         merge(*e, open);
@@ -99,7 +99,8 @@ static bool clearsWhole(RMTexture *t, MTLLoadAction load, const RMPass &pass)
     return width >= t->_raw.width && height >= t->_raw.height;
 }
 
-void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load, const RMPass &pass)
+__attribute__((objc_externally_retained)) void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load,
+                                                                  const RMPass &pass)
 {
     Entry *e = entry(t);
     if (!e)
@@ -137,7 +138,7 @@ void XrPlaneSync::submitted()
 {
     for (const Entry &e : entries_) {
         e.t->_imageSeed = e.seed;
-        e.t->_imageWrites = e.written ? surfaceWrites(e.t->_surface) : e.writes;
+        e.t->_imageWrites = e.written ? surfaceWrites(e.t->_surfaceWrites) : e.writes;
         e.t->_imageCurrent = true;
     }
 }

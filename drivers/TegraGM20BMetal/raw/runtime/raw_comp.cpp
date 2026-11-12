@@ -142,6 +142,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
         comp_.mems.push_back(std::make_unique<CompMem>(CompMem{it->bo, kind, tag, 0}));
         mem = comp_.mems.back().get();
         comp_.ready.erase(it);
+        backingsChanged();
     }
     t.va = mem->bo.va;
     t.storage = {t.va, bytes, false};
@@ -189,8 +190,10 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         l.lock();
         comp_.wanted.erase(std::find(comp_.wanted.begin(), comp_.wanted.end(), w));
         if (made && (kr = k_.bindCompressed(bo, w.kind)) == KERN_SUCCESS) {
+            set_.add(k_, bo, TegraGM20BSurfaceWrite);
             comp_.made(w);
             comp_.ready.push_back({bo, w.kind, commitCount_, compClock()});
+            backingsChanged();
             RAW_DIAGNOSTIC(stats.compMade++);
             RAW_DIAGNOSTIC(stats.compHeld++);
             RAW_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
@@ -233,7 +236,7 @@ void Device::compFree(Backing &b)
         return;
     RAW_DIAGNOSTIC(stats.compHeld--);
     RAW_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
-    k_.free(mem->bo);
+    set_.free(k_, mem->bo);
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
     }));
@@ -262,7 +265,7 @@ void Device::compTrim(uint64_t now)
         if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
             RAW_DIAGNOSTIC(stats.compHeld--);
             RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
-            k_.free(it->bo);
+            set_.free(k_, it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commitCount_);
             continue;

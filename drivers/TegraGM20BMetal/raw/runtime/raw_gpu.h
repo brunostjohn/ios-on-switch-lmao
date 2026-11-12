@@ -21,6 +21,9 @@
 #pragma once
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
+#include "raw_mme.h"
+#include "raw_state_segment.h"
+#include "raw_replay_shape.h"
 #include "raw_split_reuse.h"
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
@@ -49,10 +52,12 @@
 #include "raw_stats.h"
 #include "raw_descriptors.h"
 #include "raw_encode_profile.h"
+#include "raw_use_memo.h"
 #include "raw_transfer.h"
 #include "raw_fetch_free.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
+#include "raw_channel_recovery.h"
 #include "raw_fence.h"
 #include "raw_host_access.h"
 #include "raw_heap.h"
@@ -383,6 +388,7 @@ struct Pipeline {
     const PackPipeline *rec = nullptr;
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
+    StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
 
@@ -663,21 +669,18 @@ private:
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
 
-    struct Body {
-        uint32_t *first = nullptr, *second = nullptr;
-        uint64_t indirectVa = 0;
-        uint32_t indirectWords = 0;
-        bool incomplete = false;
-        bool batchEnd = false;
-    };
-
-    std::vector<Body> bodies_;  // ordered CPU streams and GPU-owned argument continuations
+    using Body = PushBody;
+    std::vector<Body> bodies_;
     SplitPassPlan splitPlan_;
-    bool indirectGeometry_ = false, drawParamsUnknown_ = false;
+    bool indirectGeometry_ = false;
+    mme::DrawParams params_;  // what the channel holds: the context's zeros at a pass's start, put back at its end
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
+    void bindState(Push &p, const Pipeline &pl);
+    bool measuringInline() const;
+    bool bindsBySegment() const;
     const Pipeline *compatible_ = nullptr;
     uint32_t compatibleSampleMasks_[4]{};
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
@@ -689,10 +692,11 @@ private:
     const Sampler *samplers_[16] = {};
     uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
-    // the state a draw needs, up to its draw parameters (vertices [vFirst, vFirst + vCount) of the stream are CPU-cleaned):
-    // the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to each index
-    bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
-                 uint32_t baseInstance, bool indexed, const char **why);
+    // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
+    // the stream are CPU-cleaned): the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to
+    // each index
+    bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount, bool indexed,
+                 const char **why);
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     uint32_t bindingFacts(const Pipeline &pl);
@@ -734,7 +738,7 @@ private:
     bool blendColorDirty_ = true;
     uint32_t blendWords_[8] = {};
     bool blendWordsDirty_ = true;
-    uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0, baseVertex_ = 0;
+    uint32_t topology_ = ~0u, restart_ = ~0u;
     uint32_t samplePasses_ = 1;
     AttachmentWrites attachmentWrites_;
     bool memoryless_[8] = {};
@@ -772,8 +776,7 @@ private:
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
 #endif
-    const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
-                         const char **why);
+    const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count, uint32_t instances, const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
     const Runs *refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,
                             uint32_t instances, const char **why);
@@ -799,8 +802,10 @@ private:
         bool own = false;  // cleared by a pass of its own before this one (a Clear load reaching past the render area)
     };
 
-    std::vector<Clear> clears() const;
+    // the pass's clears into `out`; the tiles its draws reach in tiles_ (both keep the last pass's capacity)
+    void clears(std::vector<Clear> &out);
     std::vector<Clear> initialClears_;
+    std::vector<bool> tiles_;
     bool clearsSealed_ = false;
 
     // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
@@ -938,6 +943,11 @@ public:
     {
         forceWholePrograms_ = force;
     }
+    // hw_test_app's measurement of state segments: every state bound as the inline copy it was before them
+    void inlineStates(bool inline_)
+    {
+        inlineStates_ = inline_;
+    }
     const ProbeForms &probeForms() const
     {
         return forms_;
@@ -982,10 +992,18 @@ private:
     DirtyRanges dirty_;
     std::vector<Texture *> backings_;                            // memoryless backings it uses
     SurfaceList surfaces_;
+    UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool forceWholePrograms_ = false;
+    bool forceWholePrograms_ = false, inlineStates_ = false;
+    // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
+    // add per draw for each was a measurable share of a debug build's draw
+    struct DrawCounts {
+        uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
+                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
+    } counts_;
+    void foldCounts();
     ProbeForms forms_;
     ProbeTaken taken_;
     ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
@@ -994,6 +1012,7 @@ private:
     std::vector<NativeSurface *> nativeSurfaces_;
     std::vector<const Import *> pitchImports_;
     GeometryBudget geometryBudget_;
+    GeometrySnapshotPool geometryPool_;
 
     struct GeometryRead {
         Bo bo;
@@ -1016,6 +1035,8 @@ private:
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
+    HeldSegment heldSegment_;               // and the state segment its registers hold
+    uint32_t segmentBinds_ = 0;             // its own (kSegmentBindsPerCommandBuffer)
     bool drawn_ = false;  // a draw was encoded (NVK resets the restart index at a command buffer's first)
     // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
     // in the heap since the last submission that invalidated the instruction cache
@@ -1073,6 +1094,12 @@ public:
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
     bool fetchFreeReachable(uint64_t keyHash) const;
+    // A new depth/stencil state's registers into the segment heap
+    void placeSegments(DepthStencilState &state)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        state.place(segmentHeap_);
+    }
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
@@ -1252,9 +1279,17 @@ public:
     bool hostAccess(const Texture &owner, const void *cpu, uint64_t bytes, bool write, HostAccess &access);
     CpuCompletion captureCpuCompletion(uint32_t seqno, uint64_t generation,
                                        const std::vector<const Buffer *> &buffers);
+    // A job of a channel made again since keeps nothing in the kernel to maintain its ranges against: Stale, so its buffers
+    // stay GPU-dirty and their next CPU access acquires them, never a failure of a job that completed
     CpuCompletionResult completeCpu(const CpuCompletion &completion)
     {
-        return k_.completeCpu(completion);
+        const auto retired = [&] {
+            return completion.valid && !completion.ranges.empty() && completion.generation != channelGeneration();
+        };
+        if (retired())
+            return CpuCompletionResult::Stale;
+        const CpuCompletionResult result = k_.completeCpu(completion);
+        return result == CpuCompletionResult::Failed && retired() ? CpuCompletionResult::Stale : result;
     }
     void destroyBuffer(Buffer &b);
 
@@ -1319,7 +1354,7 @@ public:
 
     uint64_t channelGeneration() const
     {
-        return channelGeneration_.load(std::memory_order_acquire);
+        return generations_.current();
     }
 
     uint32_t completed() const
@@ -1347,17 +1382,15 @@ public:
     }
     bool wait(uint32_t seqno, uint64_t generation)
     {
-        if (channelGeneration() != generation) {
-            waitGenerationRetired(generation);
-            return false;
-        }
+        if (channelGeneration() != generation)
+            return retiredWait(seqno, generation);
         const bool success = done(seqno) && semanticFence(seqno).status != SemanticFenceStatus::Superseded
             ? !lost(seqno) : waitFence(seqno, generation);
         if (channelGeneration() == generation)
             return success;
-        waitGenerationRetired(generation);
-        return false;
+        return retiredWait(seqno, generation);
     }
+
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
@@ -1387,6 +1420,10 @@ public:
 
     // Which of this device's memory holds GPU VA `va` (a killed command buffer's fault VA), and where in it, for its line
     std::string vaOwner(uint64_t va);
+
+    // The index fetch reads index 0 past SET_INDEX_BUFFER_C/D's limit (kits/SwitchGM20B caps row 3D-B11 at chip grade,
+    // which the facade reads at open): a draw past its buffer's indices binds the buffer with its limit, no padded copy
+    bool indexZeroPastLimit = false;
 
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
@@ -1436,7 +1473,7 @@ public:
             return false;
         SurfaceList none;
         uint32_t seq = 0;
-        if (!k_.exec(channel_, nullptr, 0, lastSeqno_, seq, &none, result, JobVisibility::External, events))
+        if (!job(setView_, channel_, nullptr, 0, none, JobVisibility::External, seq, result, events))
             return false;
         lastSeqno_ = seq;
         seqno = seq;
@@ -1476,10 +1513,6 @@ public:
             fetchBarriersInterlocked{0};
         // Clear loads of colors, and those left out because the pass's first draw covers them (RenderEncoder::clears)
         std::atomic<uint64_t> clears{0}, clearsElided{0};
-        // draws that fetch a color they write (debug builds): split into runs where their own triangles may cover a pixel
-        // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
-        // the CPU time telling them (raw_overlap.h)
-        std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         FetchCounts fetch;
         // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it
         // now; buffers made and the kernel's refusals since the device opened; full-target clears of compressed targets to a
@@ -1496,9 +1529,18 @@ public:
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
+        std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
+        // state segment binds, the inline words they replaced, a pass's first binds of the segment the channel still held
+        // from the pass or command buffer before (no words; raw_state_segment.h), and passes that could not keep it because
+        // their prologue set back the last state's extras (Pipeline::restore)
+        std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
+        ReplayTally replay;
+        // binding slots the encode compared applying recorded state, and the slots of the tables it compared
+        // (RawMetalPlanApply.h): what a comparison of every slot of each changed table looked at
+        std::atomic<uint64_t> slotsCompared{0}, slotsInTables{0};
         EncodeTotals encode;
 #endif
 #else
@@ -1607,7 +1649,56 @@ private:
     Sizes sizes_ = kSizes[0];
     std::mutex lock_;
     Kernel k_;
+    // The BOs only this device's jobs touch (raw_resource_set.h); setView_ is the submitting thread's
+    ResourceSet set_;
+    SetView setView_;
     TextureTransfers transfers_;
+
+    // One job of `channel` naming the set; `uses`, the job's uses no member holds
+    bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, const SurfaceList &uses,
+             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {})
+    {
+        if (!uses.valid()) {
+            if (result)
+                *result = kIOReturnBadArgument;
+            return false;
+        }
+        const KernelJob made = {channel, pushes, count, uses.uses().data(), uint32_t(uses.uses().size()), 0, 0,
+                                visibility, events};
+        return submitInSet(k_, set_, view, true, made, seqno, result);
+    }
+
+    // [va, va + bytes) is in a member, so no job names it: as the submitting thread sees the set. A draw's resources
+    // mostly lie in the member the last one found (a ring, a bytes chunk), which answers without a search while the
+    // view's version is the one it was found in.
+    bool member(uint64_t va, uint64_t bytes)
+    {
+        set_.view(setView_);
+        if (lastMember_.version == setView_.version && va - lastMember_.va < lastMember_.bytes &&
+            bytes <= lastMember_.bytes - (va - lastMember_.va))
+            return true;
+        const auto after = std::upper_bound(setView_.members.begin(), setView_.members.end(), va,
+                                            [](uint64_t at, const SetMember &m) {
+                                                return at < m.va;
+                                            });
+        if (after == setView_.members.begin())
+            return false;
+        const SetMember &m = *std::prev(after);
+        if (va - m.va >= m.bytes || bytes > m.bytes - (va - m.va))
+            return false;
+        lastMember_ = {m.va, m.bytes, setView_.version};
+        return true;
+    }
+    struct {
+        uint64_t va = 0, bytes = 0;
+        uint32_t version = 0;
+    } lastMember_;
+
+    bool member(const Bo &bo)
+    {
+        set_.view(setView_);
+        return setView_.holds(bo);
+    }
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
@@ -1646,10 +1737,7 @@ private:
     }
     std::mutex channelLock_;
     std::atomic<bool> channelReady_{false};
-    std::atomic<uint64_t> channelGeneration_{0};
-    std::atomic<uint64_t> retiredGeneration_{0};
-    std::condition_variable channelRetired_;
-    void waitGenerationRetired(uint64_t generation);
+    ChannelGenerations generations_;
     bool channelFailed_ = false;
     uint64_t channelRetryNs_ = 0;  // CLOCK_UPTIME_RAW: a refused channel is asked for again from then on
     static constexpr uint64_t kChannelRetryNs = 1000000000;
@@ -1733,6 +1821,8 @@ private:
     void offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
+    HeldSegment heldSegment_;               // the state segment its registers hold after everything submitted
+    StateSegmentHeap segmentHeap_;          // lock_ (place)
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index
@@ -1823,7 +1913,9 @@ private:
         uint32_t tag = 0;
         uint32_t lastUse = 0;
         bool submitted = false;
-        uint64_t lastCommit = 0, lastClosed = 0;  // commitCount_ and closedCount_ when a pass last asked for it
+        // commitCount_ and closedCount_ when a pass last asked for it: the encoding thread stores them with no lock
+        // (lastBacking), the compressed-memory thread's trim reads them under lock_
+        std::atomic<uint64_t> lastCommit{0}, lastClosed{0};
         uint64_t usedNs = 0;        // compClock() when made, and at each commit of a command buffer that used it
         CompMem *comp = nullptr;    // the compressed memory it is a view of (raw_comp.h), else none
         PlainMem *plain = nullptr;  // or the plain memory (a memoryless one's)
@@ -1862,6 +1954,30 @@ private:
     }
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
+    // What backing() answered, kept by the encoding thread for lastBacking
+    struct BackingAsk {
+        uint32_t width = 0, height = 0, format = 0, tag = 0;
+        uint8_t samples = 0;
+        bool zeta = false, blockLinear = false, compression = false;
+        Backing *backing = nullptr;
+        uint64_t epoch = 0;
+
+        bool same(const Texture &m, uint32_t t, bool linear, bool compressed) const
+        {
+            return backing && width == m.width && height == m.height && format == m.format && tag == t &&
+                   samples == m.samples && zeta == m.zeta && blockLinear == linear && compression == compressed;
+        }
+    };
+    std::array<BackingAsk, 16> asks_{};
+    uint32_t nextAsk_ = 0;
+    // moved, lock_ held, by everything that changes what backing() answers: memory made, a backing retired, a trim
+    std::atomic<uint64_t> backingEpoch_{1};
+    void backingsChanged()
+    {
+        backingEpoch_.fetch_add(1, std::memory_order_seq_cst);
+    }
+    // trimmed backings, deleted at the encoding thread's next begin(), where no lastBacking reads one
+    std::vector<Backing *> trimmedBackings_;
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;
     bool growing_ = false, stopping_ = false;
@@ -1879,18 +1995,29 @@ private:
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
+    bool newContext(uint32_t channel, uint32_t &seqno);
     bool waitFence(uint32_t seqno, uint64_t generation);
+    // A seqno of a channel reopen() retired: as that channel ended it, its failure's error kept for lostError()
+    bool retiredWait(uint32_t seqno, uint64_t generation)
+    {
+        uint32_t error = 0;
+        if (generations_.completed(generation, seqno, &error))
+            return true;
+        killedError_.store(error, std::memory_order_relaxed);
+        return false;
+    }
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records
 
     // The seqnos a kill took (TegraGM20BAbiFence): the live channel's record, then the ones the channels it replaced left,
     // kept until reopen made the record's slot over (a slot's seqnos continue, so a kept record names its channel's alone).
-    struct Killed {
-        uint32_t first, last, error;
-    };
+    using Killed = KillRange;
 
     bool liveKill(Killed &k) const;
     bool killed(uint32_t seqno) const;
+    std::vector<KillRange> failedSeqnos() const;
+    void forgetKept();
+    const volatile uint32_t *keptSlot_ = &kNoFence;  // the fence record of the slot the kept records were written in
     mutable std::mutex killedLock_;
     std::atomic<bool> keptKills_{false};
     std::atomic<uint32_t> keptThrough_{0};
@@ -1924,6 +2051,9 @@ private:
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test
     // scratch remain separate. Plain and compressed views keep their own backing and retire after their final fence.
     Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true);
+    // The backing backing() last answered the same ask with, taken with no lock while nothing that decides backings has
+    // changed since (backingEpoch_); nullptr: ask backing() under lock_. The encoding thread's alone.
+    Texture *lastBacking(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true);
     void trimBackings();
 
     // Compressed backings (raw_comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or

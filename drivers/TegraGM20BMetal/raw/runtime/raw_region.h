@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The fetch barrier's region test: whether a fetching draw's pixels can meet those a draw since the last barrier wrote.
-// Each draw keeps what its vertices need (raw_bounds.h) and the CPU reads them only when a fetching draw asks, newest
-// first, until one meets it. A draw whose pixels it cannot bound (not Core Animation's transform, its matrix or vertices
-// not readable here, too many vertices, a vertex at or behind w = 0) may cover its whole scissor.
+// The fetch barrier's region test: whether a fetching draw's pixels can meet those a draw since the last barrier wrote,
+// newest first, until one meets it. A draw is its pixel limit (scissor within viewport) unless its vertices were bounded
+// already (a pass's first draw, for its cover test): the test reads no vertex.
 //
 // Skipping the barrier where no written pixel is fetched is exact on uncompressed (pitch and generic block-linear)
 // targets: a texel's bytes change only where the ROP writes that pixel, so a fetch of any other pixel reads the same
@@ -12,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <vector>
 
 #include "raw_geometry.h"
 
@@ -24,10 +24,21 @@ public:
 
     void clear()
     {
-        for (uint32_t i = 0; i < count_; ++i)
-            draws_[i].reset();
-        count_ = 0;
+        draws_.clear();
         overflow_ = false;
+    }
+
+    // the list, its capacity for another region (the render encoder's next pass: no allocation a steady frame)
+    std::vector<Analysis> release()
+    {
+        clear();
+        return std::move(draws_);
+    }
+
+    void adopt(std::vector<Analysis> &&storage)
+    {
+        draws_ = std::move(storage);
+        clear();
     }
 
     void add(const DrawGeometry &g)
@@ -39,11 +50,11 @@ public:
     {
         if (analysis.geometry().limit.empty())
             return;
-        if (count_ == kMaxDraws) {
+        if (draws_.size() == kMaxDraws) {
             overflow_ = true;
             return;
         }
-        draws_[count_++].emplace(analysis);
+        draws_.push_back(analysis);
     }
 
     // Whether `g`'s pixels may meet a pixel written since the last clear
@@ -60,17 +71,10 @@ public:
             return false;
         if (overflow_)
             return true;
-        PixelBox box;
-        if (!analysis.bounds(box))
-            box = g.limit;
-        for (uint32_t i = count_; i-- > 0;) {
-            auto &draw = *draws_[i];
-            PixelBox written;
-            if (!draw.bounds(written))
-                written = draw.geometry().limit;
-            if (written.overlaps(box))
+        const PixelBox box = analysis.cachedBox();
+        for (size_t i = draws_.size(); i-- > 0;)
+            if (draws_[i].cachedBox().overlaps(box))
                 return true;
-        }
         return false;
     }
 
@@ -89,8 +93,7 @@ public:
     }
 
 private:
-    std::array<std::optional<Analysis>, kMaxDraws> draws_;
-    uint32_t count_ = 0;
+    std::vector<Analysis> draws_;
     bool overflow_ = false;
 };
 

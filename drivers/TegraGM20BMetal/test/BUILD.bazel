@@ -21,8 +21,11 @@
 #   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
 #                     and how the raw path's twin and record key take them
 #   raw_encode_profile_test  raw/runtime/raw_encode_profile.h: a debug build's encode spans count only inside an
-#                     encode, each part's time holds its nested parts', and the totals fold profiles and keep the longest
+#                     encode, each part's time holds its nested parts' and its self time leaves them out, events and
+#                     locks count in the encoding thread's profile, and the totals fold profiles and keep the longest
 #                     prepare
+#   raw_use_memo_test raw/runtime/raw_use_memo.h: a resource named again at its address and access is answered, any
+#                     other name or one evicted by another is not
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
@@ -37,6 +40,9 @@
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
 #   splits_layout_test  raw/pack/splits.py: a split is packed only where its per-pixel program binds its uniform
 #                     buffers as its whole program does
+#   raw_state_segment_test  raw/runtime/raw_state_segment.h: a bound segment's GPFIFO entries fetch the words the inline
+#                     stream wrote, the heap never moves a stream, a channel keeps its segment across a pass boundary only
+#                     where the boundary writes none of its registers (raw_pass_writes.h, checked against the emitters)
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
 #   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
@@ -93,8 +99,7 @@
 #   raw_bounds_test   raw/runtime/raw_bounds.h: a Core Animation draw's pixel box and rectangle from its vertices (against
 #                     a GPU's coverage it is raw/test/boundsoracle.mm's, this Mac's GPU), and raw_region.h: the fetch
 #                     barrier's region test over such draws, and which covers a render area (a clear it makes redundant)
-#   raw_overlap_test  raw/runtime/raw_overlap.h: a fetching draw's triangles in runs that share no pixel (against a GPU's
-#                     coverage it is raw/test/overlaporacle.mm's, this Mac's GPU)
+#   raw_overlap_test  raw/runtime/raw_overlap.h: a fetching draw outside the pixel interlock in runs of one triangle
 #   raw_zcull_test    raw/runtime/raw_zcull.h: zcull regions laid out as Mesa's nil_zcull_new (its reference table),
 #                     their words, and the draws' states that invalidate a pass's region
 #   raw_blend_kill_test  raw/runtime/raw_blend_kill.h: the zero-source pixel kill only for single-target ROP blends that
@@ -104,7 +109,7 @@
 #   raw_keyline_probe_test  raw/runtime/raw_keyline_probe.h (debug builds' scroll edge keyline lines): a fill's
 #                     vertices in pixels with its half colour, and a write a row or two short of a texture's edge
 #   raw_fetch_order_test  raw/runtime/raw_fetch_order.h: the fetching draws refused as they are recorded (their encoder
-#                     alone goes to m2v) and those left to the CPU's geometry at submission
+#                     alone goes to m2v) and those drawn a triangle at a time
 #   raw_record_samplers_test  raw/runtime/raw_record.h: a record's constexpr entries index its own sampler headers whoever
 #                     made it (runtime, native seed), and the device places each header, the pack's first, once
 #   nak_half_round_test  NAK's rewrites of metal2vulkan's half emulation (nak_nir_algebraic.py): its rounding as two
@@ -156,6 +161,16 @@ host_test(
 )
 
 host_test(
+    name = "raw_use_memo_test",
+    srcs = [
+        "raw_use_memo_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_use_memo.h",
+    ],
+    cxx_std = "c++17",
+    gtest_main = False,
+)
+
+host_test(
     name = "raw_limits_fill_test",
     srcs = [
         "raw_limits_fill_test.cpp",
@@ -195,12 +210,80 @@ host_test(
     ],
 )
 
+# raw/runtime/raw_channel_recovery.h over a model of the kernel's channels (raw_kernel_model.h): a channel killed mid-stream,
+# a reopen the kernel refuses, a kill record's seqnos read after the channel was made again, NotResponding on a healthy
+# channel, and memory a killed job wrote
+host_test(
+    name = "raw_channel_recovery_test",
+    srcs = [
+        "raw_channel_recovery_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_channel_recovery.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
+# raw/runtime/raw_resource_set.h over the same model (methods 31-33): members go with the set and never as uses, what the
+# kernel refuses stays a use, a freed member leaves the view before its VA is reused, a killed channel's set is made again
+# for the next job, and a NotReady the generation's mirror does not explain stays the job's
+host_test(
+    name = "raw_resource_set_test",
+    srcs = [
+        "raw_kernel_model.h",
+        "raw_resource_set_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
 host_test(
     name = "raw_shared_events_test",
     srcs = [
         "raw_shared_events_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
@@ -209,6 +292,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -268,11 +352,13 @@ host_test(
         "raw_plan_completion_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArguments.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlan.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pointer_map.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanExecution.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_dispatch_regions.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_retirement.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
@@ -296,10 +382,12 @@ host_test(
         "raw_plan_resources_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArguments.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlan.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pointer_map.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanExecution.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_dispatch_regions.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
@@ -314,8 +402,10 @@ host_test(
         "raw_semantic_plan_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArguments.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlan.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pointer_map.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanApply.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
@@ -610,6 +700,26 @@ host_test(
 )
 
 host_test(
+    name = "raw_state_segment_test",
+    srcs = [
+        "raw_state_segment_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//kits/SwitchGM20BEmit:emit_headers",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+    ],
+)
+
+host_test(
     name = "raw_tiled_cache_test",
     srcs = [
         "raw_tiled_cache_test.cpp",
@@ -874,6 +984,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split_cost.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_raster_area.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
     ],
     cxx_std = "c++17",
 )
@@ -1004,9 +1115,12 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kit.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fence.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.h",
@@ -1075,12 +1189,9 @@ host_test(
     name = "raw_overlap_test",
     srcs = [
         "raw_overlap_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_order.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_key_tally.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_geometry.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_storage_form.h",
     ],
     cxx_std = "c++17",
@@ -1474,8 +1585,11 @@ host_test(
     name = "raw_depth_stencil_state_test",
     srcs = [
         "raw_depth_stencil_state_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_depth_stencil_state.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
     ],
     cxx_std = "c++17",

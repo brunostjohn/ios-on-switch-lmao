@@ -105,7 +105,7 @@ bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, ui
 // state draws whole from then on).
 SplitState *Device::makeSplit(Pipeline &pl)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     if (pl.split)
         return pl.split;
     const SplitSource *source = pl.splitSource;
@@ -146,9 +146,8 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analys
     const SplitSource *source = __atomic_load_n(&pl->splitSource, __ATOMIC_ACQUIRE);
     if (!source)
         return pl;
-    PixelBox box;
-    if (!analysis.bounds(box))
-        box = analysis.geometry().limit;
+    // priced by its pixel limit, as the pass's plan admitted its state (RawMetalSplitPlan.h): no vertex is read
+    const PixelBox box = analysis.geometry().limit;
     if (box.empty() || !splitPlan_.accepts(pl, source->rec, uint64_t(box.x1 - box.x0) * (box.y1 - box.y0)))
         return pl;
     for (uint8_t k = 0; k < source->rec.uboCount; k++) {

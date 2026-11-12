@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <map>
 
-TEST(RawSurfaces, PreservesEveryDependencyBeyondTheLegacyLimit)
+TEST(RawSurfaces, PreservesEveryDependencyBeyondTheOldExecSurfacesLimit)
 {
     raw::SurfaceList uses;
     for (uint64_t handle = 1; handle <= 200; ++handle)
@@ -12,9 +12,6 @@ TEST(RawSurfaces, PreservesEveryDependencyBeyondTheLegacyLimit)
     ASSERT_TRUE(uses.valid());
     ASSERT_EQ(uses.uses().size(), 200u);
     EXPECT_EQ(uses.uses()[2].access, uint32_t(TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite));
-    size_t bytes = 100;
-    EXPECT_EQ(uses.legacy(9, bytes), nullptr);
-    EXPECT_EQ(bytes, 0u);
 }
 
 TEST(RawSurfaces, CapacityFailureSticksUntilANewJob)
@@ -30,16 +27,12 @@ TEST(RawSurfaces, CapacityFailureSticksUntilANewJob)
     EXPECT_FALSE(uses.valid());
     uses.clear();
     uses.add(7, false);
-    size_t bytes;
-    const auto *legacy = uses.legacy(9, bytes);
-    ASSERT_NE(legacy, nullptr);
-    EXPECT_EQ(legacy->channel, 9u);
-    EXPECT_EQ(legacy->count, 1u);
-    EXPECT_EQ(legacy->flags, 0u);
-    EXPECT_EQ(bytes, offsetof(TegraGM20BAbiExecSurfaces, uses) + sizeof(TegraGM20BAbiSurfaceUse));
+    EXPECT_TRUE(uses.valid());
+    ASSERT_EQ(uses.uses().size(), 1u);
+    EXPECT_EQ(uses.uses()[0].access, uint32_t(TegraGM20BSurfaceRead));
 }
 
-TEST(RawSurfaces, AddressAndHandleNamespacesStayDistinctAndNeverReachLegacyAbi)
+TEST(RawSurfaces, AddressAndHandleNamespacesStayDistinct)
 {
     raw::SurfaceList uses;
     uses.add(4096, false);
@@ -49,8 +42,6 @@ TEST(RawSurfaces, AddressAndHandleNamespacesStayDistinctAndNeverReachLegacyAbi)
     EXPECT_EQ(uses.uses()[0].access, uint32_t(TegraGM20BSurfaceRead));
     EXPECT_EQ(uses.uses()[1].access,
               uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite));
-    size_t bytes;
-    EXPECT_EQ(uses.legacy(1, bytes), nullptr);
     uses.clear();
     uses.add(0, true);
     EXPECT_FALSE(uses.valid());

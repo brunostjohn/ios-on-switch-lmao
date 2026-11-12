@@ -3,6 +3,7 @@
 #include "raw_kit.h"
 #include "raw_fence.h"
 #include <algorithm>
+#include <os/log.h>
 #include <cstring>
 #include <limits>
 
@@ -50,7 +51,7 @@ bool TextureTransfers::retire(Kernel &kernel, Slot &slot)
     return true;
 }
 
-bool TextureTransfers::copy(Kernel &kernel, std::mutex &allocationLock, const TextureTransfer &region,
+bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, const TextureTransfer &region,
                            void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner)
 {
     if (!kernel.exactJobs() || !bytes || !region.width || !region.height || !region.planes ||
@@ -106,6 +107,7 @@ bool TextureTransfers::copy(Kernel &kernel, std::mutex &allocationLock, const Te
     Push push{start, start + commandBytes / sizeof(uint32_t)};
     SurfaceList uses;
     uses.add(slot.memory.handle, !write);
+    set.view(view_);
     for (uint32_t z = 0; z < region.planes; ++z) {
         CopySurface texture = region.texture;
         if (region.layerBytes)
@@ -113,6 +115,14 @@ bool TextureTransfers::copy(Kernel &kernel, std::mutex &allocationLock, const Te
         else
             texture.layer += z;
         const CopySurface staging{slot.memory.va + z * plane, uint32_t(pitch)};
+        // The set's jobs are ordered across channels only by the order their SubmitJobs return in, which nothing
+        // serialises against the device's channel here; no texture a transfer reaches is a member today.
+        if (view_.holds(texture.va, 1)) {
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: a texture transfer reached resource set member 0x%llx: refused",
+                         (unsigned long long)texture.va);
+            return false;
+        }
         uses.addAddress(texture.va, 1, write);
         emitCopy(push, write ? staging : texture, write ? texture : staging,
                  region.width, region.height, copyTexelRemap(region.bpp), true);
@@ -121,9 +131,15 @@ bool TextureTransfers::copy(Kernel &kernel, std::mutex &allocationLock, const Te
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     const TegraGM20BAbiPush commands{slot.memory.va + commandOffset, uint32_t(push.at - start), 0};
+    KernelJob job;
+    job.channel = channel_;
+    job.pushes = &commands;
+    job.pushCount = 1;
+    job.uses = uses.uses().data();
+    job.useCount = uint32_t(uses.uses().size());
+    job.visibility = write ? JobVisibility::Internal : JobVisibility::External;
     uint32_t sequence = 0;
-    if (!kernel.exec(channel_, &commands, 1, last_, sequence, &uses, nullptr,
-                     write ? JobVisibility::Internal : JobVisibility::External))
+    if (!uses.valid() || !submitInSet(kernel, set, view_, false, job, sequence))
         return false;
     slot.sequence = sequence;
     slot.pending = true;

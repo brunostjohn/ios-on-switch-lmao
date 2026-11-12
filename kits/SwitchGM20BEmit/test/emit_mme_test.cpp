@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include "../../SwitchGM20B/SwitchGM20B3D.h"
 #include "SwitchGM20BMacros.h"
 #include "mme_fermi.h"
 #include "mme_fermi_sim.h"
@@ -195,10 +196,51 @@ TEST(EmitMme, TheClampPairPicksTheColourMatrixProgram)
     }
 }
 
+// The draw parameters as the raw path wrote them from the CPU before each draw (raw_gpu.cpp prepare), then the draw loop
+std::vector<Method> withParams(bool indexed, uint32_t instances, uint32_t first, uint32_t count, uint32_t baseVertex,
+                               uint32_t baseInstance)
+{
+    std::vector<Method> m = {{NVB197_LOAD_CONSTANT_BUFFER_OFFSET, 0},
+                             {NVB197_LOAD_CONSTANT_BUFFER(0), indexed ? baseVertex : first},
+                             {NVB197_LOAD_CONSTANT_BUFFER(0), baseInstance},
+                             {NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX, baseInstance},
+                             {NVB197_SET_GLOBAL_BASE_VERTEX_INDEX, indexed ? baseVertex : 0},
+                             {NVB197_SET_VERTEX_ID_BASE, indexed ? baseVertex : 0}};
+    const uint16_t start = indexed ? NVB197_SET_INDEX_BUFFER_F : NVB197_SET_VERTEX_ARRAY_START;
+    for (uint32_t i = 0; i < instances; ++i) {
+        m.push_back({NVB197_BEGIN, i ? 1u << 26 : 0});
+        m.push_back({start, first});
+        m.push_back({uint16_t(start + 4), count});
+        m.push_back({NVB197_END, 0});
+    }
+    return m;
+}
+
+TEST(EmitMme, ParameterDrawsWriteTheParametersThenDraw)
+{
+    for (uint32_t instances : {0u, 1u, 3u}) {
+        EXPECT_EQ(run(switch_gm20b_macro_draw_params, count(switch_gm20b_macro_draw_params), {instances, 40, 6, 9}),
+                  withParams(false, instances, 40, 6, 0, 9))
+            << instances;
+        EXPECT_EQ(run(switch_gm20b_macro_draw_indexed_params, count(switch_gm20b_macro_draw_indexed_params),
+                      {instances, 12, 30, 0xfffffffcu, 2}),
+                  withParams(true, instances, 12, 30, 0xfffffffcu, 2))
+            << instances;
+    }
+}
+
+TEST(EmitMme, TheMacrosTakeNvksDrawSlots)
+{
+    EXPECT_EQ(SWITCH_GM20B_MACRO_DRAW, 11);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, 16);
+    EXPECT_EQ(SWITCH_GM20B_MACRO_VCM_CONSTANTS, 17);
+}
+
 TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
 {
     const size_t words = count(switch_gm20b_macro_draw) + count(switch_gm20b_macro_draw_indexed) +
                          count(switch_gm20b_macro_indirect) + count(switch_gm20b_macro_indexed_indirect) +
+                         count(switch_gm20b_macro_draw_params) + count(switch_gm20b_macro_draw_indexed_params) +
                          count(switch_gm20b_macro_vcm_constants);
     EXPECT_LE(words, 2048u);
 }

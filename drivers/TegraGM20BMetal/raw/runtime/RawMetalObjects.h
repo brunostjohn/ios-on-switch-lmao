@@ -27,6 +27,7 @@ struct ComputeState;
 }
 
 @class RMDevice, RMCommandBuffer;
+struct SurfaceWriteCount;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
 // object's lock is never held across a call into m2v: a thread inside m2v holding one of its locks (its handlers run Core
@@ -120,6 +121,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     std::atomic<bool> _gpuWrites;  // its surface was declared GPU-written (surfaceGpuWrites)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
+    SurfaceWriteCount *_surfaceWrites;  // its surface's writes (RawMetalSurfaceWrites.mm), held while it lives
     NSUInteger _plane;
     // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
     // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)
@@ -209,6 +211,14 @@ struct RMPass {
 
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
+    // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
+    struct Zeta {
+        __unsafe_unretained id texture;
+        NSUInteger level;
+        MTLLoadAction load;
+        MTLStoreAction store;
+        bool resolve;
+    } zeta[2];
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
@@ -255,7 +265,7 @@ struct RMSharedEventWait {
     size_t _encAt;
     bool _encOpen, _encRefused, _whole;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool _forceWholePrograms;
+    bool _forceWholePrograms, _inlineStates;
     // hw_test_app's probes (RawMetalProbe.mm): its barriers' forms, where they took effect, and its 2D-engine work, each
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;
@@ -286,6 +296,9 @@ struct RMSharedEventWait {
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
+    // the encode reads (the first draw's cover test) is not read from the write-combined chunk
+    std::vector<uint8_t> _shadow;
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;
     std::unordered_set<void *> _ownerKeys;  // everything the tape names, retained until completion
@@ -394,6 +407,7 @@ uint64_t nextTraceId();
     uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
+    bool _drew;                      // a draw recorded
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -411,7 +425,7 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);
 // OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
-void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length);
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow = false);
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
 

@@ -91,6 +91,12 @@ TEST(ProbeForms, ParsesEveryFormAndNothingElse)
     EXPECT_FALSE(raw::parseProbeForms("pass=wfi", f));
     EXPECT_FALSE(raw::parseProbeForms("pass", f));
     EXPECT_FALSE(raw::parseProbeForms("barrier=none", f));
+    ASSERT_TRUE(raw::parseProbeForms("index=8", f));
+    EXPECT_EQ(f.indexLimit, 8u);
+    EXPECT_TRUE(f.any());
+    EXPECT_FALSE(raw::parseProbeForms("index=0", f));
+    EXPECT_FALSE(raw::parseProbeForms("index=-4", f));
+    EXPECT_FALSE(raw::parseProbeForms("index=", f));
 }
 
 TEST(ProbeForms, TodayIsWhatTheRuntimeEmittedBefore)

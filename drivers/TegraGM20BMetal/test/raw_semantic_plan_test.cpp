@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include "../raw/runtime/RawMetalPlanApply.h"
+#include <cstdio>
 #include <map>
+#include <string>
 #include <vector>
 
 namespace {
@@ -110,6 +112,80 @@ TEST(SemanticPlan, SettersCollapseBeforeTheFirstDraw)
     const auto &state = plan.renderStates[plan.draw(1).state];
     EXPECT_EQ(plan.buffers[0][state.buffers[0]][0].offset, 999u * 16);
     EXPECT_EQ(plan.buffers[0].size(), 1u);
+}
+
+Cmd bytes(uint8_t stage, uint16_t slot, uint64_t offset)
+{
+    Cmd c = cmd(OpBytes, stage, slot);
+    c.a = offset;
+    c.b = 64;
+    return c;
+}
+
+TEST(SemanticPlan, ADrawsSetBytesCaptureCopiesOnlyTheChunkOfSlotsTheyEdited)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(binding(OpBuffer, 1, 20, 7, 4096), {});
+    constexpr uint32_t kDraws = 200;
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        for (uint16_t slot = 0; slot < 4; ++slot)
+            plan.record(bytes(1, slot, uint64_t(d) * 1024 + slot * 256), {});
+        draw(plan);
+    }
+    ASSERT_EQ(plan.buffers[0].size(), kDraws);
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        const auto &state = plan.renderStates[plan.draw(1 + d).state];
+        const auto bindings = plan.buffers[0][state.buffers[0]];
+        for (uint16_t slot = 0; slot < 4; ++slot) {
+            EXPECT_EQ(bindings[slot].source, raw::BufferBinding::Source::Bytes);
+            EXPECT_EQ(bindings[slot].offset, uint64_t(d) * 1024 + slot * 256);
+        }
+        EXPECT_EQ(bindings[20].object, object(7));
+        EXPECT_EQ(bindings[20].offset, 4096u);
+        EXPECT_EQ(bindings[5].source, raw::BufferBinding::Source::Unset);
+        uint32_t set = 0;
+        for (const raw::BufferBinding &b : bindings)
+            set += b.source != raw::BufferBinding::Source::Unset;
+        EXPECT_EQ(set, 5u);
+    }
+    // the first capture's eight chunks, then one a draw: far below a whole table a draw
+    EXPECT_LT(plan.buffers[0].storageBytes(), kDraws * sizeof(raw::BufferBindings) / 3);
+}
+
+TEST(SemanticPlan, ANewEncodersFirstCaptureEmptiesOnlyTheSlotsTheLastOneSet)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(bytes(1, 3, 256), {});
+    draw(plan);
+    plan.record(cmd(OpEnd), {});
+    plan.record(cmd(OpRender), {});
+    plan.record(bytes(1, 30, 512), {});
+    draw(plan);
+    const auto &state = plan.renderStates[plan.draw(plan.size() - 1).state];
+    const auto bindings = plan.buffers[0][state.buffers[0]];
+    EXPECT_EQ(bindings[3].source, raw::BufferBinding::Source::Unset);
+    EXPECT_EQ(bindings[30].offset, 512u);
+    EXPECT_EQ(bindings[30].source, raw::BufferBinding::Source::Bytes);
+}
+
+TEST(SemanticPlan, APointerMapKeepsItsStorageAcrossClears)
+{
+    raw::PointerMap<uint32_t> map;
+    for (uintptr_t i = 1; i <= 100; ++i)
+        EXPECT_TRUE(map.insert(object(i * 64), uint32_t(i)).second);
+    const size_t bytes = map.storageBytes();
+    for (unsigned round = 0; round < 50; ++round) {
+        map.clear();
+        EXPECT_EQ(map.find(object(64)), nullptr);
+        for (uintptr_t i = 1; i <= 100; ++i)
+            EXPECT_TRUE(map.insert(object(i * 64), uint32_t(i + round)).second);
+        EXPECT_FALSE(map.insert(object(64), 0).second);
+        EXPECT_EQ(*map.find(object(64 * 50)), 50 + round);
+    }
+    EXPECT_EQ(map.size(), 100u);
+    EXPECT_EQ(map.storageBytes(), bytes);
 }
 
 TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
@@ -865,4 +941,167 @@ TEST(SemanticPlan, NonuniformRegionsKeepOneOriginalReplayOperationAndImmutableGr
     EXPECT_EQ(plan.dispatch(2).pending, object(40));
     EXPECT_EQ(plan.legacy(1).op, OpDispatch);
     EXPECT_TRUE(plan.dispatch(1).perThread);
+}
+
+namespace {
+
+// Every sink call in order, as text: what the encoder is asked to do
+struct CallLog {
+    std::vector<std::string> calls;
+
+    void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &value)
+    {
+        calls.push_back("b" + std::to_string(stage) + "." + std::to_string(slot) + "=" +
+                        std::to_string(reinterpret_cast<uintptr_t>(value.object)) + "+" +
+                        std::to_string(value.offset) + "/" + std::to_string(int(value.source)));
+    }
+
+    void texture(uint32_t stage, uint32_t slot, void *value)
+    {
+        calls.push_back("t" + std::to_string(stage) + "." + std::to_string(slot) + "=" +
+                        std::to_string(reinterpret_cast<uintptr_t>(value)));
+    }
+
+    void sampler(uint32_t stage, uint32_t slot, void *value)
+    {
+        calls.push_back("s" + std::to_string(stage) + "." + std::to_string(slot) + "=" +
+                        std::to_string(reinterpret_cast<uintptr_t>(value)));
+    }
+
+    void raster(const raw::RasterState &, const raw::RasterState *)
+    {
+        calls.push_back("r");
+    }
+
+    void kernel(const raw::KernelState &, const raw::KernelState *)
+    {
+        calls.push_back("k");
+    }
+};
+
+// The comparison of every slot of each changed table, as the encoder made it before tables recorded their edits
+void applyEverySlot(const RMCommandPlan &plan, uint32_t index, uint32_t &applied, CallLog &log)
+{
+    if (applied == index)
+        return;
+    const auto &next = plan.renderStates[index];
+    const auto *previous = applied == raw::kNoSnapshot ? nullptr : &plan.renderStates[applied];
+    if (previous && previous->epoch != next.epoch)
+        previous = nullptr;
+    for (uint32_t stage = 0; stage < 2; ++stage) {
+        if (!previous || previous->buffers[stage] != next.buffers[stage]) {
+            const auto bindings = plan.buffers[stage][next.buffers[stage]];
+            const auto old = plan.buffers[stage][previous ? previous->buffers[stage] : next.buffers[stage]];
+            for (uint32_t slot = 0; slot < bindings.size(); ++slot)
+                if (bindings[slot].source != raw::BufferBinding::Source::Unset &&
+                    (!previous || bindings[slot] != old[slot]))
+                    log.buffer(stage + 1, slot, bindings[slot]);
+        }
+        if (!previous || previous->textures[stage] != next.textures[stage]) {
+            const auto &bindings = plan.textures[stage][next.textures[stage]];
+            const auto *old = previous ? &plan.textures[stage][previous->textures[stage]] : nullptr;
+            for (uint32_t slot = 0; slot < bindings.objects.size(); ++slot)
+                if ((bindings.set & (1u << slot)) &&
+                    (!old || !(old->set & (1u << slot)) || bindings.objects[slot] != old->objects[slot]))
+                    log.texture(stage + 1, slot, bindings.objects[slot]);
+        }
+        if (!previous || previous->samplers[stage] != next.samplers[stage]) {
+            const auto &bindings = plan.samplers[stage][next.samplers[stage]];
+            const auto *old = previous ? &plan.samplers[stage][previous->samplers[stage]] : nullptr;
+            for (uint32_t slot = 0; slot < bindings.objects.size(); ++slot)
+                if ((bindings.set & (1u << slot)) &&
+                    (!old || !(old->set & (1u << slot)) || bindings.objects[slot] != old->objects[slot]))
+                    log.sampler(stage + 1, slot, bindings.objects[slot]);
+        }
+    }
+    if (!previous || previous->raster != next.raster)
+        log.raster(plan.raster[next.raster], previous ? &plan.raster[previous->raster] : nullptr);
+    applied = index;
+}
+
+Cmd bytes(uint8_t stage, uint16_t slot, uint32_t chunk, uint32_t offset)
+{
+    Cmd c = cmd(OpBytes, stage, slot);
+    c.a = offset;
+    c.b = 64;
+    c.c = chunk;
+    return c;
+}
+
+// Core Animation's encoder: per draw new vertex and fragment bytes, a texture and sampler now and then, a pipeline
+// switch, one encoder ending and the next starting with the same bindings
+RMCommandPlan caPlan()
+{
+    RMCommandPlan plan;
+    for (uint32_t pass = 0; pass < 3; ++pass) {
+        plan.record(cmd(OpRender), {});
+        for (uint32_t i = 0; i < 40; ++i) {
+            for (uint16_t slot : {1, 2, 3})
+                plan.record(bytes(1, slot, i % 2, i * 256 + slot * 64), {});
+            for (uint16_t slot : {1, 2, 5, 6})
+                plan.record(bytes(2, slot, i % 2, i * 256 + slot * 64 + 32), {});
+            if (i % 7 == 0)
+                plan.record(binding(OpTexture, 2, uint16_t(3 + i % 2), 100 + i), {});
+            if (i % 11 == 0)
+                plan.record(binding(OpSampler, 2, 1, 200 + i % 3), {});
+            if (i % 5 == 0)
+                plan.record(binding(OpBuffer, 1, 9, 300 + i, 16 * i), {});
+            if (i % 13 == 4)
+                plan.record(binding(OpBufferOffset, 1, 9, 0, 64 * i), {});
+            if (i % 4 == 0)
+                plan.record(binding(OpPipeline, 0, 0, 400 + i % 3), {});
+            draw(plan, i);
+        }
+        plan.record(cmd(OpEnd), {});
+    }
+    return plan;
+}
+
+}  // namespace
+
+TEST(SemanticPlan, AppliedStateIsTheEverySlotComparisonsWithOnlyTheEditedSlotsCompared)
+{
+    const RMCommandPlan plan = caPlan();
+    CallLog masked, every;
+    raw::StateCursor cursor;
+    uint32_t applied = raw::kNoSnapshot;
+    for (size_t at = 0; at < plan.size(); ++at) {
+        const Op op = plan.operation(at).op;
+        if (isPlanDraw(op)) {
+            raw::applyRenderState(plan, plan.draw(at).state, cursor, masked);
+            applyEverySlot(plan, plan.draw(at).state, applied, every);
+        } else if (op == OpRender || op == OpEnd) {
+            cursor.reset();
+            applied = raw::kNoSnapshot;
+        }
+    }
+    EXPECT_EQ(masked.calls, every.calls);
+    EXPECT_GT(masked.calls.size(), 0u);
+    printf("binding slots compared per draw: %.1f of %.1f\n", double(cursor.slotsCompared) / 120,
+           double(cursor.slotsInTables) / 120);
+    EXPECT_LT(cursor.slotsCompared * 4, cursor.slotsInTables);
+}
+
+TEST(SemanticPlan, ASnapshotNotNextAfterTheAppliedOneComparesEverySlot)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(bytes(1, 1, 0, 0), {});
+    draw(plan, 0);
+    plan.record(bytes(1, 2, 0, 64), {});
+    draw(plan, 1);
+    plan.record(bytes(1, 3, 0, 128), {});
+    draw(plan, 2);
+    const uint32_t first = plan.renderStates[plan.draw(1).state].buffers[0],
+                   third = plan.renderStates[plan.draw(3).state].buffers[0];
+    EXPECT_EQ(plan.buffers[0].changedFrom(first, first + 1), 1u << 2);
+    EXPECT_EQ(plan.buffers[0].changedFrom(first, third), ~0u);
+    CallLog masked, every;
+    raw::StateCursor cursor;
+    uint32_t applied = raw::kNoSnapshot;
+    for (size_t at : {size_t(1), size_t(3)}) {
+        raw::applyRenderState(plan, plan.draw(at).state, cursor, masked);
+        applyEverySlot(plan, plan.draw(at).state, applied, every);
+    }
+    EXPECT_EQ(masked.calls, every.calls);
 }

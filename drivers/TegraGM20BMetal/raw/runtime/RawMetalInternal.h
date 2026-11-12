@@ -255,6 +255,10 @@ void packedVariants(RMPipeline *p, uint64_t keyHash);
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)
 void restoreArenas(RMCommandBuffer *cb);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// DEVELOPMENT: the structure of the plan's operations [from, to) into the device's replay tally (raw_replay_shape.h)
+void noteReplayShape(RMCommandBuffer *cb, size_t from, size_t to);
+#endif
 // A heap's pages back if it was purged (an m2v twin aliases them); true without a heap or an arena
 bool heapResident(RMHeap *h);
 
@@ -335,7 +339,8 @@ bool promisedEvent(void *event, uint64_t value);
 bool expiredEventWait(RMCommandBuffer *cb, size_t index);
 std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb);
 void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool success);
-bool validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation);
+raw::EventDependencyState validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation);
+bool waitsOnRetiredProducer(RMCommandBuffer *cb);
 void releaseEventWaits(RMCommandBuffer *cb);
 std::shared_ptr<raw::SharedEventLease> sharedEventLease(id event);
 int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool native);
@@ -351,7 +356,6 @@ bool submitRange(RMCommandBuffer *cb);
 void unhold(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
-void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
@@ -369,9 +373,11 @@ void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void completionLoop();
 
 // RawMetalSurfaceWrites.mm
-void surfaceConverted(IOSurfaceRef s, bool made);  // a planar or YCbCr texture over `s` made, or gone
-uint64_t surfaceWrites(IOSurfaceRef s);
-void noteSurfaceWrite(IOSurfaceRef s);
+SurfaceWriteCount *holdSurfaceWrites(IOSurfaceRef s);  // a texture over `s` made: its surface's count, held
+void releaseSurfaceWrites(IOSurfaceRef s, SurfaceWriteCount *count);
+void surfaceConverted(SurfaceWriteCount *count, bool made);  // a planar or YCbCr texture over its surface made, or gone
+uint64_t surfaceWrites(const SurfaceWriteCount *count);
+void noteSurfaceWrite(SurfaceWriteCount *count);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
 // RawMetalDeviceAnswers.mm: the per-kind capability answers (raw_device_answers.h) as methods of the device class `cls`, where

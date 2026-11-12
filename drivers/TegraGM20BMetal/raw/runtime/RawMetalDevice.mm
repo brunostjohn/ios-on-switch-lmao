@@ -42,7 +42,8 @@ static const char *zetaMemoryRefusal(int asked)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // hw_test_app's attribution: this process's command buffers on each path since the device opened, never reset (the rates
 // line's windows stay its own). Keys: raw, m2v, split, split_m2v, aborted, reopens (channels the kernel killed and this
-// process opened again), m2v.<reason>, pred.<predicate> (nonzero only).
+// process opened again), reopen_us (the last one's time), gpu_order (1: the drivers order on the GPU now), cpu_ordered (the
+// Orders the kernel refused, each a CPU-ordered line), m2v.<reason>, pred.<predicate> (nonzero only).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCounters
 {
     const Stats &s = gRM->stats;
@@ -53,6 +54,14 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"split_m2v"] = @(s.splitM2v.load());
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
+    {
+        mach_timebase_info_data_t base;
+        mach_timebase_info(&base);
+        d[@"reopen_us"] = @(gRM->raw->stats.reopenTicks.load() * base.numer / base.denom / 1000);
+        std::lock_guard<std::mutex> m(gRM->m2vLock);
+        d[@"gpu_order"] = @(gRM->gpuOrder ? 1 : 0);
+    }
+    d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
     d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
@@ -63,9 +72,22 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
+    d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
+    d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
+    d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
+    d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
+    {
+        const raw::EncodeTotals &encode = gRM->raw->stats.encode;
+        const double perUs = raw::encodeTicksPerUs();
+        d[@"encodes"] = @(encode.encodes.load());
+        d[@"encode_us"] = @(uint64_t(double(encode.wallTicks.load()) / perUs));
+        d[@"exec_us"] = @(uint64_t(double(encode.ticks[size_t(raw::EncodePart::Exec)].load()) / perUs));
+        d[@"exec_pushes"] = @(encode.execPushes.load());
+    }
+    d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
+    d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
+    d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
-    d[@"fetch_whole"] = @(fetch.provenWhole.load());
-    d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
     d[@"fetch_interlocked"] = @(fetch.interlocked.load());
@@ -471,6 +493,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
     t->_descriptor = [d copy];
     t->_kind = RMTextureSurface;
     t->_surface = (IOSurfaceRef)CFRetain(s);
+    t->_surfaceWrites = holdSurfaceWrites(s);
     t->_plane = plane;
     raw::YcbcrPlan ycbcr;
     raw::Rotation turned;
@@ -522,7 +545,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
             t->_raw.nativePlane = uint32_t(plane);
     }
     if (t->_rawOk && t->_raw.converted())
-        surfaceConverted(s, true);
+        surfaceConverted(t->_surfaceWrites, true);
     if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)

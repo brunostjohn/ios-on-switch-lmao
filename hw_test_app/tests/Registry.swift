@@ -61,4 +61,6 @@ public enum Registry {
 
     /// Programs a unit no other driver here drives, which kills the channel when its setup is wrong: each app's last.
     public static let last: [any HWTest] = [FetchRungTest(id: "gpu.raw.fetch_rung3", rung: 3)]
+    /// Kills the app's raw channel: each app runs it after all its other tests, so a failed recovery spoils none of them.
+    public static let recovery: [any HWTest] = [RecoverKillOneTest()]
 }

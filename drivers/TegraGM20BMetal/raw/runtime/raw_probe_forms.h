@@ -64,10 +64,14 @@ struct ProbeForms {
     EntryForm entry = EntryForm::Today;
     SwitchForm switchForm = SwitchForm::Today;
     bool resolveTwoD = false;
+    // an indexed draw's index fetch ends this many bytes past its offset (SET_INDEX_BUFFER_C/D), its indices never
+    // padded: the hardware's answer past the limit is the draw's (0: today's)
+    uint32_t indexLimit = 0;
 
     bool any() const
     {
-        return pass != PassForm::Today || entry != EntryForm::Today || switchForm != SwitchForm::Today || resolveTwoD;
+        return pass != PassForm::Today || entry != EntryForm::Today || switchForm != SwitchForm::Today || resolveTwoD ||
+               indexLimit;
     }
 
     bool keepsTiledFlush() const
@@ -78,12 +82,12 @@ struct ProbeForms {
 
 // Where a command buffer's barriers took a form other than today's (0 everywhere: the probe's work never met one)
 struct ProbeTaken {
-    uint32_t passes = 0, entries = 0, firsts = 0, switches = 0, flushes = 0, resolves = 0, ops = 0;
+    uint32_t passes = 0, entries = 0, firsts = 0, switches = 0, flushes = 0, resolves = 0, ops = 0, indexLimits = 0;
 
     void add(const ProbeTaken &o)
     {
         passes += o.passes, entries += o.entries, firsts += o.firsts, switches += o.switches;
-        flushes += o.flushes, resolves += o.resolves, ops += o.ops;
+        flushes += o.flushes, resolves += o.resolves, ops += o.ops, indexLimits += o.indexLimits;
     }
 
     std::string text() const
@@ -91,12 +95,12 @@ struct ProbeTaken {
         return "passes=" + std::to_string(passes) + " entries=" + std::to_string(entries) +
                " firsts=" + std::to_string(firsts) + " switches=" + std::to_string(switches) +
                " flushes=" + std::to_string(flushes) + " resolves=" + std::to_string(resolves) +
-               " ops=" + std::to_string(ops);
+               " ops=" + std::to_string(ops) + " index_limits=" + std::to_string(indexLimits);
     }
 };
 
 // "pass=<today|pixel|pixel_nowfi|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
-// resolve=<draw|twod>", any subset in any order; false on anything else
+// resolve=<draw|twod> index=<bytes>", any subset in any order; false on anything else
 inline bool parseProbeForms(const char *text, ProbeForms &out)
 {
     ProbeForms f;
@@ -136,6 +140,9 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
             f.switchForm = SwitchForm::None;
         else if (key == "resolve" && (value == "draw" || value == "twod"))
             f.resolveTwoD = value == "twod";
+        else if (key == "index" && !value.empty() && value.size() < 9 &&
+                 value.find_first_not_of("0123456789") == std::string::npos && std::stoul(value))
+            f.indexLimit = uint32_t(std::stoul(value));
         else
             return false;
     }

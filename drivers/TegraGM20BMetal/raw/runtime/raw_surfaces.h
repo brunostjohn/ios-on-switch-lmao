@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Exact backing uses for one job. An older ABI refuses an oversized list instead of losing dependencies via All.
+// Exact backing uses for one job: an oversized list is refused, never cut short.
 #pragma once
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <vector>
 #include "TegraGM20BABI.h"
 
@@ -128,23 +127,6 @@ public:
         return false;
     }
 
-    const TegraGM20BAbiExecSurfaces *legacy(uint32_t channel, size_t &bytes)
-    {
-        bytes = 0;
-        if (!valid() || uses_.size() > TegraGM20BMaxExecSurfaces)
-            return nullptr;
-        for (const auto &use : uses_)
-            if (use.access & ~(TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite))
-                return nullptr;
-        legacy_.channel = channel;
-        legacy_.flags = 0;
-        legacy_.count = uint32_t(uses_.size());
-        if (!uses_.empty())
-            memcpy(legacy_.uses, uses_.data(), uses_.size() * sizeof(uses_[0]));
-        bytes = offsetof(TegraGM20BAbiExecSurfaces, uses) + uses_.size() * sizeof(uses_[0]);
-        return &legacy_;
-    }
-
 private:
     void mergeAddress(size_t index, uint32_t access, uint64_t bytes)
     {
@@ -198,7 +180,6 @@ private:
     std::vector<uint64_t> extents_;
     std::vector<Range> ranges_;
     std::vector<TegraGM20BAbiSurfaceUse> uses_;
-    TegraGM20BAbiExecSurfaces legacy_ = {};
     size_t last_ = 0;
     bool overflow_ = false;
 };

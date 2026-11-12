@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_transfer.h"
 #include "../raw/fx/fx_image.h"
+#include <IOKit/IOReturn.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
@@ -140,26 +141,28 @@ void Kernel::closeChannel(uint32_t)
     else
         fake->complete(fake->sequence);
 }
-bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count,
-                  uint32_t, uint32_t &sequence, SurfaceList *uses, int *, JobVisibility visibility,
-                  const JobEvents &events, const JobAdmission &admission)
+bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
 {
-    EXPECT_TRUE(events.empty());
-    EXPECT_TRUE(admission.empty());
-    EXPECT_EQ(channel, 7u);
-    EXPECT_EQ(count, 1u);
-    EXPECT_NE(visibility, JobVisibility::Legacy);
+    EXPECT_TRUE(job.events.empty());
+    EXPECT_EQ(job.channel, 7u);
+    EXPECT_EQ(job.pushCount, 1u);
+    EXPECT_EQ(job.set, 0u) << "a copy of no set member named the set";
+    EXPECT_NE(job.visibility, JobVisibility::Legacy);
     if (fake->reject)
         return false;
     sequence = ++fake->sequence;
-    fake->jobs.push_back({pushes->va, pushes->dwords, sequence});
-    fake->uses = uses->uses();
-    fake->visibility = visibility;
+    fake->jobs.push_back({job.pushes->va, job.pushes->dwords, sequence});
+    fake->uses.assign(job.uses, job.uses + job.useCount);
+    fake->visibility = job.visibility;
     ++fake->submissions;
     fake->semantic = {2, sequence, sequence, fake->semanticOnSubmit};
     if (fake->completeOnSubmit)
         fake->complete(sequence);
     return true;
+}
+int Kernel::resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &, uint32_t &, const volatile uint32_t *&)
+{
+    return kIOReturnUnsupported;
 }
 bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
 {
@@ -185,6 +188,7 @@ protected:
     FakeGpu gpu;
     raw::Kernel kernel;
     raw::TextureTransfers transfers;
+    raw::ResourceSet set;
     std::mutex allocationLock;
 
     void SetUp() override
@@ -202,7 +206,7 @@ protected:
     bool copy(const raw::TextureTransfer &region, void *bytes, uint64_t row, bool write,
               std::shared_ptr<void> owner = {})
     {
-        return transfers.copy(kernel, allocationLock, region, bytes, row, 0, write, std::move(owner));
+        return transfers.copy(kernel, set, allocationLock, region, bytes, row, 0, write, std::move(owner));
     }
 };
 
@@ -306,8 +310,8 @@ TEST_F(RawTransfer, VolumePlanesPreserveTheirPhysicalBlockDepthAndCallerImageStr
         region.height = 5;
         region.planes = 4;
         region.bpp = 4;
-        ASSERT_TRUE(transfers.copy(kernel, allocationLock, region, input.data(), 128, 128 * 7, true, {}));
-        ASSERT_TRUE(transfers.copy(kernel, allocationLock, region, output.data(), 128, 128 * 7, false, {}));
+        ASSERT_TRUE(transfers.copy(kernel, set, allocationLock, region, input.data(), 128, 128 * 7, true, {}));
+        ASSERT_TRUE(transfers.copy(kernel, set, allocationLock, region, output.data(), 128, 128 * 7, false, {}));
         for (uint32_t z = 0; z < 9; ++z)
             for (uint32_t y = 0; y < 13; ++y)
                 for (uint32_t x = 0; x < 23; ++x)

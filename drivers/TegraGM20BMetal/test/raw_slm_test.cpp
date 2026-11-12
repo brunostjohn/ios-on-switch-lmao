@@ -163,7 +163,7 @@ TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
                 HasSubstr("dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))"));
     const std::string commit = Body(gpu, "bool CommandBuffer::commit(uint32_t &seqno)");
     EXPECT_THAT(commit, HasSubstr("segments_.insert(0,"));
-    EXPECT_LT(at(commit, "emitSlm(p, slmVa,"), at(commit, "d.k_.exec("));
+    EXPECT_LT(at(commit, "emitSlm(p, slmVa,"), at(commit, "d.job(d.setView_, d.channel_,"));
     const std::string build = Body(gpu, "void Device::build(Pipeline &pl, const PackPipeline &pp,");
     EXPECT_LT(at(build, "if (ownedMethod(m) || swizzleMethod(m))"), at(build, "w.m(m, v);"));
 }
