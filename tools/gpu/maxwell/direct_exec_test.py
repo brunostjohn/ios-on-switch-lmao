@@ -259,24 +259,28 @@ class WideStride(Records):
 
 class Kernels(Records):
     @staticmethod
-    def dispatch(record: dict, binding: dr.Binding, threads: int, stage_in: list[int] | None = None) -> list[dr.Stage]:
+    def dispatch(record: dict, binding: dr.Binding, groups: int, local: int, stage_in: list[int] | None = None) -> None:
+        """Run every thread of a dispatchThreadgroups: of `groups` threadgroups of `local` threads on x.
+
+        The root table's group count (nvk_root_descriptor_table cs.group_count) and the record's DispatchRegion words as
+        raw_compute.cpp writes them (raw_dispatch_regions.h computeDispatch, computeRegionWords: base 0, the packed
+        threadgroup size less 1, the grid's threads); each thread's TID, CTAID and lane in its warp of 32.
+        """
         push = dr.record_push(record)
         if stage_in is not None:
             word = record['stage_in_region_word']
             for k, v in enumerate(stage_in):
                 push[word - 1 + k] = v
         if record['region_word'] >= 0:
-            # raw_dispatch_regions.h computeRegionWords of one threadgroup of `threads`: base, packed size, grid
-            for k, v in enumerate([0, 0, 0, threads - 1, threads, 1, 1, 0]):
+            for k, v in enumerate([0, 0, 0, local - 1, groups * local, 1, 1, 0]):
                 push[record['region_word'] + k] = v
-        binding.tables(dr.root_table(push, record['set_bytes'], {12: 1, 16: 1, 20: 1}), dr.kernel_set(record, binding))
-        out = []
-        for tid in range(threads):
-            system = {SV_TID_X: tid, SV_CTAID_X: 0, 0x26: 0, 0x27: 0, 0x22: 0, 0x23: 0, SV_COMBINED_TID: tid}
-            system[SV_LANE_ID] = tid % 32
-            environment = dr.stage(record, binding, attributes({}), system)
-            out.append(dr.execute(record, environment, header=False))
-        return out
+        root = dr.root_table(push, record['set_bytes'], {12: groups, 16: 1, 20: 1})
+        binding.tables(root, dr.kernel_set(record, binding))
+        for group in range(groups):
+            for tid in range(local):
+                system = {SV_TID_X: tid, 0x22: 0, 0x23: 0, SV_COMBINED_TID: tid, SV_LANE_ID: tid % 32}
+                system.update({SV_CTAID_X: group, 0x26: 0, 0x27: 0})
+                dr.execute(record, dr.stage(record, binding, attributes({}), system), header=False)
 
     def test_a_stage_in_kernel_reads_its_region_from_its_origin(self):
         record = self.kernel('stage_in')
@@ -289,7 +293,7 @@ class Kernels(Records):
         binding = dr.Binding()
         binding.bind((3, 0), bytes(source))
         out = binding.bind((3, 1), bytes(4 * size))
-        self.dispatch(record, binding, size, [origin, 0, 0, 0, size, 1, 1, 0])
+        self.dispatch(record, binding, 1, size, [origin, 0, 0, 0, size, 1, 1, 0])
         written = struct.unpack(f'<{size}f', binding.memory.read(out, 4 * size))
         expected = [values[origin + g][0] * 2.0 + values[origin + g][1] for g in range(size)]
         self.assertEqual(list(written), expected)
@@ -298,15 +302,17 @@ class Kernels(Records):
         record = self.kernel('counter_resolve')
         num, den = 625, 384
         anchor_units, anchor_ns = 0x0000_0012_FFFF_FF00, 0x0000_0003_FFFF_FFF0
-        spans = [0, 5, 383, 384, 0x1_0000_0005, 0xFFFF_FFFF, -1, -384, -0x2_0000_0001, 0x7FFF_0000_0000]
+        edges = [0, 5, 383, 384, 0x1_0000_0005, 0xFFFF_FFFF, -1, -384, -0x2_0000_0001, 0x7FFF_0000_0000]
+        spans = edges + [(k * 0x1_3579_BDF1 * (-1) ** k) % (1 << 40) - (1 << 39) for k in range(70)]
         records = [(1, 0, (anchor_units + s) & 0xFFFF_FFFF_FFFF_FFFF) for s in spans] + [(0, 0, 0x1234)]
         count = len(records)
+        self.assertGreater(count, 64)
         binding = dr.Binding()
         binding.bind((3, 0), b''.join(struct.pack('<IIQ', *r) for r in records))
         out = binding.bind((3, 1), bytes(8 * count))
         anchor = [anchor_units & 0xFFFFFFFF, anchor_units >> 32, anchor_ns & 0xFFFFFFFF, anchor_ns >> 32]
         binding.bind((3, 2), struct.pack('<6I', *anchor, count, 1))
-        self.dispatch(record, binding, count)
+        self.dispatch(record, binding, (count + 63) // 64, 64)
         got = struct.unpack(f'<{count}Q', binding.memory.read(out, 8 * count))
         expected = [(anchor_ns + (s * num) // den) & 0xFFFF_FFFF_FFFF_FFFF for s in spans] + [0]
         self.assertEqual(list(got), expected)
@@ -317,7 +323,7 @@ class Kernels(Records):
         binding.bind((3, 0), struct.pack('<IIQ', 1, 0, 77) + struct.pack('<IIQ', 0, 0, 77))
         out = binding.bind((3, 1), bytes(16))
         binding.bind((3, 2), struct.pack('<6I', 0, 0, 0, 0, 2, 0))
-        self.dispatch(record, binding, 2)
+        self.dispatch(record, binding, 1, 64)
         self.assertEqual(list(struct.unpack('<2Q', binding.memory.read(out, 16))), [0xFFFF_FFFF_FFFF_FFFF, 0])
 
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw_amplification.cpp on raw::Device: a state of vertex amplification drawn once per amplification, a count the state
 // does not take refused, a viewport offset refused, and a dynamic vertex stride taken from the bind up to the stream's
-// 12-bit field.
+// 12-bit field, past it by the state's stride twin alone.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_record.h"
 
@@ -39,7 +39,7 @@ class DeviceAmplification : public harness::DeviceTest {
 protected:
     raw::Texture target;
     raw::Buffer vertices;
-    raw::Pipeline *amplified = nullptr, *counted = nullptr, *plain = nullptr, *strided = nullptr;
+    raw::Pipeline *amplified = nullptr, *counted = nullptr, *plain = nullptr, *strided = nullptr, *twinned = nullptr;
 
     void SetUp() override
     {
@@ -55,6 +55,14 @@ protected:
         ASSERT_NE(plain, nullptr) << why;
         strided = dev.addRecord(record(0xa304, 0, false, true), false, why);
         ASSERT_NE(strided, nullptr) << why;
+        raw::RuntimeRecord withTwin = record(0xa305, 0, false, true);
+        raw::RuntimeRecord twin = record(0xa306, 0, false, false);
+        twin.pipeline.pulledStride[0][0] = 1;
+        twin.pipeline.pulledStride[0][1] = 5;
+        twin.pipeline.pushMask = 1u << 4;
+        withTwin.strideTwin = std::make_shared<raw::RuntimeRecord>(twin);
+        twinned = dev.addRecord(withTwin, false, why);
+        ASSERT_NE(twinned, nullptr) << why;
     }
 
     struct Drawn {
@@ -126,6 +134,15 @@ TEST_F(DeviceAmplification, ADynamicStrideIsTheBindsUpToTheStreamField)
     EXPECT_EQ(drawWith(strided, 1, false, 0xfff).why, "");
     EXPECT_EQ(drawWith(strided, 1).why, "");
     EXPECT_NE(drawWith(strided, 1, false, 0x1000).why, "");
+}
+
+TEST_F(DeviceAmplification, AStream0BindStridePastTheFieldDrawsTheStrideTwin)
+{
+    ASSERT_NE(twinned->strideTwin, nullptr);
+    EXPECT_EQ(twinned->strideTwin->rec->vertexSlot, 0xff);
+    EXPECT_EQ(drawWith(twinned, 1, false, 16).why, "");
+    EXPECT_EQ(drawWith(twinned, 1, false, 0x1000).why, "");
+    EXPECT_EQ(drawWith(twinned, 1, false, 0x10000).draws, 1u);
 }
 
 }  // namespace
