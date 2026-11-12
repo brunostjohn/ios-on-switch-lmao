@@ -187,6 +187,11 @@ struct Limits {
 // (display+0x75d6, update_display_limits 0x1844e9844) is false; backboardd logs it as "CADisplay 1 Packed YUV Support
 // Enabled: NO". Window B and VIC take 4:2:2 for that. The display+0x6bf4 chroma mode that detach_layer also reads
 // (0x18443ba04) comes from the chip id alone (update_display_limits 0x1844e9828: 2, 4:4:4, on 0x7000; otherwise 0).
+// detach_layer's other two 4:2:2 triggers never fire on this display: needs_420_transform (0x18443c3c4) takes the copy's
+// width (0x18443b9b8) and wants more than display+0x7700, 2160 for chip 0x8030 (0x1844e9640), and nothing in 24B119
+// sets the flag bit 29 that 0x18443c378 tests (render_contents_background builds the flags at 0x18437cc6c-0x18437ce98,
+// OGLDisplay::detach_layer adds bit 22, detach_layer keeps bits 31-27, 7 and 3-0 of the layer's earlier flags and
+// detachable_layer_impl adds bits 7 and 23-27).
 constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true, .compressionUnsupported = true};
 
 // The row and plane-base alignment published for every surface iPadOS sizes for this display (Core Animation's
