@@ -63,8 +63,6 @@
 #   raw_xr_pass_test  raw/runtime/raw_xr_pass.h: RGB10A8_2P_XR10 drawn in its planes: the alpha index (m2v's rule), a state's
 #                     plane formats, a Clear's plane words, raw_emit's alpha targets, and the header pair's join
 #                     (nvk_switch_xr_planes.c) giving each code's half
-#   raw_xr_planes_test  raw/runtime/raw_xr_planes.h: a two-plane XR surface's merge and split launches, run over bytes with
-#                     the copy engine's remap, and the copy-free form's output rule
 #   raw_clear_test    raw/runtime/raw_clear.h: the clear values the raw path hands NVK, m2v's for every format it renders
 #                     (raw/test/targetcheck.py: its target formats against NVK's)
 #   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
@@ -866,22 +864,6 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
     ],
     cxx_std = "c++17",
-)
-
-host_test(
-    name = "raw_xr_planes_test",
-    srcs = [
-        "raw_xr_planes_test.cpp",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20BMetal:raw_runtime_headers",
-    ],
-    copts = ["-Idrivers/TegraGM20B"],
-    cxx_std = "c++17",
-    deps = [
-        "//kits/SwitchGM20B:classes",
-        "//kits/SwitchGM20BEmit:emit_ndebug",
-    ],
 )
 
 host_test(

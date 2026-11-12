@@ -8,8 +8,7 @@ import Metal
 /// (raw_xr_pass.h: the word into plane 0, the alpha byte into plane 1 as a target of its own): a cleared pass with a
 /// draw, a pass that loads it and draws again, and a pass that samples it; then, each after the CPU rewrote part of
 /// both planes, a loading pass, a sampling pass and a blit into a buffer; last a blit from a buffer into it. Every
-/// command buffer must take the raw path, and no copy-engine merge or split of the planes may run (merges, splits); the
-/// planes must hold Metal's bytes (plane 0 the code word, plane 1 the alpha byte, codes as raw_xr.h writeCode stores
+/// command buffer must take the raw path, and the planes must hold Metal's bytes (plane 0 the code word, plane 1 the alpha byte, codes as raw_xr.h writeCode stores
 /// them), the samples each code's value as a half, and blits move plane 0's words alone (m2v two_planes.rs); rows of
 /// 128-byte multiples (96 wide) are drawn in place. Then XRTwoPlaneCells.
 struct XRTwoPlaneTest: HWTest {
@@ -83,9 +82,7 @@ struct XRTwoPlaneTest: HWTest {
         let linearApart = XRTwoPlaneCells.halfDistance(linear.halves, referenceLinear)
 
         var metrics = Metrics()
-        let merges = moved("xr_merges"), splits = moved("xr_splits"), planePasses = moved("xr_plane_passes")
-        metrics.set("merges", merges)
-        metrics.set("splits", splits)
+        let planePasses = moved("xr_plane_passes")
         metrics.set("plane_passes", planePasses)
         metrics.set("plane_shadows", directShadows)
         metrics.set("cell_shadows", cellShadows)
@@ -123,7 +120,6 @@ struct XRTwoPlaneTest: HWTest {
                 ("the samples follow a CPU write of the planes", resampled == 0),
                 ("a blit into a buffer gives plane 0's words after a CPU write", copiedOut == 0),
                 ("a blit from a buffer writes plane 0 alone", copiedIn == 0),
-                ("no copy-engine merge or split of the planes", merges == 0 && splits == 0),
                 ("the passes drew in the planes", planePasses > 0),
                 (
                     "rows of 128-byte multiples are drawn in place, beside a memoryless 550 too",

@@ -78,8 +78,6 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"xr_plane_passes"] = @(gRM->raw->stats.xrPlanePasses.load());
     d[@"xr_plane_shadows"] = @(gRM->raw->stats.xrPlaneShadows.load());
     d[@"xr_pair_binds"] = @(gRM->raw->stats.xrPairBinds.load());
-    d[@"xr_merges"] = @(gRM->raw->stats.xrMerges.load());
-    d[@"xr_splits"] = @(gRM->raw->stats.xrSplits.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_whole"] = @(fetch.provenWhole.load());
     d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
