@@ -269,7 +269,7 @@ bool heapResident(RMHeap *h)
     uint64_t bytes, align;
     if (arenaKind(d.storageMode, blockLinear) && placed(d, blockLinear, bytes, align))
         return {NSUInteger(bytes), NSUInteger(align)};
-    return [gRM->fallback heapTextureSizeAndAlignWithDescriptor:d];
+    return [RM_M2V("a heap texture's size the raw path does not place") heapTextureSizeAndAlignWithDescriptor:d];
 }
 
 - (MTLSizeAndAlign)heapBufferSizeAndAlignWithLength:(NSUInteger)length options:(MTLResourceOptions)options

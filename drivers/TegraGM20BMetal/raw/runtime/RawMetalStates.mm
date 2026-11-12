@@ -34,7 +34,7 @@
         if (_twin)
             return _twin;
     }
-    return twinPublish(self, _twin, [gRM->fallback newSamplerStateWithDescriptor:_descriptor]);
+    return twinPublish(self, _twin, [RM_M2V("a sampler's twin") newSamplerStateWithDescriptor:_descriptor]);
 }
 
 @end
@@ -123,33 +123,37 @@
 
 - (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithURL:url error:error], url.path);
+    id<MTLDevice> m2v = RM_M2V("a library from a URL");
+    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithURL:url error:error], url.path);
 }
 
 - (id<MTLLibrary>)newLibraryWithFile:(NSString *)path error:(NSError **)error
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithFile:path error:error], path);
+    id<MTLDevice> m2v = RM_M2V("a library from a file");
+    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithFile:path error:error], path);
 }
 
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithData:data error:error], nil);
+    return (id<MTLLibrary>)wrapLibrary(self, [RM_M2V("a library from data") newLibraryWithData:data error:error], nil);
 }
 
 - (id<MTLLibrary>)newDefaultLibrary
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newDefaultLibrary], nil);
+    return (id<MTLLibrary>)wrapLibrary(self, [RM_M2V("the main bundle's default library") newDefaultLibrary], nil);
 }
 
 - (id<MTLLibrary>)newDefaultLibraryWithBundle:(NSBundle *)bundle error:(NSError **)error
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newDefaultLibraryWithBundle:bundle error:error],
+    id<MTLDevice> m2v = RM_M2V("a bundle's default library");
+    return (id<MTLLibrary>)wrapLibrary(self, [m2v newDefaultLibraryWithBundle:bundle error:error],
                                        [bundle.bundlePath stringByAppendingString:@"/default.metallib"]);
 }
 
 - (id<MTLLibrary>)newLibraryWithSource:(NSString *)source options:(MTLCompileOptions *)options error:(NSError **)error
 {
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithSource:source options:options error:error],
+    id<MTLDevice> m2v = RM_M2V("a library from source");
+    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithSource:source options:options error:error],
                                        nil);
 }
 
@@ -382,12 +386,12 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                NSError **error)
 {
     if (packed && native_bridge_metal_render_pipeline_lazy)
-        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, packedTwinDescriptor(d, true),
-                                                        packedTwinOptions(o, true));
-    return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                       options:packedTwinOptions(o, packed)
-                                                    reflection:nil
-                                                         error:error];
+        return native_bridge_metal_render_pipeline_lazy(RM_M2V("a packed render state's twin"),
+                                                        packedTwinDescriptor(d, true), packedTwinOptions(o, true));
+    return [RM_M2V("a render state's twin") newRenderPipelineStateWithDescriptor:twinDescriptor(d)
+                                                                         options:packedTwinOptions(o, packed)
+                                                                      reflection:nil
+                                                                           error:error];
 }
 
 // A state of `d` under `o`: its record the pack's, or made at once, unless the archives it lists miss it as Metal's would; its
@@ -399,13 +403,15 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
     if (!p)
         return nil;
     const bool packed = p->_raw || p->_archived;
-    if (reflection)
-        p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
-                                                               options:packedTwinOptions(o, packed)
-                                                            reflection:reflection
-                                                                 error:error];
-    else
+    if (reflection) {
+        id<MTLDevice> m2v = RM_M2V("a render state's twin with its reflection");
+        p->_twin = [m2v newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
+                                                     options:packedTwinOptions(o, packed)
+                                                  reflection:reflection
+                                                       error:error];
+    } else {
         p->_twin = pipelineTwin(d, o, packed, error);
+    }
     refuseUnmade(p, d);
     if (error && p->_raw)
         *error = nil;
@@ -486,7 +492,7 @@ static dispatch_queue_t creationQueue()
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(self, gRM->fallback, d, MTLPipelineOptionNone, nil, error);
+    return rmComputeState(self, RM_M2V("a compute state"), d, MTLPipelineOptionNone, nil, error);
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f
@@ -496,7 +502,7 @@ static dispatch_queue_t creationQueue()
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(self, gRM->fallback, d, o, r, error);
+    return rmComputeState(self, RM_M2V("a compute state"), d, o, r, error);
 }
 
 // _MTLDevice's own sends this to [self compiler], which answers nil on a device without Apple's compiler service: Core
@@ -512,7 +518,7 @@ static dispatch_queue_t creationQueue()
                                                           reflection:(MTLAutoreleasedComputePipelineReflection *)r
                                                                error:(NSError **)error
 {
-    return rmComputeState(self, gRM->fallback, d, o, r, error);
+    return rmComputeState(self, RM_M2V("a compute state"), d, o, r, error);
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)d
@@ -524,7 +530,7 @@ static dispatch_queue_t creationQueue()
     t.tileFunction = twinOf(d.tileFunction);
     if (!rmTileArchiveAnswer(t, d, o, error))
         return nil;
-    return [self wrapCarried:[gRM->fallback newRenderPipelineStateWithTileDescriptor:t
+    return [self wrapCarried:[RM_M2V("a tile render state") newRenderPipelineStateWithTileDescriptor:t
                                                                              options:o
                                                                           reflection:r
                                                                                error:error]];
@@ -556,7 +562,8 @@ static NSArray *twinFunctions(NSArray *functions, NSError **error)
         return nil;
     MTLStitchedLibraryDescriptor *t = [d copy];
     t.functions = twins;
-    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithStitchedDescriptor:t error:error], nil);
+    id<MTLDevice> m2v = RM_M2V("a stitched library");
+    return (id<MTLLibrary>)wrapLibrary(self, [m2v newLibraryWithStitchedDescriptor:t error:error], nil);
 }
 
 - (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
@@ -566,8 +573,9 @@ static NSArray *twinFunctions(NSArray *functions, NSError **error)
     NSArray *twins = twinFunctions(functions, error);
     if (!twins)
         return nil;
+    id<MTLDevice> m2v = RM_M2V("a Core Image filter library");
     return (id<MTLLibrary>)wrapLibrary(self,
-                                       [(id<RMImageFilterLinking>)gRM->fallback newLibraryWithCIFilters:twins
+                                       [(id<RMImageFilterLinking>)m2v newLibraryWithCIFilters:twins
                                                                                 imageFilterFunctionInfo:info
                                                                                                   error:error],
                                        nil);
