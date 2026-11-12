@@ -17,7 +17,7 @@ for source in mme_fermi mme_fermi_sim; do
     xcrun clang -O1 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$source.c" -o "$OUT/$source.o"
 done
 xcrun clang -O1 -g -Wall -Wextra -fsanitize=address,undefined -I "$TREE/drivers/TegraGM20B" \
-    -c "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
+    -DSWITCH_MOCK_JOB_INTERFACE -c "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
 for source in cap nvdec nvdec_compute; do
     xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" \
         -c "$RAW/pack/$source.cpp" -o "$OUT/$source.o"

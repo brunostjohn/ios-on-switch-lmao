@@ -479,8 +479,17 @@ static uint32_t surface_layout(const struct bo *bo, const struct TegraGM20BAbiSu
     return layout;
 }
 
+static uint32_t *fence_page(void)
+{
+    if (!fence)
+        fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
+    return fence;
+}
+
 #include "mock_submission.h"
+#ifdef SWITCH_MOCK_JOB_INTERFACE
 #include "mock_jobs.h"
+#endif
 
 static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size_t insz, void *out, size_t *outsz)
 {
@@ -675,12 +684,14 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     case TegraGM20BMethodSubmitAddress:
         return mock_submit(c, in, insz, out, outsz);
+#ifdef SWITCH_MOCK_JOB_INTERFACE
     case TegraGM20BMethodResourceSetCreate:
         return mock_set_create(in, insz, out);
     case TegraGM20BMethodResourceSetRelease:
         return mock_set_release(in, insz);
     case TegraGM20BMethodSubmitJob:
         return mock_job(c, in, insz, out, outsz);
+#endif
     case TegraGM20BMethodExec: {
         const struct TegraGM20BAbiExec *e = in;
         uint32_t ch = e->channel & 15;
