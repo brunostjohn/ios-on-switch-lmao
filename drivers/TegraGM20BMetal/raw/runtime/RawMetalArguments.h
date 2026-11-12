@@ -43,6 +43,7 @@ enum Op : uint8_t {
     OpKernelBytes,
     OpKernelBuffer,
     OpKernelBufferOffset,
+    OpKernelClockAnchors,  // the kernel's clock anchor table (RawMetalCounters.h) at c, b bytes long, as buffer `index`
     OpKernelTexture,
     OpKernelSampler,
     OpKernelMemory,

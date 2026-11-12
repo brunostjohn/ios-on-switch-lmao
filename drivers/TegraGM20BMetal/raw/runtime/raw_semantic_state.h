@@ -90,7 +90,8 @@ struct BufferBinding {
         Unset,
         Buffer,
         Bytes,
-        Offset
+        Offset,
+        ClockAnchors  // offset: the kernel's clock anchor table's GPU address (OpKernelClockAnchors)
     };
     void *object = nullptr;
     uint64_t offset = 0;

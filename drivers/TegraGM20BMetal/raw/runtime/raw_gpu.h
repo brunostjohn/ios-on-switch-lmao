@@ -1388,9 +1388,9 @@ public:
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
 
-    bool ptimer(uint64_t &units)
+    bool clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint64_t &gpuVa)
     {
-        return k_.ptimer(units);
+        return k_.clockAnchors(table, gpuVa);
     }
 
     bool lost(uint32_t seqno) const

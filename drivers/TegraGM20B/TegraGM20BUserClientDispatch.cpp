@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The ABI dispatch: run's method switch.
 #include "TegraGM20BUserClientInternal.h"
+#include "TegraGM20BClockABI.h"
 #include "TegraGM20BZcullABI.h"
 
 static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
@@ -168,6 +169,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodZcullInfo:
 		wantOut = sizeof(TegraGM20BAbiZcullInfo);
 		break;
+	case TegraGM20BMethodClockAnchors:
+		wantOut = sizeof(TegraGM20BAbiClockAnchorsReply);
+		break;
 #if TGM_STATS
 	case TegraGM20BMethodReadback:
 		wantIn = sizeof(TegraGM20BAbiReadback);
@@ -282,6 +286,11 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return unmapToken(static_cast<const TegraGM20BAbiUnmap *>(in));
 	if (method == TegraGM20BMethodGetTimestamp) {
 		static_cast<TegraGM20BAbiTimestamp *>(out)->ns = tgm_timestamp_ns();
+		return kIOReturnSuccess;
+	}
+	if (method == TegraGM20BMethodClockAnchors) {
+		*static_cast<TegraGM20BAbiClockAnchorsReply *>(out) = {
+			fence_gpu_ + TegraGM20BClockAnchorOffset, kFenceToken, 0};
 		return kIOReturnSuccess;
 	}
 	if (method == TegraGM20BMethodZbc) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The device's counter sets, sample buffers and clock, as the identity's AGX driver answers them (raw_counters.h).
 #import "RawMetalCounters.h"
+#include "raw_counter_kernel.h"
 
 static NSString *text(std::string_view s)
 {
@@ -49,7 +50,7 @@ static NSArray<id<MTLCounterSet>> *timestampSets()
     return _sampleCount;
 }
 
-// The driver's raw copy of the samples, here each record placed by the device's anchor
+// The driver's raw copy of the samples, here each record placed by the anchor of its power-up of the GPU
 - (NSData *)resolveCounterRange:(NSRange)range
 {
     if (!raw::counters::resolvable(range.location, range.length, _sampleCount))
@@ -57,13 +58,13 @@ static NSArray<id<MTLCounterSet>> *timestampSets()
     const auto *records = static_cast<const raw::counters::Record *>([(id<MTLBuffer>)_storage contents]);
     if (!records)
         return nil;
-    const raw::counters::Anchor anchor = rmCounterAnchor();
+    const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
     NSMutableData *data = [NSMutableData dataWithLength:range.length * raw::counters::kSampleBytes];
     auto *out = static_cast<uint64_t *>(data.mutableBytes);
     for (NSUInteger i = 0; i < range.length; i++) {
         raw::counters::Record r;
         memcpy(&r, records + range.location + i, sizeof r);
-        out[i] = raw::counters::resolved(r, anchor);
+        out[i] = raw::counters::resolved(r, anchors);
     }
     return data;
 }
@@ -87,29 +88,26 @@ uint64_t rmHostNanoseconds()
     return mach_absolute_time() * timebase.numer / timebase.denom;
 }
 
-static raw::counters::Reading readPtimer()
+const RMClockAnchors &rmClockAnchors()
 {
-    raw::counters::Reading r = {};
-    r.before = rmHostNanoseconds();
-    gRM->raw->ptimer(r.units);
-    r.after = rmHostNanoseconds();
-    return r;
+    static const RMClockAnchors anchors = [] {
+        RMClockAnchors a = {};
+        if (!gRM->raw->clockAnchors(a.table, a.va)) {
+            a = {};
+            SWITCH_REFUSE("raw", "counter.anchors",
+                          "the kernel has no clock anchors: counter samples resolve to the error value");
+        }
+        return a;
+    }();
+    return anchors;
 }
 
-raw::counters::Anchor rmCounterAnchor()
+TegraGM20BAbiClockAnchors rmClockAnchorsNow()
 {
-    static std::mutex lock;
-    static raw::counters::Anchor held;
-    std::lock_guard<std::mutex> hold(lock);
-    const raw::counters::Reading now = readPtimer();
-    if (raw::counters::agrees(held, now) || (held.valid && raw::counters::poweredDown(now)))
-        return held;
-    const raw::counters::Reading readings[3] = {now, readPtimer(), readPtimer()};
-    held = raw::counters::anchorOf(raw::counters::narrowest(readings, 3));
-    if (!held.valid)
-        SWITCH_REFUSE("raw", "counter.anchor",
-                      "the kernel gave no PTIMER reading: counter samples resolve to the error value");
-    return held;
+    TegraGM20BAbiClockAnchors now = {};
+    if (const RMClockAnchors &live = rmClockAnchors(); live.table)
+        raw::counters::snapshot(*live.table, now);
+    return now;
 }
 
 static id failed(NSError **error, MTLCounterSampleBufferError code, const std::string &message)

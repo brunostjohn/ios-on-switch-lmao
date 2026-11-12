@@ -366,6 +366,7 @@ cc_library(
         "bench/switch_bench.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",

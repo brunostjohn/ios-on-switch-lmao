@@ -30,6 +30,18 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 return raw::assignState(bindings[c.index], value);
             });
         break;
+    case OpKernelClockAnchors:
+        if (stage < 3 && c.index < 31)
+            changed = buffers[stage].update([&](auto &bindings) {
+                raw::BufferBinding value;
+                value.source = raw::BufferBinding::Source::ClockAnchors;
+                value.offset = c.c;
+                value.length = c.b;
+                resourcesChanged =
+                    bindings[c.index].source == raw::BufferBinding::Source::Buffer && bindings[c.index].object;
+                return raw::assignState(bindings[c.index], value);
+            });
+        break;
     case OpBufferOffset:
     case OpKernelBufferOffset:
         if (stage < 3 && c.index < 31)

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPlanAdapters.h"
+#import "RawMetalCounters.h"
+#include "TegraGM20BClockABI.h"
 
 namespace {
 
@@ -22,6 +24,11 @@ struct ReplayPlanSink {
                 [encoder setFragmentBufferOffset:binding.offset atIndex:slot];
             else
                 [encoder setBufferOffset:binding.offset atIndex:slot];
+            return;
+        }
+        if (binding.source == raw::BufferBinding::Source::ClockAnchors) {
+            const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
+            [encoder setBytes:&anchors length:sizeof anchors atIndex:slot];
             return;
         }
         if (binding.source == raw::BufferBinding::Source::Bytes) {

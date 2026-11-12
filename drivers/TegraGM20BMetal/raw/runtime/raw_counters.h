@@ -9,9 +9,9 @@
 //
 // A resolved sample is nanoseconds of mach_absolute_time, the domain of the real driver's samples (its sampleTimestamps:
 // answers one value for both clocks). PTIMER and the CPU's counter both count the 19.2 MHz oscillator (PTIMER 32 a tick,
-// raw_stamps.h; timebase-frequency 19200000), so the rate is exact and one reading of both, an anchor, places every unit.
-// The offset changes only when the GPU powers up again (the kernel restarts PTIMER from its clock, gpu_power.c
-// stamp_reseed): an anchor holds while each later reading lands where it says.
+// raw_stamps.h; timebase-frequency 19200000), so the rate is exact and one reading of both, an anchor, places every unit
+// of one power-up of the GPU. The kernel publishes each power-up's anchor (TegraGM20BClockABI.h): a sample takes the
+// newest one at or below its PTIMER value.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -28,10 +28,6 @@ constexpr uint64_t kMaxBufferBytes = 0x8000;
 constexpr uint32_t kPayload = 1;
 constexpr uint64_t kErrorValue = ~0ull;
 constexpr uint32_t kTimestampWords = 8;
-// A reading lands where an anchor places it within this much beyond the reading's own window, or the GPU powered up since
-constexpr uint64_t kAnchorSlackNs = 20000;
-// The kernel's and this process's conversions of mach_absolute_time to ns round apart by less than this
-constexpr uint64_t kClockRoundingNs = 1000;
 
 inline constexpr std::string_view kSetName = "timestamp";
 inline constexpr std::string_view kSetDescription = "A counter set containing only a GPU timestamp.";
@@ -124,30 +120,10 @@ inline Index sampleIndex(uint64_t index, uint64_t count)
     return index < count ? Index::Sample : Index::Invalid;
 }
 
-// One reading of PTIMER the kernel took (method 10), between two readings of the CPU's clock in nanoseconds
-struct Reading {
-    uint64_t before, units, after;
-};
-
 struct Anchor {
     uint64_t units = 0, ns = 0;
     bool valid = false;
 };
-
-inline Anchor anchorOf(const Reading &r)
-{
-    return {r.units, r.before + (r.after - r.before) / 2, r.units != 0 && r.after >= r.before};
-}
-
-// The reading of the narrowest window
-inline Reading narrowest(const Reading *readings, size_t count)
-{
-    Reading best = readings[0];
-    for (size_t i = 1; i < count; i++)
-        if (readings[i].units && (!best.units || readings[i].after - readings[i].before < best.after - best.before))
-            best = readings[i];
-    return best;
-}
 
 // A span of PTIMER units in nanoseconds, rounded toward minus infinity
 inline int64_t unitsToNs(int64_t units)
@@ -163,29 +139,6 @@ inline int64_t unitsToNs(int64_t units)
 inline uint64_t nanoseconds(const Anchor &a, uint64_t units)
 {
     return a.ns + uint64_t(unitsToNs(int64_t(units - a.units)));
-}
-
-// While the GPU is powered down GetTimestamp answers the kernel's clock (mach_absolute_time in ns), not PTIMER: the
-// samples to resolve were all taken before, so the anchor of their power-up holds. A powered GPU's reading is below the
-// CPU's clock, PTIMER having restarted from it at the wake and counting slower since.
-inline bool poweredDown(const Reading &r)
-{
-    return r.units && r.units + kClockRoundingNs >= r.before;
-}
-
-inline bool agrees(const Anchor &a, const Reading &r, uint64_t slackNs = kAnchorSlackNs)
-{
-    if (!a.valid || !r.units)
-        return false;
-    const uint64_t at = nanoseconds(a, r.units);
-    return at + slackNs >= r.before && at <= r.after + slackNs;
-}
-
-inline uint64_t resolved(const Record &r, const Anchor &a)
-{
-    if (!r.payload)
-        return 0;
-    return a.valid ? nanoseconds(a, r.units) : kErrorValue;
 }
 
 // Where a sample is taken, which engine writes it

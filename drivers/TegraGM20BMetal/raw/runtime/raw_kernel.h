@@ -20,6 +20,7 @@
 #include "raw_control_memory.h"
 
 struct TegraGM20BAbiZcullInfo;
+struct TegraGM20BAbiClockAnchors;
 
 namespace raw {
 
@@ -152,9 +153,9 @@ public:
     void markLost(uint32_t channel, uint32_t opened);
     // GetStatus: false when the kernel has no such channel (destroyed) or refused the call
     bool status(uint32_t channel, TegraGM20BAbiStatus &st);
-    // GetTimestamp: PTIMER now, in its own units (raw_stamps.h), or the kernel's clock while the GPU is powered down; false
-    // when the kernel refused the call or has no GPU time yet
-    bool ptimer(uint64_t &units);
+    // ClockAnchors ('CA', TegraGM20BClockABI.h): the GPU clock's anchors in the connection's fence page, read where the
+    // CPU maps it and at `gpuVa` in the connection's GPU address space; false without the method
+    bool clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint64_t &gpuVa);
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,

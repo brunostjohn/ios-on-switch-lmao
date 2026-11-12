@@ -19,6 +19,10 @@ struct NativePlanSink {
                 render->setBufferOffset(stage, slot, binding.offset);
             return;
         }
+        if (binding.source == raw::BufferBinding::Source::ClockAnchors) {
+            compute->setBytesAt(slot, binding.offset, binding.length);
+            return;
+        }
         if (binding.source == raw::BufferBinding::Source::Bytes) {
             const raw::Buffer &chunk = cb->_bytes.chunks[binding.chunk];
             if (!chunk.wc)

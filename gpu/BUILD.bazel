@@ -156,6 +156,7 @@ metal_plugin(
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
         GM20B_LAYOUT,
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//kits/SwitchGM20B:class_headers",
         "//kits/SwitchGM20B:SwitchGM20BCaps.h",
