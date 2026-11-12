@@ -15,7 +15,8 @@ struct SurfaceWriteCount {
 };
 
 static std::mutex gLock;
-static std::unordered_map<uint32_t, SurfaceWriteCount *> gSurfaces;  // IOSurfaceID -> its count, while a texture holds it
+// IOSurfaceID -> its count, while a texture holds it
+static std::unordered_map<uint32_t, SurfaceWriteCount *> gSurfaces;
 static std::atomic<uint32_t> gConverted{0};
 
 SurfaceWriteCount *holdSurfaceWrites(IOSurfaceRef s)
