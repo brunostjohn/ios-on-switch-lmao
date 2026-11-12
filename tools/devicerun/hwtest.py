@@ -118,6 +118,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.private_compression',
             'gpu.raw.alpha_to_coverage',
             'gpu.compile.shared',
+            'gpu.compile.first_draw',
             'gpu.sched.long_draw_bands',
             'gpu.sched.long_dispatch_pieces',
             'gpu.poster_targets',
