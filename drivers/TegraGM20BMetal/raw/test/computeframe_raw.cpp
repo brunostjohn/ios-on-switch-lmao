@@ -205,4 +205,3 @@ int computeframeRaw(char **argv)
             (unsigned long long)dev.stats.programsPlaced.load());
     return 0;
 }
-

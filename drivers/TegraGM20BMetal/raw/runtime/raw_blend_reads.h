@@ -30,8 +30,8 @@ inline bool operationReadsDestination(unsigned op)
 inline bool blendReadsDestination(const ColorKeyFields &c)
 {
     return c.dstRGB != 0 || c.dstAlpha != 0 || factorReadsDestination(c.srcRGB, false) ||
-           factorReadsDestination(c.srcAlpha, true) ||
-           operationReadsDestination(c.rgbOp) || operationReadsDestination(c.alphaOp);
+           factorReadsDestination(c.srcAlpha, true) || operationReadsDestination(c.rgbOp) ||
+           operationReadsDestination(c.alphaOp);
 }
 
 inline bool colorReadsDestination(const ColorKeyFields &c)

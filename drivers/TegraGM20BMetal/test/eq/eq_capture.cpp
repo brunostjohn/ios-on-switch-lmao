@@ -102,8 +102,9 @@ private:
                 uint32_t bytes = 0;
                 if (!d.bound(group, slot, addr, bytes))
                     continue;
-                const std::vector<uint32_t> words = dump(d, draw, "group " + std::to_string(group) + " cb" +
-                                                                        std::to_string(slot), addr, std::min<uint32_t>(bytes, 0x800));
+                const std::vector<uint32_t> words =
+                    dump(d, draw, "group " + std::to_string(group) + " cb" + std::to_string(slot), addr,
+                         std::min<uint32_t>(bytes, 0x800));
                 for (size_t k = 0; k + 4 <= words.size(); k += 4) {
                     const uint64_t va = words[k] | uint64_t(words[k + 1]) << 32;
                     if (words[k + 3] == 0 && words[k + 2] && words[k + 2] <= 0x10000 && kernel_model::model.host(va))

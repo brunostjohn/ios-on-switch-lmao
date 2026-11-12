@@ -68,8 +68,9 @@ float blend(unsigned src, unsigned dst, unsigned op, bool alpha, Pixel d)
 bool channelReads(unsigned src, unsigned dst, unsigned op, bool alpha)
 {
     const float first = blend(src, dst, op, alpha, kDestinations[0]);
-    return std::any_of(std::begin(kDestinations) + 1, std::end(kDestinations),
-                       [&](Pixel d) { return blend(src, dst, op, alpha, d) != first; });
+    return std::any_of(std::begin(kDestinations) + 1, std::end(kDestinations), [&](Pixel d) {
+        return blend(src, dst, op, alpha, d) != first;
+    });
 }
 
 // a source factor among DestinationColor..OneMinusDestinationAlpha against SourceColor or SourceAlpha as the destination's

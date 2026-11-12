@@ -120,5 +120,4 @@ const char *nmb_last_error(void)
 {
     return "no device";
 }
-
 }
