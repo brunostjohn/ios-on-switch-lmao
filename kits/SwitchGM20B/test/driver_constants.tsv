@@ -11,6 +11,7 @@ raw_gpu.cpp	kProgramWindow	policy	SET_PIPELINE_PROGRAM is a 32-bit offset from S
 raw_gpu.cpp	kHeapStep	policy	heap growth step
 raw_gpu.cpp	kHeapSlack	policy	instruction prefetch slack
 raw_gpu.cpp	kHeapAtOpen	policy	heap bound at open
+raw_gpu.cpp	kHeapCopiesWindow	policy	the program window after the pack's region that copied programs may take
 raw_gpu.cpp	kClientFirstShare	policy	allocation policy
 raw_gpu.cpp	kClientHeapFirstShare	policy	allocation policy
 raw_gpu.cpp	kInstanceWords	policy	push words per instance
