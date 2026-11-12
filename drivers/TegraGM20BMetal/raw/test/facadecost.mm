@@ -34,6 +34,8 @@ struct facadecount {
     uint64_t sends, locks, mallocs, frees;
 };
 
+extern "C" void mock_iokit_report(void);  // the mock kernel's: facadecount_mock_image names its image
+
 using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 
 @interface NSObject (SwitchRawEncodeProfile)
@@ -275,10 +277,14 @@ int main(int argc, char **argv)
     const auto start = reinterpret_cast<void (*)()>(dlsym(RTLD_DEFAULT, "facadecount_start"));
     const auto stop = reinterpret_cast<void (*)(facadecount *)>(dlsym(RTLD_DEFAULT, "facadecount_stop"));
     const auto sites = reinterpret_cast<SitesFn>(dlsym(RTLD_DEFAULT, "facadecount_sites"));
+    const auto mockImage = reinterpret_cast<void (*)(const void *)>(dlsym(RTLD_DEFAULT, "facadecount_mock_image"));
+    const auto mockCounts = reinterpret_cast<void (*)(uint64_t *, uint64_t *)>(dlsym(RTLD_DEFAULT, "facadecount_mock"));
     // without the interposers (a run under TSAN, which interposes the same calls) only the profile and the run itself
     const bool counting = image && start && stop;
     if (counting)
         image(reinterpret_cast<const void *>(&raw_metal_device_open));
+    if (counting && mockImage)
+        mockImage(reinterpret_cast<const void *>(&mock_iokit_report));
     else
         fprintf(stderr,
                 "facadecount.dylib is not preloaded (DYLD_INSERT_LIBRARIES): the facade's own counts are not taken\n");
@@ -450,6 +456,9 @@ int main(int argc, char **argv)
                 if (counting)
                     stop(&c);
                 cpuNs(mine1, others1);
+                uint64_t mockLocks = 0, mockMallocs = 0;
+                if (counting && mockCounts)
+                    mockCounts(&mockLocks, &mockMallocs);
                 const char *shape = hold ? "held" : "facade";
                 printf(
                     "facadecost d%u %s: sends %.2f locks %.2f mallocs %.2f frees %.2f blocks %.2f | cpu us recording "
@@ -457,6 +466,8 @@ int main(int argc, char **argv)
                     arms[a], shape, double(c.sends) / buffers, double(c.locks) / buffers, double(c.mallocs) / buffers,
                     double(c.frees) / buffers, hold ? heldBlocks : 0.0, double(mine1 - mine0) / 1e3 / buffers,
                     double(others1 - others0) / 1e3 / buffers);
+                printf("facadecost d%u %s: the mock kernel's under facade calls: locks %.2f mallocs %.2f\n", arms[a],
+                       shape, double(mockLocks) / buffers, double(mockMallocs) / buffers);
                 if (!hold)
                     continue;
                 const std::pair<const char *, double> counts[] = {{"held sends", double(c.sends)},

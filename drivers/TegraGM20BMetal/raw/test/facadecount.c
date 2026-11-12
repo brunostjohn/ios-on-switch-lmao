@@ -2,7 +2,8 @@
 // The raw facade's own Objective-C messages, locks and allocations, on every thread (raw/test/facadecost.mm): a dylib
 // whose interposers count a call when the facade's image made it. A message counts where objc_msgSend returns into the
 // facade (its link register); a lock or an allocation where a return address of its first frames lies in the facade,
-// so std::mutex::lock and operator new count for the facade code that called them. The facade must be its own image.
+// so std::mutex::lock and operator new count for the facade code that called them, unless the mock kernel's image lies
+// between (its own locks and allocations, the kernel's on a device: facadecount_mock). The facade is its own image.
 // Each count's facade return address also goes into a ring (facadecount_sites), which facadecost names by symbol.
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
@@ -11,6 +12,7 @@
 #include <os/lock.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #define DYLD_INTERPOSE(_replacement, _replacee)                                 \
@@ -27,7 +29,9 @@ struct facadecount {
 // [start, end) of the facade's __TEXT: read by the message trampoline below, so its layout is fixed
 uintptr_t facadecount_text[2];
 _Atomic uint64_t facadecount_sends;
-static _Atomic uint64_t locks, mallocs, frees;
+static _Atomic uint64_t locks, mallocs, frees, mockLocks, mockMallocs;
+// [start, end) of the mock kernel's __TEXT (facadecount_mock_image): what it does under a facade call is the kernel's
+static uintptr_t mockText[2];
 static _Atomic int counting;
 
 // the last kSites counted calls' facade return addresses, each tagged with its kind in the top byte
@@ -47,13 +51,16 @@ static void site(uintptr_t lr, uintptr_t kind)
     facadecount_ring[at & (kSites - 1)] = lr | kind << 56;
 }
 
-static uintptr_t fromFacade(const void *frame, int depth)
+// The facade return address of the first frames, and whether the mock kernel's image is between it and the call
+static uintptr_t fromFacade(const void *frame, int depth, bool *mock)
 {
     const uintptr_t *fp = frame;
+    *mock = false;
     for (int i = 0; i < depth && fp && !((uintptr_t)fp & 7); i++) {
         const uintptr_t lr = fp[1];
         if (lr >= facadecount_text[0] && lr < facadecount_text[1])
             return lr;
+        *mock |= lr >= mockText[0] && lr < mockText[1];
         fp = (const uintptr_t *)fp[0];
     }
     return 0;
@@ -93,8 +100,11 @@ static void noteLock(void)
 {
     if (!atomic_load_explicit(&counting, memory_order_relaxed))
         return;
-    const uintptr_t lr = fromFacade(__builtin_frame_address(0), 4);
-    if (lr) {
+    bool mock;
+    const uintptr_t lr = fromFacade(__builtin_frame_address(0), 4, &mock);
+    if (lr && mock)
+        atomic_fetch_add_explicit(&mockLocks, 1, memory_order_relaxed);
+    else if (lr) {
         atomic_fetch_add_explicit(&locks, 1, memory_order_relaxed);
         site(lr, kLock);
     }
@@ -141,9 +151,15 @@ static void countAllocations(uint32_t type, uintptr_t a, uintptr_t b, uintptr_t 
         kDeallocate = 4
     };
 
-    const uintptr_t lr = type & (kAllocate | kDeallocate) ? fromFacade(__builtin_frame_address(0), 24) : 0;
+    bool mock = false;
+    const uintptr_t lr = type & (kAllocate | kDeallocate) ? fromFacade(__builtin_frame_address(0), 24, &mock) : 0;
     if (!lr)
         return;
+    if (mock) {
+        if (type & kAllocate)
+            atomic_fetch_add_explicit(&mockMallocs, 1, memory_order_relaxed);
+        return;
+    }
     if (type & kAllocate) {
         atomic_fetch_add_explicit(&mallocs, 1, memory_order_relaxed);
         site(lr, kMalloc);
@@ -164,6 +180,25 @@ void facadecount_image(const void *inside)
     facadecount_text[1] = (uintptr_t)(text ? text : (const uint8_t *)info.dli_fbase) + size;
 }
 
+// The mock kernel's image: the one that holds `inside`
+void facadecount_mock_image(const void *inside)
+{
+    Dl_info info;
+    if (!dladdr(inside, &info))
+        return;
+    unsigned long size = 0;
+    const uint8_t *text = getsegmentdata((const struct mach_header_64 *)info.dli_fbase, "__TEXT", &size);
+    mockText[0] = (uintptr_t)info.dli_fbase;
+    mockText[1] = (uintptr_t)(text ? text : (const uint8_t *)info.dli_fbase) + size;
+}
+
+// The locks and allocations the mock kernel made under facade calls since facadecount_start
+void facadecount_mock(uint64_t *mockLocksOut, uint64_t *mockMallocsOut)
+{
+    *mockLocksOut = atomic_load(&mockLocks);
+    *mockMallocsOut = atomic_load(&mockMallocs);
+}
+
 void facadecount_start(void)
 {
     atomic_store(&facadecount_sends, 0);
@@ -171,6 +206,8 @@ void facadecount_start(void)
     atomic_store(&locks, 0);
     atomic_store(&mallocs, 0);
     atomic_store(&frees, 0);
+    atomic_store(&mockLocks, 0);
+    atomic_store(&mockMallocs, 0);
     malloc_logger = countAllocations;
     atomic_store(&counting, 1);
 }
