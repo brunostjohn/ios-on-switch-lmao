@@ -330,7 +330,8 @@ retry:
             dependency = {};
             continue;
         }
-        if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_VIC || dependency.engine == SWITCH_GPU_ENGINE_NVDEC))
+        if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_VIC || dependency.engine == SWITCH_GPU_ENGINE_NVDEC ||
+                       dependency.engine == SWITCH_GPU_ENGINE_NVENC))
             continue;
         if (!ready && dependency.engine == SWITCH_GPU_ENGINE_GM20B) {
             const int covered = dependencies.covered(dependency);
@@ -393,7 +394,8 @@ retry:
     if (acquire)
         n += tegra_host1x_op_wait_syncpt(words + n, acquire->syncpt, acquire->threshold);
     for (uint32_t i = 0; i < needed; ++i) {
-        if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVDEC)
+        if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVDEC ||
+            dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC)
             n += tegra_host1x_op_wait_syncpt(words + n, dependencies.tokens[i].queue,
                                              static_cast<uint32_t>(dependencies.tokens[i].value));
     }

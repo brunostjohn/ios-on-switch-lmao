@@ -21,8 +21,8 @@ bool switch_nvdec_native_output_ready()
 // idle: no engine has work recorded on it at all, so its memory may be given back.
 int switch_nvdec_output_reusable(const TegraNVDECBlock *block, bool *idle)
 {
-    constexpr uint32_t kOrdered =
-        1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_VIC | 1u << SWITCH_GPU_ENGINE_GM20B;
+    constexpr uint32_t kOrdered = 1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_VIC |
+                                  1u << SWITCH_GPU_ENGINE_GM20B | 1u << SWITCH_GPU_ENGINE_NVENC;
     uint32_t engines = 0, owners = 0;
     const int read = switch_gpu_backing_pending(block->backing, SWITCH_GPU_BACKING_WRITE, &engines, &owners);
     if (read)

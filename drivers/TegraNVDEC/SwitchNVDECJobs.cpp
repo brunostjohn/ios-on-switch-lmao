@@ -279,7 +279,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
                 dependency = {};
                 continue;
             }
-            if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_NVDEC || dependency.engine == SWITCH_GPU_ENGINE_VIC))
+            if (!ready && (dependency.engine == SWITCH_GPU_ENGINE_NVDEC || dependency.engine == SWITCH_GPU_ENGINE_VIC ||
+                           dependency.engine == SWITCH_GPU_ENGINE_NVENC))
                 continue;
             if (!ready && dependency.engine == SWITCH_GPU_ENGINE_GM20B) {
                 const int covered = dependencies.covered(dependency);
@@ -328,7 +329,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
         if (dependencies.acquire(&bridgeSyncpoint, &bridgeThreshold))
             n += tegra_host1x_op_wait_syncpt(work.words + n, bridgeSyncpoint, bridgeThreshold);
         for (uint32_t i = 0; i < needed; ++i)
-            if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_VIC)
+            if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_VIC ||
+                dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC)
                 n += tegra_host1x_op_wait_syncpt(work.words + n, dependencies.tokens[i].queue,
                                                  static_cast<uint32_t>(dependencies.tokens[i].value));
         const uint64_t slot = static_cast<uint64_t>(gQueue.tail()) * kSetupStride;

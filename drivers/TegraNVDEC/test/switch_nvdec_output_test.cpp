@@ -150,6 +150,15 @@ TEST_F(SwitchNVDECOutputTest, EngineWorkTheNextJobOrdersKeepsTheAllocation)
     EXPECT_EQ(allocations, 0u);
 }
 
+// NVENC still reading the picture in place (a transcode): NVDEC's next job waits for it on NVENC's syncpoint.
+TEST_F(SwitchNVDECOutputTest, AnEncoderStillReadingKeepsTheAllocation)
+{
+    pendingEngines = 1u << SWITCH_GPU_ENGINE_NVENC;
+    EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), 0);
+    unchanged();
+    EXPECT_EQ(allocations, 0u);
+}
+
 TEST_F(SwitchNVDECOutputTest, ExportedAllocationGetsIndependentReplacement)
 {
     cpuOwnerCount = 1;

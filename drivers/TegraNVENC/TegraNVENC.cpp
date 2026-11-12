@@ -406,6 +406,8 @@ void bringUp(void *, wait_result_t)
     }
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
+    if (!tegra_nvenc_engine_start())
+        IOLog("TegraNVENC: E2 could not register as a memory engine; native pictures go through VIC\n");
     tegra_nvenc_publish();
 }
 }  // namespace

@@ -10,11 +10,10 @@
 #include <stdint.h>
 #include <kern/task.h>
 #include "TegraNVENCABI.h"
+#include "../TegraGM20B/SwitchGpuBacking.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
 struct switch_dma_buffer;
-
-struct switch_gpu_backing;
 
 // One buffer NVENC reads or writes: any RAM pages, mapped at `iova` in NVENC's address space, 64 KiB granular, zeroed
 // and clean in the caches when allocated. Its backing is what another engine writing it (VIC, an input picture) is
@@ -71,6 +70,12 @@ const char *tegra_nvenc_app_dump(volatile uint8_t *nvenc, uint32_t codec);
 
 int tegra_nvenc_publish(void);  // E3
 }
+
+// TegraNVENCEngine.cpp: NVENC as an engine of SwitchGpuBacking, its jobs' fences the tokens of the memory they read,
+// which other engines and the CPU wait for.
+bool tegra_nvenc_engine_start(void);
+bool tegra_nvenc_engine_ready(void);
+switch_gpu_backing_token tegra_nvenc_token(uint32_t fence);
 
 // TegraNVENCSource.cpp: a checked submit's source surface written into its input buffer by VIC. 0, what the job waits
 // for and the route (TEGRA_NVENC_INPUT_*), or a negative errno-style value and the reason. `last`: the connection's last

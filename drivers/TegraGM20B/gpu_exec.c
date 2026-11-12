@@ -239,8 +239,10 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
 					tgm_hold_need(tgm_gpu.device, source->chid);
 			}
 			mutex_unlock(&tgm_live_lock);
-		} else if (token->engine == SWITCH_GPU_ENGINE_VIC || token->engine == SWITCH_GPU_ENGINE_NVDEC ||
-			   token->engine == SWITCH_GPU_ENGINE_DISPLAY) {
+		} else if (token->engine == SWITCH_GPU_ENGINE_VIC ||
+			   token->engine == SWITCH_GPU_ENGINE_NVDEC ||
+			   token->engine == SWITCH_GPU_ENGINE_DISPLAY ||
+			   token->engine == SWITCH_GPU_ENGINE_NVENC) {
 			u32 words[TGM_SYNCPT_WAIT_DWORDS];
 			u32 n;
 			if (token->queue > 255)
