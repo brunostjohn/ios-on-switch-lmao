@@ -261,7 +261,6 @@ ios_binary(
         "-O2",
         "-std=c++17",
         "-DSWITCH_RAW_HARNESS_MARKS",
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-Wall",
         "-Wextra",
         "-I",

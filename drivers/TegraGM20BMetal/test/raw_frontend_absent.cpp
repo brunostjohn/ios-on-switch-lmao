@@ -8,7 +8,6 @@
 #import <Metal/Metal.h>
 #import <objc/message.h>
 #include "NativeBridgeMetalFrontend.h"
-#include "bridge/NativeMetalBlend.h"
 #include "bridge/NativeMetalObjects.h"
 
 static id standInAnswer(id object, const char *selector)
@@ -122,11 +121,4 @@ const char *nmb_last_error(void)
     return "no device";
 }
 
-// the translator's blend colour words: no scenario here draws with a constant blend colour
-void switch_nmb_blend_color_words(const float color[4], uint32_t words[8])
-{
-    (void)color;
-    for (int i = 0; i < 8; i++)
-        words[i] = 0;
-}
 }

@@ -42,7 +42,7 @@ FACADE_RUNTIME=("$RAW/runtime/raw_semantic_plan.cpp" "$RAW/runtime/raw_semantic_
 COMPLETION=("$RAW/runtime/raw_record_parts.cpp" "$RAW/runtime/raw_direct.cpp" "$RAW/runtime/raw_direct_compute.cpp" "$RAW/runtime/raw_emit.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp")
 # the raw facade (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
 FACADE=("$RAW"/runtime/Raw*.mm "$RAW/runtime/SwitchSharedEvent.mm")
-LIBS=(-Wl,-U,_switch_nmb_blend_color_words -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation)
+LIBS=(-L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation)
 xcrun clang++ "${OBJC[@]}" -x objective-c++ "$HERE/nvkframe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/nvkframe" 2>&1 | awk '!/duplicate libraries/'
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/rawframe.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_draw_bands.cpp" "$RAW/runtime/raw_job_uses.cpp" "$RAW/runtime/raw_transfer.cpp" "$RAW/runtime/raw_split.cpp" "$RAW/runtime/raw_variants.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_kernel_job.cpp" "$RAW/runtime/raw_resource_set.cpp" "$RAW/runtime/raw_state_segment.cpp" "$RAW/runtime/raw_encoder_state.cpp" "$RAW/runtime/raw_shared_events.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" \
     "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "${LIBS[@]}" -o "$OUT/rawframe"
@@ -131,7 +131,7 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/edgecheck.cpp" 
     "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_kernel_job.cpp" "$RAW/runtime/raw_resource_set.cpp" "$RAW/runtime/raw_state_segment.cpp" "$RAW/runtime/raw_encoder_state.cpp" "$RAW/runtime/raw_shared_events.cpp" \
     "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" \
     "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_record_parts.cpp" \
-    "$RAW/runtime/raw_emit.cpp" "${LIBS[@]}" -Wl,-U,_switch_nmb_blend_color_words -o "$OUT/edgecheck"
+    "$RAW/runtime/raw_emit.cpp" "${LIBS[@]}" -o "$OUT/edgecheck"
 # kernelcheck: the direct compile of every compute dispatch shape of a corpus (runtime/raw_direct_compute.h), its kernels against the pack
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/kernelcheck.mm" "$RAW/runtime/RawDirect.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_pack.cpp" "${COMPLETION[@]}" -x none "$BRIDGE" "${LIBS[@]}" \

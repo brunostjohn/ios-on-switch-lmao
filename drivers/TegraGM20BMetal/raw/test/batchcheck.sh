@@ -37,7 +37,7 @@ for source in gpu transfer split kernel shared_events alias arena pack ycbcr zet
 done
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" \
     "$HERE/batchcheck.cpp" "${SOURCES[@]}" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
-    -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -Wl,-U,_switch_nmb_blend_color_words -lobjc -framework Foundation -framework Metal \
+    -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal \
     -framework IOSurface -framework IOKit -framework CoreFoundation -o "$OUT/batchcheck"
 for mode in legacy native; do
     if [[ $mode == native ]]; then export MOCK_NATIVE_JOBS=1; else unset MOCK_NATIVE_JOBS; fi

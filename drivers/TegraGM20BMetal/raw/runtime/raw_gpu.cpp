@@ -15,7 +15,7 @@
 #include "raw_dynamic_push.h"
 #include "raw_keyline_probe.h"
 #include "raw_glass_probe.h"
-#include "../../../NativeMetal/bridge/NativeMetalBlend.h"
+#include "raw_blend_color.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_block_base.h"
@@ -5704,15 +5704,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
         if (r.blendColorWord && blendWordsDirty_) {
-#if defined(SWITCH_RAW_HARNESS_MARKS)
-            if (!switch_nmb_blend_color_words) {
-                *why = "extended blend color conversion unavailable";
-                return false;
-            }
-#endif
             float color[4];
             memcpy(color, blendColor_, sizeof color);
-            switch_nmb_blend_color_words(color, blendWords_);
+            blendColorWords(color, blendWords_);
             blendWordsDirty_ = false;
         }
         patchBlendPush(r, blendColor_, blendWords_, want);

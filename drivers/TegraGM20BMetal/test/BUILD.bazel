@@ -373,6 +373,7 @@ host_test(
         "raw_device_recovery_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -417,7 +418,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -440,6 +440,7 @@ host_test(
         "raw_device_harness.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -484,7 +485,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -506,6 +506,7 @@ host_test(
         "raw_device_harness.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -550,7 +551,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -573,6 +573,7 @@ host_test(
         "raw_device_loops_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -617,7 +618,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -640,6 +640,7 @@ host_test(
         "raw_device_harness.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -684,7 +685,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -704,6 +704,7 @@ host_test(
         "raw_device_layers_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -748,7 +749,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -1877,6 +1877,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_storage.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_storage.h",
@@ -2500,6 +2501,7 @@ host_test(
         "raw_kernel_model.h",
         "raw_surface_image_test.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -2545,7 +2547,6 @@ host_test(
     ],
     cxx_std = "c++17",
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "IOKit",
         "-framework",
@@ -2677,6 +2678,7 @@ host_test(
         "raw_direct_push_test.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_push.h",
@@ -2684,6 +2686,15 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
     ],
     copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_blend_color_test",
+    srcs = [
+        "raw_blend_color_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
+    ],
     cxx_std = "c++17",
 )
 
@@ -2981,6 +2992,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_key.h",
         "//drivers/NativeMetal:MetallibSlice.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
@@ -3035,6 +3047,7 @@ host_test(
         "//drivers/TegraGM20BMetal:compiler/compiler_store.h",
         "//drivers/NativeMetal:MetallibSlice.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
@@ -3081,6 +3094,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_lock.h",
         "//drivers/NativeMetal:MetallibSlice.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",

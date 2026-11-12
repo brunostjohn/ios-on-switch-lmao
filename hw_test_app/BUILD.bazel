@@ -492,6 +492,7 @@ cc_library(
         "bench/bench_twod.cpp",
         "bench/switch_bench.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -543,7 +544,6 @@ cc_library(
         "-Idrivers/TegraGM20B",
     ],
     linkopts = [
-        "-Wl,-U,_switch_nmb_blend_color_words",
         "-framework",
         "CoreFoundation",
         "-framework",
