@@ -231,6 +231,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         if (!t)
             continue;
         facts.color[c] = {t, a.level, a.loadAction, a.storeAction, a.clearColor, a.resolveTexture};
+        if ([(id)t isKindOfClass:[RMTexture class]] && ((RMTexture *)t)->_rawOk && ((RMTexture *)t)->_raw.comptags)
+            facts.compressed |= uint8_t(1u << c);
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;

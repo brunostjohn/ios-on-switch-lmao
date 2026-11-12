@@ -1358,7 +1358,9 @@ host_test(
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++20",
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalCommandBuffer.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncoder.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPrivateComp.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
     ],

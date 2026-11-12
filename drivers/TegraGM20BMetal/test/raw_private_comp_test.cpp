@@ -90,16 +90,61 @@ TEST(RawPrivateComp, AStateWithABarrierFormKeepsTheCompressedTarget)
     EXPECT_EQ(raw::storageSlotsToPlain(0x6, false), 0x6);
 }
 
-TEST(RawPrivateComp, TheMoveRunsBeforeTheRawEncodeWhichMayNotAskForIt)
+// A compositor drawing a no-twin fetch pass over a private target every frame, keeping the target or making a new one
+// of the same shape each frame: the move runs once, and the target, or every later one, is plain from then on
+uint32_t movesOver(uint32_t frames, bool newTargetEachFrame)
 {
+    raw::PlainShapes plain;
+    const raw::PrivateShape shape{70, 64, 64, 5};
+    uint32_t moves = 0;
+    Target target;
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+        if (!frame || newTargetEachFrame)
+            target = Target{4, 1, !plain.holds(shape)};
+        if (raw::storageSlotsToPlain(0x1, false) & 1 && target.comptags) {
+            plain.add(shape);
+            target.comptags = false;
+            ++moves;
+        }
+        EXPECT_EQ(raw::storageViewMismatch(4, 1, target), raw::StorageFallback::None) << "frame " << frame;
+    }
+    return moves;
+}
+
+TEST(RawPrivateComp, AStorageTargetMovesOnceEverAndItsShapeIsMadePlainFromThen)
+{
+    EXPECT_EQ(movesOver(1, false), 1u);
+    EXPECT_EQ(movesOver(2, false), 1u) << "the second frame does no move";
+    EXPECT_EQ(movesOver(100, false), 1u);
+    EXPECT_EQ(movesOver(2, true), 1u) << "the second frame's new target is made plain";
+    EXPECT_EQ(movesOver(100, true), 1u);
+    raw::PlainShapes plain;
+    plain.add({70, 64, 64, 5});
+    EXPECT_FALSE(plain.holds({70, 64, 32, 5}));
+    EXPECT_FALSE(plain.holds({80, 64, 64, 5}));
+}
+
+TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRawEncode)
+{
+    const std::string record = SourceText("../raw/runtime/RawMetalCommandBuffer.mm");
+    EXPECT_THAT(record, HasSubstr("if (cmd.op == OpPipeline && _recordedPass < _passes.size() && "
+                                  "_passes[_recordedPass].compressed)\n        rmNoteStorageTargets(self, "
+                                  "_passes[_recordedPass], cmd);"));
+    const std::string pass = SourceText("../raw/runtime/RawMetalEncoder.mm");
+    EXPECT_THAT(pass, HasSubstr("facts.compressed |= uint8_t(1u << c);"));
     const std::string submit = SourceText("../raw/runtime/RawMetalSubmit.mm");
     EXPECT_THAT(submit, HasSubstr("rmStorageTargetsPlain(cb, range.from, range.to);\n        const bool encoded = "
                                   "encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);"));
-    const std::string scan = Body(SourceText("../raw/runtime/RawMetalPrivateComp.mm"), "void rmStorageTargetsPlain(");
-    EXPECT_THAT(scan, HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr)"));
-    EXPECT_THAT(scan, HasSubstr("rmTexturePlain(t)"));
-    const std::string encode = SourceText("../raw/runtime/RawMetalEncode.mm");
-    EXPECT_THAT(encode, HasSubstr("tRawEncoding = true;"));
+    const std::string facade = SourceText("../raw/runtime/RawMetalPrivateComp.mm");
+    const std::string note = Body(facade, "static void notePipeline(");
+    EXPECT_THAT(note, HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed"));
+    EXPECT_THAT(note, HasSubstr("cb->_scanStorageTargets = true;")) << "a variant still being made is looked at later";
+    const std::string move = Body(facade, "void rmStorageTargetsPlain(");
+    EXPECT_THAT(move, HasSubstr("if (cb->_scanStorageTargets)"));
+    EXPECT_THAT(move, HasSubstr("gPlainShapes.add("));
+    EXPECT_THAT(move, HasSubstr("rmTexturePlain(t)"));
+    EXPECT_THAT(Body(facade, "uint32_t privateCompressedKind("), HasSubstr("gPlainShapes.holds("));
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalEncode.mm"), HasSubstr("tRawEncoding = true;"));
 }
 
 }  // namespace

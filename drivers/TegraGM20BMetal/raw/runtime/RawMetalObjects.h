@@ -220,6 +220,7 @@ struct RMPass {
     uint32_t clearStencil;
     NSUInteger width, height;
     raw::SamplePositions positions;
+    uint8_t compressed = 0;  // colour attachments on compressed memory as the pass was made (raw_private_comp.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -292,6 +293,10 @@ struct RMSharedEventWait {
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
+    uint32_t _recordedPass;       // the OpRender the draws being recorded belong to
+    // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
+    std::vector<RMTexture *> _plainForStorage;
+    bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;

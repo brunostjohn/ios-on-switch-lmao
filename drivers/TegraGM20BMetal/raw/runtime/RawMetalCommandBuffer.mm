@@ -112,6 +112,8 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)record:(const Cmd &)cmd
 {
+    if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes[_recordedPass].compressed)
+        rmNoteStorageTargets(self, _passes[_recordedPass], cmd);
     if (_plan.record(cmd, _extra)) {
         std::vector<raw::ResourceUse> uses;
         if (isPlanDraw(cmd.op)) {
@@ -162,6 +164,7 @@ static void giveRecording(RMCommandBuffer *b)
                                        static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
+            _recordedPass = cmd.x;
             const RMPass &pass = _passes[cmd.x];
             for (const RMPass::Color &a : pass.color)
                 if (a.texture)

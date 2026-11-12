@@ -13,6 +13,8 @@
 // memory. Work already submitted keeps the old header and memory, which stay until the texture goes.
 #pragma once
 #include <cstdint>
+#include <set>
+#include <tuple>
 #include "raw_comp.h"
 #include "raw_kernel.h"
 
@@ -44,6 +46,33 @@ constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin)
 {
     return barrierTwin ? 0 : storageBits;
 }
+
+// What a target is made for, by its descriptor: a target of the same shape as one a storage form needed plain is made
+// plain, so an owner that makes such a target again (a compositor's per-frame target) moves none
+struct PrivateShape {
+    uint64_t format = 0, width = 0, height = 0, usage = 0;
+
+    bool operator<(const PrivateShape &o) const
+    {
+        return std::tie(format, width, height, usage) < std::tie(o.format, o.width, o.height, o.usage);
+    }
+};
+
+class PlainShapes {
+public:
+    bool holds(const PrivateShape &s) const
+    {
+        return shapes_.count(s) != 0;
+    }
+
+    void add(const PrivateShape &s)
+    {
+        shapes_.insert(s);
+    }
+
+private:
+    std::set<PrivateShape> shapes_;
+};
 
 struct PrivateComp {
     Bo bo;

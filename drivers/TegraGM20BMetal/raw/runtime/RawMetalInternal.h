@@ -361,8 +361,12 @@ extern thread_local bool tRawEncoding;
 uint32_t privateCompressedKind(MTLTextureDescriptor *d);
 bool rmTexturePlain(RMTexture *t);
 void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
-// Before a raw range encodes: the compressed attachments its draws bind as storage images with no barrier form to take
-// (raw_private_comp.h storageSlotsToPlain) move to plain memory, which an encode may not ask for
+// A pipeline bound (OpPipeline `binding`) in `pass`, which has compressed attachments: the attachments its pipeline binds
+// as storage images with no barrier form to take (raw_private_comp.h storageSlotsToPlain) join the command buffer's
+// _plainForStorage; a variant still being made marks the command buffer for a look at its draws before the encode
+void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &binding);
+// Before a raw range encodes, which may not ask for a move: those move to plain memory, and their shape is made plain
+// from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
 
