@@ -17,6 +17,12 @@
     },
     "useCountFlags": {
       "doc": "The byte whose bit 5 is kIOSurfaceProhibitUseCount: a surface made with it logs and ignores every use-count change (the IOSurface log line 'Attempt to change IOSurface useCount while kIOSurfaceProhibitUseCount is set, ignored')."
+    },
+    "parent": {
+      "doc": "The parent surface whose memory descriptor a child surface was made over (0: none): the child's own seed does not move when its parent is written."
+    },
+    "memoryRegions": {
+      "doc": "The address ranges of the creating task's memory a surface was made over (0: none), which that task writes without IOSurfaceLock; IOSurface moves no seed for them."
     }
   },
   "functions": {
@@ -170,6 +176,12 @@
       "doc": "IOSurface::getUseCount(): both categories' counts summed, what IOSurfaceIsInUse tests for nonzero",
       "symbols": [
         "switch_surface_use_count"
+      ]
+    },
+    "seed": {
+      "doc": "IOSurface::getSeed(): the shared entry's +0xc word, which IOSurface::lock moves for a lock without kIOSurfaceLockReadOnly, the device write end moves for an engine's write, and a surface made over its creator's memory starts at 1; the entry is zeroed when made, so a surface nothing wrote reads 0",
+      "symbols": [
+        "tegra_gm20b_ios_seed"
       ]
     }
   }

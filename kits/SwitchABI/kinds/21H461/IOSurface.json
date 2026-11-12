@@ -11,7 +11,9 @@
     "baseOffset": "0x168",
     "clientMemory": "0x150",
     "clientTask": "0x170",
-    "useCountFlags": "0x3b2"
+    "useCountFlags": "0x3b2",
+    "parent": "0x358",
+    "memoryRegions": "0x350"
   },
   "addresses": {
     "protection": "0xfffffff005b9d2fc",
@@ -36,7 +38,8 @@
     "element_height": "0xfffffff005b9ebec",
     "use_count_increment": "0xfffffff005b9f758",
     "use_count_decrement": "0xfffffff005b9f814",
-    "use_count": "0xfffffff005b9f9e0"
+    "use_count": "0xfffffff005b9f9e0",
+    "seed": "0xfffffff005ba4f6c"
   },
   "hints": {
     "functions": {
@@ -154,6 +157,11 @@
         "at": "0xfffffff005b9f9e0",
         "body": "f940bc08 f9400d08 d360fd09 0b080120 d65f03c0",
         "why": "IOSurface::getUseCount(): the shared entry's +0x18 low and high words added; selector 16 (0xfffffff005bae1dc) returns it; GOT entry 0xfffffff006f79ec8"
+      },
+      "seed": {
+        "at": "0xfffffff005ba4f6c",
+        "body": "f940bc08 b9400d00 d65f03c0",
+        "why": "IOSurface::getSeed(): ldr x8, [x0, #0x178] (the shared entry); ldr w0, [x8, #0xc]: the word IOSurface::lock (0xfffffff005b9d81c), the device write end (0xfffffff005ba0ff4), the allocation over client memory (0xfffffff005b9c408) and the seed increment pair (0xfffffff005b9d6b4, 0xfffffff005b9d704) add 1 to; between the +0x3b2 flag readers and the +0x10 reader, the accessor run 24B119 has at 0xfffffff009af6940. The 0xb8-byte shared entry is zeroed when made (0xfffffff005bac818..834)"
       }
     },
     "constants": {
@@ -180,6 +188,18 @@
         "at": "0xfffffff005b9f774",
         "word": "394ec80b",
         "why": "ldrb w11, [x0, #0x3b2] then tbnz w11, #5 in incrementUseCount: the prohibit flag every use-count change tests (24B119: +0x3d2)"
+      },
+      "parent": {
+        "value": "0x358",
+        "at": "0xfffffff005b9c240",
+        "word": "f941ac08",
+        "why": "ldr x8, [x0, #0x358] at the head of the memory allocation init calls (0xfffffff005b999e4): a child takes its parent's descriptor (+0x30 of the parent) and no seed moves; the use counts climb the same chain (24B119: +0x378)"
+      },
+      "memoryRegions": {
+        "value": "0x350",
+        "at": "0xfffffff005b9c31c",
+        "word": "f941aa68",
+        "why": "ldr x8, [x19, #0x350] in the memory allocation when clientMemory is 0: each 16-byte range of the creating task (+0x170) is checked page-aligned and the descriptor made over them (0xfffffff005b9c5b0), with no seed move, unlike the clientMemory branch (0xfffffff005b9c408) (24B119: +0x370)"
       }
     }
   }
