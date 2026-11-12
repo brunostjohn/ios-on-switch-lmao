@@ -176,6 +176,7 @@ void planeDropOverlays(PlaneSet &p, unsigned windows)
 // which of the last two sets the boundary took is open, held for the frame end that settles it (newest wins).
 bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
 {
+    mediaFlipFromGate();
     if (planesAbandoned)
         return false;
     if (planeRecovering) {

@@ -146,6 +146,7 @@ int windowProbePost(const display_window_probe::Plan &plan, const char *&why)
     }
     s.plan = plan;
     s.busyReason = nullptr;
+    mediaFlipFromGate();
     native_planes::Image heaviest;
     PlaneSet set = {};
     set.window[0].on = display_window_probe::heaviestOverlay(plan.step, plan.steps, heaviest);
@@ -308,6 +309,7 @@ void windowProbeRequest()
 void windowProbeShow(const display_window_probe::Step &step)
 {
     withdrawCompletionFlip();
+    mediaFlipFromGate();
     windowProbeWriteA(step.a);
     windowProbeWriteB(step.b);
     windowProbe.extras.apply(dc, step.extra, step.extras);
@@ -318,6 +320,7 @@ void windowProbeShow(const display_window_probe::Step &step)
 void windowProbeRestoreWindows()
 {
     withdrawCompletionFlip();
+    mediaFlipFromGate();
     windowProbe.extras.restore(dc);
     const WindowProbeState &s = windowProbe;
     dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);

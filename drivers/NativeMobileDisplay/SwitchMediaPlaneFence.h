@@ -5,8 +5,8 @@
 // ordered in VIC's stream (WAIT_SYNCPT on NVDEC's syncpoint). Included in the class body after
 // NativePlaneFenceDisplay.h; runs under the family's work-loop gate.
 //
-// The completion is native_legacy_gpu_complete, as the bridge fence's: it only signals gpuDoneSource, so
-// finishPlaneFence still runs on the work loop. It comes once the engines have written the surface, before their own
+// The completion is native_legacy_gpu_complete, as the bridge fence's: it signals gpuDoneSource for finishPlaneFence
+// on the work loop, and writes the set itself when the gate armed it (SwitchMediaCompletionFlipDisplay.h). It comes once the engines have written the surface, before their own
 // results are filed, so a producer failure reported after that is not seen (the bridge fence would have seen it).
 
 // True: armed, or refused for a producer that already failed (whose error is completed here): one completion comes.
@@ -20,7 +20,7 @@ bool planeMediaFence(const PlaneSet &p)
     for (unsigned i = 0; i < count; ++i)
         if (producers[i].engine != SWITCH_GPU_ENGINE_VIC && producers[i].engine != SWITCH_GPU_ENGINE_NVDEC)
             return false;
-    const int error = switch_host1x_token_fence(producers, count, native_legacy_gpu_complete, this);
+    const int error = planeFenceWithMediaFlip(p, producers, count);
     if (error == -22 || error == -16)
         return false;
     if (error)

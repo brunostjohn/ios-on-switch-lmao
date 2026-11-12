@@ -66,7 +66,8 @@ struct Display {
     int planeCsc[2][2] = {{-1, -1}, {-1, -1}};
     uint32_t planeBlendSaved[3] = {0x00ff0000u | 255, 0, 0}, pitchActControl = UINT32_MAX;
     uint64_t planeRequestedAt = 0, frameEnds = 10;
-    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, planeUnderflowRun = 0, kicks = 0, withdrawals = 0;
+    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, planeUnderflowRun = 0, kicks = 0, withdrawals = 0,
+             mediaFromGate = 0;
     uint64_t retiredUnshown = 0;
 
     struct Ring {
@@ -128,6 +129,8 @@ struct Display {
     static bool columnScanBusy() { return false; }
     static bool windowProbeHolds() { return false; }
     void withdrawCompletionFlip() { ++withdrawals; }
+    void mediaFlipFromGate() { ++mediaFromGate; }
+    static bool mediaFlipIdle() { return true; }
     static bool planeWindowIdle() { return false; }
     void scanoutMemoryBarrier() {}
     void planeReleaseIdle() {}
@@ -256,6 +259,7 @@ TEST(LandscapeDisplay, EnterWaitsForAQuietFrameEndThenMovesBothWindowsInOneReque
     const unsigned withdrawals = d.withdrawals;
     d.landscapeFrameEnd();
     EXPECT_GT(d.withdrawals, withdrawals) << "window A's assembly copy changes: no completion flip may promote it";
+    EXPECT_GT(d.mediaFromGate, 0u) << "windows B and C change: no media flip may be left armed";
     EXPECT_FALSE(d.landscapeState.wanted);
     EXPECT_TRUE(d.landscapeState.switching);
     EXPECT_TRUE(d.landscapeHoldsKicks());

@@ -132,6 +132,9 @@ struct Display {
         ++withdrawals;
     }
 
+    void mediaFlipFromGate()
+    {}
+
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
 #include "../SwitchPlaneAdmissionDrop.h"

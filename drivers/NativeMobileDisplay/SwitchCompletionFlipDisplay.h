@@ -50,6 +50,7 @@ void startCompletionFlip()
         panic("SwitchDisplay: no lock for window A's completion flips");
     __atomic_store_n(&completionFlipLock, lock, __ATOMIC_RELEASE);
     flipTotalsRegister();
+    mediaFlipTotalsRegister();
 }
 
 bool completionFlipIdle() const
@@ -59,7 +60,7 @@ bool completionFlipIdle() const
 
 bool completionFlipOut() const
 {
-    return !completionFlipIdle();
+    return !completionFlipIdle() || !mediaFlipIdle();
 }
 
 // Armed only when presentEntry would write this frame at once whatever latches meanwhile: no hold, no window B change
@@ -69,7 +70,7 @@ bool completionFlipMay(int entry)
     if (completionFlipsRefused || !rotated || !rotationLatched || !doubleBuffer ||
         (entry >= kSlot0 && !directAttached) || hwSuspended || gPanicRestore.panicking || planeNextSet ||
         probeRequest || probe.active() || columnScanBusy() || windowProbeBusy() || landscapeOn() ||
-        landscapeHoldsKicks())
+        landscapeHoldsKicks() || !mediaFlipIdle())
         return false;
     if (ring.held != kNoBuffer || ring.superseded != kNoBuffer)
         return false;
@@ -85,7 +86,7 @@ bool armCompletionFlip(int entry)
         startCompletionFlip();
     if (!completionFlipMay(entry))
         return false;
-    if (completionFlipOut())
+    if (!completionFlipIdle())
         panic("SwitchDisplay: an offer for entry %d while entry %d's completion flip is out (state %u)", entry,
               completionFlip.entry, static_cast<unsigned>(completionFlip.state));
     uint32_t kind = 0, stride = 0, hOffset = 0;
@@ -129,6 +130,7 @@ void writeCompletionFlip(int status)
         completionFlip.requestedAt = __atomic_load_n(&frameEnds, __ATOMIC_RELAXED);
         completionFlip.writtenAt = mach_absolute_time();
     }
+    writeMediaFlipLocked(status);
     [[maybe_unused]] const uint32_t start = completionFlip.start;
     IOSimpleLockUnlockEnableInterrupt(lock, state);
     if (write && SWITCH_FRAME_TIMELINE)
@@ -181,6 +183,7 @@ void takeCompletionFlip()
 {
     if (completionFlipWritten())
         runCompletionPass();
+    takeMediaFlip();
 }
 
 // Nothing armed or written once this returns: an armed flip is withdrawn, a written one goes in the ring. The pass may
@@ -205,6 +208,7 @@ void drainCompletionFlip()
 void suspendCompletionFlip()
 {
     drainCompletionFlip();
+    mediaFlipFromGate();
     flipUnverifiedFromGate();
 }
 
@@ -252,8 +256,12 @@ LatchState latchState()
 bool completionFlipRefused(const LatchState &seen)
 {
     const CompletionUnverified flip = completionUnverified;
-    if (flip.entry == kNoBuffer || flip.entry != ring.pending)
+    if (flip.entry == kNoBuffer)
         return false;
+    if (flip.entry != ring.pending) {
+        completionUnverified.entry = kNoBuffer;
+        return false;
+    }
     if (seen.start == flip.start) {
         completionUnverified.entry = kNoBuffer;
         completionFlipsProven = true;
