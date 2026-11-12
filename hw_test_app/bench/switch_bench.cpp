@@ -823,4 +823,16 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
         b->reopen();
 }
 
+void switch_bench_fill_surface(struct switch_bench *b, const void *surface, uint32_t format, uint32_t color,
+                               struct switch_bench_result *r)
+{
+    r->status = SWITCH_BENCH_OK;
+    r->why[0] = 0;
+    if (!b->device && !b->open())
+        return bench::fail(*r, SWITCH_BENCH_ERROR, "no raw device: " + b->error);
+    bench::fillSurface(*b, surface, format, color, *r);
+    if (r->status == SWITCH_BENCH_KILLED)
+        b->reopen();
+}
+
 }  // extern "C"

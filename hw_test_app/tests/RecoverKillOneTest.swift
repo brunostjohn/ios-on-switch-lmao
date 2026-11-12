@@ -8,8 +8,8 @@ import UIKit
 /// One client's raw channel killed while other clients render: this process's channel runs a deliberately illegal
 /// method in a scratch command buffer, committed right behind eight others and ahead of eight committed once it failed,
 /// all on one queue. The bench's raw device (a connection and channel of its own) fills on the 2D engine throughout, read
-/// back against the fill (RecoverBystander), and a probe layer on
-/// the m2v device shows that the compositor kept presenting. Exactly the poisoned command buffer fails, the eight before
+/// back against the fill (RecoverBystander), and a probe layer another bench raw device fills shows that the compositor
+/// kept presenting. Exactly the poisoned command buffer fails, the eight before
 /// it keep their completion and bytes, the eight after it complete on the channel made again, the bystander sees no
 /// error and no gap past the bound, one reopen, and the drivers stay ordered on the GPU (no CPU-ordered line).
 struct RecoverKillOneTest: HWTest {
@@ -31,17 +31,16 @@ struct RecoverKillOneTest: HWTest {
         }
         let start = RawFacade.counters(of: gpu.device)
         guard start["gpu_order"] != nil else { return .skip("the facade has no recovery counters (a release build)") }
-        guard let m2v = RawFacade.m2vDevice(of: gpu.device), let m2vQueue = m2v.makeCommandQueue() else {
-            return .fail("no m2v device for the compositor probe")
-        }
         let bystander: RecoverBystander
+        let probeBench: BenchRunner
         do {
             bystander = try RecoverBystander(try BenchRunner.open())
+            probeBench = try BenchRunner.open()
         } catch {
-            return .fail("the bystander's raw device did not open: \(error)")
+            return .fail("a bench raw device did not open: \(error)")
         }
         let compositor = await context.onStage { stage -> RecoverCompositorProbe in
-            let probe = RecoverCompositorProbe(device: m2v, queue: m2vQueue)
+            let probe = RecoverCompositorProbe(device: gpu.device, bench: probeBench)
             probe.probe.frame = CGRect(x: stage.bounds.width - 58, y: 10, width: 48, height: 48)
             probe.probe.contentsScale = UIScreen.main.scale
             stage.layer.addSublayer(probe.probe)
@@ -66,6 +65,7 @@ struct RecoverKillOneTest: HWTest {
         let bystanderStopped = bystander.stop(seconds: 5)
         await MainActor.run { compositor.stop() }
         let presented = await MainActor.run { compositor.presented }
+        let (fillErrors, firstFillError) = await MainActor.run { (compositor.fillErrors, compositor.firstFillError) }
         await context.clearStage()
         let end = RawFacade.counters(of: gpu.device)
 
@@ -107,6 +107,8 @@ struct RecoverKillOneTest: HWTest {
         metrics.set("paths", String(paths.sorted().joined(separator: ",").prefix(80)))
         metrics.set("bystander_runs", bystander.runs)
         metrics.set("present_frames", shown.frames)
+        metrics.set("probe_fill_errors", fillErrors)
+        if !firstFillError.isEmpty { metrics.set("probe_fill_first", String(firstFillError.prefix(80))) }
         if !bystander.firstError.isEmpty { metrics.set("bystander_first", String(bystander.firstError.prefix(80))) }
         if let refusal { return .fail("the illegal method was refused: \(refusal)", metrics) }
         if poisoned.status == .completed && delta("reopens") == 0 {
@@ -132,6 +134,7 @@ struct RecoverKillOneTest: HWTest {
                     "the compositor kept presenting within the bound",
                     shown.frames > 0 && presentGapMs <= Self.gapBoundMs
                 ),
+                ("the probe's own raw device filled every frame", fillErrors == 0),
             ], metrics)
     }
 

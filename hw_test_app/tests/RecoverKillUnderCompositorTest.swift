@@ -5,7 +5,8 @@ import Metal
 import QuartzCore
 import UIKit
 
-/// gpu.recover.kill_one's kill again and again while the compositor presents every frame. Each GR error resets GR, and
+/// gpu.recover.kill_one's kill again and again while the compositor presents every frame (a probe layer a bench raw
+/// device fills, RecoverCompositorProbe). Each GR error resets GR, and
 /// with the compositor drawing every frame the PBDMA is often on its channel when that reset comes: a reset that leaves
 /// the compositor's context load stuck shows as a frame waiting a context-switch timeout tick or more. Each kill fails
 /// only its own command buffer, the raw channel comes back each time, and no frame waits past the bound.
@@ -25,11 +26,14 @@ struct RecoverKillUnderCompositorTest: HWTest {
         }
         let start = RawFacade.counters(of: gpu.device)
         guard start["gpu_order"] != nil else { return .skip("the facade has no recovery counters (a release build)") }
-        guard let m2v = RawFacade.m2vDevice(of: gpu.device), let m2vQueue = m2v.makeCommandQueue() else {
-            return .fail("no m2v device for the compositor probe")
+        let probeBench: BenchRunner
+        do {
+            probeBench = try BenchRunner.open()
+        } catch {
+            return .fail("the compositor probe's bench raw device did not open: \(error)")
         }
         let compositor = await context.onStage { stage -> RecoverCompositorProbe in
-            let probe = RecoverCompositorProbe(device: m2v, queue: m2vQueue)
+            let probe = RecoverCompositorProbe(device: gpu.device, bench: probeBench)
             probe.probe.frame = CGRect(x: stage.bounds.width - 58, y: 10, width: 48, height: 48)
             probe.probe.contentsScale = UIScreen.main.scale
             stage.layer.addSublayer(probe.probe)
@@ -61,6 +65,7 @@ struct RecoverKillUnderCompositorTest: HWTest {
         try await Task.sleep(nanoseconds: 300_000_000)
         await MainActor.run { compositor.stop() }
         let presented = await MainActor.run { compositor.presented }
+        let (fillErrors, firstFillError) = await MainActor.run { (compositor.fillErrors, compositor.firstFillError) }
         await context.clearStage()
         let end = RawFacade.counters(of: gpu.device)
 
@@ -85,6 +90,8 @@ struct RecoverKillUnderCompositorTest: HWTest {
         metrics.set("present_gap_ms", presentGapMs, digits: 1)
         metrics.set("gap_bound_ms", Self.gapBoundMs, digits: 0)
         metrics.set("present_frames", shown.frames)
+        metrics.set("probe_fill_errors", fillErrors)
+        if !firstFillError.isEmpty { metrics.set("probe_fill_first", String(firstFillError.prefix(80))) }
         if let refusal { return .fail("the illegal method was refused: \(refusal)", metrics) }
         return .judged(
             [
@@ -97,6 +104,7 @@ struct RecoverKillUnderCompositorTest: HWTest {
                     "the compositor kept presenting within the bound",
                     shown.frames > 0 && presentGapMs <= Self.gapBoundMs
                 ),
+                ("the probe's own raw device filled every frame", fillErrors == 0),
             ], metrics)
     }
 }

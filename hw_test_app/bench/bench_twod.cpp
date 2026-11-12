@@ -1,5 +1,6 @@
 // The bench's 2D-engine experiments (raw_probe_ops.h, one operation a command buffer so a rejected one names itself in
 // the kernel's kill line) and their compare forms: the same operation through the 3D path or the copy engine.
+#include <IOSurface/IOSurfaceRef.h>
 #include <cstring>
 #include "drivers/TegraGM20BMetal/raw/fx/fx_image.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_probe_ops.h"
@@ -10,6 +11,7 @@ namespace bench {
 namespace {
 
 constexpr uint32_t kTriangleStrip = 4;
+constexpr uint32_t kA8b8g8r8 = 0xd5;  // NV902D_SET_RENDER_SOLID_PRIM_COLOR_FORMAT_V_A8B8G8R8
 constexpr uint64_t kOne = 1ull << 32;
 
 raw::ProbeSurface surface(const raw::Texture &t, uint32_t fmt2d, uint32_t width, uint32_t height)
@@ -394,6 +396,40 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
         d.destroyTexture(staging);
     if (ms.va)
         d.destroyTexture(ms);
+}
+
+void fillSurface(switch_bench &b, const void *surface, uint32_t format, uint32_t color, switch_bench_result &r)
+{
+    raw::Device &d = *b.device;
+    const auto s = static_cast<IOSurfaceRef>(const_cast<void *>(surface));
+    switch_bench_experiment x = {};
+    x.kind = SWITCH_BENCH_TWOD;
+    x.format = format;
+    x.width = uint32_t(IOSurfaceGetWidth(s));
+    x.height = uint32_t(IOSurfaceGetHeight(s));
+    x.rect[2] = x.width;
+    x.rect[3] = x.height;
+    x.twod.op = SWITCH_BENCH_TWOD_FILL;
+    x.twod.color_format = kA8b8g8r8;
+    x.twod.color[0] = color;
+    raw::Texture t;
+    if (!raw::probeTwodFormat(format) ||
+        !d.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0,
+                                x.width, x.height, uint32_t(IOSurfaceGetBytesPerRow(s)), format, t, true))
+        return fail(r, SWITCH_BENCH_REFUSED, "the raw path takes no texture over the surface");
+    Submission submission(b, x, r);
+    uint64_t gpu = 0, wall = 0;
+    submission.record(
+        [&](raw::CommandBuffer &cb) {
+            raw::BlitEncoder *e = cb.blit();
+            if (!e)
+                return submission.refused("the raw path opened no blit encoder");
+            e->probe(operation(x, t, nullptr), nullptr, t);
+            e->end();
+            return true;
+        },
+        gpu, wall);
+    d.destroyTexture(t);
 }
 
 }  // namespace bench

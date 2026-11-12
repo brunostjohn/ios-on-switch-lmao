@@ -91,19 +91,23 @@ final class RecoverBystander: @unchecked Sendable {
     }
 }
 
-/// The compositor's side: a probe layer cleared every display-link frame on the m2v device (NVK's channel, not the raw
-/// channel being killed), with the times the display showed each drawable (ShownTimes, as the pacing tests take them).
+/// The compositor's side: a probe layer whose drawable each display-link frame is filled by a bench raw device (a second
+/// connection and channel of this process, not the one being killed) and presented with no command buffer, so the
+/// render server composites a frame each time, with the times the display showed each drawable (ShownTimes, as the
+/// pacing tests take them). fillErrors= counts the frames the bench did not fill.
 @MainActor
 final class RecoverCompositorProbe: NSObject {
     let probe = CAMetalLayer()
-    private let queue: MTLCommandQueue
+    private let bench: BenchRunner
     private let shown = ShownTimes()
+    private var frame: UInt32 = 0
+    private(set) var fillErrors = 0
+    private(set) var firstFillError = ""
     private var link: CADisplayLink?
-    private var frame = 0
     private var measuring = false
 
-    init(device: MTLDevice, queue: MTLCommandQueue) {
-        self.queue = queue
+    init(device: MTLDevice, bench: BenchRunner) {
+        self.bench = bench
         probe.device = device
         probe.pixelFormat = .bgra8Unorm
         probe.framebufferOnly = true
@@ -127,20 +131,20 @@ final class RecoverCompositorProbe: NSObject {
     }
 
     @objc private func tick(_: CADisplayLink) {
+        guard let drawable = probe.nextDrawable() else { return }
         frame += 1
-        guard let drawable = probe.nextDrawable(), let commands = queue.makeCommandBuffer() else { return }
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColor(
-            red: Double(frame % 60) / 60, green: 0.5, blue: 0.2, alpha: 1)
-        pass.colorAttachments[0].storeAction = .store
-        commands.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
+        let filled =
+            drawable.texture.iosurface.map {
+                bench.fill($0, format: probe.pixelFormat, color: 0xff20_8000 | (frame % 60) * 4)
+            } ?? "no IOSurface under the drawable"
+        if filled != "ok" {
+            fillErrors += 1
+            if firstFillError.isEmpty { firstFillError = filled }
+        }
         let shown = shown
         let submitted = CACurrentMediaTime()
         let measured = measuring
         drawable.addPresentedHandler { shown.add($0.presentedTime, submitted: submitted, measured: measured) }
-        commands.present(drawable)
-        commands.commit()
+        drawable.present()
     }
 }

@@ -196,6 +196,10 @@ size_t switch_bench_known_kernel(uint8_t *out, size_t size);
 // Runs on the caller's thread; one experiment at a time
 void switch_bench_run(struct switch_bench *bench, const struct switch_bench_experiment *e,
                       struct switch_bench_result *r);
+// One 2D-engine fill of all of `surface` (an IOSurfaceRef of one plane, `format` a MTLPixelFormat the raw path renders)
+// with `color`, one A8B8G8R8 word, on the bench's own connection and channel, waited for: a status, and *why
+void switch_bench_fill_surface(struct switch_bench *bench, const void *surface, uint32_t format, uint32_t color,
+                               struct switch_bench_result *r);
 
 #ifdef __cplusplus
 }

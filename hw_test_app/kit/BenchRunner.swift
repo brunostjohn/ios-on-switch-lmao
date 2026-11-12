@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import IOSurface
 import Metal
 import SwitchBench
 
@@ -56,6 +57,16 @@ final class BenchRunner {
         "resolve3d": SWITCH_BENCH_COMPARE_RESOLVE3D, "plain": SWITCH_BENCH_COMPARE_PLAIN,
         "sampled3d": SWITCH_BENCH_COMPARE_SAMPLED3D,
     ]
+
+    /// All of `surface` (one plane, of a format the raw path renders) filled with `color` (an RGBA8 word) by the 2D engine
+    /// on the bench's own connection and channel, waited for: "ok", else the status and why.
+    func fill(_ surface: IOSurfaceRef, format: MTLPixelFormat, color: UInt32) -> String {
+        var r = switch_bench_result()
+        switch_bench_fill_surface(
+            bench, Unmanaged.passUnretained(surface).toOpaque(), UInt32(format.rawValue), color, &r)
+        let status = Self.statuses[Int(r.status)]
+        return status == "ok" ? status : "\(status):\(Self.text(&r.why))"
+    }
 
     func run(_ e: BenchExperiment) -> BenchOutcome {
         let started = DispatchTime.now().uptimeNanoseconds

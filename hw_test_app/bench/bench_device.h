@@ -103,5 +103,6 @@ private:
 
 void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r);
 void runPack(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r);
+void fillSurface(switch_bench &b, const void *surface, uint32_t format, uint32_t color, switch_bench_result &r);
 
 }  // namespace bench
