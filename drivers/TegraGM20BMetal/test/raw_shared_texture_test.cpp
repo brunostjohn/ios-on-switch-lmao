@@ -253,6 +253,43 @@ TEST(RawSharedTexture, EveryShapeIsTheImageTheRawPathLaysOut)
         }
 }
 
+TEST(RawTextureLayers, EveryTextureTypeHasMetalsSlices)
+{
+    static_assert(raw::kType1D == MTLTextureType1D && raw::kType1DArray == MTLTextureType1DArray &&
+                  raw::kType2D == MTLTextureType2D && raw::kType2DArray == MTLTextureType2DArray &&
+                  raw::kType2DMultisample == MTLTextureType2DMultisample && raw::kTypeCube == MTLTextureTypeCube &&
+                  raw::kTypeCubeArray == MTLTextureTypeCubeArray && raw::kType3D == MTLTextureType3D);
+
+    const struct {
+        uint32_t type, arrayLength, layers;
+    } rows[] = {
+        {raw::kType1D, 1, 1},
+        {raw::kType1DArray, 5, 5},
+        {raw::kType2D, 1, 1},
+        {raw::kType2DArray, 5, 5},
+        {raw::kType2DMultisample, 1, 1},
+        {raw::kTypeCube, 1, 6},
+        {raw::kTypeCubeArray, 3, 18},
+        {raw::kType3D, 1, 1},
+        {MTLTextureType2DMultisampleArray, 4, 1},
+        {MTLTextureTypeTextureBuffer, 1, 1},
+        {raw::kType2DArray, 0, 1},
+        {raw::kTypeCubeArray, 0, 6},
+    };
+
+    for (const auto &r : rows)
+        EXPECT_EQ(raw::textureLayers(r.type, r.arrayLength), r.layers) << r.type << " x" << r.arrayLength;
+    raw::SurfaceImage image;
+    raw::SurfaceImageFacts d = rgba8(raw::kType1DArray, 64, 1);
+    d.arrayLength = 5;
+    ASSERT_EQ(raw::surfaceImage(d, image), nullptr);
+    EXPECT_EQ(image.layout.layers, 5u) << "a 1D array's layers are its slices, no cube's six";
+    d = rgba8(raw::kTypeCubeArray, 16, 16);
+    d.arrayLength = 3;
+    ASSERT_EQ(raw::surfaceImage(d, image), nullptr);
+    EXPECT_EQ(image.layout.layers, 18u);
+}
+
 TEST(RawSharedTexture, MipmappedArraysCubesAndVolumesAreTheirLevelsLayout)
 {
     raw::SurfaceImage image;

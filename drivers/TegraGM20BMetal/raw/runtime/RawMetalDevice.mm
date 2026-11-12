@@ -365,9 +365,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
                                    volumeRendered(d), t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (array) {
         t->_kind = RMTexturePool;
-        const NSUInteger faces = array == raw::fx::kTexCube || array == raw::fx::kTexCubeArray ? 6 : 1;
         t->_rawOk = gRM->raw->createArray(
-            uint32_t(d.width), uint32_t(d.height), uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
+            uint32_t(d.width), uint32_t(d.height),
+            raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))),
             uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         // one allocation for both drivers: m2v's texture, which the raw path renders and copies in place
@@ -389,10 +389,10 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             z.blockDepth = m.z_log2;
             z.tiled = m.tiled;
             z.compressed = m.compressed;
-            const NSUInteger faces = d.textureType == MTLTextureTypeCube ? 6 : 1;
-            t->_rawOk = gRM->raw->createZetaOver(z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                                 (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why,
-                                                 uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces));
+            t->_rawOk = gRM->raw->createZetaOver(
+                z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why,
+                raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))));
         }
         if (!t->_rawOk)
             SWITCH_REFUSE_DETAIL("raw", "zeta.over", d.pixelFormat,
