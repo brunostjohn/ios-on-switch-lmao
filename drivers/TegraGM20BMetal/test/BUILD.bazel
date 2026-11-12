@@ -2703,6 +2703,15 @@ host_test(
     cxx_std = "c++17",
 )
 
+host_test(
+    name = "raw_blend_reads_test",
+    srcs = [
+        "raw_blend_reads_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_reads.h",
+    ],
+    cxx_std = "c++17",
+)
+
 rust_test(
     name = "raw_blend_words_test",
     srcs = [

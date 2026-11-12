@@ -16,6 +16,7 @@
 #include "raw_keyline_probe.h"
 #include "raw_glass_probe.h"
 #include "raw_blend_color.h"
+#include "raw_blend_reads.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_block_base.h"
@@ -1109,21 +1110,21 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.segment = segmentHeap_.place(pl.methods.data(), uint32_t(pl.methods.size()));
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
-    // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
-    // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
+    // the color formats of its key, and which colors its draws read as they were (raw_blend_reads.h)
     for (const char *at = keyString; (at = strstr(at, " c")); at += 2) {
-        unsigned c = 0, f = 0, mask = 0, blend = 0, factor[6] = {};
-        const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
-                             &factor[2], &factor[3]);
+        unsigned c = 0;
+        ColorKeyFields k = {};
+        const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%u:%u:%u:%u", &c, &k.format, &k.writeMask, &k.blending, &k.srcRGB,
+                             &k.dstRGB, &k.rgbOp, &k.srcAlpha, &k.dstAlpha, &k.alphaOp);
         if (n >= 4 && c < 8) {
             constexpr unsigned kRGB8_444_2P = 542,
                                kRGBA16Float = 115;  // rendered through its stand-in (Texture::planarStandIn)
-            pl.colorFormats[c] = f == kRGB8_444_2P ? kRGBA16Float : f;
-            if (mask && (blend || mask != 15))
+            pl.colorFormats[c] = k.format == kRGB8_444_2P ? kRGBA16Float : k.format;
+            if (colorReadsDestination(k))
                 pl.readBits |= uint8_t(1u << c);
             // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
-            for (int k = 0; blend && k + 4 < n; k++)
-                pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
+            for (const unsigned factor : {k.srcRGB, k.dstRGB, k.srcAlpha, k.dstAlpha})
+                pl.constantBlend |= k.blending && factor >= 11 && factor <= 14;
         }
     }
     // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
