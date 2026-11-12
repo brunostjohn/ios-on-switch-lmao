@@ -1640,13 +1640,13 @@ pub(super) fn declare(
 /// instance holds (`StorageColor::shadowed`): a single-sample 2D `Rgba16f` storage image of
 /// `float` texels (`ResourceKind::ExtendedShadow`), each Metal's tile value of the texel. Every
 /// value it holds is a `half`, so the device's conversions both ways are exact.
-pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32, layered: bool) -> BResult<GlobalId> {
+pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32) -> BResult<GlobalId> {
     let sampled_type = mb.ty(SType::Float { width: 32 })?;
     let ty = mb.ty(SType::Image(ImageType {
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: layered,
+        arrayed: false,
         multisampled: false,
         usage: ImageUsage::Storage,
         format: crate::spv::ImageFormat::Rgba16f,
@@ -1678,8 +1678,8 @@ fn shadow_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
-    let texel = storage_texel(cx, fb)?;
-    Ok((image, texel))
+    let pixel = pixel(cx, fb)?;
+    Ok((image, pixel))
 }
 
 /// The tile value the shadow of attachment `color`, held in `range`, holds at the invocation's

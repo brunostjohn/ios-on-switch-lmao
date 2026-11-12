@@ -836,9 +836,13 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     if !p.graphics.storage_attachments.is_empty() && shape.vertex_amplification.count > 1 {
         return Err(not_implemented(Feature::FramebufferFetch));
     }
-    // The shader-side stencil's shadow is one image of the pass's layers: the same holds.
+    // The shader-side stencil's shadow is one 2D image of the stencil's one layer
+    // (`shadow_stencil.rs`): what a layered pass, or an amplified draw, tests of each layer or view
+    // is not modelled.
     let shadow = shadow_template(p);
-    if shadow.is_some() && shape.vertex_amplification.count > 1 {
+    if shadow.is_some()
+        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
+    {
         return Err(not_implemented(Feature::StencilExport));
     }
     // A fragment function's tile threadgroup memory is the pass's, every tile's in one buffer:
@@ -967,9 +971,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     .any(|a| a.color_index == c)
         })
         .collect();
+    // An extended-range shadow is one 2D image, which the encoder holds in a pass of one layer
+    // alone (`extended_shadow.rs`).
     if !extended_shadows.is_empty()
         && (mesh
             || p.graphics.rasterization_samples.as_raw() > 1
+            || shape.render_target_array_length > 1
             || shape.vertex_amplification.count > 1)
     {
         return Err(not_implemented(Feature::FramebufferFetch));
@@ -977,10 +984,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // In a pass of more than one layer the storage form's images are arrays of its layers, each
     // access at its primitive's layer: the variant compiled for it, and only there.
     let layered_storage = shape.render_target_array_length > 1
-        && (!p.graphics.storage_attachments.is_empty()
-            || shadow.is_some()
-            || !interlocked_colors.is_empty()
-            || !extended_shadows.is_empty());
+        && (!p.graphics.storage_attachments.is_empty() || !interlocked_colors.is_empty());
     let compiled_layered_storage = p
         .dependencies
         .iter()

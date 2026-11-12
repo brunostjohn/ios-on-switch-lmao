@@ -497,11 +497,11 @@ pub fn declare(
     for (&color, sc) in &fp.fetch {
         if sc.shadowed {
             d.extended_shadows
-                .insert(color, fetch::declare_shadow(mb, color, fp.fetch_layer.is_some())?);
+                .insert(color, fetch::declare_shadow(mb, color)?);
         }
     }
     d.imageblock = imageblock::declare(mb, fp.imageblock.as_ref())?;
-    d.shadow_stencil = stencil::declare(mb, fp.stencil.as_ref(), fp.fetch_layer.is_some())?;
+    d.shadow_stencil = stencil::declare(mb, fp.stencil.as_ref())?;
     d.depth_stand_in = depth_test::declare(mb, fp.depth_test.as_ref())?;
     d.stencil_stand_in = depth_test::declare_stencil(mb, fp.depth_test.as_ref())?;
     d.loop_sample = coverage::declare(mb, plan)?;
