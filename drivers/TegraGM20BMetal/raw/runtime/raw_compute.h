@@ -209,8 +209,9 @@ private:
     bool launch(const std::array<uint32_t, 3> &grid, const DispatchPiece &piece, const std::array<uint32_t, 8> &region,
                 const char **why);
     void cutBatch();
-    bool measureDispatch(uint64_t units, DrawTiming &t);
-    void stampDispatch(const DrawTiming &t, bool end);
+    void noteDispatch(uint64_t units, bool looping);
+    uint32_t dispatches_ = 0;
+    DrawTiming candidate_;
     LoopStream stream();
     Predication::Answer startLoop(bool doWhile, uint64_t wordVa, const PredicateTest *test);
     Predication::Answer endLoop(uint64_t wordVa, const PredicateTest *test, uint32_t tag);

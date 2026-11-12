@@ -137,6 +137,7 @@ struct Model {
     unsigned refuse = 0;  // submissions refused from now, with `refusal`
     // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
     uint64_t vaEnd = uint64_t(1) << 40;
+    uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
@@ -510,8 +511,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags =
-            TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord | TegraGM20BInfoCpuAccess;
+        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
+                     TegraGM20BInfoCpuAccess | model.infoFlags;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;

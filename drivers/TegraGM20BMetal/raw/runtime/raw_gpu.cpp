@@ -4858,6 +4858,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     d.commitCount_.fetch_add(1, std::memory_order_relaxed);
     d.closedCount_.fetch_add(1, std::memory_order_release);
+    d.noteCommittedTimings(timings);
     releaseNativeReads();
     RAW_DIAGNOSTIC(d.stats.commits++);
     return true;
@@ -6137,6 +6138,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
+    ++passDraws_;
     readBits_ |= pl->readBits | pl->fetchBits;
     // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels), over each
     // viewport its vertex function may choose
@@ -7668,7 +7670,7 @@ void RenderEncoder::end()
     RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
     endShaderTests();
-    if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports)
+    if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports + kDrawStampWords)
         reserve();
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
@@ -7706,8 +7708,11 @@ void RenderEncoder::end()
 #else
     constexpr bool flush = true;
 #endif
+    const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
         tiledCacheDrain(p_, d.k_.info());
+    if (measured)
+        emitDrawStamp(p_, d.stamps_.va, candidate_.slot, true, candidate_.payload);
     if (attachmentWrites_.storage)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     checkRoom(p_, "a pass body");
@@ -7730,7 +7735,7 @@ void RenderEncoder::end()
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
                           kZetaClearWords + 16 + kSampleWords + kTurnWordsMethods + uint32_t(restore.size()) +
-                          kSpanMarkWords + startStampCount_ * counters::kTimestampWords;
+                          kSpanMarkWords + startStampCount_ * counters::kTimestampWords + kDrawStampWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -7844,6 +7849,8 @@ void RenderEncoder::end()
             p.m(CLEAR_SURFACE, zsBits);
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
+    if (measured)
+        emitDrawStamp(p, d.stamps_.va, candidate_.slot, false, candidate_.payload);
     RAW_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));
     checkRoom(p, "a pass prologue");
     cb_->segment(start, p.at);

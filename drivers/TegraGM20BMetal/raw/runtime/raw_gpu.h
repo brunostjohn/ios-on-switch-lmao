@@ -1038,8 +1038,10 @@ private:
                   uint32_t baseInstance, const Shortcut &cut);
     uint64_t drawUnits(uint32_t instances) const;
     uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
-    bool measureDraw(uint64_t units, DrawTiming &t);
-    void stampDraw(Push &p, const DrawTiming &t, bool end);
+    void noteCandidate(uint64_t units);
+    bool measurePass(bool drained);
+    uint32_t passDraws_ = 0;
+    DrawTiming candidate_;  // the pass's first draw, measured at the pass's end when it stays the only one
     // whether the prepared draw of `pl` is drawn whole, never in bands: it amplifies, or may choose a viewport past 0 and so
     // its scissor, which bands do not narrow; and its words so, an amplify call where it amplifies
     bool drawnWhole(const Pipeline &pl) const;
@@ -1562,7 +1564,7 @@ public:
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
-    std::vector<DrawTiming> timings;  // its measured draws, for Device::learnDrawTimes once it completed
+    std::vector<DrawTiming> timings;  // its measured draws, which its commit hands the device (Device::learnCompleted)
     bool loopsLaid = false;           // a predicated loop's copies: the GPU writes the push ring
 
 private:
@@ -2201,8 +2203,10 @@ public:
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
-    // a completed command buffer's measured draws, each teaching its state's rate (raw_band_rates.h)
-    void learnDrawTimes(const std::vector<DrawTiming> &timings);
+    // a committed command buffer's measured draws, kept until the GPU has run them (raw_band_rates.h)
+    void noteCommittedTimings(std::vector<DrawTiming> &timings);
+    // the measured draws the GPU has run, each teaching its state's rate: every command buffer's completer calls it
+    void learnCompleted();
 #if SWITCH_RAW_DIAGNOSTICS
     SpanMarks spans_;
     // The render server's completed command buffer's spans of kLongSpanNs or more (raw_span_marks.h), which the facade logs
@@ -2565,6 +2569,9 @@ private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     std::atomic<uint32_t> drawStamps_{0};  // measured draws' stamp slots taken (raw_stamps.h kDrawStampSlots)
+    std::mutex timingsLock_;
+    std::vector<DrawTiming> committedTimings_;
+    std::atomic<uint32_t> committedTimingCount_{0};
     // A block-compressed image of `layout` at t.va (lock_ held, t.tic allocated): its header of `type` and, past one level,
     // its chain
     void layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,

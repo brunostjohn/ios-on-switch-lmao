@@ -479,7 +479,6 @@ struct RMSharedEventWait {
     raw::Mutex _lock;
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
-    std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)
     uint32_t
         _rangeLoopStamp;  // the raw range just encoded laid predicated loops: its stamp (RMRawRetirement::loopStamp)
 

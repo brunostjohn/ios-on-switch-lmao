@@ -733,6 +733,7 @@ bool Submission::finish(raw::CommandBuffer *cb, uint64_t &gpu, uint64_t &wall)
     }
     if (!d.gpuNanoseconds(stamp, gpu))
         gpu = 0;
+    d.learnCompleted();
     return true;
 }
 

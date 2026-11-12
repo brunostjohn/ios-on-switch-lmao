@@ -4,10 +4,12 @@
 // The static estimate prices a draw as pixels x program instructions, so a draw bound by memory or the ROP (a 4x resolve:
 // 642 instructions, priced 3 ms, measured 11.5-12 ms) or a looped program is priced far short and kept whole.
 //
-// A unit is a pixel of the draw's box times its sample passes and instances (a thread of a dispatch). The first kWarmSamples
-// draws of at least kMeasureUnits units, then one in kRemeasureEvery, are measured: a stamp before and one after, read at
-// the command buffer's completion. The table is per state, its reads and its update relaxed atomics: a racing update loses
-// a sample, never a rate.
+// A unit is a pixel of the draw's box times its sample passes and instances (a thread of a dispatch). Only a draw alone in
+// its pass (a dispatch alone in its encoder) of at least kMeasureUnits units is a candidate: its stamps go where the pass
+// already drains the tiled cache and waits (raw_draw_bands.cpp), so a measured draw costs what an unmeasured one does. A
+// state's first kWarmSamples candidates, then one in kRemeasureEvery, are measured, counted where they are encoded whatever
+// later teaches them; any completion teaches every committed measured draw the GPU has run (Device::learnCompleted). The
+// table is per state, its reads and its update relaxed atomics: a racing update loses a sample, never a rate.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -24,7 +26,7 @@ constexpr uint32_t kRateWeight = 4;  // a new sample moves a warm rate by a quar
 struct BandRate {
     std::atomic<uint32_t> psPerUnit{0};  // 0: not measured yet
     std::atomic<uint32_t> samples{0};
-    std::atomic<uint32_t> asked{0};
+    std::atomic<uint32_t> picks{0};
 
     BandRate() = default;
 
@@ -37,7 +39,7 @@ struct BandRate {
     {
         psPerUnit.store(o.psPerUnit.load(std::memory_order_relaxed), std::memory_order_relaxed);
         samples.store(o.samples.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        asked.store(o.asked.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        picks.store(o.picks.load(std::memory_order_relaxed), std::memory_order_relaxed);
         return *this;
     }
 };
@@ -51,14 +53,22 @@ inline uint64_t estimatedNs(const BandRate &r, uint64_t units, uint64_t staticNs
     return units > UINT64_MAX / ps ? UINT64_MAX / 1000 : units * ps / 1000;
 }
 
-// Whether this draw of `units` is one to measure
+inline bool picked(uint32_t pick)
+{
+    return pick < kWarmSamples || (pick - kWarmSamples) % kRemeasureEvery == kRemeasureEvery - 1;
+}
+
+// Whether a candidate of `units` is one to measure; counts it
 inline bool measure(BandRate &r, uint64_t units)
 {
-    if (units < kMeasureUnits)
-        return false;
-    if (r.samples.load(std::memory_order_relaxed) < kWarmSamples)
-        return true;
-    return r.asked.fetch_add(1, std::memory_order_relaxed) % kRemeasureEvery == 0;
+    return units >= kMeasureUnits && picked(r.picks.fetch_add(1, std::memory_order_relaxed));
+}
+
+// Whether the state's next candidate would be measured, without counting it (a dispatch's start stamp goes out before its
+// encoder knows the dispatch is alone)
+inline bool wouldMeasure(const BandRate &r, uint64_t units)
+{
+    return units >= kMeasureUnits && picked(r.picks.load(std::memory_order_relaxed));
 }
 
 // A measured draw: `ns` of GPU time over `units`

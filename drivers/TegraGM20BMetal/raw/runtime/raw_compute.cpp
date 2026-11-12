@@ -558,18 +558,12 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     dispatched_ = true;
     if (pieces > 1 && cb_.batchWork_.operations)
         cutBatch();
-    DrawTiming timing;
-    const bool measured = !looping && measureDispatch(pieces > 1 ? units / pieces : units, timing);
+    if (first)
+        noteDispatch(units, looping);
     slotTableVa_ = 0;
     for (uint32_t i = 0; i < pieces; i++) {
-        if (measured && i == 0)
-            stampDispatch(timing, false);
         if (!launch(grid, dispatchPiece(grid, axis, i, pieces), region, why))
             return false;
-        if (measured && i == 0) {
-            stampDispatch(timing, true);
-            cb_.timings.push_back(timing);
-        }
         if (pieces > 1)
             cutBatch();
     }
@@ -641,21 +635,23 @@ void ComputeEncoder::cutBatch()
     start_ = p_.at;
 }
 
-// As a draw is measured (raw_band_rates.h), but with the host's semaphore after a wait for idle: the compute class's own
-// release has no pipeline location to wait at
-bool ComputeEncoder::measureDispatch(uint64_t units, DrawTiming &t)
+// A dispatch alone in its encoder is measured as a draw alone in its pass is (raw_band_rates.h), with the host's semaphore
+// after a wait for idle (the compute class's release has no pipeline location to wait at): the start stamp right after
+// the encoder's opening wait for idle, which only the first dispatch follows, the end stamp ahead of the closing one. The
+// start stamp goes out before the encoder knows the dispatch stays alone, so it is taken in a slot of its own; a second
+// dispatch leaves it unread. The pick is counted at the end whether or not a start stamp went out.
+void ComputeEncoder::noteDispatch(uint64_t units, bool looping)
 {
-    if (dev_.compositorClass() || cb_.timings.size() >= kMeasuredPerCommandBuffer || !measure(state_->rate, units))
-        return false;
+    if (++dispatches_ != 1 || looping || dev_.compositorClass() || cb_.timings.size() >= kMeasuredPerCommandBuffer)
+        return;
+    candidate_ = {&state_->rate, units, 0, 0, state_->rec->keyHash, state_->instructions};
+    if (!wouldMeasure(state_->rate, units))
+        return;
     const uint32_t n = dev_.drawStamps_.fetch_add(1, std::memory_order_relaxed);
-    t = {&state_->rate, units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, state_->rec->keyHash, state_->instructions};
-    return true;
-}
-
-void ComputeEncoder::stampDispatch(const DrawTiming &t, bool end)
-{
+    candidate_.slot = n % kDrawStampSlots;
+    candidate_.payload = n + 1 ? n + 1 : 1;
     room(kStampWords);
-    emitStamp(p_, dev_.stamps_.va + drawStampOffset(t.slot, end), t.payload);
+    emitStamp(p_, dev_.stamps_.va + drawStampOffset(candidate_.slot, false), candidate_.payload);
 }
 
 // The root table words of the kernel's reads through argument buffers: the device's root table and ExecutionStatus
@@ -710,7 +706,11 @@ void ComputeEncoder::timestamp(uint64_t va)
 
 void ComputeEncoder::end()
 {
-    room(8);
+    room(8 + kStampWords);
+    if (dispatches_ == 1 && candidate_.rate && measure(*candidate_.rate, candidate_.units) && candidate_.payload) {
+        emitStamp(p_, dev_.stamps_.va + drawStampOffset(candidate_.slot, true), candidate_.payload);
+        cb_.timings.push_back(candidate_);
+    }
     computeToGraphics(p_, true);
     cb_.loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);

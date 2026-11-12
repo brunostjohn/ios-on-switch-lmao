@@ -960,8 +960,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     cb->_seqno = seq;
     cb->_channelGeneration = generation;
     cb->_stamp = cb->_segs.size() == 1 && cb->_segs.front().raw ? rc->stamp : 0;
-    if (cb->_stamp)
-        cb->_timings = std::move(rc->timings);
     cb->_rangeLoopStamp = rc->loopsLaid ? rc->stamp : 0;
     RAW_DIAGNOSTIC(d.stats.levelPasses += levelPasses);
     RAW_DIAGNOSTIC(gRM->stats.draws += rc->draws);

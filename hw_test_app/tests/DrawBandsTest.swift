@@ -20,7 +20,9 @@ import UIKit
 /// draw costs the compositor. us_per_band is the GPU time a band took.
 /// The learned arm draws a loop of scattered texture reads, a few dozen instructions priced far under a band: its first
 /// draw is whole and measured (raw_band_rates.h), and once its state's rate is learned the same draw must be banded by
-/// the time it took, with the whole draw's pixels.
+/// the time it took, with the whole draw's pixels. Its draw is alone in its pass, so the state's first three are measured and
+/// the rest not (raw_band_rates.h): us_measured (the measured banded draws) against us_unmeasured (the later ones) is what a
+/// measurement costs the GPU, which must be nothing beyond noise.
 struct DrawBandsTest: HWTest {
     let id = "gpu.sched.long_draw_bands"
     let name = "Long app draws in scissor bands: compositor wait and pixel identity"
@@ -34,7 +36,8 @@ struct DrawBandsTest: HWTest {
     static let kickSeconds = 1.5
     static let memorySide = 2048
     static let memoryReads: UInt32 = 8
-    static let learnRounds = 4
+    static let learnRounds = 7
+    static let measuredSlackUs = 50.0
 
     struct Case {
         let name: String
@@ -183,6 +186,7 @@ struct DrawBandsTest: HWTest {
         var failures: [String] = []
         var wholeMs = 0.0
         var learnedBands = 0
+        var measuredUs: [Double] = [], unmeasuredUs: [Double] = []
         for round in 0..<Self.learnRounds {
             let before = RawFacade.counters(of: gpu.device)
             let timing = try await gpu.run(encode)
@@ -199,9 +203,29 @@ struct DrawBandsTest: HWTest {
             } else {
                 learnedBands = bands
                 metrics.set("us_memory_learned", timing.gpuMilliseconds * 1000, digits: 0)
+                if timing.gpuTimed {
+                    if learned > 0 {
+                        measuredUs.append(timing.gpuMilliseconds * 1000)
+                    } else {
+                        unmeasuredUs.append(timing.gpuMilliseconds * 1000)
+                    }
+                }
             }
         }
         metrics.set("bands_memory_learned", learnedBands)
+        metrics.set("measured_draws", measuredUs.count)
+        metrics.set("unmeasured_draws", unmeasuredUs.count)
+        if let measured = Self.mean(measuredUs), let unmeasured = Self.mean(unmeasuredUs) {
+            metrics.set("us_measured", measured, digits: 0)
+            metrics.set("us_unmeasured", unmeasured, digits: 0)
+            if measured > unmeasured * 1.02 + Self.measuredSlackUs {
+                failures.append(
+                    "memory: a measured draw took \(Int(measured)) us, an unmeasured one \(Int(unmeasured)) us")
+            }
+        } else {
+            failures.append(
+                "memory: \(measuredUs.count) measured and \(unmeasuredUs.count) unmeasured draws to compare")
+        }
         let banded = try await gpu.read(target, bytesPerPixel: 4)
         _ = Self.budget(gpu.device, 0)
         try await gpu.run(encode)
@@ -214,6 +238,10 @@ struct DrawBandsTest: HWTest {
         }
         return failures
     }
+    static func mean(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
     static let preemptKeys = [
         "preempts", "preempt_max_us", "preempt_mid_job", "preempt_job_end", "preempt_unknown", "preempt_lt250_us",
         "preempt_lt500_us", "preempt_lt1000_us", "preempt_lt2000_us", "preempt_lt4000_us", "preempt_ge4000_us",
