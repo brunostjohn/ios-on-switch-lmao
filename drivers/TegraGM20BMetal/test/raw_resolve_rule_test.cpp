@@ -108,13 +108,17 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataIsReadable)
     }
 }
 
-TEST(ResolveRule, TheComplementIsTakenAt2xOnPlainSamplesUntilResolvetie2Reads4x)
+TEST(ResolveRule, TheComplementWaitsOnTheDeviceAndThen4xOnOneRounding)
 {
-    EXPECT_TRUE(raw::twodResolveExact(screenBound(2)));
-    EXPECT_EQ(raw::twodResolveExact(screenBound(4)), raw::twodResolveSingleRounding4x());
+    const bool proven = raw::twodResolveComplementProven();
+    EXPECT_EQ(raw::twodResolveExact(screenBound(2)), proven);
+    EXPECT_EQ(raw::twodResolveExact(screenBound(4)), proven && raw::twodResolveSingleRounding4x());
     raw::ResolveAsk a = screenBound(2);
     a.compressedSamples = true;
     EXPECT_TRUE(raw::twodResolveAcceptable(a));
+    EXPECT_FALSE(raw::twodResolveExact(a));
+    a = screenBound(2);
+    a.readable = true;
     EXPECT_FALSE(raw::twodResolveExact(a));
     EXPECT_EQ(raw::resolveSampleSlot(2), 0u);
     EXPECT_EQ(raw::resolveSampleSlot(4), 1u);

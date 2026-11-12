@@ -8,7 +8,7 @@
 // every sample c made 255 - c in place, the box read under ROP3 NOTSRCCOPY) a tie lands on the other side: 255 -
 // down((255n - s) / n) = up(s / n) for every sum s, so one rounding of the mean is Metal's rule exactly. Two rounded
 // 2:1 steps are not (pair sums 1 and 0 give 1 where Metal gives 0): 4x waits on bench resolvetie2's reading of the
-// engine, 2x has one step only.
+// engine, 2x has one step only. Both wait on the device's reading of the complement's steps.
 #pragma once
 #include <cstdint>
 
@@ -17,10 +17,12 @@ namespace raw {
 // What can read a resolve texture's texels as data
 struct ResolveTarget {
     bool sharedStorage = false;  // its storage, its parent's or its heap's, is CPU-visible
-    bool imported = false;       // over an IOSurface or no-copy pages: the CPU or another process maps them
-    bool overBuffer = false;     // over a buffer's bytes
-    bool storage = false;        // ShaderWrite usage: a kernel or pass reads and writes it as data
-    bool readOut = false;  // a blit copied out of it (into a buffer or a texture), in this command buffer or before
+    // over no-copy pages, or over an IOSurface this texture can read back (usage beyond RenderTarget): the CPU or another
+    // process maps them. A render-target-only surface texture is a framebufferOnly drawable, which only the compositor reads
+    bool imported = false;
+    bool overBuffer = false;  // over a buffer's bytes
+    bool storage = false;     // ShaderWrite usage: a kernel or pass reads and writes it as data
+    bool readOut = false;     // a blit copied out of it (into a buffer or a texture), in this command buffer or before
 };
 
 constexpr bool resolveTargetReadable(const ResolveTarget &t)
@@ -45,8 +47,16 @@ constexpr bool twodResolveAcceptable(const ResolveAsk &a)
     return unorm8 && (a.samples == 2 || a.samples == 4) && !a.readable && a.wholeTarget && !a.shadowTarget;
 }
 
+// The complement's hardware steps, none of which an open driver runs this way: a ROP3 code after a bilinear scale,
+// DSTINVERT over a multisampled image's grid, and one 2D wait between them. gpu.raw.resolve_twod's 2x_exact_differ=0
+// and kept_differ=0, and resolvetie2's rt-*-2x-sandwich cells at 0 against Metal, flip it
+constexpr bool twodResolveComplementProven()
+{
+    return false;
+}
+
 // 4x read as one rounding of the four samples' mean: resolvetie2's rt-*-4x-prod cells at 0 down-rounding misses and
-// its 4x sandwich cells at 0 against Metal flip it
+// its 4x sandwich cells at 0 against Metal (gpu.raw.resolve_twod's 4x_exact_differ=0) flip it
 constexpr bool twodResolveSingleRounding4x()
 {
     return false;
@@ -56,7 +66,8 @@ constexpr bool twodResolveSingleRounding4x()
 // multisample kind no open driver writes with it, unproven, so those keep resolve.twod
 constexpr bool twodResolveExact(const ResolveAsk &a)
 {
-    return twodResolveAcceptable(a) && !a.compressedSamples && (a.samples == 2 || twodResolveSingleRounding4x());
+    return twodResolveComplementProven() && twodResolveAcceptable(a) && !a.compressedSamples &&
+           (a.samples == 2 || twodResolveSingleRounding4x());
 }
 
 enum ResolveRoute : uint8_t {

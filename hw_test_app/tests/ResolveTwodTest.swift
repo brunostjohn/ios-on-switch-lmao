@@ -8,8 +8,8 @@ import Metal
 /// pick, the complement route forced (switchRawProbeResolveExact:), the complement route on a store-and-resolve whose
 /// samples a second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:,
 /// Metal's exact rule). PASS: all on the raw path, the picked route within one code of the pass, the complement route
-/// taken and within one code, exact at 2x (where resolve.exact is live), and the kept samples resolving as the pass's.
-/// `4x_exact_differ=0` is the device reading that flips twodResolveSingleRounding4x. 2x is run too.
+/// taken and within one code, exact at 2x, and the kept samples resolving as the pass's. `2x_exact_differ=0` with
+/// `2x_kept_differ=0` flips twodResolveComplementProven, `4x_exact_differ=0` twodResolveSingleRounding4x.
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
     let name = "MSAA resolves by the 2D engine, directly and through the complement, against the resolve pass"
