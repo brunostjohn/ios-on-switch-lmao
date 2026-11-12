@@ -34,6 +34,20 @@ uint32_t *slot(RMIndirectCommandBuffer *b, NSUInteger index)
     return reinterpret_cast<uint32_t *>(b->_raw.cpu) + index * raw::icb::kSlotWords;
 }
 
+// Command `index`'s words as `c` says, written by the CPU
+void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand &c)
+{
+    if (c.kind == RMICBCommand::Draw)
+        raw::icb::draw(slot(b, index), uint32_t(index), {c.primitive, c.count, c.instances, c.first, c.baseInstance});
+    else if (c.kind == RMICBCommand::Indexed)
+        raw::icb::indexed(slot(b, index), uint32_t(index),
+                          {c.primitive, c.indexType == MTLIndexTypeUInt16 ? 2u : 4u, c.indices->_raw.va + c.indexOffset,
+                           c.indices->_raw.va + c.indices->_raw.length - 1, c.count, c.instances, 0, c.baseVertex,
+                           c.baseInstance});
+    else
+        raw::icb::empty(slot(b, index));
+}
+
 }  // namespace
 
 @implementation RMIndirectCommandBuffer
@@ -413,8 +427,12 @@ void encodeCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
         }
         to->_gpuWritten.store(true, std::memory_order_relaxed);
     }
-    for (NSUInteger i = 0; i < count; i++)
+    // with no copy engine (the blit encoder replayed on m2v) the words are the CPU's to write, as Metal's would be the GPU's
+    for (NSUInteger i = 0; i < count; i++) {
+        if (!be)
+            writeSlot(to, into + i, commands[i]);
         [to take:commands[i] at:into + i];
+    }
 }
 
 void replayCommands(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const std::function<id(void *)> &use)
