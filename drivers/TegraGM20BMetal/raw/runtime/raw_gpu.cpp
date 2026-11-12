@@ -1066,7 +1066,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         }
         w.m(m, v);
     }
-    w.m(PIXEL_SHADER_INTERLOCK_CONTROL, interlockControl);
+    w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
     w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);
     pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, writes, keyString,
                                      (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0) == kNoopSourceRgba0000;

@@ -442,3 +442,18 @@ TEST(RawStorage, EmissionResetsControlAndDisablesStorageRopWrites)
     EXPECT_NE(raw::emittableMethods().count(0x1224), 0u);
 }
 }  // namespace
+
+// A multisampled storage form runs a pass a sample; its record's pixel conflict detection is drawn as sample detection
+// (DATA_ERROR 0x134 otherwise: gpu.raw.framebuffer_fetch_depth's 2x case), every other pair as recorded
+TEST(RawStorage, PerSamplePassesDrawSampleConflictDetection)
+{
+    constexpr uint32_t none = 0, sample = 1, pixel = 2, tile8 = 1u << 2;
+    for (uint32_t samples : {2u, 4u, 8u}) {
+        const uint32_t hybrid = raw::sampleShadingControl(samples);
+        EXPECT_EQ(raw::legalInterlockControl(pixel | tile8, hybrid), sample | tile8) << samples;
+        EXPECT_EQ(raw::legalInterlockControl(sample | tile8, hybrid), sample | tile8) << samples;
+        EXPECT_EQ(raw::legalInterlockControl(none, hybrid), none) << samples;
+    }
+    EXPECT_EQ(raw::legalInterlockControl(pixel | tile8, raw::sampleShadingControl(1)), pixel | tile8);
+    EXPECT_EQ(raw::legalInterlockControl(pixel, 0), pixel);
+}
