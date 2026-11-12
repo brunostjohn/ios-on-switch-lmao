@@ -3963,7 +3963,7 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     bufs_[stage][slot] = {va, length, nullptr, 0,
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     bufs_[stage][slot].resourceVa = dev_->upload_.bo.va;
-    invalidateDescriptors();
+    bufferMoved(stage, slot);
     RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += chunk);
 }
 
@@ -3982,7 +3982,7 @@ void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t l
         if (allocation->hostVisible && !allocation->wc)
             cb_->clean(cpu, length);
     }
-    invalidateDescriptors();
+    bufferMoved(stage, slot);
 }
 
 void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_t offset)
@@ -3998,7 +3998,7 @@ void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_
         old.cpu == next.cpu)
         return;
     bufs_[stage][slot] = next;
-    invalidateDescriptors();
+    bufferMoved(stage, slot);
 }
 
 void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
@@ -4803,12 +4803,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
-        pl, bindingRevision_,
-        [&](PreparedDescriptorWords &prepared) {
+        pl, movedEntries(r), ~0u,
+        [&](PreparedDescriptorWords &prepared, uint32_t moved) {
             RAW_ENCODE_COUNT(DescriptorBuilds);
             static_assert(sizeof(prepared.words) == kSetBytes);
             uint32_t *set = prepared.words.data();
             for (uint32_t i = 0; i < r.entries; i++) {
+                if (!(moved >> i & 1))
+                    continue;
                 const PackEntry &e = r.entry[i];
                 uint32_t *at = set + e.offset / 4;
                 if (e.kind == EntryColorTable) {
@@ -4945,6 +4947,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_END(descriptorSpan);
     if (!prepared)
         return false;
+    moved_ = MovedBindings{{}, 0, 0, false};
     const uint32_t *set = prepared->words.data();
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
@@ -5199,6 +5202,23 @@ bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
 
 // What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
 // of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
+uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
+{
+    if (moved_.all)
+        return ~0u;
+    uint32_t moved = 0;
+    for (uint32_t i = 0; i < rec.entries; i++) {
+        const PackEntry &e = rec.entry[i];
+        const bool buffer = e.kind == EntryUbo && e.stage < 3 && e.slot < 32 && (moved_.buffers[e.stage] >> e.slot & 1);
+        const bool texture = (e.kind == EntryTexture || e.kind == EntryTexture3d) && e.slot < 16 &&
+                             (moved_.textures >> e.slot & 1);
+        const bool sampler = e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < 16 &&
+                             (moved_.samplers >> e.sampler & 1);
+        moved |= uint32_t(buffer || texture || sampler) << i;
+    }
+    return moved;
+}
+
 DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
                                      const PixelBox &limit)
 {
@@ -5391,7 +5411,7 @@ bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **wh
             return false;
         cb_->backings_.push_back(slot);
         cb_->use(*slot, true);
-        ++bindingRevision_;
+        invalidateDescriptors();
         return true;
     };
     constexpr uint32_t kR32Float = 55, kR8Uint = 13, kRG8Unorm = 30;

@@ -582,7 +582,8 @@ public:
     {
         if (slot < 16 && samplers_[slot] != s) {
             samplers_[slot] = s;
-            invalidateDescriptors();
+            ++bindingRevision_;
+            moved_.samplers |= uint16_t(1u << slot);
         }
     }
 
@@ -590,6 +591,7 @@ public:
     void invalidateDescriptors()
     {
         ++bindingRevision_;
+        moved_.all = true;
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -686,6 +688,18 @@ private:
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
     PreparedDescriptors descriptors_;
     uint64_t bindingRevision_ = 0;
+    // the bindings set 0's entries are built from that moved since the last draw's set (descriptors_)
+    struct MovedBindings {
+        uint32_t buffers[3] = {};
+        uint16_t textures = 0, samplers = 0;
+        bool all = true;
+    } moved_;
+    void bufferMoved(int stage, uint32_t slot)
+    {
+        ++bindingRevision_;
+        moved_.buffers[stage] |= 1u << slot;
+    }
+    uint32_t movedEntries(const PackPipeline &rec) const;
     DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
     const Texture *textures_[16] = {};

@@ -137,7 +137,8 @@ void RenderEncoder::setTexture(uint32_t slot, const Texture *texture)
     texture = cb_->readTexture(texture);
     if (slot < 16 && textures_[slot] != texture) {
         textures_[slot] = texture;
-        invalidateDescriptors();
+        ++bindingRevision_;
+        moved_.textures |= uint16_t(1u << slot);
     }
 }
 

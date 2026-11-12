@@ -35,22 +35,31 @@ struct PreparedDescriptorWords {
     uint64_t address = 0;
 };
 
+// A pipeline's set 0, built again where its bindings moved. `moved`: the entries whose bindings moved since the last
+// resolve (bit k: entry k); the set of another pipeline than the last one's is built whole. `memory`: the entries the GPU
+// reads from the set's upload (PackPipeline::memoryEntries): the set is uploaded again only where one of them moved, its
+// other entries the CPU's alone (the uniform buffers' constant buffer binds read their words here).
 class PreparedDescriptors {
 public:
     template <typename Build, typename Upload>
-    const PreparedDescriptorWords *resolve(const void *pipeline, uint64_t revision, Build build, Upload upload)
+    const PreparedDescriptorWords *resolve(const void *pipeline, uint32_t moved, uint32_t memory, Build build,
+                                           Upload upload)
     {
-        if (value_.address && pipeline_ == pipeline && revision_ == revision)
+        const bool same = value_.address && pipeline_ == pipeline;
+        if (same && !moved)
             return &value_;
-        PreparedDescriptorWords value;
-        if (!build(value))
+        if (!same)
+            value_ = {};
+        pipeline_ = nullptr;  // until this build succeeds
+        if (!build(value_, same ? moved : ~0u))
             return nullptr;
-        value.address = snapshot_.resolve(value.words, upload);
-        if (!value.address)
-            return nullptr;
-        value_ = value;
+        if (!same || (moved & memory)) {
+            const uint64_t address = snapshot_.resolve(value_.words, upload);
+            if (!address)
+                return nullptr;
+            value_.address = address;
+        }
         pipeline_ = pipeline;
-        revision_ = revision;
         return &value_;
     }
 
@@ -58,7 +67,6 @@ private:
     DescriptorSnapshot snapshot_;
     PreparedDescriptorWords value_;
     const void *pipeline_ = nullptr;
-    uint64_t revision_ = 0;
 };
 
 // What the last draw bound of set 0: its address, and each uniform buffer's constant buffer (the descriptor's base and

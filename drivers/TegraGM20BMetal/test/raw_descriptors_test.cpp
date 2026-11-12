@@ -122,13 +122,13 @@ TEST(RawDescriptors, ConstantBufferBindingsTrackBothPipelineAndSnapshot)
     EXPECT_FALSE(binding.changed(&first, 512));
 }
 
-TEST(RawDescriptors, UnchangedGenerationDoesNotRebuildOrUpload)
+TEST(RawDescriptors, UnmovedBindingsDoNotRebuildOrUpload)
 {
     raw::PreparedDescriptors cache;
     int pipeline = 0;
     unsigned builds = 0;
     Uploads uploads;
-    const auto build = [&](raw::PreparedDescriptorWords &prepared) {
+    const auto build = [&](raw::PreparedDescriptorWords &prepared, uint32_t) {
         ++builds;
         prepared.words[4] = 123;
         prepared.residuals[7] = 12;
@@ -138,11 +138,11 @@ TEST(RawDescriptors, UnchangedGenerationDoesNotRebuildOrUpload)
     const auto upload = [&](const raw::DescriptorWords &words) {
         return uploads(words);
     };
-    const auto *first = cache.resolve(&pipeline, 5, build, upload);
+    const auto *first = cache.resolve(&pipeline, ~0u, ~0u, build, upload);
     ASSERT_NE(first, nullptr);
     const uint64_t address = first->address;
     for (unsigned draw = 0; draw < 10000; ++draw) {
-        const auto *next = cache.resolve(&pipeline, 5, build, upload);
+        const auto *next = cache.resolve(&pipeline, 0, ~0u, build, upload);
         ASSERT_NE(next, nullptr);
         EXPECT_EQ(next->address, address);
         EXPECT_EQ(next->residuals[7], 12u);
@@ -152,57 +152,91 @@ TEST(RawDescriptors, UnchangedGenerationDoesNotRebuildOrUpload)
     EXPECT_EQ(uploads.images.size(), 1u);
 }
 
-TEST(RawDescriptors, PipelineAndBindingRevisionRebuildIndependently)
+TEST(RawDescriptors, AnotherPipelinesSetIsBuiltWholeTheSameOnesOnlyWhereItMoved)
 {
     raw::PreparedDescriptors cache;
     int first = 0, second = 0;
-    unsigned builds = 0;
+    std::vector<uint32_t> built;
     Uploads uploads;
     const auto upload = [&](const raw::DescriptorWords &words) {
         return uploads(words);
     };
-    const auto build = [&](raw::PreparedDescriptorWords &prepared) {
-        prepared.words[0] = 33;
-        prepared.residuals[2] = ++builds;
-        prepared.residualMask = 4;
+    const auto build = [&](raw::PreparedDescriptorWords &prepared, uint32_t moved) {
+        built.push_back(moved);
+        prepared.words[0] = uint32_t(built.size());
         return true;
     };
-    ASSERT_NE(cache.resolve(&first, 1, build, upload), nullptr);
-    EXPECT_EQ(cache.resolve(&first, 2, build, upload)->residuals[2], 2u);
-    EXPECT_EQ(cache.resolve(&second, 2, build, upload)->residuals[2], 3u);
-    EXPECT_EQ(cache.resolve(&first, 2, build, upload)->residuals[2], 4u);
-    EXPECT_EQ(builds, 4u);
-    EXPECT_EQ(uploads.images.size(), 1u);
+    ASSERT_NE(cache.resolve(&first, 1u << 2, ~0u, build, upload), nullptr);
+    ASSERT_NE(cache.resolve(&first, 1u << 2, ~0u, build, upload), nullptr);
+    ASSERT_NE(cache.resolve(&second, 1u << 2, ~0u, build, upload), nullptr);
+    ASSERT_NE(cache.resolve(&first, 1u << 5, ~0u, build, upload), nullptr);
+    EXPECT_EQ(built, (std::vector<uint32_t>{~0u, 1u << 2, ~0u, ~0u}));
+    EXPECT_EQ(uploads.images.size(), 4u);
 }
 
-TEST(RawDescriptors, FailedPreparationOrUploadDoesNotPoisonTheGeneration)
+TEST(RawDescriptors, AnEntryTheGpuDoesNotReadFromTheSetKeepsItsUpload)
 {
     raw::PreparedDescriptors cache;
     int pipeline = 0;
-    unsigned builds = 0;
     Uploads uploads;
     const auto upload = [&](const raw::DescriptorWords &words) {
         return uploads(words);
     };
-    const auto build = [&](raw::PreparedDescriptorWords &prepared) {
-        ++builds;
+    uint32_t ubo = 0x1000, handle = 7;
+    const auto build = [&](raw::PreparedDescriptorWords &prepared, uint32_t moved) {
+        if (moved & 1u << 0)
+            prepared.words[0] = ubo;
+        if (moved & 1u << 1)
+            prepared.words[4] = handle;
+        return true;
+    };
+    constexpr uint32_t kHandleRead = 1u << 1;
+    const uint64_t address = cache.resolve(&pipeline, ~0u, kHandleRead, build, upload)->address;
+    for (unsigned draw = 0; draw < 100; ++draw) {
+        ubo += 256;
+        const auto *next = cache.resolve(&pipeline, 1u << 0, kHandleRead, build, upload);
+        ASSERT_NE(next, nullptr);
+        EXPECT_EQ(next->words[0], ubo);
+        EXPECT_EQ(next->address, address);
+    }
+    EXPECT_EQ(uploads.images.size(), 1u);
+    handle = 9;
+    const auto *moved = cache.resolve(&pipeline, 1u << 1, kHandleRead, build, upload);
+    ASSERT_NE(moved, nullptr);
+    EXPECT_NE(moved->address, address);
+    ASSERT_EQ(uploads.images.size(), 2u);
+    EXPECT_EQ(uploads.images.back()[4], 9u);
+    EXPECT_EQ(uploads.images.back()[0], ubo);
+}
+
+TEST(RawDescriptors, FailedPreparationOrUploadBuildsTheNextSetWhole)
+{
+    raw::PreparedDescriptors cache;
+    int pipeline = 0;
+    std::vector<uint32_t> built;
+    Uploads uploads;
+    const auto upload = [&](const raw::DescriptorWords &words) {
+        return uploads(words);
+    };
+    const auto build = [&](raw::PreparedDescriptorWords &prepared, uint32_t moved) {
+        built.push_back(moved);
         prepared.words[0] = 22;
         return true;
     };
-    const auto failedBuild = [](raw::PreparedDescriptorWords &) {
+    const auto failedBuild = [](raw::PreparedDescriptorWords &, uint32_t) {
         return false;
     };
     const auto failedUpload = [](const raw::DescriptorWords &) {
         return uint64_t(0);
     };
-    EXPECT_EQ(cache.resolve(&pipeline, 1, failedBuild, upload), nullptr);
+    EXPECT_EQ(cache.resolve(&pipeline, ~0u, ~0u, failedBuild, upload), nullptr);
     EXPECT_TRUE(uploads.images.empty());
-    EXPECT_EQ(cache.resolve(&pipeline, 1, build, failedUpload), nullptr);
-    ASSERT_NE(cache.resolve(&pipeline, 1, build, upload), nullptr);
-    EXPECT_EQ(builds, 2u);
+    EXPECT_EQ(cache.resolve(&pipeline, ~0u, ~0u, build, failedUpload), nullptr);
+    ASSERT_NE(cache.resolve(&pipeline, 1u << 3, ~0u, build, upload), nullptr);
     EXPECT_EQ(uploads.images.size(), 1u);
-    EXPECT_EQ(cache.resolve(&pipeline, 2, failedBuild, upload), nullptr);
-    ASSERT_NE(cache.resolve(&pipeline, 1, failedBuild, failedUpload), nullptr);
+    EXPECT_EQ(cache.resolve(&pipeline, 1u << 3, ~0u, failedBuild, upload), nullptr);
+    ASSERT_NE(cache.resolve(&pipeline, 1u << 3, ~0u, build, upload), nullptr);
+    EXPECT_EQ(built, (std::vector<uint32_t>{~0u, ~0u, ~0u}));
 }
 
 TEST(RawDescriptors, ADrawOfTheSamePipelineRebindsOnlyTheUniformBuffersThatMoved)
