@@ -192,8 +192,24 @@ def timed(e: dict) -> dict:
     return out | {'id': 't-' + e['id'], 'rect': [0, 0, w, h], 'readback': 'summary', 'repeats': 5, 'warmup': 2}
 
 
+def edge_fills() -> list[dict]:
+    """Give, per format, fills of a 32x32 target ending on and starting at its 16-texel tile edge, plain and reference.
+
+    Must pass: every texel outside the rectangle keeps the background. On 12 Nov (T-v3i) a reference BGRA8 fill left 0
+    in the 14 texels of column 15 past its rectangle, read as a stale L2 line written back over the CPU's fill.
+    """
+    out = []
+    for fmt in OWN:
+        for name, rect in (('end16', [1, 1, 16, 16]), ('from16', [16, 16, 31, 31])):
+            for reference in (False, True):
+                e = own_fill(fmt, f'-{name}{"-ref" if reference else ""}', (32, 32), reference=reference)
+                out.append(e | {'rect': rect, 'meta': e['meta'] | {'must_pass': 'kept_outside'}})
+    return out
+
+
 def generate() -> list[dict]:
     out = [own_fill(fmt) for fmt in OWN]
+    out += edge_fills()
     out += [own_fill(fmt, '-ref', reference=True) for fmt in ('bgra8unorm', 'rgba8unorm', 'rgba16float')]
     out += [compare_fill(fmt) for fmt in ('bgra8unorm', 'rgba8unorm')]
     copy = scale('1to1', 'bgra8unorm', False, True, compare='copy')
@@ -340,6 +356,8 @@ def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
         row = {'id': e['id'], 'status': result.get('status'), 'why': result.get('why', ''), 'form': result.get('form')}
         if data and ('fill' in e or e['twod'].get('clearFirst')):
             row['kept_outside'] = all(c == background(e) for c in outside)
+            if e.get('meta', {}).get('must_pass') == 'kept_outside':
+                row['verdict'] = 'pass' if row['kept_outside'] else 'FAIL: wrote outside its rectangle'
         if data and e['twod']['op'] == 'fill' and (want := wanted_fill(e)) is not None:
             row['fill_exact'] = sum(c == want for c in inside)
             row['fill_cells'] = len(inside)

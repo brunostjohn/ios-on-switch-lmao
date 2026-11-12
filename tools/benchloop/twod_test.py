@@ -41,6 +41,19 @@ class TwodTest(unittest.TestCase):
                 protocol.batch('one', [cell])
         protocol.batch('one', [twod.own_fill('bgra8unorm_srgb'), twod.fill('f', 'rgba32float', twod.F32, words)])
 
+    def test_an_edge_fill_that_writes_outside_its_rectangle_fails(self) -> None:
+        cell = twod.edge_fills()[0]
+        data = bytearray(twod.background(cell) * (32 * 32))
+        want = twod.wanted_fill(cell)
+        for y in range(1, 16):
+            for x in range(1, 16):
+                data[(y * 32 + x) * 4 : (y * 32 + x + 1) * 4] = want
+        clean = {'status': 'ok', 'texels': {'data': protocol.b64(bytes(data))}}
+        self.assertEqual(twod.analyse([cell], {cell['id']: clean})[0]['verdict'], 'pass')
+        data[(1 * 32 + 16) * 4 : (1 * 32 + 17) * 4] = bytes(4)
+        stray = {'status': 'ok', 'texels': {'data': protocol.b64(bytes(data))}}
+        self.assertTrue(twod.analyse([cell], {cell['id']: stray})[0]['verdict'].startswith('FAIL'))
+
     def test_no_two_by_two_mean_of_the_source_is_a_tie(self) -> None:
         data, side = twod.source_texels(), 64
         for y in range(0, side, 2):
