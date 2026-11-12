@@ -213,6 +213,50 @@ TEST(SubmitGate, AMutationWaitsForLockFreeSubmissionsAndIsWokenByTheLast)
 	gate.leaveFast(&lock);
 }
 
+// The four submitters and two mutators below hung under load (T-v3g's laptop gates): a mutation that counted a refused
+// enterFast went to sleep, the refusal undid its count without a wake, and every submitter then slept in enterSlow
+// behind that mutation. A refused submission's enterSlow wakes the mutation; the mutation looks again.
+TEST(SubmitGate, ARefusedFastEntryWakesTheMutationItHeldAsleep)
+{
+	IOLock lock;
+	SwitchGpuSubmitGate gate;
+	ASSERT_TRUE(gate.enterFast());
+	std::promise<void> asleep;
+	int sleeps = 0;
+	lock.sleeping = [&] {
+		if (++sleeps == 1)
+			asleep.set_value();
+	};
+	auto mutation = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		EXPECT_TRUE(gate.beginMutation(&lock));
+		gate.endMutation(&lock);
+		IOLockUnlock(&lock);
+	});
+	ASSERT_EQ(asleep.get_future().wait_for(2s), std::future_status::ready);
+	EXPECT_FALSE(gate.enterFast());
+	auto refused = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		EXPECT_TRUE(gate.enterSlow(&lock));
+		IOLockUnlock(&lock);
+		gate.leaveFast(&lock);
+	});
+	for (int i = 0; i < 200; i++) {
+		IOLockLock(&lock);
+		const int seen = sleeps;
+		IOLockUnlock(&lock);
+		if (seen >= 3)
+			break;
+		std::this_thread::sleep_for(5ms);
+	}
+	IOLockLock(&lock);
+	EXPECT_GE(sleeps, 3) << "the mutation looked again (and the refused submitter slept behind it)";
+	IOLockUnlock(&lock);
+	gate.leaveFast(&lock);
+	ASSERT_EQ(mutation.wait_for(2s), std::future_status::ready);
+	ASSERT_EQ(refused.wait_for(2s), std::future_status::ready);
+}
+
 TEST(SubmitGate, LockFreeSubmissionsNeverOverlapAMutation)
 {
 	IOLock lock;

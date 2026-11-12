@@ -38,6 +38,8 @@ public:
 
 	bool enterSlow(IOLock *lock)
 	{
+		// enterFast's refused count was undone with no wake: a mutation that saw it as the last one is woken here
+		IOLockWakeup(lock, this, false);
 		while (!closed_ && (mutations_ || mutating_))
 			IOLockSleep(lock, this, THREAD_UNINT);
 		if (closed_)
