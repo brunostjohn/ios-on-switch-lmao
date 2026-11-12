@@ -49,19 +49,21 @@ reads the facade's process-wide counters: how many command buffers went to raw, 
 
 ## GPU, compositor and pacing scenes
 
-The `gpu.*` tests are offscreen scenes (`gpu/scenes`): each draws, reads every result back and compares it with a
-reference computed on the CPU (`core/`). On the Switch each one runs twice: on the process's default Metal device
-(the raw GM20B facade) and on the m2v device that facade wraps. Fields prefixed `raw_` and `m2v_` belong
-to those two runs. `raw_paths=` lists the path each command buffer took, as `raw`, `m2v:<reason>:<predicate>` or
+The `gpu.*` tests are offscreen scenes (`gpu/scenes`, and `gpu/scenes27` for the ones only iOS 27's app runs): each
+draws, reads every result back and compares it with a reference computed on the CPU (`core/`). A picture the CPU can't
+model (Core Animation's states with zero uniforms, a cubic filter) is compared with the same picture drawn on a Mac's
+GPU with the same IPSW's QuartzCore (`goldens/scenes_<build>.txt`, the 8x8 block means `gpu.ca.sweep` uses below;
+`golden_<picture>=exact|close|wrong|missing`). `bazel run //hw_test_app:scene_goldens` (again with `--config=ios27`)
+redraws them after a scene's picture changes. Only the process's default Metal device (the raw GM20B facade) decides a
+scene's verdict. While the facade still wraps an m2v device, the scene runs on it too, for its `m2v_` fields and
+`m2v_same=` (the pictures it drew in raw's bytes); nothing there passes or fails the test, and a build without m2v runs
+nothing there. `raw_paths=` lists the path each command buffer took, as `raw`, `m2v:<reason>:<predicate>` or
 `split:…`. `raw_cbs`, `m2v_cbs` and `m2v_why` are the facade's process-wide counters over the run; they come from
 `switchRawCounters` and `switchM2VDevice` in `RawMetalDevice.mm` and `switchRawPath` in `RawMetalCommandBuffer.mm`,
-which only debug builds have. The app's
-own shaders aren't in the raw pack, so draws with them always go to m2v. Clears, blits, uploads and the `gpu.ca.*`
-scenes, which build Core Animation's own pipeline states from QuartzCore's library, are what reach raw. A failed
-comparison names the first wrong pixel, both values, the bounding box, an 8x8 hex map of the wrong area and any streak
-columns, and saves got, want and diff PNGs under `Documents/gpu/<id>/`.
+which only debug builds have. A failed comparison names the first wrong pixel, both values, the bounding box, an 8x8
+hex map of the wrong area and any streak columns, and saves got, want and diff PNGs under `Documents/gpu/<id>/`.
 
-`gpu.ca.sweep` checks the raw path against a Mac's GPU, since m2v is no reference. It draws one Core Animation state of
+`gpu.ca.sweep` checks the raw path against a Mac's GPU too. It draws one Core Animation state of
 each class in the raw pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time). It compares each
 attachment with that state as the same IPSW's QuartzCore draws it on a Mac (`goldens/ca_<build>.txt`). The comparison
 is the 8x8 block means of every channel, which another GPU's filtering and rounding move by a step or two and a wrong
