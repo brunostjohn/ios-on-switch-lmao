@@ -18,8 +18,15 @@ void AGXDeviceUserClient::dropPromiseSurfaces(uint32_t promise)
 // lock_ held. A word written here reaches a GPU reader parked on it only through the write-combined fence page.
 void AGXDeviceUserClient::releasePromise(uint32_t promise)
 {
-	if (switch_gpu_promise_release(&promises_[promise], promiseWord(promise)))
-		__asm__ volatile("dsb sy" ::: "memory");
+	const uint32_t value = promises_[promise].value;
+	if (!switch_gpu_promise_release(&promises_[promise], promiseWord(promise)))
+		return;
+	__asm__ volatile("dsb sy" ::: "memory");
+#if TGM_STATS
+	tgm_promise_cpu_raised(tgm_fence_offset(promiseWord(promise)), value);
+#else
+	(void)value;
+#endif
 }
 
 // lock_ held. All: the connection's close. Else the kept ones: those their jobs released are free, and those a kill or

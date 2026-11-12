@@ -16,6 +16,9 @@ static void present_typed_complete(void *unused)
 	done = tgm_present.done;
 	arg = tgm_present.arg;
 	mutex_unlock(&tgm_present.lock);
+#if TGM_STATS
+	tgm_present_promises_done(&tgm_present.tokens, tgm_present.queued, tgm_present.copy.valid);
+#endif
 	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, 0,
 							  switch_gpu_timeline_promote);
 	mutex_lock(&tgm_present.lock);

@@ -639,6 +639,9 @@ struct tgm_import_cost {
 	const char *owner;
 };
 #if TGM_STATS
+/* Debug kernels: a writer promise's word the CPU raised (gpu_promise.c), and whether a word was one of the last few */
+void tgm_promise_cpu_raised(uint32_t offset, uint32_t value);
+int tgm_promise_was_cpu_raised(uint32_t offset, uint32_t value);
 uint64_t tgm_stats_cpu_ns(void);
 uint64_t tgm_stats_zero_fills(void);
 void tgm_stats_import_cost(const struct tgm_import_cost *cost);
