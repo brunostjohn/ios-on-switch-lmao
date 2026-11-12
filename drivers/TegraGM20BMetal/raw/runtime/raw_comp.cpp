@@ -142,6 +142,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
         comp_.mems.push_back(std::make_unique<CompMem>(CompMem{it->bo, kind, tag, 0}));
         mem = comp_.mems.back().get();
         comp_.ready.erase(it);
+        backingsChanged();
     }
     t.va = mem->bo.va;
     t.storage = {t.va, bytes, false};
@@ -192,6 +193,7 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
             set_.add(k_, bo, TegraGM20BSurfaceWrite);
             comp_.made(w);
             comp_.ready.push_back({bo, w.kind, commitCount_, compClock()});
+            backingsChanged();
             RAW_DIAGNOSTIC(stats.compMade++);
             RAW_DIAGNOSTIC(stats.compHeld++);
             RAW_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);

@@ -1880,7 +1880,9 @@ private:
         uint32_t tag = 0;
         uint32_t lastUse = 0;
         bool submitted = false;
-        uint64_t lastCommit = 0, lastClosed = 0;  // commitCount_ and closedCount_ when a pass last asked for it
+        // commitCount_ and closedCount_ when a pass last asked for it: the encoding thread stores them with no lock
+        // (lastBacking), the compressed-memory thread's trim reads them under lock_
+        std::atomic<uint64_t> lastCommit{0}, lastClosed{0};
         uint64_t usedNs = 0;        // compClock() when made, and at each commit of a command buffer that used it
         CompMem *comp = nullptr;    // the compressed memory it is a view of (raw_comp.h), else none
         PlainMem *plain = nullptr;  // or the plain memory (a memoryless one's)
@@ -1919,6 +1921,30 @@ private:
     }
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
+    // What backing() answered, kept by the encoding thread for lastBacking
+    struct BackingAsk {
+        uint32_t width = 0, height = 0, format = 0, tag = 0;
+        uint8_t samples = 0;
+        bool zeta = false, blockLinear = false, compression = false;
+        Backing *backing = nullptr;
+        uint64_t epoch = 0;
+
+        bool same(const Texture &m, uint32_t t, bool linear, bool compressed) const
+        {
+            return backing && width == m.width && height == m.height && format == m.format && tag == t &&
+                   samples == m.samples && zeta == m.zeta && blockLinear == linear && compression == compressed;
+        }
+    };
+    std::array<BackingAsk, 16> asks_{};
+    uint32_t nextAsk_ = 0;
+    // moved, lock_ held, by everything that changes what backing() answers: memory made, a backing retired, a trim
+    std::atomic<uint64_t> backingEpoch_{1};
+    void backingsChanged()
+    {
+        backingEpoch_.fetch_add(1, std::memory_order_seq_cst);
+    }
+    // trimmed backings, deleted at the encoding thread's next begin(), where no lastBacking reads one
+    std::vector<Backing *> trimmedBackings_;
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;
     bool growing_ = false, stopping_ = false;
@@ -1992,6 +2018,9 @@ private:
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test
     // scratch remain separate. Plain and compressed views keep their own backing and retire after their final fence.
     Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true);
+    // The backing backing() last answered the same ask with, taken with no lock while nothing that decides backings has
+    // changed since (backingEpoch_); nullptr: ask backing() under lock_. The encoding thread's alone.
+    Texture *lastBacking(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true);
     void trimBackings();
 
     // Compressed backings (raw_comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or
