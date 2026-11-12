@@ -58,6 +58,7 @@ struct PromiseVICPathTest: GPUPathTest {
     }
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
+        guard PathParts.ownRouteRaw(gpu, part: "the test", counters: counters, &metrics) else { return [] }
         guard let maker = GPUConnection() else { throw TestFailure("no TegraGM20B connection") }
         let source = try Self.nv12(Self.width, Self.height)
         let destination = try Self.nv12(Self.width / 2, Self.height / 2)

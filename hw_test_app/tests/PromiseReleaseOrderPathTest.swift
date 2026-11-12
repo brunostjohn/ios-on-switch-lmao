@@ -11,7 +11,7 @@ import Metal
 /// 5 ms later the test cancels the promise. A release the GPU never saw would leave its copy parked past it, so each
 /// copy must end within lostMs of its cancel (lost: those that did not, judged zero), and the releases counted
 /// (promise_cpu_releases) must equal the copies that ended.
-/// gpu.path.promise_unkept judges the hang rule's own raise the same way (raise_to_end_ms).
+/// gpu.path.promise_unkept judges the give-up's own raise the same way (raise_to_end_ms).
 struct PromiseReleaseOrderPathTest: GPUPathTest {
     let id = "gpu.path.promise_release_order"
     let name = "Every promise word the CPU releases is seen by the GPU acquire parked on it"
@@ -24,6 +24,7 @@ struct PromiseReleaseOrderPathTest: GPUPathTest {
             .width: Self.size, .height: Self.size, .bytesPerElement: 4, .bytesPerRow: rowBytes,
             .allocSize: rowBytes * Self.size, .pixelFormat: 0x4247_5241,
         ]
+        guard PathParts.ownRouteRaw(gpu, part: "the test", counters: counters, &metrics) else { return [] }
         guard let surface = IOSurface(properties: properties), let maker = GPUConnection() else {
             throw TestFailure("no IOSurface or TegraGM20B connection")
         }
@@ -84,7 +85,7 @@ struct PromiseReleaseOrderPathTest: GPUPathTest {
                     worst))
         }
         if after.abandoned != before.abandoned {
-            failures.append("the hang rule gave \(after.abandoned - before.abandoned) promises up: a release was lost")
+            failures.append("\(after.abandoned - before.abandoned) promises were given up: a release was lost")
         }
         return failures
     }

@@ -26,6 +26,9 @@ struct PresentPromisePathTest: GPUPathTest {
             .width: Self.size, .height: Self.size, .bytesPerElement: 4, .bytesPerRow: rowBytes,
             .allocSize: rowBytes * Self.size, .pixelFormat: 0x4247_5241,
         ]
+        guard PathParts.ownRouteRaw(gpu, part: "the held command buffer", counters: counters, &metrics) else {
+            return []
+        }
         guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface creation failed") }
         surface.lock(options: [], seed: nil)
         for at in stride(from: 0, to: rowBytes * Self.size, by: 4) {
@@ -68,17 +71,17 @@ struct PresentPromisePathTest: GPUPathTest {
         commands.waitUntilCompleted()
         await context.clearStage()
         let centre = render.pixel(render.width / 2, render.height / 2)
-        let level = render.levels
         metrics.set("held", scheduledEarly ? 1 : 0)
         metrics.set("render_ms", String(format: "%.1f", renderMs))
-        metrics.set("centre", centre.prefix(3).map { String(Int($0)) }.joined(separator: ","))
+        metrics.set(
+            "centre", centre.prefix(3).map { String(Int(($0 * render.levels).rounded())) }.joined(separator: ","))
         var failures: [String] = []
         if !scheduledEarly { failures.append("waitUntilScheduled waited for the event: nothing was promised early") }
         if commands.status != .completed {
             failures.append("the held command buffer ended \(commands.status.rawValue)")
         }
-        if centre[1] < level * 0.8 || centre[0] > level * 0.2 {
-            failures.append("the render shows \(centre.prefix(3).map { Int($0) }), not the held job's green")
+        if centre[1] < 0.8 || centre[0] > 0.2 {
+            failures.append("the render shows \(centre.prefix(3)), not the held job's green")
         }
 
         return failures

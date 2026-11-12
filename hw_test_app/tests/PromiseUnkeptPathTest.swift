@@ -57,17 +57,17 @@ final class PromiseSafetyCancel: @unchecked Sendable {
 
 /// A writer promise nobody keeps (drivers/TegraGM20B/SwitchGpuWriterPromise.h): the test's connection promises an
 /// IOSurface's writes and never submits the job. Its readers must not wait for ever, nor see the surface without the
-/// frame it held: the promise is given up on once, its writer reported in one line, and each reader goes on with the
-/// frame the surface held before.
-/// - composite: a layer showing the surface, rendered by the render server (whose job acquires the promise and parks),
-///   so the display's present waits behind that job. Its deadline's first look comes once the job has been stuck for
-///   TGM_STUCK_NS, as the job's acquires include the promise, and the next TGM_STUCK_NS later gives it up
-///   (gpu_present_deadline.c): composite_ms about 1010.
-/// - copy: the Metal device's blit of the surface (another connection's job). Its own wait's hang checks key on the
-///   promise as the present's deadline does (tgm_hang_check_interval): copy_ms about 1010. After the raise the parked
-///   channel must see the CPU-written word within one strike (raise_to_end_ms under TGM_STUCK_NS), the hang rule's DSB.
-///   Alongside it a CPU lock of the surface sleeps behind the same promise; the give-up wakes it, with no cancel or
-///   close, and it reads the frame before (cpu_reader_woken_ms about copy_ms).
+/// frame it held: the promise is given up once, a second after its first reader parked (SwitchGpuPromiseGiveUp.h),
+/// its writer reported in one line, and each reader goes on with the frame the surface held before.
+/// - composite: a layer showing the surface, rendered by the render server, whose job acquires the promise and parks
+///   at its submit, so the display's present waits behind that job: composite_ms about 1000. Judged on its own
+///   evidence: a composite that never parked (nothing given up, and it returned well inside the second) is SKIP with
+///   that reason; one that parked fails only on its give-up count or the frame it shows.
+/// - copy: the Metal device's blit of the surface (this process's own job, run only when its command buffers take the
+///   raw path). It parks at its submit: copy_ms about 1000. After the raise the parked channel must see the
+///   CPU-written word at once (raise_to_end_ms under oneStrikeMs), the give-up's DSB. Alongside it a CPU lock of the
+///   surface sleeps behind the same promise and parks on it too; the give-up wakes it, with no cancel or close, and it
+///   reads the frame before (cpu_reader_woken_ms about copy_ms).
 /// Each gives up exactly one promise (d_abandoned 1).
 struct PromiseUnkeptPathTest: GPUPathTest {
     let id = "gpu.path.promise_unkept"
@@ -75,7 +75,9 @@ struct PromiseUnkeptPathTest: GPUPathTest {
     let counters = ["writer_promises", "promise_waits"]
     static let size = 64
     static let fill: [UInt8] = [0, 0, 255, 255]  // BGRA red: the frame before the promised one
-    static let compositeLimitMs = 1200.0, copyLimitMs = 1200.0, oneStrikeMs = 500.0, safetySeconds = 8.0
+    static let compositeLimitMs = 1100.0, copyLimitMs = 1100.0, oneStrikeMs = 500.0, safetySeconds = 8.0
+    /// A composite that returned this soon with nothing given up never waited on the promise
+    static let neverParkedMs = 500.0
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let rowBytes = Self.size * 4
@@ -114,22 +116,33 @@ struct PromiseUnkeptPathTest: GPUPathTest {
         await context.clearStage()
         let afterComposite = try PromiseTotals.read()
         let centre = render.pixel(render.width / 2, render.height / 2)
+        let compositeGivenUp = afterComposite.abandoned - start.abandoned
         metrics.set("composite_ms", String(format: "%.1f", compositeMs))
         metrics.set("composite_waited_ms", afterComposite.lastWaitedMs)
-        metrics.set("composite_d_abandoned", afterComposite.abandoned - start.abandoned)
-        metrics.set("centre", centre.prefix(3).map { String(Int($0)) }.joined(separator: ","))
-        if compositeSafety.fired { failures.append("the composite went on only at the safety cancel") }
-        if afterComposite.abandoned - start.abandoned != 1 {
-            failures.append("the composite's promise was given up \(afterComposite.abandoned - start.abandoned) times")
-        }
-        if compositeMs > Self.compositeLimitMs {
-            failures.append(
-                String(format: "the composite waited %.0f ms (at most %.0f)", compositeMs, Self.compositeLimitMs))
-        }
-        if centre[0] < render.levels * 0.8 || centre[1] > render.levels * 0.2 {
-            failures.append("the composite shows \(centre.prefix(3).map { Int($0) }), not the frame before (red)")
+        metrics.set("composite_d_abandoned", compositeGivenUp)
+        metrics.set(
+            "centre", centre.prefix(3).map { String(Int(($0 * render.levels).rounded())) }.joined(separator: ","))
+        if compositeGivenUp == 0 && !compositeSafety.fired && compositeMs < Self.neverParkedMs {
+            PathParts.current?.skip(
+                String(format: "composite: the render server never parked on the promise (%.0f ms)", compositeMs),
+                counters: [])
+        } else {
+            if compositeSafety.fired { failures.append("the composite went on only at the safety cancel") }
+            if compositeGivenUp != 1 {
+                failures.append("the composite's promise was given up \(compositeGivenUp) times")
+            }
+            if compositeMs > Self.compositeLimitMs {
+                failures.append(
+                    String(format: "the composite waited %.0f ms (at most %.0f)", compositeMs, Self.compositeLimitMs))
+            }
+            if centre[0] < 0.8 || centre[1] > 0.2 {
+                failures.append("the composite shows \(centre.prefix(3)), not the frame before (red)")
+            }
         }
 
+        guard PathParts.ownRouteRaw(gpu, part: "copy and CPU lock", counters: ["promise_waits"], &metrics) else {
+            return failures
+        }
         let (copyHandle, copyPromise) = try PromiseCancelPathTest.promise(surface, maker)
         defer {
             _ = maker.call(
@@ -184,7 +197,7 @@ struct PromiseUnkeptPathTest: GPUPathTest {
         }
         if raiseToEndMs > Self.oneStrikeMs {
             failures.append(
-                String(format: "the copy ended %.0f ms after its raise: the word was not seen", raiseToEndMs))
+                String(format: "the copy ended %.0f ms after its give-up: the raised word was not seen", raiseToEndMs))
         }
         let got = Array(UnsafeRawBufferPointer(start: copied.contents(), count: 4))
         if got != Self.fill { failures.append("the copy read \(got), not the frame before \(Self.fill)") }

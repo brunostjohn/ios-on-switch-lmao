@@ -10,8 +10,8 @@ import Metal
 /// surface into a buffer, so its job acquires the promise's fence word on the GPU (ACQ_GEQ) and parks there. 30 ms
 /// later the test cancels the promise, which the kernel writes from the CPU. The copy must complete soon after, with
 /// the surface's CPU fill: a channel parked on ACQ_GEQ reads the word again after a CPU write, which the kernel's
-/// cancel, kill and close releases and the hang rule's all rely on. Were it not so, the copy would wait for the hang
-/// rule (its "GPU hang, releasing the writer promise" line, which finds the word written and kills the channel).
+/// cancel, kill and close releases and the give-up's raise all rely on. Were it not so, the copy would wait for the
+/// give-up a second after it parked (its "writer promise ... was not kept" line).
 struct PromiseCancelPathTest: GPUPathTest {
     let id = "gpu.path.promise_cancel"
     let name = "A job parked on the GPU for a writer promise goes on once the CPU cancels it"
@@ -55,6 +55,7 @@ struct PromiseCancelPathTest: GPUPathTest {
             .width: Self.size, .height: Self.size, .bytesPerElement: 4, .bytesPerRow: rowBytes,
             .allocSize: rowBytes * Self.size, .pixelFormat: 0x4247_5241,
         ]
+        guard PathParts.ownRouteRaw(gpu, part: "the test", counters: counters, &metrics) else { return [] }
         guard let surface = IOSurface(properties: properties), let maker = GPUConnection() else {
             throw TestFailure("no IOSurface or TegraGM20B connection")
         }
