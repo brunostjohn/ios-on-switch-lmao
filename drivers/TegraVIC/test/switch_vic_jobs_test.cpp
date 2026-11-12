@@ -349,9 +349,10 @@ void switch_vic_engine_describe(char *text, size_t size)
     snprintf(text, size, "falcon CPUCTL 0");
 }
 
-bool switch_vic_engine_reset()
+bool switch_vic_engine_reset(bool *drained)
 {
     EXPECT_TRUE(powerLock->locked);
+    *drained = true;
     engineSteps.emplace_back("reset");
     return true;
 }
