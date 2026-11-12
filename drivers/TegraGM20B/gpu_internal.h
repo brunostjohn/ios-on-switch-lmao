@@ -318,6 +318,8 @@ struct tgm_chan {
 	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
 	 * class (PTIMER units) and the pushes counted, for its owner */
 	u32 prof_seqno, prof_first, prof_count, prof_subs; /* prof_seqno: the job's last, prof_first its first */
+	u32 prof_stamped, prof_stamps, prof_spans; /* this window's jobs kicked with stamps, their stamps, spans read */
+	u64 prof_span;                             /* those spans (PTIMER units) */
 	u8 prof_cls[TGM_PROF_MAX], prof_ilk[TGM_PROF_MAX];
 	u16 prof_draws[TGM_PROF_MAX], prof_sdraws[TGM_PROF_MAX], prof_kpx[TGM_PROF_MAX];
 	struct switch_gpu_prof_seq prof_run, prof_slow; /* the profile being read, the window's slowest */

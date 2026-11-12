@@ -83,7 +83,8 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 	static struct {
 		char name[17];
 		u64 sum, max;
-		u32 n, subs;
+		u32 n, subs, stamped, stamps, spans;
+		u64 span;
 		u64 prof_ns[TGM_PC_COUNT];
 		u32 prof_n[TGM_PC_COUNT];
 		u64 prof_dn[TGM_PC_COUNT], prof_sdn[TGM_PC_COUNT];
@@ -108,10 +109,11 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		u64 sum = __atomic_exchange_n(&chan->stat_exec, 0, __ATOMIC_RELAXED);
 		u64 max = __atomic_exchange_n(&chan->stat_exec_max, 0, __ATOMIC_RELAXED);
 		u32 subs = __atomic_exchange_n(&chan->prof_subs, 0, __ATOMIC_RELAXED);
+		u32 stamped = __atomic_exchange_n(&chan->prof_stamped, 0, __ATOMIC_RELAXED);
 		struct stats_submits submits = {0};
 
 		stats_submits_take(chan, &submits);
-		if ((!n && !subs && !submits.n) || chan->kernel)
+		if ((!n && !subs && !stamped && !submits.n) || chan->kernel)
 			continue;
 		for (i = 0; i < used && strncmp(o[i].name, chan->owner, sizeof(o[i].name)); i++)
 			;
@@ -126,6 +128,10 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		if (max > o[i].max)
 			o[i].max = max;
 		o[i].subs += subs;
+		o[i].stamped += stamped;
+		o[i].stamps += __atomic_exchange_n(&chan->prof_stamps, 0, __ATOMIC_RELAXED);
+		o[i].spans += __atomic_exchange_n(&chan->prof_spans, 0, __ATOMIC_RELAXED);
+		o[i].span += __atomic_exchange_n(&chan->prof_span, 0, __ATOMIC_RELAXED);
 		stats_submits_merge(&o[i].submits, &submits);
 		switch_gpu_job_take(&chan->stat_jobs, &taken);
 		switch_gpu_job_merge(&o[i].jobs, &taken);
@@ -203,6 +209,14 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		nvxnu_stats("tegra-gm20b: gpuprof %s", line);
 		if (switch_gpu_prof_seq_format(line, len, o[i].name, &o[i].seq))
 			nvxnu_stats("tegra-gm20b: gpuprof sequence %s", line);
+	}
+	/* what the profile's stamps cost each owner, so a pacing change between kernels with and without them is told apart */
+	for (i = 0; i < EXEC_OWNERS; i++) {
+		const struct switch_gpu_prof_cost cost = {o[i].stamped, o[i].stamps, o[i].spans, o[i].n,
+							  o[i].span * rate >> 16, o[i].sum * rate >> 16};
+
+		if (switch_gpu_prof_cost_format(line, len, &cost))
+			nvxnu_stats("tegra-gm20b: gpuprof cost %s:%s", o[i].name, line);
 	}
 }
 

@@ -362,9 +362,9 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 		Between(client(), "void AGXDeviceUserClient::scanPushes(", "\n}\n");
 	EXPECT_THAT(scan, HasSubstr("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
-	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
+	// A stamp only after a push the profile's rule left a class (switch_gpu_prof_stamped), only on a profiled submission.
 	EXPECT_THAT(Between(gpu(), "void chan_job_entry(", "\n}\n"),
-		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
+		    HasSubstr("if (prof && chan->prof_cls[i] != TGM_PC_SKIP) {"));
 	// A job with internal fences is profiled whole: read at its last seqno, against its first's start stamp.
 	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
 		    HasSubstr("|| count > TGM_PROF_MAX || profiled))"));
@@ -1077,6 +1077,22 @@ TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
 
 // A submission that writes a block-linear IOSurface under a CPU write lock keeps the lock's rows before it runs, with the
 // connection's lock dropped and before the active-submit gate's channel entry (the copy engine's wait sleeps).
+// The push profile's stamps (debug kernels): one rule (switch_gpu_prof_stamped) decides the room a profiled job takes, the
+// pushes that stamp and the classes read back, so the compositor stamps only where its job already waits for idle; and
+// every window says per owner what the stamps cost.
+TEST(GM20BPushScanSource, OneRuleDecidesAProfiledJobsStamps)
+{
+	EXPECT_THAT(flat(definition(gpu(), "static void chan_submission_room(")),
+		    HasSubstr("stamps += switch_gpu_prof_stamped(chan->critical, &pushes[i], i, count, (*prof)->cls[i]);"));
+	EXPECT_THAT(flat(definition(gpu(), "static inline __attribute__((always_inline)) void chan_job_entry(")),
+		    HasSubstr("if (prof && chan->prof_cls[i] != TGM_PC_SKIP) {"));
+	const std::string body = flat(gpu());
+	expectBefore(body, "const int stamped = switch_gpu_prof_stamped(chan->critical, &pushes[i], i, count, prof->cls[i]);",
+		     "last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);");
+	EXPECT_THAT(body, HasSubstr("__atomic_fetch_add(&chan->prof_span, end - start, __ATOMIC_RELAXED);"));
+	EXPECT_THAT(body, HasSubstr("nvxnu_stats(\"tegra-gm20b: gpuprof cost %s:%s\", o[i].name, line);"));
+}
+
 // gpu.path.resource_ready: a GPU write under a CPU write lock keeps the lock's rows for the merge only when its
 // submission asks before its job is kicked (TegraGM20BViews.h tgm_views_job_writes). Both submission paths ask, once
 // their uses are resolved (Exec outside the connection lock); nothing else calls the per-surface hook, so no path can

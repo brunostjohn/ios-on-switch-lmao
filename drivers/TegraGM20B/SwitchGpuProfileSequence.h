@@ -55,6 +55,42 @@ static inline void switch_gpu_prof_seq_take(struct switch_gpu_prof_seq *slow, st
 		out->n = 0;
 }
 
+/* Whether a profiled job stamps after push `i` of `count`. A stamp waits for idle, so a push that may continue into the
+ * next (incomplete) or that the scan could not read (TGM_PC_SKIP) gets none, and the compositor's pushes get one only
+ * where its job already waits for idle (a batch's end, or its last push before the fence): a profiled compositor frame
+ * drains no more often than any other. An unstamped push's time is counted with the next stamped one. */
+static inline int switch_gpu_prof_stamped(int compositor, const struct tgm_push *push, uint32_t i, uint32_t count,
+					  uint8_t cls)
+{
+	return !push->incomplete && cls != TGM_PC_SKIP && (!compositor || push->fence || i + 1 == count);
+}
+
+/* An owner's stamped jobs in a window, its spans in ns: how many were kicked with their stamps and how many stamps; the
+ * profiled ones read back and their spans (first start to last end); and every job span the window counted, the
+ * profiled ones among them. */
+struct switch_gpu_prof_cost {
+	uint32_t stamped, stamps, profiled, jobs;
+	uint64_t profiled_ns, jobs_ns;
+};
+
+/* " N stamped (S stamps): A us each vs B us unstamped (+D us)": what the stamps' waits added, as the profiled jobs' mean
+ * span less the mean of the owner's other jobs in the window (one estimate over different jobs, not the same job timed
+ * twice). Returns 0 with nothing stamped. */
+static inline int switch_gpu_prof_cost_format(char *buf, unsigned long len, const struct switch_gpu_prof_cost *c)
+{
+	uint64_t with = 0, without = 0;
+
+	if (!c->stamped)
+		return 0;
+	if (!c->profiled || c->jobs <= c->profiled || c->jobs_ns < c->profiled_ns)
+		return snprintf(buf, len, " %u stamped (%u stamps), no span to compare", c->stamped, c->stamps);
+	with = c->profiled_ns / c->profiled / 1000;
+	without = (c->jobs_ns - c->profiled_ns) / (c->jobs - c->profiled) / 1000;
+	return snprintf(buf, len, " %u stamped (%u stamps): %llu us each vs %llu us unstamped (%+lld us)", c->stamped,
+			c->stamps, (unsigned long long)with, (unsigned long long)without,
+			(long long)with - (long long)without);
+}
+
 /* A push: D draw, C clear, P pass, S sync, X compute, Y copy, 2 2D engine, T state; then for draws and clears its
  * target's thousands of samples (a multisampled target counts its sample grid: 720x1280 at 4x is 3686k), p if
  * pitch-linear, m if multisampled, /draws, i and the interlock enables (conflict detection on); then its microseconds. */

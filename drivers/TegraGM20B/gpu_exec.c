@@ -301,7 +301,7 @@ static inline __attribute__((always_inline)) void chan_job_entry(void *context, 
 
 	nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 			      pushes[i].no_prefetch || (job->unprefetched && !i));
-	if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {
+	if (prof && chan->prof_cls[i] != TGM_PC_SKIP) {
 		push_stamp(&chan->chan.push, chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
 			   chan->submitted + 1);
 		PUSH_KICK(&chan->chan.push);
@@ -352,7 +352,7 @@ static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *p
 	if (*prof && (!stats_on() || chan->kernel || count > TGM_PROF_MAX || profiled))
 		*prof = NULL;
 	for (i = 0; *prof && i < count; i++)
-		stamps += !pushes[i].incomplete && (*prof)->cls[i] != TGM_PC_SKIP;
+		stamps += switch_gpu_prof_stamped(chan->critical, &pushes[i], i, count, (*prof)->cls[i]);
 	*entries = count + 6 + stamps + job_fences + CHAN_WAKE_ENTRIES + 1;
 	*words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps +
 		 SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16;
@@ -505,10 +505,16 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 		PUSH_KICK(&chan->chan.push);
 	}
 	if (prof) {
-		memcpy(chan->prof_cls, prof->cls, count);
-		for (i = 0; i < count; ++i)
-			if (pushes[i].incomplete)
-				chan->prof_cls[i] = TGM_PC_SKIP;
+		u32 stamps = 0;
+
+		for (i = 0; i < count; ++i) {
+			const int stamped = switch_gpu_prof_stamped(chan->critical, &pushes[i], i, count, prof->cls[i]);
+
+			chan->prof_cls[i] = stamped ? prof->cls[i] : TGM_PC_SKIP;
+			stamps += stamped;
+		}
+		__atomic_fetch_add(&chan->prof_stamped, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_stamps, stamps, __ATOMIC_RELAXED);
 		memcpy(chan->prof_draws, prof->draws, count * sizeof(prof->draws[0]));
 		memcpy(chan->prof_sdraws, prof->sampleDraws, count * sizeof(prof->sampleDraws[0]));
 		memcpy(chan->prof_kpx, prof->kpx, count * sizeof(prof->kpx[0]));

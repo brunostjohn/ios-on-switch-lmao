@@ -5,15 +5,16 @@
 #include "gpu_inline.h"
 
 /* push profile (stats):
- * What each push of a submission costs the GPU, sampled: one submission in 16 of each connection (the user client's
- * choice, with each push's class from the method stream it read, struct tgm_prof) stamps the GPU's time after each of its
+ * What each push of a submission costs the GPU, sampled: one submission in 64 of each connection (the user client's
+ * scanSubmission, with each push's class from the method stream it read, struct tgm_prof) stamps the GPU's time after its
  * pushes, a 16-byte semaphore release after wait-for-idle (push_stamp, as the submission's own start and end stamps) into
  * its own slot of the channel's CHAN_PROF page, each kicked as an entry of its own after the push's. So each push's time
  * is the GPU's from the end of the push before (the start stamp for the first) until its own work has drained, and the
- * fence push (WFI, L2 flush) takes the rest up to the end stamp; a push not stamped (TGM_PC_SKIP: a method may continue
- * into the next push, or the method stream was not read) has its time counted with the next one stamped. The stamps' wait
- * for idle keeps pushes from overlapping in a profiled submission, so those run slightly longer than others: one in 16
- * per connection, no more than one in flight per channel, and none with more than TGM_PROF_MAX pushes. A job with internal
+ * fence push (WFI, L2 flush) takes the rest up to the end stamp; a push not stamped (switch_gpu_prof_stamped: a method
+ * may continue into the next push, the method stream was not read, or a compositor push that ends no batch) has its time
+ * counted with the next one stamped. The stamps' wait for idle keeps pushes from overlapping in a profiled submission,
+ * so those run slightly longer than others ("gpuprof cost" gives how much): one in 64 per connection, no more than one in
+ * flight per channel, and none with more than TGM_PROF_MAX pushes. A job with internal
  * fences is read once its last seqno completes, against its first seqno's start stamp. Each window, the "gpuprof" line
  * gives every process's time by class (stats_exec_owners), and "gpuprof sequence" its slowest profile push by push. */
 static inline void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
@@ -69,6 +70,8 @@ static inline void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64
 		__atomic_fetch_add(&chan->prof_n[TGM_PC_FENCE], 1, __ATOMIC_RELAXED);
 		run->ns = tgm_deadline_pt_ns(end - start);
 		switch_gpu_prof_seq_offer(&chan->prof_slow, run);
+		__atomic_fetch_add(&chan->prof_span, end - start, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_spans, 1, __ATOMIC_RELAXED);
 	}
 	__atomic_fetch_add(&chan->prof_subs, 1, __ATOMIC_RELAXED);
 }

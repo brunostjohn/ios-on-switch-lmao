@@ -303,6 +303,16 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_prof_cost_test",
+    srcs = [
+        "switch_gpu_prof_cost_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuProfileSequence.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "switch_gpu_job_timing_test",
     srcs = [
         "switch_gpu_job_timing_test.cpp",
