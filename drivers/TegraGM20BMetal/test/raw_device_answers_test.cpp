@@ -40,10 +40,16 @@ TEST(RawDeviceAnswers, AmplificationIsOneViewAndEveryQuerySaysSo)
 TEST(RawDeviceAnswers, FeaturesWithNoFormHereAreNo)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds)
-        for (const char *selector : {"maxPredicatedNestingDepth", "supportsDynamicAttributeStride",
-                                     "supportsSharedTextureHandles", "supportsTessellation",
-                                     "supportsIndirectTessellation", "maxTessellationFactor"})
+        for (const char *selector : {"supportsDynamicAttributeStride", "supportsSharedTextureHandles",
+                                     "supportsTessellation", "supportsIndirectTessellation", "maxTessellationFactor"})
             EXPECT_EQ(count(k, selector), 0u) << k.kind << " " << selector;
+}
+
+// The loop depth the raw path lays down (raw_loop_copies.h LoopCopies::kMaxDepth); Ifs nest freely within it
+TEST(RawDeviceAnswers, PredicationNestsAsDeepAsTheLoopsLaidDown)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 2u) << k.kind;
 }
 
 }  // namespace
