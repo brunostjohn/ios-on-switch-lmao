@@ -78,12 +78,17 @@ struct StoredMSAAScene: GPUScene {
             let off = gpu.paths.paths.keys.filter { $0 != "raw" }.sorted()
             result.expect(off.isEmpty, "command buffers off the raw path: \(off.joined(separator: ","))")
             result.metrics.set("route", off.isEmpty ? "raw" : "m2v")
+            var packed: [Bool] = []
             for format in [TexelFormat.rgba8Unorm, .r32Float] {
                 let fragment = Self.unpackFragment(format)
-                let state = try gpu.render(fragment: fragment, format: format.metal)
-                guard let packed = RawFacade.packed(state) else { continue }
-                result.metrics.set("packed_\(fragment)", packed)
-                result.expect(packed, "\(fragment): a state made at its creation, not the pack's")
+                guard let held = RawFacade.packed(try gpu.render(fragment: fragment, format: format.metal)) else {
+                    continue
+                }
+                packed.append(held)
+                result.expect(held, "\(fragment): a state made at its creation, not the pack's")
+            }
+            if !packed.isEmpty {
+                result.metrics.set("packed", "\(packed.filter { $0 }.count)/\(packed.count)")
             }
         }
         return result

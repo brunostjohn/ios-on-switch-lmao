@@ -10,6 +10,7 @@ struct FramebufferFetchDepthScene: GPUScene {
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
+        var packed: [Bool] = []
         for samples in [1, 2, 4, 8] where gpu.device.supportsTextureSampleCount(samples) {
             for stencil in [false, true] {
                 let key = "\(stencil ? "depth_stencil" : "depth")_\(samples)x"
@@ -88,9 +89,8 @@ struct FramebufferFetchDepthScene: GPUScene {
                 if RawFacade.kind(of: gpu.device) == "raw" {
                     result.expect(timing.path == "raw", "\(key) did not execute entirely raw: \(timing.path)")
                     if let fetchPacked = RawFacade.packed(fetch), let ordinaryPacked = RawFacade.packed(ordinary) {
-                        let packed = fetchPacked && ordinaryPacked
-                        result.metrics.set("packed_\(key)", packed)
-                        result.expect(packed, "\(key): a state made at its creation, not the pack's")
+                        packed.append(fetchPacked && ordinaryPacked)
+                        result.expect(packed.last!, "\(key): a state made at its creation, not the pack's")
                     }
                     let after = RawFacade.counters(of: gpu.device)
                     let draws = (after["interlock_draws"] ?? 0) - (before["interlock_draws"] ?? 0)
@@ -108,6 +108,9 @@ struct FramebufferFetchDepthScene: GPUScene {
                         format: .rgba8Unorm, width: Self.size, height: Self.size, tolerance: 2.0 / 255)
                 }
             }
+        }
+        if !packed.isEmpty {
+            result.metrics.set("packed", "\(packed.filter { $0 }.count)/\(packed.count)")
         }
         return result
     }
