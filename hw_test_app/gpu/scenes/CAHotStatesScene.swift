@@ -14,8 +14,8 @@ import Metal
 /// - stall_us_<label>: per command buffer, the host's time after the commit that the GPU time does not account for (the
 ///   wait for the GPU and the completion's latency), where the GPU time is in nanoseconds.
 /// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock. Such a state is timed again as the same
-///   pixels in eight disjoint bands, no fragment waiting on another: apart_us_<label>, GPU time per full screen, which
-///   InterlockBound holds us_<label> to within its class's factor.
+///   pixels in eight disjoint bands, no fragment waiting on another (apart_us_<label>, GPU time per full screen), and
+///   as the pass with no draw (pass_us_<label>, its clears and setup), which InterlockBound takes out of both.
 /// - gpu_clock_<label>=host (raw, debug builds): a timed run's GPU time was the host's window, for want of a GPU stamp.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
@@ -28,7 +28,7 @@ struct CAHotStatesScene: GPUScene {
 
     static let width = 1280
     static let height = 720
-    static let draws = 8
+    static let draws = InterlockBound.draws
     static let runs = 5
     static let warmups = 20
     static let wideBlur = "narrow_blur_27_frag_lph"
@@ -68,7 +68,7 @@ struct CAHotStatesScene: GPUScene {
                     ? gpu.texture(format, Self.width, Self.height)
                     : gpu.texture(format, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
             }
-            let draw = { (bands: Bool, commands: MTLCommandBuffer) in
+            let draw = { (bands: Bool, draws: Int, commands: MTLCommandBuffer) in
                 let pass = MTLRenderPassDescriptor()
                 for (color, texture) in zip(line.colors, attachments) {
                     pass.colorAttachments[color.index].texture = texture
@@ -77,7 +77,7 @@ struct CAHotStatesScene: GPUScene {
                 }
                 let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
                 encoder.setRenderPipelineState(pipeline)
-                for band in 0..<Self.draws {
+                for band in 0..<draws {
                     let (y0, y1) = bands ? Self.band(band) : (-1, 1)
                     CAState.bind(
                         encoder, vertices: CAState.rectangle(x0: -1, y0: y0, x1: 1, y1: y1, color: SIMD4(1, 1, 1, 1)),
@@ -86,7 +86,7 @@ struct CAHotStatesScene: GPUScene {
                 }
                 encoder.endEncoding()
             }
-            let overlapping = { (commands: MTLCommandBuffer) in draw(false, commands) }
+            let overlapping = { (commands: MTLCommandBuffer) in draw(false, Self.draws, commands) }
             let label = line.shortLabel.lowercased()
             var warm = 0
             if kind == "raw" {
@@ -134,11 +134,15 @@ struct CAHotStatesScene: GPUScene {
             if warm > 0 { result.metrics.set("warm_" + label, warm) }
             if let interlocked = after["interlock_draws"], interlocked > before["interlock_draws"] ?? 0 {
                 result.metrics.set("ilk_" + label, interlocked - (before["interlock_draws"] ?? 0))
-                var apart: [Double] = []
+                var apart: [Double] = [], pass: [Double] = []
                 for _ in 0..<Self.runs {
-                    apart.append(try await gpu.run(tolerateError: true) { draw(true, $0) }.gpuMilliseconds * 1000)
+                    let bands = try await gpu.run(tolerateError: true) { draw(true, Self.draws, $0) }
+                    let empty = try await gpu.run(tolerateError: true) { draw(false, 0, $0) }
+                    apart.append(bands.gpuMilliseconds * 1000)
+                    pass.append(empty.gpuMilliseconds * 1000)
                 }
                 result.metrics.set("apart_us_" + label, Stats.percentile(apart, 0.5), digits: 1)
+                result.metrics.set("pass_us_" + label, Stats.percentile(pass, 0.5), digits: 1)
             } else if after["interlock_draws"] != nil {
                 result.metrics.set("ilk_" + label, 0)
             }
