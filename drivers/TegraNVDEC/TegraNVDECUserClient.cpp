@@ -110,12 +110,13 @@ bool AppleD5500UserClient::resolve(void *context, uint32_t handle, TegraNVDECBlo
 }
 
 // The connection's jobs are done (or the engine is wedged and will never touch memory again before a resume resets it).
+// A cancelled job (-5) is done too: its engine was reset with its memory client flushed before it failed.
 bool AppleD5500UserClient::quiesce() const
 {
     if (!submitted_)
         return true;
     const int ret = tegra_nvdec_wait(lastFence_);
-    return ret == 0 || !tegra_nvdec_ready();
+    return ret == 0 || ret == -5 || !tegra_nvdec_ready();
 }
 
 // The client's mappings of the buffer are revoked before its pages can go to anyone else. A buffer a wedged job may
