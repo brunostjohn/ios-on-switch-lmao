@@ -2,6 +2,8 @@
 
     void presentEntry(int i)
     {
+        if (presentedByCompletion(i))
+            return;
         const bool mayReplace = ring.pending == kNoBuffer || sameLayout(i, ring.pending);
         const TegraScanoutRing::Ready how = ring.ready(i, mayReplace);
         entrySeq[i] = entryPendingSeq[i] = seqOf(flipRequest);
@@ -167,6 +169,7 @@
     // scanout is on, START_ADDR, then the window and general requests).
     void writeFlip(int i)
     {
+        flipFromGate();
         scanoutMemoryBarrier();  // the frame is in memory before the window can fetch it
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;

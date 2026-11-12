@@ -37,6 +37,7 @@
 #include "DisplaySmmuProbe.h"
 #include "NativePlaneFence.h"
 #include "NativePlanes.h"
+#include "SwitchCompletionFlip.h"
 #include "SwitchDisplayComposition.h"
 #include "SwitchDisplayMemoryEnvelope.h"
 #include "SwitchDisplayMemoryTiming.h"
@@ -1458,7 +1459,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecovering || landscapeState.wanted;
+               planeProbe.active() || planeHeldSet || planeRecovering || landscapeState.wanted || completionFlipOut();
     }
 
     void maskIdleFrameEnd()
@@ -1630,6 +1631,7 @@ private:
 
     void vblankTick()
     {
+        takeCompletionFlip();
         const uint32_t status = __atomic_exchange_n(&dcPending, 0u, __ATOMIC_ACQUIRE);
         if (hwSuspended)
             return;  // a status taken just before the SC7 power-down: the registers are unclocked now
@@ -2674,8 +2676,7 @@ private:
     // then taken at the next boundary), or nothing yet. Each latch frees the surfaces no longer scanned.
     void checkFlip(bool atFrameEnd)
     {
-        const uint32_t control = dc[kDcStateControl];
-        const uint32_t start = uiActive(kWinbufStartAddr);
+        const auto [control, start] = latchState();
         const int asked = ring.pending;
         const int replaced = ring.superseded;
         const int scanned = ring.front;
@@ -2992,6 +2993,7 @@ private:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void settleStopped()
     {
+        flipUnverifiedFromGate();
         const int asked = ring.pending;
         uint64_t seq = asked != kNoBuffer ? entrySeq[asked] : 0;
         ring.settle();
@@ -3113,6 +3115,7 @@ private:
     // tape, over the console's screen (it redraws it in the boot framebuffer first; the tape may be read once more, never written).
     void stopRotation()
     {
+        withdrawCompletionFlip();
         columnScanAbort("the display stopped");
         windowProbeAbort("the display stopped");
         landscapeRunAbort();
@@ -3238,6 +3241,7 @@ public:
     // between the steps is honoured, not undone).
     void quiesceForSuspend()
     {
+        suspendCompletionFlip();
         columnScanAbort("the display suspended (SC7)");
         windowProbeAbort("the display suspended (SC7)");
         landscapeRunAbort();
@@ -3265,7 +3269,8 @@ public:
 #include "SwitchDisplayResume.h"
 
     // Called by the GPU client's completion (any thread): the swap is finished on the framebuffer's work loop. The GPU frame copy's
-    // completion (any context, even the GPU's interrupt filter) only records its status and signals the work loop.
+    // completion (any context, even the GPU's interrupt filter) records its status, writes a direct frame's armed window A flip
+    // (SwitchCompletionFlipDisplay.h) and signals the work loop.
     void gpuComplete(int status)
     {
         if (SWITCH_FRAME_TIMELINE) {
@@ -3275,6 +3280,7 @@ public:
         if (gpuDoneSource) {
             __atomic_store_n(&gpuStatus, status, __ATOMIC_RELAXED);
             __atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);
+            writeCompletionFlip(status);
             gpuDoneSource->interruptOccurred(nullptr, nullptr, 0);
             return;
         }
@@ -4326,7 +4332,7 @@ public:
         switch_gpu_backing_token planeTokens[kPlaneDependencies] = {};
         planeNextDependencies(copy, planeTokens);
         memory->retain();
-        const int offered = tegra_gm20b_scanout_copy(&copy);
+        const int offered = offerWithCompletionFlip(copy, target);
         if (offered) {
             memory->release();
             releaseIdleDirectReads();
@@ -4652,6 +4658,7 @@ public:
 
 #include "SwitchDirectSlots.h"
 #include "SwitchDirectVisibleDisplay.h"
+#include "SwitchCompletionFlipDisplay.h"
 
     // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
     void cleanDomain()
@@ -4689,7 +4696,7 @@ public:
         switch_gpu_backing_token planeTokens[kPlaneDependencies] = {};
         planeNextDependencies(copy, planeTokens);
         memory->retain();
-        const int offered = tegra_gm20b_scanout_copy(&copy);
+        const int offered = offerWithCompletionFlip(copy, entry);
         if (offered) {
             memory->release();
             releaseIdleDirectReads();

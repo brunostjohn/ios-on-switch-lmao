@@ -8,6 +8,7 @@ void paletteFrameEnd(bool mayRequest)
     const uint32_t want = color->windowOptions();
     if (!pitchSaved || !mayRequest || want == (pitchOptions & switch_color::kCpEnable))
         return;
+    withdrawCompletionFlip();
     pitchOptions = (pitchOptions & ~switch_color::kCpEnable) | want;
     switch_window_palette::setOptions(want);
     dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
