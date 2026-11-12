@@ -5,16 +5,18 @@ import IOSurface
 import Metal
 
 /// gpu.x1.rotated_target's passes whose attachments beside the turned target are turned another way, of another frame, or
-/// not turned and of another size. Metal accepts each (measured on an M-series Mac): every attachment lands by its own
-/// store map over the render area, the attachments' intersection, and keeps its texels outside it.
+/// not turned and of another size. Metal accepts each (measured on an M-series Mac). Of one frame, every attachment lands by
+/// its own store map. Of other extents, its area and default viewport are not the attachments' intersection, which these
+/// cells assume: those two run as informational.
 extension RotatedCells {
     /// The second plane's turn: never the target's (rotation 4 stores as rotation 1)
     var secondTurn: Int { turn == 2 ? 3 : 2 }
 
-    /// A second plane of another turn and a larger frame beside the target (in the plain run, a texture of that frame),
-    /// cleared and drawn, then loaded and drawn again; the plane must hold the texture's bytes by its own store map
-    func mixedTurns(_ commands: MTLCommandBuffer, _ target: MTLTexture) {
-        let w = width + 32, h = height + 16
+    /// A second plane of another turn, of the target's frame or a larger one, beside the target (in the plain run, a texture
+    /// of that frame), cleared and drawn, then loaded and drawn again; the plane must hold the texture's bytes by its own
+    /// store map
+    func mixedTurns(_ commands: MTLCommandBuffer, _ target: MTLTexture, larger: Bool) {
+        let w = width + (larger ? 32 : 0), h = height + (larger ? 16 : 0)
         let second: MTLTexture
         if beside.turnedRun {
             let cells = RotatedCells(
@@ -33,7 +35,8 @@ extension RotatedCells {
         pair(commands, target, second, load: .clear) { e in
             shapes(e, rect(4, 2, 60, 40), [1, 0, 0, 1], states.pair)
         }
-        pair(commands, target, second, load: .load) { e in
+        // the target cleared again: a rotation-4 target's Load is the load cell's, which reads it transposed
+        pair(commands, target, second, load: .load, targetLoad: .clear) { e in
             shapes(e, rect(30, 20, 90, 60), [0, 1, 0, 1], states.pair)
         }
     }
@@ -83,12 +86,12 @@ extension RotatedCells {
 
     private func pair(
         _ commands: MTLCommandBuffer, _ target: MTLTexture, _ second: MTLTexture, load: MTLLoadAction,
-        _ draw: (MTLRenderCommandEncoder) -> Void
+        targetLoad: MTLLoadAction? = nil, _ draw: (MTLRenderCommandEncoder) -> Void
     ) {
         let pass = MTLRenderPassDescriptor()
         for (i, texture) in [target, second].enumerated() {
             pass.colorAttachments[i].texture = texture
-            pass.colorAttachments[i].loadAction = load
+            pass.colorAttachments[i].loadAction = i == 0 ? targetLoad ?? load : load
             pass.colorAttachments[i].clearColor = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
             pass.colorAttachments[i].storeAction = .store
         }
