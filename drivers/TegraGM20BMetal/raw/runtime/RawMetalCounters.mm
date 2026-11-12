@@ -7,45 +7,35 @@ static NSString *text(std::string_view s)
     return [[NSString alloc] initWithBytes:s.data() length:s.size() encoding:NSUTF8StringEncoding];
 }
 
-@interface RMCounter : NSObject <MTLCounter>
-@end
-@implementation RMCounter
-
-- (NSString *)name
-{
-    return MTLCommonCounterTimestamp;
-}
-
-- (NSString *)description
-{
-    static NSString *const description = text(raw::counters::kCounterDescription);
-    return description;
-}
-
+// Metal's own counter classes, made as -[AGXA10FamilyDevice counterSets] and -[AGXA13FamilyDevice counterSets] make them
+@interface MTLCounterInternal : NSObject <MTLCounter>
+- (instancetype)initWithName:(NSString *)name description:(NSString *)description;
 @end
 
-@interface RMCounterSet : NSObject <MTLCounterSet>
+@interface MTLCounterSetInternal : NSObject <MTLCounterSet>
+- (instancetype)initWithName:(NSString *)name
+                 description:(NSString *)description
+                    counters:(NSArray<id<MTLCounter>> *)counters;
 @end
-@implementation RMCounterSet
 
-- (NSString *)name
+static NSArray<id<MTLCounterSet>> *timestampSets()
 {
-    return MTLCommonCounterSetTimestamp;
+    static Class const counterClass = NSClassFromString(@"MTLCounterInternal"),
+                       setClass = NSClassFromString(@"MTLCounterSetInternal");
+    if (!counterClass || !setClass) {
+        SWITCH_REFUSE("raw", "counter.sets",
+                      "Metal has no MTLCounterInternal or MTLCounterSetInternal: no counter set");
+        return @[];
+    }
+    MTLCounterInternal *counter =
+        [(MTLCounterInternal *)[counterClass alloc] initWithName:MTLCommonCounterTimestamp
+                                                     description:text(raw::counters::kCounterDescription)];
+    MTLCounterSetInternal *set =
+        [(MTLCounterSetInternal *)[setClass alloc] initWithName:MTLCommonCounterSetTimestamp
+                                                    description:text(raw::counters::kSetDescription)
+                                                       counters:@[ counter ]];
+    return @[ set ];
 }
-
-- (NSArray<id<MTLCounter>> *)counters
-{
-    static NSArray<id<MTLCounter>> *const counters = @[ [RMCounter new] ];
-    return counters;
-}
-
-- (NSString *)description
-{
-    static NSString *const description = text(raw::counters::kSetDescription);
-    return description;
-}
-
-@end
 
 @implementation RMCounterSampleBuffer
 
@@ -133,14 +123,42 @@ static id failed(NSError **error, MTLCounterSampleBufferError code, const std::s
     return nil;
 }
 
+static id<MTLCounterSampleBuffer> newSamples(RMDevice *device, NSUInteger samples, NSString *label, bool resolvedAhead,
+                                             NSError **error)
+{
+    const NSUInteger bytes = samples * raw::counters::kRecordBytes;
+    RMBuffer *storage = (RMBuffer *)[(id<MTLDevice>)device newBufferWithLength:bytes
+                                                                       options:MTLResourceStorageModeShared];
+    if (![(id)storage isKindOfClass:[RMBuffer class]] || !storage->_raw.cpu)
+        return failed(error, MTLCounterSampleBufferErrorOutOfMemory, "Cannot allocate sample buffer");
+    memset(storage->_raw.cpu, 0, bytes);
+    if (!storage->_raw.wc)
+        cacheLines(storage->_raw.cpu, bytes, false);
+    RMCounterSampleBuffer *b = [RMCounterSampleBuffer new];
+    b->_device = device;
+    b->_storage = storage;
+    b->_sampleCount = samples;
+    b.label = label;
+    gCounterBuffersMade.store(true, std::memory_order_relaxed);
+    static std::once_flag warm;
+    if (resolvedAhead)
+        std::call_once(warm, [] {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                rmCounterResolveState();
+            });
+        });
+    if (error)
+        *error = nil;
+    return b;
+}
+
 @interface RMDevice (Counters)
 @end
 @implementation RMDevice (Counters)
 
 - (NSArray<id<MTLCounterSet>> *)counterSets
 {
-    static NSArray<id<MTLCounterSet>> *const sets = @[ [RMCounterSet new] ];
-    return sets;
+    return timestampSets();
 }
 
 // -[AGXA1xFamilyDevice counterSampleBufferLimits]: the same constant on both identities
@@ -167,31 +185,20 @@ static id failed(NSError **error, MTLCounterSampleBufferError code, const std::s
             error, MTLCounterSampleBufferErrorInvalid,
             raw::counters::checkMessage(check, found ? found.UTF8String : "(null)", uint64_t(d.sampleCount) << 3));
     }
-    const NSUInteger bytes = d.sampleCount * raw::counters::kRecordBytes;
-    RMBuffer *storage = (RMBuffer *)[(id<MTLDevice>)self newBufferWithLength:bytes
-                                                                     options:MTLResourceStorageModeShared];
-    if (![(id)storage isKindOfClass:[RMBuffer class]] || !storage->_raw.cpu)
-        return failed(error, MTLCounterSampleBufferErrorOutOfMemory, "Cannot allocate sample buffer");
-    memset(storage->_raw.cpu, 0, bytes);
-    if (!storage->_raw.wc)
-        cacheLines(storage->_raw.cpu, bytes, false);
-    RMCounterSampleBuffer *b = [RMCounterSampleBuffer new];
-    b->_device = self;
-    b->_storage = storage;
-    b->_sampleCount = d.sampleCount;
-    b.label = d.label;
-    gCounterBuffersMade.store(true, std::memory_order_relaxed);
     // A private buffer's samples are resolved by a blit alone: its kernel compiled ahead (a shared one's at the first)
-    static std::once_flag warm;
-    if (d.storageMode == MTLStorageModePrivate)
-        std::call_once(warm, [] {
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                rmCounterResolveState();
-            });
-        });
-    if (error)
-        *error = nil;
-    return b;
+    return newSamples(self, d.sampleCount, d.label, d.storageMode == MTLStorageModePrivate, error);
+}
+
+// -[AGXMTLCounterSampleBuffer initWithDevice:length:label:options:error:], options 0 (shared): the length's checks alone
+- (id<MTLCounterSampleBuffer>)newCounterSampleBufferWithLength:(NSUInteger)length
+                                                         label:(NSString *)label
+                                                         error:(NSError **)error
+{
+    const raw::counters::Check check = raw::counters::checkLength(uint64_t(length));
+    if (check != raw::counters::Check::Ok)
+        return failed(error, MTLCounterSampleBufferErrorInvalid,
+                      raw::counters::checkMessage(check, {}, uint64_t(length)));
+    return newSamples(self, length / raw::counters::kSampleBytes, label, false, error);
 }
 
 // The driver's answer: one reading of the CPU's clock for both, the GPU's samples being in its domain
