@@ -116,10 +116,10 @@ TEST_F(HeapTablesTest, ASetHoldsEveryNamedObjectWhereItsClassFitsAndFollowsThemA
     const raw::HeapSampler pixels = {12, raw::kSamplerWordPixelCoordinates};
     heap.sampler(3, &pixels);
     const raw::PackPipeline rec = record();
-    EXPECT_EQ(heap.find(rec), nullptr);
-    const raw::HeapSet *set = heap.add(rec, {setBytes.data(), 0x300000, setBytes.size()});
+    EXPECT_EQ(heap.find(raw::heapLayout(rec)), nullptr);
+    const raw::HeapSet *set = heap.add(raw::heapLayout(rec), {setBytes.data(), 0x300000, setBytes.size()});
     ASSERT_NE(set, nullptr);
-    EXPECT_EQ(heap.find(rec), set);
+    EXPECT_EQ(heap.find(raw::heapLayout(rec)), set);
     EXPECT_EQ(element(*set, 0, 9), 40u);
     EXPECT_EQ(element(*set, 1, 9), 0u);
     EXPECT_EQ(element(*set, 2, 3), 12u << 20);
@@ -133,7 +133,7 @@ TEST_F(HeapTablesTest, ASetHoldsEveryNamedObjectWhereItsClassFitsAndFollowsThemA
     EXPECT_EQ(element(*set, 2, 3), 0u);
     raw::PackPipeline other = rec;
     other.heap[1].offset = 0x4000;
-    EXPECT_EQ(heap.find(other), nullptr);
+    EXPECT_EQ(heap.find(raw::heapLayout(other)), nullptr);
 }
 
 TEST_F(HeapTablesTest, TheRootsAreNullThenTheSinkThenTheIdentityOverTheConnectionsVas)
