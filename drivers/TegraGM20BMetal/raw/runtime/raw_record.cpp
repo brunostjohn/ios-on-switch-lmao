@@ -158,6 +158,8 @@ bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutE
                 e.smp = Smp::None;  // NVK's reserved sampler (nvk_device.c): the handle names no sampler
             else
                 e.smp = smp == r.tsc.end() ? Smp::Constexpr : samplerKind(smp->second, e.smpSlot);
+            // m2v binds a slot the state samples by comparison with its compare header (TEXSAMP0 DEPTH_COMPARE, bit 9)
+            e.smpCompare = e.smp == Smp::Slot && (smp->second[0] >> 9 & 1);
             if (e.smp == Smp::Constexpr && smp != r.tsc.end()) {
                 e.headerKnown = true;
                 e.header = smp->second;

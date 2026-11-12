@@ -31,10 +31,11 @@ enum PackSectionId {
     PackVariants,
     PackArchives,
     PackIterated,
+    PackComputeStates,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 18;
+constexpr uint32_t kPackVersion = 22;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -128,6 +129,17 @@ struct PackArchive {
 // The PackArchive whose keys are the compute states the pack holds kernels for, at any dispatch shape (computeStateKey)
 constexpr uint64_t kPackHeldKernels = 0;
 
+// A compute state's answers to Metal's per-state queries as m2v's front end gave them when the pack was made (its
+// ComputePipelineMetalInfo, which no kernel's compile changes), so a state of the pack is made without m2v. The
+// PackComputeStates section, ascending by keyHash: Pack::fnv of its computeStateKey.
+struct PackComputeFacts {
+    uint64_t keyHash;
+    uint32_t maxThreads;      // maxTotalThreadsPerThreadgroup
+    uint32_t executionWidth;  // threadExecutionWidth
+    uint32_t staticMemory;    // staticThreadgroupMemoryLength
+    uint32_t reserved;
+};
+
 // The rung of the fetch ladder a color attachment's framebuffer fetch needs: FetchNone where it is not fetched
 enum PackFetchRung : uint8_t {
     FetchNone,
@@ -202,6 +214,14 @@ struct PackEntry {
     uint8_t sampler;      // handles: fragment sampler index, or constexpr sampler number. Buffers: the function's
     uint8_t pad;          //   window on the slot in 16-byte units (sampler | pad << 8), 0 = the whole buffer
 };
+
+// PackEntry::pad of a handle whose sampler slot the state samples by comparison: the sampler's compare header goes there
+constexpr uint8_t kEntryCompares = 1;
+
+inline bool entryCompares(const PackEntry &e)
+{
+    return e.kind != EntryUbo && e.samplerKind == SamplerSlot && (e.pad & kEntryCompares);
+}
 
 // A buffer entry: storage, else uniform (NVK rounds its range up to the 256-byte cbuf alignment)
 inline bool bufferStorage(const PackEntry &e)
@@ -452,6 +472,7 @@ public:
     const PackArchive *archive(uint64_t pathHash) const;              // nullptr: the pack lists no such archive
     const PackIteratedBlend *iterated(const PackPipeline &pp) const;  // nullptr: it names none
     bool declares(const PackArchive &archive, uint64_t keyHash) const;
+    const PackComputeFacts *computeFacts(uint64_t keyHash) const;  // nullptr: the pack has no facts of that state
 
     const char *string(uint32_t off) const
     {

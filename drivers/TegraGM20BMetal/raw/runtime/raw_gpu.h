@@ -381,6 +381,9 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
 
 struct Sampler {
     uint32_t tsc = 0;
+    // its header with depth comparison on (desc.compare), which a state that samples its slot by comparison reads
+    // (entryCompares): m2v makes the slot's sampler per use, compare-enabled for such a state
+    uint32_t compareTsc = 0;
     SamplerDesc desc;
     // its headers under a planar texture's address map (Texture::addressMap 1 to 3): m2v samples those textures through the
     // sampler with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
@@ -1904,7 +1907,7 @@ private:
     std::vector<uint32_t> freeTic_, freeTsc_;
     // by header: its views' word 0 and header (viewTic)
     std::unordered_multimap<uint32_t, std::pair<uint32_t, uint32_t>> viewTics_;
-    uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
+    uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0, neutralCompareTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;

@@ -16,7 +16,8 @@
 // form is under the state's key (PipelineFetchFreeForm).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
-// shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
+// shader data and constant buffer types, its sampler headers, which its sampler entries number from 0 (slot 0x80 | n), and
+// its state's answers as the runtime's compute prepare gives them (runtime/raw_pack.h PackComputeFacts: three u32).
 // PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -211,8 +212,24 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
     }
 }
 
+// The answers m2v's front end gives the state of `k` (RawMetalComputeState.mm makes the state its pack answers this way)
+bool stateFacts(const probe::Kernel &k, uint32_t facts[3], std::string &why)
+{
+    NSError *error = nil;
+    const MTLPipelineOption options = MTLPipelineOption(k.shape.options) & ~MTLPipelineOptionFailOnBinaryArchiveMiss;
+    id<MTLComputePipelineState> made = native_bridge_metal_compute_prepare(k.descriptor, options, nullptr, &error);
+    if (!made) {
+        why = std::string("no compute prepare: ") + (error.localizedDescription.UTF8String ?: "refused");
+        return false;
+    }
+    facts[0] = uint32_t(made.maxTotalThreadsPerThreadgroup);
+    facts[1] = uint32_t(made.threadExecutionWidth);
+    facts[2] = uint32_t(made.staticThreadgroupMemoryLength);
+    return true;
+}
+
 void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
-            const raw::ComputeRecord &rec)
+            const raw::ComputeRecord &rec, const uint32_t facts[3])
 {
     if (!head(w, "DKRN", key, outcome, why))
         return;
@@ -221,6 +238,7 @@ void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
     w.list(rec.data);
     w.bytes(rec.cbufType, rec.cbufs);
     w.list(rec.samplers);
+    w.bytes(facts, 3 * sizeof *facts);
 }
 
 }  // namespace
@@ -274,8 +292,11 @@ int main(int argc, char **argv)
                 probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
                 raw::ComputeRecord rec;
                 std::string why;
-                const raw::CompileOutcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
-                kernel(w, k.key, outcome, why, rec);
+                uint32_t facts[3] = {};
+                const raw::CompileOutcome outcome = !stateFacts(k, facts, why)
+                                                        ? raw::CompileOutcome::Refused
+                                                        : direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                kernel(w, k.key, outcome, why, rec, facts);
                 kernels[uint32_t(outcome)]++;
             },
             [](const std::string &, const std::string &) {});

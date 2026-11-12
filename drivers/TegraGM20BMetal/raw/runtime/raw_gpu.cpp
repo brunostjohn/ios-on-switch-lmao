@@ -121,7 +121,7 @@ enum : uint32_t {
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
-constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
+constexpr uint32_t kTicCount = 8192, kTscCount = 2048;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr size_t kDedicatedSpares = 2;
@@ -568,9 +568,12 @@ bool Device::init(std::string &err)
     // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
     // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
     {
-        const uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
+        uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
         memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
         neutralTsc_ = nextTsc_++;
+        compareHeader(neutral, 0);  // m2v's neutral compare sampler: comparison Never
+        memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
+        neutralCompareTsc_ = nextTsc_++;
     }
     const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
     if (pack_.header()->samplers > kConstexprSamplers) {
@@ -2740,13 +2743,21 @@ bool Device::takeTsc(uint32_t &tsc)
 
 bool Device::createSampler(const SamplerDesc &d, Sampler &s)
 {
-    uint32_t w[8];
+    uint32_t w[8], compared[8];
     samplerHeader(d, w);
+    memcpy(compared, w, sizeof w);
+    compareHeader(compared, d.compare);
     s.desc = d;
     std::lock_guard<std::mutex> l(lock_);
     if (!takeTsc(s.tsc))
         return false;
+    if (!takeTsc(s.compareTsc)) {
+        freeTsc_.push_back(s.tsc);
+        s.tsc = 0;
+        return false;
+    }
     memcpy(tsc_.cpu + 32 * s.tsc, w, 32);
+    memcpy(tsc_.cpu + 32 * s.compareTsc, compared, 32);
     return true;
 }
 
@@ -2755,6 +2766,8 @@ void Device::destroySampler(Sampler &s)
     std::lock_guard<std::mutex> l(lock_);
     if (s.tsc)
         freeTsc_.push_back(s.tsc);
+    if (s.compareTsc)
+        freeTsc_.push_back(s.compareTsc);
     for (uint32_t m : s.mapped)
         if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end())
             freeTsc_.push_back(m);
@@ -5220,7 +5233,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
                 if (e.samplerKind == SamplerSlot) {
                     const Sampler *s = samplers_[e.sampler];
-                    tsc = s ? (map ? s->mapped[map] : s->tsc) : d.neutralTsc_;
+                    const bool compares = entryCompares(e);
+                    if (s && map && compares) {
+                        *why = "a planar texture sampled by comparison";
+                        return false;
+                    }
+                    tsc = s          ? (map        ? s->mapped[map]
+                                        : compares ? s->compareTsc
+                                                   : s->tsc)
+                          : compares ? d.neutralCompareTsc_
+                                     : d.neutralTsc_;
                     if (s && map && !tsc) {
                         *why = "a planar texture's sampler without its address map";
                         return false;

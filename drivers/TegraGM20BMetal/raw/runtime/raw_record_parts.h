@@ -37,6 +37,7 @@ struct LayoutEntry {
     Tex tex = Tex::None;
     Smp smp = Smp::None;
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
+    bool smpCompare = false;           // a sampler slot the state samples by comparison
     bool headerKnown = false;          // a constexpr sampler's header
     std::array<uint32_t, 8> header = {};
 };

@@ -156,6 +156,20 @@ class RecordsTest(unittest.TestCase):
         off, kind, stage, slot = struct.unpack_from('<HBBB', packfile.entry_bytes([ent]))
         self.assertEqual((off, kind, stage, slot), (228, 4, 2, 0xFF))
 
+    def test_a_slot_m2v_binds_its_compare_header_at_is_a_compared_entry(self):
+        problems: list[str] = []
+        lod2 = 2 * 256 << 12  # the probe's tag of sampler slot 2: max LOD 2, nearest, repeating U
+        tsc = {5: [0x26090 | 1 << 9 | 1 << 10, 0x291, lod2, 0, 0, 0, 0, 0], 6: [0x26090, 0x291, lod2, 0, 0, 0, 0, 0]}
+        compared = mkpack.handle_entry((64, 'handle', ('tex', 0), ('smp', 2), 5 << 20), tsc, [], problems)
+        plain = mkpack.handle_entry((72, 'handle', ('tex', 1), ('smp', 2), 6 << 20), tsc, [], problems)
+        self.assertEqual(problems, [])
+        self.assertEqual((compared['compare'], plain['compare']), (True, False))
+        ents = packfile.entry_bytes([compared, plain])
+        self.assertEqual([struct.unpack_from('<HBBBBBB', ents, 8 * i)[6] for i in range(2)], [1, 0])
+        pipeline = bytes(directlink.PIPELINE.size) + bytes(ents)
+        read = directlink.entries_of(pipeline, 2, [], [])
+        self.assertEqual([e['compare'] for e in read], [True, False])
+
     def test_a_pipeline_holds_32_entries(self):
         ents = packfile.entry_bytes([handle(('slot', 3))] * 27)
         self.assertEqual(len(ents), 8 * 32)
@@ -207,6 +221,21 @@ def record(key: str, entries: list[tuple[int, int, int, int]], samplers: list[li
 
 
 class KernelRecordsTest(unittest.TestCase):
+    def test_a_states_answers_are_packed_once_ascending_and_must_agree(self):
+        state = 'aa | k  | max=0 tgm=0'
+        recs = [dict(record(state + ' | tg=8,8,1 | tgmem= | tex= | smp=', [], []), facts=(512, 32, 64))]
+        recs.append(dict(record(state + ' | tg=16,16,1 | tgmem= | tex= | smp=', [], []), facts=(512, 32, 64)))
+        recs.append(dict(record('bb | k  | max=0 tgm=0 | tg=1,1,1 | tgmem= | tex= | smp=', [], []), facts=(1024, 32, 0)))
+        facts = kernels.state_facts(recs)
+        self.assertEqual(len(facts), 2)
+        section = packfile.compute_facts_bytes(facts)
+        rows = [struct.unpack_from('<QIIII', section, 24 * i) for i in range(len(section) // 24)]
+        self.assertEqual([r[0] for r in rows], sorted(packfile.fnv(k.encode()) for k in (state, 'bb | k  | max=0 tgm=0')))
+        self.assertIn((packfile.fnv(state.encode()), 512, 32, 64, 0), rows)
+        recs.append(dict(record(state + ' | tg=4,4,1 | tgmem= | tex= | smp=', [], []), facts=(256, 32, 64)))
+        with self.assertRaises(ValueError):
+            kernels.state_facts(recs)
+
     def test_a_record_is_the_pack_kernel_it_holds(self):
         self.assertEqual(len(record('k', [], [])['kernel']), kernels.KERNEL_BYTES)
         (k,), skipped = kernels.from_records([record('k', [(0, kernels.BUFFER, 2, 64 | 4 << 24)], [])], [])

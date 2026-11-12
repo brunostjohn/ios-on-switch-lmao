@@ -357,7 +357,11 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
 #if SWITCH_RAW_DIAGNOSTICS
             const uint64_t began = nowUs();
 #endif
-            outcome = direct().kernel(descriptor, dispatch, key, record, why);
+            // m2v's translation reads m2v's functions: the twins are made only for a kernel compiled in this process
+            if (MTLComputePipelineDescriptor *twin = twinComputeDescriptor(descriptor))
+                outcome = direct().kernel(twin, dispatch, key, record, why);
+            else
+                why = "its function has no m2v twin to compile here";
             if (outcome != Compiler::Outcome::Failed) {
                 const auto saved = outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;
                 const CacheKey key = k;

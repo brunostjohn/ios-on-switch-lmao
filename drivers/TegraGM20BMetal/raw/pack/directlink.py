@@ -90,6 +90,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
                 rec['kernel'] = r.blob()
                 rec['program'] = {'image': bytes(80) + r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
                 rec['samplers'] = headers(r.blob())
+                rec['facts'] = struct.unpack('<3I', r.blob())
             kernel_recs.append(rec)
             continue
         if outcome == 0:
@@ -144,6 +145,7 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
             entry = {'off': off, 'kind': 'handle', 'tex': (TEXTURE_KINDS[kind], slot) if kind else None, 'smp': None}
             if sampler_kind == SAMPLER_SLOT:
                 entry['smp'] = ('slot', sampler)
+                entry['compare'] = bool(pad & packfile.ENTRY_COMPARES)
             elif sampler_kind == SAMPLER_CONSTEXPR:
                 header = samplers[sampler]
                 if header not in constexpr_tsc:
@@ -271,8 +273,11 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     return states, refused
 
 
-def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tuple, report: list[str]) -> list[dict]:
-    """Give the buckets' kernels (kernels.py), their programs appended to the heap image `laid` holds."""
+def compute_kernels(
+    buckets: list[str], constexpr_tsc: list[list[int]], laid: tuple, report: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Give the buckets' kernels (kernels.py), their programs appended to the heap image `laid` holds, and their states'
+    answers."""
     records = [rec for d in buckets for rec in load_records(os.path.join(d, 'records.bin'))[1]]
     programs = {}
     for rec in records:
@@ -283,7 +288,9 @@ def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tu
     kernels.lay_out(computes, programs, *laid)
     report.append(f'{len(computes)} compute kernels, {len(skipped)} dispatch shapes left out')
     report += [f'  skipped kernel {key}: {why}' for key, why in skipped]
-    return computes
+    facts = kernels.state_facts(records)
+    report.append(f'{len(facts)} compute states answered')
+    return computes, facts
 
 
 def split_identities(states: list[dict]) -> None:
@@ -368,7 +375,7 @@ def main() -> None:
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
     pipes, iterated = fetchfree_link.attach(pipes, report)
-    computes = compute_kernels(buckets, constexpr_tsc, laid, report)
+    computes, compute_facts = compute_kernels(buckets, constexpr_tsc, laid, report)
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
     split = splits.lay_out(used, found, programs, laid, report)
     init_recs = [(sc, m, d, mkpack.RELOC_CODE.get(mkpack.RELOC.get((sc, m)), 0)) for sc, m, d in init]
@@ -386,6 +393,7 @@ def main() -> None:
         split,
         archives.section(declared, held),
         iterated,
+        compute_facts,
     )
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)

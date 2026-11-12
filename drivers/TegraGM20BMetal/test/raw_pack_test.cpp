@@ -14,22 +14,22 @@ namespace {
 // A pack of one pipeline whose fragment stage has `variants` variants, its header saying `version`
 std::string writePack(uint32_t version, uint32_t variants, const char *name)
 {
-    std::vector<uint8_t> file(0x400, 0);
+    std::vector<uint8_t> file(0x600, 0);
     raw::PackHeader h = {};
     memcpy(h.magic, "GM20BPK1", 8);
     h.version = version;
     h.pipelines = 1;
-    h.section[raw::PackPipelines] = {0x100, sizeof(raw::PackPipeline)};
-    h.section[raw::PackVariants] = {0x300, variants * sizeof(raw::PackVariant)};
+    h.section[raw::PackPipelines] = {0x200, sizeof(raw::PackPipeline)};
+    h.section[raw::PackVariants] = {0x500, variants * sizeof(raw::PackVariant)};
     h.chipFacts = raw::AssumeTexsF16;
     memcpy(file.data(), &h, sizeof h);
     raw::PackPipeline pp = {};
     pp.keyHash = 7;
     pp.variantCount[1] = uint8_t(variants);
-    memcpy(file.data() + 0x100, &pp, sizeof pp);
+    memcpy(file.data() + 0x200, &pp, sizeof pp);
     for (uint32_t i = 0; i < variants; i++) {
         const raw::PackVariant v = {raw::AssumeUniformAligned << i, 70000 + i};
-        memcpy(file.data() + 0x300 + i * sizeof v, &v, sizeof v);
+        memcpy(file.data() + 0x500 + i * sizeof v, &v, sizeof v);
     }
     const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
     FILE *f = fopen(path.c_str(), "wb");
@@ -41,12 +41,12 @@ std::string writePack(uint32_t version, uint32_t variants, const char *name)
 // A pack of a state's own record and two of its variants' (" | tests=2" and a cubic one), under one key
 std::string writeVariantPack(const char *name)
 {
-    std::vector<uint8_t> file(0x1000, 0);
+    std::vector<uint8_t> file(0x2000, 0);
     raw::PackHeader h = {};
     memcpy(h.magic, "GM20BPK1", 8);
     h.version = raw::kPackVersion;
     h.pipelines = 3;
-    h.section[raw::PackPipelines] = {0x100, 3 * sizeof(raw::PackPipeline)};
+    h.section[raw::PackPipelines] = {0x200, 3 * sizeof(raw::PackPipeline)};
     const char strings[] = "\0 | tests=2\0 | cubic s0:0000n t0:80";
     h.section[raw::PackStrings] = {0xc00, sizeof strings};
     memcpy(file.data(), &h, sizeof h);
@@ -59,7 +59,7 @@ std::string writeVariantPack(const char *name)
     }
     pp[1].variantName = 1;
     pp[2].variantName = 12;
-    memcpy(file.data() + 0x100, pp, sizeof pp);
+    memcpy(file.data() + 0x200, pp, sizeof pp);
     const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
     FILE *f = fopen(path.c_str(), "wb");
     fwrite(file.data(), 1, file.size(), f);
@@ -91,7 +91,7 @@ TEST(RawPack, RefusesAPackOfAnotherVersion)
     raw::Pack pack;
     std::string err;
     EXPECT_FALSE(pack.load(writePack(17, 0, "v17.bin").c_str(), 0, err));
-    EXPECT_EQ(err, "a version-17 pack: this runtime reads version 18 only");
+    EXPECT_EQ(err, "a version-17 pack: this runtime reads version 22 only");
 }
 
 TEST(RawPack, ReadsAStagesVariantsInOrder)
@@ -151,11 +151,11 @@ std::string writeArchivePack(const char *name)
     const uint32_t counts[2] = {3, 4};
     const raw::PackArchive archives[3] = {{raw::kPackHeldKernels, 0, 1}, {0x20, 1, 2}, {0x40, 3, 1}};
     const uint64_t keys[4] = {11, 3, 9, 5};
-    h.section[raw::PackArchives] = {0x100, sizeof counts + sizeof archives + sizeof keys};
+    h.section[raw::PackArchives] = {0x200, sizeof counts + sizeof archives + sizeof keys};
     memcpy(file.data(), &h, sizeof h);
-    memcpy(file.data() + 0x100, counts, sizeof counts);
-    memcpy(file.data() + 0x100 + sizeof counts, archives, sizeof archives);
-    memcpy(file.data() + 0x100 + sizeof counts + sizeof archives, keys, sizeof keys);
+    memcpy(file.data() + 0x200, counts, sizeof counts);
+    memcpy(file.data() + 0x200 + sizeof counts, archives, sizeof archives);
+    memcpy(file.data() + 0x200 + sizeof counts + sizeof archives, keys, sizeof keys);
     const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
     FILE *f = fopen(path.c_str(), "wb");
     fwrite(file.data(), 1, file.size(), f);

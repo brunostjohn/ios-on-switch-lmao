@@ -53,6 +53,8 @@ typedef struct NmbDirectWrite {
     uint32_t sampler;  // a sampler's slot, NMB_DIRECT_IMMUTABLE (the layout's constexpr sampler) or NMB_DIRECT_NEUTRAL
     uint64_t range;    // a buffer's bound range
     int32_t viewType;  // an image\'s VkImageViewType (a neutral\'s too), -1 for no image
+    uint32_t
+        compare;  // 1: a sampler slot the state samples by comparison (m2v's compare-enabled VkSampler for this use)
 } NmbDirectWrite;
 
 // One probe draw on the variant its bind state settles on

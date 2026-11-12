@@ -72,6 +72,20 @@ def from_records(records: list[dict], constexpr_tsc: list[list[int]]) -> tuple[l
     return kernels, skipped
 
 
+def state_facts(records: list[dict]) -> list[dict]:
+    """Give each compute state's answers (directpack.mm's DKRN facts), once a state: every shape of it names the same."""
+    facts: dict[int, dict] = {}
+    for rec in records:
+        if rec['outcome'] or 'facts' not in rec:
+            continue
+        state = packfile.fnv(rec['key'].split(' | tg=', 1)[0].encode())
+        max_threads, width, static = rec['facts']
+        made = {'hash': state, 'max_threads': max_threads, 'execution_width': width, 'static_memory': static}
+        if facts.setdefault(state, made) != made:
+            raise ValueError(f'compute state {state:x} answers otherwise at another shape: {rec["key"]}')
+    return list(facts.values())
+
+
 def lay_out(kernels: list[dict], programs: dict[str, dict], heap: bytearray, prog_index: dict, prog_recs: list) -> None:
     """Append each kernel's program to the heap image and set each kernel's program index.
 

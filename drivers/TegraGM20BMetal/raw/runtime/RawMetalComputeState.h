@@ -13,9 +13,10 @@
     raw::ComputeKernelCache<raw::ComputeState> _kernels;
     MTLComputePipelineDescriptor *_direct;
     RMFunction *_function;  // the facade's, which a compile request names (nil: another device's)
+    NSString *_libraryName;        // the library function it was made from, which an archive key names
+    raw::PackComputeFacts _facts;  // the pack's answers (keyHash 0: none, m2v's state answers)
     id<MTLComputePipelineState> _metadata;
     id<MTLComputePipelineState> _compatibility;
-    id<MTLDevice> _fallback;
     std::once_flag _twinOnce;
 }
 @end

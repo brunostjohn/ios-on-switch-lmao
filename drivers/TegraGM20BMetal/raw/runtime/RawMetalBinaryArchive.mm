@@ -215,6 +215,11 @@ bool rmPackHoldsKernels(const std::string &stateKey)
     return held && pack.declares(*held, raw::Pack::fnv(stateKey.data(), stateKey.size()));
 }
 
+const raw::PackComputeFacts *rmPackComputeFacts(const std::string &stateKey)
+{
+    return gRM->raw->pack().computeFacts(raw::Pack::fnv(stateKey.data(), stateKey.size()));
+}
+
 bool rmTileArchiveAnswer(MTLTileRenderPipelineDescriptor *twin, MTLTileRenderPipelineDescriptor *d,
                          MTLPipelineOption &options, NSError **error)
 {

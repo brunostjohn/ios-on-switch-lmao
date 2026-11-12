@@ -10,9 +10,10 @@ MAGIC = b'GM20BPK1'
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
-# forms and their iterated blend programs
-VERSION = 18
-SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
+# forms and their iterated blend programs; 22: compute states' answers (PackComputeFacts), compared sampler slots
+VERSION = 22
+SECTIONS = 14  # runtime/raw_pack.h PackSectionCount
+ENTRY_COMPARES = 1  # runtime/raw_pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
 # constant[8][3], program[128]
 ITERATED = struct.Struct('<BBBBHHII24H128I')
@@ -80,8 +81,9 @@ def entry_bytes(entries: list[dict]) -> bytearray:
             sk = e['smp']
             tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4, 'depth_test': 6, 'stencil_test': 7}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
+            compares = ENTRY_COMPARES if e.get('compare') else 0  # raw_pack.h kEntryCompares
             ents += struct.pack(
-                '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
+                '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], compares
             )
     ents += bytes(8 * (PACK_ENTRIES - len(entries)))
     return ents
@@ -346,6 +348,7 @@ class Pack:
     splits: list[dict] = field(default_factory=list)
     archives: bytes = b''  # the PackArchives section (archives.py)
     iterated: list[dict] = field(default_factory=list)  # the PackIterated section's programs (iterated_bytes)
+    compute_facts: list[dict] = field(default_factory=list)  # the PackComputeStates section (kernels.py state_facts)
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
@@ -374,6 +377,14 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
         key_off = string(rec['key'].split(' | ')[0].rstrip())
         pipe_bin += pipeline_bytes(rec, key_off, blobs[pairs], variants_off, string(name) if name else 0)
     return pipe_bin, blob, strings, variant_bin
+
+
+def compute_facts_bytes(facts: list[dict]) -> bytes:
+    """Give the PackComputeStates section: each compute state's answers, ascending by its key's hash."""
+    return b''.join(
+        struct.pack('<QIIII', f['hash'], f['max_threads'], f['execution_width'], f['static_memory'], 0)
+        for f in sorted(facts, key=lambda f: f['hash'])
+    )
 
 
 def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
@@ -416,9 +427,10 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         bytes(variant_bin),
         pack.archives,
         iterated_bytes(pack.iterated),
+        compute_facts_bytes(pack.compute_facts),
     ]
     assert len(sections) == SECTIONS
-    header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
+    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16  # the section table, then the stack key and chip facts
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
     for s in sections:

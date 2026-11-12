@@ -131,11 +131,11 @@ std::string writePackDeclaring(const std::string &path, std::vector<uint64_t> ke
     h.version = raw::kPackVersion;
     const uint32_t counts[2] = {1, uint32_t(keys.size())};
     const raw::PackArchive archive = {fnv(path), 0, uint32_t(keys.size())};
-    h.section[raw::PackArchives] = {0x100, uint32_t(sizeof counts + sizeof archive + 8 * keys.size())};
+    h.section[raw::PackArchives] = {0x200, uint32_t(sizeof counts + sizeof archive + 8 * keys.size())};
     memcpy(file.data(), &h, sizeof h);
-    memcpy(file.data() + 0x100, counts, sizeof counts);
-    memcpy(file.data() + 0x100 + sizeof counts, &archive, sizeof archive);
-    memcpy(file.data() + 0x100 + sizeof counts + sizeof archive, keys.data(), 8 * keys.size());
+    memcpy(file.data() + 0x200, counts, sizeof counts);
+    memcpy(file.data() + 0x200 + sizeof counts, &archive, sizeof archive);
+    memcpy(file.data() + 0x200 + sizeof counts + sizeof archive, keys.data(), 8 * keys.size());
     const std::string out = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/declaring.bin";
     FILE *f = fopen(out.c_str(), "wb");
     fwrite(file.data(), 1, file.size(), f);

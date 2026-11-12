@@ -437,8 +437,9 @@ uint64_t nextTraceId();
 }
 @end
 
-// RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
-id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
+// RawMetalComputeState.mm: a compute state with what the raw pack keys its kernels by, answered from the pack's facts of
+// it; m2v's state is made only for what the pack does not answer, a reflection or a replay
+id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
                   MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)

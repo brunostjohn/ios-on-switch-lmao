@@ -14,8 +14,12 @@
 #include "made_metallib.h"
 #include "../raw/runtime/RawMetal.h"
 #include "../raw/runtime/RawPipelineKey.h"
+#include "../raw/runtime/raw_compute_key.h"
+#include "../raw/runtime/raw_metallib.h"
 #include "../raw/runtime/raw_pack.h"
+#include <algorithm>
 #include <dlfcn.h>
+#include <map>
 #include <libproc.h>
 #include <mach/mach.h>
 #include <sys/stat.h>
@@ -106,8 +110,8 @@ inline std::vector<uint8_t> slot(uint32_t k)
 }
 
 // A pack of this build's version holding the state of `key`: vertex program slot 0, fragment slot 1, each kSlot bytes in
-// the heap section at kHeap, so a page-multiple slot of the pack's own pages
-inline std::string writePack(const std::string &key)
+// the heap section at kHeap, so a page-multiple slot of the pack's own pages; `facts`: its compute states' answers
+inline std::string writePack(const std::string &key, std::vector<raw::PackComputeFacts> facts = {})
 {
     std::vector<uint8_t> file(kHeap + 2 * kSlot + 0x1000, 0);
     raw::PackHeader h = {};
@@ -119,10 +123,15 @@ inline std::string writePack(const std::string &key)
     std::vector<char> strings(1, 0);
     strings.insert(strings.end(), fields.begin(), fields.end());
     strings.push_back(0);
-    h.section[raw::PackPrograms] = {0x100, 2 * sizeof(raw::PackProgram)};
+    h.section[raw::PackPrograms] = {0x180, 2 * sizeof(raw::PackProgram)};
     h.section[raw::PackPipelines] = {0x200, sizeof(raw::PackPipeline)};
     h.section[raw::PackStrings] = {0x800, strings.size()};
     h.section[raw::PackHeap] = {kHeap, 2 * kSlot + 0x1000};
+    std::sort(facts.begin(), facts.end(), [](const auto &a, const auto &b) {
+        return a.keyHash < b.keyHash;
+    });
+    h.section[raw::PackComputeStates] = {0xC00, facts.size() * sizeof(raw::PackComputeFacts)};
+    memcpy(file.data() + 0xC00, facts.data(), facts.size() * sizeof(raw::PackComputeFacts));
     memcpy(file.data(), &h, sizeof h);
     for (uint32_t k = 0; k < 2; k++) {
         raw::PackProgram p = {};
@@ -132,7 +141,7 @@ inline std::string writePack(const std::string &key)
         p.cbufs = 1;
         p.cbufType[0] = raw::CbufRoot;
         p.gprs = 8;
-        memcpy(file.data() + 0x100 + k * sizeof p, &p, sizeof p);
+        memcpy(file.data() + 0x180 + k * sizeof p, &p, sizeof p);
         const std::vector<uint8_t> bytes = slot(k);
         memcpy(file.data() + kHeap + k * kSlot, bytes.data(), bytes.size());
     }
@@ -149,15 +158,25 @@ inline std::string writePack(const std::string &key)
     return path;
 }
 
-// QuartzCore's default library as the facade reads it: "v" a vertex function, "f" a fragment one
+// QuartzCore's default library as the facade reads it: "v" a vertex function, "f" a fragment one, "k" a kernel
 inline std::string writeMetallib()
 {
     const std::string framework = dir() + "/QuartzCore.framework";
     mkdir(framework.c_str(), 0755);
     const std::string path = framework + "/default.metallib";
-    const std::string bytes = made_metallib::universal({"v", "f"}, 0xA0, 0xEE, {0, 1});
+    const std::string bytes = made_metallib::universal({"v", "f", "k"}, 0xA0, 0xEE, {0, 1, 2});
     std::ofstream(path, std::ios::binary).write(bytes.data(), std::streamsize(bytes.size()));
     return path;
+}
+
+// The pack's hash of the compute state the library at `metallib` makes of `function` with no descriptor fields
+inline uint64_t computeStateHash(const std::string &metallib, const std::string &function)
+{
+    std::map<std::string, raw::AirHash> hashes;
+    if (!raw::metallibAirHashes(metallib, hashes) || !hashes.count(function))
+        return 0;
+    const std::string key = raw::computeStateKey(hashes[function], "", 0, false);
+    return raw::Pack::fnv(key.data(), key.size());
 }
 
 // What the opener was asked: each process's m2v device opens once, at most

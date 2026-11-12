@@ -284,6 +284,9 @@ MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
 - (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
 @end
 
+// A compute descriptor over m2v's functions (RawMetalComputeState.mm): for m2v's state, or a kernel compiled in process
+MTLComputePipelineDescriptor *twinComputeDescriptor(MTLComputePipelineDescriptor *d);
+
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
 // cubic sampler where it samples), and a packed state's variants, the pack's records of them (under its pack key's hash)
 // placed at its creation

@@ -494,6 +494,8 @@ def handle_entry(e: tuple, tsc: dict[int, list[int]], constexpr_tsc: list[list[i
         ent['smp'] = None
     elif sk[0] == 'smp':
         ent['smp'] = ('slot', sk[1])
+        # m2v binds a slot the state samples by comparison with its compare header (TEXSAMP0 DEPTH_COMPARE, bit 9)
+        ent['compare'] = bool(tsc[e[4] >> 20][0] >> 9 & 1)
     elif sk[0] == 'tsc?derived':
         problems.append('a sampler m2v derives from a bound one (YCbCr conversion)')
     else:
