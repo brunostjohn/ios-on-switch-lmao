@@ -27,6 +27,13 @@ RAW = [
     "ca/qc-21H461.json",
 ]
 
+# What the generator reads beside its directory (defs.bzl _RAW_LINK's ../runtime/ headers).
+RAW_RUNTIME = [
+    "raw_owned.h",
+    "raw_srgb_table.h",
+    "raw_chip_facts.h",
+]
+
 [write_file(
     name = path.replace("/", "_"),
     out = path,
@@ -46,7 +53,7 @@ RAW = [
     "tools/MANIFEST.json",
     "tools/raw/probe",
     "corpus/corpus.log",
-] + ["raw/" + name for name in RAW]]
+] + ["raw/" + name for name in RAW] + ["runtime/" + name for name in RAW_RUNTIME]]
 
 filegroup(
     name = "base",
@@ -98,7 +105,7 @@ metal_seed(
 
 seed_raw_pack(
     name = "raw_pack",
-    srcs = [":raw/" + name for name in RAW],
+    srcs = [":raw/" + name for name in RAW] + [":runtime/" + name for name in RAW_RUNTIME],
     corpus = ":corpus/corpus.log",
     crawl = ":crawl",
     device_libraries = ":device/1.metallib",
