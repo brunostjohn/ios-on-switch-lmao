@@ -21,7 +21,7 @@ public enum Registry {
             DecodeRouteTest(),
         ]
         + PlaybackTest.all + VideoEncodeTest.all + VideoEncodeIdleTest.all
-        + [VideoEncodeBFramesTest(), NVENCInputLayoutTest()]
+        + [VideoEncodeBFramesTest(), NVENCInputLayoutTest(), VideoTranscodeTest()]
 
     static let images: [any HWTest] =
         ImageDecodeTest.all + [HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test()]

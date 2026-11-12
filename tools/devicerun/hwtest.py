@@ -141,6 +141,7 @@ TESTS: dict[str, bool] = {
     'encode.h264_client_pool': False,
     'encode.h264_bframes': False,
     'encode.nvenc_input_layouts': False,
+    'encode.h264_from_nvdec': False,
     **{f'image.{still}': False for still in STILLS},
     'image.heic_encode': False,
     'image.coreimage': False,

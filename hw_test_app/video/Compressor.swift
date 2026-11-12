@@ -83,6 +83,24 @@ public enum Compressor {
         let inputs = try (0..<frames).map {
             try PatternPixels.make(pattern, frame: $0, bitDepth: settings.codec.bitDepth, pool: pool)
         }
+        return try encode(session, settings, inputs: inputs, pause: pause, inspect: inspect)
+    }
+
+    /// `pictures` as they are (frame i at i / fps), the client's own buffers: a decoder's, say.
+    public static func encode(
+        _ settings: CompressorSettings, pictures: [CVPixelBuffer],
+        inspect: ((VTCompressionSession) throws -> Void)? = nil
+    ) throws -> CompressedClip {
+        let session = try makeSession(settings)
+        defer { VTCompressionSessionInvalidate(session) }
+        return try encode(session, settings, inputs: pictures, pause: nil, inspect: inspect)
+    }
+
+    static func encode(
+        _ session: VTCompressionSession, _ settings: CompressorSettings, inputs: [CVPixelBuffer],
+        pause: (after: Int, seconds: Double)?, inspect: ((VTCompressionSession) throws -> Void)?
+    ) throws -> CompressedClip {
+        let frames = inputs.count
         let collector = Collector()
         let start = CFAbsoluteTimeGetCurrent()
         for (index, input) in inputs.enumerated() {

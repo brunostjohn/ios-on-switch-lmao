@@ -63,10 +63,59 @@ public enum Decompressor {
                 session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder))
         result.routes = pictureRoutes(session)
         if probeDisplayBuffer {
-            result.displayBufferProbe = (Compressor.read(session, "SwitchDisplayBufferProbe" as CFString)
+            result.displayBufferProbe =
+                (Compressor.read(session, "SwitchDisplayBufferProbe" as CFString)
                 as? [String: NSNumber])?.mapValues(\.intValue)
         }
         return result
+    }
+
+    /// Decodes `samples` (in decode order) on the hardware decoder and keeps its pictures, in display order, untouched
+    /// by the CPU (a CPU read would turn a native NVDEC picture into its pitch rows), with the decoder's routes.
+    public static func decodePictures(
+        _ samples: [CMSampleBuffer], format: CMVideoFormatDescription, width: Int, height: Int, bitDepth: Int
+    ) throws -> (pictures: [CVPixelBuffer], routes: [String: Int]?) {
+        let session = try makeSession(
+            format: format, width: width, height: height, bitDepth: bitDepth, requireHardware: true)
+        defer { VTDecompressionSessionInvalidate(session) }
+        let kept = Pictures()
+        for (index, sample) in samples.enumerated() {
+            let status = VTDecompressionSessionDecodeFrame(
+                session, sampleBuffer: sample, flags: [._EnableAsynchronousDecompression], infoFlagsOut: nil
+            ) { status, _, image, pts, _ in kept.add(status, image, pts) }
+            guard status == noErr else { throw VideoError.status("VTDecompressionSessionDecodeFrame \(index)", status) }
+        }
+        let waited = VTDecompressionSessionWaitForAsynchronousFrames(session)
+        guard waited == noErr else {
+            throw VideoError.status("VTDecompressionSessionWaitForAsynchronousFrames", waited)
+        }
+        return (try kept.inOrder(expected: samples.count), pictureRoutes(session))
+    }
+
+    final class Pictures: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pictures: [(CMTime, CVPixelBuffer)] = []
+        private var failure: OSStatus = noErr
+
+        func add(_ status: OSStatus, _ image: CVImageBuffer?, _ pts: CMTime) {
+            lock.lock()
+            defer { lock.unlock() }
+            if status != noErr {
+                failure = status
+            } else if let image {
+                pictures.append((pts, image))
+            }
+        }
+
+        func inOrder(expected: Int) throws -> [CVPixelBuffer] {
+            lock.lock()
+            defer { lock.unlock() }
+            guard failure == noErr else { throw VideoError.status("decoder output", failure) }
+            guard pictures.count == expected else {
+                throw VideoError.message("the decoder returned \(pictures.count) of \(expected) pictures")
+            }
+            return pictures.sorted { $0.0 < $1.0 }.map(\.1)
+        }
     }
 
     /// The Switch decoder's SwitchPictureRoutes (debug builds of the AVD plugin): nil from any other decoder.
