@@ -20,8 +20,10 @@
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // hw_test_app's attribution: this process's command buffers on each path since the device opened, never reset (the rates
 // line's windows stay its own). Keys: raw, m2v, split, split_m2v, aborted, reopens (channels the kernel killed and this
-// process opened again), reopen_us (the last one's time), gpu_order (1: the drivers order on the GPU now), cpu_ordered (the
-// Orders the kernel refused, each a CPU-ordered line), m2v.<reason>, pred.<predicate> (nonzero only).
+// process opened again), reopen_us (the last one's time), set_refusals and set_rebuilds (resource set registrations
+// the kernel refused, and those it took once made again without what it refused), gpu_order (1: the drivers order on
+// the GPU now), cpu_ordered (the Orders the kernel refused, each a CPU-ordered line), m2v.<reason>, pred.<predicate>
+// (nonzero only).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCounters
 {
     const Stats &s = gRM->stats;
@@ -32,6 +34,9 @@
     d[@"split_m2v"] = @(s.splitM2v.load());
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
+    const raw::ResourceSet::Counts sets = gRM->raw->setCounts();
+    d[@"set_refusals"] = @(sets.refusals);
+    d[@"set_rebuilds"] = @(sets.rebuilds);
     {
         mach_timebase_info_data_t base;
         mach_timebase_info(&base);
@@ -124,6 +129,12 @@
 // heap_in_place: the pack's and the shader compiler's store's pages larger programs run from (file pages, outside the
 // footprint); backings: memoryless attachments' uncompressed backings (trimBackings' last count); grows: allocations that
 // wired a chunk themselves.
+// hw_test_app's gpu.path.set_survives_trim: the latest resource set registration the kernel refused, its member and why
+- (NSString *)switchRawSetRefusal
+{
+    return [NSString stringWithUTF8String:gRM->raw->setLastRefusal().c_str()];
+}
+
 - (NSDictionary<NSString *, NSNumber *> *)switchRawMemory
 {
     raw::Device &d = *gRM->raw;

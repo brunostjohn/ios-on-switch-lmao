@@ -46,6 +46,13 @@ public enum RawFacade {
         return counters.mapValues(\.intValue)
     }
 
+    /// The latest resource set registration the kernel refused: its member and the reason (debug builds; "-" for none
+    /// or off the facade).
+    public static func setRefusal(of device: MTLDevice) -> String {
+        let refusal = ask(device, "switchRawSetRefusal") as? String ?? ""
+        return refusal.isEmpty ? "-" : refusal
+    }
+
     /// The facade's encode profile since the device opened (debug builds; empty off the facade or in a release
     /// runtime): "<part>_us", "<part>_self_us" and "<part>_calls" for each part of raw_encode_profile.h, its events
     /// ("mallocs", "locks", "sends", "applied", ...), "encodes", "malloc_encodes" and "wall_us".

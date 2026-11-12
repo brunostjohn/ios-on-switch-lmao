@@ -164,6 +164,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.promise_vic',
             'gpu.path.promise_unkept',
             'gpu.path.promise_release_order',
+            'gpu.path.set_survives_trim',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',
