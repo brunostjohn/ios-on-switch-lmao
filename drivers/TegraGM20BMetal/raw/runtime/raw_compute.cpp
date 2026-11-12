@@ -128,8 +128,7 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     probeComputeOpening(p_, cb.forms_, cb.lastEngine_, cb.taken_);
     cb.lastEngine_ = ProbeEngine::Compute;
 #else
-    computeOpeningFlush(p_);
-    computeOpeningHeaders(p_);
+    computeOpening(p_);
 #endif
 }
 

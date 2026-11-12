@@ -39,8 +39,7 @@ std::vector<Method> opening()
 {
     std::array<uint32_t, 32> words{};
     raw::Push p{words.data(), words.data() + words.size()};
-    raw::computeOpeningFlush(p);
-    raw::computeOpeningHeaders(p);
+    raw::computeOpening(p);
     return methods(words.data(), p.at);
 }
 

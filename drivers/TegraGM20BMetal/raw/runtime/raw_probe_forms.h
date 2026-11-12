@@ -200,7 +200,7 @@ inline void probeBlitOpening(Push &p, const ProbeForms &f, ProbeEngine before, P
 }
 
 // A compute encoder's opening (raw_compute.cpp's ComputeEncoder): the scheduler's and the compute class's header and
-// sampler caches always; the flush and the data invalidates by the form (today's: raw_compute_opening.h)
+// sampler caches always; the flush and the data invalidates by the form (today's is raw_compute_opening.h's, as shipped)
 inline void probeComputeOpening(Push &p, const ProbeForms &f, ProbeEngine before, ProbeTaken &taken)
 {
     constexpr uint32_t dataNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
@@ -208,16 +208,18 @@ inline void probeComputeOpening(Push &p, const ProbeForms &f, ProbeEngine before
     const bool first = before == ProbeEngine::None && f.entry != EntryForm::Today;
     const bool switched =
         before != ProbeEngine::None && before != ProbeEngine::Compute && f.switchForm != SwitchForm::Today;
+    if (!first && !switched) {
+        computeOpening(p);
+        return;
+    }
     if (first) {
         taken.firsts++;
-    } else if (switched) {
+    } else {
         taken.switches++;
         if (f.switchForm != SwitchForm::None) {
             p.m(NVB1C0_INVALIDATE_SHADER_CACHES_NO_WFI, dataNoWfi | constantNoWfi, SUBC_COMPUTE);
             p.m(NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
         }
-    } else {
-        computeOpeningFlush(p);
     }
     computeOpeningHeaders(p);
 }

@@ -26,8 +26,8 @@ TEST(RawMetalFenceSource, EveryRawEncoderOpensWithADrain)
     // the compute encoder drains through the waiting INVALIDATE_SHADER_CACHES (raw_compute_opening_test pins its methods)
     const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
     EXPECT_THAT(Body(compute, "ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev)"),
-                HasSubstr("computeOpeningFlush(p_);"));
-    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_compute_opening.h"), "inline void computeOpeningFlush(Push &p)"),
+                HasSubstr("computeOpening(p_);"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_compute_opening.h"), "inline void computeOpening(Push &p)"),
                 HasSubstr("p.m(NVB1C0_INVALIDATE_SHADER_CACHES, "));
 }
 
