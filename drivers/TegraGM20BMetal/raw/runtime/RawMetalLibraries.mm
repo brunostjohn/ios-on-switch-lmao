@@ -55,16 +55,22 @@ static NSData *metallibFile(NSString *path)
         self, [RM_M2V("a library from data raw does not read") newLibraryWithData:data error:error], nil);
 }
 
+// The library is named as m2v's was (no path for the main bundle's, the bundle's path for another's), so its framework,
+// system flag and compile requests are unchanged
 - (id<MTLLibrary>)newDefaultLibrary
 {
-    return [self newDefaultLibraryWithBundle:[NSBundle mainBundle] error:nil];
+    NSURL *url = [[NSBundle mainBundle] URLForResource:@"default" withExtension:@"metallib"];
+    if (RMLibrary *l = readLibrary(self, nil, metallibFile(url.path)))
+        return (id<MTLLibrary>)l;
+    return (id<MTLLibrary>)wrapLibrary(
+        self, [RM_M2V("the main bundle's default library raw does not read") newDefaultLibrary], nil);
 }
 
 - (id<MTLLibrary>)newDefaultLibraryWithBundle:(NSBundle *)bundle error:(NSError **)error
 {
     NSURL *url = [bundle URLForResource:@"default" withExtension:@"metallib"];
-    NSString *path = url ? url.path : [bundle.bundlePath stringByAppendingString:@"/default.metallib"];
-    if (RMLibrary *l = readLibrary(self, path, metallibFile(path))) {
+    NSString *path = [bundle.bundlePath stringByAppendingString:@"/default.metallib"];
+    if (RMLibrary *l = readLibrary(self, path, metallibFile(url.path))) {
         if (error)
             *error = nil;
         return (id<MTLLibrary>)l;

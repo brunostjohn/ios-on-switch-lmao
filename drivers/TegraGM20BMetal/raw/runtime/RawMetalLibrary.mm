@@ -36,12 +36,12 @@ static raw::FunctionTess functionTess(id twin)
     id<MTLLibrary> library = [_library twinOn:m2v];
     NSString *name = [NSString stringWithUTF8String:_libraryName.c_str()];
     id made = nil;
-    if (_specialized) {
+    if (_values || ![self.name isEqualToString:name]) {
         MTLFunctionDescriptor *d = [MTLFunctionDescriptor functionDescriptor];
         d.name = name;
         if (![self.name isEqualToString:name])
             d.specializedName = self.name;
-        d.constantValues = _values ?: [MTLFunctionConstantValues new];
+        d.constantValues = _values;
         made = [library newFunctionWithDescriptor:d error:nil];
     } else {
         made = [library newFunctionWithName:name];
@@ -258,11 +258,10 @@ static id functionNotFound(NSString *name, NSError **error)
     if ([self ownsFunction:d.name]) {
         if (error)
             *error = nil;
-        const bool specialized = d.constantValues || d.specializedName.length;
         return (id<MTLFunction>)[self function:d.name
                                             as:d.specializedName
-                                        values:specialized ? (d.constantValues ?: [MTLFunctionConstantValues new]) : nil
-                                   specialized:specialized];
+                                        values:d.constantValues
+                                   specialized:d.constantValues != nil];
     }
     if (d.name && ![self listsFunction:d.name])
         return functionNotFound(d.name, error);
