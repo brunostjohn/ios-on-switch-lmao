@@ -185,6 +185,30 @@ genrule(
     tools = [":ca_states_filter"],
 )
 
+# The states this device's QuartzCore asks for where the offline compilation manifest names another colour precision
+# (ca_asked.py), which gpu.ca.asked_forms makes on the raw facade.
+py_binary(
+    name = "ca_asked_forms",
+    srcs = ["ca_asked.py"],
+    main = "ca_asked.py",
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+genrule(
+    name = "ca_asked",
+    srcs = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"] + select({
+        "//ipsw:" + kind: [tables]
+        for kind, tables in QC_TABLES.items()
+    }),
+    outs = ["ca_asked.log"],
+    cmd = select({
+        "//ipsw:" + kind: "$(execpath :ca_asked_forms) $(execpath " + tables + ") " +
+                          "$(execpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py) $@"
+        for kind, tables in QC_TABLES.items()
+    }),
+    tools = [":ca_asked_forms"],
+)
+
 py_test(
     name = "ca_states_test",
     size = "small",
@@ -226,6 +250,7 @@ genrule(
 apple_resource_group(
     name = "ca_states_resources",
     resources = [
+        ":ca_asked",
         ":ca_goldens_txt",
         ":ca_states",
     ],

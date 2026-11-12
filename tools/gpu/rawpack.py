@@ -15,6 +15,7 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         under another build (os=<build> in its head) is left out; one with no os= is taken, and both are counted in
         <report>, which the link puts at the end of the pack's report
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
+                     [--ca-preferences <stage-tegra-gm20b-metal.py>]
                      --out <bucket corpus>...
         the states of each of the generator's buckets, with the Core Animation states a device's logs named
         (precompile/ca-names/<build>.txt)
@@ -151,6 +152,7 @@ def build(args: argparse.Namespace, generator: list[str], env: dict[str, str], r
 def split(args: argparse.Namespace, generator: list[str], env: dict[str, str], work: Path) -> None:
     arguments = ['--split', '--qc', Path(args.qc).resolve(), '--corpus', Path(args.corpus).resolve(), '--out', work]
     arguments += ['--ca-names', Path(args.ca_names).resolve()] if args.ca_names else []
+    arguments += ['--ca-preferences', Path(args.ca_preferences).resolve()] if args.ca_preferences else []
     print(generate(generator, arguments, env, 'the split into buckets').rstrip())
     made = sorted((work / 'work').glob('bucket*'), key=lambda d: int(d.name.removeprefix('bucket')))
     if len(made) != len(args.out):
@@ -241,6 +243,7 @@ def main() -> None:
             p.add_argument('--' + name, required=True)
     steps.choices['split'].add_argument('--out', nargs='+', required=True)
     steps.choices['split'].add_argument('--ca-names')
+    steps.choices['split'].add_argument('--ca-preferences')
     steps.choices['probe'].add_argument('--data-dir')
     steps.choices['probe'].add_argument('--data', action='append', default=[])
     steps.choices['link'].add_argument('buckets', nargs='+')

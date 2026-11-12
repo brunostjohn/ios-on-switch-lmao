@@ -275,6 +275,20 @@ py_test(
     deps = [":raw_pack"],
 )
 
+# raw/pack/ca/deepcolour.py: the colour precision the device's QuartzCore names Core Animation's states with, from the
+# preferences the stager writes.
+py_test(
+    name = "deepcolour_test",
+    srcs = ["raw/pack/ca/deepcolour_test.py"],
+    data = [
+        "raw/pack/ca/qc-21H461.json",
+        "raw/pack/ca/qc-24B119.json",
+        "stage-tegra-gm20b-metal.py",
+    ],
+    main = "raw/pack/ca/deepcolour_test.py",
+    deps = [":raw_pack"],
+)
+
 # raw/pack/iterated: every iterated blend program a fetch-free form names, against QuartzCore's formula.
 py_test(
     name = "iterated_table_test",

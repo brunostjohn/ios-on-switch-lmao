@@ -27,11 +27,14 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the buckets 
 edit only reruns the buckets).
 --ca-names: Core Animation states a device's logs name as missing from the pack (precompile/ca_names.py), made from
 their names in the corpus tier, as the journal's own are.
+--ca-preferences: the GPU stager (stage-tegra-gm20b-metal.py, the default) whose Core Animation preferences decide the
+colour precision the device's QuartzCore names its states with (ca/deepcolour.py).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
 The same work in three steps, for a build that caches each bucket's run (it depends on the bucket's state lines and the
 tools alone):
-       rawpack.py --split --qc <default.metallib> --corpus <corpus.log> [--ca-names <ca-names/<build>.txt>] --out <dir>
+       rawpack.py --split --qc <default.metallib> --corpus <corpus.log> [--ca-names <ca-names/<build>.txt>]
+                  [--ca-preferences <stager>] --out <dir>
            writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
            makes one bucket in place: records.bin (its states' and kernels' records) and bucket 0's warm.{out,log}
@@ -64,6 +67,7 @@ TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))  # tree/ (drivers/Te
 METAL = TREE / 'drivers/NativeMetal'
 ABI = TREE / 'drivers/TegraGM20B'
 CLASSES = TREE / 'third_party/mesa/src/nouveau/headers'  # NVIDIA's class headers find nvtypes.h here (nvdec.cpp)
+STAGER = RAW.parent / 'stage-tegra-gm20b-metal.py'
 
 
 def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | None = None) -> str:
@@ -119,7 +123,7 @@ def library_root(qc: Path) -> str:
 CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 
 
-def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = ()) -> Path:
+def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = (), preferences: Path = STAGER) -> Path:
     """Give the corpus with its Core Animation lines as harvested and those made from their names (ca/ tables).
 
     Without this QuartzCore's tables in ca/, the corpus as it is.
@@ -137,16 +141,21 @@ def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = ()) -> Path
         lines = src.readlines()
     sys.path.insert(0, str(HERE / 'ca'))
     import caspec  # noqa: PLC0415 (ca/ is only on the path here)
+    import deepcolour  # noqa: PLC0415
 
+    cif10 = deepcolour.cif10(preferences)
+    print(f'rawpack: CADeviceUseCIF10 as {preferences.name} leaves it: {"MobileGestalt" if cif10 is None else cif10}')
     with open(out, 'w') as dst:
         dst.writelines(line for line in lines if not caspec.corpus_fields(line)[0])
-        for tier, made in ca_states(path, corpus, names):
+        for tier, made in ca_states(path, corpus, names, cif10):
             dst.writelines(line + '\n' for line in made)
             print(f'rawpack: Core Animation states, {tier}: {len(made)}')
     return out
 
 
-def ca_states(tables_path: Path, corpus: Path, names: list[str] = ()) -> list[tuple[str, list[str]]]:
+def ca_states(
+    tables_path: Path, corpus: Path, names: list[str] = (), cif10: bool | None = None
+) -> list[tuple[str, list[str]]]:
     """Give the Core Animation states the pack holds, each once by its key, by tier: those harvested, then caset's.
 
     Every state a device drew goes in as it drew it (QuartzCore makes some names otherwise than the journal holds them,
@@ -168,7 +177,7 @@ def ca_states(tables_path: Path, corpus: Path, names: list[str] = ()) -> list[tu
         drawn = [line.rstrip('\n') for line in f if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0]]
     out = [('harvested', [line for line in drawn if fresh(line)])]
     named = caset.corpus_names(str(corpus), tables) + [n for n in names if caset.makes(tables, n)]
-    for tier, labels in caset.labels(tables, named, CA_TIERS).items():
+    for tier, labels in caset.labels(tables, named, CA_TIERS, cif10).items():
         out.append((tier, [line for line in (caspec.state_line(tables, n) for n in labels) if fresh(line)]))
     why: dict[str, int] = {}
     tagged = [(tier, [caset.with_fetch_rung(tables, line, why) for line in lines]) for tier, lines in out]
@@ -489,7 +498,7 @@ def main() -> None:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     names = Path(option('--ca-names', False) or os.devnull).read_text().split()
-    corpus = ca_corpus(qc, corpus, work, names)
+    corpus = ca_corpus(qc, corpus, work, names, Path(option('--ca-preferences', False) or STAGER).resolve())
     if '--split' in sys.argv[1:]:  # --split --qc <metallib> --corpus <corpus.log> --out <dir>: <dir>/work/bucket<i>
         split_buckets(corpus, work, BUCKETS)
         return

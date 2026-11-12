@@ -4,7 +4,8 @@
 Tiers, each name in the first that has it:
   corpus     every Core Animation state the device's journals hold (precompile/corpus.log), by name
   manifest   QuartzCore's offline compilation manifest (CA::OGL::MetalContext::offline_compilation_manifest: the states
-             Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot). CA
+             Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot), each
+             as this device's QuartzCore names it (deepcolour.py: Apple names them for its extended-colour devices). CA
              makes a generic state (g: the uber shader) only out of its binary archive, failing on a miss; the raw
              runtime answers such a creation from the pack as the device's archive would. QuartzCore 27 asks for every
              generic state of its manifest at boot (17 F "Metal failed to load render pipeline" lines each iOS 27 boot
@@ -24,6 +25,7 @@ usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (
 import sys
 
 import caspec
+import deepcolour
 import fetchfree
 
 TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
@@ -116,12 +118,19 @@ def _fetch_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
     return names
 
 
-def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS) -> dict[str, list[str]]:
-    """Give every tier's names, in order, each name in the first tier that has it."""
+def labels(
+    tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS, cif10: bool | None = None
+) -> dict[str, list[str]]:
+    """Give every tier's names, in order, each name in the first tier that has it.
+
+    `cif10`: CADeviceUseCIF10 on the device (deepcolour.cif10), None where it is not known: the manifest's states go in
+    as the device's QuartzCore names them (deepcolour.asked), so the tiers made of them are the device's too.
+    """
     manifest = [
-        m[0]
+        form
         for m in tables.t['manifest']
         if m[0][0] == 'P' and (tables.v27 or not caspec.decode(tables, m[0]).flag('g'))
+        for form in deepcolour.asked(tables, m[0], cif10)
     ]
     variants = _variant_tier(tables, list(corpus) + manifest)
     fragments = _fragments(tables, list(corpus) + manifest + variants)
