@@ -48,9 +48,14 @@ class MatrixUniform(unittest.TestCase):
         rows = [0xB0 + 4 * k for k in range(10)]
         self.assertEqual(fetchfree_link.matrix_uniform(pipe(rows), pipe(rows[:2])), (1, 0xB0, 10))
 
-    def test_rows_the_fetch_free_form_reads_whole_are_not_the_matrix(self):
+    def test_rows_both_forms_read_alike_are_the_matrix_where_they_are_the_only_rows(self):
         rows = [0xB0 + 4 * k for k in range(10)]
-        self.assertIsNone(fetchfree_link.matrix_uniform(pipe(rows), pipe(rows)))
+        self.assertEqual(fetchfree_link.matrix_uniform(pipe(rows), pipe(rows)), (1, 0xB0, 10))
+        others = [0x40 + 4 * k for k in range(10)]
+        self.assertIsNone(fetchfree_link.matrix_uniform(pipe(rows + others), pipe(rows + others)))
+
+    def test_words_only_the_storage_form_reads_outside_the_rows_are_no_matrix(self):
+        rows = [0xB0 + 4 * k for k in range(10)]
         self.assertIsNone(fetchfree_link.matrix_uniform(pipe([*rows, 0x10]), pipe(rows[:1])))
 
 

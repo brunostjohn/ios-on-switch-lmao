@@ -53,12 +53,14 @@ def matrix_uniform(storage: dict, free: dict) -> tuple[int, int, int] | None:
 
     The rows: five half4 rows from a 16-byte boundary the storage form reads, none of which the fetch-free form reads,
     else (a texture function reading the same words, 21H461's c33, c4b, 3dl, mpc and opa) the rows holding every word
-    the storage form reads there and the fetch-free form does not. Its words: the rows and the clamp pair where the
-    storage form reads the pair too, else the rows alone.
+    the storage form reads there and the fetch-free form does not, else, where the storage form reads no word the
+    fetch-free form does not (the blend's loads merged with its texture function's: 21H461's c4b), the one block of
+    rows both read. Its words: the rows and the clamp pair where the storage form reads the pair too, else the rows
+    alone.
     `storage`, `free`: each a pipeline's 'uniform' and 'entries' and its fragment program's 'fs_image'.
     """
     free_banks = fragment_banks(free)
-    found = []
+    found, shared = [], []
     for slot, bank in fragment_banks(storage).items():
         read = loads(storage['fs_image'], bank)
         theirs = loads(free['fs_image'], free_banks[slot]) if slot in free_banks else set()
@@ -72,7 +74,11 @@ def matrix_uniform(storage: dict, free: dict) -> tuple[int, int, int] | None:
                 return slot, offset, words
             if read - theirs and read - theirs <= rows | {clamp}:
                 found.append((slot, offset, words))
-    return found[0] if found else None
+            elif read == theirs:
+                shared.append((slot, offset, words))
+    if found:
+        return found[0]
+    return shared[0] if len(shared) == 1 else None
 
 
 def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]]:
