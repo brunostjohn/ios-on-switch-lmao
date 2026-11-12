@@ -16,8 +16,7 @@
     "on the panel, under each name ProgressUI looks for at a truncated main-screen-scale of 1 or 2 (iPadOS 17 and 27).",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/SwitchPortrait.h).",
     "debug (optional): staged only in debug boot packages (switch-fetchform, which the BlueTool stand-in runs on request;",
-    "switch-texpeer, HW Test's second process for shared textures, which 21H461's stand-in and 24B119's launchd start;",
-    "24B119's launchd takes its memory limits from the Supplemental jetsam overlay, not from its plist).",
+    "switch-texpeer, HW Test's second process for shared textures, which 21H461's stand-in and 24B119's launchd start).",
     "kind (optional): staged only for that IPSW kind (--//ipsw:kind), for paths only that kind has or loads.",
     "J120's speaker strips give the presets and bypass flags of VirtualAudio's built-in DSP chain for the speaker port",
     "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
@@ -91,13 +90,6 @@
     {
       "path": "/private/preboot/Cryptexes/Supplemental/System/Library/LaunchDaemons/com.brunostjohn.switch.texpeer.plist",
       "source": "hw_test_app/peer/com.brunostjohn.switch.texpeer.plist",
-      "union": "/private/preboot/Cryptexes/Supplemental",
-      "debug": true,
-      "kind": "24B119"
-    },
-    {
-      "path": "/private/preboot/Cryptexes/Supplemental/System/Library/JetsamProperties/com.apple.jetsamproperties.cryptex.plist",
-      "source": "overlay/com.apple.jetsamproperties.cryptex.plist",
       "union": "/private/preboot/Cryptexes/Supplemental",
       "debug": true,
       "kind": "24B119"

@@ -18,7 +18,7 @@ manifest.json: {"files": [{"path": absolute, "source": relative to the tree, "tr
 ancestor (XNU unions are deep, so a new bundle directory can appear inside a sealed one). "portrait": true stages the
 file only for a portrait-native kernel, "debug": true only in a debug boot package (not with --release), "kind" only for
 that IPSW kind (a union over a directory the System volume lacks fails at boot). Under the Supplemental cryptex path
-only launchd's plists are allowed (SUPPLEMENTAL).
+only launchd plists are allowed (SUPPLEMENTAL).
 "bundle": true makes the entry a whole bundle directory: its source is a rules_apple .ipa, whose Payload/<the path's
 name>/ becomes the directory at path, and "trust" covers every Mach-O inside it.
 """
@@ -44,17 +44,10 @@ OVERLAY_ROOT = '/private/var/Switch/overlay'
 # iOS 27's launchd bootstraps the Supplemental cryptex path's LaunchDaemons, through the commpage byte the 27 kernel
 # sets for it (commpage.c). Other readers of that byte act on files under the same tree: Foundation dlopens
 # Frameworks/ERFoundationExtension.dylib into every process, and Settings shows an Extended Research pane for a bundle
-# under System/Library/PreferenceBundles. So the overlay may put launchd plists there and nothing else: its daemons and
-# the jetsam overlay of their memory limits. 24B119's launchd ignores a daemon plist's JetsamProperties and limits a
-# daemon the J181 database names not to the 6 MB default; behind the same byte it merges the Supplemental cryptex's
-# jetsam overlay (launchd's Bootstrap SupplementalJetsamProperties, loaded at 0x10002feac) into that database.
+# under System/Library/PreferenceBundles. So the overlay may put launchd plists there and nothing else.
 SUPPLEMENTAL = '/private/preboot/Cryptexes/Supplemental'
 SUPPLEMENTAL_ROOTS = (SUPPLEMENTAL, '/System/Cryptexes/Supplemental')
-SUPPLEMENTAL_DAEMON = re.compile(
-    re.escape(SUPPLEMENTAL)
-    + r'/System/Library/(LaunchDaemons/[A-Za-z0-9._-]+'
-    + r'|JetsamProperties/com\.apple\.jetsamproperties\.cryptex)\.plist'
-)
+SUPPLEMENTAL_DAEMON = re.compile(re.escape(SUPPLEMENTAL) + r'/System/Library/LaunchDaemons/[A-Za-z0-9._-]+\.plist')
 
 
 def plan(manifest: dict, portrait: bool, kind: str, given: Iterable[str] | None = None, release: bool = False) -> dict:

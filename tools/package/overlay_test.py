@@ -1,7 +1,7 @@
 """overlay.py's bundle entries and its Supplemental cryptex rule.
 
-A bundle's .ipa app directory is staged whole, every Mach-O in it trusted; the Supplemental cryptex path holds launchd's
-daemon plists and its jetsam overlay only.
+A bundle's .ipa app directory is staged whole, every Mach-O in it trusted; the Supplemental cryptex path holds launchd
+plists only.
 """
 
 import hashlib
@@ -134,18 +134,12 @@ class SupplementalTest(unittest.TestCase):
         plan = overlay.plan(self.manifest(path), portrait=False, kind='24B119')
         self.assertEqual(plan['dirs'], [[SUPPLEMENTAL, '']])
 
-    def test_the_jetsam_overlay_is_allowed(self):
-        path = SUPPLEMENTAL + '/System/Library/JetsamProperties/com.apple.jetsamproperties.cryptex.plist'
-        plan = overlay.plan(self.manifest(path), portrait=False, kind='24B119')
-        self.assertEqual(plan['dirs'], [[SUPPLEMENTAL, '']])
-
     def test_anything_else_is_refused(self):
         refused = [
             (SUPPLEMENTAL + '/Frameworks/ERFoundationExtension.dylib', SUPPLEMENTAL),
             (SUPPLEMENTAL + '/System/Library/PreferenceBundles/SecurityResearchDeviceERMSettings.bundle', SUPPLEMENTAL),
             (SUPPLEMENTAL + '/System/Library/LaunchDaemons/joyconpaird', SUPPLEMENTAL),
-            (SUPPLEMENTAL + '/System/Library/JetsamProperties/com.apple.jetsamproperties.J181.plist', SUPPLEMENTAL),
-            (SUPPLEMENTAL + '/System/Library/JetsamProperties/other.plist', SUPPLEMENTAL),
+            (SUPPLEMENTAL + '/System/Library/JetsamProperties/com.apple.jetsamproperties.cryptex.plist', SUPPLEMENTAL),
             (SUPPLEMENTAL, '/private/preboot/Cryptexes'),
             ('/System/Cryptexes/Supplemental/Frameworks/ERFoundationExtension.dylib', '/System/Cryptexes/Supplemental'),
             ('/private/var/RPSupport/System/Library/PreferenceBundles/X.bundle', '/private/var/RPSupport'),
