@@ -219,6 +219,12 @@ bool programsBindable(const RecordParts &parts, std::string &why)
                   ", the raw path binds root, shader data, set 0 and its uniform buffers";
             return false;
         }
+        constexpr size_t kPackCbufs = sizeof(PackProgram::cbufType);
+        if (p->cbufTypes.size() > kPackCbufs) {
+            why = "a program reads " + std::to_string(p->cbufTypes.size()) + " constant buffers, past the " +
+                  std::to_string(kPackCbufs) + " a pack program records";
+            return false;
+        }
     }
     return true;
 }
