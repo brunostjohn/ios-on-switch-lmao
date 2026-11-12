@@ -144,7 +144,8 @@ inline void run(const std::vector<std::pair<std::string, raw::RuntimeRecord>> &r
             waitpid(pid, &status, 0);
             check(WIFEXITED(status) && WEXITSTATUS(status) == 0, "a writer process exits");
         }
-        check(torn == 0 && seen > 0, "no reader sees a torn entry while four processes write");
+        check(seen > 0, "the reader sees the writers' entries while four processes write");
+        check(torn == 0, "no reader sees a torn entry while four processes write");
         check(cache.store(keyOf(stack, refusedKey, 7), nullptr, refusal), "a refusal stored");
     }
     char tmp[64];
