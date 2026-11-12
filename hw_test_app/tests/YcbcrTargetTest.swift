@@ -153,8 +153,15 @@ struct YcbcrTargetTest: HWTest {
         return (wrong, nil)
     }
 
-    /// The planes Metal stores: plane 0's codes, then plane 1's Cb, Cr pairs.
+    /// The planes Metal stores: plane 0's codes, then plane 1's Cb, Cr pairs, each a 10-bit target's in its word's high
+    /// bits.
     static func expected(_ target: Target, _ texels: [SIMD4<Float>], _ source: YcbcrStore.Source) -> [[UInt16]] {
+        let shift: UInt16 = target.tenBit ? 6 : 0
+        return codes(target, texels, source).map { $0.map { $0 << shift } }
+    }
+
+    /// The codes of the planes Metal stores.
+    static func codes(_ target: Target, _ texels: [SIMD4<Float>], _ source: YcbcrStore.Source) -> [[UInt16]] {
         let (luma, chroma) =
             target.converted
             ? YcbcrStore.converted(
@@ -163,8 +170,7 @@ struct YcbcrTargetTest: HWTest {
             : YcbcrStore.codes(
                 texels, width: width, height: height, max: target.tenBit ? 1023 : 255,
                 halvedAcross: target.halvedAcross, halvedDown: target.halvedDown, source: source)
-        let shift: UInt16 = target.tenBit ? 6 : 0
-        return [luma.map { $0 << shift }, chroma.map { $0 << shift }]
+        return [luma, chroma]
     }
 
     /// Each plane's codes that differ from `planes`

@@ -5,7 +5,8 @@
 // the ties of the 1/255, 1/1023, 1/2048 and 1/8192 grids, out of range and not numbers.
 // Then the raw path's route on this Mac's GPU: the same texels in an RGBA32Float stand-in (a clear's colour as its half, as
 // RawMetalEncode.mm puts it there), the pack's store states (raw/pack/ycbcr_store.metal) into R8/RG8 or R16/RG16 planes: their
-// bytes must be Metal's too.
+// bytes must be Metal's too. And the packed states into R32Uint planes: their words must be their unpacked twins' codes,
+// three to a word (this Mac's GPU faults on Metal's own passes into a packed target).
 // usage: ycbcrstoreoracle <raw/pack directory>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
@@ -265,6 +266,58 @@ std::vector<uint16_t> route(Gpu &g, const Config &c, const std::vector<float> &t
     return out;
 }
 
+// The packed states' words (raw/pack/ycbcr_store.metal's _packed functions) of `texels`, a packed target whose unpacked twin is
+// `twin`: plane 0's words then plane 1's
+std::vector<uint32_t> packedRoute(Gpu &g, const Config &twin, const std::vector<float> &texels)
+{
+    const raw::YcbcrStoreShape shape = raw::ycbcrPackedShape(shapeOf(twin));
+    const uint32_t cw = shape.across ? W / 2 : W, ch = shape.down ? H / 2 : H;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                                                  width:W
+                                                                                 height:H
+                                                                              mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    id<MTLTexture> standIn = [g.dev newTextureWithDescriptor:td];
+    [standIn replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:texels.data() bytesPerRow:W * 16];
+    std::vector<uint32_t> out;
+    for (int plane = 0; plane < 2; plane++) {
+        td.pixelFormat = MTLPixelFormatR32Uint;
+        td.width = ((plane ? 2 * cw : W) + 2) / 3;
+        td.height = plane ? ch : H;
+        td.usage = MTLTextureUsageRenderTarget;
+        id<MTLTexture> t = [g.dev newTextureWithDescriptor:td];
+        NSString *name = [NSString stringWithFormat:@"ycbcr_store_%@_packed%@", plane ? @"chroma" : @"luma",
+                                                    shape.srgb ? @"_srgb_frag" : @"_frag"];
+        g.pass(t, g.state(g.store, @"ycbcr_store_vert", name, MTLPixelFormatR32Uint), nullptr, {}, standIn, &shape);
+        std::vector<uint32_t> words(td.width * td.height);
+        [t getBytes:words.data()
+            bytesPerRow:td.width * 4
+             fromRegion:MTLRegionMake2D(0, 0, td.width, td.height)
+            mipmapLevel:0];
+        out.insert(out.end(), words.begin(), words.end());
+    }
+    return out;
+}
+
+// The rule's words of a packed target: its twin's codes (`codes`, plane 0's then plane 1's), three to a word a row
+std::vector<uint32_t> packedWords(const Config &twin, const std::vector<uint16_t> &codes)
+{
+    bool across, down;
+    halved(twin.fourcc, across, down);
+    const uint32_t rowCodes[2] = {W, 2 * (across ? W / 2 : W)}, rows[2] = {H, down ? H / 2 : H};
+    std::vector<uint32_t> out;
+    size_t at = 0;
+    for (int plane = 0; plane < 2; plane++)
+        for (uint32_t y = 0; y < rows[plane]; y++) {
+            std::vector<uint32_t> words((rowCodes[plane] + 2) / 3);
+            raw::ycbcrPackRow(&codes[at], rowCodes[plane], words.data());
+            out.insert(out.end(), words.begin(), words.end());
+            at += rowCodes[plane];
+        }
+    return out;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -368,10 +421,23 @@ int main(int argc, char **argv)
             }
             CVPixelBufferRelease(s.pb);
         }
+        // packed targets: Metal's own passes into them fault on this Mac (IOGPUCommandQueueErrorDomain 5), so their words are
+        // held to their unpacked twins' measured codes, three to a word as Metal reads them
+        const Config twins[] = {{505, 'x420', nullptr},      {506, 'x422', "ITU_R_709_2"}, {507, 'x444', nullptr},
+                                {525, 'xf20', "ITU_R_2020"}, {526, 'x422', nullptr},       {527, 'xf44', "ITU_R_709_2"},
+                                {543, 'x420', nullptr},      {544, 'xf22', nullptr}};
+        uint32_t packedPasses = 0, packedBad = 0;
+        for (const Config &twin : twins)
+            for (uint32_t k = 0; k < sets.size(); k++) {
+                const std::vector<uint32_t> want =
+                    packedWords(twin, reference(twin, encode, sets[k], raw::YcbcrTexelSource::DrawnFloat));
+                packedBad += packedRoute(g, twin, sets[k]) != want;
+                packedPasses++;
+            }
         printf(
             "%s: %u passes into two-plane YCbCr attachments, %u with a code off the rule, %u with a byte of the store "
-            "states' off Metal's\n",
-            g.dev.name.UTF8String, passes, bad, routeBad);
-        return bad || routeBad ? 1 : 0;
+            "states' off Metal's; %u of packed targets, %u with a word off their twins' codes\n",
+            g.dev.name.UTF8String, passes, bad, routeBad, packedPasses, packedBad);
+        return bad || routeBad || packedBad ? 1 : 0;
     }
 }

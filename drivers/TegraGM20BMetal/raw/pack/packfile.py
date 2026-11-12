@@ -105,7 +105,19 @@ def key_hash(rec: dict) -> int:
     parts = key.split(' | ')
     pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
     for family, vertex, fragments in (
-        ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
+        (
+            'ycbcr',
+            'ycbcr_vert',
+            (
+                'converted_frag',
+                'srgb_frag',
+                'codes_frag',
+                'codes10_frag',
+                'packed_converted_frag',
+                'packed_srgb_frag',
+                'packed_codes10_frag',
+            ),
+        ),
         (
             'ycbcr_store',
             'ycbcr_store_vert',
@@ -113,7 +125,7 @@ def key_hash(rec: dict) -> int:
                 f'{plane}{bits}{srgb}_frag'
                 for srgb in ('', '_srgb')
                 for plane in ('luma', 'chroma')
-                for bits in (8, 16)
+                for bits in ('8', '16', '_packed')
             ),
         ),
         (

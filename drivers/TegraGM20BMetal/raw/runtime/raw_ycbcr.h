@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Two-plane YCbCr textures over IOSurfaces (Metal formats 500 to 545): which ones the raw path takes and how its conversion
+// Two-plane YCbCr textures over IOSurfaces (Metal formats 500 to 548): which ones the raw path takes and how its conversion
 // state (pack/ycbcr.metal) draws their image. The rules are m2v's (metal2vulkan-runtime ycbcr.rs `surface_planes`,
 // metal2vulkan bind/ycbcr_convert.rs), whose texels are an Apple M4's measured reads.
 #pragma once
@@ -35,6 +35,10 @@ enum YcbcrOutput : uint8_t {
     YcbcrSrgb = 2,       // RGBA32Float of step / 8192
     YcbcrCodes8 = 3,     // RGBA8Unorm: red Cr, green Y, blue Cb
     YcbcrCodes10 = 4,    // RGB10A2Unorm
+    // the same of packed planes (R32Uint, three codes a word)
+    YcbcrConvertedPacked = 5,
+    YcbcrSrgbPacked = 6,
+    YcbcrCodes10Packed = 7,
 };
 
 struct YcbcrPlan {
@@ -45,10 +49,12 @@ struct YcbcrPlan {
     // (codes), 3 both, 0 neither (a 4:4:4 converted texture)
     uint8_t addressMap = 0;
     uint32_t image = 0;                         // MTLPixelFormat of the image the conversion draws
-    uint32_t lumaFormat = 0, chromaFormat = 0;  // R8Unorm or R16Unorm, RG8Unorm or RG16Unorm
+    uint32_t lumaFormat = 0, chromaFormat = 0;  // R8Unorm or R16Unorm, RG8Unorm or RG16Unorm; R32Uint packed
     uint64_t luma = 0, chroma = 0;              // offsets past the surface's base address
     uint32_t lumaPitch = 0, chromaPitch = 0;
-    uint32_t chromaWidth = 0, chromaHeight = 0;  // 0: no chroma plane read (a texture over plane 1: chroma codes 0)
+    // the planes' textures' sizes: a texel a code (luma) or pair (chroma), or a word of three codes packed; chromaWidth 0:
+    // no chroma plane read (a texture over plane 1: chroma codes 0)
+    uint32_t lumaWidth = 0, chromaWidth = 0, chromaHeight = 0;
     uint32_t shape[kYcbcrShapeWords] = {};
     YcbcrStoreShape store;  // a target's store states' shape
 };

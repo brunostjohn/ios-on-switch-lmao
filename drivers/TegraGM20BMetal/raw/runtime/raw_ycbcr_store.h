@@ -36,28 +36,27 @@ inline const char *ycbcrTargetRefusal(uint32_t pixelFormat)
     case 505:
     case 506:
     case 507:
+    case 508:
+    case 509:
+    case 510:
     case 520:
     case 522:
     case 523:
     case 525:
     case 526:
     case 527:
+    case 528:
+    case 529:
+    case 530:
     case 540:
     case 541:
     case 543:
     case 544:
     case 545:
-        return nullptr;
-    case 508:
-    case 509:
-    case 510:
-    case 528:
-    case 529:
-    case 530:
     case 546:
     case 547:
     case 548:
-        return "packed 10-bit codes (p420 and its kin): three codes a word, no unorm target holds one";
+        return nullptr;
     default:
         return "not a two-plane YCbCr format the raw path renders";
     }
@@ -70,10 +69,11 @@ struct YcbcrStoreShape {
     int32_t row[3][3] = {};
     uint32_t mul[3] = {};
     uint32_t termBits = 6;
-    uint32_t srgb = 0;  // the _srgb states': steps through pack/srgb_encode.h
+    uint32_t srgb = 0;    // the _srgb states': steps through pack/srgb_encode.h
+    uint32_t packed = 0;  // the _packed states: R32Uint planes of three codes a word
 };
 
-static_assert(sizeof(YcbcrStoreShape) == 92, "pack/ycbcr_store.metal StoreShape");
+static_assert(sizeof(YcbcrStoreShape) == 96, "pack/ycbcr_store.metal StoreShape");
 
 // A code target of `bits`-bit codes: 10-bit codes in a 16-bit word's high bits, a drawn float held toward zero
 inline YcbcrStoreShape ycbcrCodesShape(uint32_t bits, bool across, bool down)
@@ -103,6 +103,26 @@ inline YcbcrStoreShape ycbcrConvertedShape(const YcbcrConvertedTarget &t)
             t.full ? (code ? 1u << t.bits : (1u << t.bits) - 1) : 1u << (26 - kYcbcrRowsVideo[i][code][3] + ten);
     }
     return s;
+}
+
+// A packed target (YCBCR10_*_PACKED, their sRGB twins, RGB10_*_PACKED): its unpacked twin's codes (`twin`), three to a word
+inline YcbcrStoreShape ycbcrPackedShape(YcbcrStoreShape twin)
+{
+    twin.shift = 0;
+    twin.packed = 1;
+    return twin;
+}
+
+// `n` codes of a packed row in its words, as the _packed states write them: code x at bit 10 (x % 3) of word x / 3, the slots
+// past the last code and each word's top two bits 0 (the reads' layout, m2v bind/ycbcr_convert.rs; Metal's store of a packed
+// target is not measured: an M4 Max's command buffer faults)
+inline void ycbcrPackRow(const uint16_t *codes, uint32_t n, uint32_t *words)
+{
+    for (uint32_t w = 0; w < (n + 2) / 3; w++) {
+        words[w] = 0;
+        for (uint32_t i = 0; i < 3 && 3 * w + i < n; i++)
+            words[w] |= uint32_t(codes[3 * w + i] & 1023) << (10 * i);
+    }
 }
 
 // floor(sum * mul / 2^20) as the store state takes it in 32-bit steps: sum = 4096 q + r, q mul = 256 s + u (|sum| <= 2^28,

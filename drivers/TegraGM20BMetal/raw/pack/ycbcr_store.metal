@@ -8,8 +8,11 @@
 //    t = floor(row . x * mul / 2^20) >> (8 - T), T its bits past a code (6 at 8 bits, 4 at 10); the code
 //    offset + ((sum t + 2^(T - 1 + k)) >> (T + k)) over a block of 2^k texels, clamped to [0, max].
 // The codes are written as code << shift over the target's whole range, so the ROP's unorm store of the exact quotient is the
-// code. One function a target format: the pack keys an own state by its function's name. Built without fast math
-// (rawpack.py): the NaN tests and the half rounding are kept.
+// code. A packed target's (the _packed functions, R32Uint planes) are its unpacked twin's codes, three to a little-endian
+// word at bits 0, 10 and 20, as Metal reads them (m2v bind/ycbcr_convert.rs): luma code x in word x / 3, chroma pair x as
+// codes 2 x (Cb) and 2 x + 1 (Cr); bits 30 and 31 and a row's slots past its last code 0. One function a target format: the
+// pack keys an own state by its function's name. Built without fast math (rawpack.py): the NaN tests and the half rounding
+// are kept.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -25,6 +28,7 @@ struct StoreShape {
     uint mul[3];      // and its terms' scale over 2^20
     uint termBits;    // and a term's bits past a code
     uint srgb;        // the runtime's choice of the _srgb functions
+    uint packed;      // and of the _packed ones
 };
 
 struct Out {
@@ -184,4 +188,56 @@ fragment float4 ycbcr_store_chroma16_srgb_frag(Out in [[stage_in]], StandIn stan
                                                constant StoreShape &s [[buffer(0)]])
 {
     return float4(float2(chromaCodes<true>(stand_in, s, uint2(in.position.xy)) << s.shift) / 65535.0f, 0.0f, 1.0f);
+}
+
+// Word `at` of a packed luma row: codes 3 x, 3 x + 1 and 3 x + 2
+template <bool Srgb> static uint packedLuma(StandIn stand_in, constant StoreShape &s, uint2 at)
+{
+    const uint width = stand_in.get_width();
+    uint word = 0;
+    for (uint i = 0; i < 3; i++) {
+        const uint x = 3 * at.x + i;
+        if (x < width)
+            word |= lumaCode<Srgb>(stand_in, s, uint2(x, at.y)) << (10 * i);
+    }
+    return word;
+}
+
+// Word `at` of a packed chroma row: codes 3 x .. 3 x + 2 of its pairs, the pairs of blocks 3 x / 2 and the one after it
+template <bool Srgb> static uint packedChroma(StandIn stand_in, constant StoreShape &s, uint2 at)
+{
+    const uint blocks = stand_in.get_width() / (s.across ? 2 : 1), first = 3 * at.x;
+    const uint block = first / 2;
+    const uint2 pairs[2] = {block < blocks ? chromaCodes<Srgb>(stand_in, s, uint2(block, at.y)) : uint2(0),
+                            block + 1 < blocks ? chromaCodes<Srgb>(stand_in, s, uint2(block + 1, at.y)) : uint2(0)};
+    uint word = 0;
+    for (uint i = 0; i < 3; i++) {
+        const uint code = first + i, pair = code / 2 - block;
+        word |= (code & 1 ? pairs[pair].y : pairs[pair].x) << (10 * i);
+    }
+    return word;
+}
+
+fragment uint ycbcr_store_luma_packed_frag(Out in [[stage_in]], StandIn stand_in [[texture(0)]],
+                                           constant StoreShape &s [[buffer(0)]])
+{
+    return packedLuma<false>(stand_in, s, uint2(in.position.xy));
+}
+
+fragment uint ycbcr_store_chroma_packed_frag(Out in [[stage_in]], StandIn stand_in [[texture(0)]],
+                                             constant StoreShape &s [[buffer(0)]])
+{
+    return packedChroma<false>(stand_in, s, uint2(in.position.xy));
+}
+
+fragment uint ycbcr_store_luma_packed_srgb_frag(Out in [[stage_in]], StandIn stand_in [[texture(0)]],
+                                                constant StoreShape &s [[buffer(0)]])
+{
+    return packedLuma<true>(stand_in, s, uint2(in.position.xy));
+}
+
+fragment uint ycbcr_store_chroma_packed_srgb_frag(Out in [[stage_in]], StandIn stand_in [[texture(0)]],
+                                                  constant StoreShape &s [[buffer(0)]])
+{
+    return packedChroma<true>(stand_in, s, uint2(in.position.xy));
 }

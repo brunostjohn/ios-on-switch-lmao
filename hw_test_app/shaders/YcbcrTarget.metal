@@ -15,3 +15,9 @@ fragment half4 texel_halves(float4 position [[position]], device const float4 *v
 {
     return half4(values[uint(position.y) * width + uint(position.x)]);
 }
+
+/// A texture's texels as a draw reads them (gpu.ycbcr_packed_target: a packed YCbCr texture against its unpacked twin).
+fragment float4 texel_read(float4 position [[position]], texture2d<float, access::read> t [[texture(0)]])
+{
+    return t.read(uint2(position.xy));
+}

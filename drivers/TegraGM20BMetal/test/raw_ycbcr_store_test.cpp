@@ -241,7 +241,8 @@ raw::YcbcrFacts target(uint32_t format, uint32_t fourcc, uint32_t w, uint32_t h,
     return f;
 }
 
-constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, k444v = 0x34343476, kX420 = 0x78343230, kXf20 = 0x78663230;
+constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, k444v = 0x34343476, kX420 = 0x78343230, kXf20 = 0x78663230,
+                   kP420 = 0x70343230;
 
 TEST(RawYcbcrStore, TargetsAreTakenOverTheirOwnChroma)
 {
@@ -286,6 +287,17 @@ TEST(RawYcbcrStore, TargetsAreTakenOverTheirOwnChroma)
     EXPECT_EQ(p.store.offset[1], 512);
     EXPECT_EQ(p.store.mul[0], 1023u);
     EXPECT_NE(raw::planYcbcr(target(546, kX420, 1920, 1080, 540), p), nullptr);
+    raw::YcbcrFacts packed = target(546, kP420, 1920, 1080, 540);
+    packed.pitch[0] = packed.pitch[1] = 2560;
+    packed.offset[1] = uint64_t(packed.pitch[0]) * 1080;
+    packed.allocBytes = packed.offset[1] + uint64_t(packed.pitch[1]) * 540;
+    EXPECT_EQ(raw::planYcbcr(packed, p), nullptr);
+    EXPECT_EQ(p.store.packed, 1u);
+    EXPECT_EQ(p.store.shift, 0u);
+    EXPECT_EQ(p.store.max, 1023u);
+    EXPECT_EQ(p.store.converted, 0u);
+    EXPECT_EQ(p.lumaWidth, 640u);
+    EXPECT_EQ(p.chromaWidth, 640u);
     raw::YcbcrFacts sampled = target(500, k420v, 1920, 1080, 540);
     sampled.target = false;
     EXPECT_EQ(raw::planYcbcr(sampled, p), nullptr);

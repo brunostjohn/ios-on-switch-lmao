@@ -13,8 +13,8 @@
 
 namespace probe {
 
-// probe.mm's tagged textures: BGRA8, but for the raw path's own states that read codes (pack/xr.metal), the two-plane stand-in
-// and, for its own resolves alone (pack/resolve.metal), multisampled colours or depth
+// probe.mm's tagged textures: BGRA8, but for the raw path's own states that read codes (pack/xr.metal, packed YCbCr planes),
+// the two-plane stand-in and, for its own resolves alone (pack/resolve.metal), multisampled colours or depth
 inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
 {
     if (ours && line.find("| v resolve_vert | f resolve_depth") != std::string::npos)
@@ -26,6 +26,7 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
                                                                 {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
                                                                 {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}},
                                                                 {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}},
+                                                                {"f ycbcr_packed_", {MTLPixelFormatR32Uint, 1}},
                                                                 {"f turn_copy", {MTLPixelFormatR32Uint, 1}},
                                                                 {"f turn_depth", {MTLPixelFormatDepth32Float, 1}}};
     for (const auto &[fragment, textures] : sets)

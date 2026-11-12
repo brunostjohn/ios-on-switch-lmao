@@ -400,6 +400,24 @@ TEST(RawYcbcrConvertedStore, TheStoreStatesAreTheRule)
             }
 }
 
+TEST(RawYcbcrConvertedStore, APackedRowIsThreeCodesAWordFromBitZero)
+{
+    const uint16_t codes[] = {1023, 1, 512, 0x3ff, 0x155, 7, 1022};
+    uint32_t words[3];
+    raw::ycbcrPackRow(codes, 7, words);
+    EXPECT_EQ(words[0], 1023u | 1u << 10 | 512u << 20);
+    EXPECT_EQ(words[1], 0x3ffu | 0x155u << 10 | 7u << 20);
+    EXPECT_EQ(words[2], 1022u);  // the row's tail: its slots past the last code 0
+
+    raw::YcbcrStoreShape twin = raw::ycbcrConvertedShape(targetOf(525, true, raw::YcbcrMatrix::Bt709));
+    raw::YcbcrStoreShape packed = raw::ycbcrPackedShape(twin);
+    EXPECT_EQ(packed.packed, 1u);
+    EXPECT_EQ(packed.shift, 0u);
+    packed.packed = 0;
+    packed.shift = twin.shift;
+    EXPECT_EQ(memcmp(&packed, &twin, sizeof twin), 0);
+}
+
 TEST(RawYcbcrConvertedStore, ThirtyTwoBitStepsScaleAsTheSixtyFourBitProduct)
 {
     std::mt19937 rng(20);

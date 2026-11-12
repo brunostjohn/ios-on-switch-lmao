@@ -1166,8 +1166,8 @@ public:
                                Texture &t);
     // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
     Pipeline *standInPipeline(bool store);
-    // The pack's store state of a YCbCr texture's luma or chroma plane of `store`'s target (pack/ycbcr_store.metal): of 8-bit or
-    // 16-bit words, its steps through the sRGB encode or not
+    // The pack's store state of a YCbCr texture's luma or chroma plane of `store`'s target (pack/ycbcr_store.metal): of 8-bit,
+    // 16-bit or packed words, its steps through the sRGB encode or not
     Pipeline *ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
