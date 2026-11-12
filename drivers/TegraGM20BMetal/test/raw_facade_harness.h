@@ -32,6 +32,7 @@
 @interface HarnessM2V : NSObject
 @end
 @implementation HarnessM2V
+
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
     for (BOOL required : {YES, NO}) {
@@ -53,16 +54,19 @@
 {
     return [(id<MTLDevice>)self registryID];
 }
+
 @end
 
 @interface HarnessM2VMethods : NSObject
 - (uint64_t)harnessSelfRegistry;
 @end
 @implementation HarnessM2VMethods
+
 - (uint64_t)harnessSelfRegistry
 {
     return 0;
 }
+
 @end
 
 namespace harness {
@@ -140,7 +144,8 @@ inline std::string writePack(const std::string &key)
     memcpy(file.data() + 0x200, &pp, sizeof pp);
     memcpy(file.data() + 0x800, strings.data(), strings.size());
     const std::string path = dir() + "/pack.bin";
-    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(file.data()), std::streamsize(file.size()));
+    std::ofstream(path, std::ios::binary)
+        .write(reinterpret_cast<const char *>(file.data()), std::streamsize(file.size()));
     return path;
 }
 
@@ -165,7 +170,8 @@ inline id<MTLDevice> open(const std::string &pack, Class methods = [HarnessM2VMe
     if (!nvk || !dlopen(nvk, RTLD_NOW | RTLD_LOCAL))
         return nil;
     RawM2V m2v;
-    m2v.open = ^id<MTLDevice> {
+    m2v.open = ^id<MTLDevice>
+    {
         gOpens++;
         return (id<MTLDevice>)[HarnessM2V new];
     };

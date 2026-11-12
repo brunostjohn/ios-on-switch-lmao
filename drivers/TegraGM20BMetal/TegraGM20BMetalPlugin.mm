@@ -747,7 +747,8 @@ private:
         // seed: "shared (<its SEED line>)" (the runtime reads the shared seed beneath the cache), "none" (no readable seed,
         // or off)
         os_log(logger(),
-               "TegraGM20BMetal: m2v device %{public}s open in %{public}s, cache %{public}s%{public}s%{public}s%{public}s, "
+               "TegraGM20BMetal: m2v device %{public}s open in %{public}s, cache "
+               "%{public}s%{public}s%{public}s%{public}s, "
                "seed %{public}s%{public}s%{public}s, open %llu ms (bridge %llu ms)",
                [[(id<MTLDevice>)made name] UTF8String], getprogname(), cache ? cache : "memory only",
                !cache ? " (" : "", !cache ? (gCacheRefusals[0] ? gCacheRefusals : "no candidate") : "",

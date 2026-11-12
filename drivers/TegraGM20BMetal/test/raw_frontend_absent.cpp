@@ -20,8 +20,8 @@ id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *,
     return nil;
 }
 
-bool native_bridge_metal_compute_direct(id, const struct NmbDirectDispatch *, bool (*)(const struct NmbDirectKernel *, void *),
-                                        void *, const char **why)
+bool native_bridge_metal_compute_direct(id, const struct NmbDirectDispatch *,
+                                        bool (*)(const struct NmbDirectKernel *, void *), void *, const char **why)
 {
     *why = "no device";
     return false;

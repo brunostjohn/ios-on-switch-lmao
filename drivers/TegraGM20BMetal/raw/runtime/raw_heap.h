@@ -77,6 +77,18 @@ public:
         return bytes_;
     }
 
+    bool explicitPlacement() const
+    {
+        return explicitPlacement_;
+    }
+
+    // Each free range in offset order: f(offset, bytes)
+    template <class F> void forEachFree(F &&f) const
+    {
+        for (const auto &[start, length] : free_)
+            f(start, length);
+    }
+
     // The largest placement `align` allows (maxAvailableSizeWithAlignment)
     uint64_t largestFree(uint64_t align) const
     {
