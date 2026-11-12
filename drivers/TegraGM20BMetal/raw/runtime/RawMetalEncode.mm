@@ -12,34 +12,6 @@
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
 // encoder names that encoder's first command in *refusedEncoder; one no encoder owns (the channel's, the kernel's, a planar
 // texture sampled and rendered across the range) leaves it alone.
-// The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
-// texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
-// reads (its image is pool memory).
-// The command buffer holds every object an encode reaches (RMCommandBuffer retain:), so the encode path retains none
-__attribute__((objc_externally_retained)) void useTexture(raw::CommandBuffer *rc, RMTexture *texture, bool write)
-{
-    __unsafe_unretained RMTexture *t = texture;
-    while (t && t->_kind == RMTextureView && t->_parent)
-        t = t->_parent;
-    if (!t)
-        return;
-#if SWITCH_RAW_DIAGNOSTICS
-    t->_raw.probeWritten |= write;
-#endif
-    rc->use(t->_raw, write);
-    if (t->_buffer)
-        rc->use(t->_buffer->_raw, write);
-    for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
-        if (plane)
-            rc->use(*plane, false);
-}
-
-__attribute__((objc_externally_retained)) void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
-{
-    if (b)
-        rc->use(b->_raw, write);
-}
-
 __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to,
                                                                         const char **why, bool &stale,
                                                                         size_t *refusedEncoder)
