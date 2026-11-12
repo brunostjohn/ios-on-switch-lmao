@@ -44,6 +44,7 @@
 #include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
 #include "raw_comp.h"
+#include "raw_counters.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_stats.h"
 #include "raw_descriptors.h"
@@ -639,6 +640,8 @@ public:
         size_t indexBufferCount;
     };
     bool executeSlots(const IcbExecute &x, const char **why);
+    // A counter sample where the pass starts: in its prologue, after the barrier to the work before
+    void timestampAtStart(uint64_t va, counters::Point point);
     void end();
 
     void continuePass(uint8_t stores);
@@ -675,6 +678,8 @@ private:
     Push p_;
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
+    std::array<counters::Stamp, 8> startStamps_{};
+    uint8_t startStampCount_ = 0;
 
     struct Body {
         uint32_t *first = nullptr, *second = nullptr;
@@ -878,6 +883,8 @@ public:
     // Every copy and 2D blit before it completes before any after it starts: NVK's wait between transfers
     // (nvk_cmd_flush_wait_dep), as the copy engine starts a PIPELINED launch before the ones before it have landed
     void barrier();
+    // A counter sample on the copy engine now; `afterCopies`: once the copies before it landed
+    void timestamp(uint64_t va, bool afterCopies);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // hw_test_app's 2D-engine probes (raw_probe_ops.h): `op` reading `read` and writing `written`
     void probe(const ProbeOp &op, const Texture *read, const Texture &written);
@@ -921,6 +928,8 @@ public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     BlitEncoder *blit();
+    // Counter samples behind every encoder ended so far, each on its own engine, in a segment of their own
+    void timestamps(const counters::Stamp *stamps, size_t count);
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
     void clean(const void *cpu, uint64_t bytes, bool invalidate = false);
@@ -1378,6 +1387,11 @@ public:
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
+
+    bool ptimer(uint64_t &units)
+    {
+        return k_.ptimer(units);
+    }
 
     bool lost(uint32_t seqno) const
     {

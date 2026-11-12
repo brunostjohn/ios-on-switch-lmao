@@ -71,11 +71,15 @@
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
 #   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: no amplification above one view, NO for
-#                     predication, dynamic attribute stride and tessellation, YES for shared texture handles
+#                     predication, dynamic attribute stride and tessellation, YES for shared texture handles, and counter
+#                     sampling at stage boundaries alone
 #   raw_shared_texture_test  raw/runtime/raw_shared_texture.h and RawMetalSharedTexture.h, every kind: a shared texture's
 #                     IOSurface creation properties from its descriptor (Metal's keys, the surface's rows and room for
 #                     the kernel's block-linear layout), the descriptor read back from them, refused for another device's
 #                     registry ID or a missing key
+#   raw_counters_test raw/runtime/raw_counters.h, raw_counter_kernel.h: a counter sample buffer's checks in the AGX
+#                     driver's words, PTIMER on the CPU's clock by an anchor, the resolve on the CPU and the GPU kernel's
+#                     32-bit arithmetic equal to it, and each stage boundary's report words
 #   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
 #                     metallib entry's TESS tag, Xcode's bytes for them
 #   raw_icb_test      raw/runtime/raw_icb.h: an indirect command buffer's command words through the FIFO's decoding and the
@@ -1178,6 +1182,19 @@ host_test(
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_counters_test",
+    srcs = [
+        "raw_counters_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_counter_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_counters.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_stamps.h",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
 )
 
 host_test(

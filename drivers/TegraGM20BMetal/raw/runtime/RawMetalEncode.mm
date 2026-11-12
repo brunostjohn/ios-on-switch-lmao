@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
@@ -115,6 +116,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     std::optional<raw::ComputeEncoder> ce;
     bool serialCompute = false;
     raw::StateCursor stateCursor;
+    RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
@@ -462,6 +464,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
+            counters.started(at, *ce);
             break;
         case OpRender: {
             RAW_ENCODE_SPAN(Pass);
@@ -554,6 +557,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             standInLoads.clear();
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
             break;
         }
@@ -564,12 +568,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (o.at == at)
                     be->probe(o.op, o.read ? &o.read->_raw : nullptr, o.written->_raw);
 #endif
+            counters.started(at, *be);
             break;
         case OpEnd:
             if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
                 (rmContinuesPass(cb, at + 1) ||
-                 (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) &&
-                  raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))))) {
+                 (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && !counters.at(at) &&
+                  !counters.at(at + 1) && raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))))) {
                 continuing = true;
                 break;
             }
@@ -587,6 +592,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (standInPass(t, true))
                     return false;
             standInStores.clear();
+            counters.ended(at);
             re = nullptr;
             be = nullptr;
             break;

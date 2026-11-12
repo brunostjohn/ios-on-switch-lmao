@@ -74,6 +74,8 @@ public:
                         const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why);
     // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
     void barrier();
+    // A counter sample on the compute class now: right after the encoder's opening wait for idle, its start
+    void timestamp(uint64_t va);
     void end();
 
     // A buffer an indirect dispatch command binds at a slot (va 0: none)

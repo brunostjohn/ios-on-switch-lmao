@@ -41,35 +41,6 @@ id rmRefuseUnsupported(const char *why, NSError **error)
     return nil;
 }
 
-@interface RMDevice (Unsupported)
-@end
-@implementation RMDevice (Unsupported)
-
-// No counter set: the GPU's report semaphores write time stamps, but no MTLCounterSampleBuffer of them is made here
-- (NSArray<id<MTLCounterSet>> *)counterSets
-{
-    return @[];
-}
-
-- (BOOL)supportsCounterSampling:(MTLCounterSamplingPoint)point
-{
-    (void)point;
-    return NO;
-}
-
-- (id<MTLCounterSampleBuffer>)newCounterSampleBufferWithDescriptor:(MTLCounterSampleBufferDescriptor *)d
-                                                             error:(NSError **)error
-{
-    (void)d;
-    if (error)
-        *error = [NSError errorWithDomain:MTLCounterErrorDomain
-                                     code:MTLCounterSampleBufferErrorInvalid
-                                 userInfo:@{NSLocalizedDescriptionKey : @"the device has no counter sets"}];
-    return nil;
-}
-
-@end
-
 @interface RMRenderEncoder (Amplification)
 @end
 @implementation RMRenderEncoder (Amplification)
