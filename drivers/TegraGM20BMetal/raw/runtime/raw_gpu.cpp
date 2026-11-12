@@ -5228,9 +5228,16 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
         if (t.import)
             continue;
         const uint32_t levels = t.chain ? t.chain->layout.levels : 1;
-        const bool copyable = !t.comptags && !t.memoryless && !t.zeta && !t.converted() && !t.standIn && !t.sampled &&
-                              t.blockW == 1 && t.blockH == 1 && t.bpp && t.bpp <= 16 && t.samples == 1 &&
-                              t.layers == 1 && t.type == fx::kTexTwoD && t.va;
+        const char unread = t.comptags      ? 'c'
+                            : t.memoryless  ? 'm'
+                            : t.zeta        ? 'z'
+                            : t.converted() ? 'v'
+                            : t.sampled     ? 'p'
+                            : t.standIn     ? 's'
+                            : t.blockW == 1 && t.blockH == 1 && t.bpp && t.bpp <= 16 && t.samples == 1 &&
+                                    t.layers == 1 && t.type == fx::kTexTwoD && t.va
+                                ? 0
+                                : 'o';
         uint64_t header = 0xcbf29ce484222325ull;
         if (t.tic)
             for (uint32_t b = 0; b < 32; b++)
@@ -5252,7 +5259,8 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
             it.bpp = t.bpp;
             it.texels = std::min(kGlassMemTexels, image.width);
             it.flags = uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
-                               (copyable && image.height ? 0 : kGlassMemUnsampled));
+                               (unread || !image.height ? kGlassMemUnsampled : 0));
+            it.unread = unread ? unread : image.height ? 0 : 'o';
             const int index = dev_->glassMem->sampled(it, bound.caName, t.tic, header, dev_->commitCount_);
             if (index >= 0) {
                 cb_->glassMemImages_[index] = image;
@@ -6021,8 +6029,6 @@ void CommandBuffer::glassMemTail()
         GlassMemItem &it = record.items[i];
         if (const Texture *t = glassMemSources_[i]; t && t->arena && !t->view && !t->span.valid())
             it.flags |= kGlassMemAliased | kGlassMemUnsampled;
-        if (!(it.flags & kGlassMemUnsampled))
-            glassMemRowsAt(it);
     }
     const GlassMemTailPlan plan = glassMemTailPlan(d.glassMemLive_, record);
     if (!plan.ring)

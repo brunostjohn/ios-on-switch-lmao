@@ -284,6 +284,84 @@ TEST(RawGlassMem, RowOutsideWhatThePassesReachedIsReadAndNamed)
     EXPECT_EQ(probe.counts.nonFinite.load(), 1u);
 }
 
+// A reused texture's row is read where the command buffer that last wrote it read it, so the two rows compare: the glass
+// shape's box, not the image's middle. One whose writer took no row of it is read in its middle.
+TEST(RawGlassMem, ReusedRowIsReadWhereItsReferenceWas)
+{
+    raw::GlassMem probe;
+    raw::GlassMemItem shape = item(kCapture, 832, 1408, kRgba16f, 8);
+    shape.image = kCapture;
+    const std::vector<uint8_t> lit = {0, 0x38, 0, 0x38, 0, 0x38, 0, 0x3c};
+    probe.wrote(kCapture, 130, 0);
+    probe.reached(kCapture, raw::GlassMemReach{'c', 20, 954, 129, 1280, 832, 1408, 832, 1408}, 130);
+    probe.sampled(shape, "PBGRABsovXmw_TgbgA3Xhf_Isrc_Isrc", 9, 1, 130);
+    const raw::GlassMemCb built = probe.close(130, 13000, 0);
+    EXPECT_EQ(built.items[0].inX, 58u);
+    EXPECT_EQ(built.items[0].inY, 1117u);
+    probe.finish(built, rows(130, {lit}).data(), false);
+
+    probe.sampled(shape, "PBGRABsovXmw_TgbgA3Xhf_Isrc_Isrc", 9, 1, 131);
+    const raw::GlassMemCb reused = probe.close(131, 13100, 0);
+    ASSERT_FALSE(reused.items[0].rebuilt);
+    EXPECT_EQ(reused.items[0].inX, 58u);
+    EXPECT_EQ(reused.items[0].inY, 1117u);
+    EXPECT_FALSE(reused.items[0].outside);
+    const std::string line = joined(probe.finish(reused, rows(131, {lit}).data(), true));
+    EXPECT_NE(line.find("/Tgbg/U1:ok"), std::string::npos) << line;
+
+    raw::GlassMemItem pyramid = item(kPyramid, 384, 128, kBgra8, 4);
+    pyramid.image = kPyramid;
+    probe.wrote(kPyramid, 140, 0);
+    probe.reached(kPyramid, raw::GlassMemReach{'c', 0, 0, 64, 64, 384, 128, 384, 128}, 140);
+    EXPECT_EQ(probe.close(140, 14000, 0).count, 0u);
+    probe.sampled(pyramid, "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 141);
+    const raw::GlassMemCb unread = probe.close(141, 14100, 0);
+    EXPECT_EQ(unread.items[0].inX, 176u);
+    EXPECT_EQ(unread.items[0].inY, 64u);
+}
+
+// In the owner's watch a zero row of a float texture a glass draw sampled makes a line, once in kGlassMemZeroEvery
+// command buffers a texture; a zero row of a unorm texture, or of one no glass draw sampled, stays quiet
+TEST(RawGlassMem, WatchNamesZeroRowsOfGlassFloatTexturesAtARate)
+{
+    raw::GlassMem probe;
+    const std::vector<uint8_t> zero(8, 0);
+    const raw::GlassMemItem blur = item(kCapture, 448, 896, kRgba16f, 8);
+    probe.wrote(kCapture, 150, 0);
+    probe.sampled(blur, "PBGRAXm_Tds4A2Xhf_Isrc", 9, 1, 150);
+    probe.sampled(blur, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, 150);
+    std::string line = joined(probe.finish(probe.close(150, 15000, 0), rows(150, {zero}).data(), false));
+    EXPECT_NE(line.find("/Tds4/R0/n:zero"), std::string::npos) << line;
+    const uint64_t again = 150 + raw::kGlassMemZeroEvery;
+    for (uint64_t s = 151; s < again; s++) {
+        probe.sampled(blur, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, s);
+        EXPECT_TRUE(probe.finish(probe.close(s, s * 100, 0), rows(s, {zero}).data(), false).empty()) << s;
+    }
+    probe.sampled(blur, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, again);
+    line = joined(probe.finish(probe.close(again, again * 100, 0), rows(again, {zero}).data(), false));
+    EXPECT_NE(line.find("/U60:zero"), std::string::npos) << line;
+
+    probe.wrote(kPyramid, 300, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 300);
+    EXPECT_TRUE(probe.finish(probe.close(300, 30000, 0), rows(300, {kOpaqueBlack}).data(), false).empty());
+    probe.wrote(kPyramid + 0x40000, 301, 0);
+    probe.sampled(item(kPyramid + 0x40000, 384, 128, kRgba16f, 8), "PBGRAXm_TvrdA2Xhf_Isrc", 8, 1, 301);
+    EXPECT_TRUE(probe.finish(probe.close(301, 30100, 0), rows(301, {zero}).data(), false).empty());
+}
+
+// A row the copy engine cannot read names why: a compressed blur intermediate is "-c"
+TEST(RawGlassMem, UnreadRowNamesWhy)
+{
+    raw::GlassMem probe;
+    raw::GlassMemItem blur = item(kCapture, 448, 896, kRgba16f, 8);
+    blur.flags = raw::kGlassMemUnsampled;
+    blur.unread = 'c';
+    probe.wrote(kCapture, 160, 0);
+    probe.sampled(blur, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, 160);
+    const std::string line = joined(probe.finish(probe.close(160, 16000, 0), rows(160, {}).data(), true));
+    EXPECT_NE(line.find("/Tgbh/R0/n:-c"), std::string::npos) << line;
+}
+
 // A reach that covers the image leaves no outside row
 TEST(RawGlassMem, FullReachReadsOneRow)
 {

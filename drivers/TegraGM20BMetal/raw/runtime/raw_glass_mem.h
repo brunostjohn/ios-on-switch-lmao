@@ -9,7 +9,10 @@
 // kGlassMemPoison before its submission, and the slot ends with a host semaphore release of its command buffer's cookie:
 // a slot without the cookie (its segment never ran) or a row still poisoned (its copy never landed) is not judged.
 // For a texture rebuilt in the command buffer, what its passes reached is kept (the first pass's load, the box its draws
-// covered) and a second row is read outside that box: memory nothing of this command buffer wrote.
+// covered) and a second row is read outside that box: memory nothing of this command buffer wrote. A reused texture's row
+// is read where its last write's command buffer read it, so that the two compare. In the owner's watch a zero row of a
+// float texture a glass draw sampled is a line too, once in kGlassMemZeroEvery command buffers a texture: Settings' dark
+// backdrop blurs to zero, and every such row would fill the log.
 // It runs only while armed (GlassMemArming): disarmed, the frame path pays one relaxed load and nothing else.
 #pragma once
 #include <algorithm>
@@ -37,6 +40,7 @@ constexpr uint8_t kGlassMemPoison = 0xa5;
 constexpr size_t kGlassMemLine = 900;  // os_log keeps about 1 KiB of a line
 // Entries kept: a texture CA dropped without our seeing its destroy (a client's) ages out past this many
 constexpr size_t kGlassMemTracked = 512;
+constexpr uint64_t kGlassMemZeroEvery = 60;
 
 enum : uint8_t {
     kGlassMemHeap = 1,       // an MTLHeap's (an arena: a purge takes its pages)
@@ -111,8 +115,12 @@ struct GlassMemItem {
     uint64_t image = 0;  // the address of the image (level) sampled, which its passes name as their target
     uint32_t width = 0, height = 0, format = 0, levels = 1, level = 0, texels = 0, bpp = 0;
     uint8_t flags = 0;
+    // why a kGlassMemUnsampled one's row is not read: c compressed, m memoryless, z depth, v converted from planes,
+    // p read through a pool image, s a stand-in, o another layout the copy engine cannot read
+    char unread = 0;
     char state[5] = "-";                                 // the sampling state's family (the "T..." term of its name)
     bool rebuilt = false, moved = false, fresh = false;  // fresh: its first write ever is this command buffer's
+    bool glass = false;                                  // a glass draw (a "Tg" state) sampled it
     uint64_t age = 0, events = 0;                        // command buffers and memory events since its last write
     GlassMemReach reach;
     bool outside = false;  // a second row was read outside the reach
@@ -276,18 +284,20 @@ public:
             moved = h.key == item.key && h.hash != header;
             h = {item.key, header};
         }
+        char state[5];
+        glassMemState(caName, state);
+        const bool glass = glassMemGlassState(state);
         for (uint32_t i = 0; i < open_.count; i++)
             if (open_.items[i].key == item.key && open_.items[i].level == item.level) {
                 open_.items[i].moved |= moved;
+                open_.items[i].glass |= glass;
                 return -1;
             }
-        char state[5];
-        glassMemState(caName, state);
         uint32_t at = open_.count;
         if (at == kGlassMemItems) {
             // the glass draws sample last: one takes the place of the latest item no glass draw sampled
             open_.dropped++;
-            if (!glassMemGlassState(state))
+            if (!glass)
                 return -1;
             while (at > 0 && glassMemGlassState(open_.items[at - 1].state))
                 at--;
@@ -300,6 +310,7 @@ public:
         GlassMemItem &it = open_.items[at];
         it = item;
         it.moved = moved;
+        it.glass = glass;
         memcpy(it.state, state, sizeof state);
         return int(at);
     }
@@ -339,7 +350,8 @@ public:
             it = it->second.key == key ? headers_.erase(it) : std::next(it);
     }
 
-    // Command buffer `serial`'s record, closed at its commit: rebuilt or reused is known now that every write was seen
+    // Command buffer `serial`'s record, closed at its commit: rebuilt or reused is known now that every write was seen,
+    // and so where each item's rows are read
     GlassMemCb close(uint64_t serial, uint64_t mach, uint64_t events)
     {
         std::lock_guard<std::mutex> l(lock_);
@@ -359,6 +371,14 @@ public:
             for (uint32_t r = 0; it.rebuilt && r < cb.reaches; r++)
                 if (cb.reach[r].first == it.image)
                     it.reach = cb.reach[r].second;
+            Ref &ref = refs_[it.key + it.level];
+            if (it.rebuilt || !ref.placed) {
+                glassMemRowsAt(it);
+                if (it.rebuilt)
+                    ref.inX = it.inX, ref.inY = it.inY, ref.placed = true;
+            } else {
+                it.inX = ref.inX, it.inY = ref.inY;
+            }
         }
         return cb;
     }
@@ -421,9 +441,12 @@ private:
         uint64_t serial = 0, events = 0, first = 0;
     };
 
+    // The row read at its last write's end, where it was read (placed: by a command buffer that rebuilt it) and the last
+    // command buffer whose zero row made a line
     struct Ref {
-        uint64_t serial = 0, hash = 0;
-        bool black = false;
+        uint64_t serial = 0, hash = 0, zeroLine = 0;
+        uint32_t inX = 0, inY = 0;
+        bool black = false, placed = false;
     };
 
     struct Header {
@@ -442,7 +465,9 @@ private:
     std::string verdictOf(const GlassMemItem &it, const uint8_t *row, uint64_t serial, bool &notable)
     {
         std::string v = insideVerdict(it, row, serial, notable);
-        if (!it.outside || (it.flags & kGlassMemUnsampled))
+        if (it.flags & kGlassMemUnsampled)
+            return it.unread ? v + it.unread : v;
+        if (!it.outside)
             return v;
         const uint8_t *out = row + kGlassMemRowBytes;
         if (poisoned(it, out))
@@ -474,8 +499,13 @@ private:
             counts.nonFinite++;
             notable = true;
         }
+        if (r.black && it.glass && floatComponentBytes(it.format) &&
+            (!ref.zeroLine || serial - ref.zeroLine >= kGlassMemZeroEvery)) {
+            ref.zeroLine = serial;
+            notable = true;
+        }
         if (it.rebuilt) {
-            ref = {serial, r.hash, r.black};
+            ref.serial = serial, ref.hash = r.hash, ref.black = r.black;
             return r.nonFinite ? "nf" : r.black ? "zero" : "ok";
         }
         if (r.black)
