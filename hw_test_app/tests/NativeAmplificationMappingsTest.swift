@@ -42,7 +42,8 @@ struct NativeAmplificationMappingsTest: NativeObjectTest {
         descriptor.maxVertexAmplificationCount = 2
         let pipeline = try await device.makeRenderPipelineState(descriptor: descriptor)
         let t = try Layering.array(gpu, Self.size, layers: 2)
-        work.objects += [pipeline, t]
+        work.objects.append(pipeline)
+        work.objects.append(t)
         let half = Double(Self.size / 2)
         let timing = try await gpu.run { commands in
             let pass = MTLRenderPassDescriptor()

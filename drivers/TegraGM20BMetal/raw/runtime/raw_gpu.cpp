@@ -5026,8 +5026,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         return false;
     }
     // A record of a vertex function that chooses its slice writes Layer below the pass's length (arrayLengthWord) and
-    // one that chooses its viewport ViewportIndex below the encoder's count (viewportCountWord); a record made before
-    // either word draws viewport 0
+    // one that chooses its viewport ViewportIndex below the encoder's count (viewportCountWord); a record of one layer
+    // draws layer 0, and a record made before the viewport word viewport 0
+    if (pass_.layers > 1 && pl->rec->arrayLengthWord == kLayerDropped) {
+        *why = "a vertex function choosing the layer of a layered pass, of a state m2v has no layered form of";
+        cb_->refusal = {};
+        return false;
+    }
     if (views_.viewports > 1 && pl->viewportIndex && !pl->rec->viewportCountWord) {
         *why = "a vertex function choosing among several viewports: its record draws viewport 0";
         cb_->refusal = {RefViewports, views_.viewports, 0, 0};

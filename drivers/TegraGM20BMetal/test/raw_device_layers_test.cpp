@@ -106,7 +106,7 @@ protected:
         r.pipeline.keyHash = key;
         r.pipeline.arrayLengthWord = arrayLengthWord;
         r.pipeline.viewportCountWord = viewportCountWord;
-        r.pipeline.pushMask = (arrayLengthWord ? 1u << (arrayLengthWord - 1) : 0) |
+        r.pipeline.pushMask = (arrayLengthWord && arrayLengthWord <= 32 ? 1u << (arrayLengthWord - 1) : 0) |
                               (viewportCountWord ? 1u << (viewportCountWord - 1) : 0);
         r.blob = {0x1a00, 0x1111};
         std::string why;
@@ -311,6 +311,30 @@ TEST_F(DeviceLayers, ViewportsAndScissorsPastTheFirstAreWrittenAtTheirIndex)
         EXPECT_EQ(at.at(NVB197_SET_SCISSOR_HORIZONTAL(j)), (rects[j][0] + 12) << 16 | rects[j][0]) << j;
         EXPECT_EQ(at.at(NVB197_SET_SCISSOR_VERTICAL(j)), (rects[j][1] + 10) << 16 | rects[j][1]) << j;
     }
+}
+
+// A state whose vertex function chooses its slice but whose record is one layer's (m2v had no layered form of it) draws
+// in a pass of one layer and is refused in a layered pass
+TEST_F(DeviceLayers, AOneLayerRecordOfASliceChoosingStateIsRefusedInALayeredPass)
+{
+    raw::Pipeline *dropped = record(0xa5, false, false, raw::kLayerDropped);
+    ASSERT_NE(dropped, nullptr);
+    raw::Texture array, view;
+    ASSERT_TRUE(dev.createArray(32, 32, 4, kRGBA8, raw::fx::kTexTwoDArray, array));
+    ASSERT_TRUE(raw::attachmentTarget(array, 0, 0, view));
+    const auto drawn = [&](uint32_t layers) {
+        std::string why;
+        const auto m = pass(
+            onto(view, layers),
+            [&](raw::RenderEncoder &e, const char **refused) {
+                e.setPipeline(dropped);
+                return e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
+            },
+            &why);
+        return m.empty() ? why : std::string();
+    };
+    EXPECT_EQ(drawn(1), "");
+    EXPECT_NE(drawn(4).find("layered pass"), std::string::npos);
 }
 
 // A vertex function choosing among the encoder's viewports draws below its count, which its draws write: a record made

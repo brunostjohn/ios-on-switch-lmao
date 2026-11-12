@@ -331,7 +331,8 @@ struct PackPipeline {
     // AmplificationId and AmplificationCount (0: none), which each draw writes (its [[amplification_count]] is the draw's)
     uint8_t amplificationMax, amplificationIdWord, amplificationCountWord;
     // A pack field: the push word + 1 of m2v's RenderTargetArrayLength (0: none), the pass's length, which each draw writes:
-    // its vertex program writes Layer (SET_RT_LAYER takes it), an index at or past the length as 0
+    // its vertex program writes Layer (SET_RT_LAYER takes it), an index at or past the length as 0. kLayerDropped: its
+    // vertex function chooses its slice, but the translation had no layered form of the state; its record draws layer 0
     uint8_t arrayLengthWord;
     // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
     // index and push word + 1 (0: none)
@@ -344,6 +345,9 @@ struct PackPipeline {
     // its vertex program writes at or past the count is 0
     uint8_t viewportCountWord;
 };
+
+// PackPipeline::arrayLengthWord of a record of one layer whose vertex function chooses its slice
+constexpr uint8_t kLayerDropped = 0xFF;
 
 // A vertexStreams byte's Metal buffer index
 inline uint8_t streamSlot(uint8_t stream)

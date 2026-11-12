@@ -68,6 +68,8 @@ pub enum NmbDirectSource {
 }
 
 pub const NMB_DIRECT_IMMUTABLE: u32 = u32::MAX;
+/// NmbDirectDraw::array_length_word of a state whose vertex function chooses its slice, compiled for one layer
+pub const LAYER_DROPPED: u32 = 0xFF;
 pub const NMB_DIRECT_NEUTRAL: u32 = u32::MAX - 1;
 
 #[repr(C)]
@@ -978,37 +980,44 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
-        // A vertex function that chooses its render target slice, or one amplified, is compiled as for a pass of two
-        // layers: the variant that writes Layer, reading the pass's length from its push word, draws in a pass of any
-        // length
-        let layers = if chooses_layer(&base) || amplification > 1 {
-            2
-        } else {
-            0
-        };
         let draw = crate::direct_tess::probe_draw(base.graphics.tessellation.as_ref());
         let patches = base.graphics.tessellation.is_some();
+        let chooses = chooses_layer(&base);
         let mut variants = vec![(VariantKey::new(), base)];
-        let mut runs = Vec::with_capacity(RUN_BYTES.len());
-        for run in 0..RUN_BYTES.len() {
-            runs.push(settle(
-                compile,
-                &descriptor,
-                &mut variants,
-                &probe_state(
-                    run,
-                    format,
-                    texture_samples.max(1),
-                    &declared,
-                    &binds,
-                    patches,
-                    amplification,
-                    layers,
-                ),
-                &draw,
-                &budget,
-            )?);
-        }
+        let probe = |variants: &mut Vec<(VariantKey, RenderPipeline)>, layers: u32| {
+            (0..RUN_BYTES.len())
+                .map(|run| {
+                    let state = probe_state(
+                        run,
+                        format,
+                        texture_samples.max(1),
+                        &declared,
+                        &binds,
+                        patches,
+                        amplification,
+                        layers,
+                    );
+                    settle(compile, &descriptor, variants, &state, &draw, &budget)
+                })
+                .collect::<Result<Vec<_>, String>>()
+        };
+        // A vertex function that chooses its render target slice, or one amplified, is compiled as for a pass of two
+        // layers: the variant that writes Layer, reading the pass's length from its push word, draws in a pass of any
+        // length. One the translation has no layered form of (an interlocked or tile-memory fragment function's) is
+        // compiled for one layer, its record marked so (LAYER_DROPPED): a layered pass draws it elsewhere.
+        let (runs, layer_dropped) = if amplification > 1 {
+            (probe(&mut variants, 2)?, false)
+        } else if chooses {
+            match probe(&mut variants, 2) {
+                Ok(runs) => (runs, false),
+                Err(_) => {
+                    variants.truncate(1);
+                    (probe(&mut variants, 0)?, true)
+                }
+            }
+        } else {
+            (probe(&mut variants, 0)?, false)
+        };
         // SAFETY: the runtime device's own handles, used while it lives.
         let handles = unsafe { runtime.raw() };
         let layouts = variants
@@ -1030,7 +1039,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .iter()
             .map(|run| CString::new(format!("{:?}", run.plan.variant)).unwrap_or_default())
             .collect();
-        let draws: Vec<NmbDirectDraw> = runs
+        let mut draws: Vec<NmbDirectDraw> = runs
             .iter()
             .enumerate()
             .map(|(k, run)| {
@@ -1044,6 +1053,11 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 )
             })
             .collect::<Result<Vec<_>, String>>()?;
+        if layer_dropped {
+            for d in &mut draws {
+                d.array_length_word = LAYER_DROPPED;
+            }
+        }
 
         let first = &runs[0];
         let pipeline = &variants[first.variant].1;

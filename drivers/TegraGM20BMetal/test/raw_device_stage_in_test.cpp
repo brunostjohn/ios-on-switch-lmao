@@ -242,10 +242,11 @@ TEST_F(DeviceStageIn, AnInheritingCommandTakesEachExecutesBindStride)
 {
     const raw::ComputeState *k = raw::placeCompute(dev, stageInKernel());
     ASSERT_NE(k, nullptr);
+    // write-combined: the kernel model reads a submission's words from memory a BoAlloc made, as an ICB's are
     raw::Buffer block, slots, binds, bound;
     ASSERT_TRUE(dev.createBuffer(raw::icb::computeRegionBytes(0), block));
-    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeSlotWords * 4, slots));
-    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeBindSlotWords * 4, binds));
+    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeSlotWords * 4, slots, true));
+    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeBindSlotWords * 4, binds, true));
     ASSERT_TRUE(dev.createBuffer(4096, bound));
     raw::ComputeRegion region;
     region.local = {1, 1, 1};

@@ -81,7 +81,8 @@ typedef struct NmbDirectDraw {
     // mappings offset the viewport), which each amplification writes
     uint32_t amplificationLayerWord, amplificationViewportWord;
     // push words + 1 of m2v's RenderTargetArrayLength (a vertex function that chooses its slice: compiled for a layered
-    // pass) and ViewportCount (one that chooses its viewport), which each draw writes
+    // pass; 0xFF where the translation has no layered form of the state, compiled for one layer) and ViewportCount (one
+    // that chooses its viewport), which each draw writes
     uint32_t arrayLengthWord, viewportCountWord;
     // the vertex attributes the translation reads in the shader, by Metal index: fixed-function input fetches the others,
     // numbered densely in Metal attribute order (m2v link/varyings)
