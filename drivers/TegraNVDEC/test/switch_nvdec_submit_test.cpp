@@ -1012,6 +1012,48 @@ TEST_F(SwitchNVDECSubmitTest, AFailedProducersJobCompletesWithItsError)
     EXPECT_EQ(completed[0].result, -5);
 }
 
+// The AVD plug-in's pictures of a stalled decode and of the decodes queued behind it fail and none is left unanswered:
+// each job's completion runs once with the failure, off the queue lock, from its fence (the stalled one's bound, the
+// others' released fences) and its semantic outcome in either order.
+TEST_F(SwitchNVDECSubmitTest, AStalledDecodeAndTheDecodesBehindItCompleteWithTheFailure)
+{
+    completed.clear();
+    uint64_t stalled = nextTestSequence + 1, behind = nextTestSequence + 2, after = nextTestSequence + 3;
+    ASSERT_EQ(submit({recordCompletion, &stalled}), 0);
+    ASSERT_EQ(submit({recordCompletion, &behind}), 0);
+    ASSERT_EQ(submit({recordCompletion, &after}), 0);
+    semantic(behind);
+    outlived(0);
+    EXPECT_TRUE(completed.empty()) << "the stalled decode's semantic outcome is not in yet";
+    semantic(stalled);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].fence, uint32_t(stalled));
+    EXPECT_EQ(completed[0].result, -5);
+    EXPECT_FALSE(completed[0].queueLocked);
+    runCancellation();
+    reachedInterrupts();
+    ASSERT_EQ(completed.size(), 2u) << "the decode whose semantic outcome came first ends on its released fence";
+    EXPECT_EQ(completed[1].fence, uint32_t(behind));
+    EXPECT_EQ(completed[1].result, -5);
+    EXPECT_TRUE(gCancelling) << "the last cancelled decode has not ended";
+    semantic(after);
+    ASSERT_EQ(completed.size(), 3u) << "the decode whose semantic outcome came last ends on it";
+    EXPECT_EQ(completed[2].fence, uint32_t(after));
+    EXPECT_EQ(completed[2].result, -5);
+    for (const auto &job : completed)
+        EXPECT_FALSE(job.queueLocked);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_FALSE(gCancelling);
+    uint64_t next = 0;
+    ASSERT_EQ(submit({recordCompletion, &next}), 0);
+    next = gQueue.submitted;
+    semantic(next);
+    hardware = fence;
+    reachedInterrupts();
+    ASSERT_EQ(completed.size(), 4u);
+    EXPECT_EQ(completed[3].result, 0) << "the decode after the cancellation";
+}
+
 // A client whose ring of input buffers is one deeper than the queue never writes one a job still reads: the submit that
 // finds the queue full sleeps until the oldest job retires, and says so.
 TEST_F(SwitchNVDECSubmitTest, ASubmitIntoAFullQueueSleepsUntilTheOldestRetiresAndSaysSo)

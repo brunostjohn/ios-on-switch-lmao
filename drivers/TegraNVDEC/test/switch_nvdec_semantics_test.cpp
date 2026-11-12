@@ -85,3 +85,36 @@ TEST_F(Events, DecodeFailuresRemainExactAcrossHardwareCompletedConsumers)
     switch_gpu_event_waits_release(&c);
     pump();
 }
+
+// A cancelled decode's last step comes with no help: its batch, bound to the decode alone, takes the decode's recorded
+// failure as its outcome once the physical result is in, so the job ends and its completion (the AVD plug-in's
+// picture) runs with the failure instead of waiting for an outcome nothing would bring.
+TEST_F(Events, ACancelledDecodesSemanticOutcomeIsItsRecordedFailure)
+{
+    using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_NVDEC>;
+    ASSERT_TRUE(switch_nvdec_semantics_start(162, recordRetired));
+    statusEngine = SWITCH_GPU_ENGINE_NVDEC;
+    statusOverride = Results::status;
+    physicalOverride = Results::physicalStatus;
+    auto *record = Results::allocate();
+    switch_gpu_backing_token decode{};
+    ASSERT_EQ(Results::prepare(record, 11, 11, &decode), 0);
+    tokens[key(decode)] = {};
+    auto *own = batch(nullptr, decode);
+    SwitchNVDECSemantic *node = nullptr;
+    ASSERT_EQ(switch_nvdec_semantics_bind(own, &decode, &node), 0);
+    commit(own);
+    switch_nvdec_semantics_physical(0);
+    pump();
+    EXPECT_EQ(switch_gpu_event_waits_status(own), 0) << "the decode is still running";
+    Results::physical(record, -5);
+    switch_nvdec_semantics_physical(0);
+    pump();
+    EXPECT_EQ(switch_gpu_event_waits_status(own), -5);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), own), 1);
+    EXPECT_EQ(Results::status(&decode), -5);
+    Results::complete(&record, -5);
+    EXPECT_EQ(Results::waitLegacy(11), -5);
+    switch_gpu_event_waits_release(&own);
+    pump();
+}
