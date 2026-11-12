@@ -307,6 +307,7 @@ host_test(
         "switch_vic_mapping_test.cpp",
         "//drivers/TegraVIC:SwitchVICMapping.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBackingMaps.h",
     ],
     additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICMapping.cpp"],
     deps = [":backing_kernel"],
