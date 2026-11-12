@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 PROTOCOL = 'benchloop/3'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
-KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod')
+KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod', 'pack')
 TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
 READBACK = ('none', 'summary', 'full')
 
@@ -107,6 +107,7 @@ EXPERIMENT_KEYS = {
     'fill',
 }
 EXPERIMENT_KEYS |= {'program', 'compute', 'twod', 'methods', 'restore', 'targets', 'source', 'compare', 'compressed'}
+EXPERIMENT_KEYS |= {'pack'}
 EXPERIMENT_KEYS |= {'meta', 'expect'}
 TARGET_KEYS = {'format', 'width', 'height'}
 PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
@@ -129,6 +130,15 @@ COMPARES = {'twod': ('program', 'copy', 'resolve3d', 'sampled3d'), 'readback': (
 MAX_OUTPUT = 64 * 1024
 # QMDs a compute experiment's own one may name dependent, one after another (hw_test_app/bench switch_bench.h)
 MAX_CHAIN = 3
+# A pack experiment (hw_test_app/bench/bench_pack.cpp): a pack state drawn with its own programs, quads in one command
+# buffer, each with uniform blocks at offsets in a 64 KiB region of its own, in one form of a split draw
+PACK_KEYS = {'form', 'ca', 'quads'}
+QUAD_KEYS = {'rect', 'ubos'}
+UBO_KEYS = {'stage', 'slot', 'offset', 'data'}
+PACK_FORMS = ('whole', 'whole_generic', 'split', 'split_whole')
+MAX_QUADS = 64
+MAX_UBOS = 8
+QUAD_REGION = 64 * 1024
 
 
 class InvalidError(ValueError):
@@ -209,7 +219,9 @@ def instructions(code: bytes) -> int:
 
 def estimated_ms(experiment: dict) -> float:
     """Give the GPU time of the experiment's longest command buffer if every lane ran every instruction at full rate."""
-    if experiment['kind'] in ('noop', 'known') or (experiment['kind'] == 'twod' and 'program' not in experiment):
+    if experiment['kind'] in ('noop', 'known', 'pack') or (
+        experiment['kind'] == 'twod' and 'program' not in experiment
+    ):
         return 0.0
     if experiment['kind'] == 'compute':
         c = experiment['compute']
@@ -370,6 +382,37 @@ def _chain(c: dict) -> None:
         _require(isinstance(flag, bool), 'compute.schedule: true or false')
 
 
+def _pack(e: dict, target: Target, draws: list) -> None:
+    """Check a pack experiment: its state, its form and each quad's rect and uniform blocks."""
+    p = e.get('pack')
+    _require(isinstance(p, dict), 'pack is an object')
+    _keys(p, PACK_KEYS, 'pack')
+    _require('template' in e, "pack: the state's key hash in template")
+    _require(draws == [1], 'pack: draws [1] (every quad in one command buffer a repeat)')
+    _require(p.get('form') in PACK_FORMS, f'pack.form is one of {", ".join(PACK_FORMS)}')
+    if 'ca' in p:
+        _flag(p['ca'], 'pack.ca')
+    quads = p.get('quads')
+    _require(isinstance(quads, list) and 1 <= len(quads) <= MAX_QUADS, f'pack.quads: 1..{MAX_QUADS}')
+    for quad in quads:
+        _require(isinstance(quad, dict), 'pack.quads: objects')
+        _keys(quad, QUAD_KEYS, 'pack.quads[]')
+        rect = quad.get('rect')
+        _require(isinstance(rect, list) and len(rect) == 4, 'pack.quads[].rect is [x0, y0, x1, y1]')
+        x0, y0, x1, y1 = (_count(n, 0, MAX_SIDE, 'pack.quads[].rect') for n in rect)
+        _require(x0 < x1 <= target.width and y0 < y1 <= target.height, 'pack.quads[].rect outside the target')
+        ubos = quad.get('ubos', [])
+        _require(isinstance(ubos, list) and len(ubos) <= MAX_UBOS, f'pack.quads[].ubos: at most {MAX_UBOS}')
+        for ubo in ubos:
+            _require(isinstance(ubo, dict), 'pack.quads[].ubos: objects')
+            _keys(ubo, UBO_KEYS, 'pack.quads[].ubos[]')
+            _require(ubo.get('stage') in (1, 2), 'pack.quads[].ubos[].stage is 1 (vertex) or 2 (fragment)')
+            _count(ubo.get('slot'), 0, 15, 'pack.quads[].ubos[].slot')
+            offset = _count(ubo.get('offset', 0), 0, QUAD_REGION - 1, 'pack.quads[].ubos[].offset')
+            data = unb64(ubo.get('data', ''))
+            _require(len(data) > 0 and offset + len(data) <= QUAD_REGION, 'pack.quads[].ubos[]: data inside 64 KiB')
+
+
 def _forms(e: dict, target: Target) -> None:
     """Check the source, compressed and compare fields: which kinds take them and what each needs."""
     if e['kind'] == 'twod':
@@ -417,6 +460,10 @@ def validate_experiment(e: dict) -> None:
             _chain(e['compute'])
             _require(draws == [1] and repeats == 1 and warmup == 0, 'compute.chain: one command buffer')
     _forms(e, target)
+    if e['kind'] == 'pack':
+        _pack(e, target, draws)
+    else:
+        _require('pack' not in e, 'only pack experiments carry pack')
     if e['kind'] == 'readback':
         _pairs(e.get('methods', []), 'methods')
         _pairs(e.get('restore', []), 'restore')

@@ -30,6 +30,9 @@ LIMITS = {
     'maxCommandBufferMs': 'MAX_COMMAND_BUFFER_MS',
     'clockHz': 'CLOCK_HZ',
     'lanesPerClock': 'LANES_PER_CLOCK',
+    'maxQuads': 'MAX_QUADS',
+    'maxUbos': 'MAX_UBOS',
+    'quadRegion': 'QUAD_REGION',
 }
 
 
@@ -63,6 +66,9 @@ class AgreementTest(unittest.TestCase):
             'computeKeys': protocol.COMPUTE_KEYS,
             'twodKeys': protocol.TWOD_KEYS,
             'sourceKeys': protocol.SOURCE_KEYS,
+            'packKeys': protocol.PACK_KEYS,
+            'quadKeys': protocol.QUAD_KEYS,
+            'uboKeys': protocol.UBO_KEYS,
         }
         for swift, python in sets.items():
             match = re.search(rf'static let {swift}: Set<String> = \[(.*?)\]', text, re.DOTALL)
@@ -75,6 +81,8 @@ class AgreementTest(unittest.TestCase):
         found = re.findall(r'(\d+): \((\d+), (\d+)\)', grids.group(1))
         self.assertEqual({int(n): (int(x), int(y)) for n, x, y in found}, protocol.SAMPLE_GRIDS)
         self.assertIn(f'static let maxOutput = {protocol.MAX_OUTPUT // 1024} * 1024', text)
+        forms = re.search(r'static let packForms = \[(.*?)\]', text, re.DOTALL)
+        self.assertEqual(tuple(re.findall(r'"(\w+)"', forms.group(1))), protocol.PACK_FORMS)
 
     def test_protocol_version(self) -> None:
         self.assertIn(f'static let version = "{protocol.PROTOCOL}"', SWIFT.read_text())

@@ -11,6 +11,43 @@ final class BenchProtocolTests: XCTestCase {
         return try Data(contentsOf: URL(fileURLWithPath: root + path))
     }
 
+    /// protocol.py's pack_test experiment: its quads and blocks decode, a pack names its state, and its result carries
+    /// the frontiers its prologues wrote
+    func testAPackExperimentDecodesAndItsResultCarriesItsFrontiers() throws {
+        let block = Data(repeating: 7, count: 64).base64EncodedString()
+        let json = """
+            {"protocol": "\(BenchProtocol.version)", "batch": "pack", "experiments": [
+              {"id": "iscd", "kind": "pack", "template": "618b45175101cd20", "readback": "full",
+               "target": {"format": "rgba16float", "width": 256, "height": 256},
+               "pack": {"form": "split_whole", "ca": true, "quads": [
+                 {"rect": [0, 0, 128, 256], "ubos": [{"stage": 2, "slot": 1, "offset": 80, "data": "\(block)"}]},
+                 {"rect": [128, 0, 256, 256]}]}},
+              {"id": "nokey", "kind": "pack", "target": {"format": "rgba16float", "width": 16, "height": 16},
+               "pack": {"form": "split", "quads": [{"rect": [0, 0, 16, 16]}]}}]}
+            """
+        let batch = try BenchBatch.decode(Data(json.utf8))
+        guard case .experiment(let e) = batch.entries[0] else { return XCTFail("\(batch.entries[0])") }
+        XCTAssertEqual(e.kind, .pack)
+        XCTAssertEqual(e.templateKey, 0x618b_4517_5101_cd20)
+        XCTAssertEqual(e.pack?.form, "split_whole")
+        XCTAssertEqual(e.pack?.ca, true)
+        XCTAssertEqual(e.pack?.quads.map(\.rect), [[0, 0, 128, 256], [128, 0, 256, 256]])
+        XCTAssertEqual(e.pack?.quads[0].blocks.first?.offset, 80)
+        XCTAssertEqual(e.pack?.quads[0].blocks.first?.data.count, 64)
+        XCTAssertEqual(e.pack?.quads[1].blocks, [])
+        guard case .invalid(_, _, let why) = batch.entries[1] else { return XCTFail("\(batch.entries[1])") }
+        XCTAssertTrue(why.contains("template"), why)
+
+        var outcome = BenchOutcome()
+        outcome.split = (2, Data([1, 2, 3, 4]))
+        let line = BenchResult.encode(batch: "pack", entry: batch.entries[0], outcome: outcome)
+        let top = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+        let split = top?["split"] as? [String: Any]
+        XCTAssertEqual(split?["launches"] as? Int, 2)
+        XCTAssertEqual(split?["bytes"] as? Int, 4)
+        XCTAssertEqual(split?["frontier"] as? String, Data([1, 2, 3, 4]).base64EncodedString())
+    }
+
     func testEveryKindOfTheGoldenBatchDecodes() throws {
         let batch = try BenchBatch.decode(try golden())
         XCTAssertEqual(batch.name, "golden")

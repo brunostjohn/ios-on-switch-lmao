@@ -442,6 +442,7 @@ cc_library(
         "bench/bench_known.h",
         "bench/bench_records.cpp",
         "bench/bench_records.h",
+        "bench/bench_pack.cpp",
         "bench/bench_twod.cpp",
         "bench/switch_bench.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",

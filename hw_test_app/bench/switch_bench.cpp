@@ -59,56 +59,6 @@ uint64_t nanoseconds(uint64_t ticks)
     return ticks * base.numer / base.denom;
 }
 
-std::vector<uint32_t> otherFormats(const char *key)
-{
-    std::vector<uint32_t> formats;
-    for (unsigned c = 1; c < 8; c++) {
-        char tag[8];
-        unsigned format = 0;
-        snprintf(tag, sizeof tag, " c%u=", c);
-        const char *at = strstr(key, tag);
-        if (!at || sscanf(at + strlen(tag), "%u", &format) != 1)
-            break;
-        formats.push_back(format);
-    }
-    return formats;
-}
-
-// The template's inputs as fetchform binds the pack's states (raw/test/fetchform.cpp): the rect's corners as float4
-// clip-space positions through identity matrices, the other attributes and uniforms fixed, its textures one picture
-void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, const switch_bench_experiment &x,
-          const raw::Texture &image, const raw::Sampler &sampler)
-{
-    const raw::PackPipeline &r = *p.rec;
-    std::vector<uint8_t> v(4 * r.vertexStride);
-    const float x0 = float(x.rect[0]) / x.width * 2 - 1, x1 = float(x.rect[2]) / x.width * 2 - 1;
-    const float y0 = 1 - float(x.rect[1]) / x.height * 2, y1 = 1 - float(x.rect[3]) / x.height * 2;
-    for (uint32_t k = 0; k < 4; k++) {
-        float *f = reinterpret_cast<float *>(v.data() + k * r.vertexStride);
-        f[0] = k & 1 ? x1 : x0;
-        f[1] = k & 2 ? y1 : y0;
-        f[2] = 0.5f;
-        f[3] = 1.f;
-        for (uint32_t w = 4; w < r.vertexStride / 4 && w < 8; w++)
-            f[w] = float((k >> (w & 1)) & 1);
-    }
-    e->setBytes(1, r.vertexSlot, v.data(), uint32_t(v.size()));
-    float identity[64], uniforms[64];
-    for (uint32_t k = 0; k < 64; k++) {
-        identity[k] = (k % 16) % 5 == 0 ? 1.f : 0.f;
-        uniforms[k] = float(k % 7) / 7.f;
-    }
-    for (uint32_t k = 0; k < r.entries; k++) {
-        const raw::PackEntry &entry = r.entry[k];
-        if (entry.kind == raw::EntryUbo)
-            e->setBytes(entry.stage, entry.slot, entry.stage == 1 ? identity : uniforms, sizeof uniforms);
-        else if (entry.kind == raw::EntryTexture)
-            e->setTexture(entry.slot, &image);
-        if (entry.kind != raw::EntryUbo && entry.samplerKind == raw::SamplerSlot)
-            e->setSampler(entry.sampler, &sampler);
-    }
-}
-
 bool readsPositionW(const uint8_t *sph)
 {
     uint32_t word5;
@@ -176,41 +126,6 @@ bench::Methods pairs(const uint32_t *words, uint32_t count)
     return out;
 }
 
-// The target and the template's other colours (memoryless); false: no memory, `r` says so
-bool makeTarget(raw::Device &d, const switch_bench_experiment &x, const std::vector<uint32_t> &others,
-                bool compressible, bench::Target &t, switch_bench_result &r)
-{
-    if (compressible)
-        d.probeCompressNext.store(true, std::memory_order_release);
-    if (!d.createTexture(x.width, x.height, x.format, t.color, !compressible, compressible)) {
-        bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
-        return false;
-    }
-    if (compressible && !t.color.comptags) {
-        d.destroyTexture(t.color);
-        bench::fail(r, SWITCH_BENCH_REFUSED, "the target did not get compressible memory (no comptags)");
-        return false;
-    }
-    for (uint32_t format : others) {
-        t.others.emplace_back();
-        if (!d.createMemoryless(x.width, x.height, format, t.others.back())) {
-            t.others.pop_back();
-            bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the template's other colours");
-            return false;
-        }
-    }
-    return true;
-}
-
-void destroyTarget(raw::Device &d, bench::Target &t)
-{
-    for (raw::Texture &o : t.others)
-        d.destroyTexture(o);
-    t.others.clear();
-    if (t.color.va)
-        d.destroyTexture(t.color);
-}
-
 // The experiment's draws into colour 0: compressed, its texels through a staging texture, else written and read by the
 // CPU. `into` gets the texels
 bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *pipeline,
@@ -224,7 +139,7 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
         bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the staging texture");
         return false;
     }
-    bool ran = makeTarget(d, x, others, compressed, t, r);
+    bool ran = bench::makeTarget(d, x, others, compressed, t, r);
     if (ran && compressed) {
         t.staging = &staging;
         r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1, 0, 0};
@@ -234,7 +149,7 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
         bench::fail(r, SWITCH_BENCH_ERROR, "the kernel refused the CPU a read lease on the target");
     if (ran && x.kind != SWITCH_BENCH_NOOP)
         bench::checkAlive(b, x, t, r);
-    destroyTarget(d, t);
+    bench::destroyTarget(d, t);
     if (staging.va)
         d.destroyTexture(staging);
     return ran;
@@ -252,7 +167,7 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
         return;
     std::vector<uint32_t> others;
     if (tpl && !x.single_target && x.kind != SWITCH_BENCH_NOOP)
-        others = otherFormats(d.pack().string(tpl->keyString));
+        others = bench::otherFormats(d.pack().string(tpl->keyString));
     if (!drawInto(b, x, pipeline, others, x.compressed != 0, r.texels, r))
         return;
     if (x.compare == SWITCH_BENCH_COMPARE_PLAIN && r.compare_texels) {
@@ -439,6 +354,91 @@ void switch_bench::close()
 
 namespace bench {
 
+std::vector<uint32_t> otherFormats(const char *key)
+{
+    std::vector<uint32_t> formats;
+    for (unsigned c = 1; c < 8; c++) {
+        char tag[8];
+        unsigned format = 0;
+        snprintf(tag, sizeof tag, " c%u=", c);
+        const char *at = strstr(key, tag);
+        if (!at || sscanf(at + strlen(tag), "%u", &format) != 1)
+            break;
+        formats.push_back(format);
+    }
+    return formats;
+}
+
+// The template's inputs as fetchform binds the pack's states (raw/test/fetchform.cpp): the rect's corners as float4
+// clip-space positions through identity matrices, the other attributes and uniforms fixed, its textures one picture
+void bindTemplate(raw::RenderEncoder *e, const raw::Pipeline &p, const uint32_t rect[4], uint32_t width,
+                  uint32_t height, const raw::Texture &image, const raw::Sampler &sampler)
+{
+    const raw::PackPipeline &r = *p.rec;
+    std::vector<uint8_t> v(4 * r.vertexStride);
+    const float x0 = float(rect[0]) / width * 2 - 1, x1 = float(rect[2]) / width * 2 - 1;
+    const float y0 = 1 - float(rect[1]) / height * 2, y1 = 1 - float(rect[3]) / height * 2;
+    for (uint32_t k = 0; k < 4; k++) {
+        float *f = reinterpret_cast<float *>(v.data() + k * r.vertexStride);
+        f[0] = k & 1 ? x1 : x0;
+        f[1] = k & 2 ? y1 : y0;
+        f[2] = 0.5f;
+        f[3] = 1.f;
+        for (uint32_t w = 4; w < r.vertexStride / 4 && w < 8; w++)
+            f[w] = float((k >> (w & 1)) & 1);
+    }
+    e->setBytes(1, r.vertexSlot, v.data(), uint32_t(v.size()));
+    float identity[64], uniforms[64];
+    for (uint32_t k = 0; k < 64; k++) {
+        identity[k] = (k % 16) % 5 == 0 ? 1.f : 0.f;
+        uniforms[k] = float(k % 7) / 7.f;
+    }
+    for (uint32_t k = 0; k < r.entries; k++) {
+        const raw::PackEntry &entry = r.entry[k];
+        if (entry.kind == raw::EntryUbo)
+            e->setBytes(entry.stage, entry.slot, entry.stage == 1 ? identity : uniforms, sizeof uniforms);
+        else if (entry.kind == raw::EntryTexture)
+            e->setTexture(entry.slot, &image);
+        if (entry.kind != raw::EntryUbo && entry.samplerKind == raw::SamplerSlot)
+            e->setSampler(entry.sampler, &sampler);
+    }
+}
+
+// The target and the template's other colours (memoryless); false: no memory, `r` says so
+bool makeTarget(raw::Device &d, const switch_bench_experiment &x, const std::vector<uint32_t> &others,
+                bool compressible, Target &t, switch_bench_result &r)
+{
+    if (compressible)
+        d.probeCompressNext.store(true, std::memory_order_release);
+    if (!d.createTexture(x.width, x.height, x.format, t.color, !compressible, compressible)) {
+        bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
+        return false;
+    }
+    if (compressible && !t.color.comptags) {
+        d.destroyTexture(t.color);
+        bench::fail(r, SWITCH_BENCH_REFUSED, "the target did not get compressible memory (no comptags)");
+        return false;
+    }
+    for (uint32_t format : others) {
+        t.others.emplace_back();
+        if (!d.createMemoryless(x.width, x.height, format, t.others.back())) {
+            t.others.pop_back();
+            bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the template's other colours");
+            return false;
+        }
+    }
+    return true;
+}
+
+void destroyTarget(raw::Device &d, Target &t)
+{
+    for (raw::Texture &o : t.others)
+        d.destroyTexture(o);
+    t.others.clear();
+    if (t.color.va)
+        d.destroyTexture(t.color);
+}
+
 void fail(switch_bench_result &r, uint32_t status, const std::string &why)
 {
     r.status = status;
@@ -598,7 +598,8 @@ bool Submission::render(Target &t, raw::Pipeline *pipeline, uint32_t draws, uint
     e->setScissor(0, 0, w, h);
     if (draws) {
         e->setPipeline(pipeline);
-        bind(e, *pipeline, b_, x_, t.image ? *t.image : b_.image, t.linear ? b_.linear : b_.sampler);
+        bindTemplate(e, *pipeline, x_.rect, x_.width, x_.height, t.image ? *t.image : b_.image,
+                     t.linear ? b_.linear : b_.sampler);
     }
     for (uint32_t n = 0; n < draws; n++) {
         const char *why = nullptr;
@@ -753,6 +754,7 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
     r->status = r->compare_status = SWITCH_BENCH_OK;
     r->why[0] = r->compare_why[0] = 0;
     r->form = {};
+    r->launches = 0;
     if (b->records >= kRecordsPerDevice) {
         b->records = 0;
         b->reopen();
@@ -767,6 +769,8 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
         runCompute(*b, *x, *r);
     else if (x->kind == SWITCH_BENCH_TWOD)
         bench::runTwod(*b, *x, *r);
+    else if (x->kind == SWITCH_BENCH_PACK)
+        bench::runPack(*b, *x, *r);
     else
         runRender(*b, *x, *r);
     if (r->status == SWITCH_BENCH_KILLED)

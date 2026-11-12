@@ -39,7 +39,14 @@ final class BenchRunner {
     static let kinds: [BenchKind: switch_bench_kind] = [
         .noop: SWITCH_BENCH_NOOP, .known: SWITCH_BENCH_KNOWN, .fragment: SWITCH_BENCH_FRAGMENT,
         .compute: SWITCH_BENCH_COMPUTE, .readback: SWITCH_BENCH_READBACK, .twod: SWITCH_BENCH_TWOD,
+        .pack: SWITCH_BENCH_PACK,
     ]
+    static let packForms: [String: switch_bench_pack_form] = [
+        "whole": SWITCH_BENCH_PACK_WHOLE, "whole_generic": SWITCH_BENCH_PACK_WHOLE_GENERIC,
+        "split": SWITCH_BENCH_PACK_SPLIT, "split_whole": SWITCH_BENCH_PACK_SPLIT_WHOLE,
+    ]
+    /// The most a split's frontier holds (raw_split_metadata.h): the room a pack experiment's quads need for theirs
+    static let frontierBytes = 4096
     static let statuses = ["ok", "invalid", "refused", "killed", "error"]
     static let twodOps: [BenchTwodOp: switch_bench_twod_op] = [
         .fill: SWITCH_BENCH_TWOD_FILL, .scale: SWITCH_BENCH_TWOD_SCALE, .resolve: SWITCH_BENCH_TWOD_RESOLVE,
@@ -90,12 +97,28 @@ final class BenchRunner {
         x.compare = (e.compare.flatMap { Self.compares[$0] } ?? SWITCH_BENCH_COMPARE_NONE).rawValue
         x.compressed = e.compressed ? 1 : 0
         x.output_bytes = UInt32(e.outputBytes)
-        x.chain = pinned.programs(e.chain.map { link in
-            switch_bench_program(
-                sph: nil, code: pinned.bytes(link.code), code_bytes: link.code.count, data: pinned.bytes(link.data),
-                data_bytes: link.data.count, gprs: link.gprs)
-        })
+        x.chain = pinned.programs(
+            e.chain.map { link in
+                switch_bench_program(
+                    sph: nil, code: pinned.bytes(link.code), code_bytes: link.code.count, data: pinned.bytes(link.data),
+                    data_bytes: link.data.count, gprs: link.gprs)
+            })
         (x.chain_links, x.chain_schedule) = (UInt32(e.chain.count), e.chainSchedule)
+        if let p = e.pack {
+            let quads = p.quads.map { quad in
+                let blocks = quad.blocks.map {
+                    switch_bench_block(
+                        stage: $0.stage, slot: $0.slot, offset: $0.offset, bytes: UInt32($0.data.count),
+                        data: pinned.bytes($0.data))
+                }
+                return switch_bench_quad(
+                    rect: (quad.rect[0], quad.rect[1], quad.rect[2], quad.rect[3]), blocks: pinned.values(blocks),
+                    block_count: UInt32(blocks.count))
+            }
+            x.pack = switch_bench_pack(
+                form: Self.packForms[p.form]!.rawValue, ca_transform: p.ca ? 1 : 0, quads: pinned.values(quads),
+                quad_count: UInt32(quads.count))
+        }
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()
@@ -106,6 +129,9 @@ final class BenchRunner {
         r.compare_texels = texelBytes > 0 && e.compare != nil ? pinned.filled(UInt8.self, texelBytes, Self.unread) : nil
         r.output = e.outputBytes > 0 ? pinned.filled(UInt8.self, e.outputBytes, Self.unread) : nil
         r.output_bytes = e.outputBytes
+        let frontierRoom = (e.pack?.quads.count ?? 0) * Self.frontierBytes
+        r.frontier = frontierRoom > 0 ? pinned.zeroed(UInt8.self, frontierRoom) : nil
+        r.frontier_bytes = frontierRoom
         switch_bench_run(bench, &x, &r)
         var outcome = BenchOutcome(status: Self.statuses[Int(r.status)], why: Self.text(&r.why))
         let gpu = Array(UnsafeBufferPointer(start: r.gpu_ns, count: timed))
@@ -121,6 +147,9 @@ final class BenchRunner {
                 outcome.compareTexels = Data(bytes: other, count: texelBytes)
             }
             if let output = r.output { outcome.output = Data(bytes: output, count: e.outputBytes) }
+            if let frontier = r.frontier, e.pack != nil {
+                outcome.split = (Int(r.launches), Data(bytes: frontier, count: r.frontier_bytes))
+            }
         }
         if r.form.set != 0 {
             outcome.form = [
@@ -166,10 +195,14 @@ private final class Pinned {
     }
 
     func programs(_ values: [switch_bench_program]) -> UnsafePointer<switch_bench_program>? {
+        self.values(values)
+    }
+
+    func values<T>(_ values: [T]) -> UnsafePointer<T>? {
         guard !values.isEmpty else { return nil }
-        let buffer = allocate(values.count * MemoryLayout<switch_bench_program>.stride)
+        let buffer = allocate(values.count * MemoryLayout<T>.stride)
         values.withUnsafeBytes { buffer.copyMemory(from: $0) }
-        return UnsafePointer(buffer.baseAddress!.assumingMemoryBound(to: switch_bench_program.self))
+        return UnsafePointer(buffer.baseAddress!.assumingMemoryBound(to: T.self))
     }
 
     func zeroed<T>(_: T.Type, _ count: Int) -> UnsafeMutablePointer<T> {

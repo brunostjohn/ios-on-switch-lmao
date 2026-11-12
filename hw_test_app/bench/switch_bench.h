@@ -18,6 +18,38 @@ enum switch_bench_kind {
     SWITCH_BENCH_COMPUTE,   // the caller's kernel
     SWITCH_BENCH_READBACK,  // the caller's pixel program with the caller's methods around its draw
     SWITCH_BENCH_TWOD,      // one 2D-engine fill, scaled copy or resolve into the target (raw_probe_ops.h), no program
+    SWITCH_BENCH_PACK,  // a pack state with its own programs, the caller's uniform blocks a quad (switch_bench_pack)
+};
+
+// How a pack experiment's draws take a state with a split (raw_split_reuse.h SplitProbe). Every form but whole takes
+// the split plan's draws without a plan, so a bench-sized quad splits as a screen-sized one would.
+enum switch_bench_pack_form {
+    SWITCH_BENCH_PACK_WHOLE,          // whole programs, the fact-selected variant (the debug switch whole-programs)
+    SWITCH_BENCH_PACK_WHOLE_GENERIC,  // the generic whole program the split twin is made from, no prologue
+    SWITCH_BENCH_PACK_SPLIT,          // the split twin, its frontier from its prologue
+    SWITCH_BENCH_PACK_SPLIT_WHOLE,    // the prologue launched and its frontier written, the generic whole program drawn
+};
+
+// A uniform block: `bytes` at `offset` in the quad's own region of one buffer (an offset off 256 bytes binds its
+// floor with the rest as a residual push word, as Core Animation's blocks do), bound at `slot` of `stage` (1 vertex,
+// 2 fragment)
+struct switch_bench_block {
+    uint32_t stage, slot, offset, bytes;
+    const uint8_t *data;
+};
+
+struct switch_bench_quad {
+    uint32_t rect[4];  // x0, y0, x1, y1 in pixels
+    const struct switch_bench_block *blocks;
+    uint32_t block_count;
+};
+
+// Every quad drawn in one command buffer, in order, with the template's inputs (fetchform's) where no block is given
+struct switch_bench_pack {
+    uint32_t form;          // switch_bench_pack_form
+    uint32_t ca_transform;  // the state's vertex function is Core Animation's fixed_vert_l?h_spc
+    const struct switch_bench_quad *quads;
+    uint32_t quad_count;
 };
 
 enum switch_bench_twod_op {
@@ -104,6 +136,7 @@ struct switch_bench_experiment {
     // schedules QMD i + 1 when it completes. Every QMD's release adds 1 to the output's last word.
     const struct switch_bench_program *chain;
     uint32_t chain_links, chain_schedule;
+    struct switch_bench_pack pack;
 };
 
 // What the app did, so a result proves its own form
@@ -130,6 +163,11 @@ struct switch_bench_result {
     uint32_t compare_status;  // the compare form's own status and why: its failure leaves the experiment's result
     char compare_why[160];
     struct switch_bench_form form;
+    // pack: the last command buffer's prologue launches and their frontiers' bytes, one after another in launch order
+    // (frontier: the caller's, frontier_bytes its room in and what was written out)
+    uint32_t launches;
+    uint8_t *frontier;
+    size_t frontier_bytes;
 };
 
 struct switch_bench;

@@ -58,7 +58,7 @@ public enum BenchProtocol {
     public static let experimentKeys: Set<String> = [
         "id", "kind", "target", "rect", "draws", "repeats", "warmup", "clear", "readback", "template", "fill",
         "program",
-        "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed",
+        "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed", "pack",
     ]
     public static let targetKeys: Set<String> = ["format", "width", "height"]
     public static let programKeys: Set<String> = ["code", "data", "sph", "gprs"]
@@ -83,6 +83,14 @@ public enum BenchProtocol {
         .twod: ["program", "copy", "resolve3d", "sampled3d"], .readback: ["plain"],
     ]
     public static let maxOutput = 64 * 1024
+    /// A pack experiment's quads and their uniform blocks (protocol.py PACK_KEYS and the rest)
+    public static let packKeys: Set<String> = ["form", "ca", "quads"]
+    public static let quadKeys: Set<String> = ["rect", "ubos"]
+    public static let uboKeys: Set<String> = ["stage", "slot", "offset", "data"]
+    public static let packForms = ["whole", "whole_generic", "split", "split_whole"]
+    public static let maxQuads = 64
+    public static let maxUbos = 8
+    public static let quadRegion = 64 * 1024
 
     public static func methodAllowed(_ method: UInt32) -> Bool {
         method % 4 == 0 && methodRanges.contains { $0.0 <= method && method < $0.1 }
@@ -96,7 +104,7 @@ public enum BenchProtocol {
 }
 
 public enum BenchKind: String, Sendable {
-    case noop, known, fragment, compute, readback, twod
+    case noop, known, fragment, compute, readback, twod, pack
 }
 
 public enum BenchTwodOp: String, Sendable {
@@ -193,6 +201,8 @@ public struct BenchExperiment: Equatable, Sendable {
     public var chain: [BenchProgram] = []
     /// Bit i: QMD i (0 the experiment's own) schedules QMD i + 1 when it completes
     public var chainSchedule: UInt32 = 0
+    /// A pack experiment's form and quads (its state is templateKey)
+    public var pack: BenchPack?
 
     public var commandBuffers: Int { draws.count * Int(repeats + warmup) }
 }

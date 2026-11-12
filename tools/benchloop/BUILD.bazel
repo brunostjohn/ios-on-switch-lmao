@@ -107,6 +107,7 @@ APP_SOURCES = [
         "gr_errors_test",
         "known_test",
         "loop_test",
+        "pack_test",
         "qmdchain_test",
         "rop_test",
         "sampling_test",

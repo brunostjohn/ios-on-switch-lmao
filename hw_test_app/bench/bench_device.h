@@ -44,6 +44,15 @@ void fail(switch_bench_result &r, uint32_t status, const std::string &why);
 bool fill(raw::Device &d, raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp);
 bool readBack(raw::Device &d, const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into,
               size_t bytes);
+// A template's other colour formats, from its key string's " c<n>=" fields
+std::vector<uint32_t> otherFormats(const char *key);
+// The template's inputs as fetchform binds the pack's states over `rect` of a `width` x `height` target
+void bindTemplate(raw::RenderEncoder *e, const raw::Pipeline &p, const uint32_t rect[4], uint32_t width,
+                  uint32_t height, const raw::Texture &image, const raw::Sampler &sampler);
+// The target and the template's other colours (memoryless); false: no memory, `r` says so
+bool makeTarget(raw::Device &d, const switch_bench_experiment &x, const std::vector<uint32_t> &others,
+                bool compressible, Target &t, switch_bench_result &r);
+void destroyTarget(raw::Device &d, Target &t);
 // The caller's pixel program in the template's state, made a pipeline of the device; null: `r` says why.
 // `firstColourOnly`: the state without the template's other colours, for a pass that binds colour 0 alone
 raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,
@@ -90,5 +99,6 @@ private:
 };
 
 void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r);
+void runPack(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r);
 
 }  // namespace bench

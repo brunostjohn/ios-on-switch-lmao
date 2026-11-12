@@ -1089,6 +1089,22 @@ public:
     {
         splitProbe_ = probe;
     }
+
+    // HW Test's bench: every draw the split plan would take if large enough is taken, without a plan
+    void forceSplit(bool force)
+    {
+        splitForced_ = force;
+    }
+
+    // HW Test's bench: each prologue launch's frontier (its address, its bytes), until the next begin()
+    std::vector<std::pair<uint64_t, uint32_t>> splitFrontiers() const
+    {
+        std::vector<std::pair<uint64_t, uint32_t>> out;
+        for (const SplitLaunch &l : splits_)
+            if (l.batchRecord < splitRecords_.size())
+                out.emplace_back(splitRecords_[l.batchRecord].frontier, l.split->rec.frontierBytes);
+        return out;
+    }
     // hw_test_app's measurement of state segments: every state bound as the inline copy it was before them
     void inlineStates(bool inline_)
     {
@@ -1154,6 +1170,7 @@ private:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
     SplitProbe splitProbe_ = SplitProbe::Twin;
+    bool splitForced_ = false;
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {
@@ -1781,6 +1798,15 @@ public:
     uint64_t jobsSubmitted() const
     {
         return k_.jobsSubmitted();
+    }
+
+    // HW Test's bench: `bytes` of the upload ring at `va` as the GPU left them (the ring is GPU-volatile); false outside it
+    bool readUpload(uint64_t va, void *out, uint32_t bytes) const
+    {
+        if (va < upload_.bo.va || va + bytes > upload_.bo.va + upload_.bo.bytes || !upload_.bo.cpu)
+            return false;
+        memcpy(out, upload_.bo.cpu + (va - upload_.bo.va), bytes);
+        return true;
     }
 
     uint64_t signalsReleased() const

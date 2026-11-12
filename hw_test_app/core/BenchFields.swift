@@ -60,9 +60,10 @@ struct BenchFields {
             if !chain.0.isEmpty, draws != [1] || repeats != 1 || warmup != 0 {
                 throw BenchInvalid("compute.chain: one command buffer (draws [1], repeats 1, no warmup)")
             }
-        case .noop, .known, .twod:
+        case .noop, .known, .twod, .pack:
             break
         }
+        if kind != .pack, fields["pack"] != nil { throw BenchInvalid("only pack experiments carry pack") }
         let forms = try self.forms(kind, format: format, size: (width, height), rect: rect)
         if forms.compare == "program" { program = try self.program(fields["program"], "program", sph: true) }
         let methods = kind == .readback ? try pairs(fields["methods"] ?? ([] as [Any]), "methods") : []
@@ -89,6 +90,13 @@ struct BenchFields {
             singleTarget: targets == 1, templateKey: templateKey, twod: forms.twod, source: forms.source,
             compare: forms.compare, compressed: forms.compressed, outputBytes: outputBytes)
         (experiment.chain, experiment.chainSchedule) = chain
+        if kind == .pack {
+            guard templateKey != 0 else { throw BenchInvalid("pack: the state's key hash in template") }
+            guard draws == [1] else {
+                throw BenchInvalid("pack: draws [1] (every quad in one command buffer a repeat)")
+            }
+            experiment.pack = try pack(fields["pack"], width: width, height: height)
+        }
         guard Self.estimatedMs(experiment) <= BenchProtocol.maxCommandBufferMs else {
             throw BenchInvalid("a command buffer would run past \(BenchProtocol.maxCommandBufferMs) ms")
         }

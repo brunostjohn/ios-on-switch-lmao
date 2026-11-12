@@ -3561,6 +3561,7 @@ CommandBuffer *Device::begin()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
     cb.splitProbe_ = SplitProbe::Twin;
+    cb.splitForced_ = false;
     cb.foldCounts();
 #endif
     cb.draws = cb.passes = cb.blits = cb.bands = 0;

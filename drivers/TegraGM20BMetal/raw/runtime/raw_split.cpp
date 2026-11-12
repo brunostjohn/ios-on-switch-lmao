@@ -148,7 +148,11 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analys
         return pl;
     // priced by its pixel limit, as the pass's plan admitted its state (RawMetalSplitPlan.h): no vertex is read
     const PixelBox box = analysis.geometry().limit;
-    if (box.empty() || !splitPlan_.accepts(pl, source->rec, uint64_t(box.x1 - box.x0) * (box.y1 - box.y0)))
+    bool forced = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    forced = cb_->splitForced_;
+#endif
+    if (box.empty() || (!forced && !splitPlan_.accepts(pl, source->rec, uint64_t(box.x1 - box.x0) * (box.y1 - box.y0))))
         return pl;
     for (uint8_t k = 0; k < source->rec.uboCount; k++) {
         const int entry = pixelUboEntry(*pl, source->rec.uboCbuf[k]);

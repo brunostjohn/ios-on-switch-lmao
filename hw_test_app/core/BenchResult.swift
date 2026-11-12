@@ -19,6 +19,8 @@ public struct BenchOutcome: Sendable {
     public var compareFailure: (status: String, why: String)?
     /// What the app did, as it did it: the target's compression, the 2D operation's waits, a resolve's samples
     public var form: [String: Int] = [:]
+    /// A pack experiment's last command buffer: its prologue launches and their frontiers' bytes in launch order
+    public var split: (launches: Int, frontier: Data)?
 
     public init(status: String = "ok", why: String = "") {
         self.status = status
@@ -60,6 +62,14 @@ public enum BenchResult {
                 top["output"] = fields
             }
             if !outcome.form.isEmpty { top["form"] = outcome.form }
+            if let split = outcome.split {
+                top["split"] =
+                    [
+                        "launches": split.launches, "bytes": split.frontier.count,
+                        "crc32": hex(UInt64(crc32(split.frontier)), digits: 8),
+                        "frontier": split.frontier.base64EncodedString(),
+                    ] as [String: Any]
+            }
         case .invalid(_, let kind, _):
             top["kind"] = kind
         }
