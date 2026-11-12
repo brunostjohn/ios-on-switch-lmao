@@ -721,7 +721,7 @@ bool Device::slmNeed(uint64_t perWarp)
         return true;
     const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
     Bo area;
-    if (!k_.alloc(a.bytes, false, area))
+    if (!k_.allocGpu(a.bytes, area))
         return false;
     if (slm_.bytes)
         slmOutgrown_.push_back(slm_);
@@ -2530,6 +2530,15 @@ uint64_t Device::heapInPlaceBytes()
     uint64_t bytes = packPages_.boundBytes();
     for (const StoreRegion &r : storeRegions_)
         bytes += r.pages.boundBytes();
+    return bytes;
+}
+
+uint64_t Device::controlMappedBytes()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    uint64_t bytes = 0;
+    for (const Bo *bo : {&tic_, &tsc_, &root_, &zero_, &tickets_, &colorTable_, &stamps_, &push_.bo, &upload_.bo})
+        bytes += bo->mapped;
     return bytes;
 }
 

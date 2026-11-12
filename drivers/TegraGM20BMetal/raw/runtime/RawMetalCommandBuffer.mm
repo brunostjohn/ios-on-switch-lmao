@@ -643,7 +643,7 @@ static void giveRecording(RMCommandBuffer *b)
         if (_twin)
             return _twin;
     }
-    return twinPublish(self, _twin, [gRM->fallback newCommandQueue]);
+    return twinPublish(self, _twin, [RM_M2V("a command queue for a command buffer replayed on it") newCommandQueue]);
 }
 
 - (id<MTLCommandBuffer>)commandBuffer

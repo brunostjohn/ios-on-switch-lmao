@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -204,6 +205,19 @@ struct RawState {
 };
 
 extern RawState *gRM;
+
+// The m2v device, for something the raw path has no own for (`need`, a string literal). Debug builds name each need once a
+// process: what keeps its m2v device in use.
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
+#define RM_M2V(need)                              \
+    ([]() -> id<MTLDevice> {                      \
+        static std::atomic<bool> said{false};     \
+        return rmM2VFor(need, said);              \
+    }())
+#else
+#define RM_M2V(need) ((id<MTLDevice>)gRM->fallback)
+#endif
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
@@ -435,6 +449,11 @@ void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
+
+// RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void logGivenBack(size_t relieved);
+#endif
 
 // RawMetalRates.mm
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

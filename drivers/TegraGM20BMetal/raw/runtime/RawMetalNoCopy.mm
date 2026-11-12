@@ -264,8 +264,10 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
 {
     raw::fx::MipChain layout;
     const raw::FormatInfo *f = nullptr;
-    if (backed || !blockLayout(d, layout, &f))
-        return ((id (*)(id, SEL, id, BOOL))objc_msgSend)(gRM->fallback, _cmd, d, backed);
+    if (backed || !blockLayout(d, layout, &f)) {
+        id<MTLDevice> m2v = RM_M2V("a texture layout the raw path does not take");
+        return ((id (*)(id, SEL, id, BOOL))objc_msgSend)(m2v, _cmd, d, backed);
+    }
     RMBlockLayout *l = [RMBlockLayout new];
     l->_device = self;
     l->_layout = layout;
@@ -281,9 +283,10 @@ void logImport(const void *bytes, NSUInteger length, MTLTextureDescriptor *d, co
     SWITCH_API(ApiObject);
     raw::fx::MipChain layout;
     const raw::FormatInfo *f = nullptr;
-    if (!blockLayout(d, layout, &f))
-        return ((id (*)(id, SEL, void *, NSUInteger, id, id))objc_msgSend)(gRM->fallback, _cmd, bytes, length, d,
-                                                                           deallocator);
+    if (!blockLayout(d, layout, &f)) {
+        id<MTLDevice> m2v = RM_M2V("a no-copy texture the raw path does not take");
+        return ((id (*)(id, SEL, void *, NSUInteger, id, id))objc_msgSend)(m2v, _cmd, bytes, length, d, deallocator);
+    }
     RMNoCopyTexture *t = [RMNoCopyTexture new];
     t->_device = self;
     t->_descriptor = [d copy];

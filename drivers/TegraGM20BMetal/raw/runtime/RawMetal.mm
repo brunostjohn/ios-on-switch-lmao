@@ -21,7 +21,6 @@
 #include "raw_device_answers.h"
 #include "raw_limits_fill.h"
 
-#include <mach/mach.h>
 #include <malloc/malloc.h>
 
 #if SWITCH_FRAME_TIMELINE
@@ -154,32 +153,13 @@ RawState *gRM;
 
 @end
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// What the process keeps once the GPU's idle memory went back: jetsam reads phys_footprint against the daemon's limits
-// (JetsamProperties: iconservicesagent's ActiveSoft 200 MB, InactiveHard 15 MB); the rest of it is mostly IOKit's mappings
-extern "C" bool native_bridge_metal_memory(uint64_t out[3]) __attribute__((weak_import));
 
-static void logGivenBack(size_t relieved)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said)
 {
-    task_vm_info_data_t vm = {};
-    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) != KERN_SUCCESS)
-        return;
-    raw::Device &d = *gRM->raw;
-    uint64_t m2v[3] = {};
-    if (native_bridge_metal_memory)
-        native_bridge_metal_memory(m2v);
-    const uint64_t footprint = vm.phys_footprint >> 20, internal = vm.internal >> 20, compressed = vm.compressed >> 20;
-    os_log(rawLog(),
-           "raw: idle memory given back: pool %llu MB in %llu chunks (heaps %llu MB), write-combined %llu MB, shader "
-           "heap %llu KB, m2v %llu MB, malloc's free pages %llu KB; footprint %llu MB (internal %llu, compressed %llu, "
-           "other %llu)",
-           (unsigned long long)(d.stats.poolBytes.load() >> 20), (unsigned long long)d.stats.poolChunks.load(),
-           (unsigned long long)(d.arenaBytes() >> 20), (unsigned long long)(d.wcChunkBytesHeld() >> 20),
-           (unsigned long long)(d.heapBytes() >> 10), (unsigned long long)(m2v[0] >> 20),
-           (unsigned long long)(relieved >> 10), (unsigned long long)footprint,
-           (unsigned long long)internal, (unsigned long long)compressed,
-           (unsigned long long)(footprint > internal + compressed ? footprint - internal - compressed : 0));
+    if (!said.exchange(true, std::memory_order_relaxed))
+        os_log(rawLog(), "raw: %{public}s needs its m2v device for %{public}s", getprogname(), need);
+    return gRM->fallback;
 }
 #endif
 
