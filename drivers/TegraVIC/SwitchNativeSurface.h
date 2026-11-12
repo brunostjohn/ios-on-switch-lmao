@@ -39,3 +39,8 @@ extern "C" int switch_native_surface_prepare_gpu(OSObject *surface, uint32_t id,
 // The caller holds the descriptor CPU reservation; this query neither converts nor waits for GPU work.
 extern "C" int switch_native_surface_gpu_admission(OSObject *surface, uint32_t access,
                                                     switch_gpu_backing *expected);
+
+#if DEVELOPMENT || DEBUG
+// Since boot: native publications, and how many of them needed a new surface object (the rest reused a retired one).
+extern "C" void switch_native_surface_publications(uint64_t *published, uint64_t *allocated);
+#endif

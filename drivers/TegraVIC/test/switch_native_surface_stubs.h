@@ -31,6 +31,7 @@ public:
     virtual void free() { delete this; }
     void retain() { ++refs; }
     void release() { if (--refs == 0) free(); }
+    int getRetainCount() const { return static_cast<int>(refs.load()); }
 };
 struct IOMemoryDescriptorReserved {
     OSObject *switchAttachment = nullptr;

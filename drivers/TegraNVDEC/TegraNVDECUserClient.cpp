@@ -28,6 +28,10 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
+#if DEVELOPMENT || DEBUG
+extern "C" void switch_native_surface_publications(uint64_t *published, uint64_t *allocated) __attribute__((weak));
+#endif
+
 namespace {
 constexpr uint32_t kMaxBuffers = 64, kMaxConnections = 16;
 constexpr uint64_t kMaxBufferBytes = 64ULL << 20;
@@ -63,6 +67,9 @@ class AppleD5500UserClient : public IOUserClient {
     SwitchNVDECCompletions *completions_ = nullptr;
     Buffer buffers_[kMaxBuffers] = {};
     SwitchNVDECPark park_ = {};
+#if DEVELOPMENT || DEBUG
+    uint64_t recycles_ = 0;
+#endif
     alignas(8) uint8_t input_[sizeof(TegraNVDECSubmit)] = {};  // under lock_: the record of a locked call
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
@@ -190,10 +197,15 @@ IOReturn AppleD5500UserClient::clientClose()
     if (!idle)
         IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay wired\n");
 #if DEVELOPMENT || DEBUG
-    if (park_.recycled)
-        IOLog("TegraNVDEC: client closed: %llu recycles of an exported picture's buffer, %llu took a parked buffer, "
-              "%llu allocated one (%u parked at most)\n",
-              park_.recycled, park_.taken, park_.allocated, park_.most);
+    if (recycles_) {
+        uint64_t published = 0, objects = 0;
+        if (switch_native_surface_publications)
+            switch_native_surface_publications(&published, &objects);
+        IOLog("TegraNVDEC: client closed: %llu recycles, %llu of an exported picture's buffer: %llu took a parked "
+              "buffer, %llu allocated one (%u parked at most); since boot %llu native publications, %llu new surface "
+              "objects\n",
+              recycles_, park_.recycled, park_.taken, park_.allocated, park_.most, published, objects);
+    }
 #endif
     dropAll(idle);
     IOLockUnlock(lock_);
@@ -388,6 +400,9 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     case SwitchNVDECMethodBufferRecycle: {
         const auto *request = static_cast<const TegraNVDECBuffer *>(in);
         auto *buffer = find(request->handle);
+#if DEVELOPMENT || DEBUG
+        ++recycles_;
+#endif
         ret = !buffer || request->reserved ? kIOReturnBadArgument :
             ioreturn(switch_nvdec_output_recycle(buffer, current_task(), &park_));
         if (!ret)

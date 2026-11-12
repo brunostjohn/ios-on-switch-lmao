@@ -409,6 +409,44 @@ TEST_F(NativeSurface, DescriptorRecycleStalesOldViewsAndReleasesOldDecoderLease)
     switch_native_surface_release(&previous);
 }
 
+// A replaced publication goes to the retired ring with its decoder backing given back; once no view holds it, a later
+// publication reuses it (no new object per picture), and a view kept from before stays stale.
+TEST_F(NativeSurface, RetiredPublicationsAreReusedOnlyOnceNoViewHoldsThem)
+{
+    const auto attached = [&] {
+        auto *object = static_cast<SwitchNativeSurface *>(SwitchMemoryAttachment::copy(memory));
+        object->release();
+        return object;
+    };
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchNativeSurface *first = attached();
+    SwitchNativeSurfaceView kept = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &kept, false), 0);
+    const volatile uint64_t *keptWord = kept.guard.generation;
+    const uint64_t keptExpected = kept.guard.expected;
+
+    picture.backing = &replacement;
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    EXPECT_EQ(first->native, nullptr);
+    EXPECT_EQ(native.readers, 0u);
+    picture.backing = &native;
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    EXPECT_NE(attached(), first);
+
+    switch_native_surface_release(&kept);
+    picture.backing = &replacement;
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchNativeSurface *reused = attached();
+    EXPECT_GT(reused->generation, 1u);
+    EXPECT_EQ(reused->generation, reused->live);
+    EXPECT_NE(*keptWord, keptExpected);
+    SwitchNativeSurfaceView view = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
+    EXPECT_EQ(view.native, &replacement);
+    EXPECT_EQ(*view.guard.generation, view.guard.expected);
+    switch_native_surface_release(&view);
+}
+
 TEST_F(NativeSurface, FailedReplacementRestoresPreviousAuthority)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
