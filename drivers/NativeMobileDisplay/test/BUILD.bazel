@@ -306,7 +306,9 @@ host_test(
     srcs = [
         "display_window_probe_test.cpp",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowFormatProbes.h",
         "//drivers/NativeMobileDisplay:DisplayWindowProbe.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeExtras.h",
         "//drivers/NativeMobileDisplay:DisplayWindowProbeABI.h",
         "//drivers/NativeMobileDisplay:DisplayWindowProbeRun.h",
         "//drivers/NativeMobileDisplay:NativeColumnScan.h",
@@ -315,6 +317,26 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-O1"],
+)
+
+host_test(
+    name = "display_window_format_probe_test",
+    srcs = [
+        "display_window_format_probe_test.cpp",
+        "//drivers/NativeMobileDisplay:DisplayWindowFormatProbes.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbe.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeABI.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeExtras.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeRun.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-O1"],
+    data = ["//drivers/NativeMobileDisplay:DisplayWindowProbeDisplay.h"],
 )
 
 host_test(

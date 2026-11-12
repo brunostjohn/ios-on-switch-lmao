@@ -21,6 +21,7 @@
 #include <stdint.h>
 
 #include "DisplayWindowProbeABI.h"
+#include "DisplayWindowProbeExtras.h"
 #include "NativeColumnScan.h"
 
 namespace display_window_probe {
@@ -32,6 +33,10 @@ enum Probe : uint32_t {
     kOffsetCrop = 3,
 };
 
+struct Plan;
+inline const char *extraProbeName(Probe p);
+inline bool extraPlanOf(Probe probe, Plan &plan);
+
 inline const char *probeName(Probe p)
 {
     switch (p) {
@@ -42,14 +47,14 @@ inline const char *probeName(Probe p)
     case kOffsetCrop:
         return "V5c";
     default:
-        return "?";
+        return extraProbeName(p);
     }
 }
 
 constexpr uint32_t kPanelWidth = 720, kPanelHeight = 1280;
 constexpr uint32_t kLandscapeWidth = 1280, kLandscapeHeight = 720;
 constexpr uint32_t kCropX = 132, kCropY = 42;  // inside a GOB's 64 bytes and a 2-GOB block's 16 lines
-constexpr unsigned kMaxSurfaces = 5, kMaxSteps = SWITCH_DISPLAY_WINDOW_PROBE_STEPS;
+constexpr unsigned kMaxSurfaces = 8, kMaxSteps = SWITCH_DISPLAY_WINDOW_PROBE_STEPS;
 constexpr uint64_t kSurfaceAlign = 64 * 1024;
 constexpr uint8_t kPitch = 0xff;  // the yLog2 of a pitch-linear surface
 
@@ -104,7 +109,9 @@ struct Surface {
     Content content = Content::Image;
     uint32_t cropX = 0, cropY = 0;
     uint8_t chromaCell = 1;
-    uint64_t offset = 0, chromaOffset = 0;  // in the probe's buffer
+    uint64_t offset = 0, chromaOffset = 0;                          // in the probe's buffer
+    void (*fillWith)(uint8_t *buffer, const Surface &s) = nullptr;  // DisplayWindowFormatProbes.h's pictures, by tag
+    uint32_t tag = 0;
 
     bool block() const
     {
@@ -201,6 +208,8 @@ template <typename ByteAt> void fillPlane(uint8_t *plane, const Surface &s, uint
 // Surface `s` into the probe's buffer; bytes past the picture are 0 (chroma 128).
 inline void fill(uint8_t *buffer, const Surface &s)
 {
+    if (s.fillWith)
+        return s.fillWith(buffer, s);
     if (!s.nv12) {
         fillPlane(buffer + s.offset, s, s.lumaRows, [&](uint32_t xB, uint32_t y) -> uint8_t {
             if (xB / 4 >= s.width || y >= s.height)
@@ -294,6 +303,8 @@ enum Check : uint8_t {
 struct Step {
     const char *name = "";
     Window a, b;
+    const Extra *extra = nullptr;  // DisplayWindowProbeExtras.h
+    unsigned extras = 0;
     Check check = kShown;
     uint8_t against = 0;
 };
@@ -436,8 +447,10 @@ inline bool planOf(Probe probe, Plan &plan)
         plan = offsetCropPlan();
         return true;
     default:
-        return false;
+        return extraPlanOf(probe, plan);
     }
 }
 
 }  // namespace display_window_probe
+
+#include "DisplayWindowFormatProbes.h"

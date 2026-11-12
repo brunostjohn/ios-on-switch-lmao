@@ -33,6 +33,7 @@ struct WindowProbeState {
     uint32_t savedA[kWindowAWords] = {}, savedAU = 0, savedAHiU = 0, savedASwap = 0;
     uint32_t savedB[kOverlayWords] = {}, savedBBuffer[kOverlayBufferWords] = {};
     uint32_t savedCrcControl = 0, savedCsc[2][8] = {}, savedHTaps[2][16] = {}, savedVTaps[2][16] = {};
+    display_window_probe::ExtraRegisters extras;
 };
 
 static WindowProbeState windowProbe;
@@ -308,12 +309,14 @@ void windowProbeShow(const display_window_probe::Step &step)
 {
     windowProbeWriteA(step.a);
     windowProbeWriteB(step.b);
+    windowProbe.extras.apply(dc, step.extra, step.extras);
     dc[kDcCrcControl] = kCrcOn;
     windowProbeRequest();
 }
 
 void windowProbeRestoreWindows()
 {
+    windowProbe.extras.restore(dc);
     const WindowProbeState &s = windowProbe;
     dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
     dc[kDcWindowHeader] = kWindowASelect;
@@ -432,6 +435,7 @@ void windowProbeFrameEnd()
 void windowProbeFinish()
 {
     WindowProbeState &s = windowProbe;
+    s.extras.restore(dc);
     if (s.saved) {
         windowProbeWriteUnshadowed(s.savedCsc, s.savedHTaps, s.savedVTaps);
         s.saved = false;
