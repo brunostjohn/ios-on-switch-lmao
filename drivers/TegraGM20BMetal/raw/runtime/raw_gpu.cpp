@@ -3195,6 +3195,7 @@ CommandBuffer *Device::begin()
     cb.dirty_.clear();
     cb.backings_.clear();
     cb.surfaces_.clear();
+    cb.named_.clear();
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
     cb.visibility_ = JobVisibility::Legacy;
@@ -3451,14 +3452,6 @@ Texture::StorageRange Texture::storageRange() const
     return {};
 }
 
-static bool importContains(const Import *import, uint64_t va, uint64_t bytes)
-{
-    if (!import || !bytes)
-        return false;
-    const uint64_t base = import->bo.vaBase ? import->bo.vaBase : import->bo.va;
-    return va >= base && va - base <= import->bo.bytes && bytes <= import->bo.bytes - (va - base);
-}
-
 static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height, uint32_t element)
 {
     if (!width || !height || !element)
@@ -3467,57 +3460,9 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
     return last <= UINT64_MAX - rows ? rows + last : 0;
 }
 
-void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
-{
-    RAW_ENCODE_SPAN(Use);
-    RAW_ENCODE_COUNT(Uses);
-    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1)) {
-        RAW_ENCODE_COUNT(UseAdds);
-        surfaces_.addAddress(va, bytes ? bytes : 1, write,
-                             bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
-    }
-}
-
 uint64_t CommandBuffer::batchLimit() const
 {
     return dev_->role() == Device::Role::RenderServer ? BatchWork::kRenderServerLimit : BatchWork::kLimit;
-}
-
-void CommandBuffer::use(const Buffer &buffer, bool write)
-{
-    RAW_ENCODE_SPAN(Use);
-    RAW_ENCODE_COUNT(Uses);
-    buffersWritten_ |= write;
-    externalWrites_ |= write && buffer.hostVisible;
-    const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
-    if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
-        use(buffer.import, write);
-    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length)) {
-        RAW_ENCODE_COUNT(UseAdds);
-        surfaces_.addAddress(buffer.va, buffer.length, write,
-                             (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
-                             (ranged ? TegraGM20BSurfaceRange : 0u));
-    }
-}
-
-void CommandBuffer::use(const Texture &texture, bool write)
-{
-    RAW_ENCODE_SPAN(Use);
-    RAW_ENCODE_COUNT(Uses);
-    const Texture *view = write ? &texture : readTexture(&texture);
-    const auto storage = view->storageRange();
-    const bool ranged = dev_->k_.exactJobs() && storage.bytes && storage.bytes <= UINT32_MAX;
-    if (!ranged || !importContains(view->import, storage.va, storage.bytes))
-        use(view->import, write);
-    const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
-    externalWrites_ |= hostVisible && write;
-    if (view->va && dev_->k_.exactJobs() &&
-        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1)) {
-        RAW_ENCODE_COUNT(UseAdds);
-        surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
-                             (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
-                             (ranged ? TegraGM20BSurfaceRange : 0u));
-    }
 }
 
 // Read ownership remains held until every consuming GPU job is published. Releasing after the CPU copy alone
@@ -3890,6 +3835,7 @@ void CommandBuffer::abandon()
     segments_.clear();
     dirty_.clear();
     surfaces_.clear();
+    named_.clear();
 }
 
 // ---- render encoder ----

@@ -51,6 +51,7 @@
 #include "raw_stats.h"
 #include "raw_descriptors.h"
 #include "raw_encode_profile.h"
+#include "raw_use_memo.h"
 #include "raw_transfer.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
@@ -972,6 +973,7 @@ private:
     DirtyRanges dirty_;
     std::vector<Texture *> backings_;                            // memoryless backings it uses
     SurfaceList surfaces_;
+    UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

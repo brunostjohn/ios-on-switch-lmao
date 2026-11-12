@@ -169,6 +169,7 @@ metal_plugin(
     c_srcs = ["//kits/SwitchGM20BEmit:" + s for s in EMIT_SOURCES],
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
+        GM20B_METAL + ":raw/runtime/raw_job_uses.cpp",
         GM20B_METAL + ":raw/runtime/raw_transfer.cpp",
         GM20B_METAL + ":raw/runtime/raw_split.cpp",
         GM20B_METAL + ":raw/runtime/raw_variants.cpp",
