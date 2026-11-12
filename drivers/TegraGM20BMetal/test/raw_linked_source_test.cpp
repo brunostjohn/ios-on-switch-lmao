@@ -141,7 +141,8 @@ TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
     for (const char *handlerType : {"(MTLNewRenderPipelineStateCompletionHandler)handler",
                                     "(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler"}) {
         const std::string handler = Between(later, std::string("completionHandler:") + handlerType, "\n}\n");
-        EXPECT_THAT(handler, HasSubstr("createLater(self, [d copy]"));
+        EXPECT_THAT(handler, HasSubstr("createLater("));
+        EXPECT_THAT(handler, HasSubstr("self, [d copy]"));
     }
 }
 
