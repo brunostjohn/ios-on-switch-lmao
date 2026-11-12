@@ -118,7 +118,8 @@ bool planeAdmits(const switch_display::Overlay wanted[2])
     const auto demand = switch_display::compositeDemand(wanted);
     if (planeComposite->refusedSet && switch_display::sameDemand(demand, planeComposite->refused))
         return false;
-    const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
+    const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
+                                                    planeWindowState(switch_landscape::kC)};
     const auto assignment = switch_display::assign(wanted, windows);
     PlaneSet raw = {};
     for (unsigned index = 0; index != 2; ++index)
