@@ -70,6 +70,12 @@ TEST(CodeText, BlockMatchesBracesInCodeOnlyAndSkipsDeclarations)
     }
 }
 
+TEST(CodeText, ABlockIsNotADefaultArgument)
+{
+    const std::string source = "void place(int at, const Shape &shape = {},\n           int turns = 0)\n{\n    put(at);\n}\n";
+    EXPECT_TRUE(Block(source, "void place(int at,").StartsWith("put(at);"));
+}
+
 TEST(CodeText, OccurrencesNameTheirFunction)
 {
     for (const std::string &source : {kNarrow, kWide}) {

@@ -16,6 +16,7 @@
 #include <cctype>
 #include <cstddef>
 #include <fstream>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -312,6 +313,11 @@ public:
         return Normalized(text_ + more.text_);
     }
 
+    friend std::ostream &operator<<(std::ostream &out, const CodeText &code)
+    {
+        return out << code.Shown();
+    }
+
 private:
     static std::string Normal(std::string_view text)
     {
@@ -342,8 +348,9 @@ private:
 };
 
 // The inside of the braced block `head` opens in `source`: a function's body after its signature, a struct's after its
-// name, an if's after its condition. Braces are matched in code only (not in comments or literals). A `head` found in a
-// comment or a literal, or that a `;` follows before any `{` (a declaration, a call), is passed over for the next one.
+// name, an if's after its condition. Braces are matched in code only (not in comments or literals), and the block is the
+// first `{` outside the head's parentheses (a default argument's `{}` is not it). A `head` found in a comment or a
+// literal, or that a `;` follows first (a declaration, a call), is passed over for the next one.
 inline CodeText Block(const std::string &source, std::string_view head)
 {
     using source_text_detail::Squeeze;
@@ -354,11 +361,17 @@ inline CodeText Block(const std::string &source, std::string_view head)
          at = squeezed.text.find(needle, at + 1)) {
         if (!code[squeezed.origin[at]])
             continue;
-        size_t open = squeezed.origin[at + needle.size() - 1];
-        if (source[open] != '{')
-            ++open;
-        while (open < source.size() && !(code[open] && (source[open] == '{' || source[open] == ';')))
-            ++open;
+        size_t open = squeezed.origin[at], parens = 0;
+        for (; open < source.size(); ++open) {
+            if (!code[open])
+                continue;
+            if (source[open] == '(')
+                ++parens;
+            else if (source[open] == ')' && parens > 0)
+                --parens;
+            else if (parens == 0 && (source[open] == '{' || source[open] == ';'))
+                break;
+        }
         if (open == source.size() || source[open] == ';')
             continue;
         size_t depth = 0;
