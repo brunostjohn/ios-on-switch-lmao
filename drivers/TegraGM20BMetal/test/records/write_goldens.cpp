@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Writes an IPSW kind's record goldens from a pack (golden_files.h) and the states the sample's records belong to:
-//   write_goldens <pack.bin> <kind> [<out dir>]
-// <out dir> defaults to the checkout's drivers/TegraGM20BMetal/test/records/testdata. record_goldens.py runs it and then
-// picks the sample pack's corpus.
+//   write_goldens <pack.bin> <kind> [<out dir> [<pack states>]]
+// <out dir> defaults to the checkout's drivers/TegraGM20BMetal/test/records/testdata; <pack states>, the states of every
+// record of the pack. record_goldens.py runs it and then picks the sample pack's corpus.
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -12,7 +12,7 @@
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: write_goldens <pack.bin> <kind> [<out dir>]\n");
+        fprintf(stderr, "usage: write_goldens <pack.bin> <kind> [<out dir> [<pack states>]]\n");
         return 2;
     }
     const char *workspace = getenv("BUILD_WORKSPACE_DIRECTORY");
@@ -32,6 +32,12 @@ int main(int argc, char **argv)
     const auto sample = records::pickSample(all, 2000);
     std::ofstream(base + "_sample.tsv") << records::sampleText(all, sample);
     std::ofstream(base + "_sample_states.txt") << records::sampleStates(all, sample);
+    if (argc > 4) {
+        std::vector<records::RecordId> every;
+        for (const records::Record &r : all)
+            every.push_back({r.key, r.kind});
+        std::ofstream(argv[4]) << records::sampleStates(all, every);
+    }
     printf("%zu records, %zu sampled -> %s.bin, %s_sample.tsv\n", all.size(), sample.size(), base.c_str(),
            base.c_str());
     return 0;
