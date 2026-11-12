@@ -6018,8 +6018,9 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
             uint32_t rw = w, rh = h;
             if (a.store && !memoryless_[j]) {
                 const Rotation frame = rot_.turned() ? rot_ : frameOf(*a.texture);
-                rw = called_ ? std::min((w + kTile - 1) / kTile * kTile, frame.width) : frame.width;
-                rh = called_ ? std::min((h + kTile - 1) / kTile * kTile, frame.height) : frame.height;
+                const bool called = called_ || pass_.drawn;
+                rw = called ? std::min((w + kTile - 1) / kTile * kTile, frame.width) : frame.width;
+                rh = called ? std::min((h + kTile - 1) / kTile * kTile, frame.height) : frame.height;
             }
             Clear c{j, 0, 0, rw, rh, a.clear};
             c.own = rw != w || rh != h;

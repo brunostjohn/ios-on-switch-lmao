@@ -1,21 +1,44 @@
 // SPDX-License-Identifier: MIT
 // Texel copies a turned pass needs that no copy engine can make (it moves rows, never transposes or mirrors): the pack's turn
-// copy states (pack/turn.metal), each destination texel (x, y) the source's at (ax x + ay y + cx, bx x + by y + cy), both
-// colour images viewed as unsigned integers of their texel size, a depth image's depth copied as the float it holds.
-//  - an attachment not turned beside a turned one whose contents outside the pass matter (raw_rotated_pass.h): its texels
-//    into a plane-shaped stand-in the pass renders turned (frameToPlane) where it is loaded, and back (planeToFrame) where it
-//    is stored;
+// copy states (pack/turn.metal), each destination texel (x, y) the source's at (ax x + ay y + cx, bx x + by y + cy), kept
+// where that falls outside the map's source rectangle, both colour images viewed as unsigned integers of their texel size, a
+// depth image's depth copied as the float it holds.
+//  - an attachment not of the pass's turn and frame beside a turned one whose contents outside the pass matter
+//    (raw_rotated_pass.h): its texels into a plane-shaped stand-in the pass renders turned where it is loaded (the pass's
+//    frame read through the attachment's own load map), and back where it is stored, over the render area alone;
 //  - rotation 4 loaded (raw_rotation.h): Metal loads the plane transposed and stores it as rotation 1 does, which keeps a
 //    texel only where the plane is first mirrored across its width (planeMirror); the pass then draws as rotation 1.
 #pragma once
 #include <cstdint>
+#include <climits>
 #include "raw_rotation.h"
 
 namespace raw {
 
 struct TurnMap {
     int32_t ax = 1, ay = 0, cx = 0, bx = 0, by = 1, cy = 0;
+    int32_t x0 = 0, y0 = 0, x1 = INT32_MAX, y1 = INT32_MAX;  // the source texels it reads; the destination keeps the rest
 };
+
+// `outer` applied to what `inner` gives, `inner`'s source rectangle dropped
+inline TurnMap after(const TurnMap &outer, const TurnMap &inner)
+{
+    TurnMap m;
+    m.ax = outer.ax * inner.ax + outer.ay * inner.bx;
+    m.ay = outer.ax * inner.ay + outer.ay * inner.by;
+    m.cx = outer.ax * inner.cx + outer.ay * inner.cy + outer.cx;
+    m.bx = outer.bx * inner.ax + outer.by * inner.bx;
+    m.by = outer.bx * inner.ay + outer.by * inner.by;
+    m.cy = outer.bx * inner.cx + outer.by * inner.cy + outer.cy;
+    m.x0 = outer.x0, m.y0 = outer.y0, m.x1 = outer.x1, m.y1 = outer.y1;
+    return m;
+}
+
+inline TurnMap within(TurnMap m, const Rect &source)
+{
+    m.x0 = int32_t(source.x0), m.y0 = int32_t(source.y0), m.x1 = int32_t(source.x1), m.y1 = int32_t(source.y1);
+    return m;
+}
 
 // The frame texel of each plane texel: Metal's store map read backwards
 inline TurnMap frameToPlane(const Rotation &r)
@@ -55,6 +78,15 @@ inline TurnMap planeToFrame(const Rotation &r)
 inline TurnMap planeMirror(uint32_t width)
 {
     return {-1, 0, int32_t(width) - 1, 0, 1, 0};
+}
+
+// The plane texel a pass loads each frame texel from: the store map's inverse, or rotation 4's transpose in a pass that draws
+// (where nothing draws Metal keeps every texel in place, as the inverse does)
+inline TurnMap planeLoad(const Rotation &r, bool draws)
+{
+    if (r.turn == 4 && draws)
+        return {0, 1, 0, 1, 0, 0};
+    return planeToFrame(r);
 }
 
 // The pack's turn copy state of `bpp`-byte texels and the unsigned format both images are viewed as; null, 0 for none

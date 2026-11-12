@@ -13,8 +13,9 @@ import Metal
 /// private depth texture loaded beside it (each through a stand-in laid out as the plane, turned in and back by the
 /// pack's turn copies), rotation 4's load, which Metal makes transposed in each tile a draw reaches (its expected bytes
 /// the reference pass loading pass 1's frame flipped top to bottom, every tile reached by a full-frame draw whose fragments
-/// are discarded), and a load with no draw, which leaves the plane as it is: those cells FAIL when they run anywhere else
-/// (path= other than raw).
+/// are discarded), a load with no draw, which leaves the plane as it is, a second plane of another turn and frame beside
+/// it and private textures of other sizes (each landing by its own store map over the render area, the rest kept): those
+/// cells FAIL when they run anywhere else (path= other than raw).
 /// native_cells / native_raw count the required cells and those that ran raw; tie_wrong counts the pixels the plane's
 /// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too).
 struct RotatedTargetTest: HWTest {
@@ -76,7 +77,8 @@ struct RotatedTargetTest: HWTest {
 }
 
 enum RotatedCell: String, CaseIterable {
-    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, tie
+    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, turns,
+        sized, tie
 
     enum Kind { case native, informational }
 
@@ -119,6 +121,9 @@ struct RotatedStates {
 /// The private textures a cell's runs drew beside the target, in run order
 final class BesideTextures {
     var textures: [MTLTexture] = []
+    var turnedRun = false
+    var second: (plane: RotatedCells.Plane, cells: RotatedCells)?
+    var plainSecond: MTLTexture?
 }
 
 struct RotatedCells {
@@ -185,6 +190,8 @@ struct RotatedCells {
         var referencePath = ""
         var path = ""
         beside.textures.removeAll()
+        beside.second = nil
+        beside.plainSecond = nil
         for (n, pass) in passes(cell).enumerated() {
             if n == 1 && cell == .load && turn == 4 {
                 // Metal loads a rotation-4 plane transposed: the reference loads pass 1's frame flipped top to bottom
@@ -192,17 +199,20 @@ struct RotatedCells {
                 let flipped = (0..<h).flatMap { y in first[((h - 1 - y) * w * 4)..<((h - y) * w * 4)] }
                 try await gpu.upload(Array(flipped), to: reference, bytesPerRow: w * 4)
             }
+            beside.turnedRun = false
             let plain = try await gpu.run { pass($0, reference) }.path
+            beside.turnedRun = true
             let turned = try await gpu.run { pass($0, plane.texture) }.path
             if referencePath.isEmpty || referencePath == "raw" { referencePath = plain }
             if path.isEmpty || path == "raw" { path = turned }
         }
         guard checked else { return Result(path: path, referencePath: referencePath, wrong: 0) }
-        var wrongBeside = 0
-        if beside.textures.count == 2 {
-            let a = try await gpu.read(beside.textures[0], bytesPerPixel: 4)
-            let b = try await gpu.read(beside.textures[1], bytesPerPixel: 4)
-            wrongBeside = zip(a, b).filter { $0 != $1 }.count
+        var wrongBeside = try await secondPlaneWrong()
+        let pairs = beside.textures.count / 2
+        for i in 0..<pairs {
+            let a = try await gpu.read(beside.textures[i], bytesPerPixel: 4)
+            let b = try await gpu.read(beside.textures[i + pairs], bytesPerPixel: 4)
+            wrongBeside += zip(a, b).filter { $0 != $1 }.count
         }
         let expected = try await gpu.read(reference, bytesPerPixel: 4)
         guard plane.surface.lock(options: .readOnly, seed: nil) == 0 else {
@@ -278,6 +288,10 @@ struct RotatedCells {
             return [besideStored]
         case .keptDepth:
             return [keptDepth]
+        case .turns:
+            return [mixedTurns]
+        case .sized:
+            return [mixedSizes]
         case .tie:
             return [encode(load: .clear) { e in shapes(e, halfPixelRect(10.5, 5.5, 30.5, 20.5), [1, 1, 1, 1], states.plain) }]
         }
@@ -384,7 +398,7 @@ struct RotatedCells {
         e.endEncoding()
     }
 
-    private func encode(load: MTLLoadAction, _ draw: @escaping (MTLRenderCommandEncoder) -> Void) -> Pass {
+    func encode(load: MTLLoadAction, _ draw: @escaping (MTLRenderCommandEncoder) -> Void) -> Pass {
         { commands, target in
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = target
@@ -397,7 +411,7 @@ struct RotatedCells {
         }
     }
 
-    private func rect(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int, reversed: Bool = false) -> [SIMD4<Float>] {
+    func rect(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int, reversed: Bool = false) -> [SIMD4<Float>] {
         let c = GPU.pixelQuad(
             x0, y0, x1, y1, width: width, height: height)
         return reversed ? [c[0], c[2], c[1], c[1], c[2], c[3]] : [c[0], c[1], c[2], c[1], c[3], c[2]]
@@ -411,7 +425,7 @@ struct RotatedCells {
         return [c[0], c[1], c[2], c[1], c[3], c[2]]
     }
 
-    private func shapes(
+    func shapes(
         _ e: MTLRenderCommandEncoder, _ corners: [SIMD4<Float>], _ color: SIMD4<Float>,
         _ state: MTLRenderPipelineState, primitive: MTLPrimitiveType = .triangle, perColor: Int = 6
     ) {

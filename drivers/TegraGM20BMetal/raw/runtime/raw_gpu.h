@@ -542,6 +542,9 @@ struct PassDesc {
     // compression, which the surface unit cannot read through
     uint8_t storageMask = 0;
     SamplePositions positions;
+    // a pass of another one's clears alone: its Clear loads reach past the render area as that pass's do, which has a draw
+    // call (raw_turned_pass.cpp)
+    bool drawn = false;
 };
 
 class RenderEncoder {

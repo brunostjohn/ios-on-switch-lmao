@@ -2,6 +2,7 @@
 // See raw_turn_copy.h.
 #include "raw_turn_copy.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "raw_gpu.h"
@@ -52,7 +53,12 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
     if (dst.zeta)
         e->setDepthStencil(&depthWrites);
     e->setTexture(0, &source);
-    e->setBytes(2, 0, &map, sizeof map);
+    TurnMap bounded = map;
+    bounded.x0 = std::max(bounded.x0, 0);
+    bounded.y0 = std::max(bounded.y0, 0);
+    bounded.x1 = std::min(bounded.x1, int32_t(src.width));
+    bounded.y1 = std::min(bounded.y1, int32_t(src.height));
+    e->setBytes(2, 0, &bounded, sizeof bounded);
     if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
         return false;
     e->end();
