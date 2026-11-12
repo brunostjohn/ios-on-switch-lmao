@@ -269,6 +269,8 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
                 metal_abi.parent,
                 '-I',
                 ABI,
+                '-I',
+                CLASSES,
                 '-x',
                 'objective-c++',
                 *objcxx,

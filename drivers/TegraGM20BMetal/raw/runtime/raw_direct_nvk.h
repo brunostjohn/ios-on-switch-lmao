@@ -46,6 +46,11 @@ struct NvkStage {
     uint64_t usesSampleShading;
     uint32_t semanticVersion;
     uint8_t boundTextures;
+    uint8_t numBarriers;
+    uint16_t localSize[3];
+    uint16_t smemSize;
+    uint32_t slmSize, crsSize;
+    uint8_t cbufSets[16];
 };
 
 struct NvkStageMetrics {

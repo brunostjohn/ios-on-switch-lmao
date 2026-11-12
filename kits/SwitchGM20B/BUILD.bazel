@@ -6,6 +6,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_headers")
 load(":defs.bzl", "SWITCH_GM20B_CAPS_INPUTS", "SWITCH_GM20B_MESA_HEADERS", "caps_args")
@@ -92,5 +93,40 @@ py_binary(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
     ],
     main = "caps/caps_report.py",
+    deps = [":caps_lib"],
+)
+
+_VK_FORMATS_INPUTS = [
+    "//third_party/mesa:include/vulkan/vulkan_core.h",
+    "//third_party/mesa/src/vulkan/util:vk_format.c",
+] + SWITCH_GM20B_CAPS_INPUTS
+
+_VK_FORMATS_ARGS = [
+    "--vk-format $(rootpath //third_party/mesa/src/vulkan/util:vk_format.c)",
+    "--vulkan-core $(rootpath //third_party/mesa:include/vulkan/vulkan_core.h)",
+    "--classes $(rootpath //third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h)",
+    "--tegra $(rootpath SwitchGM20BTegra.h)",
+    "--nil-csv $(rootpath //third_party/mesa/src/nouveau/nil:nil_formats.csv)",
+    "--nil-gen $(rootpath //third_party/mesa/src/nouveau/nil:nil_format_table_gen.py)",
+    "--u-format $(rootpath //third_party/mesa/src/util/format:u_format.yaml)",
+]
+
+# SwitchGM20BVkFormats.h, the texture header word 0 of each VkFormat a view takes, is checked in and written by
+#   bazel run //kits/SwitchGM20B:gen_vk_formats -- --out $PWD/kits/SwitchGM20B/SwitchGM20BVkFormats.h
+py_binary(
+    name = "gen_vk_formats",
+    srcs = ["caps/gen_vk_formats.py"],
+    args = _VK_FORMATS_ARGS,
+    data = _VK_FORMATS_INPUTS,
+    main = "caps/gen_vk_formats.py",
+    deps = [":caps_lib"],
+)
+
+py_test(
+    name = "vk_formats_test",
+    srcs = ["caps/gen_vk_formats.py"],
+    args = _VK_FORMATS_ARGS + ["--check $(rootpath SwitchGM20BVkFormats.h)"],
+    data = _VK_FORMATS_INPUTS + ["SwitchGM20BVkFormats.h"],
+    main = "caps/gen_vk_formats.py",
     deps = [":caps_lib"],
 )

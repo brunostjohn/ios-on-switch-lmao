@@ -85,6 +85,7 @@ filegroup(
         "raw/runtime/raw_direct.h",
         "raw/runtime/raw_direct_compute.cpp",
         "raw/runtime/raw_direct_compute.h",
+        "raw/runtime/raw_direct_encode.h",
         "raw/runtime/raw_direct_nvk.h",
         "raw/runtime/raw_direct_push.h",
         "raw/runtime/raw_dynamic_push.h",
@@ -103,6 +104,7 @@ filegroup(
         "raw/runtime/raw_record_parts.cpp",
         "raw/runtime/raw_record_parts.h",
         "raw/runtime/raw_residual.h",
+        "raw/runtime/raw_set_layout.h",
         "raw/runtime/raw_set_reads.h",
     ],
 )

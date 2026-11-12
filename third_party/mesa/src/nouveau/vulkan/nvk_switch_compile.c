@@ -33,6 +33,18 @@
 _Thread_local bool switch_nvk_center_frag_depth_current;
 _Thread_local bool switch_nvk_texs_f16_current;
 
+static void
+qmd_inputs(const struct nak_shader_info *info, struct switch_nvk_stage *out)
+{
+   out->slm_size = info->slm_size;
+   out->crs_size = info->crs_size;
+   if (info->stage != MESA_SHADER_COMPUTE)
+      return;
+   out->num_barriers = info->num_control_barriers;
+   memcpy(out->local_size, info->cs.local_size, sizeof(out->local_size));
+   out->smem_size = info->cs.smem_size;
+}
+
 static nir_shader *
 build_semantic(const void *program,
                 const struct nir_shader_compiler_options *options,
@@ -52,8 +64,11 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
    out->data = shader->data_ptr;
    out->data_bytes = shader->data_size;
    out->cbuf_count = MIN2(shader->cbuf_map.cbuf_count, 16);
-   for (uint32_t c = 0; c < out->cbuf_count; c++)
+   for (uint32_t c = 0; c < out->cbuf_count; c++) {
       out->cbuf_types[c] = switch_nvk_cbuf_code(&shader->cbuf_map.cbufs[c]);
+      out->cbuf_sets[c] = shader->cbuf_map.cbufs[c].desc_set;
+   }
+   qmd_inputs(&shader->info, out);
    out->num_gprs = shader->info.num_gprs;
    out->bound_textures = shader->info.bound_textures;
    out->split = shader->switch_split;
@@ -166,6 +181,7 @@ split_program(const struct switch_nvk_program *p, struct switch_nvk_stage *out)
    memcpy(out->cbuf_types, p->cbuf_types, sizeof(out->cbuf_types));
    out->num_gprs = p->info.num_gprs;
    out->bound_textures = p->info.bound_textures;
+   qmd_inputs(&p->info, out);
 }
 
 SWITCH_EXPORT void

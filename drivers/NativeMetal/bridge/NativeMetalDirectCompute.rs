@@ -5,7 +5,10 @@
 //! compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
 
 use crate::compute_artifact::NmbComputeArtifact;
-use crate::direct::{Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of};
+use crate::direct::{
+    Layout, NMB_DIRECT_IMMUTABLE, NmbDirectBinding, NmbDirectSamplerState, NmbDirectStage, NmbDirectWrite, compile_error,
+    sampler_state, write_of,
+};
 use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
     sampler_descriptor,
@@ -62,6 +65,7 @@ pub struct NmbDirectKernelWrite {
     pub view_format: u32,
     pub components: [u32; 4],
     pub sampler: u64,
+    pub sampler_state: NmbDirectSamplerState,
 }
 
 #[repr(C)]
@@ -69,6 +73,8 @@ pub struct NmbDirectKernel {
     pub device: u64,
     pub layout: u64,
     pub set0: u64,
+    pub set0_bindings: *const NmbDirectBinding,
+    pub set0_binding_count: u32,
     pub stage: NmbDirectStage,
     pub writes: *const NmbDirectKernelWrite,
     pub write_count: u32,
@@ -323,7 +329,7 @@ impl Samplers<'_> {
         state: &BindState,
         source: &SamplerSource,
         image_format: Option<metal2vulkan::vk::Format>,
-    ) -> Result<u64, String> {
+    ) -> Result<(u64, NmbDirectSamplerState), String> {
         if let SamplerSource::Neutral(NeutralResource::Sampler { compare }) = source {
             let info = avk::SamplerCreateInfo::default()
                 .mag_filter(avk::Filter::NEAREST)
@@ -335,7 +341,8 @@ impl Samplers<'_> {
                 .max_lod(avk::LOD_CLAMP_NONE)
                 .compare_enable(*compare)
                 .compare_op(avk::CompareOp::NEVER);
-            return self.create(&info);
+            let state = sampler_state(&info, avk::SamplerReductionMode::WEIGHTED_AVERAGE, None);
+            return Ok((self.create(&info)?, state));
         }
         let SamplerSource::Slot {
             slot,
@@ -344,14 +351,14 @@ impl Samplers<'_> {
             opaque_black,
         } = source
         else {
-            return Ok(0);
+            return Ok((0, NmbDirectSamplerState::default()));
         };
         let Some(bound) = state
             .stages
             .get(&Stage::Kernel)
             .and_then(|table| table.samplers.get(&slot.index))
         else {
-            return Ok(0);
+            return Ok((0, NmbDirectSamplerState::default()));
         };
         let desc =
             metal2vulkan::bind::sampler_desc(compile, &bound.desc, *compare, *integer, *opaque_black, image_format)
@@ -359,7 +366,8 @@ impl Samplers<'_> {
         let mut reduction = avk::SamplerReductionModeCreateInfo::default();
         let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
         let info = metal2vulkan::ash_interop::sampler_create_info(&desc, &mut reduction, &mut border);
-        self.create(&info)
+        let made = sampler_state(&info, desc.reduction.into(), desc.border_components.map(avk::ComponentMapping::from));
+        Ok((self.create(&info)?, made))
     }
 
     fn create(&mut self, info: &avk::SamplerCreateInfo<'_>) -> Result<u64, String> {
@@ -404,6 +412,7 @@ fn kernel_write(
         view_format: 0,
         components: [0; 4],
         sampler: 0,
+        sampler_state: NmbDirectSamplerState::default(),
     };
     match &w.source {
         WriteSource::Texture { view, .. } => (out.view_format, out.components) = view_parts(view),
@@ -419,10 +428,10 @@ fn kernel_write(
                 integer: *integer,
                 opaque_black: *opaque_black,
             };
-            out.sampler = samplers.make(compile, state, &source, None)?;
+            (out.sampler, out.sampler_state) = samplers.make(compile, state, &source, None)?;
         }
         WriteSource::Neutral(neutral @ NeutralResource::Sampler { .. }) => {
-            out.sampler = samplers.make(compile, state, &SamplerSource::Neutral(*neutral), None)?;
+            (out.sampler, out.sampler_state) = samplers.make(compile, state, &SamplerSource::Neutral(*neutral), None)?;
         }
         WriteSource::CombinedImageSampler { image, sampler } => {
             let format = match image {
@@ -433,7 +442,7 @@ fn kernel_write(
                 ImageSource::Neutral(_) => None,
             };
             if out.write.sampler != NMB_DIRECT_IMMUTABLE {
-                out.sampler = samplers.make(compile, state, sampler, format)?;
+                (out.sampler, out.sampler_state) = samplers.make(compile, state, sampler, format)?;
             }
         }
         _ => {}
@@ -566,6 +575,8 @@ fn direct(
         device: avk::Handle::as_raw(handles.device.handle()),
         layout: avk::Handle::as_raw(layout.pipeline),
         set0: layout.set0(),
+        set0_bindings: layout.set0_bindings.as_ptr(),
+        set0_binding_count: layout.set0_bindings.len() as u32,
         stage: NmbDirectStage {
             spirv: stage.spirv.as_ptr(),
             spirv_bytes: stage.spirv.len() * 4,

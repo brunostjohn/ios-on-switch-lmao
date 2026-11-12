@@ -84,9 +84,68 @@ pub struct NmbDirectWrite {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NmbDirectSamplerState {
+    pub mag_filter: u32,
+    pub min_filter: u32,
+    pub mipmap_mode: u32,
+    pub address: [u32; 3],
+    pub mip_lod_bias: f32,
+    pub min_lod: f32,
+    pub max_lod: f32,
+    pub max_anisotropy: f32,
+    pub compare_op: u32,
+    pub border_color: u32,
+    pub reduction: u32,
+    pub border_components: [u32; 4],
+    pub anisotropy: bool,
+    pub compare: bool,
+    pub unnormalized: bool,
+}
+
+/// What vk_sampler_state_init reads of `info`, with the reduction mode and border mapping metal2vulkan chains to it
+pub(crate) fn sampler_state(
+    info: &avk::SamplerCreateInfo<'_>,
+    reduction: avk::SamplerReductionMode,
+    components: Option<avk::ComponentMapping>,
+) -> NmbDirectSamplerState {
+    let c = components.unwrap_or_default();
+    NmbDirectSamplerState {
+        mag_filter: info.mag_filter.as_raw() as u32,
+        min_filter: info.min_filter.as_raw() as u32,
+        mipmap_mode: info.mipmap_mode.as_raw() as u32,
+        address: [info.address_mode_u, info.address_mode_v, info.address_mode_w].map(|a| a.as_raw() as u32),
+        mip_lod_bias: info.mip_lod_bias,
+        min_lod: info.min_lod,
+        max_lod: info.max_lod,
+        max_anisotropy: info.max_anisotropy,
+        compare_op: if info.compare_enable != 0 { info.compare_op.as_raw() as u32 } else { 0 },
+        border_color: info.border_color.as_raw() as u32,
+        reduction: reduction.as_raw() as u32,
+        border_components: [c.r, c.g, c.b, c.a].map(|s| s.as_raw() as u32),
+        anisotropy: info.anisotropy_enable != 0,
+        compare: info.compare_enable != 0,
+        unnormalized: info.unnormalized_coordinates != 0,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NmbDirectBinding {
+    pub binding: u32,
+    pub ty: i32,
+    pub count: u32,
+    pub flags: u32,
+    pub immutable: bool,
+    pub sampler: NmbDirectSamplerState,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NmbDirectDraw {
     pub set0: u64,
+    pub set0_bindings: *const NmbDirectBinding,
+    pub set0_binding_count: u32,
     pub writes: *const NmbDirectWrite,
     pub write_count: u32,
     pub push_mask: u32,
@@ -631,6 +690,8 @@ pub(crate) struct Layout<'d> {
     samplers: Vec<avk::Sampler>,
     sets: Vec<avk::DescriptorSetLayout>,
     pub(crate) pipeline: avk::PipelineLayout,
+    /// Set 0's bindings, as data
+    pub(crate) set0_bindings: Vec<NmbDirectBinding>,
 }
 
 impl<'d> Layout<'d> {
@@ -640,17 +701,38 @@ impl<'d> Layout<'d> {
             samplers: Vec::new(),
             sets: Vec::new(),
             pipeline: avk::PipelineLayout::null(),
+            set0_bindings: Vec::new(),
         };
-        for set in &layout.sets {
+        for (set_index, set) in layout.sets.iter().enumerate() {
             let mut immutable: Vec<Vec<avk::Sampler>> = Vec::with_capacity(set.bindings.len());
             for binding in &set.bindings {
+                let mut data = NmbDirectBinding {
+                    binding: binding.binding,
+                    ty: avk::DescriptorType::from(binding.ty).as_raw(),
+                    count: binding.count,
+                    flags: avk::DescriptorBindingFlags::from(binding.flags).as_raw(),
+                    immutable: false,
+                    sampler: NmbDirectSamplerState::default(),
+                };
                 let Some(desc) = binding.immutable_sampler else {
                     immutable.push(Vec::new());
+                    if set_index == 0 {
+                        made.set0_bindings.push(data);
+                    }
                     continue;
                 };
                 let mut reduction = avk::SamplerReductionModeCreateInfo::default();
                 let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
                 let info = metal2vulkan::ash_interop::sampler_create_info(&desc, &mut reduction, &mut border);
+                data.immutable = true;
+                data.sampler = sampler_state(
+                    &info,
+                    desc.reduction.into(),
+                    desc.border_components.map(avk::ComponentMapping::from),
+                );
+                if set_index == 0 {
+                    made.set0_bindings.push(data);
+                }
                 // SAFETY: `info` and its chain are live for the call.
                 let sampler = unsafe { device.create_sampler(&info, None) }.map_err(e("sampler"))?;
                 made.samplers.push(sampler);
@@ -771,6 +853,8 @@ fn draw_of(
 ) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
         set0: layout.set0(),
+        set0_bindings: layout.set0_bindings.as_ptr(),
+        set0_binding_count: layout.set0_bindings.len() as u32,
         writes: writes.as_ptr(),
         write_count: writes.len() as u32,
         push_mask: 0,

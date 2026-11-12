@@ -92,6 +92,14 @@ struct switch_nvk_stage {
    uint64_t uses_sample_shading;
    uint32_t semantic_version;
    uint8_t bound_textures; /* nak_shader_info's: SET_BINDLESS_TEXTURE + 1, 0 none */
+   /* What nak_fill_qmd reads of a compute program's nak_shader_info, and
+    * each NVK_CBUF_TYPE_DESC_SET constant buffer's set
+    */
+   uint8_t num_barriers;
+   uint16_t local_size[3];
+   uint16_t smem_size;
+   uint32_t slm_size, crs_size;
+   uint8_t cbuf_sets[16];
 };
 
 VkResult switch_nvk_compile_stage(VkDevice device,

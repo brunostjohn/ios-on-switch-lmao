@@ -56,9 +56,30 @@ typedef struct NmbDirectWrite {
     int32_t viewType;  // an image\'s VkImageViewType (a neutral\'s too), -1 for no image
 } NmbDirectWrite;
 
+// A sampler's state as vk_sampler_state_init makes it of the VkSamplerCreateInfo metal2vulkan creates (Vulkan values;
+// kits/SwitchGM20B/SwitchGM20BSampler.h packs it)
+typedef struct NmbDirectSamplerState {
+    uint32_t magFilter, minFilter, mipmapMode, address[3];
+    float mipLodBias, minLod, maxLod, maxAnisotropy;
+    uint32_t compareOp, borderColor, reduction, borderComponents[4];
+    bool anisotropy, compare, unnormalized;
+} NmbDirectSamplerState;
+
+// A binding of a variant's set 0 layout: its VkDescriptorType, count and VkDescriptorBindingFlags, and its immutable
+// sampler's state
+typedef struct NmbDirectBinding {
+    uint32_t binding;
+    int32_t type;
+    uint32_t count, flags;
+    bool immutable;
+    NmbDirectSamplerState sampler;
+} NmbDirectBinding;
+
 // One probe draw on the variant its bind state settles on
 typedef struct NmbDirectDraw {
     uint64_t set0;  // that variant's set 0 VkDescriptorSetLayout (0: none)
+    const NmbDirectBinding *set0Bindings;
+    uint32_t set0BindingCount;
     const NmbDirectWrite *writes;
     uint32_t writeCount;
     uint32_t pushMask;  // the push-constant words [0, 128) the draw writes, and their values
@@ -152,12 +173,15 @@ typedef struct NmbDirectKernelWrite {
     uint32_t viewFormat;  // a texture's view: its VkFormat, its VkComponentSwizzles with the texture's own composed in
     uint32_t components[4];  //   (identity where the function swizzles itself), 0: no view
     uint64_t sampler;  // a sampler made for the write (VkSampler on the kernel's device, live during the call), 0: none
+    NmbDirectSamplerState samplerState;  // that sampler's state
 } NmbDirectKernelWrite;
 
 typedef struct NmbDirectKernel {
     uint64_t device;       // VkDevice of the stage compile
     uint64_t layout;       // VkPipelineLayout of the dispatch's variant
     uint64_t set0;         // its set 0 VkDescriptorSetLayout (0: none)
+    const NmbDirectBinding *set0Bindings;
+    uint32_t set0BindingCount;
     NmbDirectStage stage;  // the dispatch's region: its specialization, stage flags and required subgroup size
     const NmbDirectKernelWrite *writes;
     uint32_t writeCount;
