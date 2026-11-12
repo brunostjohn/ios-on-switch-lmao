@@ -20,7 +20,6 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -244,17 +243,24 @@ void Service::submit(Prepared prepared, std::string request, const Waiter &waite
 }
 
 #if SWITCH_DEBUG
-// HW Test gpu.compile.first_draw: the compiler dies as the memory limit kills one, holding the next request it takes, so a
-// run shows that request's creation completing once launchd's next compiler takes it
+// HW Test gpu.compile.first_draw: the compiler dies as the memory limit kills one, holding the next request of the pid
+// this name's notify state holds, so a run shows that request's creation completing once launchd's next compiler takes it
 constexpr const char *kDiesAtNextRequest = "com.brunostjohn.switch.debug.compiler-dies-at-next-request";
-std::atomic<bool> gDiesAtNextRequest{false};
+int gDeathToken = -1;
 
 void armDeath()
 {
-    int token = 0;
-    notify_register_dispatch(kDiesAtNextRequest, &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
-        gDiesAtNextRequest.store(true, std::memory_order_release);
-    });
+    notify_register_check(kDiesAtNextRequest, &gDeathToken);
+}
+
+// The state is cleared first, so the compiler launchd starts next serves the request
+void dieIfArmedFor(int32_t pid)
+{
+    uint64_t armed = 0;
+    if (!pid || gDeathToken < 0 || notify_get_state(gDeathToken, &armed) != NOTIFY_STATUS_OK || armed != uint64_t(pid))
+        return;
+    notify_set_state(gDeathToken, 0);
+    kill(getpid(), SIGKILL);
 }
 #endif
 
@@ -276,8 +282,7 @@ void Service::take(uint64_t stack)
         exit(1);
     }
 #if SWITCH_DEBUG
-    if (gDiesAtNextRequest.load(std::memory_order_acquire))
-        kill(getpid(), SIGKILL);
+    dieIfArmedFor(reply.pid);
 #endif
     const bool waited = reply.flags & TegraGM20BCompileWaited;
     std::string request(reinterpret_cast<const char *>(buffer_.get()), size_t(reply.bytes));

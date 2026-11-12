@@ -9,8 +9,8 @@ import SwitchCompilerProbe
 /// A render state the pack lacks is usable when its creation returns: each salted state (no pack or store holds it before
 /// its run) is drawn by the first command buffer after its creation, on the raw path, every pixel its colour. Made once
 /// by the synchronous form, once by the completion-handler form, and once while the shader compiler dies holding its
-/// request (a debug compiler's com.brunostjohn.switch.debug.compiler-dies-at-next-request): the creation completes once
-/// launchd's next compiler has made it. Nothing goes to m2v (T-v3g: state.making, a returned state still being made) and
+/// request (a debug compiler's com.brunostjohn.switch.debug.compiler-dies-at-next-request, its state this app's pid: the
+/// compiler dies at this app's next request): the creation completes once launchd's next compiler has made it. Nothing goes to m2v (T-v3g: state.making, a returned state still being made) and
 /// nothing compiles in this process.
 struct CompileFirstDrawTest: HWTest {
     let id = "gpu.compile.first_draw"
@@ -39,7 +39,9 @@ struct CompileFirstDrawTest: HWTest {
         var probe = switch_compiler_probe()
         switch_compiler_probe(&probe)
         let generation = probe.generation
-        notify_post("com.brunostjohn.switch.debug.compiler-dies-at-next-request")
+        let armed = Self.armCompilerDeath()
+        metrics.set("armed", armed ? "yes" : "no")
+        checks.append(("the compiler's death armed for this app's next request", armed))
         let survived = try pipeline(gpu, salt: salt + 2)
         switch_compiler_probe(&probe)
         if probe.generation > generation { DeliberateCompilerDeaths.shared.add() }
@@ -59,6 +61,17 @@ struct CompileFirstDrawTest: HWTest {
         metrics.set("compiled_here", here)
         checks.append(("nothing compiled in this process", here == 0))
         return .judged(checks, metrics, proof: "salt \(salt)")
+    }
+
+    /// The debug compiler's death at this process's next request: the name's notify state is the pid it dies for, which
+    /// the compiler reads as it takes each request
+    static func armCompilerDeath() -> Bool {
+        var token: Int32 = 0
+        guard notify_register_check("com.brunostjohn.switch.debug.compiler-dies-at-next-request", &token)
+            == NOTIFY_STATUS_OK
+        else { return false }
+        defer { notify_cancel(token) }
+        return notify_set_state(token, UInt64(getpid())) == NOTIFY_STATUS_OK
     }
 
     func descriptor(_ gpu: GPU, salt: UInt32) throws -> MTLRenderPipelineDescriptor {
