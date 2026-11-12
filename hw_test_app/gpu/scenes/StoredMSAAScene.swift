@@ -53,6 +53,11 @@ struct StoredMSAAScene: GPUScene {
                 result.expect(false, "\(samples)x depth: \(GPU.describe(error))")
             }
             do {
+                try await memorylessDepth(gpu, samples, cover, &result)
+            } catch {
+                result.expect(false, "\(samples)x memoryless depth: \(GPU.describe(error))")
+            }
+            do {
                 try await stencil(gpu, samples, cover, &result)
             } catch {
                 result.expect(false, "\(samples)x stencil: \(GPU.describe(error))")
@@ -190,6 +195,55 @@ struct StoredMSAAScene: GPUScene {
         result.compare(
             "\(samples)x depth samples", try await Self.unpack(gpu, depth, samples, .r32Float),
             Self.each(cover, samples, channels: 1) { covered, _ in covered ? 0.5 : 0.75 }, tolerance: 0)
+    }
+
+    /// A memoryless multisampled depth texture of each format, depth-tested and resolved to its minimum in the pass that
+    /// draws it: the raw path's backing for it may be compressed memory, which the resolve samples through a header of its
+    /// own
+    private func memorylessDepth(_ gpu: GPU, _ samples: Int, _ cover: [[Bool]?], _ result: inout SceneResult)
+        async throws
+    {
+        let size = Self.size
+        for (format, texel, name) in [
+            (MTLPixelFormat.depth16Unorm, TexelFormat.depth16Unorm, "Depth16Unorm"),
+            (.depth32Float, .depth32Float, "Depth32Float"),
+        ] {
+            let color = try gpu.texture(.rgba8Unorm, size, size, samples: samples)
+            let depth = try gpu.texture(format, size, size, usage: [.renderTarget], samples: samples, storage: .memoryless)
+            let resolved = try gpu.texture(format, size, size, usage: [.renderTarget, .shaderRead])
+            let drawn = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm, samples: samples, depth: format)
+            let descriptor = MTLDepthStencilDescriptor()
+            descriptor.depthCompareFunction = .lessEqual
+            descriptor.isDepthWriteEnabled = true
+            guard let lessEqual = gpu.device.makeDepthStencilState(descriptor: descriptor) else {
+                throw TestFailure("makeDepthStencilState returned nil")
+            }
+            try await gpu.run { commands in
+                let pass = MTLRenderPassDescriptor()
+                pass.colorAttachments[0].texture = color
+                pass.colorAttachments[0].loadAction = .clear
+                pass.colorAttachments[0].storeAction = .store
+                pass.depthAttachment.texture = depth
+                pass.depthAttachment.loadAction = .clear
+                pass.depthAttachment.clearDepth = 1
+                pass.depthAttachment.storeAction = .multisampleResolve
+                pass.depthAttachment.resolveTexture = resolved
+                pass.depthAttachment.depthResolveFilter = .min
+                let e = commands.makeRenderCommandEncoder(descriptor: pass)!
+                e.setRenderPipelineState(drawn)
+                e.setDepthStencilState(lessEqual)
+                Self.draw(e, Self.clip(Self.triangle, z: 0.5), Self.red)
+                Self.draw(e, GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: 0.75), Self.blue)
+                e.endEncoding()
+            }
+            let code = { (d: Float) in format == .depth16Unorm ? (d * 65535).rounded() / 65535 : d }
+            result.compare(
+                "\(samples)x memoryless \(name) depth resolved to the minimum", try await gpu.raster(resolved, texel),
+                Raster(width: size, height: size, channels: 1, levels: 1) { x, y, _ in
+                    guard let s = cover[y * size + x] else { return .nan }
+                    return code(s.contains(true) ? 0.5 : 0.75)
+                }, tolerance: format == .depth16Unorm ? 1.01 / 65535 : 0)
+        }
     }
 
     private func stencil(_ gpu: GPU, _ samples: Int, _ cover: [[Bool]?], _ result: inout SceneResult) async throws {

@@ -239,6 +239,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             from[r.attachment] = re->target(r.attachment);
         const raw::Texture *depthFrom = depthResolve.into ? re->depthTarget() : nullptr;
         const raw::Texture *stencilFrom = stencilResolve.into ? re->depthTarget() : nullptr;
+        // a memoryless zeta's compressed backing is made without a texture header (Device::compBacking)
+        if (const raw::Texture *z = depthFrom ? depthFrom : stencilFrom;
+            z && !d.sampleable(*const_cast<raw::Texture *>(z)))
+            return fail(PredEncDepthStencil, "no texture header for a multisampled zeta's resolve", z->format);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

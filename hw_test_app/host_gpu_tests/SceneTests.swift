@@ -63,7 +63,7 @@ final class SceneTests: XCTestCase {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.stored_msaa" })
         let result = try await scene.run(gpu)
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
-        let perCount = gpu.device.areProgrammableSamplePositionsSupported ? 17 : 16
+        let perCount = gpu.device.areProgrammableSamplePositionsSupported ? 19 : 18
         XCTAssertEqual(result.checks.count, [2, 4].filter(gpu.device.supportsTextureSampleCount).count * perCount)
     }
 
