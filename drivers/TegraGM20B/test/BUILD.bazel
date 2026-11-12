@@ -729,6 +729,16 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_program_pages_test",
+    srcs = ["switch_gpu_program_pages_test.cpp"],
+    deps = [
+        ":backing",
+        ":coherency",
+        ":coherency_kernel",
+    ],
+)
+
+host_test(
     name = "switch_gpu_backing_failure_test",
     srcs = [
         "switch_gpu_backing_failure_test.cpp",

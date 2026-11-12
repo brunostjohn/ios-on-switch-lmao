@@ -83,6 +83,11 @@ public:
         return remote_->storeIdentity();
     }
 
+    const uint8_t *compilerStoreMapping(uint64_t &bytes) const
+    {
+        return remote_->storeMapping(bytes);
+    }
+
     // What the calling thread's last makeNow got its record by
     static Obtained lastObtained();
     static void noteObtained(const Obtained &o);

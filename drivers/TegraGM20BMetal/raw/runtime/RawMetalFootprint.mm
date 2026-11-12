@@ -6,6 +6,7 @@
 
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <malloc/malloc.h>
 #include <unistd.h>
 
@@ -86,6 +87,38 @@ unsigned long long kb(int64_t bytes)
     return (unsigned long long)(std::max<int64_t>(bytes, 0) >> 10);
 }
 
+// The shader compiler's store as this process maps it (Remote::map: an IOKit mapping of the compiler's MAP_SHARED file).
+// XNU charges an IOKit mapping to iokit_mapped, at its whole size, only when its VM object is internal (vm_map.c
+// vm_map_enter: xnu-10063 3224-3242, xnu-12377 3748-3766); the store's object is its file's, whose resident pages are
+// external and outside phys_footprint. `external`: every region of it is backed by an external pager.
+struct StoreRegion {
+    uint64_t mapped = 0, resident = 0;
+    bool external = true;
+};
+
+StoreRegion storeRegion()
+{
+    StoreRegion r;
+    if (!gRM->completion)
+        return r;
+    const uint8_t *base = gRM->completion->compilerStoreMapping(r.mapped);
+    for (mach_vm_address_t at = mach_vm_address_t(uintptr_t(base)); base && at < uintptr_t(base) + r.mapped;) {
+        mach_vm_address_t address = at;
+        mach_vm_size_t size = 0;
+        vm_region_extended_info_data_t info = {};
+        mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
+        mach_port_t object = MACH_PORT_NULL;
+        if (mach_vm_region(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
+                           reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS ||
+            address > at)
+            break;
+        r.resident += uint64_t(info.pages_resident) * vm_page_size;
+        r.external = r.external && info.external_pager;
+        at = address + size;
+    }
+    return r;
+}
+
 }  // namespace
 
 void logGivenBack(size_t relieved)
@@ -102,18 +135,22 @@ void logGivenBack(size_t relieved)
     malloc_zone_statistics(nullptr, &heap);
     const int64_t pool = int64_t(d.stats.poolBytes.load()), copies = int64_t(d.heapBytes());
     const int64_t rest = f.internal - f.alternate - int64_t(heap.size_allocated) - pool - copies;
+    const int64_t iokitClaimed = int64_t(d.wcChunkBytesHeld() + d.controlMappedBytes() + m2v[0]);
+    const StoreRegion store = storeRegion();
     os_log(rawLog(),
            "raw: idle memory given back: footprint %llu KB = internal %llu KB (malloc %llu KB in use of %llu, raw pool "
            "%llu KB in %llu chunks with heaps %llu KB, shader heap copies %llu KB, neither malloc's "
            "nor the raw device's %llu KB) + compressed %llu KB + IOKit %llu KB (raw write-combined %llu KB, raw tables and rings %llu KB, m2v "
-           "GPU memory %llu KB; %llu KB of it internal too) + purgeable %llu KB + page tables %llu KB%s; shader heap in "
-           "place %llu KB (file pages: no footprint); malloc gave back %llu KB",
+           "GPU memory %llu KB, no owner %llu KB; %llu KB of it internal too) + purgeable %llu KB + page tables %llu "
+           "KB%s; shader heap in place %llu KB (file pages: no footprint); compiler store mapped %llu KB (external pager "
+           "%d, resident %llu KB); malloc gave back %llu KB",
            kb(f.footprint), kb(f.internal - f.alternate), kb(int64_t(heap.size_in_use)),
            kb(int64_t(heap.size_allocated)), kb(pool), (unsigned long long)d.stats.poolChunks.load(),
            kb(int64_t(d.arenaBytes())), kb(copies), kb(rest), kb(f.compressed - f.alternateCompressed), kb(f.iokit),
            kb(int64_t(d.wcChunkBytesHeld())),
-           kb(int64_t(d.controlMappedBytes())), kb(int64_t(m2v[0])), kb(f.alternate + f.alternateCompressed),
-           kb(f.purgeable), kb(f.pageTable), ledgered ? "" : " (no ledger: IOKit counts page tables too)",
-           kb(int64_t(d.heapInPlaceBytes())), kb(int64_t(relieved)));
+           kb(int64_t(d.controlMappedBytes())), kb(int64_t(m2v[0])), kb(f.iokit - iokitClaimed),
+           kb(f.alternate + f.alternateCompressed), kb(f.purgeable), kb(f.pageTable),
+           ledgered ? "" : " (no ledger: IOKit counts page tables too)", kb(int64_t(d.heapInPlaceBytes())),
+           kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)), kb(int64_t(relieved)));
 }
 #endif
