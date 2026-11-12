@@ -85,12 +85,13 @@ public enum BenchProtocol {
     public static let maxOutput = 64 * 1024
     /// A pack experiment's quads and their uniform blocks (protocol.py PACK_KEYS and the rest)
     public static let packKeys: Set<String> = ["form", "ca", "quads"]
-    public static let quadKeys: Set<String> = ["rect", "ubos"]
+    public static let quadKeys: Set<String> = ["rect", "ubos", "vertices", "primitive", "first", "count"]
     public static let uboKeys: Set<String> = ["stage", "slot", "offset", "data"]
     public static let packForms = ["whole", "whole_generic", "split", "split_whole"]
     public static let maxQuads = 64
     public static let maxUbos = 8
     public static let quadRegion = 64 * 1024
+    public static let maxVertexBytes = 4096
 
     public static func methodAllowed(_ method: UInt32) -> Bool {
         method % 4 == 0 && methodRanges.contains { $0.0 <= method && method < $0.1 }

@@ -113,7 +113,9 @@ final class BenchRunner {
                 }
                 return switch_bench_quad(
                     rect: (quad.rect[0], quad.rect[1], quad.rect[2], quad.rect[3]), blocks: pinned.values(blocks),
-                    block_count: UInt32(blocks.count))
+                    block_count: UInt32(blocks.count), vertices: quad.vertices.flatMap(pinned.bytes),
+                    vertex_bytes: UInt32(quad.vertices?.count ?? 0), primitive: quad.primitive, first: quad.first,
+                    count: quad.count)
             }
             x.pack = switch_bench_pack(
                 form: Self.packForms[p.form]!.rawValue, ca_transform: p.ca ? 1 : 0, quads: pinned.values(quads),

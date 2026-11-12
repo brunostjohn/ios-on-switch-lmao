@@ -112,10 +112,12 @@ swift_test(
     data = [
         "//tools/benchloop:generated_batches.json",
         "//tools/benchloop:testdata/golden_batch.json",
+        "//tools/benchloop:testdata/split_capture_batch.json",
     ],
     env = {
         "BENCH_GENERATED": "$(rlocationpath //tools/benchloop:generated_batches.json)",
         "BENCH_GOLDEN": "$(rlocationpath //tools/benchloop:testdata/golden_batch.json)",
+        "BENCH_CAPTURE": "$(rlocationpath //tools/benchloop:testdata/split_capture_batch.json)",
         "HWTEST_MEDIA": " ".join(MEDIA),
     },
     deps = [":core"],

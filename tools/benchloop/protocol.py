@@ -133,12 +133,13 @@ MAX_CHAIN = 3
 # A pack experiment (hw_test_app/bench/bench_pack.cpp): a pack state drawn with its own programs, quads in one command
 # buffer, each with uniform blocks at offsets in a 64 KiB region of its own, in one form of a split draw
 PACK_KEYS = {'form', 'ca', 'quads'}
-QUAD_KEYS = {'rect', 'ubos'}
+QUAD_KEYS = {'rect', 'ubos', 'vertices', 'primitive', 'first', 'count'}
 UBO_KEYS = {'stage', 'slot', 'offset', 'data'}
 PACK_FORMS = ('whole', 'whole_generic', 'split', 'split_whole')
 MAX_QUADS = 64
 MAX_UBOS = 8
 QUAD_REGION = 64 * 1024
+MAX_VERTEX_BYTES = 4096
 
 
 class InvalidError(ValueError):
@@ -401,6 +402,17 @@ def _pack(e: dict, target: Target, draws: list) -> None:
         _require(isinstance(rect, list) and len(rect) == 4, 'pack.quads[].rect is [x0, y0, x1, y1]')
         x0, y0, x1, y1 = (_count(n, 0, MAX_SIDE, 'pack.quads[].rect') for n in rect)
         _require(x0 < x1 <= target.width and y0 < y1 <= target.height, 'pack.quads[].rect outside the target')
+        if 'vertices' in quad:
+            vertices = unb64(quad['vertices'])
+            _require(0 < len(vertices) <= MAX_VERTEX_BYTES, f'pack.quads[].vertices: 1..{MAX_VERTEX_BYTES} bytes')
+            _count(quad.get('primitive'), 0, 4, 'pack.quads[].primitive')
+            _count(quad.get('first', 0), 0, 65535, 'pack.quads[].first')
+            _count(quad.get('count'), 1, 65535, 'pack.quads[].count')
+        else:
+            _require(
+                not {'primitive', 'first', 'count'} & quad.keys(),
+                'pack.quads[]: primitive, first and count only with vertices',
+            )
         ubos = quad.get('ubos', [])
         _require(isinstance(ubos, list) and len(ubos) <= MAX_UBOS, f'pack.quads[].ubos: at most {MAX_UBOS}')
         for ubo in ubos:

@@ -33,6 +33,7 @@ LIMITS = {
     'maxQuads': 'MAX_QUADS',
     'maxUbos': 'MAX_UBOS',
     'quadRegion': 'QUAD_REGION',
+    'maxVertexBytes': 'MAX_VERTEX_BYTES',
 }
 
 

@@ -24,6 +24,7 @@
 #include "raw_mme.h"
 #include "raw_state_segment.h"
 #include "raw_replay_shape.h"
+#include "raw_split_capture.h"
 #include "raw_split_reuse.h"
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
@@ -783,6 +784,10 @@ private:
     uint32_t facts_ = 0;
     // the twin's draw: its frontier bound and its prologue's launch recorded (`set`: the draw's set 0)
     void launchSplit(Push &p, const Pipeline &twin, const uint32_t *set);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    void captureSplit(const Pipeline &pl, WrittenRegion::Analysis &analysis, uint32_t primitive, uint32_t first,
+                      uint32_t count);
+#endif
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     float depthRange_[2] = {0, 1};
     bool scissorDirty_ = true, viewportDirty_ = true;
@@ -1096,6 +1101,12 @@ public:
         splitForced_ = force;
     }
 
+    // The split capture's records of this command buffer's draws (raw_split_capture.h), handed over once
+    std::vector<SplitCaptureRecord> takeSplitCaptures()
+    {
+        return std::move(splitCaptures_);
+    }
+
     // HW Test's bench: each prologue launch's frontier (its address, its bytes), until the next begin()
     std::vector<std::pair<uint64_t, uint32_t>> splitFrontiers() const
     {
@@ -1171,6 +1182,8 @@ private:
     bool forceWholePrograms_ = false, inlineStates_ = false;
     SplitProbe splitProbe_ = SplitProbe::Twin;
     bool splitForced_ = false;
+    bool splitCapturing_ = false;  // the device's capture was armed at begin(): its draws may take a record
+    std::vector<SplitCaptureRecord> splitCaptures_;
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {
@@ -1967,6 +1980,8 @@ public:
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, which probeCompressed holds until destroyTexture; any other texture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
+    // split draws the capture still takes (raw_split_capture.h); 0: disarmed
+    std::atomic<uint32_t> splitCaptureLeft{0};
     // private textures stay plain while set (raw_private_comp.h), for a probe's uncompressed reference
     std::atomic<bool> probePlainPrivate{false};
     std::atomic<bool> probeResolveDraw{false};  // resolves take the pack's resolve pass, never resolve.twod

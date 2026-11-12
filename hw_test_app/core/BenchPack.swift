@@ -12,6 +12,12 @@ public struct BenchPack: Equatable, Sendable {
 public struct BenchQuad: Equatable, Sendable {
     public let rect: [UInt32]
     public let blocks: [BenchBlock]
+    /// The draw's own vertex buffer bytes (a split capture's), drawn as Metal primitive `primitive` from `first`,
+    /// `count` vertices; nil: the template's quad over rect
+    public var vertices: Data?
+    public var primitive: UInt32 = 0
+    public var first: UInt32 = 0
+    public var count: UInt32 = 0
 }
 
 /// `data` at `offset` in the quad's own 64 KiB region of one buffer, bound at `slot` of `stage` (1 vertex, 2 fragment)
@@ -48,7 +54,20 @@ extension BenchFields {
             guard let ubos = (quad["ubos"] ?? ([] as [Any])) as? [Any], ubos.count <= BenchProtocol.maxUbos else {
                 throw BenchInvalid("pack.quads[].ubos: at most \(BenchProtocol.maxUbos)")
             }
-            return BenchQuad(rect: rect.map(UInt32.init), blocks: try ubos.map(block))
+            var built = BenchQuad(rect: rect.map(UInt32.init), blocks: try ubos.map(block))
+            if let text = quad["vertices"] {
+                let vertices = try bytes(text, "pack.quads[].vertices")
+                guard (1...BenchProtocol.maxVertexBytes).contains(vertices.count) else {
+                    throw BenchInvalid("pack.quads[].vertices: 1..\(BenchProtocol.maxVertexBytes) bytes")
+                }
+                built.vertices = vertices
+                built.primitive = UInt32(try count(quad["primitive"], 0...4, "pack.quads[].primitive"))
+                built.first = UInt32(try count(quad["first"] ?? (0 as Any), 0...65535, "pack.quads[].first"))
+                built.count = UInt32(try count(quad["count"], 1...65535, "pack.quads[].count"))
+            } else if quad["primitive"] != nil || quad["first"] != nil || quad["count"] != nil {
+                throw BenchInvalid("pack.quads[]: primitive, first and count only with vertices")
+            }
+            return built
         }
         return BenchPack(form: form, ca: ca, quads: quads)
     }

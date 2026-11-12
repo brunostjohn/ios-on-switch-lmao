@@ -2410,6 +2410,16 @@ host_test(
 )
 
 host_test(
+    name = "raw_split_capture_test",
+    srcs = [
+        "raw_split_capture_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split_capture.h",
+    ],
+    cxx_std = "c++17",
+    data = ["//tools/benchloop:testdata/split_capture.log"],
+)
+
+host_test(
     name = "raw_split_reuse_test",
     srcs = [
         "raw_split_reuse_test.cpp",

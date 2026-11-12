@@ -42,6 +42,10 @@ struct switch_bench_quad {
     uint32_t rect[4];  // x0, y0, x1, y1 in pixels
     const struct switch_bench_block *blocks;
     uint32_t block_count;
+    // the draw's own vertex buffer bytes (a split capture's), drawn as Metal primitive `primitive` from vertex `first`,
+    // `count` of them; null: the template's quad over rect
+    const uint8_t *vertices;
+    uint32_t vertex_bytes, primitive, first, count;
 };
 
 // Every quad drawn in one command buffer, in order, with the template's inputs (fetchform's) where no block is given

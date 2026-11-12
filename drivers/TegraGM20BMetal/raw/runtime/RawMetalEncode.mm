@@ -767,6 +767,9 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         cb->_promisesTaken = true;
         rc->promises = cb->_promises;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    splitCaptureCommitted(*rc);
+#endif
     if (!rc->commit(seq)) {
         cb->_partial = rc->partial;
         if (rc->admissionBlocked) {

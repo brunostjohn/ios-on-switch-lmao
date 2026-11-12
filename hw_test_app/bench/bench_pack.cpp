@@ -10,7 +10,7 @@
 namespace bench {
 namespace {
 
-constexpr uint32_t kTriangleStrip = 4, kMaxQuads = 64, kMaxBlocks = 8;
+constexpr uint32_t kTriangleStrip = 4, kMaxQuads = 64, kMaxBlocks = 8, kMaxVertexBytes = 4096;
 // Each quad's blocks lie in a region of their own, so two quads' different contents never share an address
 constexpr uint64_t kQuadRegion = 64 * 1024;
 
@@ -30,6 +30,9 @@ std::string invalidPack(const switch_bench_experiment &x)
             return "pack: a quad's rect outside the target";
         if (quad.block_count > kMaxBlocks || (quad.block_count && !quad.blocks))
             return "pack: at most 8 blocks a quad";
+        if (quad.vertices && (!quad.vertex_bytes || quad.vertex_bytes > kMaxVertexBytes || !quad.count ||
+                              quad.primitive > kTriangleStrip))
+            return "pack: a quad's vertices (1..4096 bytes), primitive (0..4) and count (> 0)";
         for (uint32_t k = 0; k < quad.block_count; k++) {
             const switch_bench_block &b = quad.blocks[k];
             if ((b.stage != 1 && b.stage != 2) || b.slot >= 16 || !b.bytes || !b.data ||
@@ -74,8 +77,11 @@ bool drawQuads(switch_bench &b, const switch_bench_experiment &x, raw::CommandBu
         for (uint32_t k = 0; k < quad.block_count; k++)
             e->setBuffer(int(quad.blocks[k].stage), quad.blocks[k].slot, &blocks,
                          q * kQuadRegion + quad.blocks[k].offset);
+        if (quad.vertices && pipeline->rec->vertexSlot != 0xff)
+            e->setBytes(1, pipeline->rec->vertexSlot, quad.vertices, quad.vertex_bytes);
         const char *why = nullptr;
-        if (!e->draw(kTriangleStrip, 0, 4, 1, 0, &why)) {
+        const bool own = quad.vertices != nullptr;
+        if (!e->draw(own ? quad.primitive : kTriangleStrip, own ? quad.first : 0, own ? quad.count : 4, 1, 0, &why)) {
             e->end();
             const raw::Refusal refusal = cb.refusal;
             char line[160];

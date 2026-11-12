@@ -4,9 +4,9 @@ import XCTest
 
 /// The bench loop's decoder against tools/benchloop's golden batch, and the result files the Mac parses.
 final class BenchProtocolTests: XCTestCase {
-    func golden() throws -> Data {
+    func golden(_ name: String = "BENCH_GOLDEN") throws -> Data {
         let environment = ProcessInfo.processInfo.environment
-        let path = try XCTUnwrap(environment["BENCH_GOLDEN"])
+        let path = try XCTUnwrap(environment[name])
         let root = environment["TEST_SRCDIR"].map { $0 + "/" } ?? ""
         return try Data(contentsOf: URL(fileURLWithPath: root + path))
     }
@@ -46,6 +46,29 @@ final class BenchProtocolTests: XCTestCase {
         XCTAssertEqual(split?["launches"] as? Int, 2)
         XCTAssertEqual(split?["bytes"] as? Int, 4)
         XCTAssertEqual(split?["frontier"] as? String, Data([1, 2, 3, 4]).base64EncodedString())
+    }
+
+    /// tools/benchloop/capture.py's batch of the device's split capture (testdata/split_capture.log): every form's quad
+    /// carries the captured vertices and blocks byte for byte, at the residual offset the capture kept
+    func testASplitCaptureDecodesToTheBytesItCaptured() throws {
+        let batch = try BenchBatch.decode(try golden("BENCH_CAPTURE"))
+        let experiments = batch.entries.compactMap { entry -> BenchExperiment? in
+            if case .experiment(let e) = entry { return e }
+            XCTFail("\(entry.id) did not decode: \(entry)")
+            return nil
+        }
+        XCTAssertEqual(experiments.compactMap(\.pack?.form), BenchProtocol.packForms)
+        for e in experiments {
+            XCTAssertEqual(e.templateKey, 0x618b_4517_5101_cd20)
+            XCTAssertEqual(e.formatRaw, 115)
+            let quad = try XCTUnwrap(e.pack?.quads.first)
+            XCTAssertEqual(quad.vertices, Data((0..<64).map { UInt8(255 - $0) }))
+            XCTAssertEqual([quad.primitive, quad.first, quad.count], [4, 0, 4])
+            let block = try XCTUnwrap(quad.blocks.first)
+            XCTAssertEqual([block.stage, block.slot, block.offset], [2, 1, 80])
+            XCTAssertEqual(block.data, Data(0..<64))
+            XCTAssertEqual(quad.blocks.last?.data, Data(repeating: 0x3c, count: 64))
+        }
     }
 
     func testEveryKindOfTheGoldenBatchDecodes() throws {

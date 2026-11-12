@@ -3562,6 +3562,8 @@ CommandBuffer *Device::begin()
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
     cb.splitProbe_ = SplitProbe::Twin;
     cb.splitForced_ = false;
+    cb.splitCapturing_ = splitCaptureLeft.load(std::memory_order_relaxed) != 0;
+    cb.splitCaptures_.clear();
     cb.foldCounts();
 #endif
     cb.draws = cb.passes = cb.blits = cb.bands = 0;
@@ -5782,6 +5784,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         launchSplit(p, *pl, set);
     else if (launchOnly)
         launchSplit(p, *launchOnly, set);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (cb_->splitCapturing_ && twin->splitOf && !indexed)
+        captureSplit(*pl, geometryAnalysis, primitive, vFirst, count);
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif

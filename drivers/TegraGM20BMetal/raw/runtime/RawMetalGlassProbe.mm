@@ -9,6 +9,8 @@
 //   split-generic-on|-off       a draw the split plan takes draws the generic whole program: no variant, no prologue
 //   split-launch-only-on|-off   its prologue runs and writes its frontier, but the generic whole program draws
 //   split-no-reuse-on|-off      its split twin draws with a frontier of its own prologue, none an earlier draw made
+//   split-capture[-off]         the next kSplitCaptureDraws split draws logged for the bench (raw_split_capture.h) as
+//                               `raw: splitcap` lines, for kSplitCaptureMs at most
 // glass-probe and glass-record also arm the blur-texture probe (raw_glass_mem.h) with every command buffer's line, and
 // glass-probe-off disarms it; glass-mem-watch[-off] arms it (or not) for kGlassMemWatchMs of normal use, with only the
 // lines that found something. While armed this file publishes its counts and the pool's shape (glass-mem,
@@ -186,8 +188,41 @@ bool rmZeroNewBuffers()
     return gZeroNewBuffers.on.load(std::memory_order_relaxed);
 }
 
+void splitCaptureCommitted(raw::CommandBuffer &rc)
+{
+    static std::atomic<uint32_t> serial{0};
+    for (const raw::SplitCaptureRecord &r : rc.takeSplitCaptures()) {
+        const uint32_t n = serial.fetch_add(1, std::memory_order_relaxed);
+        for (const std::string &line : raw::splitCaptureLines(r, n))
+            os_log(rawLog(), "raw: %{public}s", line.c_str());
+    }
+}
+
+static void watchSplitCapture(raw::Device *dev)
+{
+    static std::atomic<uint32_t> generation{0};
+    for (const bool on : {true, false}) {
+        int token;
+        notify_register_dispatch(
+            on ? "com.brunostjohn.switch.debug.split-capture" : "com.brunostjohn.switch.debug.split-capture-off",
+            &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                dev->splitCaptureLeft.store(on ? raw::kSplitCaptureDraws : 0, std::memory_order_relaxed);
+                const uint32_t armed = generation.fetch_add(1, std::memory_order_relaxed) + 1;
+                os_log(rawLog(), "raw: split capture %{public}s (debug notification)", on ? "armed" : "off");
+                if (!on)
+                    return;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, raw::kSplitCaptureMs * NSEC_PER_MSEC),
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                   if (generation.load(std::memory_order_relaxed) == armed)
+                                       dev->splitCaptureLeft.store(0, std::memory_order_relaxed);
+                               });
+            });
+    }
+}
+
 void watchGlassProbe(raw::Device *dev)
 {
+    watchSplitCapture(dev);
     const bool renderServer = dev->role() == raw::Device::Role::RenderServer;
     int token;
     notify_register_dispatch("com.brunostjohn.switch.debug.glass-probe", &token,

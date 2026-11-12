@@ -223,6 +223,46 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void RenderEncoder::captureSplit(const Pipeline &pl, WrittenRegion::Analysis &analysis, uint32_t primitive,
+                                 uint32_t first, uint32_t count)
+{
+    uint32_t left = dev_->splitCaptureLeft.load(std::memory_order_relaxed);
+    do {
+        if (!left)
+            return;
+    } while (!dev_->splitCaptureLeft.compare_exchange_weak(left, left - 1, std::memory_order_relaxed));
+    const PackPipeline &rec = *pl.rec;
+    SplitCaptureRecord r;
+    r.key = rec.keyHash;
+    r.ca = pl.caTransform;
+    if (const Texture *t = pass_.color[0].texture)
+        r.format = t->format, r.width = t->width, r.height = t->height;
+    PixelBox box;
+    if (!analysis.bounds(box))
+        box = analysis.geometry().limit;
+    r.box[0] = box.x0, r.box[1] = box.y0, r.box[2] = box.x1, r.box[3] = box.y1;
+    r.primitive = primitive, r.first = first, r.count = count, r.stride = rec.vertexStride;
+    memcpy(r.push, cb_->rootPush_, sizeof r.push);
+    auto copy = [](const Bound &b, uint64_t most) {
+        return b.cpu ? std::vector<uint8_t>(b.cpu, b.cpu + std::min<uint64_t>(b.size, most)) : std::vector<uint8_t>();
+    };
+    // a draw whose vertices pass the cap is replayed over its box with the template's quad
+    const uint64_t vertexBytes = uint64_t(first + count) * rec.vertexStride;
+    if (rec.vertexSlot != 0xff && vertexBytes <= kSplitCaptureVertexBytes)
+        r.vertices = copy(bufs_[1][rec.vertexSlot], vertexBytes);
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries && r.blocks.size() < kSplitCaptureBlocks; k++) {
+        const PackEntry &e = rec.entry[k];
+        if (e.kind != EntryUbo)
+            continue;
+        const Bound &b = bufs_[e.stage][e.slot];
+        if (b.cpu && b.size)
+            r.blocks.push_back({e.stage, e.slot, uint32_t(b.va & 255), copy(b, kSplitCaptureBlockBytes)});
+    }
+    cb_->splitCaptures_.push_back(std::move(r));
+}
+#endif
+
 // Inputs are immutable and splitTwin excludes preceding GPU writes, so these launches can share one producer boundary.
 void CommandBuffer::launchPrologues()
 {
