@@ -7,8 +7,8 @@
 // holds Textures), Barriers and SplitLaunch), PassEnd, Kernel (every kernel call), GeometryAcquire and GeometryRelease
 // are counted in whichever phase they run. Use (each resource a command buffer names), Uniforms (each setBytes chunk
 // bound), Bind (a draw's state, root and depth/stencil words), Variant (a draw's program form) and PassPrologue (a
-// pass's targets and clears, inside PassEnd) are counted wherever they run too. Retire is the facade's work after the
-// encode returned, outside its wall time. A span outside an encode (another thread, or the submit worker between
+// pass's targets and clears, inside PassEnd) and PassBegin (the raw encoder's pass set up, inside Pass) are counted
+// wherever they run too. Retire is the facade's work after the encode returned, outside its wall time. A span outside an encode (another thread, or the submit worker between
 // encodes) costs one thread-local read.
 #pragma once
 #include <cstddef>
@@ -53,6 +53,7 @@ enum class EncodePart : uint8_t {
     Apply,
     Textures,
     Retire,
+    PassBegin,
     Count
 };
 

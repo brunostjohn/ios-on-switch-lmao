@@ -3299,6 +3299,7 @@ CommandBuffer *Device::begin()
     cb.splitReuse_.clear();
     cb.buffersWritten_ = false;
     cb.geometryBudget_ = {};
+    cb.geometryPool_.clear();
     cb.geometryRefusedBuffers_.clear();
     cb.geometryRefusedBackings_.clear();
     return &cb;
@@ -3319,20 +3320,28 @@ void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 
 RenderEncoder *CommandBuffer::render(const PassDesc &pass)
 {
+    RAW_ENCODE_SPAN(PassBegin);
     RenderEncoder &e = render_;
     // a pass's lists keep the last one's capacity: no allocation a steady frame
     std::vector<RenderEncoder::Body> bodies = std::move(e.bodies_);
     std::vector<std::array<uint32_t, 4>> rects = std::move(e.rects_);
     SplitPassPlan splitPlan = std::move(e.splitPlan_);
+    std::vector<RenderEncoder::Clear> clears = std::move(e.initialClears_);
+    std::vector<bool> tiles = std::move(e.tiles_);
+    std::vector<GeometryAnalysis> written = e.written_.release();
     bodies.clear();
     rects.clear();
     splitPlan.clear();
-    // made again where it is, not built aside and moved in: the encoder is 16 KB, most of it the written region
+    clears.clear();
+    // made again where it is, not built aside and moved in (the encoder is 7 KB)
     e.~RenderEncoder();
     new (&e) RenderEncoder();
     e.bodies_ = std::move(bodies);
     e.rects_ = std::move(rects);
     e.splitPlan_ = std::move(splitPlan);
+    e.initialClears_ = std::move(clears);
+    e.tiles_ = std::move(tiles);
+    e.written_.adopt(std::move(written));
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
@@ -3357,8 +3366,17 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
+    // the device's backings, under its lock once a pass however many attachments need one (the compression thread
+    // trims them under it)
+    std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
+    const auto backings = [&]() {
+        if (!backingLock.owns_lock()) {
+            backingLock.lock();
+            RAW_ENCODE_COUNT(Locks);
+        }
+    };
     if (zeta && zeta->memoryless) {
-        RAW_ENCODE_LOCK(l, dev_->lock_);
+        backings();
         Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
         if (!b)
             return nullptr;
@@ -3386,7 +3404,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            RAW_ENCODE_LOCK(l, dev_->lock_);
+            backings();
             Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
@@ -3396,7 +3414,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            RAW_ENCODE_LOCK(l, dev_->lock_);
+            backings();
             Texture *b =
                 dev_->backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
             if (!b)
@@ -3406,6 +3424,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
         }
     }
+    if (backingLock.owns_lock())
+        backingLock.unlock();
     for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
@@ -4728,7 +4748,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         g.limit = {x[0], y[0], x[1], y[1]};
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
+    auto geometryAnalysis =
+        geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     RAW_ENCODE_BEGIN(variantSpan, Variant);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
@@ -5819,7 +5840,7 @@ void RenderEncoder::continuePass(uint8_t stores)
     // Clear reach is a Metal encoder property, including its empty-draw behavior.
     // Later encoders must not enlarge or elide the first encoder's clear.
     if (!clearsSealed_) {
-        initialClears_ = clears();
+        clears(initialClears_);
         clearsSealed_ = true;
     }
     for (uint32_t i = 0; i < 8; ++i)
@@ -5906,7 +5927,9 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     RAW_ENCODE_BEGIN(prologueSpan, PassPrologue);
-    const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
+    if (!clearsSealed_)
+        clears(initialClears_);
+    const std::vector<Clear> &cl = initialClears_;
 #if SWITCH_RAW_DIAGNOSTICS
     if (d.glassMemLive_)
         glassMemReached(cl);
@@ -6070,9 +6093,9 @@ void RenderEncoder::end()
 // DontCare-loaded memoryless color some draw reads (or that is stored) clears to zero where the pass reaches anything; a stored
 // DontCare-loaded color some draw reads (blended into, written through a partial mask, fetched) clears to zero over what the
 // pass reaches: the whole render area, or the reached tiles' runs along each row of tiles. Any other DontCare load loads.
-std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
+void RenderEncoder::clears(std::vector<Clear> &out)
 {
-    std::vector<Clear> out;
+    out.clear();
 
     enum {
         Nothing,
@@ -6090,7 +6113,8 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
     // the reached tiles where that is not every tile (none: every tile)
     constexpr uint32_t kTile = 32;
     const uint32_t perRow = (areaW_ + kTile - 1) / kTile, rows = (areaH_ + kTile - 1) / kTile;
-    std::vector<bool> tiles;
+    std::vector<bool> &tiles = tiles_;
+    tiles.clear();
     if (reach == Draws && !whole_ && perRow && rows) {
         bool every = false;
         for (const auto &r : rects_)
@@ -6164,7 +6188,6 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
                     out.push_back({j, x0, y0, x1, y1, zero});
             }
     }
-    return out;
 }
 
 // ---- blit encoder ----

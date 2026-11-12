@@ -362,10 +362,12 @@ size_t raw_metal_encode_rates(char *out, size_t size)
     const int tail = snprintf(
         out + head, size - head,
         " walk=%.0f rself=%.0f tself=%.0f sself=%.0f dself=%.0f pself=%.0f eself=%.0f apply=%.0f tex=%.0f retire=%.0f "
+        "pbeg=%.0f "
         "mal=%.1f free=%.1f lk=%.1f snd=%.1f applied=%.2f/d useadd=%.1f/%.1f descb=%.1f descu=%.1f geov=%.1f",
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
-        part(EncodePart::Textures), part(EncodePart::Retire), mallocs, frees, events(raw::EncodeCount::Locks),
+        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
+        events(raw::EncodeCount::Locks),
         events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
         events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
         events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
