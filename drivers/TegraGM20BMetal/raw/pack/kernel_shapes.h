@@ -295,8 +295,8 @@ inline id<MTLComputePipelineState> state(id<MTLDevice> dev, const Shape &s, id<M
     return made;
 }
 
-// The shape's textures, each of its tag size, (16 + slot) x (8 + slot), read and written but for a swizzled one, which
-// Metal writes through no shader (read only)
+// The shape's textures, each of its tag size, (16 + slot) x (8 + slot): read and written, but read only where swizzled
+// (Metal makes no swizzled texture shaders write)
 inline NSArray<MTLTextureDescriptor *> *textures(const std::vector<raw::BoundTexture> &bound)
 {
     NSMutableArray<MTLTextureDescriptor *> *out = [NSMutableArray array];
