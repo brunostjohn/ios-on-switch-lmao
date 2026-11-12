@@ -93,6 +93,23 @@ class StateKeyTest(unittest.TestCase):
         self.assertEqual(rawpack.state_key(line), rawpack.state_key(LINKED) + ' | xrs=2 | wtex=1:23')
 
 
+class CoreAnimationTest(unittest.TestCase):
+    def test_a_harvested_sampled_two_plane_line_is_kept_as_drawn(self):
+        # tools/gpu/logharvest.py's line of a Core Animation state's " | xrs=" variant: its texture is at slot 3
+        line = (
+            'R ok=1 label=com.apple.coreanimation.Pb3a8Xm_TlubA2Xhf_Isrc samples=1 topo=0 ds=0/0'
+            ' c0=550:15:0:1:0:0:1:0:0 c1=550:0:0:1:0:0:1:0:0 a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1'
+            ' a3=27:32:1:48:1:1 | v std_vert1_lph  | f luma_boost_lph  | '
+        )
+        tables = Path(rawpack.HERE) / 'ca' / 'qc-24B119.json'
+        with tempfile.TemporaryDirectory() as scratch:
+            corpus = Path(scratch) / 'corpus.log'
+            corpus.write_text(f'{line}\n{line}xrs=8 | \n')
+            harvested = dict(rawpack.ca_states(tables, corpus))['harvested']
+        state = rawpack.state_key(line)
+        self.assertEqual([rawpack.state_key(drawn) for drawn in harvested], [state, state + ' | xrs=8'])
+
+
 class ProbeLogTest(unittest.TestCase):
     def test_an_empty_submission_is_no_probes(self):
         with tempfile.TemporaryDirectory() as scratch:
