@@ -2,7 +2,6 @@
 // SwitchDirectVisibleDisplay.h: a direct scanout slot holds its backing as scanned for its whole life, and a swap whose
 // producer's writes are already in DRAM flips from the kick with no present job; one still running past the slot's first
 // frame is watched by the GPU driver instead of a present job; anything else keeps the job.
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -13,9 +12,9 @@
 #include "../../TegraVIC/SwitchNativeScanout.h"
 #include "bazel/testing/source_text.h"
 
-using switch_ios::test::Between;
+using switch_ios::test::Block;
+using switch_ios::test::CodeText;
 using switch_ios::test::SourceText;
-using testing::HasSubstr;
 
 using IOReturn = int;
 constexpr IOReturn kIOReturnSuccess = 0;
@@ -170,13 +169,12 @@ TEST_F(DirectVisible, ASlotsFirstFrameKeepsThePresentJobAndLaterOnesAreWatched)
 TEST(DirectVisibleSource, TheOfferTriesItOnceTheSlotIsMappedAndSlotsHoldTheirBacking)
 {
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
-    const std::string offer = Between(display, "    bool offerDirect(", "\n    }\n");
-    EXPECT_LT(offer.find("if (entry == kNoBuffer)"), offer.find("presentDirectVisible(request, entry, width"));
-    EXPECT_LT(offer.find("presentDirectVisible(request, entry, width"),
-              offer.find("offerWithCompletionFlip(copy, entry)"));
-    EXPECT_THAT(offer, HasSubstr("copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);"));
+    const CodeText offer = Block(display, "bool offerDirect(");
+    EXPECT_TRUE(offer.Before("if (entry == kNoBuffer)", "presentDirectVisible(request, entry, width"));
+    EXPECT_TRUE(offer.Before("presentDirectVisible(request, entry, width", "offerWithCompletionFlip(copy, entry)"));
+    EXPECT_TRUE(offer.Has("copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);"));
     const std::string slots = SourceText("../SwitchDirectSlots.h");
-    EXPECT_THAT(Between(slots, "    void dropSlot(unsigned k)", "\n    }\n"), HasSubstr("releaseScanoutBacking(k);"));
-    EXPECT_THAT(slots, HasSubstr("*slot.read = snapshot;\n        holdScanoutBacking(static_cast<unsigned>(victim));"));
+    EXPECT_TRUE(Block(slots, "void dropSlot(unsigned k)").Has("releaseScanoutBacking(k);"));
+    EXPECT_TRUE(CodeText(slots).Has("*slot.read = snapshot; holdScanoutBacking(static_cast<unsigned>(victim));"));
 }
 }  // namespace

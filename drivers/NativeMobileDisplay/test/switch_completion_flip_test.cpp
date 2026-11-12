@@ -17,6 +17,10 @@
 namespace completion_flip_test {
 namespace {
 
+using switch_ios::test::Block;
+using switch_ios::test::CodeText;
+using switch_ios::test::SourceText;
+
 constexpr int kSlot = Display::kSlot0;
 constexpr uint32_t kWinAStart = 0xbc0, kWinAKind = 0xbcb, kWinAHOffset = 0xbc6, kWinAStride = 0xb8a;
 
@@ -189,6 +193,23 @@ TEST_F(CompletionFlip, AGateWriteOfWindowAWithdrawsAnArmedFlip)
     EXPECT_GT(d.model.selectorWrites, 0u);
 }
 
+// The gate's own flip takes window A from an armed completion before it writes a register: a completion landing
+// at the gate's first write writes nothing.
+TEST_F(CompletionFlip, AGateFlipWithdrawsAnArmedFlipBeforeItsFirstWrite)
+{
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    size_t completionWrites = 1;
+    d.model.beforeWrite = [this, &completionWrites] {
+        const size_t before = d.model.written.size();
+        d.complete(0);
+        completionWrites = d.model.written.size() - before;
+    };
+    d.writeFlip(kSlot);
+    EXPECT_EQ(completionWrites, 0u);
+    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.model.assembly[Display::kWinbufStartAddr], d.surfaceAddress(kSlot));
+}
+
 TEST_F(CompletionFlip, NotArmedWhenTheFrameWouldBeHeldOrCarriesWindowB)
 {
     ASSERT_EQ(d.offer(kSlot + 3), 0);
@@ -237,13 +258,10 @@ TEST_F(CompletionFlip, SuspendPutsAWrittenFlipInTheRingAndWithdrawsAnArmedOne)
 // hwSuspended holds any kick it makes for the resume.
 TEST(CompletionFlipSource, SuspendRetiresWhatItsSettlesTakeAsShown)
 {
-    using switch_ios::test::Between;
-    using switch_ios::test::SourceText;
-    const std::string quiesce =
-        Between(SourceText("../NativeLegacyDisplay.cpp"), "    void quiesceForSuspend()\n    {\n", "\n    }\n");
-    EXPECT_LT(quiesce.find("const uint64_t shown = suspendShownSeq();"), quiesce.find("planesQuiesce();"));
-    EXPECT_LT(quiesce.find("ring.settle();"), quiesce.find("hwSuspended = true;"));
-    EXPECT_LT(quiesce.find("hwSuspended = true;"), quiesce.find("retireSuspendShown(shown);"));
+    const CodeText quiesce = Block(SourceText("../NativeLegacyDisplay.cpp"), "void quiesceForSuspend()");
+    EXPECT_TRUE(quiesce.Before("const uint64_t shown = suspendShownSeq();", "planesQuiesce();"));
+    EXPECT_TRUE(quiesce.Before("ring.settle();", "hwSuspended = true;"));
+    EXPECT_TRUE(quiesce.Before("hwSuspended = true;", "retireSuspendShown(shown);"));
 }
 
 // SC7 takes window A's pending flip as shown: its swap completes at the settle, with nothing presented after the
@@ -288,69 +306,54 @@ TEST_F(CompletionFlip, RandomOrdersNeverLoseOrDelayALatch)
 // is armed before the GPU driver sees it, and FRAME_END stays routed while a flip is out.
 TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
 {
-    using switch_ios::test::Between;
-    using switch_ios::test::SourceText;
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
-    const std::string complete = Between(display, "    void gpuComplete(int status)", "\n    }\n");
-    EXPECT_LT(complete.find("__atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);"),
-              complete.find("writeCompletionFlip(status);"));
-    EXPECT_LT(complete.find("writeCompletionFlip(status);"), complete.find("gpuDoneSource->interruptOccurred("));
-    EXPECT_EQ(Between(display, "    void vblankTick()\n    {\n", ";").find("takeCompletionFlip()"), 8u);
-    EXPECT_EQ(Between(display, "    void quiesceForSuspend()\n    {\n", ";").find("suspendCompletionFlip()"), 8u);
-    EXPECT_EQ(Between(display, "    void stopRotation()\n    {\n", ";").find("withdrawCompletionFlip()"), 8u);
-    EXPECT_EQ(Between(display, "    void settleStopped()\n    {\n", ";").find("flipUnverifiedFromGate()"), 8u);
-    const std::string check = Between(display, "    void checkFlip(bool atFrameEnd)", "\n    }\n");
-    EXPECT_NE(check.find("const auto [control, start] = latchState();"), std::string::npos);
-    EXPECT_EQ(check.find("windowActive("), std::string::npos);
-    EXPECT_NE(Between(display, "    bool frameEndNeeded()", "\n    }\n").find("completionFlipOut()"),
-              std::string::npos);
-    EXPECT_NE(Between(display, "    bool offerDirect(", "\n    }\n").find("offerWithCompletionFlip(copy, entry)"),
-              std::string::npos);
-    EXPECT_NE(Between(display, "    bool offerGpuCopy(", "\n    }\n").find("offerWithCompletionFlip(copy, target)"),
-              std::string::npos);
-    const std::string vic = Between(SourceText("../SwitchVICScanoutDisplay.h"), "bool offerVicCopy(", "\n}\n");
-    EXPECT_LT(vic.find("ring.claim(target);"), vic.find("armCompletionFlip(target);"));
-    EXPECT_LT(vic.find("armCompletionFlip(target);"), vic.find("copySource->interruptOccurred("));
+    const CodeText complete = Block(display, "void gpuComplete(int status)");
+    EXPECT_TRUE(complete.Before("__atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);",
+                                "writeCompletionFlip(status);"));
+    EXPECT_TRUE(complete.Before("writeCompletionFlip(status);", "gpuDoneSource->interruptOccurred("));
+    EXPECT_TRUE(Block(display, "void vblankTick()").StartsWith("takeCompletionFlip();"));
+    EXPECT_TRUE(Block(display, "void quiesceForSuspend()").StartsWith("suspendCompletionFlip();"));
+    EXPECT_TRUE(Block(display, "void stopRotation()").StartsWith("withdrawCompletionFlip();"));
+    EXPECT_TRUE(Block(display, "void settleStopped()").StartsWith("flipUnverifiedFromGate();"));
+    const CodeText check = Block(display, "void checkFlip(bool atFrameEnd)");
+    EXPECT_TRUE(check.Has("const auto [control, start] = latchState();"));
+    EXPECT_FALSE(check.Has("windowActive("));
+    EXPECT_TRUE(Block(display, "bool frameEndNeeded()").Has("completionFlipOut()"));
+    EXPECT_TRUE(Block(display, "bool offerDirect(").Has("offerWithCompletionFlip(copy, entry)"));
+    EXPECT_TRUE(Block(display, "bool offerGpuCopy(").Has("offerWithCompletionFlip(copy, target)"));
+    const CodeText vic = Block(SourceText("../SwitchVICScanoutDisplay.h"), "bool offerVicCopy(");
+    EXPECT_TRUE(vic.Before("ring.claim(target);", "armCompletionFlip(target);"));
+    EXPECT_TRUE(vic.Before("armCompletionFlip(target);", "copySource->interruptOccurred("));
     const std::string start = SourceText("../SwitchScanoutStart.h");
-    EXPECT_EQ(Between(start, "    void presentEntry(int i)\n    {\n", ")").find("if (presentedByCompletion(i"), 8u);
-    EXPECT_EQ(Between(start, "    void writeFlip(int i)\n    {\n", ";").find("flipFromGate()"), 8u);
-    EXPECT_NE(Between(SourceText("../SwitchOverlayRegisters.h"), "void planeBlendA(", "\n}\n")
-                  .find("withdrawCompletionFlip();"),
-              std::string::npos);
-    EXPECT_NE(Between(SourceText("../SwitchPaletteDisplay.h"), "void paletteFrameEnd(", "\n}\n")
-                  .find("withdrawCompletionFlip();"),
-              std::string::npos);
+    EXPECT_TRUE(Block(start, "void presentEntry(int i)").StartsWith("if (presentedByCompletion(i))"));
+    EXPECT_TRUE(Block(SourceText("../SwitchOverlayRegisters.h"), "void planeBlendA(").Has("withdrawCompletionFlip();"));
+    EXPECT_TRUE(
+        Block(SourceText("../SwitchPaletteDisplay.h"), "void paletteFrameEnd(").Has("withdrawCompletionFlip();"));
 }
 
 // Window A's other writers on the gate (the column scan, the window probes, the landscape change and the turned scan
 // on window A) withdraw an armed flip before they write its assembly copy, and none arms while they own window A.
 TEST(CompletionFlipSource, WindowAsOtherWritersWithdrawFirst)
 {
-    using switch_ios::test::Between;
-    using switch_ios::test::SourceText;
     const std::string scan = SourceText("../NativeColumnScanDisplay.h");
     const std::string probe = SourceText("../DisplayWindowProbeDisplay.h");
     const std::string landscape = SourceText("../SwitchLandscapeDisplay.h");
     const auto withdrawsFirst = [](const std::string &source, const char *function) {
-        const std::string body = Between(source, function, "\n}\n");
-        return body.find("{\n    withdrawCompletionFlip();\n") == body.find("{\n");
+        return Block(source, function).StartsWith("withdrawCompletionFlip();");
     };
     EXPECT_TRUE(withdrawsFirst(scan, "void columnScanShow("));
     EXPECT_TRUE(withdrawsFirst(scan, "void columnScanRestoreWindow("));
     EXPECT_TRUE(withdrawsFirst(probe, "void windowProbeShow("));
     EXPECT_TRUE(withdrawsFirst(probe, "void windowProbeRestoreWindows("));
     EXPECT_TRUE(withdrawsFirst(landscape, "void landscapeMoveUi("));
-    const std::string now = Between(landscape, "void landscapeLeaveNow(", "\n}\n");
-    EXPECT_LT(now.find("withdrawCompletionFlip();"), now.find("landscapeMoveUi("));
-    EXPECT_NE(Between(SourceText("../SwitchOverlayRegisters.h"), "void planeWriteWindowRegisters(", "\n}\n")
-                  .find("if (w == switch_landscape::kA)\n        withdrawCompletionFlip();"),
-              std::string::npos);
-    const std::string may = Between(SourceText("../SwitchCompletionFlipDisplay.h"), "bool completionFlipMay(", "\n}\n");
+    EXPECT_TRUE(Block(landscape, "void landscapeLeaveNow(").Before("withdrawCompletionFlip();", "landscapeMoveUi("));
+    EXPECT_TRUE(Block(SourceText("../SwitchOverlayRegisters.h"), "void planeWriteWindowRegisters(")
+                    .Has("if (w == switch_landscape::kA) withdrawCompletionFlip();"));
+    const std::string flips = SourceText("../SwitchCompletionFlipDisplay.h");
+    const CodeText may = Block(flips, "bool completionFlipMay(");
     for (const char *owner : {"columnScanBusy()", "windowProbeBusy()", "landscapeOn()", "landscapeHoldsKicks()"})
-        EXPECT_NE(may.find(owner), std::string::npos) << owner;
-    EXPECT_EQ(Between(SourceText("../SwitchCompletionFlipDisplay.h"), "LatchState latchState()", "\n}\n")
-                  .find("windowActive("),
-              std::string::npos);
+        EXPECT_TRUE(may.Has(owner));
+    EXPECT_FALSE(Block(flips, "LatchState latchState()").Has("windowActive("));
 }
 
 }  // namespace

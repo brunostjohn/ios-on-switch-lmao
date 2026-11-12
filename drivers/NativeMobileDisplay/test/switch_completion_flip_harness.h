@@ -12,6 +12,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../../TegraDisplayFlip/TegraScanoutCopy.h"
@@ -174,6 +175,7 @@ struct DcModel {
     Aperture winbuf = kLands;
     unsigned selectorWrites = 0, boundaries = 0;
     std::vector<uint32_t> written;
+    std::function<void()> beforeWrite;  // another CPU's work landing just ahead of the next write
 
     static int aperture(uint32_t word)
     {
@@ -191,6 +193,8 @@ struct DcModel {
 
     void write(uint32_t word, uint32_t value)
     {
+        if (const auto before = std::exchange(beforeWrite, nullptr))
+            before();
         if (!clocked)
             throw std::runtime_error("a write to DC A while it is unclocked");
         written.push_back(word);
