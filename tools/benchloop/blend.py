@@ -2,7 +2,7 @@
 
 A table (`iterated-blend/1`, JSON) holds one blend's microcode and what it should compute:
 
-    {"format": "iterated-blend/1", "name": "multiply", "passes": 1, "alpha": true,
+    {"format": "iterated-blend/1", "name": "multiply", "passes": 1, "alpha": false,
      "instructions": [{"operation": "ADD_PRODUCTS", "operand_a": "SRC_RGB", "operand_b": "DEST_RGB",
                        "operand_c": "SRC_RGB", "operand_d": "ONE_MINUS_DEST_AAA", "pass_output": "TEMP0"},
                       "0x302a0000"],
@@ -14,8 +14,10 @@ A table (`iterated-blend/1`, JSON) holds one blend's microcode and what it shoul
 
 An instruction is a LOAD_ITERATED_BLEND_INSTRUCTION word, given whole (a hex string) or by the fields clb197.h
 names, each value one of that field's names there (or a number). `passes` is SET_ITERATED_BLEND_PASS and `alpha`
-SET_ITERATED_BLEND's ALPHA_ENABLE; `constants` are SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j) words; `methods` are
-other state the blend needs (SET_BLEND(0), the per-target blend) set with it, from protocol.METHOD_RANGES. `rgb` and `a`
+SET_ITERATED_BLEND's ALPHA_ENABLE, which takes alpha from an R_TO_A pass; without it alpha comes from the common blend
+block, set to source over here (the unit refuses per-target blend state and runs only under SET_BLEND(0)).
+`constants` are SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j) words; `methods` are other state the blend needs, set
+with it, from protocol.METHOD_RANGES. `rgb` and `a`
 are formula.py expressions; `tolerance` is in codes of the target. Each experiment draws one source colour per column
 over one destination colour per row and reads every texel back.
 """
@@ -133,8 +135,10 @@ class Table:
             raise TableError(f'not an {TABLE_FORMAT} table')
         self.name = fields['name']
         self.passes = int(fields.get('passes', 1))
-        self.alpha = bool(fields.get('alpha', True))
+        self.alpha = bool(fields.get('alpha', False))
         self.words = [instruction(i) for i in fields['instructions']]
+        if self.alpha != any(field_values(w)['output_swizzle'] == 'R_TO_A' for w in self.words):
+            raise TableError(f'{self.name}: alpha (ALPHA_ENABLE) goes with an R_TO_A pass, and only with one')
         self.constants = [[int(c) & 0xFFFFFFFF for c in rgb] for rgb in fields.get('constants', [])]
         self.extra = [list(p) for p in fields.get('methods', [])]
         self.rgb = formula.Formula(fields['rgb'])
@@ -152,15 +156,16 @@ class Table:
 
     def methods(self, blend_enable: bool | None) -> tuple[list[list[int]], list[list[int]]]:
         """Give the methods set with the draw, and the ones that set the state back after it."""
-        set_up = [[SET_ITERATED_BLEND_PASS, self.passes], [LOAD_POINTER, 0]]
+        common = [[0x12E4, 0], [0x133C, 1], [0x1340, 0x8006], [0x1344, 0x4001], [0x1348, 0x4000]]
+        common += [[0x134C, 0x8006], [0x1350, 0x4001], [0x1358, 0x4303]]
+        set_up = [*common, [SET_ITERATED_BLEND_PASS, self.passes], [LOAD_POINTER, 0]]
         set_up += [[LOAD_INSTRUCTION, w] for w in self.words]
         for j, (r, g, b) in enumerate(self.constants):
             set_up += [[CONSTANT_RED + 16 * j, r], [CONSTANT_RED + 16 * j + 4, g], [CONSTANT_RED + 16 * j + 8, b]]
         set_up += self.extra
-        restore = [[m, 0] for m, _ in self.extra]
-        if blend_enable is not None:
-            set_up.append([0x1360, int(blend_enable)])  # SET_BLEND(0)
-            restore.append([0x1360, 0])
+        restore = [[m, 0] for m, _ in self.extra] + [[0x12E4, 1]]
+        set_up.append([0x1360, int(blend_enable is not False)])  # SET_BLEND(0): the unit runs only under it
+        restore.append([0x1360, 0])
         set_up.append([SET_ITERATED_BLEND, 1 | int(self.alpha) << 1])
         restore += [[SET_ITERATED_BLEND, 0], [SET_ITERATED_BLEND_PASS, 0]]
         return set_up, restore

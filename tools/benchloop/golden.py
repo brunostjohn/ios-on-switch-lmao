@@ -65,7 +65,7 @@ def golden_batch() -> dict:
                 [SET_ITERATED_BLEND_PASS, 1],
                 [LOAD_ITERATED_BLEND_INSTRUCTION_POINTER, 0],
                 [LOAD_ITERATED_BLEND_INSTRUCTION, 0x302A0000],
-                [SET_ITERATED_BLEND, 3],
+                [SET_ITERATED_BLEND, 1],
             ],
             'restore': [[SET_ITERATED_BLEND, 0], [SET_ITERATED_BLEND_PASS, 0]],
             'readback': 'full',

@@ -1,4 +1,4 @@
-"""The batch and result files the host and HW Test's bench loop exchange (benchloop/3).
+"""The batch and result files the host and HW Test's bench loop exchange (benchloop/4).
 
 A batch is one JSON object; each experiment in it is validated here before it is written, and again by the app
 (hw_test_app/bench) before it runs. Byte strings travel as base64. Limits keep every command buffer far below the
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from tools.benchloop import ibprogram
 
-PROTOCOL = 'benchloop/3'
+PROTOCOL = 'benchloop/4'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod', 'pack')
 TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
@@ -28,6 +28,8 @@ MAX_COMMAND_BUFFERS = 1024
 MAX_CODE = 64 * 1024
 MAX_DATA = 64 * 1024
 MAX_METHOD_PAIRS = 1024
+# A draw's zeroed storage buffer (its address written into the shader data), at most
+MAX_STORAGE = 16 * 1024 * 1024
 MAX_GROUPS = 65535
 MAX_THREADS = 1024
 SPH_BYTES = 80
@@ -79,6 +81,7 @@ METHOD_RANGES = (
     (0x113C, 0x1140),  # SET_FILL_VIA_TRIANGLE
     (0x1140, 0x1144),  # SET_BLEND_PER_FORMAT_ENABLE
     (0x1220, 0x1224),  # SET_COMPRESSION_THRESHOLD
+    (0x1224, 0x1228),  # SET_PIXEL_SHADER_INTERLOCK_CONTROL: the bench's own runtime takes it without a storage form
     (0x12E0, 0x12E8),  # SET_ALPHA_TO_COVERAGE_DITHER_CONTROL, SET_BLEND_STATE_PER_TARGET
     (0x131C, 0x132C),  # SET_BLEND_CONST_RED..ALPHA
     (0x133C, 0x1360),  # SET_BLEND_SEPARATE_FOR_ALPHA..SET_SINGLE_ROP_CONTROL
@@ -110,6 +113,7 @@ EXPERIMENT_KEYS = {
 }
 EXPERIMENT_KEYS |= {'program', 'compute', 'twod', 'methods', 'restore', 'targets', 'source', 'compare', 'compressed'}
 EXPERIMENT_KEYS |= {'pack'}
+EXPERIMENT_KEYS |= {'storage'}
 EXPERIMENT_KEYS |= {'meta', 'expect'}
 TARGET_KEYS = {'format', 'width', 'height'}
 PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
@@ -460,6 +464,8 @@ def _forms(e: dict, target: Target) -> None:
         _twod(e, target)
     else:
         _require('source' not in e, 'only twod experiments read a source')
+    if 'storage' in e:
+        _storage(e)
     if 'compressed' in e:
         _require(e['kind'] == 'readback' and _flag(e['compressed'], 'compressed'), 'compressed: a readback target')
     if 'compare' in e:
@@ -538,6 +544,27 @@ def encode_batch(b: dict) -> bytes:
     """Give the bytes pushed to the device: one line of sorted JSON."""
     sent = {**b, 'experiments': [wire(e) for e in b['experiments']]}
     return (json.dumps(sent, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+
+def _storage(e: dict) -> None:
+    s = e['storage']
+    _require(e['kind'] in ('fragment', 'readback') and isinstance(s, dict), 'storage is an object, for draws')
+    _keys(s, {'bytes', 'va_at', 'readback'}, 'storage')
+    size, at = s.get('bytes'), s.get('va_at', 0)
+    _require(
+        isinstance(size, int) and 4 <= size <= MAX_STORAGE and size % 4 == 0, 'storage.bytes: words, 16 MiB at most'
+    )
+    data = unb64(e['program']['data'])
+    _require(isinstance(at, int) and at % 8 == 0 and 0 <= at <= len(data) - 8, 'storage.va_at: 8 bytes of the data')
+    _require(s.get('readback', 'summary') in ('summary', 'full'), 'storage.readback is summary or full')
+
+
+def storage_words(result: dict) -> dict[int, int] | None:
+    """Give the storage buffer's words and how many of each the result returned, None without any."""
+    s = result.get('storage')
+    if not s:
+        return None
+    return {int(d['value'], 16): d['count'] for d in s.get('distinct', [])}
 
 
 def decode_result(data: bytes) -> dict:

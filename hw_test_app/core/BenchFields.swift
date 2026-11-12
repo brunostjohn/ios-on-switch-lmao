@@ -82,13 +82,14 @@ struct BenchFields {
             }
             templateKey = key
         }
+        let storage = try self.storage(fields["storage"], kind: kind, data: program?.data ?? Data())
         var experiment = BenchExperiment(
             id: id, kind: kind, format: format, formatRaw: info.raw, texelBytes: info.bytes, width: UInt32(width),
             height: UInt32(height), rect: rect.map(UInt32.init), clear: clear, fill: fill, program: program,
             threads: threads.map(UInt32.init), groups: groups.map(UInt32.init), draws: draws.map(UInt32.init),
             repeats: UInt32(repeats), warmup: UInt32(warmup), methods: methods, restore: restore, readback: readback,
             singleTarget: targets == 1, templateKey: templateKey, twod: forms.twod, source: forms.source,
-            compare: forms.compare, compressed: forms.compressed, outputBytes: outputBytes)
+            compare: forms.compare, compressed: forms.compressed, outputBytes: outputBytes, storage: storage)
         (experiment.chain, experiment.chainSchedule) = chain
         if kind == .pack {
             guard templateKey != 0 else { throw BenchInvalid("pack: the state's key hash in template") }
@@ -185,6 +186,22 @@ struct BenchFields {
     static func keys(_ object: [String: Any], _ allowed: Set<String>, _ field: String) throws {
         let unknown = Set(object.keys).subtracting(allowed).sorted()
         guard unknown.isEmpty else { throw BenchInvalid("\(field): unknown field \(unknown.joined(separator: ", "))") }
+    }
+
+    private func storage(_ value: Any?, kind: BenchKind, data: Data) throws -> BenchStorage? {
+        guard let value else { return nil }
+        guard kind == .fragment || kind == .readback, let s = value as? [String: Any] else {
+            throw BenchInvalid("storage is an object, for fragment and readback")
+        }
+        let bytes = try count(s["bytes"], 4...BenchProtocol.maxStorage, "storage.bytes")
+        let vaAt = try count(s["va_at"], 0...max(0, data.count - 8), "storage.va_at")
+        guard bytes % 4 == 0, vaAt % 8 == 0, data.count >= 8 else {
+            throw BenchInvalid("storage: 4-byte words, its address at an 8-byte step of the data")
+        }
+        guard let readback = BenchReadback(rawValue: s["readback"] as? String ?? "summary"), readback != .none else {
+            throw BenchInvalid("storage.readback is summary or full")
+        }
+        return BenchStorage(bytes: UInt32(bytes), vaAt: UInt32(vaAt), readback: readback)
     }
 
     func bytes(_ value: Any, _ field: String) throws -> Data {

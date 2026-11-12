@@ -2,7 +2,7 @@
   "format": "iterated-blend/1",
   "name": "multiply-example",
   "passes": 1,
-  "alpha": true,
+  "alpha": false,
   "instructions": [
     {
       "operation": "ADD_PRODUCTS",

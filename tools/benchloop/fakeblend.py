@@ -4,7 +4,8 @@ Only a stand-in for the loop's tests, which the device's readback experiments ex
 
 An instruction computes OPERATION over its products A*B and C*D (ADD and SUBTRACT over A and C alone), swizzles it,
 writes the masked lanes to its PASS_OUTPUT temp, and NONE makes it the pass's result, which the next pass reads as PBR.
-Alpha with ALPHA_ENABLE is source over destination.
+Alpha is source over destination (the common blend block blend.py sets), or with ALPHA_ENABLE the R lane of the last
+R_TO_A pass.
 """
 
 from dataclasses import dataclass, field
@@ -91,7 +92,8 @@ def apply(words: list[int], passes: int, alpha: bool, colours: tuple[Colour, Col
             elif out.startswith('TEMP'):
                 s.temps[int(out[-1])] = value
         s.pbr = result
-    a = src[3] + dst[3] * (1 - src[3]) if alpha else src[3]
+    to_alpha = [_instruction(w, s)[0] for w in words if blend.field_values(w)['output_swizzle'] == 'R_TO_A']
+    a = to_alpha[-1] if alpha and to_alpha else src[3] + dst[3] * (1 - src[3])
     return s.pbr[0], s.pbr[1], s.pbr[2], a
 
 

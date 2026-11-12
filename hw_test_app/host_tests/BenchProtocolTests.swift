@@ -88,7 +88,7 @@ final class BenchProtocolTests: XCTestCase {
         XCTAssertEqual(fragment.program?.gprs, 4)
         XCTAssertEqual(fragment.commandBuffers, 21)
         let readback = experiments[4]
-        XCTAssertEqual(readback.methods, [0xDD4, 1, 0xDF0, 0, 0xDF4, 0x302A_0000, 0xDD0, 3])
+        XCTAssertEqual(readback.methods, [0xDD4, 1, 0xDF0, 0, 0xDF4, 0x302A_0000, 0xDD0, 1])
         XCTAssertEqual(readback.restore, [0xDD0, 0, 0xDD4, 0])
         XCTAssertEqual(readback.fill?.count, 4 * 2 * 4)
         XCTAssertEqual(experiments[3].threads, [32, 1, 1])

@@ -20,6 +20,7 @@ constexpr uint32_t kTriangleStrip = 4, kBgra8 = 80;
 constexpr uint64_t kKeyBase = 0xbe7c000000000000ull;
 // Placed programs stay in the device's shader heap for its life: a long session starts a fresh device now and then
 constexpr uint64_t kRecordsPerDevice = 4096;
+constexpr uint32_t kMaxStorage = 16u << 20;
 constexpr uint8_t kUnwritten = 0xa5;  // an output buffer's bytes before a kernel runs, so a word it never wrote shows
 // QMDV01_07 (clb1c0qmd.h) for a chain: DEPENDENT_QMD_POINTER (word 5); word 6's SEMAPHORE_RELEASE_ENABLE0 (bit 202) and
 // DEPENDENT_QMD_SCHEDULE_ENABLE, DEPENDENT_QMD_TYPE GRID and DEPENDENT_QMD_FIELD_COPY (205-207, NAK's QMD 1.7 form,
@@ -89,6 +90,10 @@ bool valid(const switch_bench_experiment &x, switch_bench_result &r)
         why = "program.sph: a pixel header must read position W (bit 191), or the GPU traps it";
     else if (why.empty() && x.output_bytes && (x.output_bytes % 16 || x.output_bytes > 0x10000 || p.data_bytes < 16))
         why = "compute output: 16-byte steps up to 64 KiB, its address in shader data of at least 16 bytes";
+    else if (why.empty() && x.storage_bytes &&
+             ((x.kind != SWITCH_BENCH_FRAGMENT && x.kind != SWITCH_BENCH_READBACK) || x.storage_bytes % 4 ||
+              x.storage_bytes > kMaxStorage || x.storage_va_at % 8 || size_t(x.storage_va_at) + 8 > p.data_bytes))
+        why = "storage: 4-byte words, at most 16 MiB, for a draw, its address at an 8-byte step of the data";
     if (why.empty())
         return true;
     bench::fail(r, SWITCH_BENCH_INVALID, why);
@@ -129,7 +134,8 @@ bench::Methods pairs(const uint32_t *words, uint32_t count)
 // The experiment's draws into colour 0: compressed, its texels through a staging texture, else written and read by the
 // CPU. `into` gets the texels
 bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *pipeline,
-              const std::vector<uint32_t> &others, bool compressed, uint8_t *into, switch_bench_result &r)
+              const std::vector<uint32_t> &others, bool compressed, uint8_t *into, switch_bench_result &r,
+              const raw::Buffer *storage = nullptr)
 {
     raw::Device &d = *b.device;
     const uint32_t bpp = raw::formatInfo(x.format)->bpp;
@@ -140,6 +146,7 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
         return false;
     }
     bool ran = bench::makeTarget(d, x, others, compressed, t, r);
+    t.storage = storage;
     if (ran && compressed) {
         t.staging = &staging;
         r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1, 0, 0};
@@ -155,21 +162,53 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
     return ran;
 }
 
+// The experiment's storage buffer, zeroed under a CPU write lease (fill's reason), for as long as the experiment runs
+struct Storage {
+    raw::Device &device;
+    raw::Buffer buffer;
+    bool made = false;
+
+    Storage(raw::Device &d, uint32_t bytes) : device(d)
+    {
+        made = bytes && d.createBuffer(bytes, buffer, true);
+        raw::HostAccess lease;
+        if (made && !(made = d.hostAccess(buffer, true, lease)))
+            d.destroyBuffer(buffer);
+        if (made)
+            memset(buffer.cpu, 0, bytes);
+    }
+    Storage(const Storage &) = delete;
+    Storage &operator=(const Storage &) = delete;
+
+    ~Storage()
+    {
+        if (made)
+            device.destroyBuffer(buffer);
+    }
+};
+
 void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
 {
     raw::Device &d = *b.device;
+    Storage storage(d, x.storage_bytes);
+    if (x.storage_bytes && !storage.made)
+        return bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the storage buffer");
     const bool samples = x.kind != SWITCH_BENCH_NOOP && bench::samplesTexture(program(x));
     const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key)
                                    : samples      ? b.textured
                                                   : b.fragment;
     raw::Pipeline *pipeline = nullptr;
-    if (x.kind != SWITCH_BENCH_NOOP && !(pipeline = bench::pixelPipeline(b, x, r, x.single_target != 0)))
+    const uint64_t storageVa = storage.made ? storage.buffer.va : 0;
+    if (x.kind != SWITCH_BENCH_NOOP && !(pipeline = bench::pixelPipeline(b, x, r, x.single_target != 0, storageVa)))
         return;
     std::vector<uint32_t> others;
     if (tpl && !x.single_target && x.kind != SWITCH_BENCH_NOOP)
         others = bench::otherFormats(d.pack().string(tpl->keyString));
-    if (!drawInto(b, x, pipeline, others, x.compressed != 0, r.texels, r))
+    if (!drawInto(b, x, pipeline, others, x.compressed != 0, r.texels, r, storage.made ? &storage.buffer : nullptr))
         return;
+    raw::HostAccess read;
+    if (storage.made && r.storage && r.storage_bytes >= x.storage_bytes && d.hostAccess(storage.buffer, false, read))
+        memcpy(r.storage, storage.buffer.cpu, x.storage_bytes);
     if (x.compare == SWITCH_BENCH_COMPARE_PLAIN && r.compare_texels) {
         bench::CompareRun plain(x, r);
         drawInto(b, x, pipeline, others, false, r.compare_texels, plain.r);
@@ -477,10 +516,12 @@ bool readBack(raw::Device &d, const raw::Texture &t, const switch_bench_experime
 }
 
 raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,
-                             bool firstColourOnly)
+                             bool firstColourOnly, uint64_t storageVa)
 {
     raw::Device &d = *b.device;
-    const bench::Program fs = program(x);
+    bench::Program fs = program(x);
+    if (storageVa)
+        memcpy(fs.data.data() + x.storage_va_at, &storageVa, sizeof storageVa);
     const raw::PackPipeline *tpl = x.template_key       ? fragmentTemplate(d.pack(), x.template_key)
                                    : samplesTexture(fs) ? b.textured
                                                         : b.fragment;
@@ -569,6 +610,8 @@ bool Submission::render(Target &t, raw::Pipeline *pipeline, uint32_t draws, uint
     raw::CommandBuffer *cb = d.begin();
     if (!cb)
         return error("no channel: " + d.channelError());
+    if (t.storage)
+        cb->use(*t.storage, true);
     const uint32_t w = x_.width, h = x_.height;
     if (t.staging) {
         raw::BlitEncoder *in = cb->blit();

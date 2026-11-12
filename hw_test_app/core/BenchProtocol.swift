@@ -4,7 +4,9 @@ import Foundation
 /// tools/benchloop/protocol.py's batch as the bench loop decodes it: every limit and allowed method range is the
 /// same (tools/benchloop/agreement_test.py compares them), so the host's and the app's checks agree.
 public enum BenchProtocol {
-    public static let version = "benchloop/3"
+    public static let version = "benchloop/4"
+    /// benchloop/3 is benchloop/4 without storage and the interlock control
+    public static let versions = ["benchloop/3", version]
     public static let maxExperiments = 256
     public static let maxSide = 2048
     public static let maxDrawCounts = 16
@@ -15,6 +17,7 @@ public enum BenchProtocol {
     public static let maxCode = 64 * 1024
     public static let maxData = 64 * 1024
     public static let maxMethodPairs = 1024
+    public static let maxStorage = 16 * 1024 * 1024
     public static let maxGroups = 65535
     public static let maxThreads = 1024
     public static let sphBytes = 80
@@ -49,7 +52,7 @@ public enum BenchProtocol {
     public static let methodRanges: [(UInt32, UInt32)] = [
         (0x02E0, 0x02E4), (0x02F4, 0x02F8), (0x0754, 0x0758), (0x0D9C, 0x0DA0), (0x0DD0, 0x0DD8), (0x0DF0, 0x0DF8),
         (0x0F40, 0x0F54), (0x0F90, 0x0F94), (0x0FAC, 0x0FB0), (0x0FDC, 0x0FE0), (0x10CC, 0x10D0), (0x10E0, 0x10F4),
-        (0x113C, 0x1140), (0x1140, 0x1144), (0x1220, 0x1224), (0x12E0, 0x12E8), (0x131C, 0x132C), (0x133C, 0x1360),
+        (0x113C, 0x1140), (0x1140, 0x1144), (0x1220, 0x1224), (0x1224, 0x1228), (0x12E0, 0x12E8), (0x131C, 0x132C), (0x133C, 0x1360),
         (0x1360, 0x1380), (0x13A8, 0x13AC), (0x1480, 0x1500), (0x15B8, 0x15BC), (0x19C0, 0x19C4), (0x1A00, 0x1A20),
         (0x1E00, 0x1F00), (0x2600, 0x2604),
     ]
@@ -58,7 +61,7 @@ public enum BenchProtocol {
     public static let experimentKeys: Set<String> = [
         "id", "kind", "target", "rect", "draws", "repeats", "warmup", "clear", "readback", "template", "fill",
         "program",
-        "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed", "pack",
+        "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed", "pack", "storage",
     ]
     public static let targetKeys: Set<String> = ["format", "width", "height"]
     public static let programKeys: Set<String> = ["code", "data", "sph", "gprs"]
@@ -212,8 +215,17 @@ public struct BenchExperiment: Equatable, Sendable {
     public var chainSchedule: UInt32 = 0
     /// A pack experiment's form and quads (its state is templateKey)
     public var pack: BenchPack?
+    public var storage: BenchStorage? = nil
 
     public var commandBuffers: Int { draws.count * Int(repeats + warmup) }
+}
+
+/// A zeroed GPU buffer the app allocates for one draw experiment: its address goes into the shader data at `vaAt`, and
+/// its words come back with the result
+public struct BenchStorage: Equatable, Sendable {
+    public let bytes: UInt32
+    public let vaAt: UInt32
+    public let readback: BenchReadback
 }
 
 /// A batch's experiments in order; one that fails its checks is kept with why, so its result says so.
@@ -237,8 +249,8 @@ public struct BenchBatch: Sendable {
         guard let top = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
             throw BenchInvalid("not a JSON object")
         }
-        guard top["protocol"] as? String == BenchProtocol.version else {
-            throw BenchInvalid("protocol is not \(BenchProtocol.version)")
+        guard let version = top["protocol"] as? String, BenchProtocol.versions.contains(version) else {
+            throw BenchInvalid("protocol is not one of \(BenchProtocol.versions)")
         }
         guard let name = top["batch"] as? String, BenchProtocol.validName(name) else {
             throw BenchInvalid("batch name")

@@ -40,8 +40,10 @@ class TableTest(unittest.TestCase):
     def test_methods_are_ones_the_device_takes(self) -> None:
         table = blend.Table.load(EXAMPLE)
         methods, restore = table.methods(True)
-        self.assertEqual(methods[0], [blend.SET_ITERATED_BLEND_PASS, 1])
-        self.assertEqual(methods[-1], [blend.SET_ITERATED_BLEND, 3])
+        self.assertEqual(methods[0], [0x12E4, 0], 'per-target blend off: the unit takes the common block')
+        self.assertIn([blend.SET_ITERATED_BLEND_PASS, 1], methods)
+        self.assertIn([0x1360, 1], methods)
+        self.assertEqual(methods[-1], [blend.SET_ITERATED_BLEND, 1])
         self.assertIn([blend.SET_ITERATED_BLEND, 0], restore)
         self.assertTrue(all(protocol.method_allowed(m) for m, _ in methods + restore))
 

@@ -24,6 +24,7 @@ LIMITS = {
     'maxCode': 'MAX_CODE',
     'maxData': 'MAX_DATA',
     'maxMethodPairs': 'MAX_METHOD_PAIRS',
+    'maxStorage': 'MAX_STORAGE',
     'maxGroups': 'MAX_GROUPS',
     'maxThreads': 'MAX_THREADS',
     'sphBytes': 'SPH_BYTES',

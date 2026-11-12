@@ -141,6 +141,9 @@ struct switch_bench_experiment {
     const struct switch_bench_program *chain;
     uint32_t chain_links, chain_schedule;
     struct switch_bench_pack pack;
+    // fragment, readback: a zeroed GPU buffer of storage_bytes (0: none) for the experiment's life, its 64-bit address
+    // written into the shader data at byte storage_va_at
+    uint32_t storage_bytes, storage_va_at;
 };
 
 // What the app did, so a result proves its own form
@@ -172,6 +175,8 @@ struct switch_bench_result {
     uint32_t launches;
     uint8_t *frontier;
     size_t frontier_bytes;
+    uint8_t *storage;  // the storage buffer after the last command buffer, the caller's (null: none read)
+    size_t storage_bytes;
 };
 
 struct switch_bench;

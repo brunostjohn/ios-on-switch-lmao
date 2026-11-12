@@ -121,6 +121,7 @@ final class BenchRunner {
                 form: Self.packForms[p.form]!.rawValue, ca_transform: p.ca ? 1 : 0, quads: pinned.values(quads),
                 quad_count: UInt32(quads.count))
         }
+        (x.storage_bytes, x.storage_va_at) = (e.storage?.bytes ?? 0, e.storage?.vaAt ?? 0)
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()
@@ -134,6 +135,9 @@ final class BenchRunner {
         let frontierRoom = (e.pack?.quads.count ?? 0) * Self.frontierBytes
         r.frontier = frontierRoom > 0 ? pinned.zeroed(UInt8.self, frontierRoom) : nil
         r.frontier_bytes = frontierRoom
+        let storageBytes = Int(e.storage?.bytes ?? 0)
+        r.storage = storageBytes > 0 ? pinned.zeroed(UInt8.self, storageBytes) : nil
+        r.storage_bytes = storageBytes
         switch_bench_run(bench, &x, &r)
         var outcome = BenchOutcome(status: Self.statuses[Int(r.status)], why: Self.text(&r.why))
         let gpu = Array(UnsafeBufferPointer(start: r.gpu_ns, count: timed))
@@ -152,6 +156,7 @@ final class BenchRunner {
             if let frontier = r.frontier, e.pack != nil {
                 outcome.split = (Int(r.launches), Data(bytes: frontier, count: r.frontier_bytes))
             }
+            if let storage = r.storage { outcome.storage = Data(bytes: storage, count: storageBytes) }
         }
         if r.form.set != 0 {
             outcome.form = [

@@ -8,6 +8,8 @@ public struct BenchOutcome: Sendable {
     /// reused before it was read) and the host's commit-to-fence time, both in nanoseconds
     public var runs: [(draws: UInt32, gpuNs: [UInt64], wallNs: [UInt64])] = []
     public var texels: Data?
+    /// The experiment's storage buffer after its last command buffer
+    public var storage: Data?
     public var lostError: UInt32 = 0
     public var faultVA: UInt64 = 0
     public var templateKey: UInt64 = 0
@@ -45,6 +47,9 @@ public enum BenchResult {
             if let texels = outcome.texels, e.readback != .none {
                 top["texels"] = texelFields(texels, e)
             }
+            if let storage = outcome.storage, let s = e.storage {
+                top["storage"] = storageFields(storage, full: s.readback == .full)
+            }
             if let other = outcome.compareTexels, let texels = outcome.texels, e.readback != .none {
                 top["compare"] = [
                     "with": e.compare ?? "", "status": "ok", "texels": texelFields(other, e),
@@ -79,6 +84,23 @@ public enum BenchResult {
         }
         let bytes = try? JSONSerialization.data(withJSONObject: top, options: [.sortedKeys])
         return (bytes ?? Data()) + Data("\n".utf8)
+    }
+
+    /// Every different 32-bit word of the storage buffer with how many there are, none left out (a lost update is one
+    /// odd word among millions), and with `full` the words themselves
+    static func storageFields(_ storage: Data, full: Bool) -> [String: Any] {
+        var counts: [UInt32: Int] = [:]
+        storage.withUnsafeBytes { raw in
+            for at in stride(from: 0, to: raw.count - raw.count % 4, by: 4) {
+                counts[UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at, as: UInt32.self)), default: 0] += 1
+            }
+        }
+        var fields: [String: Any] = [
+            "bytes": storage.count,
+            "distinct": counts.keys.sorted().map { ["value": hex(UInt64($0), digits: 8), "count": counts[$0]!] },
+        ]
+        if full { fields["data"] = storage.base64EncodedString() }
+        return fields
     }
 
     static func texelFields(_ texels: Data, _ e: BenchExperiment) -> [String: Any] {

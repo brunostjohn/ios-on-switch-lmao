@@ -36,6 +36,8 @@ struct Target {
     raw::Texture *staging = nullptr;
     const raw::Texture *image = nullptr;  // what the template's texture entries sample; null: the bench's picture
     bool linear = false;                  // they sample it filtered (else nearest)
+    // The experiment's storage buffer: the addressed job ABI resolves only the addresses a command buffer names
+    const raw::Buffer *storage = nullptr;
 };
 
 void fail(switch_bench_result &r, uint32_t status, const std::string &why);
@@ -55,8 +57,9 @@ bool makeTarget(raw::Device &d, const switch_bench_experiment &x, const std::vec
 void destroyTarget(raw::Device &d, Target &t);
 // The caller's pixel program in the template's state, made a pipeline of the device; null: `r` says why.
 // `firstColourOnly`: the state without the template's other colours, for a pass that binds colour 0 alone
+// `storageVa`: written into the shader data at x.storage_va_at (0: none)
 raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,
-                             bool firstColourOnly);
+                             bool firstColourOnly, uint64_t storageVa = 0);
 // The experiment's command buffers into `t`, fill first where it has one; false: `r` says why
 bool timeDraws(switch_bench &b, const switch_bench_experiment &x, Target &t, raw::Pipeline *pipeline,
                switch_bench_result &r);
