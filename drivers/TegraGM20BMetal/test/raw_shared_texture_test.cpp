@@ -255,10 +255,14 @@ TEST(RawSharedTexture, EveryShapeIsTheImageTheRawPathLaysOut)
 
 TEST(RawTextureLayers, EveryTextureTypeHasMetalsSlices)
 {
-    static_assert(raw::kType1D == MTLTextureType1D && raw::kType1DArray == MTLTextureType1DArray &&
-                  raw::kType2D == MTLTextureType2D && raw::kType2DArray == MTLTextureType2DArray &&
-                  raw::kType2DMultisample == MTLTextureType2DMultisample && raw::kTypeCube == MTLTextureTypeCube &&
-                  raw::kTypeCubeArray == MTLTextureTypeCubeArray && raw::kType3D == MTLTextureType3D);
+    const auto same = [](uint32_t ours, MTLTextureType metal) {
+        return ours == uint32_t(metal);
+    };
+    EXPECT_TRUE(same(raw::kType1D, MTLTextureType1D) && same(raw::kType1DArray, MTLTextureType1DArray) &&
+                same(raw::kType2D, MTLTextureType2D) && same(raw::kType2DArray, MTLTextureType2DArray) &&
+                same(raw::kType2DMultisample, MTLTextureType2DMultisample) &&
+                same(raw::kTypeCube, MTLTextureTypeCube) && same(raw::kTypeCubeArray, MTLTextureTypeCubeArray) &&
+                same(raw::kType3D, MTLTextureType3D));
 
     const struct {
         uint32_t type, arrayLength, layers;

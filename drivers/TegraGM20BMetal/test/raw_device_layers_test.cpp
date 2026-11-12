@@ -78,6 +78,8 @@ protected:
             p.image.assign(80 + 64, 0);
             p.gprs = 8;
         }
+        r.programs[0].id = viewportIndex ? "vs-viewport" : "vs";  // (placed programs are shared by id)
+        r.programs[1].id = "fs";
         if (viewportIndex)
             r.programs[0].image[53] |= 4;
         r.pipeline.keyHash = key;
