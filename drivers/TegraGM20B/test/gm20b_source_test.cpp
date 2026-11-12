@@ -389,7 +389,7 @@ TEST(GM20BPresentSource, OneL2FlushPerPresent)
 		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels(");
 	EXPECT_THAT(copy,
 		    HasSubstr("if (dst_va) chan_fence_volatile(chan); else chan_fence(chan);"));
-	const std::string fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
+	const std::string fence = flat(definition(gpu(), "static u32 chan_fence_job("));
 	expectBefore(fence, "NVB06F_FB_FLUSH, 0); if (external != TGM_FENCE_VOLATILE_WRITES) {",
 		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY");
 }

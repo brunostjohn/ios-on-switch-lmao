@@ -226,8 +226,8 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         raw::tEncodeProfile = &profile;
 #endif
         size_t refusedEncoder = range.to;
-        rmStorageTargetsPlain(cb, range.from, range.to);
         cb->_rangeQuiet = raw::quietEnd(rangeEnd(cb, last, followed, observed));
+        rmStorageTargetsPlain(cb, range.from, range.to);
         const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
         raw::tEncodeProfile = nullptr;
