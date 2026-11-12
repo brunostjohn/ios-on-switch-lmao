@@ -130,6 +130,17 @@ host_test(
 )
 
 host_test(
+    name = "tegra_vic_compose_test",
+    srcs = [
+        "libdrm/vic40.h",
+        "tegra_vic_compose_test.cpp",
+        "//drivers/TegraVIC:TegraVICCompose.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+)
+
+host_test(
     name = "tegra_vic_band_test",
     srcs = [
         "tegra_vic_band_test.cpp",
