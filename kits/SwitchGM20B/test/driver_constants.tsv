@@ -75,6 +75,10 @@ raw_mme.h	kNoEntry	policy	a patch execute's layout word for a control-stage buff
 raw_mme.h	kIcbSetBytes	policy	NVK's descriptor set slot (raw_gpu.cpp kSetBytes), as the patch macro selects it
 raw_mme.h	kIcbRootBytes	policy	NVK's root descriptor table size (raw_gpu.cpp kRootBytes), as the patch macro selects it
 raw_mme.h	kIcbPatchesArguments	policy	the patch macro's call data words
+raw_mme.h	kAmplify	policy	raw macro slot
+raw_mme.h	kAmplifyIndexed	policy	raw macro slot
+raw_mme.h	kAmplifyCallWords	policy	push words of an amplify call: its header and an indexed draw's five words
+raw_mme.h	kAmplificationScratchWords	policy	push words of the amplify macros' scratch writes: the count, both maps, a state's words
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size
