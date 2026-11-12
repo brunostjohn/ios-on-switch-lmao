@@ -448,6 +448,7 @@ retry:
     const int status = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_VIC, words, n, gSyncpt,
                                                 static_cast<uint32_t>(gQueue.submitted + count));
     uint32_t end = 0;
+    const uint32_t ahead = gQueue.count ? gQueue.last() : SwitchVICQueue::kSlots;
     const switch_gpu_bridge *bridge = nullptr;
     if (!status) {
         uint32_t boundUs = 0;
@@ -473,7 +474,7 @@ retry:
         const auto &last = gQueue.jobs[end];
         bridge = last.bridge;
         if (const int error = Stages::start(end, gSyncpt, static_cast<uint32_t>(last.fence), bridge != nullptr,
-                                            last.semantics != nullptr, boundUs, producers))
+                                            last.semantics != nullptr, boundUs, producers, ahead))
             Retirement::unarmed(end, error);
         IOLockWakeup(gLock, &gQueue.count, false);
     } else if (useCount) {

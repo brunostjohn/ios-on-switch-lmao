@@ -4,6 +4,12 @@
 // all the same (the CPU releases it), so the job's Wait answers with the producer's failure instead of the frame coded
 // from memory nobody wrote. The cancelled job is recorded failed before that release; a semantic failure counts once
 // it is retired.
+//
+// The same producers decide when NVENC's stall bound counts. NVENC runs its jobs in order, each behind the producers
+// its stream waits for, so a wait on a fence whose jobs still have a producer running is held up upstream, not
+// stalled: the producer's own bound cancels the producer, which releases its syncpoint and NVENC's stream. wait()
+// gives NVENC's bound a full round once every input is in, and only a round that began that way and ran out is
+// NVENC's stall.
 #pragma once
 #include <IOKit/IOLocks.h>
 #include "../TegraGM20B/SwitchGpuBacking.h"
@@ -49,7 +55,53 @@ public:
         return 0;
     }
 
+    // The jobs after `reached` up to `fence`: true once every producer they read has run or failed on its engine.
+    bool ready(uint32_t reached, uint32_t fence) const
+    {
+        bool in = true;
+        each(reached, fence, [&](const switch_gpu_backing_token &producer) {
+            in = in && switch_gpu_backing_token_physical_status(&producer, 0) != 0;
+        });
+        return in;
+    }
+
+    // Sleeps until those producers have ended on their engines, as each one's own bound and cancellation see to.
+    void awaitProducers(uint32_t reached, uint32_t fence) const
+    {
+        each(reached, fence, [](const switch_gpu_backing_token &producer) {
+            if (!switch_gpu_backing_token_physical_status(&producer, 0))
+                (void)switch_gpu_backing_token_wait(&producer);
+        });
+    }
+
+    // NVENC's bounded wait for `fence` (bounded() returns `timedOut` once its bound ran out), its bound counted from
+    // when the inputs are in.
+    template <class Bounded> int wait(uint32_t reached, uint32_t fence, int timedOut, Bounded bounded) const
+    {
+        for (;;) {
+            const bool in = ready(reached, fence);
+            const int result = bounded();
+            if (result != timedOut || in)
+                return result;
+            awaitProducers(reached, fence);
+        }
+    }
+
 private:
+    template <class Visit> void each(uint32_t reached, uint32_t fence, Visit visit) const
+    {
+        const auto queued = static_cast<int32_t>(fence - reached);
+        for (int32_t k = queued > static_cast<int32_t>(kJobs) ? queued - static_cast<int32_t>(kJobs) : 0; k < queued;
+             ++k) {
+            const uint32_t at = reached + 1 + static_cast<uint32_t>(k);
+            IOLockLock(lock_);
+            const Job job = jobs_[at % kJobs];
+            IOLockUnlock(lock_);
+            for (uint32_t i = 0; job.fence == at && i < job.count; ++i)
+                visit(job.producers[i]);
+        }
+    }
+
     struct Job {
         uint32_t fence, count;
         switch_gpu_backing_token producers[kProducers];

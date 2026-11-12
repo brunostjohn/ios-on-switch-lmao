@@ -383,6 +383,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
         error = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_DEFAULT, work.words, n, gSyncpt,
                                          static_cast<uint32_t>(gQueue.next()));
         const uint32_t queued = gQueue.tail();
+        const uint32_t ahead = gQueue.count ? (queued + SwitchNVDECQueue::kSlots - 1) % SwitchNVDECQueue::kSlots
+                                            : SwitchNVDECQueue::kSlots;
         const switch_gpu_bridge *bridge = nullptr;
         if (!error) {
             gQueue.publish(began, dependencies.takeBridge(), batch.value, outcome.take(), completion);
@@ -395,7 +397,7 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
             const auto &job = gQueue.jobs[queued];
             bridge = job.bridge;
             if (const int failed = Stages::start(queued, gSyncpt, *fence, bridge != nullptr, job.semantics != nullptr,
-                                                 kWaitBoundUs, producers))
+                                                 kWaitBoundUs, producers, ahead))
                 Retirement::unarmed(queued, failed);
             IOLockWakeup(gLock, &gQueue.count, false);
         } else {

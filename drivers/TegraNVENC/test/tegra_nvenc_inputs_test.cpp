@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <tuple>
+#include <vector>
 #include "drivers/TegraNVENC/TegraNVENCInputs.h"
 
 namespace {
@@ -33,6 +34,18 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *t
 }
 
 namespace {
+// The producer's engine ending it while NVENC waits: its own bound passed and it was cancelled (-5), or it ran (1).
+int gEnds = -5, gProducerWaits;
+}  // namespace
+
+extern "C" int switch_gpu_backing_token_wait(const switch_gpu_backing_token *token)
+{
+    ++gProducerWaits;
+    gPhysical[key(*token)] = gStatus[key(*token)] = gEnds;
+    return gEnds;
+}
+
+namespace {
 const switch_gpu_backing_token kVicInput = {0x700000101ULL, 1, SWITCH_GPU_ENGINE_VIC, 161};
 const switch_gpu_backing_token kDecode = {0x400000033ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
 const switch_gpu_backing_token kGpu = {9, 1, SWITCH_GPU_ENGINE_GM20B, 3};
@@ -44,7 +57,18 @@ struct NVENCInputs : testing::Test {
     {
         gPhysical.clear();
         gStatus.clear();
+        gEnds = -5;
+        gProducerWaits = 0;
         ASSERT_TRUE(inputs.start());
+    }
+
+    static constexpr int kTimedOut = -60;
+    int rounds = 0;
+
+    // NVENC's bounded syncpoint wait, answering each round in turn.
+    int wait(uint32_t reached, uint32_t fence, std::vector<int> answers)
+    {
+        return inputs.wait(reached, fence, kTimedOut, [&] { return answers.at(rounds++); });
     }
 };
 
@@ -94,5 +118,57 @@ TEST_F(NVENCInputs, EachFenceHasItsOwnProducersUntilItsSlotIsReused)
     inputs.record(504 + TegraNVENCInputs::kJobs, &kDecode, 1);
     EXPECT_EQ(inputs.failure(504), 0) << "no longer known";
     EXPECT_EQ(inputs.failure(504 + TegraNVENCInputs::kJobs), 0);
+}
+
+// An encode behind a stalled VIC input is held up upstream: the round that runs out while the input is still running
+// is not NVENC's stall. The wait sleeps until VIC's own bound has cancelled the input, then gives NVENC a full round,
+// in which the encode runs; the Wait answers with VIC's failure and NVENC is never reset.
+TEST_F(NVENCInputs, AnUpstreamStallNeverResetsNVENC)
+{
+    inputs.record(600, &kVicInput, 1);
+    gPhysical[key(kVicInput)] = 0;
+    EXPECT_EQ(wait(599, 600, {kTimedOut, 0}), 0);
+    EXPECT_EQ(rounds, 2);
+    EXPECT_EQ(gProducerWaits, 1);
+    EXPECT_EQ(inputs.failure(600), -5);
+}
+
+// A job queued ahead of the one waited for holds it up as well: its producer counts.
+TEST_F(NVENCInputs, AProducerOfAJobAheadHoldsUpTheWaitToo)
+{
+    inputs.record(600, &kDecode, 1);
+    inputs.record(601, nullptr, 0);
+    gPhysical[key(kDecode)] = 0;
+    EXPECT_EQ(wait(599, 601, {kTimedOut, 0}), 0);
+    EXPECT_EQ(gProducerWaits, 1);
+}
+
+// Every input in when the round began: a round that runs out is NVENC's own stall, which the caller cancels.
+TEST_F(NVENCInputs, AStallAfterTheInputsCameInStillResetsNVENC)
+{
+    inputs.record(600, &kVicInput, 1);
+    EXPECT_EQ(wait(599, 600, {kTimedOut}), kTimedOut);
+    EXPECT_EQ(rounds, 1);
+    EXPECT_EQ(gProducerWaits, 0);
+}
+
+// An input still running when the first round began, then done: NVENC still gets a whole round from then, and a stall
+// in it is NVENC's.
+TEST_F(NVENCInputs, AnInputThatEndsDuringARoundGivesNVENCAWholeRoundAfterIt)
+{
+    inputs.record(600, &kVicInput, 1);
+    gPhysical[key(kVicInput)] = 0;
+    gEnds = 1;
+    EXPECT_EQ(wait(599, 600, {kTimedOut, kTimedOut}), kTimedOut);
+    EXPECT_EQ(rounds, 2);
+    EXPECT_EQ(gProducerWaits, 1);
+}
+
+TEST_F(NVENCInputs, AReachedFenceAsksNothing)
+{
+    inputs.record(600, &kVicInput, 1);
+    gPhysical[key(kVicInput)] = 0;
+    EXPECT_EQ(wait(600, 600, {0}), 0);
+    EXPECT_EQ(gProducerWaits, 0);
 }
 }  // namespace
