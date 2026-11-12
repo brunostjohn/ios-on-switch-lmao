@@ -40,13 +40,15 @@ struct Memory {
 	std::map<uint64_t, Pte> ptes;  // by GPU page number
 	std::map<const uint8_t *, std::array<uint8_t, kLine>> l2;  // by the line's first byte
 	std::map<const uint8_t *, uint64_t> dirty;                 // l2's written lines: their valid bytes
-	uint64_t lastPage = ~0ull;
+	// One translation per direction: a copy alternates its reads and writes between two surfaces
+	uint64_t lastPage[2] = {~0ull, ~0ull};
+	const Pte *lastPte[2] = {};
 	const Pte *last = nullptr;
 
 	void map(uint64_t va, uint8_t *bytes, uint64_t size, bool readOnly, bool cached = false)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
-		last = nullptr;
+		last = lastPte[0] = lastPte[1] = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
 			ptes[(va + at) / kPage] = {nullptr, bytes + at, 0,
 						   std::min(kPage, size - at), readOnly, cached};
@@ -55,7 +57,7 @@ struct Memory {
 	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false, bool cached = false)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
-		last = nullptr;
+		last = lastPte[0] = lastPte[1] = nullptr;
 		for (uint64_t at = 0; at < buffer.size(); at += kPage)
 			ptes[(va + at) / kPage] = {&buffer, nullptr, at, 0, readOnly, cached};
 	}
@@ -97,7 +99,7 @@ struct Memory {
 
 	void unmap(uint64_t va, uint64_t size)
 	{
-		last = nullptr;
+		last = lastPte[0] = lastPte[1] = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
 			ptes.erase((va + at) / kPage);
 	}
@@ -117,13 +119,14 @@ struct Memory {
 	uint8_t *at(uint64_t va, bool write = false)
 	{
 		const uint64_t page = va / kPage, offset = va % kPage;
-		if (page != lastPage || !last) {
+		if (page != lastPage[write] || !lastPte[write]) {
 			const auto it = ptes.find(page);
 			if (it == ptes.end())
 				return nullptr;
-			lastPage = page;
-			last = &it->second;
+			lastPage[write] = page;
+			lastPte[write] = &it->second;
 		}
+		last = lastPte[write];
 		if (offset >= last->valid() || (write && last->readOnly))
 			return nullptr;
 		return last->base() + offset;

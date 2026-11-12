@@ -43,10 +43,11 @@ struct CopyEngine {
 	{
 	}
 
-	uint64_t blockLinear(const Side &s, uint32_t xB, uint32_t y) const
+	// `texelBytes`: the remap's texel, bpp()
+	uint64_t blockLinear(const Side &s, uint32_t texelBytes, uint32_t xB, uint32_t y) const
 	{
 		const uint32_t yLog2 = (s.blockSize >> 4) & 0xf;
-		return tgm_layout_offset_of(s.width * bpp(), uint8_t(yLog2), xB, y);
+		return tgm_layout_offset_of(s.width * texelBytes, uint8_t(yLog2), xB, y);
 	}
 
 	uint32_t bpp() const
@@ -83,12 +84,11 @@ struct CopyEngine {
 			return;
 		}
 		uint32_t copied = 0;
+		const uint32_t pitchIn = m[0x0410], pitchOut = m[0x0414];
 		for (uint32_t y = 0; y < h; y++)
 			for (uint32_t x = 0; x < w * b; x++) {
-				const uint64_t s = srcPitch ? in + uint64_t(y) * m[0x0410] + x
-							    : in + blockLinear(src, x, y);
-				const uint64_t d = dstPitch ? out + uint64_t(y) * m[0x0414] + x
-							    : out + blockLinear(dst, x, y);
+				const uint64_t s = srcPitch ? in + uint64_t(y) * pitchIn + x : in + blockLinear(src, b, x, y);
+				const uint64_t d = dstPitch ? out + uint64_t(y) * pitchOut + x : out + blockLinear(dst, b, x, y);
 				uint8_t *ps = memory.at(s), *pd = memory.at(d, true);
 				if (!ps || !pd) {
 					fault = true;
