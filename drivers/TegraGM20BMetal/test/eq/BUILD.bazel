@@ -66,7 +66,7 @@ cc_binary(
         "CoreFoundation",
     ],
     deps = [
-        "//drivers/TegraGM20BMetal/test:raw_runtime_host",
+        "//drivers/TegraGM20BMetal/test:raw_runtime_marked",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",

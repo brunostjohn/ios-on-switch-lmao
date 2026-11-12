@@ -3273,6 +3273,16 @@ host_library(
     copts = RAW_HOST_COPTS,
     cxx_std = "c++17",
     sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+)
+
+# eq's raw side: raw_gpu.cpp marks each fetch barrier it leaves out and each draw it splits, for eqcheck
+host_library(
+    name = "raw_runtime_marked",
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS + ["-DSWITCH_RAW_HARNESS_MARKS"],
+    cxx_std = "c++17",
+    sanitize = False,
     visibility = ["//drivers/TegraGM20BMetal/test/eq:__pkg__"],
     deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
 )
