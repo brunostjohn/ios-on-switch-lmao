@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs (or updates) this Mac's remote-execution worker as two LaunchAgents and starts them.
 #
-#   install.sh <dir with bb_worker and bb_runner> <frontend host:port> <scheduler host:port> <cache GiB> <actions>
+#   install.sh <dir with bb_worker and bb_runner> <frontend host:port> <scheduler host:port> <cache GiB> <actions> [floor GiB]
 #
 # cache.token (aud bazel-cache) and worker.token (aud bazel-worker) must already be in the install directory.
 set -eu
@@ -11,6 +11,8 @@ frontend=${2:?}
 scheduler=${3:?}
 cache_gib=${4:?}
 concurrency=${5:?}
+# Free GiB under which the worker takes no work. Leave it above the cache's room to grow plus the agents' own floor.
+floor_gib=${6:-20}
 
 here=$(cd "$(dirname "$0")" && pwd)
 home="$HOME/Library/Application Support/switch-ios/bazel-worker"
@@ -69,6 +71,8 @@ plist() {
 		<string>$concurrency</string>
 		<key>SWITCH_WORKER_HOST</key>
 		<string>$host</string>
+		<key>SWITCH_WORKER_FLOOR_GIB</key>
+		<string>$floor_gib</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
