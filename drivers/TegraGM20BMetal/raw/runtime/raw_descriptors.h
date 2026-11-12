@@ -23,6 +23,11 @@ public:
         return address_;
     }
 
+    void forget()
+    {
+        address_ = 0;
+    }
+
 private:
     DescriptorWords words_ = {};
     uint64_t address_ = 0;
@@ -61,6 +66,14 @@ public:
         }
         pipeline_ = pipeline;
         return &value_;
+    }
+
+    // The GPU loaded words into the set it uploaded last: the next resolve builds and uploads one of its own
+    void forget()
+    {
+        value_ = {};
+        pipeline_ = nullptr;
+        snapshot_.forget();
     }
 
 private:

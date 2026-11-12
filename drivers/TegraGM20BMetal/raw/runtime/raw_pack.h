@@ -324,10 +324,9 @@ struct PackPipeline {
     // are RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
     // vertexStrideDynamic: stream 0's stride is its bind's (MTLBufferLayoutStrideDynamic).
     uint8_t controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic;
-    // A state of vertex amplification: its maxVertexAmplificationCount (0: 1), the push word + 1 of m2v's AmplificationId
-    // (0: none), which each amplification's draw writes, and whether its functions read [[amplification_count]] (m2v
-    // specializes it: the state's count is the only one its draws take)
-    uint8_t amplificationMax, amplificationIdWord, amplificationCountRead, amplificationReserved;
+    // A state of vertex amplification: its maxVertexAmplificationCount (0: 1), and the push words + 1 of m2v's
+    // AmplificationId and AmplificationCount (0: none), which each draw writes (its [[amplification_count]] is the draw's)
+    uint8_t amplificationMax, amplificationIdWord, amplificationCountWord, amplificationReserved;
     // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
     // index and push word + 1 (0: none)
     uint8_t pulledStride[4][2];

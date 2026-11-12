@@ -97,6 +97,8 @@ static void replayInvocation(NSInvocation *inv, id target)
 // nothing encoded and the command buffer's error set, where an attachment of one of its passes has no twin.
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
+    if (rmRefuseM2vRange(cb, from, to))
+        return nil;
     if (void *missing = missingAttachmentTwin(cb, from, to)) {
         failMissingTwin(cb, (__bridge id)missing);
         return nil;

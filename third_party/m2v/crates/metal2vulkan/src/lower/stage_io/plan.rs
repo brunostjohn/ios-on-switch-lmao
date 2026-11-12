@@ -595,6 +595,13 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
             });
             return Ok(());
         }
+        // Drawn one amplification at a time, a stage reads the count from the push word the binder
+        // writes with each amplification's, so one pipeline draws at every count.
+        (ParamRole::Builtin(Builtin::AmplificationCount), Stage::Vertex | Stage::Fragment)
+            if cx.inputs.amplification_draws.is_some() =>
+        {
+            return pushed(cx, b, ty, PushField::AmplificationCount);
+        }
         // Vulkan has no builtin for the count: the binder specializes it.
         (ParamRole::Builtin(Builtin::AmplificationCount), _) => {
             let f = amplification_count_form(cx, ty)?;

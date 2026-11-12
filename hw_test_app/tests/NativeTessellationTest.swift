@@ -9,7 +9,9 @@ import Metal
 /// multiples of 4/16, and the drawn pixels are patch 0's half of the target. A patch index buffer of {1, 0} draws patch
 /// 1's control points with patch 0's factors (Metal's patch index addresses control points, the position the factors),
 /// so the other half is drawn. Where the device answers supportsIndirectTessellation, an indirect draw of the same patch
-/// from GPU-written arguments draws patch 0's half again. Every command buffer stays raw.
+/// from GPU-written arguments draws patch 0's half again, and so do the two forms as an indirect command buffer's patch
+/// commands, each with its own factor buffer and patch index buffer, each executed alone by its range under the inherited
+/// state, then both in one execute, which paints the whole target. Every command buffer stays raw.
 struct NativeTessellationTest: NativeObjectTest {
     let id = "metal.native.tessellation"
     let name = "Quad patches tessellated in hardware from GPU-written factors, exact to Metal's integer partitioning"
@@ -53,10 +55,10 @@ struct NativeTessellationTest: NativeObjectTest {
         SIMD4(0, -1, 0, 1), SIMD4(1, -1, 0, 1), SIMD4(1, 1, 0, 1), SIMD4(0, 1, 0, 1),
     ]
 
-    /// Pixels that are not green in the drawn half (`left`) and black in the other
-    static func wrong(_ pixels: [UInt8], left: Bool) -> Int {
+    /// Pixels that are not green in the drawn half (`left`, or both where `both`) and black in the other
+    static func wrong(_ pixels: [UInt8], left: Bool, both: Bool = false) -> Int {
         (0..<size * size).filter { i in
-            let drawn = (i % size < size / 2) == left
+            let drawn = both || (i % size < size / 2) == left
             let want: [UInt8] = drawn ? [0, 255, 0, 255] : [0, 0, 0, 255]
             return Array(pixels.pixel(i % size, i / size, width: size)) != want
         }.count
@@ -76,7 +78,8 @@ struct NativeTessellationTest: NativeObjectTest {
         let device = gpu.device
         var work = NativeWork()
         let library = try await device.makeLibrary(source: Self.source, options: nil)
-        guard let post = library.makeFunction(name: "quad_post"), let factorsKernel = library.makeFunction(name: "quad_factors"),
+        guard let post = library.makeFunction(name: "quad_post"),
+            let factorsKernel = library.makeFunction(name: "quad_factors"),
             let argumentsKernel = library.makeFunction(name: "patch_arguments")
         else { throw TestFailure("missing tessellation functions") }
         let vertices = MTLVertexDescriptor()
@@ -92,6 +95,7 @@ struct NativeTessellationTest: NativeObjectTest {
         descriptor.tessellationPartitionMode = .integer
         descriptor.tessellationFactorStepFunction = .perPatch
         descriptor.maxTessellationFactor = 16
+        descriptor.supportIndirectCommandBuffers = true
         let pipeline = try await device.makeRenderPipelineState(descriptor: descriptor)
         let factorState = try await device.makeComputePipelineState(function: factorsKernel)
         let argumentState = try await device.makeComputePipelineState(function: argumentsKernel)
@@ -102,10 +106,13 @@ struct NativeTessellationTest: NativeObjectTest {
             let arguments = device.makeBuffer(length: 16, options: .storageModePrivate)
         else { throw TestFailure("no private factor or argument buffer") }
         let patchOrder = try gpu.buffer([UInt32](arrayLiteral: 1, 0))
-        let indirect = (device as AnyObject as! NSObject).value(forKey: "supportsIndirectTessellation") as? Bool ?? false
+        let indirect =
+            (device as AnyObject as! NSObject).value(forKey: "supportsIndirectTessellation") as? Bool ?? false
         metrics.set("indirect", indirect ? "yes" : "no")
 
-        for form in ["direct", "indexed"] + (indirect ? ["indirect"] : []) {
+        let patchCommands = indirect ? try Self.commands(device, factors, patchOrder) : nil
+        if let patchCommands { work.objects.append(patchCommands) }
+        for form in ["direct", "indexed"] + (indirect ? ["indirect", "icb", "icb_indexed", "icb_both"] : []) {
             let target = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
             let seen = try gpu.buffer([UInt32](repeating: 0, count: Self.grid * Self.grid))
             let timing = try await gpu.run { commands in
@@ -115,11 +122,13 @@ struct NativeTessellationTest: NativeObjectTest {
                 var level = Self.level
                 compute.setBytes(&level, length: 4, index: 1)
                 compute.dispatchThreadgroups(
-                    MTLSize(width: 2, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                    MTLSize(width: 2, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
                 compute.setComputePipelineState(argumentState)
                 compute.setBuffer(arguments, offset: 0, index: 0)
                 compute.dispatchThreadgroups(
-                    MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                    MTLSize(width: 1, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
                 compute.endEncoding()
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target
@@ -140,6 +149,11 @@ struct NativeTessellationTest: NativeObjectTest {
                     encoder.drawPatches(
                         numberOfPatchControlPoints: 4, patchStart: 0, patchCount: 1, patchIndexBuffer: patchOrder,
                         patchIndexBufferOffset: 0, instanceCount: 1, baseInstance: 0)
+                case "icb", "icb_indexed", "icb_both":
+                    encoder.useResource(factors, usage: .read, stages: .vertex)
+                    encoder.useResource(patchOrder, usage: .read, stages: .vertex)
+                    let range = form == "icb" ? 0..<1 : form == "icb_indexed" ? 1..<2 : 0..<2
+                    encoder.executeCommandsInBuffer(patchCommands!, range: range)
                 default:
                     encoder.drawPatches(
                         numberOfPatchControlPoints: 4, patchIndexBuffer: nil, patchIndexBufferOffset: 0,
@@ -148,7 +162,9 @@ struct NativeTessellationTest: NativeObjectTest {
                 encoder.endEncoding()
             }
             work.paths.append(timing.path)
-            let wrongPixels = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), left: form != "indexed")
+            let wrongPixels = Self.wrong(
+                try await gpu.read(target, bytesPerPixel: 4), left: !form.hasSuffix("indexed"), both: form == "icb_both"
+            )
             let wrongPoints = Self.wrongPoints(seen)
             metrics.set("\(form)_wrong_pixels", wrongPixels)
             metrics.set("\(form)_wrong_points", wrongPoints)
@@ -156,5 +172,29 @@ struct NativeTessellationTest: NativeObjectTest {
             if wrongPoints != 0 { work.failures.append("\(form): \(wrongPoints) domain points wrong at level 4") }
         }
         return work
+    }
+
+    /// Patch commands of an indirect command buffer that inherits its state: both patches from the factors (patch 1 is
+    /// culled), then patch 0's factors over patch 1's control points through the patch index buffer
+    static func commands(
+        _ device: MTLDevice, _ factors: MTLBuffer, _ patchOrder: MTLBuffer
+    ) throws
+        -> MTLIndirectCommandBuffer
+    {
+        let descriptor = MTLIndirectCommandBufferDescriptor()
+        descriptor.commandTypes = [.drawPatches]
+        descriptor.inheritPipelineState = true
+        descriptor.inheritBuffers = true
+        guard let commands = device.makeIndirectCommandBuffer(descriptor: descriptor, maxCommandCount: 2, options: [])
+        else { throw TestFailure("makeIndirectCommandBuffer returned nil for patch commands") }
+        commands.indirectRenderCommandAt(0).drawPatches(
+            4, patchStart: 0, patchCount: 2, patchIndexBuffer: nil, patchIndexBufferOffset: 0, instanceCount: 1,
+            baseInstance: 0, tessellationFactorBuffer: factors, tessellationFactorBufferOffset: 0,
+            tessellationFactorBufferInstanceStride: 0)
+        commands.indirectRenderCommandAt(1).drawPatches(
+            4, patchStart: 0, patchCount: 1, patchIndexBuffer: patchOrder, patchIndexBufferOffset: 0, instanceCount: 1,
+            baseInstance: 0, tessellationFactorBuffer: factors, tessellationFactorBufferOffset: 0,
+            tessellationFactorBufferInstanceStride: 0)
+        return commands
     }
 }

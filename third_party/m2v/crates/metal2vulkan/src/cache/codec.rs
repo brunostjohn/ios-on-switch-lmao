@@ -835,6 +835,7 @@ codec_enum! {
         Specialized(f0),
         ColorWriteRule(f0),
         HalfBlendColor,
+        AmplificationCount,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }

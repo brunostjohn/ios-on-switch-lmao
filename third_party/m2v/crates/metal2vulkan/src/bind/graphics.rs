@@ -1305,6 +1305,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::AmplificationId
                 | PushField::AmplificationLayerOffset
                 | PushField::AmplificationViewportOffset
+                | PushField::AmplificationCount
                     if matches!(field.loc, PushLoc::Push { .. }) => {}
                 PushField::VertexBufferStride(layout) if stage == Stage::Vertex => {
                     match pulled_stride(layout) {
@@ -3529,7 +3530,8 @@ fn instantiate_into(
                 // The first amplification's; `amplifications` writes each before its draw.
                 PushField::AmplificationId
                 | PushField::AmplificationLayerOffset
-                | PushField::AmplificationViewportOffset => FieldBytes::of(
+                | PushField::AmplificationViewportOffset
+                | PushField::AmplificationCount => FieldBytes::of(
                     &amplification_word(f.field, 0, &t.amplifications)?.to_le_bytes(),
                 ),
                 PushField::BaseVertexInstance => {
@@ -3765,6 +3767,8 @@ fn amplification_word(field: PushField, a: usize, offsets: &[[u32; 2]]) -> Resul
         }
         PushField::AmplificationLayerOffset => layer,
         PushField::AmplificationViewportOffset => viewport,
+        PushField::AmplificationCount => u32::try_from(offsets.len().max(1))
+            .map_err(|_| internal("an amplification count past 2^32"))?,
         other => return Err(internal(format!("{other:?} is no amplification field"))),
     })
 }
@@ -3783,6 +3787,7 @@ fn amplification_writes(t: &GraphicsTemplate) -> Result<Vec<Vec<PushConstantWrit
                     PushField::AmplificationId
                         | PushField::AmplificationLayerOffset
                         | PushField::AmplificationViewportOffset
+                        | PushField::AmplificationCount
                 ) {
                     continue;
                 }

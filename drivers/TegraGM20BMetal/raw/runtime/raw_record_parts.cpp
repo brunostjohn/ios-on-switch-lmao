@@ -317,7 +317,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     memcpy(p.vertexStreams, parts.vertexStreams, sizeof p.vertexStreams);
     p.amplificationMax = parts.amplificationMax;
     p.amplificationIdWord = parts.amplificationIdWord;
-    p.amplificationCountRead = parts.amplificationCountRead;
+    p.amplificationCountWord = parts.amplificationCountWord;
     const uint32_t colors = targets(key);
     std::map<uint32_t, uint32_t> regs;
     for (const auto &[m, v] : parts.regs)

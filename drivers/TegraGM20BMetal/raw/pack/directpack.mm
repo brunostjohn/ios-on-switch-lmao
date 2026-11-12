@@ -77,7 +77,7 @@ const char *runtimeOnly(const raw::PackPipeline &p)
     for (const auto &pulled : p.pulledStride)
         if (pulled[1])
             return "a pulled vertex buffer of a dynamic stride, which the runtime makes";
-    if (p.amplificationMax || p.amplificationIdWord || p.amplificationCountRead)
+    if (p.amplificationMax || p.amplificationIdWord || p.amplificationCountWord)
         return "vertex amplification, which the runtime makes";
     return nullptr;
 }

@@ -148,6 +148,7 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
     s->_keyed = f && !descriptor.linkedFunctions.functions.count &&
                 !descriptor.linkedFunctions.privateFunctions.count && airOf(function, s->_air);
     s->_constants = (f ? f->_constants : "") + stageInText(descriptor.stageInputDescriptor);
+    s->_m2vMissing = rmM2vMissingKernel(descriptor);
     s->_maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];

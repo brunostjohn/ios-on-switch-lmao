@@ -73,7 +73,7 @@ std::shared_ptr<RMICBBlock> newBlock(RMIndirectComputeBuffer *b, uint32_t bytes)
 std::shared_ptr<RMKernelSet> rmCommandKernels(RMComputeState *pipeline, const RMICBDispatch &c,
                                               raw::ComputeDispatch &shape)
 {
-    if (!pipeline || !pipeline->_keyed || !c.dispatched || c.stageIn)
+    if (!pipeline || !pipeline->_keyed || !c.dispatched)
         return nullptr;
     shape = raw::computeDispatch(c.grid, c.threads, c.perThread, pipeline->_threadLimit);
     if (shape.reason != raw::ComputeDispatch::Ready || !shape.count)
@@ -110,16 +110,21 @@ void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&o
     }
 }
 
-bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape,
-                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const RMICBBlock &block,
-                      raw::icb::ComputeCommand &words, const char **why)
+bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape, const RMICBDispatch &c,
+                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const std::array<uint32_t, 31> &strides,
+                      const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why)
 {
+    raw::StageIn stageIn;
+    stageIn.strides = strides;
+    if (c.stageIn)
+        stageIn.setRegion({c.stageInRegion.origin.x, c.stageInRegion.origin.y, c.stageInRegion.origin.z,
+                           c.stageInRegion.size.width, c.stageInRegion.size.height, c.stageInRegion.size.depth});
     uint32_t at = 0;
     words.regions = kernels.count;
     for (uint8_t region = 0; region < kernels.count; ++region) {
         const raw::ComputeState &k = *kernels.jobs[region]->value();
         if (!raw::ComputeEncoder::icbRegion(*gRM->raw, k, shape.regions[region], shape.grid, shape.nominal, buffers,
-                                            block.cpu + at, block.va + at, why))
+                                            stageIn, block.cpu + at, block.va + at, why))
             return false;
         words.qmd[region] = block.va + at;
         at += raw::icb::computeRegionBytes(k.rec->setBytes);
@@ -156,7 +161,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     raw::ComputeEncoder::IcbBuffer buffers[31];
     rmCommandBuffers(c, buffers);
     const char *why = nullptr;
-    if (!c.block || !rmCommandRegions(*c.kernels, shape, buffers, *c.block, c.words, &why)) {
+    if (!c.block || !rmCommandRegions(*c.kernels, shape, c, buffers, c.strides, *c.block, c.words, &why)) {
         SWITCH_REFUSE_DETAIL("raw", "icb.region", uintptr_t(why), "indirect dispatch command %lu: %s",
                              (unsigned long)index, why ? why : "no memory for its regions");
         raw::icb::computeEmpty(computeSlot(self, index));
@@ -229,6 +234,15 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 
 - (void)setKernelBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
+    [self setKernelBuffer:buffer offset:offset attributeStride:NSUIntegerMax atIndex:index];
+}
+
+// A stage-in kernel's layout of MTLBufferLayoutStrideDynamic reads the stride (StageInStride); any other ignores it
+- (void)setKernelBuffer:(id<MTLBuffer>)buffer
+                 offset:(NSUInteger)offset
+        attributeStride:(NSUInteger)stride
+                atIndex:(NSUInteger)index
+{
     if (_buffer->_inheritBuffers || index >= 31) {
         SWITCH_REFUSE("raw", "icb.inherited",
                       "an indirect dispatch command set a buffer its buffer inherits or past 30");
@@ -238,16 +252,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     [self edit:^(RMICBDispatch &c) {
         c.buffers[index] = b;
         c.offsets[index] = offset;
+        c.strides[index] = stride >= raw::kNoBindStride ? raw::kNoBindStride : uint32_t(stride);
     }];
-}
-
-- (void)setKernelBuffer:(id<MTLBuffer>)buffer
-                 offset:(NSUInteger)offset
-        attributeStride:(NSUInteger)stride
-                atIndex:(NSUInteger)index
-{
-    (void)buffer, (void)offset, (void)stride, (void)index;
-    SWITCH_REFUSE("raw", "icb.stride", "setKernelBuffer:offset:attributeStride:atIndex:: no dynamic attribute stride");
 }
 
 - (void)setThreadgroupMemoryLength:(NSUInteger)length atIndex:(NSUInteger)index
@@ -261,7 +267,6 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     }];
 }
 
-// The compute encoder's setStageInRegion: is m2v's: a command that sets one runs there too
 - (void)setStageInRegion:(MTLRegion)region
 {
     [self edit:^(RMICBDispatch &c) {

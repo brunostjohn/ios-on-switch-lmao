@@ -69,6 +69,12 @@ raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
 raw_mme.h	kIcbGate	policy	raw macro slot
 raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kIcbPatches	policy	raw macro slot
+raw_mme.h	kScratchSetHi	policy	MME shadow scratch words of a patch execute's layout, after the range's
+raw_mme.h	kNoEntry	policy	a patch execute's layout word for a control-stage buffer its state names no entry of
+raw_mme.h	kIcbSetBytes	policy	NVK's descriptor set slot (raw_gpu.cpp kSetBytes), as the patch macro selects it
+raw_mme.h	kIcbRootBytes	policy	NVK's root descriptor table size (raw_gpu.cpp kRootBytes), as the patch macro selects it
+raw_mme.h	kIcbPatchesArguments	policy	the patch macro's call data words
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

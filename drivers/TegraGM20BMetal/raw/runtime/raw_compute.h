@@ -22,6 +22,7 @@
 #include "raw_compute_record.h"
 #include "raw_dispatch_regions.h"
 #include "raw_gpu.h"
+#include "raw_stage_in.h"
 
 namespace raw {
 
@@ -89,12 +90,15 @@ public:
     };
 
     // One region of an indirect dispatch command of kernel `k` (raw_icb_compute.h): its QMD, root table and set 0 written at
-    // `block` (GPU address `va`, icb::computeRegionBytes(k.rec->setBytes) long). False: refused (*why), as a dispatch is.
+    // `block` (GPU address `va`, icb::computeRegionBytes(k.rec->setBytes) long), the command's stage-in words in its root
+    // table. False: refused (*why), as a dispatch is.
     static bool icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
                           const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
-                          const IcbBuffer (&buffers)[31], uint8_t *block, uint64_t va, const char **why);
-    // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written
-    void inheritBuffers(IcbBuffer (&out)[31]);
+                          const IcbBuffer (&buffers)[31], const StageIn &stageIn, uint8_t *block, uint64_t va,
+                          const char **why);
+    // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written,
+    // and their bind strides
+    void inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 31> &strides);
     // Memory of this command buffer's upload ring the GPU reads, 256-byte aligned
     uint8_t *upload(uint32_t bytes, uint64_t &va);
 
@@ -146,16 +150,7 @@ private:
     uint64_t setVa_ = 0, rootVa_ = 0;
     std::array<uint32_t, 3> grid_{};
     std::array<uint32_t, 8> region_{};
-    std::array<uint32_t, 8> stageIn_{};  // origin xyz, 0, size xyz, 0: m2v's StageInRegion field
-    std::array<uint32_t, 31> strides_ = filledStrides();
-    static constexpr std::array<uint32_t, 31> filledStrides()
-    {
-        std::array<uint32_t, 31> s{};
-        for (uint32_t &v : s)
-            v = UINT32_MAX;
-        return s;
-    }
-    void stageInWords(const PackKernel &r, uint32_t *push) const;
+    StageIn stageIn_;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);

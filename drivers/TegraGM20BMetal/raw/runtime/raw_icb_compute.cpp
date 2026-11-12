@@ -12,12 +12,14 @@ namespace raw {
 namespace {
 
 constexpr uint8_t kConstexprSamplerSlot = 0x80;
+constexpr uint32_t kRootPush = 0x700;
 
 }  // namespace
 
 bool ComputeEncoder::icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
                                const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
-                               const IcbBuffer (&buffers)[31], uint8_t *block, uint64_t va, const char **why)
+                               const IcbBuffer (&buffers)[31], const StageIn &stageIn, uint8_t *block, uint64_t va,
+                               const char **why)
 {
     const PackKernel &r = *k.rec;
     const uint32_t setBytes = icb::computeSetBytes(r.setBytes);
@@ -65,11 +67,13 @@ bool ComputeEncoder::icbRegion(Device &dev, const ComputeState &k, const Compute
         return false;
     }
     rootWords(r, region.groups.data(), setVa, residualMask, residuals, words, root);
+    stageInWords(r, stageIn, root + kRootPush / 4);
     return qmdWords(k, region.groups.data(), rootVa, setVa, qmd, why);
 }
 
-void ComputeEncoder::inheritBuffers(IcbBuffer (&out)[31])
+void ComputeEncoder::inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 31> &strides)
 {
+    strides = stageIn_.strides;
     for (uint32_t slot = 0; slot < 31; slot++) {
         const Bound &b = bufs_[slot];
         out[slot] = {b.va, b.size};

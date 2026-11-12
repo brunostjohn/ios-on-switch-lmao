@@ -21,7 +21,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{
     GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType, SlotClass,
-    SlotInterface, SlotRef, SpecKey, Stage, StandInView, StorageAttachmentView, TextureSlot, VertexStride,
+    SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot, VertexStride,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -104,7 +104,7 @@ pub struct NmbDirectDraw {
     pub pulled_strides: [[u32; 2]; 4],
     pub amplification_max: u32,
     pub amplification_id_word: u32,
-    pub amplification_count_read: u32,
+    pub amplification_count_word: u32,
     pub variant: *const c_char,
 }
 
@@ -769,12 +769,7 @@ fn draw_of(
         pulled_strides: [[0; 2]; 4],
         amplification_max: amplification,
         amplification_id_word: 0,
-        amplification_count_read: pipeline.stages.iter().any(|s| {
-            s.specialization
-                .constants
-                .iter()
-                .any(|c| c.key == SpecKey::AmplificationCount)
-        }) as u32,
+        amplification_count_word: 0,
         variant: variant.as_ptr(),
     };
     dynamic_words(run, pipeline, &mut draw)?;
@@ -843,6 +838,7 @@ fn dynamic_words(run: &Run, pipeline: &RenderPipeline, draw: &mut NmbDirectDraw)
         let word = offset / 4 + 1;
         match field.field {
             PushField::AmplificationId => draw.amplification_id_word = word,
+            PushField::AmplificationCount => draw.amplification_count_word = word,
             PushField::AmplificationLayerOffset | PushField::AmplificationViewportOffset => {
                 return Err("an amplification of a layer or viewport offset".into());
             }

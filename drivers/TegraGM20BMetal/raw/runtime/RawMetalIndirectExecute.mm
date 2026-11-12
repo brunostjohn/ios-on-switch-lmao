@@ -31,8 +31,6 @@ const char *admit(RMKernelExecute *x)
         const RMICBDispatch &c = b->_dispatches[i];
         if (!c.dispatched)
             continue;
-        if (c.stageIn)
-            return "an indirect dispatch command that sets a stage-in region (the encoder's is m2v's)";
         if (b->_inheritPipeline) {
             raw::ComputeDispatch shape;
             if (!(x->_kernels[i - from] = rmCommandKernels(x->_pipeline, c, shape)))
@@ -68,8 +66,9 @@ bool inheritedSlots(raw::ComputeEncoder &e, RMKernelExecute *x, raw::Buffer &slo
     slots.cpu = e.upload(bytes, slots.va);
     slots.length = bytes;
     raw::ComputeEncoder::IcbBuffer inherited[31];
+    std::array<uint32_t, 31> inheritedStrides{};
     if (b->_inheritBuffers)
-        e.inheritBuffers(inherited);
+        e.inheritBuffers(inherited, inheritedStrides);
     std::lock_guard<std::mutex> hold(b->_lock);
     for (uint32_t i = from; i < to; i++) {
         const RMICBDispatch &c = b->_dispatches[i];
@@ -88,7 +87,8 @@ bool inheritedSlots(raw::ComputeEncoder &e, RMKernelExecute *x, raw::Buffer &slo
         block.bytes = rmCommandBytes(*kernels);
         block.cpu = e.upload(block.bytes, block.va);
         raw::icb::ComputeCommand words{};
-        if (!rmCommandRegions(*kernels, shape, b->_inheritBuffers ? inherited : own, block, words, why))
+        if (!rmCommandRegions(*kernels, shape, c, b->_inheritBuffers ? inherited : own,
+                              b->_inheritBuffers ? inheritedStrides : c.strides, block, words, why))
             return false;
         words.barrier = c.barrier;
         raw::icb::dispatch(slot, i, words);
@@ -226,7 +226,13 @@ void replayKernelCommands(id<MTLComputeCommandEncoder> encoder, RMKernelExecute 
         for (uint32_t slot = 0; slot < 31 && !b->_inheritBuffers; slot++)
             if (RMBuffer *used = c.buffers[slot]) {
                 buffers.insert(used);
-                [t setKernelBuffer:twinOf(used) offset:c.offsets[slot] atIndex:slot];
+                if (c.strides[slot] == raw::kNoBindStride)
+                    [t setKernelBuffer:twinOf(used) offset:c.offsets[slot] atIndex:slot];
+                else
+                    [t setKernelBuffer:twinOf(used)
+                                 offset:c.offsets[slot]
+                        attributeStride:c.strides[slot]
+                                atIndex:slot];
             }
         for (const auto &[index, bytes] : c.memory)
             [t setThreadgroupMemoryLength:bytes atIndex:index];

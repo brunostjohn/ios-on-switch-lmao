@@ -4,9 +4,10 @@
 // (the CPU's range as scratch words, or kIcbRange reading one from memory) and before its tail. The model of the compute
 // class keeps the global render enable the gate sets and counts the launches it lets through: exactly the regions of the
 // commands inside the range launch, a barrier flushes before its command whatever the range, an empty command is no-ops,
-// and the tail leaves launches enabled.
+// and the tail leaves launches enabled. A command's stage-in words (raw_stage_in.h) are its own region and bind strides.
 #include <gtest/gtest.h>
 #include "../raw/runtime/raw_icb_compute.h"
+#include "../raw/runtime/raw_stage_in.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
 #include <utility>
@@ -267,6 +268,41 @@ TEST(RawIcbCompute, ARegionsBlockHoldsItsQmdRootTableAndSetOnTheirAlignment)
     EXPECT_EQ(raw::icb::computeRegionBytes(0x1000), 256u + 0x800u + 0x1000u);
     for (const uint32_t set : {0u, 16u, 0x1f0u, 0x1000u})
         EXPECT_EQ(raw::icb::computeRegionBytes(set) % raw::icb::kComputeBlockAlign, 0u);
+}
+
+TEST(RawIcbCompute, ACommandsStageInWordsAreItsRegionAndItsBindStrides)
+{
+    raw::PackKernel k{};
+    k.stageInRegionWord = 4;
+    k.stageInStride[0][0] = 1;
+    k.stageInStride[0][1] = 13;
+    k.stageInStride[1][0] = 2;
+    k.stageInStride[1][1] = 14;
+    raw::StageIn s;
+    s.setRegion({3, 5, 7, 0x100000040ull, 2, 1});
+    s.strides[1] = 24;
+    uint32_t push[32];
+    std::fill(std::begin(push), std::end(push), 0xeeeeeeeeu);
+    raw::stageInWords(k, s, push);
+    const uint32_t region[8] = {3, 5, 7, 0, 0x40, 2, 1, 0};
+    for (uint32_t w = 0; w < 8; w++)
+        EXPECT_EQ(push[3 + w], region[w]) << w;
+    EXPECT_EQ(push[12], 24u);
+    EXPECT_EQ(push[13], 0u) << "a bind of no stride reads at 0";
+    EXPECT_EQ(push[2], 0xeeeeeeeeu);
+    EXPECT_EQ(push[14], 0xeeeeeeeeu);
+}
+
+TEST(RawIcbCompute, AKernelOfNoStageInTakesNoStageInWords)
+{
+    const raw::PackKernel k{};
+    raw::StageIn s;
+    s.setRegion({1, 2, 3, 4, 5, 6});
+    uint32_t push[32];
+    std::fill(std::begin(push), std::end(push), 0x5au);
+    raw::stageInWords(k, s, push);
+    for (uint32_t w = 0; w < 32; w++)
+        EXPECT_EQ(push[w], 0x5au) << w;
 }
 
 }  // namespace
