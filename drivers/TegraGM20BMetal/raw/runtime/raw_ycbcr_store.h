@@ -29,6 +29,21 @@ inline uint32_t packedPlaneChannels(uint32_t pixelFormat)
     return pixelFormat == 588 ? 1 : pixelFormat == 589 ? 2 : 0;
 }
 
+// The format a pass renders an attachment of `pixelFormat` into, its pipelines made for it: the YCbCr formats' stand-in, or
+// a packed plane's R32Float or RG32Float. A fragment function returns no fewer components than its attachment's format has
+// (Metal's pipeline error, which m2v refuses), and R10Unorm_PACKED's and RG10Unorm_PACKED's return one or two.
+inline uint32_t ycbcrStandInFormat(uint32_t pixelFormat)
+{
+    switch (packedPlaneChannels(pixelFormat)) {
+    case 1:
+        return 55;  // R32Float
+    case 2:
+        return 105;  // RG32Float
+    default:
+        return kYcbcrTargetStandIn;
+    }
+}
+
 // A format whose passes the raw path renders through its stand-in, or refuses (ycbcrTargetRefusal): the two-plane YCbCr
 // formats but RGB8_444_2P, which the frontend renders through its own stand-in, and the packed 10-bit planes
 inline bool ycbcrRenderedFormat(uint32_t pixelFormat)

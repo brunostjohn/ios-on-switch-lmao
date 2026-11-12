@@ -6,7 +6,7 @@
 // the program (pack/ycbcr_store.metal). The 2D engine's 2:1 bilinear halving stores a tie rounded down where Metal's mean rounds
 // it up (24.9% of 4:2:0 and 48.1% of 4:2:2 chroma bytes off on the device), so the blocks are a draw too. A pass that loads the
 // texture is refused: Metal reloads the chroma interpolated between blocks. R10Unorm_PACKED and RG10Unorm_PACKED planes
-// (raw_packed_plane.h) render the same way, through one store state into their words.
+// (raw_packed_plane.h) render the same way, into an R32Float or RG32Float stand-in, through one store state into their words.
 #import "RawMetalInternal.h"
 #include "raw_ycbcr_store.h"
 
@@ -20,7 +20,7 @@ void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat, const raw::YcbcrStor
     const bool chroma = !store.plane;  // a packed plane's words are its one plane
     if (!rendered(t.luma) || (chroma && !rendered(t.chroma)) || !d.ycbcrStorePipeline(false, store) ||
         (chroma && !d.ycbcrStorePipeline(true, store)) ||
-        !d.createMemoryless(t.width, t.height, raw::kYcbcrTargetStandIn, *standIn)) {
+        !d.createMemoryless(t.width, t.height, raw::ycbcrStandInFormat(pixelFormat), *standIn)) {
         delete standIn;
         SWITCH_REFUSE_DETAIL("raw", "ycbcr.target", pixelFormat,
                              "no stand-in or store state for a %ux%u format %u render target: its passes go to m2v "
@@ -139,7 +139,7 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
                                                                      error:error];
             return p->_twin ? (id<MTLRenderPipelineState>)p : nil;
         }
-        made.colorAttachments[c].pixelFormat = MTLPixelFormat(raw::kYcbcrTargetStandIn);
+        made.colorAttachments[c].pixelFormat = MTLPixelFormat(raw::ycbcrStandInFormat(format));
     }
     RMPipeline *p = rmPipelineFor(self, made, o, error);
     if (!p->_raw && !p->_asked) {

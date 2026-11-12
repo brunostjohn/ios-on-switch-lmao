@@ -4,8 +4,9 @@
 // little-endian 32-bit word, at bits 0, 10 and 20: code n of a row is channel n % k of texel n / k (k codes a texel), and
 // a texel reads (code / 1023, the second code / 1023 or 0, 0, 1), bits 30 and 31 unread (an M4 Max's reads of random
 // words over each of those surfaces: raw/test/packedplaneoracle.mm). The raw path samples an RGB10A2Unorm image of the
-// codes, which the pack's ycbcr_packed_plane_frag draws from the plane's words (R32Uint), and renders a pass into the
-// two-plane YCbCr targets' memoryless stand-in, whose codes ycbcr_store_plane_packed_frag writes into the words.
+// codes, which the pack's ycbcr_packed_plane_frag draws from the plane's words (R32Uint), and renders a pass into a
+// memoryless R32Float or RG32Float stand-in (ycbcrStandInFormat), whose codes ycbcr_store_plane_packed_frag writes into
+// the words.
 //
 // Metal's store into these formats is not measured: on an M4 Max (macOS 27.2.1) a pass into one faults
 // (IOGPUCommandQueueErrorDomain 5), or completes having written nothing, or six codes to a 64-bit word against its own

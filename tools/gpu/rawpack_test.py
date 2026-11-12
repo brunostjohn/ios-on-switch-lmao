@@ -69,7 +69,7 @@ class YcbcrStandIn(unittest.TestCase):
     HEAD = 'R ok=1 label=- samples=1 topo=0 ds=0/0 '
 
     def test_every_format_the_runtime_renders_takes_the_stand_in(self):
-        for fmt in (500, 503, 507, 508, 520, 527, 530, 540, 541, 543, 544, 545, 546, 547, 548, 588, 589):
+        for fmt in (500, 503, 507, 508, 520, 527, 530, 540, 541, 543, 544, 545, 546, 547, 548):
             line = f'{self.HEAD}c0={fmt}:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
             self.assertEqual(
                 ycbcr_stand_in(line), f'{self.HEAD}c0=125:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
@@ -78,9 +78,9 @@ class YcbcrStandIn(unittest.TestCase):
         self.assertEqual(
             ycbcr_stand_in(line), f'{self.HEAD}c0=125:15:0:1:0:0:1:0:0 c2=125:14:0:1:0:0:1:0:0' + self.TAIL
         )
-        for fmt, mask in ((588, 8), (589, 12)):
+        for fmt, mask, stand_in in ((588, 8, 55), (589, 12, 105)):
             line = f'{self.HEAD}c0={fmt}:{mask}:0:1:0:0:1:0:0' + self.TAIL
-            self.assertEqual(ycbcr_stand_in(line), f'{self.HEAD}c0=125:{mask}:0:1:0:0:1:0:0' + self.TAIL)
+            self.assertEqual(ycbcr_stand_in(line), f'{self.HEAD}c0={stand_in}:{mask}:0:1:0:0:1:0:0' + self.TAIL)
 
     def test_a_state_the_runtime_leaves_to_m2v_keeps_its_formats(self):
         for colors in (

@@ -122,6 +122,9 @@ TEST(RawPackedPlane, TheYcbcrPlannerRoutesThem)
     EXPECT_EQ(raw::ycbcrTargetWrites(588), 8u);
     EXPECT_EQ(raw::ycbcrTargetWrites(589), 12u);
     EXPECT_EQ(raw::ycbcrTargetWrites(540), 14u);
+    EXPECT_EQ(raw::ycbcrStandInFormat(588), 55u);   // R32Float: R10Unorm_PACKED's fragments return one component
+    EXPECT_EQ(raw::ycbcrStandInFormat(589), 105u);  // RG32Float
+    EXPECT_EQ(raw::ycbcrStandInFormat(546), raw::kYcbcrTargetStandIn);
 }
 
 TEST(RawPackedPlane, TexelsReadThreeCodesAWordInRowOrder)

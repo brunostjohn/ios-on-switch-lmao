@@ -265,14 +265,18 @@ int main(int argc, char **argv)
                         }
                     }
                     const raw::YcbcrStoreShape shape = plan.store;
-                    id<MTLTexture> stand = g.texture(MTLPixelFormatRGBA32Float, w, h, MTLTextureUsageShaderRead);
+                    id<MTLTexture> stand =
+                        g.texture(MTLPixelFormat(raw::ycbcrStandInFormat(format)), w, h, MTLTextureUsageShaderRead);
                     id<MTLTexture> stored = g.texture(MTLPixelFormatR32Uint, words, h, MTLTextureUsageRenderTarget);
                     for (int round = 0; round < 3; round++) {
                         const std::vector<float> v = standIn(w * h, rng);
+                        std::vector<float> held(channels * w * h);
+                        for (uint32_t i = 0; i < w * h; i++)
+                            memcpy(&held[channels * i], &v[4 * i], 4 * channels);
                         [stand replaceRegion:MTLRegionMake2D(0, 0, w, h)
                                  mipmapLevel:0
-                                   withBytes:v.data()
-                                 bytesPerRow:w * 16];
+                                   withBytes:held.data()
+                                 bytesPerRow:w * 4 * channels];
                         g.draw(stored, store, stand, &shape, sizeof shape);
                         std::vector<uint32_t> got(words * h), want(words * h);
                         [stored getBytes:got.data()

@@ -72,6 +72,8 @@ YCBCR_RENDERED = frozenset(
     | {540, 541, 543, 544, 545, 546, 547, 548, 588, 589}
 )
 YCBCR_STAND_IN = 125
+# ycbcrStandInFormat: the packed planes' R32Float and RG32Float, of their fragments' one or two components
+STAND_INS = {588: 55, 589: 105}
 WRITES = {588: 0b1000, 589: 0b1100}
 RGB_WRITES = 0b1110
 
@@ -122,7 +124,7 @@ def ycbcr_stand_in(line: str) -> str:
     ):
         return line
     for m in reversed(targets):
-        head = head[: m.start(2)] + str(YCBCR_STAND_IN) + head[m.end(2) :]
+        head = head[: m.start(2)] + str(STAND_INS.get(int(m[2]), YCBCR_STAND_IN)) + head[m.end(2) :]
     return head + bar + tail
 
 
