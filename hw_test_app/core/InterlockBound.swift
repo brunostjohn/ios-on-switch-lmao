@@ -31,7 +31,8 @@ public enum InterlockBound {
         for key in metrics.keys.sorted()
         where key.hasPrefix("raw_ilk_") && !derived.contains(where: { key.hasPrefix($0) }) {
             let label = String(key.dropFirst("raw_ilk_".count))
-            guard let draws = value(metrics[key]), draws > 0, let raw = value(metrics["raw_us_" + label]) else {
+            guard let interlocked = value(metrics[key]), interlocked > 0, let raw = value(metrics["raw_us_" + label])
+            else {
                 continue
             }
             if metrics["raw_gpu_clock_" + label] == .text("host") {
