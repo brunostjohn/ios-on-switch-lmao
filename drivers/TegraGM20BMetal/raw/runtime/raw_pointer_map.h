@@ -133,7 +133,6 @@ private:
     }
 };
 
-// A map keyed by object pointers
 template <typename V> using PointerMap = StampMap<const void *, V, PointerHash>;
 
 }  // namespace raw

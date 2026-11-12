@@ -5549,7 +5549,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     cb_->buffersWritten_ |= bufferStorage(e);
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
-                    else if (!b.named)
+                    else if (!b.named || bufferStorage(e))
                         cb_->useAddress(b.va, b.size, bufferStorage(e));
                     BufferDescriptor desc;
                     if (!bufferDescriptor(e, b.va, b.size, desc)) {

@@ -740,8 +740,8 @@ private:
         uint64_t offset = 0;
         const uint8_t *cpu = nullptr;  // the bytes at va, where the CPU maps them
         uint64_t resourceVa = 0;
-        // setBytes: the memory holding it was named for the command buffer's jobs when it was bound (its allocation, or
-        // the upload ring commit names), so no draw names it again
+        // setBytes: the memory holding it was named, read, for the command buffer's jobs when it was bound (its
+        // allocation, or the upload ring commit names), so no draw that only reads it names it again
         bool named = false;
     };
 
