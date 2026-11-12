@@ -61,7 +61,9 @@ struct NativeCountersTest: NativeObjectTest {
         return (set, failures)
     }
 
-    static func pass(_ target: MTLTexture, _ counters: MTLCounterSampleBuffer, _ first: Int, load: MTLLoadAction)
+    static func pass(
+        _ target: MTLTexture, _ counters: MTLCounterSampleBuffer, _ first: Int, load: MTLLoadAction
+    )
         -> MTLRenderPassDescriptor
     {
         let pass = MTLRenderPassDescriptor()
