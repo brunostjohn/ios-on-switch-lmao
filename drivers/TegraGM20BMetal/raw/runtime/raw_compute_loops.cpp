@@ -36,13 +36,13 @@ Predication::Answer ComputeEncoder::startLoop(bool doWhile, uint64_t wordVa, con
         cb_.predication_.halt({halt, va});
     }
     uint8_t *cpu = dev_.alloc(dev_.upload_, Predication::kSlotBytes, Predication::kSlotAlign, va);
-    return loops_.start(stream(), cb_.predication_, {cpu, va}, doWhile, wordVa, test);
+    return cb_.loops_.start(stream(), cb_.predication_, {cpu, va}, doWhile, wordVa, test);
 }
 
 Predication::Answer ComputeEncoder::endLoop(uint64_t wordVa, const PredicateTest *test, uint32_t tag)
 {
     room(LoopCopies::endRoom(cb_.predication_.depth()));
-    const Predication::Answer answer = loops_.end(stream(), cb_.predication_, cb_.batchWork_, cb_.batchLimit(),
+    const Predication::Answer answer = cb_.loops_.end(stream(), cb_.predication_, cb_.batchWork_, cb_.batchLimit(),
                                                   dev_.loopRecordVa(cb_.stamp), cb_.stamp, tag, wordVa, test);
     cb_.loopsLaid |= answer == Predication::Answer::Done;
     return answer;

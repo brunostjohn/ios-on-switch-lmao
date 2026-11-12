@@ -246,4 +246,25 @@ TEST(RawPredicateRecords, AUnitEndsAtOtherWorkOrAnotherDispatchType)
     EXPECT_TRUE(r.recorded());
 }
 
+TEST(RawPredicateRecords, ALoopRunsAcrossItsUnitsComputeEncodersButNotPastItsUnit)
+{
+    Records same;
+    same.computeEncoder(0);
+    same.record(Records::StartWhile);
+    same.computeEncoder(0);
+    EXPECT_TRUE(same.record(Records::EndWhile));
+    same.end();
+    EXPECT_FALSE(same.misused());
+    for (bool otherWork : {false, true}) {
+        Records ended;
+        ended.computeEncoder(0);
+        ended.record(Records::StartWhile);
+        if (otherWork)
+            ended.otherWork();
+        else
+            ended.computeEncoder(1);
+        EXPECT_TRUE(ended.misused()) << otherWork;
+    }
+}
+
 }  // namespace

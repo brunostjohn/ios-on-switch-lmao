@@ -3418,6 +3418,7 @@ CommandBuffer *Device::begin()
     cb.sharedSignals_.clear();
     cb.sharedReleases_.clear();
     cb.predication_.endUnit();
+    cb.loops_ = {};
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
     cb.publication_ = {};
@@ -3496,6 +3497,16 @@ CommandBuffer *Device::begin()
     cb.geometryRefusedBuffers_.clear();
     cb.geometryRefusedBackings_.clear();
     return &cb;
+}
+
+LoopStream CommandBuffer::loopStream(Push &p, uint32_t *&start)
+{
+    return {p, start, segments_, dev_->push_.bo.cpu, dev_->push_.bo.va};
+}
+
+LoopStream BlitEncoder::stream()
+{
+    return cb_->loopStream(p_, start_);
 }
 
 void CommandBuffer::segment(uint32_t *from, uint32_t *to)
@@ -3696,6 +3707,7 @@ BlitEncoder *CommandBuffer::blit()
     uint64_t va;
     e.start_ = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, 1 << 14, 256, va));
     e.p_ = Push{e.start_, e.start_ + (1 << 12)};
+    loops_.openSegment(e.stream());
     // what the render work before wrote is complete before the copy engine reads it (NVK: a WFI on the 3D subchannel; the
     // switch to the copy subchannel then waits for the 3D engine anyway)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -6600,11 +6612,12 @@ void BlitEncoder::room(uint32_t words)
     if (p_.room() >= words + 8)
         return;
     checkRoom(p_, "a blit encoder");
-    cb_->segment(start_, p_.at);  // a new reservation: the copies so far become a segment
+    cb_->loops_.closeSegment(stream());  // a new reservation: the copies so far become a segment
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     uint64_t va;
     start_ = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, 1 << 14, 256, va));
     p_ = Push{start_, start_ + (1 << 12)};
+    cb_->loops_.openSegment(stream());
 }
 
 void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
@@ -6847,7 +6860,7 @@ void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)
 void BlitEncoder::end()
 {
     checkRoom(p_, "a blit encoder");
-    cb_->segment(start_, p_.at);
+    cb_->loops_.closeSegment(stream());
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     RAW_DIAGNOSTIC(dev_->stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }

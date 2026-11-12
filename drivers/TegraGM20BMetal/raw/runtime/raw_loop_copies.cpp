@@ -15,26 +15,6 @@ uint32_t LoopCopies::copies(size_t depth, size_t entries)
     return uint32_t(std::min<size_t>(bound, kEntryBudget / entries));
 }
 
-void LoopCopies::closeSegment(LoopStream s)
-{
-    if (s.p.at == s.start)
-        return;
-    const TegraGM20BAbiPush push{s.va(s.start), uint32_t(s.p.at - s.start), 0};
-    if (frames_.empty())
-        s.entries.append(push);
-    else
-        s.entries.append({push.va, push.dwords, TegraGM20BPushNoPrefetch}, false);
-}
-
-void LoopCopies::openSegment(LoopStream s)
-{
-    s.start = s.p.at;
-    if (!frames_.empty()) {
-        frames_.back().heads.push_back(s.va(s.p.at));
-        *s.p.at++ = kLoopHeadRuns;
-    }
-}
-
 void LoopCopies::addWork(uint64_t work)
 {
     if (!frames_.empty())

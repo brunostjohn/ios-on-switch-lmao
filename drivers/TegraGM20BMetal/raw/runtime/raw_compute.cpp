@@ -124,6 +124,7 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     uint64_t va;
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};
+    cb_.loops_.openSegment(stream());
     // what the render and copy work before wrote, out of the SMs' data, constant and texture caches; the scheduler's cached
     // QMDs (the upload ring reuses their addresses) and the compute class's header caches, as NVK opens a command buffer's
     // compute work (nvk_cmd_buffer_begin_compute)
@@ -144,17 +145,17 @@ void ComputeEncoder::room(uint32_t words)
 {
     if (p_.room() >= words + 16)
         return;
-    loops_.closeSegment(stream());
+    cb_.loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     uint64_t va;
     auto *chunk = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{chunk, chunk + kEncoderWords};
-    loops_.openSegment(stream());
+    cb_.loops_.openSegment(stream());
 }
 
 LoopStream ComputeEncoder::stream()
 {
-    return {p_, start_, cb_.segments_, dev_.push_.bo.cpu, dev_.push_.bo.va};
+    return cb_.loopStream(p_, start_);
 }
 
 void ComputeEncoder::setBytes(uint32_t slot, const void *bytes, uint32_t length)
@@ -380,7 +381,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     const uint8_t axis = pieceAxis(grid);
     // A loop's body is laid down once and listed per copy (raw_loop_copies.h): no band cuts a batch inside it, and its
     // copies end the batches between them
-    const bool looping = loops_.open();
+    const bool looping = cb_.loops_.open();
     const uint32_t pieces =
         dev_.compositorClass() || looping
             ? 1
@@ -414,7 +415,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         work = BatchWork::product(BatchWork::product(work, groups[a]), threads[a]);
     apiWork_ = std::min(BatchWork::kSaturated, (first ? 0 : apiWork_) + work);
     if (pieces < 2 && last && looping)
-        loops_.addWork(apiWork_);
+        cb_.loops_.addWork(apiWork_);
     else if (pieces < 2 && last && cb_.batchWork_.add(apiWork_, cb_.batchLimit()))
         cutBatch();
     RAW_DIAGNOSTIC(dev_.stats.dispatches++);
@@ -484,7 +485,7 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);
-    const bool looping = loops_.open();
+    const bool looping = cb_.loops_.open();
     room(8 + Predication::kGuardWords + Predication::kReleaseWords +
          (looping ? SWITCH_GM20B_INLINE_WORDS_WORDS(kQmdWords) : 0));
     // Every copy of a loop launches this QMD: QMDV01_07 has words only the hardware writes (HW_ONLY_*, clb1c0qmd.h:429),
@@ -528,7 +529,7 @@ void ComputeEncoder::end()
 {
     room(8);
     computeToGraphics(p_, true);
-    loops_.closeSegment(stream());
+    cb_.loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     RAW_DIAGNOSTIC(dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }

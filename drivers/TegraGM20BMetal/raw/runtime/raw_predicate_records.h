@@ -2,7 +2,7 @@
 // Metal's answers to the predication records as a command buffer takes them (the encode comes later). A unit is a run of
 // compute encoders of one dispatch type; any other encoder, an event or the command buffer's end closes it, and with it
 // every block still open (m2v's measurements, metal2vulkan-runtime/src/predication.rs). The raw path lays a loop's copies
-// inside one compute encoder (raw_loop_copies.h): a loop still open where its encoder ends is a record it cannot run.
+// across its unit's compute encoders (raw_loop_copies.h): a loop still open where its unit ends is a record it cannot run.
 #pragma once
 #include <cstdint>
 #include <vector>
@@ -23,16 +23,17 @@ public:
 
     void computeEncoder(uint32_t dispatchType)
     {
-        loopAcrossEncoders();
-        if (!unit_ || type_ != dispatchType)
+        if (!unit_ || type_ != dispatchType) {
+            loopAcrossUnits();
             open_.clear();
+        }
         unit_ = true;
         type_ = dispatchType;
     }
 
     void otherWork()
     {
-        loopAcrossEncoders();
+        loopAcrossUnits();
         unit_ = false;
         open_.clear();
     }
@@ -40,7 +41,7 @@ public:
     // The command buffer ends
     void end()
     {
-        loopAcrossEncoders();
+        loopAcrossUnits();
     }
 
     // False: the record is misused (an End with no block of its kind open). It is not the End's answer to its caller,
@@ -84,7 +85,7 @@ public:
     }
 
     // A record with no block of its kind open (Metal kills or drops work by rules raw does not model), or a loop open
-    // across compute encoders
+    // where its unit ends
     bool misused() const
     {
         return misused_;
@@ -113,7 +114,7 @@ private:
         return false;
     }
 
-    void loopAcrossEncoders()
+    void loopAcrossUnits()
     {
         for (Block b : open_)
             if (b == Block::Loop)

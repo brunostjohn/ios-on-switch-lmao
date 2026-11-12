@@ -148,8 +148,8 @@ void planSegments(RMCommandBuffer *cb)
     // of running the work they skip
     cb->_predicates.end();
     if (cb->_predicates.recorded() && (cb->_predicates.misused() || cb->_whole || cb->_reason != WhyRaw)) {
-        failCommandBuffer(cb, @"Command predication the raw path cannot run (a misused record, a loop across compute "
-                              @"encoders or refused work)");
+        failCommandBuffer(cb, @"Command predication the raw path cannot run (a misused record, a loop open where its "
+                              @"unit ends or refused work)");
         return;
     }
     const auto error = makeExecutionPlan(cb->_plan, cb->_whole, plan, [](const RMPlanEvent &entry) {

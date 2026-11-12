@@ -85,4 +85,25 @@ private:
     std::vector<Frame> frames_;
 };
 
+// Inline: every encoder's segments go through them, in units that link no loop layout of their own
+inline void LoopCopies::closeSegment(LoopStream s)
+{
+    if (s.p.at == s.start)
+        return;
+    const TegraGM20BAbiPush push{s.va(s.start), uint32_t(s.p.at - s.start), 0};
+    if (frames_.empty())
+        s.entries.append(push);
+    else
+        s.entries.append({push.va, push.dwords, TegraGM20BPushNoPrefetch}, false);
+}
+
+inline void LoopCopies::openSegment(LoopStream s)
+{
+    s.start = s.p.at;
+    if (!frames_.empty()) {
+        frames_.back().heads.push_back(s.va(s.p.at));
+        *s.p.at++ = kLoopHeadRuns;
+    }
+}
+
 }  // namespace raw

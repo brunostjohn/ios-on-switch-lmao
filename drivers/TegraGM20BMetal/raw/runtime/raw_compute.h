@@ -130,7 +130,6 @@ private:
     uint64_t setVa_ = 0, rootVa_ = 0;
     std::array<uint32_t, 3> grid_{}, base_{};
     std::array<uint32_t, 8> region_{};
-    LoopCopies loops_;
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);

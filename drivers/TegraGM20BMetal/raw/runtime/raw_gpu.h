@@ -33,6 +33,7 @@
 #include "raw_private_comp.h"
 #include "raw_event_release.h"
 #include "raw_predication.h"
+#include "raw_loop_copies.h"
 #include "raw_loop_ranges.h"
 #include "raw_visibility.h"
 #include <array>
@@ -969,6 +970,7 @@ private:
     uint8_t reads_ = 0, writes_ = 0;
     void room(uint32_t words = 56);  // at least `words` words left in the reservation
     void fillRun(uint64_t at, uint32_t width, uint32_t height, uint32_t unit);  // a constant fill's launch
+    LoopStream stream();
 };
 
 // Which encode-time predicate refused a draw (set beside *why; RawMetal.mm counts and logs it, r10-rawsweep diagnostics)
@@ -999,6 +1001,7 @@ public:
     void endPredicationUnit()
     {
         predication_.endUnit();
+        loops_ = {};
     }
     // `multisampled` resolved into `into` by the 2D engine (rules resolve.twod and resolve.exact, raw_resolve_rule.h);
     // false: not a sample grid the engine reads at 2:1, nothing recorded
@@ -1091,6 +1094,7 @@ private:
     friend class ComputeEncoder;
     Device *dev_ = nullptr;
     Predication predication_;
+    LoopCopies loops_;  // a unit's loops, laid across its compute encoders
     PushBatches segments_;
     BatchWork batchWork_;
     uint64_t batchLimit() const;
@@ -1165,6 +1169,8 @@ private:
     // GPU work encoded before may have written a buffer: a prologue, run ahead of it, reads only what the CPU wrote
     bool buffersWritten_ = false;
     void segment(uint32_t *from, uint32_t *to);
+    // An encoder's words from `start` as segments of the unit's open loops (raw_loop_copies.h), or plain ones
+    LoopStream loopStream(Push &p, uint32_t *&start);
     void launchPrologues();
 };
 

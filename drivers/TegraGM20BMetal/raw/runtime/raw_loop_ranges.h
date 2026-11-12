@@ -67,6 +67,20 @@ public:
         size_t depth = 0;  // the blocks still open around it
     };
 
+    // A walk from `from`, which may lie inside a unit: the unit is its last compute encoder's, unless other work came after
+    template <class Tape> LoopBlocks(const Tape &tape, uint32_t from)
+    {
+        for (uint32_t at = from; at-- > 0;) {
+            const LoopTapeEntry e = tape(at);
+            if (e.kind == LoopTapeEntry::Compute) {
+                unit_ = true;
+                type_ = e.value;
+            }
+            if (e.kind == LoopTapeEntry::Compute || e.kind == LoopTapeEntry::Other)
+                return;
+        }
+    }
+
     // The entry at `at`; the blocks it closed, innermost first
     template <class OnClose> void step(uint32_t at, const LoopTapeEntry &e, OnClose &&closed)
     {
@@ -128,7 +142,7 @@ private:
 template <class Tape> std::vector<uint32_t> loopSplits(const Tape &tape, uint32_t from, uint32_t to)
 {
     std::vector<uint32_t> splits;
-    LoopBlocks blocks;
+    LoopBlocks blocks(tape, from);
     for (uint32_t at = from; at < to; ++at)
         blocks.step(at, tape(at), [&](const LoopBlocks::Closed &c) {
             if (!c.depth && c.block.holdsLoop && c.at > from && c.at < to &&
@@ -155,7 +169,7 @@ template <class Tape> bool laysLoops(const Tape &tape, uint32_t from, uint32_t t
 // whole loop again). Empty: `endAt` ends no loop in the range.
 template <class Tape> std::vector<TapeRange> continuation(const Tape &tape, uint32_t from, uint32_t to, uint32_t endAt)
 {
-    LoopBlocks blocks;
+    LoopBlocks blocks(tape, from);
     const auto ignore = [](const LoopBlocks::Closed &) {};
     for (uint32_t at = from; at < endAt && at < to; ++at)
         blocks.step(at, tape(at), ignore);

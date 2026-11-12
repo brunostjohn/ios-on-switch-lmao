@@ -7,6 +7,7 @@
 #include "../raw/runtime/raw_compute.h"
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 namespace {
 
@@ -287,6 +288,42 @@ TEST_F(DeviceLoops, ACommandBufferThatLaidLoopsWritesThePushRing)
         written |= use.handle == ring && (use.access & TegraGM20BSurfaceWrite);
     }
     EXPECT_TRUE(written) << "ring " << ring << ":" << (seen.empty() ? " not named" : seen);
+}
+
+// while (word 0) { 0 counts it down; a copy of word 6 to word 7; 1 } over two compute encoders of one unit with the copy
+// engine between them, as the facade lays a dispatch whose textures need shadows: the copies cover all three
+TEST_F(DeviceLoops, ALoopSpansItsUnitsComputeEncodersAndACopyBetweenThem)
+{
+    for (uint32_t n : {5u, raw::LoopCopies::kOutermostCopies + 3}) {
+        word(0) = n;
+        word(6) = 77;
+        word(7) = 0;
+        const size_t first = kernel_model::model.jobs.size();
+        raw::CommandBuffer *cb = dev.begin();
+        std::optional<raw::ComputeEncoder> e;
+        e.emplace(*cb, dev);
+        ASSERT_EQ(e->startWhile(wordVa(0), PredicateCompare::NotEqual, 0), Answer::Done);
+        dispatch(*e, 0);
+        e->end();
+        raw::BlitEncoder *copy = cb->blit();
+        copy->copyBytes(wordVa(6), wordVa(7), 4);
+        copy->end();
+        e.emplace(*cb, dev);
+        dispatch(*e, 1);
+        ASSERT_EQ(e->endWhile(kTag), Answer::Done);
+        e->end();
+        const uint32_t stamp = commit(cb);
+        run(first, [&](int program) {
+            if (program == 0)
+                --word(0);
+        });
+        const uint32_t ran = std::min(n, raw::LoopCopies::kOutermostCopies);
+        EXPECT_EQ(count(0), ran) << n;
+        EXPECT_EQ(count(1), ran) << n;
+        EXPECT_EQ(word(7), 77u) << n;
+        EXPECT_EQ(qmdsBroken, 0u) << n;
+        EXPECT_EQ(dev.loopContinue(stamp).continues, n > raw::LoopCopies::kOutermostCopies) << n;
+    }
 }
 
 }  // namespace

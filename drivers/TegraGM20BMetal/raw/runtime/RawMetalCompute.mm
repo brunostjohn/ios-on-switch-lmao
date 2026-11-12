@@ -455,7 +455,7 @@ static bool encodePredicate(raw::ComputeEncoder &e, const Cmd &c, size_t at, con
     if (answer != raw::Predication::Answer::Done)
         *why = c.stage >= raw::PredicateRecords::StartWhile
                    ? "a predicated loop the raw path cannot lay down (deeper than eight, a body of more than 32 push "
-                     "segments, one that left its compute encoder, or more GP entries than one nest takes)"
+                     "segments, one its unit ended inside, or more GP entries than one nest takes)"
                    : "a predication record the raw path cannot run";
     return answer == raw::Predication::Answer::Done;
 }
