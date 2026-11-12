@@ -2,7 +2,7 @@
 #import <Metal/Metal.h>
 #include "../NativeBridgeMetalFrontend.h"
 #include "../bridge/NativeMetalDirect.h"
-#include "../../TegraGM20BMetal/raw/runtime/raw_direct_nvk.h"
+#include "device_compile.h"
 #include "../../../third_party/mesa/src/nouveau/vulkan/nvk_switch_ir.h"
 #include <cstdio>
 #include <cstring>
@@ -12,7 +12,7 @@
 enum : uint32_t { TypeVoid = 19, Load = 61, VectorInsertDynamic = 78, IsInf = 157, Select = 169 };
 
 struct Compared {
-    raw::DirectNvk compiler;
+    raw::nvk::DeviceNvk compiler;
     const char *name;
     const char *output;
     bool expected;
@@ -90,7 +90,7 @@ static bool compare(const NmbDirectKernel *kernel, void *context)
                      cost.codeBytes == native.codeBytes && cost.gprs == native.numGprs &&
                      cost.instructions > 0 && cost.maxWarps > 0 &&
                      !metrics(&native, &cost, sizeof(cost) - 1) && !metrics(nullptr, &cost, sizeof(cost));
-    raw::DirectNvk rankedCompiler = c.compiler;
+    raw::nvk::DeviceNvk rankedCompiler = c.compiler;
     rankedCompiler.compileStage = native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage");
     raw::NvkStage ranked = {};
     raw::NvkStageInfo rankedInfo = info;
@@ -279,7 +279,7 @@ int main(int argc, char **argv)
                 dispatch.textures = &texture;
                 dispatch.textureCount = 1;
             }
-            Compared compared = {raw::DirectNvk::find(native_bridge_metal_nvk_symbol), name, argv[4], expected};
+            Compared compared = {raw::nvk::DeviceNvk::find(native_bridge_metal_nvk_symbol), name, argv[4], expected};
             const char *why = nullptr;
             bool made = native_bridge_metal_compute_direct(descriptor, &dispatch, compare, &compared, &why);
             if (!made)

@@ -4,7 +4,7 @@
 #include "../bridge/NativeMetalDirect.h"
 #include "../../TegraGM20BMetal/precompile/PrecompileInputs.h"
 #include "../../TegraGM20BMetal/raw/pack/kernel_shapes.h"
-#include "../../TegraGM20BMetal/raw/runtime/raw_direct_nvk.h"
+#include "device_compile.h"
 #include "../../../third_party/mesa/src/nouveau/vulkan/nvk_switch_ir.h"
 #include <fstream>
 
@@ -74,7 +74,7 @@ static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_
         }
     }
     if (compileCandidates && stage.semantic) {
-        raw::DirectNvk compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
+        raw::nvk::DeviceNvk compiler = raw::nvk::DeviceNvk::find(native_bridge_metal_nvk_symbol);
         raw::SubgroupSize subgroup;
         subgroup.size = stage.subgroupSize;
         raw::NvkStageInfo info = {words, bytes, stage.entry, stage.stage, stage.specialization,
@@ -95,7 +95,7 @@ static NSDictionary *stage(const NmbDirectStage &stage, uint64_t device, uint64_
                               !memcmp(native.code, portable.code, native.codeBytes));
         out[@"nativeMetrics"] = metrics(native);
         out[@"portableMetrics"] = metrics(portable);
-        raw::DirectNvk rankedCompiler = compiler;
+        raw::nvk::DeviceNvk rankedCompiler = compiler;
         rankedCompiler.compileStage = native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage");
         if (rankedCompiler.compileStage) {
             info.semantic = stage.semantic;

@@ -2,7 +2,7 @@
 #import <Metal/Metal.h>
 #include "../NativeBridgeMetalFrontend.h"
 #include "../bridge/NativeMetalDirect.h"
-#include "../../TegraGM20BMetal/raw/runtime/raw_direct_nvk.h"
+#include "device_compile.h"
 #include <algorithm>
 #include <cstdio>
 #include <iterator>
@@ -19,7 +19,7 @@ static bool compile(const NmbDirectKernel *kernel, void *context)
 {
     auto &test = *static_cast<Case *>(context);
     test.called = true;
-    const auto compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
+    const auto compiler = raw::nvk::DeviceNvk::find(native_bridge_metal_nvk_symbol);
     raw::SubgroupSize subgroup;
     subgroup.size = kernel->stage.subgroupSize;
     raw::NvkStageInfo info = {kernel->stage.spirv, kernel->stage.spirvBytes, kernel->stage.entry,
