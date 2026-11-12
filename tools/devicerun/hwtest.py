@@ -123,6 +123,7 @@ TESTS: dict[str, bool] = {
             'metal.native.counters',
             'metal.native.counter_objects',
             'metal.native.shared_texture',
+            'metal.native.shared_texture_peer',
         ],
         False,
     ),

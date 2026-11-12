@@ -16,5 +16,6 @@ filegroup(
         "//drivers/SwitchAudio:overlay_files",
         "//drivers/SwitchCapture:overlay_files",
         "//drivers/SwitchJoyCon:overlay_files",
+        "//hw_test_app:overlay_files",
     ],
 )
