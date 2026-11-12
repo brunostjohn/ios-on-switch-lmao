@@ -101,7 +101,8 @@ inline bool computeQmd(const NvkStage &stage, uint32_t setBytes, uint32_t qmd[64
     switch_gm20b_qmd_info q = qmdInfo(stage);
     q.smem_size = stage.smemSize;
     const auto aligned = [](uint32_t bytes) {
-        const uint32_t a = (bytes + setlayout::kCbufAlignment - 1) / setlayout::kCbufAlignment * setlayout::kCbufAlignment;
+        const uint32_t a =
+            (bytes + setlayout::kCbufAlignment - 1) / setlayout::kCbufAlignment * setlayout::kCbufAlignment;
         return a < kMaxCbufBytes ? a : kMaxCbufBytes;
     };
     q.cbuf_count = stage.cbufCount;

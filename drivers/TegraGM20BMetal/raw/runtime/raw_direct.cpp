@@ -345,10 +345,12 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
         residual[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
         zeroPush |= 1u << word;
     }
+
     struct Kind {
         uint32_t zeroPush;
         bool texsF16;
     };
+
     const bool f16 = kProvenChipFacts & AssumeTexsF16;
     std::vector<Kind> kinds;
     if (zeroPush && f16)

@@ -58,6 +58,7 @@ struct NvkStageMetrics {
     uint32_t scratchBytes, memorySpills, memoryFills, registerSpills, registerFills;
     uint64_t staticCycles;
 };
+
 static_assert(sizeof(NvkStageMetrics) == 48);
 
 // VkPipelineShaderStageRequiredSubgroupSizeCreateInfo
