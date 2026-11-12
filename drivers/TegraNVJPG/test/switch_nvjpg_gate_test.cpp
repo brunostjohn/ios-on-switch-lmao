@@ -25,6 +25,8 @@ __asm__(".section __DATA,__const\n"
 namespace {
 struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
+    bool flushed = false, nvdecPartitionOn = false;
+    std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
     uint32_t syncpt = 369427729;
@@ -33,7 +35,18 @@ struct Engine {
 
     bool reachable() const
     {
-        return partitionOn && !clamped && clockOn && !inReset;
+        return partitionOn && !clamped && clockOn && !inReset && !flushed;
+    }
+
+    // The steps since `from` that name one of `of`, in order.
+    std::vector<std::string> steps(size_t from, std::initializer_list<const char *> of) const
+    {
+        std::vector<std::string> out;
+        for (size_t i = from; i < events.size(); i++)
+            for (const char *e : of)
+                if (events[i] == e)
+                    out.push_back(events[i]);
+        return out;
     }
 };
 
@@ -49,6 +62,12 @@ constexpr uint32_t kSyncpt = 163;
 extern "C" {
 uintptr_t ml_io_map(uintptr_t pa, uintptr_t)
 {
+    if (pa == 0x70000000) {
+        static std::vector<uint8_t> apb(0x1000);
+        apb[0x805] = 0x21;  // HIDREV: chip 0x21, major 2: T210B01
+        apb[0x804] = 0x20;
+        return reinterpret_cast<uintptr_t>(apb.data());
+    }
     return reinterpret_cast<uintptr_t>(pa == 0x70019000 ? gMcRegisters.data() : gNvjpgRegisters.data());
 }
 
@@ -129,6 +148,19 @@ void tegra_host1x_channel_restart(uint32_t)
     gEngine.restarts++;
 }
 
+void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
+{
+    EXPECT_EQ(ctrl, 0x970u);
+    EXPECT_EQ(bit, 1u << 8);
+    gEngine.flushed = on;
+    gEngine.events.push_back(on ? "flush" : "release");
+}
+
+uint32_t tegra_smmu_read(uint32_t offset)
+{
+    return offset == 0x974 && gEngine.flushed ? 1u << 8 : 0;
+}
+
 int tegra_smmu_attach(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, char *, size_t)
 {
     return 0;
@@ -143,15 +175,19 @@ void tegra_smmu_flush(uint32_t)
 void switch_car_clock_enable(unsigned id)
 {
     gEngine.clocks[id] = true;
-    if (id == kJpgClock)
+    if (id == kJpgClock) {
         gEngine.clockOn = true;
+        gEngine.events.push_back("clock on");
+    }
 }
 
 void switch_car_clock_disable(unsigned id)
 {
     gEngine.clocks[id] = false;
-    if (id == kJpgClock)
+    if (id == kJpgClock) {
         gEngine.clockOn = false;
+        gEngine.events.push_back("clock off");
+    }
 }
 
 bool switch_car_clock_enabled(unsigned id)
@@ -165,14 +201,17 @@ void switch_car_reset_assert(unsigned id)
     if (id == kJpgClock) {
         gEngine.inReset = true;
         gEngine.falconRunning = false;
+        gEngine.events.push_back("reset");
     }
 }
 
 void switch_car_reset_deassert(unsigned id)
 {
     gEngine.resets[id] = false;
-    if (id == kJpgClock)
+    if (id == kJpgClock) {
         gEngine.inReset = false;
+        gEngine.events.push_back("unreset");
+    }
 }
 
 bool switch_car_reset_asserted(unsigned id)
@@ -188,39 +227,45 @@ uint32_t switch_car_read(uint32_t)
 void switch_car_write(uint32_t, uint32_t)
 {}
 
-void switch_car_rmw(uint32_t, uint32_t, uint32_t)
-{}
-
-bool switch_pmc_partition_is_on(unsigned)
+void switch_car_rmw(uint32_t offset, uint32_t, uint32_t)
 {
-    return gEngine.partitionOn;
+    if (offset == 0x554)
+        gEngine.events.push_back("lvl2");
 }
 
-bool switch_pmc_partition_on(unsigned)
+bool switch_pmc_partition_is_on(unsigned partition)
 {
+    return partition == 25 ? gEngine.nvdecPartitionOn : gEngine.partitionOn;
+}
+
+bool switch_pmc_partition_on(unsigned partition)
+{
+    EXPECT_EQ(partition, 26u);
     gEngine.partitionOn = true;
     gEngine.clamped = true;
     gEngine.partitionPowerOns++;
+    gEngine.events.push_back("partition on");
+    return true;
+}
+
+bool switch_pmc_partition_off(unsigned partition)
+{
+    EXPECT_EQ(partition, 26u);
+    EXPECT_FALSE(gEngine.nvdecPartitionOn) << "NVDEC's partition needs NVJPG's on";
+    gEngine.partitionOn = false;
+    gEngine.events.push_back("partition off");
     return true;
 }
 
 void switch_pmc_remove_clamping(unsigned)
 {
     gEngine.clamped = false;
+    gEngine.events.push_back("unclamp");
 }
 
-bool switch_pmc_power_down(unsigned, unsigned clock, unsigned reset)
+uint32_t switch_pmc_read(uint32_t offset)
 {
-    switch_car_clock_enable(clock);
-    switch_car_reset_assert(reset);
-    switch_car_clock_disable(clock);
-    gEngine.partitionOn = false;
-    return true;
-}
-
-uint32_t switch_pmc_read(uint32_t)
-{
-    return 0;
+    return offset == 0x2c && gEngine.clamped ? 1u << 26 : 0;
 }
 
 switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const switch_falcon_image *)
@@ -315,13 +360,24 @@ protected:
 TEST_F(NVJPGGate, AJobAfterTheIdlePowerOffPowersThePartitionOnBootsTheFalconAndRuns)
 {
     EXPECT_EQ(gEngine.syncpt, 369427731u);  // J2's IMMEDIATE and OP_DONE
+    size_t from = gEngine.events.size();
     idle();
     EXPECT_FALSE(gEngine.partitionOn);
+    EXPECT_TRUE(gEngine.flushed) << "L4T keeps the client in hot reset while the partition is off";
+    using Steps = std::vector<std::string>;
+    EXPECT_EQ(gEngine.steps(from, {"clock on", "flush", "reset", "clock off", "partition off"}),
+              (Steps{"clock on", "flush", "reset", "clock off", "partition off"}));
+    from = gEngine.events.size();
     const int powerOns = gEngine.partitionPowerOns, boots = gEngine.boots;
     const size_t streams = gEngine.streams.size();
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
     ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    // powergate-t21x.c's order, then nvhost's module reset; no MBIST pulse on T210B01.
+    EXPECT_EQ(gEngine.steps(from, {"partition on", "clock on", "reset", "unclamp", "unreset", "release", "lvl2"}),
+              (Steps{"partition on", "clock on", "reset", "unclamp", "unreset", "release", "reset", "unreset"}));
+    EXPECT_FALSE(gEngine.flushed);
+    EXPECT_EQ(switch_mmio_read32(gNvjpgRegisters.data(), 0x117c), 0x30008u);  // FALCON_CG2's prod value
     EXPECT_EQ(gEngine.partitionPowerOns, powerOns + 1);
     EXPECT_FALSE(gEngine.clamped);
     EXPECT_EQ(gEngine.boots, boots + 1);
@@ -343,18 +399,36 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
     EXPECT_TRUE(logged("not reached"));
     EXPECT_TRUE(logged("job selector 7, 64x64"));
-    EXPECT_TRUE(logged("job cancelled, engine reset: running again"));
+    EXPECT_TRUE(logged("engine reset: running again"));
     EXPECT_EQ(gEngine.teardowns, teardowns + 1);
     EXPECT_EQ(gEngine.restarts, restarts + 1);
     EXPECT_EQ(gEngine.boots, boots + 2);  // the gate's power-on, then the cancellation's reboot
     EXPECT_TRUE(gEngine.partitionOn);
-    EXPECT_EQ(switch_mmio_read32(gMcRegisters.data(), MC_HOTRESET_CTRL_1) & MC_HOTRESET_NVJPG, 0u);
+    EXPECT_FALSE(gEngine.flushed);
+    EXPECT_TRUE(logged("memory client drained"));
     EXPECT_TRUE(tegra_nvjpg_ready());
 
     gEngine.stallDecodes = false;
     const uint32_t before = gEngine.syncpt;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
     EXPECT_EQ(gEngine.syncpt, before + 1);
+}
+
+// powergate-t21x.c powers NVJPG's partition before NVDEC's and keeps it on while NVDEC's is: an idle NVJPG is then
+// only flushed, reset and unclocked.
+TEST_F(NVJPGGate, AnIdlePowerOffKeepsThePartitionOnWhileNVDECsIsOn)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    gEngine.nvdecPartitionOn = true;
+    idle();
+    EXPECT_TRUE(gEngine.partitionOn);
+    EXPECT_TRUE(gEngine.inReset);
+    EXPECT_FALSE(gEngine.clockOn);
+    EXPECT_TRUE(gEngine.flushed);
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    gEngine.nvdecPartitionOn = false;
 }
 
 // The stream is the job's: the selector the request came through only names it in a stall line. Two decodes of one

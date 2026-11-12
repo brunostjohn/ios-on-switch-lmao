@@ -97,6 +97,7 @@ host_test(
         "//kits/SwitchDMA:SwitchHwPage.h",
         "//kits/SwitchEngineGate:SwitchEngineGate.h",
         "//kits/SwitchEngineGate:SwitchEngineGateKernel.h",
+        "//kits/SwitchEngineGate:SwitchEnginePower.h",
         "//kits/SwitchFalcon:SwitchFalcon.h",
         "//kits/SwitchMath:SwitchMath.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
