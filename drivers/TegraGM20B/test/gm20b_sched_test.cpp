@@ -425,11 +425,14 @@ struct Candidates {
 };
 
 // live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index),
-// victim, dead (no live channel, or a killed one)
-constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0, 0, 0},
-			     kNone = {0, 0, 0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0, 0, 0},
-			     kMovingResident = {1, 1, 0, 1, 1, 0, 0, 0},
-			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0, 0}, kBusyKernel = {1, 0, 1, 0, 0, 0, 0, 0};
+// victim, dead (no live channel, or a killed one), loading (an engine stuck loading its context)
+constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0, 0, 0},
+			     kBusyClient = {1, 0, 0, 0, 0, 0, 0, 0, 0},
+			     kNone = {0, 0, 0, 0, 0, 0, 0, 0, 0},
+			     kStuckResident = {1, 1, 0, 1, 0, 0, 0, 0, 0},
+			     kMovingResident = {1, 1, 0, 1, 1, 0, 0, 0, 0},
+			     kStuckKernel = {1, 1, 1, 1, 0, 0, 0, 0, 0},
+			     kBusyKernel = {1, 0, 1, 0, 0, 0, 0, 0, 0};
 
 constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
 {
@@ -458,6 +461,60 @@ TEST(HangBlame, AnEngineLeftOnAKilledChannelIsResetNotTheCompositorBehindIt)
 	EXPECT_EQ(blame, 0);
 	k.c[0].dead = 0;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING) << "what T-v2 did: the compositor killed";
+	EXPECT_EQ(blame, 1);
+}
+
+// T-v3e, the present's deadline checks 1 s apart behind ENG0 0004a022 (GR loading backboardd's channel 4, BUSY clear)
+// and PBDMA0 on channel 4. nvkm's decode named killed SwitchHWTest 34 as GR's, so the suspects were 34 and 4: the residue
+// reset found no engine holding 34, and the second check killed backboardd.
+TEST(HangBlame, Tv3eKilledTheCompositorWhoseContextGrWasLoading)
+{
+	tgm_hang_candidate hwtest = kNone, present = kStuckKernel;
+	hwtest.live = hwtest.resident = hwtest.dead = 1;
+	present.resident = 0;
+	Candidates k{{hwtest, kStuckResident, present}};
+	k.late_kernel = 1;
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RESIDUE);
+	EXPECT_EQ(blame, 0);
+	k.c[0].dead = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING) << "the old fallback";
+	EXPECT_EQ(blame, 1) << "backboardd";
+	k.c[1].loading = 1;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RELOAD)
+		<< "GR is loading 4: reset under it, kill no one";
+	EXPECT_EQ(blame, 1);
+}
+
+// With NVIDIA's decode the suspects are channel 4 alone (GR loading it, PBDMA0 on it): no channel is killed.
+TEST(HangBlame, AnEngineLoadingALiveChannelsContextIsResetUnderIt)
+{
+	tgm_hang_candidate loading = kStuckResident, present = kStuckKernel;
+	loading.loading = 1;
+	present.resident = 0;
+	Candidates k{{loading, present}};
+	k.late_kernel = 1;
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RELOAD);
+	EXPECT_EQ(blame, 0);
+	k.c[0].loading = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING)
+		<< "only a load finished meanwhile leaves the old rule";
+}
+
+// T-v3e's last checks: backboardd killed too, GR still loading its context, killed 34 first among the suspects. Each
+// dead resident's reset is tried in turn; before, only the first was, and the engine on channel 4 never was.
+TEST(HangBlame, EveryDeadChannelAnEngineIsOnGetsItsResetTried)
+{
+	tgm_hang_candidate first = kNone, second = kNone;
+	first.live = first.resident = first.dead = 1;
+	second.live = second.resident = second.dead = second.loading = 1;
+	Candidates k{{first, second, kStuckKernel}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RESIDUE);
+	EXPECT_EQ(blame, 0);
+	k.c[0].dead = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RESIDUE);
 	EXPECT_EQ(blame, 1);
 }
 
@@ -508,7 +565,7 @@ TEST(HangBlame, AnAcquireTimeoutKillsTheProducerNotTheWaiter)
 
 TEST(HangBlame, AWaiterOnAProducerThatMovesIsLeftAlone)
 {
-	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0}, waiting(kStuckClient, 1)}};
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);
@@ -569,7 +626,7 @@ TEST(HangBlame, WithNoEngineOnThemTheBlameFollowsTheAcquiresToTheEnd)
 
 TEST(HangBlame, AnAcquireOnASourceThatMovesIsSlowWork)
 {
-	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0}, waiting(kStuckClient, 1)}};
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0, 0, 0, 0}, waiting(kStuckClient, 1)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);

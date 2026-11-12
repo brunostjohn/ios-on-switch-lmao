@@ -79,6 +79,115 @@ TEST(Unbind, AnEngineWaitingOnALoadHoldsTheChannelThoughNotBusy)
 	EXPECT_TRUE(tgm_engine_holds(engine(6, 17, 4) & ~kBusy, 17)) << "saving it out";
 }
 
+// gk104_engn_status's choice of channel (nvkm/engine/fifo/gk104.c), the decode nvkm used before engn_cxid replaced it
+int nouveauCxid(uint32_t stat, bool chswLoad)
+{
+	const bool busy = stat & 0x80000000u, chsw = stat & 0x00008000u, save = stat & 0x00004000u,
+		   load = stat & 0x00002000u;
+	const int prev = int(stat & 0xfffu), next = int((stat >> 16) & 0xfffu);
+
+	if (busy && chsw) {
+		if (load && save)
+			return chswLoad ? next : prev;
+		return load ? next : prev;
+	}
+	return load ? prev : -1;
+}
+
+// T-v3e 165.8 s: ENG0 0004a022 "ch 34 -> ch 4, ctxsw load", BUSY clear: GR loads backboardd's channel 4, switched away from
+// SwitchHWTest's killed 34. nvkm named 34, so the hang rule's residue reset found no engine on 34 and killed channel 4.
+TEST(EngineContext, ALoadWithBusyClearIsOnTheChannelItLoads)
+{
+	constexpr uint32_t tv3e = 0x0004a022u, tv2 = 0x0014a014u;
+	int tsg = -1;
+
+	EXPECT_EQ(PFIFO_ENG_CTX_STATUS(tv3e), uint32_t(PFIFO_ENG_CTX_LOAD));
+	EXPECT_EQ(tgm_engine_chid(tv3e, 0, &tsg), 4);
+	EXPECT_EQ(tsg, 0);
+	EXPECT_EQ(nouveauCxid(tv3e, false), 34)
+		<< "what nvkm's recovery and the hang rule were told";
+	EXPECT_TRUE(tgm_engine_holds(tv3e, 4));
+	EXPECT_FALSE(tgm_engine_holds(tv3e, 34));
+	EXPECT_EQ(tgm_engine_chid(tv2, 0, &tsg), 20);
+}
+
+TEST(EngineContext, EveryStateNamesTheChannelTheTeardownSequenceReads)
+{
+	int tsg = -1;
+
+	EXPECT_EQ(tgm_engine_chid(engine(1, 17, 4), 0, &tsg), 17);  // VALID: ID
+	EXPECT_EQ(tgm_engine_chid(engine(6, 17, 4), 0, &tsg), 17);  // SAVE: ID
+	EXPECT_EQ(tgm_engine_chid(engine(5, 17, 4), 0, &tsg), 4);   // LOAD: NEXT_ID
+	EXPECT_EQ(tgm_engine_chid(engine(7, 17, 4), 0, &tsg), 17);  // SWITCH before FECS loads
+	EXPECT_EQ(tgm_engine_chid(engine(7, 17, 4), 1, &tsg), 4);   // and once it does
+	EXPECT_EQ(tgm_engine_chid(engine(0, 17, 4), 0, &tsg), -1);  // INVALID
+	EXPECT_EQ(tgm_engine_chid(engine(1, 17, 4) | 0x00001000u, 0, &tsg), 17);
+	EXPECT_EQ(tsg, 1);
+	EXPECT_EQ(tgm_engine_chid(engine(5, 17, 4) | 0x10000000u, 0, &tsg), 4);
+	EXPECT_EQ(tsg, 1);
+	for (uint32_t ctx : {1u, 6u, 7u})
+		EXPECT_EQ(tgm_engine_chid(engine(ctx, 17, 4), 0, &tsg),
+			  nouveauCxid(engine(ctx, 17, 4), false))
+			<< "a BUSY engine's channel is nvkm's in every other state: " << ctx;
+}
+
+// Both device stalls a GR reset left (T-v2 0014a014, T-v3e 0004a022) are a switch pending with BUSY clear in LOAD, which
+// gk104_engn_chsw (BUSY and CTXSW) never counted: every CTXSW_TIMEOUT tick for them reached no decision.
+TEST(EngineContext, AStuckLoadIsASwitchTheTicksDecideOn)
+{
+	for (uint32_t stall : {0x0004a022u, 0x0014a014u}) {
+		EXPECT_TRUE(tgm_engine_load_stuck(stall)) << std::hex << stall;
+		EXPECT_TRUE(tgm_engine_switch_pending(stall)) << std::hex << stall;
+		EXPECT_EQ(nouveauCxid(stall, false), int(stall & 0xfffu));
+	}
+	EXPECT_FALSE(tgm_engine_load_stuck(engine(5, 34, 4))) << "a BUSY load is nvkm's switch";
+	EXPECT_TRUE(tgm_engine_switch_pending(engine(5, 34, 4)));
+	EXPECT_FALSE(tgm_engine_load_stuck(engine(6, 34, 4) & ~kBusy)) << "a save";
+	EXPECT_FALSE(tgm_engine_load_stuck(engine(1, 34, 0) & ~kBusy));
+	EXPECT_FALSE(tgm_engine_switch_pending(engine(1, 34, 0)));
+	EXPECT_FALSE(tgm_engine_switch_pending(0x00000022u));
+}
+
+TEST(EngineContext, AStuckLoadResetsTheEngineAndKillsNoOne)
+{
+	EXPECT_EQ(tgm_load_verdict(1, 0, tgm_load_reloaded(0, 0, 3636)), TGM_CTXSW_RELOAD);
+	EXPECT_EQ(tgm_load_verdict(1, 1, 0), TGM_CTXSW_RESET)
+		<< "a killed channel's load is residue";
+	EXPECT_EQ(tgm_load_verdict(0, 0, 0), TGM_CTXSW_RESET) << "no channel's";
+}
+
+TEST(EngineContext, TheSameLoadStuckAgainWithNothingCompletedIsFatal)
+{
+	EXPECT_EQ(tgm_load_verdict(1, 0, tgm_load_reloaded(1, 3632, 3632)), TGM_CTXSW_FATAL);
+	EXPECT_EQ(tgm_load_verdict(1, 0, tgm_load_reloaded(1, 3632, 3633)), TGM_CTXSW_RELOAD)
+		<< "it completed work after the reset: a new stall";
+}
+
+// T-v3e's PBDMA0 00042004 "ch 4 mthd 80001428 data 00000000": channel 4 loaded (CHAN_STATUS VALID) on a 3D method
+// (subchannel 0, 0x1428 INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI), not parked on an acquire
+TEST(EngineReset, TheCompositorOnThePbdmaIsPreemptedAtTheHold)
+{
+	constexpr uint32_t pbdma = 0x00042004u;
+	EXPECT_NE(pbdma & PBDMA_BUSY, 0u);
+	EXPECT_EQ(PBDMA_CHID(pbdma), 4u);
+	EXPECT_EQ(PBDMA_METHOD_ADDR(0x80001428u), 0x1428u);
+	EXPECT_FALSE(tgm_pbdma_acquiring(0x80001428u, 0));
+	EXPECT_EQ(tgm_reset_pbdma(pbdma, 1), TGM_RESET_PBDMA_LIVE);
+	EXPECT_EQ(tgm_reset_pbdma(pbdma, 0), TGM_RESET_PBDMA_DEAD);
+	EXPECT_EQ(tgm_reset_pbdma(0, 1), TGM_RESET_PBDMA_IDLE);
+}
+
+TEST(EngineReset, OnlyTheOutermostOfNestedResetsHoldsAndReleases)
+{
+	uint32_t holds = 0;
+	EXPECT_TRUE(tgm_reset_hold_enter(&holds));   // tgm_engine_reset_locked
+	EXPECT_FALSE(tgm_reset_hold_enter(&holds));  // GR's own reset inside it
+	EXPECT_FALSE(tgm_reset_hold_leave(&holds));
+	EXPECT_TRUE(tgm_reset_hold_leave(&holds));
+	EXPECT_FALSE(tgm_reset_hold_leave(&holds)) << "a release with no hold is no release";
+	EXPECT_EQ(holds, 0u);
+}
+
 // T-v2 kill_one: the poisoned job P stopped GR, which finished P and released its fence before the kill
 TEST(Kill, TheFirstFailedSeqnoIsTheJobAGrErrorStoppedIn)
 {

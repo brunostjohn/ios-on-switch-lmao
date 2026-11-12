@@ -4,6 +4,7 @@
 #include <core/engine.h>
 #include <subdev/top.h>
 #include "TegraGM20BClkgate.h"
+#include "TegraGM20BRecover.h"
 #include "TegraGM20BTherm.h"
 
 void tgm_therm_arm(struct nvkm_device *device)
@@ -95,7 +96,9 @@ static int gated_reset(struct nvkm_engine *engine)
 	int ret = 0;
 
 	tgm_clkgate_disable(device);
+	tgm_recover_reset_hold(engine);
 	ret = gr_reset(engine);
+	tgm_recover_reset_release(engine);
 	tgm_clkgate_enable(device);
 	return ret;
 }

@@ -10,8 +10,9 @@ static void present_channel_brief(struct tgm_chan *chan, int chid, char *buf, un
 		scnprintf(buf, len, "untracked ch %d", chid);
 		return;
 	}
-	scnprintf(buf, len, "%.16s ch %u fence %u/%u err %u uid %llu", chan->owner, chan->chid,
-		  tgm_chan_completed(chan), chan->submitted, chan->error, chan->id);
+	scnprintf(buf, len, "%.16s ch %u fence %u/%u err %u%s%.12s uid %llu", chan->owner,
+		  chan->chid, tgm_chan_completed(chan), chan->submitted, chan->error,
+		  chan->fault[0] ? " " : "", chan->fault, chan->id);
 }
 
 static const char *const watch_late_names[] = {"its interrupt was never asked for",

@@ -6,8 +6,12 @@
 #include "TegraGM20BHost.h"
 
 struct nvkm_device;
+struct nvkm_engine;
+struct nvkm_engn;
 struct nvkm_fifo;
 struct nvkm_fifo_func;
+struct nvkm_runl;
+struct nvkm_runq;
 
 /* Once, after the FIFO exists (M2): recover.c takes PFIFO's scheduler errors and PBDMA ENG_RESET from nvkm's interrupt
  * handlers, and a context-switch timeout recovers the context only once its channel is stuck. */
@@ -25,6 +29,7 @@ enum tgm_ctxsw {
 	TGM_CTXSW_RESET, /* the context is a killed channel's or no channel's: nvkm finds no channel group left to recover
 			  * (nvkm_runl_rc_engn), so recover.c resets the engine */
 	TGM_CTXSW_REDO, /* a kernel channel is stuck: the engine is reset and the work it was on redone, nothing killed */
+	TGM_CTXSW_RELOAD, /* the engine is stuck loading a live channel's context: reset under it, nothing killed */
 	TGM_CTXSW_FATAL, /* a kernel channel is stuck again before any work submitted after its last reset completed */
 };
 
@@ -61,6 +66,25 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine);
  * PFIFO_ENG_STATUS. 1 if it was reset. */
 int tgm_recover_copy_reset(int chid, void (*mark)(void), uint32_t *status);
 #endif
+
+/* For an engine stuck loading a channel's context (tgm_engine_load_stuck): known and dead as tgm_ctxsw_verdict takes
+ * them; reloaded: an engine was reset under this channel's load before and the channel has completed nothing since. The
+ * channel being loaded has run nothing on the engine since the load began, so a reset under it loses none of its work. */
+static inline enum tgm_ctxsw tgm_load_verdict(int known, int dead, int reloaded)
+{
+	if (!known || dead)
+		return TGM_CTXSW_RESET;
+	return reloaded ? TGM_CTXSW_FATAL : TGM_CTXSW_RELOAD;
+}
+
+static inline int tgm_load_reloaded(int reset, uint32_t completed_at_reset, uint32_t completed)
+{
+	return reset && completed == completed_at_reset;
+}
+
+/* gpu_reload.c, from recover.c's work: tgm_load_verdict for hardware channel chid, loaded on the engine named `engine`.
+ * TGM_CTXSW_RELOAD marks the channel before the caller resets the engine; a second stuck load panics. */
+enum tgm_ctxsw tgm_ctxsw_load_decide(int chid, const char *engine);
 
 /* NV_PFIFO_INTR_SCHED_ERROR_CODE as NVIDIA's open gv100 dev_fifo.ref names it. gm20b's nvgpu header names only
  * CTXSW_TIMEOUT, 0x0a there as well, so the rest of Maxwell's encoding is taken to be the same. */
@@ -132,14 +156,83 @@ static inline int tgm_engine_holds(uint32_t status, int chid)
 	return (status & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)) && (id || next);
 }
 
-/* PBDMA_INTR_0 ENG_RESET (gv100 dev_pbdma.ref): an engine of the PBDMA's runlist was reset while the PBDMA served a
- * channel. Only a recovery resets an engine, and only when the context on it, or the one it is switching out, is the
- * channel recovered (nvkm_runl_rc: the engine's channel group under recovery; recover.c: a killed channel, none, or a stuck
- * kernel channel whose work it redoes). The PBDMA's channel is then that one, or one whose context had not reached the
- * engine, so none of its methods were lost but the kernel channel's cut work, which is redone: the method it holds goes
- * on to the reset engine, which loads its context first. nvgpu's gm20b PBDMA handling
- * counts no error for the bit; nvkm's would report it as the channel's error and replace that method with a NOP. */
+/* The channel an engine's context status names: VALID and SAVE are on ID, LOAD on NEXT_ID, and a SWITCH on NEXT_ID once
+ * FECS has begun the load (fecs_loading, nvkm's chsw_load) and on ID before, BUSY or not. nouveau's gk104_engn_status
+ * names ID, the context switched away from, for a LOAD with BUSY clear. -1: none. */
+static inline int tgm_engine_chid(uint32_t status, int fecs_loading, int *tsg)
+{
+	const uint32_t ctx = PFIFO_ENG_CTX_STATUS(status);
+	const int next = ctx == PFIFO_ENG_CTX_LOAD || (ctx == PFIFO_ENG_CTX_SWITCH && fecs_loading);
+
+	if (ctx != PFIFO_ENG_CTX_VALID && ctx != PFIFO_ENG_CTX_LOAD && ctx != PFIFO_ENG_CTX_SAVE &&
+	    ctx != PFIFO_ENG_CTX_SWITCH)
+		return -1;
+	*tsg = next ? (status & PFIFO_ENG_NEXT_ID_TSG) != 0 : (status & PFIFO_ENG_ID_TSG) != 0;
+	return (int)(next ? PFIFO_ENG_NEXT_ID(status) : PFIFO_ENG_ID(status));
+}
+
+/* A context switch pending on an engine that is not BUSY, its status LOAD: a context load that does not finish.
+ * nouveau's gk104_engn_chsw counts a switch only while BUSY, so its context-switch timeout ticks get no decision there. */
+static inline int tgm_engine_load_stuck(uint32_t status)
+{
+	return (status & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)) == PFIFO_ENG_CHSW &&
+	       PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_LOAD;
+}
+
+/* An engine whose context-switch timeout tick gets a decision: a switch pending while BUSY (nvkm's), or a stuck load */
+static inline int tgm_engine_switch_pending(uint32_t status)
+{
+	return ((status & PFIFO_ENG_BUSY) && (status & PFIFO_ENG_CHSW)) ||
+	       tgm_engine_load_stuck(status);
+}
+
+/* PBDMA_INTR_0 ENG_RESET: an engine of the PBDMA's runlist was reset while the PBDMA was on a channel, which stalls
+ * there until the bit is cleared. Cleared before the engine is back, the PBDMA sends that channel's method into an engine
+ * still in reset. So every engine reset holds the bit (tgm_recover_reset_hold): masked from before the reset, the
+ * PBDMA's live channel preempted off it to be loaded again from its saved state, acknowledged once the engine is back,
+ * a killed channel's method replaced with a NOP as nvkm's PBDMA handler replaces a faulting one. nvkm's handler would
+ * report the bit as the channel's error. */
 #define TGM_PBDMA_ENG_RESET 0x01000000u
+
+/* The channel a PBDMA is on at a reset's hold (PBDMA_STATUS: one is loaded), by whether nvkm has it alive */
+enum tgm_reset_pbdma {
+	TGM_RESET_PBDMA_IDLE,
+	TGM_RESET_PBDMA_LIVE, /* preempted off the PBDMA before the reset */
+	TGM_RESET_PBDMA_DEAD, /* its method replaced with a NOP at the release */
+};
+
+static inline enum tgm_reset_pbdma tgm_reset_pbdma(uint32_t pbdma_status, int alive)
+{
+	if (!(pbdma_status & PBDMA_BUSY))
+		return TGM_RESET_PBDMA_IDLE;
+	return alive ? TGM_RESET_PBDMA_LIVE : TGM_RESET_PBDMA_DEAD;
+}
+
+/* Engine resets nest (recover.c's reset of GR goes through GR's own reset): the outermost hold masks ENG_RESET and the
+ * outermost release acknowledges and unmasks it. *holds is device->intr.lock's, so the interrupt pass never sees the bit
+ * while a reset holds it. */
+static inline int tgm_reset_hold_enter(uint32_t *holds)
+{
+	return (*holds)++ == 0;
+}
+
+static inline int tgm_reset_hold_leave(uint32_t *holds)
+{
+	return *holds && --*holds == 0;
+}
+
+/* recover_engine.c. Around every engine reset, from before it starts until the engine is back (clkgate.c's GR reset,
+ * tgm_engine_reset_locked); runl->mutex held. */
+void tgm_recover_reset_hold(struct nvkm_engine *engine);
+void tgm_recover_reset_release(struct nvkm_engine *engine);
+/* recover.c's PBDMA handler: an ENG_RESET no hold masked, from a reset nvkm made without one */
+void tgm_eng_reset_intr(struct nvkm_device *device, struct nvkm_runq *runq);
+/* As nvkm_runl_rc resets an engine: runlist blocked, the engine reset under a hold, exception state cleared, runlist let
+ * go. runl->mutex held, and the engine found holding hardware channel id under it. */
+void tgm_engine_reset_locked(struct nvkm_runl *runl, struct nvkm_engn *engn, int id,
+			     const char *why);
+/* Debug kernels: the engines reset since the last call */
+uint32_t tgm_engine_resets_take(void);
 
 /* The PBDMA_INTR_0 bits nvkm's handler still gets. ACQUIRE is gpu_acquire.c's: nvkm's would kill the waiting channel and
  * write a NOP over the acquire it waits on. */
@@ -160,6 +253,10 @@ void tgm_recover_fault(struct nvkm_device *device, int chid);
 /* Resets every engine still holding dead hardware channel chid (tgm_engine_holds); how many. The PBDMA that fed it gets
  * ENG_RESET and drops the dead channel's method (recover.c runq_intr). */
 int tgm_recover_residue(struct nvkm_device *device, int chid);
+/* The name of an engine stuck loading hardware channel chid's context (tgm_engine_load_stuck), else NULL */
+const char *tgm_recover_loading(struct nvkm_device *device, int chid);
+/* Resets every engine stuck loading chid's context; how many */
+int tgm_recover_reload(struct nvkm_device *device, int chid);
 /* nvkm's FIFO functions as a writable copy put in place of its const table, once: recover.c and sched.c replace entries
  * of it, and vendored nouveau stays as it is. */
 struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo);
@@ -215,7 +312,8 @@ enum tgm_hang {
 	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
 	TGM_HANG_RECOVERING, /* a client's channel the GPU is stuck on is being killed (or the late one died already) */
 	TGM_HANG_PROGRESSING, /* no channel is stuck: the late work is slow, not hung */
-	TGM_HANG_RESIDUE /* an engine or PBDMA is still on a dead channel (*blame): reset it, kill no one */
+	TGM_HANG_RESIDUE, /* an engine or PBDMA is still on a dead channel (*blame): reset it, kill no one */
+	TGM_HANG_RELOAD /* an engine is stuck loading a live channel's context (*blame): reset under it, kill no one */
 };
 
 struct tgm_hang_candidate {
@@ -227,6 +325,7 @@ struct tgm_hang_candidate {
 	uint8_t waits; /* 1 + the candidate its pending acquire waits on; 0: none */
 	uint8_t victim; /* its acquire waits on what the kernel or a host1x engine releases, never on its own work */
 	uint8_t dead; /* not a live channel, or one killed already: an engine or PBDMA left on it is a recovery's residue */
+	uint8_t loading; /* an engine is stuck loading its context (tgm_engine_load_stuck): its work has not begun there */
 };
 
 /* A long single job and a hung one look alike for the whole check: the PBDMA's GET stops once the engine's method FIFO is
@@ -249,13 +348,14 @@ static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t
 }
 
 /* Candidates in order: tgm_recover_suspects' channels, the channels the late one waits on through acquires, the late
- * one (last). An engine or PBDMA on a dead channel comes first: what it holds up is no channel's fault. Then a channel an
- * engine is on that is stuck and does not move is to blame (*blame, its index; else -1): a
- * client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is busy, not hung,
- * and nothing is killed, whatever waits behind it. With no engine on any of them, the blame follows the late one's
- * acquires to the channel at the end of that chain, and only a stuck one that does not move is killed; a chain through
- * a source that moves is slow work, and a chain that ends on a victim kills nothing and is never fatal. A dead late
- * channel is recovered already, and other late kernel work with nothing progressing anywhere is fatal. */
+ * one (last). An engine or PBDMA on a dead channel comes first: what it holds up is no channel's fault. So does an
+ * engine stuck loading a live channel's context, with the PBDMA waiting behind it on that channel: neither is that
+ * channel's work. Then a channel an engine is on that is stuck and does not move is to blame (*blame, its index;
+ * else -1): a client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is
+ * busy, not hung, and nothing is killed, whatever waits behind it. With no engine on any of them, the blame follows the
+ * late one's acquires to the channel at the end of that chain, and only a stuck one that does not move is killed; a
+ * chain through a source that moves is slow work, and a chain that ends on a victim kills nothing and is never fatal. A
+ * dead late channel is recovered already, and other late kernel work with nothing progressing anywhere is fatal. */
 static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
 					   int late_kernel, int any_progress, int *blame)
 {
@@ -266,6 +366,12 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 		if (c[i].resident && c[i].dead) {
 			*blame = i;
 			return TGM_HANG_RESIDUE;
+		}
+	}
+	for (i = 0; i < n; i++) {
+		if (c[i].live && c[i].resident && c[i].loading) {
+			*blame = i;
+			return TGM_HANG_RELOAD;
 		}
 	}
 	for (i = 0; i < n; i++) {

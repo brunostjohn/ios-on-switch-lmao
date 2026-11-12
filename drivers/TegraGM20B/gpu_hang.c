@@ -424,6 +424,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		c[i].dead = !chans[i] || READ_ONCE(chans[i]->error) != 0;
 		c[i].kernel = chans[i] && chans[i]->kernel;
 		c[i].resident = i < resident;
+		c[i].loading = chans[i] && tgm_recover_loading(tgm_gpu.device, (int)chans[i]->chid);
 		c[i].moving = chans[i] && chan_moving(chans[i], now);
 		for (j = 0; j < i && chans[j] != chans[i]; j++)
 			;
@@ -452,18 +453,27 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
 	}
-	verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel, progress, &b);
-	if (verdict == TGM_HANG_RESIDUE) {
-		if (tgm_recover_residue(tgm_gpu.device, suspects[b])) {
-			nvxnu_log("tegra-gm20b: GPU hang: %s waited %llu ms for %s fence %u behind "
-				  "dead channel %d: its engine reset, nothing killed\n",
-				  who, waited_ns / 1000000, late->owner, seqno, suspects[b]);
-			return TGM_HANG_RECOVERING;
-		}
-		for (i = 0; i <= n; i++)
-			c[i].dead = 0;
+	/* each candidate's engine reset is tried at most once a check */
+	for (;;) {
 		verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel,
 					 progress, &b);
+		if (verdict == TGM_HANG_RESIDUE) {
+			if (tgm_recover_residue(tgm_gpu.device, suspects[b])) {
+				nvxnu_log(
+					"tegra-gm20b: GPU hang: %s waited %llu ms for %s fence %u "
+					"behind dead channel %d: its engine reset, nothing "
+					"killed\n",
+					who, waited_ns / 1000000, late->owner, seqno, suspects[b]);
+				return TGM_HANG_RECOVERING;
+			}
+			c[b].dead = 0;
+		} else if (verdict == TGM_HANG_RELOAD) {
+			if (tgm_load_recover_locked(chans[b], who))
+				return TGM_HANG_RECOVERING;
+			c[b].loading = 0;
+		} else {
+			break;
+		}
 	}
 	if (b < 0 || chans[b]->isolating)
 		return verdict;

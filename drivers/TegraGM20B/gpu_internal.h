@@ -340,6 +340,9 @@ struct tgm_chan {
 	/* a kernel channel's engine reset for a context-switch timeout, and what it had submitted then (tgm_ctxsw_decide) */
 	int ctxsw_reset;
 	u32 ctxsw_reset_after;
+	/* an engine was reset under its context load, and what it had completed then (gpu_reload.c; tgm_live_lock) */
+	int load_reset;
+	u32 load_reset_done;
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
@@ -407,6 +410,9 @@ void tgm_chan_isolate(struct tgm_chan *chan, const char *report, u64 now);
 int tgm_errors_contained(const char *errors);
 void tgm_iso_deadline(void *arg);
 enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns);
+/* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_RELOAD. 1 if an engine was reset under chan's context
+ * load; a second stuck load with nothing completed since panics. */
+int tgm_load_recover_locked(struct tgm_chan *chan, const char *who);
 
 struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */

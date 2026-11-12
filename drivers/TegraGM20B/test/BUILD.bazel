@@ -41,6 +41,9 @@
 #                            which engine whose switch timed out is waited for, killed off or reset (a killed channel's
 #                            context), which engines hold a channel at its unbind, that a PBDMA ENG_RESET or ACQUIRE never
 #                            reaches nvkm as the channel's error; F-v1's twod_clear save timeout and its engine line
+#   gm20b_eng_reset_order_test  recover_engine.c's hold of the PBDMA's ENG_RESET over a model of an engine reset and
+#                            the interrupt pass: at every point the pass can run, the PBDMA goes on only once the engine is
+#                            back, its live channel preempted, a killed one's method dropped
 #   gm20b_view_merge_test    TegraGM20BViewMerge.h: a CPU write lock's unlock keeps the bytes a GPU write left where the
 #                            CPU wrote none, byte by byte
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
@@ -354,6 +357,17 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_eng_reset_order_test",
+    srcs = [
+        "gm20b_eng_reset_order_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_view_merge_test",
     srcs = [
         "gm20b_view_merge_test.cpp",
@@ -407,6 +421,7 @@ host_test(
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c",
         "//drivers/TegraGM20B:recover.c",
+        "//drivers/TegraGM20B:recover_engine.c",
     ],
     defines = [
         'GF100_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c)\\"',
@@ -415,6 +430,7 @@ host_test(
         'GPU_FAULT_C=\\"$(rootpath //drivers/TegraGM20B:gpu_fault.c)\\"',
         'GPU_HANG_C=\\"$(rootpath //drivers/TegraGM20B:gpu_hang.c)\\"',
         'RECOVER_C=\\"$(rootpath //drivers/TegraGM20B:recover.c)\\"',
+        'RECOVER_ENGINE_C=\\"$(rootpath //drivers/TegraGM20B:recover_engine.c)\\"',
     ],
 )
 
@@ -521,6 +537,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
         "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
         "//drivers/TegraGM20B:recover.c",
+        "//drivers/TegraGM20B:recover_engine.c",
         "//drivers/TegraGM20B:nouveau/nvkm/subdev/ltc/base.c",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c",
         "//drivers/TegraGM20B:sched.c",

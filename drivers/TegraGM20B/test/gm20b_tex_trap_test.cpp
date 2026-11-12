@@ -196,19 +196,64 @@ TEST(Gm20bGrFault, EveryChannelErrorIsChargedBeforeGrGoesOn)
 // T-v2 19:26:17-20: the PBDMA kept killed channel 20's method across GR's reset and GR loaded that context for 3 s
 TEST(Gm20bGrFault, AKilledChannelsMethodIsDroppedAtEngReset)
 {
-	const std::string intr =
-		Body(Text(RECOVER_C),
-		     "static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)\n{");
+	const std::string engine = Text(RECOVER_ENGINE_C);
+	const std::string ack = Body(engine, "static void eng_reset_ack(");
 	const size_t nop =
-		intr.find("nvkm_wr32(device, PBDMA_METHOD0(runq->id), PBDMA_METHOD_NOP);");
+		ack.find("nvkm_wr32(device, PBDMA_METHOD0(runq->id), PBDMA_METHOD_NOP);");
 	ASSERT_NE(nop, std::string::npos);
-	EXPECT_LT(intr.find("const bool dead = !chan_alive(runq, chid);"), nop);
-	EXPECT_LT(nop,
-		  intr.find("nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_ENG_RESET);"));
+	EXPECT_LT(ack.find("const bool dead = !chan_alive(runq->fifo, chid);"), nop);
+	EXPECT_LT(nop, ack.find("nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_ENG_RESET);"));
+	EXPECT_NE(Body(Text(RECOVER_C),
+		       "static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)\n{")
+			  .find("tgm_eng_reset_intr(device, runq);"),
+		  std::string::npos);
 	const std::string hang = Body(Text(GPU_HANG_C), "enum tgm_hang tgm_hang_recover(");
 	EXPECT_LT(hang.find("if (verdict == TGM_HANG_RESIDUE) {"),
 		  hang.find("if (b < 0 || chans[b]->isolating)"));
 	EXPECT_NE(hang.find("tgm_recover_residue(tgm_gpu.device, suspects[b])"), std::string::npos);
+}
+
+// T-v3e: nvkm reset GR for SwitchHWTest's GR error while PBDMA0 held backboardd's channel, and the interrupt pass cleared
+// its ENG_RESET at once, GR still in reset: GR never finished loading that channel's context. The bit is masked from the
+// hold, under the interrupt pass's lock, and acknowledged at the release, the PBDMA's live channel preempted first.
+TEST(Gm20bGrFault, EngResetIsAcknowledgedOnlyOnceTheEngineIsBack)
+{
+	const std::string engine = Text(RECOVER_ENGINE_C);
+	const std::string hold =
+		Body(engine, "void tgm_recover_reset_hold(struct nvkm_engine *engine)\n{");
+	EXPECT_LT(hold.find("spin_lock_irqsave(&device->intr.lock, flags);"),
+		  hold.find("hold_pbdmas(device, engine);"));
+	const std::string pbdmas = Body(engine, "static void hold_pbdmas(");
+	EXPECT_LT(pbdmas.find(
+			  "nvkm_mask(device, PBDMA_INTR_EN_0(runq->id), TGM_PBDMA_ENG_RESET, 0);"),
+		  pbdmas.find("nvkm_wr32(device, PFIFO_PREEMPT, chid);"));
+	const std::string release =
+		Body(engine, "void tgm_recover_reset_release(struct nvkm_engine *engine)\n{");
+	EXPECT_LT(release.find("spin_lock_irqsave(&device->intr.lock, flags);"),
+		  release.find("eng_reset_ack(device, runq, "));
+	EXPECT_LT(
+		release.find("eng_reset_ack(device, runq, "),
+		release.find("nvkm_mask(device, PBDMA_INTR_EN_0(runq->id), TGM_PBDMA_ENG_RESET,"));
+	const std::string reset = Body(engine, "void tgm_engine_reset_locked(");
+	EXPECT_LT(reset.find("tgm_recover_reset_hold(engn->engine);"),
+		  reset.find("WARN_ON(nvkm_engine_reset(engn->engine));"));
+	EXPECT_LT(reset.find("WARN_ON(nvkm_engine_reset(engn->engine));"),
+		  reset.find("tgm_recover_reset_release(engn->engine);"));
+	EXPECT_EQ(Text(RECOVER_C).find("nvkm_engine_reset("), std::string::npos)
+		<< "every engine reset of recover.c goes through tgm_engine_reset_locked";
+}
+
+// A context-switch timeout tick on an engine stuck loading a live channel's context resets the engine and kills no one,
+// and a late wait behind one does the same instead of blaming the PBDMA's channel.
+TEST(Gm20bGrFault, AStuckLoadIsResetNeverKilled)
+{
+	const std::string work = Body(Text(RECOVER_C), "static void ctxsw_work(void *arg)\n{");
+	EXPECT_LT(work.find("else if (tgm_engine_load_stuck(status))"),
+		  work.find("verdict = tgm_ctxsw_decide(id);"));
+	EXPECT_NE(work.find("\"stuck loading the context of live\");"), std::string::npos);
+	const std::string hang = Body(Text(GPU_HANG_C), "enum tgm_hang tgm_hang_recover(");
+	EXPECT_LT(hang.find("} else if (verdict == TGM_HANG_RELOAD) {"),
+		  hang.find("if (b < 0 || chans[b]->isolating)"));
 }
 
 }  // namespace
