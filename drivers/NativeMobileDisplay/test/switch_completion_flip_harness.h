@@ -30,8 +30,17 @@ namespace completion_flip_test {
     throw std::runtime_error(text);
 }
 
-inline void IOLog(const char *, ...)
-{}
+inline std::vector<std::string> gLog;
+
+__attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    gLog.emplace_back(text);
+}
 
 struct IOSimpleLock {
     bool held = false;
@@ -74,12 +83,16 @@ inline PanicRestore gPanicRestore;
 
 inline std::function<int(const TegraScanoutCopy *)> gOffer;
 
+// A unit whose window A WINBUF aperture (0xbc0..) refuses: kDropsWinbuf loses the stores, kParksWinbuf keeps them in a
+// copy WIN_A_UPDATE does not take. Window A's DC_WIN aperture (0xb80..) lands either way.
 struct DcModel {
+    enum Aperture { kLands, kDropsWinbuf, kParksWinbuf };
     static constexpr uint32_t kStateAccess = 0x040, kStateControl = 0x041, kHeader = 0x042, kWindowASelect = 1u << 4;
     static constexpr uint32_t kStart = 0x800, kActReqs = 3u, kWinAUpdate = 1u << 9, kWinAActReq = 1u << 1;
-    std::map<uint32_t, uint32_t> general, assembly, armed, active;
+    std::map<uint32_t, uint32_t> general, assembly, armed, active, parked;
     uint32_t requested = 0;
     bool clocked = true;
+    Aperture winbuf = kLands;
     unsigned selectorWrites = 0, boundaries = 0;
     std::vector<uint32_t> written;
 
@@ -103,7 +116,10 @@ struct DcModel {
             throw std::runtime_error("a write to DC A while it is unclocked");
         written.push_back(word);
         if (const int a = aperture(word); a >= 0) {
-            assembly[static_cast<uint32_t>(a)] = value;
+            if (a < static_cast<int>(kStart) || winbuf == kLands)
+                assembly[static_cast<uint32_t>(a)] = value;
+            else if (winbuf == kParksWinbuf)
+                parked[static_cast<uint32_t>(a)] = value;
         } else if (windowWord(word)) {
             if (general[kHeader] != kWindowASelect)
                 throw std::runtime_error("a window A word written with another window selected");

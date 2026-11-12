@@ -2943,6 +2943,7 @@ private:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void settleStopped()
     {
+        flipUnverifiedFromGate();
         const int asked = ring.pending;
         uint64_t seq = asked != kNoBuffer ? entrySeq[asked] : 0;
         ring.settle();

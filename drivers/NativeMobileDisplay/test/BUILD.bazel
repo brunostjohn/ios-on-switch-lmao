@@ -40,7 +40,9 @@
 #   switch_completion_flip_test         SwitchCompletionFlipDisplay.h: a direct frame's completion writes window A
 #                                       itself, and the ring sees each latch at the first frame end after it, in any
 #                                       order of completion, pass, boundary, frame end and SC7
-#   display_planes_source_test          the driver and XNU follow those rules (validateSwap, the kick, one
+#   switch_completion_flip_proof_test   the same on a unit whose window A WINBUF aperture refuses the stores: one
+#                                       line, completion flips off, the frame flips from the gate, no latch misread
+#   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
 #
@@ -324,6 +326,7 @@ host_test(
     srcs = [
         "switch_completion_flip_harness.h",
         "switch_completion_flip_test.cpp",
+        "switch_completion_flip_walk.h",
         "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
         "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
@@ -336,6 +339,20 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchPaletteDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchVICScanoutDisplay.h",
+    ],
+)
+
+host_test(
+    name = "switch_completion_flip_proof_test",
+    srcs = [
+        "switch_completion_flip_harness.h",
+        "switch_completion_flip_proof_test.cpp",
+        "switch_completion_flip_walk.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
     ],
 )
 

@@ -2,7 +2,8 @@
 // SwitchCompletionFlipDisplay.h: a direct frame's completion writes window A's flip itself, through window A's own
 // aperture and nothing the gate's reads switch, and the gate's ring, latch check and SC7 path see that flip at the
 // boundary that took it, whatever order the completion, its own pass, the frame boundaries and the frame-end action
-// run in (switch_completion_flip_harness.h has the model).
+// run in (switch_completion_flip_harness.h has the model). Window A's aperture is taken as proven here, as it is
+// after the first completion flip latched as written; switch_completion_flip_proof_test has the unit that refuses.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -10,6 +11,7 @@
 
 #include "bazel/testing/source_text.h"
 #include "switch_completion_flip_harness.h"
+#include "switch_completion_flip_walk.h"
 
 namespace completion_flip_test {
 namespace {
@@ -24,6 +26,8 @@ protected:
     void SetUp() override
     {
         gOffer = nullptr;
+        gLog.clear();
+        d.completionFlipsProven = true;
     }
 
     void TearDown() override
@@ -228,100 +232,15 @@ TEST_F(CompletionFlip, SuspendPutsAWrittenFlipInTheRingAndWithdrawsAnArmedOne)
     EXPECT_EQ(d.ring.front, kSlot + 1);
 }
 
-uint64_t rng = 0x9e3779b97f4a7c15ull;
-
-unsigned roll(unsigned n)
-{
-    rng ^= rng << 13;
-    rng ^= rng >> 7;
-    rng ^= rng << 17;
-    return static_cast<unsigned>(rng % n);
-}
-
-// Offers, completions (also inside the frame-end action), their passes, boundaries anywhere, folded frame ends and
-// SC7 in random order. Every latch is read as the ring models it, and the ring sees each one at the first frame end
-// after the boundary that took it.
+// The ring sees each latch at the first frame end after the boundary that took it.
 TEST_F(CompletionFlip, RandomOrdersNeverLoseOrDelayALatch)
 {
-    std::vector<int> activeAt = {d.activeEntry()};
-    unsigned pendingTicks = 0, completed = 0, fromCompletions = 0;
-    bool offered = false, done = false;
-    const auto complete = [&] {
-        if (offered && !done) {
-            d.model.written.clear();
-            d.complete(roll(16) ? 0 : -5);
-            fromCompletions += !d.model.written.empty();
-            done = true;
-        }
-    };
-    const auto boundary = [&] {
-        d.boundary();
-        activeAt.push_back(d.activeEntry());
-        ++pendingTicks;
-    };
-    for (unsigned step = 0; step < 200000; ++step) {
-        switch (roll(8)) {
-        case 0:
-        case 1: {
-            // The kick's own rule: no direct offer while a frame is held or a replaced flip is unsettled.
-            const int entry = kSlot + static_cast<int>(roll(4));
-            if (!d.transferred && !d.hwSuspended && d.ring.held == Display::kNoBuffer &&
-                d.ring.superseded == Display::kNoBuffer && !d.ring.busy(entry)) {
-                offered = (roll(4) ? d.offer(entry) : d.offerCopy()) == 0;
-                done = false;
-            }
-            break;
-        }
-        case 2:
-            complete();
-            break;
-        case 3:
-            d.donePass();
-            break;
-        case 4:
-            if (!d.hwSuspended)
-                boundary();
-            break;
-        case 5:
-        case 6: {
-            if (!pendingTicks || d.hwSuspended)
-                break;
-            const size_t seenAtStart = activeAt.size() - 1;
-            if (roll(4) == 0)
-                d.midTick = [&] {
-                    complete();
-                    if (roll(2))
-                        boundary();
-                };
-            pendingTicks = 0;
-            ASSERT_NO_THROW(d.tick()) << "step " << step;
-            d.midTick = nullptr;
-            bool caughtUp = false;
-            for (size_t b = seenAtStart; b < activeAt.size(); ++b)
-                caughtUp = caughtUp || activeAt[b] == d.ring.front;
-            ASSERT_TRUE(caughtUp) << "step " << step << ": the ring's front " << d.ring.front
-                                  << " is not what window A scanned at the frame end (" << activeAt[seenAtStart] << ")";
-            break;
-        }
-        case 7:
-            if (d.hwSuspended ? roll(4) == 0 : roll(512) == 0) {
-                if (d.hwSuspended) {
-                    d.resume();
-                } else {
-                    ASSERT_NO_THROW(d.suspend()) << "step " << step;
-                    pendingTicks = 0;
-                }
-            }
-            break;
-        }
-        if (offered && done && !d.transferred) {
-            offered = false;
-            ++completed;
-        }
-    }
-    EXPECT_GT(completed, 10000u) << completed;
-    EXPECT_GT(fromCompletions, 5000u) << fromCompletions;
+    Walk walk;
+    randomWalk(d, 200000, walk);
+    EXPECT_GT(walk.completed, 10000u) << walk.completed;
+    EXPECT_GT(walk.fromCompletions, 5000u) << walk.fromCompletions;
     EXPECT_GT(d.shown.size(), 5000u) << d.shown.size();
+    EXPECT_TRUE(gLog.empty());
 }
 
 // The display's own hook sites: the completion writes after gpuDonePending (so a gate that sees the flip written can
@@ -339,6 +258,7 @@ TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
     EXPECT_EQ(Between(display, "    void vblankTick()\n    {\n", ";").find("takeCompletionFlip()"), 8u);
     EXPECT_EQ(Between(display, "    void quiesceForSuspend()\n    {\n", ";").find("suspendCompletionFlip()"), 8u);
     EXPECT_EQ(Between(display, "    void stopRotation()\n    {\n", ";").find("withdrawCompletionFlip()"), 8u);
+    EXPECT_EQ(Between(display, "    void settleStopped()\n    {\n", ";").find("flipUnverifiedFromGate()"), 8u);
     const std::string check = Between(display, "    void checkFlip(bool atFrameEnd)", "\n    }\n");
     EXPECT_NE(check.find("const auto [control, start] = latchState();"), std::string::npos);
     EXPECT_EQ(check.find("windowActive("), std::string::npos);

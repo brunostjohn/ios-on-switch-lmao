@@ -7,12 +7,14 @@ import UIKit
 /// into its ring afterwards (drivers/NativeMobileDisplay/SwitchCompletionFlipDisplay.h). Runs display.pacing's
 /// full-screen colour change for 5 s and reads the kernel's window A flip counters around it (kern.switch_flips_*,
 /// debug kernels): completions must have written flips, each ahead of the work loop, with the frames still paced.
+/// refused is the boot's total: a unit whose window A aperture does not latch the completion's stores turns completion
+/// flips off at the first one (one SwitchDisplay line), so a FAIL with refused=1 and d_completion=0 is that verdict.
 struct CompletionFlipTest: HWTest {
     let id = "display.completion_flip"
     let name = "Window A flips written by their producers' completions"
     let subsystem = Subsystem.display
 
-    static let counters = ["completion", "gate", "lead_us", "withdrawn"]
+    static let counters = ["completion", "gate", "lead_us", "withdrawn", "refused"]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (before, unread) = Self.totals()
@@ -37,14 +39,18 @@ struct CompletionFlipTest: HWTest {
         let completion = delta("completion")
         let flips = completion + delta("gate")
 
+        let refused = after["refused"] ?? 0
+
         var metrics = Metrics()
         for name in Self.counters { metrics.set("d_" + name, delta(name)) }
+        metrics.set("refused", refused)
         metrics.set("frames", stamps.count)
         metrics.set("completion_share", flips > 0 ? Double(completion) / Double(flips) : 0, digits: 3)
         metrics.set("lead_mean_us", completion > 0 ? Double(delta("lead_us")) / Double(completion) : 0, digits: 1)
         metrics.set("dropped", Stats.droppedFrames(intervals: intervals, period: 1000.0 / 60))
         return .judged(
             [
+                ("window A latched every completion flip as written (refused = 0)", refused == 0),
                 ("5 s of frames", stamps.count >= 290),
                 ("completions flipped window A (d_completion > 0)", completion > 0),
                 ("ahead of the display's work loop (d_lead_us > 0)", delta("lead_us") > 0),
