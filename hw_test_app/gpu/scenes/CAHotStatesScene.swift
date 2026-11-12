@@ -16,7 +16,8 @@ import Metal
 /// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock. Such a state is timed again as the same
 ///   pixels in eight disjoint bands, no fragment waiting on another (apart_us_<label>, GPU time per full screen), and
 ///   as the pass with no draw (pass_us_<label>, its clears and setup), which InterlockBound takes out of both.
-/// - gpu_clock_<label>=host (raw, debug builds): a timed run's GPU time was the host's window, for want of a GPU stamp.
+/// - gpu_clock_<label>=host (raw, debug builds): a timed run's GPU time (the interlock's bands and pass included) was the
+///   host's window, for want of a GPU stamp.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
 /// On the process's default device the wide blur (narrow_blur_27) also draws `dumpBuffers` untimed command buffers
@@ -132,6 +133,7 @@ struct CAHotStatesScene: GPUScene {
                 result.metrics.set("stall_us_" + label, Stats.percentile(stalls, 0.5), digits: 0)
             }
             if warm > 0 { result.metrics.set("warm_" + label, warm) }
+            var timings = runs
             if let interlocked = after["interlock_draws"], interlocked > before["interlock_draws"] ?? 0 {
                 result.metrics.set("ilk_" + label, interlocked - (before["interlock_draws"] ?? 0))
                 var apart: [Double] = [], pass: [Double] = []
@@ -140,13 +142,14 @@ struct CAHotStatesScene: GPUScene {
                     let empty = try await gpu.run(tolerateError: true) { draw(false, 0, $0) }
                     apart.append(bands.gpuMilliseconds * 1000)
                     pass.append(empty.gpuMilliseconds * 1000)
+                    timings += [bands, empty]
                 }
                 result.metrics.set("apart_us_" + label, Stats.percentile(apart, 0.5), digits: 1)
                 result.metrics.set("pass_us_" + label, Stats.percentile(pass, 0.5), digits: 1)
             } else if after["interlock_draws"] != nil {
                 result.metrics.set("ilk_" + label, 0)
             }
-            if runs.contains(where: { $0.gpuClock == "host" }) { result.metrics.set("gpu_clock_" + label, "host") }
+            if timings.contains(where: { $0.gpuClock == "host" }) { result.metrics.set("gpu_clock_" + label, "host") }
         }
         if timed == 0 { result.notes.append("no hot state made from this QuartzCore") }
         if processDefault { result.metrics.merge(dumped) }
