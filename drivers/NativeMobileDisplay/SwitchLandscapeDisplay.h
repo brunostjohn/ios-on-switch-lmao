@@ -164,6 +164,7 @@ void landscapeScanoutStopped()
 // Under the gate: the UI's registers from window `from` onto window `to` (assembly copies), `to` in front.
 void landscapeMoveUi(Window from, Window to)
 {
+    withdrawCompletionFlip();
     using namespace switch_landscape;
     dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
     for (const uint32_t word : kUiWindowWords)
@@ -273,6 +274,7 @@ void landscapeLeaveNow(const char *why)
         uiOnB = uiOnB || (id >= 0 && planeSetOf(id).landscape);
     if (!uiOnB)
         return;
+    withdrawCompletionFlip();
     IOLog("SwitchDisplay: landscape left at once: %s\n", why);
     const bool uiWrittenOnB =
         planeLatch.requested() ? planeSetOf(planeLatch.armed).landscape : planeSetOf(planeLatch.active).landscape;

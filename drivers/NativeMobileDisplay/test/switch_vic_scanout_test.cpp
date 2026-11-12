@@ -262,6 +262,7 @@ struct Display {
     Timer *gpuDeadline = &timer;
     Source *copySource = &source;
     unsigned presented = 0, retiredUnshown = 0, retired = 0, kicks = 0, lost = 0, taken = 0, finished = 0;
+    int armedFor = -1;
 
     uint32_t surfaceAddress(int i) const
     {
@@ -317,6 +318,12 @@ struct Display {
         ++kicks;
     }
 
+    bool armCompletionFlip(int entry)
+    {
+        armedFor = entry;
+        return true;
+    }
+
 #include "../SwitchVICScanoutDisplay.h"
 
     ~Display()
@@ -365,6 +372,7 @@ TEST_F(VicScanout, APitchFrameIsPlacedInWindowABlocksAndFlipsFromVicsSyncpoint)
     EXPECT_TRUE(display.gpuScanout);
     EXPECT_TRUE(display.transferred);
     EXPECT_EQ(display.ring.claimed, 1);
+    EXPECT_EQ(display.armedFor, 1) << "VIC's completion writes window A's flip to the buffer it copies into";
     EXPECT_EQ(display.source.fired, 1u);
     EXPECT_EQ(display.timer.armed, 1u);
     ASSERT_TRUE(display.vicCopyWork());

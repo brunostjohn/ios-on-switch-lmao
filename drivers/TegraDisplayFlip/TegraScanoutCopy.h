@@ -78,8 +78,9 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 int tegra_gm20b_scanout_fence(void *display, uint64_t pa);
 // Provided by NativeLegacyDisplay: the offer's copy is done (status 0: every byte of the target is in DRAM, the copy engine's writes
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
-// partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it only records the status
-// and signals the display's work loop.
+// partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it records the status, writes
+// window A's flip for a direct frame the display armed (an IOSimpleLock and six registers, SwitchCompletionFlipDisplay.h) and
+// signals the display's work loop, and never sleeps.
 void native_legacy_gpu_complete(void *display, int status);
 // status: the compositor's rendering of the source never finished (its channel faulted or hung and was killed): the source
 // holds a partial frame, and the display shows nothing of it, neither through the copy nor the CPU.

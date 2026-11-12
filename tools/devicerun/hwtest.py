@@ -168,6 +168,7 @@ TESTS: dict[str, bool] = {
     'audio.microphone': True,
     'display.mode': False,
     'display.pacing': False,
+    'display.completion_flip': False,
     'display.brightness': False,
     'display.colour': False,
     'display.planes': False,

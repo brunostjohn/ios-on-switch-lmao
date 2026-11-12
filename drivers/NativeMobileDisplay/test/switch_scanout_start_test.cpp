@@ -125,6 +125,8 @@ struct Display {
     }
     void chainPanicHook() { ++hooks; }
     void scanoutMemoryBarrier() { ++barriers; }
+    bool presentedByCompletion(int) { return false; }
+    void flipFromGate() {}
     void armFlipDeadline() { ++deadlineArms; }
     void planeStage(const Plane &plane, uint32_t &update, uint32_t &request)
     {

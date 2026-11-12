@@ -212,7 +212,7 @@ struct NativeLegacyDisplay : OSObject {
     int planeCsc[2][2] = {{-1, -1}, {-1, -1}};
     uint32_t planeBlendSaved[3] = {}, pitchActControl = UINT32_MAX, planeBuildingSlots = 0;
     uint64_t planeRequestedAt = 0, frameEnds = 10;
-    unsigned stPlaneFlips = 0, stPlaneDropped = 0, stPlaneComposited = 0, deadlines = 0, releases = 0,
+    unsigned stPlaneFlips = 0, stPlaneDropped = 0, stPlaneComposited = 0, deadlines = 0, withdrawals = 0, releases = 0,
              planeUnderflowRun = 0, busyBacking = 0;
     static constexpr unsigned kLatchFrames = 4;
     Loop loop;
@@ -276,6 +276,11 @@ struct NativeLegacyDisplay : OSObject {
     void armFlipDeadline()
     {
         ++deadlines;
+    }
+
+    void withdrawCompletionFlip()
+    {
+        ++withdrawals;
     }
 
     Loop *getWorkLoop()

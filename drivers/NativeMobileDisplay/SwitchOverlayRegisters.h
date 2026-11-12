@@ -89,6 +89,8 @@ void planeStartRegisters()
 
 void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)
 {
+    if (w == switch_landscape::kA)
+        withdrawCompletionFlip();
     using namespace native_planes;
     const SwitchMMIOWords win = dc + switch_landscape::windowBase(w);
     const SwitchMMIOWords buf = dc + switch_landscape::bufferBase(w);
@@ -134,6 +136,7 @@ void planeBlendA(bool over, uint32_t &update, uint32_t &request)
 {
     if (over == planeBlending)
         return;
+    withdrawCompletionFlip();
     const SwitchMMIOWords a = dc + kWinABase;
     if (over) {
         a[native_planes::kBlendLayer] = native_planes::kBlendPremultiplied;

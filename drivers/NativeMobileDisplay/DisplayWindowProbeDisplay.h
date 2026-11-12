@@ -307,6 +307,7 @@ void windowProbeRequest()
 
 void windowProbeShow(const display_window_probe::Step &step)
 {
+    withdrawCompletionFlip();
     windowProbeWriteA(step.a);
     windowProbeWriteB(step.b);
     windowProbe.extras.apply(dc, step.extra, step.extras);
@@ -316,6 +317,7 @@ void windowProbeShow(const display_window_probe::Step &step)
 
 void windowProbeRestoreWindows()
 {
+    withdrawCompletionFlip();
     windowProbe.extras.restore(dc);
     const WindowProbeState &s = windowProbe;
     dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);

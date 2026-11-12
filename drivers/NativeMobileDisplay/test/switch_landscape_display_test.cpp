@@ -66,7 +66,7 @@ struct Display {
     int planeCsc[2][2] = {{-1, -1}, {-1, -1}};
     uint32_t planeBlendSaved[3] = {0x00ff0000u | 255, 0, 0}, pitchActControl = UINT32_MAX;
     uint64_t planeRequestedAt = 0, frameEnds = 10;
-    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, planeUnderflowRun = 0, kicks = 0;
+    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, planeUnderflowRun = 0, kicks = 0, withdrawals = 0;
     uint64_t retiredUnshown = 0;
 
     struct Ring {
@@ -127,6 +127,7 @@ struct Display {
     char uiName() const { return landscapeOn() ? 'B' : 'A'; }
     static bool columnScanBusy() { return false; }
     static bool windowProbeHolds() { return false; }
+    void withdrawCompletionFlip() { ++withdrawals; }
     static bool planeWindowIdle() { return false; }
     void scanoutMemoryBarrier() {}
     void planeReleaseIdle() {}
@@ -252,7 +253,9 @@ TEST(LandscapeDisplay, EnterWaitsForAQuietFrameEndThenMovesBothWindowsInOneReque
     EXPECT_TRUE(d.landscapeState.wanted);
     EXPECT_FALSE(d.planeLatch.requested());
     d.ring.pending = Display::kNoBuffer;
+    const unsigned withdrawals = d.withdrawals;
     d.landscapeFrameEnd();
+    EXPECT_GT(d.withdrawals, withdrawals) << "window A's assembly copy changes: no completion flip may promote it";
     EXPECT_FALSE(d.landscapeState.wanted);
     EXPECT_TRUE(d.landscapeState.switching);
     EXPECT_TRUE(d.landscapeHoldsKicks());
@@ -413,7 +416,9 @@ TEST(LandscapeDisplay, LeaveNowPutsThePortraitWindowsIntoTheAssemblyAtOnce)
     Display d;
     landscape(d);
     const auto uiB = d.registers;
+    d.withdrawals = 0;
     d.landscapeLeaveNow("test");
+    EXPECT_GT(d.withdrawals, 0u);
     EXPECT_FALSE(d.landscapeOn());
     EXPECT_EQ(d.dc[Display::kWinABase + kOptions], uiB[Display::kWinBBase + kOptions]);
     EXPECT_EQ(d.dc[Display::kWinABase + 0x40 + kStartAddr], Display::frontAddress);
