@@ -31,7 +31,6 @@ TEST(RawArchiveAddSource, TheFacadesArchiveIsTheDevicesOwnAndTakesItsFunctions)
     const std::string opened =
         Body(archive, "- (id<MTLBinaryArchive>)newBinaryArchiveWithDescriptor:(MTLBinaryArchiveDescriptor *)d");
     EXPECT_THAT(opened, HasSubstr("rmNewBinaryArchive("));
-    EXPECT_THAT(opened, Not(HasSubstr("fallback")));
     const std::string own = SourceText("../raw/runtime/RawMetalBinaryArchive.mm");
     EXPECT_THAT(Body(own, "- (BOOL)addRenderPipelineFunctionsWithDescriptor:(MTLRenderPipelineDescriptor *)d"),
                 HasSubstr("own(d.vertexFunction)"));

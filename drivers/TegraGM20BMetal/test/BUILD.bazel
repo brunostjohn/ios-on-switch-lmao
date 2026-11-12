@@ -1288,6 +1288,7 @@ host_test(
     data = [
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
         "//third_party/m2v/crates/metal2vulkan-runtime:sources",
         "//third_party/mesa/src/nouveau/vulkan:nvk_cmd_buffer.h",
         "//third_party/mesa/src/nouveau/vulkan:nvk_nir_lower_descriptors.c",
@@ -2765,7 +2766,6 @@ host_test(
     srcs = ["raw_metal_fence_source_test.cpp"],
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFences.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",

@@ -40,8 +40,6 @@ TEST(RawMetalFenceSource, ReplayGetsTheFencesTwin)
     const std::string replay = SourceText("../raw/runtime/RawMetalReplay.mm");
     EXPECT_THAT(replay, HasSubstr("[enc updateFence:twinOf((__bridge id)c.obj)];"));
     EXPECT_THAT(replay, HasSubstr("[enc waitForFence:twinOf((__bridge id)c.obj)];"));
-    const std::string fences = SourceText("../raw/runtime/RawMetalFences.mm");
-    EXPECT_THAT(Body(fences, "- (id<MTLFence>)newFence"), Not(HasSubstr("fallback")));
 }
 
 }  // namespace

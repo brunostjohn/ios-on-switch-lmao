@@ -5,7 +5,8 @@
 //    the bridge), which raw_events_source_test's RawMetal asks for;
 //  - NVK's root table opens with cs.base_group then cs.group_count (nvk_cmd_buffer.h) and every compute shader is compiled
 //    with its workgroup id based there (nvk_shader.c has_base_workgroup_id, nvk_nir_lower_descriptors.c), where
-//    raw_dispatch_bands_test's launch writes a piece's base.
+//    raw_dispatch_bands_test's launch writes a piece's base;
+//  - a range that inline signals joined splits again where m2v takes it (raw_inline_signals_test's other half).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -14,6 +15,7 @@
 #include "bazel/testing/source_text.h"
 
 using switch_ios::test::Between;
+using switch_ios::test::Body;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
 
@@ -42,6 +44,13 @@ TEST(M2VSource, NvksComputeShadersReadTheirWorkgroupBaseFromTheRootTable)
                 HasSubstr(".has_base_workgroup_id = mesa_shader_stage_is_compute(nir->info.stage),"));
     EXPECT_THAT(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_nir_lower_descriptors.c"),
                 HasSubstr("return lower_sysval_to_root_table(b, intrin, cs.base_group, ctx);"));
+}
+
+TEST(M2VSource, AJoinedRangeSplitsAgainWhereM2VTakesIt)
+{
+    const std::string submit = SourceText("../raw/runtime/RawMetalSubmit.mm");
+    EXPECT_THAT(Body(submit, "bool submitRange(RMCommandBuffer *cb, bool followed)"),
+                HasSubstr("const std::vector<RMSegment> parts = compatibilityParts(cb, range);"));
 }
 
 }  // namespace

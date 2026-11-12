@@ -227,6 +227,25 @@ void ownDevice()
     EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
 }
 
+// A fence and a binary archive are the device's own objects (RMFence, RMBinaryArchive), made without asking m2v
+void fenceAndArchive()
+{
+    const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
+    ASSERT_TRUE(device != nil);
+    id<MTLFence> fence = [device newFence];
+    ASSERT_TRUE(fence != nil);
+    EXPECT_STREQ(object_getClassName(fence), "RMFence");
+    EXPECT_EQ(fence.device, device);
+    NSError *error = nil;
+    id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new]
+                                                                    error:&error];
+    ASSERT_TRUE(archive != nil) << error.localizedDescription.UTF8String;
+    EXPECT_STREQ(object_getClassName(archive), "RMBinaryArchive");
+    EXPECT_EQ(archive.device, device);
+    EXPECT_EQ(gOpens, 0);
+    EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
+}
+
 }  // namespace
 
 TEST(RawFacadeLazy, PackedDrawOpensNoM2V)
@@ -263,4 +282,9 @@ TEST(RawFacadeLazy, SurfaceBufferAndLinearRowOpenNoM2V)
 TEST(RawFacadeLazy, DeviceIsItsOwn)
 {
     switch_ios::test::ExpectPassesInFreshProcess(ownDevice);
+}
+
+TEST(RawFacadeLazy, FenceAndBinaryArchiveAreTheDevicesOwn)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(fenceAndArchive);
 }
