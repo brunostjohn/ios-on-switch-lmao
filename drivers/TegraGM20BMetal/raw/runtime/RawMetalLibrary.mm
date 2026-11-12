@@ -202,12 +202,13 @@ static id functionNotFound(NSString *name, NSError **error)
     }
     if (![self listsFunction:name])
         return functionNotFound(name, error);
-    return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, "a specialized function raw does not list")
-                                           newFunctionWithName:name
-                                                constantValues:values
-                                                         error:error]
-                                  name:name
-                             constants:values];
+    return (id<MTLFunction>)[self
+             wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, "a specialized function raw does not list")
+                      newFunctionWithName:name
+                           constantValues:values
+                                    error:error]
+             name:name
+        constants:values];
 }
 
 - (void)newFunctionWithName:(NSString *)name

@@ -259,7 +259,9 @@ TEST_F(SeedStore, AFullStoreRefusesAndCompactionKeepsOnlyWholeEntries)
 // after compaction
 TEST_F(SeedStore, AWholePageEntryHasItsPagesToItself)
 {
-    const auto pageOf = [](uint64_t offset) { return offset / pack::kStorePageBytes; };
+    const auto pageOf = [](uint64_t offset) {
+        return offset / pack::kStorePageBytes;
+    };
     const std::string page(pack::kStorePageBytes, 'p');
     std::vector<uint8_t> slotName = nameOf(1000);
     {

@@ -152,7 +152,6 @@ RawState *gRM;
 
 @end
 
-
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said)
 {
