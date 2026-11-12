@@ -4859,6 +4859,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             bool indexed, const char **why)
 {
     RAW_ENCODE_SPAN(Prepare);
+    if (pl->strideTwin && bindStridePastStream(*pl->rec))
+        pl = pl->strideTwin;
     if (tessellates(*pl->rec) != (primitive == icb::kPatchPrimitive)) {
         *why = "primitives drawn with a tessellation state";
         cb_->refusal = {};

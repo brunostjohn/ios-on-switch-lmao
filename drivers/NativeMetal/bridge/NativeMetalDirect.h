@@ -77,6 +77,9 @@ typedef struct NmbDirectDraw {
     // vertex amplification: the count the draw was planned at (the descriptor's maxVertexAmplificationCount, one draw per
     // amplification), the push word + 1 of m2v's AmplificationId, whether a stage specializes [[amplification_count]]
     uint32_t amplificationMax, amplificationIdWord, amplificationCountRead;
+    // the vertex attributes the translation reads in the shader, by Metal index: fixed-function input fetches the others,
+    // numbered densely in Metal attribute order (m2v link/varyings)
+    uint32_t pulledAttributes;
     const char *variant;
 } NmbDirectDraw;
 
@@ -136,6 +139,7 @@ typedef struct NmbDirectBinds {
     const NmbDirectTextureFormat *textures;
     uint32_t textureCount;
     uint32_t fragmentTests;
+    uint32_t bindStride;  // the attributeStride the probe binds every vertex buffer at (0: none)
 } NmbDirectBinds;
 
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to

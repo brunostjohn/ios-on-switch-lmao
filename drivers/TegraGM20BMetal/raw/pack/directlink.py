@@ -42,6 +42,8 @@ PIPELINE_BYTES = (
     + packfile.PIPELINE_V21.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
+# SET_VERTEX_STREAM_A_FORMAT(0), 16 bytes apart, and its STRIDE field (bits 11:0)
+STREAM_FORMAT, STREAM_STRIDE = 0x1C00, 0xFFF
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
 
@@ -154,6 +156,32 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
     return out
 
 
+def layout_strides(key: str) -> dict[int, int]:
+    """Give each Metal vertex buffer's layout stride as the key's attributes (a<i>=format:offset:buffer:stride:...) name it."""
+    out = {}
+    for field in key.split(' | ')[0].split():
+        name, _, value = field.partition('=')
+        parts = value.split(':')
+        if name[:1] == 'a' and name[1:].isdigit() and len(parts) == 6 and all(p.isdigit() for p in parts):
+            out[int(parts[2])] = int(parts[3])
+    return out
+
+
+def check_streams(key: str, slot: int, streams: list[int], regs: dict[int, int]) -> None:
+    """Refuse a record whose fixed-function vertex stream fetches at another stride than its layout's.
+
+    m2v pulls a layout past maxVertexInputBindingStride (2048) in the shader, so no stream's stride is past the format's
+    12 bits; a record that says otherwise would draw at its stride's low bits.
+    """
+    buffers = ([slot] if slot != 0xFF else []) + [(s & ~packfile.STREAM_BIND_STRIDE) - 1 for s in streams]
+    strides = layout_strides(key)
+    for k, buffer in enumerate(buffers):
+        stride = strides.get(buffer)
+        held = regs.get(STREAM_FORMAT + 0x10 * k, 0) & STREAM_STRIDE
+        if stride is None or stride > STREAM_STRIDE or held != stride:
+            raise ValueError(f'vertex stream {k} of buffer {buffer} at stride {held}, its layout {stride}: {key}')
+
+
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
     """Give a state's pipeline as mkpack.py's pipeline() gives the probe's."""
     p = rec['pipeline']
@@ -182,6 +210,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
     regs = rec['probe']['records'][0]['regs']
+    check_streams(rec['key'], slot, streams, regs)
     varying = list(varying)
     if storage_mask:
         for method in [0x0210, 0x0754, 0x1224] + [0x1A00 + 4 * i for i in range(8) if storage_mask >> i & 1]:

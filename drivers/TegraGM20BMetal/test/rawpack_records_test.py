@@ -82,13 +82,43 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={})]),
+            probe=dict(index=0, form='', records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | 16})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['vertex_streams'], [5])
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
         record['pipeline'] = packfile.pipeline_bytes(dict(rec, vertex_streams=[5 | packfile.STREAM_BIND_STRIDE]), 0, 0)
         with self.assertRaisesRegex(ValueError, 'runtime-only'):
+            directlink.pipeline_of(record, [], ids, [])
+
+    def test_a_vertex_stream_fetches_at_its_layouts_stride_alone(self):
+        rec = dict(
+            key='samples=1 c0=80:15:0 a0=30:0:1:12:1:1 a1=31:0:4:4100:1:1',
+            vs=0,
+            fs=1,
+            blob=[],
+            entries=[],
+            push=[],
+            vbs=[{'stream': 0, 'slot': 1, 'stride': 12}],
+            set_size=0,
+            fetch=False,
+            vertex_streams=[5],
+        )
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(
+            pipeline=packfile.pipeline_bytes(rec, 0, 0),
+            key=rec['key'],
+            programs=programs,
+            samplers=[],
+            probe=dict(index=0, form='', records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | (4100 & 0xFFF)})]),
+        )
+        with self.assertRaisesRegex(ValueError, 'vertex stream 1 of buffer 4'):
+            directlink.pipeline_of(record, [], ids, [])
+        record['pipeline'] = packfile.pipeline_bytes(dict(rec, vertex_streams=[]), 0, 0)
+        self.assertEqual(directlink.pipeline_of(record, [], ids, [])['vertex_streams'], [])
+        record['probe']['records'][0]['regs'][0x1C00] = 0x1000 | 8
+        with self.assertRaisesRegex(ValueError, 'vertex stream 0 of buffer 1'):
             directlink.pipeline_of(record, [], ids, [])
 
     def test_record_v15_tail_round_trip(self):

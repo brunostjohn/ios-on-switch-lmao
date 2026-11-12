@@ -105,6 +105,7 @@ pub struct NmbDirectDraw {
     pub amplification_max: u32,
     pub amplification_id_word: u32,
     pub amplification_count_read: u32,
+    pub pulled_attributes: u32,
     pub variant: *const c_char,
 }
 
@@ -133,6 +134,7 @@ pub struct NmbDirectBinds {
     pub textures: *const NmbDirectTextureFormat,
     pub texture_count: u32,
     pub fragment_tests: u32,
+    pub bind_stride: u32,
 }
 
 /// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by slot
@@ -141,6 +143,7 @@ struct Binds {
     cubic: Vec<(u32, SamplerDescriptor)>,
     textures: Vec<(u32, PixelFormat)>,
     fragment_tests: u32,
+    bind_stride: Option<u32>,
 }
 
 impl Binds {
@@ -156,6 +159,7 @@ impl Binds {
             return Err("invalid native fragment-test mode".into());
         }
         out.fragment_tests = b.fragment_tests;
+        out.bind_stride = (b.bind_stride != 0).then_some(b.bind_stride);
         let cubic: &[NmbDirectCubicSampler] = if b.cubic.is_null() {
             &[]
         } else {
@@ -417,7 +421,7 @@ fn declared_facts(t: &TextureSlot, own: Option<PixelFormat>, format: PixelFormat
 }
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and `samples` (of their declarations at `declared`) and 16
+/// buffers at each slot's own offset; vertex buffers at `binds`' stride), 16 textures of `format` and `samples` (of their declarations at `declared`) and 16
 /// samplers at the fragment stage, `binds`' in their places
 fn probe_state(
     run: usize,
@@ -446,6 +450,7 @@ fn probe_state(
     };
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
+        let attribute_stride = if stage == Stage::Vertex { binds.bind_stride } else { None };
         for slot in 0..PROBE_SLOTS {
             let bound = if run == BOUND_RUN {
                 let address = 0x1_0000_0000u64 + (u64::from(stage_number(stage)) << 24) + (u64::from(slot) << 16);
@@ -454,12 +459,12 @@ fn probe_state(
                     offset: probe_bind_offset(stage_number(stage), slot),
                     gpu_address: address,
                     device_address: Some(address),
-                    attribute_stride: None,
+                    attribute_stride,
                 }
             } else {
                 BoundBuffer::Bytes {
                     len: RUN_BYTES[run],
-                    attribute_stride: None,
+                    attribute_stride,
                 }
             };
             table.buffers.insert(slot, bound);
@@ -775,6 +780,12 @@ fn draw_of(
                 .iter()
                 .any(|c| c.key == SpecKey::AmplificationCount)
         }) as u32,
+        pulled_attributes: pipeline
+            .vertex_input
+            .pulled
+            .iter()
+            .filter(|a| a.attribute < 32)
+            .fold(0, |mask, a| mask | 1 << a.attribute),
         variant: variant.as_ptr(),
     };
     dynamic_words(run, pipeline, &mut draw)?;

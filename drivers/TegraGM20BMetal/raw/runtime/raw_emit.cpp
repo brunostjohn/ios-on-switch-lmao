@@ -216,7 +216,12 @@ bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &
             if (a.buffer == buffer)
                 stride = a.stride;
         const bool bindStride = stride == UINT32_MAX;  // RawPipelineKey.h's dynamic stride: the draw's
-        out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (bindStride ? 0 : stride & 0xfff), true});
+        // SET_VERTEX_STREAM_A_FORMAT's STRIDE is bits 11:0; m2v pulls a layout past maxVertexInputBindingStride (2048)
+        if (!bindStride && stride > 0xfff) {
+            why = "vertex buffer " + std::to_string(buffer) + " fetched by fixed function at a stride past 12 bits";
+            return false;
+        }
+        out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (bindStride ? 0 : stride), true});
         laidOut.push_back({uint8_t(buffer), bindStride});
     }
     return true;

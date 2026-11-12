@@ -40,6 +40,7 @@ struct ProbeTextures {
     NSUInteger samples = 1;
     CubicBinds cubic;  // the cubic samplers and the textures sampled through them (a state's cubic variant)
     uint8_t fragmentTests = 0;
+    uint32_t bindStride = 0;  // the attributeStride every vertex buffer is bound at (0: none)
 };
 
 class Direct {
@@ -49,7 +50,8 @@ public:
     explicit Direct(PackRules rules, bool rankArtifacts = false);
 
     // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `registers`: as
-    // directRecord's; `split`: with its fragment program's split (directRecord)
+    // directRecord's; `split`: with its fragment program's split (directRecord). A state of bind-stride vertex streams
+    // gets its stride twin (RuntimeRecord::strideTwin) with it.
     CompileOutcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
                         std::string &why, ProbeTextures textures = {},
                         std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
@@ -74,6 +76,9 @@ private:
     CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                         const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                         std::string &why, std::map<uint32_t, uint32_t> *registers, bool split);
+    CompileOutcome strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures, const std::string &key,
+                              const std::vector<uint32_t> &attributes, RuntimeRecord &out, std::string &why,
+                              bool split);
 };
 
 }  // namespace raw

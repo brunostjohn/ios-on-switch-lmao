@@ -283,6 +283,8 @@ constexpr uint32_t kPackEntries = 32;
 constexpr uint32_t kPackVertexStreams = 8;
 // A vertexStreams byte's flag: the stream's stride is its bind's (MTLBufferLayoutStrideDynamic, a runtime record's alone)
 constexpr uint8_t kStreamBindStride = 0x80;
+// The largest stride a fixed-function vertex stream fetches at: NVB197_SET_VERTEX_STREAM_A_FORMAT_STRIDE is bits 11:0
+constexpr uint32_t kStreamStrideField = 0xFFF;
 
 struct PackShaderTests {
     uint8_t depthWord, stencilWord, flags, reserved;
@@ -342,6 +344,15 @@ struct PackPipeline {
 inline uint8_t streamSlot(uint8_t stream)
 {
     return uint8_t((stream & ~kStreamBindStride) - 1);
+}
+
+// A vertex stream of the record's takes its bind's stride
+inline bool bindStrideStreams(const PackPipeline &r)
+{
+    for (uint8_t stream : r.vertexStreams)
+        if (stream & kStreamBindStride)
+            return true;
+    return r.vertexSlot != 0xFF && r.vertexStrideDynamic;
 }
 
 inline bool tessellates(const PackPipeline &p)

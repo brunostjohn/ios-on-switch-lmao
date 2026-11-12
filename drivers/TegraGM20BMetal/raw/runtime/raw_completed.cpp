@@ -99,6 +99,11 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         why = "missing or invalid dynamic blend push metadata";
         return nullptr;
     }
+    Pipeline *strideTwin = nullptr;
+    if (r.strideTwin && !(strideTwin = addRecord(*r.strideTwin, caTransform, why, retry))) {
+        why = "its stride twin: " + why;
+        return nullptr;
+    }
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())
@@ -145,6 +150,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     for (const auto &[m, v] : r.restore)
         w.m(m, v);
     stored.pipeline.restore.assign(words.data(), w.at);
+    stored.pipeline.strideTwin = strideTwin;
     if (r.split && !c.record.storageMask)
         offerCompletedSplit(stored, r, vs, caTransform);
     completed_[key] = &stored.pipeline;

@@ -424,6 +424,9 @@ struct Pipeline {
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
+    // a state of bind-stride vertex streams: the same state with those layouts pulled in the shader (RuntimeRecord's
+    // strideTwin), which a draw takes where a stream's bind stride is past SET_VERTEX_STREAM_A_FORMAT's 12 bits
+    Pipeline *strideTwin = nullptr;
     // the same state's fetch-free form (raw_fetch_free.h), which a draw takes where its rung's rule holds; null where the
     // pack has none. On that form: the rung it draws on and the colour it blends
     Pipeline *fetchFree = nullptr;
@@ -767,6 +770,8 @@ private:
 
     // What of a draw's amplification and bind strides the state does not take (null: it takes them)
     const char *drawnWordsRefusal(const PackPipeline &r) const;
+    // A vertex stream of the state's takes its bind's stride, and that stride is past the stream's 12-bit field
+    bool bindStridePastStream(const PackPipeline &r) const;
     void drawnWords(const PackPipeline &r, uint32_t (&want)[32]);
     // The state's vertex streams at their binds (raw_vertex_streams.cpp): a stream's location and limit where its bind
     // moved, its format where its stride is its bind's, and its vertices [vFirst, vFirst + count) cleaned

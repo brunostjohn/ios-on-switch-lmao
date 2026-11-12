@@ -4,17 +4,12 @@
 // amplification, in order, its id in the state's AmplificationId push word, as Metal renders every primitive of one
 // amplification before the next's. Raw passes have one layer and set one viewport, so a mapping's render target offset
 // renders the first layer, as Metal's does in such a pass; a viewport offset sends the draw elsewhere. A state of a dynamic
-// stride reads its bind's stride: its vertex stream's at each draw, a pulled layout's from its VertexBufferStride word.
+// stride reads its bind's stride: its vertex stream's at each draw, a pulled layout's from its VertexBufferStride word. A bind
+// stride past the stream's field draws the state's stride twin, which pulls those layouts in the shader.
 #include <algorithm>
 #include "raw_gpu.h"
 
 namespace raw {
-namespace {
-
-// NVB197_SET_VERTEX_STREAM_A_FORMAT_STRIDE is bits 11:0
-constexpr uint32_t kStreamStrideLimit = 0xfff;
-
-}  // namespace
 
 void RenderEncoder::setVertexStride(uint32_t slot, uint32_t stride)
 {
@@ -36,16 +31,24 @@ const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
         return "a vertex amplification count above the state's maxVertexAmplificationCount";
     if (r.amplificationCountRead && amplifications_ != most)
         return "a vertex amplification count other than the one the state's [[amplification_count]] was made with";
-    if (r.vertexStrideDynamic && vertexStride(r.vertexSlot) > kStreamStrideLimit)
-        return "a vertex buffer bind stride past the vertex stream's 12-bit stride";
-    for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++) {
-        const uint8_t stream = r.vertexStreams[k - 1], slot = streamSlot(stream);
-        if (slot >= 31)
+    for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++)
+        if (streamSlot(r.vertexStreams[k - 1]) >= 31)
             return "a vertex stream of no Metal buffer";
-        if ((stream & kStreamBindStride) && vertexStride(slot) > kStreamStrideLimit)
-            return "a vertex buffer bind stride past the vertex stream's 12-bit stride";
-    }
+    if (bindStridePastStream(r))
+        return "a vertex buffer bind stride past the vertex stream's 12-bit stride, of a state with no stride twin";
     return nullptr;
+}
+
+bool RenderEncoder::bindStridePastStream(const PackPipeline &r) const
+{
+    if (r.vertexStrideDynamic && vertexStride(r.vertexSlot) > kStreamStrideField)
+        return true;
+    for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++) {
+        const uint8_t stream = r.vertexStreams[k - 1];
+        if ((stream & kStreamBindStride) && vertexStride(streamSlot(stream)) > kStreamStrideField)
+            return true;
+    }
+    return false;
 }
 
 void RenderEncoder::drawnWords(const PackPipeline &r, uint32_t (&want)[32])

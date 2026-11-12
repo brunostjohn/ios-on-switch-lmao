@@ -130,6 +130,15 @@ raw::RuntimeRecord madeUp(uint32_t n)
             r.splitPrograms[k].cbufTypes = {4, 1};
         }
     }
+    if (n % 5 == 1) {
+        r.pipeline.vertexSlot = 2;
+        r.pipeline.vertexStrideDynamic = 1;
+        auto twin = std::make_shared<raw::RuntimeRecord>(madeUp(n + 1));
+        twin->pipeline.keyHash = 0x2000 + n;
+        twin->pipeline.pulledStride[0][0] = 2;
+        twin->pipeline.pulledStride[0][1] = 7;
+        r.strideTwin = std::move(twin);
+    }
     return r;
 }
 

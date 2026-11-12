@@ -380,6 +380,11 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     return true;
 }
 
+std::string strideTwinKey(const std::string &key)
+{
+    return key + " | strides pulled";
+}
+
 uint64_t packKeyHash(const std::string &key)
 {
     const size_t vertexAt = key.find(" | v "), fragmentAt = key.find(" | f ");
