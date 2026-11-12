@@ -12,6 +12,19 @@ namespace raw {
 bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
                              const TurnMask *mask, uint32_t width, uint32_t height)
 {
+    TurnMap bounded = map;
+    bounded.x0 = std::max(bounded.x0, 0);
+    bounded.y0 = std::max(bounded.y0, 0);
+    bounded.x1 = std::min(bounded.x1, int32_t(src.width));
+    bounded.y1 = std::min(bounded.y1, int32_t(src.height));
+    if (dst.zeta && zetaHasStencil(dst.format) && !mask && src.samples == 1 &&
+        zetaColourTakes(dst, src, StencilSample::Zero)) {
+        if (!dev_->sampleable(src)) {
+            *why = "no texture header for a turn copy's source";
+            return false;
+        }
+        return zetaColour(dst, src, StencilSample::Zero, bounded, 0, 0, why);
+    }
     static const DepthStencilState depthWrites = [] {
         DepthStencilDesc desc;
         desc.depthCompare = 7;  // MTLCompareFunctionAlways
@@ -57,11 +70,6 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         *why = "a turn copy's target the raw path cannot render";
         return false;
     }
-    TurnMap bounded = map;
-    bounded.x0 = std::max(bounded.x0, 0);
-    bounded.y0 = std::max(bounded.y0, 0);
-    bounded.x1 = std::min(bounded.x1, int32_t(src.width));
-    bounded.y1 = std::min(bounded.y1, int32_t(src.height));
     if (copies) {
         e->setPipeline(pl);
         if (dst.zeta)

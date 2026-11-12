@@ -435,6 +435,14 @@ class RecordsTest(unittest.TestCase):
         b = a.replace('#0:36:01', '#0:36:02')
         self.assertNotEqual(packfile.key_hash({'key': a}), packfile.key_hash({'key': b}))
 
+    def test_both_stencil_routes_states_are_found_by_their_names(self):
+        for form in ('s8', 'd32fs8', 'ms_s8', 'ms_d32fs8', 'ms_d32fs8_min', 'ms_d32fs8_max'):
+            for route in ('', '_colour'):
+                name = f'stencil_bits_{form}{route}_frag'
+                key = f'samples=1 topo=0 ds=0/0 c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f {name}'
+                with self.subTest(name=name):
+                    self.assertEqual(packfile.key_hash({'key': key}), packfile.fnv(f'raw.stencil_bits.{name}'.encode()))
+
     def test_a_texture3d_argument_is_an_entry_with_no_slot(self):
         problems: list[str] = []
         ent = mkpack.handle_entry((228, 'handle', ('tex3d', 'R102'), None, 0), {}, [], problems)

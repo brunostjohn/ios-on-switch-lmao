@@ -6528,15 +6528,8 @@ static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y
 // A pass of `layers` layers binds that many from the target's own (pitch memory: one)
 static void colorTarget(Push &p, uint32_t index, const Texture &t, uint32_t layers)
 {
-    ColorTargetDesc d;
-    d.va = t.va;
-    d.pitch = t.pitch;
-    d.height = t.import && t.import->kernelTiled() ? t.import->layout.height : sampleRows(t);
-    d.bpp = t.bpp;
-    d.rtFormat = formatInfo(t.format)->rt;
-    d.blockLinear = t.blockLinear;
-    d.blockHeight = t.blockHeight;
-    d.layerBytes = t.layerBytes;
+    const uint32_t rows = t.import && t.import->kernelTiled() ? t.import->layout.height : sampleRows(t);
+    ColorTargetDesc d = colorTargetDesc(t, formatInfo(t.format)->rt, rows);
     d.layers = layers;
     d.depth = t.type == fx::kTexThreeD;
     d.blockDepth = t.blockDepth;

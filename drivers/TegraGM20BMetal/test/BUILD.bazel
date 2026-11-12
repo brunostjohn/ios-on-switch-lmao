@@ -9,6 +9,9 @@
 #   raw_stencil_bits_test  raw/runtime/raw_stencil_bits.h: each bit's stencil state as registers and the draw a bit,
 #                     which over a cleared target rebuild every stencil value and move it by the turn maps; the resolves'
 #                     samples and states
+#   raw_zeta_colour_test  raw/runtime/raw_zeta_colour.h: the one-draw stencil route's colour target over a zeta is the
+#                     zeta target words' memory and layout, its pass binds it loaded with no zeta, the pack's lines make
+#                     each state with the write mask it needs, and on a ROP model it writes what the eight draws write
 #   raw_target_test   raw/runtime/raw_target.h: the raw path's color target words, pitch as before and a mip chain's level as
 #                     NVK's block-linear target, addressing every texel where raw/fx's layout (the texture header's and
 #                     the 2D engine's view of the chain) has it
@@ -1591,6 +1594,39 @@ host_test(
     ],
     cxx_std = "c++17",
     deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "raw_zeta_colour_test",
+    srcs = [
+        "raw_zeta_colour_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_depth_stencil_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_rotation.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_stencil_bits.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_turn_copy.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta_colour.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//drivers/TegraGM20BMetal:raw/pack/stencil_bits.metal",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
 )
 
 host_test(

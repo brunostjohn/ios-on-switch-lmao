@@ -2,7 +2,8 @@
 // Texel copies a turned pass needs that no copy engine can make (it moves rows, never transposes or mirrors): the pack's turn
 // copy states (pack/turn.metal), each destination texel (x, y) the source's at (ax x + ay y + cx, bx x + by y + cy), kept
 // where that falls outside the map's source rectangle, both colour images viewed as unsigned integers of their texel size, a
-// depth image's depth copied as the float it holds, its stencil by the pack's stencil bits (raw_stencil_bits.h).
+// depth image's depth copied as the float it holds, its stencil by the pack's stencil bits (raw_stencil_bits.h), or a stencil
+// plane's whole texel in one draw where raw_zeta_colour.h's route takes it.
 //  - an attachment not of the pass's turn and frame beside a turned one whose contents outside the pass matter
 //    (raw_rotated_pass.h): its texels into a plane-shaped stand-in the pass renders turned where it is loaded (the pass's
 //    frame read through the attachment's own load map), and back where it is stored, over the render area alone;

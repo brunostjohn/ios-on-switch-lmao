@@ -66,13 +66,12 @@ void zetaTargetWords(Push &p, const Texture *z, uint32_t layers)
         p.m(ZT_SELECT, 0);
         return;
     }
-    p.inc(ZT_A, {uint32_t(z->va >> 32), uint32_t(z->va), kZetaFormatInfo[zetaFormatIndex(z->format)].zt,
-                 uint32_t(z->blockHeight & 0xf) << 4,  // WIDTH ONE_GOB, HEIGHT, DEPTH ONE_GOB
-                 uint32_t(z->layerBytes >> 2)});
+    const ZetaTargetValues v = zetaTargetValues(*z, sampleRows(*z));
+    p.incArray(ZT_A, v.a, 5);
     p.m(ZT_SELECT, 1);
-    // SIZE_A the row stride in texels (NVK: the Z/S hardware has no tile width), C the pass's layers from ZT_A's,
-    // THIRD_DIMENSION_DEFINES_ARRAY_SIZE
-    p.inc(ZT_SIZE_A, {z->pitch / z->bpp, sampleRows(*z), std::max(layers, 1u)});
+    // SIZE_C the pass's layers from ZT_A's (THIRD_DIMENSION_DEFINES_ARRAY_SIZE)
+    const uint32_t size[3] = {v.size[0], v.size[1], std::max(layers, 1u)};
+    p.incArray(ZT_SIZE_A, size, 3);
     p.m(ZT_LAYER, 0);
     p.m(Z_COMPRESSION, z->comptags);
     p.m(STENCIL_COMPRESSION, z->comptags);

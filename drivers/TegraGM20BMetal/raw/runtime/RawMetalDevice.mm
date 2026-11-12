@@ -87,6 +87,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
     d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
+    d[@"stencil_bit_draws"] = @(gRM->raw->stats.stencilBitDraws.load());
+    d[@"zeta_colour_draws"] = @(gRM->raw->stats.zetaColourDraws.load());
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
     d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());

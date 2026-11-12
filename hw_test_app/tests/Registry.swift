@@ -15,6 +15,7 @@ public enum Registry {
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), IntegerTargetTest(), BlendKillTest(),
         Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
         VisibilityTest(), FixedBlendRuleTest(), FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(),
+        ZetaColourTest(),
     ]
 
     static let video: [any HWTest] =

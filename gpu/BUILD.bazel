@@ -218,6 +218,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_surface_image.cpp",
         GM20B_METAL + ":raw/runtime/raw_turn_copy.cpp",
         GM20B_METAL + ":raw/runtime/raw_stencil_bits.cpp",
+        GM20B_METAL + ":raw/runtime/raw_zeta_colour.cpp",
         GM20B_METAL + ":raw/runtime/raw_turned_pass.cpp",
         GM20B_METAL + ":raw/runtime/raw_area_load.cpp",
         GM20B_METAL + ":raw/runtime/raw_reach.cpp",
