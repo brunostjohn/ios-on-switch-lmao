@@ -2,10 +2,12 @@
 
 Fills come in the destination's own colour format (one packed word, as nouveau's EXA fill sends it), as nouveau's
 reference fill (SRCCOPY, clip at the surface), clipped to a rectangle, unbracketed (no 3D waits around it), and last
-after a clear-only pass in the same command buffer, the slot the 11 Nov 15:30 context-switch timeout ran in, in the
-RF32 x4 float form that was running then. Scales and resolves read a source of the target's own format (no conversion
-on the way in) whose 8-bit 2x2 sums are never 2 mod 4, so no equal-weight mean lands on a .5 tie unless a cell asks for
-one. Each operation's compare form runs the same work through the 3D path or the copy engine; analyse() reads both.
+after a clear-only pass in the same command buffer, the slot the 11 Nov 15:30 context-switch timeout ran in. Four floats
+(RF32 x4) fill only an RGBA32Float destination: into BGRA8 they panicked the kernel on 12 Nov (protocol.py
+SOLID_FILL_FORMATS), and sRGB destinations fill through their UNORM 2D format. Scales and resolves read a source of the
+target's own format (no conversion on the way in) whose 8-bit 2x2 sums are never 2 mod 4, so no equal-weight mean lands
+on a .5 tie unless a cell asks for one. Each operation's compare form runs the same work through the 3D path or the copy
+engine; analyse() reads both.
 """
 
 import random
@@ -28,6 +30,7 @@ OWN = {
     'r16unorm': (0xEE, 0x3333),
     'rgba16float': (0xCA, struct.unpack('<I', struct.pack('<2e', 0.2, 0.4))[0]),
 }
+UNORM_VIEW = {'bgra8unorm_srgb': 0xCF, 'rgba8unorm_srgb': 0xD5}
 SCALE_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float', 'rgba32float')
 # the formats the pack has a sampled-quad state for, the 3D side of a bilinear scale (protocol.MIP_FORMATS)
 SAMPLED3D_FORMATS = ('rgb10a2unorm', 'rgba16unorm', 'rgba32float')
@@ -101,7 +104,8 @@ def fill(
 
 def own_fill(fmt: str, suffix: str = '', size: tuple[int, int] = (SIDE, SIDE), **op: object) -> dict:
     colour_format, packed = OWN[fmt]
-    return fill(f'fill-own{suffix}-{fmt}', fmt, colour_format, [packed, 0, 0, 0], size, **op)
+    view = {'fmt2d': UNORM_VIEW[fmt]} if fmt in UNORM_VIEW else {}
+    return fill(f'fill-own{suffix}-{fmt}', fmt, colour_format, [packed, 0, 0, 0], size, **view, **op)
 
 
 def scale(name: str, fmt: str, bilinear: bool, corner: bool, **extra: object) -> dict:
@@ -191,7 +195,6 @@ def timed(e: dict) -> dict:
 def generate() -> list[dict]:
     out = [own_fill(fmt) for fmt in OWN]
     out += [own_fill(fmt, '-ref', reference=True) for fmt in ('bgra8unorm', 'rgba8unorm', 'rgba16float')]
-    out += [fill(f'fill-xcf-{fmt}', fmt, 0xCF, [OWN['bgra8unorm'][1], 0, 0, 0]) for fmt in ('rgba8unorm', 'r8unorm')]
     out += [compare_fill(fmt) for fmt in ('bgra8unorm', 'rgba8unorm')]
     copy = scale('1to1', 'bgra8unorm', False, True, compare='copy')
     out.append(copy | {'id': copy['id'].replace('scale-', 'scale-vsce-')})
@@ -219,14 +222,14 @@ def generate() -> list[dict]:
         up = {'op': 'scale', 'du': (62 << 32) // (side - 2), 'dv': (62 << 32) // (side - 2), 'bilinear': True}
         out.append(timed(_experiment(f'upscale-{side}', 'bgra8unorm', (side, side), up)))
     out.append(own_fill('bgra8unorm', '-unbracketed', bracketed=False))
-    out += [fill(f'fill-f32-{fmt}', fmt, F32, f32_words(RGBA)) for fmt in ('rgba32float', 'rgba16float', 'bgra8unorm')]
-    out.append(fill('fill-f32-unbracketed-bgra8unorm', 'bgra8unorm', F32, f32_words(RGBA), bracketed=False))
-    return out + hang_slot()
+    out += hang_slot()
+    out.append(fill('fill-f32-rgba32float', 'rgba32float', F32, f32_words(RGBA)))
+    return out
 
 
 def hang_slot() -> list[dict]:
-    """Give the 15:30 timeout's slot: a clear-only pass, then the fill, bracketed and not; f32 unbracketed last."""
-    words, out, probe = f32_words(RGBA), [], (40, 24)  # X1TwodClearProbe's target
+    """Give the 15:30 timeout's slot: a clear-only pass, then the own-format fill, bracketed and not."""
+    out, probe = [], (40, 24)  # X1TwodClearProbe's target
     # the probe's target was a private texture, block-linear: the tiled cells are its layout, the pitch ones a control
     for tiled in (False, True):
         tag = '-tiled' if tiled else ''
@@ -235,11 +238,7 @@ def hang_slot() -> list[dict]:
             own_fill(
                 'bgra8unorm', f'-afterclear-unbracketed{tag}', probe, clearFirst=True, bracketed=False, tiled=tiled
             ),
-            fill(f'fill-f32-afterclear{tag}-bgra8unorm', 'bgra8unorm', F32, words, probe, clearFirst=True, tiled=tiled),
         ]
-    for tiled in (False, True):
-        eid = f'fill-f32-afterclear-unbracketed{"-tiled" if tiled else ""}-bgra8unorm'
-        out.append(fill(eid, 'bgra8unorm', F32, words, probe, clearFirst=True, bracketed=False, tiled=tiled))
     return out
 
 

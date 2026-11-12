@@ -17,12 +17,29 @@ class TwodTest(unittest.TestCase):
         self.assertEqual(
             {e.get('compare') for e in experiments} - {None}, {'program', 'copy', 'resolve3d', 'sampled3d'}
         )
-        last = experiments[-1]['twod']
-        self.assertEqual(last['colorFormat'], twod.F32, 'the float form that hung runs last')
-        self.assertTrue(last['clearFirst'] and not last['bracketed'], 'after a clear-only pass, with no waits')
-        self.assertTrue(last['tiled'], "on the probe's layout: a private texture is block-linear")
+        slot = experiments[-2]['twod']
+        self.assertTrue(slot['clearFirst'] and not slot['bracketed'], 'after a clear-only pass, with no waits')
+        self.assertTrue(slot['tiled'], "on the probe's layout: a private texture is block-linear")
+        floats = [e for e in experiments if e['twod'].get('colorFormat') == twod.F32]
+        self.assertEqual([e['target']['format'] for e in floats], ['rgba32float'])
         scales = [e for e in experiments if e['twod']['op'] in ('scale', 'resolve') and 'source' in e]
         self.assertTrue(all(e['source']['format'] == e['target']['format'] for e in scales))
+
+    def test_a_fill_in_another_format_than_its_destination_is_refused(self) -> None:
+        words = twod.f32_words(twod.RGBA)
+        for fmt, colour_format, view in (
+            ('bgra8unorm', twod.F32, None),
+            ('rgba16float', twod.F32, None),
+            ('r8unorm', 0xCF, None),
+            ('bgra8unorm_srgb', 0xCF, None),
+            ('rgba8unorm', 0xCF, None),
+        ):
+            cell = twod.fill('cell', fmt, colour_format, words)
+            if view:
+                cell['twod']['fmt2d'] = view
+            with self.assertRaises(protocol.InvalidError, msg=fmt):
+                protocol.batch('one', [cell])
+        protocol.batch('one', [twod.own_fill('bgra8unorm_srgb'), twod.fill('f', 'rgba32float', twod.F32, words)])
 
     def test_no_two_by_two_mean_of_the_source_is_a_tie(self) -> None:
         data, side = twod.source_texels(), 64

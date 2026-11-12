@@ -74,6 +74,14 @@ public enum BenchProtocol {
     public static let sourceKeys: Set<String> = ["format", "width", "height", "data"]
     /// Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat)
     public static let twodFormats: Set<UInt32> = [10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125]
+    /// Each of them and that surface format, as probeTwodFormat gives it
+    public static let twodDestination: [UInt32: UInt32] = [
+        10: 0xF3, 20: 0xEE, 25: 0xF2, 30: 0xEA, 60: 0xDA, 65: 0xDE, 70: 0xD5, 71: 0xD6, 80: 0xCF, 81: 0xD0, 90: 0xD1,
+        92: 0xE0, 110: 0xC6, 115: 0xCA, 125: 0xC0,
+    ]
+    /// The 2D surface formats a solid fill may write, each in its own solid-prim colour format (raw_probe_ops.h
+    /// probeSolidFill)
+    public static let solidFillFormats: Set<UInt32> = [0xC0, 0xCA, 0xCF, 0xD1, 0xD5, 0xEE, 0xF3]
     /// Target formats the pack has a sampled-quad state for (raw_mip.h mipState): a bilinear scale's 3D compare
     public static let mipFormats: Set<UInt32> = [1, 20, 25, 40, 43, 55, 60, 65, 71, 81, 90, 92, 94, 105, 110, 125]
     /// A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)

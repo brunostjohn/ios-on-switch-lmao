@@ -78,6 +78,12 @@ class AgreementTest(unittest.TestCase):
         for swift, python in (('twodFormats', protocol.TWOD_FORMATS), ('mipFormats', protocol.MIP_FORMATS)):
             found = re.search(rf'static let {swift}: Set<UInt32> = \[(.*?)\]', text, re.DOTALL)
             self.assertEqual({int(n) for n in re.findall(r'\d+', found.group(1))}, python, swift)
+        destination = re.search(r'static let twodDestination: \[UInt32: UInt32\] = \[(.*?)\]', text, re.DOTALL)
+        found = re.findall(r'(\d+): (0x[0-9A-F]+)', destination.group(1))
+        self.assertEqual({int(m): int(f, 16) for m, f in found}, protocol.TWOD_DESTINATION)
+        self.assertEqual(set(protocol.TWOD_DESTINATION), protocol.TWOD_FORMATS)
+        solid = re.search(r'static let solidFillFormats: Set<UInt32> = \[(.*?)\]', text, re.DOTALL)
+        self.assertEqual({int(n, 16) for n in re.findall(r'0x[0-9A-F]+', solid.group(1))}, protocol.SOLID_FILL_FORMATS)
         grids = re.search(r'static let sampleGrids: \[Int: \(Int, Int\)\] = \[(.*?)\]', text, re.DOTALL)
         found = re.findall(r'(\d+): \((\d+), (\d+)\)', grids.group(1))
         self.assertEqual({int(n): (int(x), int(y)) for n, x, y in found}, protocol.SAMPLE_GRIDS)

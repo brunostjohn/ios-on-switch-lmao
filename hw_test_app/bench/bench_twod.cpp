@@ -287,6 +287,8 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
     const uint32_t fmt2d = w.fmt2d ? w.fmt2d : raw::probeTwodFormat(x.format);
     if (!fmt2d)
         return fail(r, SWITCH_BENCH_INVALID, "a format the 2D engine names none of");
+    if (w.op == SWITCH_BENCH_TWOD_FILL && !raw::probeSolidFill(fmt2d, w.color_format))
+        return fail(r, SWITCH_BENCH_INVALID, "a fill's colour format is its destination's own, not sRGB");
     Source source(b, x);
     const raw::Texture *read = w.op == SWITCH_BENCH_TWOD_FILL ? nullptr : source.texture(x);
     if (w.op != SWITCH_BENCH_TWOD_FILL && !read)

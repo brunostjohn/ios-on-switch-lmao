@@ -127,6 +127,11 @@ extension BenchFields {
         let reference = try flag("reference", false)
         guard !reference || op == .fill else { throw BenchInvalid("twod.reference is the reference fill: fill only") }
         guard op != .fill || source == nil else { throw BenchInvalid("a fill reads no source") }
+        let colorFormat = UInt32(try count(t["colorFormat"] ?? (0 as Any), 0...255, "twod.colorFormat"))
+        let destination = fmt2d != 0 ? fmt2d : BenchProtocol.twodDestination[BenchProtocol.formats[format]!.raw] ?? 0
+        guard op != .fill || (colorFormat == destination && BenchProtocol.solidFillFormats.contains(destination)) else {
+            throw BenchInvalid("a fill's colorFormat is its destination's own 2D format, and not an sRGB one")
+        }
         var samples = 0
         if op == .resolve {
             samples = try count(t["samples"], 2...4, "twod.samples")
@@ -154,7 +159,7 @@ extension BenchFields {
         }
         return BenchTwod(
             op: op, fmt2d: fmt2d,
-            colorFormat: UInt32(try count(t["colorFormat"] ?? (0 as Any), 0...255, "twod.colorFormat")),
+            colorFormat: colorFormat,
             color: color.map(UInt32.init), du: try wide("du", 1 << 32), dv: try wide("dv", 1 << 32),
             sx: try wide("sx", 0), sy: try wide("sy", 0), bilinear: try flag("bilinear", false),
             corner: try flag("corner", false), reference: reference, bracketed: try flag("bracketed", true),

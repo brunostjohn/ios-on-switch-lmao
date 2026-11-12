@@ -118,6 +118,28 @@ SOURCE_KEYS = {'format', 'width', 'height', 'data'}
 TWOD_OPS = ('fill', 'scale', 'resolve')
 # Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat), by MTLPixelFormat
 TWOD_FORMATS = {10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125}
+# Each of them and its 2D surface format (probeTwodFormat)
+TWOD_DESTINATION = {
+    10: 0xF3,
+    20: 0xEE,
+    25: 0xF2,
+    30: 0xEA,
+    60: 0xDA,
+    65: 0xDE,
+    70: 0xD5,
+    71: 0xD6,
+    80: 0xCF,
+    81: 0xD0,
+    90: 0xD1,
+    92: 0xE0,
+    110: 0xC6,
+    115: 0xCA,
+    125: 0xC0,
+}
+# The 2D surface formats a solid fill may write, each in its own solid-prim colour format (probeSolidFill).
+# 12 Nov: a fill of four floats (0xC0) into A8R8G8B8 passed its waits, then GR could not save the channel's context and
+# the kernel panicked; an sRGB destination raises class error 0x4a
+SOLID_FILL_FORMATS = {0xC0, 0xCA, 0xCF, 0xD1, 0xD5, 0xEE, 0xF3}
 # Target formats the pack has a sampled-quad state for (raw_mip.h mipState): the 3D side of a bilinear scale's compare
 MIP_FORMATS = {1, 20, 25, 40, 43, 55, 60, 65, 71, 81, 90, 92, 94, 105, 110, 125}
 # A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)
@@ -298,6 +320,11 @@ def _twod(e: dict, target: Target) -> None:
         'target format: the 2D engine has no surface format for it (give twod.fmt2d)',
     )
     _require(op != 'fill' or 'source' not in e, 'a fill reads no source')
+    destination = t.get('fmt2d') or TWOD_DESTINATION.get(FORMATS[target.format][0], 0)
+    _require(
+        op != 'fill' or (t.get('colorFormat', 0) == destination and destination in SOLID_FILL_FORMATS),
+        "a fill's colorFormat is its destination's own 2D format, and not an sRGB one",
+    )
     source = source_of(e)
     if op == 'resolve':
         _require(t.get('samples') in SAMPLE_GRIDS, f'twod.samples is one of {sorted(SAMPLE_GRIDS)}')

@@ -92,26 +92,61 @@ inline void surface(Push &p, uint32_t base, const ProbeSurface &s)
 inline uint32_t probeTwodFormat(uint32_t mtl)
 {
     switch (mtl) {
-    case 10: return NV902D_SET_DST_FORMAT_V_Y8;                     // R8Unorm, as fx::twodFormat
-    case 20: return NV902D_SET_DST_FORMAT_V_Y16;                    // R16Unorm
-    case 25: return NV902D_SET_DST_FORMAT_V_RF16;                   // R16Float
-    case 30: return NV902D_SET_DST_FORMAT_V_G8R8;                   // RG8Unorm
-    case 60: return NV902D_SET_DST_FORMAT_V_R16_G16;                // RG16Unorm
-    case 65: return NV902D_SET_DST_FORMAT_V_RF16_GF16;              // RG16Float
-    case 70: return NV902D_SET_DST_FORMAT_V_A8B8G8R8;               // RGBA8Unorm
-    case 71: return NV902D_SET_DST_FORMAT_V_A8BL8GL8RL8;            // RGBA8Unorm_sRGB
-    case 80: return NV902D_SET_DST_FORMAT_V_A8R8G8B8;               // BGRA8Unorm
-    case 81: return NV902D_SET_DST_FORMAT_V_A8RL8GL8BL8;            // BGRA8Unorm_sRGB
-    case 90: return NV902D_SET_DST_FORMAT_V_A2B10G10R10;            // RGB10A2Unorm
-    case 92: return NV902D_SET_DST_FORMAT_V_BF10GF11RF11;           // RG11B10Float
-    case 110: return NV902D_SET_DST_FORMAT_V_R16_G16_B16_A16;       // RGBA16Unorm
-    case 115: return NV902D_SET_DST_FORMAT_V_RF16_GF16_BF16_AF16;   // RGBA16Float
-    case 125: return NV902D_SET_DST_FORMAT_V_RF32_GF32_BF32_AF32;   // RGBA32Float
-    default: return 0;
+    case 10:
+        return NV902D_SET_DST_FORMAT_V_Y8;  // R8Unorm, as fx::twodFormat
+    case 20:
+        return NV902D_SET_DST_FORMAT_V_Y16;  // R16Unorm
+    case 25:
+        return NV902D_SET_DST_FORMAT_V_RF16;  // R16Float
+    case 30:
+        return NV902D_SET_DST_FORMAT_V_G8R8;  // RG8Unorm
+    case 60:
+        return NV902D_SET_DST_FORMAT_V_R16_G16;  // RG16Unorm
+    case 65:
+        return NV902D_SET_DST_FORMAT_V_RF16_GF16;  // RG16Float
+    case 70:
+        return NV902D_SET_DST_FORMAT_V_A8B8G8R8;  // RGBA8Unorm
+    case 71:
+        return NV902D_SET_DST_FORMAT_V_A8BL8GL8RL8;  // RGBA8Unorm_sRGB
+    case 80:
+        return NV902D_SET_DST_FORMAT_V_A8R8G8B8;  // BGRA8Unorm
+    case 81:
+        return NV902D_SET_DST_FORMAT_V_A8RL8GL8BL8;  // BGRA8Unorm_sRGB
+    case 90:
+        return NV902D_SET_DST_FORMAT_V_A2B10G10R10;  // RGB10A2Unorm
+    case 92:
+        return NV902D_SET_DST_FORMAT_V_BF10GF11RF11;  // RG11B10Float
+    case 110:
+        return NV902D_SET_DST_FORMAT_V_R16_G16_B16_A16;  // RGBA16Unorm
+    case 115:
+        return NV902D_SET_DST_FORMAT_V_RF16_GF16_BF16_AF16;  // RGBA16Float
+    case 125:
+        return NV902D_SET_DST_FORMAT_V_RF32_GF32_BF32_AF32;  // RGBA32Float
+    default:
+        return 0;
     }
 }
 
-inline bool probeResolveOp(const ProbeSurface &ms, uint32_t sxLog2, uint32_t syLog2, const ProbeSurface &into, ProbeOp &op)
+// A solid fill in a colour format other than its destination's own (0xC0 four floats into A8R8G8B8, 12 Nov) passed its
+// waits, then GR could not save the channel's context and the kernel panicked; sRGB destinations raise class error 0x4a
+inline bool probeSolidFill(uint32_t fmt2d, uint32_t colorFormat)
+{
+    switch (fmt2d) {
+    case NV902D_SET_DST_FORMAT_V_A8R8G8B8:
+    case NV902D_SET_DST_FORMAT_V_A8B8G8R8:
+    case NV902D_SET_DST_FORMAT_V_A2B10G10R10:
+    case NV902D_SET_DST_FORMAT_V_Y8:
+    case NV902D_SET_DST_FORMAT_V_Y16:
+    case NV902D_SET_DST_FORMAT_V_RF16_GF16_BF16_AF16:
+    case NV902D_SET_DST_FORMAT_V_RF32_GF32_BF32_AF32:
+        return colorFormat == fmt2d;
+    default:
+        return false;
+    }
+}
+
+inline bool probeResolveOp(const ProbeSurface &ms, uint32_t sxLog2, uint32_t syLog2, const ProbeSurface &into,
+                           ProbeOp &op)
 {
     if (sxLog2 > 1 || syLog2 > 1 || !into.width || !into.height || ms.width != into.width << sxLog2 ||
         ms.height != into.height << syLog2)
@@ -158,11 +193,14 @@ inline void emitProbeOp(Push &p, const ProbeOp &op)
             p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_TRUE, SUBC_2D);
         }
         probe_ops_detail::clipOn(p, op);
-        if (op.colorFormat == kTwodColorF32x4)
+        if (op.colorFormat == kTwodColorF32x4) {
+            // SET_RENDER_SOLID_PRIM_COLOR (0x588) lands in COLOR0: written after the four floats it stored red 0 on chip
+            p.inc(NV902D_RENDER_SOLID_PRIM_MODE, {NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS, op.colorFormat}, SUBC_2D);
             p.inc(NV902D_SET_RENDER_SOLID_PRIM_COLOR0, {op.color[0], op.color[1], op.color[2], op.color[3]}, SUBC_2D);
-        p.inc(NV902D_RENDER_SOLID_PRIM_MODE,
-              {NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS, op.colorFormat, op.colorFormat == kTwodColorF32x4 ? 0 : op.color[0]},
-              SUBC_2D);
+        } else {
+            p.inc(NV902D_RENDER_SOLID_PRIM_MODE, {NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS, op.colorFormat, op.color[0]},
+                  SUBC_2D);
+        }
         p.inc(NV902D_RENDER_SOLID_PRIM_POINT_SET_X(0), {op.dx, op.dy, op.dx + op.dw, op.dy + op.dh}, SUBC_2D);
         if (op.referenceFill || op.clip[2])
             p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_FALSE, SUBC_2D);
