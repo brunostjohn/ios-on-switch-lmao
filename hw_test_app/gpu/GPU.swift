@@ -175,9 +175,11 @@ public final class GPU: @unchecked Sendable {
         return texture
     }
 
-    /// Copies a texture (any storage) into a shared buffer with the blit engine and returns its bytes, rows packed.
+    /// Copies a texture (any storage) into a shared buffer with the blit engine and returns its bytes, rows packed:
+    /// level `level` of slice `slice`, or of a 3D texture's depth plane `plane`.
     public func read(
-        _ texture: MTLTexture, bytesPerPixel: Int, level: Int = 0, slice: Int = 0, options: MTLBlitOption = []
+        _ texture: MTLTexture, bytesPerPixel: Int, level: Int = 0, slice: Int = 0, plane: Int = 0,
+        options: MTLBlitOption = []
     ) async throws -> [UInt8] {
         let width = max(1, texture.width >> level)
         let height = max(1, texture.height >> level)
@@ -186,14 +188,15 @@ public final class GPU: @unchecked Sendable {
         try await run { commands in
             let blit = commands.makeBlitCommandEncoder()!
             let size = MTLSize(width: width, height: height, depth: 1)
+            let origin = MTLOrigin(x: 0, y: 0, z: plane)
             // m2v's blit encoder has only the form without options: the other is answered zero and copies nothing
             if options.isEmpty {
                 blit.copy(
-                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(), sourceSize: size,
+                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: origin, sourceSize: size,
                     to: out, destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0)
             } else {
                 blit.copy(
-                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(), sourceSize: size,
+                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: origin, sourceSize: size,
                     to: out, destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0,
                     options: options)
             }
@@ -204,11 +207,12 @@ public final class GPU: @unchecked Sendable {
 
     /// The blit readback as a raster of `format`.
     public func raster(
-        _ texture: MTLTexture, _ format: TexelFormat, level: Int = 0, slice: Int = 0
+        _ texture: MTLTexture, _ format: TexelFormat, level: Int = 0, slice: Int = 0, plane: Int = 0
     ) async throws
         -> Raster
     {
-        let bytes = try await read(texture, bytesPerPixel: format.bytesPerTexel, level: level, slice: slice)
+        let bytes = try await read(
+            texture, bytesPerPixel: format.bytesPerTexel, level: level, slice: slice, plane: plane)
         return format.raster(bytes, width: max(1, texture.width >> level), height: max(1, texture.height >> level))
     }
 

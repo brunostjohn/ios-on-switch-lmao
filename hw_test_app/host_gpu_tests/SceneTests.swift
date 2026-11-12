@@ -52,6 +52,13 @@ final class SceneTests: XCTestCase {
         XCTAssertEqual(result.checks.count, 29)
     }
 
+    func testMSAAResolveIntoLevelsSlicesAndPlanesOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.msaa.resolve" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+        XCTAssertEqual(result.checks.count, 2 * 2 * 23, "two formats, resolved and drawn, 23 subresources each")
+    }
+
     func testArchiveMissOnThisMac() async throws {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.archive_miss" })
         let result = try await scene.run(makeGPU())
