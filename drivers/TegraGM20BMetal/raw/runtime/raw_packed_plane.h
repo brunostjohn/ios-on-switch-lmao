@@ -11,9 +11,7 @@
 // (IOGPUCommandQueueErrorDomain 5), or completes having written nothing, or six codes to a 64-bit word against its own
 // reads. The store writes the layout Metal reads, each code its channel held as a half as the 10-bit YCbCr code targets
 // hold it (raw_ycbcr_store_rule.h: a drawn float toward zero), so YCBCR10_420_2P_PACKED's passes and these views' over one
-// surface store one code. Bits 30-31 and a row's slots past its last code are 0, as CoreVideo's black blocks of these
-// formats hold them; no reader takes them (VTPixelTransferSession, Core Image and Metal on macOS 27.2.1 read the same
-// codes with them set).
+// surface store one code. Bits 30-31 and a row's slots past its last code are 0, as ycbcrPackRow writes them.
 #pragma once
 
 #include <cstdint>

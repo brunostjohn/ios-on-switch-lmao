@@ -144,7 +144,9 @@ inline YcbcrStoreShape ycbcrPackedShape(YcbcrStoreShape twin)
 
 // `n` codes of a packed row in its words, as the _packed states write them: code x at bit 10 (x % 3) of word x / 3, the slots
 // past the last code and each word's top two bits 0 (the reads' layout, m2v bind/ycbcr_convert.rs; Metal's store of a packed
-// target is not measured: an M4 Max's command buffer faults)
+// target is not measured: an M4 Max's command buffer faults). Nothing reads those spare bits: Metal's packed views,
+// VTPixelTransferSession and Core Image read the same with them set (raw/test/packedreaders.mm on macOS 27.2.1, HW Test
+// gpu.packed_spare_bits on the device), and CoreVideo's black blocks of 'p420', 'p422' and 'p444' hold them 0
 inline void ycbcrPackRow(const uint16_t *codes, uint32_t n, uint32_t *words)
 {
     for (uint32_t w = 0; w < (n + 2) / 3; w++) {

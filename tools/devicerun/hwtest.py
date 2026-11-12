@@ -86,6 +86,7 @@ TESTS: dict[str, bool] = {
             'gpu.ycbcr_target',
             'gpu.ycbcr_packed_target',
             'gpu.packed_plane_target',
+            'gpu.packed_spare_bits',
             'gpu.raw.xr_two_plane',
             'metal.mps.blur',
             'metal.mps.matmul',
