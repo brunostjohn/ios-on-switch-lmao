@@ -286,6 +286,10 @@ IOReturn runJob(Job *job)
     if (!ret && p.fillChroma)
         fillChroma(p, pages);
     tegra_vic_surface_complete(&job->dst);
+    // AppleJPEGDriver ends its destination's write with IOSurface's device write end, as VIC does: the seed moves, so a
+    // surface a decode wrote never reads as one nothing wrote (TegraGM20BRecord.h) and seed-keyed caches see the picture
+    if (!ret)
+        tegra_vic_surface_written(&job->dst);
     job->engineUs = busy;
     job->bytesUsed = status.bytes_offset;
     job->cycles = status.reserved0;  // the cycle count (DUMP_CYCLE_COUNT)
