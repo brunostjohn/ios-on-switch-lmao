@@ -2,9 +2,9 @@
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
 // setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero, so
 // m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
-// amplification or a dynamic attribute stride has no twin that draws it as Metal does; the replay of indirect draw
-// commands reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused that holds any
-// of these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
+// amplification, a dynamic attribute stride or stage-in is drawn by raw alone; the replay of
+// indirect draw commands reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused
+// that holds any of these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
 
 namespace {
@@ -95,16 +95,12 @@ const char *rmM2vMissingState(MTLRenderPipelineDescriptor *d)
     return nullptr;
 }
 
-// m2v's compute encoder takes a stage-in region (NativeBridgeMetalFrontend.mm setStageInRegion:), not a bind's stride
 const char *rmM2vMissingKernel(MTLComputePipelineDescriptor *d)
 {
     MTLStageInputOutputDescriptor *in = d.stageInputDescriptor;
-    for (NSUInteger i = 0; in && i < 31; i++) {
-        MTLAttributeDescriptor *a = in.attributes[i];
-        if (a.format != MTLAttributeFormatInvalid && a.bufferIndex < 31 &&
-            in.layouts[a.bufferIndex].stride == MTLBufferLayoutStrideDynamic)
-            return "a stage-in kernel of a dynamic attribute stride";
-    }
+    for (NSUInteger i = 0; in && i < 31; i++)
+        if (in.attributes[i].format != MTLAttributeFormatInvalid)
+            return "a stage-in kernel";
     return nullptr;
 }
 

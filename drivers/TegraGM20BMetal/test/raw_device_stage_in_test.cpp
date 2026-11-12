@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: MIT
+// A stage-in kernel's words on raw::Device: a compute encoder's dispatch writes setStageInRegion:'s origin and size and a
+// bind's stride into the StageInRegion and StageInStride push words of the root table its QMD names (read off the
+// device's submitted words and the memory they point at), and an indirect dispatch command's region writes its own into
+// its region's root table in ICB memory; a kernel of no stage-in takes neither.
+#include "raw_device_harness.h"
+#include "../../../kits/SwitchGM20B/SwitchGM20BCompute.h"
+#include "../raw/runtime/raw_compute.h"
+#include "../raw/runtime/raw_icb_compute.h"
+
+namespace {
+
+constexpr uint32_t kRootPush = 0x700, kRegionWord = 4, kStrideWord = 13, kQmdRootLo = 29;
+constexpr uint32_t kQmdCbufValid = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CONSTANT_BUFFER_VALID(0));
+
+// A kernel whose constant buffer 0 is the root table, reading a stage-in region and buffer 1's bind stride where
+// `stageIn`
+raw::ComputeRecord kernel(bool stageIn)
+{
+    raw::ComputeRecord r;
+    r.code.assign(64, 0);
+    r.cbufType[0] = raw::CbufRoot;
+    r.cbufs = 1;
+    r.kernel.regionWord = -1;
+    r.kernel.qmd[kQmdCbufValid] |= 1;
+    if (stageIn) {
+        r.kernel.stageInRegionWord = kRegionWord;
+        r.kernel.stageInStride[0][0] = 1;
+        r.kernel.stageInStride[0][1] = kStrideWord;
+    }
+    return r;
+}
+
+// placeCompute keeps a state by its record's address: one record of each form for every test
+const raw::ComputeRecord &stageInKernel()
+{
+    static const raw::ComputeRecord r = kernel(true);
+    return r;
+}
+
+const raw::ComputeRecord &plainKernel()
+{
+    static const raw::ComputeRecord r = kernel(false);
+    return r;
+}
+
+// What the CPU wrote at `va` (the kernel model's memory of the BO bound there)
+uint32_t word(uint64_t va)
+{
+    for (const auto &[at, bound] : kernel_model::model.binds) {
+        const auto bytes = kernel_model::model.memory.find(uint32_t(bound.first));
+        if (va < at || va + 4 > at + bound.second || bytes == kernel_model::model.memory.end() ||
+            va - at + 4 > bytes->second.size())
+            continue;
+        uint32_t w;
+        memcpy(&w, bytes->second.data() + (va - at), 4);
+        return w;
+    }
+    return 0xdeadbeef;
+}
+
+class DeviceStageIn : public harness::DeviceTest {
+protected:
+    // One dispatch of `r` at region {3, 5, 7} + {64, 2, 1}, buffer 1 bound at stride 24: the root table's push words its
+    // QMD names
+    std::vector<uint32_t> dispatched(const raw::ComputeRecord &r)
+    {
+        const raw::ComputeState *k = raw::placeCompute(dev, r);
+        EXPECT_NE(k, nullptr);
+        raw::CommandBuffer *cb = dev.begin();
+        EXPECT_NE(cb, nullptr);
+        if (!k || !cb)
+            return {};
+        const size_t before = kernel_model::model.jobs.size();
+        {
+            raw::ComputeEncoder e(*cb, dev);
+            e.setState(k);
+            e.setBufferStride(1, 24);
+            e.setStageInRegion({3, 5, 7, 64, 2, 1});
+            const uint32_t groups[3] = {1, 1, 1}, threads[3] = {1, 1, 1};
+            const char *why = nullptr;
+            EXPECT_TRUE(e.dispatch(groups, threads, &why)) << (why ? why : "");
+            e.end();
+        }
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        uint64_t qmd = 0;
+        for (size_t j = before; j < kernel_model::model.jobs.size(); j++) {
+            const std::vector<uint32_t> &w = kernel_model::model.jobs[j].words;
+            for (size_t i = 0; i + 1 < w.size(); i++) {
+                const uint32_t h = w[i], op = h >> 29, subc = h >> 13 & 7, m = (h & 0xfff) << 2;
+                if (subc == raw::SUBC_COMPUTE && m == NVB1C0_SEND_PCAS_A)
+                    qmd = uint64_t(op == 4 ? h >> 16 & 0x1fff : w[i + 1]) << 8;
+            }
+        }
+        EXPECT_NE(qmd, 0u) << "no launch";
+        const uint64_t root = uint64_t(word(qmd + 4 * (kQmdRootLo + 1)) & 0xff) << 32 | word(qmd + 4 * kQmdRootLo);
+        std::vector<uint32_t> push(32);
+        for (uint32_t i = 0; i < 32; i++)
+            push[i] = word(root + kRootPush + 4 * i);
+        return push;
+    }
+};
+
+TEST_F(DeviceStageIn, ADispatchWritesItsRegionAndABindsStrideIntoItsRootTable)
+{
+    const std::vector<uint32_t> push = dispatched(stageInKernel());
+    ASSERT_EQ(push.size(), 32u);
+    const uint32_t region[8] = {3, 5, 7, 0, 64, 2, 1, 0};
+    for (uint32_t w = 0; w < 8; w++)
+        EXPECT_EQ(push[kRegionWord - 1 + w], region[w]) << w;
+    EXPECT_EQ(push[kStrideWord - 1], 24u);
+}
+
+TEST_F(DeviceStageIn, AKernelOfNoStageInTakesNeither)
+{
+    const std::vector<uint32_t> push = dispatched(plainKernel());
+    ASSERT_EQ(push.size(), 32u);
+    for (uint32_t w = 0; w < 32; w++)
+        EXPECT_EQ(push[w], 0u) << w;
+}
+
+TEST_F(DeviceStageIn, AnIndirectDispatchCommandsRegionIsInItsOwnRootTable)
+{
+    const raw::ComputeState *k = raw::placeCompute(dev, stageInKernel());
+    ASSERT_NE(k, nullptr);
+    std::vector<uint8_t> block(raw::icb::computeRegionBytes(0));
+    raw::ComputeRegion region;
+    region.local = {1, 1, 1};
+    region.groups = {1, 1, 1};
+    raw::ComputeEncoder::IcbBuffer buffers[31] = {};
+    raw::StageIn stageIn;
+    stageIn.setRegion({2, 4, 6, 8, 10, 12});
+    stageIn.strides[1] = 40;
+    const char *why = nullptr;
+    ASSERT_TRUE(raw::ComputeEncoder::icbRegion(dev, *k, region, {1, 1, 1}, {1, 1, 1}, buffers, stageIn, block.data(),
+                                               0x123400, &why))
+        << (why ? why : "");
+    const auto *push = reinterpret_cast<const uint32_t *>(block.data() + raw::icb::kComputeQmdBytes + kRootPush);
+    const uint32_t words[8] = {2, 4, 6, 0, 8, 10, 12, 0};
+    for (uint32_t w = 0; w < 8; w++)
+        EXPECT_EQ(push[kRegionWord - 1 + w], words[w]) << w;
+    EXPECT_EQ(push[kStrideWord - 1], 40u);
+}
+
+}  // namespace
