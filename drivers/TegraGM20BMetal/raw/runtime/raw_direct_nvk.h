@@ -58,6 +58,7 @@ struct NvkStageMetrics {
     uint32_t scratchBytes, memorySpills, memoryFills, registerSpills, registerFills;
     uint64_t staticCycles;
 };
+
 static_assert(sizeof(NvkStageMetrics) == 48);
 
 // nvk_switch_offline.h's layout as data: each binding with the offset and stride raw lays it out at (raw_set_layout.h)
@@ -113,8 +114,8 @@ inline void *handle(uint64_t h)
 namespace nvk {
 
 // switch_nak_compile_stage: the stage compiled with no device, from the frozen table and the layout as data
-inline int32_t nakCompileStage(const DirectNvk &n, const void *frozen, const NvkStageInfo &info, const NakLayout &layout,
-                               NvkStage &out)
+inline int32_t nakCompileStage(const DirectNvk &n, const void *frozen, const NvkStageInfo &info,
+                               const NakLayout &layout, NvkStage &out)
 {
     return reinterpret_cast<int32_t (*)(const void *, const NvkStageInfo *, const NakLayout *, NvkStage *)>(
         n.nakCompileStage)(frozen, &info, &layout, &out);

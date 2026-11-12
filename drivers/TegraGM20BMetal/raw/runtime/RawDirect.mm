@@ -104,7 +104,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
     storageRefusal_.clear();
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = nvk_.nakCompileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
-                                                    : "the frontend or NVK has no direct compile";
+                                                       : "the frontend or NVK has no direct compile";
         return CompileOutcome::Failed;
     }
     // The function's reflection marks active an attribute a function constant gates (CoreRE's vsShadow texcoord, under

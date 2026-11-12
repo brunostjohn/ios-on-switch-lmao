@@ -331,8 +331,8 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
 // words that hold uniform bind residuals (raw_residual.h) as the constant 0, so a uniform read is a constant-buffer operand
 // at an immediate offset; and where the chip is proven to round them so (raw_chip_facts.h), fetches rounded to half in
 // TEXS's F16 forms. A stage's variant is kept only where its code differs, and nothing else a record says of it does.
-void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const NakLayoutData &layout, uint32_t halfTargets,
-                     const Stages &generic, RuntimeRecord &out)
+void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const NakLayoutData &layout,
+                     uint32_t halfTargets, const Stages &generic, RuntimeRecord &out)
 {
     uint32_t residual[2] = {}, zeroPush = 0;
     const PackPipeline &p = out.pipeline;
@@ -346,10 +346,12 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const Na
         residual[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
         zeroPush |= 1u << word;
     }
+
     struct Kind {
         uint32_t zeroPush;
         bool texsF16;
     };
+
     const bool f16 = kProvenChipFacts & AssumeTexsF16;
     std::vector<Kind> kinds;
     if (zeroPush && f16)

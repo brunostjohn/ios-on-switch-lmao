@@ -142,10 +142,9 @@ private:
     {
         const NmbDirectWrite &w = kw.write;
         std::array<uint32_t, 8> header = {};
-        const bool known =
-            w.sampler == NMB_DIRECT_IMMUTABLE
-                ? immutableSamplerHeader(k_.set0Bindings, k_.set0BindingCount, w.binding, header.data())
-                : kw.sampler && samplerHeader(kw.samplerState, header.data());
+        const bool known = w.sampler == NMB_DIRECT_IMMUTABLE
+                               ? immutableSamplerHeader(k_.set0Bindings, k_.set0BindingCount, w.binding, header.data())
+                               : kw.sampler && samplerHeader(kw.samplerState, header.data());
         if (!known) {
             why = "a sampler slot the dispatch leaves unbound at " + std::to_string(offset);
             return false;

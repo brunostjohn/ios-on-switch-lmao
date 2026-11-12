@@ -122,8 +122,8 @@ typedef struct NmbDirectStorage {
 } NmbDirectStorage;
 
 typedef struct NmbDirectState {
-    uint64_t device;  // VkDevice of the stage compile
-    uint64_t layout;  // VkPipelineLayout of draw 0's variant
+    uint64_t device;                    // VkDevice of the stage compile
+    uint64_t layout;                    // VkPipelineLayout of draw 0's variant
     const NmbDirectLayout *layoutData;  // that layout, as data
     uint32_t stageCount;
     NmbDirectStage stages[2];
@@ -197,10 +197,10 @@ typedef struct NmbDirectKernelWrite {
 } NmbDirectKernelWrite;
 
 typedef struct NmbDirectKernel {
-    uint64_t device;       // VkDevice of the stage compile
-    uint64_t layout;       // VkPipelineLayout of the dispatch's variant
+    uint64_t device;                    // VkDevice of the stage compile
+    uint64_t layout;                    // VkPipelineLayout of the dispatch's variant
     const NmbDirectLayout *layoutData;  // that layout, as data
-    uint64_t set0;         // its set 0 VkDescriptorSetLayout (0: none)
+    uint64_t set0;                      // its set 0 VkDescriptorSetLayout (0: none)
     const NmbDirectBinding *set0Bindings;
     uint32_t set0BindingCount;
     NmbDirectStage stage;  // the dispatch's region: its specialization, stage flags and required subgroup size
