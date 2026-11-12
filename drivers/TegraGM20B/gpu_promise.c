@@ -223,6 +223,8 @@ void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
 		if (k->producer.engine && k->offset == promise.queue && k->value == (u32)promise.value &&
 		    !switch_gpu_backing_token_retain(&k->producer)) {
 			present_takes(&k->producer);
+			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_PROMISED);
+			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_KEPT);
 			*kept = k->producer;
 			return;
 		}
@@ -242,6 +244,7 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct swit
 	    !switch_gpu_backing_token_retain(producer)) {
 		if (switch_gpu_present_watch_kept(&tgm_present.watch, offset, value, producer)) {
 			present_takes(producer);
+			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_KEPT);
 			/* before the re-arm, as the offer attaches before its arm: the job's end then runs the display's flip
 			 * from the nonstall filter, and a pass claiming the watch detaches the view after this */
 			tgm_present_filter_attach(producer);

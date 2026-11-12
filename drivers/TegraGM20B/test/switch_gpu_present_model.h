@@ -7,7 +7,9 @@
 // fence, on a kernel channel, always interrupts. The deadline (gpu_present_deadline.c watch_late) never delivers. A
 // frame behind a writer promise is watched PROMISED until the job that keeps it is submitted (gpu_promise.c), then on
 // that job; the deadline gives up a promise still unkept, and the frame is dropped (`failed`: the display's
-// dropLostFrame keeps the frame before it on the panel).
+// dropLostFrame keeps the frame before it on the panel). `panel` is the frame window A shows: a delivered present
+// flips it to the offered frame, from the nonstall filter first when its view of a GM20B producer sees it end
+// (SwitchGpuPresentFilter.cpp: attached before each arm, detached at each claim), and a failed one leaves it.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -66,14 +68,17 @@ public:
 			return 1;
 		}
 		late = 0;
+		deadlineAt = clock + kPresentNs;
 		switch_gpu_backing_token watched = tokens[0];
 		for (const auto &k : keptJobs)
 			if (watched.engine == SWITCH_GPU_ENGINE_PROMISE && k.first == promise(watched))
 				watched = k.second;
-		if (watched.engine == SWITCH_GPU_ENGINE_PROMISE)
+		if (watched.engine == SWITCH_GPU_ENGINE_PROMISE) {
 			switch_gpu_present_watch_promise(&watch, &watched);
-		else
+		} else {
+			view = true;
 			switch_gpu_present_watch_arm(&watch, &watched);
+		}
 		if (afterArm)
 			afterArm();
 		if (asks)
@@ -100,6 +105,7 @@ public:
 		keptJobs.push_back({{offset, value}, producer});
 		if (!switch_gpu_present_watch_kept(&watch, offset, value, &producer))
 			return;
+		view = true;
 		switch_gpu_present_watch_rearm(&watch);
 		if (asks)
 			needTokens(&producer, 1);
@@ -115,6 +121,17 @@ public:
 		words[offset] = value;
 		if (switch_gpu_present_watch_promised(&watch, offset, value))
 			work();
+	}
+
+	// tgm_present_filter in the nonstall line's primary filter, ahead of the work loop's pass: the display's callout
+	// writes window A once the watched producer is complete and visible, once per view
+	void filter()
+	{
+		if (!view || filterCalled || watch.token.engine != SWITCH_GPU_ENGINE_GM20B || physical(&watch.token) != 1)
+			return;
+		filterCalled = true;
+		++filterFlips;
+		panel = offered;
 	}
 
 	// the owners' thread calls
@@ -133,6 +150,7 @@ public:
 		job.clear();
 		++jobInterrupts;
 		++presented;
+		panel = offered;
 		return true;
 	}
 
@@ -181,7 +199,10 @@ public:
 	std::vector<switch_gpu_backing_token> job;
 	uint32_t syncpoints[256] = {};
 	bool asks = true;
-	unsigned presented = 0, failed = 0, reported = 0, workItems = 0, jobInterrupts = 0;
+	unsigned presented = 0, failed = 0, reported = 0, workItems = 0, jobInterrupts = 0, filterFlips = 0;
+	static constexpr uint64_t kPresentNs = 1000000000;  // TGM_PRESENT_NS: the watched offer's deadline
+	uint64_t clock = 0, deadlineAt = 0;
+	int offered = 2, panel = 1;
 	std::map<uint32_t, uint32_t> words;  // a writer promise's word by its fence-pool offset
 	std::set<std::pair<uint32_t, uint32_t>> abandoned;
 	uint64_t late = 0;
@@ -190,6 +211,7 @@ public:
 private:
 	static inline Display *current_ = nullptr;
 	std::vector<Producer *> producers_;
+	bool view = false, filterCalled = false;
 	std::vector<std::pair<std::pair<uint32_t, uint32_t>, switch_gpu_backing_token>> keptJobs;
 
 	static std::pair<uint32_t, uint32_t> promise(const switch_gpu_backing_token &token)
@@ -224,7 +246,7 @@ private:
 		if (watch.state != SWITCH_GPU_PRESENT_WATCH_DUE)
 			return;
 		if (switch_gpu_present_watch_take_visible(&watch, physical, physical))
-			deliver();
+			deliver(true);
 		else
 			work();
 	}
@@ -236,13 +258,18 @@ private:
 		const int found = switch_gpu_present_watch_claim(&watch, physical, physical);
 		failed += found == SWITCH_GPU_PRESENT_WATCH_FAILED;
 		if (found != SWITCH_GPU_PRESENT_WATCH_PENDING)
-			deliver();
+			deliver(found != SWITCH_GPU_PRESENT_WATCH_FAILED);
 	}
 
-	void deliver()
+	// the claim detaches the filter's view; a delivered frame flips window A unless the filter already did
+	void deliver(bool shown)
 	{
+		view = false;
+		filterCalled = false;
 		switch_gpu_present_watch_reset(&watch);
 		++presented;
+		if (shown)
+			panel = offered;
 	}
 };
 }  // namespace present_model

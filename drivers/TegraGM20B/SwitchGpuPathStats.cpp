@@ -96,21 +96,32 @@ struct sysctl_oid gPathsOid;
 // Writer promises given up on since boot (each reported in one "was not kept" line, gpu_promise.c), and how long the
 // reader of the last one had waited: counted for every process, as a present's deadline gives one up in the kernel's.
 uint64_t promisesAbandoned, promiseWaitedNs;
+uint64_t directPromised[3];  // SWITCH_GPU_PATH_DIRECT_*
 
 int promisesSysctl SYSCTL_HANDLER_ARGS
 {
 	(void)oidp;
 	(void)arg1;
 	(void)arg2;
-	char line[96];
-	snprintf(line, sizeof(line), "abandoned=%llu last_waited_ms=%llu",
+	char line[160];
+	snprintf(line, sizeof(line),
+		 "abandoned=%llu last_waited_ms=%llu direct_promised=%llu direct_kept=%llu direct_given_up=%llu",
 		 static_cast<unsigned long long>(__atomic_load_n(&promisesAbandoned, __ATOMIC_ACQUIRE)),
-		 static_cast<unsigned long long>(__atomic_load_n(&promiseWaitedNs, __ATOMIC_RELAXED) / 1000000));
+		 static_cast<unsigned long long>(__atomic_load_n(&promiseWaitedNs, __ATOMIC_RELAXED) / 1000000),
+		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[0], __ATOMIC_RELAXED)),
+		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[1], __ATOMIC_RELAXED)),
+		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[2], __ATOMIC_RELAXED)));
 	return SYSCTL_OUT(req, line, strlen(line) + 1);
 }
 
 struct sysctl_oid gPromisesOid;
 }  // namespace
+
+extern "C" void switch_gpu_path_promise_direct(int what)
+{
+	if (what >= 0 && what < 3)
+		__atomic_fetch_add(&directPromised[what], 1, __ATOMIC_RELAXED);
+}
 
 extern "C" void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
 {
@@ -191,7 +202,8 @@ extern "C" void switch_gpu_path_register(void)
 	switch_sysctl_oid(&gPromisesOid, &sysctl__kern_children, "switch_gpu_promises",
 			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
 			  promisesSysctl, "A",
-			  "writer promises given up on since boot, and how long the last one's reader had waited");
+			  "writer promises given up on since boot, how long the last one's reader had waited, and the direct "
+			  "presents of promised frames watched on their promise, handed to the job that kept it, and given up");
 	sysctl_register_oid(&gPromisesOid);
 }
 #endif

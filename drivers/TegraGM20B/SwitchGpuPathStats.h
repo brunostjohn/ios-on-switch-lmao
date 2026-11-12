@@ -43,6 +43,10 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_COUNT
 };
 
+/* A direct present of a promised frame (gpu_present.c, gpu_promise.c): watched on its promise, handed to the job that
+ * keeps it, or given up on at its deadline; kern.switch_gpu_promises */
+enum { SWITCH_GPU_PATH_DIRECT_PROMISED, SWITCH_GPU_PATH_DIRECT_KEPT, SWITCH_GPU_PATH_DIRECT_GIVEN_UP };
+
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 #define SWITCH_GPU_PATH_STATS 1
 void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count);
@@ -55,11 +59,17 @@ void switch_gpu_path_register(void);
 void switch_gpu_path_line(char *line, size_t size);
 /* A writer promise given up on, whose reader had waited waited_ns: kern.switch_gpu_promises */
 void switch_gpu_path_promise_abandoned(uint64_t waited_ns);
+void switch_gpu_path_promise_direct(int what);
 #else
 #define SWITCH_GPU_PATH_STATS 0
 static inline void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
 {
 	(void)waited_ns;
+}
+
+static inline void switch_gpu_path_promise_direct(int what)
+{
+	(void)what;
 }
 
 static inline void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)

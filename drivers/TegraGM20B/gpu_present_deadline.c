@@ -86,6 +86,7 @@ static void promise_unkept(u64 age)
 		return;
 	}
 	tgm_promise_abandon(promise.queue, (u32)promise.value);
+	switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_GIVEN_UP);
 	mutex_lock(&tgm_live_lock);
 	tgm_promise_abandoned_report(promise.queue, (u32)promise.value, "the display's direct present", age);
 	mutex_unlock(&tgm_live_lock);
