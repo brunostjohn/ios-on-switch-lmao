@@ -41,6 +41,7 @@ class Lane:
     killed: bool = False
     steps: int = 0
     stores: list = field(default_factory=list)
+    carry: bool = False  # the CC carry an IADD.CC wrote, which IADD.X adds
 
     def r(self, i: int) -> int:
         return 0 if i == RZ_REG else self.regs[i]
