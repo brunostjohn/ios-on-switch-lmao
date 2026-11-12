@@ -3,10 +3,12 @@
 // completion together: HW Test gpu.path.encode_cost's command buffers (6 passes of QuartzCore's untextured fill, each
 // draw's vertices, transform and zero uniforms by setBytes with a scissor of its own, at 8 and 16 draws a pass) over the
 // m2v device the render server's facade wraps, on the mock GPU. Per command buffer: the facade's encode profile
-// (switchRawEncodeProfile, as the HW Test reads it), then on every thread the Objective-C messages, locks and allocations
-// the facade's image made (facadecount.c, preloaded) and the CPU time of the recording thread and of the others, with
-// each command buffer released once it completes (facade) and with the batch held until all complete (held). A line
-// FAIL where a count grows with the draws.
+// (switchRawEncodeProfile, as the HW Test reads it, over a held batch after a held batch at the same draws), then on
+// every thread the Objective-C messages, locks and allocations the facade's image made (facadecount.c, preloaded) and
+// the CPU time of the recording thread and of the others, with each command buffer released once it completes
+// (facade) and with the batch held until all complete (held). A line FAIL where the profile's or the held window's
+// count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
+// whose predecessor's completion has not run hands its own to it).
 // usage: DYLD_INSERT_LIBRARIES=<libfacadecount.dylib> facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
@@ -14,6 +16,7 @@
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <objc/runtime.h>
+#include <algorithm>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -315,8 +318,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "a warm-up command buffer failed\n");
                 return 1;
             }
+            failures += !batch(arms[a], buffers, true);
             NSDictionary<NSString *, NSNumber *> *before = profile(device);
-            failures += !batch(arms[a], buffers, false);
+            failures += !batch(arms[a], buffers, true);
             NSDictionary<NSString *, NSNumber *> *after = profile(device);
             const double encodes = after[@"encodes"].doubleValue - before[@"encodes"].doubleValue;
             const double mallocEncodes = after[@"malloc_encodes"].doubleValue - before[@"malloc_encodes"].doubleValue;
@@ -330,13 +334,14 @@ int main(int argc, char **argv)
                    per(@"mallocs", mallocEncodes), per(@"frees", mallocEncodes), per(@"uses", encodes),
                    per(@"use_adds", encodes), per(@"exec_uses", encodes), per(@"descriptor_uploads", encodes));
             counted[a]["encodes"] = encodes / buffers;
-            counted[a]["profile_locks"] = per(@"locks", encodes);
-            counted[a]["profile_mallocs"] = per(@"mallocs", mallocEncodes);
-            counted[a]["profile_sends"] = per(@"sends", encodes);
+            for (NSString *key : {@"locks", @"sends", @"use_adds", @"geometry_vertices"})
+                counted[a][std::string("profile ") + key.UTF8String] = per(key, encodes);
+            counted[a]["profile mallocs"] = per(@"mallocs", mallocEncodes);
+            counted[a]["profile frees"] = per(@"frees", mallocEncodes);
 
-            for (const bool hold : {false, true}) {
-                if (hold)
-                    failures += !batch(arms[a], buffers, true);
+            // a held window twice, judged by the fewer of each count: a queue or pool that grows to a new depth once
+            // counts in only one of them
+            for (const bool hold : {false, true, true}) {
                 facadecount c{};
                 uint64_t mine0, others0, mine1, others1;
                 cpuNs(mine0, others0);
@@ -351,11 +356,16 @@ int main(int argc, char **argv)
                     arms[a], shape, double(c.sends) / buffers, double(c.locks) / buffers, double(c.mallocs) / buffers,
                     double(c.frees) / buffers, double(mine1 - mine0) / 1e3 / buffers,
                     double(others1 - others0) / 1e3 / buffers);
-                const std::string prefix = hold ? "held " : "";
-                counted[a][prefix + "sends"] = double(c.sends) / buffers;
-                counted[a][prefix + "locks"] = double(c.locks) / buffers;
-                counted[a][prefix + "mallocs"] = double(c.mallocs) / buffers;
-                counted[a][prefix + "frees"] = double(c.frees) / buffers;
+                if (!hold)
+                    continue;
+                const std::pair<const char *, uint64_t> counts[] = {{"held sends", c.sends},
+                                                                    {"held locks", c.locks},
+                                                                    {"held mallocs", c.mallocs},
+                                                                    {"held frees", c.frees}};
+                for (const auto &[name, count] : counts) {
+                    const double per = double(count) / buffers;
+                    counted[a][name] = counted[a].count(name) ? std::min(counted[a][name], per) : per;
+                }
             }
         }
         printSites(sites, buffers);
