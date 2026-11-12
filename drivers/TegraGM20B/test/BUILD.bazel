@@ -331,7 +331,7 @@ genrule(
     outs = ["promise_raise_source.h"],
     cmd = """
 set -e
-awk '/^static uint32_t \\*promise_made\\(/ || /^static int promise_raise\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
+awk '/^static int promise_slot\\(/ || /^static uint32_t \\*promise_made\\(/ || /^static int promise_raise\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
 grep -q local_irq_restore $@
 grep -q switch_gpu_promise_raise_unmark $@
 """,
@@ -500,23 +500,31 @@ host_test(
     data = ["//:lint_files"],
 )
 
+PROMISE_GIVEUP_SRCS = [
+    "switch_gpu_interrupts_off_stubs.h",
+    "switch_gpu_promise_giveup_fixture.h",
+    "switch_gpu_promise_giveup_stubs.h",
+    ":promise_giveup_source",
+    ":promise_note_source",
+    "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    "//drivers/TegraGM20B:SwitchGpuJobFences.h",
+    "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+    "//drivers/TegraGM20B:SwitchGpuPromiseGiveUp.h",
+    "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+]
+
 host_test(
     name = "switch_gpu_promise_giveup_test",
-    srcs = [
-        "switch_gpu_interrupts_off_stubs.h",
-        "switch_gpu_promise_giveup_stubs.h",
-        "switch_gpu_promise_giveup_test.cpp",
-        ":promise_giveup_source",
-        ":promise_note_source",
-        "//drivers/TegraGM20B:SwitchGpuBacking.h",
-        "//drivers/TegraGM20B:SwitchGpuJobFences.h",
-        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
-        "//drivers/TegraGM20B:SwitchGpuPromiseGiveUp.h",
-        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-        "//drivers/TegraGM20B:TegraGM20BGpu.h",
-        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
-    ],
+    srcs = PROMISE_GIVEUP_SRCS + ["switch_gpu_promise_giveup_test.cpp"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_promise_giveup_call_test",
+    srcs = PROMISE_GIVEUP_SRCS + ["switch_gpu_promise_giveup_call_test.cpp"],
     cxx_std = "c++17",
 )
 

@@ -19,9 +19,15 @@
 #include "SwitchGpuWriterPromise.h"
 
 #define SWITCH_GPU_GIVEUP_NS (1000ull * 1000 * 1000)
-#define SWITCH_GPU_GIVEUPS 32
+/* One record for every promise slot that can exist: each fence user page's TegraGM20BMaxPromises slots
+ * (gpu_promise_giveup.c asserts both), so no promise is ever left without one */
+#define SWITCH_GPU_GIVEUP_PAGES 64
+#define SWITCH_GPU_GIVEUP_PER_PAGE 32
+#define SWITCH_GPU_GIVEUPS (SWITCH_GPU_GIVEUP_PAGES * SWITCH_GPU_GIVEUP_PER_PAGE)
+#define SWITCH_GPU_GIVEUP_USED_WORDS (SWITCH_GPU_GIVEUPS / 64)
+/* GPU reader channels parked at once that a record tells apart; a promise read from more is given up at its second
+ * all the same, the untold ones taken as still parked */
 #define SWITCH_GPU_GIVEUP_READERS 4
-#define SWITCH_GPU_GIVEUP_KEPT 16
 
 /* A GPU job: its channel's uid and the first seqno it releases (its acquires come before it) */
 struct switch_gpu_giveup_job {
@@ -32,10 +38,11 @@ struct switch_gpu_giveup {
 	uint32_t offset; /* 0: free (no promise word is at offset 0) */
 	uint32_t value, owner;
 	uint32_t waiters; /* CPU readers and the direct present: each leaves itself */
-	uint32_t readers; /* the GPU readers in reader[] */
-	uint8_t overflow; /* more GPU readers than reader[] holds: parked until the word moves */
-	uint8_t kept;     /* job is the promised job */
-	uint8_t display;  /* the direct present is a waiter */
+	uint32_t readers; /* GPU reader channels in reader[], each with its latest reader job */
+	/* a reader parked while reader[] held only channels still parked: taken as parked until the give-up */
+	uint8_t overflow;
+	uint8_t kept;    /* job is the promised job */
+	uint8_t display; /* the direct present is a waiter */
 	struct switch_gpu_giveup_job reader[SWITCH_GPU_GIVEUP_READERS];
 	struct switch_gpu_giveup_job job;
 	uint32_t job_last;
@@ -47,18 +54,22 @@ struct switch_gpu_giveup {
 	char waiter[17];
 };
 
+/* The job that keeps a slot's promise of `value` on its page's `owner`, remembered at keptPromises for a reader that
+ * parks after it */
 struct switch_gpu_giveup_kept {
-	uint32_t offset, value, last;
+	uint32_t value, owner, last;
 	struct switch_gpu_giveup_job job;
 };
 
+/* entry[i] and kept[i] are promise slot i's (switch_gpu_giveup_ops.slot) */
 struct switch_gpu_giveups {
 	struct switch_gpu_giveup entry[SWITCH_GPU_GIVEUPS];
-	struct switch_gpu_giveup_kept kept[SWITCH_GPU_GIVEUP_KEPT];
-	uint32_t kept_next;
-	uint32_t used; /* entries in use */
-	uint64_t
-		armed_ns; /* when the call is due; 0: not armed (written under the call's simple lock) */
+	/* under the call's simple lock */
+	struct switch_gpu_giveup_kept kept[SWITCH_GPU_GIVEUPS];
+	/* entries in use, read by the pass with plain loads */
+	uint64_t used[SWITCH_GPU_GIVEUP_USED_WORDS];
+	/* when the call is due; 0: not armed (written under the call's simple lock) */
+	uint64_t armed_ns;
 };
 
 /* Where the promised job is (switch_gpu_giveup_ops.job_ahead) */
@@ -71,6 +82,8 @@ enum {
 /* The kernel under the table's lock (tgm_live_lock) */
 struct switch_gpu_giveup_ops {
 	const struct switch_gpu_promise_fence *fence;
+	/* the promise slot whose word is at `offset`, -1 for any other word */
+	int (*slot)(uint32_t offset);
 	/* the reader's first seqno not complete on a live channel: its acquire has not passed */
 	int (*reader_parked)(const struct switch_gpu_giveup_job *reader);
 	/* BEHIND: *fence and *seqno name the job ahead, whose interrupt is asked for, and *check_ns the channel's next hang
@@ -102,12 +115,38 @@ static inline int switch_gpu_giveup_pending(const struct switch_gpu_promise_fenc
 	       (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - value) < 0;
 }
 
+static inline void switch_gpu_giveup_use(struct switch_gpu_giveups *g, int slot, int used)
+{
+	const uint64_t bit = 1ull << (slot % 64);
+	uint64_t *word = &g->used[slot / 64];
+
+	__atomic_store_n(word, used ? *word | bit : *word & ~bit, __ATOMIC_RELEASE);
+}
+
 static inline void switch_gpu_giveup_free(struct switch_gpu_giveups *g, struct switch_gpu_giveup *e)
 {
 	__atomic_store_n(&e->offset, 0u, __ATOMIC_RELEASE);
 	__atomic_store_n(&e->ahead, (const volatile uint32_t *)0, __ATOMIC_RELAXED);
-	__atomic_store_n(&g->used, g->used - 1, __ATOMIC_RELEASE);
+	switch_gpu_giveup_use(g, (int)(e - g->entry), 0);
 }
+
+/* The next entry in use from slot `from`, or SWITCH_GPU_GIVEUPS */
+static inline int switch_gpu_giveup_next_used(const struct switch_gpu_giveups *g, int from)
+{
+	for (int w = from / 64; w < SWITCH_GPU_GIVEUP_USED_WORDS; ++w) {
+		uint64_t bits = __atomic_load_n(&g->used[w], __ATOMIC_ACQUIRE);
+
+		if (w == from / 64)
+			bits &= ~0ull << (from % 64);
+		if (bits)
+			return w * 64 + __builtin_ctzll(bits);
+	}
+	return SWITCH_GPU_GIVEUPS;
+}
+
+#define switch_gpu_giveup_each(g, i)                                              \
+	for (int i = switch_gpu_giveup_next_used((g), 0); i < SWITCH_GPU_GIVEUPS; \
+	     i = switch_gpu_giveup_next_used((g), i + 1))
 
 /* An entry whose word moved: the direct present, when it still waits on it, hears that it did */
 static inline void switch_gpu_giveup_drop_moved(struct switch_gpu_giveups *g,
@@ -119,7 +158,20 @@ static inline void switch_gpu_giveup_drop_moved(struct switch_gpu_giveups *g,
 	switch_gpu_giveup_free(g, e);
 }
 
-static inline void switch_gpu_giveup_add(struct switch_gpu_giveup *e,
+/* GPU readers whose acquire passed, or whose channel died, are dropped */
+static inline void switch_gpu_giveup_prune(const struct switch_gpu_giveup_ops *ops,
+					   struct switch_gpu_giveup *e)
+{
+	uint32_t kept = 0;
+
+	for (uint32_t i = 0; i < e->readers; ++i)
+		if (ops->reader_parked(&e->reader[i]))
+			e->reader[kept++] = e->reader[i];
+	e->readers = kept;
+}
+
+static inline void switch_gpu_giveup_add(const struct switch_gpu_giveup_ops *ops,
+					 struct switch_gpu_giveup *e,
 					 const struct switch_gpu_giveup_job *reader, int display)
 {
 	if (!reader) {
@@ -127,25 +179,33 @@ static inline void switch_gpu_giveup_add(struct switch_gpu_giveup *e,
 		e->display |= (uint8_t)(display != 0);
 		return;
 	}
-	for (uint32_t i = 0; i < e->readers; ++i)
-		if (e->reader[i].uid == reader->uid && e->reader[i].first == reader->first)
-			return;
+	/* a channel runs its jobs in order: while its latest reader has not passed its acquire, it waits */
+	for (uint32_t i = 0; i < e->readers; ++i) {
+		if (e->reader[i].uid != reader->uid)
+			continue;
+		if ((int32_t)(reader->first - e->reader[i].first) > 0)
+			e->reader[i].first = reader->first;
+		return;
+	}
+	if (e->readers == SWITCH_GPU_GIVEUP_READERS)
+		switch_gpu_giveup_prune(ops, e);
 	if (e->readers == SWITCH_GPU_GIVEUP_READERS)
 		e->overflow = 1;
 	else
 		e->reader[e->readers++] = *reader;
 }
 
-/* The call's simple lock held: a kept promise remembered for a reader that parks on it after keptPromises ran */
-static inline void switch_gpu_giveup_remember(struct switch_gpu_giveups *g, uint32_t offset,
-					      uint32_t value,
+/* The call's simple lock held: a kept promise remembered on its slot for a reader that parks on it after keptPromises
+ * ran */
+static inline void switch_gpu_giveup_remember(struct switch_gpu_giveups *g, int slot,
+					      uint32_t value, uint32_t owner,
 					      const struct switch_gpu_giveup_job *job,
 					      uint32_t last)
 {
-	struct switch_gpu_giveup_kept *k = &g->kept[g->kept_next++ % SWITCH_GPU_GIVEUP_KEPT];
+	struct switch_gpu_giveup_kept *k = &g->kept[slot];
 
-	k->offset = offset;
 	k->value = value;
+	k->owner = owner;
 	k->last = last;
 	k->job = *job;
 }
@@ -154,22 +214,20 @@ static inline void switch_gpu_giveup_remember(struct switch_gpu_giveups *g, uint
 static inline int switch_gpu_giveup_recall(const struct switch_gpu_giveups *g,
 					   struct switch_gpu_giveup *e)
 {
-	for (uint32_t i = 0; i < SWITCH_GPU_GIVEUP_KEPT; ++i) {
-		const struct switch_gpu_giveup_kept *k = &g->kept[i];
+	const struct switch_gpu_giveup_kept *k = &g->kept[e - g->entry];
 
-		if (k->offset == e->offset && k->value == e->value && k->job.uid) {
-			e->kept = 1;
-			e->job = k->job;
-			e->job_last = k->last;
-			return 1;
-		}
-	}
-	return 0;
+	if (!k->job.uid || k->value != e->value || k->owner != e->owner)
+		return 0;
+	e->kept = 1;
+	e->job = k->job;
+	e->job_last = k->last;
+	return 1;
 }
 
 /* A reader parks on the promise at `now`: a GPU job (reader), or a waiter that leaves itself. The first one arms the
- * entry SWITCH_GPU_GIVEUP_NS out. The entry, -1 when there is nothing to wait for (the word moved, or its page has
- * another owner), -28 while SWITCH_GPU_GIVEUPS other promises are waited for. */
+ * slot's entry SWITCH_GPU_GIVEUP_NS out. The entry, or -1 when there is nothing to wait for (no promise slot's word, the
+ * word moved, or its page has another owner). A record an earlier promise of the slot left is dropped: its word moved
+ * or its page changed hands, or the slot could not have been made again. */
 static inline int switch_gpu_giveup_park(struct switch_gpu_giveups *g,
 					 const struct switch_gpu_giveup_ops *ops, uint32_t offset,
 					 uint32_t value, const char *waiter, const char *who,
@@ -177,26 +235,17 @@ static inline int switch_gpu_giveup_park(struct switch_gpu_giveups *g,
 					 uint64_t now)
 {
 	const uint32_t owner = ops->fence->owner(offset);
-	struct switch_gpu_giveup *e = 0;
-	int free = -1;
+	const int slot = ops->slot(offset);
+	struct switch_gpu_giveup *e = slot < 0 ? 0 : &g->entry[slot];
 
-	if (!offset || !switch_gpu_giveup_pending(ops->fence, offset, value, owner))
+	if (!e || !switch_gpu_giveup_pending(ops->fence, offset, value, owner))
 		return -1;
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
-		e = &g->entry[i];
-		if (e->offset &&
-		    !switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner))
-			switch_gpu_giveup_drop_moved(g, ops, e);
-		if (e->offset == offset && e->value == value && e->owner == owner) {
-			switch_gpu_giveup_add(e, reader, display);
-			return i;
-		}
-		if (!e->offset && free < 0)
-			free = i;
+	if (e->offset && (e->value != value || e->owner != owner))
+		switch_gpu_giveup_drop_moved(g, ops, e);
+	if (e->offset) {
+		switch_gpu_giveup_add(ops, e, reader, display);
+		return slot;
 	}
-	if (free < 0)
-		return -28;
-	e = &g->entry[free];
 	__builtin_memset(e, 0, sizeof(*e));
 	e->value = value;
 	e->owner = owner;
@@ -205,28 +254,27 @@ static inline int switch_gpu_giveup_park(struct switch_gpu_giveups *g,
 	e->who = who;
 	for (uint32_t i = 0; waiter && i < sizeof(e->waiter) - 1 && waiter[i]; ++i)
 		e->waiter[i] = waiter[i];
-	switch_gpu_giveup_add(e, reader, display);
-	__atomic_store_n(&g->used, g->used + 1, __ATOMIC_RELEASE);
+	switch_gpu_giveup_add(ops, e, reader, display);
 	__atomic_store_n(&e->offset, offset, __ATOMIC_RELEASE);
-	return free;
+	switch_gpu_giveup_use(g, slot, 1);
+	return slot;
 }
 
 /* A waiter that parked without a GPU job goes on. The entry is dropped once no reader is left. */
-static inline void switch_gpu_giveup_leave(struct switch_gpu_giveups *g, uint32_t offset,
+static inline void switch_gpu_giveup_leave(struct switch_gpu_giveups *g,
+					   const struct switch_gpu_giveup_ops *ops, uint32_t offset,
 					   uint32_t value, int display)
 {
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
-		struct switch_gpu_giveup *e = &g->entry[i];
+	const int slot = ops->slot(offset);
+	struct switch_gpu_giveup *e = slot < 0 ? 0 : &g->entry[slot];
 
-		if (e->offset != offset || e->value != value || !e->waiters)
-			continue;
-		e->waiters--;
-		if (display)
-			e->display = 0;
-		if (!e->waiters && !e->readers && !e->overflow)
-			switch_gpu_giveup_free(g, e);
+	if (!e || e->offset != offset || e->value != value || !e->waiters)
 		return;
-	}
+	e->waiters--;
+	if (display)
+		e->display = 0;
+	if (!e->waiters && !e->readers && !e->overflow)
+		switch_gpu_giveup_free(g, e);
 }
 
 /* The promise's job is submitted (remembered first): an entry judges it from now on, and its end is asked for, so the
@@ -236,28 +284,22 @@ static inline void switch_gpu_giveup_kept(struct switch_gpu_giveups *g,
 					  uint32_t value, const struct switch_gpu_giveup_job *job,
 					  uint32_t last)
 {
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
-		struct switch_gpu_giveup *e = &g->entry[i];
+	const int slot = ops->slot(offset);
+	struct switch_gpu_giveup *e = slot < 0 ? 0 : &g->entry[slot];
 
-		if (e->offset != offset || e->value != value || e->kept)
-			continue;
-		e->kept = 1;
-		e->job = *job;
-		e->job_last = last;
-		ops->need(job->uid, last);
-	}
+	if (!e || e->offset != offset || e->value != value || e->kept)
+		return;
+	e->kept = 1;
+	e->job = *job;
+	e->job_last = last;
+	ops->need(job->uid, last);
 }
 
-/* Whether a reader is still parked; GPU readers whose acquire passed, or whose channel died, are dropped */
+/* Whether a reader is still parked */
 static inline int switch_gpu_giveup_waited(const struct switch_gpu_giveup_ops *ops,
 					   struct switch_gpu_giveup *e)
 {
-	uint32_t kept = 0;
-
-	for (uint32_t i = 0; i < e->readers; ++i)
-		if (ops->reader_parked(&e->reader[i]))
-			e->reader[kept++] = e->reader[i];
-	e->readers = kept;
+	switch_gpu_giveup_prune(ops, e);
 	return e->waiters || e->readers || e->overflow;
 }
 
@@ -267,11 +309,10 @@ static inline uint64_t switch_gpu_giveup_next(struct switch_gpu_giveups *g,
 {
 	uint64_t next = 0;
 
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
+	switch_gpu_giveup_each(g, i)
+	{
 		struct switch_gpu_giveup *e = &g->entry[i];
 
-		if (!e->offset)
-			continue;
 		if (!switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner)) {
 			switch_gpu_giveup_drop_moved(g, ops, e);
 			continue;
@@ -332,11 +373,10 @@ static inline int switch_gpu_giveup_judge(const struct switch_gpu_giveup_ops *op
 static inline void switch_gpu_giveup_run(struct switch_gpu_giveups *g,
 					 const struct switch_gpu_giveup_ops *ops, uint64_t now)
 {
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
+	switch_gpu_giveup_each(g, i)
+	{
 		struct switch_gpu_giveup *e = &g->entry[i];
 
-		if (!e->offset)
-			continue;
 		if (!switch_gpu_giveup_pending(ops->fence, e->offset, e->value, e->owner)) {
 			switch_gpu_giveup_drop_moved(g, ops, e);
 			continue;
@@ -390,7 +430,8 @@ static inline int switch_gpu_giveup_pass(const struct switch_gpu_giveups *g,
 
 	if (!__atomic_load_n(&g->armed_ns, __ATOMIC_ACQUIRE))
 		return SWITCH_GPU_GIVEUP_PASS_NONE;
-	for (int i = 0; i < SWITCH_GPU_GIVEUPS; ++i) {
+	switch_gpu_giveup_each(g, i)
+	{
 		const struct switch_gpu_giveup *e = &g->entry[i];
 		const uint32_t offset = __atomic_load_n(&e->offset, __ATOMIC_ACQUIRE);
 		const volatile uint32_t *ahead = __atomic_load_n(&e->ahead, __ATOMIC_ACQUIRE);

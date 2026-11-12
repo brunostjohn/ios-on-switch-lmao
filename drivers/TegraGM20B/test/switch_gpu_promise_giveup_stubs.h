@@ -47,7 +47,9 @@ struct Call {
 
 inline Call call;
 
-inline volatile uint32_t pool[4096];
+// every fence user page, so a promise slot of any page has its word
+constexpr size_t kPoolWords = TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT / 4;
+inline volatile uint32_t pool[kPoolWords];
 inline uint32_t owner = 1;
 
 struct Chan {
@@ -130,7 +132,8 @@ inline void mutex_unlock(struct mutex *)
 
 inline volatile uint32_t *tgm_fence_word(uint32_t offset)
 {
-	return offset && offset / 4 < 4096 && !(offset & 3) ? &fake::pool[offset / 4] : nullptr;
+	return offset && offset / 4 < fake::kPoolWords && !(offset & 3) ? &fake::pool[offset / 4]
+									: nullptr;
 }
 
 inline uint32_t tgm_fence_owner(uint32_t)

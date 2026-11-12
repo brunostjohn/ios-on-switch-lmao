@@ -8,17 +8,30 @@
 _Static_assert(TGM_FENCE_PROMISES == TegraGM20BMaxPromises &&
 		       TGM_FENCE_PROMISE_WORD == TegraGM20BPromiseWord,
 	       "the guard's rows are a page's promise slots");
+_Static_assert(SWITCH_GPU_GIVEUP_PAGES == TGM_FENCE_USER_PAGES &&
+		       SWITCH_GPU_GIVEUP_PER_PAGE == TegraGM20BMaxPromises,
+	       "a give-up record for every promise slot that can exist");
 
-/* The guard's value of the promise slot whose word is at `offset`, NULL for any other word */
-static uint32_t *promise_made(uint32_t offset)
+/* The promise slot whose word is at `offset` (page by page), -1 for any other word */
+static int promise_slot(uint32_t offset)
 {
 	const uint32_t page = offset / TGM_FENCE_SLOT;
 	const uint32_t word = offset % TGM_FENCE_SLOT / 4;
 
 	if (page >= TGM_FENCE_USER_PAGES || word < TGM_FENCE_PROMISE_WORD ||
 	    word >= TGM_FENCE_PROMISE_WORD + TGM_FENCE_PROMISES)
+		return -1;
+	return (int)(page * TGM_FENCE_PROMISES + word - TGM_FENCE_PROMISE_WORD);
+}
+
+/* The guard's value of the promise slot whose word is at `offset`, NULL for any other word */
+static uint32_t *promise_made(uint32_t offset)
+{
+	const int slot = promise_slot(offset);
+
+	if (slot < 0)
 		return NULL;
-	return &tgm_fence_pages.made[page][word - TGM_FENCE_PROMISE_WORD];
+	return &tgm_fence_pages.made[slot / TGM_FENCE_PROMISES][slot % TGM_FENCE_PROMISES];
 }
 
 /* tgm_live_lock held (one raiser): a pending promise word raised from the CPU, a plain store-release after one more
@@ -164,8 +177,8 @@ static void giveup_recall(struct switch_gpu_giveup *e)
 }
 
 static const struct switch_gpu_giveup_ops giveup_ops = {
-	&tgm_promise_fence, giveup_reader_parked,         giveup_job_ahead, giveup_need,
-	giveup_stepped,     tgm_present_promise_released, giveup_recall};
+	&tgm_promise_fence, promise_slot,   giveup_reader_parked,         giveup_job_ahead,
+	giveup_need,        giveup_stepped, tgm_present_promise_released, giveup_recall};
 
 static void giveup_after(uint64_t ns)
 {
@@ -232,7 +245,6 @@ int tgm_promise_giveup_open(void)
 int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const char *who,
 		     const struct switch_gpu_giveup_job *reader, int display)
 {
-	static int full_logged;
 	struct switch_gpu_giveup *e = NULL;
 	unsigned long flags;
 	int recalled = 0;
@@ -252,37 +264,35 @@ int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const 
 	if (e)
 		giveup_arm();
 	mutex_unlock(&tgm_live_lock);
-	if (at == -28 && !__atomic_exchange_n(&full_logged, 1, __ATOMIC_RELAXED))
-		nvxnu_log(
-			"tegra-gm20b: %s waits on a writer promise at fence offset %u (value %u) "
-			"while %d others are "
-			"waited on: it is given up only when kept, cancelled or its maker closes\n",
-			waiter, offset, value, SWITCH_GPU_GIVEUPS);
-	return at == -28 ? -ENOSPC : at >= 0;
+	return at >= 0;
 }
 
 void tgm_promise_leave(uint32_t offset, uint32_t value, int display)
 {
 	mutex_lock(&tgm_live_lock);
-	switch_gpu_giveup_leave(&giveups, offset, value, display);
+	switch_gpu_giveup_leave(&giveups, &giveup_ops, offset, value, display);
 	giveup_arm();
 	mutex_unlock(&tgm_live_lock);
 }
 
 /* keptPromises: `job` (its channel's uid and its fence's seqno) keeps the promise; chan is that channel, which the
  * caller holds. tgm_live_lock is taken only while the call is armed: a reader parked meanwhile, or while the call ran,
- * recalls the job from the ring. */
+ * recalls the job from the slot. */
 void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
 		      const struct switch_gpu_backing_token *job)
 {
 	struct switch_gpu_kicked_job record;
 	struct switch_gpu_giveup_job kept = {job->queue, (u32)job->value};
+	const int slot = promise_slot(offset);
 	unsigned long flags;
 
+	if (slot < 0)
+		return;
 	if (chan && switch_gpu_jobs_find(&chan->jobs, (u32)job->value, &record))
 		kept.first = record.first;
 	spin_lock_irqsave(&giveup_lock, flags);
-	switch_gpu_giveup_remember(&giveups, offset, value, &kept, (u32)job->value);
+	switch_gpu_giveup_remember(&giveups, slot, value, tgm_fence_owner(offset), &kept,
+				   (u32)job->value);
 	spin_unlock_irqrestore(&giveup_lock, flags);
 	if (!__atomic_load_n(&giveups.armed_ns, __ATOMIC_ACQUIRE))
 		return;
