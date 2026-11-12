@@ -100,6 +100,18 @@ TEST(RawRecordLiveness, AVariantsSurfaceLoadIsTheRecords)
     EXPECT_TRUE(raw::loadsSurface(rec));
 }
 
+// NRFV1's Fusion states draw to c0, c2 and c3: c3's write mask and blend are theirs, c1's no state's
+TEST(RawRecordTargets, ATargetBetweenTwoAStateHasIsForeignToIt)
+{
+    const uint32_t mask = raw::targets("samples=1 c0=25:15 c2=25:15 c3=25:15 | v FusionVert");
+    EXPECT_EQ(mask, 0b1101u);
+    EXPECT_FALSE(raw::foreign(0x1A0C, mask));
+    EXPECT_FALSE(raw::foreign(0x1E64, mask));
+    EXPECT_TRUE(raw::foreign(0x1A04, mask));
+    EXPECT_TRUE(raw::foreign(0x1E24, mask));
+    EXPECT_TRUE(raw::foreign(0x1A10, mask));
+}
+
 // A render state's set 0 takes its NVK layout's size in 256-byte blocks, two at most (raw_descriptors.h)
 TEST(RawRecordSet, ASetPastTheEncodersRoomIsSetAside)
 {

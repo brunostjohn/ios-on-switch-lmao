@@ -184,24 +184,27 @@ void registers(const std::map<uint32_t, uint32_t> &regs, uint32_t colors, const 
 
 uint32_t targets(const std::string &key)
 {
-    uint32_t n = 0;
+    uint32_t mask = 0;
     for (size_t at = 0; at < key.size();) {
         size_t end = key.find(' ', at);
         if (end == std::string::npos)
             end = key.size();
         if (end - at >= 2 && key[at] == 'c' && isdigit(static_cast<unsigned char>(key[at + 1])) &&
             key.find('=', at) < end)
-            n++;
+            mask |= 1u << (key[at + 1] - '0');
         at = end + 1;
     }
-    return n;
+    return mask;
 }
 
 bool foreign(uint32_t m, uint32_t targets)
 {
-    return (m >= 0x1E00 && m < 0x1F00 && (m - 0x1E00) / 0x20 >= targets) ||
-           (m >= 0x1A00 && m < 0x1A20 && (m - 0x1A00) / 4 >= targets) ||
-           (m >= 0x1360 && m < 0x1380 && (m - 0x1360) / 4 >= targets);
+    const auto lacks = [&](uint32_t j) {
+        return !(targets >> j & 1);
+    };
+    return (m >= 0x1E00 && m < 0x1F00 && lacks((m - 0x1E00) / 0x20)) ||
+           (m >= 0x1A00 && m < 0x1A20 && lacks((m - 0x1A00) / 4)) ||
+           (m >= 0x1360 && m < 0x1380 && lacks((m - 0x1360) / 4));
 }
 
 bool programsBindable(const RecordParts &parts, std::string &why)

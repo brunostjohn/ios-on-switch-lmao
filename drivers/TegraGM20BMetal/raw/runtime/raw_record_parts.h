@@ -62,9 +62,10 @@ struct RecordParts {
     PackShaderTests shaderTests = {};
 };
 
-// The color attachments a key names (mkpack.py targets)
+// The color attachments a key names, bit j its c<j> (mkpack.py targets)
 uint32_t targets(const std::string &key);
-// A color target's own register for a target the state does not have (mkpack.py foreign)
+// A color target's own register for a target the state does not have, past its last or between two it has (mkpack.py
+// foreign)
 bool foreign(uint32_t method, uint32_t targets);
 
 // Whether both programs are known and bind only what the raw path binds (mkpack.py raw_bindable); false: why not

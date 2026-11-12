@@ -335,15 +335,16 @@ def split_probes(probes: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]
 # so neither in its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend
 # "vary" for every other state)
 def targets(key: str) -> int:
-    return sum(1 for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
+    """Give the color attachments a key names, bit j its c<j>."""
+    return sum(1 << int(t[1]) for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
 
-def foreign(m: int, n: int) -> bool:
-    return (
-        (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n)
-        or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
-        or (0x1360 <= m < 0x1380 and (m - 0x1360) // 4 >= n)
-    )
+def foreign(m: int, mask: int) -> bool:
+    """Whether `m` is a color target's own register for a target `mask` lacks, past its last or between two."""
+    for base, stride in ((0x1E00, 0x20), (0x1A00, 4), (0x1360, 4)):
+        if base <= m < base + 8 * stride and not mask >> ((m - base) // stride) & 1:
+            return True
+    return False
 
 
 # SET_VERTEX_STREAM_A_FORMAT(j) with ENABLE (bit 12) clear: a stream the hardware does not fetch, whose stride the probe
