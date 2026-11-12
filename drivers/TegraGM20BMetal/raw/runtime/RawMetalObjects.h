@@ -32,6 +32,7 @@ struct ComputeState;
 }
 
 @class RMDevice, RMCommandBuffer;
+struct SurfaceWriteCount;
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
 // object's lock is never held across a call into m2v: a thread inside m2v holding one of its locks (its handlers run Core
@@ -128,6 +129,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     std::atomic<bool> _gpuWrites;  // its surface was declared GPU-written (surfaceGpuWrites)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
+    SurfaceWriteCount *_surfaceWrites;  // its surface's writes (RawMetalSurfaceWrites.mm), held while it lives
     NSUInteger _plane;
     // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
     // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)

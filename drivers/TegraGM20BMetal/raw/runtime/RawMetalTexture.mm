@@ -97,12 +97,14 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     if (_heap && !_raw.arena)
         _heap->_used -= _heapBytes;
     if (_rawOk && _surface && (_raw.converted() || xrOverPlanes(_raw)))
-        surfaceConverted(_surface, false);
+        surfaceConverted(_surfaceWrites, false);
     if (_rawOk)
         if (gRM)
             gRM->raw->destroyTexture(_raw);
-    if (_surface)
+    if (_surface) {
+        releaseSurfaceWrites(_surface, _surfaceWrites);
         CFRelease(_surface);
+    }
 }
 
 - (id)rmTwin
@@ -394,8 +396,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 #if SWITCH_RAW_DIAGNOSTICS
     _raw.probeWritten = true;
 #endif
-    if (_surface)
-        noteSurfaceWrite(_surface);
+    if (_surfaceWrites)
+        noteSurfaceWrite(_surfaceWrites);
     if (transferTexture(self, r, level, slice, const_cast<void *>(bytes), row, image, true))
         return;
     TextureCpuAccess access(self, r, level, slice, true);

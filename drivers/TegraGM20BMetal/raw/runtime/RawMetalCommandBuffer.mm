@@ -108,6 +108,10 @@ static void giveRecording(RMCommandBuffer *b)
         RMTexture *texture = (RMTexture *)object;
         facts.roles = uint8_t((texture->_raw.converted() ? RMResourceFacts::Converted : 0) |
                               (texture->_raw.planarStandIn ? RMResourceFacts::PlanarTarget : 0));
+        __unsafe_unretained RMTexture *root = texture;
+        while (root->_kind == RMTextureView && root->_parent)
+            root = root->_parent;
+        facts.surfaceWrites = root->_surfaceWrites;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
     _plan.registerResource((__bridge void *)object, facts);

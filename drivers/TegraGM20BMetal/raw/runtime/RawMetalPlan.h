@@ -81,6 +81,7 @@ enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Count };
 struct RMResourceFacts {
     enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };
     void *cpuBuffer = nullptr;
+    void *surfaceWrites = nullptr;  // a texture over a surface: the surface's write count (RawMetalSurfaceWrites.mm)
     RMResourceKind kind = RMResourceKind::Other;
     uint8_t roles = 0;
 };
