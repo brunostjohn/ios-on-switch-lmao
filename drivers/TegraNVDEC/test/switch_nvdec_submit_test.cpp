@@ -377,9 +377,10 @@ void switch_nvdec_engine_describe(char *text, size_t size)
     snprintf(text, size, "falcon CPUCTL 0 IDLESTATE 0x31");
 }
 
-bool switch_nvdec_engine_reset()
+bool switch_nvdec_engine_reset(bool *drained)
 {
     EXPECT_TRUE(powerLock->locked);
+    *drained = true;
     engineSteps.emplace_back("reset");
     return true;
 }
