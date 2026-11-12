@@ -368,6 +368,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BCopy.cpp",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuCachedZero.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:TegraGM20BDeviceClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp",

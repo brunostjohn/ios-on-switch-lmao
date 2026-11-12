@@ -50,6 +50,7 @@ struct switch_gpu_backing {
 	switch_gpu_resource_set *set;
 	uint32_t set_access;
 	bool shared;
+	uint32_t scanout_holds;  // atomic: switch_gpu_backing_scanout
 };
 
 struct switch_gpu_cpu_lease {

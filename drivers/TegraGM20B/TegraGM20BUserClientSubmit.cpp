@@ -343,7 +343,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
 		 rangedUses = 0, nativeReads = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
-	bool unlockedWrites = false;
+	bool unlockedWrites = false, scanoutWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
 	const auto addUse = [&](const Bo *bo, uint32_t access, uint32_t flags, uint64_t offset = 0,
@@ -366,6 +366,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
 							     bo->representation ? 0 : bytes};
 			unlockedWrites |= bo->unlockedReads;
+			scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;
 		}
 		if (bo->representation)
 			job.surfaces[surfaceCount++] = {bo->backing,
@@ -523,7 +524,7 @@ refresh:
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_LOCK);
 			jobVisibility = switch_gpu_job_visibility(visibility, events && events->signals(),
-								  unlockedWrites,
+								  unlockedWrites || scanoutWrites,
 								  hostWritten || transaction.host_written);
 			error = switch_gpu_chan_exec_visibility(chan, pushes, count, job.dependencies,
 								dependencies, &seqno,

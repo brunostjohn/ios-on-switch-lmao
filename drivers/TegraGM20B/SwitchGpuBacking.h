@@ -73,6 +73,10 @@ struct switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page);
 struct switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t surface_id);
 void switch_gpu_backing_retain(struct switch_gpu_backing *backing);
 void switch_gpu_backing_release(struct switch_gpu_backing *backing);
+/* The display scans the backing in place (a direct scanout slot) from add 1 to add 0: a job that writes it ends
+ * External, so its completion means its writes are in DRAM and the display may flip to it with no present job. */
+void switch_gpu_backing_scanout(struct switch_gpu_backing *backing, int add);
+int switch_gpu_backing_scanned(const struct switch_gpu_backing *backing);
 void switch_gpu_backing_describe(struct switch_gpu_backing *backing,
 				 struct switch_gpu_backing_info *info);
 int switch_gpu_backing_set_layout(struct switch_gpu_backing *backing,

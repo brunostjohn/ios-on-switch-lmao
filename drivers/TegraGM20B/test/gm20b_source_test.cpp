@@ -758,10 +758,27 @@ TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {", "unlockedWrites |= bo->unlockedReads;");
 	EXPECT_THAT(exec, HasSubstr("switch_gpu_job_visibility(visibility, events && events->signals(), "
-				    "unlockedWrites, hostWritten || transaction.host_written)"));
+				    "unlockedWrites || scanoutWrites, hostWritten || transaction.host_written)"));
 	const std::string surfaces = flat(SourceText("../TegraGM20BSurfaceClient.cpp"));
 	EXPECT_THAT(flat(definition(surfaces, "int switch_gpu_surface_client_memory(const OSObject *surface)")),
 		    HasSubstr("at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0"));
+}
+
+// FRAMECPU C6.1: a job writing a backing the display scans in place (a direct scanout slot) ends External in both submit
+// paths, so its completion means its writes are in DRAM and the display may flip with no present job.
+TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {",
+		     "scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;");
+	const std::string job = flat(SourceText("../TegraGM20BUserClientJobSubmit.cpp"));
+	expectBefore(job, "if (access & TegraGM20BSurfaceWrite) {",
+		     "scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;");
+	EXPECT_THAT(job, HasSubstr("switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || "
+				   "scanoutWrites, hostWritten || transaction.host_written)"));
+	const std::string backing = flat(SourceText("../SwitchGpuBacking.cpp"));
+	EXPECT_THAT(flat(definition(backing, "extern \"C\" int switch_gpu_backing_scanned(")),
+		    HasSubstr("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
