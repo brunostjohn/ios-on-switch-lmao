@@ -7,5 +7,6 @@ enum NativeCallTests {
         NativeUnsupportedTest(), NativeVertexSamplerTest(), NativeParallelEncoderTest(), NativeIndirectCommandsTest(),
         NativeComputeCommandsTest(), NativeSharedTextureTest(), NativeCountersTest(), NativeTessellationTest(),
         NativeAmplificationTest(), NativeDynamicStrideTest(), NativeStageInTest(), NativeVertexStreamsTest(),
+        NativeM2vMissingTest(),
     ]
 }
