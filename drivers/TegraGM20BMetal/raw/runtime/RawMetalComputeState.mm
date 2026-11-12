@@ -108,6 +108,7 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
         answer = rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
     }
     options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
+    s->_direct.binaryArchives = nil;
     if (answer != raw::ArchiveAnswer::Missed ||
         (s->_keyed &&
          rmPackHoldsKernels(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth))))
@@ -170,7 +171,6 @@ id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipeli
     s->_function = f;
     if (!archivesAnswer(s, f, options, error))
         return nil;
-    s->_direct.binaryArchives = nil;
     const raw::PackComputeFacts *facts =
         s->_keyed && !reflection
             ? rmPackComputeFacts(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth))
