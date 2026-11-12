@@ -204,6 +204,8 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
         o.color[c] = uint32_t(number(op, [NSString stringWithFormat:@"color%d", c]));
     if (!o.dst.fmt2d || (read && !o.src.fmt2d))
         return @"a format the 2D engine names none of";
+    if (fill && !raw::probeSolidFill(o.dst.fmt2d, o.colorFormat))
+        return @"a fill's colour format is its destination's own 2D format, not an sRGB one (probeSolidFill)";
     if (o.dx + o.dw > o.dst.width || o.dy + o.dh > o.dst.height)
         return @"a rectangle outside the written texture";
     _probeOps.push_back({_encAt, o, read, written});

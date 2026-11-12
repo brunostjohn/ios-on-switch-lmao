@@ -40,11 +40,14 @@ extension X1TwodProbes {
     /// all but a one-texel border, held to the colour's codes (a word: its own codes; floats: each rule's rounding). An
     /// sRGB target is filled through its UNORM view (unormView) with the colour encoded, words and floats alike.
     /// The first boots' fill (bare state, four floats, no waits around it after a clear-only pass, the last GR work
-    /// before the tail) left GR busy until a context-switch timeout, so the probe bisects one command buffer a step,
-    /// journaled, safest first, every format by each form between the production 2D path's waits: the reference
-    /// word, the bare word, the reference floats, the bare floats; then position alone: a known-good scaled copy and
-    /// the reference word fill each with no waits in the fill's slot (position=). The first step a command buffer
-    /// fails on ends the probe and is named (failed_at=); cells off the raw path are listed apart.
+    /// before the tail) left GR busy until a context-switch timeout, and on 12 Nov four floats into BGRA8 passed their
+    /// waits, then GR could not save the channel's context and the kernel panicked (x1-bench3 BENCH3.md): the raw path
+    /// refuses a fill in any colour format but its destination's own (raw_probe_ops.h probeSolidFill), so the probe
+    /// runs the word forms only. It bisects one command buffer a step, journaled, safest first, every format by each
+    /// form between the production 2D path's waits: the reference word, the bare word; then position alone: a
+    /// known-good scaled copy and the reference word fill each with no waits in the fill's slot (position=). The
+    /// first step a command buffer fails on ends the probe and is named (failed_at=); cells off the raw path are
+    /// listed apart.
     static let clear = X1Probe(
         id: "gpu.x1.twod_clear", name: "2D-engine solid fills, bisected, against the colour's codes per format",
         probe: "clear.twod", risky: true, timeout: 150
@@ -135,7 +138,7 @@ extension X1TwodProbes {
             SIMD4(0.2, 0.4, 0.6, 0.8), SIMD4(1.0 / 3, 2.0 / 3, 0.1, 0.9),
         ]
         var ran: [FillStep] = []
-        outer: for (reference, word) in [(true, true), (false, true), (true, false), (false, false)] {
+        outer: for (reference, word) in [(true, true), (false, true)] {
             let step = FillStep(reference: reference, word: word)
             guard try await fill(bgra8, step, colors[2]) else { break }
             ran.append(step)

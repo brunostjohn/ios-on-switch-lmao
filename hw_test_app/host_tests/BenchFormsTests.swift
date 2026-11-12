@@ -117,7 +117,8 @@ final class BenchFormsTests: XCTestCase {
             ],
             [
                 "id": "prog", "kind": "twod", "target": target("bgra8unorm", 16, 16),
-                "twod": ["op": "fill", "reference": true, "bracketed": false], "compare": "program", "program": program,
+                "twod": ["op": "fill", "colorFormat": 0xCF, "reference": true, "bracketed": false],
+                "compare": "program", "program": program,
             ],
             [
                 "id": "prog-none", "kind": "twod", "target": target("bgra8unorm", 16, 16), "twod": ["op": "fill"],
@@ -153,11 +154,27 @@ final class BenchFormsTests: XCTestCase {
         XCTAssertNotNil(why(entries[7]))
     }
 
+    func testAFillTakesOnlyItsDestinationsOwnFormat() throws {
+        let fill = { (id: String, format: String, twod: [String: Any]) -> [String: Any] in
+            let op = (["op": "fill"] as [String: Any]).merging(twod) { $1 }
+            return ["id": id, "kind": "twod", "target": self.target(format, 16, 16), "twod": op]
+        }
+        let entries = try decode([
+            fill("own", "bgra8unorm", ["colorFormat": 0xCF]),
+            fill("floats-bgra8", "bgra8unorm", ["colorFormat": 0xC0]),
+            fill("floats-f32", "rgba32float", ["colorFormat": 0xC0]),
+            fill("srgb", "bgra8unorm_srgb", ["colorFormat": 0xCF]),
+            fill("srgb-unorm", "bgra8unorm_srgb", ["colorFormat": 0xCF, "fmt2d": 0xCF]),
+            fill("rg8", "rg8unorm", ["colorFormat": 0xEA]),
+        ])
+        XCTAssertEqual(entries.map { why($0) == nil }, [true, false, true, false, true, false])
+    }
+
     func testClipClearFirstAndTheSampledCompareNeedTheirShapes() throws {
         let entries = try decode([
             [
                 "id": "clip", "kind": "twod", "target": target("bgra8unorm", 16, 16),
-                "twod": ["op": "fill", "clip": [4, 4, 12, 10], "clearFirst": true],
+                "twod": ["op": "fill", "colorFormat": 0xCF, "clip": [4, 4, 12, 10], "clearFirst": true],
             ],
             [
                 "id": "clip-out", "kind": "twod", "target": target("bgra8unorm", 16, 16),
