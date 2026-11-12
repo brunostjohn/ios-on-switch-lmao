@@ -92,7 +92,7 @@ struct RenderEncoder {
     CommandBuffer *cb_ = nullptr;
     const Texture *textures_[16] = {};
     unsigned dirties = 0;
-    void invalidateDescriptors() { ++dirties; }
+    void textureMoved(uint32_t) { ++dirties; }
     void setTexture(uint32_t, const Texture *);
 };
 }  // namespace raw

@@ -702,6 +702,11 @@ private:
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
     }
+    void textureMoved(uint32_t slot)
+    {
+        ++bindingRevision_;
+        moved_.textures |= uint16_t(1u << slot);
+    }
     uint32_t movedEntries(const PackPipeline &rec) const;
     DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
