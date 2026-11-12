@@ -30,6 +30,18 @@ void switch_gpu_timeline_failed(struct switch_gpu_timeline *timeline, uint32_t c
 void switch_gpu_timeline_close(struct switch_gpu_timeline *timeline);
 void switch_gpu_timeline_token(struct switch_gpu_timeline *timeline, uint32_t value,
 			       struct switch_gpu_backing_token *token);
+/* A token's status read with no lock, valid while the token is retained. Open (thread context) succeeds only when the
+ * status is the physical one for good: no semantic wait at or below the token, and not failed. Semantic nodes are
+ * reserved before a job's token is committed to its writes, so none can come after. */
+struct switch_gpu_timeline_view {
+	const struct switch_gpu_timeline *timeline;
+	uint32_t value;
+};
+int switch_gpu_timeline_view_open(const struct switch_gpu_backing_token *token,
+				  struct switch_gpu_timeline_view *view);
+/* Any context, interrupts off included: as switch_gpu_backing_token_external_status: 1 complete and visible, 0 not
+ * yet, -5 failed. */
+int switch_gpu_timeline_view_visible(const struct switch_gpu_timeline_view *view);
 #ifdef __cplusplus
 }
 #endif

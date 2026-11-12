@@ -372,6 +372,11 @@ int tgm_present_outstanding(const void *arg);
 int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 void tgm_present_pass(void);
+/* SwitchGpuPresentFilter.cpp: the armed watch's token, read by the nonstall interrupt's primary filter
+ * (tgm_present_filter); attached once armed, detached at its claim before its tokens drop and before done runs. */
+void tgm_present_filter_attach(const struct switch_gpu_backing_token *token);
+void tgm_present_filter_detach(void);
+void tgm_present_filter(void);
 /* Host import bookkeeping: `pa` is the import's first page; add 1 when made, 0 when released (gpu_sync.c vm_imports). */
 void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
 

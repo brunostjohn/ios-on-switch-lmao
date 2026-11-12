@@ -104,6 +104,7 @@ static void present_watch_work(void *unused)
 	found = switch_gpu_present_watch_claim(&tgm_present.watch, present_physical, present_visible);
 	if (found == SWITCH_GPU_PRESENT_WATCH_PENDING)
 		return;
+	tgm_present_filter_detach();
 	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 	if (found == SWITCH_GPU_PRESENT_WATCH_HIDDEN) {
 		present_watch_flush();
@@ -118,7 +119,9 @@ static void present_watch_work(void *unused)
 /* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released: a watch the pass made due
  * is delivered here when its producer's writes are in DRAM; anything else goes to the watch work item. Nothing here may
  * wait for the GPU, as no GPU interrupt is taken until this returns: the tokens finish without waiting, the snapshot's
- * leases (SwitchGpuScanoutSnapshot::complete) release under their backings' locks, and done only signals. */
+ * leases (SwitchGpuScanoutSnapshot::complete) release under their backings' locks, and done only signals. The
+ * nonstall line's filter may already have run the display's callout for it (SwitchGpuPresentFilter.cpp); each claim
+ * detaches the filter's view first. */
 void tgm_present_pass(void)
 {
 	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) != SWITCH_GPU_PRESENT_WATCH_DUE)
@@ -131,6 +134,7 @@ void tgm_present_pass(void)
 			nvxnu_work_schedule(tgm_present.watch_work);
 		return;
 	}
+	tgm_present_filter_detach();
 	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 	present_watch_complete(switch_gpu_present_tokens_finish_ready(&tgm_present.tokens,
 								      switch_gpu_timeline_promote),
@@ -489,6 +493,8 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.queued = nvxnu_nanotime();
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
+		/* before the arm: a pass claiming the watch detaches the view after this */
+		tgm_present_filter_attach(&tgm_present.tokens.tokens[0]);
 		switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
 	}
 	mutex_unlock(&tgm_present.lock);

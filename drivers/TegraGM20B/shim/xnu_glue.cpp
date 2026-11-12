@@ -5,7 +5,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
-#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
@@ -36,7 +36,8 @@ void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
-void tgm_present_pass(void);  // gpu_present.c
+void tgm_present_pass(void);    // gpu_present.c
+void tgm_present_filter(void);  // SwitchGpuPresentFilter.cpp
 }
 
 #if DEVELOPMENT || DEBUG
@@ -268,6 +269,16 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	switch_gpu_backing_completed();
 }
 
+// The nonstall line's primary filter: the present watch's producer, read from memory alone (the GPU may be powered
+// down); true, as the plain event source on a level line does, masks the line until the work loop's pass has run nvkm,
+// which alone quiets it.
+// NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
+bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
+{
+	tgm_present_filter();
+	return true;
+}
+
 // Mach's assert-then-check: a wake between the caller's condition test and this sleep moves the word, and one
 // after assert_wait_deadline() clears the wait, so neither is lost. Returns true if woken, false at `until`.
 bool sleepUntil(const volatile uint32_t *word, nvxnu_u32 seq, uint64_t until_ns)
@@ -385,9 +396,14 @@ extern "C" void nvxnu_irq_start(void)
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
 		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);
-		gIrqSources[i] = gIrqLoop ? IOInterruptEventSource::interruptEventSource(
-						    gIrqLoop, gpuInterrupt, nub, 0)
-					  : nullptr;
+		if (!gIrqLoop)
+			gIrqSources[i] = nullptr;
+		else if (i)
+			gIrqSources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(
+				gIrqLoop, gpuInterrupt, gpuNonstallFilter, nub, 0);
+		else
+			gIrqSources[i] = IOInterruptEventSource::interruptEventSource(
+				gIrqLoop, gpuInterrupt, nub, 0);
 		if (!gPmc || !gIrqSources[i] ||
 		    gIrqLoop->addEventSource(gIrqSources[i]) != kIOReturnSuccess) {
 			panic("tegra-gm20b: cannot attach the GPU %s interrupt (INTID %u)",
