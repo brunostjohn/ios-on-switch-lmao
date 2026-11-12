@@ -1,5 +1,6 @@
 """storecheck.py's verdict of a moved load from what moved, and which colours a state's storage form can leave."""
 
+import struct
 import unittest
 
 from tools.gpu.maxwell import storecheck
@@ -7,10 +8,21 @@ from tools.gpu.maxwell import storecheck
 OWN = (1, 0)
 
 
+def fp32(x: float) -> float:
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
 class Kind(unittest.TestCase):
-    def test_a_store_of_the_load_plus_a_term_is_add(self):
-        base = 0.1 + 1.7
-        self.assertEqual(storecheck.kind({OWN}, OWN, base, base + storecheck.DELTA, 0.1), 'add')
+    def test_a_store_of_the_load_plus_a_term_is_add_though_the_sum_rounds_in_fp32(self):
+        load, term = 0.875, 5 * 2.0**-27
+        base, moved = fp32(load + term), fp32(load + storecheck.DELTA + term)
+        self.assertNotEqual(moved - base, storecheck.DELTA)
+        self.assertEqual(storecheck.kind({OWN}, OWN, base, moved, load), 'add')
+
+    def test_a_term_that_scales_the_load_by_a_little_is_not_add(self):
+        load = 1.0
+        base, moved = fp32(load * 0.999), fp32((load + storecheck.DELTA) * 0.999)
+        self.assertEqual(storecheck.kind({OWN}, OWN, base, moved, load), 'own')
 
     def test_the_load_written_back_is_kept(self):
         self.assertEqual(storecheck.kind({OWN}, OWN, 0.5, 0.5 + storecheck.DELTA, 0.5), 'kept')

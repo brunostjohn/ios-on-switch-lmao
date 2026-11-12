@@ -7,11 +7,12 @@ For every storage-form record of the corpus's states (those whose functions' lib
 by default), each fetched channel's load is moved by DELTA and the program run again over the same quads (quad.py):
   unused  nothing the program stores or outputs moved
   kept    only its own store moved, by exactly DELTA, from a store equal to the load: the channel written back as read
-  add     only its own store moved, within two ulps of DELTA: the store is the load plus a term that does not read it,
-          what the ROP's ONE, ONE, ADD makes of a fetch-free program's output
+  add     only its own store moved, within two fp32 ulps of DELTA: the store is the load plus a term that does not read
+          it, what the ROP's ONE, ONE, ADD makes of a fetch-free program's output
   own     only its own store moved, otherwise (a product, a mix, a minimum, a load rounded to half before its sum)
   read    another store, an output or a kill moved
-Each set-0 word that holds a fetched colour's handle is pinned to a word naming the colour, so a surface load or store
+Loads are multiples of 2^-10, so a load moved by DELTA is exact and only the program's own sum rounds. Each set-0 word
+that holds a fetched colour's handle is pinned to a word naming the colour, so a surface load or store
 names its colour in every quad (a handle drawn at random named nothing across quads). A state can leave the interlock
 on a colour only where each of its channels is unused, kept or add, and no other colour it stores is fetched.
 """
@@ -87,6 +88,11 @@ def records(path: Path, keys: set[int]) -> list[Record]:
     return out
 
 
+def ulp32(x: float) -> float:
+    """Give an fp32 value's unit in the last place (a normal one's; the smallest normal's below them)."""
+    return 2.0 ** (max(math.frexp(x)[1], -125) - 24)
+
+
 def kind(changed: set, own: tuple, base: float, moved: float, load: float | None) -> str:
     """Give what moving the load of `own` (colour, channel) did, from what moved and its own store before and after."""
     if not changed:
@@ -95,7 +101,7 @@ def kind(changed: set, own: tuple, base: float, moved: float, load: float | None
         return 'read'
     if moved - base == DELTA and base == load:
         return 'kept'
-    if abs((moved - base) - DELTA) <= 2 * math.ulp(max(abs(base), abs(moved), 1e-30)):
+    if abs((moved - base) - DELTA) <= 2 * ulp32(max(abs(base), abs(moved))):
         return 'add'
     return 'own'
 
@@ -120,7 +126,7 @@ class Quads:
                 return base.texture(op)
             colour = op[1] & 0xFF
             rng = random.Random(repr((self.invocation, lane, colour)))
-            load = self.loads.setdefault((lane, colour), [value(f32(rng.uniform(-2, 2))) for _ in range(4)])
+            load = self.loads.setdefault((lane, colour), [rng.randrange(-2048, 2048) / 1024 for _ in range(4)])
             return [f32(v + (DELTA if (colour, ch) == moved else 0.0)) for ch, v in enumerate(load)]
 
         return Inputs(base.attribute, cbuf, texture, base.bound_cbuf)
