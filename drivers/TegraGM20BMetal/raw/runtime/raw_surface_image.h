@@ -25,6 +25,24 @@ enum TextureType : uint32_t {
     kType3D = 7,
 };
 
+// The layers (slices) of a texture of MTLTextureType `type`: a cube's six faces, a cube array's six a cube, a 1D or 2D
+// array's arrayLength; one for any other type (a 3D texture's planes are its depth)
+constexpr uint32_t textureLayers(uint32_t type, uint32_t arrayLength)
+{
+    const uint32_t length = arrayLength ? arrayLength : 1;
+    switch (type) {
+    case kTypeCube:
+        return 6;
+    case kTypeCubeArray:
+        return 6 * length;
+    case kType1DArray:
+    case kType2DArray:
+        return length;
+    default:
+        return 1;
+    }
+}
+
 struct SurfaceImage {
     enum Kind : uint8_t {
         Plain,
@@ -103,8 +121,8 @@ inline const char *surfaceImage(const SurfaceImageFacts &d, SurfaceImage &out)
                            : d.type == kType2DArray ? fx::kTexTwoDArray
                            : d.type == kTypeCube    ? fx::kTexCube
                                                     : fx::kTexCubeArray);
-        laid = samples == 1 && fx::arrayLayout(d.width, std::max(d.height, 1u), arrayLength * (cube ? 6 : 1), levels,
-                                               d.bpp, out.layout);
+        laid = samples == 1 && fx::arrayLayout(d.width, std::max(d.height, 1u), textureLayers(d.type, arrayLength),
+                                               levels, d.bpp, out.layout);
         break;
     }
     case kType3D:

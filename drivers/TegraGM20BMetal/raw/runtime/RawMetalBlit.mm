@@ -117,9 +117,7 @@ static MTLSize levelSize(id<MTLTexture> t, NSUInteger level)
 
 static NSUInteger sliceCount(id<MTLTexture> t)
 {
-    const MTLTextureType type = t.textureType;
-    return (type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray ? 6 : 1) *
-           std::max<NSUInteger>(1, t.arrayLength);
+    return raw::textureLayers(uint32_t(t.textureType), uint32_t(std::min<NSUInteger>(t.arrayLength, 2048)));
 }
 
 // The levels a whole-texture copy starts at: the smaller's first, and the larger's of its size. False: neither has a level

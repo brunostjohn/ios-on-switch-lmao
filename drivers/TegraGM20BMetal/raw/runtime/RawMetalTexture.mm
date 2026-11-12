@@ -538,9 +538,8 @@ static int viewHeaderType(MTLTextureType type)
                                          levels:(NSRange)levels
                                          slices:(NSRange)slices
 {
-    const bool cube =
-        _descriptor.textureType == MTLTextureTypeCube || _descriptor.textureType == MTLTextureTypeCubeArray;
-    const NSUInteger allSlices = std::max<NSUInteger>(_descriptor.arrayLength, 1) * (cube ? 6 : 1);
+    const NSUInteger allSlices = raw::textureLayers(uint32_t(_descriptor.textureType),
+                                                    uint32_t(std::min<NSUInteger>(_descriptor.arrayLength, 2048)));
     if (type == _descriptor.textureType && !levels.location && levels.length == _descriptor.mipmapLevelCount &&
         !slices.location && slices.length == allSlices)
         return [self newTextureViewWithPixelFormat:format];
