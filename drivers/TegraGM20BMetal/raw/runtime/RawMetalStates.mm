@@ -228,8 +228,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     p->_raw = gRM->completion->makeNow(a, &retry);
     RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
+    // the journal names m2v's functions (the harvest's corpus lines): a debug build twins a state made at its creation
     if (p->_raw && native_bridge_metal_journal_render)
-        native_bridge_metal_journal_render(a.descriptor, 0);
+        native_bridge_metal_journal_render(twinDescriptor(a.descriptor), 0);
 #endif
 #if SWITCH_RAW_DIAGNOSTICS
     markProbes(p->_raw, d.label);
