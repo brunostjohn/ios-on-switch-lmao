@@ -22,7 +22,8 @@ constexpr uint32_t kAbi = 5, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWI
                    kIndexedParams = SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, kMatrix = SWITCH_GM20B_MACRO_VCM_CONSTANTS,
                    kIcbRange = SWITCH_GM20B_MACRO_ICB_RANGE, kIcbDraw = SWITCH_GM20B_MACRO_ICB_DRAW,
                    kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED, kIcbGate = SWITCH_GM20B_MACRO_ICB_GATE,
-                   kIcbPatches = SWITCH_GM20B_MACRO_ICB_PATCHES;
+                   kIcbPatches = SWITCH_GM20B_MACRO_ICB_PATCHES, kAmplify = SWITCH_GM20B_MACRO_AMPLIFY,
+                   kAmplifyIndexed = SWITCH_GM20B_MACRO_AMPLIFY_INDEXED;
 
 constexpr bool countedAsDraw(uint32_t slot)
 {
@@ -37,7 +38,7 @@ static_assert(!countedAsDraw(kMatrix) && !countedAsDraw(kIcbRange) && !countedAs
                   !countedAsDraw(kIcbDrawIndexed) && !countedAsDraw(kIcbGate) &&
                   !countedAsDraw(SWITCH_GM20B_MACRO_ICB_BIND) && !countedAsDraw(kIcbPatches),
               "and every other macro's as none");
-static_assert(kIcbPatches < SWITCH_GM20B_MACRO_RAW_END && SWITCH_GM20B_MACRO_RAW_END <= SWITCH_GM20B_MACRO_SLOTS,
+static_assert(kAmplifyIndexed < SWITCH_GM20B_MACRO_RAW_END && SWITCH_GM20B_MACRO_RAW_END <= SWITCH_GM20B_MACRO_SLOTS,
               "every raw slot is one CALL_MME_MACRO takes");
 static_assert(kDraw > SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS && kDraw > SWITCH_GM20B_MACRO_NVK_CLEAR,
               "no raw slot is one the profile reads as NVK's clear or anti-alias");
@@ -77,14 +78,17 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kIcbDrawProgram = program(switch_gm20b_macro_icb_draw),
                   kIcbDrawIndexedProgram = program(switch_gm20b_macro_icb_draw_indexed),
                   kIcbGateProgram = program(switch_gm20b_macro_icb_gate),
-                  kIcbPatchesProgram = program(switch_gm20b_macro_icb_patches);
+                  kIcbPatchesProgram = program(switch_gm20b_macro_icb_patches),
+                  kAmplifyProgram = program(switch_gm20b_macro_amplify),
+                  kAmplifyIndexedProgram = program(switch_gm20b_macro_amplify_indexed);
 constexpr size_t kContextWords =
     12 * 5 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
     std::size(switch_gm20b_macro_indirect) + std::size(switch_gm20b_macro_indexed_indirect) +
     std::size(switch_gm20b_macro_draw_params) + std::size(switch_gm20b_macro_draw_indexed_params) +
     std::size(switch_gm20b_macro_vcm_constants) + std::size(switch_gm20b_macro_icb_range) +
     std::size(switch_gm20b_macro_icb_draw) + std::size(switch_gm20b_macro_icb_draw_indexed) +
-    std::size(switch_gm20b_macro_icb_gate) + std::size(switch_gm20b_macro_icb_patches);
+    std::size(switch_gm20b_macro_icb_gate) + std::size(switch_gm20b_macro_icb_patches) +
+    std::size(switch_gm20b_macro_amplify) + std::size(switch_gm20b_macro_amplify_indexed);
 constexpr size_t kCallWords = 4, kParamsCallWords = 6;
 
 inline void install(Push &push)
@@ -108,6 +112,9 @@ inline void install(Push &push)
     load(kIcbDrawIndexed, kIcbDrawIndexedProgram.words, kIcbDrawIndexedProgram.size);
     load(kIcbGate, kIcbGateProgram.words, kIcbGateProgram.size);
     load(kIcbPatches, kIcbPatchesProgram.words, kIcbPatchesProgram.size);
+    load(kAmplify, kAmplifyProgram.words, kAmplifyProgram.size);
+    load(kAmplifyIndexed, kAmplifyIndexedProgram.words, kAmplifyIndexedProgram.size);
+    push.m(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT), 1);
 }
 
 // The colour matrix macro's call: its arguments are the next GPFIFO entry's words (the uniform's)
@@ -199,6 +206,58 @@ inline void draw(Push &push, DrawParams &held, bool indexed, uint32_t first, uin
         *push.at++ = baseVertex;
     *push.at++ = baseInstance;
     held = {root, baseInstance, baseVertex, false};
+}
+
+// Vertex amplification (raw_amplification.cpp): a draw under it is one call of an amplify macro, whose words are in
+// Vulkan's indirect order (count, instances, first, an indexed draw's vertex offset, the first instance): the call's
+// data, or for an indirect draw the GPFIFO continuation the caller appends. It leaves the draw parameters it wrote, the
+// AmplificationId word at the last amplification's id and the viewport offset word at its offset.
+constexpr uint32_t kAmplifyCallWords = 6;
+// a count and its mappings, and a state's words
+constexpr uint32_t kAmplificationScratchWords = 2 + 2 * (1 + SWITCH_GM20B_AMP_MAX) + 6;
+
+inline void amplifyHeader(Push &push, bool indexed)
+{
+    *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * (indexed ? kAmplifyIndexed : kAmplify), indexed ? 5 : 4);
+}
+
+inline void amplify(Push &push, DrawParams &held, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
+                    uint32_t root, uint32_t baseInstance)
+{
+    amplifyHeader(push, indexed);
+    *push.at++ = count;
+    *push.at++ = instances;
+    *push.at++ = first;
+    if (indexed)
+        *push.at++ = root;
+    *push.at++ = baseInstance;
+    held = {root, baseInstance, indexed ? root : 0, false};
+}
+
+// The amplify macros' scratch words: the count and each amplification's render target and viewport offsets, and the
+// bound state's words (root byte offsets, 0: none), its layer (SWITCH_GM20B_AMP_LAYER_* or its word's offset) and
+// whether two amplifications need a pixel barrier between them
+inline void amplification(Push &push, uint32_t count, const uint32_t (&layers)[SWITCH_GM20B_AMP_MAX],
+                          const uint32_t (&viewports)[SWITCH_GM20B_AMP_MAX])
+{
+    push.m(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT), count);
+    push.incArray(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_LAYERS), layers, SWITCH_GM20B_AMP_MAX);
+    push.incArray(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS), viewports, SWITCH_GM20B_AMP_MAX);
+}
+
+struct AmplificationWords {
+    uint32_t count = 0, id = 0, viewport = 0, layer = SWITCH_GM20B_AMP_LAYER_FIRST, barrier = 0;
+
+    bool same(const AmplificationWords &o) const
+    {
+        return count == o.count && id == o.id && viewport == o.viewport && layer == o.layer && barrier == o.barrier;
+    }
+};
+
+inline void amplificationWords(Push &push, const AmplificationWords &w)
+{
+    push.inc(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD),
+             {w.count, w.id, w.viewport, w.layer, w.barrier});
 }
 
 }  // namespace raw::mme
