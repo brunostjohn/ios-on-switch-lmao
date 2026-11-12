@@ -94,14 +94,18 @@ switch_gpu_timeline *find(const switch_gpu_backing_token *token)
 	return nullptr;
 }
 
-int physical_locked(const switch_gpu_timeline *timeline, uint32_t value, bool external)
+// Every load atomic: the present's interrupt filter reads a retained token's timeline with no lock
+// (switch_gpu_timeline_view_visible). The fence and visible words are in a fence page the timeline holds.
+int physical_now(const switch_gpu_timeline *timeline, uint32_t value, bool external)
 {
 	uint64_t terminal = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE);
 	uint32_t completed = uint32_t(terminal),
 		 visible = __atomic_load_n(&timeline->terminal_visible, __ATOMIC_ACQUIRE);
-	if (!terminal && timeline->fence) {
-		completed = __atomic_load_n(timeline->fence, __ATOMIC_ACQUIRE);
-		visible = __atomic_load_n(timeline->visible, __ATOMIC_ACQUIRE);
+	const volatile uint32_t *fence = __atomic_load_n(&timeline->fence, __ATOMIC_ACQUIRE);
+	if (!terminal && fence) {
+		completed = __atomic_load_n(fence, __ATOMIC_ACQUIRE);
+		visible = __atomic_load_n(__atomic_load_n(&timeline->visible, __ATOMIC_ACQUIRE),
+					  __ATOMIC_ACQUIRE);
 		// Recovery publishes failure before advancing abandoned hardware acquire fences.
 		terminal = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE);
 		if (terminal) {
@@ -110,9 +114,9 @@ int physical_locked(const switch_gpu_timeline *timeline, uint32_t value, bool ex
 		}
 	}
 	if (int32_t(completed - value) < 0)
-		return terminal || !timeline->fence ? -5 : 0;
+		return terminal || !fence ? -5 : 0;
 	return !external || int32_t(visible - value) >= 0 ||
-			       int32_t(timeline->promoted - value) >= 0
+			       int32_t(__atomic_load_n(&timeline->promoted, __ATOMIC_ACQUIRE) - value) >= 0
 		       ? 1
 		       : 0;
 }
@@ -140,7 +144,7 @@ void publish_semantic_locked(switch_gpu_timeline *timeline)
 
 int status_locked(const switch_gpu_timeline *timeline, uint32_t value, bool external)
 {
-	const int physical = physical_locked(timeline, value, external);
+	const int physical = physical_now(timeline, value, external);
 	if (physical <= 0)
 		return physical;
 	if (failed_locked(timeline, value))
@@ -355,9 +359,33 @@ extern "C" int switch_gpu_timeline_physical_status(const switch_gpu_backing_toke
 	IOLockLock(lock);
 	const auto *timeline = find(token);
 	const int result =
-		timeline ? physical_locked(timeline, uint32_t(token->value), external != 0) : -19;
+		timeline ? physical_now(timeline, uint32_t(token->value), external != 0) : -19;
 	IOLockUnlock(lock);
 	return result;
+}
+
+extern "C" int switch_gpu_timeline_view_open(const switch_gpu_backing_token *token,
+					     switch_gpu_timeline_view *view)
+{
+	*view = {};
+	if (!lock)
+		return -19;
+	IOLockLock(lock);
+	const auto *timeline = find(token);
+	const uint32_t value = timeline ? uint32_t(token->value) : 0;
+	int result = !timeline ? -19 : failed_locked(timeline, value) ? -5 : 0;
+	for (auto *node = result ? nullptr : timeline->semantics; node; node = node->next)
+		if (int32_t(value - node->seqno) >= 0)
+			result = -16;
+	if (!result)
+		*view = {timeline, value};
+	IOLockUnlock(lock);
+	return result;
+}
+
+extern "C" int switch_gpu_timeline_view_visible(const switch_gpu_timeline_view *view)
+{
+	return view->timeline ? physical_now(view->timeline, view->value, true) : -19;
 }
 
 extern "C" int switch_gpu_timeline_semantic_snapshot(const switch_gpu_backing_token *token,

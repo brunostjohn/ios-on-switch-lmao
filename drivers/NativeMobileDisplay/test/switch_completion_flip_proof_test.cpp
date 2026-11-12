@@ -202,7 +202,8 @@ TEST_P(Refusing, RandomOrdersRefuseOnceAndNeverMisreadALatch)
     randomWalk(d, 200000, walk);
     EXPECT_EQ(gLog.size(), 1u);
     EXPECT_TRUE(d.completionFlipsRefused);
-    EXPECT_LT(walk.fromCompletions, 10u) << walk.fromCompletions;
+    EXPECT_LT(walk.fromCompletions + walk.fromFilters, 10u) << walk.fromCompletions << " " << walk.fromFilters;
+    EXPECT_TRUE(d.completionFilterOff);
     EXPECT_GT(walk.completed, 5000u) << walk.completed;
     EXPECT_GT(d.shown.size(), 5000u) << d.shown.size();
 }
@@ -277,7 +278,8 @@ TEST_F(Unproven, RandomOrdersProveTheApertureAndNeverRefuse)
     EXPECT_TRUE(d.completionFlipsProven);
     EXPECT_FALSE(d.completionFlipsRefused);
     EXPECT_TRUE(gLog.empty());
-    EXPECT_GT(walk.fromCompletions, 5000u) << walk.fromCompletions;
+    EXPECT_GT(walk.fromCompletions + walk.fromFilters, 5000u) << walk.fromCompletions << " " << walk.fromFilters;
+    EXPECT_GT(walk.fromFilters, 1000u) << walk.fromFilters;
 }
 
 }  // namespace

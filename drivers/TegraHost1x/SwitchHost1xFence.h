@@ -44,6 +44,20 @@ void switch_host1x_fence_watch(struct switch_host1x_fence *fence, uint32_t bound
 // True: the fence was taken back before its callback could run, and is idle. False: the callback has run or will.
 bool switch_host1x_fence_remove(struct switch_host1x_fence *fence);
 
+// A filter waiter: fn(ctx) runs once, in the syncpoint interrupt's primary filter (interrupts off, under a simple
+// lock), when the filter finds the syncpoint at or past the threshold, which a failed engine's release also does: fn
+// reads its job's own record and takes no lock but a simple one. The work-loop pass that expires the threshold
+// retires the waiter before it runs any fence's callback, so fn either ran before that pass or never runs: a pass
+// that beats the filter leaves the threshold to the caller's ordinary fence. TEGRA_HOST1X_OK: armed (*handle cancels
+// it); SWITCH_HOST1X_FILTER_PASSED: the syncpoint is already there and fn never runs; TEGRA_HOST1X_ENOMEM: every
+// waiter is out; TEGRA_HOST1X_ENODEV while host1x is down. Thread context.
+enum { SWITCH_HOST1X_FILTER_PASSED = 1 };
+typedef uint64_t switch_host1x_filter_handle;
+int switch_host1x_filter_wait(uint32_t syncpt, uint32_t threshold, void (*fn)(void *ctx), void *ctx,
+                              switch_host1x_filter_handle *handle);
+// True: fn has not run and never will. False: it ran, or the handle's waiter is gone.
+bool switch_host1x_filter_cancel(switch_host1x_filter_handle handle);
+
 #ifdef __cplusplus
 }
 #endif

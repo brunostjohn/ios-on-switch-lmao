@@ -78,10 +78,17 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 int tegra_gm20b_scanout_fence(void *display, uint64_t pa);
 // Provided by NativeLegacyDisplay: the offer's copy is done (status 0: every byte of the target is in DRAM, the copy engine's writes
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
-// partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it records the status, writes
-// window A's flip for a direct frame the display armed (an IOSimpleLock and six registers, SwitchCompletionFlipDisplay.h) and
-// signals the display's work loop, and never sleeps.
+// partial frame; the display does not flip to it). Thread context with interrupts on (a producer's work loop or work item; its
+// interrupt filter calls tgm_present_filter_callout's fn instead); it records the status, writes window A's flip for a frame the
+// display armed (an IOSimpleLock and six registers, SwitchCompletionFlipDisplay.h) and signals the display's work loop, and never
+// sleeps.
 void native_legacy_gpu_complete(void *display, int status);
+// Provided by the GPU driver: fn(ctx, 0) runs in the GPU nonstall interrupt's primary filter (interrupts off, under a
+// simple lock) when an accepted watched offer's producer (TEGRA_SCANOUT_COPY_PRODUCER_WATCH) is complete with its
+// writes visible, before its native_legacy_gpu_complete, which follows with status 0 as ever. At most once per offer,
+// never after that offer's completion; offers the producer's own pass cannot finish (a present job, a semantic wait
+// in front) never call it. fn only stores to memory and registers under a simple lock. Registered once.
+void tgm_present_filter_callout(void (*fn)(void *ctx, int status), void *ctx);
 // status: the compositor's rendering of the source never finished (its channel faulted or hung and was killed): the source
 // holds a partial frame, and the display shows nothing of it, neither through the copy nor the CPU.
 #define TEGRA_SCANOUT_SOURCE_LOST (-5)

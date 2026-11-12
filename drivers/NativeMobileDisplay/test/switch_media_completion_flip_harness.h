@@ -6,18 +6,22 @@
 // (finishPlaneFence, planeOut) and the frame end (planeFrameEnd) are NativeLegacyDisplay's as far as windows B and C
 // see them; the rest is the real code.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "../../TegraGM20B/SwitchGpuBacking.h"
+#include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
 #include "../SwitchDisplayComposition.h"
+#include "../SwitchDisplayRetirement.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"
 
@@ -26,6 +30,17 @@ namespace media_flip_test {
 inline std::vector<std::string> gLog;
 inline int gFenceResult = 0;
 inline unsigned gFences = 0;
+
+// host1x's filter waiters as the display registers them, with what each producer's job record says in the filter.
+struct FilterWaiter {
+    void (*fn)(void *);
+    void *ctx;
+    uint32_t threshold;
+};
+
+inline std::vector<FilterWaiter> gWaiters;
+inline int gWaitResult = 0, gProducerCertain = 1;
+inline std::set<uint64_t> gUncertain, gDoneAtArm;  // producers' fences: still running in the filter, done at the arm
 
 [[noreturn]] __attribute__((format(printf, 1, 2))) inline void panic(const char *format, ...)
 {
@@ -256,7 +271,7 @@ struct Display {
     {
         landscapeState = {};
         mediaFlip = {};
-        mediaFlipsRefused = false;
+        mediaFlipsRefused = mediaFilterOff = false;
         mediaFlipUnverified = PlaneCommits::kNone;
         mediaFlipRequestedSeq = 0;
         planeLatch.values = sets;
@@ -309,6 +324,11 @@ struct Display {
         return sets[id >= 0 ? id : Commits::kSlots];
     }
 
+    PlaneSet &planeSetOf(int id)
+    {
+        return sets[id >= 0 ? id : Commits::kSlots];
+    }
+
     void armFlipDeadline()
     {
         ++deadlines;
@@ -335,26 +355,44 @@ struct Display {
         finishPlaneFence(gpuStatus);
     }
 
-    // planeFence and planeMediaFence for a set whose producers are VIC's or NVDEC's.
-    bool offer(PlaneSet p, uint64_t seq)
+    // planeFence and planeMediaFence for a set whose producers are VIC's or NVDEC's: the second, when there are two,
+    // NVDEC's at fence seq + kSecond.
+    static constexpr uint64_t kSecond = 1000000;
+
+    bool offer(PlaneSet p, uint64_t seq, unsigned producers = 1)
     {
         if (transferred)
             throw std::runtime_error("an offer while a swap is in flight");
         p.seq = seq;
+        swaps.push_back(seq);
         planeFencing = p;
         planeFencePending = gpuScanout = transferred = true;
         planeTarget = p;
-        const switch_gpu_backing_token producer = {seq, 1, SWITCH_GPU_ENGINE_VIC, 161};
-        if (planeFenceWithMediaFlip(p, &producer, 1) == 0)
+        const switch_gpu_backing_token producer[2] = {{seq, 1, SWITCH_GPU_ENGINE_VIC, 161},
+                                                      {seq + kSecond, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
+        if (planeFenceWithMediaFlip(p, producer, producers) == 0)
             return true;
         planeFencePending = gpuScanout = transferred = false;
         planeNotShown();
         return false;
     }
 
-    // gpuComplete on the producer's thread.
+    // host1x's syncpoint filter with every waiter's threshold reached (or only `threshold`'s); the stores land as a
+    // completion's do.
+    void filter(uint64_t threshold = 0)
+    {
+        model.completing = true;
+        for (const auto &waiter : gWaiters)
+            if (!threshold || waiter.threshold == static_cast<uint32_t>(threshold))
+                waiter.fn(waiter.ctx);
+        model.completing = false;
+    }
+
+    // gpuComplete on the producer's thread, after the pass that retired its filter waiters.
     void complete(int status)
     {
+        gWaiters.clear();
+        status = mediaFlipVerdict(status);
         gpuStatus = status;
         gpuDonePending = true;
         model.completing = true;
@@ -385,10 +423,60 @@ struct Display {
         }
     }
 
+    // The family's swaps as SwitchRetireDisplay.h retires them at a latch (latchRetire): each offered set's swap is
+    // queued, and must complete exactly once.
+    switch_display::Retirement scanoutRetirement;
+    std::vector<uint64_t> swaps, retired, framesShown;
+
+    uint64_t oldestPendingFrame() const
+    {
+        uint64_t first = 0;
+        const auto include = [&first](uint64_t sequence) {
+            if (sequence && (!first || sequence < first))
+                first = sequence;
+        };
+        if (planeLatch.requested())
+            include(planeSetOf(planeLatch.armed).seq);
+        if (planeLatch.superseded >= 0)
+            include(planeSetOf(planeLatch.superseded).seq);
+        if (planeHeldSet)
+            include(planeHeld.seq);
+        if (planeFencePending)
+            include(planeFencing.seq);
+        return first;
+    }
+
+    void retireThrough(uint64_t seq, uint64_t shownAt)
+    {
+        scanoutRetirement.observe(seq, shownAt);
+        const auto ready = scanoutRetirement.take(oldestPendingFrame());
+        if (!ready.sequence)
+            return;
+        framesShown.push_back(ready.sequence);
+        while (!swaps.empty() && swaps.front() <= ready.sequence) {
+            if (std::count(retired.begin(), retired.end(), swaps.front()))
+                throw std::runtime_error("a swap completed twice");
+            retired.push_back(swaps.front());
+            swaps.erase(swaps.begin());
+        }
+    }
+
+    unsigned completions(uint64_t seq) const
+    {
+        return static_cast<unsigned>(std::count(retired.begin(), retired.end(), seq));
+    }
+
+    // NativePlanesDisplay.h retireUnshown: carried by the set still out, or retired now.
     void planeNotShown()
     {
         ++notShown;
         planeTarget = planeSetOf(planeLatch.requested() ? planeLatch.armed : planeLatch.active);
+        if (planeLatch.requested())
+            planeSetOf(planeLatch.armed).seq = planeFencing.seq;
+        else if (planeHeldSet)
+            planeHeld.seq = planeFencing.seq;
+        else
+            retireThrough(planeFencing.seq, mach_absolute_time());
     }
 
     void planeOut(const PlaneSet &p)
@@ -409,6 +497,7 @@ struct Display {
             return;
         if (planeLatchedAtFrameEnd()) {
             shown.push_back(planeSetOf(planeLatch.active).seq);
+            retireThrough(planeSetOf(planeLatch.active).seq, mach_absolute_time());
             if (planeHeldSet && planeLatch.mayWrite()) {
                 planeHeldSet = false;
                 planeFlipOnly(planeHeld);
@@ -470,3 +559,23 @@ inline Display::PlaneSet video(int slot, uint32_t size = (720u << 16) | 1280)
 }
 
 }  // namespace media_flip_test
+
+extern "C" inline int switch_host1x_filter_wait(uint32_t, uint32_t threshold, void (*fn)(void *), void *ctx,
+                                                switch_host1x_filter_handle *handle)
+{
+    using namespace media_flip_test;
+    *handle = threshold;
+    if (!gWaitResult)
+        gWaiters.push_back({fn, ctx, threshold});
+    return gWaitResult;
+}
+
+extern "C" inline int switch_gpu_backing_token_filter_status(const switch_gpu_backing_token *token)
+{
+    return media_flip_test::gUncertain.count(token->value) ? 0 : media_flip_test::gProducerCertain;
+}
+
+extern "C" inline int switch_gpu_backing_token_status(const switch_gpu_backing_token *token)
+{
+    return media_flip_test::gDoneAtArm.count(token->value) ? 1 : 0;
+}

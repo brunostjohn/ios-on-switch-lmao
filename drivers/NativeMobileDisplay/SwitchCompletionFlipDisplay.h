@@ -7,20 +7,28 @@
 // that pass before it reads the latch, so the latch, the retirement and the present stamps see the flip at the
 // boundary that took it.
 //
+// Earlier still, the producer's primary interrupt filter writes it (writeEarlyCompletionFlip): the GPU's nonstall
+// filter once a watched present's producer is complete and visible (TegraScanoutCopy.h tgm_present_filter_callout),
+// host1x's syncpoint filter once a VIC copy's job is certainly done (switch_host1x_filter_wait,
+// switch_gpu_backing_token_filter_status). Its completion follows on the producer's work loop and finds the flip
+// written. A frame end or SC7 that comes between puts the early flip in the ring alone (adoption); the completion's
+// pass then presents nothing, and retires a swap whose latch it held back. The filters' side is
+// SwitchCompletionFlipFilter.h.
+//
 // The completion writes window A through its own aperture (mainline drm/tegra dc.c tegra_plane_offset, window A's
 // plane->offset 0xa00: DC_WIN 0x700 + i at 0xb80 + i, DC_WINBUF 0x800 + i at 0xbc0 + i), never WINDOW_HEADER or
 // STATE_ACCESS, which the gate switches for its reads of the active copy. Its WIN_A_UPDATE promotes all of window
 // A's assembly copy, so a gate write that puts something else there (a recovery or held flip, window A's blend over
 // an overlay, the palette bit, the stop) first withdraws an armed flip under the lock; that frame then flips from the
-// gate as before. Included in the class body; writeCompletionFlip runs on the completion's thread, the rest under the
-// gate.
+// gate as before. Included in the class body; writeCompletionFlip runs on the completion's thread,
+// writeEarlyCompletionFlip in an interrupt filter, the rest under the gate.
 //
 // Window A's WINBUF aperture (0xbc0..) is unproven on this unit (its DC_WIN words at 0xb80.. and windows B and C are),
 // so every completion flip is checked where the gate already reads the latch: one whose request was taken while window
 // A kept scanning another surface turns completion flips off for the boot, and that frame flips from the gate. Until one
 // has been seen latched as written, a completion flip keeps window A's layout (LINE_STRIDE at 0xb8a would land without
 // SURFACE_KIND and START_ADDR), and a settle that takes the last request as shown with no frame end to check it (SC7, the
-// scanout stopped) writes it again from the gate.
+// scanout stopped) writes it again from the gate. A refusal turns the filters' writes off with the rest.
 
 // Static, as the landscape and window probe state: the instance is at the 16 KiB a kalloc_type class may have.
 static inline IOSimpleLock *completionFlipLock = nullptr;
@@ -37,9 +45,11 @@ struct CompletionUnverified {
 
 static inline CompletionUnverified completionUnverified = {kNoBuffer, 0};  // in the ring, no latch read has judged it
 static inline bool completionFlipsProven = false, completionFlipsRefused = false;
+static inline bool completionFilterOff = false;  // the producers' filters write no flips: read in interrupt context
 #if SWITCH_FRAME_TIMELINE
-static constexpr unsigned kFlipTotals = 5;
-static inline uint32_t flipTotals[kFlipTotals] = {};  // completion, gate, lead us, withdrawn, refused
+static constexpr unsigned kFlipTotals = 8;
+// completion, gate, lead us, withdrawn, refused, filter, filter lead us, filter waiters declined
+static inline uint32_t flipTotals[kFlipTotals] = {};
 static inline struct sysctl_oid flipTotalOids[kFlipTotals] = {};
 #endif
 
@@ -51,6 +61,7 @@ void startCompletionFlip()
     __atomic_store_n(&completionFlipLock, lock, __ATOMIC_RELEASE);
     flipTotalsRegister();
     mediaFlipTotalsRegister();
+    tgm_present_filter_callout(&gpuFilterFlip<decltype(this)>, this);
 }
 
 bool completionFlipIdle() const
@@ -107,6 +118,22 @@ int offerWithCompletionFlip(const TegraScanoutCopy &copy, int entry)
     return offered;
 }
 
+// Under the lock: dsb, then six posted stores.
+void writeCompletionFlipLocked()
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    if (completionFlip.layout) {
+        dc[kWinAKind] = completionFlip.kind;
+        dc[kWinAStride] = completionFlip.stride;
+        dc[kWinAHOffset] = completionFlip.hOffset;
+    }
+    dc[kWinAStart] = completionFlip.start;
+    dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
+    dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
+    completionFlip.requestedAt = __atomic_load_n(&frameEnds, __ATOMIC_RELAXED);
+    completionFlip.writtenAt = mach_absolute_time();
+}
+
 // The completion's thread, after gpuDonePending is set: a failed frame withdraws the flip, a done one is requested.
 void writeCompletionFlip(int status)
 {
@@ -114,22 +141,13 @@ void writeCompletionFlip(int status)
     if (!lock)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
+    if (SWITCH_FRAME_TIMELINE && completionFlip.early())
+        completionFlip.deliveredAt = mach_absolute_time();
     if (gPanicRestore.panicking)
         completionFlip.withdraw();
     const bool write = completionFlip.claim(status);
-    if (write) {
-        __asm__ volatile("dsb sy" ::: "memory");
-        if (completionFlip.layout) {
-            dc[kWinAKind] = completionFlip.kind;
-            dc[kWinAStride] = completionFlip.stride;
-            dc[kWinAHOffset] = completionFlip.hOffset;
-        }
-        dc[kWinAStart] = completionFlip.start;
-        dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
-        dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
-        completionFlip.requestedAt = __atomic_load_n(&frameEnds, __ATOMIC_RELAXED);
-        completionFlip.writtenAt = mach_absolute_time();
-    }
+    if (write)
+        writeCompletionFlipLocked();
     writeMediaFlipLocked(status);
     [[maybe_unused]] const uint32_t start = completionFlip.start;
     IOSimpleLockUnlockEnableInterrupt(lock, state);
@@ -168,38 +186,43 @@ void runCompletionPass()
     finishGpuSwap(__atomic_load_n(&gpuStatus, __ATOMIC_RELAXED));
 }
 
-bool completionFlipWritten()
+// What the gate does with the flip before it reads window A's latch or saves it (a frame end, SC7): a written one's
+// pass runs; an early one is adopted, in the ring now and its completion's pass left with nothing to enter.
+uint8_t takeWrittenFlip(SwitchCompletionFlip &flip)
 {
-    if (completionFlipIdle())
-        return false;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    const bool written = completionFlip.state == SwitchCompletionFlip::kWritten;
+    const uint8_t seen = completionFlip.state;
+    if (seen == SwitchCompletionFlip::kEarly)
+        completionFlip.state = SwitchCompletionFlip::kAdopted;
+    flip = completionFlip;
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-    return written;
+    if (seen == SwitchCompletionFlip::kWritten)
+        runCompletionPass();
+    else if (seen == SwitchCompletionFlip::kEarly)
+        completionFlipIntoRing(flip);
+    return seen;
 }
 
 // vblankTick's first step.
 void takeCompletionFlip()
 {
-    if (completionFlipWritten())
-        runCompletionPass();
+    SwitchCompletionFlip flip;
+    if (!completionFlipIdle())
+        takeWrittenFlip(flip);
     takeMediaFlip();
 }
 
-// Nothing armed or written once this returns: an armed flip is withdrawn, a written one goes in the ring. The pass may
-// kick the next offer, armed in turn unless completion flips are off.
+// Nothing armed, written or early once this returns: an armed flip is withdrawn, a written one goes in the ring, an
+// early one is adopted, and an adopted one's completion comes when it comes (gpuPresentDeferred, or after the resume).
+// The pass may kick the next offer, armed in turn unless completion flips are off.
 void drainCompletionFlip()
 {
+    SwitchCompletionFlip flip;
     while (!completionFlipIdle()) {
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-        const bool armed = completionFlip.state == SwitchCompletionFlip::kArmed;
-        completionFlip.withdraw();
-        const bool written = completionFlip.state == SwitchCompletionFlip::kWritten;
-        IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-        if (armed && SWITCH_FRAME_TIMELINE)
-            noteFlipTotal(3, 1);
-        if (written)
-            runCompletionPass();
+        withdrawCompletionFlip();
+        const uint8_t seen = takeWrittenFlip(flip);
+        if (seen != SwitchCompletionFlip::kWritten && seen != SwitchCompletionFlip::kEarly)
+            return;
     }
 }
 
@@ -229,18 +252,20 @@ struct LatchState {
 
 LatchState latchState()
 {
+    SwitchCompletionFlip flip;
     for (;;) {
         LatchState seen = {};
         if (completionFlipIdle()) {
             seen = {dc[kDcStateControl], uiActive(kWinbufStartAddr)};
         } else {
             const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-            const bool written = completionFlip.state == SwitchCompletionFlip::kWritten;
+            const uint8_t held = completionFlip.state;
+            const bool written = held == SwitchCompletionFlip::kWritten || held == SwitchCompletionFlip::kEarly;
             if (!written)
                 seen = {dc[kDcStateControl], uiActive(kWinbufStartAddr)};
             IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
             if (written) {
-                runCompletionPass();
+                takeWrittenFlip(flip);
                 continue;
             }
         }
@@ -274,6 +299,7 @@ bool completionFlipRefused(const LatchState &seen)
               "flips from the display's work loop from here on\n",
               flip.start, seen.start);
     completionFlipsRefused = true;
+    __atomic_store_n(&completionFilterOff, true, __ATOMIC_RELAXED);
     if (SWITCH_FRAME_TIMELINE)
         noteFlipTotal(4, 1);
     drainCompletionFlip();
@@ -282,7 +308,7 @@ bool completionFlipRefused(const LatchState &seen)
 }
 
 // presentEntry's first step: true when the completion already wrote entry i, which then enters the ring as
-// presentEntry's own write would have.
+// presentEntry's own write would have (unless the gate adopted it already).
 bool presentedByCompletion(int i)
 {
     if (!completionFlipLock)
@@ -293,16 +319,35 @@ bool presentedByCompletion(int i)
     const SwitchCompletionFlip flip = completionFlip;
     const bool written = completionFlip.present(i);
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-    if (flip.state == SwitchCompletionFlip::kWritten && !written)
-        panic("SwitchDisplay: window A flips to entry %d while entry %d's completion flip is not in the ring", i,
-              flip.entry);
+    if ((flip.state == SwitchCompletionFlip::kWritten || flip.early()) && !written)
+        panic("SwitchDisplay: window A flips to entry %d while entry %d's completion flip (state %u) is not in the "
+              "ring",
+              i, flip.entry, static_cast<unsigned>(flip.state));
     if (!written) {
         if (flip.state == SwitchCompletionFlip::kArmed && SWITCH_FRAME_TIMELINE)
             noteFlipTotal(3, 1);
         return false;
     }
-    completionFlipIntoRing(flip);
+    if (flip.state == SwitchCompletionFlip::kAdopted)
+        adoptedFlipPresented(flip);
+    else
+        completionFlipIntoRing(flip);
     return true;
+}
+
+// flip()'s first step, a copy's pass: true when the gate adopted the copy's flip, whose buffer is no longer the
+// ring's target.
+bool flippedByCompletion()
+{
+    if (completionFlipIdle())
+        return false;
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
+    const SwitchCompletionFlip flip = completionFlip;
+    const bool adopted = completionFlip.state == SwitchCompletionFlip::kAdopted && completionFlip.present(flip.entry);
+    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
+    if (adopted)
+        adoptedFlipPresented(flip);
+    return adopted;
 }
 
 void completionFlipIntoRing(const SwitchCompletionFlip &flip)
@@ -320,8 +365,31 @@ void completionFlipIntoRing(const SwitchCompletionFlip &flip)
     flipRequested = flip.requestedAt;
     completionUnverified = {i, flip.start};
     armFlipDeadline();
+    if (SWITCH_FRAME_TIMELINE && flip.state != SwitchCompletionFlip::kAdopted)
+        noteCompletionFlip(flip);
+}
+
+// An adopted flip's completion pass. A latch the gate saw before it could not retire the swap, whose completion was
+// still out (retireThrough stops at gpuRequest): it retires here.
+void adoptedFlipPresented(const SwitchCompletionFlip &flip)
+{
     if (SWITCH_FRAME_TIMELINE)
         noteCompletionFlip(flip);
+    if (ring.front == flip.entry)
+        retireLatchedThrough(entrySeq[flip.entry]);
+}
+
+// A completion's pass after the latch that showed its frame: the swaps through it retire as that latch's
+// retireThrough would have, had their completion not been out.
+void retireLatchedThrough(uint64_t seq)
+{
+    if (!latchRetire || !seq)
+        return;
+    for (const OriginalLegacySwapRequest *head = pendingSwapRequest(); head; head = pendingSwapRequest()) {
+        const uint64_t at = seqOf(head);
+        if (!at || at > seq || !retireSwap(head, true))
+            break;
+    }
 }
 
 #if SWITCH_FRAME_TIMELINE
@@ -335,6 +403,18 @@ void noteCompletionFlip(const SwitchCompletionFlip &flip)
         IOLog("SwitchDisplay: first window A flip written by its producer's completion (entry %d), %llu us before "
               "the display's work loop took it\n",
               flip.entry, static_cast<unsigned long long>(lead));
+    if (flip.writer == SwitchCompletionFlip::kFromCompletion)
+        return;
+    const uint64_t ahead = flip.deliveredAt > flip.writtenAt ? Span::ticksToUs(flip.deliveredAt - flip.writtenAt) : 0;
+    noteFlipTotal(6, static_cast<uint32_t>(ahead));
+    static bool logged[3];
+    if (!logged[flip.writer]) {
+        logged[flip.writer] = true;
+        IOLog("SwitchDisplay: first window A flip written from %s interrupt filter (entry %d), %llu us before its "
+              "work loop\n",
+              flip.writer == SwitchCompletionFlip::kFromGpuFilter ? "the GPU's" : "host1x's syncpoint (VIC)",
+              flip.entry, static_cast<unsigned long long>(ahead));
+    }
 }
 
 static void noteFlipTotal(unsigned which, uint32_t n)
@@ -351,15 +431,18 @@ static int flipTotalSysctl(struct sysctl_oid *, void *, int which, struct sysctl
 
 static void flipTotalsRegister()
 {
-    static const char *const names[kFlipTotals] = {"switch_flips_completion", "switch_flips_gate",
-                                                   "switch_flips_lead_us", "switch_flips_withdrawn",
-                                                   "switch_flips_refused"};
+    static const char *const names[kFlipTotals] = {"switch_flips_completion",     "switch_flips_gate",
+                                                   "switch_flips_lead_us",        "switch_flips_withdrawn",
+                                                   "switch_flips_refused",        "switch_flips_filter",
+                                                   "switch_flips_filter_lead_us", "switch_flips_filter_declined"};
     for (unsigned i = 0; i < kFlipTotals; ++i) {
         switch_sysctl_oid(&flipTotalOids[i], &sysctl__kern_children, names[i],
                           static_cast<int>(CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED), flipTotalSysctl, "I",
                           "window A since boot: flips its producers' completions wrote, flips the display's gate "
                           "wrote, microseconds the completions' writes came before the gate took them, completion "
-                          "flips withdrawn, completion flips window A did not latch as written");
+                          "flips withdrawn, completion flips window A did not latch as written, flips their "
+                          "producers' interrupt filters wrote, microseconds those came before their completions, VIC "
+                          "copies whose job was done or whose waiter host1x refused at the arm");
         flipTotalOids[i].oid_arg2 = static_cast<int>(i);
         sysctl_register_oid(&flipTotalOids[i]);
     }

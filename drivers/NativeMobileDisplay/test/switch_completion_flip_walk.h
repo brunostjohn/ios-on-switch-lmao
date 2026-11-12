@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Offers, completions (also inside the frame-end action), their passes, boundaries anywhere, folded frame ends and SC7
-// in random order against switch_completion_flip_harness.h's Display. Every latch is read as the ring models it (the
-// harness's checkFlip throws otherwise), and the ring's front is what window A scanned at some boundary up to each
-// frame end.
+// Offers, producers' filter writes and completions (also inside the frame-end action), their passes, boundaries
+// anywhere, folded frame ends and SC7 in random order against switch_completion_flip_harness.h's Display. Every latch
+// is read as the ring models it (the harness's checkFlip throws otherwise), and the ring's front is what window A
+// scanned at some boundary up to each frame end. A filter writes only a frame whose completion is a success and only
+// before that completion, as the GPU's and host1x's filters guarantee.
 #pragma once
 #include <gtest/gtest.h>
 
@@ -14,7 +15,7 @@
 namespace completion_flip_test {
 
 struct Walk {
-    unsigned completed = 0, fromCompletions = 0;
+    unsigned completed = 0, fromCompletions = 0, fromFilters = 0;
 };
 
 inline uint64_t gRng = 0x9e3779b97f4a7c15ull;
@@ -32,11 +33,23 @@ inline void randomWalk(Display &d, unsigned steps, Walk &walk)
     constexpr int kSlot = Display::kSlot0;
     std::vector<int> activeAt = {d.activeEntry()};
     unsigned pendingTicks = 0;
-    bool offered = false, done = false;
+    bool offered = false, done = false, fails = false;
+    const auto filter = [&] {
+        if (!offered || done || fails)
+            return;
+        d.model.written.clear();
+        if (roll(2)) {
+            d.gpuFilter();
+        } else {
+            d.armWaiter(static_cast<uint32_t>(d.nextSwap));
+            d.vicFilter();
+        }
+        walk.fromFilters += !d.model.written.empty();
+    };
     const auto complete = [&] {
         if (offered && !done) {
             d.model.written.clear();
-            d.complete(roll(16) ? 0 : -5);
+            d.complete(fails ? -5 : 0);
             walk.fromCompletions += !d.model.written.empty();
             done = true;
         }
@@ -47,7 +60,7 @@ inline void randomWalk(Display &d, unsigned steps, Walk &walk)
         ++pendingTicks;
     };
     for (unsigned step = 0; step < steps; ++step) {
-        switch (roll(8)) {
+        switch (roll(9)) {
         case 0:
         case 1: {
             // The kick's own rule: no direct offer while a frame is held or a replaced flip is unsettled.
@@ -56,6 +69,7 @@ inline void randomWalk(Display &d, unsigned steps, Walk &walk)
                 d.ring.superseded == Display::kNoBuffer && !d.ring.busy(entry)) {
                 offered = (roll(4) ? d.offer(entry) : d.offerCopy()) == 0;
                 done = false;
+                fails = roll(16) == 0;
             }
             break;
         }
@@ -76,7 +90,10 @@ inline void randomWalk(Display &d, unsigned steps, Walk &walk)
             const size_t seenAtStart = activeAt.size() - 1;
             if (roll(4) == 0)
                 d.midTick = [&] {
-                    complete();
+                    if (roll(2))
+                        filter();
+                    else
+                        complete();
                     if (roll(2))
                         boundary();
                 };
@@ -99,6 +116,9 @@ inline void randomWalk(Display &d, unsigned steps, Walk &walk)
                     pendingTicks = 0;
                 }
             }
+            break;
+        case 8:
+            filter();
             break;
         }
         if (offered && done && !d.transferred) {

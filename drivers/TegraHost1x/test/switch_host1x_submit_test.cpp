@@ -111,6 +111,9 @@ void switch_host1x_intr_stop()
 void switch_host1x_intr_handle()
 {}
 
+void switch_host1x_intr_filter()
+{}
+
 extern "C" void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint32_t threshold,
                                          void (*signaled)(switch_host1x_fence *, int))
 {

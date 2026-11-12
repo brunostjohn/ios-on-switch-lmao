@@ -16,9 +16,24 @@
 
 #include "../../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../../TegraGM20B/SwitchGpuBacking.h"
+#include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
 
 namespace completion_flip_test {
+
+// The producers' filters as the display registers with them: the GPU's present callout, host1x's last filter waiter
+// (with what its VIC job's record says when the filter runs it).
+inline void (*gGpuCallout)(void *, int) = nullptr;
+inline void (*gWaiterFn)(void *) = nullptr;
+inline void *gWaiterContext = nullptr;
+inline switch_gpu_backing_token gWaiterToken{};
+inline int gWaitResult = 0, gVicStatus = 1;
+inline unsigned gWaits = 0;
+
+struct OriginalLegacySwapRequest {
+    uint64_t seq;
+};
 
 [[noreturn]] __attribute__((format(printf, 1, 2))) inline void panic(const char *format, ...)
 {
@@ -239,12 +254,17 @@ struct Display {
     unsigned underflowRun = 0, deadlineArms = 0, signals = 0;
     std::vector<std::pair<int, uint64_t>> shown;  // (entry, stamp) for every latch the ring saw
     std::function<void()> midTick;
+    // The family's swap queue as retirement sees it: a latch retires through its frame, but not the swap whose
+    // completion is still out (SwitchRetireDisplay.h retireThrough).
+    bool latchRetire = true;
+    std::vector<OriginalLegacySwapRequest> swaps;
+    std::vector<uint64_t> retired;
 
     Display()
     {
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
-        completionFlipsProven = completionFlipsRefused = false;
+        completionFlipsProven = completionFlipsRefused = completionFilterOff = false;
         ring.reset(3);
         model.general[DcModel::kHeader] = kWindowASelect;
         model.assembly[kWinbufStartAddr] = surfaceAddress(0);
@@ -297,6 +317,25 @@ struct Display {
         return request;
     }
 
+    uint64_t seqOf(const OriginalLegacySwapRequest *request) const
+    {
+        return request->seq;
+    }
+
+    const OriginalLegacySwapRequest *pendingSwapRequest() const
+    {
+        return swaps.empty() ? nullptr : &swaps.front();
+    }
+
+    bool retireSwap(const OriginalLegacySwapRequest *request, bool)
+    {
+        if (request != pendingSwapRequest())
+            throw std::runtime_error("a retirement out of order");
+        retired.push_back(request->seq);
+        swaps.erase(swaps.begin());
+        return true;
+    }
+
     void markFlip(int i)
     {
         marks.at(static_cast<size_t>(i)).ready = mach_absolute_time();
@@ -335,8 +374,14 @@ struct Display {
     void notePresent(uint64_t, uint64_t, const Mark &)
     {}
 
-    void retireThrough(uint64_t, uint64_t)
-    {}
+    void retireThrough(uint64_t seq, uint64_t)
+    {
+        while (const auto *head = pendingSwapRequest()) {
+            if (head->seq > seq || (gpuScanout && head->seq == flipRequest))
+                break;
+            retireSwap(head, true);
+        }
+    }
 
     static bool mediaFlipIdle()
     {
@@ -354,6 +399,11 @@ struct Display {
 
     static void mediaFlipTotalsRegister()
     {}
+
+    static int mediaFlipVerdict(int status)
+    {
+        return status;
+    }
 
     static bool columnScanBusy()
     {
@@ -438,9 +488,11 @@ struct Display {
             throw std::runtime_error("window A scans what the ring cannot explain");
         case TegraScanoutRing::kTaken:
             shown.emplace_back(asked, feStamp);
+            retireThrough(entrySeq[asked], feStamp);
             break;
         case TegraScanoutRing::kTakenReplaced:
             shown.emplace_back(replaced, feStamp);
+            retireThrough(entrySeq[replaced], feStamp);
             break;
         }
         flipLatched();
@@ -457,6 +509,7 @@ struct Display {
         gpuScanout = transferred = true;
         gpuDirect = entry;
         flipRequest = ++nextSwap;
+        swaps.push_back({flipRequest});
         return 0;
     }
 
@@ -474,12 +527,36 @@ struct Display {
         ring.claim(target);
         gpuScanout = transferred = copying = true;
         flipRequest = ++nextSwap;
+        swaps.push_back({flipRequest});
         return 0;
+    }
+
+    // vicCopyWork once its job's fence is armed: the job's producer token is its syncpoint and fence.
+    void armWaiter(uint32_t threshold)
+    {
+        armCompletionFlipWaiter(switch_gpu_backing_token{threshold, 1, SWITCH_GPU_ENGINE_VIC, 161});
+    }
+
+    // The GPU's nonstall filter with the watched producer complete and visible.
+    void gpuFilter()
+    {
+        if (gGpuCallout)
+            gGpuCallout(this, 0);
+    }
+
+    // host1x's syncpoint filter with the waiter's threshold reached; a pass retires the waiter.
+    void vicFilter()
+    {
+        if (auto *fn = gWaiterFn) {
+            gWaiterFn = nullptr;
+            fn(gWaiterContext);
+        }
     }
 
     // gpuComplete, on the completion's thread.
     void complete(int status)
     {
+        status = completionFlipVerdict(status);
         gpuStatus = status;
         gpuDonePending = true;
         writeCompletionFlip(status);
@@ -507,7 +584,7 @@ struct Display {
             }
             if (status)
                 ring.release();
-            else
+            else if (!flippedByCompletion())
                 presentEntry(ring.target());
             transferred = false;
             return;
@@ -568,7 +645,8 @@ struct Display {
         }
         if (deferredCopy) {
             deferredCopy = false;
-            presentEntry(ring.target());
+            if (!flippedByCompletion())
+                presentEntry(ring.target());
             transferred = false;
         }
         if (const int held = ring.flipHeld(); held != kNoBuffer)
@@ -579,6 +657,7 @@ struct Display {
 #define KDBG(...)
 #include "../SwitchScanoutStart.h"
 #include "../SwitchCompletionFlipDisplay.h"
+#include "../SwitchCompletionFlipFilter.h"
 #undef KDBG
 #undef SWITCH_FRAME_TIMELINE
 };
@@ -588,4 +667,28 @@ struct Display {
 extern "C" inline int tegra_gm20b_scanout_copy(const TegraScanoutCopy *copy)
 {
     return completion_flip_test::gOffer ? completion_flip_test::gOffer(copy) : 0;
+}
+
+extern "C" inline void tgm_present_filter_callout(void (*fn)(void *, int), void *)
+{
+    completion_flip_test::gGpuCallout = fn;
+}
+
+extern "C" inline int switch_host1x_filter_wait(uint32_t, uint32_t threshold, void (*fn)(void *), void *ctx,
+                                                switch_host1x_filter_handle *handle)
+{
+    using namespace completion_flip_test;
+    ++gWaits;
+    *handle = threshold;
+    if (gWaitResult == 0) {
+        gWaiterFn = fn;
+        gWaiterContext = ctx;
+    }
+    return gWaitResult;
+}
+
+extern "C" inline int switch_gpu_backing_token_filter_status(const switch_gpu_backing_token *token)
+{
+    completion_flip_test::gWaiterToken = *token;
+    return completion_flip_test::gVicStatus;
 }

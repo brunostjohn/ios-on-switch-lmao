@@ -13,3 +13,6 @@ void switch_host1x_intr_start();
 void switch_host1x_intr_stop();
 // The syncpoint interrupt's action, on the work loop.
 void switch_host1x_intr_handle();
+// The syncpoint interrupt's primary filter: the filter waiters whose thresholds passed. Reads syncpoint values only;
+// the action acks and re-arms.
+void switch_host1x_intr_filter();

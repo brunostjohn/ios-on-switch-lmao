@@ -105,6 +105,12 @@ int switch_gpu_backing_token_retain(const struct switch_gpu_backing_token *token
 void switch_gpu_backing_token_release(const struct switch_gpu_backing_token *token);
 int switch_gpu_backing_token_status(const struct switch_gpu_backing_token *token);
 int switch_gpu_backing_token_wait(const struct switch_gpu_backing_token *token);
+/* A host1x filter waiter's read, in any context (interrupts off included), once the token's syncpoint has reached its
+ * fence: 1 when its job will complete with status 1, nothing but that fence left; 0 when not known yet or failed.
+ * Engines that register none read 0. */
+typedef int (*switch_gpu_backing_filter_status)(const struct switch_gpu_backing_token *);
+int switch_gpu_backing_register_filter_status(uint32_t engine, switch_gpu_backing_filter_status status);
+int switch_gpu_backing_token_filter_status(const struct switch_gpu_backing_token *token);
 struct switch_gpu_event_waits;
 struct switch_gpu_backing_semantics {
     int (*snapshot)(const struct switch_gpu_backing_token *, struct switch_gpu_event_waits **);

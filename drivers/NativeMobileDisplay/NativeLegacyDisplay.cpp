@@ -58,6 +58,7 @@
 #include "../TegraVIC/SwitchNativeScanout.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
 #include "../TegraGM20B/SwitchGpuReady.h"
+#include "../TegraHost1x/SwitchHost1xFence.h"
 #include "../TegraHost1x/SwitchHost1xTokenFence.h"
 #include "../TegraHost1x/TegraHost1x.h"
 #include "SwitchNativePlane.h"
@@ -2634,6 +2635,8 @@ private:
     // Double-buffered after a fallback (recoverFlip), a frame finished while a flip is out is held and flipped at that flip's latch.
     void flip()
     {
+        if (flippedByCompletion())
+            return;
         if (gPanicRestore.panicking)
             return;
         const int target = ring.target();
@@ -3276,6 +3279,7 @@ public:
     // (SwitchCompletionFlipDisplay.h) and signals the work loop.
     void gpuComplete(int status)
     {
+        status = completionFlipVerdict(status);
         if (SWITCH_FRAME_TIMELINE) {
             __atomic_store_n(&gpuDoneAt, mach_absolute_time(), __ATOMIC_RELAXED);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT_DONE), gpuSequence, status);
@@ -4663,6 +4667,7 @@ public:
 #include "SwitchDirectSlots.h"
 #include "SwitchDirectVisibleDisplay.h"
 #include "SwitchCompletionFlipDisplay.h"
+#include "SwitchCompletionFlipFilter.h"
 
     // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
     void cleanDomain()

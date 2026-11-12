@@ -20,7 +20,7 @@ std::vector<uint32_t> publishedWords;
 uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
 uint32_t arenaShort, arenaWaits;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
-int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
+int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
 switch_gpu_event_waits *preparedBatch;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
@@ -86,6 +86,11 @@ SwitchEngineGate<TestGatePlatform> *testGate;
 
 extern "C" {
 int switch_gpu_backing_register_engine(uint32_t, const switch_gpu_backing_engine *)
+{
+    return 0;
+}
+
+int switch_gpu_backing_register_filter_status(uint32_t, switch_gpu_backing_filter_status)
 {
     return 0;
 }
@@ -477,6 +482,11 @@ int switch_gpu_event_waits_cached_status(const switch_gpu_event_waits *)
     return semanticResult;
 }
 
+int switch_gpu_event_waits_settled_status(const switch_gpu_event_waits *)
+{
+    return batchSettled;
+}
+
 int switch_gpu_event_waits_covers_token(switch_gpu_event_waits *, const switch_gpu_backing_token *)
 {
     return 1;
@@ -511,7 +521,7 @@ protected:
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = powerUses = powerDones = 0;
         reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = 0;
         bridgeError = submitError = retainError = statusError = powerError = 0;
-        semanticResult = 1;
+        semanticResult = batchSettled = 1;
         preparedBatch = nullptr;
         fences.clear();
         fenceBounds.clear();
@@ -809,6 +819,8 @@ TEST_F(SwitchVICJobsTest, AJobThatRanOnACancelledDecodesPictureEndsWithTheDecode
     EXPECT_EQ(fences[1]->threshold, 0x81234567u);
     producerPhysical[{SWITCH_GPU_ENGINE_NVDEC, decode.value}] = -5;
     interrupt(1);
+    hardware = static_cast<uint32_t>(placed);
+    EXPECT_EQ(switch_vic_token_filter_status(&token), 0) << "a host1x filter waiter sees the decode's failure";
     interrupt(0);
     EXPECT_EQ(heard, -5);
     EXPECT_EQ(Results::physicalStatus(&token), -5);
@@ -936,6 +948,55 @@ TEST_F(SwitchVICJobsTest, AJobWithASemanticBatchEndsOnItsSemanticCompletion)
     EXPECT_EQ(gQueue.count, 0u);
     EXPECT_EQ(heard, -125);
     EXPECT_EQ(waitSequence(fence), -125);
+}
+
+// The display's host1x filter waiter, with the syncpoint at the job's fence and the work loop not yet run: certain
+// only once nothing but the fence is left (no bridge out, no semantic wait), and only for a job that did not fail.
+// The display's host1x filter waiter, the work loop not yet run: certain only with the job's syncpoint at its fence,
+// its bridge done, nothing failed and its events batch settled.
+TEST_F(SwitchVICJobsTest, TheFilterStatusIsCertainOnlyOnceTheSyncpointIsAtTheFenceWithNothingElseLeft)
+{
+    const auto lastToken = [] {
+        return switch_gpu_backing_token{gQueue.submitted, 1, SWITCH_GPU_ENGINE_VIC, gSyncpt};
+    };
+    ASSERT_EQ(submit(), 0);
+    auto plain = lastToken();
+    EXPECT_EQ(switch_vic_token_filter_status(&plain), 0) << "its syncpoint short of its fence";
+    hardware = static_cast<uint32_t>(plain.value);
+    EXPECT_EQ(switch_vic_token_filter_status(&plain), 1);
+    auto other = plain;
+    other.queue = gSyncpt + 1;
+    EXPECT_EQ(switch_vic_token_filter_status(&other), 0);
+    interrupt(0);
+    EXPECT_EQ(switch_vic_token_filter_status(&plain), 0) << "retired: its slot is no longer the job's";
+
+    gpu();
+    ASSERT_EQ(submit(), 0);
+    auto bridgedJob = lastToken();
+    hardware = static_cast<uint32_t>(bridgedJob.value);
+    EXPECT_EQ(switch_vic_token_filter_status(&bridgedJob), 0) << "its GPU producer's bridge still out";
+    bridged(0, 0);
+    EXPECT_EQ(switch_vic_token_filter_status(&bridgedJob), 1);
+    interrupt(1);
+
+    ASSERT_EQ(submit(), 0);
+    auto failedJob = lastToken();
+    hardware = static_cast<uint32_t>(failedJob.value);
+    bridged(1, -5);
+    EXPECT_EQ(switch_vic_token_filter_status(&failedJob), 0);
+    interrupt(2);
+
+    sourceTokens.clear();
+    preparedBatch = reinterpret_cast<switch_gpu_event_waits *>(uintptr_t(0x50));
+    batchSettled = 0;
+    ASSERT_EQ(submit(), 0);
+    auto semantic = lastToken();
+    hardware = static_cast<uint32_t>(semantic.value);
+    EXPECT_EQ(switch_vic_token_filter_status(&semantic), 0) << "its semantic wait still out";
+    batchSettled = 1;
+    EXPECT_EQ(switch_vic_token_filter_status(&semantic), 1);
+    interrupt(3);
+    semanticRetired(preparedBatch);
 }
 
 TEST_F(SwitchVICJobsTest, JobsRetireAndCompleteInSubmissionOrder)

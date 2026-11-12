@@ -138,6 +138,7 @@ kernel_driver(
         "SwitchGpuJobStats.cpp",
         "SwitchGpuCpuLease.cpp",
         "SwitchGpuTimeline.cpp",
+        "SwitchGpuPresentFilter.cpp",
         "SwitchGpuBridge.cpp",
         "SwitchGpuPin.cpp",
         "SwitchGpuSurfaceAccess.cpp",
