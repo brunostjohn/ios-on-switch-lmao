@@ -10,8 +10,9 @@
 // One line per stage ("TegraNVDEC: N1 ok ..."), or the failing stage's FAIL line and nothing after it. Until N3
 // publishes, every failure (a register that does not settle, an engine that does not answer, an interrupt that never
 // comes) is that one line: the engine is put back in reset with its clock off and nothing is published, so
-// VideoToolbox keeps Apple's software decoders. No job runs before N3, and from then a lost syncpoint interrupt
-// (TegraHost1x) or a job past its bound panics with one line.
+// VideoToolbox keeps Apple's software decoders. No job runs before N3. From then a job past its bound is cancelled
+// with one line and fails, the engine reset and its falcon rebooted, and the next job runs (TegraNVDECCancel.cpp); a
+// lost syncpoint interrupt panics in TegraHost1x.
 //
 // The codecs are those the unit decoded right: on every boot of 11-06 an H.264 picture, a VP9 key frame and an HEVC IDR
 // matched x264, libvpx and FFmpeg, and VP9 and HEVC Main clips matched through VideoToolbox
@@ -26,7 +27,7 @@
 // push buffer and the 16 setup slots. Every job runs with the engine's GP timer on (the checker requires it), which
 // ends a picture the firmware cannot finish after 1 << 27 cycles (329 ms at 408 MHz, 291 ms at 460.8 MHz) with an
 // error status, so bad input never holds the engine: waits are bounded by kJobBoundUs per queued job, whatever timeout
-// a client asks for, and a job past that bound is a hardware fault.
+// a client asks for, and a job past that bound means the engine stopped making progress.
 //
 // Firmware: the non-secure falcon image L4T loads as nvhost_nvdec020_ns.fw when CONFIG_NVDEC_BOOTLOADER is off
 // (switchroot's tegra_linux_defconfig), here linux-firmware's nvidia/tegra210/nvdec.bin (firmware/SOURCE). The secure
@@ -55,6 +56,7 @@
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "TegraNVDEC.h"
+#include "TegraNVDECEngine.h"
 #include "SwitchNVDECJobs.h"
 #include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -94,7 +96,11 @@ enum : uint32_t {
 };
 
 enum : uint32_t {
+    MC_INTSTATUS = 0x0,
+    MC_ERR_STATUS = 0x8,
+    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL_1 = 0x970,
+    MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVDEC = 1u << 5,
 };
 
@@ -246,6 +252,24 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
     return true;
 }
 
+// N2 again on the job syncpoint, after a power-on or a reset: one line in gLine when the falcon does not answer.
+bool proven()
+{
+    const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+    const uint32_t stream[] = {
+        tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0),
+        tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, gSyncpt),
+        tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt),
+    };
+    const int ret = switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_DEFAULT, stream, 3, gSyncpt, from + 2);
+    if (!ret && !tegra_host1x_syncpt_wait(gSyncpt, from + 2, 500000))
+        return true;
+    char state[160];
+    snprintf(gLine, sizeof(gLine), "falcon did not answer (%d, syncpoint %u %u->%u); %s", ret, gSyncpt, from,
+             tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gNvdec, state, sizeof(state)));
+    return false;
+}
+
 void engineSuspend();
 void engineResume();
 int gateOn(void *);
@@ -337,7 +361,7 @@ void bringUpStages()
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
-    if (!switch_nvdec_jobs_start(gSetup, id, tegra_host1x_syncpt_read(id)) ||
+    if (!switch_nvdec_jobs_start(gSetup, id, tegra_host1x_syncpt_read(id)) || !switch_nvdec_cancel_start(id) ||
         !gGate.start({"TegraNVDEC", nullptr, gateOn, gateOff}, tegra_nvdec_power_lock())) {
         IOLog("SwitchNVDEC: completion worker or idle timer could not start\n");
         giveUp(true);
@@ -388,6 +412,44 @@ extern "C" bool tegra_nvdec_ready(void)
           gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
 }
 
+bool switch_nvdec_engine_powered()
+{
+    return gGate.powered();
+}
+
+void switch_nvdec_engine_describe(char *text, size_t size)
+{
+    char falcon[400];
+    snprintf(text, size, "%s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
+             switch_falcon_stall(gNvdec, falcon, sizeof(falcon)), switch_mmio_read32(gMc, MC_INTSTATUS),
+             switch_mmio_read32(gMc, MC_ERR_STATUS), switch_mmio_read32(gMc, MC_ERR_ADR));
+}
+
+// The memory controller stops taking NVDEC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
+// cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
+// flush has no interrupt.
+bool switch_nvdec_engine_reset()
+{
+    switch_mmio_write32(gMc, MC_HOTRESET_CTRL_1, switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) | MC_HOTRESET_NVDEC);
+    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS_1) & MC_HOTRESET_NVDEC); ++i)
+        IODelay(1);
+    bool wasOn = false;
+    gLine[0] = 0;
+    return powerUp(&wasOn);
+}
+
+bool switch_nvdec_engine_boot()
+{
+    return bootFalcon() && proven();
+}
+
+const char *switch_nvdec_engine_wedge()
+{
+    __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
+    park();
+    return gLine[0] ? gLine : "falcon";
+}
+
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
 // is N1 and N2 again on the kept image and address space: partition, clock, reset and the MBIST workaround, the falcon
 // reloaded and proven with an IMMEDIATE and an OP_DONE increment, the job queue rebased on the syncpoint. A failure
@@ -397,23 +459,8 @@ namespace {
 int gateOn(void *)
 {
     bool wasOn = false;
-    bool answered = false;
     gLine[0] = 0;
-    if (powerUp(&wasOn) && bootFalcon()) {
-        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
-        const uint32_t stream[] = {
-            tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0),
-            tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, gSyncpt),
-            tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt),
-        };
-        const int ret = switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_DEFAULT, stream, 3, gSyncpt, from + 2);
-        answered = !ret && !tegra_host1x_syncpt_wait(gSyncpt, from + 2, 500000);
-        if (!answered) {
-            char state[160];
-            snprintf(gLine, sizeof(gLine), "falcon did not answer (%d, syncpoint %u %u->%u); %s", ret, gSyncpt, from,
-                     tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gNvdec, state, sizeof(state)));
-        }
-    }
+    const bool answered = powerUp(&wasOn) && switch_nvdec_engine_boot();
     if (!answered) {
         __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
         park();
@@ -431,11 +478,13 @@ int gateOff(void *, bool drain)
 }
 
 // Sleep (SC7), through tegra_nvdec_suspend/resume in TegraHost1x.cpp. Suspend powers the engine off once its queued
-// jobs are done, before host1x saves its syncpoints, and detaches its address space; new jobs wait for resume. Resume
-// runs after host1x is back and attaches the address space again (SC7 resets the MC); the next job powers NVDEC on.
+// jobs are done and a cancellation under way has released their fences (it waits for the power lock suspend holds),
+// before host1x saves its syncpoints, and detaches its address space; new jobs wait for resume. Resume runs after
+// host1x is back and attaches the address space again (SC7 resets the MC); the next job powers NVDEC on.
 void engineSuspend()
 {
     gGate.suspend();
+    switch_nvdec_jobs_settle();
     tegra_nvdec_memory_detach();
 }
 

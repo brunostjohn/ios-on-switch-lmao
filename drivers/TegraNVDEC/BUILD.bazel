@@ -36,6 +36,7 @@ kernel_driver(
         "SwitchNVDECSemantics.cpp",
         "SwitchNVDECOutput.cpp",
         "SwitchNVDECPark.cpp",
+        "TegraNVDECCancel.cpp",
         "TegraNVDECMemory.cpp",
         "TegraNVDECUserClient.cpp",
         "firmware.S",

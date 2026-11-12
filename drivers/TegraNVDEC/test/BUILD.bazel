@@ -124,7 +124,14 @@ host_test(
 
 host_shims(
     name = "submit_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "IOKit/IOBufferMemoryDescriptor.h", "kern/thread.h", "kern/clock.h"],
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "kern/thread.h",
+        "kern/thread_call.h",
+        "kern/clock.h",
+    ],
     stubs = "switch_nvdec_submit_stubs.h",
 )
 
@@ -136,6 +143,8 @@ host_test(
         "//drivers/TegraNVDEC:SwitchNVDECJobs.h",
         "//drivers/TegraNVDEC:SwitchNVDECQueue.h",
         "//drivers/TegraNVDEC:SwitchNVDECSemantics.h",
+        "//drivers/TegraNVDEC:TegraNVDECEngine.h",
+        "//kits/SwitchEngineGate:SwitchEngineGate.h",
         "//drivers/TegraNVDEC:SwitchNVDECAccess.h",
         "//drivers/TegraNVDEC:SwitchNVDECDisplayProbe.h",
         "//drivers/TegraNVDEC:TegraNVDEC.h",
@@ -157,7 +166,10 @@ host_test(
         "//kits/SwitchDMA:SwitchDcache.h",
         "//kits/SwitchTime:SwitchTime.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraNVDEC:SwitchNVDECJobs.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraNVDEC:TegraNVDECCancel.cpp",
+    ],
     deps = [":submit_kernel"],
 )
 

@@ -4,10 +4,13 @@
 // order; then the job's physical result is published. That and the job's semantic completion (the events' retirement)
 // finish in either order and end the job.
 //
+// A job whose fence failed, or that cancel() failed, ends with kCancelled whatever its GPU producer reports.
+//
 // Engine supplies, each called once per job, without the engine's lock and never inside start:
 //   static void fault(uint32_t slot, int status, int producers);  the fence failed: its bound outlived, or (before
-//                                                                  strict) its interrupt lost; does not return
-//   static void physical(uint32_t slot, int result);              result: 1, or the GPU producer's failure
+//                                                                  strict) its interrupt lost; on host1x's work loop,
+//                                                                  so it takes no lock and never sleeps
+//   static void physical(uint32_t slot, int result);              result: 1, the GPU producer's failure or kCancelled
 //   static void ended(uint32_t slot, int result);                 result: physical()'s, for the engine to join with
 //                                                                  its semantic outcome
 #pragma once
@@ -24,6 +27,7 @@ struct SwitchHost1xStage {
 
 template <class Engine, uint32_t Slots> class SwitchHost1xStages {
 public:
+    static constexpr int kCancelled = -5;
     inline static SwitchHost1xStage stages[Slots] = {};
 
     // Under the engine's lock, once the job's slot is published and its batch committed. A job with a bridge has its
@@ -52,6 +56,18 @@ public:
         finalStep(stages[slot]);
     }
 
+    // Under the engine's lock, once the engine has stopped (its channel torn down, the engine reset or powered off): a
+    // job whose fence the syncpoint has not reached fails. True: the engine records the failure before it releases
+    // the fence, which another engine's stream may be waiting on.
+    static bool cancel(uint32_t slot, uint32_t reached)
+    {
+        auto &stage = stages[slot];
+        if (static_cast<int32_t>(reached - stage.fence.threshold) >= 0)
+            return false;
+        __atomic_store_n(&stage.physical, kCancelled, __ATOMIC_RELEASE);
+        return true;
+    }
+
 private:
     static uint32_t slotOf(const SwitchHost1xStage &stage)
     {
@@ -61,15 +77,18 @@ private:
     static void signaled(switch_host1x_fence *fence, int status)
     {
         auto &stage = *reinterpret_cast<SwitchHost1xStage *>(fence);
-        if (status)
-            Engine::fault(slotOf(stage), status, __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE));
+        if (status) {
+            const int producers = __atomic_exchange_n(&stage.physical, kCancelled, __ATOMIC_ACQ_REL);
+            Engine::fault(slotOf(stage), status, producers);
+        }
         hardwareStep(stage);
     }
 
     static void bridged(void *context, int status)
     {
         auto &stage = *static_cast<SwitchHost1xStage *>(context);
-        __atomic_store_n(&stage.physical, status < 0 ? status : 1, __ATOMIC_RELEASE);
+        if (status < 0 && __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) != kCancelled)
+            __atomic_store_n(&stage.physical, status, __ATOMIC_RELEASE);
         switch_host1x_fence_watch(&stage.fence, stage.boundUs);
         hardwareStep(stage);
     }
