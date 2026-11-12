@@ -86,7 +86,8 @@ private:
         return *d;
     }
 
-    // EQ_DUMP_DRAWS=<i>,<j>...: those draws' bound constant buffers of the vertex and pixel groups, word by word, to stderr
+    // EQ_DUMP_DRAWS=<i>,<j>...: those draws' bound constant buffers of the vertex and pixel groups, and the buffers their
+    // {address, range} descriptors name, word by word, to stderr
     void dumpBindings(nvdec::Decoder &d)
     {
         const unsigned draw = draws_++;
@@ -99,13 +100,26 @@ private:
                 uint32_t bytes = 0;
                 if (!d.bound(group, slot, addr, bytes))
                     continue;
-                std::vector<uint32_t> words(std::min<uint32_t>(bytes, 0x800) / 4);
-                d.gpuRead(addr, words.data(), words.size() * 4);
-                fprintf(stderr, "draw %u group %d cb%d va %llx size %x:", draw, group, slot, (unsigned long long)addr, bytes);
-                for (const uint32_t w : words)
-                    fprintf(stderr, " %08x", w);
-                fprintf(stderr, "\n");
+                const std::vector<uint32_t> words = dump(d, draw, "group " + std::to_string(group) + " cb" +
+                                                                        std::to_string(slot), addr, std::min<uint32_t>(bytes, 0x800));
+                for (size_t k = 0; k + 4 <= words.size(); k += 4) {
+                    const uint64_t va = words[k] | uint64_t(words[k + 1]) << 32;
+                    if (words[k + 3] == 0 && words[k + 2] && words[k + 2] <= 0x10000 && kernel_model::model.host(va))
+                        dump(d, draw, "  @" + std::to_string(k * 4), va, std::min<uint32_t>(words[k + 2], 0x800));
+                }
             }
+    }
+
+    static std::vector<uint32_t> dump(nvdec::Decoder &d, unsigned draw, const std::string &what, uint64_t va,
+                                      uint32_t bytes)
+    {
+        std::vector<uint32_t> words(bytes / 4);
+        d.gpuRead(va, words.data(), words.size() * 4);
+        fprintf(stderr, "draw %u %s va %llx size %x:", draw, what.c_str(), (unsigned long long)va, bytes);
+        for (const uint32_t w : words)
+            fprintf(stderr, " %08x", w);
+        fprintf(stderr, "\n");
+        return words;
     }
 
     void decode(const kernel_model::Job &job)
