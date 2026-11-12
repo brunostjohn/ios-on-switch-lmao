@@ -1,4 +1,4 @@
-"""Maxwell's texture fetches on the host: TEX and TLD (bindless and bound), TEXS and TLDS, as interp.py's lanes run them.
+"""Maxwell's texture fetches on the host: TEX and TLD (bindless and bound), TEXS and TLDS, as interp.py runs them.
 
 A fetch is a pure function of a canonical key, so two programs that sample the same texel the same way get the same
 result whatever form each uses: the handle word (a bindless one's register, a bound one's constant buffer word at its
@@ -110,7 +110,7 @@ def tld(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
 
 
 def write_scalar(w: int, lane: Lane, result: list[int]) -> None:
-    """A scalar form's components: its mask's in register A's pair, then B's; F16 (bit 59 clear) two halves a register."""
+    """Write a scalar form's components: its mask's in register A's pair, then B's; F16 (bit 59 clear) packs halves."""
     da, db = bits(w, 0, 8), bits(w, 28, 8)
     swizzle = bits(w, 50, 3)
     lut = RG_LUT if db == RZ_REG else RGBA_LUT

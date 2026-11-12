@@ -88,9 +88,12 @@ class Seeded:
         fetches: dict[tuple[int, int], int] | None = None,
         blended: int = 0,
     ) -> Inputs:
-        """`fetches`: the set-0 words that hold each fetched colour's handle, by (bank, byte), and their colour; a read
-        of the blended colour is the destination, a read of another the colour's own texel in both programs, whether it
-        is a storage form's surface load or a barrier form's texel load."""
+        """Give a lane's inputs.
+
+        `fetches`: the set-0 words that hold each fetched colour's handle, by (bank, byte), and their colour; a read of
+        the blended colour is the destination, a read of another the colour's own texel in both programs, whether it is
+        a storage form's surface load or a barrier form's texel load.
+        """
 
         def attribute(addr: int) -> int:
             if addr < GENERIC:
@@ -109,15 +112,18 @@ class Seeded:
 
         def texture(op: tuple) -> list[int]:
             if fetches and op[0] in ('suld', 'tld', 'tex') and op[1] & ~0xFF == FETCH_HANDLE:
-                colour = op[1] & 0xFF
-                if colour != blended:
-                    return premultiplied(self.rng('fetch', colour, lane))
-                return [f32(code / 255) for code in self.destination]
+                return self.fetched(op[1] & 0xFF, blended, lane)
             if op[0] == 'suld':
                 return [f32(code / 255) for code in self.destination]
             return premultiplied(self.rng('t', op[0], op[2:]) if op[0] == 'tex' else self.rng('t', op))
 
         return Inputs(attribute, cbuf, texture, bound)
+
+    def fetched(self, colour: int, blended: int, lane: int) -> list[int]:
+        """Give a fetched colour's texel: the destination of the blended one, any other's its own."""
+        if colour != blended:
+            return premultiplied(self.rng('fetch', colour, lane))
+        return [f32(code / 255) for code in self.destination]
 
 
 def premultiplied(rng: random.Random) -> list[int]:
@@ -262,8 +268,10 @@ def verdict_of(differences: Counter) -> str:
 
 
 def fetched(record: dict) -> dict[tuple[int, int], int]:
-    """Give the set-0 words a dumped record's fragment program reads its fetched colours' handles from: (bank, byte) ->
-    colour. Empty for a dump that names no entry's byte."""
+    """Give the set-0 words a dumped record's fragment program reads its fetched colours' handles from.
+
+    (bank, byte) -> colour; empty for a dump that names no entry's byte.
+    """
     out = {}
     for bank in record.get('fs_set_banks', []):
         for entry in record.get('entries', []):
