@@ -2,8 +2,8 @@
 // raw GM20B path: a texel copy between two images of one texel size, each destination texel (x, y) the source's texel at
 // (ax x + ay y + cx, bx x + by y + cy): a turned plane's texels moved between its frame and its plane (raw/runtime/
 // raw_turn_copy.h). Colour images are viewed as unsigned integers of the texel's size, so every bit is moved as it is; a depth
-// image's depth is read and written as the float it holds, which is its code. One function a texel size or depth format: the
-// pack keys an own state by its function's name.
+// image's depth is read and written as the float it holds, which is its code (a stencil plane is moved by
+// stencil_bits.metal). One function a texel size or depth format: the pack keys an own state by its function's name.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -70,6 +70,12 @@ fragment Depth turn_depth16_frag(Out in [[stage_in]], depth2d<float, access::rea
 
 fragment Depth turn_depth32f_frag(Out in [[stage_in]], depth2d<float, access::read> s [[texture(0)]],
                                   constant Map &m [[buffer(0)]])
+{
+    return {s.read(source(in.position, m))};
+}
+
+fragment Depth turn_depth32fs8_frag(Out in [[stage_in]], depth2d<float, access::read> s [[texture(0)]],
+                                    constant Map &m [[buffer(0)]])
 {
     return {s.read(source(in.position, m))};
 }

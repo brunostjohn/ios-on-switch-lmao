@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Texel copies a turned pass needs that no copy engine can make (it moves rows, never transposes or mirrors): the pack's turn
 // copy states (pack/turn.metal), each destination texel (x, y) the source's at (ax x + ay y + cx, bx x + by y + cy), both
-// colour images viewed as unsigned integers of their texel size, a depth image's depth copied as the float it holds.
+// colour images viewed as unsigned integers of their texel size, a depth image's depth copied as the float it holds, its
+// stencil by the pack's stencil bits (raw_stencil_bits.h).
 //  - an attachment not turned beside a turned one whose contents outside the pass matter (raw_rotated_pass.h): its texels
 //    into a plane-shaped stand-in the pass renders turned (frameToPlane) where it is loaded, and back (planeToFrame) where it
 //    is stored;
@@ -76,8 +77,7 @@ inline const char *turnCopyState(uint32_t bpp)
     }
 }
 
-// The pack's turn copy state of a depth format (Depth16Unorm, Depth32Float); null for none. A format with a stencil plane has
-// none: the GM20B's pixel programs write no stencil (no stencil export), so no draw moves one.
+// The pack's turn copy state of a depth format's depth (Depth16Unorm, Depth32Float, Depth32Float_Stencil8); null for none
 inline const char *turnDepthState(uint32_t format)
 {
     switch (format) {
@@ -85,6 +85,8 @@ inline const char *turnDepthState(uint32_t format)
         return "raw.turn.turn_depth16_frag";
     case 252:
         return "raw.turn.turn_depth32f_frag";
+    case 260:
+        return "raw.turn.turn_depth32fs8_frag";
     default:
         return nullptr;
     }

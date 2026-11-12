@@ -179,6 +179,8 @@ static void giveRecording(RMCommandBuffer *b)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
             if (pass.depthResolve)
                 uses.push_back({(__bridge void *)pass.depthResolve, raw::ResourceUse::Write});
+            if (pass.stencilResolve)
+                uses.push_back({(__bridge void *)pass.stencilResolve, raw::ResourceUse::Write});
         } else if (cmd.op == OpInvocation) {
             raw::forEachObject((__bridge NSInvocation *)cmd.obj, [&](id object) {
                 uses.push_back({(__bridge void *)object, raw::ResourceUse::Read | raw::ResourceUse::Write});

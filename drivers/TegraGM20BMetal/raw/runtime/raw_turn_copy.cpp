@@ -16,11 +16,13 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         desc.depthWrite = true;
         return DepthStencilState(desc);
     }();
+    const bool copies = !dst.zeta || zetaHasDepth(dst.format), stencil = dst.zeta && zetaHasStencil(dst.format);
     const uint32_t format = dst.zeta ? dst.format : turnCopyFormat(dst.bpp);
-    const char *state = dst.zeta ? turnDepthState(dst.format) : turnCopyState(dst.bpp);
+    const char *state = !copies ? nullptr : dst.zeta ? turnDepthState(dst.format) : turnCopyState(dst.bpp);
     const FormatInfo *f = dst.zeta ? nullptr : formatInfo(format);
     Pipeline *pl = state ? dev_->pipeline(Pack::fnv(state, strlen(state))) : nullptr;
-    if (!pl || (!dst.zeta && !f) || src.bpp != dst.bpp || src.zeta != dst.zeta) {
+    if ((copies && !pl) || (!dst.zeta && !f) || src.bpp != dst.bpp || src.zeta != dst.zeta ||
+        (dst.zeta && src.format != dst.format)) {
         *why = "no turn copy state for the attachment's format";
         return false;
     }
@@ -28,7 +30,7 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         *why = "no texture header for a turn copy's source";
         return false;
     }
-    Texture target = dst, source = src;
+    Texture target = dst, source = src, stencilView;
     target.format = source.format = format;
     target.rotation = 0;
     if (!(source.tic = dst.zeta || src.format == format ? src.tic : dev_->viewTic(src, f->tic0))) {
@@ -38,6 +40,7 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
     PassDesc p;
     if (dst.zeta) {
         p.depthStencil.texture = &target;
+        p.depthStencil.clearStencil = stencil;  // the stencil bits write ones over zeros
     } else {
         p.color[0].texture = &target;
         p.color[0].load = ColorAttachment::DontCare;
@@ -48,12 +51,16 @@ bool CommandBuffer::turnCopy(const Texture &dst, Texture &src, const TurnMap &ma
         *why = "a turn copy's target the raw path cannot render";
         return false;
     }
-    e->setPipeline(pl);
-    if (dst.zeta)
-        e->setDepthStencil(&depthWrites);
-    e->setTexture(0, &source);
-    e->setBytes(2, 0, &map, sizeof map);
-    if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+    if (copies) {
+        e->setPipeline(pl);
+        if (dst.zeta)
+            e->setDepthStencil(&depthWrites);
+        e->setTexture(0, &source);
+        e->setBytes(2, 0, &map, sizeof map);
+        if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+            return false;
+    }
+    if (stencil && !stencilBits(*e, source, stencilView, dst.format, map, StencilSample::Zero, why))
         return false;
     e->end();
     return true;

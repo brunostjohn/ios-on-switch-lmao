@@ -305,7 +305,8 @@ TEST(RawRotation, TurnWordsMapThePlaneOntoTheFrame)
 TEST(RawRotation, WhichPassesTheTurnCopiesMakeDrawable)
 {
     const FakeTexture drawable{1, 720, 1280}, fourth{4, 720, 1280}, stored{0, 1280, 720}, small{0, 640, 360},
-        odd{0, 1280, 720, false, 3}, depth{0, 1280, 720, false, 4, 252}, depthStencil{0, 1280, 720, false, 8, 260};
+        odd{0, 1280, 720, false, 3}, depth{0, 1280, 720, false, 4, 252}, depthStencil{0, 1280, 720, false, 8, 260},
+        stencil{0, 1280, 720, false, 1, 253}, smallStencil{0, 640, 360, false, 8, 260};
     FakePass p;
     p.count = 2;
     p.color[0].texture = &drawable;
@@ -322,7 +323,11 @@ TEST(RawRotation, WhichPassesTheTurnCopiesMakeDrawable)
     p.count = 1;
     p.depthStencil.texture = &depth;
     EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
-    p.depthStencil.texture = &depthStencil;  // no stencil export: no draw moves a stencil plane
+    p.depthStencil.texture = &depthStencil;  // its stencil moved by bits (raw_stencil_bits.h)
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.texture = &stencil;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.texture = &smallStencil;
     EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::Mixed);
     p.depthStencil.loaded = p.depthStencil.stored = false;
     EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
