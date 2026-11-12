@@ -36,9 +36,9 @@ common --incompatible_strict_action_env
 # Every action runs sandboxed (darwin-sandbox: read-only declared inputs, declared outputs only). No action needs an
 # unsandboxed fallback, so there is none: a new one that tries to read undeclared inputs fails instead of passing.
 build --spawn_strategy=sandboxed
-# One exception, debug only: the crates the debug profile compiles incrementally (bazel/rust/defs.bzl, INCREMENTAL_CRATES)
-# keep rustc's sessions below the output base, so their two Rust actions are tagged no-sandbox and run here unsandboxed;
-# every other Rust action (and every action of release) stays sandboxed.
+# One exception, debug only and off by default (--//bazel/rust:incremental): crates compiled incrementally
+# (bazel/rust/defs.bzl, INCREMENTAL_CRATES) keep rustc's sessions below the output base, so their two Rust actions are
+# tagged no-sandbox and run here unsandboxed; every other Rust action (and every action of release) stays sandboxed.
 build:debug --strategy=Rustc=sandboxed,local
 build:debug --strategy=RustcMetadata=sandboxed,local
 # The other exception: iOS 27's translation attaches and mounts disk images (hdiutil, diskutil), which no sandbox
@@ -129,10 +129,6 @@ build:remote --remote_upload_local_results=true
 build:remote --remote_timeout=120s
 build:remote --remote_cache_compression
 build:remote --experimental_remote_cache_eviction_retries=5
-# Results shared through a cache must be the same bytes wherever they are made. An incremental crate's rlib depends on
-# the session in its output base (2.3 GiB in each), so every fresh worktree compiled m2v anew, to other bytes, and every
-# shader seed bucket keyed on the tools built from it ran again.
-build:remote --//bazel/rust:incremental=false
 build:remote --config=rbe
 # rbe: actions run on the remote workers behind that cache (tools/remote), and only top-level outputs come back here.
 # The per-user file names the executor (`build:rbe --remote_executor=grpc://host:port`); without one the remote

@@ -38,11 +38,13 @@ config_setting(
     flag_values = {":toolchain_version": "1.96.1"},
 )
 
-# The debug profile's incremental crates (defs.bzl INCREMENTAL_CRATES). --config=remote turns it off: a session lives
-# in one output base, so those crates' bytes differ between worktrees and could not run on a remote worker either.
+# The debug profile's incremental crates (defs.bzl INCREMENTAL_CRATES), off unless asked for. A session lives in one
+# output base and the rlib's bytes depend on it: two worktrees of one commit compiled m2v to different bytes under one
+# action key, so neither the cache nor a remote worker could share them, and every shader seed bucket keyed on the tools
+# built from m2v ran again in each fresh worktree. Turning it on for a local edit loop changes those crates' keys.
 bool_flag(
     name = "incremental",
-    build_setting_default = True,
+    build_setting_default = False,
 )
 
 # Xcode's DEVELOPER_DIR and SDK paths (the declared host input, bazel/host), for build scripts that run the C compiler
