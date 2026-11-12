@@ -9,7 +9,8 @@
 // (facade) and with the batch held until all complete (held). A line FAIL where the profile's or the held window's
 // count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
 // whose predecessor's completion has not run hands its own to it), or where the runtime's own count of the locks it took
-// on every thread (facade_locks) passes 4 a command buffer.
+// on every thread (facade_locks) passes 4 a command buffer, or where a command buffer of the profile's batch was not the
+// raw path's (switchRawPath).
 // usage: [DYLD_INSERT_LIBRARIES=<libfacadecount.dylib>] facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
@@ -297,6 +298,7 @@ int main(int argc, char **argv)
         // a held batch's growth of the blocks in use in every zone over its recording, per command buffer: what
         // gpu.path.encode_cost bounds on the device
         double heldBlocks = 0;
+        std::map<std::string, unsigned> paths;  // the held batch's command buffers by switchRawPath
         auto batch = [&](unsigned draws, unsigned count, bool hold) {
             id<MTLCommandBuffer> last = nil;
             NSMutableArray<id<MTLCommandBuffer>> *held = [NSMutableArray arrayWithCapacity:count];
@@ -309,9 +311,12 @@ int main(int argc, char **argv)
                 }
             heldBlocks = (blocksInUse() - blocks) / count;
             bool completed = true;
+            paths.clear();
             for (id<MTLCommandBuffer> b in held) {
                 [b waitUntilCompleted];
                 completed &= b.status == MTLCommandBufferStatusCompleted;
+                if ([(id)b respondsToSelector:@selector(switchRawPath)])
+                    paths[[[(id)b performSelector:@selector(switchRawPath)] UTF8String]]++;
             }
             [held removeAllObjects];
             [last waitUntilCompleted];
@@ -340,6 +345,13 @@ int main(int argc, char **argv)
             NSDictionary<NSString *, NSNumber *> *before = profile(device);
             failures += !batch(arms[a], buffers, true);
             NSDictionary<NSString *, NSNumber *> *after = profile(device);
+            for (const auto &[path, count] : paths) {
+                printf("facadecost d%u path %s: %u\n", arms[a], path.c_str(), count);
+                if (path != "raw") {
+                    printf("FAIL: %u command buffers at %u draws a pass went %s\n", count, arms[a], path.c_str());
+                    failures++;
+                }
+            }
             const double encodes = after[@"encodes"].doubleValue - before[@"encodes"].doubleValue;
             const double mallocEncodes = after[@"malloc_encodes"].doubleValue - before[@"malloc_encodes"].doubleValue;
             auto per = [&](NSString *key, double over) {
