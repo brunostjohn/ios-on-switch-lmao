@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The shader compiler's jetsam band and memory limit, the same on every iOS version. iOS 17's BlueTool stand-in spawns
+/* The shader compiler's jetsam band and memory limits, the same on every iOS version. iOS 17's BlueTool stand-in spawns
  * it with them (posix_spawnattr_setjetsam_ext, as xpcproxy does for launchd). iOS 27's launchd ignores a daemon plist's
  * JetsamProperties and takes them from the Supplemental cryptex's jetsam properties overlay
  * (overlay/supplemental/com.apple.jetsamproperties.cryptex.plist; tools/package/shader_compiler_launch_test.py holds it
@@ -16,11 +16,12 @@
 /* J181's band for the always-on services the shell depends on (lsd, locationd, videocodecd, cameracaptured): above the
  * foreground app (100), below SpringBoard (160) and backboardd (170), whose GPU states it compiles */
 #define SWITCH_SHADER_COMPILER_JETSAM_PRIORITY 140
-/* MB, the active (soft) and the inactive (hard) limit alike. The daemon serves at 13.4 MB, and a compile adds its
- * transient: directpack's peak footprint for one state alone on the Mac, less its baseline, is a few MB for most of
- * the corpus, 76-152 MB for RenderBox's uber_fragment and 327 MB for QuartzCore's generic
- * fixed_frag_lph_cpf (com.apple.coreanimation.PBGRAXm_A2Xghfc). This holds that generic compile beside a RenderBox uber
- * one, or three uber compiles: the pool's two foreground jobs and its background one at once. */
-#define SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB 512
+/* MB. The daemon serves at 13.4 MB, and a compile adds its transient: directpack's peak footprint for one state alone
+ * on the Mac, less its baseline, is a few MB for most of the corpus, 76-152 MB for RenderBox's uber_fragment and 327 MB
+ * for QuartzCore's generic fixed_frag_lph_cpf (com.apple.coreanimation.PBGRAXm_A2Xghfc). The soft active limit, the one
+ * in force, holds the daemon and one worst uber compile, of the order of J181's MTLCompilerService (150); a compile
+ * past it costs one EXC_RESOURCE report. The hard inactive limit is a backstop that is never in force. */
+#define SWITCH_SHADER_COMPILER_ACTIVE_LIMIT_MB   192
+#define SWITCH_SHADER_COMPILER_INACTIVE_LIMIT_MB 512
 
 #endif

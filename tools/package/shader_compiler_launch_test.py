@@ -36,7 +36,7 @@ JETSAM_KEYS = {
 
 
 def header_value(name: str) -> int:
-    match = re.search(rf'^#define {name} (\d+)$', HEADER.read_text(), re.MULTILINE)
+    match = re.search(rf'^#define {name}\s+(\d+)$', HEADER.read_text(), re.MULTILINE)
     assert match, f'{HEADER} has no {name}'
     return int(match.group(1))
 
@@ -70,13 +70,12 @@ class Ios27(unittest.TestCase):
 
     def test_the_overlay_gives_the_headers_band_and_limits(self):
         entry = self.jetsam['Version4']['Daemon']['Override'][LABEL]
-        limit = header_value('SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB')
         self.assertEqual(
             entry,
             {
                 'JetsamPriority': header_value('SWITCH_SHADER_COMPILER_JETSAM_PRIORITY'),
-                'ActiveSoftMemoryLimit': limit,
-                'InactiveHardMemoryLimit': limit,
+                'ActiveSoftMemoryLimit': header_value('SWITCH_SHADER_COMPILER_ACTIVE_LIMIT_MB'),
+                'InactiveHardMemoryLimit': header_value('SWITCH_SHADER_COMPILER_INACTIVE_LIMIT_MB'),
                 'EnergyEfficiencyMode': 'UserInterface',
             },
         )
@@ -112,8 +111,8 @@ class Ios17(unittest.TestCase):
             [
                 'kInactiveLimitFatal',
                 'SWITCH_SHADER_COMPILER_JETSAM_PRIORITY',
-                'SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB',
-                'SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB',
+                'SWITCH_SHADER_COMPILER_ACTIVE_LIMIT_MB',
+                'SWITCH_SHADER_COMPILER_INACTIVE_LIMIT_MB',
             ],
         )
         self.assertIn('static const short kInactiveLimitFatal = 0x08;', source)

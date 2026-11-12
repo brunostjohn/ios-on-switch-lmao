@@ -73,7 +73,8 @@ void switch_compiler_probe(struct switch_compiler_probe *out)
 {
     memset(out, 0, sizeof(*out));
     out->wanted_band = SWITCH_SHADER_COMPILER_JETSAM_PRIORITY;
-    out->wanted_limit_mb = SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB;
+    out->wanted_active_mb = SWITCH_SHADER_COMPILER_ACTIVE_LIMIT_MB;
+    out->wanted_inactive_mb = SWITCH_SHADER_COMPILER_INACTIVE_LIMIT_MB;
     read_line(out);
     if (out->pid > 0)
         read_jetsam(out);

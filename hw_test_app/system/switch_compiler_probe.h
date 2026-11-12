@@ -18,7 +18,7 @@ struct switch_compiler_probe {
     int32_t limits_error;   /* errno of MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES for the pid */
     int32_t active_mb, inactive_mb;
     uint8_t active_fatal, inactive_fatal;
-    int32_t wanted_band, wanted_limit_mb;
+    int32_t wanted_band, wanted_active_mb, wanted_inactive_mb;
 };
 
 void switch_compiler_probe(struct switch_compiler_probe *out);

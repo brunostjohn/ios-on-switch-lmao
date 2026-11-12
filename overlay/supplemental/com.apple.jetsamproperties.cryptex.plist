@@ -13,7 +13,7 @@
 					<key>JetsamPriority</key>
 					<integer>140</integer>
 					<key>ActiveSoftMemoryLimit</key>
-					<integer>512</integer>
+					<integer>192</integer>
 					<key>InactiveHardMemoryLimit</key>
 					<integer>512</integer>
 					<key>EnergyEfficiencyMode</key>

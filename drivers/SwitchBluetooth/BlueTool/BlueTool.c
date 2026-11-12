@@ -155,7 +155,7 @@ static void startShaderCompiler(void)
         if (!error)
             error = posix_spawnattr_setjetsam_ext(
                 &attributes, kInactiveLimitFatal, SWITCH_SHADER_COMPILER_JETSAM_PRIORITY,
-                SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB, SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB);
+                SWITCH_SHADER_COMPILER_ACTIVE_LIMIT_MB, SWITCH_SHADER_COMPILER_INACTIVE_LIMIT_MB);
         if (!error)
             error = posix_spawn(&pid, kShaderCompiler, NULL, &attributes, argv, environ);
         posix_spawnattr_destroy(&attributes);

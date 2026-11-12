@@ -15,7 +15,8 @@ struct CompilerAliveTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         var probe = switch_compiler_probe()
         switch_compiler_probe(&probe)
-        let band = Int(probe.wanted_band), limit = Int(probe.wanted_limit_mb)
+        let band = Int(probe.wanted_band)
+        let active = Int(probe.wanted_active_mb), inactive = Int(probe.wanted_inactive_mb)
 
         var metrics = Metrics()
         metrics.set("pid", Int(probe.pid))
@@ -50,13 +51,16 @@ struct CompilerAliveTest: HWTest {
                     asked && probe.priority_error == 0
                 ),
                 ("in band \(band)", Int(probe.band) == band),
-                ("held to \(limit) MB now", Int(probe.limit_mb) == limit),
+                ("held to \(active) MB now", Int(probe.limit_mb) == active),
                 (
                     Self.answered("its memory limits", probe.limits_error),
                     asked && probe.limits_error == 0
                 ),
-                ("active limit \(limit) MB, soft", Int(probe.active_mb) == limit && probe.active_fatal == 0),
-                ("inactive limit \(limit) MB, hard", Int(probe.inactive_mb) == limit && probe.inactive_fatal != 0),
+                ("active limit \(active) MB, soft", Int(probe.active_mb) == active && probe.active_fatal == 0),
+                (
+                    "inactive limit \(inactive) MB, hard",
+                    Int(probe.inactive_mb) == inactive && probe.inactive_fatal != 0
+                ),
             ], metrics, proof: "pid \(probe.pid)")
     }
 
