@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-// stagecheck: a pack state's set 0 as the raw render encoder builds it, over the mock GPU. Every buffer slot of both stages
-// takes a buffer, and every texture and sampler slot the record's handles name, at its stage, a texture and sampler of its
-// own. Each handle word must name the header of what is bound at its entry's stage and slot; stagecheck.py then runs the
-// state's programs over these words and over the words m2v's binding of the same slots makes.
+// stagecheck: a pack state's set 0 and constant buffers as the raw render encoder binds them, over the mock GPU. Every
+// buffer slot of both stages takes a buffer of its own, and every texture and sampler slot the record's handles name, at
+// its stage, a texture and sampler of its own. Each handle word must name the header of what is bound at its entry's stage
+// and slot, and each uniform buffer a program reads as a constant buffer must be bound, at that constant buffer slot of
+// its stage's group, to the buffer of the entry's stage and slot (the decoder's binds after the draw); stagecheck.py then
+// runs the state's programs over these words and over the words m2v's binding of the same slots makes.
 // usage: stagecheck <pack.bin> <key hash, hex> <out.json>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +12,8 @@
 #include <string>
 #include <vector>
 #include "../runtime/raw_gpu.h"
+
+extern "C" bool cap_cbuf(int group, int slot, uint64_t *va, uint32_t *bytes);
 
 namespace raw {
 struct EncoderHarness {
@@ -29,10 +33,40 @@ bool handle(const raw::PackEntry &e)
     return e.kind == raw::EntryTexture || e.kind == raw::EntryTexture3d || e.kind == raw::EntrySamplerOnly;
 }
 
+// The uniform buffers `program` reads as constant buffers, each bound at its slot of group `group` to the buffer of the
+// set-0 entry its type names; prints each one that is not. Returns {checked, wrong}.
+std::pair<unsigned, unsigned> checkUniforms(const raw::PackProgram &program, int group, const raw::PackPipeline &r,
+                                            const std::map<Slot, raw::Buffer> &buffers)
+{
+    unsigned checked = 0, wrong = 0;
+    for (uint32_t c = 1; c < program.cbufs; c++) {
+        if (raw::cbufKind(program.cbufType[c]) != raw::CbufUbo)
+            continue;
+        const uint32_t offset = raw::cbufUboOffset(program.cbufType[c]);
+        const raw::PackEntry *named = nullptr;
+        for (uint32_t i = 0; i < r.entries && !named; i++)
+            if (r.entry[i].kind == raw::EntryUbo && !raw::bufferStorage(r.entry[i]) && r.entry[i].offset == offset)
+                named = &r.entry[i];
+        const auto bound = named ? buffers.find({named->stage, named->slot}) : buffers.end();
+        uint64_t va = 0;
+        uint32_t bytes = 0;
+        const bool held = cap_cbuf(group, int(c), &va, &bytes);
+        ++checked;
+        if (bound == buffers.end() || !held || va != bound->second.va || !bytes) {
+            ++wrong;
+            printf("WRONG cbuf %u of group %d: set-0 offset %u, entry %s, bound %s %llx\n", c, group, offset,
+                   named ? (std::to_string(named->stage) + ":" + std::to_string(named->slot)).c_str() : "none",
+                   held ? "at" : "nothing", (unsigned long long)va);
+        }
+    }
+    return {checked, wrong};
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
 {
+    setenv("RAWCAP_LOG", "/dev/null", 0);  // the decoder runs only with a log, and cap_cbuf reads its binds
     if (argc != 4) {
         fprintf(stderr, "usage: stagecheck <pack.bin> <key hash, hex> <out.json>\n");
         return 2;
@@ -50,9 +84,11 @@ int main(int argc, char **argv)
         return 1;
     }
     const raw::PackPipeline &r = *pl->rec;
-    raw::Buffer buffer;
-    if (!dev.createBuffer(1 << 16, buffer))
-        return 1;
+    std::map<Slot, raw::Buffer> buffers;
+    for (uint32_t stage = 1; stage <= 2; stage++)
+        for (uint32_t slot = 0; slot < 31; slot++)
+            if (!dev.createBuffer(4096, buffers[{stage, slot}]))
+                return 1;
     std::map<Slot, raw::Texture> textures;
     std::map<Slot, raw::Sampler> samplers;
     for (uint32_t i = 0; i < r.entries; i++) {
@@ -108,9 +144,8 @@ int main(int argc, char **argv)
     }
     enc->setPipeline(pl);
     enc->setScissor(0, 0, 16, 16);
-    for (int stage = 1; stage <= 2; stage++)
-        for (uint32_t slot = 0; slot < 31; slot++)
-            enc->setBuffer(stage, slot, &buffer, 0);
+    for (auto &[at, b] : buffers)
+        enc->setBuffer(int(at.first), at.second, &b, 0);
     for (auto &[at, t] : textures)
         enc->setTexture(int(at.first), at.second, &t);
     for (auto &[at, s] : samplers)
@@ -168,7 +203,12 @@ int main(int argc, char **argv)
     enc->end();
     uint32_t sequence = 0;
     const bool committed = cb->commit(sequence) && dev.wait(sequence);
-    printf("%016llx: %u handles, %u not what their stage and slot bind; %s\n", (unsigned long long)key, checked, wrong,
+    const raw::PackProgram *programs = dev.pack().section<raw::PackProgram>(raw::PackPrograms);
+    const auto [vsChecked, vsWrong] = checkUniforms(programs[r.vs], 0, r, buffers);
+    const auto [fsChecked, fsWrong] = checkUniforms(programs[r.fs], 4, r, buffers);
+    printf("%016llx: %u handles, %u not what their stage and slot bind; %u + %u uniform buffers (vertex, pixel), %u "
+           "not their own; %s\n",
+           (unsigned long long)key, checked, wrong, vsChecked, fsChecked, vsWrong + fsWrong,
            committed ? "drawn" : dev.channelError().c_str());
-    return wrong || !committed ? 1 : 0;
+    return wrong || vsWrong || fsWrong || !committed ? 1 : 0;
 }

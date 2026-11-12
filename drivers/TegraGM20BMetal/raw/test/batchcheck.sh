@@ -11,8 +11,10 @@ RAW=$(cd "$HERE/.." && pwd)
 TREE=$(cd "$HERE/../../../.." && pwd)
 # the frontend's MetalABI.h: bazel build //drivers/NativeMetal/abi:header (or METAL_ABI=<its directory>)
 METAL_ABI=${METAL_ABI:-$TREE/bazel-bin/drivers/NativeMetal/abi}
+# the push headers (bazel build //kits/SwitchGM20BEmit:push_headers, or PUSH_HEADERS=<their directory>)
+PUSH_HEADERS=${PUSH_HEADERS:-$TREE/bazel-bin/kits/SwitchGM20BEmit/gen}
 FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all
-    -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers")
+    -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$PUSH_HEADERS" -I "$TREE/third_party/mesa/src/nouveau/headers")
 for source in mme_fermi mme_fermi_sim; do
     xcrun clang -O1 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$source.c" -o "$OUT/$source.o"
 done
@@ -26,7 +28,7 @@ xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 # kits/SwitchGM20BEmit's emitters, which raw_gpu.cpp and raw_transfer.cpp call, in the mock library every harness links (their
 # generated headers: bazel build //kits/SwitchGM20BEmit:push_headers)
 for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier SwitchGM20BEmitIterated mesa/nouveau_copy_rect; do
-    xcrun clang -O2 -std=c11 -DNDEBUG -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" \
+    xcrun clang -O2 -std=c11 -DNDEBUG -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$PUSH_HEADERS" \
         -I "$TREE/third_party/mesa/src/nouveau/headers" -c "$TREE/kits/SwitchGM20BEmit/$f.c" -o "$OUT/kit_${f##*/}.o"
 done
 xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" \
