@@ -813,6 +813,13 @@ impl StorageAttachmentUse {
         }
     }
 
+    /// Whether the function's write stores a channel: it writes the attachment and the
+    /// pipeline's write mask covers one of the format's channels ([`kept`](Self::kept) is not
+    /// all four). One that stores none only reads the attachment.
+    pub fn stores(&self) -> bool {
+        self.writes && self.kept != vk::ColorComponentFlags::known_bits()
+    }
+
     /// The format of the storage view: [`uint_view`](Self::uint_view) where it is set, else
     /// `format`.
     pub fn view_format(&self) -> vk::Format {

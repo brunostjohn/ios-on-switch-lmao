@@ -216,7 +216,9 @@ fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
             return Err("storage form: invalid color attachment index".into());
         }
         storage.mask |= 1 << index;
-        storage.writes |= u32::from(attachment.writes) << index;
+        // A write the pipeline's mask leaves no channel of stores nothing: the colour is only read, so its draws need
+        // no more than a barrier (describeReads' rung, raw_storage_form.h fetchesOnlyUnwritten)
+        storage.writes |= u32::from(attachment.stores()) << index;
         storage.sample_planes |=
             u32::from(matches!(attachment.view, StorageAttachmentView::SamplePlanes { .. })) << index;
         storage.samples = graphics.rasterization_samples.as_raw();
