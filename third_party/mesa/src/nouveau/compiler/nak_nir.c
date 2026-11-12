@@ -967,7 +967,37 @@ struct interlock_data {
    nir_variable *alive_mask_var;
    nir_variable *ticket_updated_var;
    const struct nak_compiler *nak;
+   bool load_spin;
 };
+
+/* The bench's interlock spin A/B (tools/benchloop/batches): a fragment
+ * shader holding this constant waits for its ticket with loads that read L2
+ * instead of atomics, in debug builds only; shipped shaders keep the atomic
+ * until the bench proves the load form loses no update.
+ */
+#define INTERLOCK_LOAD_SPIN_MARKER 0x7fa54c53u
+
+static bool
+interlock_load_spin_probe(nir_shader *nir)
+{
+#if defined(SWITCH_DEBUG) && SWITCH_DEBUG
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_load_const)
+               continue;
+            nir_load_const_instr *c = nir_instr_as_load_const(instr);
+            for (unsigned i = 0; i < c->def.num_components; i++) {
+               if (c->def.bit_size == 32 &&
+                   c->value[i].u32 == INTERLOCK_LOAD_SPIN_MARKER)
+                  return true;
+            }
+         }
+      }
+   }
+#endif
+   return false;
+}
 
 static bool
 nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
@@ -1078,9 +1108,13 @@ nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
          nir_loop *loop = nir_push_loop(b);
          {
             nir_def *current_gpc_ticket =
-               nir_global_atomic(b, 32, interlock_ticket_buffer_addr,
-                                 nir_imm_int(b, 0),
-                                 .atomic_op = nir_atomic_op_iadd);
+               tdata->load_spin
+                  ? nir_load_global(b, 1, 32, interlock_ticket_buffer_addr,
+                                    .align_mul = 4,
+                                    .access = ACCESS_COHERENT | ACCESS_VOLATILE)
+                  : nir_global_atomic(b, 32, interlock_ticket_buffer_addr,
+                                      nir_imm_int(b, 0),
+                                      .atomic_op = nir_atomic_op_iadd);
 
             nir_break_if(b, nir_ieq(b, nir_ushr_imm(b, current_gpc_ticket, 16),
                                     ticket_value));
@@ -1147,6 +1181,7 @@ nak_nir_lower_fs_interlock(nir_shader *nir, const void *data)
 
       const struct interlock_data pass_data = {
          .nak = nak,
+         .load_spin = interlock_load_spin_probe(nir),
          .alive_mask_var = alive_mask_var,
          .ticket_updated_var = ticket_updated_var,
       };
