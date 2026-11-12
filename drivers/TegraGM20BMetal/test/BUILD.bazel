@@ -2451,3 +2451,54 @@ host_test(
         ":raw_runtime_host",
     ] + RAW_HOST_DEPS,
 )
+
+# What one compile of the heaviest states costs at its peak (RenderBox's uber states, Core Animation's generic state), each
+# in a process of its own, and which part of the compile the heap peaks in (compiler_transient_test.cpp)
+host_test(
+    name = "compiler_transient_test",
+    size = "large",
+    srcs = [
+        "compiler_requests.h",
+        "compiler_transient_test.cpp",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:raw/pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "//gpu/nvk:host_dylib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+        "SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)",
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":frontend_host",
+        ":raw_facade_host",
+        ":raw_runtime_host",
+    ] + RAW_HOST_DEPS,
+)
