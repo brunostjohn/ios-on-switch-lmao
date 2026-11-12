@@ -58,11 +58,11 @@ void signaled(switch_host1x_fence *fence, int status)
     gOrder.push_back("callback " + std::to_string(fence->threshold));
 }
 
-// A filter waiter's fn: in the filter, under its simple lock, never under the list's IOLock.
+// A filter waiter's fn: in the filter, under its simple lock, never under the list's IOLock, with preemption off.
 void filtered(void *ctx)
 {
     gOrder.push_back("filter " + std::to_string(reinterpret_cast<uintptr_t>(ctx)));
-    if (!gFilterLock->held || gFilterLock->disabled || gLock->held)
+    if (!gFilterLock->held || gFilterLock->disabled || gLock->held || !switch_test_preemption_off)
         gOrder.push_back("wrong context");
 }
 
@@ -147,6 +147,7 @@ struct Host1xFence : testing::Test {
         gBoundsAt = 0;
         gSignals.assign(8, {});
         gOrder.clear();
+        switch_test_preemption_off = 0;
     }
 };
 
@@ -438,5 +439,23 @@ TEST_F(Host1xFence, EveryWaiterOutRefusesTheNextUntilAPassFreesThem)
     EXPECT_EQ(switch_host1x_filter_wait(183, 20, filtered, tag(20), &handle), TEGRA_HOST1X_OK);
     EXPECT_TRUE(switch_host1x_filter_cancel(handle));
     EXPECT_TRUE(gOrder.empty());
+}
+
+// The filter takes no blocking lock: with a waiter ready, a fn that tried one would throw, and the stubs throw for any
+// IOLock taken under the filter's simple lock.
+TEST_F(Host1xFence, TheFilterRunsWithPreemptionOffAndNothingThatBlocks)
+{
+    value(184) = 0;
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(184, 1, filtered, tag(30), &handle), TEGRA_HOST1X_OK);
+    value(184) = 1;
+    ASSERT_NO_THROW(switch_host1x_intr_filter());
+    EXPECT_EQ(gOrder, std::vector<std::string>{"filter 30"});
+    EXPECT_EQ(switch_test_preemption_off, 0);
+    IOSimpleLock held{};
+    IOSimpleLockLock(&held);
+    EXPECT_THROW(IOLockLock(gLock), std::runtime_error);
+    IOSimpleLockUnlock(&held);
+    interrupt(184);
 }
 }  // namespace

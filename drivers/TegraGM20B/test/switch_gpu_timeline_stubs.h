@@ -81,6 +81,7 @@ inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptSta
 
 inline void IOLog(const char *, ...)
 {
+	switchTimelineMayBlock();
 }
 
 template <class T> T *switchTimelineNew(unsigned long count)

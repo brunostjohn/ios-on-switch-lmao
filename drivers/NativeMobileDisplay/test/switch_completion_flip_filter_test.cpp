@@ -237,5 +237,79 @@ TEST(CompletionFlipFilterSource, TheDisplayAsksWhereTheFiltersNeedIt)
     EXPECT_LT(vic.find("switch_host1x_token_fence("), vic.find("armCompletionFlipWaiter(job.output.view.producer);"));
 }
 
+// T-v4's panic: offerGpuCopy into the boot framebuffer (entry 0) armed its flip with surface 0's address read under
+// completionFlipLock, through IOMemoryMap::getPhysicalAddress and its IORecursiveLock. The arm reads it before the lock
+// now, and surface 0's address is a stored word; nothing under the lock may block (the harness's stubs throw).
+TEST_F(CompletionFlipFilter, ACopyIntoTheBootFramebufferArmsWithNothingThatBlocks)
+{
+    for (int i = 0; i < 4 && d.ring.target() != 0; ++i) {
+        ASSERT_EQ(d.offerCopy(), 0);
+        d.complete(0);
+        d.donePass();
+        frame();
+    }
+    ASSERT_EQ(d.ring.target(), 0);
+    int offered = -1;
+    ASSERT_NO_THROW(offered = d.offerCopy());
+    ASSERT_EQ(offered, 0);
+    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.completionFlip.entry, 0);
+    EXPECT_EQ(d.completionFlip.start, Display::kBootFramebuffer);
+    ASSERT_NO_THROW(d.complete(0));
+    EXPECT_EQ(d.model.armed[Display::kWinbufStartAddr], Display::kBootFramebuffer);
+    d.donePass();
+    frame();
+    EXPECT_EQ(d.ring.front, 0);
+    EXPECT_EQ(gPreemptionOff, 0);
+}
+
+// Each producer's filter writes the boot framebuffer's flip with preemption off and nothing that blocks.
+TEST_F(CompletionFlipFilter, EachFilterWritesTheBootFramebufferWithNothingThatBlocks)
+{
+    for (int i = 0; i < 4 && d.ring.target() != 0; ++i) {
+        ASSERT_EQ(d.offerCopy(), 0);
+        d.complete(0);
+        d.donePass();
+        frame();
+    }
+    ASSERT_EQ(d.ring.target(), 0);
+    ASSERT_EQ(d.offerCopy(), 0);
+    d.armWaiter(11);
+    d.model.written.clear();
+    ASSERT_NO_THROW(d.vicFilter());
+    EXPECT_EQ(d.model.written, kSixStores);
+    EXPECT_EQ(d.model.assembly[Display::kWinbufStartAddr], Display::kBootFramebuffer);
+    d.complete(0);
+    d.donePass();
+    frame();
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.model.written.clear();
+    ASSERT_NO_THROW(d.gpuFilter());
+    EXPECT_EQ(d.model.written, kSixStores);
+    EXPECT_EQ(gPreemptionOff, 0);
+}
+
+// What the harness's stubs stand for panics on the device with preemption off: each throws here, and not without it.
+TEST(CompletionFlipHarness, CatchesWhatPanicsWithPreemptionOff)
+{
+    Display d;
+    IOSimpleLock lock;
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(&lock);
+    EXPECT_THROW(d.bootMapping->getPhysicalAddress(), std::runtime_error);
+    uint64_t length = 0;
+    EXPECT_THROW(d.bootMapping->getPhysicalSegment(0, &length), std::runtime_error);
+    IOLock mutex;
+    EXPECT_THROW(IOLockLock(&mutex), std::runtime_error);
+    IORecursiveLock recursive;
+    EXPECT_THROW(IORecursiveLockLock(&recursive), std::runtime_error);
+    EXPECT_THROW(IOMalloc(16), std::runtime_error);
+    IOCommandGate gate;
+    EXPECT_THROW(gate.runAction(nullptr), std::runtime_error);
+    EXPECT_THROW(IOLog("SwitchDisplay: a line"), std::runtime_error);
+    IOSimpleLockUnlockEnableInterrupt(&lock, state);
+    EXPECT_NO_THROW(d.bootMapping->getPhysicalAddress());
+    gLog.clear();
+}
+
 }  // namespace
 }  // namespace completion_flip_test

@@ -18,12 +18,22 @@ constexpr uint32_t kMicrosecondScale = 1000, kMillisecondScale = 1000000;
 constexpr uint64_t NSEC_PER_USEC = 1000, NSEC_PER_MSEC = 1000000;
 constexpr size_t PAGE_SIZE = 16384;
 
+// Simple locks held: XNU panics on a mutex, sleep or allocation then ("with preemption disabled"); those stubs throw.
+inline int switch_test_preemption_off;
+
+inline void switch_test_may_block(const char *what)
+{
+    if (switch_test_preemption_off)
+        throw std::runtime_error(std::string(what) + " with preemption disabled");
+}
+
 struct IOLock {
     bool held;
 };
 
 inline IOLock *IOLockAlloc()
 {
+    switch_test_may_block("IOLockAlloc");
     return new IOLock{};
 }
 
@@ -34,6 +44,7 @@ inline void IOLockFree(IOLock *lock)
 
 inline void IOLockLock(IOLock *lock)
 {
+    switch_test_may_block("IOLockLock");
     if (lock->held)
         throw std::runtime_error("lock taken twice");
     lock->held = true;
@@ -53,6 +64,7 @@ using IOInterruptState = bool;
 
 inline IOSimpleLock *IOSimpleLockAlloc()
 {
+    switch_test_may_block("IOSimpleLockAlloc");
     return new IOSimpleLock{};
 }
 
@@ -61,11 +73,13 @@ inline void IOSimpleLockLock(IOSimpleLock *lock)
     if (lock->held)
         throw std::runtime_error("simple lock taken twice");
     lock->held = true;
+    ++switch_test_preemption_off;
 }
 
 inline void IOSimpleLockUnlock(IOSimpleLock *lock)
 {
     lock->held = false;
+    --switch_test_preemption_off;
 }
 
 inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
@@ -93,6 +107,7 @@ inline std::function<int(uint64_t deadline)> switch_test_sleep;
 
 inline int IOLockSleepDeadline(IOLock *lock, void *, uint64_t deadline, int)
 {
+    switch_test_may_block("IOLockSleepDeadline");
     if (!switch_test_sleep)
         throw std::runtime_error("unexpected sleep");
     lock->held = false;
@@ -107,7 +122,9 @@ inline int IOLockSleep(IOLock *lock, void *event, int interruptible)
 }
 
 inline void IOLog(const char *, ...)
-{}
+{
+    switch_test_may_block("IOLog");
+}
 
 inline void IODelay(unsigned)
 {}

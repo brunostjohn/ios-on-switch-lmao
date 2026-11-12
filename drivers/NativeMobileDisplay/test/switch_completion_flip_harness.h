@@ -45,10 +45,67 @@ struct OriginalLegacySwapRequest {
     throw std::runtime_error(text);
 }
 
+// Interrupts or preemption off: an IOSimpleLock held, or a producer's primary filter running. XNU panics on any
+// mutex, sleep or allocation then ("Attempt to take mutex ... with preemption disabled"), so every stub that stands for
+// one of those throws.
+inline int gPreemptionOff = 0;
+
+inline void mayBlock(const char *what)
+{
+    if (gPreemptionOff)
+        throw std::runtime_error(std::string(what) + " with preemption disabled");
+}
+
+struct IOLock {};
+
+struct IORecursiveLock {};
+
+inline void IOLockLock(IOLock *)
+{
+    mayBlock("IOLockLock");
+}
+
+inline void IORecursiveLockLock(IORecursiveLock *)
+{
+    mayBlock("IORecursiveLockLock");
+}
+
+inline void *IOMalloc(size_t size)
+{
+    mayBlock("IOMalloc");
+    return ::operator new(size);
+}
+
+struct IOCommandGate {
+    template <class... Args> int runAction(Args...)
+    {
+        mayBlock("IOCommandGate::runAction");
+        return 0;
+    }
+};
+
+// The boot framebuffer's mapping: its physical address takes the descriptor's IORecursiveLock.
+struct IOMemoryMap {
+    uint64_t physical = 0;
+
+    uint64_t getPhysicalAddress() const
+    {
+        mayBlock("IOMemoryMap::getPhysicalAddress (IORecursiveLockLock)");
+        return physical;
+    }
+
+    uint64_t getPhysicalSegment(uint64_t offset, uint64_t *, uint32_t = 0) const
+    {
+        mayBlock("IOMemoryMap::getPhysicalSegment (IORecursiveLockLock)");
+        return physical + offset;
+    }
+};
+
 inline std::vector<std::string> gLog;
 
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
+    mayBlock("IOLog");
     char text[512];
     va_list ap;
     va_start(ap, format);
@@ -74,12 +131,14 @@ inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
     if (lock->held)
         throw std::runtime_error("the completion flip's lock taken while held");
     lock->held = true;
+    ++gPreemptionOff;
     return 0;
 }
 
 inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
 {
     lock->held = false;
+    --gPreemptionOff;
 }
 
 inline uint64_t gClock = 1000;
@@ -219,6 +278,8 @@ struct Display {
     static constexpr uint32_t kWinAUnderflowInt = 1u << 8, kBlockScan = 0;
     static constexpr uint32_t kBlockSurfaceKind = 0x42, kBlockLineStride = 0x1800, kBlockHOffset = 0;
     static constexpr unsigned kLatchFrames = 4, kDirectUnderflowFrames = 3, kUnderflowFrames = 30;
+    static constexpr uint64_t kProbeSlot = 0x10000000, kSlotSpan = 0x1000000;
+    static constexpr uint64_t kBootFramebuffer = 0xc0000000;
 
     struct Plane {
         uint64_t seq = 0;
@@ -259,9 +320,17 @@ struct Display {
     bool latchRetire = true;
     std::vector<OriginalLegacySwapRequest> swaps;
     std::vector<uint64_t> retired;
+    // As NativeLegacyDisplay's startHardware and allocations leave them: surface 0 is the boot framebuffer.
+    IOMemoryMap bootMap{kBootFramebuffer};
+    IOMemoryMap *bootMapping = &bootMap;
+    uint64_t scanAddresses[TegraScanoutRing::kMaxBuffers] = {kBootFramebuffer, kBootFramebuffer + 0x1000000,
+                                                             kBootFramebuffer + 0x2000000};
 
     Display()
     {
+        gPreemptionOff = 0;
+        if (completionFlipLock)
+            completionFlipLock->held = false;
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
         completionFlipsProven = completionFlipsRefused = completionFilterOff = false;
@@ -288,11 +357,7 @@ struct Display {
         return ka == kb && sa == sb && ha == hb;
     }
 
-    uint32_t surfaceAddress(int i) const
-    {
-        return i >= kSlot0 ? 0x10000000u + static_cast<uint32_t>(i - kSlot0) * 0x1000000u
-                           : 0xc0000000u + static_cast<uint32_t>(i) * 0x1000000u;
-    }
+#include "../SwitchScanoutAddress.h"
 
     int surfaceIndex(uint32_t address) const
     {
@@ -537,20 +602,24 @@ struct Display {
         armCompletionFlipWaiter(switch_gpu_backing_token{threshold, 1, SWITCH_GPU_ENGINE_VIC, 161});
     }
 
-    // The GPU's nonstall filter with the watched producer complete and visible.
+    // The GPU's nonstall filter with the watched producer complete and visible: interrupts off, its simple lock held.
     void gpuFilter()
     {
+        ++gPreemptionOff;
         if (gGpuCallout)
             gGpuCallout(this, 0);
+        --gPreemptionOff;
     }
 
-    // host1x's syncpoint filter with the waiter's threshold reached; a pass retires the waiter.
+    // host1x's syncpoint filter with the waiter's threshold reached, likewise; a pass retires the waiter.
     void vicFilter()
     {
+        ++gPreemptionOff;
         if (auto *fn = gWaiterFn) {
             gWaiterFn = nullptr;
             fn(gWaiterContext);
         }
+        --gPreemptionOff;
     }
 
     // gpuComplete, on the completion's thread.
@@ -626,6 +695,7 @@ struct Display {
         int armed = -2, superseded = -2;
         bool armedRequested = true;
     } planeLatch;
+
     bool planesOn = false;
 
     Plane planeSetOf(int) const

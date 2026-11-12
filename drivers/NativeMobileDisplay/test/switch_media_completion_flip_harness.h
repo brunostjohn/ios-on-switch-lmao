@@ -52,8 +52,14 @@ inline std::set<uint64_t> gUncertain, gDoneAtArm;  // producers' fences: still r
     throw std::runtime_error(text);
 }
 
+// Interrupts or preemption off: completionFlipLock held, or host1x's syncpoint filter running. Nothing that blocks or
+// logs may run then (XNU panics on a mutex with preemption disabled); IOLog throws here.
+inline int gPreemptionOff = 0;
+
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
+    if (gPreemptionOff)
+        throw std::runtime_error(std::string("IOLog with preemption disabled: ") + format);
     char text[512];
     va_list ap;
     va_start(ap, format);
@@ -83,12 +89,14 @@ inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
     if (lock->held)
         throw std::runtime_error("completionFlipLock taken while held");
     lock->held = true;
+    ++gPreemptionOff;
     return 0;
 }
 
 inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
 {
     lock->held = false;
+    --gPreemptionOff;
 }
 
 inline uint64_t gClock = 1000;
@@ -271,6 +279,7 @@ struct Display {
 
     Display()
     {
+        gPreemptionOff = 0;
         landscapeState = {};
         mediaFlip = {};
         mediaFlipsRefused = mediaFilterOff = false;
@@ -384,9 +393,11 @@ struct Display {
     void filter(uint64_t threshold = 0)
     {
         model.completing = true;
+        ++gPreemptionOff;
         for (const auto &waiter : gWaiters)
             if (!threshold || waiter.threshold == static_cast<uint32_t>(threshold))
                 waiter.fn(waiter.ctx);
+        --gPreemptionOff;
         model.completing = false;
     }
 

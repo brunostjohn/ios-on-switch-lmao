@@ -916,7 +916,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr int kNoBuffer = TegraScanoutRing::kNone;
     switch_dma_buffer scanBuffers[kScanBuffers] = {};  // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
     IOMemoryMap *scanMappings[kScanBuffers] = {};      // their write-combined views
-    uint64_t scanAddresses[kScanBuffers] = {};         // their physical addresses
+    uint64_t scanAddresses[kScanBuffers] = {};         // their physical addresses ([0]: the boot framebuffer's)
     TegraScanoutRing ring;                             // which surface is scanned, asked for, replaced, drawn
     // The direct-scanout gate's probe (DisplaySmmuProbe.h): once, kProbeAfterFrames frame ends
     // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
@@ -2556,15 +2556,7 @@ private:
     }
 
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
-    uint32_t surfaceAddress(int i) const
-    {
-        if (i >= kSlot0) {
-            return static_cast<uint32_t>(kProbeSlot +
-                                         static_cast<uint64_t>(i - kSlot0) * kSlotSpan);  // a direct slot's IOVA
-        }
-        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): surface 0 is scanned only while bootMapping is mapped
-        return static_cast<uint32_t>(i > 0 ? scanAddresses[i] : bootMapping->getPhysicalAddress());
-    }
+#include "SwitchScanoutAddress.h"
 
     // The surface window A scans when its START_ADDR is start; kNoBuffer when none is.
     int surfaceIndex(uint32_t start) const
@@ -3324,6 +3316,7 @@ public:
         }
         primary = false;
         OSSafeReleaseNULL(bootMapping);
+        scanAddresses[0] = 0;
         if (hists)
             IOFreeType(hists, FrameHists);
         if (color) {
@@ -3361,6 +3354,7 @@ public:
         primary = false;
         IOMobileFramebufferLegacy::stop(provider);
         OSSafeReleaseNULL(bootMapping);
+        scanAddresses[0] = 0;
     }
 
     // The panel is already lit by the firmware's GOP framebuffer, which is the one thing the original code's power-state word (the
@@ -5118,6 +5112,7 @@ public:
             if (valid) {
                 OSSafeReleaseNULL(bootMapping);
                 bootMapping = mapping;
+                scanAddresses[0] = bootMapping->getPhysicalAddress();
                 mapping = nullptr;
                 // The Switch boots its panel in text mode (v_display=0); it is still the one built-in display.
                 primary = true;

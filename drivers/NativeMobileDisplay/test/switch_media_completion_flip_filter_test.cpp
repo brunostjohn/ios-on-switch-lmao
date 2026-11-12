@@ -62,6 +62,7 @@ protected:
 
 TEST_F(MediaFlipFilter, TheFilterWritesTheSetAndItsCompletionWritesNothing)
 {
+    EXPECT_EQ(gPreemptionOff, 0);
     ASSERT_TRUE(armed(2));
     ASSERT_EQ(gWaiters.size(), 1u) << "a waiter on the set's producer";
     d.model.written.clear();
@@ -290,6 +291,27 @@ TEST_F(MediaFlipFilter, ASetSettledAtSC7CompletesThereWithNothingPresentedAfter)
     d.resume();
     frame();
     EXPECT_EQ(d.completions(seq), 1u);
+}
+
+// The arm stages the set and its address stores under completionFlipLock, and host1x's filter writes it with preemption
+// off: neither logs or blocks (IOLog throws with preemption off), and both leave preemption as they found it.
+TEST_F(MediaFlipFilter, TheArmAndTheFilterRunNothingThatBlocks)
+{
+    bool ok = false;
+    ASSERT_NO_THROW(ok = armed(2));
+    ASSERT_TRUE(ok);
+    EXPECT_EQ(gPreemptionOff, 0);
+    d.model.written.clear();
+    ASSERT_NO_THROW(d.filter());
+    EXPECT_FALSE(d.model.written.empty());
+    EXPECT_EQ(gPreemptionOff, 0);
+    ++gPreemptionOff;
+    EXPECT_THROW(IOLog("SwitchDisplay: a line"), std::runtime_error);
+    --gPreemptionOff;
+    d.complete(0);
+    d.donePass();
+    frame();
+    EXPECT_EQ(d.shown.back(), seq);
 }
 
 }  // namespace

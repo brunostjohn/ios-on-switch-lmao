@@ -31,6 +31,9 @@
 // scanout stopped) writes it again from the gate. A refusal turns the filters' writes off with the rest.
 
 // Static, as the landscape and window probe state: the instance is at the 16 KiB a kalloc_type class may have.
+// completionFlipLock is taken with interrupts off, and inside the producers' primary filters: under it only plain loads
+// and stores to values resolved before it was taken. No IOMemoryMap/IOMemoryDescriptor call, IOLock, IORecursiveLock,
+// allocation, IOLog or command gate.
 static inline IOSimpleLock *completionFlipLock = nullptr;
 static inline SwitchCompletionFlip completionFlip;
 static constexpr uint32_t kWinbufABase = 0xbc0;
@@ -102,8 +105,9 @@ bool armCompletionFlip(int entry)
               completionFlip.entry, static_cast<unsigned>(completionFlip.state));
     uint32_t kind = 0, stride = 0, hOffset = 0;
     layoutOf(entry, kind, stride, hOffset);
+    const uint32_t start = surfaceAddress(entry);
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    completionFlip.arm(entry, surfaceAddress(entry));
+    completionFlip.arm(entry, start);
     completionFlip.armLayout(kind, stride, hOffset);
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     return true;
