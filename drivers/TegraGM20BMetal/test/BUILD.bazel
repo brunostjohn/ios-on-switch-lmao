@@ -921,6 +921,7 @@ host_test(
     name = "raw_handoff_queue_test",
     srcs = [
         "raw_handoff_queue_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completion_source.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_handoff_queue.h",
     ],
     cxx_std = "c++17",

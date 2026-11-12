@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "../raw/runtime/raw_completion_source.h"
 #include "../raw/runtime/raw_handoff_queue.h"
 #include <gtest/gtest.h>
 #include <atomic>
@@ -119,6 +120,46 @@ TEST(HandoffQueue, TheTakersListKeepsItsOrderAcrossTakes)
     EXPECT_EQ(queue.front().index, 4u);
     queue.pop();
     EXPECT_EQ(queue.size(), 0u);
+}
+
+// The completion thread over quiet ranges (RawMetalFinish.mm completionLoop): their hand-offs wake nothing while the submit
+// thread promises a range that interrupts behind them; the promise's end wakes it onto the newest, a range that interrupts
+// onto that one
+TEST(HandoffQueue, TheCompletionThreadTakesItsTargetOverQuietRanges)
+{
+    raw::HandoffQueue<Item> queue;
+    std::atomic<bool> promised{true};
+    std::atomic<size_t> target{~size_t(0)};
+    std::thread completion([&] {
+        std::optional<size_t> found;
+        queue.waitFor([&](const raw::HandoffQueue<Item> &q) {
+            found = raw::completionTarget(q, promised.load(), false);
+            return found.has_value();
+        });
+        target = *found;
+    });
+    queue.push({1, {}, true}, false);
+    queue.push({2, {}, true}, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(target.load(), ~size_t(0)) << "asleep on quiet ranges under a promise";
+    promised = false;
+    queue.wake();
+    completion.join();
+    EXPECT_EQ(target.load(), 1u) << "the newest quiet range";
+
+    raw::HandoffQueue<Item> loud;
+    std::thread next([&] {
+        std::optional<size_t> found;
+        loud.waitFor([&](const raw::HandoffQueue<Item> &q) {
+            found = raw::completionTarget(q, true, false);
+            return found.has_value();
+        });
+        target = *found;
+    });
+    loud.push({1, {}, true}, false);
+    loud.push({2, {}, false});
+    next.join();
+    EXPECT_EQ(target.load(), 1u) << "the first range that interrupts";
 }
 
 }  // namespace
