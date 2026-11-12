@@ -25,10 +25,12 @@ PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 # PackPipeline's record-v18 tail: memoryEntries
 PIPELINE_V18 = struct.Struct('<I')
 ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
-# Its record-v21 tail: controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic, amplificationWord[4],
-# pulledStride[4][2], reserved[8]
-PIPELINE_V21 = struct.Struct('<24s')
-RUNTIME_ONLY = bytes(PIPELINE_V21.size)
+# Its record-v21 tail: the runtime records' fields (controlWord, controlPoints, controlPointIndexBytes,
+# vertexStrideDynamic, amplificationWord[4], pulledStride[4][2]), vertexStreams[7], reserved
+PIPELINE_V21 = struct.Struct('<16s7sx')
+RUNTIME_ONLY = bytes(16)
+VERTEX_STREAMS = 7  # PackPipeline.vertexStreams' length: the streams past stream 0
+STREAM_BIND_STRIDE = 0x80  # runtime/raw_pack.h kStreamBindStride
 # PackKernel's record-v21 tail: stageInRegionWord, stageInStride[4][2], reserved
 KERNEL_V21 = struct.Struct('<B8s3x')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
@@ -233,7 +235,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         + tests
         + v15
         + v18
-        + RUNTIME_ONLY
+        + PIPELINE_V21.pack(RUNTIME_ONLY, bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'))
     )
 
 

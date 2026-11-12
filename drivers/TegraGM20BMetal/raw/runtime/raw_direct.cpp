@@ -304,10 +304,28 @@ std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const Nmb
     return residualWordsByValue(was, now);
 }
 
+// The streams past stream 0 into the record (PackPipeline::vertexStreams). Stream 0 is the bridge's first vertex buffer
+// (vertexSlot), which binds at the lowest Metal buffer index as raw_emit numbers the streams
+bool vertexStreams(const std::vector<EmitStream> &streams, RecordParts &parts, std::string &why)
+{
+    if (streams.size() > kPackVertexStreams) {
+        why = "more vertex streams than a record's " + std::to_string(kPackVertexStreams);
+        return false;
+    }
+    if (!streams.empty() && streams[0].buffer != parts.vertexSlot) {
+        why = "the first vertex stream is not the translation's first vertex buffer";
+        return false;
+    }
+    for (size_t k = 1; k < streams.size(); k++)
+        parts.vertexStreams[k - 1] = uint8_t(streams[k].buffer + 1) | (streams[k].bindStride ? kStreamBindStride : 0);
+    return true;
+}
+
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
 // unless the pack varies it, so it never costs an extra.
 bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t blended,
-             const PackRules &rules, std::map<uint32_t, uint32_t> &regs, std::string &why)
+             const PackRules &rules, std::map<uint32_t, uint32_t> &regs, std::vector<EmitStream> &streams,
+             std::string &why)
 {
     std::string fields = key.substr(0, key.find(" | "));
     while (!fields.empty() && fields.back() == ' ')
@@ -315,7 +333,7 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     std::vector<EmitRegister> made;
     const bool patches = stages.tessellates();
     if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
-        !emitVertexInput(fields, patches ? std::vector<uint32_t>() : attributes, made, why))
+        !emitVertexInput(fields, patches ? std::vector<uint32_t>() : attributes, made, streams, why))
         return false;
     regs = rules.context;
     for (const auto &[m, v] : rules.baseline)
@@ -566,7 +584,9 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     }
     if (!drawnWords(state, parts, why))
         return CompileOutcome::Refused;
-    if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, why))
+    std::vector<EmitStream> streams;
+    if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, streams, why) ||
+        !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     for (uint32_t i = 0; i < 32; i++)
         if (draw.pushMask >> i & 1)

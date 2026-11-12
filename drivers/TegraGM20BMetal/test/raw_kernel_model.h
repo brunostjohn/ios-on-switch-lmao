@@ -37,6 +37,7 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    std::vector<uint32_t> words;  // its pushes' method stream, in push order, where the model's memory holds them
 };
 
 struct Slot {
@@ -127,11 +128,31 @@ struct Model {
         return 0;
     }
 
-    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply)
+    // The words of `count` pushes from the memory bound at their addresses
+    std::vector<uint32_t> pushWords(const TegraGM20BAbiPush *push, uint32_t count)
+    {
+        std::vector<uint32_t> words;
+        for (uint32_t i = 0; i < count; i++)
+            for (const auto &[va, bound] : binds)
+                if (push[i].va >= va && push[i].va + 4ull * push[i].dwords <= va + bound.second &&
+                    memory.count(uint32_t(bound.first))) {
+                    const std::vector<uint8_t> &bytes = memory[uint32_t(bound.first)];
+                    const size_t at = size_t(push[i].va - va);
+                    if (at + 4ull * push[i].dwords <= bytes.size()) {
+                        const auto *from = reinterpret_cast<const uint32_t *>(bytes.data() + at);
+                        words.insert(words.end(), from, from + push[i].dwords);
+                    }
+                    break;
+                }
+        return words;
+    }
+
+    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply,
+            std::vector<uint32_t> words = {})
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses)};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), std::move(words)};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -160,7 +181,8 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        return run(*s, head->channel, {uses, uses + head->surface_count}, reply);
+        return run(*s, head->channel, {uses, uses + head->surface_count}, reply,
+                   pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count));
     }
 
     int submitJob(const TegraGM20BAbiSubmitAddress &address, TegraGM20BAbiExecReply &reply)
@@ -198,7 +220,8 @@ struct Model {
             setJobs++;
         }
         submitJobs++;
-        return run(*s, head->channel, std::move(uses), reply);
+        return run(*s, head->channel, std::move(uses), reply,
+                   pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count));
     }
 
     void endGeneration(uint32_t index)

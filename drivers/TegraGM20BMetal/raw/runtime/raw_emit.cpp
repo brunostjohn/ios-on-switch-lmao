@@ -153,6 +153,13 @@ struct Attribute {
 bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
                      std::vector<EmitRegister> &out, std::string &why)
 {
+    std::vector<EmitStream> streams;
+    return emitVertexInput(keyFields, attributes, out, streams, why);
+}
+
+bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
+                     std::vector<EmitRegister> &out, std::vector<EmitStream> &laidOut, std::string &why)
+{
     constexpr uint32_t kStreamEnable = 1u << 12, kStepPerVertex = 1;
     constexpr uint32_t kSourceInactive = 1u << 6, kInactive = kSourceInactive | 0x01u << 21 | 7u << 27;
     std::map<unsigned, Attribute> descriptor;
@@ -202,12 +209,15 @@ bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &
     // a stream no attribute reads is off, its stride unread
     if (streams.empty())
         out.push_back({kStreamFormat, 0, false});
+    laidOut.clear();
     for (const auto &[buffer, stream] : streams) {
         unsigned stride = 0;
         for (const auto &[i, a] : descriptor)
             if (a.buffer == buffer)
-                stride = a.stride == UINT32_MAX ? 0 : a.stride;  // RawPipelineKey.h's dynamic stride: the draw's
-        out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (stride & 0xfff), true});
+                stride = a.stride;
+        const bool bindStride = stride == UINT32_MAX;  // RawPipelineKey.h's dynamic stride: the draw's
+        out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (bindStride ? 0 : stride & 0xfff), true});
+        laidOut.push_back({uint8_t(buffer), bindStride});
     }
     return true;
 }

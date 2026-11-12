@@ -163,10 +163,12 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    if p[PIPELINE_BYTES - packfile.PIPELINE_V21.size :] != packfile.RUNTIME_ONLY:
+    runtime_only, streams = packfile.PIPELINE_V21.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V21.size)
+    if runtime_only != packfile.RUNTIME_ONLY or any(s & packfile.STREAM_BIND_STRIDE for s in streams):
         raise ValueError(
             'a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none'
         )
+    streams = streams[: streams.index(0)] if 0 in streams else streams
     tail = PIPELINE_BYTES - packfile.PIPELINE_V21.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
@@ -215,6 +217,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'set_size': set_bytes,
         'entries': entries_of(p, entries, rec['samplers'], constexpr_tsc),
         'vbs': [{'stream': 0, 'slot': slot, 'stride': stride}] if slot != 0xFF else [],
+        'vertex_streams': list(streams),
         'fetch': bool(flags & 1),
         'clears': 0,
         'problems': [],

@@ -55,6 +55,7 @@ struct RecordParts {
     uint16_t vertexStride = 0;
     bool vertexStrideDynamic = false;
     uint8_t pulledStride[4][2] = {};  // PackPipeline's
+    uint8_t vertexStreams[kPackVertexStreams - 1] = {};  // PackPipeline's
     uint8_t amplificationMax = 0, amplificationIdWord = 0, amplificationCountRead = 0;
     std::map<uint32_t, uint32_t> regs;  // the 3D registers at the state's draw
     std::map<uint32_t, uint32_t> push;  // the root words [0x700, 0x780) the draw writes

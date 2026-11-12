@@ -279,6 +279,10 @@ constexpr uint32_t cbufUboOffset(uint8_t type)
 
 // Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27
 constexpr uint32_t kPackEntries = 32;
+// A record's fixed-function vertex streams: stream 0 (vertexSlot) and PackPipeline::vertexStreams'
+constexpr uint32_t kPackVertexStreams = 8;
+// A vertexStreams byte's flag: the stream's stride is its bind's (MTLBufferLayoutStrideDynamic, a runtime record's alone)
+constexpr uint8_t kStreamBindStride = 0x80;
 
 struct PackShaderTests {
     uint8_t depthWord, stencilWord, flags, reserved;
@@ -315,10 +319,10 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
-    // v21, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's push word of its
-    // control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation programs are
-    // RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
-    // vertexStrideDynamic: the vertex stream's stride is its bind's (MTLBufferLayoutStrideDynamic).
+    // v21. Up to vertexStreams, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's
+    // push word of its control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation programs
+    // are RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
+    // vertexStrideDynamic: stream 0's stride is its bind's (MTLBufferLayoutStrideDynamic).
     uint8_t controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic;
     // A state of vertex amplification: its maxVertexAmplificationCount (0: 1), the push word + 1 of m2v's AmplificationId
     // (0: none), which each amplification's draw writes, and whether its functions read [[amplification_count]] (m2v
@@ -327,8 +331,18 @@ struct PackPipeline {
     // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
     // index and push word + 1 (0: none)
     uint8_t pulledStride[4][2];
-    uint8_t v21Reserved[8];
+    // The fixed-function vertex streams past stream 0, in stream order (raw_emit.cpp: densely, by Metal buffer index): each
+    // its Metal buffer index + 1 (0: no more), with kStreamBindStride; their strides are the state's
+    // SET_VERTEX_STREAM_A_FORMAT registers
+    uint8_t vertexStreams[kPackVertexStreams - 1];
+    uint8_t v21Reserved;
 };
+
+// A vertexStreams byte's Metal buffer index
+inline uint8_t streamSlot(uint8_t stream)
+{
+    return uint8_t((stream & ~kStreamBindStride) - 1);
+}
 
 inline bool tessellates(const PackPipeline &p)
 {

@@ -104,10 +104,9 @@ enum : uint32_t {
     BLEND_CONST_RED = NVB197_SET_BLEND_CONST_RED,
     COLOR_COMPRESSION = NVB197_SET_COLOR_COMPRESSION(0),
     CT_WRITE = NVB197_SET_CT_WRITE(0),
-    VERTEX_STREAM_LOCATION = NVB197_SET_VERTEX_STREAM_A_LOCATION_A(0),
     VERTEX_STREAM_FORMAT = NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
-    VERTEX_STREAM_ENABLE = NVDEF(NVB197, SET_VERTEX_STREAM_A_FORMAT, ENABLE, TRUE),
-    VERTEX_STREAM_LIMIT = NVB197_SET_VERTEX_STREAM_LIMIT_A_A(0),
+    kStreamMethods = NVB197_SET_VERTEX_STREAM_A_FORMAT(1) - NVB197_SET_VERTEX_STREAM_A_FORMAT(0),
+    kStreamStrideMask = 0xfff,  // NVB197_SET_VERTEX_STREAM_A_FORMAT_STRIDE 11:0
     CB_SELECTOR_A = NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
     LOAD_CB_OFFSET = NVB197_LOAD_CONSTANT_BUFFER_OFFSET,
     LOAD_CB = NVB197_LOAD_CONSTANT_BUFFER(0),
@@ -932,6 +931,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
+        if (m >= VERTEX_STREAM_FORMAT && m < VERTEX_STREAM_FORMAT + kStreamMethods * kPackVertexStreams &&
+            (m - VERTEX_STREAM_FORMAT) % kStreamMethods == 0)
+            pl.streamStride[(m - VERTEX_STREAM_FORMAT) / kStreamMethods] = uint16_t(v & kStreamStrideMask);
         if (m == PIXEL_SHADER_INTERLOCK_CONTROL) {
             interlockControl = v;
             continue;
@@ -5243,37 +5245,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         p.incArray(BLEND_CONST_RED, blendColor_, 4);
         blendColorDirty_ = false;
     }
-    // vertex stream 0 from the pipeline's vertex buffer slot
-    if (r.vertexSlot != 0xff) {
-        const Bound &b = bufs_[1][r.vertexSlot];
-        // the stream ends where the bound bytes end: a setBytes chunk (256-aligned, as m2v's upload blocks) or the buffer's end
-        uint64_t location = b.va, bytes = b.buffer ? b.size : (b.size + kUboChunk - 1) & ~uint64_t(kUboChunk - 1);
-        if (!location ||
-            !bytes) {  // none bound, or none of it left: NVK's empty stream (nvk_mme_bind_vb before Turing)
-            location = d.zero_.va;
-            bytes = 0;
-        }
-        const uint64_t limit = location + bytes - 1;
-        if (location != vbVa_ || limit != vbLimit_) {
-            if (b.buffer)
-                cb_->use(*b.buffer, false);
-            else
-                cb_->useAddress(b.va, b.size, false);
-            p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
-            p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
-            vbVa_ = location;
-            vbLimit_ = limit;
-        }
-        const uint32_t stride = r.vertexStrideDynamic ? vertexStride(r.vertexSlot) : r.vertexStride;
-        if (r.vertexStrideDynamic)
-            p.m(VERTEX_STREAM_FORMAT, VERTEX_STREAM_ENABLE | stride);
-        if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && stride) {
-            const uint64_t from = std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * stride), b.buffer->length);
-            const uint64_t bytes =
-                std::min<uint64_t>(indexed ? b.size : uint64_t(count) * stride, b.buffer->length - from);
-            cb_->clean(b.buffer->cpu + from, bytes);
-        }
-    }
+    bindStreams(p, *pl, indexed, vFirst, count);
     bool selected = false;
     if (descriptorBinding_.changed(pl, setVa)) {
         const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};

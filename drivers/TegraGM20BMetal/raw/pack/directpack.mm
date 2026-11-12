@@ -71,6 +71,9 @@ const char *runtimeOnly(const raw::PackPipeline &p)
         return "a tessellation state, which the runtime makes";
     if (p.vertexStrideDynamic)
         return "a dynamic vertex buffer stride, which the runtime makes";
+    for (const uint8_t stream : p.vertexStreams)
+        if (stream & raw::kStreamBindStride)
+            return "a dynamic vertex buffer stride, which the runtime makes";
     for (const auto &pulled : p.pulledStride)
         if (pulled[1])
             return "a pulled vertex buffer of a dynamic stride, which the runtime makes";

@@ -399,6 +399,7 @@ struct Pipeline {
     // the constant buffer slot the vertex, pixel, tessellation init and tessellation program read set 0 at (0: none), whose
     // bind groups are kSetGroups'
     uint8_t setSlot[4] = {};
+    uint16_t streamStride[kPackVertexStreams] = {};  // each vertex stream's static stride (its SET_VERTEX_STREAM_A_FORMAT)
 
     // the uniform buffers of set 0 its programs read as constant buffers: the group (0 vertex, 4 pixel), the slot and the set's
     // entry that names the buffer; false where a program reads one no entry names (its draws are refused)
@@ -767,6 +768,11 @@ private:
     // What of a draw's amplification and bind strides the state does not take (null: it takes them)
     const char *drawnWordsRefusal(const PackPipeline &r) const;
     void drawnWords(const PackPipeline &r, uint32_t (&want)[32]);
+    // The state's vertex streams at their binds (raw_vertex_streams.cpp): a stream's location and limit where its bind
+    // moved, its format where its stride is its bind's, and its vertices [vFirst, vFirst + count) cleaned
+    void bindStreams(Push &p, const Pipeline &pl, bool indexed, uint32_t vFirst, uint32_t count);
+    void bindStream(Push &p, uint32_t stream, uint8_t slot, uint32_t stride, bool bindStride, bool indexed,
+                    uint32_t vFirst, uint32_t count);
     uint32_t vertexStride(uint32_t slot) const
     {
         return slot < 31 && vertexStrides_[slot] != UINT32_MAX ? vertexStrides_[slot] : 0;
@@ -808,7 +814,9 @@ private:
     Bound bufs_[3][31];
     const Texture *textures_[16] = {};
     const Sampler *samplers_[16] = {};
-    uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
+    // what each vertex stream's location and limit registers hold (raw_vertex_streams.cpp)
+    uint64_t streamVa_[kPackVertexStreams] = {}, streamLimit_[kPackVertexStreams] = {};
+    uint64_t ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
     // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
     // the stream are CPU-cleaned): the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to

@@ -314,6 +314,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.vertexStride = parts.vertexStride;
     p.vertexStrideDynamic = parts.vertexStrideDynamic;
     memcpy(p.pulledStride, parts.pulledStride, sizeof p.pulledStride);
+    memcpy(p.vertexStreams, parts.vertexStreams, sizeof p.vertexStreams);
     p.amplificationMax = parts.amplificationMax;
     p.amplificationIdWord = parts.amplificationIdWord;
     p.amplificationCountRead = parts.amplificationCountRead;

@@ -38,6 +38,13 @@ const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
         return "a vertex amplification count other than the one the state's [[amplification_count]] was made with";
     if (r.vertexStrideDynamic && vertexStride(r.vertexSlot) > kStreamStrideLimit)
         return "a vertex buffer bind stride past the vertex stream's 12-bit stride";
+    for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++) {
+        const uint8_t stream = r.vertexStreams[k - 1], slot = streamSlot(stream);
+        if (slot >= 31)
+            return "a vertex stream of no Metal buffer";
+        if ((stream & kStreamBindStride) && vertexStride(slot) > kStreamStrideLimit)
+            return "a vertex buffer bind stride past the vertex stream's 12-bit stride";
+    }
     return nullptr;
 }
 

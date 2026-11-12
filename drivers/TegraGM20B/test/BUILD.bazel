@@ -384,6 +384,7 @@ host_test(
     # c++20 (not the harnesses' c++17): bazel/testing's headers use string_view and nested namespaces.
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",

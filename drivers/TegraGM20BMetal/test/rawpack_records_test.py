@@ -60,6 +60,37 @@ class RecordsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'obsolete layout'):
             directlink.pipeline_of(record, [], ids, [])
 
+    def test_vertex_streams_past_stream_0_round_trip_and_a_bind_stride_is_refused(self):
+        rec = dict(
+            key='samples=1 c0=80:15:0 a0=30:0:1:12:1:1 a1=31:0:4:16:1:1',
+            vs=0,
+            fs=1,
+            blob=[],
+            entries=[],
+            push=[],
+            vbs=[{'stream': 0, 'slot': 1, 'stride': 12}],
+            set_size=0,
+            fetch=False,
+            vertex_streams=[5],
+        )
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(data[-packfile.PIPELINE_V21.size :], bytes(16) + bytes([5]) + bytes(7))
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(
+            pipeline=data,
+            key=rec['key'],
+            programs=programs,
+            samplers=[],
+            probe=dict(index=0, form='', records=[dict(regs={})]),
+        )
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(back['vertex_streams'], [5])
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
+        record['pipeline'] = packfile.pipeline_bytes(dict(rec, vertex_streams=[5 | packfile.STREAM_BIND_STRIDE]), 0, 0)
+        with self.assertRaisesRegex(ValueError, 'runtime-only'):
+            directlink.pipeline_of(record, [], ids, [])
+
     def test_record_v15_tail_round_trip(self):
         uniform = bytes([0, 1, 2, 9]) + b'\xff\x00\x00\x00' * 7
         rec = dict(
@@ -178,7 +209,7 @@ class RecordsTest(unittest.TestCase):
         v21 = len(data) - packfile.PIPELINE_V21.size
         self.assertEqual(data[v21 - 8 : v21 - 4], bytes(4))
         self.assertEqual(struct.unpack_from('<I', data, v21 - 4), (packfile.ALL_ENTRIES,))
-        self.assertEqual(data[v21:], packfile.RUNTIME_ONLY)
+        self.assertEqual(data[v21:], bytes(packfile.PIPELINE_V21.size))
 
     def test_shader_test_views_and_push_placements_round_trip(self):
         rec = dict(
