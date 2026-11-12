@@ -291,6 +291,7 @@ int h264_parse_sps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     s.height_map_units = (uint16_t)h;
     if (!(s.frame_mbs_only = flag(&r)))
         s.mb_adaptive_frame_field = flag(&r);
+    s.height_mbs = (uint16_t)(h * (2 - s.frame_mbs_only));
     s.direct_8x8_inference = flag(&r);
     if (flag(&r)) {
         const unsigned cx = s.chroma_format_idc == 1 || s.chroma_format_idc == 2 ? 2 : 1;
@@ -491,4 +492,13 @@ int h264_parse_slice(const H264ParamSets *sets, const uint8_t *nal, size_t size,
         }
     }
     return r.overrun ? -1 : 0;
+}
+
+bool h264_slice_new_picture(const H264Slice *a, const H264Slice *b)
+{
+    return !b->first_mb_in_slice || a->frame_num != b->frame_num || a->pps_id != b->pps_id ||
+           a->field_pic != b->field_pic || a->bottom_field != b->bottom_field || !a->nal_ref_idc != !b->nal_ref_idc ||
+           a->poc_lsb != b->poc_lsb || a->delta_poc_bottom != b->delta_poc_bottom ||
+           a->delta_poc[0] != b->delta_poc[0] || a->delta_poc[1] != b->delta_poc[1] ||
+           a->nal_unit_type != b->nal_unit_type || a->idr_pic_id != b->idr_pic_id;
 }

@@ -156,8 +156,8 @@ static void fillSetup(const MPEG4Decoder *d, nvdec_mpeg4_pic_s *p, const MPEG4VO
 }
 
 // One coded VOP (start code to the next start code) into a free surface; -1, -2, -3 as mpeg4_decoder_decode, else the
-// surface (the picture's status in *status).
-static int decodeVOP(MPEG4Decoder *d, const MPEG4VOP *vop, const uint8_t *data, size_t size, int *status)
+// surface (the job that decodes it in *job).
+static int decodeVOP(MPEG4Decoder *d, const MPEG4VOP *vop, const uint8_t *data, size_t size, uint32_t *job)
 {
     MPEGFrames *f = &d->frames;
     if (vop->coding_type == MPEG4_VOP_S)
@@ -184,10 +184,10 @@ static int decodeVOP(MPEG4Decoder *d, const MPEG4VOP *vop, const uint8_t *data, 
     mpeg_frames_entry(&submit, NVC5B0_SET_COLOC_DATA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->coloc_off);
     mpeg_frames_entry(&submit, NVC5B0_SET_HISTORY_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->history_off);
     mpeg_frames_entry(&submit, NVC5B0_SET_PIC_SCRATCH_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->scratch_off);
-    const int result = mpeg_frames_run(f, &submit, current, (TegraNVDECRange){0});
-    if (result < 0)
-        return result;
-    *status = result;
+    const int64_t fence = mpeg_frames_run(f, &submit, (TegraNVDECRange){0});
+    if (fence < 0)
+        return (int)fence;
+    *job = (uint32_t)fence;
     if (vop->coding_type != MPEG4_VOP_B)
         mpeg_frames_reference(f, current);
     return current;
@@ -210,7 +210,8 @@ int mpeg4_decoder_decode(MPEG4Decoder *d, const uint8_t *data, size_t size, void
     const int vol = sampleVOL(d, data, size);
     if (vol < 0)
         return vol == -3 ? -3 : -1;
-    int shown = -1, shownStatus = 0;
+    int shown = -1;
+    uint32_t shownJob = 0;
     for (size_t at = avd_next_start_code(data, size, 0); at + 4 <= size;) {
         const size_t next = avd_next_start_code(data, size, at + 4);
         uint32_t seconds;
@@ -227,15 +228,15 @@ int mpeg4_decoder_decode(MPEG4Decoder *d, const uint8_t *data, size_t size, void
                                     (d->frames.future >= 0 && (vop.coding_type != MPEG4_VOP_B || d->frames.past >= 0));
             if (advanceTime(d, &vop) && references) {
                 if (vop.coded) {
-                    int status = 0;
-                    const int index = decodeVOP(d, &vop, data + at, next - at, &status);
+                    uint32_t job = 0;
+                    const int index = decodeVOP(d, &vop, data + at, next - at, &job);
                     if (index < 0)
                         return index;
                     shown = index;
-                    shownStatus = status;
+                    shownJob = job;
                 } else if (d->frames.future >= 0) {
                     shown = d->frames.future;
-                    shownStatus = 0;
+                    shownJob = 0;
                 }
             }
         }
@@ -243,6 +244,6 @@ int mpeg4_decoder_decode(MPEG4Decoder *d, const uint8_t *data, size_t size, void
     }
     if (shown < 0)
         return 0;
-    mpeg_frames_output(&d->frames, shown, d->vol.width, d->vol.height, AVD_FIELDS_UNSAID, shownStatus, token);
+    mpeg_frames_output(&d->frames, shown, d->vol.width, d->vol.height, AVD_FIELDS_UNSAID, shownJob, token);
     return 1;
 }

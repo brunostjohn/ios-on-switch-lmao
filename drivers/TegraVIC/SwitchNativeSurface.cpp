@@ -31,7 +31,10 @@ public:
     uint32_t chromaSite = 0;
     SwitchVICEvents *events = nullptr;  // a recorded turn's request events
     uint32_t delivered = 0;             // its signals went (a reader's VIC job, the display, or at once)
+    // generation equals live while the object is a surface's publication. A reused object's live is one past its last
+    // generation, so a view kept from an earlier publication of it stays stale.
     alignas(8) volatile uint64_t generation = 1;
+    uint64_t live = 1;
     bool pitchValid = false;
     bool preparing = false;
     void free() override;
@@ -107,7 +110,7 @@ SwitchNativeSurface *copy(IOMemoryDescriptor *memory)
 
 bool active(const SwitchNativeSurface *native)
 {
-    return __atomic_load_n(&native->generation, __ATOMIC_ACQUIRE) == 1;
+    return __atomic_load_n(&native->generation, __ATOMIC_ACQUIRE) == native->live;
 }
 
 bool matches(const TegraVICSurface *surface, const SwitchNativeSurface *native)
@@ -153,7 +156,8 @@ int invalidate(SwitchNativeSurface *native, switch_gpu_backing *logical, switch_
 {
     if (!active(native))
         return 0;
-    const int error = switch_gpu_backing_cpu_publish_generation(logical, owned, &native->generation, 1, 2);
+    const int error =
+        switch_gpu_backing_cpu_publish_generation(logical, owned, &native->generation, native->live, native->live + 1);
     if (!error && native->readLease)
         switch_gpu_backing_cpu_release_owned(&native->readLease, 0);
     return error;
@@ -178,6 +182,75 @@ void endPrepare(SwitchNativeSurface *native)
     IOLockWakeup(gPrepareLock, native, false);
     IOLockUnlock(gPrepareLock);
     switch_gpu_admission_changed();
+}
+
+// Publications their surface replaced. Each is held by this ring and by the views still reading it; once only the
+// ring holds it, the next publication reuses it instead of allocating one, so a session cycling its pool allocates
+// none per picture. Under gPrepareLock.
+constexpr unsigned kRetired = 16;
+SwitchNativeSurface *gRetired[kRetired];
+unsigned gRetiredCount;
+#if DEVELOPMENT || DEBUG
+uint64_t gPublished, gAllocated;
+#endif
+
+SwitchNativeSurface *takeRetired()
+{
+    SwitchNativeSurface *reused = nullptr;
+    IOLockLock(gPrepareLock);
+    for (unsigned i = 0; i < gRetiredCount && !reused; ++i) {
+        if (gRetired[i]->getRetainCount() != 1)
+            continue;
+        reused = gRetired[i];
+        gRetired[i] = gRetired[--gRetiredCount];
+        gRetired[gRetiredCount] = nullptr;
+    }
+#if DEVELOPMENT || DEBUG
+    ++gPublished;
+    gAllocated += !reused;
+#endif
+    IOLockUnlock(gPrepareLock);
+    if (!reused)
+        return nullptr;
+    reused->delivered = 0;
+    if (reused->readLease)
+        switch_gpu_backing_cpu_release_owned(&reused->readLease, 0);
+    if (reused->native)
+        switch_gpu_backing_release(reused->native);
+    reused->native = nullptr;
+    const uint64_t live = reused->generation + 1;
+    reused->generation = live;
+    reused->live = live;
+    reused->producer = {};
+    reused->picture = {};
+    reused->pitch = {};
+    reused->layout = {};
+    reused->crop = {};
+    reused->turn = {};
+    reused->turnOp = {};
+    reused->chromaSite = 0;
+    reused->pitchValid = false;
+    reused->preparing = false;
+    return reused;
+}
+
+// `old` was replaced and invalidated: its read lease is gone, and nothing reads its decoder backing through it again.
+void retire(SwitchNativeSurface *old)
+{
+    if (old->native && !old->readLease) {
+        switch_gpu_backing_release(old->native);
+        old->native = nullptr;
+    }
+    SwitchNativeSurface *evicted = nullptr;
+    IOLockLock(gPrepareLock);
+    if (gRetiredCount == kRetired) {
+        evicted = gRetired[0];
+        gRetired[0] = gRetired[--gRetiredCount];
+    }
+    gRetired[gRetiredCount++] = old;
+    IOLockUnlock(gPrepareLock);
+    if (evicted)
+        evicted->release();
 }
 
 int prepare(const TegraVICSurface *surface, SwitchNativeSurface *native, uint32_t options, bool gpu,
@@ -278,7 +351,7 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
     surface->memory->retain();
     const switch_gpu_backing_token *waits = nullptr;
     const uint32_t waitCount = switch_vic_events_tokens(native->events, &waits);
-    *view = {native, surface->memory, logical, native->native, {logical, &native->generation, 1},
+    *view = {native, surface->memory, logical, native->native, {logical, &native->generation, native->live},
              {logical, representation, __atomic_load_n(representation, __ATOMIC_ACQUIRE)},
              native->producer,
              native->layout,
@@ -337,9 +410,13 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
     }
     if (error && installed && !SwitchMemoryAttachment::replace(surface->memory, next, old))
         panic("SwitchSurface: native publication rollback lost attachment");
-    if (old) {
-        if (!error)
-            deliverSignals(old);  // a recorded turn replaced before it was shown or read: its frame was dropped
+    if (old && !error) {
+        deliverSignals(old);  // a recorded turn replaced before it was shown or read: its frame was dropped
+        if (old->events)
+            old->release();  // its request's events and their tokens live as long as its last reader
+        else
+            retire(old);
+    } else if (old) {
         old->release();
     }
     if (!error)
@@ -352,23 +429,29 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
     return error;
 }
 
-static SwitchNativeSurface *makeNative(switch_gpu_backing *picture, const char **why)
+static SwitchNativeSurface *makeNative(switch_gpu_backing *picture, const char **why, bool *made = nullptr)
 {
     *why = "native export without memory for its surface object";
     if (!prepareLock())
         return nullptr;
-    auto *next = new SwitchNativeSurface;
-    if (!next || !next->initialize()) {
-        if (next)
-            next->release();
-        return nullptr;
+    auto *next = takeRetired();
+    if (made)
+        *made = !next;
+    if (!next) {
+        next = new SwitchNativeSurface;
+        if (!next || !next->initialize()) {
+            if (next)
+                next->release();
+            return nullptr;
+        }
     }
     next->native = picture;
     switch_gpu_backing_retain(next->native);
     return next;
 }
 
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why)
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why,
+                                  bool *fresh)
 {
     const char *unused = nullptr;
     if (!why)
@@ -404,7 +487,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     *why = "native export of a picture its backing cannot hold";
     if (!picture->bytes || picture->bytes > (uint64_t(info.page_count) << 12))
         return -22;
-    auto *next = makeNative(picture->backing, why);
+    bool made = false;
+    auto *next = makeNative(picture->backing, why, &made);
     if (!next)
         return -12;
     next->picture = *picture;
@@ -417,6 +501,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     int error = switch_gpu_backing_export_read(next->native, &next->producer, &next->readLease);
     if (!error)
         error = install(surface, next, why);
+    if (!error && fresh)
+        *fresh = made;
     next->release();
     return error;
 }
@@ -534,3 +620,13 @@ extern "C" int switch_native_surface_gpu_admission(OSObject *object, uint32_t ac
     tegra_vic_surface_release(&surface);
     return result;
 }
+
+#if DEVELOPMENT || DEBUG
+extern "C" void switch_native_surface_publications(uint64_t *published, uint64_t *allocated)
+{
+    IOLockLock(prepareLock());
+    *published = gPublished;
+    *allocated = gAllocated;
+    IOLockUnlock(prepareLock());
+}
+#endif

@@ -15,7 +15,8 @@ enum class HeadWait {
 
 // The kernel orders a present only after the writers it already has, so a command buffer counts as scheduled before its
 // work is submitted only where waiting could deadlock: behind a shared event, which the waiting thread may be about to
-// commit the signaller of.
+// commit the signaller of. Even then the surfaces it writes are first the kernel's promised writes (RawMetalSchedule.mm
+// promiseWrites, TegraGM20BMethodWriterPromise), so a present of one still waits for its job.
 constexpr bool holds(HeadWait wait)
 {
     return wait == HeadWait::event;

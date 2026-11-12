@@ -13,7 +13,8 @@ enum {
 	SWITCH_GPU_ENGINE_VIC = 3,
 	SWITCH_GPU_ENGINE_NVDEC = 4,
 	SWITCH_GPU_ENGINE_DISPLAY = 5,
-	SWITCH_GPU_ENGINE_COUNT = 6,
+	SWITCH_GPU_ENGINE_NVENC = 6,
+	SWITCH_GPU_ENGINE_COUNT = 7,
 	SWITCH_GPU_BACKING_READ = 1u << 0,
 	SWITCH_GPU_BACKING_WRITE = 1u << 1,
 	SWITCH_GPU_BACKING_CPU_AVOID_SYNC = 1u << 2,
@@ -73,6 +74,10 @@ struct switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page);
 struct switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t surface_id);
 void switch_gpu_backing_retain(struct switch_gpu_backing *backing);
 void switch_gpu_backing_release(struct switch_gpu_backing *backing);
+/* The display scans the backing in place (a direct scanout slot) from add 1 to add 0: a job that writes it ends
+ * External, so its completion means its writes are in DRAM and the display may flip to it with no present job. */
+void switch_gpu_backing_scanout(struct switch_gpu_backing *backing, int add);
+int switch_gpu_backing_scanned(const struct switch_gpu_backing *backing);
 void switch_gpu_backing_describe(struct switch_gpu_backing *backing,
 				 struct switch_gpu_backing_info *info);
 int switch_gpu_backing_set_layout(struct switch_gpu_backing *backing,
@@ -223,6 +228,10 @@ int switch_gpu_backing_cpu_publish_generation(struct switch_gpu_backing *backing
 		uint64_t expected, uint64_t next);
 void switch_gpu_backing_cpu_cancel(struct switch_gpu_backing *backing, uint32_t access);
 int switch_gpu_backing_wait(struct switch_gpu_backing *backing, uint32_t access);
+/* Nothing waits: the engines (bit 1 << SWITCH_GPU_ENGINE_*) with recorded work still pending that a use of `access`
+ * would follow, and the CPU owners (readers and writers, an export's read lease among them) holding the backing now. */
+int switch_gpu_backing_pending(struct switch_gpu_backing *backing, uint32_t access,
+			       uint32_t *engines, uint32_t *cpu_owners);
 
 #ifdef __cplusplus
 }

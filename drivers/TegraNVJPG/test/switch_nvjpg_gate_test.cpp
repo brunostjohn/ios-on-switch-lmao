@@ -133,6 +133,28 @@ int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t cou
     return 0;
 }
 
+int switch_host1x_job_begin(uint32_t channel, uint32_t capacity, uint32_t **words)
+{
+    static std::vector<uint32_t> arena;
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_NVJPG));
+    arena.assign(capacity, 0);
+    *words = arena.data();
+    return 0;
+}
+
+int switch_host1x_job_submit(uint32_t channel, const uint32_t *first, uint32_t count, uint32_t, uint32_t)
+{
+    return tegra_host1x_submit_on(channel, first, count);
+}
+
+void switch_host1x_job_cancel(uint32_t)
+{}
+
+int switch_host1x_job_copy(uint32_t channel, const uint32_t *words, uint32_t count, uint32_t, uint32_t)
+{
+    return tegra_host1x_submit_on(channel, words, count);
+}
+
 void tegra_host1x_describe_channel(uint32_t channel, char *buffer, size_t size)
 {
     snprintf(buffer, size, "ch%u model", channel);
@@ -231,6 +253,12 @@ void switch_car_rmw(uint32_t offset, uint32_t, uint32_t)
 {
     if (offset == 0x554)
         gEngine.events.push_back("lvl2");
+}
+
+uint32_t switch_engine_clock_source(unsigned, uint32_t *khz)
+{
+    *khz = 408000;
+    return 4u << 29;
 }
 
 bool switch_pmc_partition_is_on(unsigned partition)

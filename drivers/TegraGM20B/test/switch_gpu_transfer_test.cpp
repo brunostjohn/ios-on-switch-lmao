@@ -79,6 +79,10 @@ void tgm_views_sweep(tgm_coh *)
 {
 }
 
+void tgm_views_deferred_lock(uint32_t, uint32_t)
+{
+}
+
 void tgm_coherency_put(tgm_coh *)
 {
 }

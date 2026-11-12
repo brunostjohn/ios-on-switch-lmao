@@ -91,6 +91,8 @@ MEDIA = [
     "mpeg2_720p.mp4",
     "mpeg2_1080p.mp4",
     "mpeg1_720p.mp4",
+    "h264_paff_256p.mp4",
+    "h264_mbaff_1080p.mp4",
 ] + [
     "hevc_alpha.mp4",
     "jpeg_420.jpg",

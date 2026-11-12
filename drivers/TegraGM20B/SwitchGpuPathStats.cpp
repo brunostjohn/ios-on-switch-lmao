@@ -22,7 +22,8 @@ const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
 	"control_bos",   "cpu_completes", "ranged_uses",     "visible_waits",  "native_views",
 	"native_reads",  "native_tiled_views", "event_jobs",
 	"ready_arms",    "submit_jobs",   "set_jobs",        "stale_sets",     "address_jobs",
-	"shared_uses",
+	"shared_uses",   "relayout_fresh", "relayout_deferred", "relayout_lazy", "relayout_never",
+	"relayout_moved",
 };
 
 // Every path is taken in the syscall or trap of the process it is for, so each process counts its own: a reader of

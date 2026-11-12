@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
+#include <string>
 
 using IOReturn = int;
 using IOOptionBits = uint32_t;
@@ -61,6 +62,11 @@ inline int IOLockSleepDeadline(IOLock *lock, void *, uint64_t deadline, int)
     const int result = switch_test_sleep(deadline);
     lock->held = true;
     return result;
+}
+
+inline int IOLockSleep(IOLock *lock, void *event, int interruptible)
+{
+    return IOLockSleepDeadline(lock, event, 0, interruptible);
 }
 
 inline void IOLog(const char *, ...)
@@ -153,4 +159,24 @@ inline bool thread_call_enter_delayed(thread_call_t, uint64_t deadline)
 {
     switch_test_bounds_at = deadline;
     return false;
+}
+
+// DEBUG builds of SwitchHost1xChannels.cpp write their stats line here.
+inline std::string switch_test_log;
+#define OS_LOG_DEFAULT   nullptr
+#define os_log(log, ...) switch_test_os_log(__VA_ARGS__)
+
+inline void switch_test_os_log(const char *format, ...)
+{
+    char text[512];
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(text, sizeof(text), format, arguments);
+    va_end(arguments);
+    switch_test_log = text;
+}
+
+inline void absolutetime_to_nanoseconds(uint64_t absolute, uint64_t *out)
+{
+    *out = absolute;
 }

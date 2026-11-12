@@ -14,6 +14,7 @@
 #include <string.h>
 #include "../../AVD/MPEG4NVDEC.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "fake_engine.h"
 #include "../MPEG4Clip.h"
 #include "../MPEG4Trace.h"
 
@@ -38,6 +39,7 @@ typedef struct {
     bool haveFirst;
     uint32_t outHandle, outWidth, outHeight;
     void *outToken;
+    FakeEngine engine;
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -49,6 +51,7 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
         if (!(f->va[h] = calloc(1, size)))
             return -1;
         f->size[h] = size;
+        fake_engine_allocated(&f->engine, h);
         *handle = h;
         *va = f->va[h];
         return 0;
@@ -93,14 +96,14 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         f->haveFirst = true;
     }
     f->last = *s;
-    *fence = (uint32_t)++f->submits;
+    f->submits++;
+    *fence = fake_engine_submit(&f->engine, s);
     return 0;
 }
 
 static int fakeWait(void *ctx, const TegraNVDECWait *wait)
 {
-    (void)ctx;
-    (void)wait;
+    fake_engine_wait(&((Fake *)ctx)->engine, wait->fence);
     return 0;
 }
 
@@ -134,7 +137,13 @@ static uint32_t slot(const TegraNVDECSubmit *s, int i)
 
 static MPEG4Decoder *create(Fake *f)
 {
-    const H264Backend backend = {f, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, NULL, NULL, NULL, NULL};
+    const H264Backend backend = {.ctx = f,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     return mpeg4_decoder_create(&backend);
 }
 
@@ -448,12 +457,13 @@ int main(int argc, char **argv)
     const int refused = refusals(&f);
     const bool layers = unsupportedLayers(&volA);
     const bool ok = !failedA && !failedB && matrices && skipped && truncated && pack && joined && refused > 0 &&
-                    layers && !f.refused;
+                    layers && !f.refused && !f.engine.waits && !f.engine.busyWrites;
     printf("%s mpeg4: clip A 18 VOPs, clip B 32 VOPs against FFmpeg (matrices %s, not-coded VOP %s, truncated VOP "
            "%s, packed P+B %s, missing references %s), checker refuses %d bad submits, unsupported layers %s, %d jobs "
-           "refused\n",
+           "refused, %u waits, %u CPU writes into a buffer a queued job uses\n",
            ok ? "PASS" : "FAIL", matrices ? "ok" : "wrong", skipped ? "ok" : "wrong", truncated ? "refused" : "taken",
-           pack ? "ok" : "wrong", joined ? "skipped" : "decoded", refused, layers ? "refused" : "taken", f.refused);
+           pack ? "ok" : "wrong", joined ? "skipped" : "decoded", refused, layers ? "refused" : "taken", f.refused,
+           f.engine.waits, f.engine.busyWrites);
     if (failedA || failedB)
         printf("failed at clip A VOP %d, clip B VOP %d\n", failedA - 1, failedB - 1);
     return ok ? 0 : 1;

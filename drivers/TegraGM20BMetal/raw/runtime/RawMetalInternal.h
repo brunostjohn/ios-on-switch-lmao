@@ -369,6 +369,8 @@ void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &bi
 // from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
+// RawMetalSchedule.mm: the writer promise a held command buffer made, ended once its writes reached the kernel or never will
+void endWriterPromise(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));

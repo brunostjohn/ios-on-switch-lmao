@@ -46,11 +46,15 @@ extern bool gMoveFails;
 // the CPU's moves (tgm_relayout_by_cpu, after a failed one), and whether the next scratch cannot be had
 extern int gCpuMoves;
 extern bool gScratchFails;
+extern int gScratchesReclaimed;  // kept scratches a lock took back
+extern bool gScratchPurged;
+extern uint64_t gBackingContent;  // the pinned backing's recorded writes       // a kept scratch's pages come back empty
 // switch_refusal's (domain, reason) per call
 extern std::vector<std::pair<std::string, std::string>> gRefusals;
 
 struct tgm_scratch {
 	std::vector<uint64_t> pas;
+	uint64_t handout = 0;
 };
 
 struct ViewModel {

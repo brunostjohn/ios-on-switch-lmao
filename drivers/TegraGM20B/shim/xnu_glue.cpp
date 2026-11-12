@@ -36,6 +36,7 @@ void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
+void tgm_present_pass(void);  // gpu_present.c
 }
 
 #if DEVELOPMENT || DEBUG
@@ -262,6 +263,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	} else if (++gUnhandled >= kStorm) {
 		gpuPanic("storm", "unhandled", gUnhandled);
 	}
+	tgm_present_pass();
 	nvxnu_wake();
 	switch_gpu_backing_completed();
 }

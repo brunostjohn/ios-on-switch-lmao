@@ -15,6 +15,7 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <kern/thread_call.h>
 #include <sys/kdebug.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
@@ -44,15 +45,18 @@
 #include "SwitchUnderflowAccounting.h"
 #include "../TegraVIC/SwitchNativeVICImage.h"
 #include "../TegraVIC/SwitchVICScanoutConvert.h"
+#include "SwitchPlaneComposite.h"
 #include "SwitchFrameInfo.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
 #include "SwitchSBIM.h"
+#include "SwitchTimedPresent.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraVIC/TegraVICConfig.h"
 #include "../TegraVIC/TegraVICSurface.h"
 #include "../TegraVIC/SwitchNativeScanout.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
+#include "../TegraGM20B/SwitchGpuReady.h"
 #include "../TegraHost1x/SwitchHost1xTokenFence.h"
 #include "SwitchNativePlane.h"
 #include "SwitchPlaneSlot.h"
@@ -65,6 +69,7 @@
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchLandscape.h"
 #include "SwitchLandscapeWindows.h"
+#include "SwitchSurfaceUse.h"
 #if SWITCH_FRAME_TIMELINE
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
@@ -918,7 +923,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint32_t kDcCrcControl = 0x300, kDcCrcLatched = 0x329, kCrcOn = (1u << 3) | (1u << 2) | (1u << 0);
     static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
     static constexpr uint64_t kProbeSlot = 0x10000000ULL;  // below DRAM (0x80000000): only a translation reaches it
-    static constexpr unsigned kProbeTables = 64, kProbeAfterFrames = 600;  // r18-planes: 40 tables for the plane slots
+    static constexpr unsigned kProbeTables = switch_window_caps::kDomainTables, kProbeAfterFrames = 600;
     switch_dma_buffer probeTables = {};
     uint64_t probeAt = 0;
     TegraSMMUDomain probeDomain;
@@ -984,7 +989,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // (native_legacy_detach_ready below). Window B's register sets move through DC A as native_planes::PlaneLatch follows them;
     // a set is a slot index (kOff: window off). A swap retires when the latch that shows it (or a newer one) is seen.
     static constexpr unsigned kPlaneSlots = 8;
-    static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20,
+    static constexpr uint64_t kPlaneSlotSpan = switch_window_caps::kPlaneSlotSpan,
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
     // An overlay's picture producer and a recorded turn's request waits (src and dst), for each of two overlays.
@@ -1016,9 +1021,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t planeBlendSaved[3] = {};
     // Stats (the pacing line): window B flips written, of them swaps that changed only window B (no UI composite at all),
     // B sets seen latched, new slot mappings, detached layers not shown (planes off, or a layer more than window B takes),
-    // window B underflow frames, ready-mask mismatches at a kick.
+    // window B underflow frames, ready-mask mismatches at a kick, overlay sets VIC composited into one plane.
     uint32_t stPlaneFlips = 0, stPlaneOnly = 0, stPlaneLatched = 0, stPlaneMaps = 0, stPlaneDropped = 0,
-             stPlaneUnderflows = 0, stPlaneUnready = 0;
+             stPlaneUnderflows = 0, stPlaneUnready = 0, stPlaneComposited = 0;
     // Of the placements, a decoder's own block-linear picture (SwitchNativePlane.h): static, the instance is at the size
     // a kalloc_type class may have.
     static uint32_t stPlaneNative;
@@ -1073,6 +1078,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
 
     CopyJob job = {};
 #include "SwitchSourceWaitDisplay.h"
+#include "SwitchSourceReadyDisplay.h"
     bool copyQueued = false, copyStopping = false,
          presentDeferred = false;  // under the gate; presentDeferred: finished during SC7
     // Steady-state timing: one line every 5 s from the frame-end action, the only periodic log
@@ -1674,8 +1680,10 @@ private:
         if (status & kFrameEndInt)
             underflowFrameEnd();
         if (status & kFrameEndInt) {
-            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
-                                  !columnScanBusy() && !windowProbeHolds());
+            const bool mayRequest = ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
+                                    !columnScanBusy() && !windowProbeHolds();
+            color->frameEndAction(mayRequest);
+            paletteFrameEnd(mayRequest);
         }
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
@@ -1826,9 +1834,10 @@ private:
         } else if (planesAttached) {
             planesState = "off";
         }
-        add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u",
+        add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u, "
+            "composited %u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneDropped,
-            stPlaneUnderflows, stPlaneUnready);
+            stPlaneUnderflows, stPlaneUnready, stPlaneComposited);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
@@ -1836,8 +1845,8 @@ private:
             counted[0].overflowed || counted[1].overflowed || counted[2].overflowed ? " overflowed" : "");
         stPlaneNative = 0;
         planeTotalsClose();
-        stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
-            stPlaneUnready = 0;
+        stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneComposited =
+            stPlaneUnderflows = stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
             stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch] +
                 stLong[kLongRate],
@@ -3293,6 +3302,7 @@ public:
         forgetPrimary();
         stopCopyLoop();
         stopGpuCopy();
+        stopPlaneComposite();
         stopVsync();
         if (logicalPM) {
             PMstop();
@@ -3310,6 +3320,7 @@ public:
             IOFreeType(frameInfo, switch_frame_info::State);
         if (planeSets)
             IODelete(planeSets, PlaneSet, PlaneCommits::kSlots + 1);
+        releasePlaneUses();
         if (entryPlane)
             IODelete(entryPlane, PlaneSet, TegraScanoutRing::kMaxEntries);
         if (intMaskLock)
@@ -3322,6 +3333,7 @@ public:
         forgetPrimary();
         stopCopyLoop();
         stopGpuCopy();
+        stopPlaneComposite();
         stopVsync();
         transferred = false;
         for (auto &entry : validated)
@@ -3397,6 +3409,7 @@ public:
         }
         startCopyLoop();
         startGpuCopy();
+        startVicCopy();
         if (IOWorkLoop *loop = getWorkLoop()) {
             loop->runAction(
                 [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
@@ -3520,8 +3533,11 @@ public:
         if (transferred || !logicalPM || !bootMapping || !primary)
             return;
         // Retiring at the latch, the head may be a swap already on screen or asked for: the next one not yet taken goes.
-        const OriginalLegacySwapRequest *request = latchRetire ? firstUntaken() : pendingSwapRequest();
+        const OriginalLegacySwapRequest *request =
+            consoleReleasedFrame(latchRetire ? firstUntaken() : pendingSwapRequest());
         if (!request || !isValidated(request))
+            return;
+        if (presentNotDue(request))
             return;
         if ((probe.active() || probeRequest) && !releaseProbeHold()) {  // window A is the SMMU probe's for a few frames
             kickDeferred = true;
@@ -3720,6 +3736,8 @@ public:
         if (gpuCopy && !gpuBypass &&
             offerGpuCopy(request, memory, sourceStride, allocation, width, height, blockLog2, kickAt))
             return;
+        if (offerVicCopy(request, surface, sourceStride, allocation, width, height, blockLog2, kickAt))
+            return;
         if (!asScanned) {
             native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);
             return;
@@ -3742,6 +3760,8 @@ public:
             }
             return;
         }
+        if (cpuCopyRefused(request, kickAt))
+            return;
         const uint64_t mapAt = stats ? mach_absolute_time() : 0;
         bool ownedSource = true;
         IOMemoryMap *source = sourceMapping(memory, ownedSource);
@@ -3976,6 +3996,7 @@ public:
         if (!copySource || copyLoop->addEventSource(copySource) != kIOReturnSuccess)
             panic("SwitchDisplay: cannot start the copy thread");
         asyncCopy = mode;
+        startSourceReady();
     }
 
     // Stop and free, outside the gate: no copy may run once the scanout and kept mappings go. Removing the source closes the copy
@@ -3995,6 +4016,7 @@ public:
                 return kIOReturnSuccess;
             },
             this);
+        stopSourceReady();
         copyLoop->removeEventSource(copySource);
         OSSafeReleaseNULL(copySource);
         OSSafeReleaseNULL(copyLoop);
@@ -4007,6 +4029,7 @@ public:
                 self->copyQueued = false;
                 self->sourceWaitQueued = false;
                 self->stopPlaneConversion();
+                self->stopVicCopy();
                 self->cancelQueuedPlaneFence();
                 self->copyPlaneJoined = self->copyPlaneReady = self->copyPixelsReady = false;
                 self->releaseSourceWait();
@@ -4067,6 +4090,8 @@ public:
     // The copy thread, outside the family's gate: the part of a swap that reads the surface. job is not touched after copyFinished.
     void copyWork()
     {
+        if (vicCopyWork())
+            return;
         if (planeFenceQueued) {
             planeFenceWork();
             if (copyQueued && !__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE))
@@ -4191,6 +4216,8 @@ public:
     // The GPU client reported its copy (status 0) or lost it. Success retires the swap like a finished copy; anything else uses the CPU copy.
     void finishGpuSwap(int status)
     {
+        if (finishVicCopy(status))
+            return;
         if (gpuScanout && planeFencePending) {
             finishPlaneFence(status);
             return;
@@ -4351,6 +4378,8 @@ public:
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         if (!self->gpuScanout)
+            return;
+        if (self->vicCopyLate())
             return;
         const bool held = tegra_gm20b_scanout_outstanding(self) != 0 ||
             self->planeFencePending;
@@ -4601,6 +4630,8 @@ public:
     }
 
 #include "SwitchRetireDisplay.h"
+#include "SwitchTimedPresentDisplay.h"
+#include "SwitchConsoleReleaseDisplay.h"
 
     // A swap window A can scan in place: one full-frame BGRA surface (validateSwap's single layer), its rows a multiple of 64
     // bytes, at most one slot. The portrait-native layout only: window A then scans rows unrotated, as hekate's pitch window does.
@@ -4620,6 +4651,7 @@ public:
     }
 
 #include "SwitchDirectSlots.h"
+#include "SwitchDirectVisibleDisplay.h"
 
     // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
     void cleanDomain()
@@ -4641,6 +4673,8 @@ public:
         const int entry = directSlotFor(surface, memory, stride, allocation, tiled);
         if (entry == kNoBuffer)
             return false;
+        if (presentDirectVisible(request, entry, width, height, kickAt))
+            return true;
         TegraScanoutCopy copy = {};
         copy.version = TEGRA_SCANOUT_COPY_VERSION;
         copy.width = width;
@@ -4650,7 +4684,7 @@ public:
         copy.source = memory;
         copy.sourceStride = stride;
         copy.sourceBytes = allocation;
-        copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY;
+        copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);
         copy.alsoWritten = planeNextAlsoWritten();
         switch_gpu_backing_token planeTokens[kPlaneDependencies] = {};
         planeNextDependencies(copy, planeTokens);
@@ -4744,14 +4778,19 @@ public:
 #include "SwitchNativePlaneDisplay.h"
 #include "SwitchLandscapeSelection.h"
 #include "SwitchPlaneConversionDisplay.h"
+#include "SwitchPlaneCompositeDisplay.h"
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
+#include "SwitchPlaneSurfaceUseDisplay.h"
+#include "SwitchVICScanoutDisplay.h"
 #include "NativeColumnScanDisplay.h"
 #include "DisplayWindowProbeDisplay.h"
 #include "SwitchLandscapeRunDisplay.h"
+#include "SwitchPaletteDisplay.h"
+#include "SwitchPlaneAdmissionDrop.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
@@ -5116,7 +5155,7 @@ public:
         };
         const Entry scaling[] = {{"RGBLayer_MinScaleFraction", limits.minScaleFraction},
                                  {"RGBLayer_MaxScale", limits.maxScale},
-                                 {"YUVLayer_MinScaleFraction", limits.minScaleFraction},
+                                 {"YUVLayer_MinScaleFraction", limits.yuvMinScaleFraction},
                                  {"YUVLayer_MaxScale", limits.maxScale}};
         publish("IOMFBScalingLimits", scaling, 4, 32);
         // The panel's pixel clock (TegraDisplayPower.cpp: PLLD 468 MHz, 78 MHz for 60 Hz) as both clocks [I: what
@@ -5124,7 +5163,7 @@ public:
         const Entry source[] = {{"MaxSrcRectWidth", limits.maxSrcRectWidth},
                                 {"MaxSrcRectTotal", limits.maxSrcRectTotal},
                                 {"MaxSrcBufferWidth", limits.maxSrcBuffer},
-                                {"MaxSrcBufferHeight", limits.maxSrcBuffer},
+                                {"MaxSrcBufferHeight", limits.maxSrcBufferHeight},
                                 {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
                                 {"VideoClock", 78000000},
                                 {"PixelClock", 78000000},
@@ -5514,3 +5553,6 @@ extern "C" uint64_t native_display_last_swap_ns(void)
         absolutetime_to_nanoseconds(abs, &ns);
     return ns;
 }
+
+#include "SwitchPlaneCompositeProbe.h"
+#include "SwitchConsoleRelease.h"

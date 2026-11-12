@@ -109,7 +109,8 @@ static const tgm_layout *surfaceLayout(OSObject *surface, tgm_layout &block)
 bool planeSlotBusy(int k) const
 {
     if (planeRecovering || (planeBuildingSlots & (1u << unsigned(k))) || planeConversionUses(k) ||
-        planeLatch.uses(k) || planeTarget.uses(k) || (landscapeState.wanted && landscapeState.held.uses(k)) ||
+        planeCompositeUses(k) || planeLatch.uses(k) || planeTarget.uses(k) ||
+        (landscapeState.wanted && landscapeState.held.uses(k)) ||
         (planeFencePending && planeFencing.uses(k)) ||
         (planeNextSet && planeNext.uses(k)) || (planeHeldSet && planeHeld.uses(k)))
         return true;

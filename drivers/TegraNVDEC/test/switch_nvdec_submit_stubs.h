@@ -44,9 +44,18 @@ inline void IOLockUnlock(IOLock *lock)
         switch_test_queue_locked = false;
 }
 
-inline void IOLockSleep(IOLock *, void *, int)
+// Set by a test that expects one sleep: what wakes the sleeper, run with the lock dropped as IOLockSleep drops it.
+inline void (*switch_test_while_asleep)() = nullptr;
+
+inline void IOLockSleep(IOLock *lock, void *, int)
 {
-    throw std::runtime_error("unexpected CPU sleep");
+    auto *wake = switch_test_while_asleep;
+    if (!wake)
+        throw std::runtime_error("unexpected CPU sleep");
+    switch_test_while_asleep = nullptr;
+    IOLockUnlock(lock);
+    wake();
+    IOLockLock(lock);
 }
 
 inline void IOLockWakeup(IOLock *, void *, bool)

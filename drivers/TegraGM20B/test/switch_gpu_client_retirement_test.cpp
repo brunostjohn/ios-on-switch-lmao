@@ -387,6 +387,8 @@ public:
 	} admissions_[kMaxChannels];
 
 	uint64_t admissionCookies_[kMaxChannels] = {};
+	Admission promises_[4];
+	uint64_t promiseCookies_[4] = {};
 	IOLock storage;
 	IOLock *lock_ = &storage;
 	void *vm_ = nullptr;

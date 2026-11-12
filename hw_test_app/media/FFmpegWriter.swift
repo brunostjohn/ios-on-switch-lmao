@@ -1,8 +1,8 @@
 import Foundation
 import HWTestCore
 
-/// The MPEG-4 Part 2, MPEG-2 and MPEG-1 clips, from FFmpeg's encoders (`ffmpeg` on PATH, or $FFMPEG): the Mac's
-/// VideoToolbox encodes none of them. The pattern goes in as raw I420 frames; one thread keeps the bytes the same from
+/// The MPEG-4 Part 2, MPEG-2, MPEG-1 and MBAFF H.264 clips, from FFmpeg's encoders (`ffmpeg` on PATH, or $FFMPEG): the
+/// Mac's VideoToolbox encodes none of them. The pattern goes in as raw I420 frames; one thread keeps the bytes the same from
 /// run to run. The MP4 files describe MPEG-2 and MPEG-1 by objectTypeIndication (0x61, 0x6a), which CoreMedia turns
 /// into 'mp2v' and 'mp1v'.
 ///   MPEG-4 720p: Simple profile (I- and P-VOPs, H.263 quantisation). 1080p: Advanced Simple (two B-VOPs between
@@ -12,6 +12,8 @@ import HWTestCore
 ///     field prediction in frame pictures), both matrices loaded, alternate scan, intra VLC table, non-linear quantiser
 ///     scale, 10-bit intra DC.
 ///   MPEG-1 720p: two B-pictures, a loaded intra matrix.
+///   H.264 MBAFF 1080: libx264's interlaced coding (macroblock-adaptive frame/field, top field first), High profile,
+///     two B-pictures.
 enum FFmpegWriter {
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -53,6 +55,10 @@ enum FFmpegWriter {
             ] + rate
         case .mpeg1:
             return ["-c:v", "mpeg1video", "-bf", "2", "-intra_matrix", matrix(interMatrix)] + rate
+        case .h264Mbaff:
+            return [
+                "-c:v", "libx264", "-profile:v", "high", "-flags", "+ildct+ilme", "-x264-params", "tff=1", "-bf", "2",
+            ] + rate
         default:
             throw Failure(description: "\(clip.file): not an FFmpeg clip")
         }

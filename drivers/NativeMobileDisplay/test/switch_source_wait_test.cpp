@@ -42,6 +42,7 @@ struct NativeLegacyDisplay:OSObject {
     void kickSwapQueue(){++kicks; if(onKick) onKick();}
     void noteTaken(const OriginalLegacySwapRequest *,uint64_t){++taken;}
     void dropLostFrame(const OriginalLegacySwapRequest *,int){++lost;}
+    void watchSource(){copySource->interruptOccurred(nullptr,nullptr,0);}
 #include "../SwitchSourceWaitDisplay.h"
     ~NativeLegacyDisplay(){sourceWaitQueued=false; releaseSourceWait(); free(sourceWait);}
 };

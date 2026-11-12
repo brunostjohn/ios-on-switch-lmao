@@ -11,7 +11,11 @@ public:
     void retain() { ++refs; }
     void release() { --refs; }
 };
-class IOMemoryMap : public OSObject {};
+class IOMemoryMap : public OSObject {
+public:
+    uint32_t unmaps = 0;
+    void unmap() { ++unmaps; }
+};
 class IOMemoryDescriptor : public OSObject {
 public:
     IOMemoryMap *mapping = nullptr;

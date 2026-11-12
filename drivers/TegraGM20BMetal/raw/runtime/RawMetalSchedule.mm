@@ -25,6 +25,57 @@ void enqueueBuffer(RMCommandBuffer *cb)
         cb->_status = MTLCommandBufferStatusEnqueued;
 }
 
+// unhold() ran: a promise the kernel takes after it is ended at once
+constexpr uint64_t kPromiseEnded = UINT64_MAX;
+
+// The imports of the surfaces it writes. Only while the submit thread cannot take it: under the schedule lock, or on
+// the submit thread.
+static std::vector<uint64_t> writtenSurfaces(RMCommandBuffer *cb)
+{
+    std::vector<uint64_t> handles;
+    cb->_plan.forEachWritten(0, cb->_plan.size(), [&](void *object) {
+        id resource = (__bridge id)object;
+        if (![resource isKindOfClass:[RMTexture class]])
+            return;
+        RMTexture *texture = (RMTexture *)resource;
+        while (texture->_kind == RMTextureView && texture->_parent)
+            texture = texture->_parent;
+        const raw::Import *import = texture->_raw.import;
+        if (texture->_surface && import && import->bo.handle &&
+            std::find(handles.begin(), handles.end(), import->bo.handle) == handles.end())
+            handles.push_back(import->bo.handle);
+    });
+    return handles;
+}
+
+// Before its waitUntilScheduled may return held: the surfaces it writes are the kernel's promised writes, so a present of
+// one waits for this command buffer's job as it would for a scheduled one on Apple's GPU.
+static void promiseWrites(RMCommandBuffer *cb, const std::vector<uint64_t> &handles)
+{
+    if (handles.empty() || cb->_promise.load(std::memory_order_acquire))
+        return;
+    const uint64_t cookie = gRM->raw->promiseWrites(handles.data(), uint32_t(handles.size()));
+    if (!cookie) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            os_log_error(rawLog(),
+                         "raw: the kernel took no writer promise for %zu surfaces of a command buffer held on a shared "
+                         "event: a present may show them before it is submitted",
+                         handles.size());
+        return;
+    }
+    uint64_t none = 0;
+    if (!cb->_promise.compare_exchange_strong(none, cookie, std::memory_order_acq_rel))
+        gRM->raw->endPromise(cookie);
+}
+
+void endWriterPromise(RMCommandBuffer *cb)
+{
+    const uint64_t cookie = cb->_promise.exchange(kPromiseEnded, std::memory_order_acq_rel);
+    if (cookie && cookie != kPromiseEnded)
+        gRM->raw->endPromise(cookie);
+}
+
 void commitBuffer(RMCommandBuffer *cb)
 {
     raw::followers().committing();
@@ -41,14 +92,18 @@ void commitBuffer(RMCommandBuffer *cb)
 #endif
     armEventWaits(cb);
     bool held = false;
+    std::vector<uint64_t> written;
     {
         std::lock_guard<std::mutex> l(r.schedule);
         r.waiting.commit((__bridge void *)cb->_queue, cb, cb->_reservation, &held);
+        if (held)
+            written = writtenSurfaces(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         RAW_DIAGNOSTIC(r.stats.deferred++);
 #endif
     }
     if (held) {
+        promiseWrites(cb, written);
         {
             std::lock_guard<std::mutex> l(cb->_lock);
             cb->_held = true;
@@ -132,6 +187,8 @@ static raw::HeadWait eventWait(RMCommandBuffer *cb)
 static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
 {
     for (RMCommandBuffer *cb : buffers) {
+        if (held)
+            promiseWrites(cb, writtenSurfaces(cb));
         {
             std::lock_guard<std::mutex> l(cb->_lock);
             cb->_held = held;

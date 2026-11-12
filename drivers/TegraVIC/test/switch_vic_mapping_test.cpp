@@ -32,7 +32,7 @@ namespace {
 class SwitchVICMappingTest : public testing::Test {
     void SetUp() override
     {
-        if (!gLock)
+        if (!gMappings.lock)
             ASSERT_TRUE(switch_vic_mapping_start());
         for (size_t i = 0; i < pages.size(); ++i)
             pages[i] = 0x80000000 + i * 4096;
@@ -46,11 +46,11 @@ class SwitchVICMappingTest : public testing::Test {
     }
     void TearDown() override
     {
-        for (auto &mapping : gMappings) {
+        for (auto &mapping : gMappings.maps) {
             EXPECT_EQ(mapping.users, 0u);
-            evict(mapping);
+            gMappings.evict(mapping);
         }
-        EXPECT_EQ(gBytes, 0u);
+        EXPECT_EQ(gMappings.bytes, 0u);
         EXPECT_EQ(backing.refs, 1u);
     }
 };
@@ -69,7 +69,7 @@ TEST_F(SwitchVICMappingTest, WarmPlaneRangesKeepTheSameIovaAndExactPhysicalSlice
     EXPECT_EQ(created[0].count, 12u);
     EXPECT_EQ(created[1].first, pages[100]);
     EXPECT_EQ(created[1].count, 7u);
-    EXPECT_EQ(gBytes, 19u * 4096);
+    EXPECT_EQ(gMappings.bytes, 19u * 4096);
     switch_vic_mapping_release(luma);
     switch_vic_mapping_release(same);
     switch_vic_mapping_release(chroma);
@@ -110,7 +110,7 @@ TEST_F(SwitchVICMappingTest, EvictionCannotUnmapAnActivePlane)
     auto *held = switch_vic_mapping_acquire_range(&backing, true, 0, 1);
     ASSERT_NE(held, nullptr);
     const uint64_t address = switch_vic_mapping_address(held);
-    for (uint32_t i = 1; i < kMappings + 10; ++i) {
+    for (uint32_t i = 1; i < 32 + 10; ++i) {
         auto *mapping = switch_vic_mapping_acquire_range(&backing, true, i, 1);
         ASSERT_NE(mapping, nullptr);
         switch_vic_mapping_release(mapping);

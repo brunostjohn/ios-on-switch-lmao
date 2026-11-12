@@ -13,9 +13,10 @@
 // cancelled with one line (channel torn down, engine reset and rebooted, the jobs in flight failed) and the next job
 // runs; a lost syncpoint interrupt panics in TegraHost1x. switch-no-nvdec turns it off.
 //
-// Input pictures are 16x16 tiles with chroma at the surface config's offset (TegraNVENCInfo): the layout and chroma
-// reading the unit encoded IPCM and IDR pictures from exactly on every boot of 11-06 (r30 archives, "E3 IPCM ok input
-// layout tiled 16x16, chroma offset").
+// A CPU-written input picture is 16x16 tiles with chroma at the surface config's offset (TegraNVENCInfo): the layout
+// and chroma reading the unit encoded IPCM and IDR pictures from exactly on every boot of 11-06 (r30 archives, "E3 IPCM
+// ok input layout tiled 16x16, chroma offset"). A submit that names an IOSurface has VIC write it into the input buffer
+// block linear first (TegraNVENCSource.cpp), the job's stream waiting for VIC's fence.
 //
 // Jobs (tegra_nvenc_run): host1x channel 0 in NVENC's class (0x21), each method written through the engine's THI
 // METHOD0/METHOD1 pair as NVDEC's, the picture setup from a kernel-only slot, then an OP_DONE increment of NVENC's
@@ -41,8 +42,8 @@
 //   memory/tegra/tegra210.c (MC client hot reset NVENC: control 0x200 bit 11; SMMU ASID NVENC 0x264),
 //   include/linux/host1x.h (HOST1X_CLASS_NVENC 0x21), soc/tegra/pmc.c tegra_powergate_power_up, drm/tegra/falcon.c
 //   falcon_boot (shared with TegraNVDEC.cpp), L4T nvhost t210.c (NVENC 5.0, nvhost_nvenc050.fw).
-//   Clock: PLLP undivided, 408 MHz, the rate NVDEC runs at (the T210B01 core DVFS table gives NVENC and NVDEC the same
-//   points).
+//   Clock: NVDEC's (kits/SwitchCAR/SwitchEngineClock.h: PLLC3 at the 637 mV point, or PLLP's 408 MHz); the T210B01
+//   core DVFS table gives NVENC and NVDEC the same points.
 // Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
 // queue) are bounded reads, as in TegraNVDEC; every completion of work is a host1x syncpoint interrupt.
 #include <IOKit/IOLib.h>
@@ -56,6 +57,7 @@
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -84,8 +86,6 @@ enum : uint32_t {  // clock and reset controller
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVENC = 0x6a0,
     OVRE_MPE_MBIST = 1u << 29,
-    SOURCE_PLLP = 4u << 29,
-    NVENC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
 
 enum : uint32_t {
@@ -100,6 +100,7 @@ enum : uint32_t {
 };
 
 volatile uint8_t *gNvenc, *gMc;
+uint32_t gClockKHz;
 switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
 switch_falcon_image gImage;
 char gLine[256];
@@ -108,12 +109,18 @@ char gLine[256];
 // one NVIDIA's own T210 driver leaves them at (its captured streams set none of them). The firmware takes a non-zero
 // address as the feature's data being there; 0 also means no job keeps another client's address in them.
 constexpr uint16_t kUnusedMethods[] = {
-    NVC5B7_SET_IN_RCDATA, NVC5B7_SET_IN_CEAHINTS_DATA, NVC5B7_SET_IN_COLOC_DATA,
-    NVC5B7_SET_IN_QP_MAP, NVC5B7_SET_IN_PARTITION_BUF,
+    NVC5B7_SET_IN_RCDATA,
+    NVC5B7_SET_IN_CEAHINTS_DATA,
+    NVC5B7_SET_IN_QP_MAP,
+    NVC5B7_SET_IN_PARTITION_BUF,
 };
 
-// The job engine. kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs.
-constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC_MAX_SETUP, kSinkBytes = 256 * 1024;
+uint32_t gLatched;  // tegra_nvenc_latch's: bit k, latched method k held a client's address since the falcon booted
+
+// The job engine. kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs. The
+// scratch buffer takes a picture's colocated output (64 bytes a macroblock) when it stands in for a latched address.
+constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC_MAX_SETUP;
+constexpr uint32_t kSinkBytes = TEGRA_NVENC_MAX_MBS * sizeof(nvenc_h264_coloc_mb_s);
 constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
@@ -149,7 +156,7 @@ constexpr SwitchEngineProd kProd[] = {
 
 bool powerUp(bool *wasOn)
 {
-    switch_car_write(CLK_SOURCE_NVENC, SOURCE_PLLP | NVENC_DIV_1);
+    switch_car_write(CLK_SOURCE_NVENC, switch_engine_clock_source(SWITCH_ENGINE_BUS_C3, &gClockKHz));
     IODelay(2);
     if (!switch_engine_power_up(kPower, wasOn)) {
         snprintf(gLine, sizeof(gLine),
@@ -188,6 +195,7 @@ bool loadImage()
 // falcon_boot, minus its final idle poll: that the firmware runs is shown by E2's OP_DONE increment instead.
 bool bootFalcon()
 {
+    gLatched = 0;
     if (!loadImage())
         return false;
     switch (switch_falcon_load(gNvenc, gFirmware.pa, &gImage)) {
@@ -215,7 +223,7 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, stream, 3);
+    int ret = switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVENC, stream, 3, id, from + 2);
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";
@@ -367,8 +375,8 @@ void bringUp(void *, wait_result_t)
         giveUp(true);
         return;
     }
-    IOLog("TegraNVENC: E1 ok partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
-          kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.code_size, gImage.data,
+    IOLog("TegraNVENC: E1 ok partition %u %s, %u kHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
+          kPartition, wasOn ? "already on" : "powered here", gClockKHz, gImage.code, gImage.code_size, gImage.data,
           gImage.data_size, gImage.apps);
     uint64_t us = 0;
     uint32_t id = 0;
@@ -389,6 +397,8 @@ void bringUp(void *, wait_result_t)
     }
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
+    if (!tegra_nvenc_engine_start())
+        IOLog("TegraNVENC: E2 could not register as a memory engine; native pictures go through VIC\n");
     tegra_nvenc_publish();
 }
 }  // namespace
@@ -399,11 +409,10 @@ extern "C" bool tegra_nvenc_ready(void)
 }
 
 namespace {
-int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uint32_t *fence, const char **why)
+int check(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, TegraNVENCBlock *blocks,
+          const char **why)
 {
     *why = nullptr;
-    if (!gUp)
-        return -19;
     if (s->entry_count > TEGRA_NVENC_MAX_ENTRIES || s->clean_count > TEGRA_NVENC_MAX_RANGES ||
         s->setup_bytes > kSetupSlotBytes) {
         *why = "counts";
@@ -413,7 +422,6 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         *why = "codec";
         return -22;
     }
-    TegraNVENCBlock blocks[TEGRA_NVENC_MAX_ENTRIES];
     uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
@@ -426,8 +434,18 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         avail[i] = blocks[i].size - e->offset;
     }
     *why = tegra_nvenc_check(s, avail);
-    if (*why)
-        return -22;
+    return *why ? -22 : 0;
+}
+
+int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, const TegraNVENCAfter *after,
+        const TegraNVENCOrder *order, uint32_t *fence, const char **why)
+{
+    *why = nullptr;
+    if (!gUp)
+        return -19;
+    TegraNVENCBlock blocks[TEGRA_NVENC_MAX_ENTRIES];
+    if (const int error = check(s, resolve, context, blocks, why))
+        return error;
     for (uint32_t i = 0; i < s->clean_count; i++) {
         const TegraNVENCRange *r = &s->clean[i];
         TegraNVENCBlock b;
@@ -440,15 +458,21 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
 
     // SETCLASS; the submit's methods, SET_APPLICATION_ID first (the checker requires it: the OS selects the app before
     // anything is stored for it), then just before EXECUTE: 0 in every method of kUnusedMethods, and in the ME
-    // predictor pair when the submit has none; the scratch buffer as the RC process state (NVIDIA's driver gives every
-    // job one; constant QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment.
+    // predictor pair when the submit has none; in each latched method the submit leaves out, the scratch buffer or 0
+    // (tegra_nvenc_latch); the scratch buffer as the RC process state (NVIDIA's driver gives every job one; constant
+    // QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment. Room in front for
+    // the waits: the job before it, the engine that wrote its input, and a native picture's producers (TegraNVENCOrder).
+    // The stream is written in host1x's command arena once the job kInFlight back is done, so at most kInFlight - 1
+    // jobs hold arena room and begin never sleeps under gEngineLock, which the stall path needs.
     constexpr uint32_t kUnused = sizeof(kUnusedMethods) / sizeof(kUnusedMethods[0]);
-    uint32_t words[SWITCH_HOST1X_WAIT_WORDS + 1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
-    uint32_t n = SWITCH_HOST1X_WAIT_WORDS;
+    constexpr uint32_t kWaits = (2 + TEGRA_NVENC_ORDER_WAITS) * SWITCH_HOST1X_WAIT_WORDS;
+    constexpr uint32_t kWords = kWaits + 1 + 3 * (kUnused + TEGRA_NVENC_LATCHED + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1;
+    static_assert((kInFlight + 1) * kWords <= SWITCH_HOST1X_ARENA_WORDS);
+    uint32_t *words = nullptr;
+    uint32_t n = kWaits;
     bool predictors = false;
     for (uint32_t i = 0; i < s->entry_count; i++)
         predictors |= s->entries[i].method == NVC5B7_SET_IN_MEPRED_DATA;
-    words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     const auto method = [&](uint32_t offset, uint32_t value) {
         words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
         words[n++] = offset / 4;
@@ -475,6 +499,22 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             return ret ? ret : -19;
         }
     }
+    if (const int error = switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVENC, kWords, &words)) {
+        IOLockUnlock(gEngineLock);
+        gGate.done();
+        return error;
+    }
+    TegraNVENCAfter ordered[TEGRA_NVENC_ORDER_WAITS];
+    uint32_t orderedCount = 0;
+    if (order) {
+        if (const int error = order->begin(order->context, gBase + job, ordered, &orderedCount)) {
+            switch_host1x_job_cancel(TEGRA_HOST1X_CHANNEL_NVENC);
+            IOLockUnlock(gEngineLock);
+            gGate.done();
+            return error;
+        }
+    }
+    words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     const uint32_t slot = job % kSetupSlots;
     gJobCodec[slot] = static_cast<uint8_t>(s->codec);
     uint8_t *setup = gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes;
@@ -489,6 +529,13 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
                 method(NVC5B7_SET_IN_MEPRED_DATA, 0);
                 method(NVC5B7_SET_OUT_MEPRED_DATA, 0);
             }
+            uint8_t latch[TEGRA_NVENC_LATCHED];
+            tegra_nvenc_latch(s, &gLatched, latch);
+            for (uint32_t k = 0; k < TEGRA_NVENC_LATCHED; k++) {
+                if (latch[k] != TEGRA_NVENC_LATCH_NONE)
+                    method(tegra_nvenc_latched_method(k),
+                           latch[k] == TEGRA_NVENC_LATCH_SCRATCH ? static_cast<uint32_t>(gSink.pa >> 8) : 0);
+            }
             method(NVC5B7_SET_IO_RC_PROCESS, static_cast<uint32_t>(gSink.pa >> 8));
             method(NVC5B7_SET_IN_DRV_PIC_SETUP,
                    static_cast<uint32_t>((gSetup.pa + static_cast<uint64_t>(slot) * kSetupSlotBytes) >> 8));
@@ -499,26 +546,50 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     // L4T's NVENC channel is serialized (t210.c .serialize): a job's methods reach the engine only once the job before
     // it is done, by a host1x wait in the stream, not by the CPU.
-    uint32_t first = SWITCH_HOST1X_WAIT_WORDS;
+    uint32_t first = kWaits;
     if (gIssued) {
-        first = 0;
-        tegra_host1x_op_wait_syncpt(words, gSyncpt, gBase + gIssued);
+        first -= SWITCH_HOST1X_WAIT_WORDS;
+        tegra_host1x_op_wait_syncpt(words + first, gSyncpt, gBase + gIssued);
     }
-    const int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first);
+    if (after) {
+        first -= SWITCH_HOST1X_WAIT_WORDS;
+        tegra_host1x_op_wait_syncpt(words + first, after->syncpt, after->threshold);
+    }
+    for (uint32_t k = 0; k < orderedCount; k++) {
+        first -= SWITCH_HOST1X_WAIT_WORDS;
+        tegra_host1x_op_wait_syncpt(words + first, ordered[k].syncpt, ordered[k].threshold);
+    }
+    const int ret =
+        switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first, gSyncpt, gBase + job);
     if (!ret) {
         __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
         *fence = gBase + job;
     }
+    if (order)
+        order->end(order->context, gBase + job, ret == 0);
     IOLockUnlock(gEngineLock);
     gGate.done();
     return ret;
 }
 }  // namespace
 
-extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uint32_t *fence,
+extern "C" int tegra_nvenc_check_submit(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context,
+                                        const char **why)
+{
+    TegraNVENCBlock blocks[TEGRA_NVENC_MAX_ENTRIES];
+    return check(s, resolve, context, blocks, why);
+}
+
+extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context,
+                               const TegraNVENCAfter *after, const TegraNVENCOrder *order, uint32_t *fence,
                                const char **why)
 {
-    return run(s, resolve, context, fence, why);
+    return run(s, resolve, context, after, order, fence, why);
+}
+
+extern "C" uint32_t tegra_nvenc_syncpt(void)
+{
+    return gSyncpt;
 }
 
 extern "C" int tegra_nvenc_wait(uint32_t fence)

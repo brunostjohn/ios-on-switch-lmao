@@ -264,6 +264,12 @@ void switch_scratch_put(switch_scratch *)
 {
 }
 
+switch_scratch *switch_scratch_reclaim(switch_scratch *, uint64_t, task_t, bool *intact)
+{
+	*intact = false;
+	return nullptr;
+}
+
 void switch_scratch_discard(switch_scratch *)
 {
 }

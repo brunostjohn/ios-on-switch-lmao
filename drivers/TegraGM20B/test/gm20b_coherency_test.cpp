@@ -161,6 +161,11 @@ extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 	tgm_relayout_cpu(surface, rows, l, bytes_per_row, op == TGM_RELAYOUT_TO_ROWS, modelPage);
 }
 
+uint64_t gScratchHandouts;
+std::set<tgm_scratch *> gScratchesKept;
+int gScratchesReclaimed;
+bool gScratchPurged;
+
 extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int,
 					       struct tgm_relayout_pages *pages)
 {
@@ -168,6 +173,7 @@ extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int,
 		return nullptr;
 	static uint64_t next = 0x200000000ull;
 	auto *s = new tgm_scratch;
+	s->handout = ++gScratchHandouts;
 	std::lock_guard<std::mutex> hold(gCleanLock);
 	for (uint64_t at = 0; at < bytes; at += 4096, next += 4096) {
 		s->pas.push_back(next);
@@ -177,10 +183,28 @@ extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int,
 	return s;
 }
 
+// A scratch given back stays kept for a reclaim (the pool's), its bytes as they were unless a test purges them
 extern "C" void tgm_scratch_put(struct tgm_scratch *s)
 {
 	gViews.scratchesPut++;
-	delete s;
+	gScratchesKept.insert(s);
+}
+
+extern "C" struct tgm_scratch *tgm_scratch_reclaim(struct tgm_scratch *s, uint64_t handout, int *intact)
+{
+	*intact = 0;
+	if (!gScratchesKept.count(s) || s->handout != handout)
+		return nullptr;
+	gScratchesKept.erase(s);
+	gScratchesReclaimed++;
+	s->handout = ++gScratchHandouts;
+	*intact = gScratchPurged ? 0 : 1;
+	return s;
+}
+
+extern "C" uint64_t tgm_scratch_handout(const struct tgm_scratch *s)
+{
+	return s->handout;
 }
 
 extern "C" void tgm_scratch_discard(struct tgm_scratch *s)

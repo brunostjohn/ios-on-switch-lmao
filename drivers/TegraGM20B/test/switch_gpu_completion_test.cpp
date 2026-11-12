@@ -20,7 +20,7 @@ struct tgm_chan {
 #define WRITE_ONCE(target, value) ((target) = (value))
 #define READ_ONCE(target) (target)
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
-unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, callbacks,
+unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, watchCalls, callbacks,
 	timestamps;
 int tgm_sc7_gate;
 bool diagnostic, suspended;
@@ -86,6 +86,11 @@ void chan_wake_waiters(tgm_chan *)
 	++wakeCalls;
 }
 
+void present_watch_fenced(tgm_chan *, int)
+{
+	++watchCalls;
+}
+
 #include "drivers/TegraGM20B/SwitchGpuActiveIrq.h"
 #include "drivers/TegraGM20B/SwitchGpuChannelCompletion.h"
 
@@ -97,7 +102,7 @@ protected:
 	void SetUp() override
 	{
 		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls =
-			callbacks = timestamps = 0;
+			watchCalls = callbacks = timestamps = 0;
 		diagnostic = suspended = false;
 		channel.fenced = [](void *) {
 			++callbacks;
@@ -151,6 +156,7 @@ TEST_F(Completion, SequenceWrapIsStillACompletionTransition)
 	interrupt();
 	EXPECT_EQ(callbacks, 1u);
 	EXPECT_EQ(wakeCalls, 1u);
+	EXPECT_EQ(watchCalls, 1u);
 }
 
 TEST_F(Completion, PresentAndHighPolicyRunOnlyForItsOwnProgress)
@@ -167,6 +173,7 @@ TEST_F(Completion, PresentAndHighPolicyRunOnlyForItsOwnProgress)
 	EXPECT_EQ(statsCalls, 1u);
 	EXPECT_EQ(callbacks, 1u);
 	EXPECT_EQ(wakeCalls, 0u);
+	EXPECT_EQ(watchCalls, 0u);  // a kernel channel's fence is no user producer
 }
 
 TEST_F(Completion, ScrubProgressWakesSuspendDrainWithoutGenericCallbacks)

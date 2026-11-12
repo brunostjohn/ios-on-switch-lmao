@@ -12,7 +12,7 @@ TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 	const uint32_t hashed[] = {TegraGM20BMethodGetInfo, TegraGM20BMethodCpuComplete,
 				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump};
 	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate, TegraGM20BMethodResourceSetRelease,
-				TegraGM20BMethodSubmitJob};
+				TegraGM20BMethodSubmitJob, TegraGM20BMethodWriterPromise};
 	for (uint32_t method : job) {
 		EXPECT_GT(method, uint32_t(TegraGM20BMethodCpuComplete));
 		for (uint32_t other : hashed)
@@ -35,6 +35,8 @@ TEST(JobAbi, RecordsKeepTheirLayout)
 	EXPECT_EQ(offsetof(TegraGM20BAbiJob, flags), 20u);
 	EXPECT_EQ(sizeof(TegraGM20BAbiJob) % 8, 0u);
 	EXPECT_EQ(offsetof(TegraGM20BAbiResourceSetCreateReply, generation_offset), 12u);
+	EXPECT_EQ(offsetof(TegraGM20BAbiWriterPromise, count), 16u);
+	EXPECT_EQ(sizeof(TegraGM20BAbiWriterPromise) % 8, 0u);
 }
 
 TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)

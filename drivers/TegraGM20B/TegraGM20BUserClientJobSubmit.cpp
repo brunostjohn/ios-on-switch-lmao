@@ -128,7 +128,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
 		 rangedUses = 0, nativeReads = 0;
 	bool hostWritten = (head.flags & TegraGM20BJobHostWritten) || (set && switch_gpu_set_take_host_written(set));
-	bool unlockedWrites = false;
+	bool unlockedWrites = false, scanoutWrites = false;
 	constexpr uint32_t kUseAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
 	constexpr uint32_t kUseFlags = kUseAccess | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceGpuAddress |
 				       TegraGM20BSurfaceRange;
@@ -166,6 +166,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
 						    bo->representation ? 0 : bytes};
 			unlockedWrites |= bo->unlockedReads;
+			scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;
 			job.written[writtenCount++] = bo->coh;
 		}
 		if (bo->representation)
@@ -240,7 +241,8 @@ refresh:
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
-			jobVisibility = switch_gpu_job_visibility(submit, events->signals(), unlockedWrites,
+			jobVisibility = switch_gpu_job_visibility(submit, events->signals(),
+								  unlockedWrites || scanoutWrites,
 								  hostWritten || transaction.host_written);
 			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
 							 siblings, siblingCount, &seqno, jobVisibility);

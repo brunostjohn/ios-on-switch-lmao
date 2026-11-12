@@ -104,7 +104,7 @@ void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool 
     if (!planeFiltersOf(w) && !live)
         planeStartWindowRegisters(w);
     win[kColorDepth] = m.colorDepth;
-    win[kByteSwap] = 0;
+    win[kByteSwap] = m.byteSwap;
     win[kPosition] = m.position;
     win[kSize] = m.size;
     win[kPrescaled] = m.prescaled;
@@ -207,7 +207,7 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
     if (!planeReserveBandwidth(p)) {
         if (planeHoldForLatch(p))
             return false;
-        planeDropOverlays(p, 3);
+        planeDropUntilAdmitted(p);
         planeTarget = p;
     }
     PlaneSet commit = p;

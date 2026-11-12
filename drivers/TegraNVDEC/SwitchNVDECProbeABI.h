@@ -12,10 +12,23 @@
 enum {
     SwitchNVDECMethodDisplayProbe = 0x4450,  // 'DP'
     SwitchNVDECDisplayProbeArm = 1,
+    SwitchNVDECMethodBufferStats = 0x4253,  // 'BS': no input -> SwitchNVDECBufferStats
 };
 
 typedef struct {
     uint32_t op, reserved;  // op: SwitchNVDECDisplayProbeArm; no reply
 } SwitchNVDECDisplayProbe;
+
+// The connection's buffers since it opened (SwitchNVDECPark.h), for hw_test_app's decode.native_export* through the AVD
+// plug-in's SwitchPictureRoutes.
+typedef struct {
+    uint64_t recycles;        // BufferRecycle calls
+    uint64_t replaced;        // of them, one whose buffer an export or the display still held
+    uint64_t parked;          // of those, a parked buffer taken back
+    uint64_t allocated;       // of those, a new buffer
+    uint64_t exports;         // native exports published
+    uint64_t export_objects;  // of them, one that needed a new surface object
+    uint32_t parked_most, reserved;
+} SwitchNVDECBufferStats;
 
 #endif

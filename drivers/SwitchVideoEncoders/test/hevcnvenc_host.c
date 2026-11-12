@@ -119,7 +119,7 @@ static void checkSize(uint32_t width, uint32_t height, const char *header, const
     HEVCEncConfig c = {.width = width, .height = height, .fps_num = 30, .fps_den = 1};
     CHECK(hevcnvenc_configure(&c) == 0, "%ux%u: configure", width, height);
     H264EncLayout l;
-    hevcnvenc_layout(&c, &l);
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
     const HEVCEncPicture idr = {.idr = true, .qp = 23};
     static TegraNVENCSubmit s;
     hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &idr, &kHandles, &s);
@@ -351,7 +351,7 @@ static void checkRefusals(void)
     HEVCEncConfig c = {.width = 1280, .height = 720};
     hevcnvenc_configure(&c);
     H264EncLayout l;
-    hevcnvenc_layout(&c, &l);
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
     const HEVCEncPicture idr = {.idr = true, .qp = 30}, p = {.poc = 1, .qp = 32, .picture_index = 1};
     for (size_t k = 0; k < sizeof(kBreaks) / sizeof(kBreaks[0]); k++) {
         static TegraNVENCSubmit s;
@@ -368,7 +368,7 @@ static void checkReferenceBound(void)
     HEVCEncConfig c = {.width = 1280, .height = 720};
     hevcnvenc_configure(&c);
     H264EncLayout l;
-    hevcnvenc_layout(&c, &l);
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
     const HEVCEncPicture p = {.poc = 1, .qp = 30, .picture_index = 1};
     static TegraNVENCSubmit s;
     hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p, &kHandles, &s);
@@ -392,7 +392,7 @@ static void checkChromaMethodInput(void)
     HEVCEncConfig c = {.width = 1280, .height = 720};
     hevcnvenc_configure(&c);
     H264EncLayout l;
-    hevcnvenc_layout(&c, &l);
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
     const HEVCEncPicture idr = {.idr = true, .qp = 30}, p = {.poc = 7, .qp = 30, .picture_index = 7};
     static TegraNVENCSubmit s;
     hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_METHOD, &l, &idr, &kHandles, &s);
@@ -451,7 +451,7 @@ static void checkSyntax(void)
     CHECK(hevc_parse_sps(&params, sps, spsSize) == 0 && hevc_parse_pps(&params, pps, ppsSize) == 0,
           "AVD's parser refused the SPS or PPS");
     H264EncLayout l;
-    hevcnvenc_layout(&c, &l);
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
     const HEVCEncPicture idr = {.idr = true, .qp = 30};
     static TegraNVENCSubmit s;
     hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &idr, &kHandles, &s);

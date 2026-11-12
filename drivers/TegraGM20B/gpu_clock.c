@@ -184,7 +184,7 @@ int tgm_clk_raise(char *line, unsigned int len)
  *     CPU governor's tick (SwitchPerfGovernor.cpp calls tegra_gm20b_idle_tick from XNU's perfcontrol deadline, so
  *     the GPU adds no timer of its own; without the CPU governor the GPU simply never drops). A swap arriving means
  *     Core Animation is animating, so the clock never drops during an animation, even one that submits little.
- *   * up: synchronously, before the submission's work is kicked (tgm_chan_exec, tgm_present_copy, and chan_fence as
+ *   * up: synchronously, before the submission's work is kicked (tgm_chan_exec, tgm_present_copy_dependencies, and chan_fence as
  *     a backstop), so no GPU work ever starts at the idle clock; also at once (a work item) on switch_perf_hint's
  *     touch, missed-frame and launch hints, so the clock is usually back before the frame's first submission.
  * The change is the output divider alone, VCO left running and locked (1536 MHz: M 1, N 40 from the 38.4 MHz

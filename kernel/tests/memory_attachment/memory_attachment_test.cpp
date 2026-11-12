@@ -325,3 +325,29 @@ TEST(SwitchMemoryAttachment, ExclusiveReleaseNotifiesAdmissionAfterUnlock)
     EXPECT_EQ(SwitchMemoryAttachment::enterCpu(&memory, true), 0);
     SwitchMemoryAttachment::leaveCpu(&memory);
 }
+
+TEST(SwitchMemoryAttachment, GpuRecordHasItsOwnSlotAndEndsWithTheDescriptor)
+{
+    unsigned freed = 0;
+    auto *memory = new IOMemoryDescriptor;
+    auto *representation = new OSObject;
+    auto *record = new OSObject([&] {
+        EXPECT_EQ(SwitchMemoryAttachment::copyGpu(memory), nullptr);
+        ++freed;
+    });
+    ASSERT_TRUE(SwitchMemoryAttachment::replace(memory, nullptr, representation));
+    ASSERT_TRUE(SwitchMemoryAttachment::replaceGpu(memory, nullptr, record));
+    EXPECT_FALSE(SwitchMemoryAttachment::replaceGpu(memory, nullptr, representation));
+    record->release();
+    auto *copy = SwitchMemoryAttachment::copyGpu(memory);
+    EXPECT_EQ(copy, record);
+    copy->release();
+    auto *other = SwitchMemoryAttachment::copy(memory);
+    EXPECT_EQ(other, representation);
+    other->release();
+    EXPECT_EQ(representation->refs, 2u);
+    delete memory;
+    EXPECT_EQ(freed, 1u);
+    EXPECT_EQ(representation->refs, 1u);
+    representation->release();
+}

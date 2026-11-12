@@ -20,6 +20,7 @@
 
 struct switch_dma_buffer;
 struct switch_gpu_backing;
+struct SwitchNVDECCompletion;
 
 // One buffer NVDEC reads or writes: any RAM pages, mapped at `iova` in NVDEC's address space, 64 KiB granular, zeroed
 // and clean in the caches when allocated.
@@ -46,13 +47,16 @@ void tegra_nvdec_buffer_free(TegraNVDECBlock *block);  // only once no job can t
 void tegra_nvdec_memory_usage(uint64_t *limit, uint64_t *free);
 
 // Checks a submit (TegraNVDECCheck.h), cleans its CPU-written ranges, copies its picture setup into kernel memory
-// and queues it on host1x channel 0. Returns 0 and the job's fence, or a negative errno-style value.
-int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context, uint32_t *fence,
-                    const char **why);
+// and queues it on host1x channel 0. Returns 0 and the job's fence, or a negative errno-style value. A queue already
+// holding SwitchNVDECQueue::kSlots jobs makes it sleep for room first (*waitedForRoom). `completion` (or null) runs
+// once from the job's retirement (SwitchNVDECQueue.h).
+int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context,
+                    const SwitchNVDECCompletion *completion, uint32_t *fence, bool *waitedForRoom, const char **why);
 #if SWITCH_NVDEC_PROBES
 // tegra_nvdec_run with the display-buffer probe's check (SwitchNVDECDisplayProbe.h) in place of tegra_nvdec_check.
 int switch_nvdec_run_display_probe(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context,
-                                   uint32_t *fence, const char **why);
+                                   const SwitchNVDECCompletion *completion, uint32_t *fence, bool *waitedForRoom,
+                                   const char **why);
 #endif
 // Sleeps until the fence is reached (syncpoint interrupt), bounded by the engine's own GP timer per queued job. Past
 // that bound the job is cancelled with one line and its wait returns -5 (TegraNVDECCancel.cpp).

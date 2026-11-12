@@ -30,6 +30,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 		present_fenced(chan);
 	} else {
 		chan_wake_waiters(chan);
+		present_watch_fenced(chan, 0);
 	}
 	if (READ_ONCE(chan->fenced))
 		chan->fenced(chan->fenced_arg);

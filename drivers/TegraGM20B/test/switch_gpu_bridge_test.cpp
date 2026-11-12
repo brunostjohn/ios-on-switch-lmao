@@ -275,6 +275,16 @@ TEST_F(Bridge, HeldConsumerPreventsSlotReuseAfterGpuCompletion) {
     release(held.front());
     ASSERT_NE(submit({source}), nullptr);
 }
+// NVENC's read of a native picture is a dependency like NVDEC's and VIC's: a bridge carries it to the GPU, which waits
+// for it on NVENC's syncpoint (tgm_backing_dependencies).
+TEST_F(Bridge, AnNvencReadIsADependencyItCarries) {
+    auto source = token(53, 7); source.engine = SWITCH_GPU_ENGINE_NVENC;
+    statuses[key(source)] = 0;
+    ASSERT_NE(submit({source}), nullptr);
+    ASSERT_EQ(submittedTokens.size(), 1u);
+    EXPECT_EQ(submittedTokens[0].engine, uint32_t(SWITCH_GPU_ENGINE_NVENC));
+    EXPECT_EQ(submittedTokens[0].queue, 7u);
+}
 TEST_F(Bridge, FailedSubmissionReleasesEveryRetainedToken) {
     auto source = token(48); statuses[key(source)] = 0;
     nextExecError = -22;

@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreMedia
+import CoreVideo
 import Foundation
 import HWTestCore
 import HWTestVideo
@@ -10,8 +11,12 @@ import VideoToolbox
 /// HEIC written on the device and read back: ImageIO's encode (CMPhoto, a tile session per image over the 'hvc1'
 /// encoder) decoded and compared with the pattern. The same tile session SPI, with CMPhoto's specification and
 /// properties, then runs here on the pattern's NV12 picture so its encoder can be asked how it coded the tiles
-/// (SwitchEncoderRoutes, debug builds of the AVE plug-in): every 512x512 tile one NVENC picture, each decoded back on
-/// the hardware decoder against its region of the source. hevc_encoders is how many 'hvc1' encoders VideoToolbox lists.
+/// (SwitchEncoderRoutes, debug builds of the AVE plug-in): every 512x512 tile one NVENC picture whose input VIC read
+/// from its region of the source's IOSurface (no CPU copy), each decoded back on the hardware decoder against that
+/// region. hevc_encoders is how many 'hvc1' encoders VideoToolbox lists. A second picture, 960 pixels wide with
+/// 64-byte-aligned rows (off VIC's 256-byte grid, as a client's own buffer may be), goes through the same tile session:
+/// VideoToolbox hands a tile session's source over as it is, so the kernel bounces each tile's rows through the GPU's
+/// copy engine before VIC reads them (input_bounced), and those tiles too must decode back with no CPU copy.
 struct HEICEncodeTest: HWTest {
     let id = "image.heic_encode"
     let name = "HEIC encode on NVENC (tile sessions) and decode on the device"
@@ -28,10 +33,20 @@ struct HEICEncodeTest: HWTest {
         metrics.set("tile_hardware", tiled.usingHardware)
         metrics.set("nvenc_tiles", tiled.routes?["tiles"] ?? -1)
         metrics.set("nvenc_errors", tiled.routes?["errors"] ?? -1)
+        metrics.set("input_vic", tiled.routes?["input_vic"] ?? -1)
+        metrics.set("input_cpu_copies", tiled.routes?["input_cpu_copies"] ?? -1)
+        metrics.set("input_refused", tiled.routes?["input_refused"] ?? -1)
         metrics.set("tiles_decoded", tiled.decoded)
         metrics.set("tile_error", tiled.worstLumaError, digits: 1)
         metrics.set("tile_bytes", tiled.bytes)
         metrics.set("tile_ms", tiled.seconds * 1000, digits: 1)
+        let offGridSource = try Self.offGridPicture(Pattern(width: 960, height: 768, clip: 0x5E1D))
+        let offGridRows = CVPixelBufferGetBytesPerRowOfPlane(offGridSource, 0)
+        let offGrid = try TileCompressor.encode(offGridSource, tile: 512, quality: 0.9)
+        metrics.set("offgrid_row_bytes", offGridRows)
+        metrics.set("offgrid_bounced", offGrid.routes?["input_bounced"] ?? -1)
+        metrics.set("offgrid_input_vic", offGrid.routes?["input_vic"] ?? -1)
+        metrics.set("offgrid_tile_error", offGrid.worstLumaError, digits: 1)
 
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil)
@@ -66,8 +81,37 @@ struct HEICEncodeTest: HWTest {
                         && tiled.routes?["errors"] == 0
                 ),
                 ("every tile decodes back to its region", tiled.decoded == tiled.expected && tiled.worstLumaError <= 4),
+                (
+                    "every tile's input read by VIC from its region, none copied or refused",
+                    VideoEncodeTest.allByVIC(tiled.routes, tiled.expected)
+                ),
+                ("the 960-wide picture's rows are off VIC's 256-byte grid", offGridRows % 256 != 0),
+                (
+                    "its tiles bounced through the copy engine, read by VIC, none copied or refused",
+                    VideoEncodeTest.allByVIC(offGrid.routes, offGrid.expected)
+                        && offGrid.routes?["input_bounced"] == offGrid.expected
+                ),
+                (
+                    "its tiles decode back to their regions",
+                    offGrid.decoded == offGrid.expected && offGrid.worstLumaError <= 4
+                ),
             ],
             metrics, proof: "SwitchEncoderRoutes tiles=\(nvencTiles.map(String.init) ?? "-") of \(tiled.expected)")
+    }
+
+    /// The pattern in an NV12 buffer whose rows CoreVideo aligns to 64 bytes only.
+    static func offGridPicture(_ pattern: Pattern) throws -> CVPixelBuffer {
+        var attributes = PatternPixels.attributes(
+            width: pattern.width, height: pattern.height, format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        attributes[kCVPixelBufferBytesPerRowAlignmentKey as String] = 64
+        attributes.removeValue(forKey: kCVPixelBufferMetalCompatibilityKey as String)
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            nil, pattern.width, pattern.height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            attributes as CFDictionary, &buffer)
+        guard status == kCVReturnSuccess, let buffer else { throw VideoError.status("CVPixelBufferCreate", status) }
+        PatternPixels.fill(buffer, pattern: pattern, frame: 0)
+        return buffer
     }
 
     func encoderIDs(_ codec: CMVideoCodecType) -> [String] {

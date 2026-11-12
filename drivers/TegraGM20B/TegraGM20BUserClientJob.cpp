@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The job interface (TegraGM20BJobABI.h): persistent resource sets.
+// The job interface (TegraGM20BJobABI.h): persistent resource sets and writer promises.
 #include "TegraGM20BUserClientInternal.h"
 
 IOReturn AGXDeviceUserClient::resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
@@ -118,4 +118,66 @@ void AGXDeviceUserClient::destroySets()
 		switch_gpu_set_destroy(set);
 		set = nullptr;
 	}
+}
+
+IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in)
+{
+	if (!in->cookie || (in->flags != TegraGM20BPromiseBegin && in->flags != TegraGM20BPromiseEnd))
+		return kIOReturnBadArgument;
+	if (in->flags == TegraGM20BPromiseEnd) {
+		if (in->count || in->uses_address)
+			return kIOReturnBadArgument;
+		IOReturn result = kIOReturnBadArgument;
+		IOLockLock(lock_);
+		for (uint32_t i = 0; i < TegraGM20BMaxWriterPromises; ++i) {
+			if (promiseCookies_[i] != in->cookie)
+				continue;
+			promises_[i].end();
+			promiseCookies_[i] = 0;
+			result = kIOReturnSuccess;
+			break;
+		}
+		IOLockUnlock(lock_);
+		return result;
+	}
+	if (!in->count || in->count > TegraGM20BMaxPromisedWrites || !in->uses_address)
+		return kIOReturnBadArgument;
+	TegraGM20BAbiSurfaceUse uses[TegraGM20BMaxPromisedWrites];
+	if (copyin(in->uses_address, uses, in->count * sizeof(*uses)))
+		return kIOReturnBadArgument;
+	IOLockLock(lock_);
+	const IOReturn result = submitGate_.closed() ? kIOReturnNotOpen : promiseWrites(in, uses);
+	IOLockUnlock(lock_);
+	return result;
+}
+
+// lock_ held. Every handle must be an import of the connection's with its backing, the one the display snapshots: the
+// registry keeps one backing per first page (switch_gpu_backing_register), and an import adopts its surface's (-95 for
+// another, switch_gpu_surface_adopt).
+IOReturn AGXDeviceUserClient::promiseWrites(const TegraGM20BAbiWriterPromise *in,
+					    const TegraGM20BAbiSurfaceUse *uses)
+{
+	uint32_t slot = TegraGM20BMaxWriterPromises;
+	for (uint32_t i = 0; i < TegraGM20BMaxWriterPromises; ++i) {
+		if (promiseCookies_[i] == in->cookie)
+			return kIOReturnBadArgument;
+		if (!promiseCookies_[i] && slot == TegraGM20BMaxWriterPromises)
+			slot = i;
+	}
+	if (slot == TegraGM20BMaxWriterPromises)
+		return kIOReturnNoResources;
+	switch_gpu_backing_use backings[TegraGM20BMaxPromisedWrites];
+	for (uint32_t i = 0; i < in->count; ++i) {
+		if (uses[i].reserved || uses[i].access != TegraGM20BSurfaceWrite)
+			return kIOReturnBadArgument;
+		const Bo *bo = findBo(uses[i].handle);
+		if (!bo || !bo->backing)
+			return kIOReturnNotFound;
+		backings[i] = {bo->backing, SWITCH_GPU_BACKING_WRITE, 0};
+	}
+	const int promised = promises_[slot].promise(backings, in->count);
+	if (promised)
+		return ioreturn(promised);
+	promiseCookies_[slot] = in->cookie;
+	return kIOReturnSuccess;
 }

@@ -64,5 +64,15 @@ struct DisplayWindowProbeTest: HWTest {
         DisplayWindowProbeTest(
             id: "display.x1.offset_crop", name: "A block-linear NV12 crop through window B's H/V offsets (CRC)",
             probe: "V5c", number: 3),
+        DisplayWindowProbeTest(
+            id: "display.x1.window_formats",
+            name: "NV12 Cb first at depth 43, NV24 at 49, packed 4:2:2 at 16 and SWAP2, against BGRA (CRC)",
+            probe: "L979/L955", number: 4),
+        DisplayWindowProbeTest(
+            id: "display.x1.window_wide", name: "Window B's V filter on 3840- and 4096-wide lines (CRC)",
+            probe: "L958", number: 5),
+        DisplayWindowProbeTest(
+            id: "display.x1.window_palette", name: "Windows A and B with CP_ENABLE and a per-channel palette (CRC)",
+            probe: "L1004", number: 6),
     ]
 }

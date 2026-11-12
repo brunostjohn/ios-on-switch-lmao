@@ -73,6 +73,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodResourceSetRelease:
 		wantIn = sizeof(TegraGM20BAbiResourceSetRelease);
 		break;
+	case TegraGM20BMethodWriterPromise:
+		wantIn = sizeof(TegraGM20BAbiWriterPromise);
+		break;
 	case TegraGM20BMethodVmBind:
 		if (inSize < offsetof(TegraGM20BAbiVmBind, ops))
 			return kIOReturnBadArgument;
@@ -266,6 +269,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodResourceSetCreate)
 		return resourceSetCreate(static_cast<const TegraGM20BAbiResourceSetCreate *>(in),
 					 static_cast<TegraGM20BAbiResourceSetCreateReply *>(out));
+	if (method == TegraGM20BMethodWriterPromise)
+		return writerPromise(static_cast<const TegraGM20BAbiWriterPromise *>(in));
 	if (method == TegraGM20BMethodWaitFence)
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
 	if (method == TegraGM20BMethodCpuComplete)

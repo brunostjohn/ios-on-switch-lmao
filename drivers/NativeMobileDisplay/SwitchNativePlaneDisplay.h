@@ -35,7 +35,7 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         switch_native_scanout_release(&scanout);
         return error;
     }
-    const int slot = planeMapSnapshot(scanout, image);
+    const int slot = planeUseNoted(planeMapSnapshot(scanout, image), surface);
     if (native && slot >= 0 && stats)
         ++stPlaneNative;
     return slot;
@@ -76,6 +76,7 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
     }
     if (mapped >= 0) {
         auto &slot = planeSlots[mapped];
+        planeUseRelease(unsigned(mapped));
         switch_native_scanout_deliver(slot.native);
         switch_native_scanout_release(slot.native);
         *slot.native = scanout;

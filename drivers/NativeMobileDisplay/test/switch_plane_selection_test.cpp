@@ -48,6 +48,21 @@ struct Display {
         return slot + 4;
     }
     bool planeLandscapeDecide(const native_planes::Roles &, uint32_t, uint32_t, PlaneDecision &) { return false; }
+    int composite = -1;
+    bool compositeWaits = false;
+    uint32_t composedFrom = 0;
+    bool planeComposeWaits(switch_display::Overlay wanted[2], const int *, uint32_t, uint32_t)
+    {
+        if (compositeWaits || composite < 0)
+            return compositeWaits;
+        composedFrom = planeBuildingSlots;
+        native_planes::Image image;
+        image.visible = true;
+        image.options = native_planes::kWinEnable;
+        wanted[0] = {true, composite, image, 1};
+        wanted[1] = {};
+        return false;
+    }
 #include "../SwitchPlaneSelection.h"
 };
 native_planes::Layer layer(native_planes::Kind kind, bool ui = false)
@@ -181,6 +196,36 @@ TEST(PlaneSelection, ConvertedOverlayStillKeepsStackOrderAndMappedReservation)
     EXPECT_TRUE(decision.set.uses(6));
     EXPECT_FALSE(decision.set.window[1].image.yuv);
     EXPECT_EQ(decision.set.window[1].depth, 2u);
+    EXPECT_EQ(display.planeBuildingSlots, 0u);
+}
+TEST(PlaneSelection, RefusedOverlaysGoOutAsTheirCompositeAlone)
+{
+    Display display;
+    display.stats = true;
+    const auto request = frame(display);
+    display.live[0] = {true, 5, native_planes::kBt709, 0};
+    display.live[1] = {true, 6, native_planes::kBt709, 0};
+    display.composite = 7;
+    Display::PlaneDecision decision;
+    display.planeDecide(&request, decision);
+    ASSERT_FALSE(decision.waitSlot);
+    EXPECT_EQ(display.composedFrom, (1u << 0) | (1u << 2));
+    EXPECT_EQ(display.conversions, 0u);
+    EXPECT_TRUE(decision.set.uses(7));
+    EXPECT_FALSE(decision.set.uses(0));
+    EXPECT_FALSE(decision.set.uses(2));
+    EXPECT_FALSE(decision.set.window[0].on && decision.set.window[1].on);
+    EXPECT_EQ(display.stPlaneDropped, 0u);
+}
+TEST(PlaneSelection, ACompositeOnItsWayKeepsTheCurrentFrame)
+{
+    Display display;
+    const auto request = frame(display);
+    display.compositeWaits = true;
+    Display::PlaneDecision decision;
+    display.planeDecide(&request, decision);
+    EXPECT_TRUE(decision.waitSlot);
+    EXPECT_FALSE(decision.planeChange);
     EXPECT_EQ(display.planeBuildingSlots, 0u);
 }
 TEST(PlaneSelection, FractionalSamplingChangeIsNotMistakenForStaticContent)

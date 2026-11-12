@@ -52,6 +52,17 @@ void tgm_scratch_discard(struct tgm_scratch *)
 {
 }
 
+struct tgm_scratch *tgm_scratch_reclaim(struct tgm_scratch *, uint64_t, int *intact)
+{
+	*intact = 0;
+	return nullptr;
+}
+
+uint64_t tgm_scratch_handout(const struct tgm_scratch *)
+{
+	return 0;
+}
+
 void tgm_scratch_stats(uint64_t *held, uint64_t *peak)
 {
 	*held = *peak = 0;

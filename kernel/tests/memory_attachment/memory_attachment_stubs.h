@@ -14,6 +14,7 @@ public:
 };
 struct IOMemoryDescriptorReserved {
     OSObject *switchAttachment = nullptr;
+    OSObject *switchGpuRecord = nullptr;
     uint32_t switchCpuUsers = 0;
     bool switchExclusive = false;
     uint64_t switchGeneration = 0;

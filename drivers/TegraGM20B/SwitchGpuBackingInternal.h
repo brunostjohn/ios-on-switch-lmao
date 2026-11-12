@@ -51,6 +51,10 @@ struct switch_gpu_backing {
 	uint32_t set_access;
 	bool shared;
 	bool cpu_reached;  // a CPU lease or CpuComplete named it: sticky, and it is never a set member again
+	uint32_t scanout_holds;  // atomic: switch_gpu_backing_scanout
+	// Writers promised before their jobs exist (SwitchGpuAdmission::promise): snapshots and CPU locks wait them out; the
+	// conversion, layout and registration checks the promised job's own submission passes through never read it.
+	uint32_t promised_writers;
 };
 
 struct switch_gpu_cpu_lease {
