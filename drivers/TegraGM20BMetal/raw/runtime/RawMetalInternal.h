@@ -339,6 +339,11 @@ size_t rmPassGroupEnd(RMCommandBuffer *cb, size_t begin);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
+// RawMetalM2vGuard.mm: what of a state m2v has no form of (null: none), and whether the range [from, to) holds such work,
+// which fails its command buffer (its error set, one refusal line) instead of replaying on m2v
+const char *rmM2vMissingState(MTLRenderPipelineDescriptor *d);
+const char *rmM2vMissingKernel(MTLComputePipelineDescriptor *d);
+bool rmRefuseM2vRange(RMCommandBuffer *cb, size_t from, size_t to);
 
 // RawMetalEncode.mm
 bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder);

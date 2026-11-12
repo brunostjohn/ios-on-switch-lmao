@@ -169,6 +169,7 @@ enum class RMShareable : uint8_t { Unasked, No, Yes };
     bool _asked;                             // its record asked of the runtime (completeLater)
     std::string _key;                        // its pack key (completable states')
     MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
+    const char *_m2vMissing;                 // what of it m2v has no form of (rmM2vMissingState), null: nothing
     std::mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
 }
