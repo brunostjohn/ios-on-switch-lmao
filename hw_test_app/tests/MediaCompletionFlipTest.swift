@@ -10,13 +10,14 @@ import UIKit
 /// (kern.switch_media_flips_*, debug kernels): completions must have written the sets armed for them, each ahead of
 /// the work loop, and none may have failed to latch as written (refused is the boot's total; a refusing unit turns
 /// these flips off at the first one, with one SwitchDisplay line). A set whose producers finished before its swap goes
-/// out at once from the kick and is never armed; with none armed the test is skipped, armed=0 says why.
+/// out at once from the kick and is never armed; with none armed the test is skipped, armed=0 says why. filter_share
+/// is the part host1x's syncpoint filter wrote earlier still.
 struct MediaCompletionFlipTest: HWTest {
     let id = "display.media_completion_flip"
     let name = "Video sets on windows B and C written by their producers' completions"
     let subsystem = Subsystem.display
 
-    static let counters = ["completion", "withdrawn", "refused", "lead_us", "armed"]
+    static let counters = ["completion", "withdrawn", "refused", "lead_us", "armed", "filter", "filter_declined"]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (before, unread) = Self.totals()
@@ -60,6 +61,7 @@ struct MediaCompletionFlipTest: HWTest {
         metrics.set("expected", clip.frames)
         metrics.set("completion_share", Double(completion) / Double(max(1, armed)), digits: 3)
         metrics.set("lead_mean_us", completion > 0 ? Double(delta("lead_us")) / Double(completion) : 0, digits: 1)
+        metrics.set("filter_share", completion > 0 ? Double(delta("filter")) / Double(completion) : 0, digits: 3)
         metrics.set("dropped", dropped)
         if armed == 0 && refused == 0 {
             return .skip("no video set waited for its producers at its swap", metrics)

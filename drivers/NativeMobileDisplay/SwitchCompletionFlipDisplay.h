@@ -373,8 +373,15 @@ void adoptedFlipPresented(const SwitchCompletionFlip &flip)
 {
     if (SWITCH_FRAME_TIMELINE)
         noteCompletionFlip(flip);
-    const uint64_t seq = entrySeq[flip.entry];
-    if (!latchRetire || !seq || ring.front != flip.entry)
+    if (ring.front == flip.entry)
+        retireLatchedThrough(entrySeq[flip.entry]);
+}
+
+// A completion's pass after the latch that showed its frame: the swaps through it retire as that latch's
+// retireThrough would have, had their completion not been out.
+void retireLatchedThrough(uint64_t seq)
+{
+    if (!latchRetire || !seq)
         return;
     for (const OriginalLegacySwapRequest *head = pendingSwapRequest(); head; head = pendingSwapRequest()) {
         const uint64_t at = seqOf(head);

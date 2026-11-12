@@ -45,6 +45,8 @@
 		<string>kern.switch_media_flips_refused</string>
 		<string>kern.switch_media_flips_lead_us</string>
 		<string>kern.switch_media_flips_armed</string>
+		<string>kern.switch_media_flips_filter</string>
+		<string>kern.switch_media_flips_filter_declined</string>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>kern.switch_scanout_cpu</string>
 		<string>kern.switch_scanout_unshown</string>

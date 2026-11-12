@@ -427,6 +427,7 @@ bool switch_nvdec_jobs_start(const switch_dma_buffer &setup, uint32_t syncpt, ui
         gLock = nullptr;
         return false;
     }
+    (void)switch_gpu_backing_register_filter_status(SWITCH_GPU_ENGINE_NVDEC, switch_nvdec_token_filter_status);
     switch_nvdec_semantics_physical(completed);
     return true;
 }
@@ -493,6 +494,24 @@ extern "C" int switch_nvdec_run_display_probe(const TegraNVDECSubmit *submit, Te
     return run(submit, resolve, context, displayProbeCheck, completion, fence, waitedForRoom, why);
 }
 #endif
+
+// switch_gpu_backing_token_filter_status for NVDEC: the job's own stage words, no lock. Its slot stays the job's until
+// the work-loop pass that expires this fence retires it, which runs after the filter.
+extern "C" int switch_nvdec_token_filter_status(const switch_gpu_backing_token *token)
+{
+    if (!token || token->engine != SWITCH_GPU_ENGINE_NVDEC || token->queue != gSyncpt)
+        return 0;
+    for (uint32_t slot = 0; slot < SwitchNVDECQueue::kSlots; ++slot) {
+        const auto &job = gQueue.jobs[slot];
+        if (__atomic_load_n(&job.sequence, __ATOMIC_ACQUIRE) != token->value)
+            continue;
+        const auto *semantics = __atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE);
+        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1)
+                   ? 1
+                   : 0;
+    }
+    return 0;
+}
 
 extern "C" int tegra_nvdec_wait(uint32_t fence)
 {

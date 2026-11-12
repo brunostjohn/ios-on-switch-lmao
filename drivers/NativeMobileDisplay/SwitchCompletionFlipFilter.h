@@ -75,6 +75,7 @@ void writeEarlyCompletionFlip(uint32_t armed, uint8_t by)
 // from then on.
 int completionFlipVerdict(int status)
 {
+    status = mediaFlipVerdict(status);
     if (!status || !__atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE))
         return status;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);

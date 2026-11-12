@@ -505,10 +505,8 @@ extern "C" int switch_vic_token_filter_status(const switch_gpu_backing_token *to
         const auto &job = gQueue.jobs[slot];
         if (__atomic_load_n(&job.fence, __ATOMIC_ACQUIRE) != token->value)
             continue;
-        const auto &stage = Stages::stages[slot];
-        return !__atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE) &&
-                       __atomic_load_n(&stage.hardware, __ATOMIC_ACQUIRE) == 1 &&
-                       __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) == 1
+        const auto *semantics = __atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE);
+        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1)
                    ? 1
                    : 0;
     }

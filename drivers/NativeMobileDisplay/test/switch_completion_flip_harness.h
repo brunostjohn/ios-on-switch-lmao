@@ -397,6 +397,11 @@ struct Display {
     static void mediaFlipTotalsRegister()
     {}
 
+    static int mediaFlipVerdict(int status)
+    {
+        return status;
+    }
+
     static bool columnScanBusy()
     {
         return false;

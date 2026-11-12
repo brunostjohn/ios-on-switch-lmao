@@ -103,7 +103,8 @@ struct SwitchCompletionFlip {
 };
 
 // Windows B and C's set, staged by the gate with every word but the surface addresses: the completion writes those
-// (stores) and the STATE_CONTROL pair. Same states and lock as SwitchCompletionFlip.
+// (stores) and the STATE_CONTROL pair, or host1x's syncpoint filter does earlier (kEarly), once every producer's job is
+// certainly done. Same states and lock as SwitchCompletionFlip.
 struct SwitchPlaneCompletionFlip {
     static constexpr unsigned kMaxStores = 4;  // START_ADDR and START_ADDR_U of windows B and C
 
@@ -111,12 +112,16 @@ struct SwitchPlaneCompletionFlip {
     unsigned stores = 0;
     uint32_t word[kMaxStores] = {}, value[kMaxStores] = {};
     uint32_t update = 0, request = 0;
+    uint32_t generation = 0;  // of the arm: what a filter waiter left from an earlier offer checks
+    bool filtered = false;    // written by host1x's filter
     uint64_t requestedAt = 0, writtenAt = 0;
 
     void arm(uint32_t updateBits, uint32_t requestBits)
     {
         update = updateBits;
         request = requestBits;
+        filtered = false;
+        generation = generation + 1 == SwitchCompletionFlip::kAnyArm ? 1 : generation + 1;
         state = SwitchCompletionFlip::kArmed;
     }
 
@@ -134,12 +139,31 @@ struct SwitchPlaneCompletionFlip {
         }
     }
 
+    bool claimEarly(uint32_t armed)
+    {
+        if (state != SwitchCompletionFlip::kArmed || armed != generation)
+            return false;
+        state = SwitchCompletionFlip::kEarly;
+        filtered = true;
+        return true;
+    }
+
+    // A set its filter already wrote is the completion's own from here (completionFlipVerdict made its status 0).
     bool claim(int status)
     {
+        if (state == SwitchCompletionFlip::kEarly) {
+            state = SwitchCompletionFlip::kWritten;
+            return false;
+        }
         if (state != SwitchCompletionFlip::kArmed)
             return false;
         state = status ? SwitchCompletionFlip::kIdle : SwitchCompletionFlip::kWritten;
         return status == 0;
+    }
+
+    bool early() const
+    {
+        return state == SwitchCompletionFlip::kEarly || state == SwitchCompletionFlip::kAdopted;
     }
 
     void withdraw()
@@ -148,10 +172,10 @@ struct SwitchPlaneCompletionFlip {
             state = SwitchCompletionFlip::kIdle;
     }
 
-    // The gate's pass: true when the completion wrote it.
+    // The gate's pass: true when the completion wrote it. An adopted set's request is the latch's already.
     bool take()
     {
-        const bool written = state == SwitchCompletionFlip::kWritten;
+        const bool written = state == SwitchCompletionFlip::kWritten || state == SwitchCompletionFlip::kEarly;
         if (written)
             state = SwitchCompletionFlip::kIdle;
         return written;

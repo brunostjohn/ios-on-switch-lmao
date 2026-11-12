@@ -27,6 +27,7 @@
 #pragma once
 #include <stdint.h>
 #include "SwitchHost1xFence.h"
+#include "TegraHost1x.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
 
 // The other host1x engines' jobs a job's stream waits for by syncpoint: the newest of each engine's, since a
@@ -136,6 +137,19 @@ public:
     static void semantic(uint32_t slot)
     {
         finalStep(stages[slot]);
+    }
+
+    // A host1x filter waiter's read (any context, no lock, host1x up): the job's syncpoint is at its fence, whose
+    // callback has not run, its bridge is done and nothing failed. Its semantic step is the engine's to judge.
+    static bool fenceReached(uint32_t slot)
+    {
+        const auto &stage = stages[slot];
+        if (static_cast<int32_t>(tegra_host1x_syncpt_read(stage.fence.syncpt) - stage.fence.threshold) < 0)
+            return false;
+        // The syncpoint before the stage words: a cancel stores its failure before the CPU releases the syncpoint.
+        __asm__ volatile("dmb sy" ::: "memory");
+        return __atomic_load_n(&stage.hardware, __ATOMIC_ACQUIRE) == 1 &&
+               __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) == 1;
     }
 
     // Under the engine's lock, once the engine has stopped (its channel torn down, the engine reset or powered off): a
