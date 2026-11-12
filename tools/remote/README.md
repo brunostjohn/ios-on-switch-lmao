@@ -20,9 +20,6 @@ Without that line, or off the LAN, actions build here as before. Actions also bu
 Only top-level targets come back. A script that reads `bazel-bin` has to build what it reads as a top-level target,
 or use `bazel run`.
 
-`--config=rbe-linux` is an experiment that sends targets marked `//bazel/platforms:portable` to the cluster's Linux
-workers. Today that means Mesa's Python generators.
-
 ## Running a worker on a Mac
 
 The worker needs Xcode at `/Applications/Xcode.app`, selected with `xcode-select`. Every client's actions name that
