@@ -3675,7 +3675,8 @@ void CommandBuffer::releaseEvent(uint64_t va, uint32_t payload)
     uint64_t pushVa;
     auto *words = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, kEventReleaseWords * 4, 4, pushVa));
     Push p{words, words + kEventReleaseWords};
-    const bool publish = publication_.take();
+    // a kernel without addressed jobs publishes DRAM at every job end, so its mid-job releases do as well
+    const bool publish = publication_.take() || !dev_->k_.exactJobs();
     emitEventRelease(p, va, payload, publish);
     segment(words, p.at);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

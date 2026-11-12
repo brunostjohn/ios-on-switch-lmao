@@ -41,6 +41,7 @@
         @"jobs" : @(gRM->raw->jobsSubmitted()),
         @"released_signals" : @(gRM->raw->signalsReleased()),
         @"unflushed_signals" : @(gRM->raw->signalsUnflushed()),
+        @"exact_jobs" : @(gRM->raw->exactJobs()),
     };
 }
 

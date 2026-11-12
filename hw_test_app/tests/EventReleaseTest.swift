@@ -10,8 +10,9 @@ import Metal
 /// value while the work before the signal still runs (the kernel's events line counts its wait on the word), must copy the
 /// fill. Reports the command buffer's jobs alone (the facade's jobs counter: one, where the signal
 /// used to end a job and start another), the signals released mid-job, and how long after the work before the signal the
-/// listener heard it. The rounds after those write only private memory before the signal, so the release goes without
-/// the L2 flush (raw_event_release.h), and the waiter must still copy the fill: unflushed_signals counts them.
+/// listener heard it. The rounds after those write only private memory before the signal, so on a kernel with addressed
+/// jobs the release goes without the L2 flush (raw_event_release.h), and the waiter must still copy the fill:
+/// unflushed_signals counts them (0 where exact_jobs=0).
 struct EventReleaseTest: HWTest {
     let id = "gpu.raw.event_release"
     let name = "A mid-command-buffer shared-event signal: one job, heard before the command buffer completes"
@@ -110,8 +111,10 @@ struct EventReleaseTest: HWTest {
         if rounds.contains(where: { $0.released != 1 }) { wrong.append("released") }
         if rounds.contains(where: { !$0.heardBeforeEnd }) { wrong.append("heard_after_end") }
         if rounds.dropFirst().contains(where: { !$0.waiterDone || $0.waiterWrong != 0 }) { wrong.append("waiter") }
+        let exactJobs = (EventJobs.read(gpu.device)["exact_jobs"] ?? 0) != 0
         metrics.set("unflushed_signals", unflushed)
-        if unflushed != Self.rounds { wrong.append("unflushed_signals") }
+        metrics.set("exact_jobs", exactJobs ? 1 : 0)
+        if unflushed != (exactJobs ? Self.rounds : 0) { wrong.append("unflushed_signals") }
         if event.signaledValue != UInt64(2 * Self.rounds) { wrong.append("final_value") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }

@@ -1699,10 +1699,16 @@ public:
         return k_.signalsReleased();
     }
 
-    // Of those, the ones released without the L2 flush: nothing host-visible written since the last flush
+    // Of those, the ones released without the L2 flush: nothing host-visible written since the last flush, on a kernel
+    // with addressed jobs (exactJobs)
     uint64_t signalsUnflushed() const
     {
         return unflushed_.load(std::memory_order_relaxed);
+    }
+
+    bool exactJobs() const
+    {
+        return k_.exactJobs();
     }
 #endif
 

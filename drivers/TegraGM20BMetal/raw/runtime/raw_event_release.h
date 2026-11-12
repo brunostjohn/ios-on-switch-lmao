@@ -6,7 +6,8 @@
 // only the host's MEM_OP_D L2_FLUSH_DIRTY (clb06f.h) writes it back, after a wait for idle; the engines' own releases (3D and
 // compute SET_REPORT_SEMAPHORE_D, the copy engine's LAUNCH_DMA semaphore) carry no L2 writeback. So a release `publishes`
 // (the flush first, as the kernel's external job end makes it, gpu_exec.c tgm_chan_fence_job) only where host-visible
-// memory was written since the last one that did, by the job end's own rule (CommandBuffer::use). Other readers of the
+// memory was written since the last one that did, by the job end's own rule (CommandBuffer::use), and always on a kernel
+// without addressed jobs, whose every job end publishes (gpu_exec.c tgm_chan_exec: external). Other readers of the
 // word (another channel's acquire, the kernel) read it, and what the GPU wrote, through the same L2.
 #pragma once
 #include <cstdint>
