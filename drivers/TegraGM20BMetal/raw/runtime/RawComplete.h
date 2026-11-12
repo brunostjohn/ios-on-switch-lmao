@@ -142,6 +142,13 @@ private:
     bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name,
                        bool every = false);
     RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // A process compiles a state itself only on a debug boot with no compiler at all (switch-no-bt hides iOS 17's
+    // launcher), and host tests: a release client never carries a compile's memory
+#if SWITCH_DEBUG
+    static constexpr bool kCompilesHere = true;
+#else
+    static constexpr bool kCompilesHere = false;
+#endif
     // Why a state's creation fails where no compiler makes it (makeNow's `failure`)
     static constexpr const char kNoCompilerComes[] =
         "no shader compiler comes this boot: it declined, or its launcher stopped starting it";

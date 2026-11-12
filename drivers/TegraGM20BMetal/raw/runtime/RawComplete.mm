@@ -198,7 +198,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         std::string why;
         const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
         const bool remote = !found && remote_->serving();
-        if (!found && !remote && remote_->declined()) {
+        if (!found && !remote && (!kCompilesHere || remote_->declined())) {
             pending->ready(nullptr, pending->creation ? kNoCompilerComes : "");
             return;
         }
@@ -289,13 +289,13 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
         break;
     case RecordCache::Found::None:
         if (!remote_->serving()) {
-            if (remote_->declined()) {
-                failure = kNoCompilerComes;
-                return nullptr;
+            if (kCompilesHere && !remote_->declined()) {
+                compiledHere(InProcess::NoCompiler);
+                state = madeHere(k, record, why);
+                break;
             }
-            compiledHere(InProcess::NoCompiler);
-            state = madeHere(k, record, why);
-            break;
+            failure = kNoCompilerComes;
+            return nullptr;
         }
         if (!remoteNow(a, k, state, record, failure))
             return nullptr;
@@ -419,6 +419,10 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                     outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
                     if (!taken)
                         outcome = Compiler::Outcome::Refused;
+                    break;
+                }
+                if (!kCompilesHere) {
+                    outcome = Compiler::Outcome::Refused;
                     break;
                 }
                 compiledHere(InProcess::NoCompiler);
