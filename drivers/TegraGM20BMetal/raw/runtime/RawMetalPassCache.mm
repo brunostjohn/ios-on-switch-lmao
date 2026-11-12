@@ -8,8 +8,9 @@ namespace {
 
 constexpr size_t kAttachments = 10;  // 8 colour, depth, stencil
 constexpr size_t kEntries = 16;
-constexpr uint64_t kIdleLookups =
-    256;  // a shape no pass took for this many is let go, with the textures its copy holds
+// A shape no pass took for this many lookups is let go, with the textures its copy holds: a frame's passes take theirs
+// within a few
+constexpr uint64_t kIdleLookups = 64;
 
 // Where Metal's descriptor classes keep what a pass reads, from their ivars' names and encodings
 struct Layout {
