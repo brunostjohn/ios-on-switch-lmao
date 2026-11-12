@@ -3,10 +3,10 @@ import HWTestCore
 import SwitchCompilerProbe
 
 /// The system shader compiler at the end of the run: the boot's first compiler still serves (the GPU kext's broker,
-/// kern.switch_shader_compiler: generation 1, nothing lost), in the jetsam band and with the limits its launcher gives it
-/// (SwitchShaderCompilerJetsam.h: launchd's jetsam properties overlay on iOS 27, the BlueTool stand-in's spawn on 17),
-/// read back from the kernel with memorystatus_control. Boot 12 of T-v3e had launchd's daemon default instead: band 0
-/// once aged, InactiveHard 6 MB, and seven compilers jetsam-killed in two minutes.
+/// kern.switch_shader_compiler: generation 1, nothing lost), in the jetsam band and with the limits its launcher gives
+/// it (SwitchShaderCompilerJetsam.h: launchd's jetsam properties overlay on iOS 27, the BlueTool stand-in's spawn on
+/// 17), read back from the kernel with memorystatus_control. Boot 12 of T-v3e had launchd's daemon default instead:
+/// band 0 once aged, InactiveHard 6 MB, and seven compilers jetsam-killed in two minutes.
 struct CompilerAliveTest: HWTest {
     let id = "system.compiler_alive"
     let name = "The shader compiler runs the whole boot in its own jetsam band and limits"
@@ -41,8 +41,10 @@ struct CompilerAliveTest: HWTest {
                         : KernelSysctl.unreadable("kern.switch_shader_compiler", probe.line_error), read
                 ),
                 ("a compiler is registered", probe.pid > 0),
-                ("the boot's first compiler still serves (generation 1, none lost)",
-                 probe.generation == 1 && probe.losses == 0),
+                (
+                    "the boot's first compiler still serves (generation 1, none lost)",
+                    probe.generation == 1 && probe.losses == 0
+                ),
                 (
                     Self.answered("its jetsam band", probe.priority_error),
                     asked && probe.priority_error == 0

@@ -46,8 +46,8 @@ kernel_driver(
 ios_binary(
     name = "BlueTool",
     srcs = ["BlueTool/BlueTool.c"],
-    hdrs = ["//drivers/TegraGM20BMetal:compiler/SwitchShaderCompilerJetsam.h"],
     out = "build/switch-bluetooth/BlueTool",
+    hdrs = ["//drivers/TegraGM20BMetal:compiler/SwitchShaderCompilerJetsam.h"],
     copts = [
         "-Os",
         "-Wall",

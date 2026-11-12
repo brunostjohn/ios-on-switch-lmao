@@ -2,8 +2,8 @@
 
 24B119's launchd ignores a daemon plist's JetsamProperties (its importer's handler for the key is empty) and merges a
 daemon's jetsam properties from its tables only: Override[label], then Override Global, then the plist's own top-level
-keys, then Default. J181's Daemon Override Global holds band 40 and 6 MB limits, so only an Override entry for the label,
-in the Supplemental cryptex's overlay that launchd loads, gives the compiler its own. EnablePressuredExit and
+keys, then Default. J181's Daemon Override Global holds band 40 and 6 MB limits, so only an Override entry for the
+label, in the Supplemental cryptex's overlay that launchd loads, gives the compiler its own. EnablePressuredExit and
 EnableTransactions are top-level plist keys that Global leaves alone: false, the compiler is never clean, aged or
 idle-exited. 21H461's BlueTool stand-in spawns it with the same numbers (SwitchShaderCompilerJetsam.h).
 """
@@ -23,7 +23,7 @@ HEADER = Path('drivers/TegraGM20BMetal/compiler/SwitchShaderCompilerJetsam.h')
 BLUETOOL = Path('drivers/SwitchBluetooth/BlueTool/BlueTool.c')
 MANIFEST = Path('overlay/manifest.json')
 SUPPLEMENTAL_DAEMONS = overlay.SUPPLEMENTAL + '/System/Library/LaunchDaemons/'
-# launchd's keys for a memory limit or band; any of them at a plist's top level is ignored on 24B119 like JetsamProperties
+# launchd's keys for a memory limit or band: at a plist's top level 24B119 ignores each, as it does JetsamProperties
 JETSAM_KEYS = {
     'JetsamProperties',
     'JetsamPriority',
@@ -104,7 +104,7 @@ class Ios27(unittest.TestCase):
 class Ios17(unittest.TestCase):
     def test_the_bluetool_stand_in_spawns_it_with_the_headers_band_and_limits(self):
         source = BLUETOOL.read_text()
-        call = re.search(r'posix_spawnattr_setjetsam_ext\(&attributes,([^;]*)\);', source)
+        call = re.search(r'posix_spawnattr_setjetsam_ext\(\s*&attributes,([^;]*)\);', source)
         self.assertIsNotNone(call)
         arguments = [a.strip() for a in call.group(1).split(',')]
         self.assertEqual(
@@ -117,9 +117,7 @@ class Ios17(unittest.TestCase):
             ],
         )
         self.assertIn('static const short kInactiveLimitFatal = 0x08;', source)
-        self.assertLess(
-            source.index('posix_spawnattr_setjetsam_ext(&attributes'), source.index('posix_spawn(&pid, kShaderCompiler')
-        )
+        self.assertLess(call.start(), source.index('posix_spawn(&pid, kShaderCompiler'))
 
 
 if __name__ == '__main__':

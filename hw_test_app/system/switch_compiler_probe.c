@@ -8,7 +8,7 @@
 #include "../../drivers/TegraGM20BMetal/compiler/SwitchShaderCompilerJetsam.h"
 
 /* xnu bsd/sys/kern_memorystatus.h: not in the SDK, the same on xnu-10063 and xnu-12377. */
-#define SWITCH_MEMORYSTATUS_CMD_GET_PRIORITY_LIST      1
+#define SWITCH_MEMORYSTATUS_CMD_GET_PRIORITY_LIST       1
 #define SWITCH_MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES 8
 #define SWITCH_MEMORYSTATUS_MEMLIMIT_ATTR_FATAL         0x1u
 
@@ -58,7 +58,8 @@ static void read_jetsam(struct switch_compiler_probe *out)
         out->limit_mb = entry.limit;
     }
     struct switch_memorystatus_memlimit_properties limits = {0};
-    if (memorystatus_control(SWITCH_MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES, out->pid, 0, &limits, sizeof(limits)) < 0) {
+    if (memorystatus_control(SWITCH_MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES, out->pid, 0, &limits, sizeof(limits)) <
+        0) {
         out->limits_error = errno;
         return;
     }
