@@ -10,8 +10,8 @@ MAGIC = b'GM20BPK1'
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
-# forms and their iterated blend programs; 22: compute states' answers (PackComputeFacts), compared sampler slots
-VERSION = 22
+# forms and their iterated blend programs; 23: compute states' answers (PackComputeFacts), compared sampler slots
+VERSION = 23
 SECTIONS = 14  # runtime/raw_pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/raw_pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
