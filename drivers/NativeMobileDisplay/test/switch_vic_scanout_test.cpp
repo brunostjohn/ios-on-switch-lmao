@@ -263,6 +263,8 @@ struct Display {
     Source *copySource = &source;
     unsigned presented = 0, retiredUnshown = 0, retired = 0, kicks = 0, lost = 0, taken = 0, finished = 0;
     int armedFor = -1;
+    switch_gpu_backing_token waiterFor = {};
+    unsigned waiters = 0;
 
     uint32_t surfaceAddress(int i) const
     {
@@ -322,6 +324,12 @@ struct Display {
     {
         armedFor = entry;
         return true;
+    }
+
+    void armCompletionFlipWaiter(const switch_gpu_backing_token &producer)
+    {
+        waiterFor = producer;
+        ++waiters;
     }
 
 #include "../SwitchVICScanoutDisplay.h"
@@ -390,6 +398,8 @@ TEST_F(VicScanout, APitchFrameIsPlacedInWindowABlocksAndFlipsFromVicsSyncpoint)
     EXPECT_EQ(placedOperation.nearest, 1u);
     EXPECT_EQ(fences, 1u);
     EXPECT_EQ(fenced.engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
+    EXPECT_EQ(display.waiters, 1u) << "host1x's syncpoint filter may write the flip once the fence is armed";
+    EXPECT_EQ(display.waiterFor.value, fenced.value);
     EXPECT_EQ(display.presented, 0u);
     ASSERT_TRUE(display.finishVicCopy(0));
     EXPECT_EQ(display.presented, 1u);

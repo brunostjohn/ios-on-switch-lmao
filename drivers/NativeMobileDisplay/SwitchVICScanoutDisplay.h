@@ -249,6 +249,8 @@ bool vicCopyWork()
         error = switch_host1x_token_fence(&job.output.view.producer, 1, native_legacy_gpu_complete, this);
     if (error)
         native_legacy_gpu_complete(this, error);
+    else
+        armCompletionFlipWaiter(job.output.view.producer);
     return true;
 }
 

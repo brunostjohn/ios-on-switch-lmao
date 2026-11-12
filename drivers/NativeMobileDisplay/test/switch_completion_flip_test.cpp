@@ -232,14 +232,17 @@ TEST_F(CompletionFlip, SuspendPutsAWrittenFlipInTheRingAndWithdrawsAnArmedOne)
     EXPECT_EQ(d.ring.front, kSlot + 1);
 }
 
-// The ring sees each latch at the first frame end after the boundary that took it.
+// The ring sees each latch at the first frame end after the boundary that took it, whichever of a producer's filter
+// and its completion wrote the flip.
 TEST_F(CompletionFlip, RandomOrdersNeverLoseOrDelayALatch)
 {
     Walk walk;
     randomWalk(d, 200000, walk);
-    EXPECT_GT(walk.completed, 10000u) << walk.completed;
-    EXPECT_GT(walk.fromCompletions, 5000u) << walk.fromCompletions;
+    EXPECT_GT(walk.completed, 8000u) << walk.completed;
+    EXPECT_GT(walk.fromCompletions, 2000u) << walk.fromCompletions;
+    EXPECT_GT(walk.fromFilters, 2000u) << walk.fromFilters;
     EXPECT_GT(d.shown.size(), 5000u) << d.shown.size();
+    EXPECT_FALSE(d.completionFilterOff);
     EXPECT_TRUE(gLog.empty());
 }
 

@@ -6,7 +6,9 @@ import UIKit
 /// present, the present job's completion otherwise), with no hop to the display's work loop, which takes the flip
 /// into its ring afterwards (drivers/NativeMobileDisplay/SwitchCompletionFlipDisplay.h). Runs display.pacing's
 /// full-screen colour change for 5 s and reads the kernel's window A flip counters around it (kern.switch_flips_*,
-/// debug kernels): completions must have written flips, each ahead of the work loop, with the frames still paced.
+/// debug kernels): completions must have written flips, each ahead of the work loop, with the frames still paced. A
+/// watched present's and a VIC copy's flip comes earlier still, from the producer's primary interrupt filter (filter,
+/// filter_lead_us: how far ahead of its completion); filter_share is their part of window A's flips.
 /// refused is the boot's total: a unit whose window A aperture does not latch the completion's stores turns completion
 /// flips off at the first one (one SwitchDisplay line), so a FAIL with refused=1 and d_completion=0 is that verdict.
 struct CompletionFlipTest: HWTest {
@@ -14,7 +16,9 @@ struct CompletionFlipTest: HWTest {
     let name = "Window A flips written by their producers' completions"
     let subsystem = Subsystem.display
 
-    static let counters = ["completion", "gate", "lead_us", "withdrawn", "refused"]
+    static let counters = [
+        "completion", "gate", "lead_us", "withdrawn", "refused", "filter", "filter_lead_us", "filter_declined",
+    ]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (before, unread) = Self.totals()
@@ -47,6 +51,9 @@ struct CompletionFlipTest: HWTest {
         metrics.set("frames", stamps.count)
         metrics.set("completion_share", flips > 0 ? Double(completion) / Double(flips) : 0, digits: 3)
         metrics.set("lead_mean_us", completion > 0 ? Double(delta("lead_us")) / Double(completion) : 0, digits: 1)
+        let filter = delta("filter")
+        metrics.set("filter_share", flips > 0 ? Double(filter) / Double(flips) : 0, digits: 3)
+        metrics.set("filter_lead_mean_us", filter > 0 ? Double(delta("filter_lead_us")) / Double(filter) : 0, digits: 1)
         metrics.set("dropped", Stats.droppedFrames(intervals: intervals, period: 1000.0 / 60))
         return .judged(
             [

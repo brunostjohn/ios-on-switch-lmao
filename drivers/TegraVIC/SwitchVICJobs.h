@@ -27,6 +27,8 @@ void switch_vic_jobs_recovered(bool ready);
 void switch_vic_jobs_settle();
 
 extern "C" int switch_vic_wait(uint32_t fence);
+// switch_gpu_backing_token_filter_status for VIC's tokens (SwitchGpuBacking.h).
+extern "C" int switch_vic_token_filter_status(const switch_gpu_backing_token *token);
 int switch_vic_submit_batch(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                             switch_gpu_backing_use *uses, uint32_t useCount, void (*completion)(void *, int),
                             void *context, uint32_t *fence);

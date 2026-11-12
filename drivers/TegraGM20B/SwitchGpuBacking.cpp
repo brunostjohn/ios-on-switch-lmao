@@ -18,6 +18,7 @@ switch_gpu_backing_engine engines[SWITCH_GPU_ENGINE_COUNT];
 uint32_t engine_ready[SWITCH_GPU_ENGINE_COUNT];
 switch_gpu_backing_visibility visibility[SWITCH_GPU_ENGINE_COUNT];
 uint32_t visibility_ready[SWITCH_GPU_ENGINE_COUNT];
+switch_gpu_backing_filter_status filter_status[SWITCH_GPU_ENGINE_COUNT];
 switch_gpu_backing_semantics semantics[SWITCH_GPU_ENGINE_COUNT];
 uint32_t semantics_ready[SWITCH_GPU_ENGINE_COUNT];
 uint64_t next_id, next_generation;
@@ -556,6 +557,27 @@ extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token 
 {
     if (const auto *ops = token ? switch_gpu_backing_engine_ops(token->engine) : nullptr)
         ops->release_token(token);
+}
+
+extern "C" int switch_gpu_backing_register_filter_status(uint32_t engine,
+							   switch_gpu_backing_filter_status status)
+{
+	if (!engine || engine >= SWITCH_GPU_ENGINE_COUNT || !status)
+		return -22;
+	switch_gpu_backing_filter_status expected = nullptr;
+	return __atomic_compare_exchange_n(&filter_status[engine], &expected, status, false,
+					   __ATOMIC_RELEASE, __ATOMIC_RELAXED)
+		       ? 0
+		       : -16;
+}
+
+extern "C" int switch_gpu_backing_token_filter_status(const switch_gpu_backing_token *token)
+{
+	const switch_gpu_backing_filter_status status =
+		token && token->engine < SWITCH_GPU_ENGINE_COUNT
+			? __atomic_load_n(&filter_status[token->engine], __ATOMIC_ACQUIRE)
+			: nullptr;
+	return status ? status(token) : 0;
 }
 
 extern "C" int switch_gpu_backing_register_visibility(uint32_t engine,

@@ -177,10 +177,13 @@ private:
         hardwareStep(stage);
     }
 
-    // A host1x producer's fence: reached, or released by the CPU when its engine cancelled it.
+    // A host1x producer's fence: reached, or released by the CPU when its engine cancelled it. The producer's failure
+    // is folded in here already, ahead of the job's own fence: a host1x filter waiter reads the job's physical result
+    // with nothing but that fence left (switch_gpu_backing_token_filter_status), before hardwareStep's fold.
     static void produced(switch_host1x_fence *fence, int)
     {
         auto &stage = stages[reinterpret_cast<SwitchHost1xInputFence *>(fence)->slot];
+        foldProducerFailure(stage);
         inputStep(stage);
         hardwareStep(stage);
     }
@@ -198,14 +201,19 @@ private:
         }
     }
 
-    static void hardwareStep(SwitchHost1xStage &stage)
+    static void foldProducerFailure(SwitchHost1xStage &stage)
     {
-        if (__atomic_sub_fetch(&stage.hardware, 1u, __ATOMIC_ACQ_REL))
-            return;
         int ran = 1;
         if (__atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) == ran)
             if (const int failed = stage.producers.failure())
                 __atomic_compare_exchange_n(&stage.physical, &ran, failed, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
+
+    static void hardwareStep(SwitchHost1xStage &stage)
+    {
+        if (__atomic_sub_fetch(&stage.hardware, 1u, __ATOMIC_ACQ_REL))
+            return;
+        foldProducerFailure(stage);
         Engine::physical(slotOf(stage), stage.physical);
         finalStep(stage);
     }

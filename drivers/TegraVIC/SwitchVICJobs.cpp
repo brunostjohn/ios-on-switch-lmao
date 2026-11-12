@@ -195,6 +195,7 @@ bool switch_vic_jobs_start(const TegraVICBuffer &configs, uint32_t syncpt, uint3
     if (switch_gpu_backing_register_engine(SWITCH_GPU_ENGINE_VIC, &operations) ||
         !switch_vic_semantics_start(syncpt, semanticRetired))
         return false;
+    (void)switch_gpu_backing_register_filter_status(SWITCH_GPU_ENGINE_VIC, switch_vic_token_filter_status);
     switch_vic_semantics_physical(completed);
     return true;
 }
@@ -492,6 +493,26 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
                               uint32_t *fence, SwitchVICEvents *events)
 {
     return switch_vic_submit_checked(jobs, count, acquire, ownership, completion, context, fence, events, nullptr);
+}
+
+// switch_gpu_backing_token_filter_status for VIC: the job's own stage words, no lock. Its slot stays the job's until
+// the work-loop pass that expires this fence retires it, which runs after the filter.
+extern "C" int switch_vic_token_filter_status(const switch_gpu_backing_token *token)
+{
+    if (!token || token->engine != SWITCH_GPU_ENGINE_VIC || token->queue != gSyncpt)
+        return 0;
+    for (uint32_t slot = 0; slot < SwitchVICQueue::kSlots; ++slot) {
+        const auto &job = gQueue.jobs[slot];
+        if (__atomic_load_n(&job.fence, __ATOMIC_ACQUIRE) != token->value)
+            continue;
+        const auto &stage = Stages::stages[slot];
+        return !__atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE) &&
+                       __atomic_load_n(&stage.hardware, __ATOMIC_ACQUIRE) == 1 &&
+                       __atomic_load_n(&stage.physical, __ATOMIC_ACQUIRE) == 1
+                   ? 1
+                   : 0;
+    }
+    return 0;
 }
 
 extern "C" int switch_vic_wait(uint32_t fence)

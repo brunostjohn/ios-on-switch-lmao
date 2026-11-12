@@ -78,9 +78,10 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 int tegra_gm20b_scanout_fence(void *display, uint64_t pa);
 // Provided by NativeLegacyDisplay: the offer's copy is done (status 0: every byte of the target is in DRAM, the copy engine's writes
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
-// partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it records the status, writes
-// window A's flip for a direct frame the display armed (an IOSimpleLock and six registers, SwitchCompletionFlipDisplay.h) and
-// signals the display's work loop, and never sleeps.
+// partial frame; the display does not flip to it). Thread context with interrupts on (a producer's work loop or work item; its
+// interrupt filter calls tgm_present_filter_callout's fn instead); it records the status, writes window A's flip for a frame the
+// display armed (an IOSimpleLock and six registers, SwitchCompletionFlipDisplay.h) and signals the display's work loop, and never
+// sleeps.
 void native_legacy_gpu_complete(void *display, int status);
 // Provided by the GPU driver: fn(ctx, 0) runs in the GPU nonstall interrupt's primary filter (interrupts off, under a
 // simple lock) when an accepted watched offer's producer (TEGRA_SCANOUT_COPY_PRODUCER_WATCH) is complete with its
