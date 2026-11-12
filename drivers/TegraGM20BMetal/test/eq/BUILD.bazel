@@ -3,7 +3,7 @@
 # from raw's log where it differed from NVK's (eq.sh's settings) only as eq_rules.py allows, while NVK could still be run
 # (testdata: each IPSW kind's frame corpus and goldens).
 #
-#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/eq:eq_test   builds the full pack (manual)
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/eq:eq_test   builds the full pack
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -142,8 +142,8 @@ py_test(
         ":rawframe",
         "//gpu/seed:raw_pack",
     ] + glob(["testdata/*"]),
+    # m2v: //gpu/seed:raw_pack's probe runs NVK until the pack generator stops needing it
     tags = [
-        "manual",
         "m2v",
         "pack",
     ],
