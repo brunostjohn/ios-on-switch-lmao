@@ -16,12 +16,12 @@ import sys
 import time
 from pathlib import Path
 
-from tools.benchloop import blend, doctor, report, rop, session
+from tools.benchloop import blend, doctor, floatadd, report, rop, session
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('doctor', 'run', 'latency', 'blend', 'rop'))
+    p.add_argument('command', choices=('doctor', 'run', 'latency', 'blend', 'rop', 'floatadd'))
     p.add_argument('inputs', nargs='*', type=Path)
     p.add_argument('--udid')
     p.add_argument('--fake', type=Path, help='a folder the fake device works in')
@@ -47,6 +47,8 @@ def experiments(args: argparse.Namespace) -> list[dict]:
     if args.command == 'blend':
         enables = (None,) if args.blend_enable == 'as-is' else (True, False)
         return [e for path in args.inputs for e in blend.generate(blend.Table.load(path), args.format, 32, enables)]
+    if args.command == 'floatadd':
+        return floatadd.generate()
     return rop.generate()
 
 
