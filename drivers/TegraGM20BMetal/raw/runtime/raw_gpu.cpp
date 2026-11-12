@@ -4337,7 +4337,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
-            emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance);
+            emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance, Shortcut{});
         }
         cb_->draws++;
         return true;
