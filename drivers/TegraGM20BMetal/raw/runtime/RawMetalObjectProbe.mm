@@ -15,6 +15,16 @@
 
 @end
 
+// A render state also answers whether its record is the pack's (hw_test_app's states that must never wait on a compile)
+@implementation RMPipeline (NativeProbe)
+
+- (NSDictionary<NSString *, id> *)switchRawObject
+{
+    return @{@"class" : NSStringFromClass([self class]), @"twin" : @(_twin != nil), @"packed" : @(_packed)};
+}
+
+@end
+
 @implementation SwitchSharedEvent (NativeProbe)
 
 - (NSDictionary<NSString *, id> *)switchRawObject

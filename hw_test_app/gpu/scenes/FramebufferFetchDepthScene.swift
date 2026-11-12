@@ -87,6 +87,11 @@ struct FramebufferFetchDepthScene: GPUScene {
                 result.metrics.set("path_\(key)", timing.path)
                 if RawFacade.kind(of: gpu.device) == "raw" {
                     result.expect(timing.path == "raw", "\(key) did not execute entirely raw: \(timing.path)")
+                    if let fetchPacked = RawFacade.packed(fetch), let ordinaryPacked = RawFacade.packed(ordinary) {
+                        let packed = fetchPacked && ordinaryPacked
+                        result.metrics.set("packed_\(key)", packed)
+                        result.expect(packed, "\(key): a state made at its creation, not the pack's")
+                    }
                     let after = RawFacade.counters(of: gpu.device)
                     let draws = (after["interlock_draws"] ?? 0) - (before["interlock_draws"] ?? 0)
                     result.metrics.set("interlock_\(key)", draws)

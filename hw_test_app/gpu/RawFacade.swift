@@ -22,6 +22,12 @@ public enum RawFacade {
         ask(device, "switchM2VDevice") as? MTLDevice
     }
 
+    /// Whether the facade drew `state` from the raw pack's record rather than one made at its creation (nil off the
+    /// facade or in a release runtime, raw/runtime/RawMetalObjectProbe.mm).
+    public static func packed(_ state: MTLRenderPipelineState) -> Bool? {
+        ((ask(state, "switchRawObject") as? [String: Any])?["packed"] as? NSNumber)?.boolValue
+    }
+
     /// The facade's cumulative command buffer counters (empty off the facade).
     public static func counters(of device: MTLDevice) -> [String: Int] {
         guard let counters = ask(device, "switchRawCounters") as? [String: NSNumber] else { return [:] }
