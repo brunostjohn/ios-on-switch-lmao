@@ -94,8 +94,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 - (void)dealloc
 {
     _twin = nil;
-    if (_heap && !_raw.arena)
+    if (_heap && !_raw.arena) {
         _heap->_used -= _heapBytes;
+        const raw::Texture::StorageRange storage = _raw.storageRange();
+        rmHeapForget(_heap, storage.bytes ? storage.va : _raw.va);
+    }
     if (_rawOk && _surface && (_raw.converted() || xrOverPlanes(_raw)))
         surfaceConverted(_surfaceWrites, false);
     rmHeapForgetTexture(self);

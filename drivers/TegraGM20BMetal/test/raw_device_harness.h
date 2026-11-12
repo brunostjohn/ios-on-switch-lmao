@@ -33,6 +33,21 @@ struct DeviceHarness {
     {
         return d.heapTables_;
     }
+
+    static const Bo &handleTables(const Device &d)
+    {
+        return d.handleTables_;
+    }
+
+    static const Bo &arena(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].bo;
+    }
+
+    static bool arenaWriteCombined(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].wc;
+    }
 };
 
 }  // namespace raw
@@ -92,12 +107,6 @@ protected:
     {
         kernel_model::Slot *s = liveSlot();
         return s ? uint32_t(s - kernel_model::model.slots) + 1 : 0;
-    }
-
-    bool freed(uint64_t handle) const
-    {
-        const auto &f = kernel_model::model.freed;
-        return std::find(f.begin(), f.end(), handle) != f.end();
     }
 };
 

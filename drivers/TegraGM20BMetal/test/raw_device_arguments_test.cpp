@@ -3,7 +3,6 @@
 // ExecutionStatus words at its creation, its set 1 holds every texture whose ID was named where its class fits, and its
 // draws are submitted.
 #include "raw_device_harness.h"
-#include "SwitchGpuJobVisibility.h"
 #include "../raw/runtime/raw_record.h"
 
 namespace {
@@ -150,22 +149,24 @@ TEST_F(DeviceArguments, ANamedTextureIsInTheStatesSetAndItsDrawsAreSubmitted)
     EXPECT_EQ(draw(), "");
 }
 
-TEST_F(DeviceArguments, AJobAfterTheTablesChangedNamesThemHostWrittenAndTheNextDoesNot)
+// The tables and the state's set 1 are members of the device's resource set: no job names them as a use, and the job after
+// their CPU writes says so by its flag, whatever its visibility, so the kernel invalidates the L2 before it
+TEST_F(DeviceArguments, AJobAfterTheTablesChangedIsHostWrittenAndTheNextIsNot)
 {
-    const auto hostWritten = [] {
-        size_t n = 0;
-        for (const auto &use : kernel_model::model.jobs.back().uses)
-            n += (use.access & TegraGM20BSurfaceHostWritten) != 0;
-        return n;
-    };
     raw::HeapTexture t;
     t.sampleTic = sampled.tic;
     t.facts.textureType = 2;
     ASSERT_TRUE(dev.heapTexture(sampled.tic, &t));
-    ASSERT_EQ(draw(true), "");
-    const size_t changed = hostWritten();
-    ASSERT_EQ(draw(true), "");
-    EXPECT_GE(changed, hostWritten() + 2);  // the handle tables and the state's set 1
+    for (bool explicitly : {false, true}) {
+        ASSERT_TRUE(dev.heapTexture(sampled.tic, explicitly ? &t : nullptr));
+        ASSERT_EQ(draw(explicitly), "");
+        const kernel_model::Job &changed = kernel_model::model.jobs.back();
+        EXPECT_TRUE(changed.flags & TegraGM20BJobHostWritten) << explicitly;
+        for (const auto &use : changed.uses)
+            EXPECT_NE(use.handle, raw::DeviceHarness::handleTables(dev).handle);
+        ASSERT_EQ(draw(explicitly), "");
+        EXPECT_FALSE(kernel_model::model.jobs.back().flags & TegraGM20BJobHostWritten) << explicitly;
+    }
 }
 
 TEST_F(DeviceArguments, ATexturesIdSamplesItAsASlotBindsIt)
@@ -252,32 +253,12 @@ TEST_F(DeviceArguments, ASlotStatesDrawWritesItsRootTableOverTheBoundBuffer)
     EXPECT_EQ(table[3].guest, buffer.va);
     EXPECT_EQ(table[3].size, (buffer.length + 15) & ~uint64_t(15));
     EXPECT_EQ(table[3].bindOffset, 48u);
+    const uint64_t bo = kernel_model::model.resolve({buffer.va, TegraGM20BSurfaceGpuAddress, 0});
+    ASSERT_NE(bo, 0u);
     bool written = false;
     for (const auto &use : kernel_model::model.jobs.back().uses)
-        written |= (use.access & TegraGM20BSurfaceGpuAddress) && use.handle == buffer.va &&
-                   (use.access & TegraGM20BSurfaceWrite);
+        written |= use.handle == bo && (use.access & TegraGM20BSurfaceWrite);
     EXPECT_TRUE(written);
-}
-
-// A job submitted without explicit visibility names nothing host-written, and needs not: the kernel acquires every CPU
-// write before such a job (TegraGM20BUserClientSubmit.cpp exec)
-TEST_F(DeviceArguments, ALegacyJobAcquiresEveryHostWrite)
-{
-    raw::HeapTexture t;
-    t.sampleTic = sampled.tic;
-    t.facts.textureType = 2;
-    ASSERT_TRUE(dev.heapTexture(sampled.tic, &t));
-    ASSERT_EQ(draw(false), "");
-    const kernel_model::Job &legacy = kernel_model::model.jobs.back();
-    EXPECT_TRUE(switch_gpu_submit_acquires_host_writes(legacy.flags));
-    ASSERT_TRUE(dev.heapTexture(sampled.tic, nullptr));
-    ASSERT_EQ(draw(true), "");
-    const kernel_model::Job &exact = kernel_model::model.jobs.back();
-    EXPECT_FALSE(switch_gpu_submit_acquires_host_writes(exact.flags));
-    bool named = false;
-    for (const auto &use : exact.uses)
-        named |= (use.access & TegraGM20BSurfaceHostWritten) != 0;
-    EXPECT_TRUE(named);
 }
 
 }  // namespace

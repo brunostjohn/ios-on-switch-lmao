@@ -115,6 +115,8 @@ static void giveRecording(RMCommandBuffer *b)
         facts.surfaceWrites = root->_surfaceWrites;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
+    else if ([object isKindOfClass:[RMHeap class]])
+        facts.kind = RMResourceKind::Heap;
     _plan.registerResource((__bridge void *)object, facts);
 }
 

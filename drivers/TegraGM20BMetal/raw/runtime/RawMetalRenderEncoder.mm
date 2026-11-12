@@ -524,7 +524,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [self useResource:resource usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
-// Every resource the heap holds, as useResource names one for reading: an argument buffer may reach any of them
+// The heap as one use for reading (an argument buffer may reach any of its resources): its jobs name what it holds when
+// they are submitted (raw_heap_members.h), whatever it holds
 - (void)useHeap:(id<MTLHeap>)heap
 {
     [self useHeap:heap stages:MTLRenderStageVertex | MTLRenderStageFragment];
@@ -532,9 +533,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
-    rmHeapEach(heap, ^(id<MTLResource> resource) {
-        [self useResource:resource usage:MTLResourceUsageRead stages:stages];
-    });
+    if ([(id)heap isKindOfClass:[RMHeap class]])
+        [self useResource:(id<MTLResource>)heap usage:MTLResourceUsageRead stages:stages];
 }
 
 - (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources

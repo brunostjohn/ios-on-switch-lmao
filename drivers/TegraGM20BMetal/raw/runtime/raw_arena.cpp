@@ -6,11 +6,32 @@
 #include "TegraGM20BLayout.h"
 
 #include <mach/mach.h>
+#include <mach/memory_object_types.h>
 
 namespace raw {
 namespace {
 constexpr uint64_t kArenaGranule = 0x10000;  // the GMMU big page every VA range starts and ends on (raw_kernel.cpp)
 constexpr uint64_t kArenaPitchAlign = 256;   // a pitch render target's address and rows (linearTarget), a cbuf's base
+
+// An arena's host pages at `at` (`fixed`: in place of the ones there). A shared heap's are write-combined, as the device's
+// shared buffers are (Buffer::wc): a heap used whole (useHeap) leaves no resource of it for an encoder to clean, so what the
+// CPU writes there must need no clean. A private heap's are cacheable: the CPU never writes them.
+bool hostPages(uint64_t bytes, bool writeCombined, vm_address_t &at, bool fixed)
+{
+    const int place = fixed ? VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE : VM_FLAGS_ANYWHERE;
+    if (!writeCombined)
+        return vm_allocate(mach_task_self(), &at, bytes, place) == KERN_SUCCESS;
+    memory_object_size_t size = bytes;
+    mach_port_t entry = MACH_PORT_NULL;
+    vm_prot_t permission = MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE;
+    SET_MAP_MEM(MAP_MEM_WCOMB, permission);
+    if (mach_make_memory_entry_64(mach_task_self(), &size, 0, permission, &entry, MACH_PORT_NULL) != KERN_SUCCESS)
+        return false;
+    const kern_return_t kr = vm_map(mach_task_self(), &at, vm_size_t(bytes), 0, place, entry, 0, FALSE,
+                                    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    mach_port_deallocate(mach_task_self(), entry);
+    return kr == KERN_SUCCESS;
+}
 }  // namespace
 
 bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bool blockLinear, uint64_t &bytes,
@@ -53,9 +74,10 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
         return false;
     bytes = (bytes + kArenaGranule - 1) & ~(kArenaGranule - 1);
     vm_address_t cpu = 0;
-    if (!bytes || vm_allocate(mach_task_self(), &cpu, bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+    if (!bytes || !hostPages(bytes, !blockLinear, cpu, false))
         return false;
     Arena a;
+    a.wc = !blockLinear;
     a.bytes = bytes;
     a.kind = blockLinear ? TGM_LAYOUT_KIND : kPteKindPitch;
     a.cpu = reinterpret_cast<uint8_t *>(cpu);
@@ -63,8 +85,8 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
     a.used = true;
     std::lock_guard<std::mutex> l(lock_);
     a.va = k_.reserveVa(bytes);
-    // Kind 0xfe changes the sector interpretation inside a GOB. Buffers retain a pitch view of the same BO.
-    a.bufferVa = explicitPlacement && blockLinear ? k_.reserveVa(bytes) : a.va;
+    // Kind 0xfe changes the sector interpretation inside a GOB. Buffers take a pitch view of the same BO.
+    a.bufferVa = blockLinear ? k_.reserveVa(bytes) : a.va;
     if (!a.va || !a.bufferVa || !bindArena(a)) {
         if (a.va)
             k_.releaseVa(a.va, bytes);
@@ -146,6 +168,7 @@ bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint3
         return false;
     t.span = {arena, offset, bytes, a.va + offset, a.cpu + offset};
     t.arena = true;
+    t.wc = a.wc;
     t.va = t.span.va;
     t.cpu = t.span.cpu;
     tgm_layout bl;
@@ -182,6 +205,7 @@ bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::option
     b = {};
     b.span = {arena, offset, bytes, a.bufferVa + offset, a.cpu + offset};
     b.arena = true;
+    b.wc = a.wc;
     b.va = b.span.va;
     b.cpu = b.span.cpu;
     b.length = std::max<uint64_t>(length, 16);
@@ -251,7 +275,7 @@ void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
     }
     k_.free(a.bo);
     vm_address_t at = vm_address_t(a.cpu);
-    vm_allocate(mach_task_self(), &at, a.bytes, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
+    hostPages(a.bytes, a.wc, at, true);
     RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
     a.purged = true;
 }

@@ -11,6 +11,28 @@ static bool importContains(const Import *import, uint64_t va, uint64_t bytes)
     return va >= base && va - base <= import->bo.bytes && bytes <= import->bo.bytes - (va - base);
 }
 
+// lock_ held. A heap's arena is one BO, named whole for reading (useHeap's resources are read-only), host-written for a heap
+// the CPU writes: its write-combined pages leave no CPU line behind, the GPU's L2 may hold stale ones. Each resource the heap
+// made outside its arena is a use of its own.
+void CommandBuffer::nameHeaps()
+{
+    Device &d = *dev_;
+    for (const HeapMembers *heap : heaps_) {
+        const uint32_t written = heap->hostVisible() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u;
+        if (heap->arena() < d.arenas_.size()) {
+            const Device::Arena &a = d.arenas_[heap->arena()];
+            if (a.used && !a.purged && !d.member(a.bo))
+                surfaces_.addAccess(a.bo.handle, TegraGM20BSurfaceRead | written);
+        }
+        heap->each([&](const HeapMember &m) {
+            if (!d.member(m.va, m.bytes))
+                surfaces_.addAddress(m.va, m.bytes, false,
+                                     (m.hostVisible ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u) |
+                                         (m.bytes <= UINT32_MAX ? uint32_t(TegraGM20BSurfaceRange) : 0u));
+        });
+    }
+}
+
 void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     RAW_ENCODE_SPAN(Use);

@@ -78,7 +78,7 @@ struct RMPlanOperation {
 
 enum class RMPlanError : uint8_t { None, NestedEncoder, EventInsideEncoder, UnclosedEncoder };
 
-enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Count };
+enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Heap, Count };
 
 struct RMResourceFacts {
     enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };

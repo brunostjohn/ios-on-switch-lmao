@@ -83,9 +83,9 @@ void once(NSString *text);
 bool rmHeapHolds(uint32_t heapClass, const raw::HeapTextureFacts *facts);
 void rmHeapForgetTexture(RMTexture *t);
 void rmHeapForgetSampler(RMSampler *s);
-// A heap's live resources (RawMetalHeap.mm): one made from it joins them, and useHeap names each to the command buffer
-void rmHeapHold(RMHeap *heap, id resource);
-void rmHeapEach(id<MTLHeap> heap, void (^each)(id<MTLResource> resource));
+// A resource a heap made outside its arena (RawMetalHeap.mm): a member of what a job names of the heap until it goes
+void rmHeapHold(RMHeap *heap, const raw::HeapMember &member);
+void rmHeapForget(RMHeap *heap, uint64_t va);
 // newArgumentEncoderWithBufferIndex: of a function (RawMetalArgumentEncoder.mm): nil where Metal makes no encoder
 id<MTLArgumentEncoder> rmFunctionArgumentEncoder(RMFunction *function, NSUInteger index);
 double hostSeconds();

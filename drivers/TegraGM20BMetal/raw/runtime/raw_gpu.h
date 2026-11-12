@@ -61,6 +61,7 @@
 #include "raw_fence.h"
 #include "raw_host_access.h"
 #include "raw_heap.h"
+#include "raw_heap_members.h"
 #include "raw_heap_tables.h"
 #include "raw_order.h"
 #include "raw_pack.h"
@@ -1001,6 +1002,12 @@ public:
 
     // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
     void useAddress(uint64_t va, uint64_t bytes, bool write);
+    // An MTLHeap an encoder used (useHeap): named once per command buffer, its jobs name what it holds at their commit
+    void useHeap(const HeapMembers &heap)
+    {
+        if (std::find(heaps_.begin(), heaps_.end(), &heap) == heaps_.end())
+            heaps_.push_back(&heap);
+    }
     void use(const Buffer &buffer, bool write);
     void use(const Texture &texture, bool write);
 
@@ -1020,6 +1027,8 @@ private:
     uint64_t batchLimit() const;
     DirtyRanges dirty_;
     std::vector<Texture *> backings_;                            // memoryless backings it uses
+    std::vector<const HeapMembers *> heaps_;                     // useHeap's, each kept alive by the facade's command buffer
+    void nameHeaps();                                            // lock_ held
     SurfaceList surfaces_;
     UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
@@ -1704,7 +1713,8 @@ private:
 
     // One job of `channel` naming the set; `uses`, the job's uses no member holds
     bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, const SurfaceList &uses,
-             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {})
+             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {},
+             bool hostWritten = false)
     {
         if (!uses.valid()) {
             if (result)
@@ -1712,7 +1722,7 @@ private:
             return false;
         }
         const KernelJob made = {channel, pushes, count, uses.uses().data(), uint32_t(uses.uses().size()), 0, 0,
-                                visibility, events};
+                                visibility, events, hostWritten};
         return submitInSet(k_, set_, view, true, made, seqno, result);
     }
 
@@ -1932,6 +1942,7 @@ private:
         HeapPlacement place;
         uint32_t leases = 0;  // m2v views of its resources (raw_alias.cpp): never purged or freed under one
         bool used = false, isVolatile = false, purged = false, dying = false;
+        bool wc = false;  // its host pages are write-combined (raw_arena.cpp hostPages)
     };
 
     std::vector<Arena> arenas_;

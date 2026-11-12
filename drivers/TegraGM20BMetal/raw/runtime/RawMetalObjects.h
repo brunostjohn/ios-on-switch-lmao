@@ -83,8 +83,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::atomic<uint64_t> _used;  // what its resources made outside its arena hold
     uint32_t _arena;              // its arena + 1; 0: none
     std::atomic<int> _purgeable;  // the MTLPurgeableState asked last (0: never asked)
-    // its live resources, weakly: what useHeap names to a command buffer (an argument buffer may reach any of them)
-    NSHashTable *_resources;
+    // what a command buffer that uses it names (raw_heap_members.h): its arena, and the resources it made outside it
+    std::shared_ptr<raw::HeapMembers> _members;
 }
 @end
 

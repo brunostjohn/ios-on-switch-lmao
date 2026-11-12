@@ -802,6 +802,7 @@ bool Device::heapMemory()
     heapTables_.attach({handleTables_.cpu, handleTables_.va, handleTables_.bytes},
                        {argumentRoots_.cpu, argumentRoots_.va, argumentRoots_.bytes}, kTicCount, kTscCount,
                        k_.info().va_start, k_.info().va_end, heapHolds_);
+    set_.add(k_, {{&handleTables_, TegraGM20BSurfaceRead}, {&argumentRoots_, TegraGM20BSurfaceWrite}});
     return true;
 }
 
@@ -826,6 +827,7 @@ const HeapSet *Device::heapSet(const PackPipeline &rec)
     if (!rec.heapBytes || !k_.allocControl(rec.heapBytes, bo, ControlUse::HandleTables))
         return nullptr;
     heapSets_.push_back(bo);
+    set_.add(k_, bo, TegraGM20BSurfaceRead);
     const HeapSet *set = heapTables_.add(rec, {bo.cpu, bo.va, bo.bytes});
     tablesWritten();
     return set;
@@ -3405,6 +3407,7 @@ CommandBuffer *Device::begin()
     cb.batchWork_ = {};
     cb.dirty_.clear();
     cb.backings_.clear();
+    cb.heaps_.clear();
     cb.surfaces_.clear();
     cb.named_.clear();
     cb.sharedWaits_.clear();
@@ -3929,12 +3932,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
             tablesBefore = d.tablesInvalidated_;
             d.tablesInvalidated_ = d.tablesWritten_;
         }
+        // members (the set's own) are host-written by the job's flag; one the kernel kept out, by its use
         const uint32_t tables =
             TegraGM20BSurfaceRead | (tablesInvalidate ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u);
-        if (d.handleTables_.handle)
+        if (d.handleTables_.handle && !d.member(d.handleTables_))
             surfaces_.addAccess(d.handleTables_.handle, tables);
         for (const Bo &bo : d.heapSets_)
-            surfaces_.addAccess(bo.handle, tables);
+            if (!d.member(bo))
+                surfaces_.addAccess(bo.handle, tables);
         for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_, &d.argumentRoots_})
             control(*bo, true);
         for (const auto &part : d.heapParts_)
@@ -3942,6 +3947,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
                 (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
         for (const Bo &bo : d.slmOutgrown_)
             control(bo, true);
+        nameHeaps();
         // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
         control(d.upload_.bo, true);
         for (const Bo &bo : d.upload_.outgrown)
@@ -3964,7 +3970,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_DIAGNOSTIC(noteExecPushes(count));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events);
+        const bool executed =
+            d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events, tablesInvalidate);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;

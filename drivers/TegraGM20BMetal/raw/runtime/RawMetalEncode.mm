@@ -85,6 +85,10 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         cleanBuffer(use);
         useTexture(rc, (__bridge RMTexture *)use.object, use.access & raw::ResourceUse::Write);
     });
+    cb->_plan.forEachResource(from, to, RMResourceKind::Heap, [&](const RMRangeResource &use) {
+        if (__unsafe_unretained RMHeap *heap = (__bridge RMHeap *)use.object; heap->_members)
+            rc->useHeap(*heap->_members);
+    });
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
