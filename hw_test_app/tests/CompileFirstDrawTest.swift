@@ -40,9 +40,9 @@ struct CompileFirstDrawTest: HWTest {
         switch_compiler_probe(&probe)
         let generation = probe.generation
         notify_post("com.brunostjohn.switch.debug.compiler-dies-at-next-request")
-        DeliberateCompilerDeaths.shared.add()
         let survived = try pipeline(gpu, salt: salt + 2)
         switch_compiler_probe(&probe)
+        if probe.generation > generation { DeliberateCompilerDeaths.shared.add() }
         metrics.set("generations", Int(probe.generation) - Int(generation))
         checks.append(("the compiler died holding the request and the next one made it", probe.generation > generation))
         if let answer = RawFacade.compile(of: survived) {
