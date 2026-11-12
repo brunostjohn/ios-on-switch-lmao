@@ -1,0 +1,110 @@
+# eq: raw's frame against the NVK side's, draw by draw, with no NVK, m2v or mock kernel: rawframe draws over the kernel
+# model, eq_capture.cpp decodes what it submits with nvdec, and draw_goldens.py holds the log to per-draw goldens of the
+# NVK side's log, recorded with eq.sh's settings before NVK went (testdata: each IPSW kind's frame corpus, NVK's
+# programs.bin and the goldens).
+#
+#   bazel test --config=ios27 //drivers/TegraGM20BMetal/test/eq:eq_test   builds the full pack (manual)
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+GM20B_METAL = "//drivers/TegraGM20BMetal"
+
+cc_binary(
+    name = "rawframe",
+    testonly = True,
+    srcs = [
+        "eq_capture.cpp",
+        "//drivers/TegraGM20BMetal/test:raw_kernel_model.h",
+    ] + [GM20B_METAL + ":raw/" + f for f in [
+        "fx/test/twod_sim.cpp",
+        "fx/test/twod_sim.h",
+        "pack/nvdec.cpp",
+        "pack/nvdec.h",
+        "pack/nvdec_comp.h",
+        "pack/nvdec_compute.cpp",
+        "pack/probe_record.h",
+        "pack/mesa/mme_bitpack_helpers.h",
+        "pack/mesa/mme_fermi.c",
+        "pack/mesa/mme_fermi.h",
+        "pack/mesa/mme_fermi_sim.c",
+        "pack/mesa/mme_fermi_sim.h",
+        "pack/mesa/mme_sim.h",
+        "pack/mesa/nv_device_info.h",
+        "pack/mesa/nv_push_cl902d.h",
+        "pack/mesa/nv_push_cl9097.h",
+        "pack/mesa/util/bitpack_helpers.h",
+        "pack/mesa/util/macros.h",
+        "pack/mesa/util/u_math.h",
+        "test/frame.h",
+        "test/rawframe.cpp",
+    ]],
+    conlyopts = [
+        "-Wno-unused-parameter",
+        "-Wno-sign-compare",
+    ],
+    copts = [
+        "-DSWITCH_RAW_HARNESS_MARKS",
+        "-DNVDEC_TWOD",
+        "-Idrivers/TegraGM20B",
+        "-Idrivers/TegraGM20BMetal/raw/runtime",
+        "-Ikits/SwitchGM20BEmit/mesa",
+        "-I$(GENDIR)/kits/SwitchGM20BEmit/gen",
+        "-Ithird_party/mesa/src/nouveau/headers",
+        "-Wno-deprecated-declarations",
+    ],
+    cxxopts = ["-std=c++17"],
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//drivers/TegraGM20BMetal/test:raw_runtime_host",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+    ],
+)
+
+py_library(
+    name = "draw_goldens",
+    srcs = ["draw_goldens.py"],
+    data = [GM20B_METAL + ":raw_pack_generator"],
+    imports = ["."],
+)
+
+py_test(
+    name = "eq_test",
+    srcs = ["eq_test.py"],
+    args = [
+        "$(rootpath :rawframe)",
+        "$(rootpath //gpu/seed:raw_pack)/pack.bin",
+    ] + select({
+        "//ipsw:21H461": [
+            "21H461",
+            "drivers/TegraGM20BMetal/test/eq/testdata",
+        ],
+        "//ipsw:24B119": [
+            "24B119",
+            "drivers/TegraGM20BMetal/test/eq/testdata",
+            "--qc27",
+        ],
+    }),
+    data = [
+        ":rawframe",
+        "//gpu/seed:raw_pack",
+    ] + glob(["testdata/*"]),
+    tags = [
+        "manual",
+        "m2v",
+        "pack",
+    ],
+    deps = [":draw_goldens"],
+)

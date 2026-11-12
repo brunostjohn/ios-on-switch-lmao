@@ -217,6 +217,11 @@ load(":defs.bzl", "objcxx_units")
 
 lint_files()
 
+exports_files(
+    ["raw_kernel_model.h"],
+    visibility = ["//drivers/TegraGM20BMetal/test/eq:__pkg__"],
+)
+
 host_test(
     name = "raw_fence_test",
     srcs = [
@@ -3268,6 +3273,7 @@ host_library(
     copts = RAW_HOST_COPTS,
     cxx_std = "c++17",
     sanitize = False,
+    visibility = ["//drivers/TegraGM20BMetal/test/eq:__pkg__"],
     deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
 )
 

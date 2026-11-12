@@ -106,6 +106,7 @@ struct Model {
     bool inFlight = false;  // jobs run until a kill
     // A test's GPU: each job is in flight until it ran, and a WaitFence on it waits up to then (false: it timed out)
     std::function<void()> jobAdded;
+    std::function<void(const TegraGM20BAbiBindOp &op)> bound;  // each VmBind's op, as the kernel takes it
     std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
     unsigned refuse = 0;           // submissions refused from now, with `refusal`
     uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
@@ -484,6 +485,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     case TegraGM20BMethodVmBind: {
         const auto &op = static_cast<const TegraGM20BAbiVmBind *>(input)->ops[0];
         model.binds[op.va] = {op.handle, op.range};
+        if (model.bound)
+            model.bound(op);
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodCpuAcquire:
