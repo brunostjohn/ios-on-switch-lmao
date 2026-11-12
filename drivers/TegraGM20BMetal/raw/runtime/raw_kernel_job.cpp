@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // raw::Kernel's job interface: SubmitJob and the resource set it names (drivers/TegraGM20B/TegraGM20BJobABI.h).
+#include "raw_lock.h"
 #include "raw_kernel.h"
 #include "TegraGM20BJobABI.h"
 
@@ -176,7 +177,7 @@ int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t 
         setError(refused("ResourceSetCreate", kr));
         return kr;
     }
-    std::lock_guard<std::mutex> l(lostLock_);
+    std::lock_guard<raw::Mutex> l(lostLock_);
     if (!fenceMap_ && !map(reply.fence_token, true, fenceMap_, fenceMapBytes_)) {
         fenceMap_ = 0;
         fenceMapBytes_ = 0;

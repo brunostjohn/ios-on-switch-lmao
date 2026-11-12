@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -92,8 +93,8 @@ private:
     void *queue_;
     void *persistence_;
     std::unique_ptr<CompileSlots> slots_;  // at most two cold compiles; unrelated warm keys never take a slot
-    mutable std::mutex lock_;
-    std::condition_variable idle_, settled_;
+    mutable raw::Mutex lock_;
+    raw::CondVar idle_, settled_;
     uint64_t queued_ = 0;
     std::map<uint64_t, Entry> entries_;
 #if SWITCH_RAW_DIAGNOSTICS
@@ -108,7 +109,7 @@ private:
                              const RuntimeRecord **made);
     void queue(const CacheKey &k);
     bool retryable(const Entry &e, uint64_t &wait) const;
-    void waitForMaker(std::unique_lock<std::mutex> &l, Entry &e);
+    void waitForMaker(std::unique_lock<raw::Mutex> &l, Entry &e);
 };
 
 }  // namespace raw

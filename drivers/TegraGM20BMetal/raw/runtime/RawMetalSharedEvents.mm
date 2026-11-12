@@ -92,7 +92,7 @@ bool sharedEventWord(id event, uint64_t value, uint64_t inlineStamp, uint64_t &a
 
 static void eventFailure(RMCommandBuffer *cb, NSString *message)
 {
-    std::lock_guard<std::mutex> lock(cb->_lock);
+    std::lock_guard<raw::Mutex> lock(cb->_lock);
     cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal
                                    userInfo:@{NSLocalizedDescriptionKey: message}];
 }

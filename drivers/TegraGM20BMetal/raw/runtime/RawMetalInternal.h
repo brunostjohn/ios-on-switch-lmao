@@ -199,10 +199,10 @@ struct RawState {
     raw::HandoffQueue<RMScheduleChange> schedule;
     raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
     std::atomic<uint32_t> waitingCommitted{0};  // waiting.committed() as the worker last saw it (the stall line's)
-    std::mutex eventValues;
+    raw::Mutex eventValues;
     raw::EventTimeline events;
-    std::mutex m2vLock;
-    std::condition_variable m2vChanged;
+    raw::Mutex m2vLock;
+    raw::CondVar m2vChanged;
     // changed under m2vLock, read with none (m2vClear)
     std::atomic<uint32_t> m2vPending{0};      // m2v command buffers committed and not completed
     std::atomic<uint32_t> m2vUnscheduled{0};  // and not scheduled yet: their kernel submission (NVK's Exec) is not made
@@ -418,7 +418,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
 bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder);
 
 // RawMetalEvents.mm
-extern std::mutex gHoldersLock;
+extern raw::Mutex gHoldersLock;
 extern std::set<RMCommandBuffer *> gHolders;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // A held command buffer's shared event wait as it was armed, for the still-waiting line (rawStallTick); gHoldersLock

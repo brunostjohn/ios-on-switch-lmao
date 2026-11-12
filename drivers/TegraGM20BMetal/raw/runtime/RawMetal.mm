@@ -17,6 +17,7 @@
 //    buffer, and every one committed after it while it waits, goes to the submit thread, which submits them in order once
 //    they may run; the render thread never blocks for it. waitUntilScheduled waits for the submission, so the display's
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
+#include "raw_lock.h"
 #import "RawMetalIndirect.h"
 #include "raw_device_answers.h"
 #include "raw_limits_fill.h"
@@ -47,10 +48,10 @@ os_log_t rawLog()
 // One line per distinct text, then silence (shipped paths: no diagnostics but one-shot lines).
 void once(NSString *text)
 {
-    static std::mutex lock;
+    static raw::Mutex lock;
     static std::set<std::string> seen;
     {
-        std::lock_guard<std::mutex> l(lock);
+        std::lock_guard<raw::Mutex> l(lock);
         if (seen.size() > 512 || !seen.insert(text.UTF8String).second)
             return;
     }
@@ -156,7 +157,7 @@ RawState *gRM;
 
 // raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
 static struct {
-    std::mutex lock;
+    raw::Mutex lock;
     std::thread thread;
     std::string path, err;
     uint64_t stack = 0;
@@ -180,7 +181,7 @@ static raw::Device *openDevice(const char *packPath, uint64_t stack, raw::Device
 
 void raw_metal_prepare(const char *packPath, uint64_t stack)
 {
-    std::lock_guard<std::mutex> l(gPrepared.lock);
+    std::lock_guard<raw::Mutex> l(gPrepared.lock);
     if (gPrepared.started)
         return;
     gPrepared.started = true;
@@ -191,7 +192,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
         pthread_setname_np("com.brunostjohn.switch.raw.open");
         std::string err;
         raw::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, raw::Device::Role::RenderServer, err);
-        std::lock_guard<std::mutex> m(gPrepared.lock);
+        std::lock_guard<raw::Mutex> m(gPrepared.lock);
         gPrepared.dev = dev;
         gPrepared.err = err;
     });
@@ -288,15 +289,15 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
 id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, uint64_t registryID, RawM2V m2v,
                                          NSString **error)
 {
-    static std::mutex once;
-    std::lock_guard<std::mutex> l(once);
+    static raw::Mutex once;
+    std::lock_guard<raw::Mutex> l(once);
     if (gRM)
         return gRM->device;  // one per process
     raw::Device *dev = nullptr;
     std::string err;
     bool prepared = false;
     {
-        std::unique_lock<std::mutex> m(gPrepared.lock);
+        std::unique_lock<raw::Mutex> m(gPrepared.lock);
         if (gPrepared.started && gPrepared.thread.joinable()) {
             m.unlock();
             gPrepared.thread.join();  // what is left of it: it began with the plugin

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_compute.h. Method numbers are NVIDIA's (kits/SwitchGM20B: Mesa's clb1c0.h, clb1c0qmd.h, MIT).
+#include "raw_lock.h"
 #include "raw_compute.h"
 #include "raw_compute_slot.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
@@ -54,14 +55,14 @@ constexpr uint32_t qmdCbufLo(uint32_t i)
 }
 
 // The states made, by device and key (a pack kernel's keyHash, a record's address): a device lives as long as its process
-std::mutex gStatesLock;
+raw::Mutex gStatesLock;
 std::map<std::pair<const Device *, uint64_t>, ComputeState> gStates;
 
 }  // namespace
 
 const ComputeState *computeState(Device &dev, uint64_t keyHash)
 {
-    std::lock_guard<std::mutex> hold(gStatesLock);
+    std::lock_guard<raw::Mutex> hold(gStatesLock);
     if (auto it = gStates.find({&dev, keyHash}); it != gStates.end())
         return &it->second;
     const PackKernel *k = dev.pack().findKernel(keyHash);
@@ -70,7 +71,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     ComputeState c;
     c.rec = k;
     {
-        std::lock_guard<std::mutex> l(dev.lock_);
+        std::lock_guard<raw::Mutex> l(dev.lock_);
         if (!dev.slmNeed(slmPerWarpOfQmd(k->qmd)) || !dev.place(k->program, c.program, c.data)) {
             dev.stats.heapFull++;
             return nullptr;
@@ -84,7 +85,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
 
 const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
 {
-    std::lock_guard<std::mutex> hold(gStatesLock);
+    std::lock_guard<raw::Mutex> hold(gStatesLock);
     const uint64_t key = uint64_t(uintptr_t(&r));
     if (auto it = gStates.find({&dev, key}); it != gStates.end())
         return &it->second;
@@ -94,7 +95,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     c.instructions = uint32_t(std::max<size_t>(1, r.code.size() / 8));
     uint64_t at = 0;
     {
-        std::lock_guard<std::mutex> l(dev.lock_);
+        std::lock_guard<raw::Mutex> l(dev.lock_);
         for (uint32_t i = 0; i < c.placed.entries; i++) {
             PackKernelEntry &e = c.placed.entry[i];
             uint32_t index = 0;

@@ -7,6 +7,7 @@
 // freed). A process without NVK (a host tool of the raw path alone) gets a connection of its own, the same quarter.
 // VM allocation state is serialized independently of channel submission.
 #pragma once
+#include "raw_lock.h"
 #include <atomic>
 #include <mutex>
 #include <cstdint>
@@ -268,7 +269,7 @@ public:
 
     std::string error() const
     {
-        std::lock_guard<std::mutex> lock(errorLock_);
+        std::lock_guard<raw::Mutex> lock(errorLock_);
         return err_;
     }
 
@@ -297,7 +298,7 @@ private:
 #endif
     void setError(std::string error)
     {
-        std::lock_guard<std::mutex> lock(errorLock_);
+        std::lock_guard<raw::Mutex> lock(errorLock_);
         err_ = std::move(error);
     }
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);
@@ -316,20 +317,20 @@ private:
     std::atomic<bool> importsWritten_{false};
     std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};
     std::atomic<uint64_t> admissionCookie_{1};
-    std::mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
+    raw::Mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
     std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint64_t fenceMapBytes_ = 0;
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced
-    std::mutex vaLock_;
-    std::mutex eventsLock_;
+    raw::Mutex vaLock_;
+    raw::Mutex eventsLock_;
     std::shared_ptr<SharedEvents> events_;
     std::atomic<uint64_t> vaUsed_{0};
     std::atomic<uint64_t> allocated_{0};
     std::string err_;
-    mutable std::mutex errorLock_;
+    mutable raw::Mutex errorLock_;
 };
 
 }  // namespace raw

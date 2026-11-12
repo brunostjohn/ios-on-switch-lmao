@@ -21,7 +21,8 @@ static_assert(sizeof kCountNames / sizeof *kCountNames == raw::kEncodeCounts);
 
 // hw_test_app's gpu.path.encode_cost: this process's encode profile since the device opened (raw_encode_profile.h),
 // never reset. <part>_us and <part>_self_us are microseconds, <part>_calls the spans; the events are counts, mallocs
-// and frees over malloc_encodes of the encodes only.
+// and frees over malloc_encodes of the encodes only; facade_locks the runtime's locks on every thread since the process
+// began (raw_lock.h).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile
 {
     const raw::EncodeTotals &k = gRM->raw->stats.encode;
@@ -32,6 +33,7 @@ static_assert(sizeof kCountNames / sizeof *kCountNames == raw::kEncodeCounts);
     d[@"wall_us"] = @(double(k.wallTicks.load()) * usPerTick);
     d[@"exec_uses"] = @(k.execUses.load());
     d[@"exec_pushes"] = @(k.execPushes.load());
+    d[@"facade_locks"] = @(raw::LockCount::total());
     for (size_t i = 0; i < raw::kEncodeParts; ++i) {
         d[[NSString stringWithFormat:@"%s_us", kPartNames[i]]] = @(double(k.ticks[i].load()) * usPerTick);
         d[[NSString stringWithFormat:@"%s_self_us", kPartNames[i]]] = @(double(k.self[i].load()) * usPerTick);

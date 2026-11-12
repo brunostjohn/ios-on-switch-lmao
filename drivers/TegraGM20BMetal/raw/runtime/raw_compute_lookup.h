@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #include <algorithm>
 #include <array>
 #include <map>
@@ -237,7 +238,7 @@ public:
     {
         std::shared_ptr<Job> job;
         {
-            std::lock_guard<std::mutex> hold(lock_);
+            std::lock_guard<raw::Mutex> hold(lock_);
             const auto at = entries_.find(key);
             if (at != entries_.end() && !at->second->retryable())
                 return at->second;
@@ -262,7 +263,7 @@ public:
     }
 
 private:
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::map<ComputeSpecialization, std::shared_ptr<Job>> entries_;
 };
 

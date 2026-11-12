@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "raw_lock.h"
 #include "raw_private_comp.h"
 #include <os/log.h>
 #include "raw_gpu.h"
@@ -11,7 +12,7 @@ bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t f
     if (!shape(width, height, format, t) || !t.renderable || !tgm_layout_tiled(t.width, t.height, t.bpp, &bl) ||
         compressedKind(t.bpp, 0) != kind)
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probePlainPrivate.load(std::memory_order_relaxed))
         return false;
@@ -41,7 +42,7 @@ bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t f
 
 bool Device::privateCompressed(const Texture &t)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     auto it = privateComp_.find(&t);
     return it != privateComp_.end() && t.comptags;
 }
@@ -53,7 +54,7 @@ bool Device::plainFromCompressed(Texture &t)
         return false;
     Texture plain = t;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (!blAlloc(bl.bytes, bl.align, plain.span))
             return false;
         if (!(plain.tic = allocTic())) {
@@ -77,7 +78,7 @@ bool Device::plainFromCompressed(Texture &t)
         if (!copied)
             rc->abandon();
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!copied) {
         freeTic(plain.tic);
         Lease *none = nullptr;

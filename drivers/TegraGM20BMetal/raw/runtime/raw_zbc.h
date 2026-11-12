@@ -9,6 +9,7 @@
 // gpu.x1.rop_conversion), any value of RGBA16Float. Those three packings HW Test gpu.raw.compressed_targets reads back;
 // no other format goes in (sRGB, the 10-bit and 16-bit unorm formats, RGBA32Float beyond the boot table's 0 and 1).
 #pragma once
+#include "raw_lock.h"
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -135,7 +136,7 @@ public:
     // thread that asks)
     bool lookup(const TegraGM20BAbiZbc &e, bool &wanted)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         wanted = false;
         Entry *x = find(e);
         if (!x) {
@@ -153,7 +154,7 @@ public:
     // The next entry to ask the kernel for, now Asking
     bool next(TegraGM20BAbiZbc &e)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         for (uint32_t i = 0; i < count_; i++)
             if (entries_[i].state == Wanted) {
                 entries_[i].state = Asking;
@@ -165,14 +166,14 @@ public:
 
     void answer(const TegraGM20BAbiZbc &e, bool held)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (Entry *x = find(e))
             x->state = held ? Held : Refused;
     }
 
     bool pending()
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         for (uint32_t i = 0; i < count_; i++)
             if (entries_[i].state == Wanted)
                 return true;
@@ -212,7 +213,7 @@ private:
         return nullptr;
     }
 
-    std::mutex lock_;
+    raw::Mutex lock_;
     Entry entries_[kEntries] = {};
     uint32_t count_ = 0, evict_ = 0;
 };

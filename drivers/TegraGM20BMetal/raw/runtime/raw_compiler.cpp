@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_compiler.h.
+#include "raw_lock.h"
 #include "raw_compiler.h"
 
 #include <dispatch/dispatch.h>
@@ -58,7 +59,7 @@ public:
         if (tHeld == this)
             return Held(nullptr, 0);
         const qos_class_t mine = qos_class_self();
-        std::unique_lock<std::mutex> l(lock_);
+        std::unique_lock<raw::Mutex> l(lock_);
         for (;;) {
             for (size_t i = 0; i < holders_.size(); ++i)
                 if (!holders_[i].thread) {
@@ -87,14 +88,14 @@ private:
     };
 
     static thread_local const CompileSlots *tHeld;
-    std::mutex lock_;
-    std::condition_variable freed_;
+    raw::Mutex lock_;
+    raw::CondVar freed_;
     std::vector<Holder> holders_;
 
     void give(size_t index)
     {
         {
-            std::lock_guard<std::mutex> l(lock_);
+            std::lock_guard<raw::Mutex> l(lock_);
             holders_[index] = {};
             tHeld = nullptr;
         }
@@ -123,7 +124,7 @@ struct Compiler::Task {
 
 void Compiler::enqueue(std::function<void()> work)
 {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<raw::Mutex> lock(lock_);
     ++queued_;
     dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Task{this, std::move(work)}, runTask);
 }
@@ -138,7 +139,7 @@ void Compiler::runTask(void *context)
 
         ~Retire()
         {
-            std::lock_guard<std::mutex> lock(compiler.lock_);
+            std::lock_guard<raw::Mutex> lock(compiler.lock_);
             --compiler.queued_;
             compiler.idle_.notify_all();
         }
@@ -168,7 +169,7 @@ Compiler::~Compiler()
 
 Compiler::State Compiler::ask(const CacheKey &k, Done done, const RuntimeRecord **record)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const auto [it, first] = entries_.try_emplace(k.name());
     Entry &e = it->second;
     uint64_t wait = 0;
@@ -202,7 +203,7 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     const uint64_t began = nowUs();
 #endif
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         const auto it = entries_.find(k.name());
         if (it != entries_.end()) {
             const Entry &e = it->second;
@@ -222,7 +223,7 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
         return found;
     if (found == RecordCache::Found::Record)
         record = *loaded;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     RAW_DIAGNOSTIC(stats_.hits++;
                    stats_.lookupHits++;
                    (seeded ? stats_.seedHits : stats_.ownHits)++;
@@ -240,7 +241,7 @@ void Compiler::keep(const CacheKey &k, RecordCache::Found found, const RuntimeRe
 {
     if (found == RecordCache::Found::None)
         return;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const auto [it, first] = entries_.try_emplace(k.name());
     if (!first)
         return;
@@ -252,7 +253,7 @@ void Compiler::keep(const CacheKey &k, RecordCache::Found found, const RuntimeRe
 
 bool Compiler::retryAfter(const CacheKey &k, uint64_t &us) const
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const auto it = entries_.find(k.name());
     return it != entries_.end() && retryable(it->second, us);
 }
@@ -273,7 +274,7 @@ Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, st
         return found == RecordCache::Found::Record ? Outcome::Made : Outcome::Refused;
 
     const CompileSlots::Held slot = slots_->take();
-    RAW_DIAGNOSTIC(std::lock_guard<std::mutex> l(lock_); stats_.waitUs += tSlotWaitUs);
+    RAW_DIAGNOSTIC(std::lock_guard<raw::Mutex> l(lock_); stats_.waitUs += tSlotWaitUs);
     const Outcome outcome = make_(k, record, why);
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
         dispatch_async_f(
@@ -294,7 +295,7 @@ std::vector<Compiler::Done> Compiler::settle(const CacheKey &k, Outcome outcome,
                                              std::unique_ptr<RuntimeRecord> record, const std::string &why,
                                              uint64_t began, const RuntimeRecord **made)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     Entry &e = entries_[k.name()];
     std::vector<Done> waiters;
     waiters.swap(e.waiters);
@@ -328,7 +329,7 @@ void Compiler::run(void *context)
     std::unique_ptr<Job> job(static_cast<Job *>(context));
     Compiler &c = *job->compiler;
     {
-        std::lock_guard<std::mutex> l(c.lock_);
+        std::lock_guard<raw::Mutex> l(c.lock_);
         Entry &e = c.entries_[job->key.name()];
         if (e.state != State::Pending || e.maker) {
             c.queued_--;
@@ -346,7 +347,7 @@ void Compiler::run(void *context)
     const RuntimeRecord *made = nullptr;
     for (const Done &done : c.settle(job->key, outcome, found, std::move(record), why, began, &made))
         done(made, why);
-    std::lock_guard<std::mutex> l(c.lock_);
+    std::lock_guard<raw::Mutex> l(c.lock_);
     c.queued_--;
     c.idle_.notify_all();
 }
@@ -362,7 +363,7 @@ Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std:
         break;
     }
     {
-        std::unique_lock<std::mutex> l(lock_);
+        std::unique_lock<raw::Mutex> l(lock_);
         const auto [it, first] = entries_.try_emplace(k.name());
         Entry &e = it->second;
         if (!first && e.state == State::Pending && e.maker)
@@ -391,7 +392,7 @@ Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std:
 }
 
 // lock_ held in `l`: until the thread making `e` settles it, that thread runs at least at the caller's class
-void Compiler::waitForMaker(std::unique_lock<std::mutex> &l, Entry &e)
+void Compiler::waitForMaker(std::unique_lock<raw::Mutex> &l, Entry &e)
 {
     const qos_class_t mine = qos_class_self();
     pthread_override_t lent =
@@ -405,7 +406,7 @@ void Compiler::waitForMaker(std::unique_lock<std::mutex> &l, Entry &e)
 
 void Compiler::drain()
 {
-    std::unique_lock<std::mutex> l(lock_);
+    std::unique_lock<raw::Mutex> l(lock_);
     idle_.wait(l, [&] {
         return queued_ == 0;
     });
@@ -423,7 +424,7 @@ uint64_t Compiler::slotWaitUs()
 Compiler::Stats Compiler::stats() const
 {
 #if SWITCH_RAW_DIAGNOSTICS
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return stats_;
 #else
     return {};

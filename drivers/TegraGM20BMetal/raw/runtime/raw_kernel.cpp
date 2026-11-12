@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_kernel.h. The transport (direct call, or tunnel {magic, method} + record through the selector that answers the tunnel
 // probe) is nvkmd_darwin's (out/gpu/nvk/nvk-darwin.patch, MIT), so whatever the kext admits for NVK it admits here.
+#include "raw_lock.h"
 #include "raw_kernel.h"
 #include "TegraGM20BClockABI.h"
 #include "raw_encode_profile.h"
@@ -58,7 +59,7 @@ std::shared_ptr<SharedEvents> Kernel::sharedEvents()
 {
     if (!exactJobs())
         return nullptr;
-    std::lock_guard<std::mutex> lock(eventsLock_);
+    std::lock_guard<raw::Mutex> lock(eventsLock_);
     if (!events_)
         events_ = SharedEvents::create(conn_, tunnel_, selector_);
     return events_;
@@ -169,7 +170,7 @@ bool Kernel::openOwn(std::string &err)
 
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 {
-    std::lock_guard<std::mutex> lock(vaLock_);
+    std::lock_guard<raw::Mutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     const uint64_t minimumAlignment = bytes >= kBigPageAlignment ? kBigPageAlignment : kVaGranule;
     if (align < minimumAlignment)
@@ -192,7 +193,7 @@ uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 
 void Kernel::freeVa(uint64_t va, uint64_t bytes)
 {
-    std::lock_guard<std::mutex> lock(vaLock_);
+    std::lock_guard<raw::Mutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     if (!va || !bytes)
         return;
@@ -412,7 +413,7 @@ void Kernel::free(Bo &bo)
 
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)
 {
-    std::lock_guard<std::mutex> l(lostLock_);
+    std::lock_guard<raw::Mutex> l(lostLock_);
     if (engines == TegraGM20BEngineCopy)
         engines |= TegraGM20BEngineCopyOnly;
     TegraGM20BAbiChannelCreate in = {engines, 0};
@@ -533,7 +534,7 @@ bool Kernel::clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint
     TegraGM20BAbiClockAnchorsReply r = {};
     if (call(TegraGM20BMethodClockAnchors, nullptr, 0, &r, sizeof r) != KERN_SUCCESS || !r.gpu_va)
         return false;
-    std::lock_guard<std::mutex> l(lostLock_);
+    std::lock_guard<raw::Mutex> l(lostLock_);
     if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, fenceMapBytes_)) {
         fenceMap_ = 0;
         fenceMapBytes_ = 0;
@@ -558,7 +559,7 @@ void Kernel::notResponding(uint32_t channel, uint32_t opened)
 
 void Kernel::markLost(uint32_t channel, uint32_t opened)
 {
-    std::lock_guard<std::mutex> l(lostLock_);
+    std::lock_guard<raw::Mutex> l(lostLock_);
     if (opened != opened_.load(std::memory_order_relaxed))
         return;
     TegraGM20BAbiStatus st;

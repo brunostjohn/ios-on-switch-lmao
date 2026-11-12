@@ -4,6 +4,7 @@
 // runs the range by reference after one prepare of the state they inherit. Commands that set their own pipeline, buffers or
 // raster state, and patches, have no form here: such a descriptor's creation is nil. A descriptor of dispatches makes a
 // buffer of them (RawMetalIndirectCompute.mm).
+#include "raw_lock.h"
 #import "RawMetalIndirectCompute.h"
 #include "raw_icb.h"
 
@@ -67,7 +68,7 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 // Command `index` is now `command` (its words already written): the index buffers and primitive kinds of the whole buffer
 - (void)take:(RMICBCommand)command at:(NSUInteger)index
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     RMICBCommand &was = _commands[index];
     if (was.indices && --_indexBuffers[(__bridge void *)was.indices] == 0)
         _indexBuffers.erase((__bridge void *)was.indices);
@@ -82,13 +83,13 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 
 - (uint8_t)kinds
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     return uint8_t((_kinds[0] ? KindTriangles : 0) | (_kinds[1] ? KindOthers : 0));
 }
 
 - (std::vector<RMBuffer *>)indexBuffers
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     std::vector<RMBuffer *> out;
     for (const auto &[buffer, uses] : _indexBuffers)
         out.push_back((__bridge RMBuffer *)buffer);
@@ -423,7 +424,7 @@ void encodeCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
     }
     std::vector<RMICBCommand> commands(count);
     if (c.op == OpCopyCommands) {
-        std::lock_guard<std::mutex> hold(from->_lock);
+        std::lock_guard<raw::Mutex> hold(from->_lock);
         std::copy_n(from->_commands.begin() + ptrdiff_t(first), count, commands.begin());
     }
     if (be) {
@@ -459,7 +460,7 @@ void replayCommands(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw,
     }
     std::vector<RMICBCommand> commands;
     {
-        std::lock_guard<std::mutex> hold(b->_lock);
+        std::lock_guard<raw::Mutex> hold(b->_lock);
         commands.assign(b->_commands.begin() + ptrdiff_t(draw.argumentOffset),
                         b->_commands.begin() + ptrdiff_t(draw.argumentOffset + draw.indexOffset));
     }

@@ -5,6 +5,7 @@
 // XNU clamps a daemon's user-interactive QoS to user-initiated (37), so a QoS class alone put them below the thread
 // waiting on them, level with every busy daemon. Committers at a QoS class (an app's threads) leave them at their own.
 #pragma once
+#include "raw_lock.h"
 #include <algorithm>
 #include <mutex>
 #include <pthread.h>
@@ -28,7 +29,7 @@ public:
         };
 
         static thread_local Member member{this};
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         threads_.push_back(pthread_self());
         if (policy_ != SCHED_OTHER)
             pthread_setschedparam(pthread_self(), policy_, &param_);
@@ -47,7 +48,7 @@ public:
         if (pthread_getschedparam(pthread_self(), &policy, &param) != 0 || policy == SCHED_OTHER)
             return;
         fixed = true;
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (policy_ != SCHED_OTHER && param.sched_priority <= param_.sched_priority)
             return;
         policy_ = policy;
@@ -59,11 +60,11 @@ public:
 private:
     void leave(pthread_t self)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         threads_.erase(std::remove(threads_.begin(), threads_.end(), self), threads_.end());
     }
 
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::vector<pthread_t> threads_;
     int policy_ = SCHED_OTHER;
     sched_param param_{};

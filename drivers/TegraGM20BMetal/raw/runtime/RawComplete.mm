@@ -188,7 +188,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             return;
         }
         {
-            std::lock_guard<std::mutex> l(lock_);
+            std::lock_guard<raw::Mutex> l(lock_);
             asked_[k.name()] = a;
             remote &= !notTaken_.count(k.name());
         }
@@ -259,7 +259,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     if (!keyOf(a, k))
         return nullptr;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         asked_[k.name()] = a;
     }
     RuntimeRecord record;
@@ -288,7 +288,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
             break;
         case Asked::Here: {
             {
-                std::lock_guard<std::mutex> l(lock_);
+                std::lock_guard<raw::Mutex> l(lock_);
                 notTaken_.insert(k.name());
             }
             state = madeHere(k, record, why);
@@ -332,7 +332,7 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
 {
     Ask a;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         const auto it = asked_.find(k.name());
         if (it == asked_.end()) {
             why = "asked for no state";
@@ -381,13 +381,13 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     k.key = "kernel | " + key;
     std::shared_ptr<Kernel> job;
     {
-        std::lock_guard<std::mutex> mapLock(kernelLock_);
+        std::lock_guard<raw::Mutex> mapLock(kernelLock_);
         auto &entry = kernels_[k.name()];
         if (!entry)
             entry = std::make_shared<Kernel>();
         job = entry;
     }
-    std::lock_guard<std::mutex> hold(job->lock);
+    std::lock_guard<raw::Mutex> hold(job->lock);
     using Build = ComputeKernelBuild<ComputeRecord, ComputeState>;
     std::string why;
     bool attempted = false;

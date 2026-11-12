@@ -53,7 +53,7 @@
 @end
 
 // The committed command buffers that wait for a shared event, until scheduled.
-std::mutex gHoldersLock;
+raw::Mutex gHoldersLock;
 std::set<RMCommandBuffer *> gHolders;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
@@ -72,7 +72,7 @@ void unhold(RMCommandBuffer *cb)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (!cb->_inHolders.exchange(false, std::memory_order_acq_rel))
         return;
-    std::lock_guard<std::mutex> l(gHoldersLock);
+    std::lock_guard<raw::Mutex> l(gHoldersLock);
     gHolders.erase(cb);
     gEventWaits.erase(cb);
 #else
@@ -96,7 +96,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
             return Readiness::blocked;
         cb->_resourceReady.reset();
         if (result != KERN_SUCCESS) {
-            std::lock_guard<std::mutex> lock(cb->_lock);
+            std::lock_guard<raw::Mutex> lock(cb->_lock);
             cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                                code:MTLCommandBufferErrorInternal
                                            userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness failed before GPU submission"}];
@@ -109,7 +109,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     if (!sharedWaitsReady(cb, native))
         return Readiness::blocked;
     if (!cb->_gpuEventWaits.empty()) {
-        std::lock_guard<std::mutex> lock(cb->_lock);
+        std::lock_guard<raw::Mutex> lock(cb->_lock);
         switch (raw::eventDependencies(cb->_gpuEventWaits, gRM->raw->channelGeneration(), native)) {
         case raw::EventDependencyState::blocked:
             return Readiness::blocked;
@@ -131,7 +131,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     if (c.op == OpSignalEvent) {
         if (range.gpuSignal || signalOrderedOnGpu(cb, range))
             return Readiness::ready;
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         return cb->_finishState.pending() ? Readiness::blocked : Readiness::ready;
     }
     id event = (__bridge id)c.obj;
@@ -144,20 +144,20 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_nativeWaitEvent = c.obj;
         raw::EventTimeline::Promise promise;
         {
-            std::lock_guard<std::mutex> lock(gRM->eventValues);
+            std::lock_guard<raw::Mutex> lock(gRM->eventValues);
             promise = gRM->events.observe(reinterpret_cast<uintptr_t>(c.obj), c.c,
                                           reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue),
                                           gRM->raw->channelGeneration());
         }
         if (promise) {
             RAW_DIAGNOSTIC(gRM->stats.waitsOnPromise++);
-            std::lock_guard<std::mutex> lock(cb->_lock);
+            std::lock_guard<raw::Mutex> lock(cb->_lock);
             cb->_gpuEventWaits.push_back(std::move(promise));
             return Readiness::ready;
         }
     }
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         if (cb->_finishState.pending())
             return Readiness::
                 blocked;  // timeout belongs to execution at this position, not time spent on earlier GPU work
@@ -169,7 +169,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_eventWaits.push_back(range.from);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         {
-            std::lock_guard<std::mutex> h(gHoldersLock);
+            std::lock_guard<raw::Mutex> h(gHoldersLock);
             gEventWaits[cb] = {c.obj, c.c, nowUs(), 0};
             cb->_inHolders.store(true, std::memory_order_release);
         }
@@ -193,7 +193,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
 
 bool promisedEvent(void *event, uint64_t value)
 {
-    std::lock_guard<std::mutex> lock(gRM->eventValues);
+    std::lock_guard<raw::Mutex> lock(gRM->eventValues);
     return gRM->events.promised(reinterpret_cast<uintptr_t>(event), value);
 }
 
@@ -209,10 +209,10 @@ std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
         !cb->_segs[cb->_segNext + 1].event)
         return signals;
     {
-        std::lock_guard<std::mutex> lock(cb->_lock);
+        std::lock_guard<raw::Mutex> lock(cb->_lock);
         if (cb->_segError)
             return signals;
-        std::lock_guard<std::mutex> events(gRM->eventValues);
+        std::lock_guard<raw::Mutex> events(gRM->eventValues);
         for (size_t at = cb->_segNext + 1; at < cb->_segs.size(); ++at) {
             auto &range = cb->_segs[at];
             if (!range.event)
@@ -240,7 +240,7 @@ void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool su
     for (const auto &signal : signals) {
         std::vector<uintptr_t> wake;
         {
-            std::lock_guard<std::mutex> lock(gRM->eventValues);
+            std::lock_guard<raw::Mutex> lock(gRM->eventValues);
             gRM->events.retire(reinterpret_cast<uintptr_t>(signal.event), signal.promise, success, &wake);
         }
         if (success) {
@@ -259,7 +259,7 @@ raw::EventDependencyState validateNativeEventWaits(RMCommandBuffer *cb, uint64_t
 {
     if (cb->_gpuEventWaits.empty())
         return raw::EventDependencyState::ready;
-    std::lock_guard<std::mutex> lock(cb->_lock);
+    std::lock_guard<raw::Mutex> lock(cb->_lock);
     const raw::EventDependencyState state = raw::eventDependencies(cb->_gpuEventWaits, generation, true);
     if (state == raw::EventDependencyState::failed)
         cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
@@ -272,7 +272,7 @@ bool waitsOnRetiredProducer(RMCommandBuffer *cb)
 {
     if (cb->_gpuEventWaits.empty())
         return false;
-    std::lock_guard<std::mutex> lock(cb->_lock);
+    std::lock_guard<raw::Mutex> lock(cb->_lock);
     return raw::eventDependencies(cb->_gpuEventWaits, gRM->raw->channelGeneration(), true) ==
            raw::EventDependencyState::blocked;
 }
@@ -282,7 +282,7 @@ void releaseEventWaits(RMCommandBuffer *cb)
     cb->_sharedEventWatch.reset();
     if (!cb->_nativeWaitEvent)
         return;
-    std::lock_guard<std::mutex> lock(gRM->eventValues);
+    std::lock_guard<raw::Mutex> lock(gRM->eventValues);
     gRM->events.unobserve(reinterpret_cast<uintptr_t>(cb->_nativeWaitEvent),
                           reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue));
     cb->_nativeWaitEvent = nullptr;

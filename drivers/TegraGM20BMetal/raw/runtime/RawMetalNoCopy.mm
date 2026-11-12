@@ -63,12 +63,12 @@ public:
     {
         const uint64_t key = uint64_t(format & 0xffff) << 48 | uint64_t(width & 0x3fff) << 34 |
                              uint64_t(height & 0x3fff) << 20 | (uintptr_t(memory) & 0x3fff);
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         return seen_.size() < 64 && seen_.insert(key).second;
     }
 
 private:
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::set<uint64_t> seen_;
 };
 
@@ -221,14 +221,14 @@ class WrappedMemory {
 public:
     void add(const void *memory, RMNoCopyTexture *t)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         textures_.emplace(memory, t);
     }
 
     // The entries over `memory` whose texture is gone, a deallocating one included
     void prune(const void *memory)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         auto [from, to] = textures_.equal_range(memory);
         while (from != to)
             from = from->second ? std::next(from) : textures_.erase(from);
@@ -237,7 +237,7 @@ public:
     std::vector<RMNoCopyTexture *> over(const void *memory)
     {
         std::vector<RMNoCopyTexture *> found;
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         auto [from, to] = textures_.equal_range(memory);
         for (; from != to; ++from)
             if (RMNoCopyTexture *t = from->second)
@@ -246,7 +246,7 @@ public:
     }
 
 private:
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::unordered_multimap<const void *, __weak RMNoCopyTexture *> textures_;
 };
 

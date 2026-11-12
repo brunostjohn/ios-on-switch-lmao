@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Compressed memory for the raw path's memoryless attachments (raw_comp.h)
+#include "raw_lock.h"
 #include "raw_comp.h"
 
 #include <os/log.h>
@@ -107,7 +108,7 @@ void Device::compStart()
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             pthread_setname_np("com.brunostjohn.switch.raw.comp");
             followers().join();  // it binds under lock_, which the committer's render thread waits for
-            std::unique_lock<std::mutex> l(lock_);
+            std::unique_lock<raw::Mutex> l(lock_);
             const auto asked = [&] {
                 return stopping_ || !comp_.wanted.empty() || compRearm_ || zbc_.pending();
             };
@@ -132,7 +133,7 @@ void Device::compPrearm(const Texture &m)
 {
     if (m.samples < 2)
         return;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const uint32_t kind = compKind(m, kMemorylessTag, true);
     Texture t;
     fx::MipChain c;
@@ -193,7 +194,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     return b;
 }
 
-void Device::compMake(std::unique_lock<std::mutex> &l)
+void Device::compMake(std::unique_lock<raw::Mutex> &l)
 {
     while (!comp_.wanted.empty() && !stopping_) {
         const CompWant w = comp_.wanted.front();
@@ -309,7 +310,7 @@ bool Device::zbcHeld(const TegraGM20BAbiZbc &e)
     bool wanted = false;
     const bool held = zbc_.lookup(e, wanted);
     if (wanted) {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         compStart();
     }
     return held;
@@ -345,7 +346,7 @@ void Device::clearZbcDepth(const Texture &t, bool full, float depth)
     RAW_DIAGNOSTIC((full && held ? stats.zbcHits : stats.zbcMisses)++);
 }
 
-void Device::zbcMake(std::unique_lock<std::mutex> &l)
+void Device::zbcMake(std::unique_lock<raw::Mutex> &l)
 {
     TegraGM20BAbiZbc e;
     while (!stopping_ && zbc_.next(e)) {

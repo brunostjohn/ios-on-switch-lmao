@@ -19,6 +19,7 @@
 //
 // Threads. The Device's resource calls take its lock; one CommandBuffer encodes and commits at a time (RawMetal.mm serialises).
 #pragma once
+#include "raw_lock.h"
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
 #include "raw_mme.h"
@@ -1317,7 +1318,7 @@ public:
     // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
     std::string channelError()
     {
-        std::lock_guard<std::mutex> l(channelLock_);
+        std::lock_guard<raw::Mutex> l(channelLock_);
         return channelError_;
     }
 
@@ -1351,7 +1352,7 @@ public:
     // A new depth/stencil state's registers into the segment heap
     void placeSegments(DepthStencilState &state)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         state.place(segmentHeap_);
     }
     bool packHolds(const Pipeline &pl) const
@@ -1562,7 +1563,7 @@ public:
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()
     {
-        std::unique_lock<std::mutex> l(lock_, std::try_to_lock);
+        std::unique_lock<raw::Mutex> l(lock_, std::try_to_lock);
         return l.owns_lock();
     }
 
@@ -2018,13 +2019,13 @@ public:
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     // hw_test_app's gpu.sched.long_draw_bands: the band budget its unbanded arm sets to 0 (RawMetalProbe.mm)
     std::atomic<uint64_t> bandBudgetNs_{TGM_APP_BAND_NS};
-    std::mutex probeLock;
+    raw::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
     std::shared_ptr<const ProbeWords> armedProbe()
     {
         if (!probeArmed.load(std::memory_order_acquire))
             return nullptr;
-        std::lock_guard<std::mutex> hold(probeLock);
+        std::lock_guard<raw::Mutex> hold(probeLock);
         return probeWords;
     }
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
@@ -2134,7 +2135,7 @@ private:
     Role role_ = Role::RenderServer;
     std::atomic<bool> highPriority_{false};
     Sizes sizes_ = kSizes[0];
-    std::mutex lock_;
+    raw::Mutex lock_;
     Kernel k_;
     // The BOs only this device's jobs touch (raw_resource_set.h); setView_ is the submitting thread's
     ResourceSet set_;
@@ -2245,7 +2246,8 @@ private:
         const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
         return readSemanticFence(reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(record + 1), seqno);
     }
-    std::mutex channelLock_;
+
+    raw::Mutex channelLock_;
     std::atomic<bool> channelReady_{false};
     ChannelGenerations generations_;
     bool channelFailed_ = false;
@@ -2414,7 +2416,7 @@ private:
     void tiledFree(std::vector<Chunk> &chunks, Span &s);
     // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring); the chunk's index in `chunks`
     bool newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
-                       std::unique_lock<std::mutex> *unlocked, uint32_t &index);
+                       std::unique_lock<raw::Mutex> *unlocked, uint32_t &index);
     // the free bytes of a kind's shared chunks, lock_ held
     static uint64_t tiledFreeBytes(const std::vector<Chunk> &chunks);
 
@@ -2528,9 +2530,9 @@ private:
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;
     bool growing_ = false, stopping_ = false;
-    std::condition_variable grow_, grown_;
+    raw::CondVar grow_, grown_;
     std::thread grower_;
-    bool newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index);
+    bool newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index);
     void growLoop();
     // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
     std::atomic<uint64_t> commitCount_{0};
@@ -2596,7 +2598,7 @@ private:
     std::vector<KillRange> failedSeqnos() const;
     void forgetKept();
     const volatile uint32_t *keptSlot_ = &kNoFence;  // the fence record of the slot the kept records were written in
-    mutable std::mutex killedLock_;
+    mutable raw::Mutex killedLock_;
     std::atomic<bool> keptKills_{false};
     std::atomic<uint32_t> keptThrough_{0};
     std::array<Killed, 4> killedKept_{};
@@ -2644,7 +2646,7 @@ private:
     // dirty and clears the comptags at the bind, which takes milliseconds for a full-screen target, and no other thread (the
     // pool's grower included, which a render thread may wait for) waits behind it
     std::thread compThread_;
-    std::condition_variable compWake_;
+    raw::CondVar compWake_;
     uint32_t compKind(const Texture &m, bool blockLinear, bool copied) const;
     bool zetaKindsProbed() const
     {
@@ -2656,7 +2658,7 @@ private:
     }
     Backing *compBacking(const Texture &m, uint32_t tag, uint32_t kind);
     // What was asked for, made, `l` dropped around each kernel allocation
-    void compMake(std::unique_lock<std::mutex> &l);
+    void compMake(std::unique_lock<raw::Mutex> &l);
     void compStop();
     // Asks compThread_ for `w` unless it was
     void compAsk(const CompWant &w);
@@ -2686,7 +2688,7 @@ private:
     // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
     bool zbcHeld(const TegraGM20BAbiZbc &e);
     // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call
-    void zbcMake(std::unique_lock<std::mutex> &l);
+    void zbcMake(std::unique_lock<raw::Mutex> &l);
 };
 
 // NV topology for an MTLPrimitiveType (point, line, lineStrip, triangle, triangleStrip)

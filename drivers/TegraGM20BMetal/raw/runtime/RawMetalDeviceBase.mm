@@ -144,7 +144,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 @end
 
 @implementation RMResidencySet {
-    std::mutex _lock;
+    raw::Mutex _lock;
     NSMutableArray<id<MTLAllocation>> *_pending;
     NSArray<id<MTLAllocation>> *_committed;
 }
@@ -164,7 +164,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (uint64_t)allocatedSize
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     uint64_t bytes = 0;
     for (id<MTLAllocation> allocation in _committed)
         bytes += allocation.allocatedSize;
@@ -173,7 +173,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)addAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     if (allocation && ![_pending containsObject:allocation])
         [_pending addObject:allocation];
 }
@@ -186,7 +186,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)removeAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     [_pending removeObject:allocation];
 }
 
@@ -198,31 +198,31 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)removeAllAllocations
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     [_pending removeAllObjects];
 }
 
 - (BOOL)containsAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     return [_pending containsObject:allocation];
 }
 
 - (NSArray<id<MTLAllocation>> *)allAllocations
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     return [_pending copy];
 }
 
 - (NSUInteger)allocationCount
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     return _pending.count;
 }
 
 - (void)commit
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     _committed = [_pending copy];
 }
 

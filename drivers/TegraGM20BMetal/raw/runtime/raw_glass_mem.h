@@ -18,6 +18,7 @@
 // as plain texels (raw_comp.h copyEngineReadsCompressed) is read through its own binding (+comp).
 // It runs only while armed (GlassMemArming): disarmed, the frame path pays one relaxed load and nothing else.
 #pragma once
+#include "raw_lock.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -143,7 +144,7 @@ public:
     // A write into the memory at `key` by command buffer `serial`, with `events` memory events so far
     void wrote(uint64_t key, uint64_t serial, uint64_t events)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         Write &w = writes_[key];
         if (!w.first)
             w.first = serial;
@@ -156,7 +157,7 @@ public:
     void reached(uint64_t image, const GlassMemReach &pass, uint64_t serial)
     {
         const uint32_t x0 = pass.x0, y0 = pass.y0, x1 = pass.x1, y1 = pass.y1;
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         open_.serial = serial;
         for (uint32_t i = 0; i < open_.reaches; i++)
             if (open_.reach[i].first == image) {
@@ -173,7 +174,7 @@ public:
     // hash `header`: its row's index in this command buffer, or -1 (not one this process wrote, already taken, or no room)
     int sampled(const GlassMemItem &item, const char *caName, uint32_t tic, uint64_t header, uint64_t serial)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         open_.serial = serial;
         auto w = writes_.find(item.key);
         if (w == writes_.end() || !w->second.serial)
@@ -218,14 +219,14 @@ public:
     // A command buffer is begun: what an abandoned one sampled is no record's
     void begin()
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         open_ = GlassMemCb();
     }
 
     // Armed again: what was written while disarmed went unseen, so no texture's history holds
     void reset()
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         writes_.clear();
         refs_.clear();
         headers_.clear();
@@ -235,7 +236,7 @@ public:
     // `key` died (a view's header `tic` alone, when `tic`)
     void forget(uint64_t key, uint32_t tic = 0)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (tic) {
             headers_.erase(tic);
             return;
@@ -254,7 +255,7 @@ public:
     // and so where each item's rows are read
     GlassMemCb close(uint64_t serial, uint64_t mach, uint64_t events)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         GlassMemCb cb = open_.serial == serial ? open_ : GlassMemCb();
         open_ = GlassMemCb();
         cb.serial = serial;
@@ -289,7 +290,7 @@ public:
     // `probeNs`: the GPU time of the probe's own copies, which each line names with their launches.
     std::vector<std::string> finish(const GlassMemCb &cb, const uint8_t *rows, bool every, uint64_t probeNs = 0)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         uint32_t cookie;
         memcpy(&cookie, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes, sizeof cookie);
         const bool landed = cookie == glassMemCookie(cb.serial);
@@ -454,7 +455,7 @@ private:
             it = it->first - key < 16 ? refs_.erase(it) : std::next(it);
     }
 
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::unordered_map<uint64_t, Write> writes_;
     std::unordered_map<uint64_t, Ref> refs_;        // by key plus level: the row read at its last write's end
     std::unordered_map<uint32_t, Header> headers_;  // by header index: whose it is and its bytes' hash

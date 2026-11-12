@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "raw_lock.h"
 #include "raw_shared_events.h"
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>
@@ -11,7 +12,7 @@
 
 namespace raw {
 namespace {
-std::mutex registryLock;
+raw::Mutex registryLock;
 std::map<uintptr_t, std::weak_ptr<SharedEvents>> registry;
 std::atomic<uintptr_t> nextIdentity{1};
 }
@@ -24,7 +25,7 @@ struct SharedEvents::State {
     uintptr_t identity = 0;
     IONotificationPortRef port = nullptr;
     dispatch_queue_t queue = nullptr;
-    std::mutex lock;
+    raw::Mutex lock;
     std::set<uint64_t> imports;
     struct Observer {
         uint64_t handle;
@@ -90,7 +91,7 @@ std::shared_ptr<SharedEvents> SharedEvents::create(uint32_t connection, bool tun
     if (!state.identity)
         return nullptr;
     {
-        std::lock_guard<std::mutex> lock(registryLock);
+        std::lock_guard<raw::Mutex> lock(registryLock);
         registry.emplace(state.identity, events);
     }
     return events;
@@ -104,7 +105,7 @@ SharedEvents::~SharedEvents()
 std::shared_ptr<SharedEventLease> SharedEvents::import(uint32_t port)
 {
     auto &s = *state_;
-    std::lock_guard<std::mutex> lock(s.lock);
+    std::lock_guard<raw::Mutex> lock(s.lock);
     const TegraGM20BAbiEventImport request{port, 0};
     TegraGM20BAbiEventImportReply reply{};
     if (s.call(TegraGM20BMethodEventImport, &request, sizeof request, &reply, sizeof reply) || !reply.handle)
@@ -127,7 +128,7 @@ std::shared_ptr<SharedEventWatch> SharedEvents::observe(std::shared_ptr<SharedEv
 {
     auto &s = *state_;
     std::function<void(int)> failedReady;
-    std::lock_guard<std::mutex> lock(s.lock);
+    std::lock_guard<raw::Mutex> lock(s.lock);
     result = kIOReturnBadArgument;
     if (!event || event->owner().get() != this || !s.imports.count(event->handle()) || !ready || s.closed)
         return nullptr;
@@ -177,7 +178,7 @@ std::shared_ptr<ResourceReadyCompletion> SharedEvents::resources(const std::vect
 {
     auto &s = *state_;
     std::function<void(int)> failedReady;
-    std::lock_guard<std::mutex> lock(s.lock);
+    std::lock_guard<raw::Mutex> lock(s.lock);
     result = kIOReturnBadArgument;
     if (!ready || uses.empty() || uses.size() > TegraGM20BMaxJobUses || s.closed)
         return nullptr;
@@ -216,7 +217,7 @@ void SharedEvents::notification(void *context, int result, void *cookie)
 {
     std::shared_ptr<SharedEvents> owner;
     {
-        std::lock_guard<std::mutex> lock(registryLock);
+        std::lock_guard<raw::Mutex> lock(registryLock);
         const auto found = registry.find(reinterpret_cast<uintptr_t>(context));
         if (found != registry.end())
             owner = found->second.lock();
@@ -229,7 +230,7 @@ void SharedEvents::delivered(uint64_t cookie, int result)
 {
     std::function<void(int)> ready;
     {
-        std::lock_guard<std::mutex> lock(state_->lock);
+        std::lock_guard<raw::Mutex> lock(state_->lock);
         const auto found = state_->observers.find(cookie);
         if (found == state_->observers.end())
             return;
@@ -242,7 +243,7 @@ void SharedEvents::delivered(uint64_t cookie, int result)
 void SharedEvents::cancel(uint64_t handle, uint64_t cookie)
 {
     std::function<void(int)> cancelled;
-    std::lock_guard<std::mutex> lock(state_->lock);
+    std::lock_guard<raw::Mutex> lock(state_->lock);
     if (auto found = state_->observers.find(cookie); found != state_->observers.end()) {
         cancelled = std::move(found->second.ready);
         state_->observers.erase(found);
@@ -252,7 +253,7 @@ void SharedEvents::cancel(uint64_t handle, uint64_t cookie)
 
 void SharedEvents::release(uint64_t handle)
 {
-    std::lock_guard<std::mutex> lock(state_->lock);
+    std::lock_guard<raw::Mutex> lock(state_->lock);
     if (!state_->imports.erase(handle))
         return;
     const TegraGM20BAbiEventRelease request{handle};
@@ -262,7 +263,7 @@ void SharedEvents::release(uint64_t handle)
 void SharedEvents::shutdown()
 {
     {
-        std::lock_guard<std::mutex> lock(registryLock);
+        std::lock_guard<raw::Mutex> lock(registryLock);
         registry.erase(state_->identity);
     }
     auto &s = *state_;
@@ -270,7 +271,7 @@ void SharedEvents::shutdown()
     dispatch_queue_t queue;
     std::map<uint64_t, State::Observer> cancelled;
     {
-        std::lock_guard<std::mutex> lock(s.lock);
+        std::lock_guard<raw::Mutex> lock(s.lock);
         if (s.closed)
             return;
         for (const auto &entry : s.observers)

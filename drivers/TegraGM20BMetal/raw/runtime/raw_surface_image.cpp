@@ -3,6 +3,7 @@
 // carries the surface's ID, so the kernel keeps the surface's coherency across every process's locks, and never asks the
 // kernel's SurfaceLayout, which decides a one-level 2D layout: a surface of no width is never one it tiles
 // (SwitchGpuSurfaceGeometry.h switch_gpu_surface_packed), so the bytes stay in the image the descriptor gives.
+#include "raw_lock.h"
 #include <CoreFoundation/CoreFoundation.h>
 #include <unistd.h>
 #include <cstring>
@@ -25,7 +26,7 @@ bool Device::createSurfaceImage(uint64_t surfaceId, void *base, uint64_t allocBy
         delete i;
         return false;
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!k_.bindImport(base, i->bo, TGM_LAYOUT_KIND)) {
         delete i;
         return false;

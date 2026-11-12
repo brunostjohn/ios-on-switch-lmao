@@ -6,6 +6,7 @@
 // (one Metal lets finish later, and work nobody waits for). A request that finds no compiler waits for one, unless the
 // kernel says none will come this boot.
 #pragma once
+#include "raw_lock.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -89,7 +90,7 @@ private:
     std::atomic<bool> absent_{false};
     std::atomic<const Mapping *> mapping_{nullptr};
     std::atomic<uint32_t> latest_{0};  // the newest generation a completion named
-    std::mutex mapLock_, asyncLock_;
+    raw::Mutex mapLock_, asyncLock_;
     std::vector<const Mapping *> mappings_;  // every one ever made: a reader may still be inside an older one
     void *port_ = nullptr, *queue_ = nullptr;
     std::map<uint64_t, std::function<void(Answer)>> pending_;

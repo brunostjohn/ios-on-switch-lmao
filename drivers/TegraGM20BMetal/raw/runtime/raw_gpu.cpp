@@ -4,6 +4,7 @@
 // copies NVK's nouveau_copy_rect and nvk_cmd_copy_memory_ce (all MIT), restricted to what Core Animation uses. r7-raw wrote the
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
+#include "raw_lock.h"
 #include "../fx/fx_image.h"
 #include "raw_nonfinite.h"
 #include "raw_clear.h"
@@ -466,7 +467,7 @@ Device::~Device()
     cb_.releaseGeometry();
     // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         stopping_ = true;
     }
     grow_.notify_all();
@@ -657,7 +658,7 @@ bool Device::init(std::string &err)
     // at the render server's start, not under its first frames: the heap's first part, the mip chains' first chunk and the
     // first pool chunk
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         Span first;
         if (blAlloc(1, 0, first))
@@ -672,7 +673,7 @@ bool Device::ensureChannel()
 {
     if (channelReady_.load(std::memory_order_acquire))
         return true;
-    std::lock_guard<std::mutex> l(channelLock_);
+    std::lock_guard<raw::Mutex> l(channelLock_);
     if (channelReady_.load(std::memory_order_relaxed))
         return true;
     const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -901,7 +902,7 @@ bool Device::placeFromStore(const uint8_t *slot, uint32_t size, uint64_t &offset
 
 void Device::runSlotsFrom(SlotLookup lookup)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     slotLookup_ = std::move(lookup);
 }
 
@@ -946,7 +947,7 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     if (form != PackForm::Default || !pl || !pl->storageBits || pl->storageBlendBits)
         return pl;
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (twin && twin != pl && !twin->storageBits)
         pl->barrierTwin = twin;
     return pl;
@@ -964,7 +965,7 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
     for (const PackPipeline *rec : pack_.variantRecords(keyHash)) {
         Pipeline *pl = nullptr;
         if (usableRecord(rec)) {
-            std::lock_guard<std::mutex> l(lock_);
+            std::lock_guard<raw::Mutex> l(lock_);
             pl = placeRecord(*rec, caTransform);
         }
         out.emplace_back(pack_.string(rec->variantName), pl);
@@ -992,7 +993,7 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
         }
 #endif
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!rec) {
         const auto made = completed_.find(keyHash);
         return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
@@ -1199,7 +1200,7 @@ uint64_t Device::chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint6
 }
 
 // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring and taken again); the chunk's index in chunks_
-bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index)
+bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index)
 {
     vm_address_t memory = 0;
     if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
@@ -1237,7 +1238,7 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex
 
 void Device::growLoop()
 {
-    std::unique_lock<std::mutex> l(lock_);
+    std::unique_lock<raw::Mutex> l(lock_);
     for (;;) {
         grow_.wait(l, [&] {
             return stopping_ || growing_ || !tiledWanted_.empty();
@@ -1304,7 +1305,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
             break;
         RAW_DIAGNOSTIC(stats.poolStalls++);
         if (growing_) {  // the grower is making one: wait for it rather than wire a second
-            std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
+            std::unique_lock<raw::Mutex> l(lock_, std::adopt_lock);
             // bounded, as every wait of the plugin's: a chunk not wired in 20 s is a stuck kernel import, said once and
             // stopped for the stack (a wait with no bound froze r7p8's compositor with nothing in the log)
             if (!grown_.wait_for(l, std::chrono::seconds(20), [&] {
@@ -1327,7 +1328,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
 void Device::warm()
 {
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         uint32_t c;
         while (poolFree_ <= sizes_.chunk && newChunk(sizes_.chunk, false, nullptr, c)) {
         }  // the first and the one ahead of it
@@ -1401,7 +1402,7 @@ void Device::freeChunk(Chunk &ch)
 
 void Device::trim()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     reapNativeSurfaces();
     for (const Spare &sp : spares_)
         freeChunk(chunks_[sp.chunk]);
@@ -1574,7 +1575,7 @@ void Device::writeTic(const Texture &t)
 
 void Device::swizzle(Texture &t, const uint8_t channels[4])
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     memcpy(t.swizzle, channels, 4);
     if (!t.tic)
         return;
@@ -1647,7 +1648,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
         return false;
     const bool blocks = t.blockW > 1 || t.blockH > 1;
     t.pitch = (t.width * t.bpp + 255) & ~255u;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * t.height;
     tgm_layout bl;
     // (a colour format: the chunks are bound under colour kind 0xFE, which a depth/stencil format's zeta is not; a
@@ -1691,7 +1692,7 @@ bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
     tgm_layout bl;
     if (!shape(width, 1, format, t) || xrForm(format) != XrForm::None || !tgm_layout_tiled(width, 1, t.bpp, &bl))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!blAlloc(bl.bytes, bl.align, t.span))
         return false;
     t.va = t.span.va;
@@ -1717,7 +1718,7 @@ bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint3
     if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
         !fx::volumeLayout(width, height, depth, levels, t.bpp, view2d, c))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     t.va = t.span.va;
@@ -1738,7 +1739,7 @@ bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint3
     if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
         !fx::arrayLayout(width, height, layers, levels, t.bpp, c))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     t.va = t.span.va;
@@ -1834,7 +1835,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
             return false;
         }
     }
-    std::unique_lock<std::mutex> l(lock_);
+    std::unique_lock<raw::Mutex> l(lock_);
     t.pitch = pitch;
     const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
     t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
@@ -1898,13 +1899,13 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
         return false;
     Import *planes;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         planes = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface);
     }
     if (!planes)
         return false;
     if (!createTexture(width, height, kRGBA8Unorm, t)) {  // the image: pool memory, its texture header
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         release(planes);
         return false;
     }
@@ -1954,7 +1955,7 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
         pitch < width * t.bpp || offset > b.length || uint64_t(pitch) * height > b.length - offset ||
         offset > UINT64_MAX - b.va || ((b.va + offset) & 31))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     t.pitch = pitch;
     t.va = b.va + offset;
     t.storage = {t.va, uint64_t(pitch) * height, b.hostVisible};
@@ -1977,7 +1978,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     if (!f || f->bpp != of.bpp || f->blockW != of.blockW || f->blockH != of.blockH || of.memoryless || of.sampled ||
         xrForm(format) != XrForm::None || xrForm(of.format) != XrForm::None)
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     t = of;
     t.storage = of.storageRange();
     memcpy(t.swizzle, kIdentitySwizzle, 4);
@@ -2038,7 +2039,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
         image.layerBytes = c.arrayStride;
     }
     c.layers = layers;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     t = image;
     t.storage = of.storageRange();
     memcpy(t.swizzle, kIdentitySwizzle, 4);
@@ -2147,7 +2148,7 @@ bool Device::tiledWanted(const std::vector<Chunk> &chunks) const
 }
 
 bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
-                           std::unique_lock<std::mutex> *unlocked, uint32_t &index)
+                           std::unique_lock<raw::Mutex> *unlocked, uint32_t &index)
 {
     vm_address_t memory = 0;
     if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
@@ -2228,7 +2229,7 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
         }
         RAW_DIAGNOSTIC(stats.poolStalls++);
         if (tiledWanted(chunks)) {  // the grower is making one: wait for it rather than wire a second
-            std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
+            std::unique_lock<raw::Mutex> l(lock_, std::adopt_lock);
             // bounded, as the pool's wait (a chunk not wired in 20 s is a stuck kernel import)
             if (!grown_.wait_for(l, std::chrono::seconds(20), [&] {
                     return !tiledWanted(chunks);
@@ -2316,7 +2317,7 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
         return false;
     }
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (!blAlloc(c->layout.bytes, c->layout.align, t.span)) {
             delete c;
             return false;
@@ -2360,7 +2361,7 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
         delete i;
         return false;
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!k_.bindImport(bytes, i->bo, kind)) {
         delete i;
         return false;
@@ -2404,7 +2405,7 @@ bool Device::createBlockTexture(uint32_t width, uint32_t height, uint32_t levels
     if (!blockCompressed(f) || !shape(width, height, format, t) ||
         !fx::blockChainLayout(width, height, levels, layers, f->blockW, f->blockH, f->bpp, c))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     t.va = t.span.va;
@@ -2446,7 +2447,7 @@ void Device::destroyTexture(Texture &t)
         glassMem->forget(t.storageRange().va ? t.storageRange().va : t.va, t.view ? t.tic : 0);
 #endif
     if (t.view) {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (t.tic) {
             freeTic(t.tic);
         }
@@ -2470,7 +2471,7 @@ void Device::destroyTexture(Texture &t)
         t.sampled = nullptr;
         t.tic = 0;
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (t.tic) {
         freeTic(t.tic);
     }
@@ -2505,7 +2506,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
     if (!length)
         length = 16;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         if (wc && wcAlloc(length, b.span)) {
             b.wc = true;
             RAW_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
@@ -2533,7 +2534,7 @@ bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
     buffer = {};
     if (!length)
         length = 16;
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<raw::Mutex> lock(lock_);
     Chunk chunk;
     if (!k_.allocControl(length, chunk.bo, ControlUse::Bytes))
         return false;
@@ -2655,7 +2656,7 @@ void Device::wcFree(Span &s)
 
 uint32_t Device::wcChunksHeld()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     uint32_t n = 0;
     for (const Chunk &ch : wcChunks_)
         n += ch.bo.handle && !ch.dedicated;
@@ -2664,7 +2665,7 @@ uint32_t Device::wcChunksHeld()
 
 uint64_t Device::heapInPlaceBytes()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     uint64_t bytes = packPages_.boundBytes();
     for (const StoreRegion &r : storeRegions_)
         bytes += r.pages.boundBytes();
@@ -2673,7 +2674,7 @@ uint64_t Device::heapInPlaceBytes()
 
 uint64_t Device::controlMappedBytes()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     uint64_t bytes = 0;
     for (const Bo *bo : {&tic_, &tsc_, &root_, &zero_, &tickets_, &colorTable_, &stamps_, &push_.bo, &upload_.bo})
         bytes += bo->mapped;
@@ -2682,7 +2683,7 @@ uint64_t Device::controlMappedBytes()
 
 uint64_t Device::wcChunkBytesHeld()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     uint64_t n = 0;
     for (const Chunk &ch : wcChunks_)
         n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
@@ -2691,7 +2692,7 @@ uint64_t Device::wcChunkBytesHeld()
 
 uint64_t Device::blChunkFreeBytes()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return tiledFreeBytes(blChunks_);
 }
 
@@ -2703,7 +2704,7 @@ bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
     b = {};
     if (!bytes || !length)
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!(b.import = importSurface(0, bytes, length, nullptr)))
         return false;
     b.va = b.import->bo.va;
@@ -2717,7 +2718,7 @@ bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t bytes, uint64
 {
     b = {};
     tiled = false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     Import *i = importSurface(id, base, bytes, owner);
     if (!i)
         return false;
@@ -2735,7 +2736,7 @@ bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t bytes, uint64
 
 void Device::destroyBuffer(Buffer &b)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (b.import)
         release(b.import);
     freeSpan(b.span, b.arena ? Memory::Arena : b.wc ? Memory::Wc : Memory::Pool, b.lease);
@@ -2855,7 +2856,7 @@ bool Device::createSampler(const SamplerDesc &d, Sampler &s)
     uint32_t w[8];
     samplerHeader(d, w);
     s.desc = d;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!takeTsc(s.tsc))
         return false;
     memcpy(tsc_.cpu + 32 * s.tsc, w, 32);
@@ -2864,7 +2865,7 @@ bool Device::createSampler(const SamplerDesc &d, Sampler &s)
 
 void Device::destroySampler(Sampler &s)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (s.tsc)
         freeTsc_.push_back(s.tsc);
     for (uint32_t m : s.mapped)
@@ -2981,7 +2982,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     // its alpha read as one, as m2v's view of its own converted image reads it (W_SOURCE ONE_FLOAT; the conversion writes 1 there
     // too: the same texels, now the same header)
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         uint32_t *w = reinterpret_cast<uint32_t *>(tic_.cpu + 32 * t.tic);
         w[0] = (w[0] & ~(7u << 28)) | 7u << 28;
     }
@@ -3295,7 +3296,7 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
                          "raw: the kernel refused %u waits on channel %u's seqno %u (%s): taken as killed", refused, ch,
                          seqno, k_.error().c_str());
             {
-                std::lock_guard<std::mutex> l(killedLock_);
+                std::lock_guard<raw::Mutex> l(killedLock_);
                 killedKept_[killedNext_++ % killedKept_.size()] = {
                     st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
                 keptThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
@@ -3311,7 +3312,7 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
 // A job the kernel says its own event wait failed, which the fence record no longer names
 void Device::keepFailure(uint32_t seqno)
 {
-    std::lock_guard<std::mutex> l(killedLock_);
+    std::lock_guard<raw::Mutex> l(killedLock_);
     killedKept_[killedNext_++ % killedKept_.size()] = {seqno, seqno, kDependencyFailed};
     const uint32_t through = keptThrough_.load(std::memory_order_relaxed);
     if (!keptKills_.load(std::memory_order_relaxed) || int32_t(seqno - through) > 0)
@@ -3325,7 +3326,7 @@ std::vector<KillRange> Device::failedSeqnos() const
 {
     std::vector<KillRange> failed;
     {
-        std::lock_guard<std::mutex> l(killedLock_);
+        std::lock_guard<raw::Mutex> l(killedLock_);
         for (const Killed &kept : killedKept_)
             if (kept.error)
                 failed.push_back(kept);
@@ -3345,7 +3346,7 @@ std::vector<KillRange> Device::failedSeqnos() const
 // A kept record names the seqnos of the slot it was written in, which a channel made in another slot gives out again
 void Device::forgetKept()
 {
-    std::lock_guard<std::mutex> l(killedLock_);
+    std::lock_guard<raw::Mutex> l(killedLock_);
     killedKept_ = {};
     keptThrough_.store(0, std::memory_order_relaxed);
     keptKills_.store(false, std::memory_order_release);
@@ -3389,7 +3390,7 @@ bool Device::killed(uint32_t seqno) const
     if (!keptKills_.load(std::memory_order_acquire) ||
         int32_t(seqno - keptThrough_.load(std::memory_order_relaxed)) > 0)
         return false;
-    std::lock_guard<std::mutex> l(killedLock_);
+    std::lock_guard<raw::Mutex> l(killedLock_);
     for (const Killed &kept : killedKept_)
         if (covers(kept)) {
             killedError_.store(kept.error, std::memory_order_relaxed);
@@ -3423,7 +3424,7 @@ std::string Device::vaOwner(uint64_t va)
         }
         return false;
     };
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (in(heap_, heapBound_, "the shader heap") || in(heap_, heap_.bytes, "the shader heap's unbound reservation") ||
         in(push_.bo, push_.bo.bytes, "the push ring") || in(upload_.bo, upload_.bo.bytes, "the upload ring") ||
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
@@ -3453,7 +3454,7 @@ bool Device::reopen()
         Killed live = {};
         if (liveKill(live)) {
             k_.markLost(channel_, k_.opened());
-            std::lock_guard<std::mutex> l(killedLock_);
+            std::lock_guard<raw::Mutex> l(killedLock_);
             killedKept_[killedNext_++ % killedKept_.size()] = live;
             keptThrough_.store(live.last, std::memory_order_relaxed);
             keptKills_.store(true, std::memory_order_release);
@@ -3467,7 +3468,7 @@ bool Device::reopen()
     if (!makeChannel(k_, kEngines, channel_, fence_, lastSeqno_, &kNoFence, [this](uint32_t channel, uint32_t &seqno) {
             return newContext(channel, seqno);
         })) {
-        std::lock_guard<std::mutex> l(channelLock_);
+        std::lock_guard<raw::Mutex> l(channelLock_);
         channelError_ = k_.error();
         return false;
     }
@@ -3485,7 +3486,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     push_.inflight.clear();
     upload_.inflight.clear();
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         for (Backing *b : backings_)
             b->submitted = false;
         heapInvalidated_ = ~0ull;
@@ -3629,7 +3630,7 @@ CommandBuffer *Device::begin()
     reapAtBegin();
     // a trim's lock once in 64 command buffers, never waited for: the compressed-memory thread holding it trims too
     if (commits() % 64 == 0) {
-        std::unique_lock<std::mutex> l(lock_, std::try_to_lock);
+        std::unique_lock<raw::Mutex> l(lock_, std::try_to_lock);
         if (l.owns_lock()) {
             RAW_ENCODE_COUNT(Locks);
             trimBackings();
@@ -3774,7 +3775,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             blockLinear = true;
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
-    std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
+    std::unique_lock<raw::Mutex> backingLock(dev_->lock_, std::defer_lock);
     const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression, bool copied = false) {
         if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
             return b;
@@ -5349,11 +5350,11 @@ static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, c
     const EdgeMiss m = edgeMiss(t.width, t.height, r.x0, r.y0, r.x1, r.y1);
     if (!m.any())
         return;
-    static std::mutex lock;
+    static raw::Mutex lock;
     static std::set<std::array<uint32_t, 8>> seen;
     static uint32_t seenGeneration = 0;
     {
-        std::lock_guard<std::mutex> l(lock);
+        std::lock_guard<raw::Mutex> l(lock);
         if (const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
             generation != seenGeneration) {
             seen.clear();

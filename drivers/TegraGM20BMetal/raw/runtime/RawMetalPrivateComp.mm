@@ -13,7 +13,7 @@
 thread_local bool tRawEncoding = false;
 
 // The process's shapes a storage form needed plain (rmStorageTargetsPlain): textures of them are made plain
-static std::mutex gPlainShapesLock;
+static raw::Mutex gPlainShapesLock;
 static raw::PlainShapes gPlainShapes;
 
 static raw::SubmitGate gSubmitGate;
@@ -56,7 +56,7 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
     const uint32_t kind = raw::privateCompressedKind(facts);
     if (!kind)
         return 0;
-    std::lock_guard<std::mutex> l(gPlainShapesLock);
+    std::lock_guard<raw::Mutex> l(gPlainShapesLock);
     return gPlainShapes.holds({uint64_t(d.pixelFormat), uint64_t(d.width), uint64_t(d.height), uint64_t(d.usage)}) ? 0
                                                                                                                    : kind;
 }
@@ -182,7 +182,7 @@ void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to)
     for (RMTexture *t : cb->_plainForStorage) {
         MTLTextureDescriptor *d = t->_descriptor;
         {
-            std::lock_guard<std::mutex> l(gPlainShapesLock);
+            std::lock_guard<raw::Mutex> l(gPlainShapesLock);
             gPlainShapes.add({uint64_t(d.pixelFormat), uint64_t(d.width), uint64_t(d.height), uint64_t(d.usage)});
         }
         rmTexturePlain(t);

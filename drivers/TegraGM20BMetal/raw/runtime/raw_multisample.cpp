@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_multisample.h and Device::createStoredMultisample, createOwnedZeta (raw_gpu.h).
+#include "raw_lock.h"
 #include <algorithm>
 #include "raw_gpu.h"
 #include "raw_multisample.h"
@@ -12,7 +13,7 @@ bool Device::createStoredMultisample(uint32_t width, uint32_t height, uint32_t f
     if (!shape(width, height, format, t) || !t.renderable || blockCompressed(formatInfo(format)) ||
         xrForm(format) != XrForm::None || !fx::msLayout(t.width, t.height, samples, t.bpp, c))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     if (!(t.tic = allocTic())) {
@@ -44,7 +45,7 @@ bool Device::createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, u
         sampled = false;
     }
     const uint32_t z = zetaFormatIndex(format);
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const uint32_t kind = samples == 1 && layers == 1 ? compressedKind(t.bpp, format) : 0;
         kind && probeCompressNext.exchange(false) && probeCompressibleZeta(bytes, kind, sampled, t))
@@ -70,7 +71,7 @@ bool Device::moveOwnedZeta(Texture &t, const ZetaMemory &m, const char **why)
     Texture over;
     bool owned;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         owned = ownedZeta_.count(t.va) != 0;
     }
     if (!owned || t.samples > 1) {
@@ -94,7 +95,7 @@ bool Device::moveOwnedZeta(Texture &t, const ZetaMemory &m, const char **why)
         if (!copied)
             rc->abandon();
     }
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!copied) {
         if (over.tic)
             freeTic(over.tic);

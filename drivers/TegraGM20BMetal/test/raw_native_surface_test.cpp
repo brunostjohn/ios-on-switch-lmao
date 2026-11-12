@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "../raw/runtime/raw_lock.h"
 #include "../raw/runtime/raw_native_plane.h"
 #include <gtest/gtest.h>
 #include <IOKit/IOReturn.h>
@@ -65,7 +66,7 @@ bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &out)
 }
 struct Device {
     Kernel k_;
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     std::atomic<bool> nativeStale_{false};
     std::map<unsigned, Import *> surfaces_;

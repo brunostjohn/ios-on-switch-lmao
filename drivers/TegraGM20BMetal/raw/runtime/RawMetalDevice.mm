@@ -35,7 +35,7 @@
         mach_timebase_info_data_t base;
         mach_timebase_info(&base);
         d[@"reopen_us"] = @(gRM->raw->stats.reopenTicks.load() * base.numer / base.denom / 1000);
-        std::lock_guard<std::mutex> m(gRM->m2vLock);
+        std::lock_guard<raw::Mutex> m(gRM->m2vLock);
         d[@"gpu_order"] = @(gRM->gpuOrder ? 1 : 0);
     }
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());

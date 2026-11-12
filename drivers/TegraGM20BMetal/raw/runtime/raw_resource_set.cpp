@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "raw_lock.h"
 #include "raw_resource_set.h"
 #include "raw_encode_profile.h"
 
@@ -93,7 +94,7 @@ bool ResourceSet::registerLocked(Kernel &k)
 
 bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bool always)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     for (const Candidate &c : candidates)
         insertLocked(*c.bo, c.access, always);
     if (!registerLocked(k)) {
@@ -112,7 +113,7 @@ bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bo
 
 void ResourceSet::promote(Kernel &k, uint64_t handle)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     bool changed = false;
     for (SetMember &m : members_)
         if (m.handle == handle && !(m.access & TegraGM20BSurfaceWrite)) {
@@ -126,7 +127,7 @@ void ResourceSet::promote(Kernel &k, uint64_t handle)
 
 void ResourceSet::free(Kernel &k, Bo &bo)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const bool listed = eraseLocked(bo.handle);
     if (listed) {
         ++removals_;
@@ -140,7 +141,7 @@ void ResourceSet::free(Kernel &k, Bo &bo)
 
 bool ResourceSet::renew(Kernel &k, uint32_t generation)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (generation != generation_)
         return true;
     if (!mirror_ || *mirror_ == generation_)

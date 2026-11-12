@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_zeta.h. Method numbers: NVIDIA's class headers (kits/SwitchGM20B: Mesa's clb197.h); the target words follow
 // Mesa NVK nvk_CmdBeginRendering, the state's emission nvk_flush_ds_state, the clears nvk_CmdClearAttachments (all MIT).
+#include "raw_lock.h"
 #include "raw_zeta.h"
 
 #include <algorithm>
@@ -106,7 +107,7 @@ bool RenderEncoder::hideZeta(const PassDesc &pass)
     shape.zeta = shape.memoryless = true;
     Texture *b;
     {
-        std::lock_guard<std::mutex> l(dev_->lock_);
+        std::lock_guard<raw::Mutex> l(dev_->lock_);
         b = dev_->backing(shape);
     }
     if (!b)

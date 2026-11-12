@@ -137,7 +137,7 @@ void rmChanged(RMCommandBuffer *cb)
     if (!cb->_waiters.load())
         return;
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
     }
     cb->_changed.notify_all();
 }
@@ -146,7 +146,7 @@ NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std
 {
     if (!added.load())
         return nil;
-    std::lock_guard<std::mutex> l(cb->_lock);
+    std::lock_guard<raw::Mutex> l(cb->_lock);
     NSArray *taken = list;
     list = nil;
     return taken;
@@ -155,7 +155,7 @@ NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std
 // Asleep on _changed until `done` holds of cb's state, counted among its waiters (rmChanged)
 template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 {
-    std::unique_lock<std::mutex> l(cb->_lock);
+    std::unique_lock<raw::Mutex> l(cb->_lock);
     cb->_waiters.fetch_add(1);
     cb->_changed.wait(l, done);
     cb->_waiters.fetch_sub(1);
@@ -319,7 +319,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 // Answered here, not recorded as invocations (each one sent the whole command buffer to m2v)
 - (NSMutableDictionary *)userDictionary
 {
-    std::lock_guard<std::mutex> l(_lock);
+    std::lock_guard<raw::Mutex> l(_lock);
     if (!_userDictionary)
         _userDictionary = [NSMutableDictionary dictionary];
     return _userDictionary;
@@ -327,7 +327,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 
 - (uint64_t)globalTraceObjectID
 {
-    std::lock_guard<std::mutex> l(_lock);
+    std::lock_guard<raw::Mutex> l(_lock);
     if (!_traceId)
         _traceId = nextTraceId();
     return _traceId;
@@ -447,7 +447,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
         return;
     _hasScheduledHandlers.store(true);
     {
-        std::lock_guard<std::mutex> l(_lock);
+        std::lock_guard<raw::Mutex> l(_lock);
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
         // again, and a presentDrawable added then never presented)
         if (!_scheduledSent) {
@@ -470,7 +470,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
     bool now;
     _hasCompletedHandlers.store(true);
     {
-        std::lock_guard<std::mutex> l(_lock);
+        std::lock_guard<raw::Mutex> l(_lock);
         now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
         if (!now) {
             if (!_completedHandlers)
@@ -582,7 +582,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 - (NSNumber *)switchRawWholePrograms
 {
-    std::lock_guard<std::mutex> lock(_lock);
+    std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
     _forceWholePrograms = true;
@@ -592,7 +592,7 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 // hw_test_app's gpu.path.state_segments: this command buffer binds every state as an inline copy (raw_gpu.h inlineStates)
 - (NSNumber *)switchRawInlineStates
 {
-    std::lock_guard<std::mutex> lock(_lock);
+    std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
     _inlineStates = true;
@@ -603,17 +603,16 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 // stamps) or "host" (the host's window from submission to completion, which stands in where no stamp was read)
 - (NSString *)switchGpuClock
 {
-    std::lock_guard<std::mutex> l(_lock);
     if (!_completedSent)
         return @"pending";
     return _gpuStamped ? @"ns" : @"host";
 }
 
 // hw_test_app's attribution, final once the command buffer completed (its completed handlers may ask): "raw",
-// "m2v:<reason>:<first predicate>" or "split:<raw segments>+<m2v segments>:<reason>:<first predicate>"
+// "m2v:<reason>:<first predicate>" or "split:<raw segments>+<m2v segments>:<reason>:<first predicate>". With no lock:
+// what it reads is set before the completed mark this acquires.
 - (NSString *)switchRawPath
 {
-    std::lock_guard<std::mutex> l(_lock);
     if (!_completedSent)
         return @"pending";
     raw::ExecutionAttribution route;

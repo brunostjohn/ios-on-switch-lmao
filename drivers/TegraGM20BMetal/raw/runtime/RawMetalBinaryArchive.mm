@@ -18,7 +18,7 @@
 
 @interface RMBinaryArchive : RMObject <MTLBinaryArchive> {
 @public
-    std::mutex _lock;
+    raw::Mutex _lock;
     raw::ArchiveKeys _keys;
     const raw::PackArchive *_declared;  // the pack's list for the Apple file it was opened from
 }
@@ -79,13 +79,13 @@ static RMFunction *own(id<MTLFunction> function)
 
 - (bool)holds:(uint64_t)key
 {
-    std::lock_guard<std::mutex> l(_lock);
+    std::lock_guard<raw::Mutex> l(_lock);
     return _keys.holds(key) || (_declared && gRM->raw->pack().declares(*_declared, key));
 }
 
 - (BOOL)add:(uint64_t)key
 {
-    std::lock_guard<std::mutex> l(_lock);
+    std::lock_guard<raw::Mutex> l(_lock);
     _keys.add(key);
     return YES;
 }
@@ -143,7 +143,7 @@ static RMFunction *own(id<MTLFunction> function)
 {
     std::vector<uint8_t> bytes;
     {
-        std::lock_guard<std::mutex> l(_lock);
+        std::lock_guard<raw::Mutex> l(_lock);
         bytes = _keys.serialized();
     }
     NSData *data = [NSData dataWithBytes:bytes.data() length:bytes.size()];

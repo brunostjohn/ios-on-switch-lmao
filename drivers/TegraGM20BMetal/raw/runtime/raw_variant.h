@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -67,7 +68,7 @@ public:
         const State ready = state();
         if (ready != State::Pending)
             return ready;
-        std::lock_guard<std::mutex> lock(lock_);
+        std::lock_guard<raw::Mutex> lock(lock_);
         const State current = state();
         if (current == State::Pending && observer)
             observers_.push_back(std::move(observer));
@@ -78,7 +79,7 @@ public:
     {
         std::vector<std::function<void()>> observers;
         {
-            std::lock_guard<std::mutex> lock(lock_);
+            std::lock_guard<raw::Mutex> lock(lock_);
             if (state() != State::Pending)
                 return false;
             value_ = value;
@@ -91,7 +92,7 @@ public:
     }
 
 private:
-    mutable std::mutex lock_;
+    mutable raw::Mutex lock_;
     std::atomic<State> state_{State::Pending};
     T *value_ = nullptr;
     std::vector<std::function<void()>> observers_;

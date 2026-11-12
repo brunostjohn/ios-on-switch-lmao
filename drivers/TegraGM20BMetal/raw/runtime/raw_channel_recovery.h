@@ -3,6 +3,7 @@
 // gave out a seqno (its generation), how a channel the device gave up ended the seqnos it gave out, and the making of the
 // next channel with its context.
 #pragma once
+#include "raw_lock.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -41,7 +42,7 @@ public:
     {
         const uint64_t generation = current();
         {
-            std::lock_guard<std::mutex> l(lock_);
+            std::lock_guard<raw::Mutex> l(lock_);
             retired_[next_++ % retired_.size()] = {generation, failed};
         }
         current_.fetch_add(1, std::memory_order_release);
@@ -52,7 +53,7 @@ public:
     void closed(uint64_t generation)
     {
         {
-            std::lock_guard<std::mutex> l(lock_);
+            std::lock_guard<raw::Mutex> l(lock_);
             closed_ = generation;
         }
         changed_.notify_all();
@@ -64,7 +65,7 @@ public:
     // be kept reads as failed (error 0).
     bool completed(uint64_t generation, uint32_t seqno, uint32_t *error = nullptr)
     {
-        std::unique_lock<std::mutex> l(lock_);
+        std::unique_lock<raw::Mutex> l(lock_);
         changed_.wait(l, [&] {
             return closed_ >= generation;
         });
@@ -91,8 +92,8 @@ private:
     };
 
     std::atomic<uint64_t> current_{0};
-    std::mutex lock_;
-    std::condition_variable changed_;
+    raw::Mutex lock_;
+    raw::CondVar changed_;
     uint64_t closed_ = 0;
     std::array<Retired, 8> retired_{};
     size_t next_ = 0;

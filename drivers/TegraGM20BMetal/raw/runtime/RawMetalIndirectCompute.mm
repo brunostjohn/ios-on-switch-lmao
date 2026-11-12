@@ -4,6 +4,7 @@
 // A buffer that inherits the encoder's buffers also writes each command's bind slot, from which an execute's GPU writes its
 // descriptors; one that inherits the encoder's pipeline keeps its commands as the CPU encoded them and writes them all for
 // a pipeline at the first execute under it after a change (rmPipelineVariant).
+#include "raw_lock.h"
 #import "RawMetalIndirectCompute.h"
 #include "RawDirect.h"
 #include "raw_compute_key.h"
@@ -291,7 +292,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 
 - (void)resetWithRange:(NSRange)range
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     for (NSUInteger i = range.location; i < std::min<NSUInteger>(NSMaxRange(range), _count); i++) {
         _dispatches[i] = {};
         raw::icb::computeEmpty(computeSlot(self, i));
@@ -308,7 +309,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 
 - (void)edit:(void (^)(RMICBDispatch &c))change
 {
-    std::lock_guard<std::mutex> hold(_buffer->_lock);
+    std::lock_guard<raw::Mutex> hold(_buffer->_lock);
     change(_buffer->_dispatches[_index]);
     [_buffer write:_index];
 }
@@ -316,7 +317,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 // A barrier changes the slot's first words alone
 - (void)barrier:(bool)barrier
 {
-    std::lock_guard<std::mutex> hold(_buffer->_lock);
+    std::lock_guard<raw::Mutex> hold(_buffer->_lock);
     RMICBDispatch &c = _buffer->_dispatches[_index];
     c.barrier = barrier;
     if (!c.raw)

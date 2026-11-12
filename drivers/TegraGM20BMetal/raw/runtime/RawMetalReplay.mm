@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "raw_lock.h"
 #import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
 #import <objc/message.h>
@@ -79,7 +80,7 @@ static void failMissingTwin(RMCommandBuffer *cb, id object)
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                          code:MTLCommandBufferErrorInternal
                                      userInfo:@{NSLocalizedDescriptionKey : text}];
-    std::lock_guard<std::mutex> l(cb->_lock);
+    std::lock_guard<raw::Mutex> l(cb->_lock);
     if (!cb->_segError)
         cb->_segError = error;
 }

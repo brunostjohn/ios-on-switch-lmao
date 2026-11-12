@@ -3,6 +3,7 @@
 // words, or its variant for the encoder's pipeline where it inherits that, and the bind slots for the encoder's buffers in
 // the macros' scratch where it inherits them; m2v's replay encodes the commands again into m2v's buffer, which executes
 // them as Metal does; and a blit's reset or copy of the commands.
+#include "raw_lock.h"
 #import "RawMetalIndirectCompute.h"
 
 namespace {
@@ -42,7 +43,7 @@ const char *admit(RMKernelExecute *x)
 {
     RMIndirectComputeBuffer *b = x->_buffer;
     const auto [from, to] = reach(x);
-    std::lock_guard<std::mutex> hold(b->_lock);
+    std::lock_guard<raw::Mutex> hold(b->_lock);
     if (b->_inheritPipeline) {
         const auto made = b->_variants.find(x->_pipeline);
         const bool current = made != b->_variants.end() && made->second->generation == b->_generation;
@@ -72,7 +73,7 @@ std::vector<RMBuffer *> commandBuffers(RMKernelExecute *x)
     RMIndirectComputeBuffer *b = x->_buffer;
     const auto [from, to] = reach(x);
     std::vector<RMBuffer *> out;
-    std::lock_guard<std::mutex> hold(b->_lock);
+    std::lock_guard<raw::Mutex> hold(b->_lock);
     for (uint32_t i = from; i < to && !b->_inheritBuffers; i++)
         for (RMBuffer *buffer : b->_dispatches[i].buffers)
             if (buffer && std::find(out.begin(), out.end(), buffer) == out.end())
@@ -159,7 +160,7 @@ static std::shared_ptr<RMICBVariant> pipelineVariant(RMKernelExecute *x, const c
 {
     RMIndirectComputeBuffer *b = x->_buffer;
     const auto [from, to] = reach(x);
-    std::lock_guard<std::mutex> hold(b->_lock);
+    std::lock_guard<raw::Mutex> hold(b->_lock);
     std::shared_ptr<RMICBVariant> &v = b->_variants[x->_pipeline];
     if (!v || v->generation != b->_generation) {
         if (x->_kernelsGeneration != b->_generation || x->_kernels.size() != b->_count)
@@ -212,7 +213,7 @@ bool encodeKernelCommands(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMKern
             run.alignedSlots = x->_variant->alignedSlots;
         }
     } else if (b->_inheritBuffers) {
-        std::lock_guard<std::mutex> hold(b->_lock);
+        std::lock_guard<raw::Mutex> hold(b->_lock);
         if (b->_bindsChanged) {
             b->_bindSlots = b->_alignedSlots = 0;
             for (const RMICBDispatch &c : b->_dispatches) {
@@ -234,7 +235,7 @@ void replayKernelCommands(id<MTLComputeCommandEncoder> encoder, RMKernelExecute 
 {
     RMIndirectComputeBuffer *b = x->_buffer;
     const auto [from, to] = reach(x);
-    std::lock_guard<std::mutex> hold(b->_lock);
+    std::lock_guard<raw::Mutex> hold(b->_lock);
     if (!b->_m2v)
         b->_m2v = [gRM->fallback newIndirectCommandBufferWithDescriptor:b->_descriptor
                                                         maxCommandCount:b->_count
@@ -286,7 +287,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
     const NSUInteger first = NSUInteger(c.c), count = NSUInteger(c.x), into = copy ? c.a : first;
     std::vector<RMICBDispatch> commands(count);
     if (copy) {
-        std::lock_guard<std::mutex> hold(from->_lock);
+        std::lock_guard<raw::Mutex> hold(from->_lock);
         std::copy_n(from->_dispatches.begin() + ptrdiff_t(first), count, commands.begin());
     }
     if (be) {
@@ -313,7 +314,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
         }
         to->_gpuWritten.store(true, std::memory_order_relaxed);
     }
-    std::lock_guard<std::mutex> hold(to->_lock);
+    std::lock_guard<raw::Mutex> hold(to->_lock);
     to->_bindsChanged = true;
     to->_generation++;
     for (NSUInteger i = 0; i < count; i++) {

@@ -3,6 +3,7 @@
 // worked out when its bindings change; the pipeline it draws with is the one whose programs are the first variants of each
 // stage those facts hold for. That pipeline is made the first time a draw selects it, its programs placed from the pack, never
 // compiled.
+#include "raw_lock.h"
 #include <algorithm>
 #include "raw_gpu.h"
 #include "raw_slm.h"
@@ -40,7 +41,7 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
     const size_t at = v * (pl.variantCount[1] + 1u) + f;
     if (Pipeline *made = __atomic_load_n(&pl.chosen[at], __ATOMIC_ACQUIRE))
         return made;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (pl.chosen[at])
         return pl.chosen[at];
     const PackPipeline &pp = *pl.rec;

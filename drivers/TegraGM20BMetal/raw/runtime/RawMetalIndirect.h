@@ -24,7 +24,7 @@ struct RMICBCommand {
 @public
     raw::Buffer _raw;  // the commands' words, raw::icb::kSlotWords each
     NSUInteger _count;
-    std::mutex _lock;  // commands are encoded from any thread
+    raw::Mutex _lock;  // commands are encoded from any thread
     std::vector<RMICBCommand> _commands;
     std::unordered_map<void *, uint32_t> _indexBuffers;  // the index buffers its commands name, and how many name each
     uint32_t _kinds[2];                                  // its commands of triangles, and of lines or points

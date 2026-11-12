@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_remote.h. The call forms are raw_kernel.cpp's (direct, or tunnelled through the selector the sandbox admits).
+#include "raw_lock.h"
 #include "raw_remote.h"
 
 #include <IOKit/IOKitLib.h>
@@ -80,7 +81,7 @@ Remote::~Remote()
 {
     std::map<uint64_t, std::function<void(Answer)>> pending;
     {
-        std::lock_guard<std::mutex> l(asyncLock_);
+        std::lock_guard<raw::Mutex> l(asyncLock_);
         if (port_)
             IONotificationPortDestroy(static_cast<IONotificationPortRef>(port_));
         port_ = nullptr;
@@ -130,7 +131,7 @@ int Remote::call(uint32_t method, const void *in, size_t inSize, void *out, size
 // installed pack)
 void Remote::map(uint32_t generation)
 {
-    std::lock_guard<std::mutex> l(mapLock_);
+    std::lock_guard<raw::Mutex> l(mapLock_);
     const Mapping *current = mapping_.load(std::memory_order_acquire);
     if (current && current->generation >= generation)
         return;
@@ -249,7 +250,7 @@ bool Remote::compileAsync(const std::string &request, bool waited, uint32_t qos,
 {
     if (!serving() || !taking())
         return false;
-    std::lock_guard<std::mutex> l(asyncLock_);
+    std::lock_guard<raw::Mutex> l(asyncLock_);
     if (!port_) {
         IONotificationPortRef port = IONotificationPortCreate(kIOMainPortDefault);
         if (!port)
@@ -310,7 +311,7 @@ void Remote::delivered(void *refcon, int result, void *cookie, void *word)
     std::function<void(Answer)> done;
     std::vector<std::function<void(Answer)>> refused;
     {
-        std::lock_guard<std::mutex> l(remote->asyncLock_);
+        std::lock_guard<raw::Mutex> l(remote->asyncLock_);
         const auto found = remote->pending_.find(uint64_t(uintptr_t(cookie)));
         if (found == remote->pending_.end())
             return;

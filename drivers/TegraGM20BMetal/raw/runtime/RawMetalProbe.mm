@@ -56,7 +56,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     raw::Device &d = *gRM->raw;
     if (!before) {
         d.probeArmed.store(false, std::memory_order_release);
-        std::lock_guard<std::mutex> hold(d.probeLock);
+        std::lock_guard<raw::Mutex> hold(d.probeLock);
         d.probeWords.reset();
         return [NSString stringWithFormat:@"%llu", (unsigned long long)d.probeEmitted.exchange(0)];
     }
@@ -66,7 +66,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     if (words->before.size() + words->after.size() > 1024)
         return @"more than 512 methods";
     {
-        std::lock_guard<std::mutex> hold(d.probeLock);
+        std::lock_guard<raw::Mutex> hold(d.probeLock);
         d.probeWords = std::move(words);
         d.probeEmitted.store(0, std::memory_order_relaxed);
     }
@@ -144,7 +144,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     raw::ProbeForms f;
     if (!raw::parseProbeForms(forms.UTF8String, f))
         return [NSString stringWithFormat:@"forms not understood: %@", forms];
-    std::lock_guard<std::mutex> lock(_lock);
+    std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @"committed already";
     _probeForms = f;
@@ -154,7 +154,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
 // Where its barriers took the forms, once it completed (raw_probe_forms.h ProbeTaken)
 - (NSString *)switchRawProbeTaken
 {
-    std::lock_guard<std::mutex> lock(_lock);
+    std::lock_guard<raw::Mutex> lock(_lock);
     return @(_probeTaken.text().c_str());
 }
 
@@ -168,7 +168,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     const bool fill = [op[@"kind"] isEqual:@"fill"], method = [op[@"kind"] isEqual:@"method"];
     if (!written || (!fill && !method && !read))
         return @"a texture the raw path does not hold (memoryless, a view, or refused)";
-    std::lock_guard<std::mutex> lock(_lock);
+    std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed || !_encOpen || ![_active isKindOfClass:[RMBlitEncoder class]])
         return @"no blit encoder open";
     if (method) {

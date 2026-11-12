@@ -4,6 +4,7 @@
 // its import to its free. The last drop gives the span back or releases the import, under the device's lock, on whichever
 // thread drops it: the raw object's destroy (its command buffers completed) or NVK's free (m2v's use of the view ended), so the
 // VA is never reused while either driver's work can still reach it.
+#include "raw_lock.h"
 #include "raw_gpu.h"
 #include <os/log.h>
 
@@ -33,7 +34,7 @@ CpuCompletion Device::captureCpuCompletion(uint32_t seqno, uint64_t generation,
     CpuCompletion result;
     if (buffers.empty())
         return result;
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<raw::Mutex> lock(lock_);
     if (generation != channelGeneration() || !channelReady_.load(std::memory_order_acquire) || fence_ == &kNoFence) {
         result.valid = false;
         return result;
@@ -71,7 +72,7 @@ bool Device::hostAccess(const Buffer &buffer, const void *cpu, uint64_t bytes, b
         return false;
     Bo bo;
     {
-        std::lock_guard<std::mutex> lock(lock_);
+        std::lock_guard<raw::Mutex> lock(lock_);
         bo = bufferBoLocked(buffer);
     }
     return access.acquire(k_, bo, cpu, bytes, write);
@@ -88,7 +89,7 @@ bool Device::hostAccess(const Texture &texture, const void *cpu, uint64_t reques
     Bo bo;
     uint64_t bytes = 0;
     {
-        std::lock_guard<std::mutex> lock(lock_);
+        std::lock_guard<raw::Mutex> lock(lock_);
         if (texture.span.valid()) {
             const uint32_t index = texture.span.chunk;
             if (texture.arena) {
@@ -206,7 +207,7 @@ bool Device::alias(Texture &t, Alias &a)
 {
     if (!k_.shared() || !t.span.valid())
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     const Memory from = memoryOf(t);
     if (from == Memory::Arena)
         return aliasArena(t.span, t.lease, a);
@@ -220,7 +221,7 @@ bool Device::alias(Buffer &b, Alias &a)
 {
     if (!k_.shared())
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (b.import) {
         b.import->refs++;
         describe(b.import->bo, b.import->kind, new Lease{this, 1, Memory::Import, {}, b.import}, a);
@@ -239,7 +240,7 @@ bool Device::aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias 
 {
     if (!k_.shared())
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying || arenas_[arena].purged)
         return false;
     Arena &ar = arenas_[arena];
@@ -268,7 +269,7 @@ bool Device::aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const 
 {
     if (!k_.shared() || !surfaceId)
         return false;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     Import *i = importSurface(surfaceId, base, bytes, surface);
     if (!i)
         return false;
@@ -279,7 +280,7 @@ bool Device::aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const 
 void Device::holdLease(void *lease)
 {
     Lease *l = static_cast<Lease *>(lease);
-    std::lock_guard<std::mutex> g(l->dev->lock_);
+    std::lock_guard<raw::Mutex> g(l->dev->lock_);
     l->refs++;
 }
 
@@ -287,7 +288,7 @@ void Device::dropLease(void *lease)
 {
     Lease *l = static_cast<Lease *>(lease);
     Device *dev = l->dev;
-    std::lock_guard<std::mutex> g(dev->lock_);
+    std::lock_guard<raw::Mutex> g(dev->lock_);
     dev->dropLocked(l);
 }
 

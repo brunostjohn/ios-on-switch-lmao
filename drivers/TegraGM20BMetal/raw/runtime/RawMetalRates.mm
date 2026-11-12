@@ -420,7 +420,7 @@ size_t raw_metal_fetch_keys(char *out, size_t size)
 static void rawEventWaitTick()
 {
     const uint64_t now = nowUs();
-    std::unique_lock<std::mutex> h(gHoldersLock, std::try_to_lock);
+    std::unique_lock<raw::Mutex> h(gHoldersLock, std::try_to_lock);
     if (!h.owns_lock())
         return;
     for (auto &[cb, note] : gEventWaits) {
@@ -460,7 +460,7 @@ void rawStallTick()
                m2vUnscheduled = long(r.m2vUnscheduled.load(std::memory_order_relaxed));
     bool holders = false;
     {
-        std::unique_lock<std::mutex> h(gHoldersLock, std::try_to_lock);
+        std::unique_lock<raw::Mutex> h(gHoldersLock, std::try_to_lock);
         holders = h.owns_lock();
     }
     const bool device = r.raw->lockFree();

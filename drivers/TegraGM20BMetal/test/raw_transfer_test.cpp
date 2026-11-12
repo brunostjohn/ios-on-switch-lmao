@@ -198,7 +198,7 @@ protected:
     raw::Kernel kernel;
     raw::TextureTransfers transfers;
     raw::ResourceSet set;
-    std::mutex allocationLock;
+    raw::Mutex allocationLock;
 
     void SetUp() override
     {

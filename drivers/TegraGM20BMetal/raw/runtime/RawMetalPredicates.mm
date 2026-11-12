@@ -36,10 +36,10 @@ void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 // once per selector: objc_copyProtocolList copies the shared cache's protocols (the frontend's forwardSignature, r14-maps)
 const char *metalTypes(SEL selector)
 {
-    static std::mutex lock;
+    static raw::Mutex lock;
     static auto *known = new std::unordered_map<SEL, const char *>;
     {
-        std::lock_guard<std::mutex> l(lock);
+        std::lock_guard<raw::Mutex> l(lock);
         if (const auto it = known->find(selector); it != known->end())
             return it->second;
     }
@@ -56,7 +56,7 @@ const char *metalTypes(SEL selector)
         }
     }
     free(protocols);
-    std::lock_guard<std::mutex> l(lock);
+    std::lock_guard<raw::Mutex> l(lock);
     known->emplace(selector, types);
     return types;
 }
@@ -350,7 +350,7 @@ void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kin
     // and one line per new shape of texture the raw path leaves to m2v (the predicate's first line names only the first:
     // r7r's Tips replays were tex.shape of textures no line described), up to 32 per process: the predicate, its term, the
     // descriptor, and for a surface its pixel format, planes and what the 4:2:0 path did not take
-    static std::mutex lock;
+    static raw::Mutex lock;
     static NSMutableSet<NSString *> *seen;
     MTLTextureDescriptor *d = t->_descriptor;
     NSString *shape = [NSString
@@ -359,7 +359,7 @@ void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kin
                          (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount, (unsigned long)d.sampleCount,
                          (unsigned long)d.usage, (unsigned long)d.storageMode, surfaceShape(t)];
     {
-        std::lock_guard<std::mutex> l(lock);
+        std::lock_guard<raw::Mutex> l(lock);
         if (!seen)
             seen = [NSMutableSet set];
         if (seen.count >= 32 || [seen containsObject:shape])

@@ -29,7 +29,7 @@ void orderRefused(const char *what, int kr)
 {
     once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
     RAW_DIAGNOSTIC(gRM->stats.cpuOrdered++);
-    std::lock_guard<std::mutex> m(gRM->m2vLock);
+    std::lock_guard<raw::Mutex> m(gRM->m2vLock);
     gRM->gpuOrder = false;
     gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);
 }
@@ -41,7 +41,7 @@ static void orderReturned()
     if (!raw::orderReturns(r.gpuOrder, r.raw->canOrder(), r.raw->stats.reopens.load(std::memory_order_relaxed),
                            r.orderRefusedAt))
         return;
-    std::lock_guard<std::mutex> m(r.m2vLock);
+    std::lock_guard<raw::Mutex> m(r.m2vLock);
     r.gpuOrder = true;
 }
 
@@ -159,19 +159,19 @@ void planSegments(RMCommandBuffer *cb)
                [event respondsToSelector:@selector(notifyListener:atValue:block:)];
     });
     if (error != RMPlanError::None) {
-        NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder" :
-                           error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended" :
-                           @"An encoder did not end before commit";
+        NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder"
+                           : error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended"
+                                                                 : @"An encoder did not end before commit";
         failCommandBuffer(cb, reason);
         return;
     }
     for (const auto &range : plan.ranges()) {
         cb->_plan.prepareRange(range.from, range.to);
-        const bool native = range.kind == raw::ExecutionKind::native &&
-                            !cb->_plan.nativeRangeRefusal(range.from, range.to);
+        const bool native =
+            range.kind == raw::ExecutionKind::native && !cb->_plan.nativeRangeRefusal(range.from, range.to);
         cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), native,
-                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
-                             false, range.gpuWait});
+                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal, false,
+                             range.gpuWait});
         if (native && cb->_predicates.loops()) {
             const RMSegment whole = cb->_segs.back();
             cb->_segs.pop_back();
@@ -228,7 +228,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
     RawState &r = *gRM;
     NSError *priorError = nil;
     if (cb->_segError.set()) {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         priorError = cb->_segError;
     }
     // a present is added before its command buffer is committed, a completed handler's flag before it is added
@@ -246,7 +246,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
     if (range.held) {
         decltype(cb->_loopContinue) loop;
         {
-            std::lock_guard<std::mutex> l(cb->_lock);
+            std::lock_guard<raw::Mutex> l(cb->_lock);
             loop = std::exchange(cb->_loopContinue, {});
         }
         if (loop.pending) {
@@ -282,9 +282,9 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         if (event.op == OpWaitEvent)
             releaseEventWaits(cb);
         const bool unsignalled = event.op == OpSignalEvent && !range.gpuSignal;
-        const RMEventJob job = unsignalled                                  ? submitEventJobs(cb)
+        const RMEventJob job = unsignalled                                ? submitEventJobs(cb)
                                : event.op == OpWaitEvent && range.gpuWait ? submitWaitJob(cb)
-                                                                           : RMEventJob::None;
+                                                                          : RMEventJob::None;
         if (job == RMEventJob::Retry)
             return false;
         if (unsignalled && job == RMEventJob::None) {
@@ -343,7 +343,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
             folded();
 #endif
             {
-                std::lock_guard<std::mutex> l(cb->_lock);
+                std::lock_guard<raw::Mutex> l(cb->_lock);
                 priorError = cb->_segError;
             }
             if (priorError) {
@@ -364,7 +364,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
             cb->_why = [NSString stringWithUTF8String:why ?: "?"];
             if (cb->_predicates.recorded()) {
                 failCommandBuffer(cb, @"Command predication on work the raw path refused while encoding");
-                std::lock_guard<std::mutex> l(cb->_lock);
+                std::lock_guard<raw::Mutex> l(cb->_lock);
                 priorError = cb->_segError;
             }
             if (priorError) {
@@ -433,7 +433,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         cb->_finishState.submitted();
         __block bool counted = false;
         {
-            std::lock_guard<std::mutex> l(r.m2vLock);
+            std::lock_guard<raw::Mutex> l(r.m2vLock);
             ++r.m2vPending;
             ++r.m2vUnscheduled;
         }
@@ -442,7 +442,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
             if (last)
                 scheduled(cb);
             {
-                std::lock_guard<std::mutex> l(gRM->m2vLock);
+                std::lock_guard<raw::Mutex> l(gRM->m2vLock);
                 if (!counted)
                     --gRM->m2vUnscheduled;
                 counted = true;
@@ -451,7 +451,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         }];
         [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
             {
-                std::lock_guard<std::mutex> l(gRM->m2vLock);
+                std::lock_guard<raw::Mutex> l(gRM->m2vLock);
                 if (!counted)
                     --gRM->m2vUnscheduled;
                 counted = true;

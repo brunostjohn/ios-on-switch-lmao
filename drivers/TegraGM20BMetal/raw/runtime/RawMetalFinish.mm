@@ -45,8 +45,7 @@ static bool markWritten(const raw::RetirementWrites &writes, bool success, const
 #endif
     for (void *object : writes.buffers) {
         RMBuffer *buffer = (__bridge RMBuffer *)object;
-        buffer->_gpuDirty = !buffer->_raw.wc && !(success &&
-            (legacy || result == raw::CpuCompletionResult::Current));
+        buffer->_gpuDirty = !buffer->_raw.wc && !(success && (legacy || result == raw::CpuCompletionResult::Current));
     }
     for (void *object : writes.textures)
         ((__bridge RMTexture *)object)->_gpuDirty = true;
@@ -66,16 +65,18 @@ const raw::RetirementWrites *captureWrittenRange(RMCommandBuffer *cb, size_t fro
         cb->_retirements.emplace_back();
     raw::RetirementWrites &writes = cb->_retirements[cb->_retired++];
     const RMCommandPlan &plan = cb->_plan;
-    writes.captureInto([&](auto visit) { plan.forEachWritten(from, to, visit); },
-                       [&](void *value) {
-                           if (const RMResourceFacts *facts = plan.factsOf(value))
-                               return raw::RetirementWrites::Target{
-                                   facts->cpuBuffer, facts->kind == RMResourceKind::Texture ? value : nullptr};
-                           id object = (__bridge id)value;
-                           return raw::RetirementWrites::Target{(__bridge void *)cpuBufferOfResource(object),
-                                                                [object isKindOfClass:[RMTexture class]] ? value
-                                                                                                         : nullptr};
-                       });
+    writes.captureInto(
+        [&](auto visit) {
+            plan.forEachWritten(from, to, visit);
+        },
+        [&](void *value) {
+            if (const RMResourceFacts *facts = plan.factsOf(value))
+                return raw::RetirementWrites::Target{facts->cpuBuffer,
+                                                     facts->kind == RMResourceKind::Texture ? value : nullptr};
+            id object = (__bridge id)value;
+            return raw::RetirementWrites::Target{(__bridge void *)cpuBufferOfResource(object),
+                                                 [object isKindOfClass:[RMTexture class]] ? value : nullptr};
+        });
     return &writes;
 }
 
@@ -183,11 +184,13 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
     if (!error && raw::eventDependencies(waits, 0, false) != raw::EventDependencyState::ready)
         error = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal userInfo:nil];
     if (!markWritten(writes, !error, cpu) && !error)
-        error = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal
-                               userInfo:@{NSLocalizedDescriptionKey : @"CPU-visible GPU results could not be acquired"}];
+        error =
+            [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                code:MTLCommandBufferErrorInternal
+                            userInfo:@{NSLocalizedDescriptionKey : @"CPU-visible GPU results could not be acquired"}];
     retireEventSignals(signals, !error);
     if (error) {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         if (!cb->_segError)
             cb->_segError = error;
     }
@@ -261,7 +264,7 @@ void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                          code:MTLCommandBufferErrorInternal
                                      userInfo:@{NSLocalizedDescriptionKey : reason}];
-    std::lock_guard<std::mutex> l(cb->_lock);
+    std::lock_guard<raw::Mutex> l(cb->_lock);
     if (!cb->_segError)
         cb->_segError = error;
 }
@@ -269,7 +272,7 @@ void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
 void finish(RMCommandBuffer *cb, NSError *error)
 {
     if (error) {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         if (!cb->_segError)
             cb->_segError = error;
     }
@@ -287,7 +290,7 @@ static void finished(RMCommandBuffer *cb)
 {
     NSError *error = nil;
     if (cb->_segError.set()) {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         error = cb->_segError;
     }
     RAW_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
@@ -410,7 +413,7 @@ void completionLoop()
             r.inflight.pop();
             NSError *error = ok ? nil : killError(r.raw->lostError());
             if (const raw::LoopContinue loop = r.raw->loopContinue(retired.loopStamp); !error && loop.continues) {
-                std::lock_guard<std::mutex> l(cb->_lock);
+                std::lock_guard<raw::Mutex> l(cb->_lock);
                 cb->_loopContinue = {true, loop.tag, retired.loopFrom, retired.loopTo};
             }
             segmentCompleted(cb, error, *retired.writes, RMRawProgress, retired.signals, retired.waits, &retired.cpu);

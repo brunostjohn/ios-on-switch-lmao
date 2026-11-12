@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // MTLParallelRenderCommandEncoder (raw_parallel.h): its sub-encoders record into command buffers of their own, which no
 // other thread touches, and its end records their commands into its command buffer in their creation order.
+#include "raw_lock.h"
 #import "RawMetalCounters.h"
 #include "raw_parallel.h"
 
@@ -87,7 +88,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
 @implementation RMParallelRenderEncoder {
 @public
     MTLRenderPassDescriptor *_descriptor;
-    std::mutex _lock;
+    raw::Mutex _lock;
     std::vector<RMSubRecorder *> _subs;
 }
 
@@ -108,7 +109,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
 
 - (id<MTLRenderCommandEncoder>)renderCommandEncoder
 {
-    std::lock_guard<std::mutex> hold(_lock);
+    std::lock_guard<raw::Mutex> hold(_lock);
     return _ended ? nil : (id<MTLRenderCommandEncoder>)[self makeSub];
 }
 
@@ -148,7 +149,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
 {
     std::vector<RMSubRecorder *> subs;
     {
-        std::lock_guard<std::mutex> hold(_lock);
+        std::lock_guard<raw::Mutex> hold(_lock);
         if (_ended)
             return;
         _ended = true;

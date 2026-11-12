@@ -3,6 +3,7 @@
 // purge frees the BO (the kernel releases the pages) and replaces the host range with untouched pages, so neither address
 // moves and a restore is one import and one bind at the same VA, no texture header or CPU pointer rewritten. A trim
 // (raw_arena_trim.h) gives back only the ranges no resource is placed in, the same way, and binds the rest in parts.
+#include "raw_lock.h"
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
 #include "raw_arena_purge.h"
@@ -98,7 +99,7 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
     a.cpu = reinterpret_cast<uint8_t *>(cpu);
     a.place = HeapPlacement(logicalBytes, explicitPlacement);
     a.used = true;
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     a.va = k_.reserveVa(bytes);
     // Kind 0xfe changes the sector interpretation inside a GOB. Buffers retain a pitch view of the same BO.
     a.bufferVa = explicitPlacement && blockLinear ? k_.reserveVa(bytes) : a.va;
@@ -135,7 +136,7 @@ void Device::freeArena(Arena &a)
 
 void Device::destroyArena(uint32_t arena)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].used)
         return;
     Arena &a = arenas_[arena];
@@ -179,7 +180,7 @@ bool Device::aliasArena(const Span &s, Lease *&lease, Alias &a)
 bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t,
                           std::optional<uint64_t> requestedOffset)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying)
         return false;
     Arena &a = arenas_[arena];
@@ -216,7 +217,7 @@ bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint3
 
 bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::optional<uint64_t> requestedOffset)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying ||
         (arenas_[arena].kind != kPteKindPitch && arenas_[arena].bufferVa == arenas_[arena].va) ||
         length > UINT64_MAX - (kArenaPitchAlign - 1))
@@ -246,39 +247,39 @@ void Device::arenaRelease(Texture &t)
     if (t.arena && glassMemOn.load(std::memory_order_relaxed))
         glassMem->forget(t.storageRange().va);
 #endif
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (t.arena)
         freeSpan(t.span, Memory::Arena, t.lease);
 }
 
 void Device::arenaRelease(Buffer &b)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (b.arena)
         freeSpan(b.span, Memory::Arena, b.lease);
 }
 
 uint64_t Device::arenaUsed(uint32_t arena)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return arena < arenas_.size() ? arenas_[arena].place.used() : 0;
 }
 
 uint64_t Device::arenaLargestFree(uint32_t arena, uint64_t align)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return arena < arenas_.size() ? arenas_[arena].place.largestFree(std::max<uint64_t>(align, 1)) : 0;
 }
 
 bool Device::setArenaVolatile(uint32_t arena, bool isVolatile)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return arena < arenas_.size() && arenaSetVolatile(arenas_[arena], !isVolatile);
 }
 
 uint64_t Device::arenaBytes()
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     uint64_t bytes = 0;
     for (const Arena &a : arenas_)
         bytes += a.used && !a.purged ? a.bytes - rangeBytes(a.holes) : 0;
@@ -287,7 +288,7 @@ uint64_t Device::arenaBytes()
 
 void Device::arenaUse(uint64_t &placed, uint64_t &volatileBytes, uint64_t *givenBack)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     placed = volatileBytes = 0;
     uint64_t given = 0;
     for (const Arena &a : arenas_)
@@ -302,7 +303,7 @@ void Device::arenaUse(uint64_t &placed, uint64_t &volatileBytes, uint64_t *given
 
 bool Device::arenaPurged(uint32_t arena)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     return arena < arenas_.size() && arenas_[arena].purged;
 }
 
@@ -324,14 +325,14 @@ void Device::purgeLocked(Arena &a, const std::atomic<uint32_t> &committed)
 
 void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena < arenas_.size() && arenaPurgeable(arenas_[arena], done(submitted()), committed.load() != 0, true))
         purgeLocked(arenas_[arena], committed);
 }
 
 void Device::purgeArenas(const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     purgeIdleArenas(arenas_, done(submitted()), committed.load() != 0, [&](Arena &a) {
         purgeLocked(a, committed);
     });
@@ -374,7 +375,7 @@ void Device::trimLocked(Arena &a, const std::atomic<uint32_t> &committed)
 
 void Device::trimArenas(const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (!done(submitted()))
         return;
     for (Arena &a : arenas_)
@@ -399,7 +400,7 @@ bool Device::backPlacement(Arena &a, uint64_t offset, uint64_t bytes)
 
 bool Device::restoreArena(uint32_t arena)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    std::lock_guard<raw::Mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].purged)
         return true;
     Arena &a = arenas_[arena];

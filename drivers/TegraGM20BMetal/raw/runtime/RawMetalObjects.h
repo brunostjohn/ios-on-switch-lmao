@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <atomic>
@@ -194,7 +195,7 @@ enum class RMShareable : uint8_t { Unasked, No, Yes };
         *_madeFrom;                  // completable states': what its cubic variants and a later twin are made of
     MTLPipelineOption _twinOptions;  // a state raw draws from its creation: its twin is made at its first m2v
     bool _twinLater;                 // replay (rmTwin), with these options
-    std::mutex _variantLock;
+    raw::Mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
     raw::Obtained _obtained;  // debug builds: how its creation got its record
 }
@@ -446,8 +447,8 @@ struct RMSharedEventWait {
     // the threads in a wait on _changed (under _lock): a state change notifies, and takes _lock to, only where there is one
     // (rmChanged)
     std::atomic<uint32_t> _waiters;
-    std::mutex _lock;
-    std::condition_variable _changed;
+    raw::Mutex _lock;
+    raw::CondVar _changed;
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)

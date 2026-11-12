@@ -7,6 +7,7 @@
 // Only a process the kernel serves no compiler (switch-no-bt on iOS 17), or a state the compiler does not take, is made
 // here (RawDirect.h: m2v's translation and NVK's stage compile), each such compile counted and its reason logged once.
 #pragma once
+#include "raw_lock.h"
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
 #include <functional>
@@ -104,7 +105,7 @@ private:
     void place(const CacheKey &key, const RuntimeRecord *record, bool caTransform, std::shared_ptr<Pending> pending);
 
     struct Kernel {
-        std::mutex lock;
+        raw::Mutex lock;
         ComputeKernelBuild<ComputeRecord, ComputeState> build;
     };
 
@@ -117,10 +118,10 @@ private:
     dispatch_queue_t queue_, persistenceQueue_;
     dispatch_group_t pending_;
     std::atomic<bool> stopping_{false};
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
     std::set<uint64_t> notTaken_;    // by CacheKey::name, the states the compiler did not take: made here
-    std::mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
+    raw::Mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
     std::unique_ptr<Remote> remote_;

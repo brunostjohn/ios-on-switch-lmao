@@ -13,8 +13,11 @@ import Metal
 /// Objective-C sends, job uses that reached a job's list and vertices the CPU read must not grow with its draws, none
 /// may pass what the host's facade harness counts of the same command buffers with the encode and its retire lock-free
 /// (raw/test/facadecost.mm: at most the trim's lock once in 64 command buffers, no send, 4 allocations and 2 frees),
-/// and every command buffer is the raw path's. The profile is the facade's; a release runtime has none and the test
-/// skips.
+/// and every command buffer is the raw path's. Beside the encode's own: the runtime's locks on every thread over the
+/// batch (facade_locks, raw_lock.h's count of its wrappers), at most 4 a command buffer, and the growth of the blocks
+/// in use in every malloc zone while the batch is recorded and held (held_blocks), a coarse bound on what each keeps
+/// allocated (the whole process's, so no per-draw check). The profile is the facade's; a release runtime has none and
+/// the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
     let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
@@ -28,12 +31,15 @@ struct EncodeCostPathTest: HWTest {
     ]
     static let events = [
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
-        "geometry_vertices",
+        "geometry_vertices", "facade_locks", "held_blocks",
     ]
-    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices"]
+    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices", "facade_locks"]
     static let ceilings: [(event: String, most: Double)] = [
-        ("locks", 0.1), ("sends", 0), ("mallocs", 4), ("frees", 2), ("geometry_vertices", 0),
+        ("locks", 0.1), ("sends", 0), ("mallocs", 4), ("frees", 2), ("geometry_vertices", 0), ("facade_locks", 4),
+        ("held_blocks", heldBlocksMost),
     ]
+    /// coarse: facadecost's held window grows 3 blocks a command buffer on the host
+    static let heldBlocksMost = 8.0
 
     func run(_: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
@@ -91,8 +97,13 @@ struct EncodeCostPathTest: HWTest {
         for draws in Self.drawCounts {
             try gpu.finish((0..<Self.buffers).map { _ in try gpu.commit { encode($0, draws) } })
             let before = RawFacade.encodeProfile(of: gpu.device)
-            try gpu.finish((0..<Self.buffers).map { _ in try gpu.commit { encode($0, draws) } })
-            arms.append(Self.perCommandBuffer(before, RawFacade.encodeProfile(of: gpu.device)))
+            let blocks = Self.blocksInUse()
+            let held = try (0..<Self.buffers).map { _ in try autoreleasepool { try gpu.commit { encode($0, draws) } } }
+            let heldBlocks = (Self.blocksInUse() - blocks) / Double(Self.buffers)
+            try gpu.finish(held)
+            var measured = Self.perCommandBuffer(before, RawFacade.encodeProfile(of: gpu.device))
+            measured["held_blocks"] = heldBlocks
+            arms.append(measured)
             let arm = arms.last!
             let suffix = "_d\(draws)"
             metrics.set("encodes" + suffix, Int(arm["encodes"] ?? 0))
@@ -128,6 +139,12 @@ struct EncodeCostPathTest: HWTest {
         }
         return failures.isEmpty
             ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof)
+    }
+
+    static func blocksInUse() -> Double {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return Double(stats.blocks_in_use)
     }
 
     /// The profile's change between two reads, per encode (the counters' and the times'; mallocs and frees over the

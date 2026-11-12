@@ -9,6 +9,7 @@
 // A member is freed while it is still a member (the kernel keeps the set's pending jobs as its users), and leaves the view
 // before its VA is given back, so no view names an address another BO may be bound at next.
 #pragma once
+#include "raw_lock.h"
 #include <atomic>
 #include <cstdint>
 #include <initializer_list>
@@ -90,7 +91,7 @@ private:
     void insertLocked(const Bo &bo, uint32_t access, bool always);
     bool eraseLocked(uint64_t handle);
 
-    mutable std::mutex lock_;
+    mutable raw::Mutex lock_;
     std::vector<SetMember> members_;  // by va
     std::vector<SetMember> outside_;
     uint32_t set_ = 0, generation_ = 0, removals_ = 0;

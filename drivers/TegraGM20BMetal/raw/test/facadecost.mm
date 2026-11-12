@@ -8,13 +8,15 @@
 // the CPU time of the recording thread and of the others, with each command buffer released once it completes
 // (facade) and with the batch held until all complete (held). A line FAIL where the profile's or the held window's
 // count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
-// whose predecessor's completion has not run hands its own to it).
+// whose predecessor's completion has not run hands its own to it), or where the runtime's own count of the locks it took
+// on every thread (facade_locks) passes 4 a command buffer.
 // usage: [DYLD_INSERT_LIBRARIES=<libfacadecount.dylib>] facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <objc/runtime.h>
 #include <algorithm>
 #include <cstdio>
@@ -49,6 +51,15 @@ using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 @end
 
 namespace {
+
+constexpr double kFacadeLocksMost = 4;
+
+double blocksInUse()
+{
+    malloc_statistics_t stats{};
+    malloc_zone_statistics(nullptr, &stats);
+    return double(stats.blocks_in_use);
+}
 
 // PBGRAXm_A2Xhf's functions and their constants, as drivers/TegraGM20BMetal/precompile/corpus.log records them
 const char *kFillVertex = "fixed_vert_lph_spc fc_generic:53:00 fc_texcoord_count0:49:00 fc_texcoord_count1:49:00 "
@@ -283,15 +294,20 @@ int main(int argc, char **argv)
         // A held batch keeps every command buffer until all complete, as an app that commits a batch before it waits
         // (and HW Test gpu.path.encode_cost) does: each records while the others are still alive.
         static char goneKey;
+        // a held batch's growth of the blocks in use in every zone over its recording, per command buffer: what
+        // gpu.path.encode_cost bounds on the device
+        double heldBlocks = 0;
         auto batch = [&](unsigned draws, unsigned count, bool hold) {
             id<MTLCommandBuffer> last = nil;
             NSMutableArray<id<MTLCommandBuffer>> *held = [NSMutableArray arrayWithCapacity:count];
+            const double blocks = blocksInUse();
             for (unsigned i = 0; i < count; i++)
                 @autoreleasepool {
                     last = encode(draws);
                     if (hold)
                         [held addObject:last];
                 }
+            heldBlocks = (blocksInUse() - blocks) / count;
             bool completed = true;
             for (id<MTLCommandBuffer> b in held) {
                 [b waitUntilCompleted];
@@ -329,12 +345,22 @@ int main(int argc, char **argv)
             auto per = [&](NSString *key, double over) {
                 return over > 0 ? (after[key].doubleValue - before[key].doubleValue) / over : 0;
             };
+            const double facadeLocks = per(@"facade_locks", encodes);
             printf("facadecost d%u profile: encodes %.0f/%u wall_us %.1f retire_us %.1f commit_us %.1f locks %.2f "
-                   "sends %.2f mallocs %.2f frees %.2f uses %.1f use_adds %.1f job_uses %.1f descriptor_uploads %.1f\n",
+                   "sends %.2f mallocs %.2f frees %.2f uses %.1f use_adds %.1f job_uses %.1f descriptor_uploads %.1f "
+                   "facade_locks %.2f\n",
                    arms[a], encodes, buffers, per(@"wall_us", encodes), per(@"retire_us", encodes),
                    per(@"commit_us", encodes), per(@"locks", encodes), per(@"sends", encodes),
                    per(@"mallocs", mallocEncodes), per(@"frees", mallocEncodes), per(@"uses", encodes),
-                   per(@"use_adds", encodes), per(@"exec_uses", encodes), per(@"descriptor_uploads", encodes));
+                   per(@"use_adds", encodes), per(@"exec_uses", encodes), per(@"descriptor_uploads", encodes),
+                   facadeLocks);
+            if (facadeLocks > kFacadeLocksMost) {
+                printf(
+                    "FAIL: the runtime's locks on every thread %.2f a command buffer at %u draws a pass, over %.0f\n",
+                    facadeLocks, arms[a], kFacadeLocksMost);
+                failures++;
+            }
+            counted[a]["profile facade_locks"] = facadeLocks;
             counted[a]["encodes"] = encodes / buffers;
             for (NSString *key : {@"locks", @"sends", @"use_adds", @"geometry_vertices"})
                 counted[a][std::string("profile ") + key.UTF8String] = per(key, encodes);
@@ -355,19 +381,20 @@ int main(int argc, char **argv)
                 cpuNs(mine1, others1);
                 const char *shape = hold ? "held" : "facade";
                 printf(
-                    "facadecost d%u %s: sends %.2f locks %.2f mallocs %.2f frees %.2f | cpu us recording thread %.1f "
-                    "others %.1f\n",
+                    "facadecost d%u %s: sends %.2f locks %.2f mallocs %.2f frees %.2f blocks %.2f | cpu us recording "
+                    "thread %.1f others %.1f\n",
                     arms[a], shape, double(c.sends) / buffers, double(c.locks) / buffers, double(c.mallocs) / buffers,
-                    double(c.frees) / buffers, double(mine1 - mine0) / 1e3 / buffers,
+                    double(c.frees) / buffers, hold ? heldBlocks : 0.0, double(mine1 - mine0) / 1e3 / buffers,
                     double(others1 - others0) / 1e3 / buffers);
                 if (!hold)
                     continue;
-                const std::pair<const char *, uint64_t> counts[] = {{"held sends", c.sends},
-                                                                    {"held locks", c.locks},
-                                                                    {"held mallocs", c.mallocs},
-                                                                    {"held frees", c.frees}};
+                const std::pair<const char *, double> counts[] = {{"held sends", double(c.sends)},
+                                                                  {"held locks", double(c.locks)},
+                                                                  {"held mallocs", double(c.mallocs)},
+                                                                  {"held frees", double(c.frees)},
+                                                                  {"held blocks", heldBlocks * buffers}};
                 for (const auto &[name, count] : counts) {
-                    const double per = double(count) / buffers;
+                    const double per = count / buffers;
                     counted[a][name] = counted[a].count(name) ? std::min(counted[a][name], per) : per;
                 }
             }

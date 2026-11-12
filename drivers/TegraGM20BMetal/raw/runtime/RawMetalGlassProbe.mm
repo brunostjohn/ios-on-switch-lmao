@@ -46,7 +46,7 @@ Forced gWholePrograms, gZeroNewBuffers, gSplitGeneric, gSplitLaunchOnly, gSplitN
     gSplitFrontierExact;
 
 struct Record {
-    std::mutex lock;
+    raw::Mutex lock;
     std::atomic<bool> armed{false};
     std::atomic<uint64_t> until{0};
     uint32_t generation = 0, count = 0;
@@ -86,7 +86,7 @@ void watchForced(Forced &f, const char *name)
 void armRecord(bool armed)
 {
     Record &r = record();
-    std::lock_guard<std::mutex> l(r.lock);
+    std::lock_guard<raw::Mutex> l(r.lock);
     if (r.countToken < 0) {
         if (notify_register_check(kRecordName, &r.countToken) != NOTIFY_STATUS_OK)
             return;
@@ -300,7 +300,7 @@ void glassProbeCommitted(RMCommandBuffer *cb)
             level |= a.texture && a.level;
         e.levels += level;
     }
-    std::lock_guard<std::mutex> l(r.lock);
+    std::lock_guard<raw::Mutex> l(r.lock);
     if (!r.armed || r.countToken < 0)
         return;
     notify_set_state(r.slotTokens[r.count % kRecordSlots], e.packed());

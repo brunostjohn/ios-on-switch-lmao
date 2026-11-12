@@ -50,7 +50,7 @@ static void promiseWrites(RMCommandBuffer *cb, const std::vector<uint64_t> &hand
     if (handles.empty())
         return;
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
             return;
         cb->_promised.store(true, std::memory_order_release);
@@ -64,12 +64,13 @@ static void promiseWrites(RMCommandBuffer *cb, const std::vector<uint64_t> &hand
         if (gRM->raw->promise(part, id))
             made.push_back(id);
         else
-            once(@"the kernel took no writer promise for surfaces of a command buffer held on a shared event: a present "
-                 @"may show them before it is submitted");
+            once(
+                @"the kernel took no writer promise for surfaces of a command buffer held on a shared event: a present "
+                @"may show them before it is submitted");
     }
     bool late;
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         late = cb->_promisesTaken;
         if (!late)
             cb->_promises = made;
@@ -86,7 +87,7 @@ void cancelPromises(RMCommandBuffer *cb)
         return;
     std::vector<uint32_t> left;
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         cb->_promisesTaken = true;
         left.swap(cb->_promises);
     }
@@ -104,7 +105,7 @@ void commitBuffer(RMCommandBuffer *cb)
         restoreArenas(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (waitsForEvent(cb)) {
-        std::lock_guard<std::mutex> h(gHoldersLock);
+        std::lock_guard<raw::Mutex> h(gHoldersLock);
         gHolders.insert(cb);
         cb->_inHolders.store(true, std::memory_order_release);
     }
@@ -210,7 +211,7 @@ static int variantReadiness(RMCommandBuffer *cb, const RMSegment &range)
 static raw::HeadWait eventWait(RMCommandBuffer *cb)
 {
     {
-        std::lock_guard<std::mutex> l(cb->_lock);
+        std::lock_guard<raw::Mutex> l(cb->_lock);
         if (cb->_finishState.pending() || cb->_resourceReady)
             return raw::HeadWait::signal;
     }
@@ -281,7 +282,7 @@ void submitLoop()
             const auto failed = [cb]() -> NSError * {
                 if (!cb->_segError.set())
                     return nil;
-                std::lock_guard<std::mutex> l(cb->_lock);
+                std::lock_guard<raw::Mutex> l(cb->_lock);
                 return cb->_segError;
             };
             NSError *error = failed();
@@ -308,7 +309,7 @@ void submitLoop()
                         blocked = eventReadiness(cb, deadline) == raw::EventReadiness::blocked;
                         if (blocked)
                             wait = eventWait(cb);
-                        std::lock_guard<std::mutex> lock(cb->_lock);
+                        std::lock_guard<raw::Mutex> lock(cb->_lock);
                         error = cb->_segError;
                     } else if (!ready) {
                         blocked = true;

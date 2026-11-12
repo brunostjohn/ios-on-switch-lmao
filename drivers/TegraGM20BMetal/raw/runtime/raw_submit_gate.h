@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include "raw_lock.h"
 
 namespace raw {
 
@@ -36,14 +37,14 @@ public:
         }
         submitting_.store(false);
         dispatch_semaphore_signal(ended_);
-        std::lock_guard<std::recursive_mutex> l(lock_);
+        std::lock_guard<RecursiveMutex> l(lock_);
         return run();
     }
 
     // Any thread's but the worker's inside its own submission (that one moves at once)
     template <typename Move> auto exclude(Move &&move) -> decltype(move())
     {
-        std::lock_guard<std::recursive_mutex> l(lock_);
+        std::lock_guard<RecursiveMutex> l(lock_);
         movesWaiting_.fetch_add(1);
         while (submitting_.load())
             dispatch_semaphore_wait(ended_, DISPATCH_TIME_FOREVER);
@@ -78,7 +79,7 @@ private:
         SubmitGate &gate;
     };
 
-    std::recursive_mutex lock_;
+    RecursiveMutex lock_;
     std::atomic<bool> submitting_{false};
     std::atomic<uint32_t> movesWaiting_{0};
     dispatch_semaphore_t ended_;

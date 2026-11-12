@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #include "raw_native_plane.h"
 #include <algorithm>
 #include <cstring>
@@ -26,7 +27,7 @@ const Texture *Device::nativeRead(const Texture &source, NativeSurface *&owner, 
             return &found->second;
         }
     }
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<raw::Mutex> lock(lock_);
     if (!surface) {
         auto made = std::make_unique<NativeSurface>();
         const int result = k_.nativeSurfaceView(import.bo, made->bo, made->layout);
@@ -116,7 +117,7 @@ const Texture *CommandBuffer::readTexture(const Texture *source)
 
 void CommandBuffer::invalidateNativeReads()
 {
-    std::lock_guard<std::mutex> lock(dev_->lock_);
+    std::lock_guard<raw::Mutex> lock(dev_->lock_);
     for (NativeSurface *surface : nativeSurfaces_) {
         surface->cached = false;
         dev_->nativeStale_.store(true, std::memory_order_release);

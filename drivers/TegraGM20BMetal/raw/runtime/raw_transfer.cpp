@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "raw_lock.h"
 #include "raw_transfer.h"
 #include "raw_kit.h"
 #include "raw_fence.h"
@@ -50,11 +51,11 @@ bool TextureTransfers::retire(Kernel &kernel, Slot &slot)
     return true;
 }
 
-bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, const TextureTransfer &region,
-                           void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner)
+bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, raw::Mutex &allocationLock, const TextureTransfer &region,
+                            void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner)
 {
-    if (!kernel.exactJobs() || !bytes || !region.width || !region.height || !region.planes ||
-        !region.bpp || region.bpp > 16 || (region.bpp & (region.bpp - 1)))
+    if (!kernel.exactJobs() || !bytes || !region.width || !region.height || !region.planes || !region.bpp ||
+        region.bpp > 16 || (region.bpp & (region.bpp - 1)))
         return false;
     const uint64_t line = uint64_t(region.width) * region.bpp;
     if (!row && region.height == 1)
@@ -74,10 +75,9 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
     const uint64_t dataBytes = plane * region.planes;
     const uint64_t commandOffset = (dataBytes + 255) & ~uint64_t(255);
     const uint64_t commandBytes = uint64_t(region.planes) * 32 * sizeof(uint32_t);
-    if (commandOffset < dataBytes ||
-        commandOffset > UINT64_MAX - commandBytes || commandBytes / 4 >= (1u << 21))
+    if (commandOffset < dataBytes || commandOffset > UINT64_MAX - commandBytes || commandBytes / 4 >= (1u << 21))
         return false;
-    std::lock_guard<std::mutex> serial(lock_);
+    std::lock_guard<raw::Mutex> serial(lock_);
     Slot *opened = open(kernel, allocationLock, commandOffset + commandBytes);
     if (!opened)
         return false;
@@ -102,8 +102,8 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
             texture.layer += z;
         const CopySurface staging{slot.memory.va + z * plane, uint32_t(pitch)};
         name(kernel, set, uses, texture.va, 1, write, 0);
-        emitCopy(push, write ? staging : texture, write ? texture : staging,
-                 region.width, region.height, copyTexelRemap(region.bpp), true);
+        emitCopy(push, write ? staging : texture, write ? texture : staging, region.width, region.height,
+                 copyTexelRemap(region.bpp), true);
     }
     KernelJob job;
     job.visibility = write ? JobVisibility::Internal : JobVisibility::External;
@@ -116,17 +116,17 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
     std::atomic_thread_fence(std::memory_order_acquire);
     for (uint32_t z = 0; z < region.planes; ++z)
         for (uint32_t y = 0; y < region.height; ++y)
-            std::memcpy(static_cast<uint8_t *>(bytes) + z * image + y * row,
-                        slot.memory.cpu + z * plane + y * pitch, line);
+            std::memcpy(static_cast<uint8_t *>(bytes) + z * image + y * row, slot.memory.cpu + z * plane + y * pitch,
+                        line);
     return true;
 }
 
-bool TextureTransfers::copyBytes(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, uint64_t source,
+bool TextureTransfers::copyBytes(Kernel &kernel, ResourceSet &set, raw::Mutex &allocationLock, uint64_t source,
                                  uint64_t destination, uint64_t bytes, std::shared_ptr<void> owner)
 {
     if (!kernel.exactJobs() || !source || !destination || !bytes || bytes > UINT32_MAX)
         return false;
-    std::lock_guard<std::mutex> serial(lock_);
+    std::lock_guard<raw::Mutex> serial(lock_);
     Slot *slot = open(kernel, allocationLock, kCopyBytesWords * sizeof(uint32_t));
     if (!slot)
         return false;
@@ -147,20 +147,20 @@ bool TextureTransfers::copyBytes(Kernel &kernel, ResourceSet &set, std::mutex &a
 }
 
 // lock_ held: the next slot, its last copy retired, with `bytes` of memory, on a live channel; null: none
-TextureTransfers::Slot *TextureTransfers::open(Kernel &kernel, std::mutex &allocationLock, uint64_t bytes)
+TextureTransfers::Slot *TextureTransfers::open(Kernel &kernel, raw::Mutex &allocationLock, uint64_t bytes)
 {
-    const bool killed = channel_ && kernel.killRecords() &&
-                        reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence_)->error;
+    const bool killed =
+        channel_ && kernel.killRecords() && reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence_)->error;
     if (channel_ && (killed || kernel.lost(channel_) || !retire(kernel, slots_[next_])))
         reset(kernel);
     if (!channel_) {
-        std::lock_guard<std::mutex> allocate(allocationLock);
+        std::lock_guard<raw::Mutex> allocate(allocationLock);
         if (!kernel.channel(TegraGM20BEngineCopy, channel_, fence_))
             return nullptr;
     }
     Slot &slot = slots_[next_];
     if (slot.memory.bytes < bytes) {
-        std::lock_guard<std::mutex> allocate(allocationLock);
+        std::lock_guard<raw::Mutex> allocate(allocationLock);
         Bo replacement;
         if (!kernel.allocControl(std::max<uint64_t>(0x10000, bytes), replacement, ControlUse::TransferSlot))
             return nullptr;
@@ -172,8 +172,8 @@ TextureTransfers::Slot *TextureTransfers::open(Kernel &kernel, std::mutex &alloc
 
 // lock_ held, view_ current: [va, va + bytes) named to the job. A set member goes with the set (recorded_), so the device
 // channel's latest set job and this one follow each other; anything else is a use of its own with `flags`. True: a member.
-bool TextureTransfers::name(Kernel &kernel, ResourceSet &set, SurfaceList &uses, uint64_t va, uint64_t bytes, bool write,
-                            uint32_t flags)
+bool TextureTransfers::name(Kernel &kernel, ResourceSet &set, SurfaceList &uses, uint64_t va, uint64_t bytes,
+                            bool write, uint32_t flags)
 {
     if (const SetMember *m = view_.find(va, bytes)) {
         if (write && !(m->access & TegraGM20BSurfaceWrite))
@@ -209,14 +209,14 @@ bool TextureTransfers::submit(Kernel &kernel, ResourceSet &set, Slot &slot, uint
     return true;
 }
 
-void TextureTransfers::close(Kernel &kernel, std::mutex &allocationLock)
+void TextureTransfers::close(Kernel &kernel, raw::Mutex &allocationLock)
 {
-    std::lock_guard<std::mutex> serial(lock_);
+    std::lock_guard<raw::Mutex> serial(lock_);
     reset(kernel);
     for (auto &slot : slots_) {
-        std::lock_guard<std::mutex> allocate(allocationLock);
+        std::lock_guard<raw::Mutex> allocate(allocationLock);
         kernel.free(slot.memory);
     }
 }
 
-} // namespace raw
+}  // namespace raw

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_lock.h"
 #include "raw_kernel.h"
 #include "raw_resource_set.h"
 #include <array>
@@ -19,7 +20,11 @@ struct CopySurface {
     uint8_t blockDepth = 0;
 };
 
-enum class TextureTransferResult : uint8_t { Unsupported, Complete, Failed };
+enum class TextureTransferResult : uint8_t {
+    Unsupported,
+    Complete,
+    Failed
+};
 
 struct TextureTransfer {
     CopySurface texture;
@@ -31,14 +36,14 @@ class TextureTransfers {
 public:
     // A job of the copy channel; it names `set` only when the texture is one of its members, so that job and the device
     // channel's set jobs follow each other
-    bool copy(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, const TextureTransfer &region,
-              void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
+    bool copy(Kernel &kernel, ResourceSet &set, raw::Mutex &allocationLock, const TextureTransfer &region, void *bytes,
+              uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
     // `bytes` bytes from GPU address `source`, CPU-written memory whose lines are cleaned, to `destination`, with no CPU
     // wait; `owner` held until the copy completed. Later work on either range waits for it: by the set where it lies in a
     // member, else by the kernel's write record.
-    bool copyBytes(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, uint64_t source, uint64_t destination,
+    bool copyBytes(Kernel &kernel, ResourceSet &set, raw::Mutex &allocationLock, uint64_t source, uint64_t destination,
                    uint64_t bytes, std::shared_ptr<void> owner);
-    void close(Kernel &kernel, std::mutex &allocationLock);
+    void close(Kernel &kernel, raw::Mutex &allocationLock);
 
 private:
     struct Slot {
@@ -50,12 +55,12 @@ private:
 
     bool retire(Kernel &kernel, Slot &slot);
     void reset(Kernel &kernel);
-    Slot *open(Kernel &kernel, std::mutex &allocationLock, uint64_t bytes);
+    Slot *open(Kernel &kernel, raw::Mutex &allocationLock, uint64_t bytes);
     bool name(Kernel &kernel, ResourceSet &set, SurfaceList &uses, uint64_t va, uint64_t bytes, bool write,
               uint32_t flags);
     bool submit(Kernel &kernel, ResourceSet &set, Slot &slot, uint64_t offset, const uint32_t *start,
                 const uint32_t *end, SurfaceList &uses, uint32_t removals, KernelJob job, std::shared_ptr<void> owner);
-    std::mutex lock_;
+    raw::Mutex lock_;
     std::array<Slot, 4> slots_;
     SetView view_;
     std::vector<SetUse> recorded_;
@@ -63,4 +68,4 @@ private:
     const volatile uint32_t *fence_ = nullptr;
 };
 
-} // namespace raw
+}  // namespace raw

@@ -7,7 +7,7 @@
 namespace {
 
 // Held only across the opener, which calls nothing of the facade: a leaf under any lock its callers hold
-std::mutex gOpenLock;
+raw::Mutex gOpenLock;
 bool gOpenTried;
 thread_local bool tOpening;
 
@@ -18,7 +18,7 @@ std::unordered_map<SEL, std::string> *gForwarded;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 struct Needs {
-    std::mutex lock;
+    raw::Mutex lock;
     std::map<std::string, uint64_t> counts;
     std::string opener;  // the need that opened it
     uint64_t opens = 0, openUs = 0;
@@ -63,7 +63,7 @@ id<MTLDevice> rmM2V(const char *need)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     {
         Needs &n = needs();
-        std::lock_guard<std::mutex> l(n.lock);
+        std::lock_guard<raw::Mutex> l(n.lock);
         n.counts[need]++;
     }
 #endif
@@ -71,7 +71,7 @@ id<MTLDevice> rmM2V(const char *need)
         return gRM->fallback;
     if (!gRM->m2v.open || tOpening)
         return nil;
-    std::lock_guard<std::mutex> l(gOpenLock);
+    std::lock_guard<raw::Mutex> l(gOpenLock);
     if (gRM->m2vOpened.load(std::memory_order_relaxed))
         return gRM->fallback;
     if (gOpenTried)
@@ -88,7 +88,7 @@ id<MTLDevice> rmM2V(const char *need)
     gRM->m2vOpened.store(true, std::memory_order_release);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     Needs &n = needs();
-    std::lock_guard<std::mutex> m(n.lock);
+    std::lock_guard<raw::Mutex> m(n.lock);
     n.opens++;
     n.openUs = nowUs() - began;
     n.opener = need;
@@ -104,7 +104,7 @@ id<MTLDevice> rmM2V(const char *need)
 std::string rmM2VState()
 {
     Needs &n = needs();
-    std::lock_guard<std::mutex> l(n.lock);
+    std::lock_guard<raw::Mutex> l(n.lock);
     if (!n.opens)
         return "m2v device never opened";
     return "m2v device opened for " + n.opener + " in " + std::to_string(n.openUs / 1000) + " ms";
@@ -195,7 +195,7 @@ void installM2VForwarders(Class cls, const RawM2V &m2v)
 - (NSDictionary *)switchRawM2V
 {
     Needs &n = needs();
-    std::lock_guard<std::mutex> l(n.lock);
+    std::lock_guard<raw::Mutex> l(n.lock);
     NSMutableDictionary *asked = [NSMutableDictionary dictionary];
     for (const auto &[need, times] : n.counts)
         asked[[NSString stringWithUTF8String:need.c_str()]] = @(times);

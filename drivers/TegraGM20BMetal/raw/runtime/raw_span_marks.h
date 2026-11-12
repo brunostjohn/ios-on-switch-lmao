@@ -6,6 +6,7 @@
 // buffer's start stamp, the last to its end stamp); consecutive spans of one state add up. Each span of kLongSpanNs or more
 // is named on completion (Device::reportLongSpans): key, static instructions, Core Animation's state name.
 #pragma once
+#include "raw_lock.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -122,7 +123,7 @@ public:
     {
         if (!slots_)
             return;
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         at_ = &(*slots_)[(stamp - 1) % kSpanSlots];
         at_->stamp = stamp;
         at_->marks = 0;
@@ -155,7 +156,7 @@ public:
     {
         if (!slots_ || !stamp)
             return {};
-        std::lock_guard<std::mutex> l(lock_);
+        std::lock_guard<raw::Mutex> l(lock_);
         const Slot &s = (*slots_)[(stamp - 1) % kSpanSlots];
         if (s.stamp != stamp)
             return {};
@@ -171,7 +172,7 @@ private:
 
     std::unique_ptr<std::array<Slot, kSpanSlots>> slots_;
     Slot *at_ = nullptr;
-    std::mutex lock_;
+    raw::Mutex lock_;
     uint64_t va_ = 0;
     uint8_t *cpu_ = nullptr;
 };

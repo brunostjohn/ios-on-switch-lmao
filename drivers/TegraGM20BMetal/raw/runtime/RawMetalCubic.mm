@@ -37,7 +37,7 @@ raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16
 
 void packedVariants(RMPipeline *p, uint64_t keyHash)
 {
-    std::lock_guard<std::mutex> lock(p->_variantLock);
+    std::lock_guard<raw::Mutex> lock(p->_variantLock);
     for (const auto &[name, pl] : gRM->raw->variantPipelines(keyHash, p->_caTransform)) {
         auto variant = std::make_shared<raw::Variant<raw::Pipeline>>();
         variant->publish(pl);
@@ -66,7 +66,7 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     const std::string name = suffix + (tests ? " | tests=" + std::to_string(tests) : std::string());
     std::shared_ptr<raw::Variant<raw::Pipeline>> variant;
     {
-        std::lock_guard<std::mutex> lock(p->_variantLock);
+        std::lock_guard<raw::Mutex> lock(p->_variantLock);
         if (const auto found = p->_variants.find(name); found != p->_variants.end())
             return found->second.get();
         variant = std::make_shared<raw::Variant<raw::Pipeline>>();

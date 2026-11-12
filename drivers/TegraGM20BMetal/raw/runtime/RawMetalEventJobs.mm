@@ -44,13 +44,13 @@ bool signalOrderedOnGpu(RMCommandBuffer *cb, const RMSegment &range)
     const Cmd c = cb->_plan.legacy(range.from);
     if (c.op != OpSignalEvent || !sharedEventLease((__bridge id)c.obj))
         return false;
-    std::lock_guard<std::mutex> m(gRM->m2vLock);
+    std::lock_guard<raw::Mutex> m(gRM->m2vLock);
     return gRM->gpuOrder;
 }
 
 static void eventJobFailure(RMCommandBuffer *cb, int result)
 {
-    std::lock_guard<std::mutex> lock(cb->_lock);
+    std::lock_guard<raw::Mutex> lock(cb->_lock);
     if (!cb->_segError)
         cb->_segError = [NSError
             errorWithDomain:MTLCommandBufferErrorDomain
