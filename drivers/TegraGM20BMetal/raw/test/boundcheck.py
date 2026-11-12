@@ -12,7 +12,8 @@ the raw path at the bind offset rounded down (runtime/raw_residual.h), and each 
 
 Each record with an argument table is drawn too: its vertex program for four vertices and its fragment program for one
 quad on tools/gpu/maxwell's interpreter, once over the raw path's words and once over m2v's, with the same buffers,
-textures and descriptors. Both runs must give the same output bits.
+textures and descriptors. Both runs of a stage must give the same output bits, a stage with a table must read it
+through the record's entry, and other table words must change what it gives.
 
 usage: boundcheck.py <records.bin>
 """
@@ -156,6 +157,7 @@ class Draw:
     def __init__(self, rec: dict, push: list, tables: list[list[int]]) -> None:
         self.words = {}
         self.set0 = {}
+        self.table_reads = [0, 0]
         self.push = [w or 0 for w in push]
         for k, table in enumerate(tables):
             for i, w in enumerate(table):
@@ -183,23 +185,30 @@ class Draw:
                 self.push[word - 1], self.push[word] = ROOTS, 0
 
     def get(self, va: int) -> int:
+        if SPILL <= va < SPILL + 0x2000:
+            self.table_reads[(va - SPILL) // 0x1000] += 1
         return self.words.get(va, pattern(va))
+
+    def cbuf(self, prog: dict, bank: int, offset: int) -> int:
+        kind = prog['cbufs'][bank] if bank < len(prog['cbufs']) else 0
+        if kind == 1:
+            if ROOT_PUSH <= offset < ROOT_PUSH + 4 * ROOT_WORDS:
+                return self.push[(offset - ROOT_PUSH) // 4]
+            return 0
+        if kind == 3:
+            return self.set0.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
+        if kind == 11:
+            return self.get(HEAP + offset)
+        if kind & 7 == 5:
+            if kind >> 3 << 4 not in self.set0:
+                raise UnsupportedError(f'a uniform buffer at set byte {kind >> 3 << 4} that no entry binds')
+            base = self.set0[kind >> 3 << 4]
+            return self.get((base[0] | base[1] << 32) + offset)
+        raise UnsupportedError(f'a constant buffer of type {kind}')
 
     def inputs(self, prog: dict, attribute) -> Inputs:  # noqa: ANN001  an attribute function
         def cbuf(bank: int, offset: int) -> int:
-            kind = prog['cbufs'][bank] if bank < len(prog['cbufs']) else 0
-            if kind == 1:
-                if ROOT_PUSH <= offset < ROOT_PUSH + 4 * ROOT_WORDS:
-                    return self.push[(offset - ROOT_PUSH) // 4]
-                return 0
-            if kind == 3:
-                return self.set0.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
-            if kind == 11:
-                return self.get(HEAP + offset)
-            if kind & 7 == 5:
-                base = self.set0.get(kind >> 3 << 4, [0, 0])
-                return self.get((base[0] | base[1] << 32) + offset)
-            raise UnsupportedError(f'a constant buffer of type {kind}')
+            return self.cbuf(prog, bank, offset)
 
         def texture(key: tuple) -> list[int]:
             if key[0] == 'ldg':
@@ -213,29 +222,33 @@ class Draw:
 
         return Inputs(attribute, cbuf, texture, -1)
 
-    def run(self, rec: dict) -> tuple:
-        """Give both programs' outputs: each vertex lane's attribute stores, each fragment lane's colours and kill."""
-        vertex, fragment = rec['programs']
+    def run(self, rec: dict, stage: int) -> list:
+        """Give a stage's outputs: each vertex lane's attribute stores, or each fragment lane's colours and kill."""
+        prog = rec['programs'][stage - 1]
+        if stage == 1:
+            lanes = [
+                self.inputs(
+                    prog, lambda at, i=i: i if at == 0x2FC else 0 if at == 0x2F8 else pattern(0x9000000 + 64 * i + at)
+                )
+                for i in range(LANES)
+            ]
+            return [s[2] for s in run_quad(prog['image'][isa.HEADER_BYTES :], lanes, 0)]
+        lanes = []
+        for i in range(LANES):
+            fixed = {0x70: f32((i & 1) + 0.5), 0x74: f32((i >> 1) + 0.5), 0x78: f32(0.5), 0x7C: f32(1.0)}
+            lanes.append(
+                self.inputs(prog, lambda at, i=i, fixed=fixed: fixed.get(at, pattern(0xA000000 + 64 * i + at)))
+            )
+        outputs = struct.unpack_from('<I', prog['image'], 576 // 8)[0].bit_count()
+        return [(c[0], c[1]) for c in run_quad(prog['image'][isa.HEADER_BYTES :], lanes, outputs)]
 
-        def vertex_input(lane: int):  # noqa: ANN202  an attribute function
-            return lambda at: lane if at == 0x2FC else 0 if at == 0x2F8 else pattern(0x9000000 + 64 * lane + at)
 
-        def pixel(lane: int):  # noqa: ANN202  an attribute function
-            x, y = lane & 1, lane >> 1
-            fixed = {0x70: f32(x + 0.5), 0x74: f32(y + 0.5), 0x78: f32(0.5), 0x7C: f32(1.0)}
-            return lambda at: fixed.get(at, pattern(0xA000000 + 64 * lane + at))
+def draw(rec: dict, stage: int) -> str | None:
+    """Run a stage over the raw path's words and over m2v's; None when both give the same bits, else what differs.
 
-        stores = run_quad(
-            vertex['image'][isa.HEADER_BYTES :], [self.inputs(vertex, vertex_input(i)) for i in range(LANES)], 0
-        )
-        outputs = struct.unpack_from('<I', fragment['image'], 576 // 8)[0].bit_count()
-        quad = [self.inputs(fragment, pixel(i)) for i in range(LANES)]
-        colours = run_quad(fragment['image'][isa.HEADER_BYTES :], quad, outputs)
-        return [s[2] for s in stores], [(c[0], c[1]) for c in colours]
-
-
-def draw(rec: dict) -> str | None:
-    """Run the record over the raw path's words and over m2v's; None when both give the same bits, else what differs."""
+    A stage with an argument table must read it through the record's entry, and other table words must change what
+    it gives.
+    """
     m2v = rec['bound']
     push, tables = raw_words(rec)
     for i in dynamic_words(rec['pipeline']):
@@ -244,11 +257,17 @@ def draw(rec: dict) -> str | None:
         elif i - ROOT_WORDS < len(tables[1]):
             tables[1][i - ROOT_WORDS] = m2v['spill'][1][i - ROOT_WORDS]
     theirs = [m2v['push'][i] if m2v['mask'] >> i & 1 else None for i in range(ROOT_WORDS)]
-    ours, reference = Draw(rec, push, tables).run(rec), Draw(rec, theirs, m2v['spill']).run(rec)
-    if ours[0] != reference[0]:
-        return 'the vertex program stores other words'
-    if ours[1] != reference[1]:
-        return f'the fragment program writes {ours[1][0][0][:4]}, m2v {reference[1][0][0][:4]}'
+    ours = Draw(rec, push, tables)
+    out, reference = ours.run(rec, stage), Draw(rec, theirs, m2v['spill']).run(rec, stage)
+    if out != reference:
+        return "its outputs differ from its outputs over m2v's words"
+    if tables[stage - 1]:
+        if not ours.table_reads[stage - 1]:
+            return 'it reads no word of its argument table'
+        other = [list(t) for t in tables]
+        other[stage - 1] = [w ^ 0x3F800000 for w in other[stage - 1]]
+        if Draw(rec, push, other).run(rec, stage) == out:
+            return 'other argument table words change nothing it gives'
     return None
 
 
@@ -264,15 +283,14 @@ def main() -> None:
         if not any(tables_of(rec)):
             continue
         name = rec['key'].split('| v ')[-1][:100]
-        try:
-            differs = draw(rec)
-        except UnsupportedError as e:
-            print(f'FAIL not drawn ({e}): {name}')
-            failed += 1
-            continue
         drawn += 1
-        print(f'{"FAIL" if differs else "ok  "} drawn{": " + differs if differs else ""}: {name}')
-        failed += bool(differs)
+        for stage, label in ((1, 'vertex'), (2, 'fragment')):
+            try:
+                differs = draw(rec, stage)
+            except UnsupportedError as e:
+                differs = f'not drawn ({e})'
+            print(f'{"FAIL" if differs else "ok  "} {label} drawn{": " + differs if differs else ""}: {name}')
+            failed += bool(differs)
     print(
         f"boundcheck: {len(made)} records against m2v's bound draw, {drawn} with argument tables drawn, {failed} failed"
     )
