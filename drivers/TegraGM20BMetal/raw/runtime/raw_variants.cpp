@@ -115,7 +115,7 @@ uint32_t RenderEncoder::bindingFacts(const Pipeline &pl)
         const PackEntry &e = r.entry[i];
         if (e.kind != EntryTexture)
             continue;
-        const Texture *t = e.slot < 16 ? textures_[e.slot] : nullptr;
+        const Texture *t = boundTexture(e);
         const Texture *sampled = t && t->standIn ? t->standIn : t && t->sampled ? t->sampled : t;
         if (sampled && fixedPointTexels(sampled->format))
             facts |= AssumeTextureUnorm << k;

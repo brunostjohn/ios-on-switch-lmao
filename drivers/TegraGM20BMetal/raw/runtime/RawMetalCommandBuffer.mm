@@ -145,15 +145,18 @@ static void giveRecording(RMCommandBuffer *b)
                                                     uint8_t(raw::ResourceUse::Read |
                                                             (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
-                                       entry.slot < 31) {
-                                bound.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
+                                       entry.slot < raw::kStageTextures) {
+                                const uint32_t at = raw::handleStage(entry);
+                                bound.push_back({_plan.textures[at][state.textures[at]].objects[entry.slot],
                                                 raw::ResourceUse::Read | raw::ResourceUse::Sample});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&
-                                entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
+                                entry.samplerKind == raw::SamplerSlot && entry.sampler < raw::kStageSamplers) {
+                                const uint32_t at = raw::handleStage(entry);
                                 bound.push_back(
-                                    {_plan.samplers[1][state.samplers[1]].objects[entry.sampler], raw::ResourceUse::Read});
+                                    {_plan.samplers[at][state.samplers[at]].objects[entry.sampler], raw::ResourceUse::Read});
+                            }
                         }
                         if (record.vertexSlot < 31 && record.vertexStride) {
                             const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];

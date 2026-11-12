@@ -46,7 +46,6 @@ constexpr uint32_t kFragmentBit = 0x10;  // VK_SHADER_STAGE_FRAGMENT_BIT
 constexpr uint32_t kSplitProgramCbufs = 11, kQmdCbufs = 8;
 constexpr uint32_t kRootPush = 0x700;
 constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
-constexpr uint32_t kTagged = 16;    // probe.mm's fragment textures and samplers
 
 std::string hex(uint64_t v)
 {
@@ -236,15 +235,21 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
                   ", slot " + std::to_string(w.slot) + ")";
             return false;
         }
+        e.stage = uint8_t(w.stage == 1 ? 1 : 2);
         if (w.type != Sampler) {
             if (testImage) {
                 e.tex = w.source == NmbDirectDepthStandIn ? Tex::DepthTest : Tex::StencilTest;
             } else if (attachment) {
                 e.tex = Tex::Fetch;
                 e.texSlot = uint8_t(w.slot);
-            } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) && w.stage == 2 &&
-                       w.slot < kTagged) {
-                // the direct compile binds a 3D texture at each texture3d argument (NativeMetalDirect.rs volume_slots)
+            } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) &&
+                       (w.stage == 1 || w.stage == 2)) {
+                if (w.slot >= kStageTextures) {
+                    why = std::string(w.stage == 1 ? "a vertex" : "a fragment") + " texture at slot " +
+                          std::to_string(w.slot) + ", past the raw encoder's " + std::to_string(kStageTextures);
+                    return false;
+                }
+                // the direct compile binds a texture of each argument's declared type (NativeMetalDirect.rs declared_slots)
                 e.tex = w.viewType == kViewType3D ? Tex::Texture3D : Tex::Slot;
                 e.texSlot = uint8_t(w.slot);
             } else {
@@ -255,7 +260,7 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             if (w.sampler == NMB_DIRECT_IMMUTABLE) {
                 e.smp = Smp::Constexpr;
                 e.headerKnown = nvk::immutableSamplerHeader(nvk, device, d.set0, w.binding, w.element, e.header.data());
-            } else if (w.sampler < kTagged) {
+            } else if (w.sampler < kStageSamplers) {
                 e.smp = Smp::Slot;
                 e.smpSlot = uint8_t(w.sampler);
             } else {

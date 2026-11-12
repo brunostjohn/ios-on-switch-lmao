@@ -107,9 +107,15 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
                                                     : "the frontend or NVK has no direct compile";
         return CompileOutcome::Failed;
     }
+    // The function's reflection marks active an attribute a function constant gates (CoreRE's vsShadow texcoord, under
+    // kEnableAlphaCutoutShadows), which a state that leaves the constant undefined or false does not read: m2v links
+    // only what the specialised stage reads and refuses a state whose descriptor lacks one of those
+    // (pipeline/link/vertex.rs), so an attribute the descriptor leaves unset is not one the stage reads
+    MTLVertexDescriptor *vertexDescriptor = descriptor.vertexDescriptor;
     std::vector<uint32_t> attributes;
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
-        if (a.isActive)
+        if (a.isActive &&
+            (!vertexDescriptor || vertexDescriptor.attributes[a.attributeIndex].format != MTLVertexFormatInvalid))
             attributes.push_back(uint32_t(a.attributeIndex));
     const auto barrierForm = [&](bool twin) {
         const CompileOutcome made = form(descriptor, true, textures, key, attributes, out, why, registers, split);

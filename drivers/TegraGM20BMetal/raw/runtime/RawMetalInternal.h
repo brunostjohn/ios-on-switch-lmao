@@ -249,7 +249,8 @@ MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
 // cubic sampler where it samples), and a packed state's variants, the pack's records of them (under its pack key's hash)
 // placed at its creation
-raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16]);
+raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16],
+                           RMTexture *const textures[raw::kStageTextures]);
 void packedVariants(RMPipeline *p, uint64_t keyHash);
 
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded

@@ -105,7 +105,7 @@ bool handleEntry(const LayoutEntry &e, RuntimeRecord &rec, PackEntry &p, std::st
 {
     p = {};
     p.offset = uint16_t(e.offset);
-    p.stage = 2;
+    p.stage = e.stage == 1 ? 1 : 2;
     switch (e.tex) {
     case Tex::None:
         p.kind = EntrySamplerOnly;

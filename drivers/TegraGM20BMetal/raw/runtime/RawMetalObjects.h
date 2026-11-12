@@ -392,7 +392,7 @@ uint64_t nextTraceId();
     uint64_t _bufVa[3]
                    [31];  // stage 1 vertex, 2 fragment: the bound buffer's address plus offset (setBytes: 0, aligned)
     RMBuffer *_buf[3][31];
-    RMTexture *_tex[16];   // fragment textures (unretained: the command buffer retains what it binds)
+    RMTexture *_tex[2][raw::kStageTextures];  // vertex, fragment textures (unretained: the command buffer retains them)
     RMSampler *_samp[16];  // fragment samplers, alike; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
     uint16_t _cubicMask;
     uint64_t _checkedGeneration;
