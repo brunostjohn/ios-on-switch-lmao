@@ -10,5 +10,11 @@ enum NativeCallTests {
         NativeComputeCommandsTest(),
         NativeCountersTest(),
         NativeCounterObjectsTest(),
+        NativeTargetPartsTest(),
+        NativeLayeredClearTest(),
+        NativeLayeredVertexTest(),
+        NativeViewportsTest(),
+        NativeViewportIndexTest(),
+        NativeBlockTexturesTest(),
     ]
 }
