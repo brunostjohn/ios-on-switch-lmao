@@ -124,6 +124,9 @@
 #                     answers nil, aliasable ranges are taken again, usedSize and maxAvailableSizeWithAlignment)
 #   raw_program_pages_test  raw/runtime/raw_program_pages.h: the pages a program run in place from a file needs bound in
 #                     the program window, its alignment kept, each page asked for once, nothing past the file's region
+#   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread in
+#                     order with no lock, the taker sleeping until the next hand-off that wakes or a wake(), each counted
+#                     until it is popped
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names
@@ -888,6 +891,15 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_handoff_queue_test",
+    srcs = [
+        "raw_handoff_queue_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_handoff_queue.h",
     ],
     cxx_std = "c++17",
 )

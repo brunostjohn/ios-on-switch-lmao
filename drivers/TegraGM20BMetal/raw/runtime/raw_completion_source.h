@@ -31,11 +31,14 @@ inline bool quietEnd(const RangeEnd &end)
 // of them; the kernel then pushes a wake entry behind it. nullopt: the job that covers them is still to be submitted.
 template <typename Ranges> std::optional<size_t> completionTarget(const Ranges &inflight, bool promised, bool waited)
 {
-    for (size_t i = 0; i < inflight.size(); ++i)
-        if (!inflight[i].quiet)
-            return i;
-    if (!inflight.empty() && (!promised || waited))
-        return inflight.size() - 1;
+    size_t ranges = 0;
+    for (const auto &range : inflight) {
+        if (!range.quiet)
+            return ranges;
+        ++ranges;
+    }
+    if (ranges && (!promised || waited))
+        return ranges - 1;
     return std::nullopt;
 }
 

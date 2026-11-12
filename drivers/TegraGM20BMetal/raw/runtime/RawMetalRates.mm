@@ -461,11 +461,7 @@ void rawStallTick()
         if (a.owns_lock())
             waiting = long(r.waiting.committed());
     }
-    {
-        std::unique_lock<std::mutex> b(r.doneLock, std::try_to_lock);
-        if (b.owns_lock())
-            inflight = long(r.inflight.size());
-    }
+    inflight = long(r.inflight.size());
     {
         std::unique_lock<std::mutex> m(r.m2vLock, std::try_to_lock);
         if (m.owns_lock()) {

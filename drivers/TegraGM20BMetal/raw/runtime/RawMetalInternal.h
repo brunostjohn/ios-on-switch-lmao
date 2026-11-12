@@ -32,6 +32,7 @@
 #include "RawComplete.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_handoff_queue.h"
 #include "TegraGM20BLayout.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "RawMetalObjects.h"
@@ -200,12 +201,11 @@ struct RawState {
     int lastDriver = 0;
 #endif
     MTLSharedEventListener *listener;  // the CPU-ordered remainder's event waits
-    std::mutex doneLock;
-    std::condition_variable doneChanged;
-    std::deque<RMRawRetirement> inflight;  // immutable range fences; later submissions never change an earlier wait
-    // doneLock: the submit thread will put a job that interrupts behind the quiet ranges in flight; threads in
-    // waitUntilCompleted
-    bool submitPromised = false;
+    // immutable range fences, the submit worker's to the completion thread; later submissions never change an earlier wait
+    raw::HandoffQueue<RMRawRetirement> inflight;
+    // the submit thread will put a job that interrupts behind the quiet ranges in flight (stored before each hand-off);
+    // threads in waitUntilCompleted. A change of either wakes the completion thread (inflight.wake()).
+    std::atomic<bool> submitPromised{false};
     std::atomic<uint32_t> completionWaiters{0};
     dispatch_queue_t handlers;             // where scheduled handlers run (in order, never inside commit)
     std::atomic<uint32_t> committed{0};    // command buffers committed and not finished (gRawRelease's drain)

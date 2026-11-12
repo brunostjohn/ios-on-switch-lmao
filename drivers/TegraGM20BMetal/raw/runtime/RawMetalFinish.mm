@@ -90,22 +90,16 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
             cached.push_back(&buffer);
     }
     auto cpu = gRM->raw->captureCpuCompletion(cb->_seqno, cb->_channelGeneration, cached);
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        ++cb->_segmentPending;
-    }
+    // finish() reads it after the last range's increment on this thread, under cb->_lock as the completion's decrement
+    cb->_segmentPending.fetch_add(1, std::memory_order_relaxed);
     auto signals = publishRawEventSignals(cb);
     RAW_DIAGNOSTIC(gRM->stats.signalsPublished += signals.size());
     const bool quiet = cb->_rangeQuiet;
-    {
-        std::lock_guard<std::mutex> l(gRM->doneLock);
-        gRM->inflight.push_back({cb, cb->_seqno, writes, std::move(signals), cb->_gpuEventWaits,
-                                 cb->_channelGeneration, std::move(cpu), quiet, std::exchange(cb->_rangeLoopStamp, 0u),
-                                 uint32_t(from), uint32_t(to)});
-        gRM->submitPromised = quiet;
-    }
-    if (!quiet)
-        gRM->doneChanged.notify_one();
+    // before the hand-off: a completion thread that takes this range reads the promise that came with it
+    gRM->submitPromised.store(quiet, std::memory_order_release);
+    gRM->inflight.push({cb, cb->_seqno, writes, std::move(signals), cb->_gpuEventWaits, cb->_channelGeneration,
+                        std::move(cpu), quiet, std::exchange(cb->_rangeLoopStamp, 0u), uint32_t(from), uint32_t(to)},
+                       !quiet);
 }
 
 static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
@@ -386,27 +380,17 @@ void completionLoop()
     RawState &r = *gRM;
     for (;;) {
         @autoreleasepool {
-            RMRawRetirement retired;
-            uint32_t coverSeqno = 0;
-            uint64_t coverGeneration = 0;
-            bool covered = false;
-            {
-                std::unique_lock<std::mutex> l(r.doneLock);
-                std::optional<size_t> target;
-                r.doneChanged.wait(l, [&] {
-                    target = raw::completionTarget(r.inflight, r.submitPromised,
-                                                   r.completionWaiters.load(std::memory_order_relaxed) != 0);
-                    return target.has_value();
-                });
-                if (*target) {
-                    covered = true;
-                    coverSeqno = r.inflight[*target].seqno;
-                    coverGeneration = r.inflight[*target].generation;
-                }
-                retired = std::move(r.inflight.front());
+            std::optional<size_t> target;
+            r.inflight.waitFor([&](const auto &taken) {
+                target = raw::completionTarget(taken, r.submitPromised.load(std::memory_order_acquire),
+                                               r.completionWaiters.load(std::memory_order_acquire) != 0);
+                return target.has_value();
+            });
+            if (*target) {
+                const RMRawRetirement &cover = r.inflight.at(*target);
+                (void)r.raw->wait(cover.seqno, cover.generation);
             }
-            if (covered)
-                (void)r.raw->wait(coverSeqno, coverGeneration);
+            RMRawRetirement retired = std::move(r.inflight.front());
             RMCommandBuffer *cb = retired.buffer;
             // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
             const bool ok = r.raw->wait(retired.seqno, retired.generation);
@@ -430,10 +414,7 @@ void completionLoop()
             cb->_frame.mark(switch_frame::Fence);
             switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
 #endif
-            {
-                std::lock_guard<std::mutex> l(r.doneLock);
-                r.inflight.pop_front();
-            }
+            r.inflight.pop();
             NSError *error = ok ? nil : killError(r.raw->lostError());
             if (const raw::LoopContinue loop = r.raw->loopContinue(retired.loopStamp); !error && loop.continues) {
                 std::lock_guard<std::mutex> l(cb->_lock);

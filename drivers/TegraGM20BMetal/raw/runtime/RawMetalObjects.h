@@ -328,7 +328,7 @@ struct RMSharedEventWait {
     std::vector<RMSegment> _segs;
     size_t _segNext;
     NSError *_segError;  // an m2v segment's error, reported at completion
-    uint32_t _segmentPending;
+    std::atomic<uint32_t> _segmentPending;  // moved by the submit worker with no lock, read and lowered under _lock
     uint64_t _channelGeneration, _rawPrefixGeneration;
     bool _gpuPrefixEligible;
     std::vector<raw::EventTimeline::Promise> _gpuEventWaits;

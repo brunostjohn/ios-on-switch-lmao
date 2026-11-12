@@ -222,14 +222,13 @@ static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
 }
 
 // The submit thread has no more raw work in hand: the quiet ranges it left in flight wait for their own interrupt. Only
-// this thread sets the promise (retireRawRange), so it reads it without the lock.
+// this thread stores the promise (retireRawRange).
 static void closePromise()
 {
-    if (!gRM->submitPromised)
+    if (!gRM->submitPromised.load(std::memory_order_relaxed))
         return;
-    std::lock_guard<std::mutex> d(gRM->doneLock);
-    gRM->submitPromised = false;
-    gRM->doneChanged.notify_one();
+    gRM->submitPromised.store(false, std::memory_order_release);
+    gRM->inflight.wake();
 }
 
 void submitLoop()
@@ -327,10 +326,7 @@ void submitLoop()
                             std::lock_guard<std::mutex> m(r.m2vLock);
                             gpuOrder = r.gpuOrder;
                         }
-                        {
-                            std::lock_guard<std::mutex> d(r.doneLock);
-                            rawRetiring = !r.inflight.empty();
-                        }
+                        rawRetiring = r.inflight.size() != 0;
                         // completionLoop's retirements, which wake RMRawProgress: the device's own jobs (a reopen's context)
                         // have no retirement, and a seqno the device submitted may be another channel's than its fence
                         if (!gpuOrder && rawRetiring) {

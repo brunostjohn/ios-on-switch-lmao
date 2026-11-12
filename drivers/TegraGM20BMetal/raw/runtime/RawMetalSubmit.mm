@@ -430,10 +430,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         RAW_DIAGNOSTIC(r.stats.m2v++);
         countPreds(cb);
         const auto writes = captureWrittenRange(cb, range.from, range.to);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            ++cb->_segmentPending;
-        }
+        cb->_segmentPending.fetch_add(1, std::memory_order_relaxed);
         __block bool counted = false;
         {
             std::lock_guard<std::mutex> l(r.m2vLock);
