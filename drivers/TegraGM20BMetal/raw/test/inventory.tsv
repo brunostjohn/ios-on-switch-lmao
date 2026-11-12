@@ -1,6 +1,6 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 3 none 32 raw 339 read 348 refused 163 unread 145 zero 24
+# m2v's items: base 3 m2v 3 none 32 raw 339 read 354 refused 163 unread 139 zero 24
 # sent selectors: base 78 m2v 10 none 7 raw 549 refused 56 zero 115
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
@@ -391,8 +391,8 @@ MTLDepthStencilDescriptor	backFaceStencil	backFaceStencil	I	-	read
 MTLDepthStencilDescriptor	backFaceStencil	setBackFaceStencil:	I	-	read
 MTLDepthStencilDescriptor	depthCompareFunction	depthCompareFunction	I	-	read
 MTLDepthStencilDescriptor	depthCompareFunction	setDepthCompareFunction:	I	-	read
-MTLDepthStencilDescriptor	depthWriteEnabled	isDepthWriteEnabled	I	-	unread
-MTLDepthStencilDescriptor	depthWriteEnabled	setDepthWriteEnabled:	I	-	unread
+MTLDepthStencilDescriptor	depthWriteEnabled	isDepthWriteEnabled	I	-	read
+MTLDepthStencilDescriptor	depthWriteEnabled	setDepthWriteEnabled:	I	-	read
 MTLDepthStencilDescriptor	frontFaceStencil	frontFaceStencil	I	-	read
 MTLDepthStencilDescriptor	frontFaceStencil	setFrontFaceStencil:	I	-	read
 MTLDepthStencilState	-	label	-	21H461,24B119	raw
@@ -1114,8 +1114,8 @@ MTLRenderPassStencilAttachmentDescriptor	stencilResolveFilter	setStencilResolveF
 MTLRenderPassStencilAttachmentDescriptor	stencilResolveFilter	stencilResolveFilter	I	-	unread
 MTLRenderPipelineColorAttachmentDescriptor	alphaBlendOperation	alphaBlendOperation	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	alphaBlendOperation	setAlphaBlendOperation:	I	-	read
-MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	isBlendingEnabled	I	-	unread
-MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	setBlendingEnabled:	I	-	unread
+MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	isBlendingEnabled	I	-	read
+MTLRenderPipelineColorAttachmentDescriptor	blendingEnabled	setBlendingEnabled:	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationAlphaBlendFactor	destinationAlphaBlendFactor	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationAlphaBlendFactor	setDestinationAlphaBlendFactor:	I	-	read
 MTLRenderPipelineColorAttachmentDescriptor	destinationRGBBlendFactor	destinationRGBBlendFactor	I	-	read
@@ -1179,8 +1179,8 @@ MTLRenderPipelineDescriptor	tessellationControlPointIndexType	setTessellationCon
 MTLRenderPipelineDescriptor	tessellationControlPointIndexType	tessellationControlPointIndexType	I	-	read
 MTLRenderPipelineDescriptor	tessellationFactorFormat	setTessellationFactorFormat:	I	-	read
 MTLRenderPipelineDescriptor	tessellationFactorFormat	tessellationFactorFormat	I	-	read
-MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	isTessellationFactorScaleEnabled	I	-	unread
-MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	setTessellationFactorScaleEnabled:	I	-	unread
+MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	isTessellationFactorScaleEnabled	I	-	read
+MTLRenderPipelineDescriptor	tessellationFactorScaleEnabled	setTessellationFactorScaleEnabled:	I	-	read
 MTLRenderPipelineDescriptor	tessellationFactorStepFunction	setTessellationFactorStepFunction:	I	-	read
 MTLRenderPipelineDescriptor	tessellationFactorStepFunction	tessellationFactorStepFunction	I	-	read
 MTLRenderPipelineDescriptor	tessellationOutputWindingOrder	setTessellationOutputWindingOrder:	I	-	read
