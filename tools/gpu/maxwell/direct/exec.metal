@@ -19,7 +19,8 @@ struct Tessellated {
 [[patch(triangle, 3)]] vertex Tessellated tess_vertex(Patch patch [[stage_in]], float3 uvw [[position_in_patch]],
                                                       uint id [[patch_id]])
 {
-    const float4 p = patch.points[0].position * uvw.x + patch.points[1].position * uvw.y + patch.points[2].position * uvw.z;
+    const float4 p =
+        patch.points[0].position * uvw.x + patch.points[1].position * uvw.y + patch.points[2].position * uvw.z;
     return {p, float4(uvw, float(id))};
 }
 

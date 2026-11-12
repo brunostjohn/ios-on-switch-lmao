@@ -157,9 +157,9 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
 
 
 def layout_strides(key: str) -> dict[int, int]:
-    """Give each Metal vertex buffer's layout stride as the key's attributes (a<i>=format:offset:buffer:stride:...) name it."""
+    """Give each Metal vertex buffer's layout stride, as the key's a<i>=format:offset:buffer:stride:... fields say."""
     out = {}
-    for field in key.split(' | ')[0].split():
+    for field in key.partition(' | ')[0].split():
         name, _, value = field.partition('=')
         parts = value.split(':')
         if name[:1] == 'a' and name[1:].isdigit() and len(parts) == 6 and all(p.isdigit() for p in parts):

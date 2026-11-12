@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // raw_vertex_streams.cpp on raw::Device, read off the pushes the device submitted: a state of two fixed-function vertex
 // streams binds each stream's location and limit at its own bind, a draw after the second stream's bind moved rebinds that
-// stream alone, a second stream of a bind stride takes its bind's stride in its format, and a bind stride past the format's
-// 12 bits draws the state's stride twin, which reads it from its pulled layout's push word.
+// stream alone, a second stream of a bind stride takes its bind's stride in its format, and a bind stride past the
+// format's 12 bits draws the state's stride twin, which reads it from its pulled layout's push word.
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_record.h"
 #include <algorithm>

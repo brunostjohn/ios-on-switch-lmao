@@ -421,8 +421,8 @@ fn declared_facts(t: &TextureSlot, own: Option<PixelFormat>, format: PixelFormat
 }
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset; vertex buffers at `binds`' stride), 16 textures of `format` and `samples` (of their declarations at `declared`) and 16
-/// samplers at the fragment stage, `binds`' in their places
+/// buffers at each slot's own offset; vertex buffers at `binds`' stride), 16 textures of `format` and `samples` (of their
+/// declarations at `declared`) and 16 samplers at the fragment stage, `binds`' in their places
 fn probe_state(
     run: usize,
     format: PixelFormat,

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// directrun: the raw path's direct compile (drivers/TegraGM20BMetal/raw/runtime/RawDirect.h) of the states and kernels of
-// exec.metal and the counter resolve kernel, as the runtime makes each at its creation, written as JSON for
-// direct_exec_test.py to execute: each record's programs, set-0 entries, push words and the fields its draws or dispatches
-// write.
+// directrun: the raw path's direct compile (drivers/TegraGM20BMetal/raw/runtime/RawDirect.h) of the states and kernels
+// of exec.metal and the counter resolve kernel, as the runtime makes each at its creation, written as JSON for
+// direct_exec_test.py to execute: each record's programs, set-0 entries, push words and the fields its draws or
+// dispatches write.
 // usage: directrun <nvk dylib> <cache dir> <exec.metallib> <out.json>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

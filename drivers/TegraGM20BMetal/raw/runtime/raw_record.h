@@ -74,8 +74,8 @@ struct RuntimeRecord {
     };
 
     std::vector<Variant> variants;
-    // A state of bind-stride vertex streams: the same state with every per-bind layout pulled in the shader, made with it at
-    // its creation (RawDirect.mm), which a draw of a bind stride past SET_VERTEX_STREAM_A_FORMAT's 12 bits takes. Its
+    // A state of bind-stride vertex streams: the same state with every per-bind layout pulled in the shader, made with it
+    // at its creation (RawDirect.mm), which a draw of a bind stride past SET_VERTEX_STREAM_A_FORMAT's 12 bits takes. Its
     // keyHash is its own (strideTwinKey); it has no twin.
     std::shared_ptr<const RuntimeRecord> strideTwin;
 };

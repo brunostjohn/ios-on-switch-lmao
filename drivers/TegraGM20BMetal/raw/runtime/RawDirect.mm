@@ -125,8 +125,8 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
 }
 
 // The probe binds every vertex buffer at a stride no fixed-function stream fetches, so m2v's plan asks for its
-// pulled-vertex-buffer variant of every per-bind layout. A twin the translation refuses leaves the state without one: its draws
-// of such a stride are refused (RenderEncoder::drawnWordsRefusal).
+// pulled-vertex-buffer variant of every per-bind layout. A twin the translation refuses leaves the state without one:
+// its draws of such a stride are refused (RenderEncoder::drawnWordsRefusal).
 CompileOutcome Direct::strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures,
                                   const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                                   std::string &why, bool split)

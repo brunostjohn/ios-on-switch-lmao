@@ -4,8 +4,8 @@
 // amplification, in order, its id in the state's AmplificationId push word, as Metal renders every primitive of one
 // amplification before the next's. Raw passes have one layer and set one viewport, so a mapping's render target offset
 // renders the first layer, as Metal's does in such a pass; a viewport offset sends the draw elsewhere. A state of a dynamic
-// stride reads its bind's stride: its vertex stream's at each draw, a pulled layout's from its VertexBufferStride word. A bind
-// stride past the stream's field draws the state's stride twin, which pulls those layouts in the shader.
+// stride reads its bind's stride: its vertex stream's at each draw, a pulled layout's from its VertexBufferStride word. A
+// bind stride past the stream's field draws the state's stride twin, which pulls those layouts in the shader.
 #include <algorithm>
 #include "raw_gpu.h"
 

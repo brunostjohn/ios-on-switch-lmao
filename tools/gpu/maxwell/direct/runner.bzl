@@ -15,7 +15,8 @@ def _direct_runner_impl(ctx):
         executable = ctx.executable._build,
         arguments = [args],
         inputs = depset(
-            ctx.files.srcs + tools.raw + [ctx.file.host_bridge, ctx.file.metal_abi, ctx.file._xcode_env, ctx.file._xcode_identity],
+            ctx.files.srcs + tools.raw +
+            [ctx.file.host_bridge, ctx.file.metal_abi, ctx.file._xcode_env, ctx.file._xcode_identity],
         ),
         outputs = [out],
         mnemonic = "DirectRunner",
