@@ -208,6 +208,12 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             continue;
         }
         if (bufferType(w.type)) {
+            if (w.source == NmbDirectArgumentTable) {
+                why = "m2v's argument table of the push fields past the " +
+                      std::string(w.stage == 1 ? "vertex" : "fragment") + " push window (" + std::to_string(w.range) +
+                      " bytes) at set-0 byte " + std::to_string(e.offset);
+                return false;
+            }
             if ((w.source != NmbDirectBuffer && w.source != NmbDirectBytes) || (w.stage != 1 && w.stage != 2)) {
                 why = "a set-0 buffer m2v binds itself at " + std::to_string(e.offset) + " (source " +
                       std::to_string(w.source) + ")";

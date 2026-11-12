@@ -38,7 +38,8 @@ typedef enum NmbDirectSource : uint32_t {
     NmbDirectColorTable,  // m2v's sRGB colour table (bind::color_write_table), the same bytes for every state
     NmbDirectOther,
     NmbDirectDepthStandIn,
-    NmbDirectStencilStandIn
+    NmbDirectStencilStandIn,
+    NmbDirectArgumentTable  // the push fields past a stage's push window (m2v lower/push.rs), `range` bytes
 } NmbDirectSource;
 
 #define NMB_DIRECT_IMMUTABLE UINT32_MAX

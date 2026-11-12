@@ -62,6 +62,7 @@ pub enum NmbDirectSource {
     Other,
     DepthStandIn,
     StencilStandIn,
+    ArgumentTable,
 }
 
 pub const NMB_DIRECT_IMMUTABLE: u32 = u32::MAX;
@@ -569,6 +570,11 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
         WriteSource::ColorWriteTable => {
             out.source = NmbDirectSource::ColorTable;
             out.stage = 2;
+        }
+        WriteSource::ArgumentTable { stage, bytes_len } => {
+            out.source = NmbDirectSource::ArgumentTable;
+            out.stage = stage_number(*stage);
+            out.range = u64::from(*bytes_len);
         }
         _ => {}
     }
