@@ -59,17 +59,13 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpTexture:
     case OpKernelTexture:
         if (stage < 3)
-            changed = textures[stage].update(c.index, [&](auto &bindings) {
-                return bindings.bind(c.index, c.obj);
-            });
+            changed = textures[stage].bind(c.index, c.obj);
         resourcesChanged = changed;
         break;
     case OpSampler:
     case OpKernelSampler:
         if (stage < 3)
-            changed = samplers[stage].update(c.index, [&](auto &bindings) {
-                return bindings.bind(c.index, c.obj);
-            });
+            changed = samplers[stage].bind(c.index, c.obj);
         resourcesChanged = changed;
         break;
     case OpKernelState:

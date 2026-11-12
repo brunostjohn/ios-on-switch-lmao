@@ -370,7 +370,7 @@ struct RMSharedEventWait {
     std::vector<uint8_t> _shadow;
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;
-    std::unordered_set<void *> _ownerKeys;  // everything the tape names, retained until completion
+    raw::PointerMap<bool> _ownerKeys;  // everything the tape names, retained until completion
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;

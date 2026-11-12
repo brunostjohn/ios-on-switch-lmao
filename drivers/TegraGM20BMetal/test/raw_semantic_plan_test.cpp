@@ -180,6 +180,50 @@ TEST(SemanticPlan, ADrawsSetBytesCaptureCopiesOnlyTheChunkOfSlotsTheyEdited)
     EXPECT_LT(plan.buffers[0].storageBytes(), kDraws * sizeof(raw::BufferBindings) / 3);
 }
 
+TEST(SemanticPlan, ADrawsTextureCaptureCopiesOnlyTheChunkOfSlotsItBound)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(binding(OpTexture, 2, 9, 70), {});
+    plan.record(binding(OpTexture, 2, 1, 0), {});
+    constexpr uint32_t kDraws = 200;
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        plan.record(binding(OpTexture, 2, 0, 100 + d % 3), {});
+        draw(plan);
+    }
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        const auto &state = plan.renderStates[plan.draw(1 + d).state];
+        const auto textures = plan.textures[1][state.textures[1]];
+        EXPECT_EQ(textures.objects[0], object(100 + d % 3));
+        EXPECT_EQ(textures.objects[1], nullptr);
+        EXPECT_EQ(textures.objects[9], object(70));
+        EXPECT_EQ(textures.set, 1u << 0 | 1u << 1 | 1u << 9);
+    }
+    // a capture's chunk of four slots and its chunk list, half of a whole table's copy and its mask at most
+    EXPECT_LT(plan.textures[1].storageBytes(), kDraws * 32 * sizeof(void *) / 2);
+}
+
+TEST(SemanticPlan, AWordKeyedMapKeepsItsStorageAcrossClears)
+{
+    raw::StampMap<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t, raw::WordsHash> map;
+    const auto key = [](uint32_t i) {
+        return std::make_tuple(i, uintptr_t(i) * 64, uintptr_t(i & 3));
+    };
+    for (uint32_t i = 0; i < 100; ++i)
+        EXPECT_TRUE(map.insert(key(i), i).second);
+    const size_t bytes = map.storageBytes();
+    for (uint32_t round = 0; round < 50; ++round) {
+        map.clear();
+        EXPECT_EQ(map.find(key(1)), nullptr);
+        for (uint32_t i = 0; i < 100; ++i)
+            EXPECT_TRUE(map.insert(key(i), i + round).second);
+        EXPECT_FALSE(map.insert(key(5), 0).second);
+        EXPECT_EQ(*map.find(key(50)), 50 + round);
+        EXPECT_EQ(map.find(std::make_tuple(50u, uintptr_t(50) * 64, uintptr_t(3))), nullptr);
+    }
+    EXPECT_EQ(map.storageBytes(), bytes);
+}
+
 TEST(SemanticPlan, ANewEncodersFirstCaptureEmptiesOnlyTheSlotsTheLastOneSet)
 {
     RMCommandPlan plan;
@@ -316,9 +360,9 @@ TEST(SemanticPlan, RasterAndOffsetChangesReuseResourceIdentity)
         if (!i)
             coarse = plan.operation(at).uses;
         EXPECT_EQ(plan.operation(at).uses, coarse);
-        plan.resolveRenderUses(plan.draw(at).state, object(90), [&] {
+        plan.resolveRenderUses(plan.draw(at).state, object(90), [&](std::vector<raw::ResourceUse> &out) {
             ++builds;
-            return std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
+            out = std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
         });
         if (!i)
             precise = plan.operation(at).uses;
@@ -339,10 +383,11 @@ TEST(SemanticPlan, NativeResourceIdentityTracksObjectsSamplersPipelinesAndEncode
     uint32_t builds = 0;
     auto capture = [&](uintptr_t pipeline) {
         draw(plan);
-        plan.resolveRenderUses(plan.draw(plan.size() - 1).state, object(pipeline), [&] {
-            ++builds;
-            return std::vector<raw::ResourceUse>{};
-        });
+        plan.resolveRenderUses(plan.draw(plan.size() - 1).state, object(pipeline),
+                               [&](std::vector<raw::ResourceUse> &out) {
+                                   ++builds;
+                                   out = std::vector<raw::ResourceUse>{};
+                               });
     };
     plan.record(binding(OpBuffer, 1, 0, 42), {});
     capture(90);
@@ -394,15 +439,15 @@ TEST(SemanticPlan, KernelResourcePlansSurviveOffsetAndDispatchChanges)
         Cmd dispatch = cmd(OpDispatch);
         dispatch.c = 1 | uint64_t(1) << 16 | uint64_t(1) << 32;
         plan.record(dispatch, {i + 1, 1, 1, i + 1, 1, 1});
-        plan.setKernelUses(plan.size() - 1, object(90), [&] {
+        plan.setKernelUses(plan.size() - 1, object(90), [&](std::vector<raw::ResourceUse> &out) {
             ++builds;
-            return std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
+            out = std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
         });
     }
     EXPECT_EQ(builds, 1u);
-    plan.setKernelUses(plan.size() - 1, object(91), [&] {
+    plan.setKernelUses(plan.size() - 1, object(91), [&](std::vector<raw::ResourceUse> &out) {
         ++builds;
-        return std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Write}};
+        out = std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Write}};
     });
     EXPECT_EQ(builds, 2u);
     std::map<void *, uint8_t> uses;
@@ -791,10 +836,10 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
     plan.record(binding(OpKernelTexture, 3, 2, 30), {});
     const std::vector<uint64_t> dimensions{1, 1, 1, 1, 1, 1};
     unsigned builds = 0;
-    auto readSource = [&] {
+    auto readSource = [&](std::vector<raw::ResourceUse> &out) {
         ++builds;
-        return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-            {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
+        out = std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
+                                            {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
     };
     for (unsigned i = 0; i < 10000; ++i) {
         plan.record(cmd(OpDispatch), dimensions);
@@ -803,8 +848,8 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
     EXPECT_EQ(builds, 1u);
     const size_t boundary = plan.size();
     plan.record(cmd(OpDispatch), dimensions);
-    plan.setKernelUses(plan.size() - 1, object(41), [] {
-        return std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Read | raw::ResourceUse::Write}};
+    plan.setKernelUses(plan.size() - 1, object(41), [](std::vector<raw::ResourceUse> &out) {
+        out = std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Read | raw::ResourceUse::Write}};
     });
     std::map<void *, uint8_t> first, last;
     plan.forEachUse(1, boundary, [&](void *object, uint8_t access) { first[object] = access; });
@@ -843,11 +888,11 @@ TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
     EXPECT_EQ(plan.buffers[2][second.buffers][0].offset, 128u);
     EXPECT_EQ(plan.dispatch(1).encoderBegin, 0u);
     EXPECT_EQ(plan.dispatch(boundary + 1).encoderBegin, boundary);
-    plan.setKernelUses(1, object(200), [] {
-        return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read}};
+    plan.setKernelUses(1, object(200), [](std::vector<raw::ResourceUse> &out) {
+        out = std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read}};
     });
-    plan.setKernelUses(2, object(200), [] {
-        return std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Write}};
+    plan.setKernelUses(2, object(200), [](std::vector<raw::ResourceUse> &out) {
+        out = std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Write}};
     });
     plan.resolveDispatch(1, object(200), 4);
     plan.resolveDispatch(2, object(200), 0);
@@ -875,9 +920,9 @@ TEST(SemanticPlan, ComputeAliasesUnionAccessAndExplicitWritesRemainDependencies)
     RMCommandPlan plan;
     plan.record(cmd(OpCompute), {});
     plan.record(cmd(OpDispatch), {1, 1, 1, 1, 1, 1});
-    plan.setKernelUses(1, object(1), [] {
-        return std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read},
-                                           {object(10), raw::ResourceUse::Write}};
+    plan.setKernelUses(1, object(1), [](std::vector<raw::ResourceUse> &out) {
+        out =
+            std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read}, {object(10), raw::ResourceUse::Write}};
     });
     auto explicitUse = binding(OpKernelUse, 3, 0, 20, 2);
     plan.record(explicitUse, {});
@@ -1055,19 +1100,19 @@ void applyEverySlot(const RMCommandPlan &plan, uint32_t index, uint32_t &applied
                     log.buffer(stage + 1, slot, bindings[slot]);
         }
         if (!previous || previous->textures[stage] != next.textures[stage]) {
-            const auto &bindings = plan.textures[stage][next.textures[stage]];
-            const auto *old = previous ? &plan.textures[stage][previous->textures[stage]] : nullptr;
+            const auto bindings = plan.textures[stage][next.textures[stage]];
+            const auto old = plan.textures[stage][previous ? previous->textures[stage] : next.textures[stage]];
             for (uint32_t slot = 0; slot < bindings.objects.size(); ++slot)
                 if ((bindings.set & (1u << slot)) &&
-                    (!old || !(old->set & (1u << slot)) || bindings.objects[slot] != old->objects[slot]))
+                    (!previous || !(old.set & (1u << slot)) || bindings.objects[slot] != old.objects[slot]))
                     log.texture(stage + 1, slot, bindings.objects[slot]);
         }
         if (!previous || previous->samplers[stage] != next.samplers[stage]) {
-            const auto &bindings = plan.samplers[stage][next.samplers[stage]];
-            const auto *old = previous ? &plan.samplers[stage][previous->samplers[stage]] : nullptr;
+            const auto bindings = plan.samplers[stage][next.samplers[stage]];
+            const auto old = plan.samplers[stage][previous ? previous->samplers[stage] : next.samplers[stage]];
             for (uint32_t slot = 0; slot < bindings.objects.size(); ++slot)
                 if ((bindings.set & (1u << slot)) &&
-                    (!old || !(old->set & (1u << slot)) || bindings.objects[slot] != old->objects[slot]))
+                    (!previous || !(old.set & (1u << slot)) || bindings.objects[slot] != old.objects[slot]))
                     log.sampler(stage + 1, slot, bindings.objects[slot]);
         }
     }

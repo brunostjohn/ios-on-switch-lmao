@@ -144,9 +144,12 @@ class RMCommandPlan {
     const Range &rangeAt(size_t from, size_t to) const;
     void classifyRange(Range &range);
     size_t rangeStorageBytes() const;
-    std::map<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t> drawUseSpans_;
+    raw::StampMap<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t, raw::WordsHash> drawUseSpans_;
     using ResourceKey = std::pair<uint64_t, uintptr_t>;
-    std::map<ResourceKey, uint32_t> renderUseSpans_, kernelUseSpans_;
+    raw::StampMap<ResourceKey, uint32_t, raw::WordsHash> renderUseSpans_, kernelUseSpans_;
+    // the use lists merged or built before saveUses takes them, and the recording's own (recordUses), kept from one
+    // command buffer to the next
+    std::vector<raw::ResourceUse> mergeUses_, buildUses_, recordUses_;
     ResourceKey lastRenderUseKey_{UINT64_MAX, 0};
     uint32_t lastRenderUses_ = 0;
     uint32_t drawUses(uint32_t base, void *indices, void *arguments);
@@ -158,8 +161,8 @@ class RMCommandPlan {
 
 public:
     raw::BufferSnapshots buffers[3];
-    raw::StateSnapshots<raw::TextureBindings> textures[3];
-    raw::StateSnapshots<raw::SamplerBindings> samplers[3];
+    raw::TextureSnapshots textures[3];
+    raw::SamplerSnapshots samplers[3];
     raw::StateSnapshots<raw::RasterState> raster;
     raw::StateSnapshots<raw::KernelState> kernel;
     std::vector<raw::RenderStateRef> renderStates;
@@ -168,28 +171,43 @@ public:
 
     bool record(const Cmd &c, const std::vector<uint64_t> &extra);
 
+    // `build` fills the list it is handed with the dispatch's uses, where the kernel and resource revision are new
     template <typename Build> void setKernelUses(size_t at, const void *nativeKernel, Build build)
     {
         auto &operation = operations_[at];
         const auto &state = kernelStates[dispatches_[operation.payload].state];
         const auto key = std::make_pair(state.resourceRevision, reinterpret_cast<uintptr_t>(nativeKernel));
-        auto [found, inserted] = kernelUseSpans_.try_emplace(key, 0);
-        if (inserted)
-            found->second = saveUses(build());
-        operation.uses = found->second;
+        auto [found, inserted] = kernelUseSpans_.insert(key, 0);
+        if (inserted) {
+            buildUses_.clear();
+            build(buildUses_);
+            *found = saveUses(buildUses_);
+        }
+        operation.uses = *found;
     }
 
+    // `build` fills the list it is handed with the draw's uses, where the pipeline and resource revision are new
     template <typename Build> void resolveRenderUses(uint32_t state, const void *nativePipeline, Build build)
     {
         const ResourceKey key{renderStates[state].resourceRevision, reinterpret_cast<uintptr_t>(nativePipeline)};
         if (key != lastRenderUseKey_) {
-            auto [found, inserted] = renderUseSpans_.try_emplace(key, 0);
-            if (inserted)
-                found->second = saveUses(build());
+            auto [found, inserted] = renderUseSpans_.insert(key, 0);
+            if (inserted) {
+                buildUses_.clear();
+                build(buildUses_);
+                *found = saveUses(buildUses_);
+            }
             lastRenderUseKey_ = key;
-            lastRenderUses_ = found->second;
+            lastRenderUses_ = *found;
         }
         applyRenderUses(state, lastRenderUses_);
+    }
+
+    // An empty list for the recording's uses of one command, its capacity the largest one's so far
+    std::vector<raw::ResourceUse> &recordUses()
+    {
+        recordUses_.clear();
+        return recordUses_;
     }
 
     size_t size() const

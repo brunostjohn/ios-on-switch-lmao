@@ -12,7 +12,7 @@ template <typename T> uint32_t append(std::vector<T> &values, T value)
 }
 
 void appendBindings(std::vector<raw::ResourceUse> &uses, const raw::BufferBindings &buffers,
-                    const raw::TextureBindings &textures, uint8_t access)
+                    const raw::TextureSnapshots::Current &textures, uint8_t access)
 {
     for (const auto &binding : buffers)
         if (binding.source == raw::BufferBinding::Source::Buffer && binding.object)
@@ -56,10 +56,10 @@ uint32_t RMCommandPlan::captureRender()
     }
     state.raster = raster.capture();
     if (savedResources_[0] != resourceRevision_[0]) {
-        std::vector<raw::ResourceUse> uses;
+        mergeUses_.clear();
         for (uint32_t stage = 0; stage < 2; ++stage)
-            appendBindings(uses, buffers[stage].current(), textures[stage].current(), raw::ResourceUse::Read);
-        resourceUses_[0] = saveUses(uses);
+            appendBindings(mergeUses_, buffers[stage].current(), textures[stage].current(), raw::ResourceUse::Read);
+        resourceUses_[0] = saveUses(mergeUses_);
         savedResources_[0] = resourceRevision_[0];
     }
     state.uses = resourceUses_[0];
@@ -73,9 +73,10 @@ uint32_t RMCommandPlan::captureKernel()
     if (savedKernel_ == kernelGeneration_)
         return currentKernel_;
     if (savedResources_[1] != resourceRevision_[1]) {
-        std::vector<raw::ResourceUse> uses;
-        appendBindings(uses, buffers[2].current(), textures[2].current(), raw::ResourceUse::Read | raw::ResourceUse::Write);
-        resourceUses_[1] = saveUses(uses);
+        mergeUses_.clear();
+        appendBindings(mergeUses_, buffers[2].current(), textures[2].current(),
+                       raw::ResourceUse::Read | raw::ResourceUse::Write);
+        resourceUses_[1] = saveUses(mergeUses_);
         savedResources_[1] = resourceRevision_[1];
     }
     currentKernel_ = append(kernelStates, {buffers[2].capture(), textures[2].capture(), samplers[2].capture(),
@@ -224,10 +225,10 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
                                     : control.compute != raw::kNoSnapshot ? kernelStates[control.compute].uses
                                                                           : 0;
             const UseSpan span = useSpans_[before];
-            std::vector<raw::ResourceUse> possible(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
-            for (auto &use : possible)
+            mergeUses_.assign(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
+            for (auto &use : mergeUses_)
                 use.access |= raw::ResourceUse::Read | raw::ResourceUse::Write;
-            operation.uses = saveUses(possible);
+            operation.uses = saveUses(mergeUses_);
             for (auto &state : buffers)
                 state.resetCurrent();
             for (auto &state : textures)
@@ -266,24 +267,23 @@ uint32_t RMCommandPlan::drawUses(uint32_t base, void *indices, void *arguments)
         return base;
     const auto key =
         std::make_tuple(base, reinterpret_cast<uintptr_t>(indices), reinterpret_cast<uintptr_t>(arguments));
-    const auto found = drawUseSpans_.find(key);
-    if (found != drawUseSpans_.end())
-        return found->second;
+    if (const uint32_t *found = drawUseSpans_.find(key))
+        return *found;
     const UseSpan span = useSpans_[base];
-    std::vector<raw::ResourceUse> merged(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
-    merged.push_back({indices, raw::ResourceUse::Read});
-    merged.push_back({arguments, raw::ResourceUse::Read});
-    const uint32_t result = saveUses(merged);
-    drawUseSpans_.emplace(key, result);
+    mergeUses_.assign(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
+    mergeUses_.push_back({indices, raw::ResourceUse::Read});
+    mergeUses_.push_back({arguments, raw::ResourceUse::Read});
+    const uint32_t result = saveUses(mergeUses_);
+    drawUseSpans_.insert(key, result);
     return result;
 }
 
 void RMCommandPlan::addUses(size_t at, const std::vector<raw::ResourceUse> &uses)
 {
     const UseSpan old = useSpans_[operations_[at].uses];
-    std::vector<raw::ResourceUse> merged(uses_.begin() + old.begin, uses_.begin() + old.begin + old.count);
-    merged.insert(merged.end(), uses.begin(), uses.end());
-    operations_[at].uses = saveUses(merged);
+    mergeUses_.assign(uses_.begin() + old.begin, uses_.begin() + old.begin + old.count);
+    mergeUses_.insert(mergeUses_.end(), uses.begin(), uses.end());
+    operations_[at].uses = saveUses(mergeUses_);
 }
 
 void RMCommandPlan::setRenderUses(uint32_t state, const std::vector<raw::ResourceUse> &uses)
@@ -392,8 +392,10 @@ size_t RMCommandPlan::storageBytes() const
            dispatches_.capacity() * sizeof(RMPlanDispatch) + transfers_.capacity() * sizeof(RMPlanTransfer) +
            controls_.capacity() * sizeof(RMPlanControl) + begins_.capacity() * sizeof(RMPlanBegin) +
            events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse) +
-           useSpans_.capacity() * sizeof(UseSpan) +
-           rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) + rangeStorageBytes();
+           useSpans_.capacity() * sizeof(UseSpan) + rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) +
+           rangeStorageBytes() + drawUseSpans_.storageBytes() + renderUseSpans_.storageBytes() +
+           kernelUseSpans_.storageBytes() +
+           (mergeUses_.capacity() + buildUses_.capacity() + recordUses_.capacity()) * sizeof(raw::ResourceUse);
 }
 
 void RMCommandPlan::clear()

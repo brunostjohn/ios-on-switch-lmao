@@ -169,7 +169,9 @@ TEST(PlanResources, PendingComputeDoesNotRefuseItsConservativeWritableSummary)
     EXPECT_EQ(plan.nativeRangeRefusal(0, 3), nullptr);
     plan.setRefused(0, false);
     EXPECT_FALSE(plan.begin(0).refused);
-    plan.setKernelUses(1, object(3), [] { return std::vector<raw::ResourceUse>{{object(1), read | sample}}; });
+    plan.setKernelUses(1, object(3), [](std::vector<raw::ResourceUse> &out) {
+        out = std::vector<raw::ResourceUse>{{object(1), read | sample}};
+    });
     plan.resolveDispatch(1, object(3), 0);
     plan.invalidateUses();
     plan.prepareRange(0, 3);
@@ -177,7 +179,9 @@ TEST(PlanResources, PendingComputeDoesNotRefuseItsConservativeWritableSummary)
     const auto use = resources(plan, 0, 3, RMResourceKind::Texture);
     ASSERT_EQ(use.size(), 1u);
     EXPECT_EQ(use[0].access, read | sample);
-    plan.setKernelUses(1, object(4), [] { return std::vector<raw::ResourceUse>{{object(1), read | write | sample}}; });
+    plan.setKernelUses(1, object(4), [](std::vector<raw::ResourceUse> &out) {
+        out = std::vector<raw::ResourceUse>{{object(1), read | write | sample}};
+    });
     plan.invalidateUses();
     plan.prepareRange(0, 3);
     EXPECT_EQ(plan.nativeRangeRefusal(0, 3), object(1));

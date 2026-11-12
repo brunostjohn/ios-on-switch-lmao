@@ -17,7 +17,7 @@ struct RMRecording {
     std::vector<uint8_t> shadow;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
-    std::unordered_set<void *> ownerKeys;
+    raw::PointerMap<bool> ownerKeys;
 };
 
 static std::mutex gRecordingsLock;
@@ -36,7 +36,7 @@ static void takeRecording(RMCommandBuffer *b)
             b->_shadow.swap(r.shadow);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
-            b->_ownerKeys.swap(r.ownerKeys);
+            std::swap(b->_ownerKeys, r.ownerKeys);
             gRecordings.pop_back();
             return;
         }
@@ -73,7 +73,7 @@ static void giveRecording(RMCommandBuffer *b)
     r.shadow.swap(b->_shadow);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
-    r.ownerKeys.swap(b->_ownerKeys);
+    std::swap(r.ownerKeys, b->_ownerKeys);
     r.plan.clear();
     r.passes.clear();
     r.bytes.at = 0;
@@ -101,7 +101,7 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)retain:(id)object
 {
-    if (!object || !_ownerKeys.insert((__bridge void *)object).second)
+    if (!object || !_ownerKeys.insert((__bridge void *)object, true).second)
         return;
     _owners.push_back(object);
     RMResourceFacts facts;
@@ -131,7 +131,7 @@ static void giveRecording(RMCommandBuffer *b)
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
     if (_plan.record(cmd, _extra)) {
-        std::vector<raw::ResourceUse> uses;
+        std::vector<raw::ResourceUse> &uses = _plan.recordUses();
         if (isPlanDraw(cmd.op)) {
             const uint32_t index = _plan.draw(_plan.size() - 1).state;
             const auto &state = _plan.renderStates[index];
@@ -142,8 +142,7 @@ static void giveRecording(RMCommandBuffer *b)
                 if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
                     native = pipeline->_raw;
                 if (native && native->rec) {
-                    _plan.resolveRenderUses(index, native, [&] {
-                        std::vector<raw::ResourceUse> bound;
+                    _plan.resolveRenderUses(index, native, [&](std::vector<raw::ResourceUse> &bound) {
                         const auto &record = *native->rec;
                         for (uint32_t i = 0; i < record.entries; ++i) {
                             const auto &entry = record.entry[i];
@@ -170,7 +169,6 @@ static void giveRecording(RMCommandBuffer *b)
                             if (binding.source == raw::BufferBinding::Source::Buffer)
                                 bound.push_back({binding.object, raw::ResourceUse::Read});
                         }
-                        return bound;
                     });
                 }
             }

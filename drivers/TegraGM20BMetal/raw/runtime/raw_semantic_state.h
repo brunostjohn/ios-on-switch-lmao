@@ -142,25 +142,8 @@ struct BufferBinding {
 using BufferBindings = std::array<BufferBinding, 31>;
 using BufferSnapshots = SlotSnapshots<BufferBinding, 31>;
 
-template <size_t N> struct ObjectBindings {
-    std::array<void *, N> objects{};
-    uint32_t set = 0;
-
-    bool bind(uint32_t slot, void *object)
-    {
-        if (slot >= N)
-            return false;
-        const uint32_t bit = uint32_t(1) << slot;
-        if ((set & bit) && objects[slot] == object)
-            return false;
-        objects[slot] = object;
-        set |= bit;
-        return true;
-    }
-};
-
-using TextureBindings = ObjectBindings<31>;
-using SamplerBindings = ObjectBindings<16>;
+using TextureSnapshots = ObjectSnapshots<31>;
+using SamplerSnapshots = ObjectSnapshots<16>;
 
 struct RasterState {
     enum Field : uint32_t {

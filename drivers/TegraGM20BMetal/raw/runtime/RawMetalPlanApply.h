@@ -31,15 +31,15 @@ void applyBuffers(const BufferSnapshots &table, uint32_t from, uint32_t to, uint
 }
 
 template <size_t N, typename Apply>
-void applyObjects(const StateSnapshots<ObjectBindings<N>> &table, uint32_t from, uint32_t to, StateCursor &cursor,
-                  Apply apply)
+void applyObjects(const ObjectSnapshots<N> &table, uint32_t from, uint32_t to, StateCursor &cursor, Apply apply)
 {
-    const ObjectBindings<N> &bindings = table[to];
-    const ObjectBindings<N> *old = from == kNoSnapshot ? nullptr : &table[from];
-    const uint32_t edited = old ? table.changedFrom(from, to) : ~0u;
+    const auto bindings = table[to];
+    const bool hasOld = from != kNoSnapshot;
+    const auto old = table[hasOld ? from : to];
+    const uint32_t edited = hasOld ? table.changedFrom(from, to) : ~0u;
     for (uint32_t slots = slotsToCompare(edited, from, N, cursor) & bindings.set; slots; slots &= slots - 1) {
         const uint32_t slot = uint32_t(__builtin_ctz(slots));
-        if (!old || !(old->set & (1u << slot)) || bindings.objects[slot] != old->objects[slot])
+        if (!hasOld || !(old.set & (1u << slot)) || bindings.objects[slot] != old.objects[slot])
             apply(slot, bindings.objects[slot]);
     }
 }

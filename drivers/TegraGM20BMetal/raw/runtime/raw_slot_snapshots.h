@@ -191,4 +191,93 @@ private:
     uint32_t edited_ = 0;
 };
 
+// A table of N object slots (textures, samplers) kept as SlotSnapshots keeps a buffer table, each capture with its mask of
+// the slots bound (to an object or to nil): a draw that binds one texture copies one chunk of four, not the table
+template <size_t N> class ObjectSnapshots {
+    static_assert(N <= 32);
+    using Objects = SlotSnapshots<void *, N>;
+
+public:
+    struct View {
+        typename Objects::View objects;
+        uint32_t set;
+    };
+
+    struct Current {
+        const typename Objects::Table &objects;
+        uint32_t set;
+    };
+
+    Current current() const
+    {
+        return {objects_.current(), set_};
+    }
+
+    View operator[](uint32_t index) const
+    {
+        return {objects_[index], sets_[index]};
+    }
+
+    uint64_t generation() const
+    {
+        return objects_.generation();
+    }
+
+    size_t size() const
+    {
+        return objects_.size();
+    }
+
+    size_t storageBytes() const
+    {
+        return objects_.storageBytes() + sets_.capacity() * sizeof(uint32_t);
+    }
+
+    // `object` at `slot`; false where the slot held it bound already or there is no such slot
+    bool bind(uint32_t slot, void *object)
+    {
+        if (slot >= N)
+            return false;
+        const uint32_t bit = uint32_t(1) << slot;
+        if ((set_ & bit) && objects_.current()[slot] == object)
+            return false;
+        set_ |= bit;
+        return objects_.update(slot, [&](typename Objects::Table &table) {
+            table[slot] = object;
+            return true;
+        });
+    }
+
+    uint32_t capture()
+    {
+        const uint32_t index = objects_.capture();
+        if (index == sets_.size())
+            sets_.push_back(set_);
+        return index;
+    }
+
+    uint32_t changedFrom(uint32_t from, uint32_t index) const
+    {
+        return objects_.changedFrom(from, index);
+    }
+
+    void resetCurrent()
+    {
+        objects_.resetCurrent();
+        set_ = 0;
+    }
+
+    void clear()
+    {
+        objects_.clear();
+        sets_.clear();
+        set_ = 0;
+    }
+
+private:
+    Objects objects_;
+    std::vector<uint32_t> sets_;
+    uint32_t set_ = 0;
+};
+
 }  // namespace raw

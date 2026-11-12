@@ -92,8 +92,7 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             }
         }
     }
-    plan.setKernelUses(at, kernels, [&] {
-        std::vector<raw::ResourceUse> exact;
+    plan.setKernelUses(at, kernels, [&](std::vector<raw::ResourceUse> &exact) {
         const auto &state = plan.kernelStates[plan.dispatch(at).state];
         for (uint8_t region = 0; region < kernels->count; ++region) {
             const auto &record = *kernels->jobs[region]->value()->rec;
@@ -113,7 +112,6 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
                 }
             }
         }
-        return exact;
     });
     plan.resolveDispatch(at, kernels, surfaceSlots);
     return true;
