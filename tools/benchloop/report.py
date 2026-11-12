@@ -9,7 +9,18 @@ import statistics
 import struct
 from pathlib import Path
 
-from tools.benchloop import blend, cbufsize, floatadd, interlock_section, qmdchain, rop, sweeps, twod, units
+from tools.benchloop import (
+    blend,
+    cbufsize,
+    floatadd,
+    interlock_section,
+    qmdchain,
+    resolve_ties,
+    rop,
+    sweeps,
+    twod,
+    units,
+)
 
 
 def per_draw(result: dict) -> tuple[float | None, float | None, float | None]:
@@ -55,9 +66,18 @@ def rows(planned: list[dict], results: dict[str, dict]) -> list[list[str]]:
     return out
 
 
-def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs: list[Path]) -> dict:
-    if command == 'run' and any(e['id'].startswith('interlock_section.') for e in planned):
+def _run(planned: list[dict], results: dict[str, dict]) -> dict:
+    """Give a `run`'s analysis by the batch its experiments came from."""
+    if any(e['id'].startswith('interlock_section.') for e in planned):
         return {'interlock_section': interlock_section.analyse(planned, results)}
+    if any((e.get('meta') or {}).get('family') == 'resolvetie2' for e in planned):
+        return {'resolveties': resolve_ties.analyse(planned, results)}
+    return {}
+
+
+def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs: list[Path]) -> dict:
+    if command == 'run':
+        return _run(planned, results)
     if command == 'latency':
         from tools.benchloop.sm53 import fit  # noqa: PLC0415  the fit pulls in the interpreter
 
@@ -77,6 +97,7 @@ def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs
         'precision': sweeps.analyse_precision,
         'iterated': sweeps.analyse_iterated,
         'twod': twod.analyse,
+        'resolveties': resolve_ties.analyse,
         'compressed': units.analyse_compressed,
         'cstall': units.analyse_cstall,
         'qmdchain': qmdchain.analyse,

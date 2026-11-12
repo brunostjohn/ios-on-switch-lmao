@@ -57,6 +57,8 @@ py_library(
         "loop.py",
         "qmdchain.py",
         "report.py",
+        "resolve_ties.py",
+        "resolve_verdict.py",
         "rop.py",
         "sampling.py",
         "session.py",
@@ -108,6 +110,14 @@ genrule(
     cmd = "$(execpath :emit_batches) > $@",
     tools = [":emit_batches"],
     visibility = ["//hw_test_app:__pkg__"],
+)
+
+# Three fake engines run over the whole batch, every sample pair and sum of it
+py_test(
+    name = "resolve_ties_test",
+    size = "medium",
+    srcs = ["resolve_ties_test.py"],
+    deps = [":lib"],
 )
 
 # The app's side of the format: its decoder's limits (Swift), its GPU side's method ranges (C++), its known program
