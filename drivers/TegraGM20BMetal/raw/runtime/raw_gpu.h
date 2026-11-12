@@ -29,6 +29,7 @@
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
 #include "raw_attachment_order.h"
+#include "raw_attachment_view.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_visibility.h"
@@ -546,6 +547,9 @@ struct CapturedProgram;
 // A render pass's attachments (Core Animation: color 0 the target, color 1 a memoryless attachment, writeMask 0 or 15)
 struct ColorAttachment {
     Texture *texture = nullptr;
+    // A level or slice of `image` (raw_attachment_target.h): what the pass's other views of the attachment are made of
+    const Texture *image = nullptr;
+    uint32_t level = 0, slice = 0;
 
     enum Load : uint8_t {
         DontCare,
@@ -1024,12 +1028,19 @@ private:
     // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
     // copies): asked of the device once a pass, not under its lock at each draw's descriptors
     struct PassView {
-        uint32_t ownTic, word0, tic;
+        uint32_t ownTic;
+        AttachmentView view;
+        uint32_t tic;
     };
 
     std::array<PassView, 8> passViews_{};
     uint8_t passViewCount_ = 0;
     uint32_t passViewTic(const Texture &t, uint32_t word0);
+    uint32_t passViewTic(const Texture &owner, const AttachmentView &v, const char **why);
+    // The header a draw's fetch of attachment `a` binds: the storage form's view of word 0 `storage`, a 2D array of the
+    // pass's layers for a record of the layered form (`layeredRecord`), or (storage 0) the input-attachment form's, which
+    // NVK fetches at (x, y, Layer) (nvk_nir_lower_descriptors.c lower_load_input_attachment_coord); 0: none (`why`)
+    uint32_t fetchTic(const ColorAttachment &a, uint32_t storage, bool layeredRecord, const char **why);
 
     Rotation
         rot_;  // the pass's turned plane (raw_rotation.h): its frame is what areaW_, areaH_ and the rectangles count in
@@ -1491,6 +1502,9 @@ public:
     // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
     // of the same texel size), made on first use and freed with t's header; 0: no header slot left
     uint32_t viewTic(const Texture &t, uint32_t word0);
+    // The header of view `v` of `owner`, an attachment's image (v.part) or the attachment itself (raw_attachment_view.h),
+    // made on first use and freed with owner's header; 0: none (`why`)
+    uint32_t attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
     bool shared() const
@@ -2042,8 +2056,8 @@ private:
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
     bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
-    // by header: its views' word 0 and header (viewTic)
-    std::unordered_multimap<uint32_t, std::pair<uint32_t, uint32_t>> viewTics_;
+    // by header: its views and theirs (viewTic, attachmentViewTic)
+    std::unordered_multimap<uint32_t, std::pair<AttachmentView, uint32_t>> viewTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid

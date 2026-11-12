@@ -1003,8 +1003,9 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         };
         // A vertex function that chooses its render target slice, or one amplified, is compiled as for a pass of two
         // layers: the variant that writes Layer, reading the pass's length from its push word, draws in a pass of any
-        // length. One the translation has no layered form of (an interlocked or tile-memory fragment function's) is
-        // compiled for one layer, its record marked so (LAYER_DROPPED): a layered pass draws it elsewhere.
+        // length. One the translation has no layered form of (a fragment function of tile memory, an imageblock, the
+        // shader-side stencil or depth test, or an extended-range shadow) is compiled for one layer, its record marked so
+        // (LAYER_DROPPED): a layered pass draws it elsewhere.
         let (runs, layer_dropped) = if amplification > 1 {
             (probe(&mut variants, 2)?, false)
         } else if chooses {
@@ -1024,6 +1025,8 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .iter()
             .map(|(_, pipeline)| Layout::new(handles.device, &pipeline.layout))
             .collect::<Result<Vec<_>, String>>()?;
+        // The layered storage variant's attachments are the runtime's views of the pass's layers (render_target.rs
+        // attachment_view_in), which its storage images address at each primitive's layer
         let writes: Vec<Vec<NmbDirectWrite>> = runs
             .iter()
             .map(|run| {
@@ -1031,7 +1034,13 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     .descriptors
                     .iter()
                     .take(MAX_WRITES)
-                    .map(|w| write_of(w, &run.commands.descriptor_ranges))
+                    .map(|w| {
+                        let mut out = write_of(w, &run.commands.descriptor_ranges);
+                        if run.plan.variant.layered_storage && out.source == NmbDirectSource::StorageAttachment {
+                            out.view_type = avk::ImageViewType::TYPE_2D_ARRAY.as_raw();
+                        }
+                        out
+                    })
                     .collect()
             })
             .collect();

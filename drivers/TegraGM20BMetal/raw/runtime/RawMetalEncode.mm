@@ -513,6 +513,9 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 p.color[j].texture = !whole                  ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
                                                              : &t->_raw;
+                p.color[j].image = whole ? nullptr : &t->_raw;
+                p.color[j].level = uint32_t(a.level);
+                p.color[j].slice = uint32_t(a.slice);
                 p.color[j].load = a.load == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.load == MTLLoadActionLoad ? raw::ColorAttachment::Load
                                                                 : raw::ColorAttachment::DontCare;

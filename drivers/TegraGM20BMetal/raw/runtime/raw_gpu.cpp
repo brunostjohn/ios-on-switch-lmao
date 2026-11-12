@@ -17,6 +17,7 @@
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_attachment_target.h"
 #include "raw_layers.h"
 #include "raw_kit.h"
 #include "raw_mme.h"
@@ -5247,26 +5248,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
                     tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
                 } else if (e.kind == EntryFetch) {
-                    const Texture *t = pass_.color[e.slot].texture;
-                    if (t && !t->tic) {
-                        *why = "framebuffer fetch from a target the raw path cannot sample";
-                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                    const ColorAttachment &a = pass_.color[e.slot];
+                    const Texture *t = a.texture;
+                    const bool storage = t && (pl->storageBits >> e.slot & 1);
+                    if (storage && storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples,
+                                                       *t) != StorageFallback::None) {
+                        *why = "an incompatible framebuffer storage view";
+                        cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                         return false;
                     }
-                    if (t)
+                    if (t) {
                         cb_->use(*t, pl->storageWriteBits >> e.slot & 1);
-                    tic = t ? t->tic : 0;
-                    if (t && (pl->storageBits >> e.slot & 1)) {
-                        if (storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples, *t) !=
-                            StorageFallback::None) {
-                            *why = "an incompatible framebuffer storage view";
-                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
-                            return false;
-                        }
-                        tic = passViewTic(*t, pl->storageTic[e.slot]);
+                        tic = fetchTic(a, storage ? pl->storageTic[e.slot] : 0, layeredRecord(pl->rec->arrayLengthWord),
+                                       why);
                         if (!tic) {
-                            *why = "no room for the framebuffer storage view";
-                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
+                            cb_->refusal = {storage ? RefStorageView : RefNoTic, e.slot, t->format, t->width};
                             return false;
                         }
                     }
@@ -5912,13 +5908,48 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
 
 uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
 {
+    AttachmentView v;
+    v.word0 = word0;
     for (uint8_t i = 0; i < passViewCount_; ++i)
-        if (passViews_[i].ownTic == t.tic && passViews_[i].word0 == word0)
+        if (passViews_[i].ownTic == t.tic && passViews_[i].view == v)
             return passViews_[i].tic;
     const uint32_t tic = dev_->viewTic(t, word0);
     if (tic && passViewCount_ < passViews_.size())
-        passViews_[passViewCount_++] = {t.tic, word0, tic};
+        passViews_[passViewCount_++] = {t.tic, v, tic};
     return tic;
+}
+
+uint32_t RenderEncoder::passViewTic(const Texture &owner, const AttachmentView &v, const char **why)
+{
+    for (uint8_t i = 0; i < passViewCount_; ++i)
+        if (passViews_[i].ownTic == owner.tic && passViews_[i].view == v)
+            return passViews_[i].tic;
+    const uint32_t tic = dev_->attachmentViewTic(owner, v, why);
+    if (tic && passViewCount_ < passViews_.size())
+        passViews_[passViewCount_++] = {owner.tic, v, tic};
+    return tic;
+}
+
+uint32_t RenderEncoder::fetchTic(const ColorAttachment &a, uint32_t storage, bool layeredRecord, const char **why)
+{
+    const Texture &t = *a.texture;
+    const bool layered = pass_.layers > 1;
+    if (t.tic && (storage ? !layeredRecord : !layered))
+        return storage ? passViewTic(t, storage) : t.tic;
+    const FormatInfo *f = formatInfo(t.format);
+    if (!f) {
+        *why = "framebuffer fetch from a target the raw path cannot sample";
+        return 0;
+    }
+    AttachmentView v;
+    v.word0 = storage ? storage : f->tic0;
+    v.srgb = !storage && f->srgb;
+    v.arrayed = storage ? layeredRecord : layered;
+    v.layers = v.arrayed ? pass_.layers : 1;
+    v.part = a.image != nullptr;
+    v.level = uint8_t(a.level);
+    v.slice = a.slice;
+    return passViewTic(v.part ? *a.image : t, v, why);
 }
 
 uint32_t Device::viewTic(const Texture &t, uint32_t word0)
@@ -5926,9 +5957,11 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0)
     RAW_ENCODE_LOCK(l, lock_);
     if (!t.tic)
         return 0;
+    AttachmentView key;
+    key.word0 = word0;
     const auto views = viewTics_.equal_range(t.tic);
     for (auto v = views.first; v != views.second; ++v)
-        if (v->second.first == word0)
+        if (v->second.first == key)
             return v->second.second;
     const uint32_t tic = allocTic();
     if (!tic)
@@ -5937,7 +5970,39 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0)
     memcpy(own, tic_.cpu + 32 * t.tic, 32);
     viewHeader(own, word0, w);
     memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
-    viewTics_.emplace(t.tic, std::make_pair(word0, tic));
+    viewTics_.emplace(t.tic, std::make_pair(key, tic));
+    return tic;
+}
+
+uint32_t Device::attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why)
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    *why = "framebuffer fetch from a target the raw path cannot sample";
+    if (!owner.tic)
+        return 0;
+    const auto views = viewTics_.equal_range(owner.tic);
+    for (auto it = views.first; it != views.second; ++it)
+        if (it->second.first == v)
+            return it->second.second;
+    uint32_t w[8];
+    if (v.part) {
+        fx::MipChain c;
+        uint64_t base = 0;
+        if (!attachmentImage(owner, c, base) || !attachmentViewHeader(c, base, owner.type == fx::kTexThreeD, v, w))
+            return 0;
+    } else {
+        uint32_t own[8];
+        memcpy(own, tic_.cpu + 32 * owner.tic, 32);
+        if (!ownViewHeader(own, v, w))
+            return 0;
+    }
+    const uint32_t tic = allocTic();
+    if (!tic) {
+        *why = "no room for the framebuffer storage view";
+        return 0;
+    }
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    viewTics_.emplace(owner.tic, std::make_pair(v, tic));
     return tic;
 }
 
