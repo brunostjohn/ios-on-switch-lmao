@@ -584,6 +584,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.cpp",

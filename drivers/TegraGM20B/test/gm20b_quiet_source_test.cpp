@@ -194,6 +194,12 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	expectBefore(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
 		     "if (chans[i] && c[i].stuck && !c[i].moving)",
 		     "tgm_chan_release_promises(chans[i], who, waited_ns);");
+	// The hang rule's compare-and-swap is a store-release to the write-combined fence page, which the parked PBDMA
+	// reads from DRAM (volatile, no L2): a DSB completes it, as it does after the CPU's own release (releasePromise).
+	expectBefore(Body(unit("gpu_promise.c"), "uint32_t tgm_chan_release_promises("),
+		     "switch_gpu_promise_waits_release(&chan->promise_waits,", "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
+	EXPECT_THAT(Body(unit("SwitchGpuWriterPromise.h"), "static inline uint32_t switch_gpu_promise_waits_release("),
+		    HasSubstr("__ATOMIC_RELEASE"));
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));

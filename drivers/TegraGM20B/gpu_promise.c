@@ -123,10 +123,15 @@ static void promise_released(uint32_t offset, uint32_t value, int step, void *ar
 	tgm_promise_abandoned_report(offset, value, hang->chan->owner, hang->waited_ns);
 }
 
+/* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so the parked
+ * channel's PBDMA reads the word from DRAM, which a store-release need not have reached until a DSB completes it. */
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns)
 {
 	struct promise_hang hang = {chan, who, waited_ns};
+	const uint32_t raised = switch_gpu_promise_waits_release(&chan->promise_waits, tgm_fence_word,
+								 promise_released, &hang);
 
-	return switch_gpu_promise_waits_release(&chan->promise_waits, tgm_fence_word,
-						promise_released, &hang);
+	if (raised)
+		__asm__ volatile("dsb sy" ::: "memory");
+	return raised;
 }
