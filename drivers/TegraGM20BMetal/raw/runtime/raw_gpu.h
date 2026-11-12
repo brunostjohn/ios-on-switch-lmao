@@ -89,6 +89,7 @@
 #include "raw_band_rates.h"
 #include "raw_span_marks.h"
 #include "../fx/fx_mip.h"
+#include "raw_surface_image.h"
 
 namespace raw {
 
@@ -175,6 +176,13 @@ struct Import {
     uint32_t kind = 0;
     tgm_layout layout = {};
     NativeSurface *native = nullptr;
+
+    // Bound 0xFE as the kernel laid the surface out, not under a layout of one texture's own (createBlockTextureOver,
+    // createSurfaceImage), whose textures address their memory as their images say
+    bool kernelTiled() const
+    {
+        return kind == TGM_LAYOUT_KIND && layout.bytes;
+    }
 };
 
 // The first texture's shape a new import asks the kernel the surface's layout with (raw_kernel.h surfaceLayout)
@@ -1397,6 +1405,19 @@ public:
     // of the layout, a base off 512 bytes, or the import or header refused.
     bool createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
                                 const fx::MipChain &layout, Texture &t);
+    // A shared texture over its IOSurface (raw_surface_image.h): the surface's pages imported under its ID and bound 0xFE,
+    // the texture over them as the private one of the same image (createMipTexture, createArray, createVolume,
+    // createStoredMultisample, createLine, createBlockTextureOver) lies in memory of its own. False: a Plain image, an
+    // allocation short of the layout, a base off a page, or the import or header refused.
+    bool createSurfaceImage(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                            const SurfaceImage &image, uint32_t width, uint32_t height, uint32_t format, Texture &t);
+
+    // Header `tic`'s eight words as the texture unit reads them
+    const uint32_t *headerWords(uint32_t tic) const
+    {
+        return reinterpret_cast<const uint32_t *>(tic_.cpu + 32 * tic);
+    }
+
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
@@ -1923,6 +1944,10 @@ private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     std::atomic<uint32_t> drawStamps_{0};  // measured draws' stamp slots taken (raw_stamps.h kDrawStampSlots)
+    // A block-compressed image of `layout` at t.va (lock_ held, t.tic allocated): its header of `type` and, past one level,
+    // its chain
+    void layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,
+                   Texture &t);
     friend class BlitEncoder;
     friend class ComputeEncoder;
 #ifdef SWITCH_RAW_HARNESS_MARKS

@@ -1439,7 +1439,9 @@ void Device::release(Import *i)
     if (!i || --i->refs)
         return;
     if (i->id)
-        surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
+        if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
+            it != surfaces_.end() && it->second == i)
+            surfaces_.erase(it);
     RAW_DIAGNOSTIC(stats.imports--);
     RAW_DIAGNOSTIC(stats.importBytes -= i->bo.bytes);
     if (i->native)
@@ -1777,7 +1779,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     t.pitch = pitch;
     const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
     t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND) {
+    if (t.import && t.import->kernelTiled()) {
         SurfaceView view;
         const bool valid = surfaceView(t.import->layout, offset, width, height, t.bpp, pitch, view);
         if (valid && !view.direct && !sampled) {
@@ -2289,12 +2291,19 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     t.va = i->bo.va;
     t.storage = {t.va, layout.bytes, true};
     t.cpu = static_cast<uint8_t *>(bytes);
+    layBlocks(layout, f, width, height, uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD), t);
+    return true;
+}
+
+void Device::layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,
+                       Texture &t)
+{
     t.pitch = layout.level[0].rowBytes;
     t.blockLinear = true;
     t.blockHeight = layout.yLog2;
     t.layers = layout.layers;
     t.layerBytes = layout.arrayStride;
-    t.type = uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD);
+    t.type = type;
     uint32_t w[8];
     fx::mipChainTic(layout, t.va, f->tic0, f->srgb, 0, layout.levels, w, t.type);
     setField(w, 143, 128, width - 1);  // WIDTH_MINUS_ONE in texels (NIL's extent_px)
@@ -2305,7 +2314,6 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
         t.chain->layout = layout;
         t.chain->va = t.va;
     }
-    return true;
 }
 
 void Device::destroyTexture(Texture &t)
@@ -5737,7 +5745,7 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND)
+    if (t.import && t.import->kernelTiled())
         return {t.va, t.pitch, x + t.surfaceX, y + t.surfaceY, t.import->layout.height, true, t.blockHeight};
     if (t.layers > 1)
         return {t.va + z * t.layerBytes, t.pitch, x, y, t.height, true, t.blockHeight};
@@ -6083,7 +6091,7 @@ static void colorTarget(Push &p, uint32_t index, const Texture &t)
     ColorTargetDesc d;
     d.va = t.va;
     d.pitch = t.pitch;
-    d.height = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
+    d.height = t.import && t.import->kernelTiled() ? t.import->layout.height : sampleRows(t);
     d.bpp = t.bpp;
     d.rtFormat = formatInfo(t.format)->rt;
     d.blockLinear = t.blockLinear;

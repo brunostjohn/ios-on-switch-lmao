@@ -6,6 +6,7 @@
 // MTLSharedTextureHandle over the surface, which finds the receiving process's device by that ID and crosses processes
 // by XPC or mach port. The device's registry ID is the IORegistry entry ID of the one accelerator service with a Metal
 // plugin (TegraGM20BMetalPlugin.mm), the same kernel object in every process.
+#import <objc/message.h>
 #import "RawMetalInternal.h"
 #import "RawMetalSharedTexture.h"
 
@@ -40,15 +41,42 @@ MTLSharedTextureHandle *handleOver(IOSurfaceRef s, NSString *label)
     return h;
 }
 
-const char *unsharedShape(MTLTextureDescriptor *d, const raw::FormatInfo *f)
+bool rotated(MTLTextureDescriptor *d)
 {
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    return [d respondsToSelector:rotation] && ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation);
+}
+
+// The image a shared texture of `d` is in its surface; null when it has one, else why not
+const char *sharedImage(MTLTextureDescriptor *d, raw::SurfaceImage &image)
+{
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     if (d.storageMode == MTLStorageModeMemoryless)
         return "memoryless";
+    if (rotated(d))
+        return "rotated";
+    if (raw::blockCompressed(f) && d.storageMode != MTLStorageModePrivate)
+        return "block-compressed and not private: the copy engine writes and reads it, never the CPU";
+    raw::SurfaceImageFacts facts;
+    facts.type = uint32_t(d.textureType);
+    facts.width = uint32_t(std::min<NSUInteger>(d.width, UINT32_MAX));
+    facts.height = uint32_t(std::min<NSUInteger>(d.height, UINT32_MAX));
+    facts.depth = uint32_t(std::min<NSUInteger>(d.depth, UINT32_MAX));
+    facts.levels = uint32_t(std::min<NSUInteger>(d.mipmapLevelCount, UINT32_MAX));
+    facts.samples = uint32_t(std::min<NSUInteger>(d.sampleCount, UINT32_MAX));
+    facts.arrayLength = uint32_t(std::min<NSUInteger>(d.arrayLength, UINT32_MAX));
+    facts.bpp = f ? f->bpp : 0;
+    facts.blockW = f ? f->blockW : 1;
+    facts.blockH = f ? f->blockH : 1;
+    facts.target = f && f->rt;
+    facts.extended = raw::xrForm(uint32_t(d.pixelFormat)) != raw::XrForm::None;
+    facts.rendered = volumeRendered(d);
+    if (const char *why = raw::surfaceImage(facts, image))
+        return why;
+    if (image.kind != raw::SurfaceImage::Plain)
+        return nullptr;
     if (!rawShape(d))
-        return "the raw path takes IOSurface textures 2D, of one level, sample and layer, unrotated, of a format it "
-               "keeps";
-    if (raw::blockCompressed(f))
-        return "block-compressed, which the raw path lays out block-linear in memory of its own alone";
+        return "a one-level 2D texture of a format the raw path keeps no IOSurface texture of";
     if (raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes)
         return "an extended-range format, which a surface holds in two planes";
     return nullptr;
@@ -80,6 +108,15 @@ id<MTLTexture> openShared(id<MTLDevice> device, MTLSharedTextureHandle *handle, 
 
 }  // namespace
 
+bool laidOutSurface(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::SurfaceImage &image)
+{
+    if (plane || IOSurfaceGetPlaneCount(s) || sharedImage(d, image) || image.kind == raw::SurfaceImage::Plain ||
+        IOSurfaceGetAllocSize(s) < image.layout.bytes)
+        return false;
+    NSDictionary *p = creationProperties(s);
+    return p[rmSharedString(raw::shared::kRegistryKey)] && p[rmSharedString(raw::shared::kLayoutKey)];
+}
+
 // Its methods go onto the device class of a kind whose _MTLDevice has them (installSharedTextureMethods)
 @interface RMSharedTextureAtIndex : NSObject
 @end
@@ -107,20 +144,27 @@ void installSharedTextureMethods(Class cls)
 
 - (NSMutableDictionary *)copyIOSurfaceSharedTextureProperties:(MTLTextureDescriptor *)d
 {
-    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
-    return unsharedShape(d, f) ? nil : rmSharedSurfaceProperties(d, f->bpp);
+    raw::SurfaceImage image;
+    if (sharedImage(d, image))
+        return nil;
+    return image.kind == raw::SurfaceImage::Plain
+               ? rmSharedSurfaceProperties(d, raw::formatInfo(uint32_t(d.pixelFormat))->bpp)
+               : rmLaidOutSurfaceProperties(image.layout.bytes);
 }
 
 - (id<MTLTexture>)newSharedTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
     NSMutableDictionary *p = [self copyIOSurfaceSharedTextureProperties:d];
     if (!p) {
-        const char *why = unsharedShape(d, raw::formatInfo(uint32_t(d.pixelFormat)));
-        SWITCH_REFUSE_DETAIL("raw", "texture.shared", d.pixelFormat << 8 | rawShapeTerm(d),
-                             "newSharedTextureWithDescriptor: %lux%lu format %lu type %lu levels %lu samples %lu: %s",
-                             (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
-                             (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount,
-                             (unsigned long)d.sampleCount, why ? why : "an extent past the GPU's");
+        raw::SurfaceImage image;
+        const char *why = sharedImage(d, image);
+        SWITCH_REFUSE_DETAIL(
+            "raw", "texture.shared", d.pixelFormat << 8 | d.textureType,
+            "newSharedTextureWithDescriptor: %lux%lux%lu format %lu type %lu levels %lu samples %lu "
+            "array %lu storage %lu: %s",
+            (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.depth, (unsigned long)d.pixelFormat,
+            (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount, (unsigned long)d.sampleCount,
+            (unsigned long)d.arrayLength, (unsigned long)d.storageMode, why ? why : "an extent past the GPU's");
         return nil;
     }
     rmAddSharedTextureKeys(p, d, [(id<MTLDevice>)self registryID], kKind);

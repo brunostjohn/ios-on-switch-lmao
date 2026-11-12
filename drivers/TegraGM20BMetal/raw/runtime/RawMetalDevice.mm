@@ -413,7 +413,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
                                            uint32_t(d.pixelFormat), volumeRendered(d), t->_raw);
     } else if (array) {
         t->_kind = RMTexturePool;
-        const NSUInteger faces = array == raw::fx::kTexTwoDArray ? 1 : 6;
+        const NSUInteger faces = array == raw::fx::kTexCube || array == raw::fx::kTexCubeArray ? 6 : 1;
         t->_rawOk = gRM->raw->createArray(uint32_t(d.width), uint32_t(d.height),
                                           uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
                                           uint32_t(d.pixelFormat), array, t->_raw);
@@ -587,6 +587,12 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
             makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
+    } else if (raw::SurfaceImage image;
+               (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
+        // a shared texture in the device's layout of its descriptor (RawMetalSharedTextures.mm): a surface of no rows
+        t->_rawOk = gRM->raw->createSurfaceImage(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s),
+                                                 IOSurfaceGetAllocSize(s), s, image, uint32_t(d.width),
+                                                 uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
     } else if (rawShape(d) && !plane && IOSurfaceGetPlaneCount(s) <= 1) {
         // a surface without planes, or one described by a single plane (CoreVideo's chunky surfaces): its plane's bytes
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)

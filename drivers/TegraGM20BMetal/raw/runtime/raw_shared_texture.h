@@ -18,6 +18,10 @@
 namespace raw::shared {
 
 inline constexpr std::string_view kRegistryKey = "kMetalRegistryID";
+// AGX's copyIOSurfaceSharedTextureProperties: writes it beside kIOSurfaceAllocSize, and its newTextureWithDescriptor:
+// iosurface:plane: opens a surface that holds it as one in the device's layout of the descriptor (21H461 0x21c8d6530,
+// 24B119 0x18c1486c0): here a surface of raw_surface_image.h's image, uncompressed
+inline constexpr std::string_view kLayoutKey = "kAGXCompressionMode";
 
 // A descriptor property under its key. Swizzle is the four channels packed red first, a byte each
 // (MTLTextureSwizzleChannelsToKey); Private ones are SPI the descriptor may not answer (0 then). All go through KVC,

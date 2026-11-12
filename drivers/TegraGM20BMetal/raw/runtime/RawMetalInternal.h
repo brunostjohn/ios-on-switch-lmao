@@ -484,6 +484,9 @@ uint64_t deviceAnswer(SEL selector, uint64_t argument);
 
 // RawMetalSharedTextures.mm: the shared texture methods only some kinds' Metal has (raw_shared_texture.h), on `cls`
 void installSharedTextureMethods(Class cls);
+// The image of `d` that surface `s` holds as a shared texture of the device's layout (raw_surface_image.h): false for any
+// other surface, or a Plain image
+bool laidOutSurface(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::SurfaceImage &image);
 
 // RawMetalQueuePriority.mm
 void queuePriorityAdd(RMQueue *queue);

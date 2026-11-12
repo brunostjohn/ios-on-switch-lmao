@@ -48,7 +48,7 @@ void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 const tgm_layout *textureCpuImportLayout(RMTexture *texture)
 {
     while (texture) {
-        if (texture->_raw.import && texture->_raw.import->kind == TGM_LAYOUT_KIND)
+        if (texture->_raw.import && texture->_raw.import->kernelTiled())
             return &texture->_raw.import->layout;
         texture = texture->_kind == RMTextureView ? texture->_parent : nil;
     }

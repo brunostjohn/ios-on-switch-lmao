@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
-// raw/runtime/raw_shared_texture.h and RawMetalSharedTexture.h, every kind: a shared texture's IOSurface creation
-// properties from its descriptor and the descriptor read back from them. The keys are those an M4 Max's Metal writes
-// for the same descriptor (its newSharedTextureWithDescriptor:, macOS 27), its swizzle key that Metal's own.
+// raw/runtime/raw_shared_texture.h, raw_surface_image.h and RawMetalSharedTexture.h, every kind: a shared texture's
+// IOSurface creation properties from its descriptor and the descriptor read back from them. The keys are those an M4
+// Max's Metal writes for the same descriptor (its newSharedTextureWithDescriptor:, macOS 27), its swizzle key that
+// Metal's own. Any shape but a one-level 2D one is laid out in the surface as the raw path lays the descriptor out in
+// memory of its own; the AGX drivers' surface of it holds AllocSize and kAGXCompressionMode alone.
 #include "../raw/runtime/RawMetalSharedTexture.h"
+#include "../raw/runtime/raw_surface_image.h"
 
 #include <gtest/gtest.h>
 
@@ -147,6 +150,175 @@ TEST(RawSharedTexture, AnotherDevicesOrAnIncompleteSurfaceOpensNothing)
     ASSERT_TRUE(k27.writeAccessPattern);
     EXPECT_EQ(rmSharedTextureDescriptor(properties(descriptor(), k17), kRegistry, k27), nil);
     EXPECT_NE(rmSharedTextureDescriptor(properties(descriptor(), k27), kRegistry, k17), nil);
+}
+
+raw::SurfaceImageFacts rgba8(uint32_t type, uint32_t width, uint32_t height)
+{
+    raw::SurfaceImageFacts d;
+    d.type = type;
+    d.width = width;
+    d.height = height;
+    d.bpp = 4;
+    d.target = true;
+    return d;
+}
+
+raw::SurfaceImage laid(const raw::SurfaceImageFacts &d)
+{
+    raw::SurfaceImage image;
+    const char *why = raw::surfaceImage(d, image);
+    EXPECT_EQ(why, nullptr) << (why ? why : "");
+    return image;
+}
+
+bool sameLayout(const raw::fx::MipChain &a, const raw::fx::MipChain &b)
+{
+    return a.bytes == b.bytes && a.levels == b.levels && a.layers == b.layers && a.arrayStride == b.arrayStride &&
+           a.depth == b.depth && a.zLog2 == b.zLog2 && a.samples == b.samples && a.yLog2 == b.yLog2 &&
+           a.level[0].rowBytes == b.level[0].rowBytes && a.level[a.levels - 1].offset == b.level[b.levels - 1].offset;
+}
+
+TEST(RawSharedTexture, EveryShapeIsTheImageTheRawPathLaysOut)
+{
+    EXPECT_EQ(laid(rgba8(raw::kType2D, 100, 70)).kind, raw::SurfaceImage::Plain);
+    raw::fx::MipChain c;
+
+    raw::SurfaceImageFacts d = rgba8(raw::kType2D, 64, 48);
+    d.levels = 7;
+    raw::SurfaceImage image = laid(d);
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Chain);
+    ASSERT_TRUE(raw::fx::mipChainLayout(64, 48, 7, 4, c));
+    EXPECT_TRUE(sameLayout(image.layout, c));
+
+    d = rgba8(raw::kType2DArray, 40, 24);
+    d.arrayLength = 3;
+    image = laid(d);
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Layers);
+    EXPECT_EQ(image.type, raw::fx::kTexTwoDArray);
+    ASSERT_TRUE(raw::fx::arrayLayout(40, 24, 3, 1, 4, c));
+    EXPECT_TRUE(sameLayout(image.layout, c));
+
+    image = laid(rgba8(raw::kTypeCube, 32, 32));
+    EXPECT_EQ(image.type, raw::fx::kTexCube);
+    EXPECT_EQ(image.layout.layers, 6u);
+    d = rgba8(raw::kTypeCubeArray, 16, 16);
+    d.arrayLength = 2;
+    image = laid(d);
+    EXPECT_EQ(image.type, raw::fx::kTexCubeArray);
+    EXPECT_EQ(image.layout.layers, 12u);
+    d = rgba8(raw::kType1DArray, 100, 1);
+    d.arrayLength = 4;
+    image = laid(d);
+    EXPECT_EQ(image.type, raw::fx::kTexOneDArray);
+    EXPECT_EQ(image.layout.layers, 4u);
+
+    for (const bool rendered : {false, true}) {
+        d = rgba8(raw::kType3D, 20, 12);
+        d.depth = 9;
+        d.rendered = rendered;
+        image = laid(d);
+        EXPECT_EQ(image.kind, raw::SurfaceImage::Volume);
+        EXPECT_EQ(image.type, raw::fx::kTexThreeD);
+        ASSERT_TRUE(raw::fx::volumeLayout(20, 12, 9, 1, 4, rendered, c));
+        EXPECT_TRUE(sameLayout(image.layout, c));
+    }
+
+    d = rgba8(raw::kType2DMultisample, 30, 18);
+    d.samples = 4;
+    image = laid(d);
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Samples);
+    ASSERT_TRUE(raw::fx::msLayout(30, 18, 4, 4, c));
+    EXPECT_TRUE(sameLayout(image.layout, c));
+
+    image = laid(rgba8(raw::kType1D, 300, 1));
+    EXPECT_EQ(image.kind, raw::SurfaceImage::Line);
+    tgm_layout line;
+    ASSERT_TRUE(tgm_layout_tiled(300, 1, 4, &line));
+    EXPECT_EQ(image.layout.bytes, line.bytes);
+    EXPECT_EQ(image.layout.level[0].rowBytes, line.row_bytes);
+
+    for (const uint32_t levels : {1u, 7u})
+        for (const uint32_t type : {raw::kType2D, raw::kType2DArray}) {
+            d = rgba8(type, 100, 60);
+            d.bpp = 16;
+            d.blockW = d.blockH = 4;
+            d.target = false;
+            d.levels = levels;
+            d.arrayLength = type == raw::kType2DArray ? 3 : 1;
+            image = laid(d);
+            EXPECT_EQ(image.kind, raw::SurfaceImage::Blocks);
+            EXPECT_EQ(image.type, type == raw::kType2DArray ? raw::fx::kTexTwoDArray : raw::fx::kTexTwoD);
+            ASSERT_TRUE(raw::fx::blockChainLayout(100, 60, levels, d.arrayLength, 4, 4, 16, c));
+            EXPECT_TRUE(sameLayout(image.layout, c));
+        }
+}
+
+TEST(RawSharedTexture, ShapesTheRawPathKeepsInNoMemoryHaveNoImage)
+{
+    raw::SurfaceImage image;
+    raw::SurfaceImageFacts d = rgba8(raw::kType2DArray, 32, 32);
+    d.levels = 2;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped array";
+    d = rgba8(raw::kType3D, 32, 32);
+    d.levels = 2;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a mipmapped 3D texture";
+    d = rgba8(raw::kType2DMultisample, 32, 32);
+    d.samples = 8;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "8 samples";
+    d.samples = 4;
+    d.target = false;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "multisampled, not a target";
+    d = rgba8(raw::kType2D, 32, 32);
+    d.levels = 3;
+    d.target = false;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "mipmapped, not a target";
+    d = rgba8(raw::kType2DArray, 32, 32);
+    d.extended = true;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "an extended-range array";
+    d = rgba8(raw::kTypeCube, 32, 16);
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a cube of unequal sides";
+    d = rgba8(raw::kType3D, 32, 32);
+    d.blockW = d.blockH = 4;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "a block-compressed 3D texture";
+    d = rgba8(raw::kType2D, 32, 32);
+    d.bpp = 0;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "no header";
+    d = rgba8(raw::kType2DArray, 0, 32);
+    d.arrayLength = 2;
+    EXPECT_NE(raw::surfaceImage(d, image), nullptr) << "no texels";
+}
+
+TEST(RawSharedTexture, ALaidOutSurfaceHoldsAGXsPropertiesAndIOSurfaceMakesIt)
+{
+    MTLTextureDescriptor *d =
+        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm size:32 mipmapped:NO];
+    d.textureType = MTLTextureTypeCubeArray;
+    d.arrayLength = 2;
+    d.usage = MTLTextureUsageShaderRead;
+    d.storageMode = MTLStorageModePrivate;
+    raw::SurfaceImageFacts facts = rgba8(raw::kTypeCubeArray, 32, 32);
+    facts.arrayLength = 2;
+    const raw::SurfaceImage image = laid(facts);
+    for (const raw::shared::Kind &k : raw::shared::kKinds) {
+        NSMutableDictionary *p = rmLaidOutSurfaceProperties(image.layout.bytes);
+        EXPECT_EQ(p.count, 2u);
+        EXPECT_EQ(number(p, (__bridge NSString *)kIOSurfaceAllocSize), image.layout.bytes);
+        ASSERT_NE(p[@"kAGXCompressionMode"], nil);
+        EXPECT_EQ(number(p, @"kAGXCompressionMode"), 0u);
+        rmAddSharedTextureKeys(p, d, kRegistry, k);
+        MTLTextureDescriptor *back = rmSharedTextureDescriptor(p, kRegistry, k);
+        ASSERT_NE(back, nil) << k.kind;
+        EXPECT_EQ(back.textureType, MTLTextureTypeCubeArray);
+        EXPECT_EQ(back.arrayLength, 2u);
+        EXPECT_EQ(back.width, 32u);
+        IOSurfaceRef s = IOSurfaceCreate((__bridge CFDictionaryRef)p);
+        ASSERT_NE(s, nullptr) << k.kind;
+        EXPECT_GE(IOSurfaceGetAllocSize(s), image.layout.bytes);
+        EXPECT_EQ(IOSurfaceGetPlaneCount(s), 0u);
+        EXPECT_EQ(IOSurfaceGetWidth(s), 0u);
+        CFRelease(s);
+    }
+    EXPECT_EQ(IOSurfaceCreate((__bridge CFDictionaryRef)rmLaidOutSurfaceProperties(0)), nullptr);
 }
 
 // _MTLDevice's own methods in each kind's ABI table (drivers/NativeMetal/abi/kinds)
