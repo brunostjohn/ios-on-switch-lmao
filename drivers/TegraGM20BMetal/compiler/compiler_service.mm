@@ -45,6 +45,13 @@ os_log_t logger()
     return l;
 }
 
+// launchd's KeepAlive (iOS 27) starts the compiler again whenever it dies; the BlueTool stand-in (iOS 17) sets
+// SWITCH_SHADER_COMPILER_LAST_START on the start after which it starts none
+uint32_t restarts()
+{
+    return getenv("SWITCH_SHADER_COMPILER_LAST_START") ? 0u : uint32_t(TegraGM20BCompilerRestarts);
+}
+
 struct Asked : Work {
     Prepared prepared;
     std::string request;
@@ -271,7 +278,7 @@ bool Service::connect(std::string &why)
         IOObjectRelease(service);
     if (opened)
         return why = "no connection to the GPU", false;
-    const TegraGM20BAbiCompilerAnnounce in = {TegraGM20BCompilerRestarts, 0};
+    const TegraGM20BAbiCompilerAnnounce in = {restarts(), 0};
     call(TegraGM20BMethodCompilerAnnounce, &in, sizeof in, nullptr, 0);
     return true;
 }
@@ -283,12 +290,9 @@ void Service::decline()
         call(TegraGM20BMethodCompilerDecline, nullptr, 0, nullptr, 0);
 }
 
-// Both launchers start the compiler again when it dies: launchd's KeepAlive (iOS 27), the BlueTool stand-in's watch of
-// its child (iOS 17), each up to the kernel's three losses
 bool Service::registerStore(uint64_t stack, std::string &why)
 {
-    TegraGM20BAbiCompilerRegister in = {uint64_t(uintptr_t(store_.base())), store_.mappedBytes(), stack,
-                                        TegraGM20BCompilerRestarts, 0};
+    TegraGM20BAbiCompilerRegister in = {uint64_t(uintptr_t(store_.base())), store_.mappedBytes(), stack, restarts(), 0};
     TegraGM20BAbiCompilerRegisterReply reply = {};
     const int registered = call(TegraGM20BMethodCompilerRegister, &in, sizeof in, &reply, sizeof reply);
     if (registered) {

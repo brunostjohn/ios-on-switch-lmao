@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <pthread.h>
 #include <string>
 #include <vector>
 #include "raw_cache.h"
@@ -44,8 +45,9 @@ public:
     // disk's entry is kept as the state's result). None: not made yet (being made, or never asked)
     RecordCache::Found lookup(const CacheKey &k, RuntimeRecord &record, std::string &why);
     // The state made now, on the caller's thread (sharing the bounded compile slots with queued work), as a queued ask would: Ready with
-    // its record, Refused, Failed (a later ask tries again), or Pending (the queue is making it)
-    State makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // its record, Refused, or Failed (a later ask tries again; `again` tries a failed one now, within kRetries). A make
+    // another thread runs is waited for with the caller's class lent to it; one the queue has not started is made here.
+    State makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why, bool again = false);
     // A state's record or refusal found outside this table (the shader compiler's store), kept as its result unless an ask
     // came first
     void keep(const CacheKey &k, RecordCache::Found found, const RuntimeRecord &record, const std::string &why);
@@ -77,6 +79,7 @@ private:
         uint32_t failures = 0;
         uint64_t failedUs = 0;
         std::vector<Done> waiters;  // the asks made while it was being made
+        pthread_t maker = nullptr;  // the thread making it; none while it waits in the queue
     };
 
     struct Job;
@@ -90,7 +93,7 @@ private:
     void *persistence_;
     std::unique_ptr<CompileSlots> slots_;  // at most two cold compiles; unrelated warm keys never take a slot
     mutable std::mutex lock_;
-    std::condition_variable idle_;
+    std::condition_variable idle_, settled_;
     uint64_t queued_ = 0;
     std::map<uint64_t, Entry> entries_;
 #if SWITCH_RAW_DIAGNOSTICS
@@ -105,6 +108,7 @@ private:
                              const RuntimeRecord **made);
     void queue(const CacheKey &k);
     bool retryable(const Entry &e, uint64_t &wait) const;
+    void waitForMaker(std::unique_lock<std::mutex> &l, Entry &e);
 };
 
 }  // namespace raw

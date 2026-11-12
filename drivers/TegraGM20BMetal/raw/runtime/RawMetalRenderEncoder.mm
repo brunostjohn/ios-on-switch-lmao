@@ -212,7 +212,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredStateForeign);
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
-        hit(_cb, !p->_completable ? PredStateNotPackable : p->_asked ? PredStateBeingMade : PredStateNotInPack);
+        hit(_cb, !p->_completable ? PredStateNotPackable : PredStateNotInPack);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     _drawn = _pipe ? _pipe->_raw : nullptr;

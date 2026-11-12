@@ -157,13 +157,13 @@ void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found f
 #endif
 }
 
-bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record)
+Completion::Asked Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record)
 {
     CompileRequest r;
     Digest name;
     if (!renderRequest(a, k, false, r, name)) {
         compiledHere(InProcess::NoRequest);
-        return false;
+        return Asked::Here;
     }
     std::string why;
     RecordCache::Found found = fromStore(name, k, record, why);
@@ -176,7 +176,7 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
         }
         if (!renderRequest(a, k, true, r, name)) {
             compiledHere(InProcess::NoRequest);
-            return false;
+            return Asked::Here;
         }
         uint32_t how = 0;
         const Remote::Answer answer = remote_->compile(encodeRequest(r), &how);
@@ -192,15 +192,17 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
             break;
         case Remote::Answer::Failed:
             state = Compiler::State::Failed;
-            return true;
+            return Asked::Answered;
         case Remote::Answer::Unavailable:
+            if (remote_->declined())
+                return Asked::Gone;
             compiledHere(InProcess::NotTaken);
-            return false;
+            return Asked::Here;
         }
         found = fromStore(name, k, record, why);
         if (found == RecordCache::Found::None) {
             compiledHere(InProcess::NotInStore);
-            return false;
+            return Asked::Here;
         }
         logRemote(a, k, found, "by the shader compiler", nowUs() - began);
     } else {
@@ -208,7 +210,7 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     }
     compiler_->keep(k, found, record, why);
     state = found == RecordCache::Found::Record ? Compiler::State::Ready : Compiler::State::Refused;
-    return true;
+    return Asked::Answered;
 }
 
 bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done)
@@ -247,7 +249,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
     const Ask asked = a;
     const bool sent = remote_->compileAsync(
         encodeRequest(r), true, a.qos, [this, asked, k, name, began, settle, done](Remote::Answer answer) {
-            if (answer == Remote::Answer::Failed)
+            if (answer == Remote::Answer::Failed || (answer == Remote::Answer::Unavailable && remote_->declined()))
                 return done(nullptr);
             RuntimeRecord made;
             std::string refusal;

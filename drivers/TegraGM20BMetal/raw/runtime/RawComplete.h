@@ -58,9 +58,10 @@ public:
     // failures keep the request pending and retry from retained compiler output.
     void ask(Ask a, std::function<void(Pipeline *)> ready);
     // The state's pipeline now, on the caller's thread: its record from this process or the disk (a state made in an earlier
-    // boot is raw from its first draw), else made, as Metal makes a state at its creation. Null: refused, or its compile could
-    // not run (*retry: ask() may make it later)
-    Pipeline *makeNow(Ask a, bool *retry);
+    // boot is raw from its first draw), else made while the thread waits, as Metal makes a state at its creation, so its
+    // first draw is raw. Null with `failure` empty: refused (m2v draws it); with it, the creation fails with it as Metal's
+    // does: no compiler comes this boot, its compile could not run, or the shader heap is full.
+    Pipeline *makeNow(Ask a, std::string &failure);
 
     // The kernel of compute key `key` (raw_compute_key.h) for `descriptor` (over m2v's functions) at `dispatch`, placed:
     // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
@@ -128,8 +129,15 @@ private:
     void compiledHere(InProcess::Why why);
     bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name);
     RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);
-    // The state made by the compiler while this thread sleeps; false: not taken (made here instead)
-    bool remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record);
+    enum class Asked : uint8_t {
+        Answered,  // `state` is the compiler's answer
+        Here,      // a state the compiler cannot take, for a reason logged once: made here
+        Gone,      // no compiler comes this boot
+    };
+    // The state made by the compiler while this thread sleeps
+    Asked remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record);
+    // The state made on this thread, a failed compile tried once more
+    Compiler::State madeHere(const CacheKey &k, RuntimeRecord &record, std::string &why);
     // The state asked of the compiler with `done` called once it answers; false: not asked
     bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done);
     // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: not

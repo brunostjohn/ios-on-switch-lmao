@@ -458,6 +458,54 @@ TEST(RawCompiler, AWaitingCreationLendsItsClassToTheSlotHolders)
     EXPECT_EQ(raised, 2u);
 }
 
+// A state's creation while an ask of it is being made waits for that make, lending it its class, and takes its record:
+// it is never handed back unready, and the state is made once
+TEST(RawCompiler, ACreationWaitsForTheMakeAnAskStartedAndLendsItItsClass)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    bool making = false, raised = false;
+    std::atomic<unsigned> makes{0};
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &, raw::RuntimeRecord &record, std::string &) {
+        makes++;
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        const int own = scheduledPriority();
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            making = true;
+            changed.notify_all();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (scheduledPriority() <= own && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        raised = scheduledPriority() > own;
+        record = madeUp(4);
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey k;
+    k.key = "asked-then-created";
+    EXPECT_EQ(compiler.ask(k, nullptr), raw::Compiler::State::Pending);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        ASSERT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return making;
+        }));
+    }
+    raw::Compiler::State created = raw::Compiler::State::Pending;
+    raw::RuntimeRecord record;
+    std::thread creation([&] {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        std::string why;
+        created = compiler.makeNow(k, record, why);
+    });
+    creation.join();
+    compiler.drain();
+    EXPECT_EQ(created, raw::Compiler::State::Ready);
+    EXPECT_EQ(record.pipeline.keyHash, madeUp(4).pipeline.keyHash);
+    EXPECT_TRUE(raised);
+    EXPECT_EQ(makes.load(), 1u);
+}
+
 // A creation on a fixed-priority thread with no class (Core Animation's render thread) compiles while both slots are held.
 TEST(RawCompiler, AFixedPriorityCreationDoesNotWaitForASlot)
 {

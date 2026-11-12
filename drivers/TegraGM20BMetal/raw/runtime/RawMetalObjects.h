@@ -187,7 +187,7 @@ enum class RMShareable : uint8_t { Unasked, No, Yes };
     bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
     bool _archived;     // an archive its creation listed declares it: its twin is made as a packed one's
     bool _caTransform;
-    bool _asked;                             // its record asked of the runtime (completeLater)
+    std::string _failure;                    // why its creation failed (Completion::makeNow), as Metal's would
     std::string _key;                        // its pack key (completable states')
     MTLRenderPipelineDescriptor
         *_madeFrom;                  // completable states': what its cubic variants and a later twin are made of

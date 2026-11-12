@@ -152,6 +152,10 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             return;
         }
         bool remote = remote_->serving();
+        if (!remote && remote_->declined()) {
+            pending->ready(nullptr);
+            return;
+        }
         {
             std::lock_guard<std::mutex> l(lock_);
             asked_[k.name()] = a;
@@ -209,9 +213,9 @@ void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool ca
     });
 }
 
-Pipeline *Completion::makeNow(Ask a, bool *retry)
+Pipeline *Completion::makeNow(Ask a, std::string &failure)
 {
-    *retry = false;
+    failure.clear();
     CacheKey k;
     if (!keyOf(a, k))
         return nullptr;
@@ -221,7 +225,7 @@ Pipeline *Completion::makeNow(Ask a, bool *retry)
     }
     RuntimeRecord record;
     std::string why;
-    Compiler::State state = Compiler::State::Pending;
+    Compiler::State state = Compiler::State::Refused;
     RAW_DIAGNOSTIC(noteObtained({"table", 0, uint32_t(qos_class_self()), 0}));
     switch (compiler_->lookup(k, record, why)) {
     case RecordCache::Found::Record:
@@ -232,20 +236,49 @@ Pipeline *Completion::makeNow(Ask a, bool *retry)
         break;
     case RecordCache::Found::None:
         if (!remote_->serving()) {
+            if (remote_->declined()) {
+                failure = "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
+                return nullptr;
+            }
             compiledHere(InProcess::NoCompiler);
-            RAW_DIAGNOSTIC(noteObtained({"here", 0, uint32_t(qos_class_self()), 0}));
-            state = compiler_->makeNow(k, record, why);
-        } else if (!remoteNow(a, k, state, record)) {
-            // made here, off this thread: ask() makes it on the compile queue
-            std::lock_guard<std::mutex> l(lock_);
-            notTaken_.insert(k.name());
-            *retry = true;
+            state = madeHere(k, record, why);
+            break;
+        }
+        switch (remoteNow(a, k, state, record)) {
+        case Asked::Answered:
+            break;
+        case Asked::Here: {
+            {
+                std::lock_guard<std::mutex> l(lock_);
+                notTaken_.insert(k.name());
+            }
+            state = madeHere(k, record, why);
+            break;
+        }
+        case Asked::Gone:
+            failure = "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
             return nullptr;
         }
         break;
     }
-    *retry = state == Compiler::State::Failed || state == Compiler::State::Pending;
-    return state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why, retry) : nullptr;
+    if (state == Compiler::State::Failed) {
+        failure = "the state's compile could not run" + (why.empty() ? std::string() : ": " + why);
+        return nullptr;
+    }
+    if (state != Compiler::State::Ready)
+        return nullptr;
+    bool heapFull = false;
+    Pipeline *made = device_.addRecord(record, a.caTransform, why, &heapFull);
+    if (!made && heapFull)
+        failure = why;
+    return made;
+}
+
+Compiler::State Completion::madeHere(const CacheKey &k, RuntimeRecord &record, std::string &why)
+{
+    RAW_DIAGNOSTIC(noteObtained({"here", 0, uint32_t(qos_class_self()), 0}));
+    const Compiler::State state = compiler_->makeNow(k, record, why);
+    return state == Compiler::State::Failed ? compiler_->makeNow(k, record, why, true) : state;
 }
 
 Direct &Completion::direct()

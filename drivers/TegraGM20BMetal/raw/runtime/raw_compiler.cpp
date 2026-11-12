@@ -318,6 +318,8 @@ std::vector<Compiler::Done> Compiler::settle(const CacheKey &k, Outcome outcome,
         e.failedUs = nowUs();
     }
     e.state = outcome == Outcome::Made ? State::Ready : outcome == Outcome::Refused ? State::Refused : State::Failed;
+    e.maker = nullptr;
+    settled_.notify_all();
     return waiters;
 }
 
@@ -325,6 +327,16 @@ void Compiler::run(void *context)
 {
     std::unique_ptr<Job> job(static_cast<Job *>(context));
     Compiler &c = *job->compiler;
+    {
+        std::lock_guard<std::mutex> l(c.lock_);
+        Entry &e = c.entries_[job->key.name()];
+        if (e.state != State::Pending || e.maker) {
+            c.queued_--;
+            c.idle_.notify_all();
+            return;
+        }
+        e.maker = pthread_self();
+    }
     uint64_t began = 0;
     RAW_DIAGNOSTIC(began = nowUs());
     auto record = std::make_unique<RuntimeRecord>();
@@ -339,7 +351,7 @@ void Compiler::run(void *context)
     c.idle_.notify_all();
 }
 
-Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why)
+Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why, bool again)
 {
     switch (lookup(k, record, why)) {
     case RecordCache::Found::Record:
@@ -350,16 +362,20 @@ Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std:
         break;
     }
     {
-        std::lock_guard<std::mutex> l(lock_);
+        std::unique_lock<std::mutex> l(lock_);
         const auto [it, first] = entries_.try_emplace(k.name());
         Entry &e = it->second;
+        if (!first && e.state == State::Pending && e.maker)
+            waitForMaker(l, e);
         uint64_t wait = 0;
-        if (!first && (e.state != State::Failed || !retryable(e, wait) || wait)) {
+        if (!first && e.state != State::Pending &&
+            (e.state != State::Failed || !retryable(e, wait) || (wait && !again))) {
             if (e.state == State::Ready)
                 record = *e.record;
             return e.state;
         }
         e.state = State::Pending;
+        e.maker = pthread_self();
     }
     uint64_t began = 0;
     RAW_DIAGNOSTIC(began = nowUs());
@@ -372,6 +388,19 @@ Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std:
     for (const Done &done : settle(k, outcome, found, std::move(made), why, began, &kept))
         done(kept, why);
     return outcome == Outcome::Made ? State::Ready : outcome == Outcome::Refused ? State::Refused : State::Failed;
+}
+
+// lock_ held in `l`: until the thread making `e` settles it, that thread runs at least at the caller's class
+void Compiler::waitForMaker(std::unique_lock<std::mutex> &l, Entry &e)
+{
+    const qos_class_t mine = qos_class_self();
+    pthread_override_t lent =
+        mine == QOS_CLASS_UNSPECIFIED ? nullptr : pthread_override_qos_class_start_np(e.maker, mine, 0);
+    settled_.wait(l, [&] {
+        return e.state != State::Pending || !e.maker;
+    });
+    if (lent)
+        pthread_override_qos_class_end_np(lent);
 }
 
 void Compiler::drain()

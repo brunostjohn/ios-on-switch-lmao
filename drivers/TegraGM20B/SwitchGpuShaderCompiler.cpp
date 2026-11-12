@@ -37,7 +37,8 @@ IOReturn info(TegraGM20BAbiCompilerInfoReply *out)
 		TegraGM20BCompilerCapable |
 			(gBroker.compiler ? uint32_t(TegraGM20BCompilerRegistered) : 0u) |
 			(gBroker.store ? uint32_t(TegraGM20BCompilerStore) : 0u) |
-			(compilerMayCome() ? uint32_t(TegraGM20BCompilerExpected) : 0u),
+			(compilerMayCome() ? uint32_t(TegraGM20BCompilerExpected) : 0u) |
+			(gBroker.declined ? uint32_t(TegraGM20BCompilerDeclined) : 0u),
 		gBroker.generation};
 	IOLockUnlock(gBroker.lock);
 	return kIOReturnSuccess;
@@ -161,6 +162,7 @@ IOReturn registerCompiler(const void *owner, task_t task, const TegraGM20BAbiCom
 	gBroker.stack = in->stack;
 	gBroker.restarts = in->flags & TegraGM20BCompilerRestarts;
 	gBroker.declined = false;
+	registeredAfterLosses(gBroker.losses);
 	*out = {++gBroker.generation, 0};
 	const uint32_t generation = gBroker.generation;
 	IOLockUnlock(gBroker.lock);

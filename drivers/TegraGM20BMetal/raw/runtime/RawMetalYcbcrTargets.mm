@@ -113,7 +113,9 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
         made.colorAttachments[c].pixelFormat = MTLPixelFormat(raw::kYcbcrTargetStandIn);
     }
     RMPipeline *p = rmPipelineFor(self, made, o, error);
-    if (!p->_raw && !p->_asked) {
+    if (!p)
+        return nil;
+    if (!p->_raw) {
         if (error)
             *error = [NSError errorWithDomain:MTLLibraryErrorDomain
                                          code:MTLLibraryErrorCompileFailure

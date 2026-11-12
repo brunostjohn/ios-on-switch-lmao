@@ -34,6 +34,7 @@ void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
 {
     if (info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered))
         expected_.store(true, std::memory_order_release);
+    declined_.store(info.flags & TegraGM20BCompilerDeclined, std::memory_order_release);
     if ((info.flags & TegraGM20BCompilerStore) && info.stack == stack_)
         map(info.generation);
 }
@@ -65,6 +66,14 @@ bool Remote::serving()
         call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) == kIOReturnSuccess)
         refresh(info);
     return expected_.load(std::memory_order_acquire);
+}
+
+bool Remote::declined()
+{
+    TegraGM20BAbiCompilerInfoReply info = {};
+    if (capable_ && call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) == kIOReturnSuccess)
+        refresh(info);
+    return declined_.load(std::memory_order_acquire);
 }
 
 Remote::~Remote()
@@ -217,8 +226,14 @@ Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
     const TegraGM20BAbiCompile in = {uint64_t(uintptr_t(request.data())), request.size(),         0, stack_,
                                      uint32_t(qos_class_self()),          TegraGM20BCompileWaited};
     TegraGM20BAbiCompileReply reply = {};
-    const int called = call(TegraGM20BMethodCompile, &in, sizeof in, &reply, sizeof reply);
-    if (called == kIOReturnAborted || called == kIOReturnNoResources)
+    const auto unanswered = [](int called) {
+        return called == kIOReturnAborted || called == kIOReturnNoResources;
+    };
+    int called = call(TegraGM20BMethodCompile, &in, sizeof in, &reply, sizeof reply);
+    // a wait a signal broke, or the connection's bound on requests in flight: asked once more
+    if (unanswered(called))
+        called = call(TegraGM20BMethodCompile, &in, sizeof in, &reply, sizeof reply);
+    if (unanswered(called))
         return Answer::Failed;
     if (called != kIOReturnSuccess)
         return Answer::Unavailable;

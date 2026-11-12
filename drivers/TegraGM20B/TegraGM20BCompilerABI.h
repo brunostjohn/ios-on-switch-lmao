@@ -41,6 +41,8 @@ enum {
 	TegraGM20BCompilerStore = 1u << 2,      /* a store is registered (the token maps) */
 	/* a request waits for a compiler to register; without it one that finds none is Unavailable */
 	TegraGM20BCompilerExpected = 1u << 3,
+	/* none comes this boot though the boot has one: it declined, or its launcher stopped starting it */
+	TegraGM20BCompilerDeclined = 1u << 4,
 
 	/* TegraGM20BAbiCompilerRegister.flags */
 	TegraGM20BCompilerRestarts = 1u << 0,
@@ -87,8 +89,8 @@ struct TegraGM20BAbiCompileReply {
 };
 
 /* flags: TegraGM20BCompilerRestarts, its launcher starts it again when it exits (launchd's KeepAlive, the BlueTool
- * stand-in's watch); without it, or after the third loss of a compiler this boot, a compiler's connection closing ends
- * every request Unavailable */
+ * stand-in's watch but for its last start); without it, or at the third loss in a row of a compiler that never
+ * registered, a compiler's connection closing ends every request Unavailable */
 struct TegraGM20BAbiCompilerAnnounce {
 	uint32_t flags, reserved;
 };

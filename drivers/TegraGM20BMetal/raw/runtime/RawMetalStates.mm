@@ -229,8 +229,7 @@ static void markProbes(raw::Pipeline *pl, NSString *label)
 #endif
 
 // A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
-// creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A compile that could not
-// run is asked again off this thread; m2v draws the state until then.
+// creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw
 static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
     RAW_DIAGNOSTIC(p->_obtained.how = p->_raw ? "pack" : "none");
@@ -242,8 +241,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
-    bool retry = false;
-    p->_raw = gRM->completion->makeNow(a, &retry);
+    p->_raw = gRM->completion->makeNow(a, p->_failure);
     RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
     if (p->_raw && native_bridge_metal_journal_render)
@@ -253,23 +251,6 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 #if SWITCH_RAW_DIAGNOSTICS
     markProbes(p->_raw, d.label);
 #endif
-    if (p->_raw || !retry)
-        return;
-    p->_asked = true;
-    __weak RMPipeline *weak = p;
-    gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
-        RMPipeline *strong = weak;
-        if (strong)
-            markRoute(pl, strong.label);
-#if SWITCH_RAW_DIAGNOSTICS
-        if (strong)
-            markProbes(pl, strong.label);
-#endif
-        if (strong && pl)
-            __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
-        else if (strong)
-            strong->_asked = false;
-    });
 }
 
 // What the archives a render creation lists answer for the state of key hash `keyHash` (RawMetalBinaryArchive.mm), Metal's
@@ -339,7 +320,15 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;
     makeRecord(p, d);
-    return p;
+    if (p->_failure.empty())
+        return p;
+    if (error)
+        *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                     code:MTLLibraryErrorInternal
+                                 userInfo:@{
+                                     NSLocalizedDescriptionKey : @(p->_failure.c_str())
+                                 }];
+    return nil;
 }
 
 static void refuseUnmade(RMPipeline *p, MTLRenderPipelineDescriptor *d)
@@ -349,10 +338,8 @@ static void refuseUnmade(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     const char *label = d.label.UTF8String ?: "-";
     SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
                          "state neither in the pack nor made at its creation: m2v draws it%s: %s (functions %s, %s)",
-                         !p->_completable           ? " (a function not this device's: never made)"
-                         : p->_asked                ? " until its compile, asked again, makes it"
-                         : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
-                                                    : " (the raw log names why it was refused)",
+                         !p->_completable ? " (a function not this device's: never made)"
+                                          : " (the raw log names why it was refused)",
                          label, d.vertexFunction ? object_getClassName(d.vertexFunction) : "nil",
                          d.fragmentFunction ? object_getClassName(d.fragmentFunction) : "nil");
 }

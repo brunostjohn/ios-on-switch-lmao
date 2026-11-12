@@ -54,6 +54,7 @@
 #include <sys/event.h>
 #include <sys/sysctl.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
 #if SWITCH_BLUETOOL_STARTS_HELPERS
@@ -71,6 +72,8 @@ static const char kFirmware[] = "CYW4356A3_001.004.009.0092.0095.hcd";  // nx-fi
 static const char kPairingAgent[] = "/usr/libexec/joyconpaird";
 static const char kAppRegistration[] = "/usr/libexec/switch-appregd";
 static const char kShaderCompiler[] = "/usr/libexec/SwitchShaderCompiler";
+// compiler_service.mm: the compiler started with it set says nothing starts it again
+static const char kShaderCompilerLastStart[] = "SWITCH_SHADER_COMPILER_LAST_START";
 
 // libsystem_kernel (spawn_private.h) and xnu's bsd/sys/spawn_internal.h POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE: a daemon
 // whose threads may run at the class of the client threads waiting on it, as launchd's ProcessType Interactive
@@ -101,9 +104,13 @@ static void startHelper(const char *path, bool *reported)
         os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", path, error);
 }
 
-// The kernel stops waiting for a compiler at its third loss (SwitchGpuShaderCompilerPolicy.h kLosses)
+// As launchd's KeepAlive, the compiler is started again whenever it dies, but for a crash loop: three deaths in a row each
+// within launchd's throttle interval of its start. The start that could be the loop's last tells the kernel nothing
+// starts it again, so the kernel ends what waits on it when it dies (SwitchGpuShaderCompilerPolicy.h).
 static const int kCompilerDeaths = 3;
+static const uint64_t kCompilerThrottleNs = 10ull * NSEC_PER_SEC;
 static int compilerDeaths;
+static uint64_t compilerStartedNs;
 
 static void startShaderCompiler(void);
 
@@ -131,7 +138,8 @@ static void watchShaderCompiler(pid_t pid)
         const int status = (int)event.data;
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
             return;
-        compilerDeaths++;
+        const bool quick = clock_gettime_nsec_np(CLOCK_MONOTONIC) - compilerStartedNs < kCompilerThrottleNs;
+        compilerDeaths = quick ? compilerDeaths + 1 : 0;
         os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s (pid %d) died (status 0x%x), death %d of %d",
                      kShaderCompiler, pid, status, compilerDeaths, kCompilerDeaths);
         startShaderCompiler();
@@ -149,6 +157,9 @@ static void startShaderCompiler(void)
     char *argv[] = {(char *)kShaderCompiler, NULL};
     posix_spawnattr_t attributes;
     pid_t pid;
+    const bool last = compilerDeaths == kCompilerDeaths - 1;
+    if (last)
+        setenv(kShaderCompilerLastStart, "1", 1);
     int error = posix_spawnattr_init(&attributes);
     if (!error) {
         error = posix_spawnattr_setprocesstype_np(&attributes, kDaemonInteractive);
@@ -160,6 +171,9 @@ static void startShaderCompiler(void)
             error = posix_spawn(&pid, kShaderCompiler, NULL, &attributes, argv, environ);
         posix_spawnattr_destroy(&attributes);
     }
+    if (last)
+        unsetenv(kShaderCompilerLastStart);
+    compilerStartedNs = clock_gettime_nsec_np(CLOCK_MONOTONIC);
     if (error)
         os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kShaderCompiler, error);
     else
