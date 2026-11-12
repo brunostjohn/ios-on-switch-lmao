@@ -4,8 +4,11 @@
 
 namespace {
 
+// The plan's bindings onto the encoders. The range's resources were named to the job before its encode
+// (encodeRawAttempt) and every one a draw reads is named again where its binding table is built, so a binding names
+// none; the command buffer holds every object, so none is retained here.
 struct NativePlanSink {
-    RMCommandBuffer *cb;
+    __unsafe_unretained RMCommandBuffer *cb;
     raw::CommandBuffer &commands;
     raw::RenderEncoder *render;
     raw::ComputeEncoder *compute;
@@ -33,13 +36,11 @@ struct NativePlanSink {
                                    &chunk);
             return;
         }
-        RMBuffer *object = (__bridge RMBuffer *)binding.object;
+        __unsafe_unretained RMBuffer *object = (__bridge RMBuffer *)binding.object;
         if (stage == 3)
             compute->setBuffer(slot, object ? &object->_raw : nullptr, binding.offset);
-        else {
-            useBuffer(&commands, object, false);
+        else
             render->setBuffer(stage, slot, object ? &object->_raw : nullptr, binding.offset);
-        }
     }
 
     // A vertex texture (stage 1) binds nothing: no raw record reads one, raw_direct.cpp refuses a vertex-stage handle
@@ -47,20 +48,18 @@ struct NativePlanSink {
     {
         RAW_ENCODE_SPAN(Apply);
         RAW_ENCODE_COUNT(Applied);
-        RMTexture *object = (__bridge RMTexture *)value;
-        if (stage == 3) {
+        __unsafe_unretained RMTexture *object = (__bridge RMTexture *)value;
+        if (stage == 3)
             compute->setTexture(slot, object ? &object->_raw : nullptr);
-        } else if (stage == 2) {
-            useTexture(&commands, object, false);
+        else if (stage == 2)
             render->setTexture(slot, object ? &object->_raw : nullptr);
-        }
     }
 
     void sampler(uint32_t stage, uint32_t slot, void *value)
     {
         RAW_ENCODE_SPAN(Apply);
         RAW_ENCODE_COUNT(Applied);
-        RMSampler *object = (__bridge RMSampler *)value;
+        __unsafe_unretained RMSampler *object = (__bridge RMSampler *)value;
         if (stage == 3)
             compute->setSampler(slot, object ? &object->_raw : nullptr);
         else if (stage == 2)
@@ -79,7 +78,7 @@ struct NativePlanSink {
         if (rasterChanged(next, previous, R::Pipeline, &R::pipeline) ||
             rasterChanged(next, previous, R::Pipeline, &R::nativePipeline) ||
             rasterChanged(next, previous, R::Pipeline, &R::nativeVariant)) {
-            RMPipeline *pipeline = (__bridge RMPipeline *)next.pipeline;
+            __unsafe_unretained RMPipeline *pipeline = (__bridge RMPipeline *)next.pipeline;
             auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(next.nativeVariant);
             render->setPipeline(variant               ? variant->value()
                                 : next.nativePipeline ? static_cast<raw::Pipeline *>(next.nativePipeline)
@@ -87,7 +86,7 @@ struct NativePlanSink {
                                                       : nullptr);
         }
         if (rasterChanged(next, previous, R::DepthStencil, &R::depthStencil)) {
-            RMDepthStencil *depth = (__bridge RMDepthStencil *)next.depthStencil;
+            __unsafe_unretained RMDepthStencil *depth = (__bridge RMDepthStencil *)next.depthStencil;
             render->setDepthStencil(depth ? &depth->_raw : nullptr);
         }
         if (rasterChanged(next, previous, R::Scissor, &R::scissor))
@@ -117,8 +116,12 @@ struct NativePlanSink {
 
 }  // namespace
 
-void encodePlannedState(RMCommandBuffer *cb, size_t at, raw::CommandBuffer &commands, raw::RenderEncoder *render,
-                        raw::ComputeEncoder *compute, raw::StateCursor &cursor)
+// (the command buffer is its caller's, so ARC need not retain it at each command)
+__attribute__((objc_externally_retained)) void encodePlannedState(RMCommandBuffer *cb, size_t at,
+                                                                  raw::CommandBuffer &commands,
+                                                                  raw::RenderEncoder *render,
+                                                                  raw::ComputeEncoder *compute,
+                                                                  raw::StateCursor &cursor)
 {
     const Op op = cb->_plan.operation(at).op;
     NativePlanSink sink{cb, commands, render, compute};
