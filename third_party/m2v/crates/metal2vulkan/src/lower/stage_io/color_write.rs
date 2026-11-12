@@ -118,7 +118,10 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     let mut selected = None;
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
-        half_nans |= color_writes::half_float(rule) && !metal_nans && !half;
+        half_nans |= color_writes::half_float(rule)
+            && !metal_nans
+            && !half
+            && !(rule == color_writes::HALF && stores_half(cx, f.float_fmt(), half || storage));
         if metal && rule == color_writes::HALF {
             continue;
         }
@@ -253,6 +256,9 @@ fn lane(
     use color_write::Lane;
     let takes = |d| !own && cx.profile.takes_driver_deviation(d);
     match rule {
+        rule if rule == color_writes::HALF && stores_half(cx, Some(fmt), own) => {
+            Some(Lane::NanAs(QUIET_NAN))
+        }
         ChannelWrite::FloatTowardZero { signed, .. }
             if fmt == FloatFmt::F32 && takes(DriverDeviation::MetalSmallFloatColorWrites) =>
         {
@@ -311,6 +317,16 @@ fn selected_lane(
     };
     let store_code = stores_unorm_code(cx, own, 8);
     (Lane::Selected { half, store_code }, write)
+}
+
+/// Whether a `float` output variable's lane to a half-float channel that rounds toward zero
+/// ([`color_writes::HALF`]) is written as computed, its NaN as the rounding's `0x7fc00000`: the
+/// device's store makes Metal's half of it (`NativeShaderTarget::stores_half_toward_zero`). Not
+/// where the function writes the output itself (`own`).
+fn stores_half(cx: &SelectCx<'_>, fmt: Option<FloatFmt>, own: bool) -> bool {
+    fmt == Some(FloatFmt::F32)
+        && !own
+        && cx.profile.fields().native_target.stores_half_toward_zero()
 }
 
 /// Whether a lane of an output variable to an `bits`-bit unorm channel is written for the

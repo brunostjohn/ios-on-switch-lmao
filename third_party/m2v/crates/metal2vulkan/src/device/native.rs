@@ -56,6 +56,15 @@ impl NativeShaderTarget {
         self == Self::Sm53 && matches!(bits, 2 | 8 | 10 | 16)
     }
 
+    /// Whether the device's color store makes Metal's half of a `float` output to a half-float
+    /// channel rounding toward zero: GM20B's ROP converts to a half toward zero, a finite value
+    /// past the largest to the largest, an infinity kept, -0 kept, and stores the NaN it is given
+    /// as `0x7e00`, Metal's NaN of a `float` output (54,467 of 54,468 device readings of every
+    /// half in [0, 1], the values beside them and the specials; the other one the NaN).
+    pub(crate) fn stores_half_toward_zero(self) -> bool {
+        self == Self::Sm53
+    }
+
     pub(crate) fn half(self, operation: HalfOperation) -> bool {
         self.half_rules(operation).is_some()
     }
