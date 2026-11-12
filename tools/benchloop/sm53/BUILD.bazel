@@ -88,7 +88,10 @@ py_test(
     name = "sph_test",
     size = "small",
     srcs = ["sph_test.py"],
-    data = ["//third_party/mesa/src/nouveau/headers:nvidia/classes/cla097sph.h"],
+    data = [
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/cla097sph.h",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clcb97sph.h",
+    ],
     deps = [":sph"],
 )
 

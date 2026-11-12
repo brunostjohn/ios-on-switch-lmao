@@ -111,6 +111,7 @@ struct switch_bench_program {
     const uint8_t *data;  // bound at constant buffer 1
     size_t data_bytes;
     uint32_t gprs;
+    uint32_t data_bound;  // bytes constant buffer 1 is bound with; 0: the data padded to 256-byte steps
 };
 
 struct switch_bench_experiment {

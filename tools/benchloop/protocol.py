@@ -1,4 +1,4 @@
-"""The batch and result files the host and HW Test's bench loop exchange (benchloop/4).
+"""The batch and result files the host and HW Test's bench loop exchange (benchloop/5).
 
 A batch is one JSON object; each experiment in it is validated here before it is written, and again by the app
 (hw_test_app/bench) before it runs. Byte strings travel as base64. Limits keep every command buffer far below the
@@ -10,9 +10,9 @@ import json
 import re
 from dataclasses import dataclass
 
-from tools.benchloop import ibprogram
+from tools.benchloop import ibprogram, ticket
 
-PROTOCOL = 'benchloop/4'
+PROTOCOL = 'benchloop/5'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod', 'pack')
 TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
@@ -116,7 +116,7 @@ EXPERIMENT_KEYS |= {'pack'}
 EXPERIMENT_KEYS |= {'storage'}
 EXPERIMENT_KEYS |= {'meta', 'expect'}
 TARGET_KEYS = {'format', 'width', 'height'}
-PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
+PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs', 'dataBound'}
 COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output', 'chain', 'schedule'}
 TWOD_KEYS = {'op', 'fmt2d', 'colorFormat', 'color', 'du', 'dv', 'sx', 'sy', 'bilinear', 'corner'}
 TWOD_KEYS |= {'reference', 'bracketed', 'samples', 'clip', 'clearFirst', 'tiled', 'byScale'}
@@ -281,6 +281,14 @@ def _program(program: object, field: str) -> None:
         _require(
             reads_position_w(sph), 'program.sph: a pixel header must read position W (bit 191), or the GPU traps it'
         )
+        _require(
+            not ticket.reads_ticket(code) or ticket.header_says_so(sph),
+            'program reads SR_ORDERING_TICKET without SPH bit 610 (READS_INTERLOCK_TICKET): no ticket is handed '
+            'out and its interlock wait never ends',
+        )
+        if 'dataBound' in program:
+            padded = (len(data) + 0xFF) & ~0xFF
+            _count(program['dataBound'], 1, max(1, padded), 'program.dataBound: bytes bound, at most the padded data')
 
 
 def source_of(experiment: dict) -> Target:

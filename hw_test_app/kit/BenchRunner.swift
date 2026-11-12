@@ -69,7 +69,8 @@ final class BenchRunner {
         x.fill = e.fill.flatMap(pinned.bytes)
         x.program = switch_bench_program(
             sph: pinned.bytes(program.sph), code: pinned.bytes(program.code), code_bytes: program.code.count,
-            data: pinned.bytes(program.data), data_bytes: program.data.count, gprs: program.gprs)
+            data: pinned.bytes(program.data), data_bytes: program.data.count, gprs: program.gprs,
+            data_bound: program.dataBound)
         x.threads = (e.threads[0], e.threads[1], e.threads[2])
         x.groups = (e.groups[0], e.groups[1], e.groups[2])
         (x.draws, x.draw_counts) = (pinned.words(e.draws), UInt32(e.draws.count))
@@ -101,7 +102,7 @@ final class BenchRunner {
             e.chain.map { link in
                 switch_bench_program(
                     sph: nil, code: pinned.bytes(link.code), code_bytes: link.code.count, data: pinned.bytes(link.data),
-                    data_bytes: link.data.count, gprs: link.gprs)
+                    data_bytes: link.data.count, gprs: link.gprs, data_bound: 0)
             })
         (x.chain_links, x.chain_schedule) = (UInt32(e.chain.count), e.chainSchedule)
         if let p = e.pack {

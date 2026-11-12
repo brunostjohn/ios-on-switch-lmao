@@ -14,6 +14,8 @@ IMAP_GENERIC = 192
 OMAP_TARGET = 576
 OMAP_SAMPLE_MASK = 608
 OMAP_DEPTH = 609
+# NAK's SPHV4T2_READS_INTERLOCK_TICKET, which sph.rs writes on every version (tools/benchloop/ticket.py)
+READS_INTERLOCK_TICKET = 610
 FIRST_GENERIC = 0x80
 LAST_GENERIC = 0x27C
 # sph.rs PixelImap by IPA frequency, as NAK's from_nir pairs them: pass is screen-linear, pass*w perspective
@@ -26,7 +28,9 @@ def _put(header: int, at: int, n: int, value: int) -> int:
     return header | value << at
 
 
-def pixel(attributes: dict[int, int] | None = None, targets: int = 0xF, kills: bool = False) -> bytes:
+def pixel(
+    attributes: dict[int, int] | None = None, targets: int = 0xF, kills: bool = False, reads_ticket: bool = False
+) -> bytes:
     """Give the header of a fragment program that reads `attributes` (byte address: IPA frequency).
 
     `targets` is the output map, four bits (RGBA) per render target from target 0 up. MRT is enabled as NAK always
@@ -49,4 +53,5 @@ def pixel(attributes: dict[int, int] | None = None, targets: int = 0xF, kills: b
         else:
             raise ValueError(f'attribute {addr:#x} has no input map here')
     h = _put(h, OMAP_TARGET, 32, targets)
+    h = _put(h, READS_INTERLOCK_TICKET, 1, int(reads_ticket))
     return h.to_bytes(SPH_BYTES, 'little')

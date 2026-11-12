@@ -31,6 +31,7 @@ bazel run //tools/benchloop -- store16                 # float to unorm16 roundi
 bazel run //tools/benchloop -- compressed              # draws into compressible memory against a plain target
 bazel run //tools/benchloop -- cstall                  # the stall family as kernels storing their results
 bazel run //tools/benchloop -- qmdchain                # dependent QMDs: one launch runs a chain, and a kernel steers it
+bazel run //tools/benchloop -- cbufsize                # a constant buffer bound at 16..768 bytes: which words read back
 bazel run //tools/benchloop -- run "$PWD/batch.json"   # any batch in protocol.py's format
 bazel run //tools/benchloop -- latency --fake /tmp/fake  # the same loop against fakedevice.py, no Switch needed
 ```

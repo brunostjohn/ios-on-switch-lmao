@@ -88,6 +88,8 @@ bool valid(const switch_bench_experiment &x, switch_bench_result &r)
         why = "program: code in whole bundles, data in 16-byte steps, both at most 64 KiB, 1..255 registers, an SPH";
     else if (why.empty() && programmed && x.kind != SWITCH_BENCH_COMPUTE && !readsPositionW(p.sph))
         why = "program.sph: a pixel header must read position W (bit 191), or the GPU traps it";
+    else if (why.empty() && programmed && p.data_bound && p.data_bound > ((p.data_bytes + 0xff) & ~size_t(0xff)))
+        why = "program.dataBound: at most the data padded to 256-byte steps";
     else if (why.empty() && x.output_bytes && (x.output_bytes % 16 || x.output_bytes > 0x10000 || p.data_bytes < 16))
         why = "compute output: 16-byte steps up to 64 KiB, its address in shader data of at least 16 bytes";
     else if (why.empty() && x.storage_bytes &&
@@ -120,6 +122,7 @@ bench::Program program(const switch_bench_experiment &x)
     if (s.data)
         p.data.assign(s.data, s.data + s.data_bytes);
     p.gprs = s.gprs;
+    p.dataBound = s.data_bound;
     return p;
 }
 

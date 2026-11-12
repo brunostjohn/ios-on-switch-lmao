@@ -9,7 +9,7 @@ import statistics
 import struct
 from pathlib import Path
 
-from tools.benchloop import blend, qmdchain, rop, sweeps, twod, units
+from tools.benchloop import blend, cbufsize, qmdchain, rop, sweeps, twod, units
 
 
 def per_draw(result: dict) -> tuple[float | None, float | None, float | None]:
@@ -76,6 +76,7 @@ def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs
         'compressed': units.analyse_compressed,
         'cstall': units.analyse_cstall,
         'qmdchain': qmdchain.analyse,
+        'cbufsize': cbufsize.analyse,
     }
     return {command: sweep[command](planned, results)} if command in sweep else {}
 

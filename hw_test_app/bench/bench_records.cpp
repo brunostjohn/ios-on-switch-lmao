@@ -121,7 +121,8 @@ std::string programId(const Program &p)
     all.insert(all.end(), p.code.begin(), p.code.end());
     all.insert(all.end(), p.data.begin(), p.data.end());
     char id[40];
-    snprintf(id, sizeof id, "bench-%016llx-%u", (unsigned long long)raw::Pack::fnv(all.data(), all.size()), p.gprs);
+    snprintf(id, sizeof id, "bench-%016llx-%u-%u", (unsigned long long)raw::Pack::fnv(all.data(), all.size()), p.gprs,
+             p.dataBound);
     return id;
 }
 
@@ -274,6 +275,8 @@ bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const P
     p.image = fs.sph;
     p.image.insert(p.image.end(), fs.code.begin(), fs.code.end());
     p.data = padded(fs.data);
+    if (fs.dataBound)
+        p.data.resize(fs.dataBound);
     p.cbufTypes = {raw::CbufRoot};
     if (!fs.data.empty())
         p.cbufTypes.push_back(raw::CbufShaderData);

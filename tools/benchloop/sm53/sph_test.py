@@ -71,6 +71,13 @@ class SphTest(unittest.TestCase):
         for h in (sph.pixel(), sph.pixel({0x80: 1}), sph.pixel({0x7C: 0})):
             self.assertEqual(self.f.read(h, 'IMAP_POSITION_W'), 1)
 
+    def test_the_ticket_bit_is_clcb97s(self):
+        text = (HEADER.parent / 'clcb97sph.h').read_text()
+        bit = int(re.search(r'NVCB97_SPHV4T2_READS_INTERLOCK_TICKET\s+MW\((\d+):', text)[1])
+        self.assertEqual(sph.READS_INTERLOCK_TICKET, bit)
+        set_bit = int.from_bytes(sph.pixel(reads_ticket=True), 'little') ^ int.from_bytes(sph.pixel(), 'little')
+        self.assertEqual(set_bit, 1 << bit)
+
 
 if __name__ == '__main__':
     unittest.main()

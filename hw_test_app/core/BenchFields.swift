@@ -130,7 +130,9 @@ struct BenchFields {
         let header = sph ? try bytes(p["sph"] ?? ("" as Any), "\(field).sph") : Data()
         guard !sph || header.count == BenchProtocol.sphBytes else { throw BenchInvalid("program.sph is 80 bytes") }
         let gprs = try count(p["gprs"], 1...255, "\(field).gprs")
-        return BenchProgram(sph: header, code: code, data: data, gprs: UInt32(gprs))
+        let padded = max(1, (data.count + 0xff) & ~0xff)
+        let bound = p["dataBound"] == nil ? 0 : try count(p["dataBound"], 1...padded, "\(field).dataBound")
+        return BenchProgram(sph: header, code: code, data: data, gprs: UInt32(gprs), dataBound: UInt32(bound))
     }
 
     private func pairs(_ value: Any, _ field: String) throws -> [UInt32] {

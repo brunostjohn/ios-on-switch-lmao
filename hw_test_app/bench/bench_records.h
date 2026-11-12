@@ -15,6 +15,7 @@ using Methods = std::vector<std::pair<uint32_t, uint32_t>>;
 struct Program {
     std::vector<uint8_t> sph, code, data;
     uint32_t gprs = 0;
+    uint32_t dataBound = 0;  // the bound size of the data's constant buffer; 0: padded to 256-byte steps
 };
 
 // The plainest single-sample state of the pack whose first colour is written whole and unblended, whose vertex program

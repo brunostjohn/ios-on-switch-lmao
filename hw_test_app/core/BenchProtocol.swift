@@ -4,9 +4,9 @@ import Foundation
 /// tools/benchloop/protocol.py's batch as the bench loop decodes it: every limit and allowed method range is the
 /// same (tools/benchloop/agreement_test.py compares them), so the host's and the app's checks agree.
 public enum BenchProtocol {
-    public static let version = "benchloop/4"
+    public static let version = "benchloop/5"
     /// benchloop/3 is benchloop/4 without storage and the interlock control
-    public static let versions = ["benchloop/3", version]
+    public static let versions = ["benchloop/3", "benchloop/4", version]
     public static let maxExperiments = 256
     public static let maxSide = 2048
     public static let maxDrawCounts = 16
@@ -64,7 +64,7 @@ public enum BenchProtocol {
         "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed", "pack", "storage",
     ]
     public static let targetKeys: Set<String> = ["format", "width", "height"]
-    public static let programKeys: Set<String> = ["code", "data", "sph", "gprs"]
+    public static let programKeys: Set<String> = ["code", "data", "sph", "gprs", "dataBound"]
     public static let computeKeys: Set<String> = [
         "code", "data", "gprs", "threads", "groups", "output", "chain", "schedule",
     ]
@@ -170,9 +170,11 @@ public struct BenchProgram: Equatable, Sendable {
     public let code: Data
     public let data: Data
     public let gprs: UInt32
+    /// The constant buffer's bound size in bytes (CB_SELECTOR_A); 0: the data padded to 256-byte steps, as NVK binds it
+    public let dataBound: UInt32
 
-    public init(sph: Data, code: Data, data: Data, gprs: UInt32) {
-        (self.sph, self.code, self.data, self.gprs) = (sph, code, data, gprs)
+    public init(sph: Data, code: Data, data: Data, gprs: UInt32, dataBound: UInt32 = 0) {
+        (self.sph, self.code, self.data, self.gprs, self.dataBound) = (sph, code, data, gprs, dataBound)
     }
 }
 
