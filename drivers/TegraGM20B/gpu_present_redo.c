@@ -25,7 +25,9 @@ void tgm_present_push_copy(struct nvif_push *push)
 /* The present whose copy a copy engine reset cut (tgm_present_redo): its fence completed, so it is copied again, with no
  * acquire (what it waited for completed before), the L2 flush and the fence as present_copy pushes them. The display
  * keeps scanning the frame before it until this copy's fence completes and present_fenced delivers its completion. While
- * the GPU sleeps the redo waits: gate_open kicks it again (tgm_present_redo_kick). */
+ * the GPU sleeps the redo waits: gate_open kicks it again (tgm_present_redo_kick). A redo that finds no room in the
+ * present's ring for 1 s (the copy engine stuck again) goes to the hang rule, as present_copy's does, and is tried
+ * again. */
 void tgm_present_redo_work(void *unused)
 {
 	struct tgm_chan *chan = tgm_present.chan;
@@ -39,11 +41,16 @@ void tgm_present_redo_work(void *unused)
 	push = &chan->chan.push;
 	ret = chan->error ? -ENODEV
 			  : chan_push_wait(chan, TGM_PRESENT_COPY_DWORDS + CHAN_FENCE_DWORDS);
+	if (ret == -ETIMEDOUT) {
+		tgm_chan_stalled(chan, "present redo: push buffer still full after 1 s",
+				 chan->submitted, NSEC_PER_SEC);
+	}
 	if (ret) {
 		mutex_unlock(&tgm_present.lock);
-		nvxnu_panic("tegra-gm20b: the present's copy cut by a copy engine reset cannot be "
-			    "redone (%d)",
-			    ret);
+		gate_leave();
+		if (ret == -ETIMEDOUT)
+			nvxnu_work_schedule(tgm_present.redo_work);
+		return;
 	}
 	tgm_present_push_copy(push);
 	tgm_present.queued = nvxnu_nanotime();

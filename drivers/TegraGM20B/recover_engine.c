@@ -348,3 +348,31 @@ int tgm_recover_engines(struct nvkm_device *device)
 	}
 	return reset;
 }
+
+int tgm_recover_engine_contexts(struct nvkm_device *device, int *chids, int max)
+{
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	int held[2];
+	int n = 0;
+	int i = 0;
+	int j = 0;
+	int k = 0;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+		{
+			k = tgm_engine_contexts(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), held);
+			for (i = 0; i < k; i++) {
+				for (j = 0; j < n && chids[j] != held[i]; j++)
+					;
+				if (j == n && n < max)
+					chids[n++] = held[i];
+			}
+		}
+	}
+	return n;
+}

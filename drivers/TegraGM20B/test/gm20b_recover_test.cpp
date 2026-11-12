@@ -213,25 +213,84 @@ TEST(StuckSave, Tv3gsSaveOfAChannelWithNothingPendingIsDecidedAtTheFirstTick)
 	EXPECT_FALSE(tgm_switch_unowned(0, 2, 3)) << "work pending: the stuck rule decides";
 }
 
-// The present's or the scrubber's channel with nothing pending, an engine stuck switching off it: with nothing to redo
-// (tgm_ctxsw_redo_mark), progress is any job of the channel completing after the reset.
-TEST(StuckSave, AKernelChannelWithNothingPendingIsResetOnceAndFatalOnlyIfThatResetDidNotFreeIt)
+// The present's or the scrubber's channel with nothing pending, an engine stuck switching off it. T-v4's first tick redid
+// nothing and set the redo mark, and any later stall of the still idle channel panicked: the present is idle for minutes
+// under direct scanout. Nothing of an idle channel is lost to a reset, so every such stall is a reset that kills no one.
+TEST(KernelStall, AnIdleKernelChannelIsResetAtEveryStallAndKillsNoOne)
 {
 	const uint32_t done = 9;
-	const int stuck = tgm_switch_unowned(0, done, done);
-	ASSERT_TRUE(stuck);
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(0, 0, done)),
-		  TGM_CTXSW_REDO)
-		<< "the engine is reset at the first tick, nothing killed";
-	const uint32_t resetAfter = done;
-	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done)),
+	const int idle = tgm_switch_unowned(0, done, done);
+	ASSERT_TRUE(idle);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, idle, tgm_ctxsw_redo_pending(1, done, done)),
 		  TGM_CTXSW_FATAL)
-		<< "stuck again on the same context with no job since: the reset did not free the "
-		   "engine";
-	EXPECT_EQ(
-		tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done + 1)),
-		TGM_CTXSW_REDO)
-		<< "a later stall after the channel ran again is a new one";
+		<< "what T-v4 did with the second stall";
+	for (const int again : {0, 1}) {
+		EXPECT_EQ(tgm_kernel_stall_verdict(idle, 0, 0, 0), TGM_CTXSW_RESET);
+		EXPECT_EQ(tgm_kernel_stall_verdict(idle, 0, 0, 2), TGM_CTXSW_RESET);
+		EXPECT_FALSE(tgm_kernel_stall_kills(idle, again, 0, 2)) << again;
+	}
+	const uint64_t reset = 1000 * kMs;
+	EXPECT_FALSE(tgm_engine_not_back(reset, done, reset + 60 * 1000 * kMs, done))
+		<< "a stall a minute after a reset that worked is a new one";
+}
+
+// The present's copy cut by an engine reset is redone; stuck again before the redo landed (T-v4: fatal), the client
+// contexts the engines hold are killed and the engine reset again.
+TEST(KernelStall, AKernelChannelStuckAgainWithItsWorkKillsTheResidentClientsAndRedoes)
+{
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 0, 0, 1), TGM_CTXSW_REDO);
+	EXPECT_FALSE(tgm_kernel_stall_kills(0, 0, 0, 1)) << "the first stall kills no one";
+	EXPECT_TRUE(tgm_kernel_stall_kills(0, 1, 0, 1));
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 0, 0, 0), TGM_CTXSW_REDO)
+		<< "again, nothing resident: reset and redo";
+	EXPECT_FALSE(tgm_kernel_stall_kills(0, 1, 0, 0));
+}
+
+// The one fatal row: the engine did not come back after a reset with no client context resident.
+TEST(KernelStall, OnlyAnEngineThatDidNotComeBackAfterACleanResetIsFatal)
+{
+	const uint64_t reset = 5000 * kMs;
+	const uint32_t done = 12;
+	const uint64_t secondTick = reset + 200 * kMs;
+	ASSERT_TRUE(tgm_engine_not_back(reset, done, secondTick, done));
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 0, 1, 0), TGM_CTXSW_FATAL);
+	EXPECT_EQ(tgm_kernel_stall_verdict(1, 0, 1, 0), TGM_CTXSW_FATAL)
+		<< "the engine, not the idle channel";
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 0, 1, 1), TGM_CTXSW_REDO)
+		<< "a client is resident: it goes first";
+	EXPECT_TRUE(tgm_kernel_stall_kills(1, 0, 1, 1));
+	EXPECT_FALSE(tgm_engine_not_back(0, done, secondTick, done))
+		<< "the last reset had a client resident";
+	EXPECT_FALSE(tgm_engine_not_back(reset, done, secondTick, done + 1))
+		<< "T-v3 251 s: the interrupted job completed after the reset (12 -> 13)";
+	EXPECT_FALSE(tgm_engine_not_back(reset, done, reset + TGM_ENGINE_BACK_NS, done));
+}
+
+// A kernel channel's context the engine cannot load again after a reset under it: the same rule, the reset under
+// the load (a client's own is killed: gpu_reload.c)
+TEST(KernelStall, AKernelChannelsStuckLoadIsReloadedFatalOnlyForAnEngineNotBack)
+{
+	EXPECT_EQ(tgm_load_verdict(1, 0, tgm_load_reloaded(1, 3632, 3632)), TGM_CTXSW_FATAL)
+		<< "T-v4, before";
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 1, 0, 1), TGM_CTXSW_RELOAD);
+	EXPECT_TRUE(tgm_kernel_stall_kills(0, 1, 0, 1));
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 1, 0, 0), TGM_CTXSW_RELOAD);
+	EXPECT_EQ(tgm_kernel_stall_verdict(0, 1, 1, 0), TGM_CTXSW_FATAL);
+}
+
+TEST(KernelStall, TheResidentContextsAreEachEnginesHeldAndIncomingChannels)
+{
+	int held[2] = {-1, -1};
+	EXPECT_EQ(tgm_engine_contexts(0x802ac02au, held), 1) << "T-v3g: GR saving channel 42";
+	EXPECT_EQ(held[0], 42);
+	EXPECT_EQ(tgm_engine_contexts(engine(7, 22, 4), held), 2)
+		<< "a switch from the present to a client";
+	EXPECT_EQ(held[0], 22);
+	EXPECT_EQ(held[1], 4);
+	EXPECT_EQ(tgm_engine_contexts(engine(5, 22, 4), held), 1);
+	EXPECT_EQ(held[0], 4);
+	EXPECT_EQ(tgm_engine_contexts(engine(1, 22, 4) & ~kBusy, held), 0) << "idle";
+	EXPECT_EQ(tgm_engine_contexts(engine(6, 22, 4) | 0x00001000u, held), 0) << "a TSG";
 }
 
 TEST(StuckSave, OnlyASwitchAwayFromTheContextIsASave)

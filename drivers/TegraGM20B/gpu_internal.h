@@ -347,6 +347,10 @@ struct tgm_chan {
 	/* a kernel channel's engine reset for a context-switch timeout, and what it had submitted then (tgm_ctxsw_decide) */
 	int ctxsw_reset;
 	u32 ctxsw_reset_after;
+	/* a kernel channel's last engine reset with no client context resident: when, and what it had completed then
+	 * (tgm_kernel_stall_locked, tgm_engine_not_back; tgm_live_lock) */
+	u64 ctxsw_clean_ns;
+	u32 ctxsw_clean_done;
 	/* an engine was reset under its context load, and what it had completed then (gpu_reload.c; tgm_live_lock) */
 	int load_reset;
 	u32 load_reset_done;
@@ -707,9 +711,14 @@ void tgm_copy_reset_presented(int status);
 #endif
 /* the same for the pool scrubber: its jobs up to `through` go back to the pool dirty, to be scrubbed again */
 int tgm_scrub_redo(u32 through);
-/* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) and a
- * second context-switch timeout before the redo lands is fatal (tgm_ctxsw_decide) */
+/* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) */
 void tgm_ctxsw_redo_mark(struct tgm_chan *chan);
+/* gpu_reload.c, tgm_live_lock held: an engine stuck switching off (or loading, load) kernel channel chan, stuck again
+ * before its redone work landed (again). tgm_kernel_stall_verdict, after the client contexts the engines hold are killed
+ * where tgm_kernel_stall_kills says so (*killed: how many) and, for TGM_CTXSW_REDO, chan's work marked to be redone.
+ * TGM_CTXSW_FATAL panics unless fatal_ok is 0 (the HW Test hook), which gets it back. */
+enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine, int again, int load, int fatal_ok,
+				       u32 *killed);
 
 /* pool scrub: the copy engine zeroes pool pages:
  * The CPU would spend 0.3 s of every boot zeroing the pool at M1 (256 MiB through the write-combined aperture), and a

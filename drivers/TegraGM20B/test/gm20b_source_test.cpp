@@ -44,7 +44,7 @@ const std::string &gpu()
 		std::string units;
 		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire",
 					 "stats", "stats_tick", "chan", "sync", "exec", "present",
-					 "present_deadline", "present_redo", "scrub", "power"})
+					 "present_deadline", "present_redo", "reload", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -1412,12 +1412,16 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 	expectBefore(redo, "|| !gate_try()) return;", "tgm_present_push_copy(push);");
 	expectBefore(redo, "tgm_present_push_copy(push);", "chan_fence_volatile(chan);");
 	expectBefore(redo, "__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);",
-		     "gate_leave();");
+		     "#endif mutex_unlock(&tgm_present.lock); gate_leave();");
 	EXPECT_THAT(flat(definition(gpu(), "static void gate_open(")),
 		    HasSubstr("tgm_present_redo_kick();"));
 	EXPECT_THAT(redo, Not(HasSubstr("done(arg")));
 	EXPECT_THAT(redo, Not(HasSubstr("tgm_present.done")));
 	EXPECT_THAT(redo, Not(HasSubstr("SEMAPHORED")));
+	// a redo with no room in the ring goes to the hang rule and is tried again, never a panic
+	expectBefore(redo, "tgm_chan_stalled(chan, \"present redo: push buffer still full after 1 s\"",
+		     "nvxnu_work_schedule(tgm_present.redo_work);");
+	EXPECT_THAT(redo, Not(HasSubstr("nvxnu_panic(")));
 	const auto mark = flat(definition(gpu(), "int tgm_present_redo("));
 	expectBefore(mark, "__atomic_store_n(&tgm_present.redo, pending, __ATOMIC_SEQ_CST);",
 		     "if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) == pending) "
@@ -1426,7 +1430,15 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 		    HasSubstr("nvxnu_pool_free_dirty(tgm_scrub.job[slot].pa, "
 			      "tgm_scrub.job[slot].bytes);"));
 	const auto decide = flat(definition(gpu(), "enum tgm_ctxsw tgm_ctxsw_decide("));
-	expectBefore(decide, "tgm_ctxsw_redo_mark(chan);", "nvxnu_panic(");
+	// a stuck kernel channel never panics here: tgm_kernel_stall_locked decides, and marks the redo before the reset
+	EXPECT_THAT(decide, HasSubstr("if (chan->kernel && (verdict == TGM_CTXSW_REDO || verdict == TGM_CTXSW_FATAL)) "
+				      "verdict = tgm_kernel_stall_locked(chan, engine_name, verdict == TGM_CTXSW_FATAL, 0, "
+				      "1, &killed);"));
+	EXPECT_THAT(decide, Not(HasSubstr("nvxnu_panic(")));
+	const auto stall = flat(definition(gpu(), "enum tgm_ctxsw tgm_kernel_stall_locked("));
+	expectBefore(stall, "if (verdict == TGM_CTXSW_FATAL) {", "*killed = kill_clients(");
+	expectBefore(stall, "*killed = kill_clients(", "tgm_ctxsw_redo_mark(chan);");
+	EXPECT_THAT(stall, HasSubstr("if (!fatal_ok) return verdict;"));
 	// an idle channel the engine cannot switch off has no drain to wait for: a kernel one is reset, a client's killed,
 	// at the first tick
 	EXPECT_THAT(decide, HasSubstr("chan_stuck_for(chan, now, tgm_stuck_window(gr)) || chan_unowned(chan)"));
@@ -1434,6 +1446,26 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_ctxsw_redo_mark(")),
 		    HasSubstr("chan->ctxsw_reset_after = marked ? chan->submitted : "
 			      "tgm_chan_completed(chan);"));
+}
+
+// A context load an engine is stuck in again after a reset under it: a client's is that client's alone and kills it, a
+// kernel channel's goes to the kernel stall rule, whose only panic is the engine that did not come back
+TEST(GM20BRecoverSource, ASecondStuckLoadKillsTheClientOrGoesToTheKernelStallRule)
+{
+	const auto load = flat(definition(gpu(), "static enum tgm_ctxsw load_verdict("));
+	expectBefore(load,
+		     "if (chan->kernel) return tgm_kernel_stall_locked(chan, engine, verdict == TGM_CTXSW_FATAL, 1, "
+		     "1, &killed);",
+		     "tgm_chan_isolate(chan, report, nvxnu_nanotime());");
+	expectBefore(load, "tgm_chan_isolate(chan, report, nvxnu_nanotime());", "return TGM_CTXSW_KILL;");
+	EXPECT_THAT(load, Not(HasSubstr("nvxnu_panic(")));
+	const auto stall = flat(definition(gpu(), "enum tgm_ctxsw tgm_kernel_stall_locked("));
+	EXPECT_EQ(Count(stall, "nvxnu_panic("), 1u);
+	EXPECT_THAT(stall, HasSubstr("hardware failure: %s did not come back after a reset with no client "));
+	EXPECT_THAT(stall, HasSubstr("chan->ctxsw_clean_ns = n ? 0 : now;"));
+	EXPECT_THAT(flat(definition(gpu(), "static u32 kill_clients(")),
+		    HasSubstr("tgm_chan_isolate(clients[i], report, now); "
+			      "tgm_recover_fault(tgm_gpu.device, (int)clients[i]->chid);"));
 }
 
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)

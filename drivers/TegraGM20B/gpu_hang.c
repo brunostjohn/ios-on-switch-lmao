@@ -538,6 +538,7 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name, int gr)
 	char engines[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
 	enum tgm_ctxsw verdict = TGM_CTXSW_RESET;
+	u32 killed = 0;
 
 	mutex_lock(&tgm_live_lock);
 	chan = live_by(0, chid);
@@ -547,28 +548,9 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name, int gr)
 			chan_stuck_for(chan, now, tgm_stuck_window(gr)) || chan_unowned(chan),
 			tgm_ctxsw_redo_pending(chan->ctxsw_reset, chan->ctxsw_reset_after,
 					       tgm_chan_completed(chan)));
-		if (verdict == TGM_CTXSW_REDO) {
-			tgm_chan_describe(chan, state, sizeof(state));
-			tgm_engines_line(engines, sizeof(engines));
-			tgm_ctxsw_redo_mark(chan);
-			scnprintf(
-				ctxsw_line, sizeof(ctxsw_line),
-				"tegra-gm20b: context switch timed out on %s's channel %u on %s: "
-				"the engine reset, its work redone on the GPU, nothing killed: %s; "
-				"engines %s\n",
-				chan->owner, chan->chid, engine_name, state, engines);
-			switch_linux_log_line(ctxsw_line);
-		}
-		if (verdict == TGM_CTXSW_FATAL) {
-			tgm_chan_describe(chan, state, sizeof(state));
-			tgm_engine_state(engine, sizeof(engine));
-			tgm_engines_line(engines, sizeof(engines));
-			nvxnu_panic(
-				"tegra-gm20b: context switch timed out on %s's channel on %s again "
-				"before the work redone after its engine reset landed: %s; "
-				"engines %s; %s",
-				chan->owner, engine_name, state, engines, engine);
-		}
+		if (chan->kernel && (verdict == TGM_CTXSW_REDO || verdict == TGM_CTXSW_FATAL))
+			verdict = tgm_kernel_stall_locked(chan, engine_name, verdict == TGM_CTXSW_FATAL, 0,
+							  1, &killed);
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);

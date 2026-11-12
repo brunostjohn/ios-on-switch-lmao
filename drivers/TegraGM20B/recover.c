@@ -309,8 +309,8 @@ static void ctxsw_work(void *arg)
 						runl, engn, id,
 						verdict == TGM_CTXSW_REDO
 							? "stuck switching the context of kernel"
-							: "stuck switching the context of killed "
-							  "or unknown");
+							: "stuck switching the context of killed, "
+							  "unknown or idle kernel");
 				}
 				mutex_unlock(&runl->mutex);
 				if (verdict == TGM_CTXSW_REDO && TGM_STATS)

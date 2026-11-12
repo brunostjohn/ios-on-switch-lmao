@@ -30,7 +30,8 @@ enum tgm_ctxsw {
 			  * (nvkm_runl_rc_engn), so recover.c resets the engine */
 	TGM_CTXSW_REDO, /* a kernel channel is stuck: the engine is reset and the work it was on redone, nothing killed */
 	TGM_CTXSW_RELOAD, /* the engine is stuck loading a live channel's context: reset under it, nothing killed */
-	TGM_CTXSW_FATAL, /* a kernel channel is stuck again before any work submitted after its last reset completed */
+	TGM_CTXSW_FATAL, /* a hardware failure: an engine stuck on a kernel channel did not come back after a reset with no
+			  * client context resident (tgm_kernel_stall_verdict) */
 };
 
 /* known: one of gpu_chan.c's channels; dead: killed already; stuck: tgm_stuck; reset_pending: a kernel channel whose
@@ -56,9 +57,9 @@ static inline int tgm_ctxsw_redo_pending(int reset, uint32_t reset_after, uint32
 
 /* gpu_hang.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid, switched on the engine
  * named `engine`, GR (gr) or another: stuck when nothing completed for tgm_stuck_window(gr), or when it has nothing
- * pending at all (tgm_switch_unowned). A stuck client channel is being killed on return. For TGM_CTXSW_REDO the kernel
- * channel's work is marked to be redone (gpu_present.c, gpu_scrub.c) before the caller resets the engine; a second
- * timeout before that work lands panics. */
+ * pending at all (tgm_switch_unowned). A stuck client channel is being killed on return. A stuck kernel channel gets
+ * tgm_kernel_stall_locked's verdict: for TGM_CTXSW_REDO its work is marked to be redone (gpu_present.c, gpu_scrub.c)
+ * before the caller resets the engine. */
 enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine, int gr);
 
 #if TGM_STATS
@@ -288,6 +289,8 @@ void tgm_recover_stats(char *buf, unsigned int len);
  * as nvkm's own recovery picks it), then each busy PBDMA's that is not parked on a semaphore acquire
  * (tgm_pbdma_acquiring). Returns how many, at most max. */
 int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max);
+/* recover_engine.c: the channels the busy or switching engines hold (tgm_engine_contexts), each once; up to max */
+int tgm_recover_engine_contexts(struct nvkm_device *device, int *chids, int max);
 
 /* A PBDMA on a host semaphore acquire that has not passed (NV906F SEMAPHORED with an ACQUIRE, ACQ_GEQ or ACQ_AND
  * operation): its channel waits for another one's release, and the PBDMA switches between such channels
@@ -351,6 +354,56 @@ static inline int tgm_stuck_for(int dead, uint32_t completed, uint32_t submitted
 static inline int tgm_switch_unowned(int dead, uint32_t completed, uint32_t submitted)
 {
 	return !dead && completed == submitted;
+}
+
+/* A kernel channel's engine reset with no client context resident: the same kernel context stuck on that engine again
+ * within this, with nothing of the channel completed since, is an engine that did not come back. Ticks come every 100 ms
+ * and a copy engine's switch is stuck after 90, so a reset that did not free the engine is seen by the second tick after
+ * it at the latest. Not read from PFIFO_ENG_STATUS right after the reset: whether host clears its context state on an
+ * engine reset is not established, and a wrong guess there would panic on a healthy engine. */
+#define TGM_ENGINE_BACK_NS (500ull * 1000 * 1000)
+
+static inline int tgm_engine_not_back(uint64_t clean_ns, uint32_t clean_done, uint64_t now,
+				      uint32_t completed)
+{
+	return clean_ns && now - clean_ns < TGM_ENGINE_BACK_NS && completed == clean_done;
+}
+
+/* An engine stuck on a kernel channel (tgm_ctxsw_verdict's REDO or FATAL, or tgm_load_verdict's RELOAD or FATAL, for it):
+ * idle, nothing of it is lost to a reset; loading, the reset is under the load; with work, the work is redone after the
+ * reset. No kernel channel's stall is fatal: only an engine that did not come back after a reset with no client context
+ * resident is. */
+static inline enum tgm_ctxsw tgm_kernel_stall_verdict(int idle, int load, int not_back, int clients)
+{
+	if (not_back && !clients)
+		return TGM_CTXSW_FATAL;
+	if (load)
+		return TGM_CTXSW_RELOAD;
+	return idle ? TGM_CTXSW_RESET : TGM_CTXSW_REDO;
+}
+
+/* Whether the client contexts resident on the engines are killed before that reset: when the last reset did not free the
+ * engine, or when the kernel channel is stuck again before its redone work landed (again). An idle kernel channel's
+ * stall kills no one. */
+static inline int tgm_kernel_stall_kills(int idle, int again, int not_back, int clients)
+{
+	return clients && (not_back || (again && !idle));
+}
+
+/* The channels a busy or switching engine's status names: the context it holds or saves (ID) and the one it loads
+ * (NEXT_ID), as tgm_engine_holds reads them. out: up to two; returns how many. */
+static inline int tgm_engine_contexts(uint32_t status, int out[2])
+{
+	const uint32_t ctx = PFIFO_ENG_CTX_STATUS(status);
+	int n = 0;
+
+	if (!(status & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)))
+		return 0;
+	if ((ctx == 1 || ctx == 6 || ctx == 7) && !(status & PFIFO_ENG_ID_TSG))
+		out[n++] = (int)PFIFO_ENG_ID(status);
+	if ((ctx == 5 || ctx == 7) && !(status & PFIFO_ENG_NEXT_ID_TSG))
+		out[n++] = (int)PFIFO_ENG_NEXT_ID(status);
+	return n;
 }
 
 /* A job's internal fences move its channel's fence word with no interrupt, so a check reads the word itself: a value
