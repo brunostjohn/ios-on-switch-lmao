@@ -18,7 +18,8 @@ final class SceneGoldensWriter: XCTestCase {
         let sources = try ["HWTest.metal", "Scenes.metal", "FramebufferFetch.metal"].map {
             try String(contentsOfFile: runfiles + "_main/hw_test_app/shaders/" + $0, encoding: .utf8)
         }
-        let library = try await device.makeLibrary(source: sources.joined(separator: "\n"), options: MTLCompileOptions())
+        let library = try await device.makeLibrary(
+            source: sources.joined(separator: "\n"), options: MTLCompileOptions())
         let gpu = GPU(device: device, queue: try XCTUnwrap(device.makeCommandQueue()), library: library)
         var lines = ["# QuartzCore \(build) on \(device.name), 8x8 block means"]
         for scene in Scenes.all + [Scenes.glass, Scenes.glassSplit] {

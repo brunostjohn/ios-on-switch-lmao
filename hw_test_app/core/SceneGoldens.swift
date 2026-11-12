@@ -33,6 +33,7 @@ public struct SceneGoldens: Sendable {
     public static func key(scene: String, picture: String) -> String { scene + "/" + picture }
 
     public static func line(scene: String, picture: String, metalFormat: UInt, _ signature: Signature) -> String {
-        CAGoldens.line(key: key(scene: scene, picture: picture), label: "f\(metalFormat)", [(index: 0, signature: signature)])
+        CAGoldens.line(
+            key: key(scene: scene, picture: picture), label: "f\(metalFormat)", [(index: 0, signature: signature)])
     }
 }

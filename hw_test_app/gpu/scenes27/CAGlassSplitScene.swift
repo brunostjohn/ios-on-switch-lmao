@@ -123,7 +123,8 @@ struct CAGlassSplitScene: GPUScene {
         result.metrics.set(name + "_mean_split", Self.mean(split.picture))
         result.metrics.set(name + "_picture_split", Self.coarsePicture(split.picture))
         let read: (format: TexelFormat, metal: UInt) =
-            frame.target.pixelFormat == .bgr10_xr ? (.bgr10XR, 554) : (.rgba16Float, MTLPixelFormat.rgba16Float.rawValue)
+            frame.target.pixelFormat == .bgr10_xr
+            ? (.bgr10XR, 554) : (.rgba16Float, MTLPixelFormat.rgba16Float.rawValue)
         result.picture(
             name, bytes: Patterns.bytes(split.picture, read.format), metalFormat: read.metal, width: Self.size,
             height: Self.size)
