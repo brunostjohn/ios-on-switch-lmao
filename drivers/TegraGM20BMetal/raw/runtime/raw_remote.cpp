@@ -157,6 +157,13 @@ const uint8_t *Remote::findSlot(const uint8_t *slot, size_t size, const uint8_t 
     return found.data;
 }
 
+const uint8_t *Remote::storeMapping(uint64_t &bytes) const
+{
+    const Mapping *m = mapping_.load(std::memory_order_acquire);
+    bytes = m ? m->bytes : 0;
+    return m ? m->base : nullptr;
+}
+
 std::string Remote::storeIdentity() const
 {
     const Mapping *m = mapping_.load(std::memory_order_acquire);
