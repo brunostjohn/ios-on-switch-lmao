@@ -14,10 +14,13 @@ import UIKit
 /// read-back: the frame rate it costs), and appear and glass again under each debug switch of a split draw, in every raw
 /// process: _whole (whole-programs: no split, variants as they are), _generic (split-generic: the generic whole program
 /// where a draw would split), _launch (split-launch-only: the prologue runs, the generic whole program draws) and, for
-/// glass, _noreuse (split-no-reuse: each split draw's frontier from its own prologue). Partial black gone under _generic
-/// but not _launch puts it on the compute segment at the command buffer's start; gone under _launch puts it on the
-/// frontier; gone under _noreuse puts it on the frontier's reuse; present under _generic puts it on the generic program. After each variant `<variant>_rest=<last>/<after>`: the glass
-/// left on screen when the motion stopped against the glass once the backdrop under it is captured again.
+/// glass, _noreuse (split-no-reuse: each split draw's frontier from its own prologue), then appear_late and glass_late,
+/// split again: the control that the black has not faded over the run. Partial black gone under _generic but not _launch
+/// puts it on the compute segment at the command buffer's start; gone under _launch puts it on the frontier; gone under
+/// _noreuse puts it on the frontier's reuse; present under _generic puts it on the generic program. A switch stays on
+/// across the two variants that share it: its -off and -on, posted back to back, may arrive in either order. After each
+/// variant `<variant>_rest=<last>/<after>`: the glass left on screen when the motion stopped against the glass once the
+/// backdrop under it is captured again.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
@@ -30,7 +33,7 @@ struct UIGlassLiveTest: HWTest {
     let id = "ui.glass_live"
     let name = "Liquid Glass on screen over a moving backdrop, read back per presented frame"
     let subsystem = Subsystem.compositor
-    var timeout: TimeInterval { 240 }
+    var timeout: TimeInterval { 270 }
     static let seconds: TimeInterval = 3.5
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -42,8 +45,11 @@ struct UIGlassLiveTest: HWTest {
         var summaries: [LiveSummary] = []
         var pngs: [String] = []
         var stopped: String?
-        for variant in LiveVariant.allCases where stopped == nil {
-            if let forced = variant.forced { GlassProbe.post(forced + "-on") }
+        let variants = LiveVariant.allCases
+        for (index, variant) in variants.enumerated() where stopped == nil {
+            let forced = variant.forced
+            let next = index + 1 < variants.count ? variants[index + 1].forced : nil
+            if let forced, index == 0 || variants[index - 1].forced != forced { GlassProbe.post(forced + "-on") }
             let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant.appears)
             }
             await Snapshots.settle()
@@ -65,9 +71,9 @@ struct UIGlassLiveTest: HWTest {
                 regenerated: read.regenerated, seconds: Date().timeIntervalSince(start))
             summary.rest = rest
             summaries.append(summary)
-            if let forced = variant.forced { GlassProbe.post(forced + "-off") }
             pngs += reader?.saved ?? []
             stopped = reader?.failure.map { "\(variant.rawValue):\($0)" }
+            if let forced, next != forced || stopped != nil { GlassProbe.post(forced + "-off") }
         }
         return Self.outcome(summaries, live: session.live, stopped: stopped, pngs: pngs, directory: directory)
     }
@@ -134,12 +140,14 @@ enum LiveVariant: String, CaseIterable {
     case appearLaunch = "appear_launch"
     case glassLaunch = "glass_launch"
     case glassNoReuse = "glass_noreuse"
+    case appearLate = "appear_late"
+    case glassLate = "glass_late"
 
     var readsBack: Bool { self != .plain }
-    var appears: Bool { [.appear, .appearWhole, .appearGeneric, .appearLaunch].contains(self) }
-    var moves: Bool { [.glass, .glassWhole, .glassGeneric, .glassLaunch, .glassNoReuse].contains(self) }
+    var appears: Bool { [.appear, .appearWhole, .appearGeneric, .appearLaunch, .appearLate].contains(self) }
+    var moves: Bool { [.glass, .glassWhole, .glassGeneric, .glassLaunch, .glassNoReuse, .glassLate].contains(self) }
 
-    /// The raw path's debug switch the variant runs under (RawMetalGlassProbe.mm), posted -on before it and -off after
+    /// The raw path's debug switch the variant runs under (RawMetalGlassProbe.mm)
     var forced: String? {
         switch self {
         case .appearWhole, .glassWhole: return "whole-programs"
