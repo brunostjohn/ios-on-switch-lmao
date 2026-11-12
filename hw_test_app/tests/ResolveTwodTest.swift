@@ -3,78 +3,155 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// Rule resolve.twod (drivers/TegraGM20BMetal/raw/runtime/raw_fetch_rungs.h twodResolveAcceptable): a 720x1280 BGRA8 4x
-/// pass, every sample shaded apart, resolved into a private texture by the 2D engine (the rule's route) and by the pack's
-/// resolve pass (switchRawProbeResolveDraw:, Metal's exact rule), each three times. PASS: both on the raw path, the 2D
-/// route taken (resolve_twod moved) and every byte within one code of the resolve pass's. The line gives the bytes one
-/// code apart, which channel they fall in, and each route's fastest GPU time for the pass and its resolve. 2x is run too.
+/// Rules resolve.twod and resolve.exact (drivers/TegraGM20BMetal/raw/runtime/raw_resolve_rule.h): a 720x1280 BGRA8 4x
+/// pass, every sample shaded apart, resolved into a private texture four ways, each three times: the route the rules
+/// pick, the complement route forced (switchRawProbeResolveExact:), the complement route on a store-and-resolve whose
+/// samples a second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:,
+/// Metal's exact rule). PASS: all on the raw path, the picked route within one code of the pass, the complement route
+/// taken and within one code, exact at 2x (where resolve.exact is live), and the kept samples resolving as the pass's.
+/// `4x_exact_differ=0` is the device reading that flips twodResolveSingleRounding4x. 2x is run too.
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
-    let name = "MSAA resolves by the 2D engine: within one code of the resolve pass, and the GPU time each way"
+    let name = "MSAA resolves by the 2D engine, directly and through the complement, against the resolve pass"
     let subsystem = Subsystem.metal
-    var timeout: TimeInterval { 90 }
+    var timeout: TimeInterval { 120 }
 
-    static let selector = NSSelectorFromString("switchRawProbeResolveDraw:")
+    static let drawSelector = NSSelectorFromString("switchRawProbeResolveDraw:")
+    static let exactSelector = NSSelectorFromString("switchRawProbeResolveExact:")
     static let (width, height) = (720, 1280)
+
+    struct Resolved {
+        var bytes: [UInt8] = []
+        var gpuMs = Double.infinity
+        var path = ""
+        var twod = 0, exact = 0
+    }
 
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
         let kind = RawFacade.kind(of: gpu.device)
         guard kind == "raw" else { return .skip("the default device is not the raw facade (\(kind))") }
-        guard let facade = gpu.device as? NSObject, facade.responds(to: Self.selector) else {
-            return .skip("a release facade: no switch to send the reference through the resolve pass")
+        guard let facade = gpu.device as? NSObject, facade.responds(to: Self.drawSelector),
+            facade.responds(to: Self.exactSelector)
+        else {
+            return .skip("a release facade: no switches to send resolves through the pass or the complement")
         }
         var metrics = Metrics()
         var wrong: [String] = []
         for samples in [4, 2] where gpu.device.supportsTextureSampleCount(samples) {
             let state = try gpu.render(fragment: "resolve_twod_fragment", format: .bgra8Unorm, samples: samples)
-            let before = RawFacade.counters(of: gpu.device)["resolve_twod"] ?? 0
-            let (twod, twodMs, twodPath) = try await resolved(gpu, state, samples: samples)
-            let taken = (RawFacade.counters(of: gpu.device)["resolve_twod"] ?? 0) - before
-            _ = facade.perform(Self.selector, with: NSNumber(value: true))
-            defer { _ = facade.perform(Self.selector, with: NSNumber(value: false)) }
-            let (pass, passMs, passPath) = try await resolved(gpu, state, samples: samples)
-            var oneOff = [0, 0, 0, 0], beyond = 0
-            for i in 0..<min(twod.count, pass.count) where twod[i] != pass[i] {
-                if abs(Int(twod[i]) - Int(pass[i])) > 1 { beyond += 1 } else { oneOff[i % 4] += 1 }
+            let picked = try await resolved(gpu, state, samples: samples)
+            let exact = try await switched(facade, Self.exactSelector) {
+                try await resolved(gpu, state, samples: samples)
+            }
+            let kept = try await keptSamples(gpu, facade, state, samples: samples)
+            let pass = try await switched(facade, Self.drawSelector) {
+                try await resolved(gpu, state, samples: samples)
             }
             let tag = "\(samples)x"
+            let (beyond, oneOff) = Self.compare(picked.bytes, pass.bytes)
+            let (exactBeyond, exactOff) = Self.compare(exact.bytes, pass.bytes)
+            let exactDiffer = exactOff.reduce(0, +) + exactBeyond
+            let keptDiffer = zip(kept, pass.bytes).filter { $0 != $1 }.count
+            let route = picked.exact > 0 ? "exact" : picked.twod > 0 ? "twod" : "pass"
+            metrics.set("\(tag)_route", route)
             metrics.set("\(tag)_beyond_one", beyond)
             metrics.set("\(tag)_one_off_bgra", oneOff.map(String.init).joined(separator: "/"))
-            metrics.set("\(tag)_twod_gpu_ms", twodMs, digits: 3)
-            metrics.set("\(tag)_pass_gpu_ms", passMs, digits: 3)
-            metrics.set("\(tag)_twod_taken", taken)
-            metrics.set("\(tag)_paths", "\(twodPath)/\(passPath)")
+            metrics.set("\(tag)_exact_differ", exactDiffer)
+            metrics.set("\(tag)_exact_one_off_bgra", exactOff.map(String.init).joined(separator: "/"))
+            metrics.set("\(tag)_exact_taken", exact.exact)
+            metrics.set("\(tag)_kept_differ", keptDiffer)
+            metrics.set("\(tag)_twod_gpu_ms", picked.gpuMs, digits: 3)
+            metrics.set("\(tag)_exact_gpu_ms", exact.gpuMs, digits: 3)
+            metrics.set("\(tag)_pass_gpu_ms", pass.gpuMs, digits: 3)
+            metrics.set("\(tag)_paths", "\(picked.path)/\(exact.path)/\(pass.path)")
             if beyond > 0 { wrong.append("\(tag)_beyond_one") }
-            if taken == 0 { wrong.append("\(tag)_not_taken") }
-            if twodPath != "raw" || passPath != "raw" { wrong.append("\(tag)_paths") }
+            if picked.twod == 0 { wrong.append("\(tag)_not_taken") }
+            if exact.exact == 0 { wrong.append("\(tag)_exact_not_taken") }
+            if exactBeyond > 0 { wrong.append("\(tag)_exact_beyond_one") }
+            if samples == 2 && exactDiffer > 0 { wrong.append("2x_exact_differ") }
+            if keptDiffer > 0 { wrong.append("\(tag)_kept_differ") }
+            if [picked.path, exact.path, pass.path].contains(where: { $0 != "raw" }) { wrong.append("\(tag)_paths") }
         }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
-    /// The resolve texture's bytes, the fastest of three GPU times of the pass and its resolve, and the path
-    func resolved(_ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int) async throws -> ([UInt8], Double, String) {
+    static func compare(_ a: [UInt8], _ b: [UInt8]) -> (beyond: Int, oneOff: [Int]) {
+        var oneOff = [0, 0, 0, 0], beyond = 0
+        for i in 0..<min(a.count, b.count) where a[i] != b[i] {
+            if abs(Int(a[i]) - Int(b[i])) > 1 { beyond += 1 } else { oneOff[i % 4] += 1 }
+        }
+        return (beyond, oneOff)
+    }
+
+    func switched<T>(_ facade: NSObject, _ selector: Selector, _ body: () async throws -> T) async rethrows -> T {
+        _ = facade.perform(selector, with: NSNumber(value: true))
+        defer { _ = facade.perform(selector, with: NSNumber(value: false)) }
+        return try await body()
+    }
+
+    func pass(_ ms: MTLTexture, into: MTLTexture, load: MTLLoadAction, store: MTLStoreAction) -> MTLRenderPassDescriptor
+    {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = ms
+        pass.colorAttachments[0].resolveTexture = into
+        pass.colorAttachments[0].loadAction = load
+        pass.colorAttachments[0].storeAction = store
+        return pass
+    }
+
+    func draw(_ commands: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState) {
+        let e = commands.makeRenderCommandEncoder(descriptor: pass)!
+        e.setRenderPipelineState(state)
+        var corners = GPU.fullScreen
+        e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+        e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        e.endEncoding()
+    }
+
+    /// The resolve texture's bytes, the fastest of three GPU times of the pass and its resolve, the path, and the 2D
+    /// engine's resolve counters moved over the three
+    func resolved(_ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int) async throws -> Resolved {
         let ms = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], samples: samples)
         let into = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
-        var best = Double.infinity
-        var path = ""
+        let before = RawFacade.counters(of: gpu.device)
+        var out = Resolved()
         for _ in 0..<3 {
             let timing = try await gpu.run { commands in
-                let pass = MTLRenderPassDescriptor()
-                pass.colorAttachments[0].texture = ms
-                pass.colorAttachments[0].resolveTexture = into
-                pass.colorAttachments[0].loadAction = .clear
-                pass.colorAttachments[0].storeAction = .multisampleResolve
-                let e = commands.makeRenderCommandEncoder(descriptor: pass)!
-                e.setRenderPipelineState(state)
-                var corners = GPU.fullScreen
-                e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
-                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                e.endEncoding()
+                draw(commands, pass(ms, into: into, load: .clear, store: .multisampleResolve), state)
             }
-            best = min(best, timing.gpuMilliseconds)
-            path = timing.path
+            out.gpuMs = min(out.gpuMs, timing.gpuMilliseconds)
+            out.path = timing.path
         }
-        return (try await gpu.read(into, bytesPerPixel: 4), best, path)
+        let after = RawFacade.counters(of: gpu.device)
+        out.twod = (after["resolve_twod"] ?? 0) - (before["resolve_twod"] ?? 0)
+        out.exact = (after["resolve_exact"] ?? 0) - (before["resolve_exact"] ?? 0)
+        out.bytes = try await gpu.read(into, bytesPerPixel: 4)
+        return out
+    }
+
+    /// A store-and-resolve through the complement, then its samples loaded by a pass that draws nothing and resolved by
+    /// the pack's pass: the complement put back, these are the pass's own bytes
+    func keptSamples(
+        _ gpu: GPU, _ facade: NSObject, _ state: MTLRenderPipelineState, samples: Int
+    ) async throws
+        -> [UInt8]
+    {
+        let ms = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], samples: samples)
+        let first = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
+        let again = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
+        try await switched(facade, Self.exactSelector) {
+            _ = try await gpu.run { commands in
+                draw(commands, pass(ms, into: first, load: .clear, store: .storeAndMultisampleResolve), state)
+            }
+        }
+        try await switched(facade, Self.drawSelector) {
+            _ = try await gpu.run { commands in
+                commands.makeRenderCommandEncoder(
+                    descriptor: pass(ms, into: again, load: .load, store: .multisampleResolve))!
+                    .endEncoding()
+            }
+        }
+        return try await gpu.read(again, bytesPerPixel: 4)
     }
 }
