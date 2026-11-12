@@ -42,7 +42,6 @@ drivers/NativeMobileDisplay/SwitchScanoutStart.h
 drivers/NativeMobileDisplay/SwitchTimedPresentDisplay.h
 drivers/NativeMobileDisplay/test/display_planes_source_test.cpp
 drivers/NativeMobileDisplay/test/native_legacy_display_source_test.cpp
-drivers/NativeMobileDisplay/test/switch_completion_flip_harness.h
 drivers/NativeMobileDisplay/test/switch_direct_visible_test.cpp
 drivers/TegraDisplayFlip/TegraScanoutCopy.h
 drivers/TegraGM20B/SwitchGpuAdmission.cpp
