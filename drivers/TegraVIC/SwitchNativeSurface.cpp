@@ -316,7 +316,8 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view)
     *view = {};
 }
 
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why)
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why,
+                                  bool *fresh)
 {
     const char *unused = nullptr;
     if (!why)
@@ -356,7 +357,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     if (!prepareLock())
         return -12;
     auto *next = takeRetired();
-    if (!next) {
+    const bool made = !next;
+    if (made) {
         next = new SwitchNativeSurface;
         if (!next || !next->initialize()) {
             if (next)
@@ -411,6 +413,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
         old->release();
     if (!error)
         tegra_vic_surface_written(surface);
+    if (!error && fresh)
+        *fresh = made;
     if (owned)
         switch_gpu_backing_cpu_release_owned(&owned, 0);
     if (logical)

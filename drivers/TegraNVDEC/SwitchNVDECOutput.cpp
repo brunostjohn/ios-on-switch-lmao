@@ -84,7 +84,7 @@ int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPr
 }
 
 int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPresent *request, task_t task,
-                               SwitchNVDECExportRefusal *refusal)
+                               SwitchNVDECExportRefusal *refusal, bool *fresh)
 {
     SwitchNVDECExportRefusal unused = {};
     if (!refusal)
@@ -107,7 +107,7 @@ int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPre
     refusal->allocationBytes = surface.desc.length;
     refusal->descriptorBytes = surface.memory ? surface.memory->getLength() : 0;
     refusal->baseOffset = surface.baseOffset;
-    const int result = switch_native_surface_publish(&surface, &picture, &refusal->why);
+    const int result = switch_native_surface_publish(&surface, &picture, &refusal->why, fresh);
     tegra_vic_surface_release(&surface);
     return result;
 }

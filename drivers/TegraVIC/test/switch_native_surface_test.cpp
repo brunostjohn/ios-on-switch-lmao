@@ -435,7 +435,9 @@ TEST_F(NativeSurface, RetiredPublicationsAreReusedOnlyOnceNoViewHoldsThem)
 
     switch_native_surface_release(&kept);
     picture.backing = &replacement;
-    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    bool fresh = true;
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture, nullptr, &fresh), 0);
+    EXPECT_FALSE(fresh);
     SwitchNativeSurface *reused = attached();
     EXPECT_GT(reused->generation, 1u);
     EXPECT_EQ(reused->generation, reused->live);

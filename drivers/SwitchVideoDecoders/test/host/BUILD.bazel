@@ -55,6 +55,7 @@ FRAMEWORKS = [
 host_library(
     name = "nvdec_check",
     hdrs = [
+        "//drivers/TegraNVDEC:SwitchNVDECProbeABI.h",
         "//drivers/TegraNVDEC:TegraNVDECABI.h",
         "//drivers/TegraNVDEC:TegraNVDECCheck.h",
         "//drivers/TegraNVDEC:TegraNVDECCheckMPEG.h",

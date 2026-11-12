@@ -6,6 +6,7 @@
 #include <dispatch/dispatch.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "../../TegraNVDEC/SwitchNVDECProbeABI.h"
 #include "../../TegraNVDEC/TegraNVDECABI.h"
 #include "../../TegraNVDEC/nvidia/clc5b0.h"
 
@@ -48,6 +49,10 @@ bool nvdec_listen(NVDECClient *client, dispatch_queue_t queue, NVDECDone done, v
 void nvdec_stop_listening(NVDECClient *client);
 // The completions come as TegraNVDEC's port messages, not from the refused port's Wait route.
 bool nvdec_completions_on_port(const NVDECClient *client);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The connection's buffer counts (a debug kernel's SwitchNVDECMethodBufferStats); false from a release kernel.
+bool nvdec_buffer_stats(const NVDECClient *client, SwitchNVDECBufferStats *stats);
+#endif
 // TegraNVDECInfo.features has TEGRA_NVDEC_FEATURE_PRESENT: VIC copies pictures into IOSurfaces (nvdec_present).
 bool nvdec_can_present(const NVDECClient *client);
 bool switch_nvdec_can_export(const NVDECClient *client);

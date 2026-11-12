@@ -8,14 +8,17 @@
 // far, the counts the session's closing line logs, then AVDAlpha.c's: the plane it writes VideoToolbox's target from
 // and how many, and the process's alpha-plane pictures by VIC and by the CPU (a HEVC-with-alpha client reaches only the
 // colour layer's session); then AVDEmitter.h's waits and latency, and 1 while job completions come on TegraNVDEC's
-// port (0: its Wait route, the sandbox refused the port).
+// port (0: its Wait route, the sandbox refused the port); then, from a debug kernel, the connection's buffer recycles
+// and native exports (SwitchNVDECBufferStats): a session cycling a fixed set allocates and makes objects only until
+// its pool has gone round once.
 CFDictionaryRef avd_copy_picture_routes(const Decoder *d)
 {
     enum {
         kAlpha = 5,
         kEmitter = 9,
         kPort = kEmitter + AVD_ROUTE_COUNT,
-        kCount
+        kBuffers,
+        kCount = kBuffers + 7
     };
 
     int32_t counts[kCount] = {(int32_t)d->frames, (int32_t)d->exported, (int32_t)(d->presented - d->exported),
@@ -23,6 +26,15 @@ CFDictionaryRef avd_copy_picture_routes(const Decoder *d)
     avd_alpha_routes(d, &counts[kAlpha]);
     avd_emitter_routes(d->emitter, &counts[kEmitter]);
     counts[kPort] = nvdec_completions_on_port(d->client);
+    SwitchNVDECBufferStats stats = {0};
+    const int count = nvdec_buffer_stats(d->client, &stats) ? kCount : kBuffers;
+    counts[kBuffers] = (int32_t)stats.recycles;
+    counts[kBuffers + 1] = (int32_t)stats.replaced;
+    counts[kBuffers + 2] = (int32_t)stats.parked;
+    counts[kBuffers + 3] = (int32_t)stats.allocated;
+    counts[kBuffers + 4] = (int32_t)stats.exports;
+    counts[kBuffers + 5] = (int32_t)stats.export_objects;
+    counts[kBuffers + 6] = (int32_t)stats.parked_most;
     const void *keys[kCount] = {CFSTR("frames"),
                                 CFSTR("exported"),
                                 CFSTR("vic"),
@@ -38,13 +50,20 @@ CFDictionaryRef avd_copy_picture_routes(const Decoder *d)
                                 CFSTR("room_waits"),
                                 CFSTR("in_flight_max"),
                                 CFSTR("emit_latency_us"),
-                                CFSTR("completion_port")};
+                                CFSTR("completion_port"),
+                                CFSTR("recycles"),
+                                CFSTR("recycles_replaced"),
+                                CFSTR("recycles_parked"),
+                                CFSTR("buffers_allocated"),
+                                CFSTR("native_exports"),
+                                CFSTR("native_objects"),
+                                CFSTR("parked_most")};
     const void *values[kCount];
-    for (int i = 0; i < kCount; i++)
+    for (int i = 0; i < count; i++)
         values[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &counts[i]);
-    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, kCount,
+    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, count,
                                                 &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    for (int i = 0; i < kCount; i++)
+    for (int i = 0; i < count; i++)
         CFRelease(values[i]);
     return routes;
 }

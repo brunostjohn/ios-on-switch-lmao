@@ -54,7 +54,7 @@ extern "C" void tegra_nvdec_buffer_free(TegraNVDECBlock *block)
 }
 extern "C" IOReturn tegra_vic_surface_lookup(uint32_t, task_t, TegraVICSurface *) { return -22; }
 extern "C" void tegra_vic_surface_release(TegraVICSurface *) {}
-int switch_native_surface_publish(const TegraVICSurface *, const TegraVICPicture *, const char **) { return -22; }
+int switch_native_surface_publish(const TegraVICSurface *, const TegraVICPicture *, const char **, bool *) { return -22; }
 
 namespace {
 constexpr uint64_t kBytes = 3ULL << 20;

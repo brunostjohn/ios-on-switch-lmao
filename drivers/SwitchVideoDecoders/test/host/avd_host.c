@@ -118,6 +118,12 @@ bool nvdec_completions_on_port(const NVDECClient *c)
     return c->listener != NULL;
 }
 
+bool nvdec_buffer_stats(const NVDECClient *c, SwitchNVDECBufferStats *stats)  // a release kernel's answer
+{
+    (void)c, (void)stats;
+    return false;
+}
+
 void nvdec_stop_listening(NVDECClient *c)
 {
     FakeListener *l = c->listener;

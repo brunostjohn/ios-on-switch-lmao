@@ -278,6 +278,14 @@ bool nvdec_completions_on_port(const NVDECClient *c)
     return nvdec_listener_on_port(c->listener);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+bool nvdec_buffer_stats(const NVDECClient *c, SwitchNVDECBufferStats *stats)
+{
+    return c && nvdec_tunnel(c->connection, c->selector, SwitchNVDECMethodBufferStats, NULL, 0, stats, sizeof(*stats)) ==
+                    KERN_SUCCESS;
+}
+#endif
+
 void nvdec_stop_listening(NVDECClient *c)
 {
     nvdec_listener_stop(c->listener);
