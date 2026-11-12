@@ -36,7 +36,8 @@
 // Sources (Linux's drivers are GPL-2.0-only, so this follows them without copying):
 //   tegra210.dtsi nvenc@544c0000 (0x40000; CAR clock and reset 219; power domain pd_nvenc = PMC partition "mpe", 6),
 //   clk-tegra-periph.c (CLK_SOURCE_NVENC 0x6a0, the NVDEC/NVJPG mux: PLLP is code 4), clk-tegra210.c
-//   tegra210_pg_mbist_war[TEGRA_POWERGATE_MPE] (LVL2_CLK_GATE_OVRE bit 29 pulsed, no slcg clock),
+//   L4T r32.7.4 powergate-t21x.c (the MPE partition, its MC client flush and release, the MBIST workaround on T210
+//   before B01 only) and t210/cg_regs.c (the prod registers), through SwitchEnginePower.h,
 //   memory/tegra/tegra210.c (MC client hot reset NVENC: control 0x200 bit 11; SMMU ASID NVENC 0x264),
 //   include/linux/host1x.h (HOST1X_CLASS_NVENC 0x21), soc/tegra/pmc.c tegra_powergate_power_up, drm/tegra/falcon.c
 //   falcon_boot (shared with TegraNVDEC.cpp), L4T nvhost t210.c (NVENC 5.0, nvhost_nvenc050.fw).
@@ -59,6 +60,7 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
+#include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -127,43 +129,37 @@ const char *falconState()
     return switch_falcon_state(gNvenc, text, sizeof(text));
 }
 
-// tegra_powergate_power_up with the T210 MBIST workaround for the MPE partition (no slcg clock to hold on). A
-// partition the boot chain left on keeps its state; the engine is still reset and re-clocked so the falcon starts
-// from scratch.
+// The MPE partition and NVENC's memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
+// (t210/cg_regs.c t21x_msenc_gating_registers). The MBIST workaround (LVL2 bit 29, no slcg clock) runs only on T210
+// before B01, as powergate-t21x.c's.
+const SwitchEnginePower kPower = {kPartition,         kClock,         MC_HOTRESET_CTRL, MC_HOTRESET_STATUS,
+                                  MC_HOTRESET_NVENC,  OVRE_MPE_MBIST, nullptr,          0,
+                                  tegra_mc_hot_reset, tegra_smmu_read};
+constexpr SwitchEngineProd kProd[] = {
+    {0xe00, 0},            // THI_CLK_OVERRIDE
+    {0x88, 0},             // THI_SLCG_OVERRIDE_HIGH_A
+    {0x8c, 0},             // THI_SLCG_OVERRIDE_LOW_A
+    {0x10a0, 0},           // FALCON_CGCTL
+    {0x1804, 0},           // TFBIF_MCCIF_FIFOCTRL
+    {0x117c, 0x30008},     // FALCON_CG2
+    {0x2200, 0x800040},    // NVENC_CG1
+    {0x2204, 0x10000000},  // NVENC_CG2
+    {0x2208, 0},           // NVENC_CG3
+};
+
 bool powerUp(bool *wasOn)
 {
-    *wasOn = switch_pmc_partition_is_on(kPartition);
-    switch_car_reset_assert(kClock);
-    IODelay(10);
-    if (!*wasOn) {
-        if (!switch_pmc_partition_on(kPartition)) {
-            snprintf(gLine, sizeof(gLine), "E1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
-                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
-            return false;
-        }
-        IODelay(10);
-    }
     switch_car_write(CLK_SOURCE_NVENC, SOURCE_PLLP | NVENC_DIV_1);
     IODelay(2);
-    switch_car_clock_enable(kClock);
-    IODelay(10);
-    switch_pmc_remove_clamping(kPartition);
-    IODelay(10);
-    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_NVENC)
-        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_NVENC);
-    switch_car_reset_deassert(kClock);
-    IODelay(10);
-    // tegra210_generic_mbist_war: only MPE's override bit changes, under the CAR lock.
-    const uint32_t overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_MPE_MBIST;
-    switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_MPE_MBIST);
-    IODelay(1);
-    switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_MPE_MBIST & ~overridden, 0);
-    IODelay(1);
-    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
-        snprintf(gLine, sizeof(gLine), "E1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
-                 switch_car_read(CLK_OUT_ENB_Y), switch_car_read(RST_DEVICES_Y));
+    if (!switch_engine_power_up(kPower, wasOn)) {
+        snprintf(gLine, sizeof(gLine),
+                 "E1 FAIL partition %u did not come up (PWRGATE_STATUS %#x CLAMP_STATUS %#x CLK_OUT_ENB_Y %#x "
+                 "RST_DEVICES_Y %#x)",
+                 kPartition, switch_pmc_read(PWRGATE_STATUS), switch_pmc_read(0x2c), switch_car_read(CLK_OUT_ENB_Y),
+                 switch_car_read(RST_DEVICES_Y));
         return false;
     }
+    switch_engine_prod(gNvenc, kProd, sizeof(kProd) / sizeof(kProd[0]));
     return true;
 }
 
@@ -259,16 +255,6 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool);
 
-// The memory controller stops taking the client's requests and drains those in flight (tegra_mc_flush), so the reset
-// cannot cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
-// flush has no interrupt.
-void flushMemoryClient()
-{
-    switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) | MC_HOTRESET_NVENC);
-    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS) & MC_HOTRESET_NVENC); ++i)
-        IODelay(1);
-}
-
 bool drained()
 {
     return static_cast<int32_t>(tegra_host1x_syncpt_read(gSyncpt) -
@@ -305,7 +291,9 @@ int stalled(uint32_t fence)
     const char *app = tegra_nvenc_app_dump(gNvenc, gJobCodec[(reached + 1 - gBase) % kSetupSlots]);
     const char *falcon = tegra_nvenc_falcon_dump(gNvenc);
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVENC);
-    flushMemoryClient();
+    (void)switch_engine_power::flush(kPower);
+    switch_car_reset_assert(kClock);
+    IODelay(10);
     bool wasOn = false;
     gLine[0] = 0;
     const bool reset = powerUp(&wasOn);
@@ -323,7 +311,10 @@ int stalled(uint32_t fence)
           "cancelled through fence %u, engine reset: %s%s\n",
           fence, kWaitBoundUs / 1000, gSyncpt, reached, app, falcon, host, gFailedThrough,
           back ? "running again" : "it did not come back, NVENC refuses work: ",
-          back ? "" : (gLine[0] ? gLine : stage ? stage : "falcon"));
+          back ? ""
+               : (gLine[0] ? gLine
+                  : stage  ? stage
+                           : "falcon"));
     return -5;
 }
 
@@ -594,7 +585,7 @@ int gateOff(void *, bool drain)
     if (drain && !gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
         stalled(gBase + gIssued);
     gSuspended = true;
-    const bool off = switch_pmc_power_down(kPartition, kClock, kClock);
+    const bool off = switch_engine_power_down(kPower);
     IOLockUnlock(gEngineLock);
     return off ? SWITCH_ENGINE_GATE_OFF : -5;
 }
