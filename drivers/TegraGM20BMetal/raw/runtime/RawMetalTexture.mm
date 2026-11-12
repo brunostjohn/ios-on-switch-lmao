@@ -126,7 +126,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
             break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
-            if (_raw.zeta && _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
+            // zeta memory of its own (raw::Device::createOwnedZeta): only a range that keeps none of it replays (ownedZetaIn)
+            if (_raw.zeta && (_raw.samples > 1 || _raw.arena)) {
                 made = [m2v newTextureWithDescriptor:_descriptor];
                 break;
             }
@@ -136,12 +137,17 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             const bool released = _raw.arena && !_raw.span.valid() && _heap && _heap->_arena;
             uint8_t *cpu = released ? _raw.cpu : _raw.span.cpu;
             uint64_t bytes = _raw.span.bytes, align;
-            const bool shared =
-                heapResident(_heap) &&
-                (released ? raw::Device::arenaFootprint(_raw.width, _raw.height, uint32_t(_descriptor.pixelFormat),
-                                                        _raw.blockLinear, bytes, align) &&
-                                gRM->raw->aliasArenaRange(_heap->_arena - 1, _raw.va, bytes, a)
-                          : gRM->raw->alias(_raw, a));
+            const auto releasedBytes = [&] {
+                raw::TextureAsk ask;
+                if (!heapTextureAsk(_descriptor, _heap->_descriptor.storageMode == MTLStorageModePrivate, ask))
+                    return false;
+                ask.standIn = false;
+                return raw::Device::footprint(ask, bytes, align);
+            };
+            const bool shared = heapResident(_heap) &&
+                                (released ? releasedBytes() && gRM->raw->aliasArenaRange(_heap->_arena - 1, _raw.va,
+                                                                                          bytes, a)
+                                          : gRM->raw->alias(_raw, a));
             id<MTLBuffer> pages = shared ? rawAliasBuffer(a, cpu, (NSUInteger(bytes) + page - 1) & ~(page - 1),
                                                           MTLResourceStorageModeShared)
                                          : nil;

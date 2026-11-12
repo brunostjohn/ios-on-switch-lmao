@@ -271,6 +271,8 @@ void noteReplayShape(RMCommandBuffer *cb, size_t from, size_t to);
 #endif
 // A heap's pages back if it was purged (an m2v twin aliases them); true without a heap or an arena
 bool heapResident(RMHeap *h);
+// The device's ask of `d` in an arena of `blockLinear` (a private heap's): every kind the raw path keeps; false: none
+bool heapTextureAsk(MTLTextureDescriptor *d, bool blockLinear, raw::TextureAsk &ask);
 
 // RawMetalTexture.mm
 void declareGpuWrites(RMTexture *t);

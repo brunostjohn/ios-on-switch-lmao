@@ -180,6 +180,31 @@ struct Span {
     }
 };
 
+// An MTLHeap's arena a texture is made in (raw_arena.cpp): at `offset` of a placement heap's, else wherever it fits
+struct ArenaAt {
+    uint32_t arena = 0;
+    std::optional<uint64_t> offset;
+};
+
+// A texture of one of the kinds the device makes, by the Device::create* that makes it, with that one's arguments
+// (Device::footprint, arenaTexture)
+struct TextureAsk {
+    enum Kind : uint8_t {
+        Plain,        // createTexture: `tiled` its block-linear ask
+        Line,         // createLine
+        Mips,         // createMipTexture
+        Volume,       // createVolume: `view2d`
+        Array,        // createArray: `type` its header's, `layers` (six a cube)
+        Multisample,  // createStoredMultisample
+        Zeta          // createOwnedZeta: `sampled`
+    } kind = Plain;
+
+    uint32_t width = 0, height = 1, depth = 1, layers = 1, levels = 1, samples = 1, format = 0;
+    uint8_t type = 0;
+    bool tiled = false, view2d = false, sampled = false;
+    bool standIn = false;  // an extended-range Plain one's stand-in (createStandIn) beside it
+};
+
 struct Texture {
     struct StorageRange {
         uint64_t va = 0, bytes = 0;
@@ -1164,7 +1189,7 @@ public:
     // `tiled`: block-linear (TegraGM20BLayout.h) where its shape tiles and its format is a colour target's, for a texture the
     // CPU never touches
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
-                       bool tiled = false);
+                       bool tiled = false, const ArenaAt *at = nullptr);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
     bool probeCompressible(const tgm_layout &bl, Texture &t);
@@ -1207,7 +1232,7 @@ public:
     // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
     // An extended-range texture's stand-in (Texture::standIn), made if the pack has its conversion state
-    bool createStandIn(Texture &t);
+    bool createStandIn(Texture &t, const ArenaAt *at = nullptr);
     // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
     Pipeline *xrPipeline(XrForm form);
     // The pack's resolve state into a target of `format` (raw_samples.h resolveState), null if the pack has none
@@ -1253,25 +1278,30 @@ public:
                         const char **why);
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
-    bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
+    bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t,
+                                 const ArenaAt *at = nullptr);
     // A stored multisampled depth/stencil texture in zeta memory of its own (raw_multisample.cpp), with a header where
-    // `sampled`. It has no m2v twin: NVK neither views zeta memory it did not make nor answers where a multisampled
-    // image's is.
-    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t);
+    // `sampled`; one of a single sample too in an arena (an MTLHeap's, whose depth is not NVK's image). It has no m2v twin:
+    // NVK neither views zeta memory it did not make nor answers where a multisampled image's is.
+    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t,
+                         const ArenaAt *at = nullptr);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
-    bool createLine(uint32_t width, uint32_t format, Texture &t);
+    bool createLine(uint32_t width, uint32_t format, Texture &t, const ArenaAt *at = nullptr);
     // A 3D texture of one level: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v makes
     // a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
-    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t);
+    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
+                      const ArenaAt *at = nullptr);
     // A 2D array, cube or cube array of one level: NIL's image of `layers` layers (fx_image.h) under a header of `type`
     // (fx::kTexTwoDArray, kTexCube, kTexCubeArray)
-    bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t);
+    bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
+                     const ArenaAt *at = nullptr);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
-    bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
+                          const ArenaAt *at = nullptr);
     // A block-compressed 2D texture (or 2D array) over the caller's `bytes` (newTextureWithBytesNoCopy), already laid out as
     // `layout` (fx::blockChainLayout of its texel size, levels and layers): the pages imported under kind 0xFE, cleaned to
     // memory, and a block-linear header over them, of the texel size. False: not a block-compressed format, `length` short
@@ -1347,10 +1377,19 @@ public:
     // TGM_LAYOUT_KIND for a private heap's block-linear textures or pitch for a shared heap's textures and buffers, its
     // resources placed in it (raw_heap.h). Purged, its pages go back and its VA and CPU range stay reserved, so restoring it
     // binds fresh pages where its resources' addresses and texture headers already point.
+    // A kind of memory the arena's own mapping is not (a private heap's pitch, a shared heap's block-linear, a depth
+    // format's) is a view of its one BO, bound under that kind at the first texture that takes it: a job naming the arena
+    // names every view.
     bool createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool explicitPlacement = false);
     void destroyArena(uint32_t arena);  // once its resources are gone; an m2v view's lease keeps it until its last drop
     bool arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t,
                       std::optional<uint64_t> offset = {});
+    // Any kind the device makes (TextureAsk), made as its create* makes it, in the arena; an extended-range one's stand-in
+    // there too
+    bool arenaTexture(const ArenaAt &at, const TextureAsk &ask, Texture &t);
+    // What `ask` takes of an arena (its stand-in's after it, at the stand-in's alignment); false: the device makes no such
+    // texture. A placement heap's offset is aligned to `align`.
+    static bool footprint(const TextureAsk &ask, uint64_t &bytes, uint64_t &align);
     bool arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::optional<uint64_t> offset = {});
     // makeAliasable: the range goes back for later placements (at an m2v view's last drop, if one aliases it)
     void arenaRelease(Texture &t);
@@ -1957,6 +1996,13 @@ private:
         uint32_t leases = 0;  // m2v views of its resources (raw_alias.cpp): never purged or freed under one
         bool used = false, isVolatile = false, purged = false, dying = false;
         bool wc = false;  // its host pages are write-combined (raw_arena.cpp hostPages)
+
+        // its BO bound again under another PTE kind (createArena's comment)
+        struct View {
+            uint64_t va = 0;
+            uint32_t kind = 0;
+        };
+        std::vector<View> views;
     };
 
     std::vector<Arena> arenas_;
@@ -1965,6 +2011,20 @@ private:
     void freeArena(Arena &a);  // lock_ held
     void arenaFree(Span &s);   // lock_ held
     bool aliasArena(const Span &s, Lease *&lease, Alias &a);
+    // lock_ held: the arena's mapping of `kind` (its own, its pitch view, or a view made now); 0: none
+    uint64_t arenaView(Arena &a, uint32_t kind);
+    // The kind of the arena's mapping `va` lies in; false: none of its
+    static bool arenaKindAt(const Arena &a, uint64_t va, uint64_t &base, uint32_t &kind);
+    // The layout every create* but createTexture's own memory gives its kind of texture: t's shape, rows and kind fields
+    // with no memory or header, what its memory takes and the PTE kind it is bound with, `chain` a Mips one's levels. False:
+    // the device makes no such texture.
+    static bool layout(const TextureAsk &ask, Texture &t, uint64_t &bytes, uint64_t &align, uint32_t &kind,
+                       fx::MipChain *chain = nullptr);
+    static TextureAsk standInAsk(const Texture &t);
+    // `ask` laid out in `at`'s arena, else (any kind but Plain) in the device's chunks of its kind, with its header
+    bool createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at);
+    // lock_ held: `bytes` of the arena under `kind` as t's memory (Texture::arena)
+    bool arenaSpan(const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind, Texture &t);
 
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);

@@ -50,6 +50,31 @@ struct DeviceHarness {
         return d.arenas_[arena].wc;
     }
 
+    static const uint8_t *arenaPages(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].cpu;
+    }
+
+    // The mappings of an arena's BO besides its own: its pitch view (a private heap's), then the views of other kinds
+    static size_t arenaViews(const Device &d, uint32_t arena)
+    {
+        const auto &a = d.arenas_[arena];
+        return (a.bufferVa != a.va) + a.views.size();
+    }
+
+    // An m2v view's hold on an arena (raw_alias.cpp's lease), which the harness's own connection never makes
+    static void holdArena(Device &d, uint32_t arena, bool hold)
+    {
+        auto &leases = d.arenas_[arena].leases;
+        leases = hold ? leases + 1 : leases - 1;
+    }
+
+    static std::array<uint32_t, 8> header(const Device &d, uint32_t tic)
+    {
+        std::array<uint32_t, 8> w;
+        memcpy(w.data(), d.tic_.cpu + 32 * tic, sizeof w);
+        return w;
+    }
     // Where the encoder's last upload of stage `k`'s argument table lies (raw_spill_table.h), 0: none
     static uint64_t spillTable(const RenderEncoder &e, uint32_t k)
     {

@@ -24,7 +24,8 @@ constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFe
 
 struct BoState {
     bool import = false, cached = false;
-    uint32_t set = 0;  // the set it is a member of, 0: none
+    uint32_t set = 0;                 // the set it is a member of, 0: none
+    uint64_t address = 0, bytes = 0;  // an import's host range
 };
 
 struct SetState {
@@ -322,10 +323,12 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodBoImport:
-        model.bos[model.nextHandle] = {true, true, 0};
+    case TegraGM20BMethodBoImport: {
+        const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
+        model.bos[model.nextHandle] = {true, true, 0, in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodBoFree:
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;

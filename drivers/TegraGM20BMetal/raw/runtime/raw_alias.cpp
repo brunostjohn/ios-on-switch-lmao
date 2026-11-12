@@ -243,14 +243,14 @@ bool Device::aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias 
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying || arenas_[arena].purged)
         return false;
     Arena &ar = arenas_[arena];
-    if (!bytes || va < ar.va || bytes > ar.bytes || va - ar.va > ar.bytes - bytes)
+    uint64_t base = 0;
+    if (!bytes || !arenaKindAt(ar, va, base, a.kind) || bytes > ar.bytes || va - base > ar.bytes - bytes)
         return false;
     a.cpu = ar.cpu;
     a.bytes = ar.bytes;
     a.handle = ar.bo.handle;
-    a.va = ar.va;
-    a.kind = ar.kind;
-    a.lease = new Lease{this, 1, Memory::Arena, {arena, va - ar.va, bytes, va, ar.cpu + (va - ar.va)}, nullptr, false};
+    a.va = base;
+    a.lease = new Lease{this, 1, Memory::Arena, {arena, va - base, bytes, va, ar.cpu + (va - base)}, nullptr, false};
     ar.leases++;
     return true;
 }

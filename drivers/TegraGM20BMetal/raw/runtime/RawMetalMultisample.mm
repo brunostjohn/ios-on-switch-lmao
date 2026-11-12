@@ -62,7 +62,7 @@ static bool ownedZeta(void *object)
     if (![o isKindOfClass:[RMTexture class]])
         return false;
     const RMTexture *t = (RMTexture *)o;
-    return t->_rawOk && t->_raw.zeta && t->_raw.samples > 1;
+    return t->_rawOk && t->_raw.zeta && (t->_raw.samples > 1 || t->_raw.arena);
 }
 
 // Whether every pass of the range that attaches `t` neither loads nor stores it: m2v's own texture of its descriptor then
@@ -121,9 +121,9 @@ void failOwnedZeta(RMCommandBuffer *cb, RMTexture *t)
         "%u samples whose memory m2v has no texture of",
         t->_raw.width, t->_raw.height, unsigned(t->_raw.samples));
     NSString *text = [NSString
-        stringWithFormat:
-            @"The multisampled depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
-            [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height, (unsigned long)t->_descriptor.pixelFormat];
+        stringWithFormat:@"The depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
+                         [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height,
+                         (unsigned long)t->_descriptor.pixelFormat];
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                          code:MTLCommandBufferErrorInternal
                                      userInfo:@{NSLocalizedDescriptionKey : text}];

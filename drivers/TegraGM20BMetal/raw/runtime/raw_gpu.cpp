@@ -1651,8 +1651,46 @@ static void blockLayout(const Texture &t, tgm_layout &bl)
     bl.bytes = (uint64_t(bl.row_bytes) * bl.rows + bl.align - 1) / bl.align * bl.align;
 }
 
-bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc, bool tiled)
+// createTexture's block-linear layout of shaped `t`, where it is asked tiled: a colour format's (the chunks are bound under
+// colour kind 0xFE, which a depth/stencil format's zeta is not) or a block-compressed one's (NVK's optimal image, never
+// pitch), of a shape that tiles
+static bool plainTiled(const Texture &t, bool tiled, tgm_layout &bl)
 {
+    const bool blocks = t.blockW > 1 || t.blockH > 1;
+    if (!tiled || !(t.renderable || blocks) || !tgm_layout_tiled(t.width, t.height, t.bpp, &bl))
+        return false;
+    if (blocks)
+        blockLayout(t, bl);
+    return true;
+}
+
+static void tiledRows(Texture &t, const tgm_layout &bl)
+{
+    t.pitch = bl.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = bl.y_log2;
+    t.layerBytes = bl.bytes;
+}
+
+static void chainRows(Texture &t, const fx::MipChain &c, uint64_t layerBytes)
+{
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.layerBytes = layerBytes;
+}
+
+bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc, bool tiled,
+                           const ArenaAt *at)
+{
+    if (at) {
+        TextureAsk ask;
+        ask.width = width;
+        ask.height = height;
+        ask.format = format;
+        ask.tiled = tiled;
+        return createLaidOut(ask, t, at);
+    }
     if (!shape(width, height, format, t))
         return false;
     const bool blocks = t.blockW > 1 || t.blockH > 1;
@@ -1660,20 +1698,13 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * t.height;
     tgm_layout bl;
-    // (a colour format: the chunks are bound under colour kind 0xFE, which a depth/stencil format's zeta is not; a
-    // block-compressed one is NVK's optimal image, never pitch)
-    const bool laid = tiled && !wc && (t.renderable || blocks) && tgm_layout_tiled(t.width, t.height, t.bpp, &bl);
-    if (laid && blocks)
-        blockLayout(t, bl);
+    const bool laid = !wc && plainTiled(t, tiled, bl);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, 0))
         return probeCompressible(bl, t);
 #endif
     if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
-        t.pitch = bl.row_bytes;
-        t.blockLinear = true;
-        t.blockHeight = bl.y_log2;
-        t.layerBytes = bl.bytes;
+        tiledRows(t, bl);
     } else if (blocks) {
         return false;
     } else if (wc && wcAlloc(bytes, t.span)) {
@@ -1696,81 +1727,212 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     return true;
 }
 
-bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
+bool Device::layout(const TextureAsk &ask, Texture &t, uint64_t &bytes, uint64_t &align, uint32_t &kind,
+                    fx::MipChain *chain)
 {
-    tgm_layout bl;
-    if (!shape(width, 1, format, t) || xrForm(format) != XrForm::None || !tgm_layout_tiled(width, 1, t.bpp, &bl))
-        return false;
-    std::lock_guard<std::mutex> l(lock_);
-    if (!blAlloc(bl.bytes, bl.align, t.span))
-        return false;
-    t.va = t.span.va;
-    t.cpu = t.span.cpu;
-    t.pitch = bl.row_bytes;
-    t.blockLinear = true;
-    t.blockHeight = bl.y_log2;
-    t.layerBytes = bl.bytes;
-    t.type = fx::kTexOneD;
-    if (!(t.tic = allocTic())) {
-        Lease *none = nullptr;
-        freeSpan(t.span, Memory::Bl, none);
-        return false;
+    fx::MipChain own;
+    fx::MipChain &c = chain ? *chain : own;
+    const FormatInfo *f = formatInfo(ask.format);
+    const bool xr = xrForm(ask.format) != XrForm::None;
+    kind = fx::kBlockLinearKind;
+    switch (ask.kind) {
+    case TextureAsk::Plain: {
+        tgm_layout bl;
+        if (!shape(ask.width, ask.height, ask.format, t))
+            return false;
+        if (plainTiled(t, ask.tiled, bl)) {
+            tiledRows(t, bl);
+            bytes = bl.bytes;
+            align = bl.align;
+            return true;
+        }
+        if (t.blockW > 1 || t.blockH > 1)
+            return false;
+        t.pitch = (t.width * t.bpp + 255) & ~255u;
+        bytes = uint64_t(t.pitch) * t.height;
+        align = 256;
+        kind = kPteKindPitch;
+        return true;
     }
-    writeTic(t);
+    case TextureAsk::Line: {
+        tgm_layout bl;
+        if (!shape(ask.width, 1, ask.format, t) || xr || !tgm_layout_tiled(ask.width, 1, t.bpp, &bl))
+            return false;
+        tiledRows(t, bl);
+        t.type = fx::kTexOneD;
+        bytes = bl.bytes;
+        align = bl.align;
+        return true;
+    }
+    case TextureAsk::Mips:
+        if (!f || ask.levels < 2 || !f->rt || xr || !fx::mipChainLayout(ask.width, ask.height, ask.levels, f->bpp, c) ||
+            !shape(ask.width, ask.height, ask.format, t))
+            return false;
+        chainRows(t, c, c.bytes);
+        break;
+    case TextureAsk::Volume:
+        if (!shape(ask.width, ask.height, ask.format, t) || xr ||
+            !fx::volumeLayout(ask.width, ask.height, ask.depth, 1, t.bpp, ask.view2d, c))
+            return false;
+        chainRows(t, c, c.bytes);
+        t.type = fx::kTexThreeD;
+        t.depth = ask.depth;
+        t.blockDepth = c.zLog2;
+        break;
+    case TextureAsk::Array:
+        if (!shape(ask.width, ask.height, ask.format, t) || xr ||
+            !fx::arrayLayout(ask.width, ask.height, ask.layers, 1, t.bpp, c))
+            return false;
+        chainRows(t, c, c.arrayStride);
+        t.type = ask.type;
+        t.layers = ask.layers;
+        break;
+    case TextureAsk::Multisample:
+        if (!shape(ask.width, ask.height, ask.format, t) || !t.renderable || blockCompressed(f) || xr ||
+            !fx::msLayout(t.width, t.height, ask.samples, t.bpp, c))
+            return false;
+        chainRows(t, c, uint64_t(c.level[0].rowBytes) * c.level[0].rows);
+        t.samples = uint8_t(ask.samples);
+        break;
+    case TextureAsk::Zeta:
+        if (!zetaShape(ask.width, ask.height, ask.format, ask.samples, t, bytes, align))
+            return false;
+        align = std::max(align, kBlAlign);
+        kind = kZetaFormatInfo[zetaFormatIndex(ask.format)].kind;
+        return true;
+    }
+    bytes = c.bytes;
+    align = c.align;
     return true;
 }
 
-bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t)
+// An arena's block-linear memory at NVK's image alignment, as m2v's twin over it in place takes it
+static void arenaRounded(uint32_t kind, uint64_t &bytes, uint64_t &align)
 {
-    fx::MipChain c;
-    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
-        !fx::volumeLayout(width, height, depth, 1, t.bpp, view2d, c))
+    if (kind == kPteKindPitch)
+        return;
+    bytes = (bytes + kBlAlign - 1) & ~(kBlAlign - 1);
+    align = std::max(align, kBlAlign);
+}
+
+bool Device::footprint(const TextureAsk &ask, uint64_t &bytes, uint64_t &align)
+{
+    Texture t;
+    uint32_t kind = 0;
+    if (!layout(ask, t, bytes, align, kind))
         return false;
-    std::lock_guard<std::mutex> l(lock_);
-    if (!blAlloc(c.bytes, c.align, t.span))
+    arenaRounded(kind, bytes, align);
+    if (!ask.standIn)
+        return true;
+    uint64_t standIn = 0, standInAlign = 0;
+    if (!footprint(standInAsk(t), standIn, standInAlign))
         return false;
-    t.va = t.span.va;
-    t.cpu = t.span.cpu;
-    t.pitch = c.level[0].rowBytes;
-    t.blockLinear = true;
-    t.blockHeight = c.level[0].yLog2;
-    t.layerBytes = c.bytes;
-    t.type = fx::kTexThreeD;
-    t.depth = depth;
-    t.blockDepth = c.zLog2;
-    if (!(t.tic = allocTic())) {
-        Lease *none = nullptr;
-        freeSpan(t.span, Memory::Bl, none);
-        return false;
-    }
-    writeTic(t);
+    bytes = (bytes + standInAlign - 1) / standInAlign * standInAlign + standIn;
+    align = std::max(align, standInAlign);
     return true;
 }
 
-bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t)
+TextureAsk Device::standInAsk(const Texture &t)
 {
-    fx::MipChain c;
-    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
-        !fx::arrayLayout(width, height, layers, 1, t.bpp, c))
-        return false;
-    std::lock_guard<std::mutex> l(lock_);
-    if (!blAlloc(c.bytes, c.align, t.span))
-        return false;
-    t.va = t.span.va;
-    t.cpu = t.span.cpu;
-    t.pitch = c.level[0].rowBytes;
-    t.blockLinear = true;
-    t.blockHeight = c.level[0].yLog2;
-    t.layerBytes = c.arrayStride;
-    t.type = uint8_t(type);
-    t.layers = layers;
-    if (!(t.tic = allocTic())) {
-        Lease *none = nullptr;
-        freeSpan(t.span, Memory::Bl, none);
+    TextureAsk ask;
+    ask.width = t.width;
+    ask.height = t.height;
+    ask.format = kXrStandInFormat;
+    ask.tiled = true;
+    return ask;
+}
+
+bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
+{
+    uint64_t bytes = 0, align = 0;
+    uint32_t kind = 0;
+    Texture::Chain *chain = ask.kind == TextureAsk::Mips ? new Texture::Chain : nullptr;
+    if ((!at && ask.kind == TextureAsk::Plain) ||
+        !layout(ask, t, bytes, align, kind, chain ? &chain->layout : nullptr)) {
+        delete chain;
         return false;
     }
-    writeTic(t);
+    if (at)
+        arenaRounded(kind, bytes, align);
+    const bool zeta = ask.kind == TextureAsk::Zeta;
+    const uint32_t z = zetaFormatIndex(ask.format);
+    std::lock_guard<std::mutex> l(lock_);
+    Span owned;
+    const bool placed = at     ? arenaSpan(*at, bytes, align, kind, t)
+                        : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
+                               : blAlloc(bytes, align, t.span);
+    if (!placed) {
+        delete chain;
+        return false;
+    }
+    const Span &span = zeta && !at ? owned : t.span;
+    if ((!zeta || ask.sampled) && !(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        if (zeta && !at)
+            tiledFree(zChunks_[z], owned);
+        else
+            freeSpan(t.span, memoryOf(t), none);
+        delete chain;
+        return false;
+    }
+    t.va = span.va;
+    if (zeta) {
+        t.storage = {span.va, bytes, false};
+        if (!at)
+            ownedZeta_[span.va] = {z, owned};
+    } else {
+        t.cpu = span.cpu;
+    }
+    if (chain) {
+        const FormatInfo *f = formatInfo(ask.format);
+        chain->va = t.va;
+        chain->fmt2d = fx::twodFormat(ask.format);
+        uint32_t w[8];
+        fx::mipChainTic(chain->layout, chain->va, f->tic0, f->srgb, 0, ask.levels, w);
+        // the texture's header: the chain's (visible at the next header invalidate)
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        t.chain = chain;
+        RAW_DIAGNOSTIC(stats.chains++);
+        RAW_DIAGNOSTIC(stats.chainBytes += chain->layout.bytes);
+    } else if (t.tic) {
+        writeTic(t);
+    }
     return true;
+}
+
+bool Device::createLine(uint32_t width, uint32_t format, Texture &t, const ArenaAt *at)
+{
+    TextureAsk ask;
+    ask.kind = TextureAsk::Line;
+    ask.width = width;
+    ask.format = format;
+    return createLaidOut(ask, t, at);
+}
+
+bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
+                          const ArenaAt *at)
+{
+    TextureAsk ask;
+    ask.kind = TextureAsk::Volume;
+    ask.width = width;
+    ask.height = height;
+    ask.depth = depth;
+    ask.format = format;
+    ask.view2d = view2d;
+    return createLaidOut(ask, t, at);
+}
+
+bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
+                         const ArenaAt *at)
+{
+    TextureAsk ask;
+    ask.kind = TextureAsk::Array;
+    ask.width = width;
+    ask.height = height;
+    ask.layers = layers;
+    ask.format = format;
+    ask.type = uint8_t(type);
+    return createLaidOut(ask, t, at);
 }
 
 // A texture over a block-linear surface's import: TegraGM20BLayout.h's image from the surface's first byte, at the shape the
@@ -2268,45 +2430,16 @@ void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
         freeChunk(ch);
 }
 
-bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t)
+bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
+                              const ArenaAt *at)
 {
-    const FormatInfo *f = formatInfo(format);
-    const uint32_t fmt2d = fx::twodFormat(format);
-    if (!f || levels < 2 || !f->rt || xrForm(format) != XrForm::None)
-        return false;
-    Texture::Chain *c = new Texture::Chain;
-    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !shape(width, height, format, t)) {
-        delete c;
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> l(lock_);
-        if (!blAlloc(c->layout.bytes, c->layout.align, t.span)) {
-            delete c;
-            return false;
-        }
-        if (!(t.tic = allocTic())) {
-            Lease *none = nullptr;
-            freeSpan(t.span, Memory::Bl, none);
-            delete c;
-            return false;
-        }
-    }
-    const fx::MipLevel &l0 = c->layout.level[0];
-    t.va = c->va = t.span.va;
-    t.cpu = t.span.cpu;
-    t.pitch = l0.rowBytes;
-    t.blockLinear = true;
-    t.blockHeight = l0.yLog2;
-    t.layerBytes = c->layout.bytes;
-    c->fmt2d = fmt2d;
-    uint32_t w[8];
-    fx::mipChainTic(c->layout, c->va, f->tic0, f->srgb, 0, levels, w);
-    memcpy(tic_.cpu + 32 * t.tic, w, 32);  // the texture's header: the chain's (visible at the next header invalidate)
-    t.chain = c;
-    RAW_DIAGNOSTIC(stats.chains++);
-    RAW_DIAGNOSTIC(stats.chainBytes += c->layout.bytes);
-    return true;
+    TextureAsk ask;
+    ask.kind = TextureAsk::Mips;
+    ask.width = width;
+    ask.height = height;
+    ask.levels = levels;
+    ask.format = format;
+    return createLaidOut(ask, t, at);
 }
 
 bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
@@ -2805,12 +2938,12 @@ Pipeline *Device::mipPipeline(uint32_t format)
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
-bool Device::createStandIn(Texture &t)
+bool Device::createStandIn(Texture &t, const ArenaAt *at)
 {
     if (t.standIn || !xrPipeline(xrForm(t.format)))
         return t.standIn != nullptr;
     Texture *s = new Texture;
-    if (!createTexture(t.width, t.height, kXrStandInFormat, *s, false, true)) {
+    if (!createTexture(t.width, t.height, kXrStandInFormat, *s, false, true, at)) {
         delete s;
         return false;
     }

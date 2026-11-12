@@ -69,6 +69,7 @@ TESTS: dict[str, bool] = {
             'gpu.shared.retained_pointer',
             'gpu.heap.m2v_target',
             'gpu.heap.placement',
+            'gpu.heap.kinds',
             'gpu.raw.archive_miss',
             'gpu.raw.stored_msaa',
             'metal.device',
