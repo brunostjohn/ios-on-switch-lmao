@@ -15,6 +15,9 @@ raw_gpu.cpp	kClientFirstShare	policy	allocation policy
 raw_gpu.cpp	kClientHeapFirstShare	policy	allocation policy
 raw_gpu.cpp	kInstanceWords	policy	push words per instance
 raw_gpu.cpp	kSampleWords	policy	push words of a sample layout
+raw_gpu.cpp	kFillConstA	policy	NVB0B5_SET_REMAP_COMPONENTS DST_X..W CONST_A (NVK nvk_cmd_fill_memory_ce)
+raw_gpu.cpp	kFillMaxDim	policy	the copy engine's line length and count per launch NVK fills with
+raw_gpu.cpp	kFillLaunch	policy	NVB0B5_LAUNCH_DMA PIPELINED, FLUSH, pitch both sides, REMAP (NVK nvk_cmd_fill_memory_ce)
 raw_compute.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_compute.cpp	kRootSets	policy	NVK root table offset
 raw_compute.cpp	kRootPush	policy	NVK root table offset
@@ -48,6 +51,11 @@ raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot
 raw_mme.h	kIndirect	policy	raw macro slot
 raw_mme.h	kIndexedIndirect	policy	raw macro slot
+raw_mme.h	kIcbRange	policy	raw macro slot
+raw_mme.h	kIcbDraw	policy	raw macro slot
+raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
+raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

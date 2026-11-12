@@ -7,6 +7,7 @@
 #include "../fx/fx_image.h"
 #include "raw_nonfinite.h"
 #include "raw_clear.h"
+#include "raw_icb.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
@@ -331,9 +332,7 @@ const FormatInfo *formatInfo(uint32_t mtl)
 
 uint32_t nvTopology(uint32_t mtl)
 {
-    static const uint32_t map[] = {1, 2, 3, 4,
-                                   5};  // point, line, lineStrip, triangle, triangleStrip -> V_POINTLIST..TRIANGLESTRIP
-    return mtl < 5 ? map[mtl] : 4;
+    return icb::topology(mtl);
 }
 
 // ---- device: rings ----
@@ -4379,6 +4378,76 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
     return indirect(primitive, true, arguments, argumentOffset, why);
 }
 
+// The state the commands inherit prepared once, as an indirect draw's, the range into the macros' scratch, then the
+// commands' words by reference. Each command sets its topology, restart, index buffer and draw parameters, which the
+// encoder holds unknown after them.
+bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
+{
+    RAW_ENCODE_SPAN(Draw);
+    if (!pipeline_ || !x.count)
+        return true;
+    Pipeline *form = formFor(pipeline_);
+    const Pipeline &pl = *form;
+    const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {x.primitive, 0, 1, true});
+        refusal != FetchRefusal::None) {
+        refuseFetch(pl, refusal, x.primitive, 0, 0, why);
+        return false;
+    }
+    const uint64_t offset = uint64_t(x.first) * icb::kSlotWords * 4, bytes = uint64_t(x.count) * icb::kSlotWords * 4;
+    if (!x.slots->va || offset > x.slots->length || x.slots->length - offset < bytes) {
+        *why = "indirect command buffer commands outside its memory";
+        return false;
+    }
+    if (x.range && (!x.range->va || (x.rangeOffset & 3) || x.rangeOffset > x.range->length ||
+                    x.range->length - x.rangeOffset < 8)) {
+        *why = "an indirect command buffer's execution range outside its buffer or not four-byte aligned";
+        return false;
+    }
+    called_ = true;
+    indirectGeometry_ = true;
+    const bool prepared = prepare(form, x.primitive, 0, 0, UINT32_MAX, 0, x.indexed, why);
+    indirectGeometry_ = false;
+    if (!prepared)
+        return false;
+    cb_->use(*x.slots, false);
+    for (size_t i = 0; i < x.indexBufferCount; i++) {
+        const Buffer &ib = *x.indexBuffers[i];
+        cb_->use(ib, false);
+        if (ib.hostVisible && !ib.wc && ib.cpu)
+            cb_->clean(ib.cpu, ib.length);
+    }
+    if (p_.room() < 16)
+        reserve();
+    if (x.written || x.range) {
+        p_.m(WAIT_FOR_IDLE, 0);
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
+        p_.m(0x0050, 0);  // NV906F_SET_REFERENCE, as indirect(): the fetches wait for the writes before them
+    }
+    if (x.range) {
+        cb_->use(*x.range, false);
+        if (x.range->hostVisible && !x.range->wc && x.range->cpu)
+            cb_->clean(x.range->cpu + x.rangeOffset, 8);
+        mme::icbRangeHeader(p_);
+        bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
+        bodies_.push_back({nullptr, nullptr, x.range->va + x.rangeOffset, 2, false});
+    } else {
+        mme::icbRange(p_, x.first, x.count);
+        bodies_.push_back({bodyStart_, p_.at});
+    }
+    bodies_.push_back({nullptr, nullptr, x.slots->va + offset, uint32_t(bytes / 4), false});
+    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+    bodyStart_ = nullptr;
+    reserve();
+    topology_ = restart_ = ~0u;
+    ibVa_ = ibEnd_ = ~uint64_t(0);
+    ibSize_ = 0;
+    drawParamsUnknown_ = true;
+    ++cb_->draws;
+    finishDraw(0, 0, true);
+    return true;
+}
+
 #if SWITCH_RAW_DIAGNOSTICS
 static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uint8_t *bytes, uint64_t length)
 {
@@ -6003,48 +6072,62 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
     }
 }
 
+// SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
+// component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
+namespace {
+constexpr uint32_t kFillConstA = 0x4444, kFillMaxDim = 1u << 15;
+constexpr uint32_t kFillLaunch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 10;
+}  // namespace
+
+void BlitEncoder::fillRun(uint64_t at, uint32_t width, uint32_t height, [[maybe_unused]] uint32_t unit)
+{
+    room();
+    p_.inc(CE_OFFSET_IN_UPPER + 8, {uint32_t(at >> 32), uint32_t(at)}, SUBC_COPY);
+    p_.inc(CE_LINE_LENGTH_IN, {width, height}, SUBC_COPY);
+    p_.m(CE_LAUNCH_DMA, kFillLaunch | (height > 1 ? 1u << 9 : 0), SUBC_COPY);
+    RAW_DIAGNOSTIC(dev_->stats.ceOps++);
+    RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(width) * height * unit);
+}
+
+void BlitEncoder::fillWords(uint64_t dst, uint64_t bytes, uint32_t word)
+{
+    if (bytes)
+        cb_->useAddress(dst, bytes, true);
+    cb_->buffersWritten_ = true;
+    if (bytes < 4)
+        return;
+    room();
+    p_.m(CE_SET_REMAP_CONST_A, word, SUBC_COPY);
+    p_.m(CE_SET_REMAP_COMPONENTS, kFillConstA | 3u << 16, SUBC_COPY);
+    p_.inc(CE_PITCH_IN, {kFillMaxDim * 4, kFillMaxDim * 4}, SUBC_COPY);
+    for (uint64_t at = dst, left = bytes & ~uint64_t(3); left >= 4;) {
+        const uint64_t words = left / 4;
+        const uint32_t width = uint32_t(std::min<uint64_t>(words, kFillMaxDim)),
+                       height = words >= kFillMaxDim ? uint32_t(std::min<uint64_t>(words / kFillMaxDim, kFillMaxDim)) : 1;
+        fillRun(at, width, height, 4);
+        at += uint64_t(width) * height * 4;
+        left -= uint64_t(width) * height * 4;
+    }
+}
+
 void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 {
     if (bytes)
         cb_->useAddress(dst, bytes, true);
     cb_->buffersWritten_ = true;
-    // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
-    // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
-    constexpr uint32_t kConstA = 0x4444, kRemap = 1u << 10, kMaxDim = 1u << 15;
-    constexpr uint32_t kLaunch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | kRemap;
-    auto run = [&](uint64_t at, uint32_t width, uint32_t height, [[maybe_unused]] uint32_t unit) {
-        room();
-        p_.inc(CE_OFFSET_IN_UPPER + 8, {uint32_t(at >> 32), uint32_t(at)}, SUBC_COPY);
-        p_.inc(CE_LINE_LENGTH_IN, {width, height}, SUBC_COPY);
-        p_.m(CE_LAUNCH_DMA, kLaunch | (height > 1 ? 1u << 9 : 0), SUBC_COPY);
-        RAW_DIAGNOSTIC(dev_->stats.ceOps++);
-        RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(width) * height * unit);
-    };
     auto bytesOf = [&](uint64_t at, uint64_t n) {
         if (!n)
             return;
         room();
         p_.m(CE_SET_REMAP_CONST_A, value, SUBC_COPY);
-        p_.m(CE_SET_REMAP_COMPONENTS, kConstA, SUBC_COPY);
-        run(at, uint32_t(n), 1, 1);
+        p_.m(CE_SET_REMAP_COMPONENTS, kFillConstA, SUBC_COPY);
+        fillRun(at, uint32_t(n), 1, 1);
     };
     const uint64_t end = dst + bytes, first = std::min((dst + 3) & ~uint64_t(3), end),
                    last = std::max(end & ~uint64_t(3), first);
     bytesOf(dst, first - dst);
-    if (last > first) {
-        room();
-        p_.m(CE_SET_REMAP_CONST_A, uint32_t(value) * 0x01010101u, SUBC_COPY);
-        p_.m(CE_SET_REMAP_COMPONENTS, kConstA | 3u << 16, SUBC_COPY);
-        p_.inc(CE_PITCH_IN, {kMaxDim * 4, kMaxDim * 4}, SUBC_COPY);
-        for (uint64_t at = first, left = last - first; left >= 4;) {
-            const uint64_t words = left / 4;
-            const uint32_t width = uint32_t(std::min<uint64_t>(words, kMaxDim)),
-                           height = words >= kMaxDim ? uint32_t(std::min<uint64_t>(words / kMaxDim, kMaxDim)) : 1;
-            run(at, width, height, 4);
-            at += uint64_t(width) * height * 4;
-            left -= uint64_t(width) * height * 4;
-        }
-    }
+    if (last > first)
+        fillWords(first, last - first, uint32_t(value) * 0x01010101u);
     bytesOf(last, end - last);
 }
 
