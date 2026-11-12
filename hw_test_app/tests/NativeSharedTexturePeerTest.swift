@@ -7,8 +7,8 @@ import SwitchTexturePattern
 import XPC
 
 /// What the texture peer (peer/texpeer.mm) does for the app: opens a handle with its own device and writes every texel
-/// of it on the GPU, answering "ok pid=<pid> registry=<id> path=<its command buffer's path> shareable=<0|1>" once that
-/// work completed, or "fail=<why> ...".
+/// of it on the GPU, answering "ok pid=<pid> registry=<id> path=<its command buffer's path> shareable=<0|1>
+/// footprint_kb=<now> peak_kb=<its peak>" once that work completed, or "fail=<why> ...".
 @objc protocol SharedTexturePeer {
     func write(_ handle: MTLSharedTextureHandle, reply: @escaping (String) -> Void)
 }
@@ -264,6 +264,7 @@ struct NativeSharedTexturePeerTest: NativeObjectTest {
         if connection.processIdentifier == getpid() { work.failures.append("the peer is this process") }
 
         var peerPaths: [String] = []
+        var peerPeak = "-"
         for (name, texture, handle) in made {
             guard let answer = await Self.write(connection, handle) else {
                 work.failures.append("the peer did not answer for the \(name) texture")
@@ -271,6 +272,7 @@ struct NativeSharedTexturePeerTest: NativeObjectTest {
             }
             let fields = Self.fields(answer)
             peerPaths.append(fields["path"] ?? "-")
+            peerPeak = fields["peak_kb"] ?? peerPeak
             if !answer.hasPrefix("ok ") { work.failures.append("the peer's \(name) write: \(answer)") }
             if fields["path"] != "raw" {
                 work.failures.append("the peer's \(name) command buffer went \(fields["path"] ?? "-")")
@@ -293,6 +295,7 @@ struct NativeSharedTexturePeerTest: NativeObjectTest {
             if wrong != 0 { work.failures.append("\(wrong) bytes of the \(name) texture are not the peer's") }
         }
         metrics.set("peer_paths", peerPaths.isEmpty ? "-" : peerPaths.joined(separator: ","))
+        metrics.set("peer_peak_kb", peerPeak)
         return work
     }
 }

@@ -11,6 +11,7 @@
 // serves that one connection.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <mach/mach.h>
 #include <os/log.h>
 #include <algorithm>
 #include <unistd.h>
@@ -114,6 +115,17 @@ bool fill(id<MTLDevice> device, id<MTLCommandBuffer> cb, id<MTLTexture> t)
     return true;
 }
 
+// What jetsam holds against this daemon's limits (24B119: the Supplemental jetsam overlay's), now and at its peak
+NSString *footprint()
+{
+    task_vm_info_data_t vm = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) != KERN_SUCCESS)
+        return @"footprint_kb=- peak_kb=-";
+    return [NSString stringWithFormat:@"footprint_kb=%llu peak_kb=%llu", vm.phys_footprint >> 10,
+                                      vm.ledger_phys_footprint_peak >> 10];
+}
+
 }  // namespace
 
 @interface TexturePeer : NSObject <SharedTexturePeer>
@@ -146,9 +158,10 @@ bool fill(id<MTLDevice> device, id<MTLCommandBuffer> cb, id<MTLTexture> t)
     [cb waitUntilCompleted];
     const SEL path = NSSelectorFromString(@"switchRawPath");
     NSString *taken = [(id)cb respondsToSelector:path] ? [(id)cb valueForKey:@"switchRawPath"] : @"device";
-    reply([NSString stringWithFormat:@"%@ pid=%d registry=%llx path=%@ shareable=%d",
+    reply([NSString stringWithFormat:@"%@ pid=%d registry=%llx path=%@ shareable=%d %@",
                                      cb.status == MTLCommandBufferStatusCompleted ? @"ok" : @"fail=not_completed",
-                                     getpid(), (unsigned long long)self.device.registryID, taken, t.isShareable]);
+                                     getpid(), (unsigned long long)self.device.registryID, taken, t.isShareable,
+                                     footprint()]);
 }
 
 @end
