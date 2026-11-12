@@ -98,13 +98,14 @@ struct PackProgram {
     uint32_t bytes;       // slot size
     // NAK's shader data in the slot (where NVK uploads it: 256-aligned after the code) and its size, a multiple of 256; 0: none
     uint32_t dataOffset, dataBytes;
-    uint8_t cbufs;         // constant buffer slots it uses
-    uint8_t cbufType[11];  // each slot's PackCbufType: the root table at 0
-    uint8_t gprs;          // SET_PIPELINE_REGISTER_COUNT: a graphics program's registers (a kernel's are its QMD's)
+    uint8_t cbufs;  // constant buffer slots it uses
+    // each slot's PackCbufType, the root table at 0: as many as a GM20B stage binds (BIND_GROUP_CONSTANT_BUFFER's 18)
+    uint8_t cbufType[18];
+    uint8_t gprs;  // SET_PIPELINE_REGISTER_COUNT: a graphics program's registers (a kernel's are its QMD's)
     // SET_BINDLESS_TEXTURE's constant buffer slot + 1: where its bound texture instructions read their handles (word
     // index x 4, the handles' set-0 entries: PackPipeline::boundEntries); 0: it has none
     uint8_t boundTextures;
-    uint16_t reserved;
+    uint8_t reserved[3];
 };
 
 // One of a stage's programs compiled under assumptions about its draws (PackAssumption). A stage's variants are tried in order
@@ -426,7 +427,7 @@ static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
 static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4, "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
-static_assert(sizeof(PackProgram) == 36, "pack layout");
+static_assert(sizeof(PackProgram) == 44, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");

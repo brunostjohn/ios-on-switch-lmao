@@ -112,6 +112,7 @@ TEST(RawRecordTargets, ATargetBetweenTwoAStateHasIsForeignToIt)
     EXPECT_TRUE(raw::foreign(0x1A10, mask));
 }
 
+// A GM20B stage binds 18 constant buffers (BIND_GROUP_CONSTANT_BUFFER); a pack program records each one's type
 TEST(RawRecordPrograms, AProgramOfMoreConstantBuffersThanAPackProgramRecordsIsSetAside)
 {
     raw::CapturedProgram vs, fs;
@@ -119,14 +120,14 @@ TEST(RawRecordPrograms, AProgramOfMoreConstantBuffersThanAPackProgramRecordsIsSe
     fs.image.assign(96, 0);
     fs.cbufTypes = {raw::CbufRoot};
     vs.cbufTypes = {raw::CbufRoot};
-    for (uint32_t ubo = 0; ubo < 11; ubo++)
+    for (uint32_t ubo = 0; ubo < 18; ubo++)
         vs.cbufTypes.push_back(uint8_t(raw::CbufUbo | ubo << 3));
     raw::RecordParts parts;
     parts.programs[0] = &vs;
     parts.programs[1] = &fs;
     std::string why;
     EXPECT_FALSE(raw::programsBindable(parts, why));
-    EXPECT_EQ(why, "a program reads 12 constant buffers, past the 11 a pack program records");
+    EXPECT_EQ(why, "a program reads 19 constant buffers, past the 18 a pack program records");
     vs.cbufTypes.pop_back();
     EXPECT_TRUE(raw::programsBindable(parts, why)) << why;
 }

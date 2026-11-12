@@ -1,7 +1,8 @@
 """Write a pack whose program indices pass 65,535, by the pack writer's own codec (raw/pack/packfile.py).
 
 usage: wide_index_pack.py <out pack.bin>
-raw_pack_test reads it back with the runtime's reader (raw/runtime/raw_pack.h): the two agree on every index field.
+raw_pack_test reads it back with the runtime's reader (raw/runtime/raw_pack.h): the two agree on every index field, and
+on a program of more constant buffers than the 11 PackProgram once held.
 """
 
 import os
@@ -15,8 +16,21 @@ KERNEL_KEY = 'kernel | wide_kernel'
 VERTEX, FRAGMENT, VARIANT, KERNEL, SPLIT_FRAGMENT, PROLOGUE = 70000, 70001, 70002, 70003, 70004, 70005
 
 
-def program() -> dict:
-    return {'heap_offset': 0, 'program': 0x30, 'bytes': 0x100, 'data_offset': 0, 'data_bytes': 0, 'cbufs': [1]}
+# VectorKit's DaVinci ground_base_vertex on 21H461 reads the root table and 11 uniform buffers: 12 constant buffers
+WIDE_CBUFS = [1, *(5 | ubo << 3 for ubo in range(11))]
+
+
+def program(cbufs: list[int] | None = None) -> dict:
+    return {
+        'heap_offset': 0,
+        'program': 0x30,
+        'bytes': 0x100,
+        'data_offset': 0,
+        'data_bytes': 0,
+        'cbufs': cbufs or [1],
+        'gprs': 40,
+        'bound_textures': 2,
+    }
 
 
 def pack() -> packfile.Pack:
@@ -55,7 +69,7 @@ def pack() -> packfile.Pack:
     }
     return packfile.Pack(
         pipes=[state],
-        programs=[program(), program()],
+        programs=[program(), program(WIDE_CBUFS)],
         constexpr_tsc=[],
         baseline={},
         init=[],

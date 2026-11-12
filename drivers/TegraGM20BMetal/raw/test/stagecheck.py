@@ -36,7 +36,7 @@ class Pack:
     def __init__(self, path: Path):
         self.bytes = path.read_bytes()
         version, _, self.count, _ = struct.unpack_from('<4I', self.bytes, 8)
-        self.size, _, sections, self.head = nakstat.LAYOUTS[version]
+        self.size, self.program_bytes, sections, self.head = nakstat.LAYOUTS[version]
         self.sections = [struct.unpack_from('<QQ', self.bytes, 24 + 16 * i) for i in range(sections)]
 
     def programs(self, key: int) -> tuple[int, int]:
@@ -48,12 +48,12 @@ class Pack:
 
     def program(self, index: int) -> tuple[bytes, int, int]:
         """Give the program's code, the constant buffer slot it reads set 0 at, and the one its bound textures read."""
-        at = self.sections[0][0] + 36 * index
+        at = self.sections[0][0] + self.program_bytes * index
         heap, _, size, data, _ = struct.unpack_from('<5I', self.bytes, at)
-        cbufs, types = self.bytes[at + 20], self.bytes[at + 21 : at + 32]
+        cbufs, types, _, bound = nakstat.program_fields(self.bytes, at, self.program_bytes)
         image = self.bytes[self.sections[7][0] + heap + 0x30 : self.sections[7][0] + heap + (data or size)]
-        set_slot = next((c for c in range(1, min(cbufs, 11)) if types[c] & 7 == CBUF_SET), -1)
-        return image, set_slot, self.bytes[at + 33] - 1
+        set_slot = next((c for c in range(1, min(cbufs, len(types))) if types[c] & 7 == CBUF_SET), -1)
+        return image, set_slot, bound - 1
 
 
 def sets(state: dict) -> dict[str, list[int]]:
