@@ -37,10 +37,11 @@ const char *kernelMissing(id state)
     return [state isKindOfClass:[RMComputeState class]] ? ((RMComputeState *)state)->_m2vMissing : nullptr;
 }
 
-const char *dispatchMissing(RMCommandBuffer *cb, size_t at)
+// The compute encoder's state `index` (RMCommandPlan::kernelStates) at a dispatch or an execute of dispatch commands
+const char *kernelStateMissing(RMCommandBuffer *cb, uint32_t index)
 {
     const auto &plan = cb->_plan;
-    const raw::KernelStateRef &state = plan.kernelStates[plan.dispatch(at).state];
+    const raw::KernelStateRef &state = plan.kernelStates[index];
     if (const char *missing = kernelMissing((__bridge id)plan.kernel[state.state].pipeline))
         return missing;
     const auto &buffers = plan.buffers[2][state.buffers];
@@ -50,8 +51,13 @@ const char *dispatchMissing(RMCommandBuffer *cb, size_t at)
     return nullptr;
 }
 
-const char *executeMissing(RMKernelExecute *x)
+const char *executeMissing(RMCommandBuffer *cb, size_t at)
 {
+    const RMPlanControl &control = cb->_plan.control(at);
+    if (control.compute != raw::kNoSnapshot)
+        if (const char *missing = kernelStateMissing(cb, control.compute))
+            return missing;
+    RMKernelExecute *x = (__bridge RMKernelExecute *)cb->_plan.legacy(at).obj;
     if (const char *missing = kernelMissing(x->_pipeline))
         return missing;
     RMIndirectComputeBuffer *b = x->_buffer;
@@ -61,6 +67,9 @@ const char *executeMissing(RMKernelExecute *x)
             return "an indirect dispatch command of a stage-in region";
         if (const char *missing = kernelMissing(c.pipeline))
             return missing;
+        for (const uint32_t stride : c.strides)
+            if (stride != raw::kNoBindStride)
+                return "an indirect dispatch command's buffer bound with an attribute stride";
     }
     return nullptr;
 }
@@ -74,9 +83,9 @@ const char *rangeMissing(RMCommandBuffer *cb, size_t from, size_t to)
         if (isPlanDraw(op))
             missing = drawMissing(cb, at, op);
         else if (op == OpDispatch)
-            missing = dispatchMissing(cb, at);
+            missing = kernelStateMissing(cb, cb->_plan.dispatch(at).state);
         else if (op == OpExecuteKernels)
-            missing = executeMissing((__bridge RMKernelExecute *)cb->_plan.legacy(at).obj);
+            missing = executeMissing(cb, at);
         if (missing)
             return missing;
     }
