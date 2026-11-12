@@ -213,6 +213,22 @@ TEST(StuckSave, Tv3gsSaveOfAChannelWithNothingPendingIsDecidedAtTheFirstTick)
 	EXPECT_FALSE(tgm_switch_unowned(0, 2, 3)) << "work pending: the stuck rule decides";
 }
 
+// The present's or the scrubber's channel with nothing pending, an engine stuck switching off it: with nothing to redo
+// (tgm_ctxsw_redo_mark), progress is any job of the channel completing after the reset.
+TEST(StuckSave, AKernelChannelWithNothingPendingIsResetOnceAndFatalOnlyIfThatResetDidNotFreeIt)
+{
+	const uint32_t done = 9;
+	const int stuck = tgm_switch_unowned(0, done, done);
+	ASSERT_TRUE(stuck);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(0, 0, done)), TGM_CTXSW_REDO)
+		<< "the engine is reset at the first tick, nothing killed";
+	const uint32_t resetAfter = done;
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done)), TGM_CTXSW_FATAL)
+		<< "stuck again on the same context with no job since: the reset did not free the engine";
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 1, stuck, tgm_ctxsw_redo_pending(1, resetAfter, done + 1)), TGM_CTXSW_REDO)
+		<< "a later stall after the channel ran again is a new one";
+}
+
 TEST(StuckSave, OnlyASwitchAwayFromTheContextIsASave)
 {
 	EXPECT_EQ(tgm_engine_saving(engine(6, 42, 4), 0), 42);

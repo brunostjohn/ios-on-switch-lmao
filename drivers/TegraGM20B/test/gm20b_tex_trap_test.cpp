@@ -274,6 +274,11 @@ TEST(Gm20bGrFault, AClientsStallEndsInItsKillOrAnEngineResetNeverAPanic)
 	EXPECT_NE(iso.find("nvxnu_work_schedule_after(tgm_iso.deadline, TGM_ISOLATE_NS);"), std::string::npos);
 	const std::string contained = Body(hang, "int tgm_errors_contained(const char *errors)\n{");
 	EXPECT_NE(contained.find("if (!found)\n\t\t\tcontinue;"), std::string::npos);
+	const std::string ticks = Text(RECOVER_C);
+	const size_t redo = ticks.find("case TGM_CTXSW_REDO:");
+	ASSERT_NE(redo, std::string::npos);
+	EXPECT_LT(ticks.find("tgm_engine_reset_locked(", redo), ticks.find("break;", redo))
+		<< "a kernel channel's REDO resets the engine as a dead channel's RESET does";
 }
 
 }  // namespace
