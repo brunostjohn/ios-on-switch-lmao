@@ -3,9 +3,9 @@
 usage: record_goldens.py <write_goldens> <pack dir> <kind> <the pack's split bucket logs>...
 
 write_goldens writes testdata/records_<kind>.bin, _sample.tsv and _sample_states.txt from the pack; then the sample
-pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. A bucket begins with
-the warm-up state (rawpack.py split_buckets), which the probe draws first, so the first bucket's first line leads. Then
-every R line whose state key hashes (packfile.fnv of rawpack.state_key) to a sampled state, and every D line (the
+pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. A bucket begins
+with the warm-up state (rawpack.py split_buckets), which the probe draws first, so the first bucket's first line leads.
+Then every R line whose state key hashes (packfile.fnv of rawpack.state_key) to a sampled state, and every D line (the
 kernels' dispatch shapes, a few dozen), each once.
 """
 
@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'raw/pack'))
-import packfile  # noqa: E402
-import rawpack  # noqa: E402
+import packfile
+import rawpack
 
 
 def pick(states: set[int], logs: list[Path]) -> list[str]:
