@@ -9,12 +9,18 @@ namespace {
 
 uint64_t gInlineStamp;  // the submit thread's: one per range encoded
 
-bool inlineable(RMCommandBuffer *cb, const RMSegment &range)
+bool signalRange(RMCommandBuffer *cb, const RMSegment &range)
 {
-    if (!range.event || range.to != range.from + 1 || !gRM->eventWords.load(std::memory_order_relaxed))
-        return false;
-    const Cmd c = cb->_plan.legacy(range.from);
-    return c.op == OpSignalEvent && sharedEventLease((__bridge id)c.obj) != nullptr;
+    return range.event && range.to == range.from + 1 && cb->_plan.legacy(range.from).op == OpSignalEvent;
+}
+
+// Its signals' events are the kernel's (a first one imported here, on the committing thread)
+bool leased(RMCommandBuffer *cb, const raw::InlineJoin &join)
+{
+    for (size_t k = join.first + 1; k < join.last; ++k)
+        if (cb->_segs[k].event && !sharedEventLease((__bridge id)cb->_plan.legacy(cb->_segs[k].from).obj))
+            return false;
+    return true;
 }
 
 }  // namespace
@@ -23,12 +29,16 @@ void inlineSignals(RMCommandBuffer *cb)
 {
     cb->_inlineSignals.clear();
     auto &segs = cb->_segs;
+    if (segs.size() < 3 || !gRM->eventWords.load(std::memory_order_relaxed))
+        return;
     std::vector<raw::InlineRangeView> views;
     for (const RMSegment &range : segs)
-        views.push_back({range.raw && !range.event, inlineable(cb, range)});
+        views.push_back({range.raw && !range.event, signalRange(cb, range)});
     const std::vector<raw::InlineJoin> joins = raw::inlineJoins(views);
     for (auto join = joins.rbegin(); join != joins.rend(); ++join) {
         const uint32_t from = segs[join->first].from, to = segs[join->last].to;
+        if (!leased(cb, *join))
+            continue;
         cb->_plan.prepareRange(from, to);
         if (cb->_plan.nativeRangeRefusal(from, to))
             continue;
