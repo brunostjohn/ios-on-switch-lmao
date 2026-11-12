@@ -16,8 +16,9 @@ import Metal
 /// and every command buffer is the raw path's. Beside the encode's own: the runtime's locks on every thread over the
 /// batch (facade_locks, raw_lock.h's count of its wrappers), at most 4 a command buffer, and the growth of the blocks
 /// in use in every malloc zone while the batch is recorded and held (held_blocks), a coarse bound on what each keeps
-/// allocated (the whole process's, so no per-draw check). The profile is the facade's; a release runtime has none and
-/// the test skips.
+/// allocated (the whole process's, so no per-draw check). The pooled encoders' blocks (raw_object_pool.h): none freed
+/// in the batch (its pool kept too few for what the batch holds at once), and the most each pool made in the process.
+/// The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
     let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
@@ -31,12 +32,12 @@ struct EncodeCostPathTest: HWTest {
     ]
     static let events = [
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
-        "geometry_vertices", "facade_locks", "held_blocks",
+        "geometry_vertices", "facade_locks", "held_blocks", "render_encoders_freed",
     ]
     static let perDrawFree = ["mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices", "facade_locks"]
     static let ceilings: [(event: String, most: Double)] = [
         ("locks", 0.1), ("sends", 0), ("mallocs", 4), ("frees", 2), ("geometry_vertices", 0), ("facade_locks", 4),
-        ("held_blocks", heldBlocksMost),
+        ("held_blocks", heldBlocksMost), ("render_encoders_freed", 0),
     ]
     /// coarse: facadecost's held window grows 3 blocks a command buffer on the host
     static let heldBlocksMost = 8.0
@@ -114,6 +115,13 @@ struct EncodeCostPathTest: HWTest {
             let drawn = arm["draw_calls"] ?? 0
             metrics.set("applied_per_draw" + suffix, drawn > 0 ? (arm["applied"] ?? 0) / drawn : 0, digits: 2)
             metrics.set("mallocs_counted" + suffix, arm["malloc_encodes"] ?? 0 > 0)
+        }
+        let process = RawFacade.encodeProfile(of: gpu.device)
+        for kind in ["render", "blit", "compute"] {
+            for count in ["made", "freed"] {
+                let key = kind + "_encoders_" + count
+                metrics.set(key, Int(process[key] ?? 0))
+            }
         }
         metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
         var failures: [String] = []

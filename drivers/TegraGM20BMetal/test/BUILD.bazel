@@ -128,6 +128,9 @@
 #                     over the encodings of Metal's render pass descriptor ivars (RawMetalPassCache.mm reads them by name)
 #   raw_finish_state_test  raw/runtime/raw_finish_state.h: of a command buffer's submitter and its ranges' completions,
 #                     exactly one finishes it, in every interleaving
+#   raw_object_pool_test  raw/runtime/raw_object_pool.h: an instance is built on the block of one gone before, zeroed, one
+#                     still held keeps its block, warm frames make none, and dealloc destroys in place (C++ and ARC ivars,
+#                     weak references, associated objects); kept blocks are poisoned under ASan
 #   raw_submit_gate_test  raw/runtime/raw_submit_gate.h: the submit worker's submissions and other threads' moves never
 #                     overlap, the worker taking no lock while no move waits
 #   raw_take_pool_test  raw/runtime/raw_take_pool.h: items any thread keeps and takes with no lock, never held by two
@@ -924,6 +927,37 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_finish_state.h",
     ],
     cxx_std = "c++17",
+)
+
+# C++ with no ARC: the runtime's in-place instance functions are unavailable under it
+host_library(
+    name = "raw_object_pool",
+    srcs = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_lock.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_object_pool.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_object_pool.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_take_pool.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_object_pool_test",
+    srcs = [
+        "raw_object_pool_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_object_pool.h",
+    ],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+    ],
+    deps = [":raw_object_pool"],
 )
 
 host_test(
@@ -3077,6 +3111,7 @@ RAW_HOST_UNITS = [
         "raw_visibility_pass.cpp",
         "raw_private_comp.cpp",
         "raw_multisample.cpp",
+        "raw_object_pool.cpp",
         "raw_comp.cpp",
         "raw_record_parts.cpp",
         "raw_direct.cpp",

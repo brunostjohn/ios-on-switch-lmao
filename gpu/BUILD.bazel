@@ -204,6 +204,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_draw_shortcuts.cpp",
         GM20B_METAL + ":raw/runtime/raw_resolve_twod.cpp",
         GM20B_METAL + ":raw/runtime/raw_multisample.cpp",
+        GM20B_METAL + ":raw/runtime/raw_object_pool.cpp",
         GM20B_METAL + ":raw/runtime/raw_surface_image.cpp",
         GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_record_parts.cpp",

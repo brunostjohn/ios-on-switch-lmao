@@ -293,6 +293,7 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
     std::lock_guard<raw::Mutex> l(once);
     if (gRM)
         return gRM->device;  // one per process
+    rmPoolEncoders();
     raw::Device *dev = nullptr;
     std::string err;
     bool prepared = false;

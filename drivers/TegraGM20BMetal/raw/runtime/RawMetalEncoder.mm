@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalCounters.h"
+#include "raw_object_pool.h"
 #import "RawMetalMultisample.h"
 #import "RawMetalPassCache.h"
 #import "RawMetalRotated.h"
@@ -88,11 +89,18 @@ uint64_t nextTraceId()
     return nil;
 }
 
-// One its caller dropped without ending it is ended here, so the tape's encoders stay closed
+// One its caller dropped without ending it is ended here, so the tape's encoders stay closed: a check with no message
+// (an ended one, every pass's, sends none)
+static void endDropped(void *object)
+{
+    RMEncoder *__unsafe_unretained e = (__bridge RMEncoder *)object;
+    if (!e->_ended && e->_cb)
+        [e endEncoding];
+}
+
 - (void)dealloc
 {
-    if (!_ended && _cb)
-        [self endEncoding];
+    endDropped((__bridge void *)self);
 }
 
 - (void)endEncoding
@@ -258,6 +266,13 @@ void rmOwnPass(RMRenderEncoder *e)
     e->_pass = own;
     e->_passShared = false;
     e->_cb->_plan.setDescriptor(e->_renderAt, (__bridge void *)own);
+}
+
+void rmPoolEncoders()
+{
+    for (Class cls : {[RMRenderEncoder class], [RMBlitEncoder class], [RMComputeEncoder class]})
+        if (!rawPoolInstances(cls, endDropped))
+            os_log_error(rawLog(), "raw: %{public}s instances are not pooled", class_getName(cls));
 }
 
 @implementation RMCommandBuffer (Encoders)

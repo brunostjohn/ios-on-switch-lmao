@@ -38,7 +38,7 @@ OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HAR
 # the runtime's completion of states the pack lacks (RawComplete.mm, RawDirect.mm; raw_completed.cpp beside raw_gpu.cpp)
 # the facade's own runtime units: its recording plan (RawMetalPlan.h), XR planes and multisample resolves
 FACADE_RUNTIME=("$RAW/runtime/raw_semantic_plan.cpp" "$RAW/runtime/raw_semantic_resources.cpp" "$RAW/runtime/raw_semantic_setters.cpp"
-    "$RAW/runtime/raw_xr_planes.cpp" "$RAW/runtime/raw_multisample.cpp")
+    "$RAW/runtime/raw_xr_planes.cpp" "$RAW/runtime/raw_multisample.cpp" "$RAW/runtime/raw_object_pool.cpp")
 COMPLETION=("$RAW/runtime/raw_record_parts.cpp" "$RAW/runtime/raw_direct.cpp" "$RAW/runtime/raw_direct_compute.cpp" "$RAW/runtime/raw_emit.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp")
 # the raw facade (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
 FACADE=("$RAW"/runtime/Raw*.mm "$RAW/runtime/SwitchSharedEvent.mm")

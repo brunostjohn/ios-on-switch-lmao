@@ -10,7 +10,7 @@
 // count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
 // whose predecessor's completion has not run hands its own to it), or where the runtime's own count of the locks it took
 // on every thread (facade_locks) passes 4 a command buffer, or where a command buffer of the profile's batch was not the
-// raw path's (switchRawPath).
+// raw path's (switchRawPath). Then each pooled encoder class's bytes, blocks and costs.
 // usage: [DYLD_INSERT_LIBRARIES=<libfacadecount.dylib>] facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
@@ -19,6 +19,7 @@
 #include <mach/mach.h>
 #include <malloc/malloc.h>
 #include <objc/runtime.h>
+#include <time.h>
 #include <algorithm>
 #include <cstdio>
 #include <map>
@@ -26,6 +27,7 @@
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
 #include "../runtime/RawMetal.h"
+#include "../runtime/raw_object_pool.h"
 
 struct facadecount {
     uint64_t sends, locks, mallocs, frees;
@@ -54,6 +56,48 @@ using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 namespace {
 
 constexpr double kFacadeLocksMost = 4;
+
+uint64_t nowNs()
+{
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+
+// Each pooled encoder class (raw_object_pool.h): its instance bytes, the blocks its pool made and freed over the run
+// (none freed: made is the most alive at once), and what an alloc and dealloc through it cost beside the memset of its
+// bytes and the calloc and free it replaced
+void printPools()
+{
+    for (const char *name : {"RMRenderEncoder", "RMBlitEncoder", "RMComputeEncoder"}) {
+        Class cls = NSClassFromString(@(name));
+        const size_t bytes = class_getInstanceSize(cls);
+        const unsigned long long made = rawPoolMade(cls), freed = rawPoolFreed(cls);
+        constexpr int kRounds = 200000;
+        uint64_t t = nowNs();
+        for (int i = 0; i < kRounds; i++)
+            @autoreleasepool {
+                id e = [cls new];
+                (void)e;
+            }
+        const double pooled = double(nowNs() - t) / kRounds;
+        std::vector<uint8_t> scratch(bytes);
+        t = nowNs();
+        for (int i = 0; i < kRounds; i++) {
+            memset(scratch.data(), 0, bytes);
+            __asm__ volatile("" : : "r"(scratch.data()) : "memory");
+        }
+        const double zeroed = double(nowNs() - t) / kRounds;
+        t = nowNs();
+        for (int i = 0; i < kRounds; i++) {
+            void *block = calloc(1, bytes);
+            __asm__ volatile("" : : "r"(block) : "memory");
+            free(block);
+        }
+        const double callocFree = double(nowNs() - t) / kRounds;
+        printf(
+            "facadecost pool %s: bytes %zu made %llu freed %llu | ns alloc+dealloc %.1f memset %.1f calloc+free %.1f\n",
+            name, bytes, made, freed, pooled, zeroed, callocFree);
+    }
+}
 
 double blocksInUse()
 {
@@ -412,6 +456,7 @@ int main(int argc, char **argv)
             }
         }
         printSites(sites, buffers);
+        printPools();
         for (const auto &[name, value] : counted[0]) {
             const double grown = counted[1][name] - value;
             if (name == "encodes" ? value < 1 : grown >= 0.5) {
