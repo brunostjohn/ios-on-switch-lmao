@@ -215,8 +215,8 @@ bool RenderEncoder::blurTwod(const Pipeline &pl, uint32_t primitive, uint32_t fi
                 return false;
         }
         const switch_gm20b_2d_surface a = twodSurface(from, fmt2d), b = twodSurface(into, fmt2d);
-        const switch_gm20b_2d_scale_op op = {0,          0,          into.width, into.height, 2ull << 32,
-                                             2ull << 32, 1ull << 32, 1ull << 32, true,        true};
+        const switch_gm20b_2d_scale_op op = {0,          0,          into.width, into.height, 2ull << 32, 2ull << 32,
+                                             1ull << 32, 1ull << 32, true,       true,        0};
         kit(p_, switch_gm20b_2d_scale, &a, &b, &op);
         if (step < steps)
             kit(p_, switch_gm20b_wait_for_idle);

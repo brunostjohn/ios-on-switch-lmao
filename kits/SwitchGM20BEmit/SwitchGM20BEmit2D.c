@@ -60,6 +60,20 @@ static void source(struct nv_push *p, const struct switch_gm20b_2d_surface *s)
     P_INLINE_DATA(p, (uint32_t)s->address);
 }
 
+// The pattern a ROP3 code may read held at all ones, as the DDX holds it outside planemask copies (NVC0EXASetPattern)
+static void rop_on(struct nv_push *p, uint8_t rop)
+{
+    P_IMMD(p, NV902D, SET_OPERATION, V_ROP);
+    P_IMMD(p, NV902D, SET_ROP, rop);
+    P_MTHD(p, NV902D, SET_MONOCHROME_PATTERN_COLOR_FORMAT);
+    P_INLINE_DATA(p, NV902D_SET_MONOCHROME_PATTERN_COLOR_FORMAT_V_A8R8G8B8);
+    P_INLINE_DATA(p, NV902D_SET_MONOCHROME_PATTERN_FORMAT_V_LE_M1);
+    P_INLINE_DATA(p, ~0u);
+    P_INLINE_DATA(p, ~0u);
+    P_INLINE_DATA(p, ~0u);
+    P_INLINE_DATA(p, ~0u);
+}
+
 void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surface *src,
                            const struct switch_gm20b_2d_surface *dst, const struct switch_gm20b_2d_scale_op *s)
 {
@@ -67,6 +81,8 @@ void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surfa
     P_IMMD(p, NV902D, SET_COMPRESSION, dst->compressed);
     destination(p, dst, dst->format);
     source(p, src);
+    if (s->rop)
+        rop_on(p, s->rop);
     P_IMMD(p, NV902D, TWOD_INVALIDATE_TEXTURE_DATA_CACHE, V_L1_ONLY);
     P_IMMD(
         p, NV902D, SET_PIXELS_FROM_MEMORY_SAMPLE_MODE,
@@ -86,16 +102,21 @@ void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surfa
     P_INLINE_DATA(p, (uint32_t)(s->src_x >> 32));
     P_INLINE_DATA(p, (uint32_t)s->src_y);
     P_INLINE_DATA(p, (uint32_t)(s->src_y >> 32));
+    if (s->rop)
+        P_IMMD(p, NV902D, SET_OPERATION, V_SRCCOPY);
 }
 
-void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
-                          uint32_t y0, uint32_t x1, uint32_t y1)
+static void solid(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint8_t rop, uint32_t color,
+                  uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
 {
     const uint32_t format = switch_gm20b_2d_fill_format(dst->format);
     P_IMMD(p, NV902D, SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, dst->zeta);
     P_IMMD(p, NV902D, SET_COMPRESSION, dst->compressed);
     destination(p, dst, format);
-    P_IMMD(p, NV902D, SET_OPERATION, V_SRCCOPY);
+    if (rop)
+        rop_on(p, rop);
+    else
+        P_IMMD(p, NV902D, SET_OPERATION, V_SRCCOPY);
     P_IMMD(p, NV902D, SET_COLOR_KEY_ENABLE, V_FALSE);
     P_IMMD(p, NV902D, SET_RENDER_ENABLE_C, MODE_TRUE);
     P_MTHD(p, NV902D, SET_CLIP_X0);
@@ -114,4 +135,18 @@ void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surfac
     P_INLINE_DATA(p, x1);
     P_INLINE_DATA(p, y1);
     P_IMMD(p, NV902D, SET_CLIP_ENABLE, V_FALSE);
+    if (rop)
+        P_IMMD(p, NV902D, SET_OPERATION, V_SRCCOPY);
+}
+
+void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
+                          uint32_t y0, uint32_t x1, uint32_t y1)
+{
+    solid(p, dst, 0, color, x0, y0, x1, y1);
+}
+
+void switch_gm20b_2d_invert(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t x0, uint32_t y0,
+                            uint32_t x1, uint32_t y1)
+{
+    solid(p, dst, SWITCH_GM20B_2D_ROP_DSTINVERT, 0, x0, y0, x1, y1);
 }

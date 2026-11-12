@@ -156,7 +156,7 @@ TEST(Emit2D, AScaledBlitIsTheProbesScaleOp)
     dst.address = 0x0200000000ull;
     dst.width = 256;
     dst.height = 128;
-    switch_gm20b_2d_scale_op s = {0, 0, 256, 128, 2ull << 32, 2ull << 32, 1ull << 32, 1ull << 32, true, true};
+    switch_gm20b_2d_scale_op s = {0, 0, 256, 128, 2ull << 32, 2ull << 32, 1ull << 32, 1ull << 32, true, true, 0};
     std::vector<uint32_t> words(64);
     nv_push p;
     nv_push_init(&p, words.data(), words.size(), SUBC_MASK_ALL);
@@ -199,6 +199,75 @@ TEST(Emit2D, AScaledBlitIsTheProbesScaleOp)
         {k2D, NV902D_PIXELS_FROM_MEMORY_SRC_Y0_INT, 1},
     };
     EXPECT_EQ(Methods(words), expected);
+}
+
+std::vector<Method> ropOn(uint32_t rop)
+{
+    return {
+        {k2D, NV902D_SET_OPERATION, NV902D_SET_OPERATION_V_ROP},
+        {k2D, NV902D_SET_ROP, rop},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN_COLOR_FORMAT, NV902D_SET_MONOCHROME_PATTERN_COLOR_FORMAT_V_A8R8G8B8},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN_FORMAT, NV902D_SET_MONOCHROME_PATTERN_FORMAT_V_LE_M1},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN_COLOR0, ~0u},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN_COLOR1, ~0u},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN0, ~0u},
+        {k2D, NV902D_SET_MONOCHROME_PATTERN1, ~0u},
+    };
+}
+
+TEST(Emit2D, AnInvertIsTheDdxsGxInvertFillThenSrccopyAgain)
+{
+    switch_gm20b_2d_surface s = {};
+    s.address = 0x0123456000ull;
+    s.format = NV902D_SET_DST_FORMAT_V_A8B8G8R8;
+    s.block_height_log2 = 4;
+    s.width = 1440;
+    s.height = 2560;
+    std::vector<uint32_t> words(64);
+    nv_push p;
+    nv_push_init(&p, words.data(), words.size(), SUBC_MASK_ALL);
+    switch_gm20b_2d_invert(&p, &s, 0, 0, 1440, 2560);
+    words.resize(nv_push_dw_count(&p));
+    EXPECT_LE(words.size(), SWITCH_GM20B_2D_INVERT_WORDS);
+    const std::vector<Method> m = Methods(words);
+    ASSERT_EQ(m.size(), 11u + 8u + 15u + 1u);
+    EXPECT_EQ(std::vector<Method>(m.begin() + 11, m.begin() + 19), ropOn(SWITCH_GM20B_2D_ROP_DSTINVERT));
+    EXPECT_EQ(m[19], (Method{k2D, NV902D_SET_COLOR_KEY_ENABLE, 0}));
+    EXPECT_EQ(m[27], (Method{k2D, NV902D_SET_RENDER_SOLID_PRIM_COLOR_FORMAT, NV902D_SET_DST_FORMAT_V_A8B8G8R8}));
+    EXPECT_EQ(m[29], (Method{k2D, NV902D_RENDER_SOLID_PRIM_POINT_SET_X(0), 0}));
+    EXPECT_EQ(m[32], (Method{k2D, NV902D_RENDER_SOLID_PRIM_POINT_Y(1), 2560}));
+    EXPECT_EQ(m[33], (Method{k2D, NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_FALSE}));
+    EXPECT_EQ(m.back(), (Method{k2D, NV902D_SET_OPERATION, NV902D_SET_OPERATION_V_SRCCOPY}));
+}
+
+TEST(Emit2D, ARopScaleSetsTheRopBeforeTheLaunchAndSrccopyAfter)
+{
+    switch_gm20b_2d_surface src = {}, dst = {};
+    src.format = NV902D_SET_SRC_FORMAT_V_A8R8G8B8;
+    src.block_height_log2 = 4;
+    src.width = 1440;
+    src.height = 2560;
+    dst = src;
+    dst.width = 720;
+    dst.height = 1280;
+    const switch_gm20b_2d_scale_op plain = {0,          0,          720,  1280, 2ull << 32, 2ull << 32,
+                                            1ull << 32, 1ull << 32, true, true, 0};
+    switch_gm20b_2d_scale_op inverted = plain;
+    inverted.rop = SWITCH_GM20B_2D_ROP_NOTSRCCOPY;
+    std::vector<uint32_t> a(64), b(64);
+    nv_push pa, pb;
+    nv_push_init(&pa, a.data(), a.size(), SUBC_MASK_ALL);
+    nv_push_init(&pb, b.data(), b.size(), SUBC_MASK_ALL);
+    switch_gm20b_2d_scale(&pa, &src, &dst, &plain);
+    switch_gm20b_2d_scale(&pb, &src, &dst, &inverted);
+    b.resize(nv_push_dw_count(&pb));
+    a.resize(nv_push_dw_count(&pa));
+    EXPECT_LE(b.size(), SWITCH_GM20B_2D_SCALE_WORDS);
+    std::vector<Method> expected = Methods(a);
+    const auto rop = ropOn(SWITCH_GM20B_2D_ROP_NOTSRCCOPY);
+    expected.insert(expected.begin() + 19, rop.begin(), rop.end());
+    expected.push_back({k2D, NV902D_SET_OPERATION, NV902D_SET_OPERATION_V_SRCCOPY});
+    EXPECT_EQ(Methods(b), expected);
 }
 
 }  // namespace

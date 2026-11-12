@@ -42,16 +42,28 @@ void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surfac
 // (GM20B's mip chains: corner origin, source origin at du/2, raw/fx/fx_mip.h kGm20bSampling). 32.32 fixed point. The
 // engine's texture cache is invalidated (L1) before the source is read; the caller orders the source's writes before and
 // the destination's readers after.
+// `rop` 0 copies the filtered source (SRCCOPY); any other value is a ROP3 code the engine applies to the destination's
+// codes after the filter (SET_OPERATION ROP, xf86-video-nouveau's NVC0EXASetROP form), SRCCOPY set again after it.
 struct switch_gm20b_2d_scale_op {
     uint32_t dst_x, dst_y, dst_w, dst_h;
     uint64_t du, dv, src_x, src_y;
     bool bilinear, corner;
+    uint8_t rop;
 };
 
-#define SWITCH_GM20B_2D_SCALE_WORDS 40u
+#define SWITCH_GM20B_2D_SCALE_WORDS 52u
 
 void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surface *src,
                            const struct switch_gm20b_2d_surface *dst, const struct switch_gm20b_2d_scale_op *s);
+
+#define SWITCH_GM20B_2D_ROP_NOTSRCCOPY 0x33u
+#define SWITCH_GM20B_2D_ROP_DSTINVERT  0x55u
+#define SWITCH_GM20B_2D_INVERT_WORDS   44u
+
+// [x0, x1) x [y0, y1) of `dst` complemented in place, every channel's code c to 2^n - 1 - c: a solid rectangle under
+// ROP3 DSTINVERT (xf86-video-nouveau's GXinvert fill), clip at the surface, SRCCOPY set again after it
+void switch_gm20b_2d_invert(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t x0, uint32_t y0,
+                            uint32_t x1, uint32_t y1);
 
 #ifdef __cplusplus
 }
