@@ -1058,11 +1058,22 @@ TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
 
 // A submission that writes a block-linear IOSurface under a CPU write lock keeps the lock's rows before it runs, with the
 // connection's lock dropped and before the active-submit gate's channel entry (the copy engine's wait sleeps).
+// gpu.path.resource_ready: a GPU write under a CPU write lock keeps the lock's rows for the merge only when its
+// submission asks before its job is kicked (TegraGM20BViews.h tgm_views_job_writes). Both submission paths ask, once
+// their uses are resolved (Exec outside the connection lock); nothing else calls the per-surface hook, so no path can
+// skip the list, as SubmitJob did once raw moved onto it (57b71739d).
 TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
 {
-	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_gpu_writes(job.written[i]);");
-	expectBefore(exec, "tgm_views_gpu_writes(job.written[i]);", "switch_gpu_chan_submit_enter(chan);");
+	const std::string job =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,"));
+	expectBefore(job, "job.written[writtenCount++] = bo->coh;", "tgm_views_job_writes(job.written, writtenCount);");
+	expectBefore(job, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_submit_enter(chan);");
+	expectBefore(job, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_exec_job(");
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "job.written[writtenCount++] = bo->coh;", "tgm_views_job_writes(job.written, writtenCount);");
+	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_job_writes(job.written, writtenCount);");
+	expectBefore(exec, "tgm_views_job_writes(job.written, writtenCount);", "switch_gpu_chan_submit_enter(chan);");
+	EXPECT_EQ(Count(client(), "tgm_views_gpu_writes("), 0u);
 }
 
 // The PBDMA's ACQUIRE interrupt is gpu_acquire.c's: the timeout goes off in the PBDMA before the bit is cleared (so the

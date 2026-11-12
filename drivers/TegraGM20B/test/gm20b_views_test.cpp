@@ -156,6 +156,42 @@ TEST_F(Views, AGpuWriteUnderAWriteLockKeepsItsBytesWhereTheCpuWroteNone)
 	tgm_coherency_put(s.coh);
 }
 
+// gpu.path.resource_ready on SubmitJob, raw's path since 57b71739d. A job's written list as runJobUses builds it: the
+// coherency entry of each written shared use, none for a BO without one. The job's entry keeps a write-locked surface's
+// rows once, keeps nothing for a read-locked one, and the render survives the unlock where the CPU wrote none. Without the
+// call, as on 8ac4f2e41's SubmitJob, the unlock lays the lock's rows over the render.
+TEST_F(Views, AJobsWrittenListKeepsAWriteLockedRenderAcrossTheUnlock)
+{
+	for (const bool called : {true, false}) {
+		Tiled target(called ? 0xa8000000 : 0xaa000000, called ? 87 : 88);
+		Tiled sampled(called ? 0xac000000 : 0xae000000, called ? 89 : 90);
+		map(1, target.id, 0x10000);
+		map(1, sampled.id, 0x20000);
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, target.id, 0), 0);
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, sampled.id, kReadOnly), 0);
+		const size_t locked = gMoves.size();
+		tgm_coh *const written[] = {nullptr, target.coh, sampled.coh, target.coh};
+		if (called)
+			tgm_views_job_writes(written, 4);
+		ASSERT_EQ(gMoves.size(), locked + (called ? 1u : 0u));
+		if (called)
+			EXPECT_EQ(gMoves.back().op, TGM_RELAYOUT_TO_ROWS);
+
+		std::vector<uint8_t> green(target.rows.size(), 0x5a), texels = target.texels();
+		tgm_layout_write(&target.l, texels.data(), 0, 0, kW, kH, green.data(), kRow);
+		scatter(target.pages, texels);
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, target.id, 0), 0);
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, sampled.id, kReadOnly), 0);
+		std::vector<uint8_t> back(target.rows.size());
+		const std::vector<uint8_t> after = target.texels();
+		tgm_layout_read(&target.l, after.data(), 0, 0, kW, kH, back.data(), kRow);
+		EXPECT_EQ(target.rowsAre(back, green), called);
+		EXPECT_EQ(target.rowsAre(back, target.rows), !called);
+		tgm_coherency_put(target.coh);
+		tgm_coherency_put(sampled.coh);
+	}
+}
+
 TEST_F(Views, ReadOnlyLocksAndUnlockedSurfacesKeepNoBase)
 {
 	Tiled s(0xa6000000, 86);

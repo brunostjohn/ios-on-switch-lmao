@@ -207,6 +207,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
 	if (admissionContinue && !admission.covers(job.uses, useTotal))
 		return kIOReturnBadArgument;
+	tgm_views_job_writes(job.written, writtenCount);
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;
 	int error = events->sequence(eventChannels_[slot]);

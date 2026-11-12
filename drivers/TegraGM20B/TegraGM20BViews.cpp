@@ -423,6 +423,12 @@ extern "C" void tgm_views_gpu_writes(struct tgm_coh *c)
 	tgm_coh_unlock(c);
 }
 
+extern "C" void tgm_views_job_writes(struct tgm_coh *const *written, uint32_t count)
+{
+	for (uint32_t i = 0; i < count; ++i)
+		tgm_views_gpu_writes(written[i]);
+}
+
 extern "C" int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id,
 					  uint32_t options)
 {

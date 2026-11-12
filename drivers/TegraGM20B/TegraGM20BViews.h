@@ -71,6 +71,9 @@ int tgm_views_trap(void *client, uint32_t index, uint32_t id, uint32_t options);
 /* Before a GPU submission that writes the surface of `c` (any may be null): a write lock's rows kept to merge at its
  * unlock. One atomic load when no lock is held. Sleeps on the copy engine's fence interrupt while it copies. */
 void tgm_views_gpu_writes(struct tgm_coh *c);
+/* tgm_views_gpu_writes for each surface a job writes: every GPU submission path (Submit, SubmitJob) calls it once its
+ * uses are resolved and before its job is kicked, since the kept rows are read behind the surface's earlier writers. */
+void tgm_views_job_writes(struct tgm_coh *const *written, uint32_t count);
 
 #ifdef __cplusplus
 }
