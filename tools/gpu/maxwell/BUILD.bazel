@@ -86,6 +86,17 @@ py_test(
     ],
 )
 
+py_test(
+    name = "msaa_storage_test",
+    size = "medium",
+    srcs = ["msaa_storage_test.py"],
+    data = ["testdata/fetch_order_msaa4.hex"],
+    deps = [
+        ":interp",
+        ":isa",
+    ],
+)
+
 py_binary(
     name = "blendcheck",
     srcs = ["blendcheck.py"],

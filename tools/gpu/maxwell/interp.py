@@ -32,6 +32,7 @@ class Inputs:
     cbuf: Callable[[int, int], int]  # a 32-bit word of bank, byte offset
     texture: Callable[[tuple], list[int]]  # four result words of a fetch's canonical key (texture.py)
     bound_cbuf: int = -1  # the constant buffer bound textures read handles from (SET_BINDLESS_TEXTURE); -1: none
+    pixel: Callable[[int], int] = lambda _mode: 0  # PIXLD's word of a mode (5: MyIndex, the invocation's sample)
 
 
 @dataclass

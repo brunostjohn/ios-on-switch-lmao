@@ -210,6 +210,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             lane.w(d + k, result[c])
     elif base in ('S2R', 'CS2R'):
         lane.w(d, 0)
+    elif base == 'PIXLD':
+        lane.w(d, inputs.pixel(bits(w, 31, 3)))
     elif base in ('SULD', 'SUST', 'LDG', 'ATOM', 'RED', 'MEMBAR'):
         memory(base, w, lane, inputs, d)
     else:
@@ -338,9 +340,10 @@ def fminmax(x: int, y: int, want_min: bool, ftz: bool) -> int:
 
 
 def ipa(w: int, lane: Lane, inputs: Inputs, d: int) -> None:
+    """Interpolate an attribute: one value over a lane's pixel, so its centroid reads the centre's."""
     freq, loc = bits(w, 54, 2), bits(w, 52, 2)
-    if loc or bits(w, 38, 1):
-        raise UnsupportedError('IPA centroid, offset or indexed')
+    if loc > 1 or bits(w, 38, 1):
+        raise UnsupportedError('IPA offset or indexed')
     v = inputs.attribute(bits(w, 28, 10))
     if freq == 1:
         v = arith('mul', [v, lane.r(bits(w, 20, 8))], F32)
