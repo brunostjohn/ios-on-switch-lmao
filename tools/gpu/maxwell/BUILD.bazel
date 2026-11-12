@@ -97,18 +97,23 @@ py_binary(
     deps = [":rungcheck_lib"],
 )
 
+py_library(
+    name = "storecheck_lib",
+    srcs = ["storecheck.py"],
+    deps = [":rungcheck_lib"],
+)
+
 py_binary(
     name = "storecheck",
     srcs = ["storecheck.py"],
-    data = ["scoreboard.log"],
-    deps = [":rungcheck_lib"],
+    deps = [":storecheck_lib"],
 )
 
 py_test(
     name = "storecheck_test",
     size = "small",
     srcs = ["storecheck_test.py"],
-    deps = [":rungcheck_lib"],
+    deps = [":storecheck_lib"],
 )
 
 py_test(

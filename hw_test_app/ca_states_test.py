@@ -49,7 +49,7 @@ class States(unittest.TestCase):
     def test_another_builds_constants_for_a_name_are_not_this_builds_state(self) -> None:
         kept = {line.split()[2] for line in ca_states.states(self.corpus, self.library, self.tables)}
         ios17 = 'label=com.apple.coreanimation.PBGRABxorXm_TcimA2Xhf_IsrcM1'
-        ios27 = 'label=com.apple.coreanimation.PBGRAXm_TimgBmpyA2Xhf_Isrc'
+        ios27 = 'label=com.apple.coreanimation.PBGRABacpXm_TgsaA2Xhf_Isrc'
         self.assertEqual(ios17 in kept, self.build == '21H461')
         self.assertEqual(ios27 in kept, self.build == '24B119')
 

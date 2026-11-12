@@ -34,6 +34,16 @@ BEYOND_BOUND = frozenset(
 BEYOND_BOUND_ON = {'21H461': frozenset({'pdi'})}
 # by image function: luminosity and saturation over 21H461's sar and ara images, 13 codes
 BEYOND_WITH_IMAGE = {'sar': frozenset({'lum', 'sat'}), 'ara': frozenset({'lum', 'sat'})}
+# by texture function: the colour matrices, whose source leaves the premultiplied range the unit's programs assume
+# (rungcheck over one state of each texture function, program, memoryless image and attachment count, 24B119 and
+# 21H461: up to 242 codes); hard light, linear light, lighten, pin light and the colour matrix stay within the bound,
+# darker colour too but under c3b
+_COLOUR_MATRIX_BEYOND = frozenset(
+    {'cli', 'dif', 'drk', 'dso', 'lbn', 'lso', 'lum', 'mpy', 'ovl', 'pdi', 'pld', 'sat', 'sbt', 'sds', 'slt'}
+)
+BEYOND_WITH_TEXTURE = dict.fromkeys(('c33', 'c3s', 'c4b', 'c4p'), _COLOUR_MATRIX_BEYOND) | {
+    'c3b': _COLOUR_MATRIX_BEYOND | {'dlc'}
+}
 
 
 def program_name(mode: str, extended: bool, unbounded: bool) -> str | None:

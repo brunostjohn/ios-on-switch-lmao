@@ -32,6 +32,12 @@ class Forms27(unittest.TestCase):
         self.assertEqual(self.form('PBGRAXm_TimgBvcmA2Xhfn_Isrc'), (3, 'vcm'))
         self.assertEqual(self.form('PBGRAXmw_TdfgBvcmA3Xhfs_Isrc'), (0, 'HDR scale or EDR factor'))
 
+    def test_a_colour_matrix_texture_function_keeps_the_blends_beyond_the_bound(self):
+        why = 'pld beyond the bound on the host gate with its texture function'
+        self.assertEqual(self.form('PBGRAXm_Tc33BpldA2Xhf_IsrcM1'), (0, why))
+        self.assertEqual(self.form('PBGRAXm_Tc4bBvcmA2Xhf_Isrc'), (3, 'vcm'))
+        self.assertEqual(self.form('PBGRAXm_Tc33BpinA2Xhf_Isrc'), (3, 'pin'))
+
     def test_a_clear_takes_the_rop_blend(self):
         self.assertEqual(self.form('PBGRAXmw_BclrA3Xhf'), (2, ''))
 

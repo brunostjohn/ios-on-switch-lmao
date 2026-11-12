@@ -66,6 +66,9 @@ def _iterated(tables: caspec.Tables, s: caspec.Spec, colors: dict[int, tuple[int
     names = _image_names(tables, s)
     if any(program in table.BEYOND_WITH_IMAGE.get(image, ()) for image in names):
         return 0, f'{program} beyond the bound on the host gate with its image function'
+    texture = {v: k for k, v in tables.dec['TextureFunction'].items()}.get(s.T)
+    if program in table.BEYOND_WITH_TEXTURE.get(texture, ()):
+        return 0, f'{program} beyond the bound on the host gate with its texture function'
     if s.S != 0 or any(mask for c, (_fmt, mask) in colors.items() if c != s.S):
         return 0, 'writes another colour'
     return 3, program
