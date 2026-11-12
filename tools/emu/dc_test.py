@@ -112,7 +112,7 @@ class DcTest(unittest.TestCase):
     def setUp(self) -> None:
         binary = qemu.built()
         if not binary:
-            self.fail('this Mac has no tegra_qemu build of these patches: bazel run //tools/emu:build')
+            self.skipTest('this Mac has no tegra_qemu build of these patches: bazel run //tools/emu:build')
         self.log = Path(tempfile.mkdtemp()) / 'qemu.log'
         self.q = Qtest(binary, self.log)
         self.dc = Dc(self.q)
