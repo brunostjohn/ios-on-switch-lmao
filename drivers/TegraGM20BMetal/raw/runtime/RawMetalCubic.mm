@@ -80,10 +80,10 @@ static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, 
 // `xrSlots` (raw_xr_pass.h) and textures written in other formats than its record's (raw_written_textures.h), named in
 // that order. A cubic, sampled or written variant no pack holds is made off the encoding thread from the binds of the
 // draw that first needs it, the only place they are known (the texture unit has no cubic filter for another record to
-// stand in with). Until it is, m2v draws a cubic variant's draws, a sampled variant's draws sample those textures'
-// stand-ins, and a written variant's draws wait for it (no other record stores their formats). Its record is kept on
-// disk, so a later boot draws it raw from its first draw. A RenderBox state's compile takes seconds on the device, which
-// no encoding thread may wait for.
+// stand in with). Until it is, a sampled variant's draws sample those textures' stand-ins, and a command buffer with any
+// other variant's draws waits at its queue's head (RawMetalSchedule.mm variantReadiness); one no compiler makes fails
+// that command buffer, as a pipeline Metal could not compile. Its record is kept on disk, so a later boot draws it raw
+// from its first draw. A RenderBox state's compile takes seconds on the device, which no encoding thread may wait for.
 static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests,
                                                   bool planes, uint16_t xrSlots,
                                                   const std::vector<raw::WrittenTexture> &written)
@@ -128,10 +128,16 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     raw::Completion::Ask fallback = request;
     fallback.key = p->_key + suffix;
     fallback.fragmentTests = 0;
-    completion->ask(std::move(request), [variant, base, fallback, tests, completion](raw::Pipeline *made) {
-        if (!made && tests && !base) {
-            completion->ask(fallback, [variant](raw::Pipeline *untested) {
-                variant->publish(untested);
+    completion->askVariant(std::move(request), [variant, base, fallback, tests,
+                                                completion](raw::Pipeline *made, const std::string &failure) {
+        if (!made && !failure.empty()) {
+            variant->fail();
+        } else if (!made && tests && !base) {
+            completion->askVariant(fallback, [variant](raw::Pipeline *untested, const std::string &failed) {
+                if (untested || failed.empty())
+                    variant->publish(untested);
+                else
+                    variant->fail();
             });
         } else {
             variant->publish(made ? made : base);

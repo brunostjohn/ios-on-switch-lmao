@@ -163,6 +163,12 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
                                   false));
 }
 
+void Completion::askVariant(Ask asked, Ready ready)
+{
+    asked.qos = uint32_t(qos_class_self());
+    request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready), false));
+}
+
 void Completion::create(Ask asked, Ready ready)
 {
     asked.qos = uint32_t(qos_class_self());
@@ -199,7 +205,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
         const bool remote = !found && remote_->serving();
         if (!found && !remote && (!kCompilesHere || remote_->declined())) {
-            pending->ready(nullptr, pending->creation ? kNoCompilerComes : "");
+            pending->ready(nullptr, kNoCompilerComes);
             return;
         }
         {
@@ -211,7 +217,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
                 if (record)
                     place(k, record, caTransform, pending);
                 else
-                    pending->ready(nullptr, pending->creation ? failureOf(k) : std::string());
+                    pending->ready(nullptr, failureOf(k));
             }))
             return;
         auto done = [this, k, asked, pending, caTransform](const RuntimeRecord *record, const std::string &) {
@@ -225,7 +231,7 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
                     request(asked, pending);
                 });
             else
-                pending->ready(nullptr, pending->creation ? failureOf(k) : std::string());
+                pending->ready(nullptr, failureOf(k));
         };
         const RuntimeRecord *made = nullptr;
         const Compiler::State state = compiler_->ask(k, done, &made);
@@ -382,7 +388,8 @@ void Completion::backgroundKernel(std::function<void()> work)
 }
 
 const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                       const std::string &key, bool *retry, uint64_t *retryAtUs, id facadeFunction)
+                                       const std::string &key, bool *retry, uint64_t *retryAtUs, id facadeFunction,
+                                       bool *gone)
 {
     CacheKey k;
     k.stack = stack_;
@@ -418,13 +425,11 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                 if (remote_->serving()) {
                     outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
                     if (!taken)
-                        outcome = Compiler::Outcome::Refused;
+                        return Build::Outcome::Gone;
                     break;
                 }
-                if (!kCompilesHere) {
-                    outcome = Compiler::Outcome::Refused;
-                    break;
-                }
+                if (!kCompilesHere || remote_->declined())
+                    return Build::Outcome::Gone;
                 compiledHere(InProcess::NoCompiler);
 #if SWITCH_RAW_DIAGNOSTICS
                 const uint64_t began = nowUs();
@@ -471,6 +476,8 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         *retry = result.retry;
     if (retryAtUs)
         *retryAtUs = result.retryAtUs;
+    if (gone)
+        *gone = result.gone;
     if (!result.state && attempted)
         once([NSString stringWithFormat:@"a kernel the pack lacks %s at %u,%u,%u threads: %s | %s %s",
                                         result.retry ? "was not made" : "is refused", dispatch.threads[0],

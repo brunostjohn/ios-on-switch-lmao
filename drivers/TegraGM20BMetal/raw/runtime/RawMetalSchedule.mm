@@ -198,6 +198,8 @@ static int variantReadiness(RMCommandBuffer *cb, const RMSegment &range)
             };
         }
         const auto state = variant->observe(std::move(observer));
+        if (state == Variant::State::Failed)
+            return -2;
         if (state == Variant::State::Refused)
             return -1;
         if (state == Variant::State::Pending)
@@ -306,7 +308,12 @@ void submitLoop()
                     int ready = variantReadiness(cb, range);
                     if (ready > 0)
                         ready = computeReadiness(cb, range);
-                    if (ready < 0) {
+                    if (ready == -2) {
+                        error = [NSError
+                            errorWithDomain:MTLCommandBufferErrorDomain
+                                       code:MTLCommandBufferErrorInternal
+                                   userInfo:@{NSLocalizedDescriptionKey : @"A render pipeline could not be compiled"}];
+                    } else if (ready < 0) {
                         range.raw = false;
                         blocked = eventReadiness(cb, deadline) == raw::EventReadiness::blocked;
                         if (blocked)

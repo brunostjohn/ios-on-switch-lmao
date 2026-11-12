@@ -68,6 +68,8 @@ public:
     // and, where its creation fails as makeNow's would, why; nothing is tried again later
     using Ready = std::function<void(Pipeline *, const std::string &failure)>;
     void create(Ask a, Ready ready);
+    // A variant's ask: as ask(), and where no compiler made it (rather than refused it), why
+    void askVariant(Ask a, Ready ready);
     // The state's pipeline now, on the caller's thread: its record from this process or the disk (a state made in an earlier
     // boot is raw from its first draw), else made while the thread waits, as Metal makes a state at its creation, so its
     // first draw is raw. Null with `failure` empty: refused (m2v draws it); with it, the creation fails with it as Metal's
@@ -77,9 +79,10 @@ public:
     // The kernel of compute key `key` (raw_compute_key.h) for `descriptor` (over m2v's functions) at `dispatch`, placed:
     // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
     // once in the raw log), or temporarily unavailable. retryAtUs is the earliest next attempt after a transient failure.
+    // *gone: no compiler made it and none will (the dispatch fails, as a kernel Metal could not compile)
     const ComputeState *kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
                                const std::string &key, bool *retry = nullptr, uint64_t *retryAtUs = nullptr,
-                               id facadeFunction = nil);
+                               id facadeFunction = nil, bool *gone = nullptr);
 
     void backgroundKernel(std::function<void()> work);
 
@@ -161,7 +164,8 @@ private:
     // The state made on this thread, a failed compile tried once more
     Compiler::State madeHere(const CacheKey &k, RuntimeRecord &record, std::string &why);
     // The state asked of the compiler with `done` called once it answers, null where it made none
-    bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done);
+    bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done,
+                     bool again = false);
     // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: none
     // made (the kernel is refused: no process compiles one itself while a compiler serves)
     Compiler::Outcome remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,

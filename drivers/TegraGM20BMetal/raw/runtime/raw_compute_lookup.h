@@ -126,30 +126,33 @@ private:
 
 template <typename Record, typename T> class ComputeKernelBuild {
 public:
+    // Gone: no compiler made it, and none will (the dispatches that need it fail)
     enum class Outcome {
         Made,
         Refused,
-        Failed
+        Failed,
+        Gone
     };
 
     struct Result {
         const T *state = nullptr;
         bool retry = false;
         uint64_t retryAtUs = 0;
+        bool gone = false;
     };
 
     template <typename Clock, typename Produce, typename Place> Result make(Clock now, Produce produce, Place place)
     {
-        if (state_ || refused_)
-            return {state_, false, 0};
+        if (state_ || refused_ || gone_)
+            return {state_, false, 0, gone_};
         if (retryAtUs_ && now() < retryAtUs_)
             return {nullptr, true, retryAtUs_};
         if (!record_) {
             auto record = std::make_unique<Record>();
             const auto outcome = produce(*record);
-            if (outcome == Outcome::Refused) {
-                refused_ = true;
-                return {};
+            if (outcome == Outcome::Refused || outcome == Outcome::Gone) {
+                (outcome == Outcome::Gone ? gone_ : refused_) = true;
+                return {nullptr, false, 0, gone_};
             }
             if (outcome == Outcome::Made)
                 record_ = std::move(record);
@@ -168,13 +171,14 @@ private:
     const T *state_ = nullptr;
     uint64_t retryAtUs_ = 0;
     RetryDelay delay_;
-    bool refused_ = false;
+    bool refused_ = false, gone_ = false;
 };
 
 template <typename T> struct ComputeKernelResult {
     const T *state = nullptr;
     bool retry = false;
     bool deferredRetry = false;
+    bool gone = false;  // no compiler made it: the command buffer that needs it fails
 };
 
 template <typename T> class ComputeKernelJob {
@@ -184,7 +188,7 @@ public:
     State state() const
     {
         const auto *result = ready_.value();
-        return !result ? State::Pending : result->state ? State::Ready : State::Refused;
+        return !result ? State::Pending : result->state ? State::Ready : result->gone ? State::Failed : State::Refused;
     }
 
     const T *value() const
@@ -281,14 +285,15 @@ public:
 
     State state() const
     {
-        bool pending = false;
+        bool pending = false, refused = false;
         for (uint8_t i = 0; i < count; ++i) {
             const auto result = jobs[i]->state();
-            if (result == State::Refused)
+            if (result == State::Failed)
                 return result;
+            refused |= result == State::Refused;
             pending |= result == State::Pending;
         }
-        return pending ? State::Pending : State::Ready;
+        return refused ? State::Refused : pending ? State::Pending : State::Ready;
     }
 
     bool retryable() const

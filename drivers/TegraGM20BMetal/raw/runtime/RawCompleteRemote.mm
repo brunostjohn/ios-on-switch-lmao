@@ -59,10 +59,11 @@ bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<con
         RequestLibrary library;
         library.path = f->_source->path;
         library.system = f->_source->system && !every;
-        if (bytes && !library.system)
+        if ((bytes || every) && !library.system)
             library.bytes.assign(static_cast<const char *>(data), length);
+        // sent as its bytes, the library is named by them, as the compiler names it (compiler_request.mm)
+        ids.push_back(every ? identityOf(library) : f->_source->identity(data, length));
         r.libraries.push_back(std::move(library));
-        ids.push_back(f->_source->identity(data, length));
     }
     RequestStage s;
     s.tag = tag;
@@ -205,11 +206,12 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     return true;
 }
 
-bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done)
+bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done,
+                             bool again)
 {
     CompileRequest r;
     Digest name;
-    if (!renderRequest(a, k, true, r, name)) {
+    if (!renderRequest(a, k, true, r, name, again)) {
         done(nullptr);
         return true;
     }
@@ -240,16 +242,21 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
     const uint64_t began = nowUs();
     const Ask asked = a;
     const bool sent = remote_->compileAsync(
-        encodeRequest(r), true, a.qos, [this, asked, k, name, began, settle, done](Remote::Answer answer) {
-            if (answer == Remote::Answer::Failed || answer == Remote::Answer::Unavailable)
-                return done(nullptr);
+        encodeRequest(r), true, a.qos, [this, asked, k, name, began, settle, done, again](Remote::Answer answer) {
             RuntimeRecord made;
             std::string refusal;
-            const RecordCache::Found found = fromStore(name, k, made, refusal);
-            if (found == RecordCache::Found::None)
-                return done(nullptr);
-            logRemote(asked, k, found, "by the shader compiler", nowUs() - began);
-            settle(found, made, refusal);
+            const RecordCache::Found found = answer == Remote::Answer::Made || answer == Remote::Answer::Refused
+                                                 ? fromStore(name, k, made, refusal)
+                                                 : RecordCache::Found::None;
+            if (found != RecordCache::Found::None) {
+                logRemote(asked, k, found, "by the shader compiler", nowUs() - began);
+                return settle(found, made, refusal);
+            }
+            // as the synchronous ask: once more, every library sent as its bytes, and a record retired before it was
+            // read made again
+            if (!again && answer != Remote::Answer::Failed && !remote_->declined())
+                return (void)remoteLater(asked, k, done, true);
+            done(nullptr);
         });
     if (!sent)
         done(nullptr);
@@ -262,49 +269,54 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
 {
     taken = false;
     CompileRequest r;
-    r.stack = stack_;
-    r.kind = RequestKind::Kernel;
-    r.key = k.key;
-    KernelRequest &q = r.kernel;
-    q.maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
-    q.multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
-    q.regionMode = dispatch.regionMode;
-    memcpy(q.threads, dispatch.threads, sizeof q.threads);
-    memcpy(q.memory, dispatch.memory, sizeof q.memory);
-    q.textures.assign(dispatch.textures, dispatch.textures + dispatch.textureCount);
-    q.samplers.assign(dispatch.samplers, dispatch.samplers + dispatch.samplerCount);
-    std::vector<LibraryIdentity> ids;
-    std::map<const LibrarySource *, uint32_t> seen;
-    if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
-        !addStage(r, ids, seen, "k", facadeFunction, true))
-        return Compiler::Outcome::Failed;
-    const Digest name = storeName(k, r, ids);
+    Digest name;
+    const auto request = [&](bool every) {
+        r = {};
+        r.stack = stack_;
+        r.kind = RequestKind::Kernel;
+        r.key = k.key;
+        KernelRequest &q = r.kernel;
+        q.maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
+        q.multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
+        q.regionMode = dispatch.regionMode;
+        memcpy(q.threads, dispatch.threads, sizeof q.threads);
+        memcpy(q.memory, dispatch.memory, sizeof q.memory);
+        q.textures.assign(dispatch.textures, dispatch.textures + dispatch.textureCount);
+        q.samplers.assign(dispatch.samplers, dispatch.samplers + dispatch.samplerCount);
+        std::vector<LibraryIdentity> ids;
+        std::map<const LibrarySource *, uint32_t> seen;
+        if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
+            !addStage(r, ids, seen, "k", facadeFunction, true, every))
+            return false;
+        name = storeName(k, r, ids);
+        return true;
+    };
     const auto stored = [&]() {
         std::string bytes;
         if (!remote_->find(name, bytes))
             return RecordCache::Found::None;
         return decodeKernelEntry(bytes, k, record, why);
     };
+    if (!request(false))
+        return Compiler::Outcome::Failed;
     RecordCache::Found found = stored();
-    if (found == RecordCache::Found::None) {
-        if (!remote_->taking())
-            return Compiler::Outcome::Failed;
-        switch (remote_->compile(encodeRequest(r))) {
-        case Remote::Answer::Made:
-        case Remote::Answer::Refused:
+    // the compiler's answer, then once more every library sent as its bytes, and a record retired before it was read
+    // made again, as a render state's
+    for (bool every : {false, true}) {
+        if (found != RecordCache::Found::None || !remote_->taking() || (every && !request(true)))
             break;
-        case Remote::Answer::Failed:
+        const Remote::Answer answer = remote_->compile(encodeRequest(r));
+        if (answer == Remote::Answer::Failed) {
             taken = true;
             return Compiler::Outcome::Failed;
-        case Remote::Answer::Unavailable:
-            return Compiler::Outcome::Failed;
         }
-        found = stored();
-        if (found == RecordCache::Found::None && remote_->compile(encodeRequest(r)) == Remote::Answer::Made)
+        if (answer != Remote::Answer::Unavailable)
             found = stored();
-        if (found == RecordCache::Found::None)
-            return Compiler::Outcome::Failed;
+        if (remote_->declined())
+            break;
     }
+    if (found == RecordCache::Found::None)
+        return Compiler::Outcome::Failed;
     taken = true;
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
 }

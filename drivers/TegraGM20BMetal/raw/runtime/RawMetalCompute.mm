@@ -227,36 +227,36 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
                         if (_samplers[slot])
                             ask->sampler(slot, _samplers[slot]->_descriptor);
                     RMComputeState *state = _state;
-                    completion->backgroundKernel(
-                        [pending, ask, specialization, state, completion, grid, threads, perThread, region] {
-                            RMKernelJob::Run run{pending};
-                            const auto text = specialization.text();
-                            const auto key =
-                                raw::computeKey(state->_air, state->_constants, state->_maxThreads,
-                                                state->_multipleOfWidth, specialization.threads.data(), text.memory,
-                                                text.textures, text.samplers, specialization.regionMode);
-                            run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
-                            if (run.result.state) {
-                                run.result.retry = false;
-                                return;
-                            }
-                            uint64_t retryAtUs = 0;
-                            run.result.state = completion->kernel(state->_direct, ask->dispatch(), key,
-                                                                  &run.result.retry, &retryAtUs, state->_function);
-                            if (run.result.retry && retryAtUs) {
-                                run.result.deferredRetry = true;
-                                const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
-                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
-                                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                                                   pending->allowRetry();
-                                               });
-                            }
-                            // the journal names m2v's state: a state the pack answered has none
-                            if (run.result.state && !region && state->_metadata)
-                                native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
-                                                                     text.memory.c_str(), text.textures.c_str(),
-                                                                     text.samplers.c_str());
-                        });
+                    completion->backgroundKernel([pending, ask, specialization, state, completion, grid, threads,
+                                                  perThread, region] {
+                        RMKernelJob::Run run{pending};
+                        const auto text = specialization.text();
+                        const auto key =
+                            raw::computeKey(state->_air, state->_constants, state->_maxThreads, state->_multipleOfWidth,
+                                            specialization.threads.data(), text.memory, text.textures, text.samplers,
+                                            specialization.regionMode);
+                        run.result.state = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
+                        if (run.result.state) {
+                            run.result.retry = false;
+                            return;
+                        }
+                        uint64_t retryAtUs = 0;
+                        run.result.state = completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry,
+                                                              &retryAtUs, state->_function, &run.result.gone);
+                        if (run.result.retry && retryAtUs) {
+                            run.result.deferredRetry = true;
+                            const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
+                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_USEC)),
+                                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                               pending->allowRetry();
+                                           });
+                        }
+                        // the journal names m2v's state: a state the pack answered has none
+                        if (run.result.state && !region && state->_metadata)
+                            native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
+                                                                 text.memory.c_str(), text.textures.c_str(),
+                                                                 text.samplers.c_str());
+                    });
                 });
             }
             _shape = dispatch;
@@ -265,7 +265,8 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
         kernels = _kernel;
     }
     const auto kernelState = kernels ? kernels->state() : RMKernelSet::State::Refused;
-    const bool pending = kernelState == RMKernelSet::State::Pending;
+    // a kernel no compiler made fails its command buffer at submission (computeReadiness), as one still being made waits
+    const bool pending = kernelState == RMKernelSet::State::Pending || kernelState == RMKernelSet::State::Failed;
     const bool ready = kernelState == RMKernelSet::State::Ready;
     if (!refused && !ready && !pending)
         [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch the raw path has no kernel for"];
