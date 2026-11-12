@@ -14,6 +14,7 @@
 // include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
+#include "TegraGM20BCompilerABI.h"
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
 #include <algorithm>
@@ -119,6 +120,11 @@ struct Model {
     std::function<void()> jobAdded;
     std::function<void(const TegraGM20BAbiBindOp &op)> bound;  // each VmBind's op, as the kernel takes it
     std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
+    // the shader compiler broker (SwitchGpuShaderCompiler.cpp): none while its info flags are 0; each compile's answer is
+    // the next of `compileResults`, the last one again once they run out
+    uint32_t compilerFlags = 0;
+    std::vector<int32_t> compileResults = {TegraGM20BCompileUnavailable};
+    unsigned compiles = 0;
     unsigned refuse = 0;  // submissions refused from now, with `refusal`
     // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
     uint64_t vaEnd = uint64_t(1) << 40;
@@ -573,6 +579,21 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         model.eventWords.push_back(in.handle);
         const uint64_t word = kernel_model::kFenceToken + 4 * (TegraGM20BEventWordFirst + in.handle);
         *static_cast<TegraGM20BAbiEventWordReply *>(output) = {word, 0, 0, 0};
+        return KERN_SUCCESS;
+    }
+    case TegraGM20BMethodCompilerInfo: {
+        if (!model.compilerFlags)
+            return kIOReturnUnsupported;
+        auto &info = *static_cast<TegraGM20BAbiCompilerInfoReply *>(output);
+        info = {};
+        info.flags = model.compilerFlags;
+        return KERN_SUCCESS;
+    }
+    case TegraGM20BMethodCompile: {
+        const size_t at = std::min<size_t>(model.compiles++, model.compileResults.size() - 1);
+        auto &reply = *static_cast<TegraGM20BAbiCompileReply *>(output);
+        reply = {};
+        reply.result = model.compileResults[at];
         return KERN_SUCCESS;
     }
     default:
