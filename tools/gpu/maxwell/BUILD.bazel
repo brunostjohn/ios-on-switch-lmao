@@ -180,6 +180,7 @@ direct_runner(
         "direct/directrun.mm",
         "direct/exec.metal",
         "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20BMetal:raw_stack_sources",
         "//kits/SwitchGM20B:class_headers",
     ],

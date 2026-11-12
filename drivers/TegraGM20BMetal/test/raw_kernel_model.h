@@ -403,11 +403,6 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     case TegraGM20BMethodGetStatus:
         return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
                             *static_cast<TegraGM20BAbiStatus *>(output));
-    case TegraGM20BMethodCpuComplete: {
-        const auto &in = *static_cast<const TegraGM20BAbiCpuComplete *>(input);
-        *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
-        return KERN_SUCCESS;
-    }
     case TegraGM20BMethodUnmap:
     case TegraGM20BMethodCpuAcquire:
     case TegraGM20BMethodCpuRelease:
