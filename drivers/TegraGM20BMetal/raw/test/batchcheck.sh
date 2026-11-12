@@ -34,13 +34,18 @@ xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
 SOURCES=()
 for source in gpu transfer split kernel shared_events alias arena pack ycbcr zeta comp completed compute \
-              record_parts direct direct_compute emit cache kernel_cache compiler metallib state_segment resource_set variants kernel_job encoder_state job_uses; do
+              record_parts direct direct_compute emit cache kernel_cache compiler metallib state_segment resource_set variants kernel_job encoder_state job_uses multisample; do
     SOURCES+=("$RAW/runtime/raw_$source.cpp")
 done
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" \
     "$HERE/batchcheck.cpp" "${SOURCES[@]}" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -Wl,-U,_switch_nmb_blend_color_words -lobjc -framework Foundation -framework Metal \
     -framework IOSurface -framework IOKit -framework CoreFoundation -o "$OUT/batchcheck"
+# stagecheck: a pack state's set 0 against what each stage and slot binds (stagecheck.py runs its programs over it)
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" \
+    "$HERE/stagecheck.cpp" "${SOURCES[@]}" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
+    -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -Wl,-U,_switch_nmb_blend_color_words -lobjc -framework Foundation -framework Metal \
+    -framework IOSurface -framework IOKit -framework CoreFoundation -o "$OUT/stagecheck"
 for mode in legacy native; do
     if [[ $mode == native ]]; then export MOCK_NATIVE_JOBS=1; else unset MOCK_NATIVE_JOBS; fi
     for delay in 0 100; do

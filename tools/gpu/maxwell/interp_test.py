@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from tools.gpu.maxwell import floats, gate, isa, texture
-from tools.gpu.maxwell.execute import run
+from tools.gpu.maxwell.execute import alu, run
 from tools.gpu.maxwell.interp import Lane
 
 FIXTURE = Path(__file__).with_name('testdata') / 'image_draw_fragment.hex'
@@ -125,11 +125,61 @@ class TextureTest(unittest.TestCase):
         texture.tlds(self.TLDS, lane, inputs)
         self.assertEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (8, 9, 10, 11)])
 
+    # TXD_b r4, r0 (the handle r0, x r1, y r2), r8 (dx/dy of x, of y) .2d rgba; TXD r12 the same at bound index 16
+    TXD_B = 0xDE78 << 48 | 0xF << 31 | 2 << 28 | 8 << 20 | 0 << 8 | 4
+    TXD = 0xDE38 << 48 | 16 << 36 | 0xF << 31 | 2 << 28 | 8 << 20 | 1 << 8 | 12
+
+    def test_bound_and_bindless_derivative_fetches_read_the_same_texel(self):
+        inputs, lane = self.lanes()
+        lane.w(2, 0x3F400000)
+        lane.w(1, 0x3E800000)
+        lane.w(0, inputs.cbuf(1, 64))
+        for r, v in zip(range(8, 12), (0x3C000000, 0, 0, 0x3C000000), strict=True):
+            lane.w(r, v)
+        texture.txd(isa.name(self.TXD_B), self.TXD_B, lane, inputs, 4)
+        texture.txd(isa.name(self.TXD), self.TXD, lane, inputs, 12)
+        self.assertEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (12, 13, 14, 15)])
+
     def test_a_load_and_a_sample_of_one_texel_are_different_keys(self):
         inputs, lane = self.lanes()
         texture.tld('TLD_b', self.TLD_B, lane, inputs, 4)
         texture.tex('TEX_b', self.TEX_B, lane, inputs, 12)
         self.assertNotEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (12, 13, 14, 15)])
+
+
+class AttributeTest(unittest.TestCase):
+    # ALD.64 r4, a[0x80]; AST.64 a[0x90], r4; ALD.O r8, a[0x94] (the output AST wrote); RZ as offset and vertex
+    ALD = 0xEFD8 << 48 | 1 << 47 | 0xFF << 39 | 0x80 << 20 | 0xFF << 8 | 4
+    AST = 0xEFF0 << 48 | 1 << 47 | 0xFF << 39 | 1 << 32 | 0x90 << 20 | 0xFF << 8 | 4
+    ALD_OUT = 0xEFD8 << 48 | 0xFF << 39 | 1 << 32 | 0x94 << 20 | 0xFF << 8 | 8
+
+    def test_a_vertex_reads_its_inputs_and_its_own_outputs(self):
+        inputs = gate.Seeded(1, 0).inputs()
+        inputs.attribute = lambda at: 0x1000 + at
+        lane = Lane()
+        for w in (self.ALD, self.AST, self.ALD_OUT):
+            self.assertIn(isa.name(w).split('_')[0], ('ALD', 'AST'))
+            alu(isa.name(w), w, lane, inputs)
+        self.assertEqual((lane.r(4), lane.r(5)), (0x1080, 0x1084))
+        self.assertEqual([s for s in lane.stores if s[0] == 'ast'], [('ast', 0x90, 0x1080), ('ast', 0x94, 0x1084)])
+        self.assertEqual(lane.r(8), 0x1084)
+
+
+class LocalTest(unittest.TestCase):
+    # STL.64 [r2 - 8], r4; LDL.64 r8, [r2 - 8]; LDL r10, [r2 + 0x40] (never stored)
+    STL = 0xEF50 << 48 | 5 << 48 | ((-8) & 0xFFFFFF) << 20 | 2 << 8 | 4
+    LDL = 0xEF40 << 48 | 5 << 48 | ((-8) & 0xFFFFFF) << 20 | 2 << 8 | 8
+    LDL_UNSTORED = 0xEF40 << 48 | 4 << 48 | 0x40 << 20 | 2 << 8 | 10
+
+    def test_a_lane_reads_back_what_it_stored(self):
+        inputs, lane = gate.Seeded(1, 0).inputs(), Lane()
+        lane.w(2, 0x100)
+        lane.w(4, 7)
+        lane.w(5, 9)
+        for w in (self.STL, self.LDL, self.LDL_UNSTORED):
+            alu(isa.name(w), w, lane, inputs)
+        self.assertEqual((lane.r(8), lane.r(9), lane.r(10)), (7, 9, 0))
+        self.assertEqual(lane.local, {0xF8: 7, 0xFC: 9})
 
 
 if __name__ == '__main__':

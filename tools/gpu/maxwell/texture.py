@@ -109,6 +109,26 @@ def tld(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     write_compact(lane, d, mask, load(inputs, handle, coords, level, offset, sample, dim))
 
 
+def txd(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
+    """TXD: a fetch at explicit derivatives.
+
+    Register A's operands are the handle (TXD_b) then the coordinates, B's each axis's x and y derivative in turn (NAK's
+    nak_nir_lower_tex.c); array and offset forms are not run.
+    """
+    if name not in ('TXD', 'TXD_b'):
+        raise UnsupportedError(name)
+    dim, mask = bits(w, 28, 3), bits(w, 31, 4)
+    axes = {DIM_1D: 1, DIM_2D: 2, DIM_3D: 3, DIM_CUBE: 3}.get(dim)
+    if axes is None or bits(w, 35, 1):
+        raise UnsupportedError(f'TXD dimension {dim} or offsets')
+    ra, rb = bits(w, 8, 8), bits(w, 20, 8)
+    bindless = name == 'TXD_b'
+    a = [reg(lane, ra + k if ra != RZ_REG else RZ_REG) for k in range(axes + bindless)]
+    handle = a.pop(0) if bindless else inputs.cbuf(inputs.bound_cbuf, bits(w, 36, 13) * 4)
+    gradients = tuple(reg(lane, rb + k if rb != RZ_REG else RZ_REG) for k in range(2 * axes))
+    write_compact(lane, d, mask, inputs.texture(('txd', handle, tuple(a), gradients, dim)))
+
+
 def write_scalar(w: int, lane: Lane, result: list[int]) -> None:
     """Write a scalar form's components: its mask's in register A's pair, then B's; F16 (bit 59 clear) packs halves."""
     da, db = bits(w, 0, 8), bits(w, 28, 8)
