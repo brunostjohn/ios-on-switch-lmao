@@ -1223,6 +1223,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalLibrary.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStatesLater.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
     ],
 )

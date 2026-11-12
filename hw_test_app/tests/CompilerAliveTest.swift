@@ -33,6 +33,7 @@ struct CompilerAliveTest: HWTest {
         metrics.set("priority_error", Self.code(probe.priority_error))
         metrics.set("limits_error", Self.code(probe.limits_error))
 
+        let deliberate = DeliberateCompilerDeaths.shared.count
         let read = probe.line_error == 0
         let asked = read && probe.pid > 0
         return .judged(
@@ -43,11 +44,14 @@ struct CompilerAliveTest: HWTest {
                         : KernelSysctl.unreadable("kern.switch_shader_compiler", probe.line_error), read
                 ),
                 ("a compiler is registered", probe.pid > 0),
-                ("no compiler lost this boot (losses 0)", probe.losses == 0),
                 (
-                    "the boot's first registration still serves (generation 1; more with no loss: a full store "
-                        + "registered again)",
-                    probe.generation == 1
+                    "no compiler lost this boot (losses \(deliberate): gpu.compile.first_draw's on purpose)",
+                    Int(probe.losses) == deliberate
+                ),
+                (
+                    "the boot's first registration still serves (generation \(1 + deliberate); more with no loss: a "
+                        + "full store registered again)",
+                    Int(probe.generation) == 1 + deliberate
                 ),
                 (
                     Self.answered("its jetsam band", probe.priority_error),

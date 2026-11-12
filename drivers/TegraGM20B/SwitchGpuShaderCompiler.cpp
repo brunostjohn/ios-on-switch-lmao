@@ -162,7 +162,7 @@ IOReturn registerCompiler(const void *owner, task_t task, const TegraGM20BAbiCom
 	gBroker.stack = in->stack;
 	gBroker.restarts = in->flags & TegraGM20BCompilerRestarts;
 	gBroker.declined = false;
-	registeredAfterLosses(gBroker.losses);
+	registeredAfterLosses(gBroker.lossesInARow);
 	*out = {++gBroker.generation, 0};
 	const uint32_t generation = gBroker.generation;
 	IOLockUnlock(gBroker.lock);
@@ -399,9 +399,11 @@ void switch_gpu_compiler_close(const void *owner)
 		gBroker.announced = nullptr;
 	// one that announced itself while another compiler serves (a second instance) ends nothing
 	const bool lost = compiler || (announced && !gBroker.compiler);
-	if (lost)
-		gBroker.declined =
-			declinedAfterClose(gBroker.declined, gBroker.restarts, gBroker.losses);
+	if (lost) {
+		gBroker.losses++;
+		gBroker.declined = declinedAfterClose(gBroker.declined, gBroker.restarts,
+						      gBroker.lossesInARow);
+	}
 	if (lost && gBroker.declined)
 		ended = finishAll(TegraGM20BCompileUnavailable, &sends);
 	for (Request *request = gBroker.requests, *next; request; request = next) {

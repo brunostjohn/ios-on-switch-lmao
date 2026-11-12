@@ -12,12 +12,15 @@
 
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>
+#include <notify.h>
 #include <mach/mach.h>
 #include <malloc/malloc.h>
 #include <os/log.h>
 #include <pthread/qos.h>
+#include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -240,6 +243,21 @@ void Service::submit(Prepared prepared, std::string request, const Waiter &waite
     pool_->submit(name, std::move(work), waiter);
 }
 
+#if SWITCH_DEBUG
+// HW Test gpu.compile.first_draw: the compiler dies as the memory limit kills one, holding the next request it takes, so a
+// run shows that request's creation completing once launchd's next compiler takes it
+constexpr const char *kDiesAtNextRequest = "com.brunostjohn.switch.debug.compiler-dies-at-next-request";
+std::atomic<bool> gDiesAtNextRequest{false};
+
+void armDeath()
+{
+    int token = 0;
+    notify_register_dispatch(kDiesAtNextRequest, &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+        gDiesAtNextRequest.store(true, std::memory_order_release);
+    });
+}
+#endif
+
 void Service::take(uint64_t stack)
 {
     TegraGM20BAbiCompilerTake in = {uint64_t(uintptr_t(buffer_.get())), bufferBytes_};
@@ -257,6 +275,10 @@ void Service::take(uint64_t stack)
                      error);
         exit(1);
     }
+#if SWITCH_DEBUG
+    if (gDiesAtNextRequest.load(std::memory_order_acquire))
+        kill(getpid(), SIGKILL);
+#endif
     const bool waited = reply.flags & TegraGM20BCompileWaited;
     std::string request(reinterpret_cast<const char *>(buffer_.get()), size_t(reply.bytes));
     const Waiter waiter = {reply.id, reply.client, bandOf(reply.qos, waited), false};
@@ -365,6 +387,9 @@ void Service::warm(uint64_t stack)
 void Service::serve()
 {
     const uint64_t stack = uint64_t(TEGRA_RAW_STACK);
+#if SWITCH_DEBUG
+    armDeath();  // before the sandbox, which looks up no notification center
+#endif
     if (!open(stack))
         exit(0);
     Pool::Hooks hooks;

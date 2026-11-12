@@ -171,8 +171,10 @@ Completion::Asked Completion::remoteNow(const Ask &a, const CacheKey &k, Compile
     RAW_DIAGNOSTIC(tObtained = {"store", 0, uint32_t(qos_class_self()), 0});
     if (found == RecordCache::Found::None) {
         if (!remote_->taking()) {
+            if (remote_->declined())
+                return Asked::Gone;
             compiledHere(InProcess::NotTaken);
-            return false;
+            return Asked::Here;
         }
         if (!renderRequest(a, k, true, r, name)) {
             compiledHere(InProcess::NoRequest);
