@@ -46,13 +46,7 @@ def classify(tables: caspec.Tables, name: str, line: str) -> tuple[int, str]:
     except (KeyError, IndexError, ValueError):
         return 0, 'name'
     colors = _colors(line)
-    why = (
-        _no_blend_constant(line)
-        or _foreign(tables, line)
-        or _kept_in_fragment(tables, s)
-        or _unproven(tables, s)
-        or _target(s, colors)
-    )
+    why = _foreign(tables, line) or _kept_in_fragment(tables, s) or _unproven(tables, s) or _target(s, colors)
     if why:
         return 0, why
     if s.fragB in FIXED_FUNCTION_BLENDS:
@@ -88,13 +82,6 @@ def _kept_in_fragment(tables: caspec.Tables, s: caspec.Spec) -> str:
     if s.flag('s') or s.flag('e'):
         return 'HDR scale or EDR factor'
     return 'destination function' if s.D else ''
-
-
-def _no_blend_constant(line: str) -> str:
-    """Give why the state's fragment function takes no blend to set to none ('' where it takes one)."""
-    if all(re.search(rf'\b{constant}:\d+:', line) for constant in ('fc_blend_function', 'fc_dest_count')):
-        return ''
-    return 'its fragment function sets no fragment blend'
 
 
 def _foreign(tables: caspec.Tables, line: str) -> str:

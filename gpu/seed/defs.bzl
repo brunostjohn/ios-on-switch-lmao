@@ -315,7 +315,6 @@ _RAW_SPLIT = [
     "ca/caset.py",
     "ca/caspec.py",
     "ca/caspec27.py",
-    "ca/closure.py",
     "ca/deepcolour.py",
     "ca/fetchfree.py",
     "iterated/programs.py",
