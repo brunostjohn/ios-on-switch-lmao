@@ -35,6 +35,14 @@ inline id<MTLBuffer> shared(NSUInteger length)
     return [device() newBufferWithLength:length options:MTLResourceStorageModeShared];
 }
 
+// An argument buffer of `fill` bytes, none of which an encoder's word or a test's constant is
+inline id<MTLBuffer> filled(NSUInteger length, uint8_t fill = 0xA5)
+{
+    id<MTLBuffer> b = shared(length);
+    memset(b.contents, fill, length);
+    return b;
+}
+
 inline id<MTLTexture> texture(MTLStorageMode mode = MTLStorageModeShared, id<MTLHeap> heap = nil)
 {
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm

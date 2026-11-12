@@ -12,6 +12,7 @@ namespace {
 
 using facade::at;
 using facade::bytesOf;
+using facade::filled;
 using facade::shared;
 using facade::texture;
 using facade::word;
@@ -60,7 +61,7 @@ TEST(FacadeArgumentEncoder, WritesEveryArgumentWhereTheLayoutPlacesIt)
         EXPECT_EQ(encoder.encodedLength, 80u);
         EXPECT_EQ(encoder.alignment, 16u);
         EXPECT_EQ(encoder.encodedLength, layout.encodedLength);
-        id<MTLBuffer> arguments = shared(256), data = shared(1024);
+        id<MTLBuffer> arguments = filled(256), data = shared(1024);
         std::vector<uint8_t> want = bytesOf(arguments);
         id<MTLTexture> textures[3] = {texture(), texture(), texture()};
         id<MTLTexture> last = texture();
@@ -105,7 +106,7 @@ TEST(FacadeArgumentEncoder, ArraysOfBuffersAndConstantsTakeAStrideEach)
             layoutOf({{kPointer, 0, 3, 0}, {{ArgumentKind::Constant, 4, 1, 2}, 3, 2, 0}});
         EXPECT_EQ(encoder.encodedLength, layout.encodedLength);
         EXPECT_EQ(encoder.encodedLength, 40u);
-        id<MTLBuffer> arguments = shared(128), a = shared(64), b = shared(64), c = shared(64);
+        id<MTLBuffer> arguments = filled(128), a = shared(64), b = shared(64), c = shared(64);
         const id<MTLBuffer> three[3] = {a, b, c};
         const NSUInteger offsets[3] = {0, 16, 32};
         [encoder setArgumentBuffer:arguments offset:0];
@@ -128,7 +129,7 @@ TEST(FacadeArgumentEncoder, ARangeWithOneOffsetPastItsBufferWritesNone)
     @autoreleasepool {
         id<MTLArgumentEncoder> encoder =
             [facade::device() newArgumentEncoderWithArguments:@[ argument(MTLDataTypePointer, 0, 3) ]];
-        id<MTLBuffer> arguments = shared(64), a = shared(64), b = shared(64);
+        id<MTLBuffer> arguments = filled(64), a = shared(64), b = shared(64);
         [encoder setArgumentBuffer:arguments offset:0];
         const std::vector<uint8_t> untouched = bytesOf(arguments);
         const id<MTLBuffer> three[3] = {a, b, a};
@@ -146,7 +147,7 @@ TEST(FacadeArgumentEncoder, RefusesWhatMetalsValidationStopsAndWritesNothing)
 {
     @autoreleasepool {
         id<MTLArgumentEncoder> encoder = [facade::device() newArgumentEncoderWithArguments:descriptors()];
-        id<MTLBuffer> arguments = shared(256), data = shared(1024);
+        id<MTLBuffer> arguments = filled(256), data = shared(1024);
         id<MTLTexture> t = texture();
         [encoder setTexture:t atIndex:1];
         EXPECT_EQ([encoder constantDataAtIndex:6], nullptr) << "no argument buffer yet";
@@ -208,7 +209,7 @@ TEST(FacadeArgumentEncoder, AFunctionsEncoderAndItsNestedOnesTakeTheBridgesRuns)
         EXPECT_EQ([encoder newArgumentEncoderForBufferAtIndex:1], nil) << "a texture";
         EXPECT_EQ([nested newArgumentEncoderForBufferAtIndex:1], nil) << "a pointer to plain memory";
 
-        id<MTLBuffer> top = shared(64), below = shared(64), data = shared(256);
+        id<MTLBuffer> top = filled(64), below = filled(64), data = shared(256);
         std::vector<uint8_t> wantTop = bytesOf(top), wantBelow = bytesOf(below);
         id<MTLTexture> a = texture(), b = texture(), c = texture();
         const id<MTLTexture> pair[2] = {a, b};
