@@ -137,6 +137,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     bool _rawOk;  // the raw path can draw with it (else every command buffer using it goes to m2v)
     RMTextureKind _kind;
     std::atomic<bool> _gpuWrites;  // its surface was declared GPU-written (surfaceGpuWrites)
+    std::atomic<bool> _readOut;    // a blit copied out of it, as recorded (raw_resolve_rule.h ResolveTarget::readOut)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
     SurfaceWriteCount *_surfaceWrites;  // its surface's writes (RawMetalSurfaceWrites.mm), held while it lives

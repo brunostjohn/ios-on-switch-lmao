@@ -912,8 +912,10 @@ public:
     void fillBytes(uint64_t dst, uint64_t bytes, uint8_t value);
     // `bytes` (whole words) at `dst` set to the 32-bit `word`
     void fillWords(uint64_t dst, uint64_t bytes, uint32_t word);
-    // `ms`'s sample grid (2^sxLog2 x 2^syLog2 samples a pixel) halved into `into` by the 2D engine (raw_resolve_twod.cpp)
-    void resolveTwod(const Texture &ms, uint32_t sxLog2, uint32_t syLog2, const Texture &into, uint32_t fmt2d);
+    // `ms`'s sample grid (2^sxLog2 x 2^syLog2 samples a pixel) halved into `into` by the 2D engine (raw_resolve_twod.cpp);
+    // `complement`: through the grid's complement (rule resolve.exact), the grid complemented back after where `keep`
+    void resolveTwod(const Texture &ms, uint32_t sxLog2, uint32_t syLog2, const Texture &into, uint32_t fmt2d,
+                     bool complement, bool keep);
     // [x0, x1) x [y0, y1) of `t` set to `word` by the 2D engine's solid rectangle (rule clear.twod, raw_twod_fill.h)
     void fillTwod(const Texture &t, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t word);
     // `lines` rows of `width` pixels of `bpp` bytes, from `src` (row stride srcPitch) to `dst` (dstPitch) (vkCmdCopyImage and the
@@ -996,9 +998,9 @@ public:
     {
         predication_.endUnit();
     }
-    // `multisampled` resolved into `into` by the 2D engine (rule resolve.twod, raw_fetch_rungs.h); false: not a sample
-    // grid the engine reads at 2:1, nothing recorded
-    bool resolveTwod(const Texture &multisampled, const Texture &into);
+    // `multisampled` resolved into `into` by the 2D engine (rules resolve.twod and resolve.exact, raw_resolve_rule.h);
+    // false: not a sample grid the engine reads at 2:1, nothing recorded
+    bool resolveTwod(const Texture &multisampled, const Texture &into, bool exact = false, bool keepSamples = false);
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
     void clean(const void *cpu, uint64_t bytes, bool invalidate = false);
@@ -1753,6 +1755,9 @@ public:
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
         std::atomic<uint64_t> blurTwodPasses{0};  // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
         std::atomic<uint64_t> resolveTwod{0};     // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
+        std::atomic<uint64_t> resolveExact{0};    // those through the grid's complement (rule resolve.exact)
+        // MSAA resolves by route, 2x and 4x: resolve.twod, resolve.exact, the pack's pass (index 2: other sample counts)
+        std::atomic<uint64_t> resolveRoute[3][3] = {};
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
@@ -1810,6 +1815,8 @@ public:
     // private textures stay plain while set (raw_private_comp.h), for a probe's uncompressed reference
     std::atomic<bool> probePlainPrivate{false};
     std::atomic<bool> probeResolveDraw{false};  // resolves take the pack's resolve pass, never resolve.twod
+    // resolves resolve.twod takes go through the complement whatever resolve.exact says of their sample count
+    std::atomic<bool> probeResolveExact{false};
     // storage forms view compressed attachments and storage-bound memoryless backings compress (gpu.raw.storage_compressed)
     std::atomic<bool> probeStorageCompressed{false};
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)

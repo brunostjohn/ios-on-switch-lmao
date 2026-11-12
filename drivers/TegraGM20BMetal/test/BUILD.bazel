@@ -1759,7 +1759,7 @@ host_test(
     name = "raw_resolve_rule_test",
     srcs = [
         "raw_resolve_rule_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_rungs.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resolve_rule.h",
     ],
     cxx_std = "c++17",
 )

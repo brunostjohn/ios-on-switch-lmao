@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_resolve_rule.h"
 
 #if SWITCH_RAW_DIAGNOSTICS
 static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its timer thread only)
@@ -95,7 +96,7 @@ size_t raw_metal_rates(char *out, size_t size)
              "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
              "atcreate=%llu/%.0fus/s%llu/o%llu swait=%.0fms comp=%llu/%lluKB/v%llu/m%llu/f%llu/x%llu bk=%llu/%lluMB/r%llu "
              "tfree=%lluMB zbc=%llu/%llu "
-             "split=%llu why=%s",
+             "split=%llu rsv=t%llu/%llu,x%llu/%llu,p%llu/%llu/%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits,
              (unsigned long long)evWhole, (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
@@ -112,7 +113,14 @@ size_t raw_metal_rates(char *out, size_t size)
              (unsigned long long)k.compMisses.load(), (unsigned long long)k.backings.load(), (unsigned long long)(k.backingBytes.load() >> 20),
              (unsigned long long)k.retiredBackings.load(), (unsigned long long)(k.tiledFreeBytes.load() >> 20),
              (unsigned long long)k.zbcHits.load(), (unsigned long long)k.zbcMisses.load(),
-             (unsigned long long)k.splitPrologues.exchange(0), *preds ? preds : "-");
+             (unsigned long long)k.splitPrologues.exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByTwod][0].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByTwod][1].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByComplement][0].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByComplement][1].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByPass][0].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByPass][1].exchange(0),
+             (unsigned long long)k.resolveRoute[raw::ResolveByPass][2].exchange(0), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);

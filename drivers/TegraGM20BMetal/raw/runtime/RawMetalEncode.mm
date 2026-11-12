@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
+#import "RawMetalResolveAsk.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
 #import "RawMetalIndirect.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
-#include "raw_fetch_rungs.h"
 #include "raw_samples.h"
 
 // ---- the tape onto the raw path ----
@@ -175,6 +175,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     struct Resolve {
         uint32_t attachment;
         __unsafe_unretained RMTexture *into;
+        bool keepSamples;  // MTLStoreActionStoreAndMultisampleResolve
     };
 
     std::vector<Resolve> resolves;
@@ -185,19 +186,15 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             from[r.attachment] = re->target(r.attachment);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
-            const MTLStorageMode storage = r.into->_descriptor.storageMode;
-            raw::ResolveAsk ask;
-            ask.format = uint16_t(r.into->_raw.format);
-            ask.samples = uint8_t(from[r.attachment]->samples);
-            ask.readable = storage == MTLStorageModeShared;
-            ask.wholeTarget = width == r.into->_raw.width && height == r.into->_raw.height;
-            bool twod = raw::twodResolveAcceptable(ask);
+            const raw::ResolveAsk ask = resolveAsk(r.into, *from[r.attachment], width, height);
+            bool twod = raw::twodResolveAcceptable(ask), exact = raw::twodResolveExact(ask);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             twod = twod && !d.probeResolveDraw.load(std::memory_order_relaxed);
+            exact = twod && (exact || d.probeResolveExact.load(std::memory_order_relaxed));
 #endif
             if (twod) {
                 useTexture(rc, r.into, true);
-                if (rc->resolveTwod(*from[r.attachment], r.into->_raw))
+                if (rc->resolveTwod(*from[r.attachment], r.into->_raw, exact, r.keepSamples))
                     continue;
             }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -230,6 +227,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
                 return refused();
             e->end();
+            RAW_DIAGNOSTIC(d.stats.resolveRoute[raw::ResolveByPass][raw::resolveSampleSlot(samples)]++);
         }
         resolves.clear();
         return true;
@@ -539,7 +537,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                     a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
                 if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
                     if (__unsafe_unretained RMTexture *r = (RMTexture *)a.resolve)
-                        resolves.push_back({j, r});
+                        resolves.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve});
                 const MTLClearColor k = a.clear;
                 p.color[j].clear[0] = float(k.red);
                 p.color[j].clear[1] = float(k.green);
