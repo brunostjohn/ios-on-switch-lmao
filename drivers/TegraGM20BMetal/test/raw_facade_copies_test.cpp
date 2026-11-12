@@ -10,6 +10,7 @@
 #include "../raw/runtime/RawMetalInternal.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -276,6 +277,9 @@ TEST_F(FacadeCopies, EveryLayoutMetalTakesOnATextureTheRawPathHoldsIsItsToo)
     for (const std::string &n : notHeld)
         EXPECT_TRUE(n.find("depth") == std::string::npos && n.find("stencil") == std::string::npos)
             << n << ": a stored depth/stencil texture is the raw path's own";
+    for (const char *formerlyM2v : {"etc2 rgb8", "array slice 1 level 1", "r32uint", "rgba16uint"})
+        EXPECT_TRUE(std::find(notHeld.begin(), notHeld.end(), formerlyM2v) == notHeld.end())
+            << formerlyM2v << ": not held, so its copies are m2v's";
 }
 
 }  // namespace
