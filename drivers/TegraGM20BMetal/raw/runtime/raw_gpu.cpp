@@ -189,6 +189,8 @@ switch_gm20b_viewport_state viewportState(const uint32_t w[8])
     return v;
 }
 
+constexpr uint32_t kRtLayerFromShader = NVDEF(NVB197, SET_RT_LAYER, CONTROL, GEOMETRY_SHADER_SELECTS_LAYER);
+
 // A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
 constexpr uint32_t kSampleWords = 20;
 
@@ -1039,6 +1041,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     pl.viewportIndex = headerWritesViewportIndex(vs.header);
+    pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -3279,6 +3282,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     slmChannel_ = 0;
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
+    rtLayer_ = ~0u;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
@@ -3368,6 +3372,7 @@ CommandBuffer *Device::begin()
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
+    cb.rtLayer_ = rtLayer_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
     cb.heldSegment_ = heldSegment_;
@@ -3987,6 +3992,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.retire(d.upload_, seq);
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
+    d.rtLayer_ = rtLayer_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
@@ -5015,15 +5021,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
-    // Every record is compiled as for a pass of one layer and one viewport (the direct compile's probe state: m2v's
-    // dropped_vertex_layer variant, its viewport count push word the constant 0), so a vertex function's
-    // [[render_target_array_index]] or [[viewport_array_index]] would draw layer and viewport 0
-    if (pass_.layers > 1) {
-        *why = "a draw in a layered pass: no record says whether its vertex function chooses the layer";
-        cb_->refusal = {RefLayered, pass_.layers, 0, 0};
-        return false;
-    }
-    if (views_.viewports > 1 && pl->viewportIndex) {
+    // A record of a vertex function that chooses its slice writes Layer below the pass's length (arrayLengthWord) and
+    // one that chooses its viewport ViewportIndex below the encoder's count (viewportCountWord); a record made before
+    // either word draws viewport 0
+    if (views_.viewports > 1 && pl->viewportIndex && !pl->rec->viewportCountWord) {
         *why = "a vertex function choosing among several viewports: its record draws viewport 0";
         cb_->refusal = {RefViewports, views_.viewports, 0, 0};
         return false;
@@ -5316,8 +5317,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
     const bool patches = tessellates(r);
-    const bool drawnWordsDirty =
-        ((r.amplificationIdWord || r.amplificationCountWord) && amplificationDirty_) || r.pulledStride[0][1];
+    const bool drawnWordsDirty = ((r.amplificationIdWord || r.amplificationCountWord) && amplificationDirty_) ||
+                                 r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {
@@ -5335,6 +5336,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 narrowed_ = narrow;
             }
             bindState(p, *pl);
+            // a vertex program's Layer selects the slice where it writes one (NVK: the last pre-rasterization stage's)
+            if (const uint32_t rtLayer = pl->writesLayer ? kRtLayerFromShader : 0; rtLayer != cb_->rtLayer_) {
+                p.m(NVB197_SET_RT_LAYER, rtLayer);
+                cb_->rtLayer_ = rtLayer;
+            }
             RAW_DIAGNOSTIC(cb_->counts_.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;

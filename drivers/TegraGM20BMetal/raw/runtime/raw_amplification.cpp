@@ -122,6 +122,10 @@ void RenderEncoder::drawnWords(const PackPipeline &r, uint32_t (&want)[32])
     for (const auto &pulled : r.pulledStride)
         if (pulled[1] && pulled[1] <= 32)
             want[pulled[1] - 1] = vertexStride(pulled[0]);
+    if (r.arrayLengthWord && r.arrayLengthWord <= 32)
+        want[r.arrayLengthWord - 1] = pass_.layers;
+    if (r.viewportCountWord && r.viewportCountWord <= 32)
+        want[r.viewportCountWord - 1] = views_.viewports;
 }
 
 }  // namespace raw

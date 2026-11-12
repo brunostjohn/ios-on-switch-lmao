@@ -163,8 +163,11 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    runtime_only, streams = packfile.PIPELINE_V21.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V21.size)
-    if runtime_only != packfile.RUNTIME_ONLY or any(s & packfile.STREAM_BIND_STRIDE for s in streams):
+    head, array_length_word, pulled, streams, viewport_count_word = packfile.PIPELINE_V21.unpack_from(
+        p, PIPELINE_BYTES - packfile.PIPELINE_V21.size
+    )
+    runtime_only = head != packfile.RUNTIME_ONLY_HEAD or pulled != packfile.RUNTIME_ONLY_PULLED
+    if runtime_only or any(s & packfile.STREAM_BIND_STRIDE for s in streams):
         raise ValueError(
             'a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none'
         )
@@ -218,6 +221,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'entries': entries_of(p, entries, rec['samplers'], constexpr_tsc),
         'vbs': [{'stream': 0, 'slot': slot, 'stride': stride}] if slot != 0xFF else [],
         'vertex_streams': list(streams),
+        'array_length_word': array_length_word,
+        'viewport_count_word': viewport_count_word,
         'fetch': bool(flags & 1),
         'clears': 0,
         'problems': [],

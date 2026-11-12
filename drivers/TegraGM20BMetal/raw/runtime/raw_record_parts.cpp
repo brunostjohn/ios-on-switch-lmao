@@ -318,6 +318,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.amplificationMax = parts.amplificationMax;
     p.amplificationIdWord = parts.amplificationIdWord;
     p.amplificationCountWord = parts.amplificationCountWord;
+    p.arrayLengthWord = parts.arrayLengthWord;
+    p.viewportCountWord = parts.viewportCountWord;
     const uint32_t colors = targets(key);
     std::map<uint32_t, uint32_t> regs;
     for (const auto &[m, v] : parts.regs)

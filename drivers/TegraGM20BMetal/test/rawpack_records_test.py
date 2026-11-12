@@ -90,6 +90,15 @@ class RecordsTest(unittest.TestCase):
         record['pipeline'] = packfile.pipeline_bytes(dict(rec, vertex_streams=[5 | packfile.STREAM_BIND_STRIDE]), 0, 0)
         with self.assertRaisesRegex(ValueError, 'runtime-only'):
             directlink.pipeline_of(record, [], ids, [])
+        # a vertex function choosing its slice and viewport: the two push words each draw writes are the pack's
+        record['pipeline'] = packfile.pipeline_bytes(dict(rec, array_length_word=3, viewport_count_word=4), 0, 0)
+        self.assertEqual(
+            record['pipeline'][-packfile.PIPELINE_V21.size :],
+            bytes(7) + bytes([3]) + bytes(8) + bytes([5]) + bytes(6) + bytes([4]),
+        )
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual((back['array_length_word'], back['viewport_count_word']), (3, 4))
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), record['pipeline'])
 
     def test_record_v15_tail_round_trip(self):
         uniform = bytes([0, 1, 2, 9]) + b'\xff\x00\x00\x00' * 7

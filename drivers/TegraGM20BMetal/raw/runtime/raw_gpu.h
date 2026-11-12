@@ -442,6 +442,7 @@ struct Pipeline {
     bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
     bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
     bool viewportIndex = false;     // its vertex program writes ViewportIndex (SPH OMAP, raw_viewports.h)
+    bool writesLayer = false;       // its last stage before the rasterizer writes Layer: SET_RT_LAYER takes it
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
@@ -1101,7 +1102,6 @@ enum RefusalId : uint8_t {
     RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
     RefStorageView,   // a: the attachment, b: its format, c: its width (raw_storage_form.h)
     RefRotated,       // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
-    RefLayered,       // a: the pass's layers
     RefViewports      // a: the encoder's viewport count
 };
 
@@ -1236,6 +1236,7 @@ private:
     uint64_t pushStart_ = 0, uploadStart_ = 0;
     uint32_t rootPush_[32] = {};
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
+    uint32_t rtLayer_ = ~0u;                // and SET_RT_LAYER (~0: not known)
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     HeldSegment heldSegment_;               // and the state segment its registers hold
@@ -2081,6 +2082,7 @@ private:
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index
+    uint32_t rtLayer_ = ~0u;      // and SET_RT_LAYER (~0: not known)
     DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;

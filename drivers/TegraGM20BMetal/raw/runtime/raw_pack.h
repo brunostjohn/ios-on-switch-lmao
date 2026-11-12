@@ -319,14 +319,18 @@ struct PackPipeline {
     // bit k: the GPU reads entry[k]'s words from the set's upload (raw_set_reads.h); a draw whose other entries alone
     // moved keeps the set it uploaded last
     uint32_t memoryEntries;
-    // v21. Up to vertexStreams, runtime records only (raw_direct.cpp; every pack state has these 0). A tessellation state's
-    // push word of its control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation programs
-    // are RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0: none).
-    // vertexStrideDynamic: stream 0's stride is its bind's (MTLBufferLayoutStrideDynamic).
+    // v21. Up to arrayLengthWord and pulledStride, runtime records only (raw_direct.cpp; every pack state has these 0). A
+    // tessellation state's
+    // push word of its control stage's first field + 1 (raw_direct_push.h kControlWords; its control and evaluation
+    // programs are RuntimeRecord's), its patches' control points (0: any) and its control-point index size in bytes (0:
+    // none). vertexStrideDynamic: stream 0's stride is its bind's (MTLBufferLayoutStrideDynamic).
     uint8_t controlWord, controlPoints, controlPointIndexBytes, vertexStrideDynamic;
     // A state of vertex amplification: its maxVertexAmplificationCount (0: 1), and the push words + 1 of m2v's
     // AmplificationId and AmplificationCount (0: none), which each draw writes (its [[amplification_count]] is the draw's)
-    uint8_t amplificationMax, amplificationIdWord, amplificationCountWord, amplificationReserved;
+    uint8_t amplificationMax, amplificationIdWord, amplificationCountWord;
+    // A pack field: the push word + 1 of m2v's RenderTargetArrayLength (0: none), the pass's length, which each draw writes:
+    // its vertex program writes Layer (SET_RT_LAYER takes it), an index at or past the length as 0
+    uint8_t arrayLengthWord;
     // A pulled vertex buffer layout's stride its binds set (m2v VertexBufferStride of a dynamic layout): its Metal buffer
     // index and push word + 1 (0: none)
     uint8_t pulledStride[4][2];
@@ -334,7 +338,9 @@ struct PackPipeline {
     // its Metal buffer index + 1 (0: no more), with kStreamBindStride; their strides are the state's
     // SET_VERTEX_STREAM_A_FORMAT registers
     uint8_t vertexStreams[kPackVertexStreams - 1];
-    uint8_t v21Reserved;
+    // The push word + 1 of m2v's ViewportCount (0: none), the encoder's viewport count, which each draw writes: an index
+    // its vertex program writes at or past the count is 0
+    uint8_t viewportCountWord;
 };
 
 // A vertexStreams byte's Metal buffer index

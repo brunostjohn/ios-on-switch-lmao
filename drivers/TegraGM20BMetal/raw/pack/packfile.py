@@ -26,9 +26,10 @@ PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 PIPELINE_V18 = struct.Struct('<I')
 ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
 # Its record-v21 tail: the runtime records' fields (controlWord, controlPoints, controlPointIndexBytes,
-# vertexStrideDynamic, amplificationWord[4], pulledStride[4][2]), vertexStreams[7], reserved
-PIPELINE_V21 = struct.Struct('<16s7sx')
-RUNTIME_ONLY = bytes(16)
+# vertexStrideDynamic, amplificationMax, amplificationIdWord, amplificationCountWord), arrayLengthWord, the runtime
+# records' pulledStride[4][2], vertexStreams[7], viewportCountWord
+PIPELINE_V21 = struct.Struct('<7sB8s7sB')
+RUNTIME_ONLY_HEAD, RUNTIME_ONLY_PULLED = bytes(7), bytes(8)
 VERTEX_STREAMS = 7  # PackPipeline.vertexStreams' length: the streams past stream 0
 STREAM_BIND_STRIDE = 0x80  # runtime/raw_pack.h kStreamBindStride
 # PackKernel's record-v21 tail: stageInRegionWord, stageInStride[4][2], reserved
@@ -235,7 +236,13 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         + tests
         + v15
         + v18
-        + PIPELINE_V21.pack(RUNTIME_ONLY, bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'))
+        + PIPELINE_V21.pack(
+            RUNTIME_ONLY_HEAD,
+            rec.get('array_length_word', 0),
+            RUNTIME_ONLY_PULLED,
+            bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'),
+            rec.get('viewport_count_word', 0),
+        )
     )
 
 

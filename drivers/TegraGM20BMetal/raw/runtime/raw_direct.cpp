@@ -406,7 +406,8 @@ bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &wh
     const NmbDirectDraw &d = state.draws[0];
     for (const NmbDirectDraw &other : state.draws)
         if (other.amplificationIdWord != d.amplificationIdWord ||
-            other.amplificationCountWord != d.amplificationCountWord ||
+            other.amplificationCountWord != d.amplificationCountWord || other.arrayLengthWord != d.arrayLengthWord ||
+            other.viewportCountWord != d.viewportCountWord ||
             memcmp(other.pulledStrides, d.pulledStrides, sizeof d.pulledStrides)) {
             why = "probe draws that place a drawn push word apart";
             return false;
@@ -418,6 +419,8 @@ bool drawnWords(const NmbDirectState &state, RecordParts &parts, std::string &wh
     parts.amplificationMax = uint8_t(d.amplificationMax > 1 ? d.amplificationMax : 0);
     parts.amplificationIdWord = uint8_t(d.amplificationIdWord);
     parts.amplificationCountWord = uint8_t(d.amplificationCountWord);
+    parts.arrayLengthWord = uint8_t(d.arrayLengthWord);
+    parts.viewportCountWord = uint8_t(d.viewportCountWord);
     for (size_t k = 0; k < 4; k++) {
         parts.pulledStride[k][0] = uint8_t(d.pulledStrides[k][0]);
         parts.pulledStride[k][1] = uint8_t(d.pulledStrides[k][1]);

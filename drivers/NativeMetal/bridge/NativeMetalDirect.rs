@@ -20,8 +20,8 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType, SlotClass,
-    SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot, VertexStride,
+    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SampledType,
+    SlotClass, SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot, VertexStride,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -105,6 +105,8 @@ pub struct NmbDirectDraw {
     pub amplification_max: u32,
     pub amplification_id_word: u32,
     pub amplification_count_word: u32,
+    pub array_length_word: u32,
+    pub viewport_count_word: u32,
     pub variant: *const c_char,
 }
 
@@ -371,6 +373,13 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     }
 }
 
+fn chooses_layer(pipeline: &RenderPipeline) -> bool {
+    pipeline
+        .dependencies
+        .iter()
+        .any(|d| matches!(d.fact, RuntimeFact::RenderTargetArrayLength { .. }))
+}
+
 /// The fragment texture slots the probe binds whose arguments the state's functions declare other than a single-sample
 /// `texture2d` of floats: a texture of the declared type (Core Animation's colour cubes a 3D one, a `texture2d_ms` or a
 /// `depth2d_ms` a multisampled one), sampled type and comparison is bound there, so that each gets its own write at its
@@ -427,8 +436,10 @@ fn probe_state(
     binds: &Binds,
     patches: bool,
     amplification: u32,
+    layers: u32,
 ) -> BindState {
     let mut state = BindState::default();
+    state.render_target_array_length = layers;
     // One draw per amplification, which the raw path draws in order, into the first layer through viewport 0
     if amplification > 1 {
         state.vertex_amplification = VertexAmplification::new(amplification, Vec::new());
@@ -770,6 +781,8 @@ fn draw_of(
         amplification_max: amplification,
         amplification_id_word: 0,
         amplification_count_word: 0,
+        array_length_word: 0,
+        viewport_count_word: 0,
         variant: variant.as_ptr(),
     };
     dynamic_words(run, pipeline, &mut draw)?;
@@ -779,6 +792,8 @@ fn draw_of(
             PushField::HalfBlendColor => (&mut draw.half_blend_color_word, 16),
             PushField::ShaderTestsState => (&mut draw.depth_test_word, 16),
             PushField::ShaderStencilState => (&mut draw.stencil_test_word, 16),
+            PushField::RenderTargetArrayLength => (&mut draw.array_length_word, 4),
+            PushField::ViewportCount => (&mut draw.viewport_count_word, 4),
             _ => continue,
         };
         let FieldLocation::PushWindow { offset } = field.location else {
@@ -943,6 +958,9 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
+        // A vertex function that chooses its render target slice is compiled as for a pass of two layers: the variant
+        // that writes Layer, reading the pass's length from its push word, draws in a pass of any length
+        let layers = if chooses_layer(&base) { 2 } else { 0 };
         let draw = crate::direct_tess::probe_draw(base.graphics.tessellation.as_ref());
         let patches = base.graphics.tessellation.is_some();
         let mut variants = vec![(VariantKey::new(), base)];
@@ -960,6 +978,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     &binds,
                     patches,
                     amplification,
+                    layers,
                 ),
                 &draw,
                 &budget,
