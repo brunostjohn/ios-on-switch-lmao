@@ -2181,9 +2181,11 @@ nak_postprocess_nir(nir_shader *nir,
       OPT(nir, nir_split_conversions, &split_conv_opts);
    }
 
-   /* ios-on-switch-lmao: SM50's seven predicates
-    * (nak_nir_rematerialize_compares.c)
+   /* ios-on-switch-lmao: SM50 has no uniform registers and seven predicates
+    * (nak_nir_rematerialize_uniforms.c, nak_nir_rematerialize_compares.c)
     */
+   if (nak->sm < 70 && OPT(nir, nak_nir_rematerialize_uniforms))
+      OPT(nir, nir_opt_dce);
    if (nak->sm < 70 && OPT(nir, nak_nir_rematerialize_compares))
       OPT(nir, nir_opt_dce);
 

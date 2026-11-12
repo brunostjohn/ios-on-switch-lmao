@@ -150,6 +150,7 @@ mesa_cc_library(
         "nak_nir_mark_lcssa_invariants.c",
         "nak_nir_rematerialize_compares.c",
         "nak_nir_rematerialize_load_const.c",
+        "nak_nir_rematerialize_uniforms.c",
         "//third_party/mesa/src/nouveau/headers:nv_push.c",
     ],
 )
