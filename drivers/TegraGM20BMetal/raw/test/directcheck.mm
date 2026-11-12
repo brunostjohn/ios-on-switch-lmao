@@ -19,7 +19,7 @@
 #include <set>
 #include <sys/stat.h>
 #include "../pack/direct_states.h"
-#include "../pack/fetch_free.h"
+#include "../pack/fetch_free_make.h"
 #include "../runtime/RawDirect.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
@@ -109,18 +109,15 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     fclose(f);
 }
 
-// The state's fetch-free form, made as directpack.mm makes it, where it fetches nothing
+// The state's fetch-free form, made as directpack.mm makes it (fetch_free_make.h)
 void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &line, const std::string &key,
                    raw::ProbeTextures textures, const char *dir)
 {
     probe::FetchFree form;
-    probe::State s;
-    if (!probe::fetchFree(line, form) || !probe::parseState(qc, form.line, s))
-        return;
     raw::RuntimeRecord rec;
     std::string why;
-    if (direct.make(s.d, s.key, rec, why, textures, nullptr, true) == raw::CompileOutcome::Made &&
-        !(rec.pipeline.flags & (raw::PipelineFetches | raw::PipelineBarrierForm)))
+    bool barrier = false;
+    if (probe::makeFetchFree(direct, qc, line, textures, form, rec, nullptr, why, barrier) == probe::FreeOutcome::Made)
         dumpRecord(dir, key, rec, &form);
 }
 

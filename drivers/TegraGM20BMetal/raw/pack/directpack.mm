@@ -28,7 +28,7 @@
 #include "bridge/NativeMetalObjects.h"
 #include "direct_kernels.h"
 #include "direct_states.h"
-#include "fetch_free.h"
+#include "fetch_free_make.h"
 
 namespace {
 
@@ -145,27 +145,23 @@ std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &
 
 struct Counts {
     uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0;
-    uint32_t free[4] = {}, freeFetching = 0, freeRefused = 0;
+    uint32_t free[4] = {}, freeFetching = 0, freeRefused = 0, freeBarrier = 0;
 };
 
-// The state's fetch-free form (fetch_free.h), under the state's key: refused where the form still fetches (it reads
-// another attachment), so the state keeps its storage form
+// The state's fetch-free form (fetch_free_make.h), under the state's key
 void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::string &line, const std::string &key,
                    raw::ProbeTextures textures, Counts &n)
 {
     probe::FetchFree form;
-    probe::State s;
-    if (!probe::fetchFree(line, form) || !probe::parseState(qc, form.line, s) || form.colour >= 8)
-        return;
-    std::map<uint32_t, uint32_t> registers;
     raw::RuntimeRecord rec;
+    std::map<uint32_t, uint32_t> registers;
     std::string why;
-    // made under its own key, whose colour fields give its registers their blend, and filed under the state's
-    const raw::CompileOutcome outcome =
-        direct.make(s.d, s.key, rec, why, textures, &registers, true, raw::PackForm::Default);
-    const bool fetches = outcome == raw::CompileOutcome::Made &&
-                         (rec.pipeline.flags & (raw::PipelineFetches | raw::PipelineBarrierForm));
-    if (outcome != raw::CompileOutcome::Made || fetches) {
+    bool barrier = false;
+    const probe::FreeOutcome outcome = probe::makeFetchFree(direct, qc, line, textures, form, rec, &registers, why, barrier);
+    if (outcome == probe::FreeOutcome::None)
+        return;
+    if (outcome != probe::FreeOutcome::Made) {
+        const bool fetches = outcome == probe::FreeOutcome::Fetches;
         (fetches ? n.freeFetching : n.freeRefused)++;
         why = fetches ? "it still fetches" : why;
         fprintf(stderr, "directpack: no fetch-free form (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
@@ -174,7 +170,8 @@ void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std:
     rec.pipeline.flags |= raw::PipelineFetchFreeForm;
     rec.pipeline.fetchRung[form.colour] = form.rung == 2 ? raw::FetchBlend : raw::FetchIteratedBlend;
     n.free[form.rung]++;
-    record(w, key, outcome, why, rec, registers, form.rung == 3 ? form.program : "");
+    n.freeBarrier += barrier;
+    record(w, key, raw::CompileOutcome::Made, why, rec, registers, form.rung == 3 ? form.program : "");
 }
 
 // A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
@@ -287,8 +284,9 @@ int main(int argc, char **argv)
                 counts.made, counts.split, counts.variants, counts.refused, counts.failed, kernels[0], kernels[1],
                 kernels[2]);
         fprintf(stderr,
-                "directpack: fetch-free forms: %u on rung 2, %u on rung 3; %u still fetch, %u otherwise refused\n",
-                counts.free[2], counts.free[3], counts.freeFetching, counts.freeRefused);
+                "directpack: fetch-free forms: %u on rung 2, %u on rung 3 (%u reading other colours behind a barrier); "
+                "%u still fetch, %u otherwise refused\n",
+                counts.free[2], counts.free[3], counts.freeBarrier, counts.freeFetching, counts.freeRefused);
         return 0;
     }
 }

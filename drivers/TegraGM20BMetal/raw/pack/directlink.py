@@ -244,7 +244,7 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     for d in buckets:
         for rec in load_records(os.path.join(d, 'records.bin'))[0]:
             flags = PIPELINE.unpack_from(rec['pipeline'])[12] if rec['outcome'] == 0 else 0
-            form = 'barrier' if flags & 2 else 'free' if flags & 32 else ''
+            form = 'free' if flags & 32 else 'barrier' if flags & 2 else ''
             if (form, rec['key']) in seen:
                 continue
             seen.add((form, rec['key']))
