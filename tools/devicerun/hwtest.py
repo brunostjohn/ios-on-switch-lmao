@@ -85,6 +85,7 @@ TESTS: dict[str, bool] = {
             'gpu.surface.tiled_default',
             'gpu.ycbcr_target',
             'gpu.ycbcr_packed_target',
+            'gpu.packed_plane_target',
             'gpu.raw.xr_two_plane',
             'metal.mps.blur',
             'metal.mps.matmul',

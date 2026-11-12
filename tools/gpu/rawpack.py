@@ -63,15 +63,17 @@ OS_BUILD = re.compile(r' os=(\S+)')
 # A colour attachment of an R line's head: its index, MTLPixelFormat, write mask and blending
 COLOR = re.compile(r' c(\d)=(\d+):(\d+):(\d+):')
 # raw/runtime/raw_ycbcr_store.h: the formats whose attachments RawMetalYcbcrTargets.mm ycbcrTargetState takes
-# (ycbcrRenderedFormat), and those of them it renders into the RGBA32Float stand-in (ycbcrTargetRefusal,
-# kYcbcrTargetStandIn)
-YCBCR_TARGETS = frozenset(range(500, 549)) - {542}
+# (ycbcrRenderedFormat: two-plane YCbCr, and R10Unorm_PACKED and RG10Unorm_PACKED), those of them it renders into the
+# RGBA32Float stand-in (ycbcrTargetRefusal, kYcbcrTargetStandIn), and the channels each must write (ycbcrTargetWrites:
+# MTLColorWriteMaskRed | Green | Blue, the packed planes' red and green)
+YCBCR_TARGETS = frozenset(range(500, 549)) - {542} | {588, 589}
 YCBCR_RENDERED = frozenset(
     {500, 502, 503, 505, 506, 507, 508, 509, 510, 520, 522, 523, 525, 526, 527, 528, 529, 530}
-    | {540, 541, 543, 544, 545, 546, 547, 548}
+    | {540, 541, 543, 544, 545, 546, 547, 548, 588, 589}
 )
 YCBCR_STAND_IN = 125
-RGB_WRITES = 0b1110  # MTLColorWriteMaskRed | Green | Blue
+WRITES = {588: 0b1000, 589: 0b1100}
+RGB_WRITES = 0b1110
 
 
 def framework_line(line: str) -> bool:
@@ -106,14 +108,17 @@ def ycbcr_stand_in(line: str) -> str:
     """Give the line of the state the runtime makes for a render state of two-plane YCbCr attachments.
 
     RawMetalYcbcrTargets.mm ycbcrTargetState makes it with each such attachment's format the stand-in's, where every one
-    is a format it renders (codes, converted, sRGB or packed, 8- or 10-bit), unblended, writing red, green and blue;
-    m2v alone answers any other (it renders into no YCbCr target), so its line stays the app's. The archives' declared
-    keys stay the app's (raw/pack/archives.py).
+    is a format it renders (codes, converted, sRGB or packed, 8- or 10-bit, or a packed 10-bit plane), unblended,
+    writing every channel its store reads; m2v alone answers any other (it renders into no YCbCr target), so its line
+    stays the app's. The archives' declared keys stay the app's (raw/pack/archives.py).
     """
     head, bar, tail = line.partition(' | ')
     targets = [m for m in COLOR.finditer(head) if int(m[2]) in YCBCR_TARGETS]
     if not targets or any(
-        int(m[2]) not in YCBCR_RENDERED or int(m[3]) & RGB_WRITES != RGB_WRITES or m[4] != '0' for m in targets
+        int(m[2]) not in YCBCR_RENDERED
+        or int(m[3]) & WRITES.get(int(m[2]), RGB_WRITES) != WRITES.get(int(m[2]), RGB_WRITES)
+        or m[4] != '0'
+        for m in targets
     ):
         return line
     for m in reversed(targets):

@@ -116,6 +116,7 @@ def key_hash(rec: dict) -> int:
                 'packed_converted_frag',
                 'packed_srgb_frag',
                 'packed_codes10_frag',
+                'packed_plane_frag',
             ),
         ),
         (
@@ -126,7 +127,8 @@ def key_hash(rec: dict) -> int:
                 for srgb in ('', '_srgb')
                 for plane in ('luma', 'chroma')
                 for bits in ('8', '16', '_packed')
-            ),
+            )
+            + ('plane_packed_frag',),
         ),
         (
             'turn',

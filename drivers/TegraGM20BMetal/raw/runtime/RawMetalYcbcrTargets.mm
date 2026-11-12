@@ -5,7 +5,8 @@
 // the pack's store states then draw the luma plane and the chroma blocks from the pass's backing of it, every code worked out in
 // the program (pack/ycbcr_store.metal). The 2D engine's 2:1 bilinear halving stores a tie rounded down where Metal's mean rounds
 // it up (24.9% of 4:2:0 and 48.1% of 4:2:2 chroma bytes off on the device), so the blocks are a draw too. A pass that loads the
-// texture is refused: Metal reloads the chroma interpolated between blocks.
+// texture is refused: Metal reloads the chroma interpolated between blocks. R10Unorm_PACKED and RG10Unorm_PACKED planes
+// (raw_packed_plane.h) render the same way, through one store state into their words.
 #import "RawMetalInternal.h"
 #include "raw_ycbcr_store.h"
 
@@ -16,8 +17,9 @@ void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat, const raw::YcbcrStor
         return x && (x->renderable || x->shadowTarget);
     };
     raw::Texture *standIn = new raw::Texture;
-    if (!rendered(t.luma) || !rendered(t.chroma) || !d.ycbcrStorePipeline(false, store) ||
-        !d.ycbcrStorePipeline(true, store) ||
+    const bool chroma = !store.plane;  // a packed plane's words are its one plane
+    if (!rendered(t.luma) || (chroma && !rendered(t.chroma)) || !d.ycbcrStorePipeline(false, store) ||
+        (chroma && !d.ycbcrStorePipeline(true, store)) ||
         !d.createMemoryless(t.width, t.height, raw::kYcbcrTargetStandIn, *standIn)) {
         delete standIn;
         SWITCH_REFUSE_DETAIL("raw", "ycbcr.target", pixelFormat,
@@ -32,10 +34,12 @@ void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat, const raw::YcbcrStor
 
 const char *ycbcrTargetPassRefusal(const raw::Texture &t, MTLRenderPassColorAttachmentDescriptor *a)
 {
-    const char *why = !t.planarStandIn || !t.ycbcrStore ? "a YCbCr texture with no stand-in as a render target"
-                      : a.loadAction == MTLLoadActionLoad
-                          ? "a YCbCr target loaded: Metal reloads its chroma interpolated between blocks"
-                          : nullptr;
+    const char *why = !t.planarStandIn || !t.ycbcrStore   ? "a YCbCr texture with no stand-in as a render target"
+                      : a.loadAction != MTLLoadActionLoad ? nullptr
+                      : t.ycbcrStore->plane
+                          ? "a packed 10-bit plane loaded: what Metal loads of its codes is not measured (an M4 "
+                            "Max's passes into one fault)"
+                          : "a YCbCr target loaded: Metal reloads its chroma interpolated between blocks";
     if (why)
         SWITCH_REFUSE_DETAIL("raw", "pass.ycbcr", a.loadAction, "%ux%u format %u: %s", t.width, t.height,
                              uint32_t(a.texture.pixelFormat), why);
@@ -46,6 +50,8 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
 {
     raw::Device &d = *gRM->raw;
     for (const bool chroma : {false, true}) {
+        if (chroma && !t.chroma)
+            continue;
         raw::PassDesc p;
         p.color[0].texture = chroma ? t.chroma : t.luma;
         p.color[0].load = raw::ColorAttachment::DontCare;
@@ -67,8 +73,15 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
             return 2;
         e->end();
     }
-    static std::atomic<bool> said{false};
-    if (!said.exchange(true, std::memory_order_relaxed))
+    static std::atomic<bool> said{false}, saidPlane{false};
+    if (t.ycbcrStore->plane) {
+        if (!saidPlane.exchange(true, std::memory_order_relaxed))
+            os_log(
+                rawLog(),
+                "raw: packed 10-bit plane stored on the GPU (first: %ux%u, %u codes a texel): pass into a memoryless "
+                "stand-in, words drawn by the pack's store state",
+                t.width, t.height, t.ycbcrStore->plane);
+    } else if (!said.exchange(true, std::memory_order_relaxed)) {
         os_log(rawLog(),
                "raw: YCbCr target stored on the GPU (first: %ux%u, chroma %ux%u, %u-bit %{public}s): pass into a "
                "memoryless stand-in, luma and chroma blocks drawn by the pack's store states",
@@ -76,6 +89,7 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
                t.ycbcrStore->srgb        ? "sRGB"
                : t.ycbcrStore->converted ? "converted"
                                          : "codes");
+    }
     return 0;
 }
 
@@ -108,9 +122,9 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d)
         const uint32_t format = uint32_t(a.pixelFormat);
         if (!raw::ycbcrRenderedFormat(format))
             continue;
-        constexpr MTLColorWriteMask kRGB = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
+        const MTLColorWriteMask writes = MTLColorWriteMask(raw::ycbcrTargetWrites(format));
         const char *why = raw::ycbcrTargetRefusal(format);
-        if (!why && (a.blendingEnabled || (a.writeMask & kRGB) != kRGB))
+        if (!why && (a.blendingEnabled || (a.writeMask & writes) != writes))
             why = "a blended or channel-masked YCbCr attachment";
         if (why) {
             SWITCH_REFUSE_DETAIL("raw", "state.ycbcr", format,

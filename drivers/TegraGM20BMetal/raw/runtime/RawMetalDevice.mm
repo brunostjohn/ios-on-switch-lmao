@@ -516,8 +516,9 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                  (unsigned long)d.width, (unsigned long)d.height);
     } else if (xrPlanesShape(d, s, plane)) {
         t->_rawOk = makeXrPlanes(t, s);
-    } else if (raw::isYcbcrFormat(uint32_t(d.pixelFormat)) && !ycbcrPlan(d, s, plane, ycbcr)) {
-        // a YCbCr texture: an image the pack's conversion state draws
+    } else if ((raw::isYcbcrFormat(uint32_t(d.pixelFormat)) || raw::packedPlaneChannels(uint32_t(d.pixelFormat))) &&
+               !ycbcrPlan(d, s, plane, ycbcr)) {
+        // a YCbCr texture or a packed 10-bit plane: an image the pack's conversion state draws
         t->_rawOk =
             gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);

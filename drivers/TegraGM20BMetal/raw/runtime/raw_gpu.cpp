@@ -2681,7 +2681,8 @@ Pipeline *Device::ycbcrPipeline(uint8_t output)
                                         "raw.ycbcr.ycbcr_codes10_frag",
                                         "raw.ycbcr.ycbcr_packed_converted_frag",
                                         "raw.ycbcr.ycbcr_packed_srgb_frag",
-                                        "raw.ycbcr.ycbcr_packed_codes10_frag"};
+                                        "raw.ycbcr.ycbcr_packed_codes10_frag",
+                                        "raw.ycbcr.ycbcr_packed_plane_frag"};
     if (!output || output >= sizeof names / sizeof *names)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
@@ -2697,7 +2698,9 @@ Pipeline *Device::ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store)
     static const char *const packed[2][2] = {
         {"raw.ycbcr_store.ycbcr_store_luma_packed_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_frag"},
         {"raw.ycbcr_store.ycbcr_store_luma_packed_srgb_frag", "raw.ycbcr_store.ycbcr_store_chroma_packed_srgb_frag"}};
-    const char *name = store.packed ? packed[store.srgb != 0][chroma] : names[store.srgb != 0][chroma][store.max > 255];
+    const char *name = store.plane    ? "raw.ycbcr_store.ycbcr_store_plane_packed_frag"
+                       : store.packed ? packed[store.srgb != 0][chroma]
+                                      : names[store.srgb != 0][chroma][store.max > 255];
     return pipeline(Pack::fnv(name, strlen(name)));
 }
 
@@ -2776,6 +2779,10 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
         std::lock_guard<std::mutex> l(lock_);
         uint32_t *w = reinterpret_cast<uint32_t *>(tic_.cpu + 32 * t.tic);
         w[0] = (w[0] & ~(7u << 28)) | 7u << 28;
+        // a packed plane's channels past its codes read 0, as Metal reads R10Unorm_PACKED and RG10Unorm_PACKED (Z_SOURCE,
+        // and Y_SOURCE of a one-code texel, ZERO)
+        if (plan.output == YcbcrPackedPlane)
+            w[0] &= ~(7u << 25 | (plan.shape[2] == 1 ? 7u << 22 : 0u));
     }
     return true;
 }
