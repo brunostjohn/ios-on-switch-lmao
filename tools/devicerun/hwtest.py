@@ -214,6 +214,7 @@ TESTS: dict[str, bool] = {
     'net.wifi_link': False,
     'gpu.latency': False,
     'gpu.raw_share': False,
+    'gpu.x1.dc_host1x_class': False,
     'input.controllers': False,
     'input.joycon': False,
     'input.rail': False,
