@@ -45,13 +45,13 @@ extension AstcLayoutRun {
         }
     }
 
-    /// The blocks the copy engine reads out of `texture`, in rows.
-    func copyEngine(_ texture: MTLTexture) async throws -> AstcLayoutReading {
+    /// The blocks the copy engine reads out of layer `slice` of `texture`, in rows.
+    func copyEngine(_ texture: MTLTexture, slice: Int = 0) async throws -> AstcLayoutReading {
         let out = try gpu.buffer(Self.grid.bytes.count)
         try await gpu.run { commands in
             let blit = commands.makeBlitCommandEncoder()!
             blit.copy(
-                from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                from: texture, sourceSlice: slice, sourceLevel: 0, sourceOrigin: MTLOrigin(),
                 sourceSize: MTLSize(width: Self.grid.texelWidth, height: Self.grid.texelHeight, depth: 1), to: out,
                 destinationOffset: 0, destinationBytesPerRow: Self.grid.rowBytes, destinationBytesPerImage: 0)
             blit.endEncoding()

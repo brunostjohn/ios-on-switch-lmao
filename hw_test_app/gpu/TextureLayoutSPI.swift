@@ -47,11 +47,13 @@ public struct TextureLayoutSPI {
         alignment = count("alignment")
     }
 
-    /// Lays `region`'s blocks (rows `rowBytes` apart in `bytes`) out in `memory`.
-    public func copy(_ bytes: [UInt8], rowBytes: Int, region: MTLRegion, to memory: UnsafeMutableRawPointer) {
+    /// Lays `region`'s blocks (rows `rowBytes` apart in `bytes`) out in `memory`, in layer `slice`.
+    public func copy(
+        _ bytes: [UInt8], rowBytes: Int, region: MTLRegion, slice: Int = 0, to memory: UnsafeMutableRawPointer
+    ) {
         bytes.withUnsafeBytes {
             unsafeBitCast(layout.method(for: Self.copyIn), to: CopyIn.self)(
-                layout, Self.copyIn, $0.baseAddress!, 0, rowBytes, 0, memory, 0, 0, region)
+                layout, Self.copyIn, $0.baseAddress!, 0, rowBytes, 0, memory, slice, 0, region)
         }
     }
 
