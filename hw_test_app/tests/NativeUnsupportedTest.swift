@@ -46,7 +46,8 @@ struct NativeUnsupportedTest: NativeObjectTest {
         let device = gpu.device
         var work = NativeWork()
         let zeroes = [
-            "maxPredicatedNestingDepth", "supportsDynamicAttributeStride", "supportsTessellation", "maxTessellationFactor",
+            "maxPredicatedNestingDepth", "supportsDynamicAttributeStride", "supportsTessellation",
+            "maxTessellationFactor",
         ]
         for selector in zeroes where Self.answer(device, selector) != 0 {
             work.failures.append("\(selector) answers \(Self.answer(device, selector).map(String.init) ?? "nothing")")
