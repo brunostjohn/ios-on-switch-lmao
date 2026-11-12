@@ -216,7 +216,7 @@ int switch_vic_submit_owned(const TegraVICJob *jobs, uint32_t count, const Tegra
 
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
-                              uint32_t *fence, SwitchVICEvents *events)
+                              uint32_t *fence, SwitchVICEvents *events, switch_gpu_backing_token *written)
 {
     auto *uses = ownership.uses;
     uint32_t useCount = ownership.useCount;
@@ -420,11 +420,14 @@ retry:
         n += tegra_host1x_op_wait_syncpt(words + n, bridgeSyncpoint, bridgeThreshold);
     if (acquire)
         n += tegra_host1x_op_wait_syncpt(words + n, acquire->syncpt, acquire->threshold);
+    SwitchHost1xProducers producers;
     for (uint32_t i = 0; i < needed; ++i) {
         if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVDEC ||
-            dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC)
+            dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC) {
             n += tegra_host1x_op_wait_syncpt(words + n, dependencies.tokens[i].queue,
                                              static_cast<uint32_t>(dependencies.tokens[i].value));
+            producers.add(dependencies.tokens[i]);
+        }
     }
     for (uint32_t j = 0; j < count; ++j) {
         const auto &job = jobs[j];
@@ -464,11 +467,13 @@ retry:
         switch_vic_events_commit(events);
         if (fence)
             *fence = static_cast<uint32_t>(gQueue.submitted);
+        if (written)
+            *written = token;
         end = gQueue.last();
         const auto &last = gQueue.jobs[end];
         bridge = last.bridge;
         if (const int error = Stages::start(end, gSyncpt, static_cast<uint32_t>(last.fence), bridge != nullptr,
-                                            last.semantics != nullptr, boundUs))
+                                            last.semantics != nullptr, boundUs, producers))
             Retirement::unarmed(end, error);
         IOLockWakeup(gLock, &gQueue.count, false);
     } else if (useCount) {
@@ -479,6 +484,13 @@ retry:
         if (const int error = Stages::notify(end, bridge))
             Retirement::unarmed(end, error);
     return status;
+}
+
+int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
+                              const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
+                              uint32_t *fence, SwitchVICEvents *events)
+{
+    return switch_vic_submit_checked(jobs, count, acquire, ownership, completion, context, fence, events, nullptr);
 }
 
 extern "C" int switch_vic_wait(uint32_t fence)

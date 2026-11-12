@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <vector>
 #include <mach/port.h>
 
@@ -56,12 +58,18 @@ struct SwitchTestSent {
 
 inline std::vector<SwitchTestSent> switch_test_sent;
 inline std::vector<mach_port_t> switch_test_released_ports;
+// The kernel's send rights to each port, as MIG and IOUserClient move them: a registration's call brings one, a
+// release with none left is the kernel's "send right count overflow" panic.
+inline std::map<mach_port_t, int> switch_test_rights;
+inline std::function<void(mach_port_t)> switch_test_on_release;
 
 // What the user client hands over as SwitchNVDECCompletionPort (IOUserClient's protected statics).
 inline IOReturn switch_test_send(OSAsyncReference64 reference, IOReturn result, io_user_reference_t *arguments,
                                  UInt32 count)
 {
-    switch_test_sent.push_back({mach_port_t(reference[0]), result, {arguments, arguments + count}});
+    const auto port = mach_port_t(reference[0]);
+    EXPECT_GT(switch_test_rights[port], 0) << "a reply on a port the kernel holds no right to";
+    switch_test_sent.push_back({port, result, {arguments, arguments + count}});
     return kIOReturnSuccess;
 }
 
@@ -75,7 +83,11 @@ class IOUserClient {
 public:
     static IOReturn releaseNotificationPort(mach_port_t port)
     {
+        EXPECT_GT(switch_test_rights[port], 0) << "send right count overflow";
+        --switch_test_rights[port];
         switch_test_released_ports.push_back(port);
+        if (switch_test_on_release)
+            switch_test_on_release(port);
         return kIOReturnSuccess;
     }
 };

@@ -218,7 +218,9 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
         if (w->invalidate_count > TEGRA_NVENC_MAX_RANGES)
             return kIOReturnBadArgument;
-        const int ret = tegra_nvenc_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
+        int ret = tegra_nvenc_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
+        if (!ret)
+            ret = tegra_nvenc_input_failure(w->fence);
         if (ret)
             return ioreturn(ret);
         IOLockLock(lock_);

@@ -109,7 +109,9 @@ IOReturn switch_nvdec_completions_listen(SwitchNVDECCompletions *completions, ma
     completions->port = port;
     completions->ops.refer(completions->reference, port, task);
     IOLockUnlock(completions->lock);
-    if (old != MACH_PORT_NULL && old != port)
+    // Each registration brings a send right of its own: the replaced port's, or this call's second one to the port
+    // already kept, goes here. No send uses it after the unlock, since a completion reads the port under the lock.
+    if (old != MACH_PORT_NULL)
         IOUserClient::releaseNotificationPort(old);
     return kIOReturnSuccess;
 }

@@ -197,10 +197,13 @@ uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
     return mapping->address;
 }
 
+const switch_gpu_backing_token kWritten = {0x7000010e1ULL, 3, SWITCH_GPU_ENGINE_VIC, 161};
+
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *after,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
-                              uint32_t *fence, SwitchVICEvents *)
+                              uint32_t *fence, SwitchVICEvents *events, switch_gpu_backing_token *written)
 {
+    EXPECT_EQ(events, nullptr);
     submittedJob = jobs[count - 1];
     submittedJobs.assign(jobs, jobs + count);
     hadAfter = after != nullptr;
@@ -211,6 +214,7 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
     pending = completion;
     pendingContext = context;
     *fence = 4321;
+    *written = kWritten;
     return 0;
 }
 
@@ -281,10 +285,13 @@ protected:
 TEST_F(SwitchVICEncodeInputTest, WritesTheRegionBlockLinearAtTheBufferOriginAfterTheEncodersLastJob)
 {
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), 0) << why;
     EXPECT_EQ(fence, 4321u);
+    EXPECT_EQ(written.value, kWritten.value) << "the encoder learns the job's failure by it";
+    EXPECT_EQ(written.engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
     ASSERT_TRUE(hadAfter);
     EXPECT_EQ(submittedAfter.syncpt, 9u);
     EXPECT_EQ(submittedAfter.threshold, 1234u);
@@ -325,12 +332,13 @@ TEST_F(SwitchVICEncodeInputTest, ANarrowerPictureGetsItsLastColumnsStretchedRigh
     input.h = 1088;
     input.height = 1088;
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why),
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why),
               -95);  // 1088 rows of a 1080-row surface
     input.h = 1080;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), 0) << why;
     ASSERT_EQ(submittedJobs.size(), 3u);
     const uint8_t *right = submittedJobs[1].config;
     EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT_BIT, SLOT_SOURCE_LEFT_WIDTH), uint64_t(1898)
@@ -351,9 +359,10 @@ TEST_F(SwitchVICEncodeInputTest, ATileRegionIsReadFromItsOriginInTheSurface)
     input.y = 512;
     input.after = nullptr;
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), 0) << why;
     EXPECT_FALSE(hadAfter);
     EXPECT_EQ(submittedJobs.size(), 1u);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT), uint64_t(1024) << 16);
@@ -368,9 +377,10 @@ TEST_F(SwitchVICEncodeInputTest, RowsOffVICsGridAreBouncedThroughTheCopyEngine)
     sourceRow = 1920;
     input.y = 0;
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), 0) << why;
     EXPECT_TRUE(bounced);
     ASSERT_EQ(engineCopies.size(), 2u);
     EXPECT_EQ(engineCopies[0].rows, 1080u);
@@ -398,9 +408,10 @@ TEST_F(SwitchVICEncodeInputTest, AGpuTiledSourceIsBouncedWholePlanes)
     input.y = 8;
     input.h = 1072;
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), 0) << why;
     EXPECT_TRUE(bounced);
     ASSERT_EQ(engineCopies.size(), 2u);
     EXPECT_EQ(engineCopies[0].src.offset, 0u);
@@ -413,17 +424,18 @@ TEST_F(SwitchVICEncodeInputTest, AGpuTiledSourceIsBouncedWholePlanes)
 TEST_F(SwitchVICEncodeInputTest, RefusesWithoutQueueingAndReleasesEverything)
 {
     uint32_t fence = 0;
+    switch_gpu_backing_token written = {};
     bool bounced = false;
     const char *why = nullptr;
     found = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -22);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), -22);
     found = true;
     input.chromaRows = 600;  // not whole sixteen-GOB blocks
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -95);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), -95);
     EXPECT_STREQ(why, "block-linear plane of partial blocks");
     input.chromaRows = kChromaRows;
     vicUp = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -19);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &written, &bounced, &why), -19);
     EXPECT_EQ(pending, nullptr);
 }
 }  // namespace

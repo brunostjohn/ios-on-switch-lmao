@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "switch_vic_jobs_stubs.h"
 #include <algorithm>
+#include <map>
+#include <utility>
 #include <vector>
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
@@ -22,6 +24,7 @@ int bridgeError, submitError, retainError, statusError, powerError, semanticResu
 switch_gpu_event_waits *preparedBatch;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
+std::map<std::pair<uint32_t, uint64_t>, int> producerPhysical;  // by engine and value; absent: ran
 
 struct Notification {
     void (*completed)(void *, int);
@@ -98,6 +101,13 @@ int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
 int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *)
 {
     return statusError;
+}
+
+int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *token, int external)
+{
+    EXPECT_EQ(external, 0);
+    const auto at = producerPhysical.find({token->engine, token->value});
+    return at == producerPhysical.end() ? 1 : at->second;
 }
 
 int switch_gpu_backing_token_retain(const switch_gpu_backing_token *)
@@ -506,6 +516,7 @@ protected:
         fences.clear();
         fenceBounds.clear();
         watchedBounds.clear();
+        producerPhysical.clear();
         notifications.clear();
         transactionLocked = changeProducer = busyOnce = false;
         changeGeneration = nullptr;
@@ -778,6 +789,29 @@ TEST_F(SwitchVICJobsTest, AJobRetiresFromItsFenceOnTheWorkLoopWithNoThread)
     EXPECT_EQ(gQueue.count, 0u);
     EXPECT_EQ(gQueue.completed, fence);
     EXPECT_EQ(waitSequence(fence), 0);
+}
+
+// A job whose stream waited for an NVDEC picture whose decode was then cancelled ran on memory NVDEC never wrote: the
+// decode is recorded failed before NVDEC's syncpoint is released, and the job ends with that failure, its completion
+// and its own hardware outcome both, so neither its frame nor a consumer on VIC's syncpoint takes the picture as good.
+TEST_F(SwitchVICJobsTest, AJobThatRanOnACancelledDecodesPictureEndsWithTheDecodesFailure)
+{
+    const switch_gpu_backing_token decode = {0x181234567ULL, 1, SWITCH_GPU_ENGINE_NVDEC, 162};
+    sourceTokens = {decode, {decode.value - 1, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
+    int heard = 1;
+    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    const uint64_t placed = gQueue.submitted;
+    const switch_gpu_backing_token token = {placed, switch_vic_result_state.generation, SWITCH_GPU_ENGINE_VIC, gSyncpt};
+    producerPhysical[{SWITCH_GPU_ENGINE_NVDEC, decode.value}] = -5;
+    interrupt(0);
+    EXPECT_EQ(heard, -5);
+    EXPECT_EQ(Results::physicalStatus(&token), -5);
+    EXPECT_EQ(waitSequence(placed), -5);
+
+    sourceTokens = {{decode.value + 1, 1, SWITCH_GPU_ENGINE_NVDEC, 162}};
+    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    interrupt(1);
+    EXPECT_EQ(heard, 0) << "a later decode that ran is not this job's failure";
 }
 
 // The bound times VIC alone: it starts when the GPU producer is done (D8), whichever of the two finishes first.

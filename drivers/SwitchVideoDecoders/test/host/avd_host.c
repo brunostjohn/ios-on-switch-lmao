@@ -24,7 +24,8 @@
 //           instance.
 //   mp2v:   MPEG2Clip.h's MPEG-2 clip A as 'mp2v' and its MPEG-1 clip C as 'mp1v', described without extensions as
 //           MediaToolbox's MPEG-2 stream readers describe them, every picture through MPEG2NVDEC and the kernel's
-//           checker out of a hardware session.
+//           checker out of a hardware session; asynchronously, every frame from the completions in decode order, and
+//           with three jobs the engine cancels, those three frames out with an error and the rest decoded.
 //   alpha:  clip A's first picture through sessions opened as MuxedAlphaDecoder opens its layer sessions (AVDAlpha.c):
 //           asked nothing, a '420v' picture and no plane; asked for planes 0 or 2, a 'v0a8' picture, that plane
 //           answered and the picture handed to VIC for those planes.
@@ -55,6 +56,7 @@ struct NVDECClient {
 };
 
 static bool gFull, gPresentOn, gNativeOn, gEarlyCompletions;
+static uint32_t gFailFrom, gFailCount;  // jobs the fake engine cancels: a stalled one and those queued behind it
 static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges, gWidePresents, gWaits, gSurfaceWaits;
 static uint32_t gLastDstX, gLastDstY;
 static unsigned gNativeExports, gRecycled, gAlphaPresents[2];
@@ -89,8 +91,9 @@ typedef struct {
 static void fakeCompleted(void *context)
 {
     FakeCompletion *c = context;
+    const bool cancelled = gFailFrom && c->fence - gFailFrom < gFailCount;
     if (!atomic_load(&c->listener->stopped))
-        c->listener->done(c->listener->context, c->fence, 0, 0, 0);
+        c->listener->done(c->listener->context, c->fence, cancelled ? -5 : 0, 0, 0);
     listenerRelease(c->listener);
     free(c);
 }
@@ -682,6 +685,21 @@ int main(void)
     const bool asyncOk = asyncRun && earlyRun && gWaits == asyncWaits && !asyncRoutes[0] && !asyncRoutes[1] &&
                          asyncRoutes[2] >= 2 && asyncRoutes[3] == 18 && !earlyRoutes[0] && !earlyRoutes[1] &&
                          earlyRoutes[3] == 18;
+    // Again with a decode NVDEC cancels at its bound and the two queued behind it (TegraNVDECCancel.cpp): their
+    // completions come with the failure, those three frames come out failed and the session goes on.
+    char cancelled[256];
+    int32_t cancelledRoutes[4];
+    gPresentOn = true;
+    gFailFrom = (uint32_t)gSubmits + 6;
+    gFailCount = 3;
+    mpeg2_session_order(mp2vSpec, kVTDecodeFrame_EnableAsynchronousDecompression, kAsyncKeys, cancelledRoutes, 4,
+                        cancelled, sizeof(cancelled));
+    gPresentOn = false;
+    gFailFrom = gFailCount = 0;
+    const bool cancelledOk =
+        strstr(cancelled, "hardware decoder, 15 of 18 out, 3 errors, 0 refused, 0 out of decode order") &&
+        !cancelledRoutes[0] && !cancelledRoutes[1];
+    printf("async, a cancelled decode and the two behind it: %s\n", cancelled);
     printf("async %s (decode-thread waits %d; SwitchPictureRoutes picture_waits %d, sync_waits %d, in_flight_max %d, "
            "frames %d)\nasync, completions before Submit returns: %s\n",
            async, gWaits - asyncWaits, asyncRoutes[0], asyncRoutes[1], asyncRoutes[2], asyncRoutes[3], early);
@@ -706,7 +724,7 @@ int main(void)
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
                     hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && alphaOk && nativeOk &&
-                    mp4vEngine && mp4vSoftware && mpeg2Engine && asyncOk;
+                    mp4vEngine && mp4vSoftware && mpeg2Engine && asyncOk && cancelledOk;
     printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC, HEVC with alpha, MPEG-4 Part 2 and MPEG-1/2 on a fake "
            "NVDEC, then Apple's software H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
            ok ? "PASS" : "FAIL");

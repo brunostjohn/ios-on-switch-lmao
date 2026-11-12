@@ -25,9 +25,11 @@ struct TegraNVENCBlock {
     switch_gpu_backing *backing;
 };
 
-// Another engine's syncpoint threshold a job's stream waits for on the hardware before its methods.
+// Another engine's syncpoint threshold a job's stream waits for on the hardware before its methods, and the job there
+// that wrote what this one reads, if any (its failure is this job's: TegraNVENCInputs.h).
 struct TegraNVENCAfter {
     uint32_t syncpt, threshold;
+    switch_gpu_backing_token producer;
 };
 
 // A job that reads another engine's memory under SwitchGpuBacking's ownership (TegraNVENCDirect.cpp): with the engine
@@ -79,6 +81,8 @@ uint32_t tegra_nvenc_syncpt(void);  // the job fences' syncpoint
 // Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound the jobs in flight
 // are cancelled (-5) and the engine is reset for the next one.
 int tegra_nvenc_wait(uint32_t fence);
+// Once tegra_nvenc_wait(fence) succeeded: 0, or the failure of a job that wrote what the job read.
+int tegra_nvenc_input_failure(uint32_t fence);
 bool tegra_nvenc_ready(void);
 
 // A stalled job's line (TegraNVENCDump.cpp): the falcon's state, and where the app the job runs is stuck.

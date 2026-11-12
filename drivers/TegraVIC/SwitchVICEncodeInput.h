@@ -7,6 +7,7 @@
 #include "TegraVIC.h"
 
 struct switch_gpu_backing;
+struct switch_gpu_backing_token;
 
 struct SwitchVICEncodeInput {
     switch_gpu_backing *destination;  // the picture buffer, registered by its engine
@@ -22,7 +23,8 @@ struct SwitchVICEncodeInput {
 
 // True once VIC takes these jobs: published, and a block-linear destination proven when `blockLinear`.
 bool switch_vic_encode_input_ready(bool blockLinear);
-// Queues the job and returns once VIC has it: 0 and VIC's fence (a threshold of tegra_vic_syncpt()), `bounced` when
-// the copy engine staged the source first, or a negative errno with `why` a literal for the caller's one line.
+// Queues the job and returns once VIC has it: 0, VIC's fence (a threshold of tegra_vic_syncpt()) and the job's token
+// (whose failure is the encoder's), `bounced` when the copy engine staged the source first, or a negative errno with
+// `why` a literal for the caller's one line.
 int switch_vic_encode_input(uint32_t surfaceID, task_t task, const SwitchVICEncodeInput *input, uint32_t *fence,
-                            bool *bounced, const char **why);
+                            switch_gpu_backing_token *written, bool *bounced, const char **why);

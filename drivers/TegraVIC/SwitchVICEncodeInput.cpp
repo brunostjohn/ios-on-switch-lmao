@@ -92,7 +92,7 @@ void completed(void *context, int status)
     if (status) {
         static volatile int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            IOLog("TegraVIC: an encoder's input picture failed (%d); the encoder codes what its buffer held\n", status);
+            IOLog("TegraVIC: an encoder's input picture failed (%d); its encode fails\n", status);
     }
     release(static_cast<EncodeInput *>(context));
 }
@@ -166,7 +166,7 @@ uint32_t edgeOps(const SwitchVICEncodeInput *in, TegraVICOp *ops)
 }
 
 int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEncodeInput *in, uint32_t *fence,
-          bool *bounced, const char **why)
+          switch_gpu_backing_token *written, bool *bounced, const char **why)
 {
     if (tegra_vic_surface_lookup(surfaceID, task, &work->surface)) {
         *why = "surface ID not found in the encoding task";
@@ -255,7 +255,8 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
     const SwitchVICOwnership ownership = {
         uses, work->native.owner || scratch ? 3u : 2u, guards, guardCount, lease ? &lease : nullptr, lease ? 1u : 0u};
     __atomic_add_fetch(&work->refs, 1, __ATOMIC_RELAXED);
-    error = switch_vic_submit_checked(work->jobs, count, in->after, ownership, completed, work, fence);
+    error =
+        switch_vic_submit_checked(work->jobs, count, in->after, ownership, completed, work, fence, nullptr, written);
     switch_vic_surface_unreserve(&work->access);
     if (error) {
         release(work);
@@ -272,11 +273,11 @@ bool switch_vic_encode_input_ready(bool blockLinear)
 }
 
 int switch_vic_encode_input(uint32_t surfaceID, task_t task, const SwitchVICEncodeInput *input, uint32_t *fence,
-                            bool *bounced, const char **why)
+                            switch_gpu_backing_token *written, bool *bounced, const char **why)
 {
     *why = nullptr;
     *bounced = false;
-    if (!input || !input->destination || !fence) {
+    if (!input || !input->destination || !fence || !written) {
         *why = "request";
         return -22;
     }
@@ -290,7 +291,7 @@ int switch_vic_encode_input(uint32_t surfaceID, task_t task, const SwitchVICEnco
         return -12;
     }
     work->refs = 1;
-    const int error = place(work, surfaceID, task, input, fence, bounced, why);
+    const int error = place(work, surfaceID, task, input, fence, written, bounced, why);
     release(work);
     return error;
 }

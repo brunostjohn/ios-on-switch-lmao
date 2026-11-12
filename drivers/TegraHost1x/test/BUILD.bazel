@@ -159,7 +159,7 @@ host_test(
 
 host_shims(
     name = "token_fence_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h"],
+    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread.h"],
     stubs = "switch_host1x_token_fence_stubs.h",
 )
 
@@ -170,6 +170,7 @@ host_test(
         "switch_host1x_token_fence_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraHost1x:SwitchHost1xFence.h",
+        "//drivers/TegraHost1x:SwitchHost1xResults.h",
         "//drivers/TegraHost1x:SwitchHost1xTokenFence.h",
         "//drivers/TegraHost1x:TegraHost1x.h",
     ],
