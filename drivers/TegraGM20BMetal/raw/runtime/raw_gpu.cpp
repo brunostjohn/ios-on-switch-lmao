@@ -951,7 +951,8 @@ const uint8_t *Device::heapCpu(uint64_t at) const
 
 // The methods that bind program `prog`'s shader data at its slot of constant buffer group `group` (0 vertex, 4 pixel), leaving
 // the root table selected; and the slot it reads set 0 at (0: none)
-static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group, uint64_t data, uint64_t root)
+static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group, uint64_t data, uint64_t root,
+                                bool exact)
 {
     uint8_t setSlot = 0;
     for (uint8_t c = 1; c < prog.cbufs; c++) {
@@ -959,7 +960,7 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
             setSlot = c;
         if (prog.cbufType[c] != CbufShaderData)
             continue;
-        w.inc(CB_SELECTOR_A, {cbufBindBytes(prog.dataBytes), uint32_t(data >> 32), uint32_t(data)});
+        w.inc(CB_SELECTOR_A, {cbufBindBytes(prog.dataBytes, exact), uint32_t(data >> 32), uint32_t(data)});
         w.m(BIND_GROUP_CB + 0x20 * group, 1 | uint32_t(c) << 4);
         w.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
     }
@@ -1314,13 +1315,17 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
     if (fs.record->boundTextures)
         w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
-    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va);
-    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va);
+    bool exactCbufs = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    exactCbufs = probeExactCbufs.load(std::memory_order_relaxed);
+#endif
+    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va, exactCbufs);
+    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va, exactCbufs);
     const PackProgram *programs[4] = {vs.record, fs.record};
     for (uint32_t k = 0; tess && k < 2; k++) {
         w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
         w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
-        pl.setSlot[2 + k] = bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va);
+        pl.setSlot[2 + k] = bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va, exactCbufs);
         programs[2 + k] = tess[k].record;
         pl.tessReadsHeap |= heapCbufSlot(*tess[k].record) != 0;
     }

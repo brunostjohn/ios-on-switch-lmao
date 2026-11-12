@@ -549,7 +549,10 @@ raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, 
         fail(r, SWITCH_BENCH_INVALID, why);
         return nullptr;
     }
+    // a program bound at dataBound bytes is bound at exactly that many, the bench's measure of the chip's bound
+    d.probeExactCbufs.store(fs.dataBound != 0, std::memory_order_relaxed);
     raw::Pipeline *pipeline = d.addRecord(record, false, why);
+    d.probeExactCbufs.store(false, std::memory_order_relaxed);
     if (!pipeline)
         fail(r, SWITCH_BENCH_REFUSED, why);
     else

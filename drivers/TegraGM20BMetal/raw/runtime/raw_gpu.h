@@ -2519,6 +2519,9 @@ public:
 
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
     ProbeForms nextForms;
+    // the pipelines made while set bind their programs' shader data at its exact size (raw_cbuf.h): HW Test's bench
+    // measuring what the chip reads of a constant buffer bound off a 256-byte multiple
+    std::atomic<bool> probeExactCbufs{false};
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, as the next createOwnedZeta does for a one-sample zeta, which probeCompressed holds until destroyTexture;
     // any other texture takes the flag and stays plain

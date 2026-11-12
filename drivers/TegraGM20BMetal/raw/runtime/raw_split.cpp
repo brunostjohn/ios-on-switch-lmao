@@ -305,8 +305,8 @@ void CommandBuffer::launchPrologues()
         qmd[kQmdRasterHeightDepth] = 1 | 1u << 16;
         for (uint32_t i = 0; i < split.rec.prologueCbufs; ++i) {
             qmd[qmdCbufLo(i)] = uint32_t(cbuf[i]);
-            qmd[qmdCbufLo(i) + 1] =
-                (qmd[qmdCbufLo(i) + 1] & 0x7f00) | (uint32_t(cbuf[i] >> 32) & 0xff) | bytes[i] << kQmdCbufSizeShift;
+            qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & 0x7f00) | (uint32_t(cbuf[i] >> 32) & 0xff) |
+                                    cbufBindBytes(bytes[i]) << kQmdCbufSizeShift;
         }
         p.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
         p.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
