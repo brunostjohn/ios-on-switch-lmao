@@ -78,7 +78,10 @@ const char *partOf(const char *symbol)
 // The compiling thread's frames, innermost first, read by walking its frame pointers while it is suspended
 std::vector<const void *> framesOf(thread_act_t thread)
 {
+    constexpr size_t kFrames = 96;
     std::vector<const void *> frames;
+    // nothing allocates while the thread is suspended: it may hold the heap's lock
+    frames.reserve(kFrames + 2);
     if (thread_suspend(thread) != KERN_SUCCESS)
         return frames;
     arm_thread_state64_t state = {};
@@ -88,7 +91,7 @@ std::vector<const void *> framesOf(thread_act_t thread)
         frames.push_back(reinterpret_cast<const void *>(arm_thread_state64_get_pc(state)));
         frames.push_back(reinterpret_cast<const void *>(arm_thread_state64_get_lr(state)));
         auto fp = reinterpret_cast<const uintptr_t *>(arm_thread_state64_get_fp(state));
-        for (int i = 0; fp && i < 96 && (uintptr_t(fp) & 7) == 0; ++i) {
+        for (size_t i = 0; fp && i < kFrames && (uintptr_t(fp) & 7) == 0; ++i) {
             frames.push_back(reinterpret_cast<const void *>(fp[1] & 0x0000ffffffffffffull));
             const auto next = reinterpret_cast<const uintptr_t *>(fp[0]);
             if (next <= fp)
