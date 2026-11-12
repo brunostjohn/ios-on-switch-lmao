@@ -208,6 +208,21 @@ host_test(
 )
 
 host_test(
+    name = "tegra_display_palette_test",
+    srcs = [
+        "tegra_display_palette_test.cpp",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
     name = "switch_window_caps_test",
     srcs = [
         "switch_window_caps_test.cpp",

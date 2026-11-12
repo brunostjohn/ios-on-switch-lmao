@@ -1640,8 +1640,10 @@ private:
         if (status & kFrameEndInt)
             planeFrameEnd();
         if (status & kFrameEndInt) {
-            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
-                                  !columnScanBusy());
+            const bool mayRequest =
+                ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) && !columnScanBusy();
+            color->frameEndAction(mayRequest);
+            paletteFrameEnd(mayRequest);
         }
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
@@ -4687,6 +4689,7 @@ public:
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
+#include "SwitchPaletteDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {

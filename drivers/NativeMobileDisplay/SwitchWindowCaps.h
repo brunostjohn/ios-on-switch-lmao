@@ -77,3 +77,22 @@ inline const Format *find(uint32_t format, uint32_t planes)
 }
 
 }  // namespace switch_window_caps
+
+// The WIN_OPTIONS bits every window carries for its palette: CP_ENABLE while TegraDisplayColor shows a per-channel gamma
+// table through the palettes (TegraDisplayPalette.h), set by the display's frame-end action under the gate and read
+// where window options are made.
+namespace switch_window_palette {
+
+inline uint32_t gOptions = 0;
+
+inline uint32_t options()
+{
+    return __atomic_load_n(&gOptions, __ATOMIC_RELAXED);
+}
+
+inline void setOptions(uint32_t value)
+{
+    __atomic_store_n(&gOptions, value, __ATOMIC_RELAXED);
+}
+
+}  // namespace switch_window_palette

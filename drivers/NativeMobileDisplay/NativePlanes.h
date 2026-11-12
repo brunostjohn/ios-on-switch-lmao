@@ -451,7 +451,8 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
     image.hOffset = x.first * bpp;
     const bool scaledX = x.inc != 4096 || (x.initial != 0u);
     const bool scaledY = y.inc != 4096 || (y.initial != 0u);
-    image.options = kWinEnable | (image.yuv ? kCscEnable : 0) | (scaledX ? kHFilterOn : 0) | (scaledY ? kVFilterOn : 0);
+    image.options = kWinEnable | (image.yuv ? kCscEnable : 0) | (scaledX ? kHFilterOn : 0) | (scaledY ? kVFilterOn : 0) |
+                    (image.yuv ? 0 : switch_window_palette::options());
     if (block) {
         if (image.yuv || !blockReads(*block, l.surface, y, image))
             return false;
