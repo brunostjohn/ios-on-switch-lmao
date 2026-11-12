@@ -103,7 +103,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(len(variants), 16)
         v15 = (
             directlink.PIPELINE_BYTES * 2
-            - packfile.PIPELINE_V19.size
+            - packfile.PIPELINE_V20.size
             - packfile.PIPELINE_V18.size
             - packfile.PIPELINE_V15.size
         )
@@ -159,7 +159,7 @@ class RecordsTest(unittest.TestCase):
         flags = [directlink.PIPELINE.unpack_from(r)[-1] for r in records]
         self.assertEqual((flags[0] & 16, flags[1] & 16), (0, 16))
         name = struct.unpack_from(
-            '<I', records[1], directlink.PIPELINE_BYTES - packfile.PIPELINE_V19.size - packfile.PIPELINE_V18.size - 4
+            '<I', records[1], directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size - packfile.PIPELINE_V18.size - 4
         )[0]
         self.assertEqual(strings[name:].split(b'\0')[0], b' | tests=3')
 
@@ -208,7 +208,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 4, 0)
         self.assertEqual(data[-8:-4], bytes(4))
         self.assertEqual(
-            struct.unpack_from('<I', data, len(data) - packfile.PIPELINE_V19.size - 4), (packfile.ALL_ENTRIES,)
+            struct.unpack_from('<I', data, len(data) - packfile.PIPELINE_V20.size - 4), (packfile.ALL_ENTRIES,)
         )
 
     def test_shader_test_views_and_push_placements_round_trip(self):
@@ -334,7 +334,7 @@ def record(key: str, entries: list[tuple[int, int, int, int]], samplers: list[li
     body = kernels.HEAD.pack(0, 0, 0, len(entries), 4) + struct.pack('<64I', *qmd)
     body += struct.pack('<HHI', 0x40, 0, 1 << 2) + struct.pack('<32I', *words)
     body += b''.join(kernels.ENTRY.pack(*e) for e in entries) + bytes(kernels.ENTRY.size * (16 - len(entries)))
-    body += bytes(packfile.KERNEL_V19.size)
+    body += bytes(packfile.KERNEL_V20.size)
     rec = {'outcome': outcome, 'key': key, 'why': 'a texture slot the dispatch leaves unbound at 0' if outcome else ''}
     if not outcome:
         rec.update(kernel=body, program='p', samplers=samplers)

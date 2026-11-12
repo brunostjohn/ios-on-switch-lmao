@@ -10,9 +10,9 @@ MAGIC = b'GM20BPK1'
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
-# forms and their iterated blend programs; 18: the set-0 entries a record's programs read from memory; 19: argument
-# buffers (handle-table entries, root-table and status push words, root slots, set-1 heap arrays)
-VERSION = 19
+# forms and their iterated blend programs; 18: the set-0 entries a record's programs read from memory; 20: argument
+# buffers (handle-table entries, root-table and status push words, root slots, set-1 heap arrays of states and kernels)
+VERSION = 20
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
 # constant[8][3], program[128]
@@ -25,12 +25,12 @@ PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 # PackPipeline's record-v18 tail: memoryEntries
 PIPELINE_V18 = struct.Struct('<I')
 ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
-# PackPipeline's record-v19 tail: rootTableWord[2], statusWord[2], rootSlots[2], heapArrays, heapBytes, heap[8] as
+# PackPipeline's record-v20 tail: rootTableWord[2], statusWord[2], rootSlots[2], heapArrays, heapBytes, heap[8] as
 # (heapClass, offset) pairs
-PIPELINE_V19 = struct.Struct('<2B2B2IB3xI16I')
+PIPELINE_V20 = struct.Struct('<2B2B2IB3xI16I')
 HEAP_ARRAYS = 8
-# PackKernel's v19 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs
-KERNEL_V19 = struct.Struct('<4B2I16I')
+# PackKernel's v20 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs
+KERNEL_V20 = struct.Struct('<4B2I16I')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -227,16 +227,16 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     )
     v18 = PIPELINE_V18.pack(rec.get('memory_entries', ALL_ENTRIES))
     entries = entry_bytes(rec['entries'])
-    return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + v19_tail(rec)
+    return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + v20_tail(rec)
 
 
-def v19_tail(rec: dict) -> bytes:
-    """Give a record's PIPELINE_V19 tail: what its reads through argument buffers take of a draw."""
+def v20_tail(rec: dict) -> bytes:
+    """Give a record's PIPELINE_V20 tail: what its reads through argument buffers take of a draw."""
     heap = rec.get('heap', [])
     if len(heap) > HEAP_ARRAYS:
         raise ValueError(f'{len(heap)} set-1 heap arrays: a pipeline holds {HEAP_ARRAYS}')
     pairs = [word for array in heap for word in (array['class'], array['offset'])]
-    return PIPELINE_V19.pack(
+    return PIPELINE_V20.pack(
         *rec.get('root_table_word', [0, 0]),
         *rec.get('status_word', [0, 0]),
         *rec.get('root_slots', [0, 0]),
@@ -263,7 +263,7 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
     entries += bytes(8 * (KERNEL_ENTRIES - len(k['entries'])))
     heap = k.get('heap', [])
     pairs = [word for array in heap for word in (array['class'], array['offset'])]
-    arguments = KERNEL_V19.pack(
+    arguments = KERNEL_V20.pack(
         k.get('root_table_word', 0),
         k.get('status_word', 0),
         len(heap),

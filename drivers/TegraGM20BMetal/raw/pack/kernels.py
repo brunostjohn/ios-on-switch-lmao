@@ -14,7 +14,7 @@ BUFFER, TEXTURE, SAMPLER = 0, 1, 2  # runtime/raw_pack.h PackKernelEntryKind
 HEAD = struct.Struct('<QIIBb')
 ENTRY = struct.Struct('<HBBI')
 ENTRIES = 16
-KERNEL_BYTES = HEAD.size + 64 * 4 + 8 + 32 * 4 + ENTRIES * ENTRY.size + packfile.KERNEL_V19.size
+KERNEL_BYTES = HEAD.size + 64 * 4 + 8 + 32 * 4 + ENTRIES * ENTRY.size + packfile.KERNEL_V20.size
 
 
 def entry(fields: tuple[int, int, int, int], headers: list[list[int]], constexpr_tsc: list[list[int]]) -> dict:
@@ -46,7 +46,7 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     words = struct.unpack_from('<32I', k, HEAD.size + 264)
     at = HEAD.size + 264 + 128
     entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
-    root, status, arrays, _, slots, heap_bytes, *pairs = packfile.KERNEL_V19.unpack_from(k, at + ENTRIES * ENTRY.size)
+    root, status, arrays, _, slots, heap_bytes, *pairs = packfile.KERNEL_V20.unpack_from(k, at + ENTRIES * ENTRY.size)
     return {
         'root_table_word': root,
         'status_word': status,

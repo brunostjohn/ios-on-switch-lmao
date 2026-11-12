@@ -65,9 +65,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     c.rec = k;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
-        uint32_t qmd[64];
-        memcpy(qmd, k->qmd, sizeof qmd);  // PackKernel is packed: its QMD is no uint32_t array in place
-        if (!dev.slmNeed(slmPerWarpOfQmd(qmd)) || !dev.place(k->program, c.program, c.data)) {
+        if (!dev.slmNeed(slmPerWarpOfQmd(k->qmd)) || !dev.place(k->program, c.program, c.data)) {
             dev.stats.heapFull++;
             return nullptr;
         }
@@ -106,9 +104,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
                 return nullptr;
             e.slot = uint8_t(kConstexprSampler | index);
         }
-        uint32_t qmd[64];
-        memcpy(qmd, r.kernel.qmd, sizeof qmd);
-        if (!dev.slmNeed(slmPerWarpOfQmd(qmd)) || !dev.heapPlace(slot.data(), uint32_t(slot.size()), at)) {
+        if (!dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd)) || !dev.heapPlace(slot.data(), uint32_t(slot.size()), at)) {
             dev.stats.heapFull++;
             return nullptr;
         }

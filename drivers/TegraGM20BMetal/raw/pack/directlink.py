@@ -39,7 +39,7 @@ PIPELINE_BYTES = (
     + 16
     + packfile.PIPELINE_V15.size
     + packfile.PIPELINE_V18.size
-    + packfile.PIPELINE_V19.size
+    + packfile.PIPELINE_V20.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TABLE_KINDS = {8: 'texture_table', 9: 'sampler_table'}
@@ -166,7 +166,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    tail = PIPELINE_BYTES - packfile.PIPELINE_V19.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
+    tail = PIPELINE_BYTES - packfile.PIPELINE_V20.size - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
@@ -178,8 +178,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
-    v19 = packfile.PIPELINE_V19.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V19.size)
-    heap_arrays, heap_bytes, heap_words = v19[6], v19[7], v19[8:]
+    v20 = packfile.PIPELINE_V20.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+    heap_arrays, heap_bytes, heap_words = v20[6], v20[7], v20[8:]
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -221,9 +221,9 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'problems': [],
         'bound_entries': bound_entries,
         'memory_entries': memory_entries,
-        'root_table_word': list(v19[0:2]),
-        'status_word': list(v19[2:4]),
-        'root_slots': list(v19[4:6]),
+        'root_table_word': list(v20[0:2]),
+        'status_word': list(v20[2:4]),
+        'root_slots': list(v20[4:6]),
         'heap': [{'class': heap_words[2 * i], 'offset': heap_words[2 * i + 1]} for i in range(heap_arrays)],
         'heap_bytes': heap_bytes,
         'uniform': uniform,

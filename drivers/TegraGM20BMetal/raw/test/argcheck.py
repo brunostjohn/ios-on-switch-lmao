@@ -68,7 +68,7 @@ def f32(x: float) -> int:
 
 
 def tail(rec: dict) -> tuple:
-    return packfile.PIPELINE_V19.unpack_from(rec['pipeline'], directlink.PIPELINE_BYTES - packfile.PIPELINE_V19.size)
+    return packfile.PIPELINE_V20.unpack_from(rec['pipeline'], directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
 
 
 def device(mem: Memory, rec: dict, textures: dict, samplers: dict, holds) -> None:  # noqa: ANN001  a class predicate
@@ -84,9 +84,9 @@ def device(mem: Memory, rec: dict, textures: dict, samplers: dict, holds) -> Non
         mem.put(
             TABLES + 16 * TICS + 16 * i, struct.pack('<4I', i << 20, 1, i if i in samplers else 0, samplers.get(i, 0))
         )
-    v19 = tail(rec)
-    for k in range(v19[6]):
-        heap_class, offset = v19[8 + 2 * k], v19[9 + 2 * k]
+    v20 = tail(rec)
+    for k in range(v20[6]):
+        heap_class, offset = v20[8 + 2 * k], v20[9 + 2 * k]
         if heap_class & 3 == 2:
             for tsc in samplers:
                 mem.put(HEAP + offset + 4 * tsc, struct.pack('<I', tsc << 20))
@@ -113,10 +113,10 @@ def run(rec: dict, mem: Memory, pixel: tuple) -> tuple[list[float], list[tuple]]
     hdr = directlink.PIPELINE.unpack_from(p)
     entries = directlink.entries_of(p, hdr[6], rec['samplers'], [])
     _, *words = struct.unpack_from('<33I', p, directlink.PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    v19 = tail(rec)
+    v20 = tail(rec)
     push = list(words)
     for k in range(2):
-        for word, va in ((v19[k], DRAW_ROOTS if v19[4 + k] else ROOTS), (v19[2 + k], STATUS)):
+        for word, va in ((v20[k], DRAW_ROOTS if v20[4 + k] else ROOTS), (v20[2 + k], STATUS)):
             if word:
                 push[word - 1], push[word] = va & 0xFFFFFFFF, va >> 32
     set0 = {}
@@ -137,7 +137,7 @@ def run(rec: dict, mem: Memory, pixel: tuple) -> tuple[list[float], list[tuple]]
         if kind == 1:
             if 0x700 <= offset < 0x780:
                 return push[(offset - 0x700) // 4]
-            sets = {0x38: [SET0, 0, 256, 0], 0x48: [HEAP, 0, v19[7], 0]}
+            sets = {0x38: [SET0, 0, 256, 0], 0x48: [HEAP, 0, v20[7], 0]}
             return sets.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
         if kind == 3:
             return set0.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
