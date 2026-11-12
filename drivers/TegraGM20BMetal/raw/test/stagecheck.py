@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from tools.gpu.maxwell import gate, isa, nakstat
 from tools.gpu.maxwell.execute import run
 from tools.gpu.maxwell.interp import Inputs, Lane, UnsupportedError
-from tools.gpu.maxwell.quad import LANES, run_quad
+from tools.gpu.maxwell.quad import LANES
 
 CBUF_SET = 3  # PackCbufType CbufSet
 HANDLES = (0, 2, 4)  # raw_pack.h EntrySamplerOnly, EntryTexture, EntryTexture3d
@@ -94,7 +94,7 @@ def execute(program: tuple[bytes, int, int], words: list[int], vertex: bool, see
         result = (killed, [s for s in lane.stores if s[0] == 'ast'])
     else:
         quad = [recording(gate.Seeded(seed, 0, pinned).inputs(i, bound)) for i in range(LANES)]
-        result = tuple(map(gate.lane_result, run_quad(code, quad, gate.outputs(image))))
+        result = tuple(gate.run_pixel(image, quad))
     return result, fetches
 
 

@@ -88,27 +88,36 @@ class Seeded:
         return Inputs(attribute, cbuf, texture, bound_cbuf)
 
 
-def lane_result(result: tuple, registers: list[int], widths: list) -> tuple:
-    regs, killed, stores = result
-    if killed:
-        return killed, stores
-    written = [regs[r] for r in registers]
-    return [rop.store_code(v, w) if w else v for v, w in zip(written, widths, strict=False)], killed, stores
+def run_pixel(image: bytes, quad: list[Inputs], widths: list | None = None) -> list[tuple]:
+    """Run a pixel program's quad; give each lane killed with its stores, or the components it writes and its stores.
+
+    Where `widths` names a component's channel width, the component is the code the ROP stores (rop.store_code).
+    """
+    registers = rungcheck.written_registers(image)
+    out = []
+    for regs, killed, stores in run_quad(image[isa.HEADER_BYTES :], quad, rungcheck.nakstat_outputs(image)):
+        if killed:
+            out.append((killed, stores))
+            continue
+        written = [regs[r] for r in registers]
+        if widths:
+            written = [rop.store_code(v, w) if w else v for v, w in zip(written, widths, strict=False)]
+        out.append((written, killed, stores))
+    return out
 
 
 def compare(  # noqa: PLR0913, PLR0917  the inputs' seed and pins and the state's attachments
     before: tuple, after: tuple, n: int, seed: int, pinned: dict | None = None, key: str = ''
 ) -> str:
     """Compare two programs, each (image, the constant buffer its bound textures read handles from or -1)."""
-    registers = rungcheck.written_registers(before[0])
-    if registers != rungcheck.written_registers(after[0]):
+    if rungcheck.written_registers(before[0]) != rungcheck.written_registers(after[0]):
         return 'different: output maps'
     widths = rop.widths(key, struct.unpack_from('<I', before[0], OMAP_TARGET_BYTE)[0])
-    count = rungcheck.nakstat_outputs(before[0])
 
     def run(program: tuple, i: int) -> list:
-        quad = [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)]
-        return [lane_result(r, registers, widths) for r in run_quad(program[0][isa.HEADER_BYTES :], quad, count)]
+        return run_pixel(
+            program[0], [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)], widths
+        )
 
     for i in range(n):
         try:
