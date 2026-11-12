@@ -706,6 +706,8 @@ private:
     PassDesc pass_;
     Push p_;
     uint32_t reachStep_ = 0, reachW_ = 0, reachH_ = 0;
+    uint32_t reachScissor_[4] = {};  // a reach draw's Metal scissor and viewport, each bounding the other
+    double reachViewport_[4] = {};
     const char *reachWhy_ = nullptr;
     const Pipeline *reachTwin_ = nullptr;  // the twin takeReachTwin set
     bool reachCover_ = false;

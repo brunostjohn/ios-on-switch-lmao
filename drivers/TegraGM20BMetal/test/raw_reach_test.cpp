@@ -37,10 +37,13 @@ struct Viewport {
 
 // What the reach pass reaches of a rectangle drawn in frame pixels [x0, x1] x [y0, y1]: the texels of its target (reachStep
 // frame pixels each, the frame's extent) the conservative rasteriser covers (each the rectangle touches, its far edges included,
-// as Metal's tiles), within the rounded-out scissor and viewport clip, as their tiles
+// as Metal's tiles), within the rounded-out scissor (an empty one where it lies outside the viewport, as RenderEncoder's
+// setScissor takes it) and viewport clip, as their tiles
 Tiles reached(float x0, float y0, float x1, float y1, Scissor s, Viewport v, uint32_t w, uint32_t h)
 {
     const uint32_t step = raw::reachStep(w, h);
+    if (raw::scissorOutsideViewport(s.x, s.y, s.w, s.h, v.x, v.y, v.w, v.h))
+        s.w = s.h = 0;
     const Rect sc = raw::reachScissor(s.x, s.y, s.w, s.h, w, h, step);
     const Rect vc = raw::reachViewportClip(v.x, v.y, v.w, v.h, step);
     const float k = float(step);
@@ -82,6 +85,11 @@ TEST(RawReach, ScissorsAndViewportsBoundTheReachInWholeTilesAsMetalDoes)
         {"outside the viewport in a tile it touches", 44, 10, 60, 20, full, {0, 0, 40, 96}, {{1, 0}}},
         {"viewport far from it", 70, 10, 80, 20, full, {0, 0, 40, 96}, {}},
         {"viewport to its right", 10, 10, 20, 20, full, {64, 0, 40, 96}, {}},
+        // measured under macOS 27.2: a scissor wholly outside the viewport reaches as an empty one, though both touch a tile
+        {"scissor left of the viewport", 40, 0, 64, 48, {0, 0, 40, 20}, {40, 0, 24, 48}, {}},
+        {"scissor a pixel into the viewport", 40, 0, 64, 48, {0, 0, 41, 20}, {40, 0, 24, 48}, {{1, 0}}},
+        {"scissor above the viewport", 0, 7, 64, 48, {0, 0, 32, 7}, {0, 7, 64, 41}, {{0, 0}}},
+        {"scissor above the viewport, primitive elsewhere", 47, 11, 53, 66, {35, 1, 7, 6}, {8, 7, 79, 59}, {}},
     };
     for (const Case &c : cases)
         EXPECT_EQ(reached(c.x0, c.y0, c.x1, c.y1, c.scissor, c.viewport, 128, 96), c.metal) << c.name;

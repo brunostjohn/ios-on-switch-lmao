@@ -4084,6 +4084,10 @@ void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
 void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     if (reachStep_) {
+        reachScissor_[0] = x, reachScissor_[1] = y, reachScissor_[2] = w, reachScissor_[3] = h;
+        const double *v = reachViewport_;
+        if (scissorOutsideViewport(x, y, w, h, v[0], v[1], v[2], v[3]))
+            w = h = 0;
         const Rect r = reachScissor(x, y, w, h, reachW_, reachH_, reachStep_);
         x = r.x0, y = r.y0, w = r.x1 - r.x0, h = r.y1 - r.y0;
     }
@@ -4107,6 +4111,7 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
 {
     const Rect reachClip = reachStep_ ? reachViewportClip(x, y, w, h, reachStep_) : Rect{};
     if (reachStep_) {
+        reachViewport_[0] = x, reachViewport_[1] = y, reachViewport_[2] = w, reachViewport_[3] = h;
         const double s = 1.0 / reachStep_;
         x *= s, y *= s, w *= s, h *= s;
     }
@@ -4131,6 +4136,8 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
     if (reachStep_) {
         viewport_[6] = (reachClip.x1 - reachClip.x0) << 16 | reachClip.x0;
         viewport_[7] = (reachClip.y1 - reachClip.y0) << 16 | reachClip.y0;
+        const uint32_t *c = reachScissor_;
+        setScissor(c[0], c[1], c[2], c[3]);
     }
     viewportDirty_ = true;
 }
