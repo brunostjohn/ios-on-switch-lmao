@@ -28,10 +28,10 @@ struct RotatedTargetTest: HWTest {
 
     /// A frame over a plane whose rows are 256-byte multiples (a direct pitch target), one over rows of the plane's
     /// width (a pitch the render hardware takes only through a shadow, as the device's 60x60 and 720x1280 drawables'
-    /// were), and the device's 1280x720 drawable for its clear alone
+    /// were), and the device's 1280x720 drawable for its clear and a load that reaches some tiles
     static let shapes: [(name: String, width: Int, height: Int, aligned: Bool, cells: [RotatedCell])] = [
         ("a", 96, 64, true, RotatedCell.allCases), ("n", 90, 60, false, RotatedCell.allCases),
-        ("hd", 1280, 720, false, [.clear]),
+        ("hd", 1280, 720, false, [.clear, .partLoad]),
     ]
 
     func run(_ context: TestContext) async throws -> Outcome {

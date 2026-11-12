@@ -13,7 +13,9 @@
 // with point or line draws, whose size is in raster pixels, draws at the frame's resolution and is reduced to tiles. So that the
 // target's own edge clips a primitive past the frame where a tile overhangs it, a frame of no whole tiles draws at the largest
 // power-of-two step that divides it (reachStep), reduced to tiles likewise. The conservative rasteriser covers a primitive's
-// touched pixels whether or not it covers a pixel centre: such a sliver reaches tiles Metal leaves alone.
+// touched pixels whether or not it covers a pixel centre: such a sliver reaches tiles Metal leaves alone. A draw whose vertex
+// program writes memory (SPH DOES_GLOBAL_STORE) is not run again, which would write twice: it reaches every tile of its scissor
+// within its viewport, said once a process.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -155,7 +157,8 @@ class DrawReplay {
 public:
     virtual bool any() const = 0;
     virtual bool atFrameResolution() const = 0;  // a draw of points or lines
-    // each draw with its state into `e`, the state's pipeline taken as its reach twin (RenderEncoder::takeReachTwin); false: *why
+    // each draw with its state into `e`, the state's pipeline taken as its reach twin (RenderEncoder::takeReachTwin), a quad
+    // over its viewport where that covers it (reachCovers); false: *why
     virtual bool replay(RenderEncoder &e, const char **why) = 0;
 
 protected:

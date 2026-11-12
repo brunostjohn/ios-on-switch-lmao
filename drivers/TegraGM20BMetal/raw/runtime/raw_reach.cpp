@@ -2,9 +2,12 @@
 // See raw_reach.h.
 #include "raw_reach.h"
 
+#include <atomic>
 #include <cstring>
 #include <utility>
 #include <vector>
+
+#include <os/log.h>
 
 #include "../../../../kits/SwitchGM20B/SwitchGM20B3D.h"
 #include "raw_blend_kill.h"
@@ -113,10 +116,17 @@ void RenderEncoder::takeReachTwin()
 {
     if (!pipeline_ || pipeline_ == reachTwin_)
         return;
-    const char *why = nullptr;
-    reachTwin_ = pipeline_ = dev_->reachTwin(*pipeline_, &why);
+    const char *why = "no reach state in the pack";
+    reachCover_ = pipeline_->vertexStores;
+    Pipeline *drawn = reachCover_ ? dev_->pipeline(Pack::fnv(kReachState, strlen(kReachState))) : pipeline_;
+    reachTwin_ = pipeline_ = drawn ? dev_->reachTwin(*drawn, &why) : nullptr;
     if (!pipeline_ && !reachWhy_)
         reachWhy_ = why;
+    static std::atomic<bool> logged{false};
+    if (reachCover_ && !logged.exchange(true))
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                     "raw: a rotation-4 load's draw has a vertex program that writes memory: it reaches every tile of "
+                     "its scissor within its viewport (once per process)");
 }
 
 void RenderEncoder::beginReach(uint32_t step, uint32_t width, uint32_t height)

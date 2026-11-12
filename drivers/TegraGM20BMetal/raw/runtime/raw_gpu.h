@@ -650,6 +650,12 @@ public:
     // scissors in the target's units, no depth/stencil state; and the state set last, its reach twin for the draws after
     void beginReach(uint32_t step, uint32_t width, uint32_t height);
     void takeReachTwin();
+    // the state's vertex program writes memory, so its draws are not drawn again: the reach pass covers their viewports
+    bool reachCovers() const
+    {
+        return reachCover_;
+    }
+
     const char *reachRefusal() const
     {
         return reachWhy_;
@@ -689,6 +695,7 @@ private:
     uint32_t reachStep_ = 0, reachW_ = 0, reachH_ = 0;
     const char *reachWhy_ = nullptr;
     const Pipeline *reachTwin_ = nullptr;  // the twin takeReachTwin set
+    bool reachCover_ = false;
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
 

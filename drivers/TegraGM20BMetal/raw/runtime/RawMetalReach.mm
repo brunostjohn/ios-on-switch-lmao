@@ -2,29 +2,45 @@
 #import "RawMetalReach.h"
 #import "RawMetalPlanAdapters.h"
 
-PlanDraws::PlanDraws(RMCommandBuffer *cb, size_t pass, size_t to, raw::CommandBuffer &commands)
-    : cb_(cb), commands_(commands), from_(pass + 1), to_(from_)
+bool PlanDraws::any() const
 {
-    const RMCommandPlan &plan = cb->_plan;
-    for (; to_ < to && plan.operation(to_).op != OpEnd; to_++) {
-        if (!isPlanDraw(plan.operation(to_).op))
+    const RMCommandPlan &plan = cb_->_plan;
+    for (size_t at = from_; at < to_ && plan.operation(at).op != OpEnd; at++)
+        if (isPlanDraw(plan.operation(at).op))
+            return true;
+    return false;
+}
+
+bool PlanDraws::atFrameResolution() const
+{
+    const RMCommandPlan &plan = cb_->_plan;
+    for (size_t at = from_; at < to_ && plan.operation(at).op != OpEnd; at++) {
+        if (!isPlanDraw(plan.operation(at).op))
             continue;
-        any_ = true;
-        const RMPlanDraw &draw = plan.draw(to_);
+        const RMPlanDraw &draw = plan.draw(at);
         const raw::RasterState &raster = plan.raster[plan.renderStates[draw.state].raster];
-        frame_ |= raw::reachedAtFrameResolution(draw.primitive, raster.set & raw::RasterState::Fill ? raster.fill : 0);
+        if (raw::reachedAtFrameResolution(draw.primitive, raster.set & raw::RasterState::Fill ? raster.fill : 0))
+            return true;
     }
+    return false;
 }
 
 bool PlanDraws::replay(raw::RenderEncoder &e, const char **why)
 {
     raw::StateCursor cursor;
-    for (size_t at = from_; at < to_; at++) {
+    for (size_t at = from_; at < to_ && cb_->_plan.operation(at).op != OpEnd; at++) {
         const Op op = cb_->_plan.operation(at).op;
         if (!isPlanDraw(op))
             continue;
         encodePlannedState(cb_, at, commands_, &e, nullptr, cursor);
         e.takeReachTwin();
+        if (e.reachCovers()) {
+            e.setCullMode(0);
+            if (!e.draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                return false;
+            cursor.reset();  // the next draw's state is applied whole, its culling with it
+            continue;
+        }
         const RMPlanDraw &draw = cb_->_plan.draw(at);
         const uint32_t indexSize = draw.indexType == MTLIndexTypeUInt16 ? 2 : 4;
         RMBuffer *indices = (__bridge RMBuffer *)draw.indices, *arguments = (__bridge RMBuffer *)draw.arguments;
