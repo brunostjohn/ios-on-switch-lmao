@@ -922,21 +922,6 @@ void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
         pl.heapMissing = true;
 }
 
-        return;
-    }
-    const auto address = [&](uint8_t word, uint64_t va) {
-        if (!word || word > 31)
-            return;
-        c.argumentPush[word - 1] = uint32_t(va);
-        c.argumentPush[word] = uint32_t(va >> 32);
-        c.argumentMask |= 3u << (word - 1);
-    };
-    address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
-    address(k.statusWord, heapTables_.statusVa());
-    if (k.heapArrays && !(c.heapSet = heapSet(heapLayout(k))))
-        c.heapMissing = true;
-}
-
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
 // the pipeline's blend has no barrier twin: its barrier form would leave the blend to the ROP after a fetch outside the

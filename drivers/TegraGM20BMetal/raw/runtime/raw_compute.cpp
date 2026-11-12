@@ -132,8 +132,20 @@ void Device::bindKernelArguments(ComputeState &c, const PackKernel &k)
     std::lock_guard<std::mutex> l(lock_);
     if (!heapMemory()) {
         c.heapMissing = true;
+        return;
+    }
+    const auto address = [&](uint8_t word, uint64_t va) {
+        if (!word || word > 31)
+            return;
+        c.argumentPush[word - 1] = uint32_t(va);
+        c.argumentPush[word] = uint32_t(va >> 32);
+        c.argumentMask |= 3u << (word - 1);
+    };
+    address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
+    address(k.statusWord, heapTables_.statusVa());
+    if (k.heapArrays && !(c.heapSet = heapSet(heapLayout(k))))
+        c.heapMissing = true;
 }
-
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
 {

@@ -236,7 +236,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                            beforeStages:MTLRenderStages(c.c)];
             break;
         case OpUse:
-            [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
+            // a facade heap has no m2v twin: what it holds is the facade's own (RawMetalHeap.mm)
+            if (![(__bridge id)c.obj isKindOfClass:[RMHeap class]])
+                [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
             break;
         case OpUpdateFence:
             updated.insert(c.obj);
