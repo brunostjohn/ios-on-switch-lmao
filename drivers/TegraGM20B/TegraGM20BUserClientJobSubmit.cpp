@@ -211,7 +211,8 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	int error = events->sequence(eventChannels_[slot]);
 	if (error)
 		return error == -5 ? kIOReturnAborted : ioreturn(error);
-	// an event's waiters are woken by the interrupt at its signal
+	// an event's waiters are woken by the interrupt at its signal, and a semantic fence the job binds below resolves
+	// only at a published completion (events->semanticFence()): such a job never ends quiet
 	const bool quiet =
 		(head.flags & TegraGM20BJobQuiet) && !(head.flags & TegraGM20BJobHasEvents);
 	const uint32_t submit = TegraGM20BSubmitVisibilityExplicit |
@@ -283,10 +284,11 @@ refresh:
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
+			const bool quietEnd = quiet && !events->semanticFence();
 			jobVisibility =
 				switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || scanoutWrites,
 							  hostWritten || transaction.host_written) |
-				(quiet ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
+				(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
 			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
 							 siblings, siblingCount, &seqno, jobVisibility);
 			job.phases.end(TGM_SUBMIT_EXEC);
@@ -336,7 +338,8 @@ refresh:
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
-	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB, quiet && count ? 1 : 0);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB,
+			      (jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

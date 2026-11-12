@@ -46,6 +46,11 @@ TEST(GM20BQuietSource, TheFenceInterruptsOnlyWhenItAnnounces)
 	const std::string job = unit("TegraGM20BUserClientJobSubmit.cpp");
 	EXPECT_THAT(job, HasSubstr("(head.flags & TegraGM20BJobQuiet) && !(head.flags & "
 				   "TegraGM20BJobHasEvents)"));
+	// a semantic fence bound to the job (its own, or one a dependency passed on) resolves at a published completion
+	expectBefore(job, "error = events->bind(&completion);",
+		     "const bool quietEnd = quiet && !events->semanticFence();");
+	expectBefore(job, "const bool quietEnd", "(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u)");
+	EXPECT_THAT(job, HasSubstr("(jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0"));
 }
 
 TEST(GM20BQuietSource, EverySleepOnAUserChannelAsksFirst)

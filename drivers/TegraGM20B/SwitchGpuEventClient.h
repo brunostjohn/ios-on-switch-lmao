@@ -59,6 +59,13 @@ public:
 		return signalCount_ != 0;
 	}
 
+	// A semantic fence (its own event waits, or ones its dependencies' fences pass on) is bound to the job's
+	// completion; its batch is read again only when a completion is published, as the interrupt pass's end does.
+	bool semanticFence() const
+	{
+		return record_ != nullptr;
+	}
+
 private:
 	SwitchGpuEventChannel *channel_ = nullptr;
 	SwitchGpuEventChannel::Record *record_ = nullptr;

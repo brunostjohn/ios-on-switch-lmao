@@ -710,6 +710,7 @@ TEST_F(EventClient, AcceptedWaitOwnsProducerUntilConsumerAndCompletionQuery)
 	SwitchGpuEventJob job;
 	ASSERT_EQ(job.prepare(client, &input.header), 0);
 	ASSERT_EQ(job.sequence(channel), 0);
+	EXPECT_TRUE(job.semanticFence());
 	const switch_gpu_backing_token fence = {10, 1, SWITCH_GPU_ENGINE_GM20B, 8};
 	ASSERT_EQ(job.bind(&fence), 0);
 	EXPECT_EQ(channel.wait(10, 1), -110);
@@ -794,12 +795,15 @@ TEST_F(EventClient, PlainBackingDependencyGetsSemanticFenceWithoutExplicitEvent)
 	ASSERT_EQ(job.prepare(client, nullptr), 0);
 	ASSERT_EQ(job.sequence(channel), 0);
 	EXPECT_EQ(semanticNodes, 0);
+	EXPECT_FALSE(job.semanticFence());
 	semanticSource = {9, 3, SWITCH_GPU_ENGINE_GM20B, 8};
 	EXPECT_EQ(job.captureDependencies(&semanticSource, 1), 1);
 	EXPECT_EQ(tokenReferences, 1);
 	ASSERT_EQ(job.inheritDependencies(), 0);
 	EXPECT_EQ(tokenReferences, 0);
 	EXPECT_EQ(semanticNodes, 1);
+	// its batch is read again only at a published completion: SubmitJob never lets this job end quiet
+	EXPECT_TRUE(job.semanticFence());
 	EXPECT_EQ(job.captureDependencies(&semanticSource, 1), 0);
 	const switch_gpu_backing_token completion = {10, 4, SWITCH_GPU_ENGINE_GM20B, 9};
 	ASSERT_EQ(job.bind(&completion), 0);
