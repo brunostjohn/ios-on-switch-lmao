@@ -206,6 +206,7 @@ bool submitRange(RMCommandBuffer *cb)
         raw::tEncodeProfile = &profile;
 #endif
         size_t refusedEncoder = range.to;
+        rmStorageTargetsPlain(cb, range.from, range.to);
         const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
         raw::tEncodeProfile = nullptr;

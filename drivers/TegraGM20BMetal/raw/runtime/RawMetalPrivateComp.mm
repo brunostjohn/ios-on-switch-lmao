@@ -2,6 +2,8 @@
 // The facade's half of private textures on compressed memory (raw_private_comp.h): which descriptors qualify, and the
 // move to plain memory before anything names a texture's pages another way.
 #import "RawMetalInternal.h"
+#include "raw_storage_form.h"
+#include "raw_view.h"
 #include "raw_xr.h"
 
 thread_local bool tRawEncoding = false;
@@ -58,4 +60,47 @@ void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to)
             t = t->_parent;
         rmTexturePlain(t);
     });
+}
+
+static raw::Pipeline *drawnPipeline(const raw::RasterState &raster)
+{
+    if (auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(raster.nativeVariant))
+        return variant->value();
+    if (raster.nativePipeline)
+        return static_cast<raw::Pipeline *>(raster.nativePipeline);
+    id pipeline = (__bridge id)raster.pipeline;
+    return [pipeline isKindOfClass:[RMPipeline class]] ? ((RMPipeline *)pipeline)->_raw : nullptr;
+}
+
+// What the draw's storage view would answer of the attachment once it is plain: only a compressed one that would fit
+// then is worth the move
+static bool fitsOncePlain(const raw::Pipeline &pl, uint32_t slot, const raw::Texture &t)
+{
+    raw::Texture plain = t;
+    plain.comptags = false;
+    return raw::storageViewMismatch(raw::texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, plain) ==
+           raw::StorageFallback::None;
+}
+
+void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    const RMPass *pass = nullptr;
+    for (size_t at = from; at < to; ++at) {
+        const Cmd c = cb->_plan.legacy(at);
+        if (c.op == OpRender)
+            pass = &cb->_passes[c.x];
+        else if (c.op == OpCompute || c.op == OpBlit)
+            pass = nullptr;
+        if (!pass || !isPlanDraw(c.op))
+            continue;
+        const raw::RenderStateRef &state = cb->_plan.renderStates[cb->_plan.draw(at).state];
+        const raw::Pipeline *pl = drawnPipeline(cb->_plan.raster[state.raster]);
+        if (!pl || !pl->rec)
+            continue;
+        const uint8_t slots = raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr);
+        for (uint32_t slot = 0; slot < 8; ++slot)
+            if (RMTexture *t = (RMTexture *)pass->color[slot].texture;
+                (slots >> slot & 1) && t && t->_raw.comptags && fitsOncePlain(*pl, slot, t->_raw))
+                rmTexturePlain(t);
+    }
 }

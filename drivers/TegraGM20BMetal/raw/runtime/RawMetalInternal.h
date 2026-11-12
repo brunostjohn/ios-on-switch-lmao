@@ -361,6 +361,9 @@ extern thread_local bool tRawEncoding;
 uint32_t privateCompressedKind(MTLTextureDescriptor *d);
 bool rmTexturePlain(RMTexture *t);
 void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
+// Before a raw range encodes: the compressed attachments its draws bind as storage images with no barrier form to take
+// (raw_private_comp.h storageSlotsToPlain) move to plain memory, which an encode may not ask for
+void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm

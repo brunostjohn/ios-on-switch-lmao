@@ -1351,11 +1351,17 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_private_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_storage_form.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zbc.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++20",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPrivateComp.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
+    ],
 )
 
 host_test(

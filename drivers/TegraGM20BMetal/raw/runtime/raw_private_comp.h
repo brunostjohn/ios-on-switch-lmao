@@ -36,6 +36,15 @@ constexpr uint32_t privateCompressedKind(const PrivateTextureFacts &f)
     return f.bpp == 4 ? kCompKindC32 : f.bpp == 8 ? kCompKindC64 : 0;
 }
 
+// The colour slots a draw binds as storage images where its state has no barrier form to take instead: a compressed
+// attachment there refuses the draw (raw_storage_form.h, the surface unit reads a compressible kind's raw bytes), so it
+// moves to plain memory before the range encodes. A state with a barrier form keeps the compressed attachment and draws
+// through that form.
+constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin)
+{
+    return barrierTwin ? 0 : storageBits;
+}
+
 struct PrivateComp {
     Bo bo;
     uint32_t staleTic = 0;  // the header work submitted before the move binds; freed with the texture
