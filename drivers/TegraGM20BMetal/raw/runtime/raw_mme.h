@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "../../../../kits/SwitchGM20B/SwitchGM20B3D.h"
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h"
 #include "SwitchGM20BMacros.h"
 #include "raw_push.h"
 #include <iterator>
 
 namespace raw::mme {
 
-// Native GM20B macro ABI v5. This channel owns macro slots 11..22 (11..16 NVK's draw macros' slots, which the kernel's push
-// profile counts as draws) and their contiguous instruction words from zero. Arguments: instance count (preloaded R1),
-// first vertex/index, element count, then for the parameter macros the base instance (a draw of vertices) or the base vertex
-// and base instance (an indexed one). The caller owns topology, restart and index binding. The plain macros change only
-// BEGIN, vertex/index first+count and END; the parameter macros first write the root table's draw parameters and the base
-// registers as the direct path wrote them. Slot 17 loads the colour matrix constants; 18..22 are the indirect command
-// buffers'. They are NVK's pre-Pascal draw loops, built with Mesa's MME builder (kits/SwitchGM20BEmit:
-// gen/SwitchGM20BMacros.h).
+// Native GM20B macro ABI v5, at the slots kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h names (11..16 NVK's draw macros'
+// slots, which the kernel's push profile counts as draws), and their contiguous instruction words from zero. Arguments:
+// instance count (preloaded R1), first vertex/index, element count, then for the parameter macros the base instance (a
+// draw of vertices) or the base vertex and base instance (an indexed one). The caller owns topology, restart and index
+// binding. The plain macros change only BEGIN, vertex/index first+count and END; the parameter macros first write the
+// root table's draw parameters and the base registers as the direct path wrote them. Past them the colour matrix
+// constants and the indirect command buffers'. They are NVK's pre-Pascal draw loops, built with Mesa's MME builder
+// (kits/SwitchGM20BEmit: gen/SwitchGM20BMacros.h).
 constexpr uint32_t kAbi = 5, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWITCH_GM20B_MACRO_DRAW_INDEXED,
                    kIndirect = SWITCH_GM20B_MACRO_INDIRECT, kIndexedIndirect = SWITCH_GM20B_MACRO_INDEXED_INDIRECT,
                    kDrawParams = SWITCH_GM20B_MACRO_DRAW_PARAMS,
@@ -22,18 +23,33 @@ constexpr uint32_t kAbi = 5, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWI
                    kIcbRange = SWITCH_GM20B_MACRO_ICB_RANGE, kIcbDraw = SWITCH_GM20B_MACRO_ICB_DRAW,
                    kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED, kIcbGate = SWITCH_GM20B_MACRO_ICB_GATE,
                    kIcbPatches = SWITCH_GM20B_MACRO_ICB_PATCHES;
+
+constexpr bool countedAsDraw(uint32_t slot)
+{
+    return slot >= SWITCH_GM20B_MACRO_DRAWS_FIRST && slot <= SWITCH_GM20B_MACRO_DRAWS_LAST;
+}
+
+static_assert(countedAsDraw(kDraw) && countedAsDraw(kDrawIndexed) && countedAsDraw(kDrawParams) &&
+                  countedAsDraw(kIndexedParams),
+              "the kernel's push profile counts a draw macro's call as a draw");
+static_assert(countedAsDraw(kIndirect) && countedAsDraw(kIndexedIndirect), "and an indirect draw's");
+static_assert(!countedAsDraw(kMatrix) && !countedAsDraw(kIcbRange) && !countedAsDraw(kIcbDraw) &&
+                  !countedAsDraw(kIcbDrawIndexed) && !countedAsDraw(kIcbGate) &&
+                  !countedAsDraw(SWITCH_GM20B_MACRO_ICB_BIND) && !countedAsDraw(kIcbPatches),
+              "and every other macro's as none");
+static_assert(kIcbPatches < SWITCH_GM20B_MACRO_RAW_END && SWITCH_GM20B_MACRO_RAW_END <= SWITCH_GM20B_MACRO_SLOTS,
+              "every raw slot is one CALL_MME_MACRO takes");
+static_assert(kDraw > SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS && kDraw > SWITCH_GM20B_MACRO_NVK_CLEAR,
+              "no raw slot is one the profile reads as NVK's clear or anti-alias");
 // An indirect command buffer's draws (raw_icb.h) and dispatches (raw_icb_compute.h): a draw passes its index before an
 // indirect draw's arguments and draws only inside the range the shadow scratch words hold, which an execute writes (from the
 // CPU's range, or by kIcbRange from the range buffer the GPU reads); a dispatch passes its index to kIcbGate, which lets the
 // launches after it run only inside that range; a patch command passes its control-stage words to kIcbPatches, which loads
-// them where the scratch words of its execute's layout (icbPatchLayout) say. The only macros that read scratch
+// them where the scratch words of its execute's layout (icbPatchLayout) say. The only raw macros that read scratch
 constexpr uint32_t kScratchLocation = SWITCH_GM20B_SCRATCH_ICB_LOCATION,
                    kScratchLength = SWITCH_GM20B_SCRATCH_ICB_LENGTH, kScratchSetHi = SWITCH_GM20B_SCRATCH_ICB_SET_HI,
                    kNoEntry = SWITCH_GM20B_ICB_NO_ENTRY, kIcbSetBytes = SWITCH_GM20B_ICB_SET_BYTES,
                    kIcbRootBytes = SWITCH_GM20B_ICB_ROOT_BYTES;
-static_assert(SWITCH_GM20B_SCRATCH_ICB_ROOT_HI == kScratchSetHi + 2 &&
-              SWITCH_GM20B_SCRATCH_ICB_ENTRY == kScratchSetHi + 4 &&
-              SWITCH_GM20B_SCRATCH_ICB_CONTROL == kScratchSetHi + 7);
 constexpr uint32_t kMacroCall = NVB197_CALL_MME_MACRO(0), kRamPointer = NVB197_LOAD_MME_INSTRUCTION_RAM_POINTER,
                    kRam = NVB197_LOAD_MME_INSTRUCTION_RAM, kStartPointer = NVB197_LOAD_MME_START_ADDRESS_RAM_POINTER,
                    kStart = NVB197_LOAD_MME_START_ADDRESS_RAM;

@@ -195,6 +195,7 @@ host_test(
         "gm20b_push_scan_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BPushScan.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BMacroSlots.h",
     ],
     copts = ["-Wno-unused-parameter"],
     cxx_std = "c++17",
