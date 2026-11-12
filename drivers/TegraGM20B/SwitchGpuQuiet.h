@@ -63,6 +63,17 @@ static inline int switch_gpu_quiet_token_on(const struct switch_gpu_backing_toke
 	       token->reset_generation == (channel_id >> 32) + 1;
 }
 
+/* Whether a job asked to end quiet does. Not with a semantic fence bound to it (its batch is read again only at a
+ * published completion), nor when it writes a backing the display scans in place and closes its admission group (a
+ * command buffer range's last job, or its only one): that job is the backing's last writer, a watched present's
+ * producer, whose own interrupt completes the frame where a wake entry would come behind every job queued after it. The
+ * range's earlier jobs list the same writes and stay quiet. */
+static inline int switch_gpu_quiet_end(int quiet, int semantic_fence, int scanout_writes,
+				       int closes_group)
+{
+	return quiet && !semantic_fence && !(scanout_writes && closes_group);
+}
+
 enum {
 	SWITCH_GPU_QUIET_UNASKED = 0, /* nothing at or after the seqno interrupts, and no waiter asked */
 	SWITCH_GPU_QUIET_OWED = 1,    /* asked: the owner has not pushed the wake entry yet */

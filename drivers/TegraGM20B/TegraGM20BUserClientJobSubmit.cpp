@@ -2,6 +2,7 @@
 // SubmitJob (TegraGM20BJobABI.h method 33): a job over a resource set and its shared uses, without the connection lock.
 #include "TegraGM20BUserClientInternal.h"
 #include "SwitchGpuJobRecord.h"
+#include "SwitchGpuQuiet.h"
 
 static_assert(SwitchGpuJobRecord::kMaxBytes <= kJobBytes, "a channel's job scratch holds a SubmitJob record");
 
@@ -211,10 +212,12 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	int error = events->sequence(eventChannels_[slot]);
 	if (error)
 		return error == -5 ? kIOReturnAborted : ioreturn(error);
-	// an event's waiters are woken by the interrupt at its signal, and a semantic fence the job binds below resolves
-	// only at a published completion (events->semanticFence()): such a job never ends quiet
+	// an event's waiters are woken by the interrupt at its signal; the job's semantic fence and scanout writes are
+	// known below (switch_gpu_quiet_end)
 	const bool quiet =
 		(head.flags & TegraGM20BJobQuiet) && !(head.flags & TegraGM20BJobHasEvents);
+	const bool closesGroup =
+		!(head.flags & TegraGM20BJobAdmission) || (head.flags & TegraGM20BJobAdmissionEnd);
 	const uint32_t submit = TegraGM20BSubmitVisibilityExplicit |
 				((head.flags & TegraGM20BJobExternal) ? uint32_t(TegraGM20BSubmitExternalVisibility) : 0u) |
 				((head.flags & TegraGM20BJobHasEvents) ? uint32_t(TegraGM20BSubmitHasEvents) : 0u);
@@ -284,7 +287,8 @@ refresh:
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
-			const bool quietEnd = quiet && !events->semanticFence();
+			const bool quietEnd = switch_gpu_quiet_end(quiet, events->semanticFence(),
+								   scanoutWrites, closesGroup);
 			jobVisibility =
 				switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || scanoutWrites,
 							  hostWritten || transaction.host_written) |

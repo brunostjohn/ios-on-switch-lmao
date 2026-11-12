@@ -178,3 +178,72 @@ TEST(PresentQuiet, AGM20BAndAnExternalProducerGoToThePresentJob)
 	EXPECT_TRUE(d.runJob());
 	EXPECT_EQ(d.jobInterrupts, 1u);
 }
+
+// SubmitJob's end (switch_gpu_quiet_end): asked quiet, a job still interrupts with a semantic fence bound, or when it
+// writes a backing the display scans in place and closes its admission group.
+TEST(QuietEnd, ASemanticFenceOrTheClosingScanoutWriterInterrupts)
+{
+	EXPECT_TRUE(switch_gpu_quiet_end(1, 0, 0, 1));
+	EXPECT_TRUE(switch_gpu_quiet_end(1, 0, 1, 0));
+	EXPECT_FALSE(switch_gpu_quiet_end(1, 0, 1, 1));
+	EXPECT_FALSE(switch_gpu_quiet_end(1, 1, 0, 0));
+	EXPECT_FALSE(switch_gpu_quiet_end(0, 0, 0, 1));
+}
+
+// The frame's producer writes the scanned backing and a long quiet job is queued behind it. Ending with its own
+// interrupt, it is presented when it ends, with no wake entry; quiet, the asked entry comes after the long job.
+TEST(PresentQuiet, AScanoutWriterIsPresentedAtItsOwnEnd)
+{
+	for (const bool scanout : {true, false}) {
+		Producer a{kA, Channel(40)};
+		Display d({&a});
+		const auto token = a.token(a.channel.submit(1, switch_gpu_quiet_end(1, 0, scanout, 1)));
+		a.channel.submit(30, switch_gpu_quiet_end(1, 0, 0, 1));
+		ASSERT_EQ(d.offer(&token, 1), 0);
+		EXPECT_EQ(a.channel.asked, !scanout);
+		d.ownerWakes();
+		a.channel.run(1);
+		EXPECT_EQ(a.channel.interrupts, scanout ? 1u : 0u) << "a single-job range closes its group";
+		EXPECT_EQ(d.presented, scanout ? 1u : 0u);
+		EXPECT_EQ(a.channel.wakeEntries, scanout ? 0u : 1u);
+		a.channel.run();
+		EXPECT_EQ(d.presented, 1u);
+		EXPECT_EQ(a.channel.interrupts, 1u) << "the long job behind it stays quiet";
+	}
+}
+
+// A command buffer of four jobs (raw lists the range's surfaces on each of them, the scanned target among them, and
+// asks each but the last to end quiet): only the job that closes the group interrupts, once, and its pass presents
+// the frame. Every scanout writer interrupting would cost one interrupt per job.
+TEST(PresentQuiet, AFrameOfSeveralJobsInterruptsOnceAtItsClosingJob)
+{
+	for (const bool closingOnly : {true, false}) {
+		Producer a{kA, Channel(1000)};
+		Display d({&a});
+		const uint32_t jobs[] = {9, 1, 6, 1};
+		uint32_t last = 0;
+		for (size_t i = 0; i < 4; ++i)
+			last = a.channel.submit(jobs[i], switch_gpu_quiet_end(1, 0, 1, closingOnly ? i == 3 : 1));
+		const auto token = a.token(last);
+		ASSERT_EQ(d.offer(&token, 1), 0);
+		EXPECT_FALSE(a.channel.asked);
+		d.ownerWakes();
+		a.channel.run();
+		EXPECT_EQ(a.channel.interrupts, closingOnly ? 1u : 4u);
+		EXPECT_EQ(a.channel.seen, last) << "the pass ran at the closing job's end";
+		EXPECT_EQ(a.channel.wakeEntries, 0u);
+		EXPECT_EQ(d.presented, 1u);
+	}
+}
+
+// The same frame writing no scanned backing ends quiet throughout: nothing interrupts until something asks.
+TEST(PresentQuiet, AFrameWritingNoScannedBackingStaysQuiet)
+{
+	Channel c(1000);
+	const uint32_t jobs[] = {9, 1, 6, 1};
+	for (size_t i = 0; i < 4; ++i)
+		c.submit(jobs[i], switch_gpu_quiet_end(1, 0, 0, i == 3));
+	c.run();
+	EXPECT_EQ(c.fence, 1017u);
+	EXPECT_EQ(c.interrupts, 0u);
+}
