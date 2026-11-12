@@ -110,10 +110,11 @@ def tld(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
 
 
 def txd(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
-    """TXD: a fetch at explicit derivatives.
+    """TXD: a fetch at explicit derivatives, keyed as TEX's implicit one at the same coordinates.
 
     Register A's operands are the handle (TXD_b) then the coordinates, B's each axis's x and y derivative in turn (NAK's
-    nak_nir_lower_tex.c); array and offset forms are not run.
+    nak_nir_lower_tex.c); array and offset forms are not run. The model picks no level from derivatives (an implicit
+    TEX's are its quad's), so two programs whose derivatives round apart by an ulp fetch alike, as the hardware would.
     """
     if name not in ('TXD', 'TXD_b'):
         raise UnsupportedError(name)
@@ -125,8 +126,9 @@ def txd(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     bindless = name == 'TXD_b'
     a = [reg(lane, ra + k if ra != RZ_REG else RZ_REG) for k in range(axes + bindless)]
     handle = a.pop(0) if bindless else inputs.cbuf(inputs.bound_cbuf, bits(w, 36, 13) * 4)
-    gradients = tuple(reg(lane, rb + k if rb != RZ_REG else RZ_REG) for k in range(2 * axes))
-    write_compact(lane, d, mask, inputs.texture(('txd', handle, tuple(a), gradients, dim)))
+    if rb == RZ_REG:
+        raise UnsupportedError('TXD without derivatives')
+    write_compact(lane, d, mask, fetch(inputs, handle, tuple(a), 0, None, None, None, dim))
 
 
 def write_scalar(w: int, lane: Lane, result: list[int]) -> None:

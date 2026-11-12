@@ -139,6 +139,9 @@ class TextureTest(unittest.TestCase):
         texture.txd(isa.name(self.TXD_B), self.TXD_B, lane, inputs, 4)
         texture.txd(isa.name(self.TXD), self.TXD, lane, inputs, 12)
         self.assertEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (12, 13, 14, 15)])
+        lane.w(9, 0x3C000001)
+        texture.txd(isa.name(self.TXD), self.TXD, lane, inputs, 12)
+        self.assertEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (12, 13, 14, 15)])
 
     def test_a_load_and_a_sample_of_one_texel_are_different_keys(self):
         inputs, lane = self.lanes()
