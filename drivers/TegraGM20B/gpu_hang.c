@@ -10,15 +10,18 @@ static u64 check_interval(const struct tgm_chan *chan)
 				       TGM_HANG_NS);
 }
 
-uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
+/* The rule's bookkeeping at a check: the next check's interval, and in *stalled the time the channel has completed
+ * nothing when that is the interval or more (the hang rule's look is due) */
+static u64 progress_step(struct tgm_chan *chan, u64 *stalled)
 {
 	u32 done = tgm_chan_completed(chan);
 	u64 now = nvxnu_nanotime();
 	u64 since = READ_ONCE(chan->stall_ns);
 	u64 held = tgm_hold_held_ns(chan->chid, now);
 	u64 interval = check_interval(chan);
-	u64 stalled = 0;
+	u64 unheld = 0;
 
+	*stalled = 0;
 	if ((s32)(done - chan->submitted) >= 0) {
 		WRITE_ONCE(chan->stall_ns, 0);
 		return 0;
@@ -29,12 +32,35 @@ uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_
 		WRITE_ONCE(chan->stall_ns, now);
 		return interval;
 	}
-	stalled = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
-	if (stalled < interval)
-		return interval - stalled;
-	tgm_chan_stalled(chan, who, seqno, stalled);
+	unheld = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
+	if (unheld < interval)
+		return interval - unheld;
+	*stalled = unheld;
 	WRITE_ONCE(chan->stall_held, held);
 	WRITE_ONCE(chan->stall_ns, now);
+	return interval;
+}
+
+uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
+{
+	u64 stalled = 0;
+	const u64 next = progress_step(chan, &stalled);
+
+	if (!stalled)
+		return next;
+	tgm_chan_stalled(chan, who, seqno, stalled);
+	return check_interval(chan);
+}
+
+uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, uint32_t seqno)
+{
+	u64 stalled = 0;
+	const u64 next = progress_step(chan, &stalled);
+
+	if (!stalled)
+		return next;
+	if (tgm_hang_recover(chan, who, seqno, stalled) == TGM_HANG_STUCK)
+		tgm_chan_hung(chan, who, seqno, stalled);
 	return check_interval(chan);
 }
 
@@ -415,7 +441,6 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	int j = 0;
 	int b = 0;
 	int progress = 0;
-	u32 released = 0;
 
 	if (tgm_gpu.stage < 3 || !tgm_iso.deadline)
 		return TGM_HANG_STUCK;
@@ -467,13 +492,6 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
 	}
-	/* a stuck reader of a surface whose promised writer never ran goes on, the promise abandoned: a present of it is
-	 * dropped, the panel keeping the frame before it */
-	for (i = 0; i <= n; i++)
-		if (chans[i] && c[i].stuck && !c[i].moving)
-			released += tgm_chan_release_promises(chans[i], who, waited_ns);
-	if (released)
-		return TGM_HANG_PROGRESSING;
 	/* each candidate's engine reset is tried at most once a check */
 	for (;;) {
 		verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel,

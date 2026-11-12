@@ -190,7 +190,7 @@ TEST(WriterPromise, SlotsAndRefsAreBounded)
 }
 
 typedef int32_t s32;
-// gpu_promise.c's own promise_raise, cut out by :promise_raise_source
+// gpu_promise_giveup.c's own promise_raise, cut out by :promise_raise_source
 #include "drivers/TegraGM20B/test/promise_raise_source.h"
 
 namespace
@@ -305,26 +305,24 @@ void stepped(uint32_t offset, uint32_t, int step, void *arg)
 
 // The promise is marked given up on (RAISING) before the word moves, so a reader the raise lets go already finds it; and
 // a maker's GPU release that lands first after all (KEPT_FIRST) takes the mark back, its writes being there.
-TEST(WriterPromise, TheReleaseMarksBeforeTheWordMovesAndTellsWhoWon)
+TEST(WriterPromise, TheGiveUpMarksBeforeTheWordMovesAndTellsWhoWon)
 {
-	switch_gpu_promise_waits waits = {};
 	Steps raised, kept;
 	pool[5] = 1;
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 20, 2), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, stepped, &raised), 1u);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 20, 2, 1, stepped, &raised), 1);
 	EXPECT_EQ(raised.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
 	EXPECT_EQ(raised.words, (std::vector<uint32_t>{1, 2}));
 	pool[5] = 1;
 	kept.makerAt = 20;
 	kept.makerTo = 2;
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, stepped, &kept), 0u);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 20, 2, 1, stepped, &kept), 0);
 	EXPECT_EQ(kept.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
 	EXPECT_EQ(pool[5], 2u);
 }
 
-// The hang rule's raise of a pending word is its one write to the fence pool, a plain store: on the model's read-only
+// The give-up's raise of a pending word is its one write to the fence pool, a plain store: on the model's read-only
 // page any compare-and-swap faults, as T210's bus answers one on the write-combined pool with an SError.
 TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 {
@@ -332,11 +330,9 @@ TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 	model = &fence;
 	fence.set(20, 1);
 	fence.set(24, 7);
-	switch_gpu_promise_waits waits = {};
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20, 2), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 24, 7), 0);
 	Released released;
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &modelFence, told, &released), 1u);
+	EXPECT_EQ(switch_gpu_promise_give_up(&modelFence, 20, 2, fence.owner, told, &released), 1);
+	EXPECT_EQ(switch_gpu_promise_give_up(&modelFence, 24, 7, fence.owner, told, &released), 0);
 	EXPECT_EQ(released, (Released{{20, 2}}));
 	EXPECT_EQ(fence.page[5], 2u);
 	EXPECT_EQ(fence.page[6], 7u);
@@ -414,30 +410,23 @@ TEST(WriterPromise, WhatBlocksThrowsOnlyWithInterruptsOff)
 	EXPECT_EQ(interrupts_off::depth, 0);
 }
 
-// The maker closed and its fence page went to another connection, cleared: a wait recorded before is not on that page
-// any more. It is neither pending nor raised (a raise would write the new owner's word), and its record is free again.
-TEST(WriterPromise, AWaitOnAPageAnotherConnectionOwnsNowIsDroppedNeverRaised)
+// The maker closed and its fence page went to another connection, cleared: the word is not the promise's any more. Its
+// give-up is dropped, never raised (a raise would write the new owner's word), and nothing is told.
+TEST(WriterPromise, AGiveUpOnAPageAnotherConnectionOwnsNowIsDroppedNeverRaised)
 {
 	FenceModel fence;
 	model = &fence;
 	fence.set(20, 1);
-	switch_gpu_promise_waits waits = {};
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20, 2), 0);
-	ASSERT_TRUE(switch_gpu_promise_waits_pending(&waits, &modelFence));
+	const uint32_t owner = fence.owner;
 	fence.reuse();
-	EXPECT_FALSE(switch_gpu_promise_waits_pending(&waits, &modelFence));
 	EXPECT_EXIT(
 		{
 			Released released;
-			const uint32_t raised = switch_gpu_promise_waits_release(
-				&waits, &modelFence, told, &released);
+			const int raised = switch_gpu_promise_give_up(&modelFence, 20, 2, owner,
+								      told, &released);
 			std::exit(raised == 0 && released.empty() && fence.page[5] == 0 ? 0 : 1);
 		},
 		testing::ExitedWithCode(0), "");
-	for (uint32_t i = 1; i <= SWITCH_GPU_PROMISE_WAITS; ++i)
-		ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 20 + 4 * i, 1), 0)
-			<< "the stale record is free";
-	EXPECT_EQ(switch_gpu_promise_waits_note(&waits, &modelFence, 400, 1), -28);
 	model = nullptr;
 }
 
@@ -457,29 +446,24 @@ TEST(WriterPromise, TheAbandonedSetNamesEachPromiseByWordAndValue)
 	EXPECT_TRUE(switch_gpu_promise_abandoned_has(&set, 4, SWITCH_GPU_PROMISE_ABANDONED + 1));
 }
 
-// A reader stuck behind a promise whose command buffer never runs is let go by the hang rule, once; a promise released
-// meanwhile is left alone, and so is one the maker's own release already passed.
-TEST(WriterPromise, TheHangRuleReleasesOnlyThePromisesAStuckReaderStillWaitsFor)
+// A give-up raises a word still short of its value, once; a word the maker's own release already passed is left alone.
+TEST(WriterPromise, AGiveUpRaisesOnlyAWordStillShortOfItsValue)
 {
-	switch_gpu_promise_waits waits = {};
 	Released released;
 	pool[1] = 4;
 	pool[2] = 7;
-	pool[3] = 9;
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 5), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 4, 5), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 8, 7), 0);
-	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, &poolFence, 12, 10), 0);
 	pool[3] = 11;
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, told, &released), 1u);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 4, 5, 1, told, &released), 1);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 8, 7, 1, told, &released), 0);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 12, 10, 1, told, &released), 0);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 4, 5, 1, told, &released), 0);
 	EXPECT_EQ(pool[1], 5u);
 	EXPECT_EQ(pool[3], 11u);
 	EXPECT_EQ(released, (Released{{4, 5}}));
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, told, &released), 0u);
 }
 
 // Every frame of a compositor that reads the surface acquires the same promise: one record. A record of a released
-// promise is reused; past SWITCH_GPU_PROMISE_WAITS pending ones the acquire is refused, never left out of the hang rule.
+// promise is reused; past SWITCH_GPU_PROMISE_WAITS pending ones the acquire is refused, never left unrecorded.
 TEST(WriterPromise, AChannelRecordsEachPendingPromiseOnce)
 {
 	switch_gpu_promise_waits waits = {};

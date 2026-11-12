@@ -300,6 +300,16 @@ uint32_t tgm_fence_owner(uint32_t offset);
  * released from the CPU */
 void tgm_promise_abandon(uint32_t offset, uint32_t value);
 int tgm_promise_abandoned(uint32_t offset, uint32_t value);
+/* The give-up of a promise nobody keeps (SwitchGpuPromiseGiveUp.h): its work items, before any promise is made; a
+ * reader that parks on one (reader: a GPU job; else a waiter that leaves itself): 1 parked, 0 nothing to wait for,
+ * -28 while too many others are waited on; and the job that keeps one, submitted on `chan` */
+int tgm_promise_open(void);
+struct switch_gpu_giveup_job;
+int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const char *who,
+		     const struct switch_gpu_giveup_job *reader, int display);
+void tgm_promise_leave(uint32_t offset, uint32_t value, int display);
+void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
+		      const struct switch_gpu_backing_token *job);
 void tgm_present_promise_kept(uint32_t offset, uint32_t value,
 			      const struct switch_gpu_backing_token *producer);
 void tgm_present_promise_released(uint32_t offset, uint32_t value);

@@ -44,6 +44,8 @@ void release(const switch_gpu_backing_token *token)
 extern "C" int switch_gpu_promise_engine(void)
 {
 	static const switch_gpu_backing_engine operations = {status, wait, retain, release, 32};
+	if (tgm_promise_open())
+		return -12;
 	const int result =
 		switch_gpu_backing_register_engine(SWITCH_GPU_ENGINE_PROMISE, &operations);
 	return result == -16 ? 0 : result;

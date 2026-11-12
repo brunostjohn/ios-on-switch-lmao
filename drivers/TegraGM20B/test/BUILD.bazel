@@ -323,11 +323,11 @@ host_test(
     cxx_std = "c++17",
 )
 
-# The hang rule's raise as the kernel builds it, so the test runs it under switch_gpu_interrupts_off_stubs.h.
+# The give-up's raise as the kernel builds it, so the test runs it under switch_gpu_interrupts_off_stubs.h.
 genrule(
     name = "promise_raise_source",
     testonly = True,
-    srcs = ["//drivers/TegraGM20B:gpu_promise.c"],
+    srcs = ["//drivers/TegraGM20B:gpu_promise_giveup.c"],
     outs = ["promise_raise_source.h"],
     cmd = """
 set -e
@@ -427,15 +427,47 @@ host_test(
     cxx_std = "c++17",
 )
 
+# The give-up as the kernel builds it: gpu_promise_giveup.c whole and gpu_promise.c's GPU-reader park, with only their
+# #include lines left out for switch_gpu_promise_giveup_stubs.h's stand-ins.
+genrule(
+    name = "promise_giveup_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:gpu_promise_giveup.c"],
+    outs = ["promise_giveup_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^void tgm_promise_pass(void)' $@
+""",
+)
+
+genrule(
+    name = "promise_note_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:gpu_promise.c"],
+    outs = ["promise_note_source.h"],
+    cmd = """
+set -e
+awk '/^int tgm_chan_note_promise\\(/ || /^void tgm_chan_park_promises\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
+grep -q tgm_promise_park $@
+""",
+)
+
 host_test(
-    name = "switch_gpu_promise_strike_test",
+    name = "switch_gpu_promise_giveup_test",
     srcs = [
-        "switch_gpu_promise_strike_test.cpp",
+        "switch_gpu_interrupts_off_stubs.h",
+        "switch_gpu_promise_giveup_stubs.h",
+        "switch_gpu_promise_giveup_test.cpp",
+        ":promise_giveup_source",
+        ":promise_note_source",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuJobFences.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+        "//drivers/TegraGM20B:SwitchGpuPromiseGiveUp.h",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
-        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
-        "//drivers/TegraGM20B:TegraGM20BHost.h",
-        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
     ],
     cxx_std = "c++17",
 )
@@ -661,6 +693,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
         "//drivers/TegraGM20B:gpu_sources",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
         "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.cpp",
     ],

@@ -113,6 +113,8 @@ static void present_watch_work(void *unused)
 					       present_visible);
 	if (found == SWITCH_GPU_PRESENT_WATCH_PENDING)
 		return;
+	tgm_present_promise_leave(tgm_present.watch.token.queue,
+				  (u32)tgm_present.watch.token.value);
 	tgm_present_filter_detach();
 	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 	if (found == SWITCH_GPU_PRESENT_WATCH_HIDDEN) {
@@ -355,6 +357,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 				      : TGM_PRESENT_NS;
 	/* before the kick, so the completion cancels it */
 	nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
+	tgm_chan_park_promises(chan, tgm_present.tokens.tokens, dependency_count);
 	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's
 	 * volatile PTEs (tgm_present_map); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
 	if (dst_va)
@@ -446,12 +449,20 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.late = 0;
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 		tgm_present.recheck = TGM_PRESENT_NS;
-		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 		if (tgm_present.tokens.tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE) {
+			/* no deadline until the job that keeps it is submitted (tgm_present_promise_kept): the give-up is the
+			 * promise's */
 			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_PROMISED);
 			switch_gpu_present_watch_promise(&tgm_present.watch,
 							 &tgm_present.tokens.tokens[0]);
+			__atomic_store_n(&tgm_present.promise_parked,
+					 tgm_promise_park(tgm_present.watch.token.queue,
+							  (u32)tgm_present.watch.token.value,
+							  "the display", "a direct present", NULL,
+							  1) == 1,
+					 __ATOMIC_RELEASE);
 		} else {
+			nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 			/* before the arm: a pass claiming the watch detaches the view after this */
 			tgm_present_filter_attach(&tgm_present.tokens.tokens[0]);
 			switch_gpu_present_watch_arm(&tgm_present.watch,

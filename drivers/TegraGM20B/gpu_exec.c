@@ -278,19 +278,13 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
 			if (!chan->vm->fences_va || token->queue >= TGM_FENCE_BYTES ||
 			    token->value > UINT32_MAX)
 				return -ENODEV;
-			if (emit) {
-				const int noted = tgm_chan_note_promise(chan, token->queue,
-									(u32)token->value);
-
-				if (noted)
-					return noted;
+			if (emit)
 				PUSH_MTHD(
 					&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
 					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
 					(u32)token->value, SEMAPHORED,
 					NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 						NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-			}
 		} else if (token->engine == SWITCH_GPU_ENGINE_VIC ||
 			   token->engine == SWITCH_GPU_ENGINE_NVDEC ||
 			   token->engine == SWITCH_GPU_ENGINE_DISPLAY ||
@@ -567,6 +561,7 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		return ret;
 	}
 	PUSH_KICK(&chan->chan.push);
+	tgm_chan_park_promises(chan, dependencies, dependency_count);
 	if (READ_ONCE(chan->norder)) {
 		/* the task's other channels' work it follows (tgm_chan_order), first, so the start stamp below times the work
 		 * itself */

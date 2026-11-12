@@ -1,0 +1,245 @@
+// SPDX-License-Identifier: MIT
+// The writer promise give-up (SwitchGpuPromiseGiveUp.h) in the kernel: its table and one call under tgm_live_lock,
+// the interrupt pass's look, and the raise.
+#include "gpu_internal.h"
+#include "SwitchGpuPromiseGiveUp.h"
+
+/* A pending promise word raised from the CPU: a plain store-release after one more look. The fence pool is mapped
+ * write-combined (Normal Non-cacheable), where T210's bus answers an exclusive access (a compare-and-swap, any atomic
+ * read-modify-write) with an SError. Interrupts are off so the look and the store are a few instructions apart: only a
+ * later promise on the slot, whose job ran between them, could be lowered by the store. */
+static int promise_raise(volatile uint32_t *word, uint32_t value)
+{
+	unsigned long flags;
+	int raised = 0;
+
+	local_irq_save(flags);
+	if ((s32)(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) < 0) {
+		__atomic_store_n(word, value, __ATOMIC_RELEASE);
+		raised = 1;
+	}
+	local_irq_restore(flags);
+	return raised;
+}
+
+const struct switch_gpu_promise_fence tgm_promise_fence = {tgm_fence_word, promise_raise,
+							   tgm_fence_owner};
+
+static struct switch_gpu_giveups giveups;
+static void *giveup_call;
+/* the call's arming: taken by the interrupt pass's cancel, never around anything that sleeps */
+static DEFINE_SPINLOCK(giveup_lock);
+
+/* tgm_live_lock held */
+static int giveup_reader_parked(const struct switch_gpu_giveup_job *reader)
+{
+	struct tgm_chan *chan = live_by_uid(reader->uid);
+
+	return chan && !READ_ONCE(chan->error) &&
+	       (s32)(tgm_chan_completed(chan) - reader->first) < 0;
+}
+
+/* tgm_live_lock held: the promised job's channel, waited on as tgm_chan_check_progress's waiter of the job ahead */
+static int giveup_job_ahead(const struct switch_gpu_giveup_job *job,
+			    const volatile uint32_t **fence, uint32_t *seqno, uint64_t *check_ns)
+{
+	struct tgm_chan *chan = live_by_uid(job->uid);
+	const u32 ahead = job->first - 1;
+	u64 check = 0;
+
+	if (!chan || READ_ONCE(chan->error))
+		return SWITCH_GPU_GIVEUP_GONE;
+	if ((s32)(tgm_chan_completed(chan) - ahead) >= 0)
+		return SWITCH_GPU_GIVEUP_HEAD;
+	tgm_chan_need(chan, ahead);
+	check = tgm_chan_check_progress_locked(chan, "a writer promise's reader", ahead);
+	if (READ_ONCE(chan->error))
+		return SWITCH_GPU_GIVEUP_GONE;
+	if (!check || (s32)(tgm_chan_completed(chan) - ahead) >= 0)
+		return SWITCH_GPU_GIVEUP_HEAD;
+	*fence = chan->fence_cpu;
+	*seqno = ahead;
+	*check_ns = check;
+	return SWITCH_GPU_GIVEUP_BEHIND;
+}
+
+/* tgm_live_lock held */
+static void giveup_need(uint32_t uid, uint32_t seqno)
+{
+	struct tgm_chan *chan = live_by_uid(uid);
+
+	if (chan && !READ_ONCE(chan->error))
+		tgm_chan_need(chan, seqno);
+}
+
+/* tgm_live_lock held: the one line of a promise given up, the time from its first reader's park */
+static void giveup_report(uint32_t offset, uint32_t value, const struct switch_gpu_giveup *e,
+			  u64 waited_ns)
+{
+	switch_gpu_path_promise_abandoned(waited_ns);
+	if (e->display)
+		switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_GIVEN_UP);
+	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s "
+		  "waited %llu ms for "
+		  "it in %s; it goes on without the promised writes, and a present of the surface "
+		  "is dropped\n",
+		  tgm_promise_maker(offset), offset, value, e->waiter, waited_ns / 1000000, e->who);
+}
+
+/* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so a reader's PBDMA
+ * parked on the word reads it from DRAM, which a store-release need not have reached until a DSB completes it. */
+static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entry)
+{
+	const struct switch_gpu_giveup *e = (const struct switch_gpu_giveup *)entry;
+
+	if (step == SWITCH_GPU_PROMISE_RAISING) {
+		tgm_promise_abandon(offset, value);
+		return;
+	}
+	if (step == SWITCH_GPU_PROMISE_KEPT_FIRST) {
+		tgm_promise_kept_first(offset, value);
+		return;
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+#if TGM_STATS
+	tgm_promise_cpu_raised(offset, value);
+#endif
+	giveup_report(offset, value, e, nvxnu_nanotime() - e->parked_ns);
+}
+
+static const struct switch_gpu_giveup_ops giveup_ops = {
+	&tgm_promise_fence, giveup_reader_parked, giveup_job_ahead,
+	giveup_need,        giveup_stepped,       tgm_present_promise_released};
+
+static void giveup_after(uint64_t ns)
+{
+	nvxnu_work_schedule_after(giveup_call, ns);
+}
+
+static void giveup_cancel(void)
+{
+	nvxnu_work_cancel(giveup_call);
+}
+
+static const struct switch_gpu_giveup_call giveup_arming = {giveup_after, giveup_cancel};
+
+/* tgm_live_lock held: the call armed for the earliest due, and cancelled once nothing is waited on */
+static void giveup_arm(void)
+{
+	const u64 next = switch_gpu_giveup_next(&giveups, &giveup_ops);
+	unsigned long flags;
+
+	spin_lock_irqsave(&giveup_lock, flags);
+	switch_gpu_giveup_arm_locked(&giveups, &giveup_arming, next, nvxnu_nanotime());
+	spin_unlock_irqrestore(&giveup_lock, flags);
+}
+
+/* The call: thread context, under tgm_live_lock alone */
+static void giveup_run(void *unused)
+{
+	unsigned long flags;
+
+	(void)unused;
+	spin_lock_irqsave(&giveup_lock, flags);
+	giveups.armed_ns = 0;
+	spin_unlock_irqrestore(&giveup_lock, flags);
+	mutex_lock(&tgm_live_lock);
+	switch_gpu_giveup_run(&giveups, &giveup_ops, nvxnu_nanotime());
+	giveup_arm();
+	mutex_unlock(&tgm_live_lock);
+}
+
+int tgm_promise_giveup_open(void)
+{
+	int ret = 0;
+
+	if (__atomic_load_n(&giveup_call, __ATOMIC_ACQUIRE))
+		return 0;
+	mutex_lock(&tgm_live_lock);
+	if (!giveup_call)
+		__atomic_store_n(&giveup_call, nvxnu_work_alloc(giveup_run, NULL),
+				 __ATOMIC_RELEASE);
+	ret = giveup_call ? 0 : -ENOMEM;
+	mutex_unlock(&tgm_live_lock);
+	return ret;
+}
+
+int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const char *who,
+		     const struct switch_gpu_giveup_job *reader, int display)
+{
+	static int full_logged;
+	struct switch_gpu_giveup *e = NULL;
+	unsigned long flags;
+	int recalled = 0;
+	int at = 0;
+
+	mutex_lock(&tgm_live_lock);
+	at = switch_gpu_giveup_park(&giveups, &giveup_ops, offset, value, waiter, who, reader,
+				    display, nvxnu_nanotime());
+	e = at >= 0 ? &giveups.entry[at] : NULL;
+	if (e && !e->kept) {
+		spin_lock_irqsave(&giveup_lock, flags);
+		recalled = switch_gpu_giveup_recall(&giveups, e);
+		spin_unlock_irqrestore(&giveup_lock, flags);
+		if (recalled)
+			giveup_need(e->job.uid, e->job_last);
+	}
+	if (e)
+		giveup_arm();
+	mutex_unlock(&tgm_live_lock);
+	if (at == -28 && !__atomic_exchange_n(&full_logged, 1, __ATOMIC_RELAXED))
+		nvxnu_log(
+			"tegra-gm20b: %s waits on a writer promise at fence offset %u (value %u) "
+			"while %d others are "
+			"waited on: it is given up only when kept, cancelled or its maker closes\n",
+			waiter, offset, value, SWITCH_GPU_GIVEUPS);
+	return at == -28 ? -ENOSPC : at >= 0;
+}
+
+void tgm_promise_leave(uint32_t offset, uint32_t value, int display)
+{
+	mutex_lock(&tgm_live_lock);
+	switch_gpu_giveup_leave(&giveups, offset, value, display);
+	giveup_arm();
+	mutex_unlock(&tgm_live_lock);
+}
+
+/* keptPromises: `job` (its channel's uid and its fence's seqno) keeps the promise; chan is that channel, which the
+ * caller holds. Only a promise a reader is parked on takes tgm_live_lock. */
+void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
+		      const struct switch_gpu_backing_token *job)
+{
+	struct switch_gpu_kicked_job record;
+	struct switch_gpu_giveup_job kept = {job->queue, (u32)job->value};
+	unsigned long flags;
+
+	if (chan && switch_gpu_jobs_find(&chan->jobs, (u32)job->value, &record))
+		kept.first = record.first;
+	spin_lock_irqsave(&giveup_lock, flags);
+	switch_gpu_giveup_remember(&giveups, offset, value, &kept, (u32)job->value);
+	spin_unlock_irqrestore(&giveup_lock, flags);
+	if (!__atomic_load_n(&giveups.used, __ATOMIC_ACQUIRE))
+		return;
+	mutex_lock(&tgm_live_lock);
+	switch_gpu_giveup_kept(&giveups, &giveup_ops, offset, value, &kept, (u32)job->value);
+	mutex_unlock(&tgm_live_lock);
+}
+
+/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released: plain loads, and the
+ * call scheduled or cancelled under its simple lock. Nothing here may sleep. */
+void tgm_promise_pass(void)
+{
+	unsigned long flags;
+	const int look = switch_gpu_giveup_pass(&giveups, &tgm_promise_fence);
+
+	if (look == SWITCH_GPU_GIVEUP_PASS_RUN) {
+		nvxnu_work_schedule(giveup_call);
+		return;
+	}
+	if (look != SWITCH_GPU_GIVEUP_PASS_CANCEL)
+		return;
+	spin_lock_irqsave(&giveup_lock, flags);
+	if (switch_gpu_giveup_pass(&giveups, &tgm_promise_fence) == SWITCH_GPU_GIVEUP_PASS_CANCEL)
+		switch_gpu_giveup_arm_locked(&giveups, &giveup_arming, 0, 0);
+	spin_unlock_irqrestore(&giveup_lock, flags);
+}

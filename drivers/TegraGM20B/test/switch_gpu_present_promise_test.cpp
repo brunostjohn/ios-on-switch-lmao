@@ -71,14 +71,17 @@ TEST(PresentPromise, AJobThatEndedBeforeItsConversionIsTakenByTheLastLook)
 	EXPECT_EQ(d.workItems, 1u);
 }
 
-// No job ever keeps the promise: the deadline gives it up and reports its writer once, and the frame is dropped (the
-// panel keeps the one before it); it is never shown without its writes.
-TEST(PresentPromise, AnUnkeptPromiseAtTheDeadlineDropsTheFrame)
+// No job ever keeps the promise: the deadline has nothing to do with it; the give-up a second after the offer reports its
+// writer once, and the frame is dropped (the panel keeps the one before it); it is never shown without its writes.
+TEST(PresentPromise, AnUnkeptPromiseGivenUpDropsTheFrame)
 {
 	Producer a{kA, Channel(40)};
 	Display d({&a});
 	ASSERT_EQ(d.offer(&kPromise, 1), 0);
+	EXPECT_EQ(d.deadlineAt, 0u) << "no deadline while the promise has no job";
 	EXPECT_EQ(d.deadline(1000000000), Deadline::Idle);
+	EXPECT_EQ(d.reported, 0u);
+	d.giveUp();
 	EXPECT_EQ(d.reported, 1u);
 	EXPECT_EQ(d.failed, 1u);
 	EXPECT_EQ(shown(d), 0u);
@@ -104,14 +107,14 @@ TEST(PresentPromise, ACancelShowsTheFrameAndAKillDropsIt)
 	}
 }
 
-// A word released by a job the watch never heard of is kept at the deadline, not given up.
-TEST(PresentPromise, AWordAlreadyReleasedAtTheDeadlineShowsTheFrame)
+// A word released by a job the watch never heard of is delivered by the give-up's run, not given up.
+TEST(PresentPromise, AWordAlreadyReleasedAtTheGiveUpShowsTheFrame)
 {
 	Producer a{kA, Channel(40)};
 	Display d({&a});
 	ASSERT_EQ(d.offer(&kPromise, 1), 0);
 	d.words[kWord] = kValue;
-	EXPECT_EQ(d.deadline(1000000000), Deadline::Idle);
+	d.giveUp();
 	EXPECT_EQ(d.reported, 0u);
 	EXPECT_EQ(shown(d), 1u);
 }
@@ -143,6 +146,7 @@ TEST(PresentPromiseDirect, KeptFlipsFromTheJobsInterruptPass)
 	Display d({&a});
 	ASSERT_EQ(d.offer(&kPromise, 1), 0);
 	d.kept(kWord, kValue, a.token(a.channel.submit(1, false)));
+	EXPECT_EQ(d.deadlineAt, d.clock + Display::kPresentNs) << "the deadline comes with the job";
 	a.channel.run();
 	EXPECT_EQ(d.panel, 2);
 	EXPECT_EQ(d.filterFlips, 0u);
@@ -159,17 +163,17 @@ TEST(PresentPromiseDirect, ACancelShowsItsFrame)
 	EXPECT_EQ(d.reported, 0u);
 }
 
-// Never kept: the watched offer's deadline, TGM_PRESENT_NS (1 s) after it, gives the promise up and reports its writer
-// once, and the panel keeps frame 1.
-TEST(PresentPromiseDirect, UnkeptIsDroppedAtOneSecondKeepingThePreviousFrame)
+// Never kept: the give-up a second after the watched offer parked (switch_gpu_promise_giveup_test times it) reports its
+// writer once, and the panel keeps frame 1. Once kept, the watch has its deadline from the keep.
+TEST(PresentPromiseDirect, UnkeptIsDroppedKeepingThePreviousFrame)
 {
 	Producer a{kA, Channel(40)};
 	Display d({&a});
 	d.clock = 5 * 1000000ull;
 	ASSERT_EQ(d.offer(&kPromise, 1), 0);
-	EXPECT_EQ(d.deadlineAt - d.clock, Display::kPresentNs);
+	EXPECT_EQ(d.deadlineAt, 0u);
 	d.filter();
-	EXPECT_EQ(d.deadline(d.deadlineAt), Deadline::Idle);
+	d.giveUp();
 	EXPECT_EQ(d.reported, 1u);
 	EXPECT_EQ(d.failed, 1u);
 	EXPECT_EQ(d.panel, 1);

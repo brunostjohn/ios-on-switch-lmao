@@ -1,37 +1,34 @@
 // SPDX-License-Identifier: MIT
-// Writer promises (SwitchGpuWriterPromise.h): those a channel waits for on the GPU, as the hang rule sees them, and
-// the one a direct present watches (SwitchGpuPresentWatch.h).
+// Writer promises (SwitchGpuWriterPromise.h): the GPU jobs that park on them (SwitchGpuPromiseGiveUp.h), what was
+// given up, and the one a direct present watches (SwitchGpuPresentWatch.h).
 #include "gpu_internal.h"
 
-/* A pending promise word raised from the CPU: a plain store-release after one more look. The fence pool is mapped
- * write-combined (Normal Non-cacheable), where T210's bus answers an exclusive access (a compare-and-swap, any atomic
- * read-modify-write) with an SError. Interrupts are off so the look and the store are a few instructions apart: only a
- * later promise on the slot, whose job ran between them, could be lowered by the store. */
-static int promise_raise(volatile uint32_t *word, uint32_t value)
-{
-	unsigned long flags;
-	int raised = 0;
-
-	local_irq_save(flags);
-	if ((s32)(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) < 0) {
-		__atomic_store_n(word, value, __ATOMIC_RELEASE);
-		raised = 1;
-	}
-	local_irq_restore(flags);
-	return raised;
-}
-
-static const struct switch_gpu_promise_fence promise_fence = {tgm_fence_word, promise_raise,
-							      tgm_fence_owner};
-
+/* The reader's job (its acquires pushed, nothing to roll them back) parks on a pending promise its acquires include */
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value)
 {
-	return switch_gpu_promise_waits_note(&chan->promise_waits, &promise_fence, offset, value);
+	const struct switch_gpu_giveup_job reader = {(u32)chan->id, chan->submitted + 1};
+
+	(void)switch_gpu_promise_waits_note(&chan->promise_waits, &tgm_promise_fence, offset,
+					    value);
+	return tgm_promise_park(offset, value, chan->owner,
+				chan == tgm_present.chan ? "a present job" : "a GPU job", &reader,
+				0);
+}
+
+void tgm_chan_park_promises(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
+			    u32 count)
+{
+	u32 i;
+
+	for (i = 0; i < count; i++)
+		if (tokens[i].engine == SWITCH_GPU_ENGINE_PROMISE &&
+		    !switch_gpu_backing_token_status(&tokens[i]))
+			tgm_chan_note_promise(chan, tokens[i].queue, (u32)tokens[i].value);
 }
 
 int tgm_chan_waits_promise(const struct tgm_chan *chan)
 {
-	return switch_gpu_promise_waits_pending(&chan->promise_waits, &promise_fence);
+	return switch_gpu_promise_waits_pending(&chan->promise_waits, &tgm_promise_fence);
 }
 
 /* tgm_present.lock held: the present's job parks on an unkept promise, its own acquire's or that of a GM20B producer it
@@ -63,14 +60,8 @@ int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens)
 	return waits;
 }
 
-struct promise_hang {
-	const struct tgm_chan *chan;
-	const char *who;
-	u64 waited_ns;
-};
-
 #if TGM_STATS
-/* Promise words the CPU raised (a cancel, a kill, a close, the hang rule): a reader parked on ACQ_GEQ for one goes on
+/* Promise words the CPU raised (a cancel, a kill, a close, a give-up): a reader parked on ACQ_GEQ for one goes on
  * only if the GPU reads the word again after that write, which the present's completion reports once
  * (tgm_promise_was_cpu_raised). */
 #define TGM_PROMISE_RAISED 8
@@ -137,11 +128,20 @@ static void promise_wake(void *unused)
 	switch_gpu_backing_promise_sleepers_wake();
 }
 
+/* Before the first promise is made (switch_gpu_promise_engine) and at the present's open */
 int tgm_promise_open(void)
 {
-	if (!promise_wake_work)
-		promise_wake_work = nvxnu_work_alloc(promise_wake, NULL);
-	return promise_wake_work ? 0 : -ENOMEM;
+	int ret = 0;
+
+	if (!__atomic_load_n(&promise_wake_work, __ATOMIC_ACQUIRE)) {
+		mutex_lock(&tgm_live_lock);
+		if (!promise_wake_work)
+			__atomic_store_n(&promise_wake_work, nvxnu_work_alloc(promise_wake, NULL),
+					 __ATOMIC_RELEASE);
+		ret = promise_wake_work ? 0 : -ENOMEM;
+		mutex_unlock(&tgm_live_lock);
+	}
+	return ret ? ret : tgm_promise_giveup_open();
 }
 
 int tgm_promise_abandoned(uint32_t offset, uint32_t value)
@@ -156,8 +156,14 @@ void tgm_promise_abandon(uint32_t offset, uint32_t value)
 	tgm_present_promise_released(offset, value);
 }
 
+/* The maker's own GPU release came first after all: no longer abandoned */
+void tgm_promise_kept_first(uint32_t offset, uint32_t value)
+{
+	switch_gpu_promise_abandoned_drop(&promise_abandoned, offset, value);
+}
+
 /* tgm_live_lock held: the process whose connection's fence page holds the word at `offset` */
-static const char *promise_maker(uint32_t offset)
+const char *tgm_promise_maker(uint32_t offset)
 {
 	struct tgm_chan *chan = NULL;
 
@@ -169,49 +175,6 @@ static const char *promise_maker(uint32_t offset)
 			return chan->owner;
 	}
 	return "a connection with no channel";
-}
-
-/* tgm_live_lock held, the promise abandoned: the writer is the one reported (the reader goes on, and a present of the
- * surface is dropped). */
-void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns)
-{
-	switch_gpu_path_promise_abandoned(waited_ns);
-	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s "
-		  "waited %llu ms "
-		  "for it; it goes on without the promised writes, and a present of the surface is "
-		  "dropped\n",
-		  promise_maker(offset), offset, value, who, waited_ns / 1000000);
-}
-
-static void promise_released(uint32_t offset, uint32_t value, int step, void *arg)
-{
-	const struct promise_hang *hang = arg;
-
-	if (step == SWITCH_GPU_PROMISE_RAISING) {
-		tgm_promise_abandon(offset, value);
-		return;
-	}
-	if (step == SWITCH_GPU_PROMISE_KEPT_FIRST) {
-		switch_gpu_promise_abandoned_drop(&promise_abandoned, offset, value);
-		return;
-	}
-#if TGM_STATS
-	tgm_promise_cpu_raised(offset, value);
-#endif
-	tgm_promise_abandoned_report(offset, value, hang->chan->owner, hang->waited_ns);
-}
-
-/* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so the parked
- * channel's PBDMA reads the word from DRAM, which a store-release need not have reached until a DSB completes it. */
-uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns)
-{
-	struct promise_hang hang = {chan, who, waited_ns};
-	const uint32_t raised = switch_gpu_promise_waits_release(
-		&chan->promise_waits, &promise_fence, promise_released, &hang);
-
-	if (raised)
-		__asm__ volatile("dsb sy" ::: "memory");
-	return raised;
 }
 
 /* Promises kept lately, under tgm_present.lock: an offer whose snapshot took one just before its job was submitted
@@ -275,6 +238,9 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value,
 		if (switch_gpu_present_watch_kept(&tgm_present.watch, offset, value, producer)) {
 			present_takes(producer);
 			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_KEPT);
+			tgm_present_promise_leave(offset, value);
+			tgm_present.recovered = nvxnu_nanotime();
+			nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 			/* before the re-arm, as the offer attaches before its arm: the job's end then runs the display's flip
 			 * from the nonstall filter, and a pass claiming the watch detaches the view after this */
 			tgm_present_filter_attach(producer);
@@ -296,6 +262,13 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value,
 	tgm_chan_need_tokens(producer, 1);
 	if (switch_gpu_backing_token_physical_status(producer, 0))
 		nvxnu_work_schedule(tgm_present.watch_work);
+}
+
+/* The watch is done waiting on its promise: kept, given up on or released */
+void tgm_present_promise_leave(uint32_t offset, uint32_t value)
+{
+	if (__atomic_exchange_n(&tgm_present.promise_parked, 0, __ATOMIC_ACQ_REL))
+		tgm_promise_leave(offset, value, 1);
 }
 
 /* A promise released or given up on from the CPU: a watch still waiting for its job goes to the work item. */

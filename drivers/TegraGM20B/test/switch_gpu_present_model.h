@@ -70,7 +70,7 @@ public:
 			return 1;
 		}
 		late = 0;
-		deadlineAt = clock + kPresentNs;
+		deadlineAt = 0;
 		switch_gpu_backing_token watched = tokens[0];
 		for (const auto &k : keptJobs)
 			if (watched.engine == SWITCH_GPU_ENGINE_PROMISE &&
@@ -78,7 +78,9 @@ public:
 				watched = k.second;
 		if (watched.engine == SWITCH_GPU_ENGINE_PROMISE) {
 			switch_gpu_present_watch_promise(&watch, &watched);
+			parked = true;
 		} else {
+			deadlineAt = clock + kPresentNs;
 			view = true;
 			switch_gpu_present_watch_arm(&watch, &watched);
 		}
@@ -110,6 +112,8 @@ public:
 			return;
 		view = true;
 		switch_gpu_present_watch_rearm(&watch);
+		parked = false;
+		deadlineAt = clock + kPresentNs;
 		if (asks)
 			needTokens(&producer, 1);
 		if (physical(&producer))
@@ -165,17 +169,25 @@ public:
 			work();
 	}
 
-	// gpu_present_deadline.c at or after TGM_PRESENT_NS
+	// SwitchGpuPromiseGiveUp.h's call for the watch parked on its promise, a second after the offer: a word a job the
+	// watch never heard of released is delivered (tgm_present_promise_released); one still short is given up (marked,
+	// raised, its line), and the work item drops the frame
+	void giveUp()
+	{
+		if (!parked || watch.state != SWITCH_GPU_PRESENT_WATCH_PROMISED)
+			return;
+		parked = false;
+		if (physical(&watch.token) != 1) {
+			abandoned.insert(promise(watch.token));
+			words[uint32_t(watch.token.queue)] = uint32_t(watch.token.value);
+			++reported;
+		}
+		work();
+	}
+
+	// gpu_present_deadline.c at or after TGM_PRESENT_NS: a PROMISED watch has none
 	Deadline deadline(uint64_t now)
 	{
-		if (watch.state == SWITCH_GPU_PRESENT_WATCH_PROMISED) {  // promise_unkept
-			if (physical(&watch.token) != 1) {
-				abandoned.insert(promise(watch.token));
-				++reported;
-			}
-			work();
-			return Deadline::Idle;
-		}
 		if (watch.state != SWITCH_GPU_PRESENT_WATCH_ARMED)
 			return Deadline::Idle;
 		const int status = physical(&watch.token);
@@ -215,6 +227,7 @@ public:
 	std::set<std::pair<uint32_t, uint32_t>> abandoned;
 	uint64_t late = 0;
 	uint32_t followed = 0;
+	bool parked = false;  // the watch parked on its promise (tgm_present.promise_parked)
 
 private:
 	static inline Display *current_ = nullptr;

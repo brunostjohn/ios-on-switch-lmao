@@ -146,6 +146,8 @@ void AGXDeviceUserClient::keptPromises(const TegraGM20BAbiJobPromises *promises,
 		kept[count++][1] = promises_[promise].value;
 	}
 	IOLockUnlock(lock_);
-	for (uint32_t i = 0; i < count; ++i)
+	for (uint32_t i = 0; i < count; ++i) {
 		tgm_present_promise_kept(kept[i][0], kept[i][1], &job);
+		tgm_promise_kept(kept[i][0], kept[i][1], chans_[slot], &job);
+	}
 }

@@ -74,27 +74,6 @@ static int watch_late(int physical, u64 age, struct tgm_chan **waited, u32 *seqn
 		chan ? READ_ONCE(chan->progress_done) : 0);
 }
 
-/* The watched promise's job never came: the promise is given up on (its writer reported), and the work item it goes to
- * (tgm_present_promise_released) drops the frame, the panel keeping the one before it. A word already released by a job
- * the watch never heard of is kept: the work item shows the frame. tgm_present.lock held, released here. */
-static void promise_unkept(u64 age)
-{
-	const struct switch_gpu_backing_token promise = tgm_present.watch.token;
-
-	if (switch_gpu_backing_token_status(&promise) == 1) {
-		mutex_unlock(&tgm_present.lock);
-		nvxnu_work_schedule(tgm_present.watch_work);
-		return;
-	}
-	tgm_promise_abandon(promise.queue, (u32)promise.value);
-	switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_GIVEN_UP);
-	mutex_lock(&tgm_live_lock);
-	tgm_promise_abandoned_report(promise.queue, (u32)promise.value,
-				     "the display's direct present", age);
-	mutex_unlock(&tgm_live_lock);
-	mutex_unlock(&tgm_present.lock);
-}
-
 void tgm_present_deadline(void *arg)
 {
 	struct tgm_chan *chan = NULL;
@@ -113,8 +92,7 @@ void tgm_present_deadline(void *arg)
 	mutex_lock(&tgm_present.lock);
 	watch = __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE);
 	if ((!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
-	     watch != SWITCH_GPU_PRESENT_WATCH_ARMED &&
-	     watch != SWITCH_GPU_PRESENT_WATCH_PROMISED) ||
+	     watch != SWITCH_GPU_PRESENT_WATCH_ARMED) ||
 	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) {
 		mutex_unlock(&tgm_present.lock);
 		return;
@@ -128,10 +106,6 @@ void tgm_present_deadline(void *arg)
 		return;
 	}
 	age = nvxnu_nanotime() - tgm_present.queued;
-	if (watch == SWITCH_GPU_PRESENT_WATCH_PROMISED) {
-		promise_unkept(age);
-		return;
-	}
 	if (tgm_present.pending &&
 	    (s32)(tgm_chan_completed(tgm_present.chan) - tgm_present.pending) >= 0) {
 		nvxnu_panic("tegra-gm20b: present fence %u complete after %llu ms but its nonstall "

@@ -41,6 +41,11 @@ extern "C" void switch_gpu_fence_put(const volatile uint32_t *)
 	--holds;
 }
 
+extern "C" int tgm_promise_open(void)
+{
+	return 0;
+}
+
 namespace
 {
 switch_gpu_backing *promised(uint32_t value = 1)
@@ -158,7 +163,7 @@ TEST_F(Backing, TheCpusSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	switch_gpu_backing_release(b);
 }
 
-// The hang rule (or a present's deadline) gives the promise up: CPU readers asleep behind it, a lock and the display's
+// The give-up (SwitchGpuPromiseGiveUp.h) gives the promise up: CPU readers asleep behind it, a lock and the display's
 // CPU copy, go on at the abandonment's wake with no cancel or close of the promise, and read what the surface held
 // before (its last writer). The mark alone wakes nobody: the wake is what lets them go.
 TEST_F(Backing, CpuReadersAsleepOnAPromiseGivenUpOnGoOnAtItsWake)
@@ -309,7 +314,7 @@ bool has(const std::vector<uint32_t> &engines, uint32_t engine)
 }
 
 // Another connection's job and a VIC job both read a promised surface behind its promise, so each waits on the GPU for
-// the promised job. That job's write must not wait for them (a cycle the hang rule alone would break), while it still
+// the promised job. That job's write must not wait for them (a cycle the give-up alone would break), while it still
 // waits for a reader of what the surface held before; a writer after the promised one waits for both.
 TEST_F(Backing, ThePromisedJobDoesNotWaitForReadersOrderedBehindItsPromise)
 {
@@ -355,7 +360,7 @@ TEST_F(Backing, AReadOutsideThePromisedRangeIsAnOrdinaryRead)
 	switch_gpu_backing_release(b);
 }
 
-// A promise given up on (the hang rule's raise, a kill, a close) is a failed producer: the present that waited for it
+// A promise given up on (the give-up's raise, a kill, a close) is a failed producer: the present that waited for it
 // finishes TEGRA_SCANOUT_SOURCE_LOST, and the display drops the frame, the panel keeping the one before it. The word
 // the release raised does not make it kept.
 TEST_F(Backing, AnAbandonedPromiseFailsThePresentThatWaitedForIt)
@@ -378,7 +383,7 @@ TEST_F(Backing, AnAbandonedPromiseFailsThePresentThatWaitedForIt)
 	switch_gpu_backing_release(b);
 }
 
-// The hang rule raises a word a stuck reader waits for without dropping the surface's ref: nothing waits for it after.
+// The give-up raises a word a parked reader waits for without dropping the surface's ref: nothing waits for it after.
 TEST_F(Backing, APromiseWhoseWordWasRaisedHoldsNothingOff)
 {
 	auto *b = promised();

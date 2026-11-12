@@ -4,9 +4,10 @@
  * names. A promise is a word of its connection's fence page and a value: each surface it names keeps a ref to it, and a
  * present or another connection's job that uses the surface acquires the word on the GPU until the value is reached, as
  * VIC and NVDEC do through the GPU-to-host1x bridge. A CPU reader (a CPU lock, the display's CPU copy), which cannot
- * acquire it, waits for the promised job's submission, then for its fence. The job that keeps the promise releases it on the GPU at its end; a cancel, a kill or the
- * destruction of the channel it was kept on and the connection's close release it from the CPU, and the hang rule
- * releases one a stuck reader still waits for, so nothing waits for a promise nobody keeps. */
+ * acquire it, waits for the promised job's submission, then for its fence. The job that keeps the promise releases it on
+ * the GPU at its end; a cancel, a kill or the destruction of the channel it was kept on and the connection's close
+ * release it from the CPU, and one a reader is parked on is given up (SwitchGpuPromiseGiveUp.h), so nothing waits for a
+ * promise nobody keeps. */
 #pragma once
 #include <stdint.h>
 #include "SwitchGpuBacking.h"
@@ -127,9 +128,7 @@ static inline void switch_gpu_promise_kept(struct switch_gpu_promise_slot *slot,
 }
 
 /* The promises a channel's pushes acquired, each offset << 32 | value (0: none; a promise word is never at offset 0),
- * and the owner of the word's fence page then. The channel's submitter is the one writer. The hang rule releases those
- * still pending on a channel stuck behind them, as it kills a GPU producer that never ends: a reader of a surface must
- * not hang on an event its maker never signals. */
+ * and the owner of the word's fence page then. The channel's submitter is the one writer. */
 #define SWITCH_GPU_PROMISE_WAITS 16
 
 struct switch_gpu_promise_waits {
@@ -139,7 +138,7 @@ struct switch_gpu_promise_waits {
 
 typedef volatile uint32_t *(*switch_gpu_promise_word)(uint32_t offset);
 
-/* The fence pool as the hang rule's raise reaches it: words are read through `word` and written only by `raise`, which
+/* The fence pool as the give-up's raise reaches it: words are read through `word` and written only by `raise`, which
  * stores `value` when the word is still below it (1) and leaves it otherwise (0). The kernel maps the pool
  * write-combined (Normal Non-cacheable), where no exclusive access (a compare-and-swap, any atomic read-modify-write)
  * completes on T210: its bus answers with an SError. `owner` names a fence page's owner: a page freed with its
@@ -200,42 +199,40 @@ static inline int switch_gpu_promise_waits_note(struct switch_gpu_promise_waits 
 	return 0;
 }
 
-/* How a pending promise's release went, as switch_gpu_promise_waits_release tells it */
+/* How a give-up went, as switch_gpu_promise_give_up tells it */
 enum {
 	SWITCH_GPU_PROMISE_KEPT_FIRST = 0, /* the maker's own GPU release came first after all */
 	SWITCH_GPU_PROMISE_RAISING = 1,    /* before the word moves */
 	SWITCH_GPU_PROMISE_RAISED = 2,     /* the CPU raised it */
 };
 
-/* Each one still pending released, `released` told at each step: a reader that goes on because of the release already
- * finds what RAISING recorded. The word is looked at again after the mark: the maker's own GPU release may have come
- * meanwhile (KEPT_FIRST), and a raise never lowers it. The count the CPU raised. */
-static inline uint32_t switch_gpu_promise_waits_release(
-	struct switch_gpu_promise_waits *waits, const struct switch_gpu_promise_fence *fence,
-	void (*released)(uint32_t offset, uint32_t value, int step, void *arg), void *arg)
+/* A promise given up (SwitchGpuPromiseGiveUp.h), `stepped` told at each step: a reader that goes on because of the raise
+ * already finds what RAISING recorded. A word of a page that went to another connection since `owner` is not the
+ * promise's, whatever it holds: nothing is told or written. The word is looked at again after the mark: the maker's own
+ * GPU release may have come meanwhile (KEPT_FIRST), and a raise never lowers it. 1: the CPU raised it. */
+static inline int switch_gpu_promise_give_up(const struct switch_gpu_promise_fence *fence,
+					     uint32_t offset, uint32_t value, uint32_t owner,
+					     void (*stepped)(uint32_t offset, uint32_t value,
+							     int step, void *arg),
+					     void *arg)
 {
-	uint32_t count = 0;
+	volatile uint32_t *at = fence->word(offset);
+	int raised = 0;
 
-	for (int i = 0; i < SWITCH_GPU_PROMISE_WAITS; ++i) {
-		const uint64_t wait = __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED);
-		volatile uint32_t *at = switch_gpu_promise_pending(fence, waits, i);
-		int raised = 0;
-
-		if (!at)
-			continue;
-		released((uint32_t)(wait >> 32), (uint32_t)wait, SWITCH_GPU_PROMISE_RAISING, arg);
-		raised = fence->raise(at, (uint32_t)wait);
-		count += (uint32_t)raised;
-		released((uint32_t)(wait >> 32), (uint32_t)wait,
-			 raised ? SWITCH_GPU_PROMISE_RAISED : SWITCH_GPU_PROMISE_KEPT_FIRST, arg);
-	}
-	return count;
+	if (!at || fence->owner(offset) != owner ||
+	    (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - value) >= 0)
+		return 0;
+	stepped(offset, value, SWITCH_GPU_PROMISE_RAISING, arg);
+	raised = fence->raise(at, value);
+	stepped(offset, value, raised ? SWITCH_GPU_PROMISE_RAISED : SWITCH_GPU_PROMISE_KEPT_FIRST,
+		arg);
+	return raised;
 }
 
-/* Promises given up on before their job wrote the surface (the hang rule's release, a kill or destruction of the channel
- * that kept one, the connection's close, a present's deadline): a reader of one has no promised writes to show, so its
- * token reads as a failed producer and a present of it is dropped (TEGRA_SCANOUT_SOURCE_LOST), the panel keeping the
- * frame before it. The last SWITCH_GPU_PROMISE_ABANDONED, each offset << 32 | value, which names one promise: each make
+/* Promises given up on before their job wrote the surface (SwitchGpuPromiseGiveUp.h, a kill or destruction of the
+ * channel that kept one, the connection's close): a reader of one has no promised writes to show, so its token reads as
+ * a failed producer and a present of it is dropped (TEGRA_SCANOUT_SOURCE_LOST), the panel keeping the frame before
+ * it. The last SWITCH_GPU_PROMISE_ABANDONED, each offset << 32 | value, which names one promise: each make
  * of a slot takes its word's next value. */
 #define SWITCH_GPU_PROMISE_ABANDONED 16
 

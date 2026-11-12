@@ -39,12 +39,12 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_WAKE_ASK,       /* a wait that asked for a wake entry behind a quiet job */
 	SWITCH_GPU_PATH_WRITER_PROMISE, /* method 34: a writer promise made (SwitchGpuWriterPromise.h) */
 	SWITCH_GPU_PATH_PROMISE_WAIT, /* a job, present or VIC/NVDEC job that waits on the GPU for another's writer promise */
-	SWITCH_GPU_PATH_PROMISE_CPU_RELEASE, /* a pending writer promise's word written by the CPU (cancel, kill, close, hang) */
+	SWITCH_GPU_PATH_PROMISE_CPU_RELEASE, /* a pending writer promise's word written by the CPU (cancel, kill, close, give-up) */
 	SWITCH_GPU_PATH_COUNT
 };
 
 /* A direct present of a promised frame (gpu_present.c, gpu_promise.c): watched on its promise, handed to the job that
- * keeps it, or given up on at its deadline; kern.switch_gpu_promises */
+ * keeps it, or given up on (SwitchGpuPromiseGiveUp.h); kern.switch_gpu_promises */
 enum {
 	SWITCH_GPU_PATH_DIRECT_PROMISED,
 	SWITCH_GPU_PATH_DIRECT_KEPT,

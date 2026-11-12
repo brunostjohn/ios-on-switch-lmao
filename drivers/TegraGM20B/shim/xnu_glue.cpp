@@ -38,6 +38,7 @@ void IOLogv(const char *format, va_list ap);
 int vsnprintf(char *, size_t, const char *, va_list);
 void tgm_present_pass(void);    // gpu_present.c
 void tgm_present_filter(void);  // SwitchGpuPresentFilter.cpp
+void tgm_promise_pass(void);    // gpu_promise_giveup.c
 }
 
 #if DEVELOPMENT || DEBUG
@@ -265,6 +266,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 		gpuPanic("storm", "unhandled", gUnhandled);
 	}
 	tgm_present_pass();
+	tgm_promise_pass();
 	nvxnu_wake();
 	switch_gpu_backing_completed();
 }

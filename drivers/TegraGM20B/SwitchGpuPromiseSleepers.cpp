@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // CPU threads asleep on a backing behind a pending writer promise (SwitchGpuWriterPromise.h). A cancel, a keep or a
-// close drops the backing's ref and wakes them under its lock; a promise given up on (the hang rule's raise, a present's
-// deadline) names only its fence word, so the backings with sleepers are listed here for its wake. The list's lock is
-// taken inside a backing's and never around one: the wake copies a few entries out, then takes each backing's lock.
+// close drops the backing's ref and wakes them under its lock; a promise given up on (SwitchGpuPromiseGiveUp.h) names
+// only its fence word, so the backings with sleepers are listed here for its wake. The list's lock is taken inside a
+// backing's and never around one: the wake copies a few entries out, then takes each backing's lock.
 #include "SwitchGpuBackingInternal.h"
 
 namespace

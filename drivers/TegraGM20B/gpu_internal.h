@@ -72,6 +72,7 @@
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuQuiet.h"
 #include "SwitchGpuWriterPromise.h"
+#include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
 #include "SwitchGpuProfileSequence.h"
 #include "SwitchGpuTimeline.h"
@@ -612,17 +613,25 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
 /* gpu_quiet.c: a wake entry behind the newest job, by the submission's owner inside the gate; the idle clock's settle */
 void tgm_chan_wake_push(struct tgm_chan *chan);
 void tgm_idle_settle(void *arg);
-/* gpu_promise.c: a writer promise a channel acquired, noted for the hang rule, which releases the ones a stuck channel
- * waits for */
+/* gpu_promise.c: a GPU job whose acquires include pending writer promises parks on them (SwitchGpuPromiseGiveUp.h),
+ * once those acquires are pushed and nothing rolls them back */
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value);
-uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns);
+void tgm_chan_park_promises(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
+			    u32 count);
 /* whether one of the promises the channel acquires is still unkept (atomic reads: the caller keeps the channel) */
 int tgm_chan_waits_promise(const struct tgm_chan *chan);
 int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens);
-void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns);
-/* the work item a promise given up on wakes CPU readers with (switch_gpu_backing_promise_sleepers_wake) */
-int tgm_promise_open(void);
+/* tgm_live_lock held: the process whose fence page holds the word at `offset` */
+const char *tgm_promise_maker(uint32_t offset);
+void tgm_promise_kept_first(uint32_t offset, uint32_t value);
+/* gpu_promise_giveup.c: the fence pool as the give-up's raise reaches it, and its call */
+extern const struct switch_gpu_promise_fence tgm_promise_fence;
+int tgm_promise_giveup_open(void);
+void tgm_promise_pass(void);
+/* tgm_live_lock held: tgm_chan_check_progress for a waiter whose only hold on the channel is that lock */
+uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, uint32_t seqno);
 void tgm_present_promise_watch(struct switch_gpu_backing_token *kept);
+void tgm_present_promise_leave(uint32_t offset, uint32_t value);
 #if TGM_STATS
 void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u64 queued,
 			       int copy);
@@ -672,6 +681,7 @@ struct present_state {
 	struct switch_gpu_present_tokens tokens;
 	struct switch_gpu_present_watch
 		watch; /* a present with no job: tgm_present_watch_dependencies */
+	int promise_parked; /* the watch parks on its writer promise (SwitchGpuPromiseGiveUp.h) until it leaves */
 	u32 typed_pending;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
