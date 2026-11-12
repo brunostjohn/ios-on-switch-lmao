@@ -12,6 +12,7 @@ opener supplies. Every row gives its reason.
 import argparse
 import re
 import sys
+from collections.abc import Iterator
 
 CLASSES = {'b197': ('clb197.h', 'NVB197_', 0), 'b1c0': ('clb1c0.h', 'NVB1C0_', 1)}
 RELOCS = [
@@ -43,11 +44,13 @@ def methods(path: str, prefix: str) -> tuple[dict[str, int], dict[str, tuple[int
         text = f.read()
     scalars = {
         m.group(1): int(m.group(2), 16)
-        for m in re.finditer(rf'^#define {prefix}(\w+)\s+(0x[0-9A-Fa-f]+)\s*$', text, re.M)
+        for m in re.finditer(rf'^#define {prefix}(\w+)\s+(0x[0-9A-Fa-f]+)\s*$', text, re.MULTILINE)
     }
     arrays = {
         m.group(1): (int(m.group(3), 16), int(m.group(4)))
-        for m in re.finditer(rf'^#define {prefix}(\w+)\((\w)\)\s+\((0x[0-9A-Fa-f]+)\+\(\2\)\*(\d+)\)', text, re.M)
+        for m in re.finditer(
+            rf'^#define {prefix}(\w+)\((\w)\)\s+\((0x[0-9A-Fa-f]+)\+\(\2\)\*(\d+)\)', text, re.MULTILINE
+        )
     }
     return scalars, arrays
 
@@ -76,15 +79,17 @@ def addresses(method: str, scalars: dict, arrays: dict) -> list[int]:
     return [scalars[method]]
 
 
-def expand(table: str, macro_path: str, classes: str) -> list[tuple[int, int, int, int]]:
+def read_macros(path: str) -> list[tuple[str, list[int]]]:
     macros = []
-    with open(macro_path, encoding='utf-8') as f:
+    with open(path, encoding='utf-8') as f:
         for line in f:
             if line.strip() and not line.startswith('#'):
                 name, *words = line.split()
                 macros.append((name, [int(w, 16) for w in words]))
-    headers = {cls: methods(f'{classes}/{h}', p) for cls, (h, p, _) in CLASSES.items()}
-    out, slot, ram = [], 0, 0
+    return macros
+
+
+def rows(table: str) -> Iterator[tuple[int, list[str]]]:
     with open(table, encoding='utf-8') as f:
         lines = f.read().split('\n')
     for n, line in enumerate(lines, 1):
@@ -93,17 +98,27 @@ def expand(table: str, macro_path: str, classes: str) -> list[tuple[int, int, in
         cols = line.split('\t')
         if len(cols) != 5 or not cols[4].strip():
             raise TableError(f'context.tsv:{n}: class, method, value, reloc and a reason')
-        cls, method, value, reloc, _ = cols
-        if cls not in CLASSES or reloc not in RELOCS:
-            raise TableError(f'context.tsv:{n}: class {cls!r} or reloc {reloc!r}')
+        if cols[0] not in CLASSES or cols[3] not in RELOCS:
+            raise TableError(f'context.tsv:{n}: class {cols[0]!r} or reloc {cols[3]!r}')
+        yield n, cols[:4]
+
+
+def upload(subc: int, slot: int, ram: int, words: list[int]) -> list[tuple[int, int, int, int]]:
+    out = [(subc, MME_START_POINTER, slot, 0), (subc, MME_START, ram, 0), (subc, MME_RAM_POINTER, ram, 0)]
+    return out + [(subc, MME_RAM, w, 0) for w in words]
+
+
+def expand(table: str, macro_path: str, classes: str) -> list[tuple[int, int, int, int]]:
+    macros = read_macros(macro_path)
+    headers = {cls: methods(f'{classes}/{h}', p) for cls, (h, p, _) in CLASSES.items()}
+    out, slot, ram = [], 0, 0
+    for n, (cls, method, value, reloc) in rows(table):
         subc = CLASSES[cls][2]
         if method == 'macro':
             if slot >= len(macros) or macros[slot][0] != value:
                 raise TableError(f'context.tsv:{n}: macro {value!r} is not slot {slot} of macros.txt')
-            words = macros[slot][1]
-            out += [(subc, MME_START_POINTER, slot, 0), (subc, MME_START, ram, 0), (subc, MME_RAM_POINTER, ram, 0)]
-            out += [(subc, MME_RAM, w, 0) for w in words]
-            slot, ram = slot + 1, ram + len(words)
+            out += upload(subc, slot, ram, macros[slot][1])
+            slot, ram = slot + 1, ram + len(macros[slot][1])
             continue
         try:
             where, data = addresses(method, *headers[cls]), values(value)
