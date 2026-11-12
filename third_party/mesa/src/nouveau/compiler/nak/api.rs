@@ -3,8 +3,8 @@
 
 use crate::from_nir::*;
 use crate::ir::{
-    max_warps_per_sm, ShaderInfo, ShaderIoInfo, ShaderModel, ShaderModelInfo,
-    ShaderStageInfo,
+    max_warps_per_sm, Shader, ShaderInfo, ShaderIoInfo, ShaderModel,
+    ShaderModelInfo, ShaderStageInfo,
 };
 use crate::sph;
 
@@ -498,27 +498,23 @@ macro_rules! pass {
     }};
 }
 
-fn nak_compile_shader_internal(
-    nir: *mut nir_shader,
-    dump_asm: bool,
-    nak: *const nak_compiler,
-    robust2_modes: nir_variable_mode,
-    fs_key: *const nak_fs_key,
-    has_task_shader: bool,
-) -> *mut nak_shader_bin {
-    unsafe {
-        nak_postprocess_nir(nir, nak, robust2_modes, fs_key, has_task_shader)
-    };
-    let nak = unsafe { &*nak };
-    let nir = unsafe { &*nir };
-    let fs_key = if fs_key.is_null() {
-        None
-    } else {
-        Some(unsafe { &*fs_key })
-    };
+fn cost(s: &Shader<'_>) -> (usize, usize) {
+    let instrs: usize = s
+        .functions
+        .iter()
+        .flat_map(|f| f.blocks.iter())
+        .map(|b| b.instrs.len())
+        .sum();
+    (instrs + crate::reg_banks::extra_reads(s), instrs)
+}
 
-    let sm = ShaderModelInfo::new(nak.sm, nak.warps_per_sm);
-    let mut s = nak_shader_from_nir(nak, nir, &sm, has_task_shader);
+fn compile_backend<'a>(
+    nak: &nak_compiler,
+    nir: &'a nir_shader,
+    sm: &'a ShaderModelInfo,
+    has_task_shader: bool,
+) -> (Shader<'a>, bool) {
+    let mut s = nak_shader_from_nir(nak, nir, sm, has_task_shader);
 
     if DEBUG.print() {
         eprintln!("NAK IR:\n{}", &s);
@@ -552,6 +548,7 @@ fn nak_compile_shader_internal(
     pass!(s, opt_dce);
     pass!(s, opt_instr_sched_prepass);
     pass!(s, assign_regs);
+    let moved = crate::reg_banks::moves_values(&s);
     pass!(s, lower_par_copies);
     pass!(s, lower_copy_swap);
     if nak.sm >= 70 {
@@ -566,6 +563,41 @@ fn nak_compile_shader_internal(
     pass!(s, calc_instr_deps);
 
     s.gather_info();
+    (s, moved)
+}
+
+fn nak_compile_shader_internal(
+    nir: *mut nir_shader,
+    dump_asm: bool,
+    nak: *const nak_compiler,
+    robust2_modes: nir_variable_mode,
+    fs_key: *const nak_fs_key,
+    has_task_shader: bool,
+) -> *mut nak_shader_bin {
+    unsafe {
+        nak_postprocess_nir(nir, nak, robust2_modes, fs_key, has_task_shader)
+    };
+    let nak = unsafe { &*nak };
+    let nir = unsafe { &*nir };
+    let fs_key = if fs_key.is_null() {
+        None
+    } else {
+        Some(unsafe { &*fs_key })
+    };
+
+    let sm = ShaderModelInfo::new(nak.sm, nak.warps_per_sm);
+    let first_fit = sm.first_fit();
+    let (mut s, moved) = compile_backend(nak, nir, &sm, has_task_shader);
+    // Spreading sources over register banks can cost a parallel copy that
+    // first-fit avoids: where the allocation moved any value, compile again
+    // first-fit and keep the cheaper program (an extra MOV and an extra
+    // same-bank read each cost a cycle on GM20B), the shorter on a tie
+    if sm.reg_banks() && moved {
+        let (f, _) = compile_backend(nak, nir, &first_fit, has_task_shader);
+        if cost(&f) < cost(&s) {
+            s = f;
+        }
+    }
 
     let mut asm = String::new();
     if dump_asm {

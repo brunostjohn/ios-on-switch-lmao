@@ -1607,7 +1607,8 @@ impl Shader<'_> {
                 .any(|&s| f.blocks.pred_indices(s).len() > 1);
             let leaves =
                 defines_values_out(&f.blocks[b_idx], |ssa| bl.is_live_out(ssa));
-            let bank_sm = (!into_merge || !leaves).then_some(self.sm.sm());
+            let bank_sm = (self.sm.reg_banks() && (!into_merge || !leaves))
+                .then_some(self.sm.sm());
             arb.first_pass(
                 &mut f.blocks[b_idx],
                 bl,

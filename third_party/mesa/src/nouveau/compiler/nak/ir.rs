@@ -9839,11 +9839,31 @@ pub trait ShaderModel {
 pub struct ShaderModelInfo {
     sm: u8,
     warps_per_sm: u8,
+    first_fit_regs: bool,
 }
 
 impl ShaderModelInfo {
     pub fn new(sm: u8, warps_per_sm: u8) -> Self {
-        ShaderModelInfo { sm, warps_per_sm }
+        ShaderModelInfo {
+            sm,
+            warps_per_sm,
+            first_fit_regs: false,
+        }
+    }
+
+    /// The same model with register allocation taking the lowest free
+    /// register, register banks aside
+    pub fn first_fit(&self) -> Self {
+        ShaderModelInfo {
+            first_fit_regs: true,
+            ..*self
+        }
+    }
+
+    /// Whether register allocation spreads an instruction's sources over
+    /// register banks (reg_banks.rs)
+    pub fn reg_banks(&self) -> bool {
+        self.sm >= 50 && self.sm < 70 && !self.first_fit_regs
     }
 }
 

@@ -120,3 +120,45 @@ impl BankPartners {
         taken
     }
 }
+
+/// Whether register allocation left a parallel copy that moves a value
+pub fn moves_values(s: &Shader<'_>) -> bool {
+    s.functions.iter().flat_map(|f| f.blocks.iter()).any(|b| {
+        b.instrs.iter().any(|i| match &i.op {
+            Op::ParCopy(pc) => pc
+                .dsts_srcs
+                .iter()
+                .any(|(d, src)| d.as_reg() != src.src_ref.as_reg()),
+            _ => false,
+        })
+    })
+}
+
+/// The extra register-file reads a program's ALU instructions pay for
+/// reading one bank twice
+pub fn extra_reads(s: &Shader<'_>) -> usize {
+    let mut extra = 0;
+    for b in s.functions.iter().flat_map(|f| f.blocks.iter()) {
+        for i in &b.instrs {
+            if !reads_register_banks(&i.op, s.sm.sm()) {
+                continue;
+            }
+            let mut regs: Vec<u32> = Vec::new();
+            for src in i.srcs() {
+                if let SrcRef::Reg(r) = &src.src_ref {
+                    if r.file() == RegFile::GPR && !regs.contains(&r.base_idx())
+                    {
+                        regs.push(r.base_idx());
+                    }
+                }
+            }
+            let mut per_bank = [0_usize; NUM_BANKS as usize];
+            for r in regs {
+                per_bank[bank(r) as usize] += 1;
+            }
+            extra +=
+                per_bank.iter().map(|n| n.saturating_sub(1)).sum::<usize>();
+        }
+    }
+    extra
+}
