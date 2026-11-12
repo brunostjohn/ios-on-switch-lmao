@@ -71,6 +71,21 @@ struct Sink {
     }
 };
 
+// A command buffer's own plan, which the recording pool's replaces, allocates nothing; one recorded into as made (the
+// pool had none) reads its operations of no resource as using none
+TEST(SemanticPlan, AConstructedPlanHoldsNoStorageAndItsFirstOperationsUseNothing)
+{
+    RMCommandPlan plan;
+    EXPECT_EQ(plan.storageBytes(), 0u);
+    plan.record(cmd(OpRender), {});
+    plan.record(cmd(OpEnd), {});
+    size_t uses = 0;
+    plan.forEachUse(0, plan.size(), [&](void *, uint8_t) {
+        ++uses;
+    });
+    EXPECT_EQ(uses, 0u);
+}
+
 TEST(SemanticPlan, VisibilityModesOnAPassWithAResultBufferAreOperationsInOrder)
 {
     RMCommandPlan plan;

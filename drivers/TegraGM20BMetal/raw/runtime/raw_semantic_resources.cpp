@@ -25,7 +25,7 @@ const RMCommandPlan::Range &RMCommandPlan::rangeAt(size_t from, size_t to) const
 // The range's resources with their facts, ordered by kind (Range::first), in the order of their uses within a kind
 void RMCommandPlan::classifyRange(Range &range)
 {
-    const UseSpan span = useSpans_[range.uses];
+    const UseSpan span = useSpan(range.uses);
     range.resources.clear();
     range.first = {};
     for (uint32_t i = 0; i < span.count; ++i) {
@@ -110,7 +110,7 @@ void RMCommandPlan::prepareRange(size_t from, size_t to)
             mergedPipelines_.push_back(object);
     };
     auto span = [&](uint32_t index) {
-        if (spanMarks_[index] == spanStamp_)
+        if (!index || spanMarks_[index] == spanStamp_)
             return;
         spanMarks_[index] = spanStamp_;
         const UseSpan use = useSpans_[index];

@@ -39,6 +39,8 @@ uint32_t RMCommandPlan::saveUses(const std::vector<raw::ResourceUse> &uses)
         else
             uses_[*position].access |= use.access;
     }
+    if (useSpans_.empty())
+        useSpans_.push_back({});
     return append(useSpans_, {begin, static_cast<uint32_t>(uses_.size()) - begin});
 }
 
@@ -224,7 +226,7 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
             const uint32_t before = control.render != raw::kNoSnapshot    ? renderStates[control.render].uses
                                     : control.compute != raw::kNoSnapshot ? kernelStates[control.compute].uses
                                                                           : 0;
-            const UseSpan span = useSpans_[before];
+            const UseSpan span = useSpan(before);
             mergeUses_.assign(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
             for (auto &use : mergeUses_)
                 use.access |= raw::ResourceUse::Read | raw::ResourceUse::Write;
@@ -269,7 +271,7 @@ uint32_t RMCommandPlan::drawUses(uint32_t base, void *indices, void *arguments)
         std::make_tuple(base, reinterpret_cast<uintptr_t>(indices), reinterpret_cast<uintptr_t>(arguments));
     if (const uint32_t *found = drawUseSpans_.find(key))
         return *found;
-    const UseSpan span = useSpans_[base];
+    const UseSpan span = useSpan(base);
     mergeUses_.assign(uses_.begin() + span.begin, uses_.begin() + span.begin + span.count);
     mergeUses_.push_back({indices, raw::ResourceUse::Read});
     mergeUses_.push_back({arguments, raw::ResourceUse::Read});
@@ -280,7 +282,7 @@ uint32_t RMCommandPlan::drawUses(uint32_t base, void *indices, void *arguments)
 
 void RMCommandPlan::addUses(size_t at, const std::vector<raw::ResourceUse> &uses)
 {
-    const UseSpan old = useSpans_[operations_[at].uses];
+    const UseSpan old = useSpan(operations_[at].uses);
     mergeUses_.assign(uses_.begin() + old.begin, uses_.begin() + old.begin + old.count);
     mergeUses_.insert(mergeUses_.end(), uses.begin(), uses.end());
     operations_[at].uses = saveUses(mergeUses_);
@@ -410,7 +412,6 @@ void RMCommandPlan::clear()
     events_.clear();
     uses_.clear();
     useSpans_.clear();
-    useSpans_.push_back({});
     renderStates.clear();
     kernelStates.clear();
     viewArrays.clear();

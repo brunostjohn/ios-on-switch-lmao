@@ -124,7 +124,9 @@ class RMCommandPlan {
     std::vector<RMPlanControl> controls_;
     std::vector<RMPlanEvent> events_;
     std::vector<raw::ResourceUse> uses_;
-    std::vector<UseSpan> useSpans_{{}};
+    // [0] the empty span, which the first saveUses makes: a constructed plan allocates nothing (a command buffer's
+    // own is replaced by the recording pool's)
+    std::vector<UseSpan> useSpans_;
     uint64_t renderGeneration_ = 0, kernelGeneration_ = 0, stateEpoch_ = 0;
     uint64_t eligibilityGeneration_ = 0;
     uint64_t savedRender_ = UINT64_MAX, savedKernel_ = UINT64_MAX;
@@ -157,6 +159,12 @@ class RMCommandPlan {
     std::vector<void *> mergedPipelines_, mergedVariants_;
     std::vector<size_t> mergedComputes_;
     raw::PointerMap<uint32_t> usePositions_;
+
+    UseSpan useSpan(uint32_t index) const
+    {
+        return index ? useSpans_[index] : UseSpan{};
+    }
+
     const Range *findRange(size_t from, size_t to) const;
     const Range &rangeAt(size_t from, size_t to) const;
     void classifyRange(Range &range);
@@ -382,7 +390,7 @@ public:
     template <typename F> void forEachUse(size_t from, size_t to, F visit) const
     {
         if (const Range *found = findRange(from, to)) {
-            const UseSpan span = useSpans_[found->uses];
+            const UseSpan span = useSpan(found->uses);
             for (uint32_t i = 0; i < span.count; ++i) {
                 const auto &use = uses_[span.begin + i];
                 visit(use.object, use.access);
@@ -391,7 +399,7 @@ public:
         }
         std::unordered_map<void *, uint8_t> unioned;
         for (size_t at = from; at < std::min(to, size()); ++at) {
-            const UseSpan span = useSpans_[operations_[at].uses];
+            const UseSpan span = useSpan(operations_[at].uses);
             for (uint32_t i = 0; i < span.count; ++i) {
                 const auto &use = uses_[span.begin + i];
                 if (use.object)
