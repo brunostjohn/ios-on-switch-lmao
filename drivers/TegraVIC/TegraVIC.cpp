@@ -31,7 +31,9 @@
 //
 // Sources (Linux's drivers are GPL-2.0-only and hekate's GPL-2.0, so this follows them without copying):
 //   tegra210.dtsi vic@54340000 (0x40000; clock and reset TEGRA210_CLK_VIC03 178 = CAR X bank bit 18, power domain VIC),
-//   include/soc/tegra/pmc.h TEGRA_POWERGATE_VIC 23 (hekate POWER_RAIL_VIC 23), clk-tegra-periph.c "vic03"
+//   include/soc/tegra/pmc.h TEGRA_POWERGATE_VIC 23 (hekate POWER_RAIL_VIC 23), L4T r32.7.4 powergate-t21x.c
+//   (partition 23, its MC client flush and release, the MBIST workaround on T210 before B01 only) through
+//   SwitchEnginePower.h, clk-tegra-periph.c "vic03"
 //   (CLK_SOURCE_VIC03 0x678, mux pllc/pllp/...: PLLP is code 2; hekate _clock_vic: PLLP, divider 0, 408 MHz),
 //   clk-tegra210.c tegra210_vic_mbist_war (LVL2_CLK_GATE_OVRE bit 5, THI SLCG_OVERRIDE_LOW 0x8c bits 0, 7:2, 24),
 //   drm/tegra/vic.c vic_boot (NV_PVIC_MISC_PRI_VIC_CG 0x16d0, FCE header/data at firmware words 6/7, size at +8),
@@ -61,6 +63,7 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
+#include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
@@ -239,38 +242,16 @@ void smmuDetach()
 }
 
 // --- Power, clock, falcon ----------------------------------------------------------------------------------------
-// tegra_powergate_power_up with the VIC MBIST workaround (it needs host1x's clock, which the boot chain left on). A
-// partition the boot chain left on keeps its state; the engine is still reset and re-clocked so the falcon starts from
-// scratch.
-bool powerUp(bool *wasOn)
+// VIC's partition and memory client in L4T's order (SwitchEnginePower.h). VIC needs no clock-gating prod registers
+// (L4T's first VIC power-on loads none). On T210 before B01 only, tegra210_vic_mbist_war: VIC's override bit set with
+// THI SLCG overridden for the pulse (it needs host1x's clock, which the boot chain left on), then the module reset
+// again, as the kit's own workaround would. A partition the boot chain left on keeps its state; the engine is still
+// reset so the falcon starts from scratch.
+const SwitchEnginePower kPower = {kPartition, kClock, MC_HOTRESET_CTRL, MC_HOTRESET_STATUS, MC_HOTRESET_VIC, 0,
+                                  nullptr,    0,      tegra_mc_hot_reset, tegra_smmu_read};
+
+void mbistWorkaround()
 {
-    *wasOn = switch_pmc_partition_is_on(kPartition);
-    switch_car_reset_assert(kClock);
-    IODelay(10);
-    if (!*wasOn) {
-        if (!switch_pmc_partition_on(kPartition)) {
-            snprintf(gLine, sizeof(gLine), "V1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
-                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
-            return false;
-        }
-        IODelay(10);
-    }
-    switch_car_write(CLK_SOURCE_VIC, SOURCE_PLLP | VIC_DIV_1);
-    IODelay(2);
-    switch_car_clock_enable(kClock);
-    IODelay(10);
-    switch_pmc_remove_clamping(kPartition);
-    IODelay(10);
-    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_VIC)
-        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_VIC);
-    switch_car_reset_deassert(kClock);
-    IODelay(10);
-    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
-        snprintf(gLine, sizeof(gLine), "V1 FAIL clock or reset stuck (CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
-                 switch_car_read(CLK_OUT_ENB_X), switch_car_read(RST_DEVICES_X));
-        return false;
-    }
-    // tegra210_vic_mbist_war: VIC's override bit pulsed under the CAR lock, the register's other bits left alone.
     const bool overridden = (switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_VIC_MBIST) != 0u;
     switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_VIC_MBIST);
     IODelay(1);
@@ -282,6 +263,24 @@ bool powerUp(bool *wasOn)
     if (!overridden)
         switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_VIC_MBIST, 0);
     IODelay(1);
+    switch_engine_power::moduleReset(kPower);
+}
+
+bool powerUp(bool *wasOn)
+{
+    switch_car_write(CLK_SOURCE_VIC, SOURCE_PLLP | VIC_DIV_1);
+    IODelay(2);
+    if (!switch_engine_power_up(kPower, wasOn)) {
+        snprintf(gLine, sizeof(gLine),
+                 "V1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x CLAMP_STATUS %#x "
+                 "CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
+                 kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS),
+                 switch_pmc_read(switch_engine_power::kPmcClampStatus), switch_car_read(CLK_OUT_ENB_X),
+                 switch_car_read(RST_DEVICES_X));
+        return false;
+    }
+    if (!switch_engine_power::b01())
+        mbistWorkaround();
     return true;
 }
 
@@ -587,7 +586,7 @@ int gateOff(void *, bool drain)
 {
     if (!switch_vic_jobs_park(drain))
         return SWITCH_ENGINE_GATE_BUSY;
-    return switch_pmc_power_down(kPartition, kClock, kClock) ? SWITCH_ENGINE_GATE_OFF : -5;
+    return switch_engine_power_down(kPower) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 
 // Sleep (SC7), through TegraHost1x's sleep clients. Suspend powers the engine off once its queued jobs are done and a
@@ -633,13 +632,12 @@ void switch_vic_engine_describe(char *text, size_t size)
 }
 
 // The memory controller stops taking VIC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
-// cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
-// flush has no interrupt.
-bool switch_vic_engine_reset()
+// cut a transfer in half; powerUp releases the flush once the engine is out of reset again.
+bool switch_vic_engine_reset(bool *drained)
 {
-    switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) | MC_HOTRESET_VIC);
-    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS) & MC_HOTRESET_VIC); ++i)
-        IODelay(1);
+    *drained = switch_engine_power::flush(kPower);
+    switch_car_reset_assert(kClock);
+    IODelay(10);
     bool wasOn = false;
     gLine[0] = 0;
     return powerUp(&wasOn);

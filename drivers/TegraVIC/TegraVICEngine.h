@@ -15,8 +15,8 @@ IOLock *switch_vic_power_lock();
 bool switch_vic_engine_powered();
 // The falcon (switch_falcon_stall) and the memory controller's error capture.
 void switch_vic_engine_describe(char *text, size_t size);
-// VIC's memory client flushed, then the engine reset with its partition kept on.
-bool switch_vic_engine_reset();
+// VIC's memory client flushed (drained: within the flush's bound), then the engine reset with its partition kept on.
+bool switch_vic_engine_reset(bool *drained);
 // The falcon booted again from the kept image and proven with V2's stream, as at power-on.
 bool switch_vic_engine_boot();
 // After a reset or boot that failed: the engine back in reset with its clock off, VIC refusing work. Returns why.
