@@ -312,6 +312,10 @@ void tgm_promise_claim(const volatile uint32_t *first, struct switch_gpu_promise
 int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const char *who,
 		     const struct switch_gpu_giveup_job *reader, int display);
 void tgm_promise_leave(uint32_t offset, uint32_t value, int display);
+/* The GPU's power-down (system sleep and rail-gating) and power-up: the give-up's call stays armed and touches no
+ * register meanwhile, and every promise still waited on gets its whole second from the power-up */
+void tgm_promise_suspend(void);
+void tgm_promise_resume(void);
 void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
 		      const struct switch_gpu_backing_token *job);
 void tgm_present_promise_kept(uint32_t offset, uint32_t value,

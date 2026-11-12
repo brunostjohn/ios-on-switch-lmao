@@ -7,8 +7,11 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
+#include <gtest/gtest.h>
 #include "switch_gpu_interrupts_off_stubs.h"
 #define DEVELOPMENT 1
 #define TGM_STATS 1
@@ -72,7 +75,20 @@ inline std::vector<Chan *> chans;
 inline unsigned hangLooks = 0;
 inline std::vector<std::pair<uint32_t, uint32_t>> abandoned;
 inline unsigned pathAbandoned = 0, directGivenUp = 0, cpuRaised = 0;
+// The GPU's power as the test sets it, off from tgm_promise_suspend to tgm_promise_resume
+inline bool poweredDown = false;
+// Run at a register read and at an abandonment, to hold the call there while another thread acts
+inline std::function<void()> atRegisters, atAbandon;
 }  // namespace fake
+
+// The hang rule's look and the ACQUIRE probe read the GPU's registers: never while it is powered down
+inline void registers(const char *who)
+{
+	if (fake::poweredDown)
+		ADD_FAILURE() << who << " read registers with the GPU powered down";
+	if (fake::atRegisters)
+		fake::atRegisters();
+}
 
 #define tgm_chan fake_tgm_chan
 
@@ -123,12 +139,27 @@ inline struct mutex tgm_live_lock;
 inline int tgm_live_locked = 0;
 inline unsigned tgm_live_takes = 0;
 
+// tgm_live_lock sleeps as the kernel's does: a thread that takes it waits for the call holding it. Taken and given
+// through these, as the kernel's lck_mtx is, outside clang's thread-safety analysis of the code under test.
+inline std::mutex tgm_live_held;
+
+__attribute__((no_thread_safety_analysis)) inline void tgm_live_take()
+{
+	tgm_live_held.lock();
+}
+
+__attribute__((no_thread_safety_analysis)) inline void tgm_live_give()
+{
+	tgm_live_held.unlock();
+}
+
 inline void mutex_unlock(struct mutex *)
 {
 	--tgm_live_locked;
+	tgm_live_give();
 }
 
-#define mutex_lock(m) (mutex_lock(m), ++tgm_live_takes, ++tgm_live_locked)
+#define mutex_lock(m) (mutex_lock(m), tgm_live_take(), ++tgm_live_takes, ++tgm_live_locked)
 
 inline volatile uint32_t *tgm_fence_word(uint32_t offset)
 {
@@ -171,6 +202,7 @@ inline void tgm_chan_need(fake_tgm_chan *chan, uint32_t seqno)
 inline uint64_t tgm_chan_check_progress_locked(fake_tgm_chan *chan, const char *, uint32_t)
 {
 	constexpr uint64_t kHangNs = 2000ull * 1000 * 1000;
+	registers("the hang rule's look");
 	const uint32_t done = *chan->fence_cpu;
 	++fake::hangLooks;
 	if (int32_t(done - chan->submitted) >= 0)
@@ -197,6 +229,8 @@ inline uint64_t tgm_chan_check_progress_locked(fake_tgm_chan *chan, const char *
 
 inline void tgm_promise_abandon(uint32_t offset, uint32_t value)
 {
+	if (fake::atAbandon)
+		fake::atAbandon();
 	fake::abandoned.push_back({offset, value});
 }
 
@@ -231,6 +265,7 @@ inline unsigned probedReaders = 0;
 
 inline void tgm_acquire_probe_giveup(fake_tgm_chan *, uint64_t, uint64_t)
 {
+	registers("the ACQUIRE probe");
 	interrupts_off::mayBlock("the ACQUIRE probe's look (tgm_live_lock's caller)");
 	++probedReaders;
 }

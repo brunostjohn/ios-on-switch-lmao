@@ -507,6 +507,7 @@ void tgm_wake(void)
 	tgm_clkgate_enable(tgm_gpu.device);
 	wake_open();
 	tgm_deadline_resume();
+	tgm_promise_resume();
 }
 
 /* Rail-gating (TegraGM20BRail.h), from TegraGM20B.cpp's rail worker: system sleep's sleep steps, its durable trail
@@ -559,6 +560,7 @@ void tgm_rail_up_locked(const void *site)
 	gate_open();
 	__atomic_store_n(&tgm_gpu.railed, 0, __ATOMIC_SEQ_CST);
 	tgm_deadline_resume();
+	tgm_promise_resume();
 	if (TGM_STATS) {
 		if (site) {
 			if (!tgm_rail_ups.demand++)

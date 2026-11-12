@@ -529,6 +529,12 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_promise_giveup_power_test",
+    srcs = PROMISE_GIVEUP_SRCS + ["switch_gpu_promise_giveup_power_test.cpp"],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_eng_reset_order_test",
     srcs = [
         "gm20b_eng_reset_order_test.cpp",

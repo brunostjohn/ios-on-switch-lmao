@@ -66,6 +66,10 @@ const struct switch_gpu_promise_fence tgm_promise_fence = {tgm_fence_word, promi
 
 static struct switch_gpu_giveups giveups;
 static void *giveup_call;
+/* tgm_live_lock: the GPU is powered down (system sleep, rail-gating) from tgm_promise_suspend to tgm_promise_resume, its
+ * registers out of reach. The call stays armed and does memory work only, so a reader parked across the power-down is
+ * still let go at its second. */
+static int giveup_down;
 /* the call's arming: taken by the interrupt pass's cancel, never around anything that sleeps */
 static DEFINE_SPINLOCK(giveup_lock);
 
@@ -90,6 +94,9 @@ static int giveup_job_ahead(const struct switch_gpu_giveup_job *job,
 		return SWITCH_GPU_GIVEUP_GONE;
 	if ((s32)(tgm_chan_completed(chan) - ahead) >= 0)
 		return SWITCH_GPU_GIVEUP_HEAD;
+	/* nothing runs before the resume, and the hang rule's look reads registers */
+	if (giveup_down)
+		return SWITCH_GPU_GIVEUP_GONE;
 	tgm_chan_need(chan, ahead);
 	check = tgm_chan_check_progress_locked(chan, "a writer promise's reader", ahead);
 	if (READ_ONCE(chan->error))
@@ -132,6 +139,8 @@ static void giveup_probe(const struct switch_gpu_giveup *e)
 	const u64 now = nvxnu_nanotime();
 	u32 i;
 
+	if (giveup_down)
+		return;
 	for (i = 0; i < e->readers; i++) {
 		struct tgm_chan *chan = live_by_uid(e->reader[i].uid);
 
@@ -271,6 +280,24 @@ void tgm_promise_leave(uint32_t offset, uint32_t value, int display)
 {
 	mutex_lock(&tgm_live_lock);
 	switch_gpu_giveup_leave(&giveups, &giveup_ops, offset, value, display);
+	giveup_arm();
+	mutex_unlock(&tgm_live_lock);
+}
+
+/* The power-down (tgm_recover_suspend), before the registers go: a run in progress holds tgm_live_lock and is waited out */
+void tgm_promise_suspend(void)
+{
+	mutex_lock(&tgm_live_lock);
+	giveup_down = 1;
+	mutex_unlock(&tgm_live_lock);
+}
+
+/* The power-up (tgm_wake, tgm_rail_up_locked) */
+void tgm_promise_resume(void)
+{
+	mutex_lock(&tgm_live_lock);
+	switch_gpu_giveup_resume(&giveups, nvxnu_nanotime());
+	giveup_down = 0;
 	giveup_arm();
 	mutex_unlock(&tgm_live_lock);
 }

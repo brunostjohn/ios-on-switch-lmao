@@ -53,6 +53,10 @@ protected:
 		fake::owner = 1;
 		fake::hangLooks = fake::pathAbandoned = fake::directGivenUp = fake::cpuRaised = 0;
 		presentReleased = 0;
+		fake::poweredDown = false;
+		fake::atRegisters = nullptr;
+		fake::atAbandon = nullptr;
+		giveup_down = 0;
 		probedReaders = 0;
 		std::memset(&giveups, 0, sizeof(giveups));
 		giveup_call = nullptr;

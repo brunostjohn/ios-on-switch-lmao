@@ -409,6 +409,7 @@ void tgm_recover_init(struct nvkm_device *device)
 
 void tgm_recover_suspend(void)
 {
+	tgm_promise_suspend();
 	if (!ctxsw.work)
 		return;
 	nvxnu_work_cancel_wait(ctxsw.work);

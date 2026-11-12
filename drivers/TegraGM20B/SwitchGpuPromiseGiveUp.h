@@ -339,6 +339,16 @@ static inline void switch_gpu_giveup_restart(struct switch_gpu_giveup *e, uint64
 	e->due_ns = now + SWITCH_GPU_GIVEUP_NS;
 }
 
+/* The GPU powered up again at `now` (system sleep's wake, rail-up): every promise still waited on gets the whole time
+ * from now */
+static inline void switch_gpu_giveup_resume(struct switch_gpu_giveups *g, uint64_t now)
+{
+	switch_gpu_giveup_each(g, i)
+	{
+		switch_gpu_giveup_restart(&g->entry[i], now);
+	}
+}
+
 /* 1: the entry is to be given up at `now`; 0: it waits on, its due set again */
 static inline int switch_gpu_giveup_judge(const struct switch_gpu_giveup_ops *ops,
 					  struct switch_gpu_giveup *e, uint64_t now)
