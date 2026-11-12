@@ -21,6 +21,7 @@ struct RMICBDispatch {
     RMComputeState *pipeline = nil;
     RMBuffer *buffers[31] = {};
     uint64_t offsets[31] = {};
+    std::array<uint32_t, 31> strides = raw::StageIn::unbound();  // setKernelBuffer:offset:attributeStride:atIndex:'s
     std::vector<std::pair<uint32_t, uint32_t>> memory;  // threadgroup memory lengths by index, as the encoder keys them
     std::array<uint64_t, 3> grid{};
     std::array<uint32_t, 3> threads{};
@@ -69,10 +70,11 @@ id rmNewComputeCommandBuffer(id device, MTLIndirectCommandBufferDescriptor *d, N
 // dispatch of the shape made them, and `shape` its regions
 std::shared_ptr<RMKernelSet> rmCommandKernels(RMComputeState *pipeline, const RMICBDispatch &c,
                                               raw::ComputeDispatch &shape);
-// Command `c`'s regions written into `block` (computeRegionBytes each) with `buffers` bound, and the words that launch them
-bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape,
-                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const RMICBBlock &block,
-                      raw::icb::ComputeCommand &words, const char **why);
+// Command `c`'s regions written into `block` (computeRegionBytes each) with `buffers` bound at `strides`, and the words that
+// launch them
+bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape, const RMICBDispatch &c,
+                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const std::array<uint32_t, 31> &strides,
+                      const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why);
 uint32_t rmCommandBytes(const RMKernelSet &kernels);
 void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&out)[31]);
 

@@ -196,8 +196,8 @@ void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
 
 void ComputeEncoder::setBufferStride(uint32_t slot, uint32_t stride)
 {
-    if (slot < 31 && strides_[slot] != stride) {
-        strides_[slot] = stride;
+    if (slot < 31 && stageIn_.strides[slot] != stride) {
+        stageIn_.strides[slot] = stride;
         rootVa_ = 0;
     }
 }
@@ -205,20 +205,10 @@ void ComputeEncoder::setBufferStride(uint32_t slot, uint32_t stride)
 void ComputeEncoder::setStageInRegion(const std::array<uint32_t, 6> &region)
 {
     const std::array<uint32_t, 8> words = {region[0], region[1], region[2], 0, region[3], region[4], region[5], 0};
-    if (words != stageIn_) {
-        stageIn_ = words;
+    if (words != stageIn_.region) {
+        stageIn_.region = words;
         rootVa_ = 0;
     }
-}
-
-// m2v's StageInRegion and StageInStride push words (a bind without a stride reads at 0, as Metal's does)
-void ComputeEncoder::stageInWords(const PackKernel &r, uint32_t *push) const
-{
-    if (r.stageInRegionWord && r.stageInRegionWord - 1u + stageIn_.size() <= 32)
-        std::copy(stageIn_.begin(), stageIn_.end(), push + r.stageInRegionWord - 1);
-    for (const auto &s : r.stageInStride)
-        if (s[1] && s[1] <= 32)
-            push[s[1] - 1] = s[0] < 31 && strides_[s[0]] != UINT32_MAX ? strides_[s[0]] : 0;
 }
 
 void ComputeEncoder::barrier()
@@ -426,7 +416,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     if (!rootVa_ || grid_ != grid || !std::equal(std::begin(region), std::end(region), region_.begin())) {
         uint32_t root[kRootBytes / 4] = {};
         rootWords(r, groups, setVa_, residualMask_, residuals_, region, root);
-        stageInWords(r, root + kRootPush / 4);
+        stageInWords(r, stageIn_, root + kRootPush / 4);
         uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
         memcpy(upload, root, sizeof root);
         grid_ = grid;
