@@ -156,7 +156,7 @@ class Libraries:
     def __init__(self, build: str, corpus: list[str], inventory: Path) -> None:
         self.paths: dict[str, str] = {}
         rows = inventory.read_text().splitlines() if inventory.is_file() else []
-        tagged = [line for line in corpus if f' os={build} ' in line.split(' | ', 1)[0] + ' ']
+        tagged = [line for line in corpus if build in os_tags(line)]
         for line in [*rows, *tagged, *corpus]:
             for path, name in FRAMEWORK_PATH.findall(line):
                 self.paths.setdefault(name, path)
@@ -202,18 +202,14 @@ def unharvestable(rest: list[str], framework: str, label: str, libraries: Librar
 
 
 def in_corpus(corpus: list[str], build: str) -> set[str]:
-    """Give the state keys the corpus holds for `build`: its untagged lines' and those tagged with it."""
-    keys = set()
-    for line in corpus:
-        tag = os_tag(line)
-        if line.startswith('R ') and tag in (None, build):
-            keys.add(rawpack.state_key(line))
-    return keys
+    """Give the state keys the corpus holds for `build`: those of its lines that name it."""
+    return {rawpack.state_key(line) for line in corpus if line.startswith('R ') and build in os_tags(line)}
 
 
-def os_tag(line: str) -> str | None:
+def os_tags(line: str) -> list[str]:
+    """Give the OS builds a line names (os=<build>[,<build>...] in its head)."""
     m = re.search(r' os=(\S+)', line.split(' | ', 1)[0])
-    return m[1] if m else None
+    return m[1].split(',') if m else []
 
 
 @dataclass

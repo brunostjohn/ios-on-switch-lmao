@@ -8,9 +8,13 @@ journals only add. Each function names its library (lib=: the file's path, or da
 bytes); a line from before the journal named libraries has none, and precompile/libraries.py guesses it by the
 function's name.
 
-usage: harvest.py <corpus.log> <pipelines.log>...
-           e.g. harvest.py corpus.log <state>/device-logs/*/m2v-cache/pipelines.log
-       harvest.py <corpus.log> --volume <mounted Data volume> [--save <dir>] [--open <container UUID>]... [--open-all]
+usage: harvest.py <corpus.log> --build <IPSW build> <pipelines.log>...
+           e.g. harvest.py corpus.log --build 24B119 <state>/device-logs/*/m2v-cache/pipelines.log
+       harvest.py <corpus.log> --build <IPSW build> --volume <mounted Data volume> [--save <dir>]
+                  [--open <container UUID>]... [--open-all]
+
+--build   the OS build the journals were written under (a journal does not say): each render and dispatch line it adds
+          names it (os=<build>), as the raw pack keeps a line to the builds it names (tools/gpu/rawpack.py own_build)
 
 --volume  every process's m2v cache on the iPad's Data volume (the plugin's cacheCandidates: a container's
           Library/Caches/m2v, Library/Caches/m2v-<process> or tmp/m2v, tmp/m2v-<process>, a daemon's user cache or
@@ -63,6 +67,7 @@ from tools.gpu.shaders import replies as compiler_replies
 # os=<build>: the OS build the journal was written under, which the raw pack keeps a line to (tools/gpu/rawpack.py
 # own_build)
 DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|os|c\d|a\d+)=')
+OS_BUILD = re.compile(r' os=\S+')
 COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 # The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
@@ -97,19 +102,33 @@ REPLY_HEADER = 48
 REPLY_NAME = re.compile(r'^[0-9a-f]{64}\.reply$')
 
 
-def normal(line: str) -> tuple[str | None, str | None]:
-    """Return a journal line's corpus form and the text it is deduplicated by (None for refusals and other lines)."""
+def normal(line: str, build: str | None = None) -> tuple[str | None, str | None]:
+    """Return a journal line's corpus form and the text it is deduplicated by (None for refusals and other lines).
+
+    A render or dispatch line that names no OS build takes `build`.
+    """
     if ' ok=1 ' not in line:
         return None, None
     if line.startswith('S '):
         return _normal_specialization(line)
     if line.startswith('C '):
         return _normal_compute(line)
+    if line.startswith(('D ', 'R ')) and build and not OS_BUILD.search(line.split(' | ', 1)[0]):
+        line = _with_build(line, build)
     if line.startswith('D '):
         return line.rstrip(), line.rstrip()
     if line.startswith('R '):
         return _normal_render(line)
     return None, None
+
+
+def _with_build(line: str, build: str) -> str:
+    head, sep, rest = line.partition(' | ')
+    if line.startswith('R '):
+        tokens = head.split(' ')
+        at = next((i + 1 for i, t in enumerate(tokens) if t.startswith('label=')), 2)
+        return ' '.join([*tokens[:at], f'os={build}', *tokens[at:]]) + sep + rest
+    return f'{head} os={build}{sep}{rest}'
 
 
 def _normal_specialization(line: str) -> tuple[str | None, str | None]:
@@ -253,13 +272,13 @@ def _container_caches(
     return found, skipped
 
 
-def merge(corpus: Path, sources: list[tuple[str, str]]) -> list[str]:
+def merge(corpus: Path, sources: list[tuple[str, str]], build: str) -> list[str]:
     lines, seen = [], set()
-    kept = [(corpus, corpus.read_text(errors='replace'))] if corpus.is_file() else []
-    for name, text in kept + sources:
+    kept = [(corpus, corpus.read_text(errors='replace'), None)] if corpus.is_file() else []
+    for name, text, journaled in kept + [(n, t, build) for n, t in sources]:
         added = 0
         for raw in text.splitlines():
-            line, key = normal(raw.rstrip('\n'))
+            line, key = normal(raw.rstrip('\n'), journaled)
             if line and key not in seen:
                 seen.add(key)
                 lines.append(line)
@@ -423,7 +442,8 @@ def main() -> None:
     opens = explicit or set(SYSTEM_CACHES)
     open_all = '--open-all' in args
     args = [a for a in args if a != '--open-all']
-    if not args or (volume is None and len(args) < 2):
+    build = option(args, '--build')
+    if not args or (volume is None and len(args) < 2) or not build:
         sys.exit(__doc__)
     corpus, sources = Path(args[0]), [(p, Path(p).read_text(errors='replace')) for p in args[1:]]
     if volume:
@@ -452,7 +472,7 @@ def main() -> None:
             f'{volume}: {len(found)} m2v caches, {journals} journals; {len(set(skipped))} closed containers not '
             'looked in (--open-all)'
         )
-    merge(corpus, sources)
+    merge(corpus, sources, build)
 
 
 if __name__ == '__main__':

@@ -11,9 +11,9 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=, and every
         other library's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the
         run's input as it was; with the render states Apple's archives declare for the
-        device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. A line journaled
-        under another build (os=<build> in its head) is left out; one with no os= is taken, and both are counted in
-        <report>, which the link puts at the end of the pack's report
+        device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. Every such line
+        names the OS builds it is a state of (os=<build>[,<build>...] in its head): one of other builds is left out and
+        counted in <report>, which the link puts at the end of the pack's report; one naming none fails the step
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
                      [--ca-preferences <stage-tegra-gm20b-metal.py>]
                      --out <bucket corpus>...
@@ -58,7 +58,7 @@ FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w
 OS_LIBRARY = re.compile(r' lib=/System/Library/\S+?\.(?:bundle|framework/Resources)/\S+\.metallib')
 QUARTZCORE = '/QuartzCore.framework/'
 STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
-# The OS build a line was journaled under, in its head: an R line's (before " | v ") or a D line's
+# The OS builds a line is a state of, in its head: an R line's (before " | v ") or a D line's
 OS_BUILD = re.compile(r' os=(\S+)')
 
 
@@ -93,21 +93,27 @@ def probe_lines(corpus: str) -> list[str]:
 def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
     """Give the lines a pack for IPSW `build` takes, without their os= tag, and the report's lines.
 
-    A line tagged with another build is that build's: its encodings (RenderBox's c1 format, QuartzCore's constant sets)
-    are not this one's, so it is left out. An untagged line names no build, and no build is guessed for it: it is
-    taken, and counted.
+    A line tagged with other builds only is theirs: its encodings (RenderBox's c1 format, QuartzCore's constant sets)
+    are not this one's, so it is left out. A line with no tag names no build, and none is guessed for it: the step fails
+    (precompile/harvest.py and tools/gpu/logharvest.py tag what they add).
     """
-    taken, other, untagged = [], {}, 0
+    taken, other, untagged = [], {}, []
     for line in lines:
         tag = OS_BUILD.search(line.split(' | ', 1)[0])
-        if tag and tag[1] != build:
-            other[tag[1]] = other.get(tag[1], 0) + 1
+        if tag is None:
+            untagged.append(line)
             continue
-        untagged += tag is None
-        taken.append(OS_BUILD.sub('', line, count=1) if tag else line)
+        builds = tag[1].split(',')
+        if build not in builds:
+            for b in builds:
+                other[b] = other.get(b, 0) + 1
+            continue
+        taken.append(OS_BUILD.sub('', line, count=1))
+    if untagged:
+        sys.exit(f'{len(untagged)} corpus lines name no OS build (os=), the first: {untagged[0][:300]}')
     builds = ', '.join(f'{b} {n}' for b, n in sorted(other.items())) or 'none'
-    taken_text = f'corpus for {build}: {len(taken)} lines taken, {untagged} of them untagged (no os=)'
-    return taken, [f'{taken_text}; {sum(other.values())} of another build left out ({builds})']
+    left = len(lines) - len(taken)
+    return taken, [f'corpus for {build}: {len(taken)} lines taken; {left} of other builds left out ({builds})']
 
 
 def archive_lines(inventory: str) -> list[str]:

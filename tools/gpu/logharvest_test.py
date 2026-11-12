@@ -23,8 +23,8 @@ CA = (
 )
 CA_LABEL = 'com.apple.coreanimation.PBGRAXm_A3Xhfc'
 CORPUS = (
-    f'R ok=1 label=primitive_image samples=1 topo=0 ds=260/260 c0=80:15:0:1:0:0:1:0:0 c1=105:0:0:1:0:0:1:0:0'
-    f' c2=80:0:0:1:0:0:1:0:0 | v primitive_image_vertex lib={RB} #0:36:8700'
+    f'R ok=1 label=primitive_image os=21H461,24B119 samples=1 topo=0 ds=260/260 c0=80:15:0:1:0:0:1:0:0'
+    f' c1=105:0:0:1:0:0:1:0:0 c2=80:0:0:1:0:0:1:0:0 | v primitive_image_vertex lib={RB} #0:36:8700'
     f' | f primitive_image_fragment lib={RB} #0:36:8700 | \n'
     f'R ok=1 label=- os=21H461 {HEAD.rstrip()} | v primitive_gradient_vertex lib={RB}  '
     f'| f primitive_gradient_fragment lib={RB}  | \n'
@@ -117,7 +117,7 @@ class LogHarvestTest(unittest.TestCase):
         added, _ = self.run_tool(boot_records())
         self.assertIn(GRADIENT, [logharvest.rawpack.state_key(line) for line in added])
 
-    def test_an_untagged_corpus_line_counts_for_every_build(self):
+    def test_a_corpus_line_naming_several_builds_counts_for_each(self):
         added, _ = self.run_tool(boot_records())
         self.assertNotIn(IMAGE, [logharvest.rawpack.state_key(line) for line in added])
 

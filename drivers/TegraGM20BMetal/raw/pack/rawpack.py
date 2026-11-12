@@ -159,8 +159,10 @@ def ca_states(
     """Give the Core Animation states the pack holds, each once by its key, by tier: those harvested, then caset's.
 
     Every state a device drew goes in as it drew it (QuartzCore makes some names otherwise than the journal holds them,
-    a harvested c1=550 state regenerated with c1=115, or not at all), then those made from their names (ca/caset.py,
-    ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables, ca/qc-<build>.json).
+    a harvested c1=550 state regenerated with c1=115, or not at all), but one whose function constants are not those
+    this QuartzCore makes of its name (caspec.made_of_name: another build's journal), then those made from their names
+    (ca/caset.py, ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables,
+    ca/qc-<build>.json).
     """
     sys.path.insert(0, str(HERE / 'ca'))
     import caset  # noqa: PLC0415 (ca/ is only on the path here)
@@ -175,7 +177,9 @@ def ca_states(
 
     with open(corpus) as f:
         drawn = [line.rstrip('\n') for line in f if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0]]
-    out = [('harvested', [line for line in drawn if fresh(line)])]
+    foreign = {line for line in drawn if not caspec.made_of_name(tables, line)}
+    print(f"rawpack: Core Animation states harvested, another build's constants for their names: {len(foreign)}")
+    out = [('harvested', [line for line in drawn if line not in foreign and fresh(line)])]
     named = caset.corpus_names(str(corpus), tables) + [n for n in names if caset.makes(tables, n)]
     for tier, labels in caset.labels(tables, named, CA_TIERS, cif10).items():
         out.append((tier, [line for line in (caspec.state_line(tables, n) for n in labels) if fresh(line)]))

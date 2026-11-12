@@ -1,9 +1,10 @@
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.gpu.rawpack import framework_line, library_view, own_build
+from tools.gpu.rawpack import OS_BUILD, framework_line, library_view, own_build, probe_lines
 
 
 class NativeLibraries(unittest.TestCase):
@@ -34,23 +35,39 @@ STATE = (
 
 
 class BuildTags(unittest.TestCase):
-    def test_a_pack_takes_its_own_builds_lines_and_untagged_ones_and_counts_the_rest(self):
+    def test_a_pack_takes_the_lines_of_its_build_and_counts_the_rest(self):
         lines = [
             f'R ok=1 label=x os=24B119 {STATE}',
             f'R ok=1 label=x os=21H461 {STATE}',
-            f'R ok=1 label=x {STATE}',
+            f'R ok=1 label=x os=21H461,24B119 {STATE}',
             'D ok=1 tg=64,1,1 edge=64,1,1 threads=64 os=21H461 | form=0 | k sum',
         ]
         taken, report = own_build(lines, '24B119')
         self.assertEqual(taken, [f'R ok=1 label=x {STATE}', f'R ok=1 label=x {STATE}'])
-        self.assertEqual(
-            report,
-            ['corpus for 24B119: 2 lines taken, 1 of them untagged (no os=); 2 of another build left out (21H461 2)'],
-        )
+        self.assertEqual(report, ['corpus for 24B119: 2 lines taken; 2 of other builds left out (21H461 2)'])
+
+    def test_a_line_that_names_no_build_fails_the_step(self):
+        with self.assertRaises(SystemExit):
+            own_build([f'R ok=1 label=x os=24B119 {STATE}', f'R ok=1 label=x {STATE}'], '24B119')
 
     def test_a_functions_constants_are_not_a_build_tag(self):
         line = 'R ok=1 label=x samples=1 topo=0 ds=0/0 | v a os=1  | f b | '
-        self.assertEqual(own_build([line], '24B119')[0], [line])
+        with self.assertRaises(SystemExit):
+            own_build([line], '24B119')
+
+
+class CorpusTags(unittest.TestCase):
+    """Every line of the checked-in corpus a pack reads names the builds it is a state of."""
+
+    def test_every_render_and_dispatch_line_names_known_builds(self):
+        corpus = Path(os.environ['RAWPACK_CORPUS']).read_text().splitlines()
+        builds = set(os.environ['RAWPACK_BUILDS'].split())
+        lines = probe_lines('\n'.join(corpus))
+        self.assertGreater(len(lines), 1000)
+        for line in lines:
+            tag = OS_BUILD.search(line.split(' | ', 1)[0])
+            self.assertIsNotNone(tag, line[:200])
+            self.assertLessEqual(set(tag[1].split(',')), builds, line[:200])
 
 
 def lines_of(vertex: str, fragment: str, linked: str = '') -> str:

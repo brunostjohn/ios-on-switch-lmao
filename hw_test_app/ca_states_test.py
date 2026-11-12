@@ -27,7 +27,15 @@ class States(unittest.TestCase):
             self.assertGreater(len(strokes), 0)
         else:
             self.assertEqual(strokes, [], 'iOS 27 has no path_stroke_* functions')
-        self.assertGreater(len(kept), 100)
+        self.assertGreater(len(kept), 600 if self.build == '21H461' else 15)
+
+    def test_a_line_another_build_journaled_is_not_this_builds_state(self) -> None:
+        line = LINE.format(vertex='std_vert1_lph', constants='', fragment='luma_boost_lph')
+        tagged = line.replace(' samples=', ' os=21H461 samples=')
+        self.assertTrue(ca_states.tagged(tagged, '21H461'))
+        self.assertFalse(ca_states.tagged(tagged, '24B119'))
+        self.assertTrue(ca_states.tagged(tagged.replace('os=21H461', 'os=21H461,24B119'), '24B119'))
+        self.assertFalse(ca_states.tagged(line, '24B119'))
 
     def test_a_constant_the_function_does_not_declare_is_another_builds_state(self) -> None:
         declared = {'std_vert1_lph': {'fc_generic'}, 'luma_boost_lph': set()}
