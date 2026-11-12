@@ -114,6 +114,7 @@ pub struct NmbDirectDraw {
     pub variant: *const c_char,
     pub spill: [*const u32; 2],
     pub spill_words: [u32; 2],
+    pub spill_residual: [[u8; 32]; 2],
 }
 
 #[repr(C)]
@@ -671,6 +672,23 @@ pub(crate) fn spill_table(plan: &BindingPlan, bytes: &[DescriptorBytes], stage: 
         })
 }
 
+/// By buffer slot, the `stage` table word + 1 of each SlotBindOffset residual the plan places in that stage's argument
+/// table: the probe's codes cannot name a residual there whose slot shares its code with another
+pub(crate) fn spill_residuals(plan: &BindingPlan, stage: Stage) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for field in plan.push.fields.iter().filter(|f| f.stage == stage) {
+        if let (PushField::SlotBindOffset(slot), FieldLocation::ArgumentTable { offset }) =
+            (field.field, field.location)
+            && slot.class == SlotClass::Buffer
+            && slot.index < 32
+            && offset / 4 < 31
+        {
+            out[slot.index as usize] = (offset / 4 + 1) as u8;
+        }
+    }
+    out
+}
+
 /// Set 0's samplers that take no write: a heap image's constexpr sampler (BindingSource::HeapSampler's immutable one), whose
 /// descriptor NVK writes into the set from its layout
 fn immutable_samplers(layout: &PipelineLayout, written: &[NmbDirectWrite]) -> Vec<NmbDirectWrite> {
@@ -967,6 +985,10 @@ fn draw_of(
         variant: variant.as_ptr(),
         spill: [spills[0].as_ptr(), spills[1].as_ptr()],
         spill_words: [spills[0].len() as u32, spills[1].len() as u32],
+        spill_residual: [
+            spill_residuals(&run.plan, Stage::Vertex),
+            spill_residuals(&run.plan, Stage::Fragment),
+        ],
     };
     holes_of(&run.commands, &mut draw)?;
     heap_of(pipeline, layout, &mut draw);
@@ -992,6 +1014,7 @@ fn draw_of(
             FieldLocation::ArgumentTable { .. } => {
                 return Err("a vertex stage's dynamic state in its argument table".into());
             }
+            _ => return Err("dynamic state at a push location the raw path does not know".into()),
         };
         if field.size != bytes || offset % 4 != 0 || offset > end.saturating_sub(bytes) {
             return Err("invalid dynamic state push placement".into());

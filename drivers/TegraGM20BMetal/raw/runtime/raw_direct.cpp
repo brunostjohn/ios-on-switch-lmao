@@ -309,18 +309,8 @@ std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const Nmb
     return residualWordsByValue(was, now);
 }
 
-// A draw's argument table of stage `k` as residualWordsByValue reads words: word i at root push word 32 + i
-// (raw_spill_table.h), as far as a residual word can name one
-std::map<uint32_t, uint32_t> spillWords(const NmbDirectDraw &d, uint32_t k)
-{
-    std::map<uint32_t, uint32_t> out;
-    for (uint32_t i = 0; i < d.spillWords[k] && i < kSpillResidualWords; i++)
-        out[kRootPush + 4 * (kRootPushWords + i)] = d.spill[k][i];
-    return out;
-}
-
 // What the record takes of the draws' argument tables (m2v's push fields past each stage's window): draw 0's words, and
-// each spilled bind offset's word by its value in the bind-offset draw; null: why not
+// each spilled bind offset's word as the plan places it; null: why not
 const char *spillTables(const NmbDirectState &state, RecordParts &parts)
 {
     const NmbDirectDraw &draw = state.draws[0];
@@ -331,8 +321,12 @@ const char *spillTables(const NmbDirectState &state, RecordParts &parts)
         if (draw.spillWords[k] > kSpillWordsMax)
             return "an argument table past 255 words";
         parts.spill[k].assign(draw.spill[k], draw.spill[k] + draw.spillWords[k]);
-        for (const auto &[value, word] : residualWordsByValue(spillWords(draw, k), spillWords(state.draws[3], k)))
-            parts.residuals.emplace(value, word);
+        if (memcmp(draw.spillResidual[k], state.draws[3].spillResidual[k], sizeof draw.spillResidual[k]))
+            return "probe draws on variants of other argument tables";
+        for (uint32_t slot = 0; slot < 32; slot++)
+            if (const uint8_t word = draw.spillResidual[k][slot]; word && word > kSpillResidualWords)
+                return "a spilled bind offset past word 30 of its argument table";
+        memcpy(parts.spillResidual[k], draw.spillResidual[k], sizeof parts.spillResidual[k]);
     }
     for (const uint32_t word : {draw.blendColorWord, draw.halfBlendColorWord, draw.depthTestWord, draw.stencilTestWord})
         if (word > 0xFF)

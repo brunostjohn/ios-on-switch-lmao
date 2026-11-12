@@ -7,18 +7,27 @@
 
 namespace raw {
 
-using DescriptorWords = std::array<uint32_t, 64>;
+// A state's set 0: its record's PackEntries, 16 bytes each at most (kPackEntries of them)
+using DescriptorWords = std::array<uint32_t, 128>;
+
+// The bytes of set 0 an upload holds: the layout's (PackPipeline::setBytes) in whole constant buffer units
+constexpr uint32_t setUploadBytes(uint32_t setBytes)
+{
+    return setBytes <= 256 ? 256 : (setBytes + 255) & ~255u;
+}
 
 // The upload allocations must remain immutable and live until every draw using this encoder has retired.
 class DescriptorSnapshot {
 public:
-    template <typename Upload> uint64_t resolve(const DescriptorWords &words, Upload upload)
+    // `bytes`: the upload's size; a set of other bytes is uploaded again whatever its words
+    template <typename Upload> uint64_t resolve(const DescriptorWords &words, Upload upload, uint32_t bytes = 256)
     {
-        if (!address_ || words_ != words) {
+        if (!address_ || words_ != words || bytes_ != bytes) {
             const uint64_t address = upload(words);
             if (!address)
                 return 0;
             words_ = words;
+            bytes_ = bytes;
             address_ = address;
         }
         return address_;
@@ -26,6 +35,7 @@ public:
 
 private:
     DescriptorWords words_ = {};
+    uint32_t bytes_ = 0;
     uint64_t address_ = 0;
 };
 
@@ -45,7 +55,7 @@ class PreparedDescriptors {
 public:
     template <typename Build, typename Upload>
     const PreparedDescriptorWords *resolve(const void *pipeline, uint32_t moved, uint32_t memory, Build build,
-                                           Upload upload)
+                                           Upload upload, uint32_t bytes = 256)
     {
         const bool same = value_.address && pipeline_ == pipeline;
         if (same && !moved)
@@ -56,7 +66,7 @@ public:
         if (!build(value_, same ? moved : ~0u))
             return nullptr;
         if (!same || (moved & memory)) {
-            const uint64_t address = snapshot_.resolve(value_.words, upload);
+            const uint64_t address = snapshot_.resolve(value_.words, upload, bytes);
             if (!address)
                 return nullptr;
             value_.address = address;

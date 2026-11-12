@@ -166,19 +166,21 @@ kernel void argument_kernel(constant KernelArguments &arguments [[buffer(0)]], d
     out[1] = arguments.texture.read(uint2(0, 0));
 }
 
-/// A colour behind an argument buffer's pointer plus one float4 at each of fourteen bind offsets (metal.native.argument_encoder):
-/// m2v places the offsets past the fragment push window in the stage's argument table, which the raw path fills
+/// A colour behind an argument buffer's pointer plus one float at each of fourteen bind offsets, in red
+/// (metal.native.argument_encoder): m2v places the last offsets past the fragment push window in the stage's argument
+/// table, which the raw path fills
 fragment float4 argument_spill_fragment(constant ColourArguments &arguments [[buffer(0)]],
-                                        constant float4 *b1 [[buffer(1)]], constant float4 *b2 [[buffer(2)]],
-                                        constant float4 *b3 [[buffer(3)]], constant float4 *b4 [[buffer(4)]],
-                                        constant float4 *b5 [[buffer(5)]], constant float4 *b6 [[buffer(6)]],
-                                        constant float4 *b7 [[buffer(7)]], constant float4 *b8 [[buffer(8)]],
-                                        constant float4 *b9 [[buffer(9)]], constant float4 *b10 [[buffer(10)]],
-                                        constant float4 *b11 [[buffer(11)]], constant float4 *b12 [[buffer(12)]],
-                                        constant float4 *b13 [[buffer(13)]], constant float4 *b14 [[buffer(14)]])
+                                        device const float *b1 [[buffer(1)]], device const float *b2 [[buffer(2)]],
+                                        device const float *b3 [[buffer(3)]], device const float *b4 [[buffer(4)]],
+                                        device const float *b5 [[buffer(5)]], device const float *b6 [[buffer(6)]],
+                                        device const float *b7 [[buffer(7)]], device const float *b8 [[buffer(8)]],
+                                        device const float *b9 [[buffer(9)]], device const float *b10 [[buffer(10)]],
+                                        device const float *b11 [[buffer(11)]], device const float *b12 [[buffer(12)]],
+                                        device const float *b13 [[buffer(13)]], device const float *b14 [[buffer(14)]])
 {
-    return *arguments.colour + b1[0] + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + b10[0] + b11[0] +
-           b12[0] + b13[0] + b14[0];
+    return *arguments.colour + float4(b1[0] + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + b10[0] +
+                                          b11[0] + b12[0] + b13[0] + b14[0],
+                                      0, 0, 0);
 }
 
 struct TintVertex {
@@ -186,19 +188,22 @@ struct TintVertex {
     float4 tint;
 };
 
-/// A colour behind an argument buffer's pointer plus one float4 at each of thirteen bind offsets as the quad's tint
-/// (metal.native.argument_encoder): m2v places the last offsets past the vertex push window in the stage's argument table
+/// A colour behind an argument buffer's pointer plus one float at each of thirteen bind offsets, in green, as the quad's
+/// tint (metal.native.argument_encoder): m2v places the last offsets past the vertex push window in the stage's argument
+/// table
 vertex TintVertex spill_vertex(uint vid [[vertex_id]], constant float4 *corners [[buffer(0)]],
-                               constant ColourArguments &arguments [[buffer(1)]], constant float4 *b2 [[buffer(2)]],
-                               constant float4 *b3 [[buffer(3)]], constant float4 *b4 [[buffer(4)]],
-                               constant float4 *b5 [[buffer(5)]], constant float4 *b6 [[buffer(6)]],
-                               constant float4 *b7 [[buffer(7)]], constant float4 *b8 [[buffer(8)]],
-                               constant float4 *b9 [[buffer(9)]], constant float4 *b10 [[buffer(10)]],
-                               constant float4 *b11 [[buffer(11)]], constant float4 *b12 [[buffer(12)]],
-                               constant float4 *b13 [[buffer(13)]], constant float4 *b14 [[buffer(14)]])
+                               constant ColourArguments &arguments [[buffer(1)]], device const float *b2 [[buffer(2)]],
+                               device const float *b3 [[buffer(3)]], device const float *b4 [[buffer(4)]],
+                               device const float *b5 [[buffer(5)]], device const float *b6 [[buffer(6)]],
+                               device const float *b7 [[buffer(7)]], device const float *b8 [[buffer(8)]],
+                               device const float *b9 [[buffer(9)]], device const float *b10 [[buffer(10)]],
+                               device const float *b11 [[buffer(11)]], device const float *b12 [[buffer(12)]],
+                               device const float *b13 [[buffer(13)]], device const float *b14 [[buffer(14)]])
 {
-    return TintVertex{corners[vid], *arguments.colour + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] +
-                                        b10[0] + b11[0] + b12[0] + b13[0] + b14[0]};
+    return TintVertex{corners[vid], *arguments.colour + float4(0,
+                                                               b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] +
+                                                                   b9[0] + b10[0] + b11[0] + b12[0] + b13[0] + b14[0],
+                                                               0, 0)};
 }
 
 fragment float4 tint_fragment(TintVertex in [[stage_in]])
@@ -206,25 +211,27 @@ fragment float4 tint_fragment(TintVertex in [[stage_in]])
     return in.tint;
 }
 
-/// A colour behind an argument buffer's pointer plus one float4 from each of twenty-eight buffers: m2v places the last bind
-/// offsets past the kernel's push window in its argument table
+/// A colour behind an argument buffer's pointer plus one float from each of twenty-eight buffers, in red: m2v places the
+/// last bind offsets past the kernel's push window in its argument table
 kernel void argument_spill_kernel(constant ColourArguments &arguments [[buffer(0)]], device float4 *out [[buffer(1)]],
-                                  device const float4 *b2 [[buffer(2)]], device const float4 *b3 [[buffer(3)]],
-                                  device const float4 *b4 [[buffer(4)]], device const float4 *b5 [[buffer(5)]],
-                                  device const float4 *b6 [[buffer(6)]], device const float4 *b7 [[buffer(7)]],
-                                  device const float4 *b8 [[buffer(8)]], device const float4 *b9 [[buffer(9)]],
-                                  device const float4 *b10 [[buffer(10)]], device const float4 *b11 [[buffer(11)]],
-                                  device const float4 *b12 [[buffer(12)]], device const float4 *b13 [[buffer(13)]],
-                                  device const float4 *b14 [[buffer(14)]], device const float4 *b15 [[buffer(15)]],
-                                  device const float4 *b16 [[buffer(16)]], device const float4 *b17 [[buffer(17)]],
-                                  device const float4 *b18 [[buffer(18)]], device const float4 *b19 [[buffer(19)]],
-                                  device const float4 *b20 [[buffer(20)]], device const float4 *b21 [[buffer(21)]],
-                                  device const float4 *b22 [[buffer(22)]], device const float4 *b23 [[buffer(23)]],
-                                  device const float4 *b24 [[buffer(24)]], device const float4 *b25 [[buffer(25)]],
-                                  device const float4 *b26 [[buffer(26)]], device const float4 *b27 [[buffer(27)]],
-                                  device const float4 *b28 [[buffer(28)]], device const float4 *b29 [[buffer(29)]])
+                                  device const float *b2 [[buffer(2)]], device const float *b3 [[buffer(3)]],
+                                  device const float *b4 [[buffer(4)]], device const float *b5 [[buffer(5)]],
+                                  device const float *b6 [[buffer(6)]], device const float *b7 [[buffer(7)]],
+                                  device const float *b8 [[buffer(8)]], device const float *b9 [[buffer(9)]],
+                                  device const float *b10 [[buffer(10)]], device const float *b11 [[buffer(11)]],
+                                  device const float *b12 [[buffer(12)]], device const float *b13 [[buffer(13)]],
+                                  device const float *b14 [[buffer(14)]], device const float *b15 [[buffer(15)]],
+                                  device const float *b16 [[buffer(16)]], device const float *b17 [[buffer(17)]],
+                                  device const float *b18 [[buffer(18)]], device const float *b19 [[buffer(19)]],
+                                  device const float *b20 [[buffer(20)]], device const float *b21 [[buffer(21)]],
+                                  device const float *b22 [[buffer(22)]], device const float *b23 [[buffer(23)]],
+                                  device const float *b24 [[buffer(24)]], device const float *b25 [[buffer(25)]],
+                                  device const float *b26 [[buffer(26)]], device const float *b27 [[buffer(27)]],
+                                  device const float *b28 [[buffer(28)]], device const float *b29 [[buffer(29)]])
 {
-    out[0] = *arguments.colour + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + b10[0] + b11[0] +
-             b12[0] + b13[0] + b14[0] + b15[0] + b16[0] + b17[0] + b18[0] + b19[0] + b20[0] + b21[0] + b22[0] + b23[0] +
-             b24[0] + b25[0] + b26[0] + b27[0] + b28[0] + b29[0];
+    out[0] =
+        *arguments.colour + float4(b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + b10[0] + b11[0] +
+                                       b12[0] + b13[0] + b14[0] + b15[0] + b16[0] + b17[0] + b18[0] + b19[0] + b20[0] +
+                                       b21[0] + b22[0] + b23[0] + b24[0] + b25[0] + b26[0] + b27[0] + b28[0] + b29[0],
+                                   0, 0, 0);
 }

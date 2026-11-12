@@ -116,7 +116,7 @@ enum : uint32_t {
     CE_SET_SRC_BLOCK_SIZE = NVB0B5_SET_SRC_BLOCK_SIZE,  // then SRC_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
 };
 
-constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x200, kUboChunk = 0x100;
 constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
@@ -5163,6 +5163,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    if (r.setBytes > kSetBytes) {
+        *why = "a set 0 past the raw path's 512 bytes";
+        cb_->refusal = {};
+        return false;
+    }
+    const uint32_t setBytes = setUploadBytes(r.setBytes);
     RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, movedEntries(r), pl->memoryEntries,
@@ -5314,13 +5320,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         [&](const DescriptorWords &words) {
             RAW_ENCODE_COUNT(DescriptorUploads);
             uint64_t address = 0;
-            uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
-            memcpy(upload, words.data(), sizeof(words));
+            uint8_t *upload = d.alloc(d.upload_, setBytes, 256, address);
+            memcpy(upload, words.data(), setBytes);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += sizeof(words));
+            RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += setBytes);
 #endif
             return address;
-        });
+        },
+        setBytes);
     RAW_ENCODE_END(descriptorSpan);
     if (!prepared)
         return false;
@@ -5453,7 +5460,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         const HeapSet *heap = pl->heapSet;
         const uint64_t heapVa = heap ? heap->memory.va : 0;
         // NVK's root table sets[0] and sets[1]: set 0, and set 1 for a heap array a program reads past its constant buffer
-        const uint32_t s[8] = {uint32_t(setVa),        uint32_t(setVa >> 32),  kSetBytes, 0, uint32_t(heapVa),
+        const uint32_t s[8] = {uint32_t(setVa),        uint32_t(setVa >> 32),  setBytes, 0, uint32_t(heapVa),
                                uint32_t(heapVa >> 32), heap ? r.heapBytes : 0, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, heap ? 8 : 4);
@@ -5466,7 +5473,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             selected = true;
         }
         if (pl->setSlot[0] || pl->setSlot[1]) {
-            p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
+            p.inc(CB_SELECTOR_A, {setBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
             if (pl->setSlot[0])
                 p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
             if (pl->setSlot[1])

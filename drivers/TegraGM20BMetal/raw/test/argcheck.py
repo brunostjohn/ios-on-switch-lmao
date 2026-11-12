@@ -275,14 +275,18 @@ def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
     bound = {}
     for slot in range(1, 15):
         va = BUFFERS + slot * 0x10000
-        mem.put(va, struct.pack('<4f', 0, 1, 0, 0) * 64)
-        bound[slot] = va + 512 + 16 * slot
-        mem.put(bound[slot], struct.pack('<4f', 1 / 32, 0, 0, 0))
+        mem.put(va, struct.pack('<f', 1) * 1024)
+        bound[slot] = va + 512 + 16 * slot + (4 if slot >= 12 else 0)
+        mem.put(bound[slot], struct.pack('<f', 1 / 32))
     entries = directlink.entries_of(rec['pipeline'], directlink.PIPELINE.unpack_from(rec['pipeline'])[6], [], [])
     spilled = [e['slot'] for e in entries if e['kind'] == 'ubo' and e['residual'] and e['residual'] >= 0x780]
     check('bind offsets in the fragment argument table', bool(spilled), spilled)
     out, _ = run(rec, mem, (0, 0), bound)
-    check('fourteen buffers through the root and the argument table', out == [14 / 32, 0, 1, 1], out)
+    check(
+        'fourteen buffers, three bound off 16 with their residuals in the argument table',
+        out == [14 / 32, 0, 1, 1],
+        out,
+    )
     vertex = tail(recs['tint_fragment'])
     check('a vertex argument table', vertex[24] != 0 and vertex[26] != 0, vertex[24:29])
 

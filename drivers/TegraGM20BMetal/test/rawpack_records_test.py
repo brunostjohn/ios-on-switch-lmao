@@ -377,8 +377,10 @@ def record(key: str, entries: list[tuple[int, int, int, int]], samplers: list[li
     words = [0] * 32
     words[2] = 0x11
     body = kernels.HEAD.pack(0, 0, 0, len(entries), 4) + struct.pack('<64I', *qmd)
-    body += struct.pack('<HHI', 0x40, 0, 1 << 2) + struct.pack('<32I', *words)
-    body += b''.join(kernels.ENTRY.pack(*e) for e in entries) + bytes(kernels.ENTRY.size * (16 - len(entries)))
+    body += kernels.COUNTS.pack(0x40, 0, 1 << 2) + struct.pack('<32I', *words)
+    body += b''.join(kernels.ENTRY.pack(*e) for e in entries) + bytes(
+        kernels.ENTRY.size * (kernels.ENTRIES - len(entries))
+    )
     body += bytes(packfile.KERNEL_V20.size)
     rec = {'outcome': outcome, 'key': key, 'why': 'a texture slot the dispatch leaves unbound at 0' if outcome else ''}
     if not outcome:
