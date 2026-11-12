@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
@@ -37,6 +38,7 @@ using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 
 @interface NSObject (SwitchRawEncodeProfile)
 - (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile;  // RawMetalEncodeCounters.mm (debug builds)
+- (NSArray<NSNumber *> *)switchRawBytesChunks;                     // RawMetalCommandBuffer.mm (debug builds)
 @end
 
 // Signals when the object it is associated with is destroyed, after that object's own ivars are released.
@@ -483,6 +485,33 @@ int main(int argc, char **argv)
         }
         printf("facadecost held %u: raw %u\n", kHeldMany, heldRaw);
         printPools();
+        // Under MOCK_GPU_US, which holds each job on the mock GPU: a command buffer recorded while an earlier one is in
+        // flight takes none of the earlier one's setBytes chunks (they come back only at its completion)
+        if (getenv("MOCK_GPU_US")) {
+            auto chunksOf = [](id<MTLCommandBuffer> cb) {
+                std::set<uint64_t> vas;
+                for (NSNumber *va in [(id)cb switchRawBytesChunks])
+                    vas.insert(va.unsignedLongLongValue);
+                return vas;
+            };
+            id<MTLCommandBuffer> first = encode(arms[0]);
+            const std::set<uint64_t> held = chunksOf(first);
+            const bool inFlight = first.status != MTLCommandBufferStatusCompleted;
+            id<MTLCommandBuffer> second = encode(arms[0]);
+            unsigned shared = 0;
+            for (uint64_t va : chunksOf(second))
+                shared += held.count(va) != 0;
+            [first waitUntilCompleted];
+            [second waitUntilCompleted];
+            printf("facadecost held chunk: first in flight %d with %zu chunks, second shares %u of them\n",
+                   int(inFlight), held.size(), shared);
+            if (!inFlight || held.empty() || shared) {
+                printf("FAIL: the held-chunk check %s\n", !inFlight      ? "saw the first complete before the second"
+                                                          : held.empty() ? "found no chunk"
+                                                                         : "found a chunk taken while its job ran");
+                failures++;
+            }
+        }
         for (const auto &[name, value] : counted[0]) {
             const double grown = counted[1][name] - value;
             if (name == "encodes" ? value < 1 : grown >= 0.5) {

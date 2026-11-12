@@ -682,6 +682,16 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
         return @"raw";
     return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
 }
+
+// facadecost's held-chunk check: the GPU addresses of its setBytes chunks, read while its job is held in flight (they go
+// back at its completion)
+- (NSArray<NSNumber *> *)switchRawBytesChunks
+{
+    NSMutableArray<NSNumber *> *vas = [NSMutableArray array];
+    for (const raw::Buffer &k : _bytes.chunks)
+        [vas addObject:@(k.va)];
+    return vas;
+}
 #endif
 
 // A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero; when m2v's
