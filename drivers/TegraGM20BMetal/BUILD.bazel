@@ -427,6 +427,7 @@ py_binary(
 py_binary(
     name = "boundcheck",
     srcs = ["raw/test/boundcheck.py"],
+    data = [":raw_pack_generator"],
     main = "raw/test/boundcheck.py",
     deps = [
         ":raw_pack",
