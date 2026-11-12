@@ -157,7 +157,7 @@ struct PackIteratedBlend {
     uint16_t uniformOffset;  // the matrix's bytes from the buffer's bind offset
     uint8_t uniformWords;    // its words there: five half4 rows, then the clamp pair where its QuartzCore has one
     uint8_t reserved;
-    uint32_t alphaSource, alphaDest;           // SET_BLEND_ALPHA_SOURCE_COEFF, SET_BLEND_ALPHA_DEST_COEFF (OGL values)
+    uint32_t alphaSource, alphaDest;  // SET_BLEND_ALPHA_SOURCE_COEFF, SET_BLEND_ALPHA_DEST_COEFF (OGL values)
     uint64_t name;  // FNV-1a 64 of the program's name (pack/iterated/table.py; vcm), which raw_chip_facts.h proves
     uint64_t reservedName;
     uint16_t constant[kIteratedConstants][3];  // SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j): half floats
