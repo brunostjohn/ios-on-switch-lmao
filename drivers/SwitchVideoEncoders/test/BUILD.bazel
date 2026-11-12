@@ -13,6 +13,9 @@
 #                  kernel's checker taking those submits and refusing the display size; a reordering session's P and B
 #                  setups against NVIDIA's T210 driver's, the checker's B rules, the SPS and B slice header parsed back
 #   nvenclatch_host_test  what TegraNVENC writes in the colocated and reference slot methods a job leaves out
+#   nvencdirect_host_test  NVDEC's native 720p/1080p pictures as H.264 and H.265 input in place, the kernel's checker
+#                  taking them and the plan refusing other blocks, formats, crops, pitches and short pictures; which
+#                  producers of the picture the job waits for on the hardware
 #   hevcnvenc_host_test  HEVCNVENC.c's H.265 IDR and P setups byte for byte against NVIDIA's T210 driver's (three
 #                  sizes), the kernel's H.265 checker taking them and refusing each kind of bad submit, the SPS/PPS
 #                  and P slice header stating what the setup does
@@ -113,6 +116,25 @@ host_library(
     deps = [":h264_nvenc"],
 )
 
+# A native NVDEC picture as NVENC's input in place (TegraNVENCDirectPlan.h), through the kernel's checker.
+host_library(
+    name = "nvencdirect_host",
+    srcs = [
+        "nvencdirect_host.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCNVENC.c",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraNVENC:TegraNVENCDirectPlan.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.h",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCNVENC.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=nvencdirect_host_main"],
+    deps = [":h264_nvenc"],
+)
+
 # The HEVC parameter set and slice header writer, parsed back with AVD's HEVC syntax.
 host_library(
     name = "hevcenc_host",
@@ -156,6 +178,12 @@ host_test(
     name = "h264nvenc_host_test",
     srcs = ["h264nvenc_host_test.cpp"],
     deps = [":h264nvenc_host"],
+)
+
+host_test(
+    name = "nvencdirect_host_test",
+    srcs = ["nvencdirect_host_test.cpp"],
+    deps = [":nvencdirect_host"],
 )
 
 host_test(

@@ -30,6 +30,19 @@ struct TegraNVENCAfter {
     uint32_t syncpt, threshold;
 };
 
+// A job that reads another engine's memory under SwitchGpuBacking's ownership (TegraNVENCDirect.cpp): with the engine
+// lock held, begin opens the use with the job's fence and gives the producers' thresholds to wait for (at most
+// TEGRA_NVENC_ORDER_WAITS); end commits it once the job is queued, or abandons it.
+enum {
+    TEGRA_NVENC_ORDER_WAITS = 4
+};
+
+struct TegraNVENCOrder {
+    int (*begin)(void *context, uint32_t fence, TegraNVENCAfter *waits, uint32_t *count);
+    void (*end)(void *context, uint32_t fence, bool queued);
+    void *context;
+};
+
 // Resolves a submit's buffer handle; every user client supplies its own.
 typedef bool (*TegraNVENCResolve)(void *context, uint32_t handle, TegraNVENCBlock *block);
 
@@ -49,15 +62,19 @@ void tegra_nvenc_memory_release(void);  // a failed bring-up gives the tables ba
 int tegra_nvenc_buffer_alloc(uint64_t size, TegraNVENCBlock *block);
 void tegra_nvenc_buffer_free(TegraNVENCBlock *block);  // only once no job can touch it
 void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
+// Another engine's backing mapped read-only in NVENC's address space, cached by allocation: a handle held until no job
+// can read it (release with tegra_nvenc_native_unmap), its address and size; null when there is no room.
+void *tegra_nvenc_native_map(switch_gpu_backing *backing, uint64_t *iova, uint64_t *bytes);
+void tegra_nvenc_native_unmap(void *handle);
 
 // Checks a submit (TegraNVENCCheck.h): 0, or -22 with the reason.
 int tegra_nvenc_check_submit(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context,
                              const char **why);
 // Checks a submit, cleans its CPU-written ranges, copies its setup into kernel memory, writes 0 in the address methods
-// of features it leaves off and queues it on host1x channel 0, after `after` when given. Returns 0 and the job's
-// fence, or a negative errno-style value.
+// of features it leaves off and queues it on host1x channel 0, after `after` and `order`'s producers when given.
+// Returns 0 and the job's fence, or a negative errno-style value.
 int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context,
-                    const TegraNVENCAfter *after, uint32_t *fence, const char **why);
+                    const TegraNVENCAfter *after, const TegraNVENCOrder *order, uint32_t *fence, const char **why);
 uint32_t tegra_nvenc_syncpt(void);  // the job fences' syncpoint
 // Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound the jobs in flight
 // are cancelled (-5) and the engine is reset for the next one.

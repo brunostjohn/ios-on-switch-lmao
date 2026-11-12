@@ -44,8 +44,9 @@ typedef struct {
     uint32_t frames, keyFrames, tiles, errors;
     uint64_t bytes, copyTicks, encodeTicks;
     bool surfaceInput;  // VIC writes the input from the picture's IOSurface (AVEInput.c)
-    // Pictures whose input the CPU copied, VIC wrote (among them those the copy engine staged first), VIC could not take.
-    uint32_t inputCopies, inputVIC, inputBounced, inputRefused;
+    // Pictures whose input the CPU copied, VIC wrote (among them those the copy engine staged first), VIC could not take,
+    // and NVENC read in place from a native decoder picture.
+    uint32_t inputCopies, inputVIC, inputBounced, inputRefused, inputDirect;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     CVPixelBufferRef probeSource;  // the last picture, for SwitchEncoderLayoutProbe
 #endif

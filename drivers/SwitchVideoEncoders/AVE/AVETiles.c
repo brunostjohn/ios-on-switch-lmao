@@ -240,11 +240,11 @@ OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBuffe
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 CFDictionaryRef ave_copy_routes(const Encoder *e)
 {
-    const int32_t counts[] = {(int32_t)e->frames,      (int32_t)e->tiles,    (int32_t)e->errors,
-                              (int32_t)e->inputCopies, (int32_t)e->inputVIC, (int32_t)e->inputBounced,
-                              (int32_t)e->inputRefused};
-    const void *keys[] = {CFSTR("pictures"),  CFSTR("tiles"),         CFSTR("errors"),       CFSTR("input_cpu_copies"),
-                          CFSTR("input_vic"), CFSTR("input_bounced"), CFSTR("input_refused")};
+    const int32_t counts[] = {(int32_t)e->frames,       (int32_t)e->tiles,      (int32_t)e->errors,
+                              (int32_t)e->inputCopies,  (int32_t)e->inputVIC,   (int32_t)e->inputBounced,
+                              (int32_t)e->inputRefused, (int32_t)e->inputDirect};
+    const void *keys[] = {CFSTR("pictures"),  CFSTR("tiles"),         CFSTR("errors"),        CFSTR("input_cpu_copies"),
+                          CFSTR("input_vic"), CFSTR("input_bounced"), CFSTR("input_refused"), CFSTR("input_direct")};
 
     enum {
         COUNT = sizeof(counts) / sizeof(counts[0])

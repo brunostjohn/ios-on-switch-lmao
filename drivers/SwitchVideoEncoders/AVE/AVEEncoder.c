@@ -783,13 +783,14 @@ static void finalize(CMBaseObjectRef ref)
 {
     Encoder *e = storage(ref);
     if (e->frames)
-        os_log(gLog,
-               "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
-               "%u by VIC (%u through the copy engine), %u copied, %u VIC could not take, mean %.2f ms input + %.2f ms "
-               "encode",
-               e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
-               (unsigned long long)e->bytes, e->inputVIC, e->inputBounced, e->inputCopies, e->inputRefused,
-               ticksToMs(e->copyTicks) / e->frames, ticksToMs(e->encodeTicks) / e->frames);
+        os_log(
+            gLog,
+            "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
+            "%u read in place, %u by VIC (%u through the copy engine), %u copied, %u VIC could not take, mean %.2f ms "
+            "input + %.2f ms encode",
+            e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
+            (unsigned long long)e->bytes, e->inputDirect, e->inputVIC, e->inputBounced, e->inputCopies, e->inputRefused,
+            ticksToMs(e->copyTicks) / e->frames, ticksToMs(e->encodeTicks) / e->frames);
     ave_reorder_release(e);
     if (e->client) {
         releaseBuffers(e);

@@ -91,11 +91,17 @@ static inline uint32_t tegra_nvenc_block_rows(bool tiled, uint32_t blockHeight)
     return tiled ? 16 : 16u << tegra_nvenc_block_code(blockHeight);
 }
 
-// Luma and chroma rows a surface spans: its plane heights rounded to whole blocks, and luma to at least 64 and chroma
-// to 32 rows as every surface has been laid out since E3.
+// Luma and chroma rows a surface is laid out with: its plane heights rounded to whole blocks, and luma to at least 64
+// and chroma to 32 rows as every surface has been laid out since E3.
 static inline uint32_t tegra_nvenc_luma_rows(uint32_t height, uint32_t blockRows)
 {
     return tegra_nvenc_align(height, blockRows > 64 ? blockRows : 64);
+}
+
+// Rows the engine reads or writes: whole blocks of the picture's planes, nothing past the last block.
+static inline uint32_t tegra_nvenc_read_rows(uint32_t planeHeight, uint32_t blockRows)
+{
+    return tegra_nvenc_align(planeHeight, blockRows);
 }
 
 static inline uint32_t tegra_nvenc_chroma_rows(uint32_t height, uint32_t blockRows)
@@ -123,9 +129,14 @@ static inline const char *tegra_nvenc_check_surface(const nvenc_h264_surface_cfg
     const uint32_t pitch = c->sfc_pitch;
     if (pitch != c->sfc_pitch_chroma || (pitch & 63) || pitch < tegra_nvenc_align(width, 16) || pitch > 8176)
         return "surface pitch";
+    // A block-linear picture is bounded by the blocks the engine reads (a decoder's picture has no more); a 16x16-tiled
+    // one, which references and reconstructions are, keeps the 64-row margin of the layout every buffer has.
     const uint32_t blockRows = tegra_nvenc_block_rows(c->tiled_16x16, c->block_height);
-    const uint64_t luma = (uint64_t)pitch * tegra_nvenc_luma_rows(height, blockRows);
-    const uint64_t chroma = (uint64_t)pitch * tegra_nvenc_chroma_rows(height, blockRows);
+    const bool exact = !c->tiled_16x16;
+    const uint64_t luma =
+        (uint64_t)pitch * (exact ? tegra_nvenc_read_rows(height, blockRows) : tegra_nvenc_luma_rows(height, blockRows));
+    const uint64_t chroma = (uint64_t)pitch * (exact ? tegra_nvenc_read_rows((height + 1) / 2, blockRows)
+                                                     : tegra_nvenc_chroma_rows(height, blockRows));
     const uint64_t offset = (uint64_t)c->chroma_top_frm_offset * 256;
     if (offset && offset < luma)
         return "chroma overlaps luma";

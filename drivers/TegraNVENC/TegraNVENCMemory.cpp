@@ -9,6 +9,7 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUEngine.h"
 #include "../TegraGM20B/SwitchGpuBacking.h"
+#include "../TegraGM20B/SwitchGpuBackingMaps.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 
 namespace {
@@ -29,6 +30,22 @@ struct Allocation {
     switch_dma_pages pages;
     uint64_t iova, bytes;
 };
+
+struct NVENCSpace {
+    static uint64_t map(const uint64_t *pages, uint32_t count, bool writable)
+    {
+        return gSpace.map(pages, count, writable);
+    }
+
+    static void unmap(uint64_t address, uint32_t count)
+    {
+        gSpace.unmap(address, count);
+    }
+};
+
+// Native decoder pictures NVENC reads in place (TegraNVENCDirect.cpp), as many and as much as VIC keeps mapped: a
+// decoder's whole pool stays mapped, and a job's picture is held until its fence (TegraNVENC.cpp: kInFlight jobs).
+constinit SwitchGpuBackingMaps<SwitchGpuBackingMap, NVENCSpace, 32, 128ULL << 20> gNative;
 
 void releaseAllocation(void *context)
 {
@@ -53,6 +70,8 @@ extern "C" int tegra_nvenc_memory_init(const switch_dma_buffer *firmware, const 
         gSpace.release();
         return -1;
     }
+    if (!gNative.lock)
+        gNative.start();
     return tegra_nvenc_memory_attach(line, size);
 }
 
@@ -125,6 +144,21 @@ extern "C" void tegra_nvenc_buffer_free(TegraNVENCBlock *block)
         return;
     switch_gpu_backing_release(block->backing);
     *block = {};
+}
+
+extern "C" void *tegra_nvenc_native_map(switch_gpu_backing *backing, uint64_t *iova, uint64_t *bytes)
+{
+    SwitchGpuBackingMap *map = gSpace.lock ? gNative.acquire(backing, false) : nullptr;
+    if (map) {
+        *iova = map->address;
+        *bytes = static_cast<uint64_t>(map->pages) << 12;
+    }
+    return map;
+}
+
+extern "C" void tegra_nvenc_native_unmap(void *handle)
+{
+    gNative.release(static_cast<SwitchGpuBackingMap *>(handle));
 }
 
 extern "C" void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free)

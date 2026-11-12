@@ -447,7 +447,7 @@ int check(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, T
 }
 
 int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, const TegraNVENCAfter *after,
-        uint32_t *fence, const char **why)
+        const TegraNVENCOrder *order, uint32_t *fence, const char **why)
 {
     *why = nullptr;
     if (!gUp)
@@ -470,11 +470,11 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
     // predictor pair when the submit has none; in each latched method the submit leaves out, the scratch buffer or 0
     // (tegra_nvenc_latch); the scratch buffer as the RC process state (NVIDIA's driver gives every job one; constant
     // QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment. Room in front for
-    // two waits: the job before it and the engine that wrote its input.
+    // the waits: the job before it, the engine that wrote its input, and a native picture's producers (TegraNVENCOrder).
     // The stream is written in host1x's command arena once the job kInFlight back is done, so at most kInFlight - 1
     // jobs hold arena room and begin never sleeps under gEngineLock, which the stall path needs.
     constexpr uint32_t kUnused = sizeof(kUnusedMethods) / sizeof(kUnusedMethods[0]);
-    constexpr uint32_t kWaits = 2 * SWITCH_HOST1X_WAIT_WORDS;
+    constexpr uint32_t kWaits = (2 + TEGRA_NVENC_ORDER_WAITS) * SWITCH_HOST1X_WAIT_WORDS;
     constexpr uint32_t kWords = kWaits + 1 + 3 * (kUnused + TEGRA_NVENC_LATCHED + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1;
     static_assert((kInFlight + 1) * kWords <= SWITCH_HOST1X_ARENA_WORDS);
     uint32_t *words = nullptr;
@@ -512,6 +512,16 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
         IOLockUnlock(gEngineLock);
         gGate.done();
         return error;
+    }
+    TegraNVENCAfter ordered[TEGRA_NVENC_ORDER_WAITS];
+    uint32_t orderedCount = 0;
+    if (order) {
+        if (const int error = order->begin(order->context, gBase + job, ordered, &orderedCount)) {
+            switch_host1x_job_cancel(TEGRA_HOST1X_CHANNEL_NVENC);
+            IOLockUnlock(gEngineLock);
+            gGate.done();
+            return error;
+        }
     }
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     const uint32_t slot = job % kSetupSlots;
@@ -554,12 +564,18 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
         first -= SWITCH_HOST1X_WAIT_WORDS;
         tegra_host1x_op_wait_syncpt(words + first, after->syncpt, after->threshold);
     }
+    for (uint32_t k = 0; k < orderedCount; k++) {
+        first -= SWITCH_HOST1X_WAIT_WORDS;
+        tegra_host1x_op_wait_syncpt(words + first, ordered[k].syncpt, ordered[k].threshold);
+    }
     const int ret =
         switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first, gSyncpt, gBase + job);
     if (!ret) {
         __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
         *fence = gBase + job;
     }
+    if (order)
+        order->end(order->context, gBase + job, ret == 0);
     IOLockUnlock(gEngineLock);
     gGate.done();
     return ret;
@@ -574,9 +590,10 @@ extern "C" int tegra_nvenc_check_submit(const TegraNVENCSubmit *s, TegraNVENCRes
 }
 
 extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context,
-                               const TegraNVENCAfter *after, uint32_t *fence, const char **why)
+                               const TegraNVENCAfter *after, const TegraNVENCOrder *order, uint32_t *fence,
+                               const char **why)
 {
-    return run(s, resolve, context, after, fence, why);
+    return run(s, resolve, context, after, order, fence, why);
 }
 
 extern "C" uint32_t tegra_nvenc_syncpt(void)

@@ -33,6 +33,7 @@ kernel_driver(
     name = "TegraNVENC",
     srcs = [
         "TegraNVENC.cpp",
+        "TegraNVENCDirect.cpp",
         "TegraNVENCDump.cpp",
         "TegraNVENCEngine.cpp",
         "TegraNVENCMemory.cpp",

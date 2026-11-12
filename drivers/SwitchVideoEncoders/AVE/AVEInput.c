@@ -4,11 +4,13 @@
 // BL2 and every submit names the picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's
 // job waits for VIC's on the hardware. BL2 is the block-linear layout both ends were seen with: NVIDIA's T210 driver
 // hands NVENC its default 2-GOB surfaces (libnvtvmr 0x43a4, 0x2d4f0), and it is NVDEC's layout, the NV12 case of VIC's
-// block-linear output probe (gpu.x1.vic_block_linear). The CPU touches no sample. Rows off the grid VIC reads (VideoToolbox is asked to keep to it; a client's own
-// pool may not) go through the GPU's copy engine in the kernel first (input_bounced). A picture VIC cannot take at all
-// (no IOSurface, a surface the kernel refuses) fails its frame with one line per reason and counts in input_refused:
-// there is no CPU route beside VIC's. The CPU copy (16-byte runs into the buffer's layout) is a session's whole route
-// only when the kernel offers no surface input at all, which its start line says.
+// block-linear output probe (gpu.x1.vic_block_linear). The CPU touches no sample. A decoder's native picture (NVDEC's
+// block-linear output) NVENC reads in place, with no VIC job at all (input_direct). Rows off the grid VIC reads
+// (VideoToolbox is asked to keep to it; a client's own pool may not) go through the GPU's copy engine in the kernel
+// first (input_bounced). A picture VIC cannot take at all (no IOSurface, a surface the kernel refuses) fails its frame
+// with one line per reason and counts in input_refused: there is no CPU route beside VIC's. The CPU copy (16-byte runs
+// into the buffer's layout) is a session's whole route only when the kernel offers no surface input at all, which its
+// start line says.
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>
 #include <IOKit/IOReturn.h>
@@ -129,8 +131,9 @@ int ave_input_submit(Encoder *e, const TegraNVENCSubmit *submit, uint32_t *fence
     const int status = nvenc_submit(e->client, submit, fence, &input);
     if (!status) {
         e->inputCopies += input == TEGRA_NVENC_INPUT_CPU;
-        e->inputVIC += input != TEGRA_NVENC_INPUT_CPU;
+        e->inputVIC += input == TEGRA_NVENC_INPUT_VIC || input == TEGRA_NVENC_INPUT_BOUNCED;
         e->inputBounced += input == TEGRA_NVENC_INPUT_BOUNCED;
+        e->inputDirect += input == TEGRA_NVENC_INPUT_DIRECT;
     } else if (submit->source.surface_id && (status == kIOReturnUnsupported || status == kIOReturnNotReady)) {
         e->inputRefused++;
         if (status == kIOReturnUnsupported)

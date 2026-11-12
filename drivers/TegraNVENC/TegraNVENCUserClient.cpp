@@ -21,6 +21,7 @@
 #include <string.h>
 #include "TegraNVENC.h"
 #include "TegraNVENCABI.h"
+#include "TegraNVENCDirect.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
@@ -61,6 +62,7 @@ class AppleAVE2UserClient : public IOUserClient {
 
     IOLock *lock_ = nullptr;
     alignas(8) uint8_t input_[sizeof(TegraNVENCSubmit)] = {};  // under lock_: the record of a locked call
+    TegraNVENCSubmit direct_ = {};                             // under lock_: a submit reading a native picture
     Buffer buffers_[kMaxBuffers] = {};
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
@@ -71,6 +73,8 @@ class AppleAVE2UserClient : public IOUserClient {
     // Wait takes lock_ itself; every other method runs with the caller holding it.
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolve(void *context, uint32_t handle, TegraNVENCBlock *block);
+    static bool resolveDirect(void *context, uint32_t handle, TegraNVENCBlock *block);
+    int submitDirect(const TegraNVENCSubmit *submit, uint32_t *fence, const char **why);
 
 public:
     bool setUp()
@@ -106,6 +110,36 @@ bool AppleAVE2UserClient::resolve(void *context, uint32_t handle, TegraNVENCBloc
     if (b)
         *block = b->block;
     return b != nullptr;
+}
+
+struct DirectContext {
+    AppleAVE2UserClient *client;
+    const TegraNVENCDirect *direct;
+};
+
+bool AppleAVE2UserClient::resolveDirect(void *context, uint32_t handle, TegraNVENCBlock *block)
+{
+    const auto *c = static_cast<const DirectContext *>(context);
+    if (handle != TEGRA_NVENC_DIRECT_HANDLE)
+        return resolve(c->client, handle, block);
+    *block = c->direct->block;
+    return true;
+}
+
+// The source as its native NVDEC picture, read in place: 0, or -95 when NVENC cannot (VIC takes it), -11 when the
+// picture's producers are not ones NVENC's stream can wait for, else the job's error.
+int AppleAVE2UserClient::submitDirect(const TegraNVENCSubmit *submit, uint32_t *fence, const char **why)
+{
+    if (!tegra_nvenc_engine_ready())
+        return -95;
+    TegraNVENCDirect direct;
+    int err = tegra_nvenc_direct_prepare(submit, current_task(), &direct, &direct_, why);
+    if (!err) {
+        DirectContext context = {this, &direct};
+        err = tegra_nvenc_run(&direct_, resolveDirect, &context, nullptr, &direct.order, fence, why);
+    }
+    tegra_nvenc_direct_release(&direct);
+    return err;
 }
 
 // The connection's jobs are done, or were cancelled (-5: the engine was reset and its memory client flushed before the
@@ -275,6 +309,22 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
                 ret = ioreturn(err);
                 break;
             }
+            const char *nativeWhy = nullptr;
+            const int direct = submitDirect(submit, &fence, &nativeWhy);
+            if (!direct) {
+                submitted_ = true;
+                lastFence_ = fence;
+                TegraNVENCFence *reply = static_cast<TegraNVENCFence *>(out);
+                reply->fence = fence;
+                reply->input = TEGRA_NVENC_INPUT_DIRECT;
+                break;
+            }
+            if (direct != -95 && direct != -11) {
+                ret = ioreturn(direct);
+                break;
+            }
+            if (nativeWhy)
+                switch_refusal("TegraNVENC", nativeWhy, "the native picture goes through VIC: %s", nativeWhy);
             const int err = tegra_nvenc_source(submit, resolve, this, current_task(),
                                                submitted_ ? &lastFence_ : nullptr, &after, &route, &why);
             if (err) {
@@ -284,7 +334,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
                 break;
             }
         }
-        const int err = tegra_nvenc_run(submit, resolve, this, sourced ? &after : nullptr, &fence, &why);
+        const int err = tegra_nvenc_run(submit, resolve, this, sourced ? &after : nullptr, nullptr, &fence, &why);
         if (err) {
             static volatile int logged;
             if (why &&
