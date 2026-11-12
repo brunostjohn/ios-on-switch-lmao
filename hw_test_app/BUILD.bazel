@@ -437,9 +437,12 @@ swift_interop_hint(
 # The bench loop's GPU side (bench/switch_bench.h, tools/benchloop): the raw runtime compiled in again, as fetchform
 # links it, with SWITCH_RAW_OWN_CONNECTION so its device opens a connection and GPU VM of its own beside the facade's.
 # Hidden visibility keeps this copy's inline functions from being coalesced with the plugin's.
+# bench_completed.cpp compiles raw_completed.cpp in place of the runtime's unit, so this copy alone takes a record that
+# sets the pixel interlock without a storage form, in debug builds only; the raw stack key hashes raw_completed.cpp.
 cc_library(
     name = "bench",
     srcs = [
+        "bench/bench_completed.cpp",
         "bench/bench_device.h",
         "bench/bench_known.h",
         "bench/bench_records.cpp",
@@ -460,7 +463,6 @@ cc_library(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_loops.cpp",
@@ -488,6 +490,7 @@ cc_library(
         "//drivers/TegraGM20BMetal:raw_runtime_headers",
     ],
     hdrs = ["bench/switch_bench.h"],
+    additional_compiler_inputs = ["//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp"],
     aspect_hints = [":bench_module"],
     copts = [
         "-O2",
