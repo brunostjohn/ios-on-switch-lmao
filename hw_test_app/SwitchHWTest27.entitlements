@@ -32,6 +32,26 @@
 		<string>kern.a64x.stub_mismatch</string>
 		<string>kern.a64x.traps</string>
 		<string>kern.a64x.traps_unhandled</string>
+		<string>kern.switch_flips_completion</string>
+		<string>kern.switch_flips_gate</string>
+		<string>kern.switch_flips_lead_us</string>
+		<string>kern.switch_flips_withdrawn</string>
+		<string>kern.switch_flips_refused</string>
+		<string>kern.switch_media_flips_completion</string>
+		<string>kern.switch_media_flips_withdrawn</string>
+		<string>kern.switch_media_flips_refused</string>
+		<string>kern.switch_media_flips_lead_us</string>
+		<string>kern.switch_media_flips_armed</string>
+		<string>debug.switch_display_dc_host1x_class</string>
+		<string>kern.switch_scanout_cpu</string>
+		<string>kern.switch_scanout_unshown</string>
+		<string>kern.switch_scanout_vic</string>
+		<string>kern.switch_scanout_vic_up</string>
+		<string>kern.memorystatus_level</string>
+	</array>
+	<key>com.apple.security.exception.sysctl.read-write</key>
+	<array>
+		<string>debug.switch_display_dc_host1x_class</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
 	<array>
