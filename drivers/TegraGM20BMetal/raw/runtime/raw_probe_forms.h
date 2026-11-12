@@ -15,6 +15,7 @@
 #include <string>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitBarrier.h"
+#include "raw_compute_opening.h"
 #include "raw_push.h"
 
 namespace raw {
@@ -199,13 +200,10 @@ inline void probeBlitOpening(Push &p, const ProbeForms &f, ProbeEngine before, P
 }
 
 // A compute encoder's opening (raw_compute.cpp's ComputeEncoder): the scheduler's and the compute class's header and
-// sampler caches always; the wait, the flush and the data invalidates by the form
+// sampler caches always; the flush and the data invalidates by the form (today's: raw_compute_opening.h)
 inline void probeComputeOpening(Push &p, const ProbeForms &f, ProbeEngine before, ProbeTaken &taken)
 {
-    constexpr uint32_t data = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE),
-                       flush = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
-                       constant = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE),
-                       dataNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
+    constexpr uint32_t dataNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
                        constantNoWfi = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE);
     const bool first = before == ProbeEngine::None && f.entry != EntryForm::Today;
     const bool switched =
@@ -219,13 +217,9 @@ inline void probeComputeOpening(Push &p, const ProbeForms &f, ProbeEngine before
             p.m(NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
         }
     } else {
-        p.m(NVB197_WAIT_FOR_IDLE, 0);
-        p.m(NVB1C0_INVALIDATE_SHADER_CACHES, data | flush | constant, SUBC_COMPUTE);
-        p.m(NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+        computeOpeningFlush(p);
     }
-    p.m(NVB1C0_INVALIDATE_SKED_CACHES, 0, SUBC_COMPUTE);
-    p.m(NVB1C0_INVALIDATE_SAMPLER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
-    p.m(NVB1C0_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+    computeOpeningHeaders(p);
 }
 
 // A submission's prologue after its stamp, for an entry form other than today's; answers the

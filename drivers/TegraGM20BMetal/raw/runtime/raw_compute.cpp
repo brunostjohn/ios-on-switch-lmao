@@ -3,6 +3,7 @@
 #include "raw_lock.h"
 #include "raw_compute.h"
 #include "raw_compute_slot.h"
+#include "raw_compute_opening.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitPredicate.h"
 #include "raw_kit.h"
@@ -23,14 +24,10 @@ namespace raw {
 namespace {
 
 enum : uint32_t {
-    WAIT_FOR_IDLE = NVB1C0_WAIT_FOR_IDLE,
-    INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI = NVB1C0_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI,
-    INVALIDATE_SKED_CACHES = NVB1C0_INVALIDATE_SKED_CACHES,
     SEND_PCAS_A = NVB1C0_SEND_PCAS_A,
     SEND_SIGNALING_PCAS_B = NVB1C0_SEND_SIGNALING_PCAS_B,
     INVALIDATE_SHADER_CACHES = NVB1C0_INVALIDATE_SHADER_CACHES,
     INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI,
-    INVALIDATE_SAMPLER_CACHE_NO_WFI = NVB1C0_INVALIDATE_SAMPLER_CACHE_NO_WFI,
 };
 
 constexpr uint32_t kRootBytes = 0x800, kRootSets = 0x38, kRootPush = 0x700, kUploadChunk = 0x100;
@@ -127,19 +124,12 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};
     cb_.loops_.openSegment(stream());
-    // what the render and copy work before wrote, out of the SMs' data, constant and texture caches; the scheduler's cached
-    // QMDs (the upload ring reuses their addresses) and the compute class's header caches, as NVK opens a command buffer's
-    // compute work (nvk_cmd_buffer_begin_compute)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     probeComputeOpening(p_, cb.forms_, cb.lastEngine_, cb.taken_);
     cb.lastEngine_ = ProbeEngine::Compute;
 #else
-    p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_COMPUTE);
-    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
-    p_.m(INVALIDATE_SKED_CACHES, 0, SUBC_COMPUTE);
-    p_.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
-    p_.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+    computeOpeningFlush(p_);
+    computeOpeningHeaders(p_);
 #endif
 }
 

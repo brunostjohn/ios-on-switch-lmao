@@ -9,7 +9,8 @@ by default): grid and block, the QMD, the program, the root table and push words
 NVK's draws of its own (m2v's internal copies) and its early clears are not raw's work. Ruled raw's own:
   passstart  CE_COPY, NVK's upload at its submission's start
   placed     ICINV, the instruction caches raw invalidates in a submission that placed a program in the heap
-             (the harness places NVK's program for every run), and WFI, raw's compute encoder's opening
+             (the harness places NVK's program for every run)
+  slm        WFI before the channel's local memory grows for a kernel that asks for more (raw_slm.h emitSlm)
 A golden row: <kernel> <digest of the fields> <barriers> <tags>; a log passes with the same fields and barriers.
 """
 
@@ -21,7 +22,7 @@ import eq_fields
 
 eqcheck = eq_fields.eqcheck
 NVK_ONLY = {'CE_COPY'}
-RAW_ONLY = {'ICINV', 'WFI'}
+RAW_ONLY = {'ICINV'}
 
 
 def dispatch(log: str) -> dict:
@@ -49,11 +50,14 @@ def compare(nvk: dict, raw: dict) -> tuple[set[str], list[str]]:
             tags.add('passstart')
         else:
             refused.append(f'barriers only nvk has: {sorted(nvk["barriers"] - raw["barriers"])}')
-    if raw['barriers'] - nvk['barriers']:
-        if raw['barriers'] - nvk['barriers'] <= RAW_ONLY:
-            tags.add('placed')
-        else:
-            refused.append(f'barriers only raw has: {sorted(raw["barriers"] - nvk["barriers"])}')
+    extra = raw['barriers'] - nvk['barriers']
+    if 'WFI' in extra and ' slm=0/0 ' not in raw.get('qmd', ''):
+        tags.add('slm')
+        extra -= {'WFI'}
+    if extra <= RAW_ONLY:
+        tags.update({'placed'} if extra else set())
+    else:
+        refused.append(f'barriers only raw has: {sorted(extra)}')
     return tags, refused
 
 

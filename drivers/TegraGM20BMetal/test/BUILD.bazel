@@ -2704,6 +2704,17 @@ host_test(
 )
 
 host_test(
+    name = "raw_compute_opening_test",
+    srcs = [
+        "raw_compute_opening_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_opening.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
     name = "raw_blend_reads_test",
     srcs = [
         "raw_blend_reads_test.cpp",
