@@ -13,8 +13,9 @@ import Metal
 /// - cpu_us_<label>: per command buffer, the encode and the commit call (raw encodes and submits inside commit).
 /// - stall_us_<label>: per command buffer, the host's time after the commit that the GPU time does not account for (the
 ///   wait for the GPU and the completion's latency), where the GPU time is in nanoseconds.
-/// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock, which InterlockBound holds to about m2v's
-///   time for the same state.
+/// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock. Such a state is timed again as the same
+///   pixels in eight disjoint bands, no fragment waiting on another: apart_us_<label>, GPU time per full screen, which
+///   InterlockBound holds us_<label> to within its class's factor.
 /// - gpu_clock_<label>=host (raw, debug builds): a timed run's GPU time was the host's window, for want of a GPU stamp.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
@@ -67,7 +68,7 @@ struct CAHotStatesScene: GPUScene {
                     ? gpu.texture(format, Self.width, Self.height)
                     : gpu.texture(format, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
             }
-            let draw = { (commands: MTLCommandBuffer) in
+            let draw = { (bands: Bool, commands: MTLCommandBuffer) in
                 let pass = MTLRenderPassDescriptor()
                 for (color, texture) in zip(line.colors, attachments) {
                     pass.colorAttachments[color.index].texture = texture
@@ -76,18 +77,20 @@ struct CAHotStatesScene: GPUScene {
                 }
                 let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
                 encoder.setRenderPipelineState(pipeline)
-                CAState.bind(
-                    encoder, vertices: CAState.rectangle(x0: -1, y0: -1, x1: 1, y1: 1, color: SIMD4(1, 1, 1, 1)),
-                    source: source)
-                for _ in 0..<Self.draws {
+                for band in 0..<Self.draws {
+                    let (y0, y1) = bands ? Self.band(band) : (-1, 1)
+                    CAState.bind(
+                        encoder, vertices: CAState.rectangle(x0: -1, y0: y0, x1: 1, y1: y1, color: SIMD4(1, 1, 1, 1)),
+                        source: source)
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
                 encoder.endEncoding()
             }
+            let overlapping = { (commands: MTLCommandBuffer) in draw(false, commands) }
             let label = line.shortLabel.lowercased()
             var warm = 0
             if kind == "raw" {
-                while warm < Self.warmups, try await gpu.run(tolerateError: true, draw).path != "raw" {
+                while warm < Self.warmups, try await gpu.run(tolerateError: true, overlapping).path != "raw" {
                     warm += 1
                     try await Task.sleep(nanoseconds: 50_000_000)
                 }
@@ -95,12 +98,12 @@ struct CAHotStatesScene: GPUScene {
             let before = RawFacade.counters(of: gpu.device)
             var runs: [GPU.Timing] = []
             for _ in 0..<Self.runs {
-                runs.append(try await gpu.run(tolerateError: true, draw))
+                runs.append(try await gpu.run(tolerateError: true, overlapping))
             }
             let after = RawFacade.counters(of: gpu.device)
             if processDefault && line.fragment.name == Self.wideBlur {
                 let connection = GPUConnection()
-                let buffers = try (0..<Self.dumpBuffers).map { _ in try gpu.commit(draw) }
+                let buffers = try (0..<Self.dumpBuffers).map { _ in try gpu.commit(overlapping) }
                 dumped = RegDump.capture(.hotStates, on: connection)
                 do {
                     try gpu.finish(buffers)
@@ -129,14 +132,27 @@ struct CAHotStatesScene: GPUScene {
                 result.metrics.set("stall_us_" + label, Stats.percentile(stalls, 0.5), digits: 0)
             }
             if warm > 0 { result.metrics.set("warm_" + label, warm) }
-            if let interlocked = after["interlock_draws"] {
+            if let interlocked = after["interlock_draws"], interlocked > before["interlock_draws"] ?? 0 {
                 result.metrics.set("ilk_" + label, interlocked - (before["interlock_draws"] ?? 0))
+                var apart: [Double] = []
+                for _ in 0..<Self.runs {
+                    apart.append(try await gpu.run(tolerateError: true) { draw(true, $0) }.gpuMilliseconds * 1000)
+                }
+                result.metrics.set("apart_us_" + label, Stats.percentile(apart, 0.5), digits: 1)
+            } else if after["interlock_draws"] != nil {
+                result.metrics.set("ilk_" + label, 0)
             }
             if runs.contains(where: { $0.gpuClock == "host" }) { result.metrics.set("gpu_clock_" + label, "host") }
         }
         if timed == 0 { result.notes.append("no hot state made from this QuartzCore") }
         if processDefault { result.metrics.merge(dumped) }
         return result
+    }
+
+    /// Band `index` of `draws` across the target, in normalized device coordinates.
+    static func band(_ index: Int) -> (Float, Float) {
+        let height = 2 / Float(draws)
+        return (-1 + Float(index) * height, -1 + Float(index + 1) * height)
     }
 
     func judge(_ metrics: inout Metrics) -> [String] {

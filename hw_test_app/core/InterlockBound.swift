@@ -1,34 +1,53 @@
 import Foundation
 
-/// gpu.ca.hot_states' check that the raw path's pixel interlock costs about what the m2v device's does for the same
-/// Core Animation state: both run NAK's ticket lock over a ticket buffer, so the raw draw is held to `limit` times
-/// m2v's. The raw path's GPU times are its stamps' nanoseconds; m2v's are PTIMER units read as nanoseconds
-/// (CAHotStatesScene). The bound comes from the kernel's own per-job GPU times of the 8-draw command buffers
-/// (`tegra-gm20b: jobs SwitchHWTest: ... slowest seqno`): TimgBvcm took 2.4 ms a draw with the ticket buffer cached
-/// (probe-v1) and 26.1-34.1 ms with it bypassing the GPU's L2 (stack-S-v2), against m2v's 1812.5 PTIMER units, 2.95 ms:
-/// 0.8 and 9 times m2v's. A raw time that is the host's window (no GPU stamp) is no GPU time and fails the check.
+/// gpu.ca.hot_states' check that the pixel interlock costs a Core Animation state no more than its class's factor over
+/// the same state's draws when no fragment waits on another. Per state that interlocked on the raw device
+/// (raw_ilk_<label> > 0): its full-screen draw over the seven before it (raw_us_<label>) against the same pixels drawn in
+/// the same run as eight disjoint bands (raw_apart_us_<label>), both timed by the raw path's GPU stamps. A fetching draw
+/// runs its state's program inside the interlock either way (raw_fetch_order.h), so the ratio is what the waits cost: the
+/// ticket buffer bypassing the GPU's L2 (stack-S-v2) made TimgBvcm's overlapping draw 26.1-34.1 ms against 2.4 ms with it
+/// cached (probe-v1). A time that is the host's window (no GPU stamp) is no GPU time and fails the check, and so does an
+/// interlocked state with no uncontended time or no stated factor.
 public enum InterlockBound {
-    public static let limit = 2.0
-    public static let ptimerNanoseconds = 1.6276
+    /// The factor per class of interlocked state, by the label's texture function: TimgBvcm's colour-matrix blend that
+    /// fetches its destination, and the glass's sample (Tgsa) beside its R32Float and RGBA16Float attachments.
+    public static let factors: [(texture: String, factor: Double)] = [("timgbvcm", 2.0), ("tgsa", 2.0)]
 
-    /// Per state that interlocked on the raw device (`raw_ilk_<label>` > 0) and was timed on both devices: its raw time
-    /// over m2v's, as `raw_ilk_x_<label>`, and a reason for each past `limit`.
+    public static func factor(_ label: String) -> Double? {
+        factors.first { label.contains("_" + $0.texture) }?.factor
+    }
+
+    /// Per interlocked state: raw_ilk_x_<label>, its overlapping time over its uncontended one, both as milliseconds
+    /// (raw_ilk_ms_<label>, raw_apart_ms_<label>) for comparisons across builds, and a reason for each past its factor or
+    /// that cannot be judged.
     public static func judge(_ metrics: inout Metrics) -> [String] {
         var reasons: [String] = []
-        for key in metrics.keys where key.hasPrefix("raw_ilk_") && !key.hasPrefix("raw_ilk_x_") {
+        let derived = ["raw_ilk_x_", "raw_ilk_ms_"]
+        for key in metrics.keys.sorted()
+        where key.hasPrefix("raw_ilk_") && !derived.contains(where: { key.hasPrefix($0) }) {
             let label = String(key.dropFirst("raw_ilk_".count))
-            guard let draws = value(metrics[key]), draws > 0, let raw = value(metrics["raw_us_" + label]),
-                let m2v = value(metrics["m2v_us_" + label]), m2v > 0
-            else { continue }
+            guard let draws = value(metrics[key]), draws > 0, let raw = value(metrics["raw_us_" + label]) else {
+                continue
+            }
             if metrics["raw_gpu_clock_" + label] == .text("host") {
                 reasons.append("\(label): the raw interlocked draw's time is the host's window, not the GPU's")
                 continue
             }
-            let ratio = raw / (m2v * ptimerNanoseconds)
+            guard let apart = value(metrics["raw_apart_us_" + label]), apart > 0 else {
+                reasons.append("\(label): interlocked, with no uncontended time to hold it to")
+                continue
+            }
+            guard let factor = factor(label) else {
+                reasons.append("\(label): interlocked, and its class has no stated factor")
+                continue
+            }
+            let ratio = raw / apart
             metrics.set("raw_ilk_x_" + label, ratio, digits: 2)
-            if ratio > limit {
+            metrics.set("raw_ilk_ms_" + label, raw / 1000, digits: 3)
+            metrics.set("raw_apart_ms_" + label, apart / 1000, digits: 3)
+            if ratio > factor {
                 let shown = MetricValue.format(ratio, digits: 1)
-                reasons.append("\(label): the raw interlocked draw takes \(shown)x m2v's (limit \(limit)x)")
+                reasons.append("\(label): the interlocked draw takes \(shown)x its uncontended time (limit \(factor)x)")
             }
         }
         return reasons
