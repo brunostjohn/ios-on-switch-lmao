@@ -100,6 +100,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
                             std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers,
                             bool split, PackForm requested)
 {
+    storageRefusal_.clear();
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = nvk_.compileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
                                                     : "the frontend or NVK has no direct compile";
@@ -118,6 +119,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
     CompileOutcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
     if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
+    storageRefusal_ = why;
     outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
     if (outcome == CompileOutcome::Made)
         out.pipeline.flags |= PipelineBarrierForm;

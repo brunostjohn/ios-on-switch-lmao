@@ -61,6 +61,12 @@ public:
         variants_ = on;
     }
 
+    // Why the last make's storage form was refused where it made the barrier form instead; empty where it made none
+    const std::string &storageRefusal() const
+    {
+        return storageRefusal_;
+    }
+
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
     // (raw_direct_compute.h)
     CompileOutcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
@@ -70,6 +76,7 @@ private:
     PackRules rules_;
     DirectNvk nvk_;
     bool variants_ = false;
+    std::string storageRefusal_;
 
     CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                         const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,

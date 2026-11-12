@@ -11,7 +11,8 @@
 //   tools/gpu/maxwell/nakstat.py --dump reads, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json
 //   with its rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
 // Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
-// device's harvest against the pack it booted with, they are the states its runtime refused.
+// device's harvest against the pack it booted with, they are the states its runtime refused. A state made in the barrier
+// form because its storage form was refused is listed with that reason (BARRIER FORM lines).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -196,6 +197,8 @@ int main(int argc, char **argv)
                     rec.pipeline.flags |= raw::PipelineVariantRecord;
                 }
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+                if (outcome == raw::CompileOutcome::Made && !direct.storageRefusal().empty())
+                    printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
                 if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made) {
                     dumpRecord(dir, key, rec);
                     dumpFetchFree(direct, qc, line, key, textures, dir);
