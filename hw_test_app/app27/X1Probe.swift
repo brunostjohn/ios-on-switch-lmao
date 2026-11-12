@@ -99,6 +99,7 @@ enum X1Probes {
         X1VICPitchProbe.probe, X1VICLayoutProbe.probe, X1VICFractionProbe.probe,
         X1VICPackedProbe.probe, X1VICTransposeProbe.probe, X1VICLargeProbe.probe, X1VICComposeProbe.probe,
         X1VICComposeProbe.display,
-        X1IndexLimitProbe.probe,
     ]
+    /// The probe that runs after every other test of the app: its draw reads memory no other test's does
+    static let last: [any HWTest] = [X1IndexLimitProbe.probe]
 }
