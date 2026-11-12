@@ -128,9 +128,9 @@
 #                     over the encodings of Metal's render pass descriptor ivars (RawMetalPassCache.mm reads them by name)
 #   raw_take_pool_test  raw/runtime/raw_take_pool.h: items any thread keeps and takes with no lock, never held by two
 #                     threads at once nor lost (the recordings command buffers give back and take, RawMetalCommandBuffer.mm)
-#   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread in
-#                     order with no lock, the taker sleeping until the next hand-off that wakes or a wake(), each counted
-#                     until it is popped
+#   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread, and
+#                     every thread's schedule changes the submit worker, each giver's in order with no lock, the taker
+#                     sleeping until the next hand-off that wakes or a wake(), each counted until it is popped
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names

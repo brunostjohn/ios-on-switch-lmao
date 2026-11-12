@@ -43,6 +43,35 @@ TEST(HandoffQueue, ATakerGetsEveryItemInOrderWhileTheGiverRunsAhead)
     EXPECT_EQ(queue.size(), 0u);
 }
 
+// As the submit worker takes its schedule from every recording thread and the completion thread: each giver's items in
+// its order and none lost or doubled while their spare nodes go round between givers and the taker
+TEST(HandoffQueue, SeveralGiversEachKeepTheirOrderAcrossSpareNodes)
+{
+    raw::HandoffQueue<Item> queue;
+    constexpr uint64_t kGivers = 4, kItems = 50000;
+    std::vector<std::thread> givers;
+    for (uint64_t g = 0; g < kGivers; ++g)
+        givers.emplace_back([&queue, g] {
+            for (uint64_t i = 0; i < kItems; ++i)
+                queue.push({g << 32 | i, {i}}, i % 3 == 0);
+        });
+    std::vector<uint64_t> next(kGivers, 0);
+    uint64_t wrong = 0;
+    for (uint64_t taken = 0; taken < kGivers * kItems; ++taken) {
+        const Item &item = queue.front();
+        const uint64_t g = item.index >> 32, i = item.index & 0xffffffff;
+        wrong += g >= kGivers || i != next[g] || item.payload.size() != 1 || item.payload[0] != i;
+        if (g < kGivers)
+            next[g] = i + 1;
+        queue.pop();
+    }
+    for (std::thread &giver : givers)
+        giver.join();
+    EXPECT_EQ(wrong, 0u);
+    EXPECT_EQ(queue.size(), 0u);
+    EXPECT_EQ(queue.peek(), nullptr);
+}
+
 TEST(HandoffQueue, ATakerSleepsUntilTheNextHandOff)
 {
     raw::HandoffQueue<Item> queue;
