@@ -28,6 +28,14 @@ public enum RawFacade {
         return counters.mapValues(\.intValue)
     }
 
+    /// The facade's encode profile since the device opened (debug builds; empty off the facade or in a release
+    /// runtime): "<part>_us", "<part>_self_us" and "<part>_calls" for each part of raw_encode_profile.h, its events
+    /// ("mallocs", "locks", "sends", "applied", ...), "encodes", "malloc_encodes" and "wall_us".
+    public static func encodeProfile(of device: MTLDevice) -> [String: Double] {
+        guard let profile = ask(device, "switchRawEncodeProfile") as? [String: NSNumber] else { return [:] }
+        return profile.mapValues(\.doubleValue)
+    }
+
     /// The bytes the facade's raw device holds now (empty off the facade): "pool" (its pool, block-linear and depth
     /// chunks), "wc" (write-combined chunks) and "heap" (the shader heap's bound parts).
     public static func memory(of device: MTLDevice) -> [String: Int] {
