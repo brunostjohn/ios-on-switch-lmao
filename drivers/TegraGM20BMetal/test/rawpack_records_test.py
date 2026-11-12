@@ -79,6 +79,24 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(packfile.variant_name(rec['key'].replace('wtex=1:23', 'tests=2 | wtex=0:25,1:23')),
                          ' | tests=2 | wtex=0:25,1:23')
 
+    def test_the_report_counts_variant_records_by_form_and_names_each_sampled_two_plane_one(self):
+        state = 'samples=1 c0=550:15:0:1:0:0:1:0:0 | v a | f b'
+        cubic = ' | cubic s0:0000n t0:550 | xrs=4'
+        names = ['', ' | xrs=2', ' | xrs=2', ' | xr2p | xrs=2', ' | tests=1 | xrs=2', cubic, ' | wtex=1:23']
+        lines = directlink.variant_report([{'key': state + n} for n in names])
+        self.assertEqual(
+            lines[0],
+            '6 variant records: 1 of a test class, 1 of cubic samplers, 1 of two-plane passes, '
+            '5 of sampled two-plane textures, 1 of written formats',
+        )
+        self.assertEqual(
+            lines[1:],
+            [
+                f'  sampled two-plane variant (xrs=2): {state} | xrs=2',
+                f'  sampled two-plane variant ({cubic[3:]}): {state}{cubic}',
+            ],
+        )
+
     def test_a_variant_record_lies_under_its_states_key_and_is_named(self):
         own = {'key': 'samples=1 ds=260/260 c0=80:15:0 | v a | f b', 'vs': 0, 'fs': 1, 'blob': [], 'entries': [],
                'push': [], 'vbs': [], 'set_size': 0, 'fetch': True}

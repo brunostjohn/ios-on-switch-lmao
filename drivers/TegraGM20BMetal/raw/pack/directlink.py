@@ -337,6 +337,30 @@ def write_programs(path: str, programs: dict[str, dict]) -> None:
             f.write(bytes(p['cbufs']) + p['image'] + p['data'])
 
 
+# The forms a variant record's name holds (runtime/raw_pack.h variantNameAt), as the report counts them
+VARIANT_FORMS = (
+    ('tests=', 'of a test class'),
+    ('cubic', 'of cubic samplers'),
+    ('xr2p', 'of two-plane passes'),
+    ('xrs=', 'of sampled two-plane textures'),
+    ('wtex=', 'of written formats'),
+)
+
+
+def variant_report(states: list[dict]) -> list[str]:
+    """Give the report's count of variant records by form, then each sampled two-plane variant a corpus line named."""
+    named = [packfile.variant_name(rec['key']) for rec in states]
+    counts = ', '.join(f'{sum(1 for n in named if tag in n)} {what}' for tag, what in VARIANT_FORMS)
+    sampled = dict.fromkeys(
+        (n, rec['key'])
+        for rec, n in zip(states, named, strict=True)
+        if 'xrs=' in n and 'tests=' not in n and 'xr2p' not in n
+    )
+    return [f'{sum(1 for n in named if n)} variant records: {counts}'] + [
+        f'  sampled two-plane variant ({n.removeprefix(" | ")}): {key[:150]}' for n, key in sampled
+    ]
+
+
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
     inventory = ''
@@ -353,11 +377,7 @@ def main() -> None:
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
-    named = [packfile.variant_name(rec['key']) for rec in states]
-    report.append(
-        f'{sum(1 for n in named if n)} variant records: {sum(1 for n in named if "tests=" in n)} of a test class, '
-        f'{sum(1 for n in named if "cubic" in n)} of cubic samplers'
-    )
+    report += variant_report(states)
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')
