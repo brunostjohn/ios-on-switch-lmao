@@ -53,6 +53,7 @@ seed_tools(
         METAL + ":frontend_headers",
         GM20B_METAL + ":precompile/PrecompileCompute.h",
         GM20B_METAL + ":precompile/PrecompileInputs.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
