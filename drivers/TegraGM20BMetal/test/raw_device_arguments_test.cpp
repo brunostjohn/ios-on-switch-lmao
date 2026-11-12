@@ -3,6 +3,8 @@
 // ExecutionStatus words at its creation, its set 1 holds every texture whose ID was named where its class fits, and its
 // draws are submitted.
 #include "raw_device_harness.h"
+#include "../raw/runtime/raw_compute.h"
+#include "../raw/runtime/raw_compute_record.h"
 #include "../raw/runtime/raw_record.h"
 
 namespace {
@@ -258,6 +260,50 @@ TEST_F(DeviceArguments, ASlotStatesDrawWritesItsRootTableOverTheBoundBuffer)
     for (const auto &use : kernel_model::model.jobs.back().uses)
         written |= use.handle == bo && (use.access & TegraGM20BSurfaceWrite);
     EXPECT_TRUE(written);
+}
+
+// A kernel that reads argument buffers (PackKernel's argument tail): its root-table and status words the device's own at its
+// placement, its set 1 the device's for its arrays, and its dispatches submitted with the tables' descriptors
+TEST_F(DeviceArguments, AnArgumentKernelTakesTheDevicesTablesRootsAndSet1)
+{
+    raw::ComputeRecord r;
+    r.code.assign(64, 0);
+    r.keyString = "argument kernel";
+    r.kernel.keyHash = 0xcd;
+    r.kernel.entries = 2;
+    r.kernel.entry[0] = {0, raw::KernelTextureTable, 0, 0};
+    r.kernel.entry[1] = {16, raw::KernelSamplerTable, 0, 0};
+    r.kernel.setBytes = 32;
+    r.kernel.rootTableWord = 9;
+    r.kernel.statusWord = 11;
+    r.kernel.heapArrays = 2;
+    r.kernel.heap[0] = {kSampled2d, 0};
+    r.kernel.heap[1] = {kSamplerClass, 0x8000};
+    r.kernel.heapBytes = 0x10000;
+    r.cbufs = 3;
+    r.cbufType[0] = raw::CbufRoot;
+    r.cbufType[1] = raw::kCbufHeapSet;
+    r.cbufType[2] = raw::CbufSet;
+    const raw::ComputeState *k = raw::placeCompute(dev, r);
+    ASSERT_NE(k, nullptr);
+    EXPECT_FALSE(k->heapMissing);
+    EXPECT_EQ(k->heapSet, pl->heapSet);  // the state's arrays: one set for both
+    EXPECT_EQ(uint64_t(k->argumentPush[9]) << 32 | k->argumentPush[8], tables().rootTableVa());
+    EXPECT_EQ(uint64_t(k->argumentPush[11]) << 32 | k->argumentPush[10], tables().statusVa());
+    EXPECT_EQ(k->argumentMask, 0xFu << 8);
+    raw::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    cb->internalCompletion();
+    {
+        raw::ComputeEncoder e(*cb, dev);
+        e.setState(k);
+        const uint32_t groups[3] = {1, 1, 1}, threads[3] = {1, 1, 1};
+        const char *why = nullptr;
+        EXPECT_TRUE(e.dispatch(groups, threads, &why)) << (why ? why : "");
+        e.end();
+    }
+    uint32_t seqno = 0;
+    EXPECT_TRUE(cb->commit(seqno));
 }
 
 }  // namespace
