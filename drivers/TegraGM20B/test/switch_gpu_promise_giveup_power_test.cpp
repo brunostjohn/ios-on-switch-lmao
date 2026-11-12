@@ -124,6 +124,22 @@ TEST_F(Power, ThePowerUpGivesEveryPromiseItsWholeSecondAgain)
 	EXPECT_EQ(lines.size(), 2u);
 }
 
+// After the power-up the call reaches the GPU again: a promised job queued behind another is the hang rule's, looked
+// at and waited for, not given up at its second.
+TEST_F(Power, AfterThePowerUpAJobAheadIsTheHangRulesAgain)
+{
+	powerDown();
+	until(fake::now + 300 * kMs);
+	powerUp();
+	readerSubmits();
+	makerKeeps(1);
+	until(fake::now + 1000 * kMs);
+	EXPECT_TRUE(lines.empty());
+	EXPECT_EQ(fake::hangLooks, 1u);
+	EXPECT_EQ(maker.asked.back(), maker.submitted - 1)
+		<< "the job ahead's interrupt is asked for";
+}
+
 // The call is reading registers (the hang rule's look at the job ahead) when the power-down comes: the suspend waits for
 // it, so no register is read once the GPU goes down.
 TEST_F(Power, TheSuspendWaitsOutACallInFlight)

@@ -503,11 +503,12 @@ void tgm_wake(void)
 	wake_device();
 	tgm_recover_arm(tgm_gpu.device);
 	wake_nvkm();
+	/* before the gate opens: a job queued from then on is the hang rule's again */
+	tgm_promise_resume();
 	wake_fence();
 	tgm_clkgate_enable(tgm_gpu.device);
 	wake_open();
 	tgm_deadline_resume();
-	tgm_promise_resume();
 }
 
 /* Rail-gating (TegraGM20BRail.h), from TegraGM20B.cpp's rail worker: system sleep's sleep steps, its durable trail
@@ -555,12 +556,12 @@ void tgm_rail_up_locked(const void *site)
 	wake_nvkm();
 	tgm_clkgate_enable(tgm_gpu.device);
 	clock = wake_open_locked();
+	tgm_promise_resume();
 	/* The gate opens before railed clears: a closer acts only once it has seen the GPU up (tgm_rail_down, the worker's
 	 * tgm_railed(), SwitchSuspend's tgm_rail_sc7_hold), so its close can never land before this open and be undone. */
 	gate_open();
 	__atomic_store_n(&tgm_gpu.railed, 0, __ATOMIC_SEQ_CST);
 	tgm_deadline_resume();
-	tgm_promise_resume();
 	if (TGM_STATS) {
 		if (site) {
 			if (!tgm_rail_ups.demand++)
