@@ -38,6 +38,7 @@ kernel_driver(
         "SwitchNativeGpuView.cpp",
         "SwitchNativeScanout.cpp",
         "SwitchVICScanoutConvert.cpp",
+        "SwitchVICScanoutCompose.cpp",
         "SwitchVICMapping.cpp",
         "SwitchVICSurfaceBacking.cpp",
         "SwitchVICTransform.cpp",
