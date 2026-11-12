@@ -200,6 +200,13 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 		     "switch_gpu_promise_waits_release(&chan->promise_waits,", "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
 	EXPECT_THAT(Body(unit("SwitchGpuWriterPromise.h"), "static inline uint32_t switch_gpu_promise_waits_release("),
 		    HasSubstr("__ATOMIC_RELEASE"));
+	// switch_gpu_promise_strike_test models these steps: the mark first, taken back if the maker won, one line else
+	const std::string released = Body(unit("gpu_promise.c"), "static void promise_released(");
+	expectBefore(released, "step == SWITCH_GPU_PROMISE_RAISING", "tgm_promise_abandon(offset, value);");
+	expectBefore(released, "step == SWITCH_GPU_PROMISE_KEPT_FIRST",
+		     "switch_gpu_promise_abandoned_drop(&promise_abandoned, offset, value);");
+	expectBefore(released, "switch_gpu_promise_abandoned_drop(", "tgm_promise_abandoned_report(");
+	EXPECT_EQ(Count(released, "tgm_promise_abandoned_report("), 1u);
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));

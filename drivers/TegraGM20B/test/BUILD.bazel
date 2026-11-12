@@ -377,6 +377,19 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_promise_strike_test",
+    srcs = [
+        "switch_gpu_promise_strike_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_eng_reset_order_test",
     srcs = [
         "gm20b_eng_reset_order_test.cpp",
