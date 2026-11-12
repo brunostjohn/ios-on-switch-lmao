@@ -170,6 +170,13 @@ host_test(
     ],
 )
 
+host_test(
+    name = "context_test",
+    srcs = ["context_test.cpp"],
+    data = ["testdata/context_capture.txt"],
+    deps = ["//kits/SwitchGM20BEmit:context_h"],
+)
+
 # The kit compiled by the kernel toolchain, C and C++: never linked, built so the kernel's headers and flags keep taking it.
 kernel_driver(
     name = "SwitchGM20BEmitKernelCheck",
