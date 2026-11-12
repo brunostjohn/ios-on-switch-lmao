@@ -5,8 +5,8 @@ usage: record_goldens.py <write_goldens> <pack dir> <kind> <the pack's split buc
 write_goldens writes testdata/records_<kind>.bin, _sample.tsv and _sample_states.txt from the pack; then the sample
 pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. A bucket begins
 with the warm-up state (rawpack.py split_buckets), which the probe draws first, so the first bucket's first line leads.
-Then every R line whose state key hashes (packfile.fnv of rawpack.state_key) to a sampled state, and every D line (the
-kernels' dispatch shapes, a few dozen), each once.
+Then every R line whose state key, less a variant's name, hashes (packfile.fnv of rawpack.state_key) to a sampled state,
+and every D line (the kernels' dispatch shapes, a few dozen), each once.
 """
 
 import os
@@ -27,7 +27,9 @@ def pick(states: set[int], logs: list[Path]) -> list[str]:
         for i, line in enumerate(log.read_text().splitlines()):
             lead = n == 0 and i == 0
             if not lead and line.startswith('R '):
-                if packfile.fnv(rawpack.state_key(line).encode()) not in states:
+                # a variant's line (cubic binds) is its state's: its record files under the state's key
+                state = packfile.VARIANT_NAME.sub('', rawpack.state_key(line))
+                if packfile.fnv(state.encode()) not in states:
                     continue
             elif not lead and not line.startswith('D '):
                 continue
