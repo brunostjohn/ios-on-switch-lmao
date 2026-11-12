@@ -15,6 +15,9 @@ import table
 MATRIX = 'vcm'
 ROW_WORDS = 10  # five half4 rows
 CLAMP_WORDS = 1  # the clamp pair (p3, p4) as two halves
+# A rows-only matrix's name: its draws feed the macro a clamp pair of 0 (raw_gpu.cpp matrixConstants), a route of its
+# own that raw_chip_facts.h kIteratedProven proves apart from vcm's
+ROWS_ONLY = 'vcm.rows'
 HEADER_BYTES = 0x50  # a graphics program's shader program header, ahead of its code
 LDC_OPCODE = 0x1DF2  # bits 63-51 of an LDC (opcodes.txt: 1110 1111 1001 0)
 # PackUniformRange: entry, bank, first, end
@@ -93,7 +96,7 @@ def attach(pipes: list[dict], report: list[str]) -> tuple[list[dict], list[dict]
                 unplaced += 1
                 continue
             record = {
-                'name': name,
+                'name': name if found[2] == ROW_WORDS + CLAMP_WORDS else ROWS_ONLY,
                 'words': [],
                 'enable': 3,
                 'constants': {},

@@ -22,8 +22,9 @@ enum ProvenUnit : uint32_t {
 
 constexpr uint32_t kProvenUnits = ProvenFixedBlend;
 
-// The iterated blend programs (pack/iterated/table.py's names; vcm, the colour matrix macro's) the device showed within
-// their bound of the storage form and faster than it, each by its own measured cost, not by a pass count: SwitchHWTest
+// The iterated blend programs (pack/iterated/table.py's names; vcm, the colour matrix macro's, and vcm.rows, its route
+// for a QuartzCore whose matrix has no clamp: pack/fetchfree_link.py) the device showed within their bound of the
+// storage form and faster than it, each by its own measured cost, not by a pass count: SwitchHWTest
 // gpu.raw.fetch_rung3 "proven" (every state of the program within the bound and faster), with gpu.x1.iterated_blend
 // "nvn_within_one" equal to "nvn_run". None has been, so rung 3 takes no draw.
 inline constexpr std::array<std::string_view, 0> kIteratedProven = {};
