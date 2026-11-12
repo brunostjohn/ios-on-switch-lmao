@@ -17,8 +17,8 @@
  * foreground app (100), below SpringBoard (160) and backboardd (170), whose GPU states it compiles */
 #define SWITCH_SHADER_COMPILER_JETSAM_PRIORITY 140
 /* MB, the active (soft) and the inactive (hard) limit alike. The daemon serves at 13.4 MB, and a compile adds its
- * transient: directpack's peak footprint for one state alone on the Mac, less its baseline, is under 10 MB for most of the corpus
- * (99th percentile 31 MB), 76-152 MB for RenderBox's uber_fragment and 327 MB for QuartzCore's generic
+ * transient: directpack's peak footprint for one state alone on the Mac, less its baseline, is a few MB for most of
+ * the corpus, 76-152 MB for RenderBox's uber_fragment and 327 MB for QuartzCore's generic
  * fixed_frag_lph_cpf (com.apple.coreanimation.PBGRAXm_A2Xghfc). This holds that generic compile beside a RenderBox uber
  * one, or three uber compiles: the pool's two foreground jobs and its background one at once. */
 #define SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB 512
