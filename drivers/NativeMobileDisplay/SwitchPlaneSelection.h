@@ -116,6 +116,10 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
         overlay.depth = index + 1;
         planeBuildingSlots |= 1u << unsigned(slot);
     }
+    if (planeComposeWaits(wanted, selected, width, height)) {
+        d.waitSlot = true;
+        return;
+    }
     const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
     const auto assignment = switch_display::assign(wanted, windows);
     for (unsigned index = 0; index != 2; ++index) {

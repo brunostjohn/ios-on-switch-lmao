@@ -15,6 +15,7 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <kern/thread_call.h>
 #include <sys/kdebug.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
@@ -43,6 +44,7 @@
 #include "SwitchScanoutBuffer.h"
 #include "../TegraVIC/SwitchNativeVICImage.h"
 #include "../TegraVIC/SwitchVICScanoutConvert.h"
+#include "SwitchPlaneComposite.h"
 #include "SwitchFrameInfo.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
@@ -999,9 +1001,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t planeBlendSaved[3] = {};
     // Stats (the pacing line): window B flips written, of them swaps that changed only window B (no UI composite at all),
     // B sets seen latched, new slot mappings, detached layers not shown (planes off, or a layer more than window B takes),
-    // window B underflow frames, ready-mask mismatches at a kick.
+    // window B underflow frames, ready-mask mismatches at a kick, overlay sets VIC composited into one plane.
     uint32_t stPlaneFlips = 0, stPlaneOnly = 0, stPlaneLatched = 0, stPlaneMaps = 0, stPlaneDropped = 0,
-             stPlaneUnderflows = 0, stPlaneUnready = 0;
+             stPlaneUnderflows = 0, stPlaneUnready = 0, stPlaneComposited = 0;
     bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
@@ -1791,11 +1793,12 @@ private:
         } else if (planesAttached) {
             planesState = "off";
         }
-        add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u", planesState,
-            stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u, composited %u",
+            planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows,
+            stPlaneUnready, stPlaneComposited);
         planeTotalsClose();
-        stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
-            stPlaneUnready = 0;
+        stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneComposited =
+            stPlaneUnderflows = stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
             stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch] +
                 stLong[kLongRate],
@@ -3237,6 +3240,7 @@ public:
         forgetPrimary();
         stopCopyLoop();
         stopGpuCopy();
+        stopPlaneComposite();
         stopVsync();
         if (logicalPM) {
             PMstop();
@@ -3267,6 +3271,7 @@ public:
         forgetPrimary();
         stopCopyLoop();
         stopGpuCopy();
+        stopPlaneComposite();
         stopVsync();
         transferred = false;
         for (auto &entry : validated)
@@ -4700,6 +4705,7 @@ public:
 #include "NativePlanesDisplay.h"
 #include "SwitchNativePlaneDisplay.h"
 #include "SwitchPlaneConversionDisplay.h"
+#include "SwitchPlaneCompositeDisplay.h"
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
