@@ -53,6 +53,7 @@ struct Model {
     uint64_t nextHandle = 1, nextUid = 1;
     std::map<uint32_t, std::vector<uint8_t>> memory;
     std::map<uint64_t, BoState> bos;
+    std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
@@ -386,10 +387,13 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodBoImport:
+    case TegraGM20BMethodBoImport: {
+        const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
         model.bos[model.nextHandle] = {true, true, 0};
+        model.imports[model.nextHandle] = {in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodBoFree:
         model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);

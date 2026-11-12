@@ -146,9 +146,9 @@ private:
 };
 
 // The process's one raw device (the render server's): its state. The device object Core Animation holds is an instance of a
-// subclass of the m2v device's own class (raw_metal_device_open), so it is an _MTLDevice that conforms to Metal's protocols as
-// the m2v device does and answers every selector the facade does not override with the m2v device's own method; it has no
-// instance variables of its own (the base class's ABI is fixed), so its state lives here.
+// subclass of _MTLDevice (raw_metal_device_open_lazy) that conforms to Metal's protocols as the m2v device does; a selector
+// only m2v's device class has a method for opens the m2v device at its first use (RawMetalM2V.mm). It has no instance
+// variables of its own (the base class's ABI is fixed), so its state lives here.
 struct RMNativeEventSignal {
     void *event;
     raw::EventTimeline::Promise promise;
@@ -168,8 +168,11 @@ struct RMRawRetirement {
 struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
-    id<MTLDevice> fallback;  // the m2v device
-    id device;               // the raw device object
+    RawM2V m2v;               // how the m2v device is opened (RawMetalM2V.mm)
+    id<MTLDevice> fallback;   // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
+    std::atomic<bool> m2vOpened{false};
+    uint64_t registryID = 0;
+    id device;                // the raw device object
     std::mutex schedule;
     std::mutex eventValues;
     raw::EventTimeline events;
@@ -206,8 +209,13 @@ struct RawState {
 
 extern RawState *gRM;
 
-// The m2v device, for something the raw path has no own for (`need`, a string literal). Debug builds name each need once a
-// process: what keeps its m2v device in use.
+// RawMetalM2V.mm: the m2v device, for something the raw path has no own for (`need`, a string literal), opened now if this is
+// the process's first need (nil: none can be had). Debug builds name each need once a process and keep their count
+// (switchRawM2V): what made its m2v device open.
+id<MTLDevice> rmM2V(const char *need);
+// The m2v device if something opened it already, else nil: what holds no need of its own (a twin made already, the
+// counters)
+id<MTLDevice> rmM2VIfOpen();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
 #define RM_M2V(need)                          \
@@ -216,8 +224,11 @@ id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
         return rmM2VFor(need, said);          \
     }())
 #else
-#define RM_M2V(need) ((id<MTLDevice>)gRM->fallback)
+#define RM_M2V(need) rmM2V(need)
 #endif
+// The device class's selectors m2v's device class has a method for and the raw path has none: each opens the m2v device at
+// its first use, then runs m2v's method (RawMetalM2V.mm)
+void installM2VForwarders(Class cls, const RawM2V &m2v);
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
@@ -436,6 +447,10 @@ void surfaceConverted(SurfaceWriteCount *count, bool made);  // a planar or YCbC
 uint64_t surfaceWrites(const SurfaceWriteCount *count);
 void noteSurfaceWrite(SurfaceWriteCount *count);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
+
+// RawMetalDeviceBase.mm: the base class's limits table filled with the device's own answers (Metal's registration asks again:
+// initLimits)
+void fillDeviceLimits(id device);
 
 // RawMetalDeviceAnswers.mm: the per-kind capability answers (raw_device_answers.h) as methods of the device class `cls`, where
 // it has none of its own; and an argument query's answer

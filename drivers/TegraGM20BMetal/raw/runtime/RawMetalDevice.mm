@@ -193,7 +193,7 @@ static const char *zetaMemoryRefusal(int asked)
     return a ? std::max<NSUInteger>(a, 32) : a;
 }
 
-// (every other selector: the m2v device's own method, which the device class inherits)
+// (a selector only m2v's device class has a method for opens the m2v device at its first use: RawMetalM2V.mm)
 - (id<MTLCommandQueue>)newCommandQueue
 {
     RMQueue *q = [RMQueue new];

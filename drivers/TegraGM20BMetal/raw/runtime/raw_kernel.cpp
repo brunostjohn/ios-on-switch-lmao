@@ -241,6 +241,8 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     bo.handle = r.handle;
     bo.token = r.map_token;
     bo.bytes = bytes;
+    bo.allocated = true;
+    allocated_.fetch_add(bytes, std::memory_order_relaxed);
     uint64_t addr = 0, size = 0;
     if (cpu && (!map(r.map_token, false, addr, size) || size < bytes)) {
         setError("BO map failed");
@@ -400,6 +402,8 @@ void Kernel::free(Bo &bo)
         TegraGM20BAbiBoFree f = {bo.handle};
         call(TegraGM20BMethodBoFree, &f, sizeof f, nullptr, 0);
     }
+    if (bo.allocated)
+        allocated_.fetch_sub(bo.bytes, std::memory_order_relaxed);
     if (bo.vaBase && !bo.vaReserved)
         freeVa(bo.vaBase, bo.bytes);
     bo = {};
