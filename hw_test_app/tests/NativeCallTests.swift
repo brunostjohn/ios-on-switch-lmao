@@ -17,5 +17,6 @@ enum NativeCallTests {
         NativeViewportsTest(),
         NativeViewportIndexTest(),
         NativeBlockTexturesTest(),
+        NativeDepthSlicesTest(),
     ]
 }
