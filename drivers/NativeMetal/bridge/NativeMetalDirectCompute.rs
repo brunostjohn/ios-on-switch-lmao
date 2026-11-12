@@ -106,8 +106,13 @@ pub struct NmbDirectKernel {
 /// The kernel's reads through argument buffers the raw path fills (NativeMetalDirect.rs holes_of and heap_of for a draw): its
 /// root-table and ExecutionStatus address holes (push word + 1), the others counted, the buffer slots its root table holds
 /// an entry for as the bound dispatch names them, and its set 1's heap arrays
-fn arguments_of(commands: &DispatchCommands, bound: &DispatchCommands, layout: &PipelineLayout, sets: &Layout<'_>,
-                kernel: &mut NmbDirectKernel) -> Result<(), String> {
+fn arguments_of(
+    commands: &DispatchCommands,
+    bound: &DispatchCommands,
+    layout: &PipelineLayout,
+    sets: &Layout<'_>,
+    kernel: &mut NmbDirectKernel,
+) -> Result<(), String> {
     for hole in &commands.push_holes {
         let (word, offset) = match *hole {
             PushHole::RootTableAddress { offset, .. } => (&mut kernel.root_table_word, offset),
