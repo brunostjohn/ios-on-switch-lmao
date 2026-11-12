@@ -322,10 +322,25 @@ host_test(
     cxx_std = "c++17",
 )
 
+# The hang rule's raise as the kernel builds it, so the test runs it under switch_gpu_interrupts_off_stubs.h.
+genrule(
+    name = "promise_raise_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:gpu_promise.c"],
+    outs = ["promise_raise_source.h"],
+    cmd = """
+set -e
+awk '/^static int promise_raise\\(/ { on = 1 } on { print } on && /^}/ { exit }' $< > $@
+grep -q local_irq_restore $@
+""",
+)
+
 host_test(
     name = "switch_gpu_writer_promise_test",
     srcs = [
+        "switch_gpu_interrupts_off_stubs.h",
         "switch_gpu_writer_promise_test.cpp",
+        ":promise_raise_source",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
     ],

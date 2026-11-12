@@ -3,11 +3,13 @@
 // kernel and a present of the surface it writes: the present's acquires are the pending promises, a job's fence releases
 // the ones it keeps after its writes, and a cancel, a kill or a close release them from the CPU.
 #include <gtest/gtest.h>
+#include <functional>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
 #include "../SwitchGpuWriterPromise.h"
+#include "switch_gpu_interrupts_off_stubs.h"
 
 namespace
 {
@@ -185,6 +187,10 @@ TEST(WriterPromise, SlotsAndRefsAreBounded)
 	EXPECT_EQ(c.slots[0].value, c.words[0] + 1);
 }
 
+typedef int32_t s32;
+// gpu_promise.c's own promise_raise, cut out by :promise_raise_source
+#include "drivers/TegraGM20B/test/promise_raise_source.h"
+
 namespace
 {
 volatile uint32_t pool[64];
@@ -194,16 +200,7 @@ volatile uint32_t *poolWord(uint32_t offset)
 	return offset && offset / 4 < 64 ? &pool[offset / 4] : nullptr;
 }
 
-// gpu_promise.c promise_raise, on a pool the test writes itself
-int poolRaise(volatile uint32_t *word, uint32_t value)
-{
-	if (int32_t(*word - value) >= 0)
-		return 0;
-	*word = value;
-	return 1;
-}
-
-const switch_gpu_promise_fence poolFence = {poolWord, poolRaise};
+const switch_gpu_promise_fence poolFence = {poolWord, promise_raise};
 
 // The fence pool as T210 has it: mapped write-combined, where only a plain store completes. The model's page is
 // read-only, so any other write (a compare-and-swap, any atomic read-modify-write) faults; the raise's own store is
@@ -214,13 +211,22 @@ struct FenceModel {
 
 	FenceModel()
 	{
-		void *made = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+		void *made =
+			mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 		page = static_cast<volatile uint32_t *>(made);
 		mprotect(made, bytes, PROT_READ);
 	}
-	~FenceModel() { munmap(const_cast<uint32_t *>(page), bytes); }
 
-	void set(uint32_t offset, uint32_t value) { store(&page[offset / 4], value); }
+	~FenceModel()
+	{
+		munmap(const_cast<uint32_t *>(page), bytes);
+	}
+
+	void set(uint32_t offset, uint32_t value)
+	{
+		store(&page[offset / 4], value);
+	}
+
 	void store(volatile uint32_t *word, uint32_t value)
 	{
 		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ | PROT_WRITE);
@@ -310,10 +316,75 @@ TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 	EXPECT_DEATH(
 		{
 			uint32_t expected = 2;
-			__atomic_compare_exchange_n(&fence.page[5], &expected, 3u, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+			__atomic_compare_exchange_n(&fence.page[5], &expected, 3u, false,
+						    __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
 		},
 		"");
 	model = nullptr;
+}
+
+// The raise looks and stores with interrupts off, so nothing between them may lock, log or allocate.
+TEST(WriterPromise, TheKernelRaiseStoresWithInterruptsOffAndNothingThatBlocks)
+{
+	volatile uint32_t word = 5;
+	const unsigned saves = interrupts_off::saves;
+	interrupts_off::watched = &word;
+	EXPECT_EQ(promise_raise(&word, 7), 1);
+	EXPECT_EQ(interrupts_off::atSave, 5u);
+	EXPECT_EQ(interrupts_off::atRestore, 7u);
+	EXPECT_EQ(promise_raise(&word, 6), 0);
+	EXPECT_EQ(promise_raise(&word, 7), 0);
+	EXPECT_EQ(word, 7u);
+	word = 0xfffffffeu;
+	EXPECT_EQ(promise_raise(&word, 1), 1);
+	EXPECT_EQ(word, 1u);
+	EXPECT_EQ(interrupts_off::saves - saves, 4u);
+	EXPECT_EQ(interrupts_off::depth, 0);
+	interrupts_off::watched = nullptr;
+}
+
+TEST(WriterPromise, WhatBlocksThrowsOnlyWithInterruptsOff)
+{
+	const std::vector<std::function<void()>> blocking = {
+		[] {
+			IOLock lock;
+			IOLockLock(&lock);
+		},
+		[] {
+			IORecursiveLock lock;
+			IORecursiveLockLock(&lock);
+		},
+		[] {
+			std::free(IOMalloc(16));
+		},
+		[] {
+			IOLog("%d\n", 1);
+		},
+		[] {
+			IOCommandGate().runAction();
+		},
+		[] {
+			struct mutex lock = {};
+			mutex_lock(&lock);
+		},
+		[] {
+			std::free(kmalloc(16, 0));
+		},
+		[] {
+			std::free(kzalloc(16, 0));
+		},
+		[] {
+			nvxnu_log("%d\n", 1);
+		},
+	};
+	unsigned long flags = 0;
+	for (const auto &call : blocking)
+		EXPECT_NO_THROW(call());
+	local_irq_save(flags);
+	for (const auto &call : blocking)
+		EXPECT_THROW(call(), std::runtime_error);
+	local_irq_restore(flags);
+	EXPECT_EQ(interrupts_off::depth, 0);
 }
 
 // An abandoned promise is found until the maker's own release takes it back; the set keeps the latest ones.
