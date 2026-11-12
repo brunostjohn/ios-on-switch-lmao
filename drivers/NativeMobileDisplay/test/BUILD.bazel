@@ -787,6 +787,8 @@ host_test(
 host_test(
     name = "switch_media_completion_flip_filter_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_media_completion_flip_harness.h",
         "switch_media_completion_flip_filter_test.cpp",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
