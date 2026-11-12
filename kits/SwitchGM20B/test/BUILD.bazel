@@ -45,6 +45,7 @@ DRIVER_SOURCES = {
     "raw_gpu.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
     "raw_compute.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
     "raw_split.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+    "raw_cbuf.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_cbuf.h",
     "raw_zeta.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
     "raw_emit.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.cpp",
     "raw_tiled_cache.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_tiled_cache.h",

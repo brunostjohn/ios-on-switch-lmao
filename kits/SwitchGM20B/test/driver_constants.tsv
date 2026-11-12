@@ -2,7 +2,6 @@
 raw_gpu.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_gpu.cpp	kSetBytes	policy	NVK's descriptor set slot
 raw_gpu.cpp	kUboChunk	policy	upload granule
-raw_gpu.cpp	kMaxCbufBytes	policy	NVK_MAX_CBUF_SIZE (the class takes up to 64 KiB per binding)
 raw_gpu.cpp	kRootInterlockTickets	policy	offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 raw_gpu.cpp	kTicCount	policy	texture header pool size the runtime allocates
 raw_gpu.cpp	kTscCount	policy	sampler pool size the runtime allocates
@@ -29,6 +28,8 @@ raw_compute.cpp	kConstexprSampler	policy	pack's constexpr sampler slot flag
 raw_split.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_split.cpp	kMaxCbufBytes	policy	NVK_MAX_CBUF_SIZE (the class takes up to 64 KiB per binding)
 raw_split.cpp	kPixelGroup	policy	NVK's pixel bind group
+raw_cbuf.h	kCbufUnit	policy	constant buffers bound in whole 256-byte units
+raw_cbuf.h	kCbufMaxBytes	policy	NVK_MAX_CBUF_SIZE (the class takes up to 64 KiB per binding)
 raw_emit.cpp	kEarlyZ	nv	NVB197_SET_API_MANDATED_EARLY_Z
 raw_emit.cpp	kSingleCtWrite	nv	NVB197_SET_SINGLE_CT_WRITE_CONTROL
 raw_emit.cpp	kBlend	nv	NVB197_SET_BLEND(0)
