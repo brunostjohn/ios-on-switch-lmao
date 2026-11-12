@@ -8,9 +8,9 @@ use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw,
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
-    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
-    FieldLocation, FragmentTests, ImageSource, NeutralResource, PushHole, SamplerDescriptor, SamplerSource, StageTable,
-    TextureFacts, WriteSource, heap_class_code,
+    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorBytes, DescriptorRange, DrawCall,
+    DrawCommands, FieldLocation, FragmentTests, ImageSource, NeutralResource, PushHole, SamplerDescriptor,
+    SamplerSource, StageTable, TextureFacts, WriteSource, heap_class_code,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -112,6 +112,8 @@ pub struct NmbDirectDraw {
     pub vertex_slot: u32,
     pub vertex_stride: u32,
     pub variant: *const c_char,
+    pub spill: [*const u32; 2],
+    pub spill_words: [u32; 2],
 }
 
 #[repr(C)]
@@ -644,6 +646,31 @@ fn table_of(mut write: NmbDirectWrite, layout: &PipelineLayout) -> NmbDirectWrit
     write
 }
 
+/// The words instantiation gave `stage`'s argument table (m2v's push fields past the stage's push window), empty where its
+/// placement spilled none
+pub(crate) fn spill_table(plan: &BindingPlan, bytes: &[DescriptorBytes], stage: Stage) -> Vec<u32> {
+    let Some(write) = plan
+        .descriptors
+        .iter()
+        .find(|w| matches!(w.source, WriteSource::ArgumentTable { stage: s, .. } if s == stage))
+    else {
+        return Vec::new();
+    };
+    bytes
+        .iter()
+        .find(|b| b.set == write.set && b.binding == write.binding)
+        .map_or_else(Vec::new, |b| {
+            b.bytes
+                .chunks(4)
+                .map(|w| {
+                    w.iter()
+                        .enumerate()
+                        .fold(0u32, |v, (k, byte)| v | u32::from(*byte) << (8 * k))
+                })
+                .collect()
+        })
+}
+
 /// Set 0's samplers that take no write: a heap image's constexpr sampler (BindingSource::HeapSampler's immutable one), whose
 /// descriptor NVK writes into the set from its layout
 fn immutable_samplers(layout: &PipelineLayout, written: &[NmbDirectWrite]) -> Vec<NmbDirectWrite> {
@@ -914,6 +941,7 @@ fn draw_of(
     pipeline: &RenderPipeline,
     layout: &Layout<'_>,
     writes: &[NmbDirectWrite],
+    spills: &[Vec<u32>; 2],
     variant: &CString,
 ) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
@@ -937,6 +965,8 @@ fn draw_of(
         vertex_slot: u32::MAX,
         vertex_stride: 0,
         variant: variant.as_ptr(),
+        spill: [spills[0].as_ptr(), spills[1].as_ptr()],
+        spill_words: [spills[0].len() as u32, spills[1].len() as u32],
     };
     holes_of(&run.commands, &mut draw)?;
     heap_of(pipeline, layout, &mut draw);
@@ -953,13 +983,20 @@ fn draw_of(
             PushField::ShaderStencilState => (&mut draw.stencil_test_word, 16),
             _ => continue,
         };
-        let FieldLocation::PushWindow { offset } = field.location else {
-            return Err("dynamic state outside the root push window".into());
+        // a field past the window is a word of the fragment stage's argument table: raw_spill_table.h numbers it from 32
+        let (offset, first, end) = match field.location {
+            FieldLocation::PushWindow { offset } => (offset, 0, 128),
+            FieldLocation::ArgumentTable { offset } if field.stage == Stage::Fragment => {
+                (offset, 128, 4 * spills[1].len() as u32)
+            }
+            FieldLocation::ArgumentTable { .. } => {
+                return Err("a vertex stage's dynamic state in its argument table".into());
+            }
         };
-        if field.size != bytes || offset % 4 != 0 || offset > 128 - bytes {
+        if field.size != bytes || offset % 4 != 0 || offset > end.saturating_sub(bytes) {
             return Err("invalid dynamic state push placement".into());
         }
-        let encoded = offset / 4 + 1;
+        let encoded = (first + offset) / 4 + 1;
         if *word != 0 && *word != encoded {
             return Err("multiple dynamic state push placements".into());
         }
@@ -1091,6 +1128,13 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 writes
             })
             .collect();
+        let spills: Vec<[Vec<u32>; 2]> = runs
+            .iter()
+            .map(|run| {
+                [Stage::Vertex, Stage::Fragment]
+                    .map(|stage| spill_table(&run.plan, &run.commands.descriptor_bytes, stage))
+            })
+            .collect();
         let names: Vec<CString> = runs
             .iter()
             .map(|run| CString::new(format!("{:?}", run.plan.variant)).unwrap_or_default())
@@ -1104,6 +1148,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     &variants[run.variant].1,
                     &layouts[run.variant],
                     &writes[k],
+                    &spills[k],
                     &names[k],
                 )
             })

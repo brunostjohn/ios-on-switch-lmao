@@ -209,6 +209,25 @@ const PackIteratedBlend *Pack::iterated(const PackPipeline &pp) const
     return section<PackIteratedBlend>(PackIterated) + pp.iterated - 1;
 }
 
+namespace {
+const uint32_t *spillWords(const Pack &pack, uint32_t at, uint32_t words)
+{
+    if (!words || (uint64_t(at) + words) * sizeof(uint32_t) > pack.bytes(PackBlob))
+        return nullptr;
+    return pack.section<uint32_t>(PackBlob) + at;
+}
+}  // namespace
+
+const uint32_t *Pack::spills(const PackPipeline &pp) const
+{
+    return spillWords(*this, pp.spillAt, uint32_t(pp.spillWords[0]) + pp.spillWords[1]);
+}
+
+const uint32_t *Pack::spills(const PackKernel &k) const
+{
+    return spillWords(*this, k.spillAt, k.spillWords);
+}
+
 const PackVariant *Pack::variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const
 {
     count = pp.variantCount[stage];

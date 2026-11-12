@@ -186,7 +186,9 @@ enum PackEntryKind : uint8_t {
     // m2v's handle tables of argument-buffer textures and samplers (bind/heap.rs): a storage buffer descriptor of the
     // device's own table, every texture's by its header index, every sampler's by its sampler header's (raw_heap_tables.h)
     EntryTextureTable = 8,
-    EntrySamplerTable = 9
+    EntrySamplerTable = 9,
+    // m2v's ArgumentTable of stage `stage` (raw_spill_table.h): a uniform buffer descriptor of the words the encoder uploads
+    EntrySpillTable = 10
 };
 
 constexpr uint8_t kNoSlot = 0xFF;
@@ -211,6 +213,12 @@ struct PackEntry {
 inline bool bufferStorage(const PackEntry &e)
 {
     return e.samplerKind & 1;
+}
+
+// An entry a program may read as a constant buffer (PackCbufType CbufUbo): a uniform buffer, or an argument table
+inline bool uniformEntry(const PackEntry &e)
+{
+    return (e.kind == EntryUbo && !bufferStorage(e)) || e.kind == EntrySpillTable;
 }
 
 // A buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the record
@@ -325,6 +333,10 @@ struct PackPipeline {
     uint8_t heapArrays, heapReserved[3];
     uint32_t heapBytes;  // set 1's size in NVK's layout
     PackHeapArray heap[kPackHeapArrays];
+    // m2v's ArgumentTable of each stage, vertex then fragment (raw_spill_table.h): its EntrySpillTable's index + 1 (0: none),
+    // its words, and the first of them in the blob section (the vertex table's first, then the fragment table's)
+    uint8_t spillEntry[2], spillWords[2];
+    uint32_t spillAt;
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -337,7 +349,8 @@ enum PackKernelEntryKind : uint8_t {
     // m2v's handle tables of argument-buffer textures and samplers: a storage buffer descriptor of the device's own
     // (EntryTextureTable, EntrySamplerTable)
     KernelTextureTable,
-    KernelSamplerTable
+    KernelSamplerTable,
+    KernelSpillTable  // m2v's ArgumentTable (EntrySpillTable)
 };
 
 // A word range of set 0 and the Metal argument it holds: a buffer's {address, range} descriptor (its range the bound bytes
@@ -382,6 +395,10 @@ struct PackKernel {
     uint8_t rootTableWord, statusWord, heapArrays, argumentsReserved;
     uint32_t rootSlots, heapBytes;
     PackHeapArray heap[kPackHeapArrays];
+    // its ArgumentTable as PackPipeline's: the KernelSpillTable entry's index + 1, its words, their first in the blob
+    uint8_t spillEntry, spillWords;
+    uint16_t spillReserved;
+    uint32_t spillAt;
 };
 
 inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
@@ -446,15 +463,16 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 84, "pack layout");
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92, "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
-static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipeline, heap) == 564,
+static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipeline, heap) == 564 &&
+                  offsetof(PackPipeline, spillEntry) == 628,
               "pack layout: packfile.py PIPELINE_V20");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128 + 76, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128 + 84, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
 
@@ -489,6 +507,9 @@ public:
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
     const PackArchive *archive(uint64_t pathHash) const;              // nullptr: the pack lists no such archive
     const PackIteratedBlend *iterated(const PackPipeline &pp) const;  // nullptr: it names none
+    // `pp`'s or `k`'s ArgumentTable words (PackPipeline::spillAt); nullptr: none, or past the section
+    const uint32_t *spills(const PackPipeline &pp) const;
+    const uint32_t *spills(const PackKernel &k) const;
     bool declares(const PackArchive &archive, uint64_t keyHash) const;
 
     const char *string(uint32_t off) const

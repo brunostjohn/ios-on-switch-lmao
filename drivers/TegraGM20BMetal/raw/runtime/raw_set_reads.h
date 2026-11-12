@@ -60,7 +60,7 @@ inline uint32_t ldcBytes(uint32_t size)
 
 inline uint32_t entryBytes(const PackEntry &e)
 {
-    return e.kind == EntryUbo || e.kind == EntryColorTable ? 16 : 4;
+    return e.kind == EntryUbo || e.kind == EntryColorTable || e.kind == EntrySpillTable ? 16 : 4;
 }
 
 }  // namespace setreads
@@ -115,7 +115,8 @@ inline uint32_t programSetReads(const uint8_t *code, size_t bytes, const uint8_t
     uint32_t read = setMemoryReads(code, bytes, setSlot, pp.entry, pp.entries);
     if (boundTextures && boundTextures <= cbufs && cbufType[boundTextures - 1] == CbufSet)
         for (uint32_t k = 0; k < pp.entries; k++)
-            if (pp.entry[k].kind != EntryUbo && pp.entry[k].kind != EntryColorTable)
+            if (pp.entry[k].kind != EntryUbo && pp.entry[k].kind != EntryColorTable &&
+                pp.entry[k].kind != EntrySpillTable)
                 read |= 1u << k;
     return read;
 }

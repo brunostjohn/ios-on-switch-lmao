@@ -47,12 +47,15 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     at = HEAD.size + 264 + 128
     entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
     root, status, arrays, _, slots, heap_bytes, *pairs = packfile.KERNEL_V20.unpack_from(k, at + ENTRIES * ENTRY.size)
+    pairs, (spill_entry, spill_words, _, _) = pairs[:16], pairs[16:]
     return {
         'root_table_word': root,
         'status_word': status,
         'root_slots': slots,
         'heap': [{'class': pairs[2 * i], 'offset': pairs[2 * i + 1]} for i in range(arrays)],
         'heap_bytes': heap_bytes,
+        'spill_entry': spill_entry,
+        'spill': rec.get('spill', [])[:spill_words],
         'key': rec['key'],
         'region': region,
         'set_bytes': set_bytes,

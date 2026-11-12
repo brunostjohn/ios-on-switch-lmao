@@ -11,6 +11,7 @@
 #include "raw_compute_key.h"
 #include "raw_direct_nvk.h"
 #include "raw_residual.h"
+#include "raw_spill_table.h"
 
 namespace raw {
 namespace {
@@ -47,6 +48,21 @@ std::map<uint32_t, uint32_t> pushWords(uint32_t mask, const uint32_t (&words)[32
         if (mask >> i & 1 && words[i] && !(region >= 0 && int32_t(i) >= region && int32_t(i) < region + 8))
             out[kRootPush + 4 * i] = words[i];
     return out;
+}
+
+// A dispatch's argument table words by root offset, word i at push word 32 + i (raw_spill_table.h), as far as a residual
+// word can name one
+std::map<uint32_t, uint32_t> spillWords(const uint32_t *words, uint32_t count)
+{
+    std::map<uint32_t, uint32_t> out;
+    for (uint32_t i = 0; i < count && i < kSpillResidualWords; i++)
+        out[kRootPush + 4 * (kRootPushWords + i)] = words[i];
+    return out;
+}
+
+std::vector<uint32_t> spillOf(const uint32_t *words, uint32_t count)
+{
+    return count ? std::vector<uint32_t>(words, words + count) : std::vector<uint32_t>();
 }
 
 // What each dispatch sets cleared: its program offset, grid and constant buffer addresses (raw_compute.cpp)
@@ -116,6 +132,10 @@ private:
                 {offset, w.source == NmbDirectTextureTable ? KernelTextureTable : KernelSamplerTable, 0, 0});
             return true;
         }
+        if (w.source == NmbDirectArgumentTable) {
+            entries.push_back({offset, KernelSpillTable, 0, 0});
+            return true;
+        }
         if (w.source != NmbDirectBuffer && w.source != NmbDirectBytes) {
             why = "a set-0 buffer m2v binds itself at " + std::to_string(offset) + " (source " +
                   std::to_string(w.source) + ")";
@@ -171,8 +191,12 @@ void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &ent
 {
     if (!k.boundSame)
         return;
-    const std::map<uint32_t, uint32_t> words = residualWordsByValue(pushWords(k.pushMask, k.push, k.regionWord),
-                                                                    pushWords(k.boundMask, k.bound, k.regionWord));
+    std::map<uint32_t, uint32_t> words = residualWordsByValue(pushWords(k.pushMask, k.push, k.regionWord),
+                                                              pushWords(k.boundMask, k.bound, k.regionWord));
+    if (k.boundSpillWords == k.spillWords)
+        for (const auto &[value, word] :
+             residualWordsByValue(spillWords(k.spill, k.spillWords), spillWords(k.boundSpill, k.boundSpillWords)))
+            words.emplace(value, word);
     std::map<uint32_t, int> codes;
     for (const PackKernelEntry &e : entries)
         if (e.kind == KernelBuffer)
@@ -261,12 +285,16 @@ bool kernelArguments(const NmbDirectKernel &k, const DirectNvk &nvk, PackKernel 
 bool recordable(const NmbDirectKernel &k, std::string &why)
 {
     if (k.otherHoles)
-        why = std::to_string(k.otherHoles) + " push words m2v fills with addresses other than its root and status tables";
+        why =
+            std::to_string(k.otherHoles) + " push words m2v fills with addresses other than its root and status tables";
     else if (k.regions != 1)
         why = std::to_string(k.regions) + " Vulkan dispatches for one";
     else if (!k.movedSame ||
-             pushWords(k.pushMask, k.push, k.regionWord) != pushWords(k.movedMask, k.moved, k.regionWord))
+             pushWords(k.pushMask, k.push, k.regionWord) != pushWords(k.movedMask, k.moved, k.regionWord) ||
+             spillOf(k.spill, k.spillWords) != spillOf(k.movedSpill, k.movedSpillWords))
         why = "a program or push word the bound addresses or samplers decide";
+    else if (k.spillWords > kSpillWordsMax)
+        why = "an argument table past 255 words";
     else
         return true;
     return false;
@@ -315,6 +343,15 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     r.regionWord = int8_t(k.regionWord);
     r.entries = uint8_t(entries.entries.size());
     std::copy(entries.entries.begin(), entries.entries.end(), r.entry);
+    for (uint32_t i = 0; i < r.entries; i++)
+        if (r.entry[i].kind == KernelSpillTable)
+            r.spillEntry = uint8_t(i + 1);
+    if (bool(r.spillEntry) != bool(k.spillWords)) {
+        why = "an argument table its layout and its words disagree on";
+        return CompileOutcome::Refused;
+    }
+    r.spillWords = uint8_t(k.spillWords);
+    out.spill = spillOf(k.spill, k.spillWords);
     for (size_t i = 0; i < entries.entries.size(); ++i) {
         const auto &entry = entries.entries[i];
         if (entry.slot >= 32)

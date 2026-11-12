@@ -11,7 +11,9 @@ import Metal
 /// pointer; two textures and a sampler written by the fragment function's own encoder (its buffer index form), so a draw
 /// that reads texture 0 for every ID cannot pass; an array of three textures sampled through an array of two samplers of
 /// other address modes (NativeArgumentDraws.swift); one pointer that is a bound buffer or an argument buffer's by pixel;
-/// and a texture and a colour behind a pointer to an argument buffer that the nested encoder wrote.
+/// a texture and a colour behind a pointer to an argument buffer that the nested encoder wrote; and fourteen fragment or
+/// thirteen vertex buffers (and twenty-eight kernel buffers) bound beside an argument buffer, whose last offsets m2v places
+/// in the stage's argument table (NativeArgumentSpills.swift).
 struct NativeArgumentEncoderTest: NativeObjectTest {
     let id = "metal.native.argument_encoder"
     let name = "Argument encoders are the device's own and write addresses and real resource IDs where Metal lays them"
@@ -95,6 +97,9 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
             ("draw_path", drawThroughArguments), ("texture_draw_path", drawTexturesThroughArguments),
             ("array_draw_path", drawArraysThroughArguments), ("slot_draw_path", drawSlotThroughArguments),
             ("kernel_path", dispatchThroughArguments),
+            ("spill_draw_path", { try await drawSpillThroughArguments($0, vertex: false) }),
+            ("spill_vertex_draw_path", { try await drawSpillThroughArguments($0, vertex: true) }),
+            ("spill_kernel_path", dispatchSpillThroughArguments),
         ]
         for (key, draw) in draws {
             var path = "error"

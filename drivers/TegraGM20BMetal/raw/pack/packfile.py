@@ -11,7 +11,8 @@ MAGIC = b'GM20BPK1'
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
 # binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
 # forms and their iterated blend programs; 18: the set-0 entries a record's programs read from memory; 20: argument
-# buffers (handle-table entries, root-table and status push words, root slots, set-1 heap arrays of states and kernels)
+# buffers (handle-table entries, root-table and status push words, root slots, set-1 heap arrays of states and kernels;
+# argument tables of push fields past a stage's window, their words in the blob section)
 VERSION = 20
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
@@ -26,11 +27,12 @@ PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 PIPELINE_V18 = struct.Struct('<I')
 ALL_ENTRIES = 0xFFFFFFFF  # a record whose programs' set reads no tool read: every entry read from memory
 # PackPipeline's record-v20 tail: rootTableWord[2], statusWord[2], rootSlots[2], heapArrays, heapBytes, heap[8] as
-# (heapClass, offset) pairs
-PIPELINE_V20 = struct.Struct('<2B2B2IB3xI16I')
+# (heapClass, offset) pairs, spillEntry[2], spillWords[2], spillAt
+PIPELINE_V20 = struct.Struct('<2B2B2IB3xI16I2B2BI')
 HEAP_ARRAYS = 8
-# PackKernel's v20 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs
-KERNEL_V20 = struct.Struct('<4B2I16I')
+# PackKernel's v20 tail: rootTableWord, statusWord, heapArrays, reserved, rootSlots, heapBytes, heap[8] pairs,
+# spillEntry, spillWords, reserved, spillAt
+KERNEL_V20 = struct.Struct('<4B2I16IBBHI')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -63,6 +65,7 @@ def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
 
 # raw_pack.h kPackEntries: the set-0 entries a PackPipeline holds
 PACK_ENTRIES = 32
+TABLE_KINDS = {'texture_table': 8, 'sampler_table': 9, 'spill_table': 10}  # raw_pack.h PackEntryKind
 
 
 def entry_bytes(entries: list[dict]) -> bytearray:
@@ -72,8 +75,8 @@ def entry_bytes(entries: list[dict]) -> bytearray:
     for e in entries:
         if e['kind'] == 'color_table':  # raw_pack.h EntryColorTable
             ents += struct.pack('<HBBBBBB', e['off'], 5, 2, 0, 0, 0, 0)
-        elif e['kind'] in ('texture_table', 'sampler_table'):  # EntryTextureTable, EntrySamplerTable
-            ents += struct.pack('<HBBBBBB', e['off'], 8 if e['kind'] == 'texture_table' else 9, e['stage'], 0, 0, 0, 0)
+        elif e['kind'] in TABLE_KINDS:  # EntryTextureTable, EntrySamplerTable, EntrySpillTable
+            ents += struct.pack('<HBBBBBB', e['off'], TABLE_KINDS[e['kind']], e['stage'], 0, 0, 0, 0)
         elif e['kind'] == 'ubo':
             ents += struct.pack(
                 '<HBBBBH',
@@ -244,6 +247,9 @@ def v20_tail(rec: dict) -> bytes:
         rec.get('heap_bytes', 0),
         *pairs,
         *[0] * (2 * HEAP_ARRAYS - len(pairs)),
+        *rec.get('spill_entry', [0, 0]),
+        *[len(words) for words in rec.get('spill', [[], []])],
+        rec.get('spill_at', 0) if any(rec.get('spill', [[], []])) else 0,
     )
 
 
@@ -253,7 +259,7 @@ def kernel_window(e: dict) -> int:
     return e['window'] | (residual + 1) << 24 if residual is not None else e['window']
 
 
-def kernel_bytes(k: dict, key_offset: int) -> bytes:
+def kernel_bytes(k: dict, key_offset: int, spill_at: int = 0) -> bytes:
     """Give a compute kernel's PackKernel: its key, program, QMD template, set size, push words and set-0 entries."""
     mask, words = 0, [0] * 32
     for w, v in k['push'].items():
@@ -272,6 +278,10 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
         k.get('heap_bytes', 0),
         *pairs,
         *[0] * (2 * HEAP_ARRAYS - len(pairs)),
+        k.get('spill_entry', 0),
+        len(k.get('spill', [])),
+        0,
+        spill_at if k.get('spill') else 0,
     )
     return (
         struct.pack('<QIIBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
@@ -389,7 +399,11 @@ class Pack:
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
-    """Give the pipelines, their state programs (one copy of each distinct one), the strings and the variants."""
+    """Give the pipelines, the blob, the strings and the variants.
+
+    The blob holds the registers' pairs, one copy of each distinct run, and each record's argument tables' words, the
+    vertex table's first (its spill_at).
+    """
     strings = bytearray()
 
     def string(s: str) -> int:
@@ -412,7 +426,11 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
         name = variant_name(rec['key'])
         key_off = string(rec['key'].split(' | ')[0].rstrip())
-        pipe_bin += pipeline_bytes(rec, key_off, blobs[pairs], variants_off, string(name) if name else 0)
+        spill_at = len(blob)
+        for words in rec.get('spill', [[], []]):
+            blob += words
+        placed = dict(rec, spill_at=spill_at)
+        pipe_bin += pipeline_bytes(placed, key_off, blobs[pairs], variants_off, string(name) if name else 0)
     return pipe_bin, blob, strings, variant_bin
 
 
@@ -420,7 +438,8 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
     pipe_bin, blob, strings, variant_bin = pipeline_sections(pack.pipes)
     kernel_bin = bytearray()
     for k in sorted(pack.kernels, key=lambda k: fnv(k['key'].encode())):
-        kernel_bin += kernel_bytes(k, len(strings))
+        kernel_bin += kernel_bytes(k, len(strings), len(blob))
+        blob += k.get('spill', [])
         strings.extend(k['key'].encode() + b'\0')
     prog_bin = bytearray()
     for pr in pack.programs:
@@ -497,7 +516,7 @@ def write_json(path: str, pack: Pack, varying: list[int]) -> None:
 
 def entry_kind(e: dict) -> str:
     # u: a buffer descriptor (the colour table's too), t: a handle whose sampler is unused
-    return 'u' if e['kind'] in ('ubo', 'color_table') else ('h' if e.get('smp') else 't')
+    return 'u' if e['kind'] in ('ubo', 'color_table', 'spill_table') else ('h' if e.get('smp') else 't')
 
 
 def name(program: dict) -> str:

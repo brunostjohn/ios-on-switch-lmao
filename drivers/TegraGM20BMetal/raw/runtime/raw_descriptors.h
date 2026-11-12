@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include "raw_spill_table.h"
 
 namespace raw {
 
@@ -32,6 +33,7 @@ struct PreparedDescriptorWords {
     DescriptorWords words{};
     std::array<uint32_t, 32> residuals{};
     uint32_t residualMask = 0;
+    SpillResiduals spilled[2];  // the vertex and the fragment argument tables' (raw_spill_table.h)
     uint64_t address = 0;
 };
 

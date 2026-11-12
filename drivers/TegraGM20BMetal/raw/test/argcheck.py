@@ -11,11 +11,11 @@ sampler headers a fetch names.
 usage: argcheck.py --rootdump <rootdump> <records.bin>
   rootdump: //drivers/TegraGM20BMetal:rootdump, the device's writer of a draw's root table (bazel run passes it)
   records.bin: directpack <nvk dylib> <cache> <any metallib> <corpus> records.bin, with PROBE_LABEL= and
-  PROBE_LIB_ROOT=<root>, over a corpus of five lines "R ok=1 label=x samples=1 topo=0 ds=0/0 c0=70:15:0:1:0:0:1:0:0
+  PROBE_LIB_ROOT=<root>, over a corpus of lines "R ok=1 label=x samples=1 topo=0 ds=0/0 c0=70:15:0:1:0:0:1:0:0
   lib=/System/Library/Frameworks/HWTest.framework/default.metallib | v quad_vertex | f <function>", one per
-  argument_colour_fragment, argument_slot_fragment, argument_textures_fragment, argument_array_fragment and
-  argument_nested_fragment, with hw_test_app/shaders/HWTest.metal's library at
-  <root>/System/Library/Frameworks/HWTest.framework/default.metallib.
+  argument_colour_fragment, argument_slot_fragment, argument_textures_fragment, argument_array_fragment,
+  argument_nested_fragment and argument_spill_fragment, and one of "v spill_vertex | f tint_fragment", with
+  hw_test_app/shaders/HWTest.metal's library at <root>/System/Library/Frameworks/HWTest.framework/default.metallib.
 """
 
 import os
@@ -44,6 +44,7 @@ ROOTS, TABLES, HEAP, SET0, ARG, INNER, COLOUR = (
     0x7000000,
 )
 SINK, STATUS, IDENTITY = ROOTS + 96, ROOTS + 160, ROOTS + 64
+SPILL, BUFFERS = 0x7100000, 0x8000000  # a draw's argument table in the upload ring, and buffers bound at its slots
 DRAW_ROOTS = 0x2100000  # a draw's own root table (raw_gpu.cpp RenderEncoder::rootTable), in the upload ring
 VA_START, VA_END = 0x1000, 1 << 39
 TAG = 1 << 32
@@ -107,8 +108,40 @@ def draw_roots(mem: Memory, rec: dict, slots: dict, rootdump: str) -> None:
     mem.put(DRAW_ROOTS, b''.join(struct.pack('<4Q', *e) for e in entries))
 
 
-def run(rec: dict, mem: Memory, pixel: tuple) -> tuple[list[float], list[tuple]]:  # noqa: C901  one closure per bank kind
-    """Run the fragment program at `pixel`: give lane 0's colour and the (texture, sampler header) of each fetch."""
+def bind_buffers(rec: dict, entries: list[dict], bound: dict, mem: Memory) -> tuple[dict, dict]:
+    """Give the root push words and set-0 descriptors RenderEncoder::prepare writes for fragment slots `bound`.
+
+    `bound` is {slot: address}; the words come by word, the descriptors by set byte. Each descriptor is at the address
+    less its residual, the residual in the record's word: a root push word, or past them a word of the fragment argument
+    table, which holds the record's words (raw_spill_table.h composeSpill).
+    """
+    v20 = tail(rec)
+    words = list(rec.get('spill', [])[v20[26] : v20[26] + v20[27]])
+    push, set0 = {}, {}
+    for e in entries:
+        if e['kind'] != 'ubo' or e['stage'] != 'f' or e['slot'] not in bound:
+            continue
+        address = bound[e['slot']]
+        residual = address & (15 if e['ssbo'] else 255)
+        set0[e['off']] = [(address - residual) & 0xFFFFFFFF, (address - residual) >> 32, 0x10000, 0]
+        if e['residual'] is not None:
+            word = (e['residual'] - 0x700) // 4
+            if word < 32:
+                push[word] = residual
+            else:
+                words[word - 32] = residual
+    for e in entries:
+        if e['kind'] == 'spill_table' and e['stage'] == 2:
+            set0[e['off']] = [SPILL, 0, (4 * len(words) + 255) & ~255, 0]
+            mem.put(SPILL, struct.pack(f'<{len(words)}I', *words))
+    return push, set0
+
+
+def run(rec: dict, mem: Memory, pixel: tuple, bound: dict | None = None) -> tuple[list[float], list[tuple]]:  # noqa: C901
+    """Run the fragment program at `pixel`: give lane 0's colour and the (texture, sampler header) of each fetch.
+
+    `bound`: the fragment buffer slots a draw binds besides the argument buffer, {slot: address} (bind_buffers).
+    """
     p = rec['pipeline']
     hdr = directlink.PIPELINE.unpack_from(p)
     entries = directlink.entries_of(p, hdr[6], rec['samplers'], [])
@@ -129,6 +162,11 @@ def run(rec: dict, mem: Memory, pixel: tuple) -> tuple[list[float], list[tuple]]
             set0[e['off']] = [TABLES + 16 * TICS, 0, 16 * TSCS, 0]
         elif e['kind'] == 'handle' and e['smp'] and e['smp'][0] == 'constexpr':
             set0[e['off']] = [CONSTEXPR_TSC << 20, 0, 0, 0]
+    if bound:
+        words, descriptors = bind_buffers(rec, entries, bound, mem)
+        for word, value in words.items():
+            push[word] = value
+        set0.update(descriptors)
     prog = rec['programs'][1]
     fetched = []
 
@@ -144,7 +182,8 @@ def run(rec: dict, mem: Memory, pixel: tuple) -> tuple[list[float], list[tuple]]
         if kind == 11:
             return mem.get(HEAP + offset)
         if kind & 7 == 5:
-            return mem.get(ARG + offset)
+            base = set0.get(kind >> 3 << 4, [ARG, 0])
+            return mem.get((base[0] | base[1] << 32) + offset)
         raise SystemExit(f'argcheck: a constant buffer of type {kind} at slot {bank}')
 
     def texture(key: tuple) -> list[int]:
@@ -220,6 +259,34 @@ def handles(recs: dict, check, flags: int) -> None:  # noqa: ANN001  main's chec
     check(f"a nested buffer's colour pointer, flags {flags:#x}", out == [0, 1, 1, 1], out)
 
 
+def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
+    """Check fourteen fragment buffers bound off their alignment beside an argument buffer.
+
+    The last offsets' residuals lie in the fragment stage's argument table; the vertex stage's table as its record
+    names it.
+    """
+    rec = recs['argument_spill_fragment']
+    v20 = tail(rec)
+    check('a fragment argument table', v20[25] != 0 and v20[27] != 0, v20[24:29])
+    mem = Memory()
+    device(mem, rec, {}, {}, lambda _: True)
+    mem.put(ARG, struct.pack('<Q', COLOUR))
+    mem.put(COLOUR, struct.pack('<4f', 0, 0, 1, 1))
+    bound = {}
+    for slot in range(1, 15):
+        va = BUFFERS + slot * 0x10000
+        mem.put(va, struct.pack('<4f', 0, 1, 0, 0) * 64)
+        bound[slot] = va + 512 + 16 * slot
+        mem.put(bound[slot], struct.pack('<4f', 1 / 32, 0, 0, 0))
+    entries = directlink.entries_of(rec['pipeline'], directlink.PIPELINE.unpack_from(rec['pipeline'])[6], [], [])
+    spilled = [e['slot'] for e in entries if e['kind'] == 'ubo' and e['residual'] and e['residual'] >= 0x780]
+    check('bind offsets in the fragment argument table', bool(spilled), spilled)
+    out, _ = run(rec, mem, (0, 0), bound)
+    check('fourteen buffers through the root and the argument table', out == [14 / 32, 0, 1, 1], out)
+    vertex = tail(recs['tint_fragment'])
+    check('a vertex argument table', vertex[24] != 0 and vertex[26] != 0, vertex[24:29])
+
+
 def main() -> None:
     if len(sys.argv) != 4 or sys.argv[1] != '--rootdump':
         raise SystemExit(__doc__)
@@ -233,6 +300,7 @@ def main() -> None:
         print(f'{"ok  " if ok else "FAIL"} {what}: {detail}')
 
     pointers(recs, check, rootdump)
+    spills(recs, check)
     # texel class indices, and the repeat sampler's SamplerWord (address mode 2 in bits 5-7)
     for flags in (0, 1 << 16, 0x25 << 16):
         handles(recs, check, flags)

@@ -72,6 +72,8 @@ struct RuntimeRecord {
     };
 
     std::vector<Variant> variants;
+    // its argument tables' words (PackPipeline::spillWords), the vertex table's first: in a pack, its blob section's
+    std::vector<uint32_t> spill;
 };
 
 // One state's probe: its submissions with tagged payloads of 256, 16 and 4096 bytes, the index its payloads are tagged with, and

@@ -35,4 +35,31 @@ extension NativeArgumentEncoderTest {
         let exact = words[0] == SIMD4<Float>(1, 0, 1, 1) && words[1] == SIMD4<Float>(0, 1, 0, 1)
         return "\(ran.path)/\(exact ? "exact" : "wrong")"
     }
+
+    /// Where a dispatch of a kernel whose last bind offsets m2v places in its argument table went, and whether it read the
+    /// colour behind the argument buffer's pointer and every buffer's float4
+    func dispatchSpillThroughArguments(_ gpu: GPU) async throws -> String {
+        guard let encoder = gpu.device.makeArgumentEncoder(arguments: [Self.argument(.pointer, 0)]) else {
+            return "no_encoder"
+        }
+        let colour = try gpu.buffer([SIMD4<Float>(0, 0, 1, 1)]), arguments = try gpu.buffer(16)
+        encoder.setArgumentBuffer(arguments, offset: 0)
+        encoder.setBuffer(colour, offset: 0, index: 0)
+        let values = try Self.spillValues(gpu, SIMD4<Float>(1.0 / 32, 0, 0, 0), SIMD4<Float>(0, 1, 0, 0))
+        let pipeline = try gpu.compute("argument_spill_kernel")
+        let out = try gpu.buffer(16)
+        let ran = try await gpu.run { commands in
+            let compute = commands.makeComputeCommandEncoder()!
+            compute.setComputePipelineState(pipeline)
+            compute.useResource(colour, usage: .read)
+            compute.setBuffer(arguments, offset: 0, index: 0)
+            compute.setBuffer(out, offset: 0, index: 1)
+            for slot in 2...29 { compute.setBuffer(values, offset: slot * Self.spillStride, index: slot) }
+            compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
+                                         threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+            compute.endEncoding()
+        }
+        let word = out.contents().bindMemory(to: SIMD4<Float>.self, capacity: 1)[0]
+        return "\(ran.path)/\(word == SIMD4<Float>(28.0 / 32, 0, 1, 1) ? "exact" : "wrong")"
+    }
 }

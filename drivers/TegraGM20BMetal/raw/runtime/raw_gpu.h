@@ -498,6 +498,8 @@ struct PlacedProgram {
     const PackProgram *record = nullptr;
     uint32_t program = 0;
     uint64_t data = 0;
+    // its argument tables' words (raw_spill_table.h), vertex then fragment: the pack's or its runtime record's; null: none
+    const uint32_t *spill[2] = {};
     const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
 };
 
@@ -689,6 +691,9 @@ private:
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
+#ifdef SWITCH_RAW_HARNESS_MARKS
+    friend struct DeviceHarness;
+#endif
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
     void bindState(Push &p, const Pipeline &pl);
     bool measuringInline() const;
@@ -722,6 +727,13 @@ private:
     uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
     // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
+    SpillUpload spillUploads_[2];  // each stage's argument table as the encoder uploaded it last (raw_spill_table.h)
+    // a fragment argument table's dynamic words may have moved since its last upload: the blend colour, the depth and
+    // stencil state and references, the viewport's depth range
+    bool spillDirty_ = true;
+    bool blendWords(const PackPipeline &r, const char **why);
+    bool fillSpills(const Pipeline &pl, uint32_t moved, PreparedDescriptorWords &prepared, uint32_t *set,
+                    const char **why);
     // the stream are CPU-cleaned): the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to
     // each index
     bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount, bool indexed,
@@ -1843,7 +1855,7 @@ private:
     const HeapPart *heapPartAt(uint64_t at) const;
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-               const uint32_t *blob, const char *keyString, bool caTransform);
+               const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills);
     // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads
     bool usableRecord(const PackPipeline *rec) const;
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
@@ -1868,7 +1880,7 @@ private:
     struct Completed {
         PackPipeline record;
         std::string keyString;
-        std::vector<uint32_t> blob;
+        std::vector<uint32_t> blob, spill;
         PackProgram programs[2];
         Pipeline pipeline;
     };
@@ -1881,6 +1893,7 @@ private:
     struct CompletedProgram {
         PackProgram info;
         PlacedProgram placed;
+    // `spills`: its argument tables' words (PackPipeline::spillWords), null where it has none
         uint8_t header[80];
     };
 

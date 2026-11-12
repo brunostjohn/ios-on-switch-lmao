@@ -42,7 +42,7 @@ PIPELINE_BYTES = (
     + packfile.PIPELINE_V20.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
-TABLE_KINDS = {8: 'texture_table', 9: 'sampler_table'}
+TABLE_KINDS = {code: kind for kind, code in packfile.TABLE_KINDS.items()}
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
 
@@ -72,6 +72,10 @@ def program(r: Reader) -> dict:
     return out
 
 
+def words_of(blob: bytes) -> list[int]:
+    return list(struct.unpack(f'<{len(blob) // 4}I', blob))
+
+
 def headers(blob: bytes) -> list[list[int]]:
     return [list(struct.unpack_from('<8I', blob, 32 * i)) for i in range(len(blob) // 32)]
 
@@ -92,6 +96,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
                 rec['kernel'] = r.blob()
                 rec['program'] = {'image': bytes(80) + r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
                 rec['samplers'] = headers(r.blob())
+                rec['spill'] = words_of(r.blob())
             kernel_recs.append(rec)
             continue
         if outcome == 0:
@@ -105,6 +110,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
                 rec['split'] = {'record': r.blob(), 'programs': [program(r) for _ in range(2)]}
             rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
             rec['iterated'] = r.blob().decode()
+            rec['spill'] = words_of(r.blob())
         states.append(rec)
     return states, kernel_recs
 
@@ -179,7 +185,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
     v20 = packfile.PIPELINE_V20.unpack_from(p, PIPELINE_BYTES - packfile.PIPELINE_V20.size)
-    heap_arrays, heap_bytes, heap_words = v20[6], v20[7], v20[8:]
+    heap_arrays, heap_bytes, heap_words = v20[6], v20[7], v20[8:24]
+    spill_entry, spill_words, spill = list(v20[24:26]), v20[26:28], rec.get('spill', [])
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -226,6 +233,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'root_slots': list(v20[4:6]),
         'heap': [{'class': heap_words[2 * i], 'offset': heap_words[2 * i + 1]} for i in range(heap_arrays)],
         'heap_bytes': heap_bytes,
+        'spill_entry': spill_entry,
+        'spill': [spill[: spill_words[0]], spill[spill_words[0] : spill_words[0] + spill_words[1]]],
         'uniform': uniform,
         'fetch_rung': list(fetch_rung),
         'iterated_name': rec.get('iterated', ''),

@@ -4,6 +4,7 @@
 // submitted, or holds them until a kill, and the test reads what the device submitted.
 #pragma once
 #include "raw_kernel_model.h"
+#include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_gpu.h"
 #include <gtest/gtest.h>
 #include <cstdio>
@@ -47,6 +48,18 @@ struct DeviceHarness {
     static bool arenaWriteCombined(const Device &d, uint32_t arena)
     {
         return d.arenas_[arena].wc;
+    }
+
+    // Where the encoder's last upload of stage `k`'s argument table lies (raw_spill_table.h), 0: none
+    static uint64_t spillTable(const RenderEncoder &e, uint32_t k)
+    {
+        return e.spillUploads_[k].va();
+    }
+
+    // The set-0 words a compute encoder made for its last dispatch, null: none
+    static const uint32_t *kernelSet(const ComputeEncoder &e)
+    {
+        return e.descriptorWords_.empty() ? nullptr : e.descriptorWords_.data();
     }
 };
 

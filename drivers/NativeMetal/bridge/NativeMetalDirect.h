@@ -80,6 +80,10 @@ typedef struct NmbDirectDraw {
     uint32_t vertexSlot;  // the first fixed-function vertex buffer's Metal slot (UINT32_MAX: none) and stride
     uint32_t vertexStride;
     const char *variant;
+    // Each stage's argument table (NmbDirectArgumentTable's words, m2v's push fields past its push window) as instantiation
+    // filled it for the draw; a dynamic field there is numbered from push word 32 (raw_spill_table.h)
+    const uint32_t *spill[2];
+    uint32_t spillWords[2];
 } NmbDirectDraw;
 
 typedef struct NmbDirectStorage {
@@ -188,6 +192,9 @@ typedef struct NmbDirectKernel {
     uint32_t otherHoles, rootSlots;
     uint64_t set1;
     uint32_t heapArrays, heapClass[8];
+    // Its argument table's words in each of the three dispatches (NmbDirectDraw's spill)
+    const uint32_t *spill, *movedSpill, *boundSpill;
+    uint32_t spillWords, movedSpillWords, boundSpillWords;
 } NmbDirectKernel;
 
 // `descriptor`'s compute state as the translator makes it for a dispatch of `dispatch`'s threadgroup shape and bindings, handed

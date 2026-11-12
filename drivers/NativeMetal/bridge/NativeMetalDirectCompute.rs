@@ -6,7 +6,7 @@
 
 use crate::compute_artifact::NmbComputeArtifact;
 use crate::direct::{
-    HEAP_ARRAYS, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of,
+    HEAP_ARRAYS, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, spill_table, write_of,
 };
 use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
@@ -101,6 +101,12 @@ pub struct NmbDirectKernel {
     pub set1: u64,
     pub heap_arrays: u32,
     pub heap_class: [u32; HEAP_ARRAYS],
+    pub spill: *const u32,
+    pub moved_spill: *const u32,
+    pub bound_spill: *const u32,
+    pub spill_words: u32,
+    pub moved_spill_words: u32,
+    pub bound_spill_words: u32,
 }
 
 /// The kernel's reads through argument buffers the raw path fills (NativeMetalDirect.rs holes_of and heap_of for a draw): its
@@ -612,6 +618,8 @@ fn direct(
             .collect()
     };
     let moved_same = same(&moved) && ranges(&moved) == ranges(&plain);
+    let spill = |s: &Settled| spill_table(&s.plan, &s.commands.descriptor_bytes, Stage::Kernel);
+    let (plain_spill, moved_spill, bound_spill) = (spill(&plain), spill(&moved), spill(&bound));
 
     // SAFETY: the runtime device's own handles, used while it lives.
     let handles = unsafe { runtime.raw() };
@@ -684,6 +692,12 @@ fn direct(
         set1: 0,
         heap_arrays: 0,
         heap_class: [0; HEAP_ARRAYS],
+        spill: plain_spill.as_ptr(),
+        moved_spill: moved_spill.as_ptr(),
+        bound_spill: bound_spill.as_ptr(),
+        spill_words: plain_spill.len() as u32,
+        moved_spill_words: moved_spill.len() as u32,
+        bound_spill_words: bound_spill.len() as u32,
     };
     arguments_of(&plain.commands, &bound.commands, &plain.pipeline.layout, &layout, &mut kernel)?;
     // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.

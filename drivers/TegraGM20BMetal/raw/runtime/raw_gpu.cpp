@@ -1029,7 +1029,8 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
         stats.heapFull++;
         return nullptr;
     }
-    build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
+    build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,
+          pack_.spills(pp));
     offerVariants(pl, pp);
     if (const PackSplit *split = pack_.split(pp.fs); split && !pl.storageBits) {
         SplitSource source;
@@ -1048,7 +1049,7 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
 // lock_ held: `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
 // and whose key's attachment and vertex fields are `keyString`
 void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-                   const uint32_t *blob, const char *keyString, bool caTransform)
+                   const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills)
 {
     auto instructions = [](const PackProgram &program) {
         const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;
@@ -1101,8 +1102,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             if (cbufKind(prog->cbufType[c]) != CbufUbo)
                 continue;
             uint8_t entry = 0;
-            while (entry < pp.entries && !(pp.entry[entry].kind == EntryUbo && !bufferStorage(pp.entry[entry]) &&
-                                           pp.entry[entry].offset == cbufUboOffset(prog->cbufType[c])))
+            while (entry < pp.entries &&
+                   !(uniformEntry(pp.entry[entry]) && pp.entry[entry].offset == cbufUboOffset(prog->cbufType[c])))
                 entry++;
             pl.ubosNamed &= entry < pp.entries;
             if (entry < pp.entries)
@@ -1115,6 +1116,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.heapSlot[0] = heapCbufSlot(*vs.record);
     pl.heapSlot[1] = heapCbufSlot(*fs.record);
     bindArguments(pl, pp);
+    for (uint32_t k = 0; k < 2; k++)
+        if (pp.spillEntry[k])
+            pl.spill[k] = spills ? spills + (k ? pp.spillWords[0] : 0) : nullptr;
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = keyString; (at = strstr(at, " c")); at += 2) {
@@ -4344,6 +4348,7 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 {
     static thread_local Runs runs;
     runs.clear();
+    spillDirty_ = true;
     runWinding_.fill(false);
     const bool indexed = drawIndices_ != nullptr;
     const FetchDraw shape = {primitive, count, instances, false, indexed};
@@ -4371,6 +4376,7 @@ const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, con
 #endif
     return &runs;
 }
+        spillDirty_ = true;
 
 StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 {
@@ -4380,6 +4386,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
         twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
         return StorageFallback::ReadOnly;
     StorageFallback reason = StorageFallback::None;
+    spillDirty_ = true;
     for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
         if (const Texture *t = pass_.color[slot].texture; t && (pl.storageBits >> slot & 1))
             reason = storageViewMismatch(texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, *t);
@@ -4387,6 +4394,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 }
 
 // The colour targets the pass binds: through its last attachment (CommandBuffer::render's targets)
+    spillDirty_ = true;
 uint32_t RenderEncoder::colorTargets() const
 {
     uint32_t count = 0;
@@ -5063,9 +5071,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                         uint32_t(std::min<uint64_t>(b.offset, ~0u))};
                         return false;
                     }
-                    if (desc.word >= 0) {
-                        prepared.residuals[desc.word] = desc.residual;
-                        prepared.residualMask |= 1u << desc.word;
+                    // a word that held a residual takes the slot's next one even where it is 0: the set keeps its
+                    // words from the draws before
+                    if (const int word = bufferResidualWord(e); spilledWord(word)) {
+                        prepared.spilled[e.stage == 1 ? 0 : 1].set(word, desc.residual);
+                    } else if (word >= 0 && (desc.residual || (prepared.residualMask >> word & 1))) {
+                        prepared.residuals[word] = desc.residual;
+                        prepared.residualMask |= 1u << word;
                     }
                     if (b.buffer && b.buffer->hostVisible && !b.buffer->wc)
                         cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
@@ -5150,6 +5162,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
                     if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
+    if ((r.spillEntry[0] && !pl->spill[0]) || (r.spillEntry[1] && !pl->spill[1])) {
+        *why = "an argument table whose words its record does not hold";
+        cb_->refusal = {};
+        return false;
+    }
                         *why = "a planar texture sampled through a constexpr sampler";
                         return false;
                     }
@@ -5157,11 +5174,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 }
                 at[0] = tic | tsc << 20;
             }
-            return true;
+            return fillSpills(*pl, moved, prepared, set, why);
         },
         [&](const DescriptorWords &words) {
             RAW_ENCODE_COUNT(DescriptorUploads);
             uint64_t address = 0;
+                if (e.kind == EntrySpillTable)
+                    continue;
             uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
             memcpy(upload, words.data(), sizeof(words));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -5209,18 +5228,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         memcpy(want, pl->push, sizeof want);
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
-        if (r.blendColorWord && blendWordsDirty_) {
-#if defined(SWITCH_RAW_HARNESS_MARKS)
-            if (!switch_nmb_blend_color_words) {
-                *why = "extended blend color conversion unavailable";
-                return false;
-            }
-#endif
-            float color[4];
-            memcpy(color, blendColor_, sizeof color);
-            switch_nmb_blend_color_words(color, blendWords_);
-            blendWordsDirty_ = false;
-        }
+        if (!blendWords(r, why))
+            return false;
         patchBlendPush(r, blendColor_, blendWords_, want);
         patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
         for (uint32_t k = 0; k < 2; k++)
@@ -5306,6 +5315,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
     }
     bool selected = false;
+    spillDirty_ = false;
     if (descriptorBinding_.changed(pl, setVa)) {
         const HeapSet *heap = pl->heapSet;
         const uint64_t heapVa = heap ? heap->memory.va : 0;
@@ -5458,7 +5468,9 @@ uint32_t RenderEncoder::movedEntries(const PackPipeline &rec) const
                              (moved_.textures >> e.slot & 1);
         const bool sampler = e.kind != EntryUbo && e.samplerKind == SamplerSlot && e.sampler < 16 &&
                              (moved_.samplers >> e.sampler & 1);
-        moved |= uint32_t(buffer || texture || sampler) << i;
+        const bool spill =
+            e.kind == EntrySpillTable && e.stage < 3 && (moved_.buffers[e.stage] || (e.stage == 2 && spillDirty_));
+        moved |= uint32_t(buffer || texture || sampler || spill) << i;
     }
     return moved;
 }
@@ -5596,6 +5608,55 @@ constexpr uint32_t remapOf(uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint3
 }
 
 // `w` x `h` texels by nouveau_copy_rect (raw_kit.h): a remap of components (`bytes` of each texel moved). `ordered`: after
+// The extended blend colour's words (switch_nmb_blend_color_words) where `r` reads them, made again after the colour moved
+bool RenderEncoder::blendWords(const PackPipeline &r, const char **why)
+{
+    if (!r.blendColorWord || !blendWordsDirty_)
+        return true;
+#if defined(SWITCH_RAW_HARNESS_MARKS)
+    if (!switch_nmb_blend_color_words) {
+        *why = "extended blend color conversion unavailable";
+        return false;
+    }
+#endif
+    float color[4];
+    memcpy(color, blendColor_, sizeof color);
+    switch_nmb_blend_color_words(color, blendWords_);
+    blendWordsDirty_ = false;
+    return true;
+}
+
+// `pl`'s argument tables (raw_spill_table.h) whose entries moved: the record's words with the spilled bind offsets'
+// residuals and a fragment table's dynamic words, uploaded where they differ from the encoder's last upload, named in set 0
+bool RenderEncoder::fillSpills(const Pipeline &pl, uint32_t moved, PreparedDescriptorWords &prepared, uint32_t *set,
+                               const char **why)
+{
+    const PackPipeline &r = *pl.rec;
+    Device &d = *dev_;
+    for (uint32_t k = 0; k < 2; k++) {
+        const uint32_t entry = r.spillEntry[k], count = r.spillWords[k];
+        if (!entry || entry > r.entries || !(moved >> (entry - 1) & 1))
+            continue;
+        uint32_t words[kSpillWordsMax];
+        composeSpill(pl.spill[k], count, prepared.spilled[k], words);
+        if (k == 1) {
+            if (!blendWords(r, why))
+                return false;
+            patchBlendPush(r, blendColor_, blendWords_, words, kRootPushWords, count);
+            patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, words, kRootPushWords, count);
+        }
+        const uint64_t va = spillUploads_[k].resolve(words, count, [&](const uint32_t *from, uint32_t n) {
+            RAW_ENCODE_COUNT(DescriptorUploads);
+            uint64_t address = 0;
+            uint8_t *upload = d.alloc(d.upload_, spillRange(n), 256, address);
+            memcpy(upload, from, n * sizeof(uint32_t));
+            return address;
+        });
+        spillDescriptor(va, count, set + r.entry[entry - 1].offset / 4);
+    }
+    return true;
+}
+
 // every earlier copy has completed (one that reads what the copy before it wrote)
 void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
                   [[maybe_unused]] Device::Stats &stats, bool ordered = false)

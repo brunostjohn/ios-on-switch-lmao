@@ -10,6 +10,7 @@
 #include <set>
 #include "raw_owned.h"
 #include "raw_set_reads.h"
+#include "raw_spill_table.h"
 
 namespace raw {
 namespace {
@@ -63,8 +64,7 @@ bool ubosNamed(const CapturedProgram &p, const PackPipeline &pipe)
             continue;
         bool named = false;
         for (uint32_t k = 0; k < pipe.entries && !named; k++)
-            named = pipe.entry[k].kind == EntryUbo && !bufferStorage(pipe.entry[k]) &&
-                    pipe.entry[k].offset == cbufUboOffset(p.cbufTypes[i]);
+            named = uniformEntry(pipe.entry[k]) && pipe.entry[k].offset == cbufUboOffset(p.cbufTypes[i]);
         if (!named)
             return false;
     }
@@ -270,7 +270,7 @@ static void describeReads(RuntimeRecord &out, const std::string &key)
         return;
     for (uint32_t k = 0; k < p.entries; k++)
         if (p.entry[k].kind != EntryUbo && p.entry[k].kind != EntryColorTable && p.entry[k].kind != EntryTextureTable &&
-            p.entry[k].kind != EntrySamplerTable)
+            p.entry[k].kind != EntrySamplerTable && p.entry[k].kind != EntrySpillTable)
             p.boundEntries |= 1u << k;
 }
 
@@ -359,6 +359,18 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.heapArrays = parts.heap.arrays;
     p.heapBytes = parts.heap.bytes;
     memcpy(p.heap, parts.heap.array, sizeof p.heap);
+    out.spill.clear();
+    for (uint32_t k = 0; k < 2; k++) {
+        for (uint32_t i = 0; i < p.entries; i++)
+            if (p.entry[i].kind == EntrySpillTable && p.entry[i].stage == k + 1)
+                p.spillEntry[k] = uint8_t(i + 1);
+        if (bool(p.spillEntry[k]) != !parts.spill[k].empty() || parts.spill[k].size() > kSpillWordsMax) {
+            why = "an argument table its layout and its words disagree on";
+            return false;
+        }
+        p.spillWords[k] = uint8_t(parts.spill[k].size());
+        out.spill.insert(out.spill.end(), parts.spill[k].begin(), parts.spill[k].end());
+    }
     describeReads(out, key);
     constexpr size_t kHeaderBytes = 0x50;
     for (const CapturedProgram &program : out.programs)

@@ -11,12 +11,14 @@
 // each a u32 length and bytes), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
 // and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
 // (as the programs above; the prologue's header 80 bytes of zeros), its program variants, and the iterated blend program a
-// fetch-free form names (u32 length and bytes: ca/fetchfree.py, iterated/table.py; empty for any other record). A record of
+// fetch-free form names (u32 length and bytes: ca/fetchfree.py, iterated/table.py; empty for any other record), then its
+// argument tables' words (u32 count and words: the vertex table's, then the fragment table's). A record of
 // one of a state's variants has the variant's name after its key (runtime/raw_pack.h variantNameAt); a state's fetch-free
 // form is under the state's key (PipelineFetchFreeForm).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
-// shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
+// shader data and constant buffer types, its sampler headers, which its sampler entries number from 0 (slot 0x80 | n), and its
+// argument table's words (u32 count and words).
 // PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -107,6 +109,7 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
         program(v.program);
     }
     w.text(iterated);
+    w.list(rec.spill);
 }
 
 // The rung a Core Animation state's fragment blend is a candidate for (rawpack.py's split tags its line " rung=<2|3>":
@@ -221,6 +224,7 @@ void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
     w.list(rec.data);
     w.bytes(rec.cbufType, rec.cbufs);
     w.list(rec.samplers);
+    w.list(rec.spill);
 }
 
 }  // namespace

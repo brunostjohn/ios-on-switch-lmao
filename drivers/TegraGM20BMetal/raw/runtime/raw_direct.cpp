@@ -8,6 +8,7 @@
 #include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
 #include "raw_residual.h"
+#include "raw_spill_table.h"
 #include "raw_split_metadata.h"
 
 #include <algorithm>
@@ -215,8 +216,14 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             continue;
         }
         if (w.source == NmbDirectArgumentTable) {
-            why = "push fields m2v spills past the push window into an argument table";
-            return false;
+            if (w.stage != 1 && w.stage != 2) {
+                why = "an argument table of stage " + std::to_string(w.stage);
+                return false;
+            }
+            e.table = EntrySpillTable;
+            e.stage = uint8_t(w.stage);
+            out.push_back(e);
+            continue;
         }
         if (bufferType(w.type)) {
             if ((w.source != NmbDirectBuffer && w.source != NmbDirectBytes) || (w.stage != 1 && w.stage != 2)) {
@@ -302,6 +309,36 @@ std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const Nmb
     return residualWordsByValue(was, now);
 }
 
+// A draw's argument table of stage `k` as residualWordsByValue reads words: word i at root push word 32 + i
+// (raw_spill_table.h), as far as a residual word can name one
+std::map<uint32_t, uint32_t> spillWords(const NmbDirectDraw &d, uint32_t k)
+{
+    std::map<uint32_t, uint32_t> out;
+    for (uint32_t i = 0; i < d.spillWords[k] && i < kSpillResidualWords; i++)
+        out[kRootPush + 4 * (kRootPushWords + i)] = d.spill[k][i];
+    return out;
+}
+
+// What the record takes of the draws' argument tables (m2v's push fields past each stage's window): draw 0's words, and
+// each spilled bind offset's word by its value in the bind-offset draw; null: why not
+const char *spillTables(const NmbDirectState &state, RecordParts &parts)
+{
+    const NmbDirectDraw &draw = state.draws[0];
+    for (uint32_t k = 0; k < 2; k++) {
+        for (const NmbDirectDraw &d : state.draws)
+            if (d.spillWords[k] != draw.spillWords[k])
+                return "probe draws on variants of other argument tables";
+        if (draw.spillWords[k] > kSpillWordsMax)
+            return "an argument table past 255 words";
+        parts.spill[k].assign(draw.spill[k], draw.spill[k] + draw.spillWords[k]);
+        for (const auto &[value, word] : residualWordsByValue(spillWords(draw, k), spillWords(state.draws[3], k)))
+            parts.residuals.emplace(value, word);
+    }
+    for (const uint32_t word : {draw.blendColorWord, draw.halfBlendColorWord, draw.depthTestWord, draw.stencilTestWord})
+        if (word > 0xFF)
+            return "a dynamic field past word 222 of its argument table";
+    return nullptr;
+}
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
 // unless the pack varies it, so it never costs an extra.
 bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t blended,
@@ -322,7 +359,6 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
             regs[r.method] = r.value;
     return true;
 }
-
 // Each stage's program variants, most specialised first (raw_pack.h PackVariant): residual 0, compiled with the root push
 // words that hold uniform bind residuals (raw_residual.h) as the constant 0, so a uniform read is a constant-buffer operand
 // at an immediate offset; and where the chip is proven to round them so (raw_chip_facts.h), fetches rounded to half in
@@ -342,10 +378,12 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
         residual[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
         zeroPush |= 1u << word;
     }
+
     struct Kind {
         uint32_t zeroPush;
         bool texsF16;
     };
+
     const bool f16 = kProvenChipFacts & AssumeTexsF16;
     std::vector<Kind> kinds;
     if (zeroPush && f16)
@@ -469,7 +507,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         return CompileOutcome::Refused;
     }
     // a split prologue binds its own constant buffers, set 1 not among them
-    const bool splits = split && !storage.storageMask && !heap.arrays;
+    const bool splits = split && !storage.storageMask && !heap.arrays && !draw.spillWords[0] && !draw.spillWords[1];
     Stages stages(nvk, device);
     if (const CompileOutcome compiled = stages.compile(state, halfFloatTargets(key), splits, why);
         compiled != CompileOutcome::Made)
@@ -510,6 +548,10 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
     parts.sizes4096 = boundSizes(nvk, device, state.draws[2]);
     parts.residuals = residualWords(draw, state.draws[3]);
+    if (const char *refused = spillTables(state, parts)) {
+        why = refused;
+        return CompileOutcome::Refused;
+    }
     if (draw.vertexSlot != UINT32_MAX) {
         parts.vertexSlot = uint8_t(draw.vertexSlot);
         parts.vertexStride = uint16_t(draw.vertexStride & 0xFFF);

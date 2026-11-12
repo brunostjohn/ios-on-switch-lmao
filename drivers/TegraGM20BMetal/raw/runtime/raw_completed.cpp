@@ -111,6 +111,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     c.record = r.pipeline;
     c.keyString = r.keyString;
     c.blob = r.blob;
+    c.spill = r.spill;
     for (const auto &[m, v] : r.extras) {
         c.blob.push_back(m);
         c.blob.push_back(v);
@@ -133,7 +134,9 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         return nullptr;
     }
     Completed &stored = completedStore_.emplace_back(std::move(c));
-    build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform);
+    build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform,
+          stored.spill.size() == stored.record.spillWords[0] + stored.record.spillWords[1] ? stored.spill.data()
+                                                                                           : nullptr);
     std::vector<uint32_t> words(2 * r.restore.size() + 2);
     Push w{words.data(), words.data() + words.size()};
     for (const auto &[m, v] : r.restore)

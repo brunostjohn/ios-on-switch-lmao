@@ -73,6 +73,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
     c.instructions = std::max(1u, (p.dataBytes ? p.dataOffset : p.bytes) / 8);
     memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));
+    c.spill = dev.pack().spills(*k);
     dev.bindKernelArguments(c, *k);
     return &gStates.emplace(std::make_pair(&dev, keyHash), c).first->second;
 }
@@ -113,6 +114,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
     c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
+    c.spill = r.spill.size() == r.kernel.spillWords ? r.spill.data() : nullptr;
     dev.bindKernelArguments(c, r.kernel);
     ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
     placed.rec = &placed.placed;
@@ -268,6 +270,11 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
     uint32_t *set = descriptorWords_.data();
     residuals_.fill(0);
     residualMask_ = 0;
+    spilled_ = {};
+    if (r.spillEntry && !state_->spill) {
+        *why = "an argument table whose words the kernel's record does not hold";
+        return false;
+    }
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackKernelEntry &e = r.entry[i];
         const bool writes = kernelEntryWrites(r, i);
@@ -283,7 +290,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                 *why = "a buffer bound at an offset that is not a multiple of 16";
                 return false;
             }
-            if (desc.word >= 0) {
+            if (spilledWord(desc.word)) {
+                spilled_.set(desc.word, desc.residual);
+            } else if (desc.word >= 0) {
                 residuals_[desc.word] = desc.residual;
                 residualMask_ |= 1u << desc.word;
             }
@@ -318,6 +327,8 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                 }
             }
             at[0] |= tic;
+        } else if (e.kind == KernelSpillTable) {
+            continue;
         } else if (e.kind == KernelTextureTable || e.kind == KernelSamplerTable) {
             const HeapTables &tables = dev_.heapTables_;
             const bool textures = e.kind == KernelTextureTable;
@@ -337,6 +348,13 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
             at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
         }
+    }
+    if (r.spillEntry && r.spillEntry <= r.entries) {
+        uint32_t words[kSpillWordsMax];
+        composeSpill(state_->spill, r.spillWords, spilled_, words);
+        uint64_t va = 0;
+        memcpy(dev_.alloc(dev_.upload_, spillRange(r.spillWords), 256, va), words, r.spillWords * sizeof(uint32_t));
+        spillDescriptor(va, r.spillWords, set + r.entry[r.spillEntry - 1].offset / 4);
     }
     // All descriptor read/modify/write operations above touch cached CPU scratch, never the WC upload.
     uint8_t *upload = dev_.alloc(dev_.upload_, setBytes, 256, setVa_);

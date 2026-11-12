@@ -7,19 +7,15 @@ namespace raw {
 
 inline bool validDynamicPush(const NmbDirectState &state)
 {
-    for (const NmbDirectDraw &d : state.draws)
-        if (!validDynamicPush(d.blendColorWord, d.halfBlendColorWord, d.pushMask) ||
+    for (const NmbDirectDraw &d : state.draws) {
+        const DynamicField fields[] = {
+            {d.blendColorWord, 8}, {d.halfBlendColorWord, 4}, {d.depthTestWord, 4}, {d.stencilTestWord, 4}};
+        if (!dynamicFieldsPlaced(fields, d.pushMask, d.spillWords[1]) ||
             d.blendColorWord != state.draws[0].blendColorWord ||
             d.halfBlendColorWord != state.draws[0].halfBlendColorWord ||
-            d.depthTestWord != state.draws[0].depthTestWord || d.stencilTestWord != state.draws[0].stencilTestWord)
-            return false;
-    for (const NmbDirectDraw &d : state.draws) {
-        const uint32_t depth = pushFieldMask(d.depthTestWord, 4), stencil = pushFieldMask(d.stencilTestWord, 4);
-        const uint32_t blend = pushFieldMask(d.blendColorWord, 8) | pushFieldMask(d.halfBlendColorWord, 4);
-        if (bool(d.depthTestWord) != bool(state.storage.depthFormat) ||
-            bool(d.stencilTestWord) != bool(state.storage.stencilFormat) || (d.depthTestWord && !depth) ||
-            (d.stencilTestWord && !stencil) || (depth & stencil) || ((depth | stencil) & blend) ||
-            ((depth | stencil) & ~d.pushMask))
+            d.depthTestWord != state.draws[0].depthTestWord || d.stencilTestWord != state.draws[0].stencilTestWord ||
+            bool(d.depthTestWord) != bool(state.storage.depthFormat) ||
+            bool(d.stencilTestWord) != bool(state.storage.stencilFormat))
             return false;
     }
     return true;

@@ -140,6 +140,51 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual((back['heap'], back['heap_bytes']), (heap, 0x10000))
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
 
+    def test_argument_tables_round_trip_and_take_their_words_in_the_blob_section(self):
+        entries = [{'off': 0, 'kind': 'spill_table', 'stage': 1}, {'off': 16, 'kind': 'spill_table', 'stage': 2}]
+        rec = {
+            'key': 'samples=1 c0=70:15:0',
+            'vs': 0,
+            'fs': 1,
+            'blob': [],
+            'entries': entries,
+            'push': [],
+            'vbs': [],
+            'set_size': 32,
+            'fetch': False,
+            'spill_entry': [1, 2],
+            'spill': [[7, 8], [1, 2, 3, 4]],
+            'spill_at': 5,
+        }
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(len(data), directlink.PIPELINE_BYTES)
+        self.assertEqual(
+            packfile.PIPELINE_V20.unpack_from(data, len(data) - packfile.PIPELINE_V20.size)[24:], (1, 2, 2, 4, 5)
+        )
+        programs = [{'image': bytes([i]), 'data': b'', 'cbufs': []} for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        probe = {'index': 0, 'form': '', 'records': [{'regs': {}}]}
+        record = {
+            'pipeline': data,
+            'key': rec['key'],
+            'programs': programs,
+            'samplers': [],
+            'probe': probe,
+            'spill': [7, 8, 1, 2, 3, 4],
+        }
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual((back['entries'], back['spill_entry'], back['spill']), (entries, [1, 2], rec['spill']))
+        self.assertEqual(packfile.pipeline_bytes(dict(back, spill_at=5), 0, 0), data)
+        pipes, blob, _, _ = packfile.pipeline_sections(
+            [dict(back, blob=[(0x1A00, 9)]), dict(rec, spill_entry=[0, 0], spill=[[], []], entries=[])]
+        )
+        self.assertEqual(blob, [0x1A00, 9, 7, 8, 1, 2, 3, 4])
+        tails = [
+            packfile.PIPELINE_V20.unpack_from(pipes, (i + 1) * directlink.PIPELINE_BYTES - packfile.PIPELINE_V20.size)
+            for i in range(2)
+        ]
+        self.assertEqual((tails[0][24:], tails[1][24:]), ((1, 2, 2, 4, 2), (0, 0, 0, 0, 0)))
+
     def test_a_variant_record_lies_under_its_states_key_and_is_named(self):
         own = {
             'key': 'samples=1 ds=260/260 c0=80:15:0 | v a | f b',

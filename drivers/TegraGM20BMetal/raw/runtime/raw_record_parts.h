@@ -32,8 +32,9 @@ enum class Smp : uint8_t {
 struct LayoutEntry {
     uint32_t offset = 0;
     bool buffer = false;
-    bool colorTable = false;      // m2v's sRGB colour table (EntryColorTable)
-    uint8_t table = 0;            // a handle table (EntryTextureTable, EntrySamplerTable) of stage `stage`
+    bool colorTable = false;  // m2v's sRGB colour table (EntryColorTable)
+    // a handle table (EntryTextureTable, EntrySamplerTable) or argument table (EntrySpillTable) of stage `stage`
+    uint8_t table = 0;
     uint8_t stage = 0, slot = 0;  // a buffer's
     Tex tex = Tex::None;
     Smp smp = Smp::None;
@@ -70,6 +71,7 @@ struct RecordParts {
     uint32_t storageTic[8] = {};
     PackShaderTests shaderTests = {};
     RecordHeap heap;
+    std::vector<uint32_t> spill[2];  // each stage's argument table words (raw_spill_table.h), vertex then fragment
 };
 
 // The color attachments a key names (mkpack.py targets)
