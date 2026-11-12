@@ -204,22 +204,22 @@ struct NmbVertexLayout {
 
 /* A render pipeline descriptor's fields over handles of `Function` (NmbFunction, or the offline compile's
  * NmbOfflineFunction: NativeMetalDirect.h), as the bridge's NmbRenderPipelineDescriptorOf takes them */
-#define NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS(Function)                                                         \
-    Function *vertex, *fragment;                                                                                \
-    struct NmbColorAttachment colors[8];                                                                        \
-    uint64_t depth_format, stencil_format, samples, topology, rasterization;                                    \
-    uint64_t vertex_inputs; /* 0: no vertex descriptor */                                                       \
-    struct NmbVertexAttribute attributes[31];                                                                   \
-    struct NmbVertexLayout layouts[31];                                                                         \
+#define NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS(Function)                                                           \
+    Function *vertex, *fragment;                                                                                  \
+    struct NmbColorAttachment colors[8];                                                                          \
+    uint64_t depth_format, stencil_format, samples, topology, rasterization;                                      \
+    uint64_t vertex_inputs; /* 0: no vertex descriptor */                                                         \
+    struct NmbVertexAttribute attributes[31];                                                                     \
+    struct NmbVertexLayout layouts[31];                                                                           \
     /* vertexLinkedFunctions and fragmentLinkedFunctions: each stage's functions and privateFunctions, as       \
-     * NmbComputePipelineDescriptor's linked functions are */                                                   \
-    Function *const *vertex_linked;                                                                             \
-    uint64_t vertex_linked_count;                                                                               \
-    Function *const *vertex_private_linked;                                                                     \
-    uint64_t vertex_private_count;                                                                              \
-    Function *const *fragment_linked;                                                                           \
-    uint64_t fragment_linked_count;                                                                             \
-    Function *const *fragment_private_linked;                                                                   \
+     * NmbComputePipelineDescriptor's linked functions are */ \
+    Function *const *vertex_linked;                                                                               \
+    uint64_t vertex_linked_count;                                                                                 \
+    Function *const *vertex_private_linked;                                                                       \
+    uint64_t vertex_private_count;                                                                                \
+    Function *const *fragment_linked;                                                                             \
+    uint64_t fragment_linked_count;                                                                               \
+    Function *const *fragment_private_linked;                                                                     \
     uint64_t fragment_private_count;
 
 struct NmbRenderPipelineDescriptor {
@@ -238,14 +238,14 @@ struct NmbPipelineOptions {
 
 /* As NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS, a compute pipeline descriptor's */
 #define NMB_COMPUTE_PIPELINE_DESCRIPTOR_FIELDS(Function)                                                         \
-    Function *function;                                                                                         \
-    uint64_t max_threads, multiple_of_execution_width, indirect, max_call_stack_depth, adding_binary_functions; \
-    uint64_t mutability[31];                                                                                    \
+    Function *function;                                                                                          \
+    uint64_t max_threads, multiple_of_execution_width, indirect, max_call_stack_depth, adding_binary_functions;  \
+    uint64_t mutability[31];                                                                                     \
     /* MTLLinkedFunctions: functions and privateFunctions, the external functions the kernel calls by name     \
-     * (counted arrays of live handles for the duration of the call; none where the count is 0). */             \
-    Function *const *linked;                                                                                    \
-    uint64_t linked_count;                                                                                      \
-    Function *const *private_linked;                                                                            \
+     * (counted arrays of live handles for the duration of the call; none where the count is 0). */ \
+    Function *const *linked;                                                                                     \
+    uint64_t linked_count;                                                                                       \
+    Function *const *private_linked;                                                                             \
     uint64_t private_count;
 
 struct NmbComputePipelineDescriptor {

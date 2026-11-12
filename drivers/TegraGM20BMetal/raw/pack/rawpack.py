@@ -318,7 +318,12 @@ def build(work: Path, bridge: Path, metal_abi: Path, context_header: Path) -> No
     tool('probe', [HERE / 'probe.mm'])
     tool(
         'directpack',
-        [HERE / 'directpack.mm', HERE / 'offline_metal.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
+        [
+            HERE / 'directpack.mm',
+            HERE / 'offline_metal.mm',
+            RAW / 'runtime/RawDirect.mm',
+            RAW / 'runtime/RawRenderKey.mm',
+        ],
         tuple(RAW / f'runtime/{name}.cpp' for name in DIRECT_RUNTIME),
         frontend=False,
     )

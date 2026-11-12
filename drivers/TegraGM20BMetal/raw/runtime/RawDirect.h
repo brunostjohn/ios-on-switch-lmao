@@ -60,7 +60,8 @@ class Direct {
 public:
     explicit Direct(const Pack &pack);
     // The pack generator's: records under `rules` alone (pack/directpack.mm)
-    explicit Direct(PackRules rules, bool rankArtifacts = false, DirectTranslator translator = DirectTranslator::frontend());
+    explicit Direct(PackRules rules, bool rankArtifacts = false,
+                    DirectTranslator translator = DirectTranslator::frontend());
 
     // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `registers`: as
     // directRecord's; `split`: with its fragment program's split (directRecord)

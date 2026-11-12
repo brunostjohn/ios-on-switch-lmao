@@ -143,12 +143,11 @@ NSError *refusal(NSString *why)
             const uint64_t bytes = raw::constantBytes(v.dataType);
             if (!bytes || !v.data) {
                 if (error)
-                    *error = refusal([NSString
-                        stringWithFormat:@"constant type %lu is not qualified", (unsigned long)v.dataType]);
+                    *error = refusal(
+                        [NSString stringWithFormat:@"constant type %lu is not qualified", (unsigned long)v.dataType]);
                 return nil;
             }
-            constants.push_back(
-                {v.dataType, group ? 0 : v.index, group ? v.name.UTF8String : nullptr, v.data, bytes});
+            constants.push_back({v.dataType, group ? 0 : v.index, group ? v.name.UTF8String : nullptr, v.data, bytes});
         }
     if (!specialized.length)
         specialized = nil;
@@ -211,10 +210,8 @@ NSError *refusal(NSString *why)
 
 - (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error
 {
-    NSData *bytes = url.isFileURL ? [NSData dataWithContentsOfFile:url.path
-                                                           options:NSDataReadingMappedIfSafe
-                                                             error:error]
-                                  : nil;
+    NSData *bytes =
+        url.isFileURL ? [NSData dataWithContentsOfFile:url.path options:NSDataReadingMappedIfSafe error:error] : nil;
     if (!bytes)
         return nil;
     return (id<MTLLibrary>)[self libraryOf:bytes
@@ -377,8 +374,8 @@ bool render(id descriptor, bool barrier, NSUInteger textureFormat, NSUInteger te
     return false;
 }
 
-bool compute(id descriptor, const NmbDirectDispatch *dispatch, bool (*each)(const NmbDirectKernel *, void *),
-             void *ctx, const char **why)
+bool compute(id descriptor, const NmbDirectDispatch *dispatch, bool (*each)(const NmbDirectKernel *, void *), void *ctx,
+             const char **why)
 {
     NmbOfflineComputePipelineDescriptor p = {};
     std::vector<NmbOfflineFunction *> linked;

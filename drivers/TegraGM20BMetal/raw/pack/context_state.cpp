@@ -13,7 +13,11 @@ int main()
 {
     // One submission, traced: its T lines, then its S regs (nvdec.cpp submitEnd)
     setenv("NVDEC_TRACE", "1", 1);
-    nvdec::Decoder decoder([](uint64_t, uint64_t) -> const uint8_t * { return nullptr; }, stdout);
+    nvdec::Decoder decoder(
+        [](uint64_t, uint64_t) -> const uint8_t * {
+            return nullptr;
+        },
+        stdout);
     decoder.submitBegin();
     for (const switch_gm20b_context_method &m : switch_gm20b_context) {
         const uint32_t words[2] = {1u << 29 | 1u << 16 | uint32_t(m.subc) << 13 | uint32_t(m.mthd) >> 2, m.data};

@@ -73,13 +73,11 @@ Direct::Direct(const Pack &pack) : Direct(PackRules::of(pack))
 {}
 
 Direct::Direct(PackRules rules, bool rankArtifacts, DirectTranslator translator)
-    : rules_(std::move(rules)),
-      translator_(translator),
+    : rules_(std::move(rules)), translator_(translator),
       nvk_(translator.nvkSymbol ? DirectNvk::find(translator.nvkSymbol) : DirectNvk{})
 {
     if (rankArtifacts)
-        nvk_.nakCompileStage =
-            translator.nvkSymbol ? translator.nvkSymbol("switch_nak_compile_ranked_stage") : nullptr;
+        nvk_.nakCompileStage = translator.nvkSymbol ? translator.nvkSymbol("switch_nak_compile_ranked_stage") : nullptr;
 }
 
 CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,

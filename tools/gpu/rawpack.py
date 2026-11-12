@@ -3,10 +3,10 @@
 
 One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl seed_raw_pack runs the rest):
 
-    rawpack.py build --xcode-env F --host-bridge <darwin bridge .a> --generator <raw/pack/rawpack.py> --tree <tree>
-                     --out <dir>
-        the generator's host tools (directpack and the probes through this build's frontend and host bridge, the mock
-        GM20B, the raw path's own.metallib) into <dir>
+    rawpack.py build --xcode-env F --host-bridge <darwin bridge .a> --metal-abi <MetalABI.h>
+                     --context-header <SwitchGM20BContext.h> --generator <raw/pack/rawpack.py> --tree <tree> --out <dir>
+        the generator's host tools (directpack over the host bridge, the probes through this build's frontend too, the
+        mock GM20B, the raw path's own.metallib) into <dir>, with the context init nvdec ran (context.log)
     rawpack.py corpus --corpus corpus.log --build <IPSW build> [--archives <build>.tsv] --out <file> --report <file>
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=, and every
         other library's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the

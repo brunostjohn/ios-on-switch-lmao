@@ -1,6 +1,7 @@
-"""The build's compile profile (drivers/NativeMetal/bridge/compile_profile/<build>.json) held to the m2v runtime device of
-its shader tools: the pack generator's offline compile makes its translator devices of the profile, which this runtime
-made them of before.
+"""The build's compile profile held to the m2v runtime device of its shader tools.
+
+The pack generator's offline compile makes its translator devices of the profile
+(drivers/NativeMetal/bridge/compile_profile/<build>.json), which this runtime made them of before.
 """
 
 import os
