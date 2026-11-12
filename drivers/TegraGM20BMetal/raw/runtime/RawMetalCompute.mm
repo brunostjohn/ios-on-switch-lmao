@@ -9,6 +9,8 @@
 #import "RawMetalComputeState.h"
 #import "RawMetalResolveAsk.h"
 #include "raw_predication.h"
+#import "RawMetalCounters.h"
+#include "TegraGM20BClockABI.h"
 #import "RawMetalIndirectCompute.h"
 #include "raw_view.h"
 #include "raw_surface_view.h"
@@ -401,6 +403,11 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpKernelBufferOffset:
         [e setBufferOffset:c.c atIndex:c.index];
         break;
+    case OpKernelClockAnchors: {
+        const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
+        [e setBytes:&anchors length:sizeof anchors atIndex:c.index];
+        break;
+    }
     case OpKernelTexture:
         [e setTexture:twinOf(object) atIndex:c.index];
         break;
@@ -492,6 +499,9 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
     }
     case OpKernelBufferOffset:
         e.setBufferOffset(c.index, c.c);
+        break;
+    case OpKernelClockAnchors:
+        e.setBytesAt(c.index, c.c, c.b);
         break;
     case OpKernelTexture: {
         RMTexture *t = (RMTexture *)object;

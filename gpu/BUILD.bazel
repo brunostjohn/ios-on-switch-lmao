@@ -161,6 +161,7 @@ metal_plugin(
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
         "//kits/SwitchSeedPack:SwitchSeedStore.h",
         GM20B_LAYOUT,
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BPathsABI.h",
         "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",

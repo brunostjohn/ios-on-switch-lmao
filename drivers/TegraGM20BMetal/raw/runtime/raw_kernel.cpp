@@ -2,6 +2,7 @@
 // See raw_kernel.h. The transport (direct call, or tunnel {magic, method} + record through the selector that answers the tunnel
 // probe) is nvkmd_darwin's (out/gpu/nvk/nvk-darwin.patch, MIT), so whatever the kext admits for NVK it admits here.
 #include "raw_kernel.h"
+#include "TegraGM20BClockABI.h"
 #include "raw_encode_profile.h"
 
 #include <IOKit/IOKitLib.h>
@@ -527,11 +528,23 @@ bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
     return false;
 }
 
-bool Kernel::ptimer(uint64_t &units)
+bool Kernel::clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint64_t &gpuVa)
 {
-    TegraGM20BAbiTimestamp t = {};
-    units = call(TegraGM20BMethodGetTimestamp, nullptr, 0, &t, sizeof t) == KERN_SUCCESS ? t.ns : 0;
-    return units != 0;
+    TegraGM20BAbiClockAnchorsReply r = {};
+    if (call(TegraGM20BMethodClockAnchors, nullptr, 0, &r, sizeof r) != KERN_SUCCESS || !r.gpu_va)
+        return false;
+    std::lock_guard<std::mutex> l(lostLock_);
+    if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, fenceMapBytes_)) {
+        fenceMap_ = 0;
+        fenceMapBytes_ = 0;
+        return false;
+    }
+    if (fenceMapBytes_ < TegraGM20BClockAnchorOffset + sizeof(TegraGM20BAbiClockAnchors))
+        return false;
+    table = reinterpret_cast<const volatile TegraGM20BAbiClockAnchors *>(uintptr_t(fenceMap_) +
+                                                                         TegraGM20BClockAnchorOffset);
+    gpuVa = r.gpu_va;
+    return true;
 }
 
 // kIOReturnNotResponding is the kernel's answer for a channel it killed: one GetStatus still calls healthy is not lost

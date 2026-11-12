@@ -219,7 +219,8 @@ id<MTLComputePipelineState> rmCounterResolveState()
     id<MTLComputePipelineState> state = rmCounterResolveState();
     if (!state)
         return;
-    const raw::counters::ResolveParams params = raw::counters::resolveParams(rmCounterAnchor(), uint32_t(range.length));
+    const raw::counters::ResolveParams params = {uint32_t(range.length)};
+    const RMClockAnchors &anchors = rmClockAnchors();
     RMCommandBuffer *cb = _cb;
     [cb record:cmd(OpEnd)];
     cb->_active = nil;
@@ -228,6 +229,16 @@ id<MTLComputePipelineState> rmCounterResolveState()
     [c setBuffer:(id<MTLBuffer>)b->_storage offset:range.location * raw::counters::kRecordBytes atIndex:0];
     [c setBuffer:destination offset:offset atIndex:1];
     [c setBytes:&params length:sizeof params atIndex:2];
+    // read where the GPU runs the resolve, so a power-up between this encode and the samples has its anchor
+    if (anchors.va) {
+        Cmd m = cmd(OpKernelClockAnchors, 3, 3);
+        m.c = anchors.va;
+        m.b = sizeof(TegraGM20BAbiClockAnchors);
+        [cb record:m];
+    } else {
+        const TegraGM20BAbiClockAnchors none = {};
+        [c setBytes:&none length:sizeof none atIndex:3];
+    }
     const NSUInteger groups = (range.length + raw::counters::kResolveThreads - 1) / raw::counters::kResolveThreads;
     [c dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
         threadsPerThreadgroup:MTLSizeMake(raw::counters::kResolveThreads, 1, 1)];

@@ -239,17 +239,18 @@ static void wake_power_up(void)
 		    uv, us_since(start));
 }
 
-/* After nvkm_timer_init, which restarts PTIMER from ktime: forward to the last GPU time before the power-down when the
- * GPU's clock had run ahead of ktime, so no time after the wake is behind one before it. */
+/* After nvkm_timer_init, which restarts PTIMER from ktime: forward past the last GPU time before the power-down when the
+ * GPU's clock had run ahead of ktime, so every time after the wake is after every one before it; then the power-up's clock
+ * anchor, before any channel runs. */
 static void stamp_reseed(struct nvkm_device *device)
 {
-	u64 now = (u64)ktime_to_ns(ktime_get());
-	u64 floor = tgm_stamp_monotonic(tgm_stamp_last, now);
+	u64 floor = tgm_stamp_reseed(tgm_stamp_last, nvkm_timer_read(device->timer));
 
-	if (floor == now)
-		return;
-	device->timer->func->time(device->timer, floor);
-	nvkm_timer_alarm_trigger(device->timer);
+	if (floor) {
+		device->timer->func->time(device->timer, floor);
+		nvkm_timer_alarm_trigger(device->timer);
+	}
+	tgm_clock_anchor_publish(device);
 }
 
 /* M1 after nvkm_device_tegra_new() */

@@ -95,8 +95,9 @@
 #                     the kernel's block-linear layout), the descriptor read back from them, refused for another device's
 #                     registry ID or a missing key
 #   raw_counters_test raw/runtime/raw_counters.h, raw_counter_kernel.h: a counter sample buffer's checks in the AGX
-#                     driver's words, PTIMER on the CPU's clock by an anchor, the resolve on the CPU and the GPU kernel's
-#                     32-bit arithmetic equal to it, and each stage boundary's report words
+#                     driver's words, PTIMER on the CPU's clock by the anchor of its power-up across simulated power
+#                     cycles, the resolve on the CPU and the GPU kernel's 32-bit search and arithmetic equal to it, and each
+#                     stage boundary's report words
 #   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
 #                     metallib entry's TESS tag, Xcode's bytes for them
 #   raw_icb_test      raw/runtime/raw_icb.h: an indirect command buffer's command words through the FIFO's decoding and the
@@ -242,6 +243,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -276,6 +278,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -334,6 +337,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -400,6 +404,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -532,6 +537,7 @@ host_test(
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -601,6 +607,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -629,6 +636,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
@@ -1448,11 +1456,14 @@ host_test(
     name = "raw_counters_test",
     srcs = [
         "raw_counters_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BRail.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_counter_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_counters.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stamps.h",
     ],
+    copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
     deps = ["//kits/SwitchGM20B:classes"],
 )

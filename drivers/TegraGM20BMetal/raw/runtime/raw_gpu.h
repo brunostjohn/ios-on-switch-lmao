@@ -1623,9 +1623,9 @@ public:
     uint64_t loopRecordVa(uint32_t stamp) const;
     LoopContinue loopContinue(uint32_t stamp) const;
 
-    bool ptimer(uint64_t &units)
+    bool clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint64_t &gpuVa)
     {
-        return k_.ptimer(units);
+        return k_.clockAnchors(table, gpuVa);
     }
 
     bool lost(uint32_t seqno) const
