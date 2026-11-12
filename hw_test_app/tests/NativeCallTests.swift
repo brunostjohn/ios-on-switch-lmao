@@ -6,6 +6,7 @@ enum NativeCallTests {
     static let all: [any HWTest] = [
         NativeUnsupportedTest(), NativeVertexSamplerTest(), NativeParallelEncoderTest(), NativeIndirectCommandsTest(),
         NativeSharedTextureTest(),
+        NativeSharedTexturePeerTest(),
         NativeComputeCommandsTest(),
         NativeCountersTest(),
         NativeCounterObjectsTest(),
