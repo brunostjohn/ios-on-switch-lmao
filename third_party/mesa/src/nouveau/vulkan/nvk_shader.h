@@ -144,19 +144,21 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(nvk_shader, vk.base, VkShaderEXT,
 
 extern const struct vk_device_shader_ops nvk_device_shader_ops;
 
+#include "nvk_switch_target.h"
+
 uint64_t
 nvk_physical_device_compiler_flags(const struct nvk_physical_device *pdev);
 
 nir_address_format
-nvk_ubo_addr_format(const struct nvk_physical_device *pdev,
+nvk_ubo_addr_format(const struct nv_device_info *info,
                     const struct vk_pipeline_robustness_state *rs);
 nir_address_format
-nvk_ssbo_addr_format(const struct nvk_physical_device *pdev,
-                     const struct vk_pipeline_robustness_state *rs);
+nvk_ssbo_addr_format(const struct vk_pipeline_robustness_state *rs);
 
 bool
 nvk_nir_lower_descriptors(nir_shader *nir,
-                          const struct nvk_physical_device *pdev,
+                          const struct nv_device_info *info,
+                          bool edb_buffer_views,
                           VkShaderCreateFlagsEXT shader_flags,
                           const struct vk_pipeline_robustness_state *rs,
                           uint32_t set_layout_count,

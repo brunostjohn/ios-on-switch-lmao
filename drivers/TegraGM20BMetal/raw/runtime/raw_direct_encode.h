@@ -42,6 +42,36 @@ struct Set0 {
     }
 };
 
+// A variant's layout as nvk_switch_offline.h takes it: every set laid out by raw_set_layout.h
+struct NakLayoutData {
+    std::vector<std::vector<NakBinding>> bindings;
+    std::vector<NakSet> sets;
+    NakLayout layout = {};
+    bool valid = true;
+
+    explicit NakLayoutData(const NmbDirectLayout *in)
+    {
+        if (!in)
+            return;
+        bindings.resize(in->setCount);
+        for (uint32_t s = 0; s < in->setCount; s++) {
+            const NmbDirectSet &set = in->sets[s];
+            std::vector<SetBinding> b(set.bindingCount);
+            for (uint32_t i = 0; i < set.bindingCount; i++)
+                b[i] = {set.bindings[i].binding, set.bindings[i].type, set.bindings[i].count, set.bindings[i].flags};
+            std::vector<SetSlot> slots;
+            uint32_t fixed = 0;
+            valid = valid && setSlots(b.data(), set.bindingCount, slots, fixed);
+            for (const SetBinding &x : b) {
+                const SetSlot slot = x.binding < slots.size() ? slots[x.binding] : SetSlot();
+                bindings[s].push_back({x.binding, x.type, x.count, x.flags, slot.offset, slot.stride});
+            }
+            sets.push_back({bindings[s].data(), uint32_t(bindings[s].size()), set.flags});
+        }
+        layout = {sets.data(), uint32_t(sets.size()), 0, in->push, in->pushCount};
+    }
+};
+
 inline bool samplerHeader(const NmbDirectSamplerState &s, uint32_t header[8])
 {
     switch_gm20b_sampler_state k = {};

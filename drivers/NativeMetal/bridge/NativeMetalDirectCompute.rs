@@ -72,6 +72,7 @@ pub struct NmbDirectKernelWrite {
 pub struct NmbDirectKernel {
     pub device: u64,
     pub layout: u64,
+    pub layout_data: *const crate::direct::NmbDirectLayout,
     pub set0: u64,
     pub set0_bindings: *const NmbDirectBinding,
     pub set0_binding_count: u32,
@@ -574,6 +575,7 @@ fn direct(
     let kernel = NmbDirectKernel {
         device: avk::Handle::as_raw(handles.device.handle()),
         layout: avk::Handle::as_raw(layout.pipeline),
+        layout_data: &layout.data,
         set0: layout.set0(),
         set0_bindings: layout.set0_bindings.as_ptr(),
         set0_binding_count: layout.set0_bindings.len() as u32,

@@ -96,6 +96,7 @@ filegroup(
         "raw/runtime/raw_emit.h",
         "raw/runtime/raw_metallib.cpp",
         "raw/runtime/raw_metallib.h",
+        "raw/runtime/raw_nak_target.h",
         "raw/runtime/raw_owned.h",
         "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",

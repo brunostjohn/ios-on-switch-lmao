@@ -7,6 +7,7 @@
 #include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
 #include "raw_direct_encode.h"
+#include "raw_nak_target.h"
 #include "raw_residual.h"
 #include "raw_split_metadata.h"
 
@@ -95,14 +96,14 @@ uint32_t halfFloatTargets(const std::string &key)
 
 class Stages {
 public:
-    Stages(const DirectNvk &nvk, void *device) : nvk_(nvk), device_(device)
+    Stages(const DirectNvk &nvk, const NakLayoutData &layout) : nvk_(nvk), layout_(layout)
     {}
 
     ~Stages()
     {
         for (NvkStage &s : made_)
             if (s.owner)
-                nvk::stageFinish(nvk_, device_, s);
+                nvk::nakStageFinish(nvk_, s);
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
@@ -128,7 +129,7 @@ public:
                 s.entry,
                 s.stage,
                 s.specialization,
-                handle(state.layout),
+                nullptr,
                 kLibraryBit,
                 nullptr,
                 s.subgroupSize ? &subgroup : nullptr,
@@ -147,7 +148,7 @@ public:
             for (uint32_t i = 0; i < 32; i++)
                 if (zeroPush >> i & 1)
                     info.constPushWords[i] = 0;
-            const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
+            const int32_t result = nvk::nakCompileStage(nvk_, nvk_.nakTarget, info, layout_.layout, made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
                 return CompileOutcome::Failed;
@@ -175,7 +176,7 @@ public:
 
 private:
     const DirectNvk &nvk_;
-    void *device_;
+    const NakLayoutData &layout_;
     NvkStage made_[2] = {};
     CapturedProgram programs_[2];
 };
@@ -330,7 +331,7 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
 // words that hold uniform bind residuals (raw_residual.h) as the constant 0, so a uniform read is a constant-buffer operand
 // at an immediate offset; and where the chip is proven to round them so (raw_chip_facts.h), fetches rounded to half in
 // TEXS's F16 forms. A stage's variant is kept only where its code differs, and nothing else a record says of it does.
-void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *device, uint32_t halfTargets,
+void programVariants(const NmbDirectState &state, const DirectNvk &nvk, const NakLayoutData &layout, uint32_t halfTargets,
                      const Stages &generic, RuntimeRecord &out)
 {
     uint32_t residual[2] = {}, zeroPush = 0;
@@ -359,7 +360,7 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
         kinds.push_back({0, true});
     std::vector<RuntimeRecord::Variant> made[2];
     for (const Kind &kind : kinds) {
-        Stages stages(nvk, device);
+        Stages stages(nvk, layout);
         std::string why;
         if (stages.compile(state, halfTargets, false, why, kind.zeroPush, kind.texsF16) != CompileOutcome::Made)
             continue;
@@ -417,9 +418,11 @@ void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
 DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
 {
     DirectNvk nvk;
-    nvk.compileStage = symbol("switch_nvk_compile_stage");
-    nvk.stageFinish = symbol("switch_nvk_stage_finish");
     nvk.splitParts = symbol("switch_nvk_split_parts");
+    nvk.nakCompileStage = symbol("switch_nak_compile_stage");
+    nvk.nakStageFinish = symbol("switch_nak_stage_finish");
+    nvk.nakFreeze = symbol("switch_nak_freeze");
+    nvk.nakTarget = kNakTarget;
     if (const auto abi = reinterpret_cast<CompileAbi>(symbol("switch_nvk_compile_abi"))) {
         uint32_t sizes[3] = {};
         abi(sizes);
@@ -431,7 +434,7 @@ DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
 
 bool DirectNvk::complete() const
 {
-    return compileStage && stageFinish && splitParts && abiMatches;
+    return nakCompileStage && nakStageFinish && splitParts && abiMatches;
 }
 
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
@@ -439,7 +442,6 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
                             std::string &why, std::map<uint32_t, uint32_t> *registers, bool split, bool variants)
 {
     out = {};
-    void *device = handle(state.device);
     const NmbDirectDraw &draw = state.draws[0];
     PackPipeline storage = {};
     const auto storageHeader = [](uint32_t format, uint32_t &word) {
@@ -458,7 +460,12 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         why = "inconsistent dynamic state push placement";
         return CompileOutcome::Refused;
     }
-    Stages stages(nvk, device);
+    const NakLayoutData nakLayout(state.layoutData);
+    if (!nakLayout.valid) {
+        why = "a descriptor type NVK lays out by another rule";
+        return CompileOutcome::Refused;
+    }
+    Stages stages(nvk, nakLayout);
     if (const CompileOutcome compiled =
             stages.compile(state, halfFloatTargets(key), split && !storage.storageMask, why);
         compiled != CompileOutcome::Made)
@@ -520,7 +527,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     if (split && !storage.storageMask)
         splitInto(nvk, stages.split(1), out);
     if (variants)
-        programVariants(state, nvk, device, halfFloatTargets(key), stages, out);
+        programVariants(state, nvk, nakLayout, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }
 

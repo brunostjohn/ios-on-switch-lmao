@@ -68,9 +68,9 @@ Direct::Direct(PackRules rules, bool rankArtifacts)
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
 {
     if (rankArtifacts)
-        nvk_.compileStage = native_bridge_metal_nvk_symbol
-                                ? native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage")
-                                : nullptr;
+        nvk_.nakCompileStage = native_bridge_metal_nvk_symbol
+                                   ? native_bridge_metal_nvk_symbol("switch_nak_compile_ranked_stage")
+                                   : nullptr;
 }
 
 CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
@@ -103,7 +103,7 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
 {
     storageRefusal_.clear();
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
-        why = nvk_.compileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
+        why = nvk_.nakCompileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
                                                     : "the frontend or NVK has no direct compile";
         return CompileOutcome::Failed;
     }

@@ -13,9 +13,10 @@ struct NmbDirectState;
 
 namespace raw {
 
-// The NVK exports the direct compile calls (nvk_switch_compile.h), found in the NVK the device opened
+// The NVK exports the direct compile calls (nvk_switch_offline.h), which create no device
 struct DirectNvk {
-    void *compileStage = nullptr, *stageFinish = nullptr, *splitParts = nullptr;
+    void *splitParts = nullptr, *nakCompileStage = nullptr, *nakStageFinish = nullptr, *nakFreeze = nullptr;
+    const void *nakTarget = nullptr;  // the frozen table the compile takes (raw_nak_target.h)
     bool abiMatches = false;  // raw_direct.cpp's copies of NVK's structs are NVK's size (switch_nvk_compile_abi)
 
     static DirectNvk find(void *(*symbol)(const char *name));

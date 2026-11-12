@@ -75,6 +75,25 @@ typedef struct NmbDirectBinding {
     NmbDirectSamplerState sampler;
 } NmbDirectBinding;
 
+// A set of a variant's layout, its push constant ranges (VkPushConstantRange's layout), and the layout: what NVK's stage
+// compile reads of a VkPipelineLayout
+typedef struct NmbDirectSet {
+    const NmbDirectBinding *bindings;
+    uint32_t bindingCount;
+    uint32_t flags;  // VkDescriptorSetLayoutCreateFlags
+} NmbDirectSet;
+
+typedef struct NmbDirectPushRange {
+    uint32_t stages, offset, size;
+} NmbDirectPushRange;
+
+typedef struct NmbDirectLayout {
+    const NmbDirectSet *sets;
+    uint32_t setCount;
+    const NmbDirectPushRange *push;
+    uint32_t pushCount;
+} NmbDirectLayout;
+
 // One probe draw on the variant its bind state settles on
 typedef struct NmbDirectDraw {
     uint64_t set0;  // that variant's set 0 VkDescriptorSetLayout (0: none)
@@ -105,6 +124,7 @@ typedef struct NmbDirectStorage {
 typedef struct NmbDirectState {
     uint64_t device;  // VkDevice of the stage compile
     uint64_t layout;  // VkPipelineLayout of draw 0's variant
+    const NmbDirectLayout *layoutData;  // that layout, as data
     uint32_t stageCount;
     NmbDirectStage stages[2];
     bool sampleShading;
@@ -179,6 +199,7 @@ typedef struct NmbDirectKernelWrite {
 typedef struct NmbDirectKernel {
     uint64_t device;       // VkDevice of the stage compile
     uint64_t layout;       // VkPipelineLayout of the dispatch's variant
+    const NmbDirectLayout *layoutData;  // that layout, as data
     uint64_t set0;         // its set 0 VkDescriptorSetLayout (0: none)
     const NmbDirectBinding *set0Bindings;
     uint32_t set0BindingCount;

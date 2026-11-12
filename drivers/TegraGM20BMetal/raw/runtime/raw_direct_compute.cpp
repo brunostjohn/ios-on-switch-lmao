@@ -24,20 +24,19 @@ constexpr size_t kCbufs = sizeof(ComputeRecord::cbufType);
 
 class Compiled {
 public:
-    Compiled(const DirectNvk &nvk, void *device) : nvk_(nvk), device_(device)
+    explicit Compiled(const DirectNvk &nvk) : nvk_(nvk)
     {}
 
     ~Compiled()
     {
         if (stage.owner)
-            nvk::stageFinish(nvk_, device_, stage);
+            nvk::nakStageFinish(nvk_, stage);
     }
 
     NvkStage stage = {};
 
 private:
     const DirectNvk &nvk_;
-    void *device_;
 };
 
 // The root push words a dispatch writes but m2v's DispatchRegion field, which raw_compute.cpp writes per dispatch, by root offset
@@ -185,7 +184,7 @@ CompileOutcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled 
                                k.stage.entry,
                                k.stage.stage,
                                k.stage.specialization,
-                               handle(k.layout),
+                               nullptr,
                                0,
                                nullptr,
                                k.stage.subgroupSize ? &subgroup : nullptr,
@@ -202,7 +201,12 @@ CompileOutcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled 
         why = "a stage of VkShaderStageFlags " + std::to_string(k.stage.stage);
         return CompileOutcome::Refused;
     }
-    if (const int32_t result = nvk::compileStage(nvk, handle(k.device), info, made.stage); result != 0) {
+    const NakLayoutData layout(k.layoutData);
+    if (!layout.valid) {
+        why = "a descriptor type NVK lays out by another rule";
+        return CompileOutcome::Refused;
+    }
+    if (const int32_t result = nvk::nakCompileStage(nvk, nvk.nakTarget, info, layout.layout, made.stage); result != 0) {
         why = "NVK refused the kernel (VkResult " + std::to_string(result) + ")";
         return CompileOutcome::Failed;
     }
@@ -236,7 +240,7 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     out = {};
     if (!recordable(k, why))
         return CompileOutcome::Refused;
-    Compiled made(nvk, handle(k.device));
+    Compiled made(nvk);
     if (const CompileOutcome compiled = compile(k, nvk, made, why); compiled != CompileOutcome::Made)
         return compiled;
     Entries entries(k, out);

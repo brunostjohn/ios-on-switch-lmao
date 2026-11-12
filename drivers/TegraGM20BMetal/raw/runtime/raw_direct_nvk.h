@@ -60,6 +60,25 @@ struct NvkStageMetrics {
 };
 static_assert(sizeof(NvkStageMetrics) == 48);
 
+// nvk_switch_offline.h's layout as data: each binding with the offset and stride raw lays it out at (raw_set_layout.h)
+struct NakBinding {
+    uint32_t binding;
+    int32_t type;
+    uint32_t count, flags, offset, stride;
+};
+
+struct NakSet {
+    const NakBinding *bindings;
+    uint32_t bindingCount, flags;
+};
+
+struct NakLayout {
+    const NakSet *sets;
+    uint32_t setCount, createFlags;
+    const void *pushRanges;  // VkPushConstantRange
+    uint32_t pushRangeCount;
+};
+
 // VkPipelineShaderStageRequiredSubgroupSizeCreateInfo
 struct SubgroupSize {
     uint32_t sType = 1000225001;
@@ -93,14 +112,17 @@ inline void *handle(uint64_t h)
 
 namespace nvk {
 
-inline int32_t compileStage(const DirectNvk &n, void *device, const NvkStageInfo &info, NvkStage &out)
+// switch_nak_compile_stage: the stage compiled with no device, from the frozen table and the layout as data
+inline int32_t nakCompileStage(const DirectNvk &n, const void *frozen, const NvkStageInfo &info, const NakLayout &layout,
+                               NvkStage &out)
 {
-    return reinterpret_cast<int32_t (*)(void *, const NvkStageInfo *, NvkStage *)>(n.compileStage)(device, &info, &out);
+    return reinterpret_cast<int32_t (*)(const void *, const NvkStageInfo *, const NakLayout *, NvkStage *)>(
+        n.nakCompileStage)(frozen, &info, &layout, &out);
 }
 
-inline void stageFinish(const DirectNvk &n, void *device, NvkStage &stage)
+inline void nakStageFinish(const DirectNvk &n, NvkStage &stage)
 {
-    reinterpret_cast<void (*)(void *, NvkStage *)>(n.stageFinish)(device, &stage);
+    reinterpret_cast<void (*)(NvkStage *)>(n.nakStageFinish)(&stage);
 }
 
 }  // namespace nvk

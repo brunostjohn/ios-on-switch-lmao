@@ -141,6 +141,28 @@ pub struct NmbDirectBinding {
 }
 
 #[repr(C)]
+pub struct NmbDirectSet {
+    pub bindings: *const NmbDirectBinding,
+    pub binding_count: u32,
+    pub flags: u32,
+}
+
+#[repr(C)]
+pub struct NmbDirectPushRange {
+    pub stages: u32,
+    pub offset: u32,
+    pub size: u32,
+}
+
+#[repr(C)]
+pub struct NmbDirectLayout {
+    pub sets: *const NmbDirectSet,
+    pub set_count: u32,
+    pub push: *const NmbDirectPushRange,
+    pub push_count: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NmbDirectDraw {
     pub set0: u64,
@@ -293,6 +315,7 @@ fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
 pub struct NmbDirectState {
     pub device: u64,
     pub layout: u64,
+    pub layout_data: *const NmbDirectLayout,
     pub stage_count: u32,
     pub stages: [NmbDirectStage; 2],
     pub sample_shading: bool,
@@ -692,6 +715,10 @@ pub(crate) struct Layout<'d> {
     pub(crate) pipeline: avk::PipelineLayout,
     /// Set 0's bindings, as data
     pub(crate) set0_bindings: Vec<NmbDirectBinding>,
+    set_bindings: Vec<Vec<NmbDirectBinding>>,
+    set_records: Vec<NmbDirectSet>,
+    push_ranges: Vec<NmbDirectPushRange>,
+    pub(crate) data: NmbDirectLayout,
 }
 
 impl<'d> Layout<'d> {
@@ -702,9 +729,19 @@ impl<'d> Layout<'d> {
             sets: Vec::new(),
             pipeline: avk::PipelineLayout::null(),
             set0_bindings: Vec::new(),
+            set_bindings: Vec::new(),
+            set_records: Vec::new(),
+            push_ranges: Vec::new(),
+            data: NmbDirectLayout {
+                sets: std::ptr::null(),
+                set_count: 0,
+                push: std::ptr::null(),
+                push_count: 0,
+            },
         };
         for (set_index, set) in layout.sets.iter().enumerate() {
             let mut immutable: Vec<Vec<avk::Sampler>> = Vec::with_capacity(set.bindings.len());
+            let mut bindings = Vec::with_capacity(set.bindings.len());
             for binding in &set.bindings {
                 let mut data = NmbDirectBinding {
                     binding: binding.binding,
@@ -716,9 +753,7 @@ impl<'d> Layout<'d> {
                 };
                 let Some(desc) = binding.immutable_sampler else {
                     immutable.push(Vec::new());
-                    if set_index == 0 {
-                        made.set0_bindings.push(data);
-                    }
+                    bindings.push(data);
                     continue;
                 };
                 let mut reduction = avk::SamplerReductionModeCreateInfo::default();
@@ -730,9 +765,7 @@ impl<'d> Layout<'d> {
                     desc.reduction.into(),
                     desc.border_components.map(avk::ComponentMapping::from),
                 );
-                if set_index == 0 {
-                    made.set0_bindings.push(data);
-                }
+                bindings.push(data);
                 // SAFETY: `info` and its chain are live for the call.
                 let sampler = unsafe { device.create_sampler(&info, None) }.map_err(e("sampler"))?;
                 made.samplers.push(sampler);
@@ -755,6 +788,10 @@ impl<'d> Layout<'d> {
                     }
                 })
                 .collect();
+            if set_index == 0 {
+                made.set0_bindings = bindings.clone();
+            }
+            made.set_bindings.push(bindings);
             let flags: Vec<avk::DescriptorBindingFlags> = set.bindings.iter().map(|b| b.flags.into()).collect();
             let mut flags_info = avk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
             let mut info = avk::DescriptorSetLayoutCreateInfo::default()
@@ -767,6 +804,31 @@ impl<'d> Layout<'d> {
             made.sets
                 .push(unsafe { device.create_descriptor_set_layout(&info, None) }.map_err(e("set layout"))?);
         }
+        made.push_ranges = layout
+            .push_constants
+            .iter()
+            .map(|range| NmbDirectPushRange {
+                stages: avk::ShaderStageFlags::from(range.stages).as_raw(),
+                offset: range.offset,
+                size: range.size,
+            })
+            .collect();
+        made.set_records = layout
+            .sets
+            .iter()
+            .zip(&made.set_bindings)
+            .map(|(set, bindings)| NmbDirectSet {
+                bindings: bindings.as_ptr(),
+                binding_count: bindings.len() as u32,
+                flags: avk::DescriptorSetLayoutCreateFlags::from(set.flags).as_raw(),
+            })
+            .collect();
+        made.data = NmbDirectLayout {
+            sets: made.set_records.as_ptr(),
+            set_count: made.set_records.len() as u32,
+            push: made.push_ranges.as_ptr(),
+            push_count: made.push_ranges.len() as u32,
+        };
         let push: Vec<avk::PushConstantRange> = layout
             .push_constants
             .iter()
@@ -1064,6 +1126,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let mut state = NmbDirectState {
             device: avk::Handle::as_raw(handles.device.handle()),
             layout: avk::Handle::as_raw(layouts[first.variant].pipeline),
+            layout_data: &layouts[first.variant].data,
             stage_count: pipeline.stages.len() as u32,
             stages: [NmbDirectStage {
                 spirv: std::ptr::null(),
