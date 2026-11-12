@@ -66,7 +66,8 @@ static void present_watch_complete(int status, int from_pass)
 #if TGM_STATS
 	if (from_pass && !status && !logged) {
 		logged = 1;
-		nvxnu_log("tegra-gm20b: first present completed from its producer's interrupt pass, with "
+		nvxnu_log("tegra-gm20b: first present completed from its producer's interrupt "
+			  "pass, with "
 			  "no present job\n");
 	}
 #else
@@ -108,7 +109,8 @@ static void present_watch_work(void *unused)
 	int status;
 
 	(void)unused;
-	found = switch_gpu_present_watch_claim(&tgm_present.watch, present_physical, present_visible);
+	found = switch_gpu_present_watch_claim(&tgm_present.watch, present_physical,
+					       present_visible);
 	if (found == SWITCH_GPU_PRESENT_WATCH_PENDING)
 		return;
 	tgm_present_filter_detach();
@@ -131,7 +133,8 @@ static void present_watch_work(void *unused)
  * detaches the filter's view first. */
 void tgm_present_pass(void)
 {
-	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) != SWITCH_GPU_PRESENT_WATCH_DUE)
+	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
+	    SWITCH_GPU_PRESENT_WATCH_DUE)
 		return;
 	if (!switch_gpu_present_watch_take_visible(&tgm_present.watch,
 						   switch_gpu_backing_token_status,
@@ -178,7 +181,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
 	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
 	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work &&
-		      tgm_present.redo_work && !tgm_promise_open()
+			      tgm_present.redo_work && !tgm_promise_open()
 		      ? tgm_vm_new(&tgm_present.vm)
 		      : -ENOMEM;
 	if (!ret) {
@@ -252,10 +255,10 @@ static void present_push_reads(struct nvif_push *push, const struct tgm_present_
 
 #endif
 static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2, uint32_t width,
-			uint32_t height, uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
-			void (*done)(void *, int), void *arg, const struct tgm_present_read *reads,
-			u32 nreads, const struct switch_gpu_backing_token *dependencies,
-			u32 dependency_count)
+			uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+			uint32_t block_height_log2, void (*done)(void *, int), void *arg,
+			const struct tgm_present_read *reads, u32 nreads,
+			const struct switch_gpu_backing_token *dependencies, u32 dependency_count)
 {
 	struct tgm_chan *chan = tgm_present.chan;
 	struct nvif_push *push = NULL;
@@ -290,10 +293,10 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	cut = dst_va && tgm_copy_reset_armed();
 #endif
 	push = &chan->chan.push;
-	ret = chan_push_wait(chan,
-			     dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
-				     cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) +
-				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
+	ret = chan_push_wait(
+		chan, dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+			      cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) +
+			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
 								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
 		tgm_chan_stalled(chan, "present: push buffer still full after 1 s", chan->submitted,
@@ -347,7 +350,9 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
-	tgm_present.recheck = tgm_present_waits_promise(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS : TGM_PRESENT_NS;
+	tgm_present.recheck = tgm_present_waits_promise(&tgm_present.tokens)
+				      ? TGM_PROMISE_FIRST_LOOK_NS
+				      : TGM_PRESENT_NS;
 	/* before the kick, so the completion cancels it */
 	nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
 	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's
@@ -367,24 +372,24 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
 int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
-				  uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-				  uint32_t block_height_log2, void (*done)(void *, int), void *arg,
+				  uint32_t width, uint32_t height, uint64_t dst_va,
+				  uint32_t dst_pitch, uint32_t block_height_log2,
+				  void (*done)(void *, int), void *arg,
 				  const struct switch_gpu_backing_token *dependencies,
 				  uint32_t dependency_count)
 {
 	int ret;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, NULL, 0, dependencies,
-			   dependency_count);
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va, dst_pitch,
+			   block_height_log2, done, arg, NULL, 0, dependencies, dependency_count);
 	gate_leave();
 	return ret;
 }
 #if TGM_STATS
-int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
-				       int32_t src_block_log2, uint32_t width, uint32_t height,
-				       uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
+				       uint32_t width, uint32_t height, uint64_t dst_va,
+				       uint32_t dst_pitch, uint32_t block_height_log2,
 				       void (*done)(void *, int), void *arg,
 				       const struct tgm_present_read *reads, uint32_t nreads,
 				       const struct switch_gpu_backing_token *dependencies,
@@ -395,8 +400,8 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
 		return -EINVAL;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, reads, nreads, dependencies,
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va, dst_pitch,
+			   block_height_log2, done, arg, reads, nreads, dependencies,
 			   dependency_count);
 	gate_leave();
 	return ret;
@@ -444,11 +449,13 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 		if (tgm_present.tokens.tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE) {
 			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_PROMISED);
-			switch_gpu_present_watch_promise(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+			switch_gpu_present_watch_promise(&tgm_present.watch,
+							 &tgm_present.tokens.tokens[0]);
 		} else {
 			/* before the arm: a pass claiming the watch detaches the view after this */
 			tgm_present_filter_attach(&tgm_present.tokens.tokens[0]);
-			switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+			switch_gpu_present_watch_arm(&tgm_present.watch,
+						     &tgm_present.tokens.tokens[0]);
 		}
 	}
 	mutex_unlock(&tgm_present.lock);
@@ -457,7 +464,8 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 	 * runs the pass that completes the watch (SwitchGpuQuiet.h). The caller's tokens, not the watch's, which the pass
 	 * may already have dropped. */
 	if (!ret)
-		tgm_chan_need_tokens(kept.engine ? &kept : dependencies, kept.engine ? 1 : dependency_count);
+		tgm_chan_need_tokens(kept.engine ? &kept : dependencies,
+				     kept.engine ? 1 : dependency_count);
 	if (!ret && present_physical(&tgm_present.watch.token))
 		nvxnu_work_schedule(tgm_present.watch_work);
 	return ret;

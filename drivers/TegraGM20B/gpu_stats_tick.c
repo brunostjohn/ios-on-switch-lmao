@@ -4,7 +4,8 @@
 
 #if TGM_STATS
 /* TegraVIC (drivers/TegraVIC/SwitchVICMapping.cpp, debug kernels) */
-extern int switch_vic_mapping_describe(nvxnu_u32 iova, char *out, unsigned long size) __attribute__((weak_import));
+extern int switch_vic_mapping_describe(nvxnu_u32 iova, char *out, unsigned long size)
+	__attribute__((weak_import));
 
 /* stats:
  * GPU-side times come from 16-byte semaphore releases, which write PTIMER. On this Tegra PTIMER is not in nanoseconds:
@@ -212,8 +213,9 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 	}
 	/* what the profile's stamps cost each owner, so a pacing change between kernels with and without them is told apart */
 	for (i = 0; i < EXEC_OWNERS; i++) {
-		const struct switch_gpu_prof_cost cost = {o[i].stamped, o[i].stamps, o[i].spans, o[i].n,
-							  o[i].span * rate >> 16, o[i].sum * rate >> 16};
+		const struct switch_gpu_prof_cost cost = {
+			o[i].stamped,           o[i].stamps,          o[i].spans, o[i].n,
+			o[i].span * rate >> 16, o[i].sum * rate >> 16};
 
 		if (switch_gpu_prof_cost_format(line, len, &cost))
 			nvxnu_stats("tegra-gm20b: gpuprof cost %s:%s", o[i].name, line);
@@ -419,8 +421,7 @@ void tgm_stats_tick(void)
 		"err "
 		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
 		"teardown mean %llu us max %llu us (%u)",
-		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
-		idle, imports,
+		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies, idle, imports,
 		imports * 1000ULL / (ms ? ms : 1),
 		/* live_bytes is signed: an arithmetic shift keeps its sign. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise) */
@@ -484,8 +485,10 @@ void tgm_stats_tick(void)
 		uint64_t r[5];
 		tgm_tiled_take_relayouts(r);
 		if (r[0] || r[1] || r[2] || r[3] || r[4]) {
-			nvxnu_log("tegra-gm20b: relayouts %llu tiling moves skipped (nothing had written "
-				  "the surface), %llu untiles deferred (%llu made at a CPU lock, %llu "
+			nvxnu_log("tegra-gm20b: relayouts %llu tiling moves skipped (nothing had "
+				  "written "
+				  "the surface), %llu untiles deferred (%llu made at a CPU lock, "
+				  "%llu "
 				  "never: the memory went), %llu moves made\n",
 				  r[0], r[1], r[2], r[3], r[4]);
 		}

@@ -20,7 +20,8 @@ void AGXDeviceUserClient::dropPromiseSurfaces(uint32_t promise)
 // moves, so a reader the release lets go already finds it.
 void AGXDeviceUserClient::releasePromise(uint32_t promise, bool abandoned)
 {
-	const uint32_t offset = tgm_fence_offset(promiseWord(promise)), value = promises_[promise].value;
+	const uint32_t offset = tgm_fence_offset(promiseWord(promise)),
+		       value = promises_[promise].value;
 	if (abandoned && promises_[promise].state != SWITCH_GPU_PROMISE_FREE &&
 	    int32_t(*promiseWord(promise) - value) < 0)
 		tgm_promise_abandon(offset, value);
@@ -42,7 +43,8 @@ void AGXDeviceUserClient::releasePromises(bool all)
 		const bool kept = slot.state == SWITCH_GPU_PROMISE_KEPT;
 		const bool released = kept && int32_t(*promiseWord(i) - slot.value) >= 0;
 		const bool running = chans_[slot.channel] && !tgm_chan_error(chans_[slot.channel]);
-		if (slot.state == SWITCH_GPU_PROMISE_FREE || (!all && (!kept || (!released && running))))
+		if (slot.state == SWITCH_GPU_PROMISE_FREE ||
+		    (!all && (!kept || (!released && running))))
 			continue;
 		if (kept)
 			__atomic_sub_fetch(&promisesKept_, 1u, __ATOMIC_RELAXED);

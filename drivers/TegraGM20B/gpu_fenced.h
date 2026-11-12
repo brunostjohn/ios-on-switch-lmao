@@ -104,7 +104,8 @@ static inline void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
 		run->live = 0;
 		return;
 	}
-	switch_gpu_job_batch(&chan->stat_jobs, run, st->end.ns, tgm_deadline_pt_ns(st->end.ns - run->prev_pt));
+	switch_gpu_job_batch(&chan->stat_jobs, run, st->end.ns,
+			     tgm_deadline_pt_ns(st->end.ns - run->prev_pt));
 	if (!chan->high)
 		tgm_hold_released(chan->chid, st->end.ns, seqno == run->last);
 	if (seqno != run->last)
@@ -264,7 +265,8 @@ static inline void present_fenced(struct tgm_chan *chan)
  * watch to the work item. */
 static inline void present_watch_fenced(struct tgm_chan *chan, int killed)
 {
-	if (switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, tgm_chan_completed(chan)) &&
+	if (switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id,
+					    tgm_chan_completed(chan)) &&
 	    killed)
 		nvxnu_work_schedule(tgm_present.watch_work);
 }

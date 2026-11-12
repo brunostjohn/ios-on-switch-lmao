@@ -58,8 +58,11 @@ static native_planes::Surface planeSurfaceOf(OSObject *surface)
     };
     TegraVICSurfaceDesc color = {};
     switch_vic_surface_color(surface, &color);
-    f.colorMatrix = color.colorMatrix; f.transfer = color.transfer; f.primaries = color.primaries;
-    f.chromaTop = color.chromaTop; f.chromaBottom = color.chromaBottom;
+    f.colorMatrix = color.colorMatrix;
+    f.transfer = color.transfer;
+    f.primaries = color.primaries;
+    f.chromaTop = color.chromaTop;
+    f.chromaBottom = color.chromaBottom;
     if (f.planes >= 2) {
         for (uint32_t p = 0; p < 2; ++p) {
             f.offset[p] = native_planes_surface_plane_offset(surface, p);
@@ -110,8 +113,7 @@ bool planeSlotBusy(int k) const
 {
     if (planeRecovering || (planeBuildingSlots & (1u << unsigned(k))) || planeConversionUses(k) ||
         planeCompositeUses(k) || planeLatch.uses(k) || planeTarget.uses(k) ||
-        (landscapeState.wanted && landscapeState.held.uses(k)) ||
-        (planeFencePending && planeFencing.uses(k)) ||
+        (landscapeState.wanted && landscapeState.held.uses(k)) || (planeFencePending && planeFencing.uses(k)) ||
         (planeNextSet && planeNext.uses(k)) || (planeHeldSet && planeHeld.uses(k)))
         return true;
     for (unsigned e = 0; e < TegraScanoutRing::kMaxEntries; ++e) {
@@ -559,8 +561,8 @@ bool planeDomainAttach()
         switch_dcache_clean_invalidate(reinterpret_cast<const void *>(low), high - low);
     if (tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
                           TEGRA_SMMU_TRANSLATION_ENABLE_0,
-                          kDisplay0bTranslation | kDisplay0cTranslation | (directAttached ? kDisplay0aTranslation : 0), planeProbeLine,
-                          sizeof(planeProbeLine)))
+                          kDisplay0bTranslation | kDisplay0cTranslation | (directAttached ? kDisplay0aTranslation : 0),
+                          planeProbeLine, sizeof(planeProbeLine)))
         return false;
     planesAttached = true;
     return true;

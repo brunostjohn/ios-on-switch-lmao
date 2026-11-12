@@ -25,7 +25,8 @@ static int resident_clients(struct tgm_chan **out, int max)
 	return n;
 }
 
-static u32 kill_clients(struct tgm_chan *kernel, const char *engine, struct tgm_chan **clients, int n, u64 now)
+static u32 kill_clients(struct tgm_chan *kernel, const char *engine, struct tgm_chan **clients,
+			int n, u64 now)
 {
 	char state[TGM_HANG_LINE];
 	char report[sizeof(kernel->fault)];
@@ -37,8 +38,8 @@ static u32 kill_clients(struct tgm_chan *kernel, const char *engine, struct tgm_
 			continue;
 		tgm_chan_describe(clients[i], state, sizeof(state));
 		scnprintf(report, sizeof(report),
-			  "CTXSW_TIMEOUT: on %s while %s's channel %u was stuck there again: %s", engine,
-			  kernel->owner, kernel->chid, state);
+			  "CTXSW_TIMEOUT: on %s while %s's channel %u was stuck there again: %s",
+			  engine, kernel->owner, kernel->chid, state);
 		tgm_chan_isolate(clients[i], report, now);
 		tgm_recover_fault(tgm_gpu.device, (int)clients[i]->chid);
 		killed++;
@@ -46,8 +47,8 @@ static u32 kill_clients(struct tgm_chan *kernel, const char *engine, struct tgm_
 	return killed;
 }
 
-enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine, int again, int load, int fatal_ok,
-				       u32 *killed)
+enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine, int again,
+				       int load, int fatal_ok, u32 *killed)
 {
 	struct tgm_chan *clients[4];
 	char state[TGM_HANG_LINE];
@@ -55,8 +56,10 @@ enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine
 	char regs[TGM_HANG_LINE];
 	const u64 now = nvxnu_nanotime();
 	const u32 done = tgm_chan_completed(chan);
-	const int idle = !load && tgm_switch_unowned(READ_ONCE(chan->error) != 0, done, READ_ONCE(chan->submitted));
-	const int not_back = tgm_engine_not_back(chan->ctxsw_clean_ns, chan->ctxsw_clean_done, now, done);
+	const int idle = !load && tgm_switch_unowned(READ_ONCE(chan->error) != 0, done,
+						     READ_ONCE(chan->submitted));
+	const int not_back =
+		tgm_engine_not_back(chan->ctxsw_clean_ns, chan->ctxsw_clean_done, now, done);
 	const int n = resident_clients(clients, ARRAY_SIZE(clients));
 	const enum tgm_ctxsw verdict = tgm_kernel_stall_verdict(idle, load, not_back, n);
 
@@ -67,8 +70,10 @@ enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine
 		if (!fatal_ok)
 			return verdict;
 		tgm_engine_state(regs, sizeof(regs));
-		nvxnu_panic("tegra-gm20b: hardware failure: %s did not come back after a reset with no client "
-			    "context resident: stuck %s %s's channel %u again %llu ms after it, nothing "
+		nvxnu_panic("tegra-gm20b: hardware failure: %s did not come back after a reset "
+			    "with no client "
+			    "context resident: stuck %s %s's channel %u again %llu ms after it, "
+			    "nothing "
 			    "completed since: %s; engines %s; %s",
 			    engine, load ? "loading" : "switching off", chan->owner, chan->chid,
 			    (now - chan->ctxsw_clean_ns) / 1000000, state, engines, regs);
@@ -84,10 +89,13 @@ enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine
 	chan->ctxsw_clean_ns = n ? 0 : now;
 	chan->ctxsw_clean_done = done;
 	scnprintf(load_line, sizeof(load_line),
-		  "tegra-gm20b: %s stuck %s %s's channel %u%s: the engine reset%s, %u client channels killed of "
+		  "tegra-gm20b: %s stuck %s %s's channel %u%s: the engine reset%s, %u client "
+		  "channels killed of "
 		  "%d resident: %s; engines %s\n",
-		  engine, load ? "loading" : "switching off", chan->owner, chan->chid, again ? " again" : "",
-		  verdict == TGM_CTXSW_REDO ? ", its work redone on the GPU" : "", *killed, n, state, engines);
+		  engine, load ? "loading" : "switching off", chan->owner, chan->chid,
+		  again ? " again" : "",
+		  verdict == TGM_CTXSW_REDO ? ", its work redone on the GPU" : "", *killed, n,
+		  state, engines);
 	switch_linux_log_line(load_line);
 	if (chan == tgm_present.chan)
 		tgm_present_redo_kick();
@@ -109,20 +117,23 @@ static enum tgm_ctxsw load_verdict(struct tgm_chan *chan, const char *engine, co
 	if (verdict != TGM_CTXSW_RELOAD && verdict != TGM_CTXSW_FATAL)
 		return verdict;
 	if (chan->kernel)
-		return tgm_kernel_stall_locked(chan, engine, verdict == TGM_CTXSW_FATAL, 1, 1, &killed);
+		return tgm_kernel_stall_locked(chan, engine, verdict == TGM_CTXSW_FATAL, 1, 1,
+					       &killed);
 	tgm_chan_describe(chan, state, sizeof(state));
 	tgm_engines_line(engines, sizeof(engines));
 	if (verdict == TGM_CTXSW_FATAL) {
 		/* the client's own context: the engine cannot load it even after a reset under the load */
 		if (!chan->isolating) {
 			scnprintf(report, sizeof(report),
-				  "CTXSW_TIMEOUT: %s stuck loading its context again after an engine reset "
+				  "CTXSW_TIMEOUT: %s stuck loading its context again after an "
+				  "engine reset "
 				  "under it, nothing completed since: %s",
 				  engine, state);
 			tgm_chan_isolate(chan, report, nvxnu_nanotime());
 		}
 		scnprintf(load_line, sizeof(load_line),
-			  "tegra-gm20b: %s stuck loading %s's channel %u context again after an engine reset "
+			  "tegra-gm20b: %s stuck loading %s's channel %u context again after an "
+			  "engine reset "
 			  "under it, nothing completed since: the channel killed: %s; engines %s\n",
 			  engine, chan->owner, chan->chid, state, engines);
 		switch_linux_log_line(load_line);
@@ -157,7 +168,8 @@ int tgm_load_recover_locked(struct tgm_chan *chan, const char *who)
 	return tgm_recover_reload(tgm_gpu.device, (int)chan->chid) > 0;
 }
 
-enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
+enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno,
+					  u64 waited_ns)
 {
 	char state[TGM_HANG_LINE];
 	char engines[TGM_HANG_LINE];

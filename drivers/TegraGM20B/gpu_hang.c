@@ -6,7 +6,8 @@
 /* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
 static u64 check_interval(const struct tgm_chan *chan)
 {
-	return tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes), TGM_HANG_NS);
+	return tgm_hang_check_interval(tgm_chan_waits_promise(chan), READ_ONCE(chan->hang_strikes),
+				       TGM_HANG_NS);
 }
 
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
@@ -549,8 +550,8 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine_name, int gr)
 			tgm_ctxsw_redo_pending(chan->ctxsw_reset, chan->ctxsw_reset_after,
 					       tgm_chan_completed(chan)));
 		if (chan->kernel && (verdict == TGM_CTXSW_REDO || verdict == TGM_CTXSW_FATAL))
-			verdict = tgm_kernel_stall_locked(chan, engine_name, verdict == TGM_CTXSW_FATAL, 0,
-							  1, &killed);
+			verdict = tgm_kernel_stall_locked(
+				chan, engine_name, verdict == TGM_CTXSW_FATAL, 0, 1, &killed);
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);

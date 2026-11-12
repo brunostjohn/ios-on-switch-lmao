@@ -48,8 +48,7 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
         switch_native_scanout_release(&scanout);
         return -2;
     }
-    if (!allocation.pages || image.readHigh <= image.readLow ||
-        image.readHigh - image.readLow > kPlaneSlotSpan ||
+    if (!allocation.pages || image.readHigh <= image.readLow || image.readHigh - image.readLow > kPlaneSlotSpan ||
         image.readHigh > (uint64_t(allocation.page_count) << 12)) {
         switch_native_scanout_release(&scanout);
         return -95;
@@ -60,8 +59,8 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
             continue;
         auto &slot = planeSlots[k];
         const bool samePages = slot.native && slot.mappedAllocation == allocation.allocation_id &&
-                               slot.mappedGeneration == allocation.allocation_generation &&
-                               slot.low == image.readLow && slot.high == image.readHigh;
+                               slot.mappedGeneration == allocation.allocation_generation && slot.low == image.readLow &&
+                               slot.high == image.readHigh;
         if (samePages && slot.native->lease &&
             slot.native->allocation.content_generation == allocation.content_generation) {
             slot.used = ++planeSlotUses;

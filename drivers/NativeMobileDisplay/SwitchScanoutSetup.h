@@ -36,8 +36,8 @@ void initializeScanout()
     cleanDomain();
     char why[160];
     if (tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
-                          TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation | kDisplay0bTranslation | kDisplay0cTranslation,
-                          why, sizeof(why))) {
+                          TEGRA_SMMU_TRANSLATION_ENABLE_0,
+                          kDisplay0aTranslation | kDisplay0bTranslation | kDisplay0cTranslation, why, sizeof(why))) {
         IOLog("SwitchDisplay: scanout domain refused: %s\n", why);
         return;
     }

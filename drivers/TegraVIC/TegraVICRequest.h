@@ -137,8 +137,7 @@ static inline const char *tegra_vic_image_from(const TegraVICSurfaceDesc *d, uin
     for (uint32_t p = 0; p < im->format->planes; p++) {
         if (d->planeBytesPerRow[p] > 0xffffffffu || d->planeHeight[p] > 0xffffffffu)
             return "plane geometry";
-        if (d->planeOffset[p] > d->length ||
-            d->planeBytesPerRow[p] * d->planeHeight[p] > d->length - d->planeOffset[p])
+        if (d->planeOffset[p] > d->length || d->planeBytesPerRow[p] * d->planeHeight[p] > d->length - d->planeOffset[p])
             return "planes extend past the surface's memory";
         if (window > UINT64_MAX - d->planeOffset[p])
             return "plane address overflow";

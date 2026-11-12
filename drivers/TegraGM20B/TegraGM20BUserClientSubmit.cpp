@@ -70,7 +70,7 @@ IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool r
 	IOLockUnlock(lock_);
 	switch_gpu_backing_member_cpu(lease->backing);
 	int result = lease->reservation.acquire(lease->backing, surface, surfaceId, task_,
-						    in->offset, in->bytes, in->access);
+						in->offset, in->bytes, in->access);
 	if (surface)
 		surface->release();
 	if (!result) {
@@ -218,12 +218,15 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 				return result;
 			}
 			const auto *releases =
-				eventInput && (submit->surface_flags & TegraGM20BSubmitEventReleases)
+				eventInput && (submit->surface_flags &
+					       TegraGM20BSubmitEventReleases)
 					? reinterpret_cast<const TegraGM20BAbiSignalRelease *>(
-						  reinterpret_cast<const TegraGM20BAbiEventUse *>(eventInput + 1) +
+						  reinterpret_cast<const TegraGM20BAbiEventUse *>(
+							  eventInput + 1) +
 						  eventInput->wait_count + eventInput->signal_count)
 					: nullptr;
-			const int prepared = job.events->prepare(events_, eventInput, releases, header.channel);
+			const int prepared =
+				job.events->prepare(events_, eventInput, releases, header.channel);
 			result = prepared == -5 ? kIOReturnAborted : ioreturn(prepared);
 			if (!result) {
 				IOLockLock(lock_);
@@ -238,7 +241,8 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 						tgm_stats_submit(chans_[slot], job.phases.ns);
 					}
 #endif
-					switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);
+					switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB,
+							      result ? 0 : 1);
 					submitGate_.leave(lock_);
 				} else {
 					result = kIOReturnNotOpen;
@@ -330,8 +334,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		events = job.events;
 		events->clear();
 	}
-	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
-		 rangedUses = 0, nativeReads = 0;
+	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0,
+		 writtenCount = 0, rangedUses = 0, nativeReads = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
 	bool unlockedWrites = false, scanoutWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
@@ -339,7 +343,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	const auto addUse = [&](const Bo *bo, uint32_t access, uint32_t flags, uint64_t offset = 0,
 				uint64_t bytes = 0) {
 		hostWritten |= (access & TegraGM20BSurfaceHostWritten) != 0;
-		access &= ~uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange);
+		access &= ~uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten |
+				    TegraGM20BSurfaceRange);
 		if (bo->nativeView) {
 			if (TGM_STATS)
 				++nativeReads;
@@ -354,7 +359,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		job.uses[useTotal++] = {bo->backing, access | flags, 0};
 		if (access & SWITCH_GPU_BACKING_WRITE) {
 			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
-							     bo->representation ? 0 : bytes};
+						    bo->representation ? 0 : bytes};
 			unlockedWrites |= bo->unlockedReads;
 			scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;
 		}
@@ -373,16 +378,20 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	};
 	for (uint32_t i = 0; native && i < useCount; ++i) {
 		const bool addressed = uses[i].access & TegraGM20BSurfaceGpuAddress;
-		const uint64_t bytes = uses[i].access & TegraGM20BSurfaceRange ? uses[i].reserved : 0;
+		const uint64_t bytes =
+			uses[i].access & TegraGM20BSurfaceRange ? uses[i].reserved : 0;
 		if (TGM_STATS)
 			rangedUses += bytes != 0;
-		const Binding *binding = addressed
-			? switch_gpu_binding_find(binds_, nbinds_, uses[i].handle, bytes ? bytes : 1)
-			: nullptr;
-		const Bo *bo = addressed ? (binding ? binding->bo : nullptr) : findBo(uses[i].handle);
+		const Binding *binding =
+			addressed ? switch_gpu_binding_find(binds_, nbinds_, uses[i].handle,
+							    bytes ? bytes : 1)
+				  : nullptr;
+		const Bo *bo =
+			addressed ? (binding ? binding->bo : nullptr) : findBo(uses[i].handle);
 		uint64_t offset = 0;
 		if (!bo || !bo->backing ||
-		    (bytes && !switch_gpu_binding_offset(*binding, uses[i].handle, bytes, offset)) ||
+		    (bytes &&
+		     !switch_gpu_binding_offset(*binding, uses[i].handle, bytes, offset)) ||
 		    ((uses[i].access & TegraGM20BSurfaceWrite) && bo->readOnly))
 			return kIOReturnBadArgument;
 		if (const int error = addUse(bo, uses[i].access, claim, offset, bytes))
@@ -486,7 +495,8 @@ refresh:
 						  &completion, &transaction);
 			ownershipBusy = error == -16;
 			if (!error)
-				error = switch_gpu_backing_write_ranges(&transaction, job.writes, writeCount);
+				error = switch_gpu_backing_write_ranges(&transaction, job.writes,
+									writeCount);
 			if (!error)
 				error = switch_gpu_backing_dependencies(
 					&transaction, job.dependencies, TegraGM20BMaxJobUses,
@@ -514,23 +524,24 @@ refresh:
 		if (!error) {
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_LOCK);
-			jobVisibility = switch_gpu_job_visibility(visibility, events && events->signals(),
-								  unlockedWrites || scanoutWrites,
-								  hostWritten || transaction.host_written);
+			jobVisibility =
+				switch_gpu_job_visibility(visibility, events && events->signals(),
+							  unlockedWrites || scanoutWrites,
+							  hostWritten || transaction.host_written);
 			if (events->released())
 				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));
-			error = switch_gpu_chan_exec_events(chan, pushes, count, job.dependencies, dependencies,
-							    nullptr, 0, events->words(), events->wordCount(), &seqno,
-							    profile, jobVisibility, nullptr, 0);
+			error = switch_gpu_chan_exec_events(
+				chan, pushes, count, job.dependencies, dependencies, nullptr, 0,
+				events->words(), events->wordCount(), &seqno, profile,
+				jobVisibility, nullptr, 0);
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);
-		error = switch_gpu_chan_wait_submission_room(chan, pushes, count,
-							     dependencies + events->wordCount(),
-							     profile);
+		error = switch_gpu_chan_wait_submission_room(
+			chan, pushes, count, dependencies + events->wordCount(), profile);
 		if (error)
 			break;
 	}
@@ -558,7 +569,8 @@ refresh:
 	if (ret)
 		return ret;
 	if (count) {
-		switch_gpu_path_job(jobVisibility, unlockedWrites, leanChannels_[channel - 1], rangedUses);
+		switch_gpu_path_job(jobVisibility, unlockedWrites, leanChannels_[channel - 1],
+				    rangedUses);
 		switch_gpu_path_taken(SWITCH_GPU_PATH_NATIVE_READ, nativeReads);
 		// The host imports this submission may have written, marked GPU-dirty with the submission as their writer
 		// (atomic stores, no cache maintenance): a CPU IOSurfaceLock of one waits for this seqno, then invalidates
@@ -567,7 +579,8 @@ refresh:
 			surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);
 		else
 			for (uint32_t i = 0; i < writtenCount; ++i)
-				tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);
+				tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan),
+							   seqno);
 	}
 	out->seqno = seqno;
 	out->reserved = 0;

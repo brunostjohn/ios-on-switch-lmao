@@ -13,7 +13,7 @@
 #pragma once
 #include <stdint.h>
 
-#define TEGRA_SCANOUT_COPY_VERSION 5u
+#define TEGRA_SCANOUT_COPY_VERSION      5u
 #define SWITCH_SCANOUT_MAX_DEPENDENCIES 32u
 struct switch_gpu_backing_token;
 // flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display

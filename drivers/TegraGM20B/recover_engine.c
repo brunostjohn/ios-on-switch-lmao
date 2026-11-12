@@ -293,8 +293,9 @@ void tgm_recover_preempt_unblock(struct nvkm_runl *runl)
 	nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 	{
 		status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
-		id = tgm_engine_saving(status, PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
-						       nvkm_engine_chsw_load(engn->engine));
+		id = tgm_engine_saving(status,
+				       PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
+					       nvkm_engine_chsw_load(engn->engine));
 		if (id >= 0 && (!chan_alive(runl->fifo, (u32)id) || tgm_chid_unowned(id)))
 			tgm_engine_reset_locked(runl, engn, id,
 						"saving, with nothing to drain, the context of");
@@ -314,8 +315,9 @@ int tgm_recover_saving(struct nvkm_device *device, int chid)
 		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 		{
 			status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
-			if (tgm_engine_saving(status, PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
-							      nvkm_engine_chsw_load(engn->engine)) == chid)
+			if (tgm_engine_saving(
+				    status, PFIFO_ENG_CTX_STATUS(status) == PFIFO_ENG_CTX_SWITCH &&
+						    nvkm_engine_chsw_load(engn->engine)) == chid)
 				return 1;
 		}
 	}
@@ -378,7 +380,8 @@ int tgm_recover_resident(struct nvkm_device *device, int *chids, int max)
 		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
 		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 		{
-			k = tgm_engine_contexts(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), held);
+			k = tgm_engine_contexts(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)),
+						held);
 			for (i = 0; i < k; i++)
 				n = add_once(chids, n, max, held[i]);
 		}
@@ -387,8 +390,9 @@ int tgm_recover_resident(struct nvkm_device *device, int *chids, int max)
 			if (runq && (nvkm_rd32(device, PBDMA_STATUS(runq->id)) & PBDMA_BUSY) &&
 			    !tgm_pbdma_acquiring(nvkm_rd32(device, PBDMA_METHOD0(runq->id)),
 						 nvkm_rd32(device, PBDMA_DATA0(runq->id))))
-				n = add_once(chids, n, max,
-					     PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))));
+				n = add_once(
+					chids, n, max,
+					PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))));
 		}
 	}
 	return n;

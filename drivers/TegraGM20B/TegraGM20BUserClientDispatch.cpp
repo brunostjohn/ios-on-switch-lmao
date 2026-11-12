@@ -30,13 +30,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	uint32_t wantOut = 0;
 	uint32_t count = 0;
 	switch (method) {
-    case TegraGM20BMethodEventImport:
-        wantIn = sizeof(TegraGM20BAbiEventImport);
-        wantOut = sizeof(TegraGM20BAbiEventImportReply);
-        break;
-    case TegraGM20BMethodEventRelease:
-        wantIn = sizeof(TegraGM20BAbiEventRelease);
-        break;
+	case TegraGM20BMethodEventImport:
+		wantIn = sizeof(TegraGM20BAbiEventImport);
+		wantOut = sizeof(TegraGM20BAbiEventImportReply);
+		break;
+	case TegraGM20BMethodEventRelease:
+		wantIn = sizeof(TegraGM20BAbiEventRelease);
+		break;
 	case TegraGM20BMethodEventWord:
 		wantIn = sizeof(TegraGM20BAbiEventWord);
 		wantOut = sizeof(TegraGM20BAbiEventWordReply);
@@ -145,9 +145,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiSurfaceWrites);
 		break;
 	case TegraGM20BMethodNativeSurfaceView:
-        wantIn = sizeof(TegraGM20BAbiNativeSurfaceView);
-        wantOut = sizeof(TegraGM20BAbiNativeSurfaceViewReply);
-        break;
+		wantIn = sizeof(TegraGM20BAbiNativeSurfaceView);
+		wantOut = sizeof(TegraGM20BAbiNativeSurfaceViewReply);
+		break;
 	case TegraGM20BMethodSurfaceLayoutInfo:
 		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
 		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutInfo);
@@ -197,8 +197,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #if SWITCH_GPU_PATH_STATS
 	case TegraGM20BMethodPaths:
 		wantIn = inSize == sizeof(TegraGM20BAbiPathsSpan) ? sizeof(TegraGM20BAbiPathsSpan)
-								   : sizeof(TegraGM20BAbiPaths);
-		wantOut = wantIn == sizeof(TegraGM20BAbiPathsSpan) ? 0 : sizeof(TegraGM20BAbiPathsReply);
+								  : sizeof(TegraGM20BAbiPaths);
+		wantOut = wantIn == sizeof(TegraGM20BAbiPathsSpan)
+				  ? 0
+				  : sizeof(TegraGM20BAbiPathsReply);
 		break;
 #endif
 	default:
@@ -280,8 +282,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		*reply = {};
 		if (input->reserved || !input->channel || input->channel > kMaxChannels)
 			return kIOReturnBadArgument;
-		return ioreturn(
-			events_.word(input->handle, input->channel, &reply->address, &reply->base, &reply->floor));
+		return ioreturn(events_.word(input->handle, input->channel, &reply->address,
+					     &reply->base, &reply->floor));
 	}
 	if (method == TegraGM20BMethodSubmitAddress)
 		return submitAddress(static_cast<const TegraGM20BAbiSubmitAddress *>(in),
@@ -307,9 +309,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
 	if (method == TegraGM20BMethodCpuComplete)
 		return cpuComplete(static_cast<const TegraGM20BAbiCpuComplete *>(in),
-			static_cast<TegraGM20BAbiCpuCompleteReply *>(out));
+				   static_cast<TegraGM20BAbiCpuCompleteReply *>(out));
 	if (method == TegraGM20BMethodCpuAcquire || method == TegraGM20BMethodCpuRelease)
-		return cpuAccess(static_cast<const TegraGM20BAbiCpuAccess *>(in), method == TegraGM20BMethodCpuRelease);
+		return cpuAccess(static_cast<const TegraGM20BAbiCpuAccess *>(in),
+				 method == TegraGM20BMethodCpuRelease);
 	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
 	if (method == TegraGM20BMethodMap) {
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
@@ -331,8 +334,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 			      static_cast<TegraGM20BAbiZbcReply *>(out));
 	}
 	if (method == TegraGM20BMethodZcullInfo)
-		return tgm_zcull_info(static_cast<TegraGM20BAbiZcullInfo *>(out)) ? kIOReturnUnsupported
-										    : kIOReturnSuccess;
+		return tgm_zcull_info(static_cast<TegraGM20BAbiZcullInfo *>(out))
+			       ? kIOReturnUnsupported
+			       : kIOReturnSuccess;
 #if TGM_STATS
 	if (method == TegraGM20BMethodReadback) {
 		return tgm_readback_call(this, static_cast<const TegraGM20BAbiReadback *>(in),
@@ -360,7 +364,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if ((op == TegraGM20BPathsOpNoteSpan) != (inSize == sizeof(TegraGM20BAbiPathsSpan)))
 			return kIOReturnBadArgument;
 		if (op == TegraGM20BPathsOpNoteSpan) {
-			TegraGM20BAbiPathsSpan note = *static_cast<const TegraGM20BAbiPathsSpan *>(in);
+			TegraGM20BAbiPathsSpan note =
+				*static_cast<const TegraGM20BAbiPathsSpan *>(in);
 			note.text[sizeof(note.text) - 1] = 0;
 			switch_gpu_span_note(owner_, note.text);
 		} else if (op == TegraGM20BPathsOpSpans) {
@@ -402,10 +407,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		ret = boImport(static_cast<const TegraGM20BAbiBoImport *>(in),
 			       static_cast<TegraGM20BAbiBoAllocReply *>(out));
 		break;
-    case TegraGM20BMethodNativeSurfaceView:
-        ret = nativeSurfaceView(static_cast<const TegraGM20BAbiNativeSurfaceView *>(in),
-                                static_cast<TegraGM20BAbiNativeSurfaceViewReply *>(out));
-        break;
+	case TegraGM20BMethodNativeSurfaceView:
+		ret = nativeSurfaceView(static_cast<const TegraGM20BAbiNativeSurfaceView *>(in),
+					static_cast<TegraGM20BAbiNativeSurfaceViewReply *>(out));
+		break;
 	case TegraGM20BMethodBoFree:
 		ret = boFree(static_cast<const TegraGM20BAbiBoFree *>(in));
 		break;
@@ -432,7 +437,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 			pushes + submit->push_count);
 		const bool exact = !submit->surface_flags;
 		ret = exec(submit->channel, pushes, submit->push_count,
-			   static_cast<TegraGM20BAbiExecReply *>(out), uses, submit->surface_count, exact);
+			   static_cast<TegraGM20BAbiExecReply *>(out), uses, submit->surface_count,
+			   exact);
 		break;
 	}
 
@@ -458,7 +464,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodSurfaceLayoutInfo:
 		ret = surfaceLayoutInfo(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),
-			static_cast<TegraGM20BAbiSurfaceLayoutInfo *>(out), true);
+					static_cast<TegraGM20BAbiSurfaceLayoutInfo *>(out), true);
 		break;
 	case TegraGM20BMethodSurfaceLayout:
 		ret = surfaceLayout(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),

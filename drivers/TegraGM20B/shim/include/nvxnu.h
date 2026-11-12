@@ -26,7 +26,11 @@ void nvxnu_step_impl(const char *fmt, ...) __attribute__((format(printf, 1, 2)))
 #else
 #define NVXNU_DIAGNOSTICS 0
 #endif
-#define nvxnu_step(...) do { if (NVXNU_DIAGNOSTICS) nvxnu_step_impl(__VA_ARGS__); } while (0)
+#define nvxnu_step(...)                               \
+	do {                                          \
+		if (NVXNU_DIAGNOSTICS)                \
+			nvxnu_step_impl(__VA_ARGS__); \
+	} while (0)
 /* Traced bring-up (a source-level switch, off): trace lines wait for the console (nvxnu_step 400 ms, 2 s before M1, 3 s
  * per stage) */
 int nvxnu_trace_paced(void);

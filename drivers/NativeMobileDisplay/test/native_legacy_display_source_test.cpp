@@ -51,7 +51,8 @@ TEST(DirectScanoutSource, ProductionInitializesBeforeEnablingScanout)
     EXPECT_TRUE(setup.Before("tegra_smmu_attach(", "directAttached = planesAttached = latchRetire = true;"));
     EXPECT_TRUE(setup.Has("probeRan = planeProbeRan = true;"));
     EXPECT_FALSE(setup.Has("probe.start()"));
-    EXPECT_TRUE(method("void probeFrameEnd()").Has("#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)"));
+    EXPECT_TRUE(
+        method("void probeFrameEnd()").Has("#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)"));
 }
 
 TEST(DirectScanoutSource, FenceOnlyPresentNoRetireAtTheOffer)
@@ -97,8 +98,8 @@ TEST(DirectScanoutSource, LateOffersAreTheDriversAndLostFramesAreNotShown)
     const CodeText deadline = method("static void gpuDeadlineFired(");
     EXPECT_TRUE(deadline.Before("tegra_gm20b_scanout_outstanding(self)", "panic("));
     EXPECT_TRUE(deadline.Has("fence only, direct slot"));
-    EXPECT_TRUE(
-        method("void finishGpuCopy(int status)").Before("if (status == TEGRA_SCANOUT_SOURCE_LOST) {", "gpuBypass = true;"));
+    EXPECT_TRUE(method("void finishGpuCopy(int status)")
+                    .Before("if (status == TEGRA_SCANOUT_SOURCE_LOST) {", "gpuBypass = true;"));
     const CodeText drop = method("void dropLostFrame(");
     EXPECT_TRUE(drop.Has("retireUnshown(seqOf(request));"));
     EXPECT_FALSE(drop.Has("gpuBypass"));
@@ -135,8 +136,9 @@ TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
     EXPECT_TRUE(copy.Has("copy.flags = blockLog2 >= 0 ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
     EXPECT_TRUE(copy.Has("copy.sourceBlockHeightLog2 = blockLog2 >= 0 ? static_cast<uint32_t>(blockLog2) : 0;"));
     const CodeText kick = method("void kickOnce()");
-    EXPECT_TRUE(kick.Before("const int blockLog2 = surfaceBlockLog2(memory);",
-                            "offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt)"));
+    EXPECT_TRUE(
+        kick.Before("const int blockLog2 = surfaceBlockLog2(memory);",
+                    "offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt)"));
     // window A scans, and the CPU's fallback copies as it is, only a frame in window A's own blocks; a frame tiled in
     // other blocks takes the GPU copy (which reads its layout) or is not shown
     EXPECT_TRUE(kick.Before("const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);",
@@ -306,6 +308,7 @@ TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
     EXPECT_TRUE(code().Has("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));
     EXPECT_TRUE(method("void flipLatched()").StartsWith("if (blanked) { blanked = false; color->setBlank(false);"));
 }
+
 // iOS 17's layout of the original framebuffer is the one this driver always ran on: its table must keep these values, or
 // an iOS 17 kernel would read the swap queue and the swap requests somewhere else.
 TEST(LegacyFramebufferTable, Ios17ValuesStayPut)

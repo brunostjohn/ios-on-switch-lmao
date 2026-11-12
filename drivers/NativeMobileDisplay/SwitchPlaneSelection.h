@@ -17,8 +17,7 @@ static bool planeSame(const PlaneSet &a, const PlaneSet &b)
             x.hInitial != y.hInitial || x.vInitial != y.vInitial || x.lineStride != y.lineStride ||
             x.hOffset != y.hOffset || x.vOffset != y.vOffset || x.surfaceKind != y.surfaceKind ||
             x.options != y.options || x.byteSwap != y.byteSwap || x.start[0] != y.start[0] ||
-            x.start[1] != y.start[1] ||
-            x.matrix != y.matrix || x.fullRange != y.fullRange)
+            x.start[1] != y.start[1] || x.matrix != y.matrix || x.fullRange != y.fullRange)
             return false;
     }
     return true;
@@ -92,18 +91,24 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
     PlaneSet want = {};
     switch_display::Overlay wanted[2] = {};
     const int selected[2] = {roles.plane, roles.second};
+
     struct BuildingSlots {
         uint32_t &slots;
-        ~BuildingSlots() { slots = 0; }
+
+        ~BuildingSlots()
+        {
+            slots = 0;
+        }
     } building = {planeBuildingSlots};
+
     for (unsigned index = 0; index != 2; ++index) {
         if (selected[index] < 0)
             continue;
         const auto &layer = planeLayers[selected[index]];
         auto &overlay = wanted[index];
         bool resolved = false;
-        const int slot = planesOn ? planeNativeSlotFor(layer.surface, layer.layer, width, height,
-                                                       overlay.image, resolved) : -19;
+        const int slot =
+            planesOn ? planeNativeSlotFor(layer.surface, layer.layer, width, height, overlay.image, resolved) : -19;
         if (slot == -2)
             continue;
         if (planeRetry(slot)) {
@@ -150,4 +155,3 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
     d.planeChange = !planeSame(want, planeTarget);
     d.set = want;
 }
-

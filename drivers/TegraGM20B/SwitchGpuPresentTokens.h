@@ -37,13 +37,15 @@ switch_gpu_present_tokens_pending(const struct switch_gpu_present_tokens *held)
 	return pending;
 }
 
-static inline int switch_gpu_present_pending_matches(const struct switch_gpu_present_pending *pending,
-						     uint64_t channel_id, uint32_t completed)
+static inline int
+switch_gpu_present_pending_matches(const struct switch_gpu_present_pending *pending,
+				   uint64_t channel_id, uint32_t completed)
 {
 	const struct switch_gpu_backing_token *token = &pending->token;
 	return token->engine == SWITCH_GPU_ENGINE_GM20B && !pending->status && !pending->physical &&
-	       token->queue == (uint32_t)channel_id && token->reset_generation == (channel_id >> 32) + 1 &&
-	       token->value <= UINT32_MAX && (int32_t)(completed - (uint32_t)token->value) < 0;
+	       token->queue == (uint32_t)channel_id &&
+	       token->reset_generation == (channel_id >> 32) + 1 && token->value <= UINT32_MAX &&
+	       (int32_t)(completed - (uint32_t)token->value) < 0;
 }
 
 /* A writer promise among them still unkept: the present's job parks on its word */

@@ -21,13 +21,14 @@ extern "C" int proc_selfpid(void);
 namespace
 {
 const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
-	"internal_jobs", "external_jobs", "unlocked_writes", "volatile_binds", "lean_copy_jobs",
-	"control_bos",   "cpu_completes", "ranged_uses",     "visible_waits",  "native_views",
-	"native_reads",  "native_tiled_views", "event_jobs",
-	"ready_arms",    "submit_jobs",   "set_jobs",        "stale_sets",     "address_jobs",
-	"shared_uses",   "relayout_fresh", "relayout_deferred", "relayout_lazy", "relayout_never",
-	"relayout_moved",
-	"quiet_jobs",    "wake_asks",   "writer_promises", "promise_waits",   "promise_cpu_releases",
+	"internal_jobs",        "external_jobs", "unlocked_writes", "volatile_binds",
+	"lean_copy_jobs",       "control_bos",   "cpu_completes",   "ranged_uses",
+	"visible_waits",        "native_views",  "native_reads",    "native_tiled_views",
+	"event_jobs",           "ready_arms",    "submit_jobs",     "set_jobs",
+	"stale_sets",           "address_jobs",  "shared_uses",     "relayout_fresh",
+	"relayout_deferred",    "relayout_lazy", "relayout_never",  "relayout_moved",
+	"quiet_jobs",           "wake_asks",     "writer_promises", "promise_waits",
+	"promise_cpu_releases",
 };
 
 // Every path is taken in the syscall or trap of the process it is for, so each process counts its own: a reader of
@@ -78,8 +79,8 @@ Process *slot(int pid, bool claim)
 void format(char *line, size_t size, size_t used, const uint64_t *counts)
 {
 	for (uint32_t i = 0; i < SWITCH_GPU_PATH_COUNT && used < size; ++i) {
-		const int wrote = snprintf(line + used, size - used, "%s%s=%llu", used ? " " : "", kNames[i],
-					   static_cast<unsigned long long>(counts[i]));
+		const int wrote = snprintf(line + used, size - used, "%s%s=%llu", used ? " " : "",
+					   kNames[i], static_cast<unsigned long long>(counts[i]));
 		used += wrote > 0 ? static_cast<size_t>(wrote) : 0;
 	}
 }
@@ -108,12 +109,18 @@ int promisesSysctl SYSCTL_HANDLER_ARGS
 	(void)arg2;
 	char line[160];
 	snprintf(line, sizeof(line),
-		 "abandoned=%llu last_waited_ms=%llu direct_promised=%llu direct_kept=%llu direct_given_up=%llu",
-		 static_cast<unsigned long long>(__atomic_load_n(&promisesAbandoned, __ATOMIC_ACQUIRE)),
-		 static_cast<unsigned long long>(__atomic_load_n(&promiseWaitedNs, __ATOMIC_RELAXED) / 1000000),
-		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[0], __ATOMIC_RELAXED)),
-		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[1], __ATOMIC_RELAXED)),
-		 static_cast<unsigned long long>(__atomic_load_n(&directPromised[2], __ATOMIC_RELAXED)));
+		 "abandoned=%llu last_waited_ms=%llu direct_promised=%llu direct_kept=%llu "
+		 "direct_given_up=%llu",
+		 static_cast<unsigned long long>(
+			 __atomic_load_n(&promisesAbandoned, __ATOMIC_ACQUIRE)),
+		 static_cast<unsigned long long>(
+			 __atomic_load_n(&promiseWaitedNs, __ATOMIC_RELAXED) / 1000000),
+		 static_cast<unsigned long long>(
+			 __atomic_load_n(&directPromised[0], __ATOMIC_RELAXED)),
+		 static_cast<unsigned long long>(
+			 __atomic_load_n(&directPromised[1], __ATOMIC_RELAXED)),
+		 static_cast<unsigned long long>(
+			 __atomic_load_n(&directPromised[2], __ATOMIC_RELAXED)));
 	return SYSCTL_OUT(req, line, strlen(line) + 1);
 }
 
@@ -148,8 +155,8 @@ extern "C" void switch_gpu_span_note(const char *owner, const char *text)
 extern "C" void switch_gpu_compositor_job(uint64_t ns)
 {
 	uint64_t max = __atomic_load_n(&gCompositorJobMax, __ATOMIC_RELAXED);
-	while (ns > max && !__atomic_compare_exchange_n(&gCompositorJobMax, &max, ns, false, __ATOMIC_RELAXED,
-							__ATOMIC_RELAXED))
+	while (ns > max && !__atomic_compare_exchange_n(&gCompositorJobMax, &max, ns, false,
+							__ATOMIC_RELAXED, __ATOMIC_RELAXED))
 		;
 }
 
@@ -181,7 +188,8 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	char head[160];
 	switch_gpu_comp_sync_format(head, sizeof(head), &sync);
 	IOLockLock(held);
-	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED), head, line, size);
+	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED),
+			       head, line, size);
 	IOLockUnlock(held);
 }
 
@@ -246,31 +254,38 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 	size_t used = strlen(line);
 	if (used < size)
 		snprintf(line + used, size - used,
-			 " preempts=%u preempt_max_us=%llu preempt_mid_job=%u preempt_job_end=%u preempt_unknown=%u",
+			 " preempts=%u preempt_max_us=%llu preempt_mid_job=%u preempt_job_end=%u "
+			 "preempt_unknown=%u",
 			 preempts, static_cast<unsigned long long>(preemptMax / 1000),
-			 landed.landed[SWITCH_GPU_LANDED_MID_JOB], landed.landed[SWITCH_GPU_LANDED_JOB_END],
+			 landed.landed[SWITCH_GPU_LANDED_MID_JOB],
+			 landed.landed[SWITCH_GPU_LANDED_JOB_END],
 			 landed.landed[SWITCH_GPU_LANDED_UNKNOWN]);
-	static const char *const kBuckets[SWITCH_GPU_PREEMPT_BUCKETS] = {"lt250",  "lt500",  "lt1000",
-									 "lt2000", "lt4000", "ge4000"};
+	static const char *const kBuckets[SWITCH_GPU_PREEMPT_BUCKETS] = {
+		"lt250", "lt500", "lt1000", "lt2000", "lt4000", "ge4000"};
 	for (unsigned b = 0; b < SWITCH_GPU_PREEMPT_BUCKETS; b++) {
 		used = strlen(line);
 		if (used < size)
-			snprintf(line + used, size - used, " preempt_%s_us=%u", kBuckets[b], landed.bucket[b]);
+			snprintf(line + used, size - used, " preempt_%s_us=%u", kBuckets[b],
+				 landed.bucket[b]);
 	}
 }
 
 extern "C" void switch_gpu_path_register(void)
 {
-	switch_sysctl_oid(&gPathsOid, &sysctl__kern_children, "switch_gpu_paths",
-			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
-			  pathsSysctl, "A",
-			  "GM20B capability flags, and the paths behind them the reading process took");
+	switch_sysctl_oid(
+		&gPathsOid, &sysctl__kern_children, "switch_gpu_paths",
+		static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		pathsSysctl, "A",
+		"GM20B capability flags, and the paths behind them the reading process took");
 	sysctl_register_oid(&gPathsOid);
-	switch_sysctl_oid(&gPromisesOid, &sysctl__kern_children, "switch_gpu_promises",
-			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
-			  promisesSysctl, "A",
-			  "writer promises given up on since boot, how long the last one's reader had waited, and the direct "
-			  "presents of promised frames watched on their promise, handed to the job that kept it, and given up");
+	switch_sysctl_oid(
+		&gPromisesOid, &sysctl__kern_children, "switch_gpu_promises",
+		static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		promisesSysctl, "A",
+		"writer promises given up on since boot, how long the last one's reader had "
+		"waited, and the direct "
+		"presents of promised frames watched on their promise, handed to the job that kept "
+		"it, and given up");
 	sysctl_register_oid(&gPromisesOid);
 }
 #endif

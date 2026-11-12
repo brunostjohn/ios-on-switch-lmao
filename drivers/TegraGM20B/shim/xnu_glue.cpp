@@ -247,9 +247,9 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 		return;
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
 #if DEVELOPMENT || DEBUG
-    __atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
 #else
-    (void)source;
+	(void)source;
 #endif
 	gIrqErrorsLen = 0;
 	gIrqErrors[0] = 0;
@@ -469,11 +469,13 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 	switch_dcache_sync();
 }
 
-extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
-		uint64_t offset, uint64_t bytes, int operation)
+extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count, uint64_t offset,
+					 uint64_t bytes, int operation)
 {
-	const switch_dcache_op op = operation == SWITCH_GPU_CACHE_CLEAN_INVALIDATE ? SWITCH_DCACHE_CLEAN_INVALIDATE :
-		operation == SWITCH_GPU_CACHE_INVALIDATE ? SWITCH_DCACHE_INVALIDATE : SWITCH_DCACHE_CLEAN;
+	const switch_dcache_op op =
+		operation == SWITCH_GPU_CACHE_CLEAN_INVALIDATE ? SWITCH_DCACHE_CLEAN_INVALIDATE
+		: operation == SWITCH_GPU_CACHE_INVALIDATE     ? SWITCH_DCACHE_INVALIDATE
+							       : SWITCH_DCACHE_CLEAN;
 	while (bytes && (offset >> 12) < count) {
 		const uint64_t within = offset & 4095;
 		const uint64_t span = bytes < 4096 - within ? bytes : 4096 - within;
@@ -493,9 +495,17 @@ static void *switch_backing_retire_work, *switch_backing_expiry_work;
 extern "C" int switch_gpu_backing_prepare_retirement(void)
 {
 	if (!switch_backing_retire_work)
-		switch_backing_retire_work = nvxnu_work_alloc([](void *) { switch_gpu_backing_retire(); }, nullptr);
+		switch_backing_retire_work = nvxnu_work_alloc(
+			[](void *) {
+				switch_gpu_backing_retire();
+			},
+			nullptr);
 	if (!switch_backing_expiry_work)
-		switch_backing_expiry_work = nvxnu_work_alloc([](void *) { switch_gpu_backing_expire(); }, nullptr);
+		switch_backing_expiry_work = nvxnu_work_alloc(
+			[](void *) {
+				switch_gpu_backing_expire();
+			},
+			nullptr);
 	return switch_backing_retire_work && switch_backing_expiry_work ? 0 : -12;
 }
 
@@ -516,7 +526,8 @@ extern "C" void switch_gpu_backing_arm_expiry(uint64_t deadline_ns)
 		return;
 	}
 	const uint64_t now = nvxnu_nanotime();
-	nvxnu_work_schedule_after(switch_backing_expiry_work, deadline_ns > now ? deadline_ns - now : 1);
+	nvxnu_work_schedule_after(switch_backing_expiry_work,
+				  deadline_ns > now ? deadline_ns - now : 1);
 }
 
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads

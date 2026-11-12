@@ -457,14 +457,14 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		bo->surface = switch_gpu_surface_hold(in->surface_id, task_, bo->pas, bo->npages);
 		if (!bo->surface) {
 			ret = kIOReturnBadArgument;
-        } else {
-            bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;
-            bo->representation = switch_gpu_surface_generation(bo->surface);
-            if (!bo->representation)
-                ret = kIOReturnNoMemory;
-            // The original imported pages need a checked refresh after representation replacement.
-            bo->representationValue = 1;
-        }
+		} else {
+			bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;
+			bo->representation = switch_gpu_surface_generation(bo->surface);
+			if (!bo->representation)
+				ret = kIOReturnNoMemory;
+			// The original imported pages need a checked refresh after representation replacement.
+			bo->representationValue = 1;
+		}
 	}
 	if (!ret && !bo->wiring) {
 		ret = ioreturn(
@@ -511,7 +511,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	}
 	if (bo->surface) {
 		tgm_record *record = tgm_record_of(bo->surface);
-		const int fresh = record && tgm_record_first_import(record) && tgm_surface_unwritten(bo->surface);
+		const int fresh = record && tgm_record_first_import(record) &&
+				  tgm_surface_unwritten(bo->surface);
 		tgm_coherency_import(bo->coh, record, fresh);
 	}
 	const uint64_t added = TGM_STATS ? statsNowNs() : 0;

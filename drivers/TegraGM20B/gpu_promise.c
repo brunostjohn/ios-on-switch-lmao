@@ -21,7 +21,8 @@ static int promise_raise(volatile uint32_t *word, uint32_t value)
 	return raised;
 }
 
-static const struct switch_gpu_promise_fence promise_fence = {tgm_fence_word, promise_raise, tgm_fence_owner};
+static const struct switch_gpu_promise_fence promise_fence = {tgm_fence_word, promise_raise,
+							      tgm_fence_owner};
 
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value)
 {
@@ -55,7 +56,8 @@ int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens)
 		const struct switch_gpu_backing_token *token = &tokens->tokens[producers[i]];
 		const struct tgm_chan *chan = live_by_uid(token->queue);
 
-		waits = chan && switch_gpu_quiet_token_on(token, chan->id) && tgm_chan_waits_promise(chan);
+		waits = chan && switch_gpu_quiet_token_on(token, chan->id) &&
+			tgm_chan_waits_promise(chan);
 	}
 	mutex_unlock(&tgm_live_lock);
 	return waits;
@@ -113,10 +115,12 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 		if (logged[cpu])
 			continue;
 		logged[cpu] = 1;
-		nvxnu_log("tegra-gm20b: first %s present behind a writer promise %s completed %llu ms after its offer "
+		nvxnu_log("tegra-gm20b: first %s present behind a writer promise %s completed %llu "
+			  "ms after its offer "
 			  "(fence offset %u value %u)\n",
 			  copy ? "copy" : "fence-only",
-			  cpu ? "the CPU released (a channel parked on ACQ_GEQ read the word again after a CPU write)"
+			  cpu ? "the CPU released (a channel parked on ACQ_GEQ read the word again "
+				"after a CPU write)"
 			      : "its promised job's fence released",
 			  (nvxnu_nanotime() - queued) / 1000000, token->queue, (u32)token->value);
 	}
@@ -159,9 +163,9 @@ static const char *promise_maker(uint32_t offset)
 
 	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
-		if (!chan->kernel && ((uintptr_t)chan->fence_cpu - (uintptr_t)tgm_fence_pages.va) /
-						 TGM_FENCE_SLOT ==
-					 offset / TGM_FENCE_SLOT)
+		if (!chan->kernel &&
+		    ((uintptr_t)chan->fence_cpu - (uintptr_t)tgm_fence_pages.va) / TGM_FENCE_SLOT ==
+			    offset / TGM_FENCE_SLOT)
 			return chan->owner;
 	}
 	return "a connection with no channel";
@@ -172,8 +176,10 @@ static const char *promise_maker(uint32_t offset)
 void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns)
 {
 	switch_gpu_path_promise_abandoned(waited_ns);
-	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s waited %llu ms "
-		  "for it; it goes on without the promised writes, and a present of the surface is dropped\n",
+	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s "
+		  "waited %llu ms "
+		  "for it; it goes on without the promised writes, and a present of the surface is "
+		  "dropped\n",
 		  promise_maker(offset), offset, value, who, waited_ns / 1000000);
 }
 
@@ -200,8 +206,8 @@ static void promise_released(uint32_t offset, uint32_t value, int step, void *ar
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns)
 {
 	struct promise_hang hang = {chan, who, waited_ns};
-	const uint32_t raised = switch_gpu_promise_waits_release(&chan->promise_waits, &promise_fence,
-								 promise_released, &hang);
+	const uint32_t raised = switch_gpu_promise_waits_release(
+		&chan->promise_waits, &promise_fence, promise_released, &hang);
 
 	if (raised)
 		__asm__ volatile("dsb sy" ::: "memory");
@@ -211,6 +217,7 @@ uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 w
 /* Promises kept lately, under tgm_present.lock: an offer whose snapshot took one just before its job was submitted
  * watches that job. */
 #define PRESENT_KEPT 8
+
 struct present_kept {
 	u32 offset, value;
 	struct switch_gpu_backing_token producer;
@@ -240,7 +247,8 @@ void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
 	for (i = 0; i < PRESENT_KEPT; i++) {
 		const struct present_kept *k = &present_kept[i];
 
-		if (k->producer.engine && k->offset == promise.queue && k->value == (u32)promise.value &&
+		if (k->producer.engine && k->offset == promise.queue &&
+		    k->value == (u32)promise.value &&
 		    !switch_gpu_backing_token_retain(&k->producer)) {
 			present_takes(&k->producer);
 			switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_PROMISED);
@@ -254,12 +262,14 @@ void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
 /* SubmitJob, the job that keeps the promise submitted: a watch waiting for it watches the job, whose fence push
  * releases the word after its fence, as the nonstall filter's view (SwitchGpuPresentFilter.cpp) and as the producer
  * whose asked interrupt's pass completes the watch. */
-void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer)
+void tgm_present_promise_kept(uint32_t offset, uint32_t value,
+			      const struct switch_gpu_backing_token *producer)
 {
 	int watched = 0;
 
 	mutex_lock(&tgm_present.lock);
-	present_kept[present_kept_next++ % PRESENT_KEPT] = (struct present_kept){offset, value, *producer};
+	present_kept[present_kept_next++ % PRESENT_KEPT] =
+		(struct present_kept){offset, value, *producer};
 	if (switch_gpu_present_watch_promised(&tgm_present.watch, offset, value) &&
 	    !switch_gpu_backing_token_retain(producer)) {
 		if (switch_gpu_present_watch_kept(&tgm_present.watch, offset, value, producer)) {
@@ -279,7 +289,8 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct swit
 		return;
 #if TGM_STATS
 	if (!__atomic_exchange_n(&present_kept_logged, 1, __ATOMIC_RELAXED))
-		nvxnu_log("tegra-gm20b: first direct present of a frame behind a writer promise watches the job "
+		nvxnu_log("tegra-gm20b: first direct present of a frame behind a writer promise "
+			  "watches the job "
 			  "that keeps it, with no present job\n");
 #endif
 	tgm_chan_need_tokens(producer, 1);
@@ -290,6 +301,7 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct swit
 /* A promise released or given up on from the CPU: a watch still waiting for its job goes to the work item. */
 void tgm_present_promise_released(uint32_t offset, uint32_t value)
 {
-	if (switch_gpu_present_watch_promised(&tgm_present.watch, offset, value) && tgm_present.watch_work)
+	if (switch_gpu_present_watch_promised(&tgm_present.watch, offset, value) &&
+	    tgm_present.watch_work)
 		nvxnu_work_schedule(tgm_present.watch_work);
 }

@@ -149,8 +149,9 @@ static struct nvif_mem *mem_mapping_view(struct tgm_mem *mem,
 	return &mem->mem;
 }
 
-int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem, u64 offset,
-		      u8 kind, int read_only, int vol, struct switch_gpu_mapping **mapping)
+int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem,
+			       u64 offset, u8 kind, int read_only, int vol,
+			       struct switch_gpu_mapping **mapping)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol || !l2_on(), .ro = !!read_only, .kind = kind};

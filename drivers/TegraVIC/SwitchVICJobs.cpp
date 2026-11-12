@@ -15,7 +15,9 @@
 namespace {
 const char *gLastRefusal;
 }
+
 #define SWITCH_VIC_REFUSED(stage) __atomic_store_n(&gLastRefusal, stage, __ATOMIC_RELAXED)
+
 const char *switch_vic_last_refusal()
 {
     return __atomic_load_n(&gLastRefusal, __ATOMIC_RELAXED);
@@ -523,9 +525,8 @@ extern "C" int switch_vic_token_filter_status(const switch_gpu_backing_token *to
         if (__atomic_load_n(&job.fence, __ATOMIC_ACQUIRE) != token->value)
             continue;
         const auto *semantics = __atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE);
-        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1)
-                   ? 1
-                   : 0;
+        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1) ? 1
+                                                                                                                   : 0;
     }
     return 0;
 }

@@ -117,10 +117,11 @@ int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
 int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift);
 struct switch_gpu_mapping;
 int switch_gpu_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-	uint64_t offset, uint8_t kind, int read_only, struct switch_gpu_mapping **mapping);
-int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range,
-	struct tgm_mem *mem, uint64_t offset, uint8_t kind, int read_only, int vol,
-	struct switch_gpu_mapping **mapping);
+		      uint64_t offset, uint8_t kind, int read_only,
+		      struct switch_gpu_mapping **mapping);
+int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+			       uint64_t offset, uint8_t kind, int read_only, int vol,
+			       struct switch_gpu_mapping **mapping);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
 /* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile or _prepare of mem with kind, and consumes
  * it, changing no PTE. What stays below and above the range comes back as *below and *above, the range's own entries as
@@ -173,7 +174,8 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
 int tgm_chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
 		 uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan);
 int tgm_chan_new_copy(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
-    uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan);
+		      uint64_t fence_gpu_va, const char *owner, int critical,
+		      struct tgm_chan **pchan);
 /* The channel's runlist level (TegraGM20BSchedPolicy.h enum tgm_level), from its connection's GPU priority: high makes it
  * the compositor's (its kicks preempt app work, the deadline's holds leave it, the compositor's timeslice). Serialized
  * with the channel's submissions. */
@@ -209,62 +211,82 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t c
 		  uint32_t *seqno, const struct tgm_prof *prof);
 struct switch_gpu_backing_token;
 uint64_t switch_gpu_chan_identity(struct tgm_chan *chan);
-void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno, struct switch_gpu_backing_token *token);
+void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno,
+			   struct switch_gpu_backing_token *token);
 void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token);
 /* The token of the seqno the next job's own fence releases, after its `fences` internal ones. */
-void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences, struct switch_gpu_backing_token *token);
+void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences,
+			       struct switch_gpu_backing_token *token);
 /* Enter before taking backing locks; leave after commit/abort. Room waits require those locks released. */
 void switch_gpu_chan_submit_enter(struct tgm_chan *chan);
 void switch_gpu_chan_submit_leave(void);
 int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm_push *push,
-	uint32_t count, uint32_t dependency_count, const struct tgm_prof *prof);
+					 uint32_t count, uint32_t dependency_count,
+					 const struct tgm_prof *prof);
 int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
-	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
-	uint32_t *seqno, const struct tgm_prof *prof);
+			 const struct switch_gpu_backing_token *dependencies,
+			 uint32_t dependency_count, uint32_t *seqno, const struct tgm_prof *prof);
+
 enum {
 	SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT = 1u << 0,
 	SWITCH_GPU_SUBMIT_HOST_WRITTEN = 1u << 1,
 	SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY = 1u << 2,
-    SWITCH_GPU_SUBMIT_FORCE_FENCE = 1u << 3,
+	SWITCH_GPU_SUBMIT_FORCE_FENCE = 1u << 3,
 	/* the job's end raises no interrupt unless a waiter asked for one (SwitchGpuQuiet.h); only on a channel with an owner
 	 * that pushes wake entries (tgm_chan_on_wake) */
 	SWITCH_GPU_SUBMIT_QUIET = 1u << 4,
 };
-int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
-	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
-	uint32_t *seqno, const struct tgm_prof *prof, uint32_t visibility);
+
+int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push,
+				    uint32_t count,
+				    const struct switch_gpu_backing_token *dependencies,
+				    uint32_t dependency_count, uint32_t *seqno,
+				    const struct tgm_prof *prof, uint32_t visibility);
+
 /* SubmitJob: switch_gpu_chan_exec_visibility after an acquire on each sibling's fence word reaching `seqno`. A sibling is
  * another channel of the same address space, kept alive by the caller until this returns. */
-enum { SWITCH_GPU_MAX_SIBLINGS = 8 };
+enum {
+	SWITCH_GPU_MAX_SIBLINGS = 8
+};
+
 struct switch_gpu_sibling_wait {
 	struct tgm_chan *source;
 	uint32_t seqno;
 };
+
 /* A word the job's fence push sets to `value` after the job (a writer promise it keeps, SwitchGpuWriterPromise.h) */
-enum { SWITCH_GPU_MAX_RELEASES = 4 };
+enum {
+	SWITCH_GPU_MAX_RELEASES = 4
+};
+
 struct switch_gpu_release {
 	uint64_t va;
 	uint32_t value;
 };
+
 int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
-	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
-	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count, uint32_t *seqno,
-	const struct tgm_prof *prof, uint32_t visibility, const struct switch_gpu_release *releases,
-	uint32_t release_count);
+			     const struct switch_gpu_backing_token *dependencies,
+			     uint32_t dependency_count,
+			     const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count,
+			     uint32_t *seqno, const struct tgm_prof *prof, uint32_t visibility,
+			     const struct switch_gpu_release *releases, uint32_t release_count);
 /* switch_gpu_chan_exec_job with acquires on event words as well (SwitchGpuWordWait.h) */
 struct switch_gpu_word_wait;
 int switch_gpu_chan_exec_events(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
-	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
-	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count,
-	const struct switch_gpu_word_wait *words, uint32_t word_count, uint32_t *seqno,
-	const struct tgm_prof *prof, uint32_t visibility, const struct switch_gpu_release *releases,
-	uint32_t release_count);
+				const struct switch_gpu_backing_token *dependencies,
+				uint32_t dependency_count,
+				const struct switch_gpu_sibling_wait *siblings,
+				uint32_t sibling_count, const struct switch_gpu_word_wait *words,
+				uint32_t word_count, uint32_t *seqno, const struct tgm_prof *prof,
+				uint32_t visibility, const struct switch_gpu_release *releases,
+				uint32_t release_count);
 /* The channel's jobs through `seqno` release event signals mid-job: their nonstall interrupts run event retirement. */
 void switch_gpu_chan_event_releases(struct tgm_chan *chan, uint32_t seqno);
 struct TegraGM20BAbiFenceSemantic;
-void switch_gpu_chan_semantic_visibility(struct tgm_chan *, volatile struct TegraGM20BAbiFenceSemantic *);
+void switch_gpu_chan_semantic_visibility(struct tgm_chan *,
+					 volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
-	uint64_t visible_gpu);
+				uint64_t visible_gpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* A word of the user fence pages by its byte offset in the pool (what every address space's fence view adds to its
@@ -278,7 +300,8 @@ uint32_t tgm_fence_owner(uint32_t offset);
  * released from the CPU */
 void tgm_promise_abandon(uint32_t offset, uint32_t value);
 int tgm_promise_abandoned(uint32_t offset, uint32_t value);
-void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer);
+void tgm_present_promise_kept(uint32_t offset, uint32_t value,
+			      const struct switch_gpu_backing_token *producer);
 void tgm_present_promise_released(uint32_t offset, uint32_t value);
 /* The stats' push profile (gpu_fenced.h "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
@@ -414,14 +437,17 @@ int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
 int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
-    uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-    uint32_t block_height_log2, void (*done)(void *, int), void *arg,
-    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
+				  uint32_t width, uint32_t height, uint64_t dst_va,
+				  uint32_t dst_pitch, uint32_t block_height_log2,
+				  void (*done)(void *, int), void *arg,
+				  const struct switch_gpu_backing_token *dependencies,
+				  uint32_t dependency_count);
 int tgm_present_outstanding(const void *arg);
 /* tgm_present_copy_dependencies with no job when exactly one GM20B producer is left to wait for: its own interrupt
  * pass completes the present (gpu_present.c tgm_present_pass). 1: not watchable, queue the job instead. */
 int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
-    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
+				   const struct switch_gpu_backing_token *dependencies,
+				   uint32_t dependency_count);
 void tgm_present_pass(void);
 /* SwitchGpuPresentFilter.cpp: the armed watch's token, read by the nonstall interrupt's primary filter
  * (tgm_present_filter); attached once armed, detached at its claim before its tokens drop and before done runs. */
@@ -452,8 +478,8 @@ void tgm_coherency_gpu_writes(uint32_t surface_id);
 void tgm_coherency_cleaned(struct tgm_coh *c);
 struct switch_gpu_backing;
 /* Success consumes the supplied surface reference; it keeps a parked tiled identity from being recycled. */
-int tgm_coherency_pin(struct tgm_coh *c, struct switch_gpu_backing *backing,
-    void *surface, void (*release_surface)(void *));
+int tgm_coherency_pin(struct tgm_coh *c, struct switch_gpu_backing *backing, void *surface,
+		      void (*release_surface)(void *));
 void tgm_coherency_put(struct tgm_coh *c);
 /* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). uid, seqno: the submission (channel
  * tgm_chan_uid, its fence seqno) that may have written it, which a CPU lock waits for. */
@@ -605,11 +631,13 @@ struct TegraGM20BAbiCopyResetReply;
 int tgm_copy_reset_call(const struct TegraGM20BAbiCopyReset *in,
 			struct TegraGM20BAbiCopyResetReply *reply);
 
-int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
-    int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-    uint32_t block_height_log2, void (*done)(void *, int), void *arg,
-    const struct tgm_present_read *reads, uint32_t nreads,
-    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
+				       uint32_t width, uint32_t height, uint64_t dst_va,
+				       uint32_t dst_pitch, uint32_t block_height_log2,
+				       void (*done)(void *, int), void *arg,
+				       const struct tgm_present_read *reads, uint32_t nreads,
+				       const struct switch_gpu_backing_token *dependencies,
+				       uint32_t dependency_count);
 
 #endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).

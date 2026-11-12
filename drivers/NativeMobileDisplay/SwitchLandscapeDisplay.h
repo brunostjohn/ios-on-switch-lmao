@@ -15,12 +15,11 @@ static constexpr unsigned kLandscapeQuietFrames = 120;
 
 // The UI's window words (DC_WIN 0x700 + i, DC_WINBUF 0x800 + i), WIN_OPTIONS moved last.
 static constexpr uint32_t kUiWindowWords[] = {
-    native_planes::kColorDepth,   native_planes::kByteSwap,    native_planes::kPosition,
-    native_planes::kSize,         native_planes::kPrescaled,   native_planes::kHInitialDda,
-    native_planes::kVInitialDda,  native_planes::kDdaIncrement, native_planes::kLineStride,
-    native_planes::kBufStride,    native_planes::kUvBufStride};
+    native_planes::kColorDepth, native_planes::kByteSwap,    native_planes::kPosition,    native_planes::kSize,
+    native_planes::kPrescaled,  native_planes::kHInitialDda, native_planes::kVInitialDda, native_planes::kDdaIncrement,
+    native_planes::kLineStride, native_planes::kBufStride,   native_planes::kUvBufStride};
 static constexpr uint32_t kUiBufferWords[] = {
-    native_planes::kStartAddr, native_planes::kStartAddrHi, native_planes::kStartAddrU, native_planes::kStartAddrHiU,
+    native_planes::kStartAddr, native_planes::kStartAddrHi, native_planes::kStartAddrU,  native_planes::kStartAddrHiU,
     native_planes::kHOffset,   native_planes::kVOffset,     native_planes::kSurfaceKind, native_planes::kCdeControl};
 
 // The overlay requests a latch waits for: during a change of mode, all three windows'.
@@ -45,7 +44,7 @@ bool landscapeHolds(PlaneSet &p)
         return true;
     }
     const uint64_t earlier = landscapeState.wanted ? (landscapeState.held.pendingSeq ? landscapeState.held.pendingSeq
-                                                                                    : landscapeState.held.seq)
+                                                                                     : landscapeState.held.seq)
                                                    : 0;
     const uint64_t own = p.pendingSeq ? p.pendingSeq : p.seq;
     if (earlier && (!own || earlier < own))
@@ -171,7 +170,8 @@ void landscapeMoveUi(Window from, Window to)
         dc[windowBase(to) + word] = static_cast<uint32_t>(dc[windowBase(from) + word]);
     for (const uint32_t word : kUiBufferWords)
         dc[bufferBase(to) + word] = static_cast<uint32_t>(dc[bufferBase(from) + word]);
-    dc[windowBase(to) + native_planes::kOptions] = static_cast<uint32_t>(dc[windowBase(from) + native_planes::kOptions]);
+    dc[windowBase(to) + native_planes::kOptions] =
+        static_cast<uint32_t>(dc[windowBase(from) + native_planes::kOptions]);
 }
 
 void landscapeRequest()

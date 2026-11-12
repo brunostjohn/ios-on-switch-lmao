@@ -10,7 +10,8 @@ void planeFenceWork()
     int error = kIOReturnAborted;
     while (!__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {
         error = count ? switch_gpu_bridge_fence(producers, count, native_legacy_gpu_complete, this)
-                                : pa ? tegra_gm20b_scanout_fence(this, pa) : -22;
+                : pa  ? tegra_gm20b_scanout_fence(this, pa)
+                      : -22;
         if (!count || error != -16)
             break;
         error = switch_gpu_bridge_wait_room();

@@ -15,9 +15,9 @@ static void present_channel_brief(struct tgm_chan *chan, int chid, char *buf, un
 		  chan->fault[0] ? " " : "", chan->fault, chan->id);
 }
 
-static const char *const watch_late_names[] = {"its interrupt was never asked for",
-					       "its interrupt is owed by the channel's owner",
-					       "its interrupt is queued", "its interrupt was due and never came"};
+static const char *const watch_late_names[] = {
+	"its interrupt was never asked for", "its interrupt is owed by the channel's owner",
+	"its interrupt is queued", "its interrupt was due and never came"};
 
 /* The watched producer finished (physical: its status) and the watch is still armed: where the interrupt the offer
  * asked for is (SwitchGpuQuiet.h). Queued behind work the GPU has not done: 0, and the deadline follows that work
@@ -66,11 +66,12 @@ static int watch_late(int physical, u64 age, struct tgm_chan **waited, u32 *seqn
 	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
 	    SWITCH_GPU_PRESENT_WATCH_ARMED)
 		return 1;
-	nvxnu_panic("tegra-gm20b: present watch lost %llu ms after the offer: producer uid %u fence %u "
-		    "(status %d): %s; interrupt after %u, %.16s fence %u, last pass at %u",
-		    age / 1000000, token->queue, (u32)token->value, physical, why, end,
-		    chan ? chan->owner : "-", chan ? tgm_chan_completed(chan) : 0,
-		    chan ? READ_ONCE(chan->progress_done) : 0);
+	nvxnu_panic(
+		"tegra-gm20b: present watch lost %llu ms after the offer: producer uid %u fence %u "
+		"(status %d): %s; interrupt after %u, %.16s fence %u, last pass at %u",
+		age / 1000000, token->queue, (u32)token->value, physical, why, end,
+		chan ? chan->owner : "-", chan ? tgm_chan_completed(chan) : 0,
+		chan ? READ_ONCE(chan->progress_done) : 0);
 }
 
 /* The watched promise's job never came: the promise is given up on (its writer reported), and the work item it goes to
@@ -88,7 +89,8 @@ static void promise_unkept(u64 age)
 	tgm_promise_abandon(promise.queue, (u32)promise.value);
 	switch_gpu_path_promise_direct(SWITCH_GPU_PATH_DIRECT_GIVEN_UP);
 	mutex_lock(&tgm_live_lock);
-	tgm_promise_abandoned_report(promise.queue, (u32)promise.value, "the display's direct present", age);
+	tgm_promise_abandoned_report(promise.queue, (u32)promise.value,
+				     "the display's direct present", age);
 	mutex_unlock(&tgm_live_lock);
 	mutex_unlock(&tgm_present.lock);
 }
@@ -111,7 +113,8 @@ void tgm_present_deadline(void *arg)
 	mutex_lock(&tgm_present.lock);
 	watch = __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE);
 	if ((!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
-	     watch != SWITCH_GPU_PRESENT_WATCH_ARMED && watch != SWITCH_GPU_PRESENT_WATCH_PROMISED) ||
+	     watch != SWITCH_GPU_PRESENT_WATCH_ARMED &&
+	     watch != SWITCH_GPU_PRESENT_WATCH_PROMISED) ||
 	    __atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) {
 		mutex_unlock(&tgm_present.lock);
 		return;
@@ -148,13 +151,15 @@ void tgm_present_deadline(void *arg)
 		}
 	} else if (pending.token.engine == SWITCH_GPU_ENGINE_GM20B) {
 		chan = live_by_uid(pending.token.queue);
-		if (chan && switch_gpu_present_pending_matches(&pending, chan->id, tgm_chan_completed(chan))) {
+		if (chan && switch_gpu_present_pending_matches(&pending, chan->id,
+							       tgm_chan_completed(chan))) {
 			waited = chan;
 			seqno = (u32)pending.token.value;
 		}
 	}
 	late = waited ? waited : tgm_present.chan;
-	if (tgm_hang_recover(late, "present", waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
+	if (tgm_hang_recover(late, "present", waited ? seqno : tgm_present.pending, age) !=
+	    TGM_HANG_STUCK) {
 		/* A wait on an unkept promise is struck again once it has been stuck for TGM_STUCK_NS, not a deadline later:
 		 * the second strike is the one that gives the promise up (TGM_PROMISE_FIRST_LOOK_NS). */
 		tgm_present.recheck = tgm_chan_waits_promise(late) ? TGM_STUCK_NS : TGM_PRESENT_NS;
@@ -172,7 +177,8 @@ void tgm_present_deadline(void *arg)
 	eng = nvkm_rd32(tgm_gpu.device, PFIFO_ENG_STATUS(0));
 	present_channel_brief(eng & PFIFO_ENG_ID_TSG ? NULL : live_by(0, PFIFO_ENG_ID(eng)),
 			      PFIFO_ENG_ID(eng), current_owner, sizeof(current_owner));
-	present_channel_brief(eng & PFIFO_ENG_NEXT_ID_TSG ? NULL : live_by(0, PFIFO_ENG_NEXT_ID(eng)),
+	present_channel_brief(eng & PFIFO_ENG_NEXT_ID_TSG ? NULL
+							  : live_by(0, PFIFO_ENG_NEXT_ID(eng)),
 			      PFIFO_ENG_NEXT_ID(eng), next_owner, sizeof(next_owner));
 	tgm_chan_describe(tgm_present.chan, state, sizeof(state));
 	nvxnu_panic("tegra-gm20b: present timeout %llums; typed %u pending %u:%u:%llu status %d "

@@ -29,14 +29,34 @@ namespace {
 int visible = 1;
 }  // namespace
 
-extern "C" void switch_gpu_backing_retain(switch_gpu_backing *b) { ++b->refs; }
-extern "C" void switch_gpu_backing_release(switch_gpu_backing *b) { --b->refs; }
-extern "C" void switch_gpu_backing_scanout(switch_gpu_backing *b, int add) { add ? ++b->holds : --b->holds; }
-extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *) { return visible; }
-extern "C" int switch_gpu_backing_promised(switch_gpu_backing *b) { return b ? b->promises : 0; }
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *b)
+{
+    ++b->refs;
+}
+
+extern "C" void switch_gpu_backing_release(switch_gpu_backing *b)
+{
+    --b->refs;
+}
+
+extern "C" void switch_gpu_backing_scanout(switch_gpu_backing *b, int add)
+{
+    add ? ++b->holds : --b->holds;
+}
+
+extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *)
+{
+    return visible;
+}
+
+extern "C" int switch_gpu_backing_promised(switch_gpu_backing *b)
+{
+    return b ? b->promises : 0;
+}
 
 namespace {
 struct OriginalLegacySwapRequest {};
+
 struct PlaneSet {
     bool fenced = false;
 };
@@ -45,10 +65,12 @@ struct NativeLegacyDisplay {
     static constexpr int kSlot0 = 4;
     static constexpr unsigned kSlots = 4;
     static constexpr bool stats = true;
+
     struct DirectSlot {
         SwitchNativeScanout *read = nullptr;
         uint64_t used = 0;
     };
+
     DirectSlot slots[kSlots];
     SwitchNativeScanout reads[kSlots];
     bool planeNextSet = false;
@@ -58,16 +80,38 @@ struct NativeLegacyDisplay {
     const OriginalLegacySwapRequest *flipRequest = nullptr;
     std::vector<int> presented;
     unsigned taken = 0, observed = 0;
+
     NativeLegacyDisplay()
     {
         for (unsigned k = 0; k < kSlots; ++k)
             slots[k].read = &reads[k];
     }
-    uint64_t planeNextAlsoWritten() const { return alsoWritten; }
-    bool planeFenced(const PlaneSet &p) const { return p.fenced; }
-    void noteTaken(const OriginalLegacySwapRequest *, uint64_t) { ++taken; }
-    void presentEntry(int entry) { presented.push_back(entry); }
-    void native_legacy_transfer_observed(IOReturn, const OriginalLegacySwapRequest *, uint64_t) { ++observed; }
+
+    uint64_t planeNextAlsoWritten() const
+    {
+        return alsoWritten;
+    }
+
+    bool planeFenced(const PlaneSet &p) const
+    {
+        return p.fenced;
+    }
+
+    void noteTaken(const OriginalLegacySwapRequest *, uint64_t)
+    {
+        ++taken;
+    }
+
+    void presentEntry(int entry)
+    {
+        presented.push_back(entry);
+    }
+
+    void native_legacy_transfer_observed(IOReturn, const OriginalLegacySwapRequest *, uint64_t)
+    {
+        ++observed;
+    }
+
 #include "../SwitchDirectVisibleDisplay.h"
 };
 
@@ -76,6 +120,7 @@ protected:
     NativeLegacyDisplay display;
     OriginalLegacySwapRequest request;
     switch_gpu_backing backing;
+
     void SetUp() override
     {
         visible = 1;

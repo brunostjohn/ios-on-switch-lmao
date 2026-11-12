@@ -40,8 +40,10 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 		for (uint32_t i = 0; i < backing->access_count; ++i) {
 			if (conflicts(backing->accesses[i].access, access) &&
 			    ((backing->accesses[i].access & kWrite)
-				? switch_gpu_backing_token_external_status(&backing->accesses[i].token)
-				: switch_gpu_backing_token_status(&backing->accesses[i].token)) == 0) {
+				     ? switch_gpu_backing_token_external_status(
+					       &backing->accesses[i].token)
+				     : switch_gpu_backing_token_status(
+					       &backing->accesses[i].token)) == 0) {
 				token = backing->accesses[i].token;
 				external = backing->accesses[i].access & kWrite;
 				break;
@@ -56,7 +58,8 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 		if (result)
 			return result;
 		IOLockUnlock(backing->lock);
-		result = external ? switch_gpu_backing_token_external_wait(&token) : ops->wait(&token);
+		result = external ? switch_gpu_backing_token_external_wait(&token)
+				  : ops->wait(&token);
 		const int settled = result >= 0 ? result
 				    : external  ? switch_gpu_backing_token_external_status(&token)
 						: ops->status(&token);
@@ -132,8 +135,8 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 		return -22;
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
-	const bool valid =
-		valid_range(backing, offset, bytes, access) && !(access & SWITCH_GPU_BACKING_PROMISED);
+	const bool valid = valid_range(backing, offset, bytes, access) &&
+			   !(access & SWITCH_GPU_BACKING_PROMISED);
 	int result = valid ? 0 : -22;
 	while (!result && cpu_conflicts(backing, access)) {
 		if (access & kAvoid)
@@ -147,8 +150,8 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 		held = true;
 		result = wait_locked(backing, access);
 	}
-	if (!result && (backing->dirty & SWITCH_GPU_BACKING_GPU_DIRTY) &&
-	    !(access & kNoCache) && !switch_gpu_backing_cpu_current_prepare_locked(backing))
+	if (!result && (backing->dirty & SWITCH_GPU_BACKING_GPU_DIRTY) && !(access & kNoCache) &&
+	    !switch_gpu_backing_cpu_current_prepare_locked(backing))
 		result = -12;
 	if (!result) {
 		const uint64_t size = uint64_t(backing->pages->count) << 12;
@@ -190,8 +193,8 @@ extern "C" int switch_gpu_backing_cpu_release(switch_gpu_backing *backing, uint6
 						 offset, bytes, 0);
 		if (!(access & kNoCache))
 			switch_gpu_backing_cpu_current_written_locked(backing, offset, bytes);
-		const bool current = !(access & kNoCache) &&
-			backing->cpu_current_content == backing->content;
+		const bool current =
+			!(access & kNoCache) && backing->cpu_current_content == backing->content;
 		++backing->content;
 		if (current)
 			backing->cpu_current_content = backing->content;
@@ -307,7 +310,8 @@ extern "C" int switch_gpu_backing_cpu_transfer_owned(switch_gpu_backing *backing
 		result = -12;
 	if (!result) {
 		if (backing->dirty & SWITCH_GPU_BACKING_GPU_DIRTY)
-			switch_gpu_backing_cpu_cache_locked(backing, 0, bytes, SWITCH_GPU_CACHE_INVALIDATE);
+			switch_gpu_backing_cpu_cache_locked(backing, 0, bytes,
+							    SWITCH_GPU_CACHE_INVALIDATE);
 		backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_GPU_DIRTY);
 		if (access & kWrite)
 			backing->dirty |= SWITCH_GPU_BACKING_CPU_DIRTY;

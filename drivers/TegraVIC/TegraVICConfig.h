@@ -335,14 +335,14 @@ static inline void tegra_vic_ideal_rgb709_full(const uint32_t ycc[3], uint32_t r
 // One surface as the engine sees it: plane addresses in VIC's (SMMU) address space and how far each may extend.
 typedef struct {
     const TegraVICFormat *format;
-    uint32_t width, height;  // pixels
+    uint32_t width, height;                // pixels
     uint32_t pitch[TEGRA_VIC_MAX_PLANES];  // bytes per row of each plane
     uint32_t rows[TEGRA_VIC_MAX_PLANES];   // rows each plane holds
     uint64_t base[TEGRA_VIC_MAX_PLANES];   // plane addresses
     uint64_t span[TEGRA_VIC_MAX_PLANES];   // bytes mapped from base[p] (the checker keeps every access inside)
-    uint32_t standard;       // TEGRA_VIC_YCC_* for the 4:2:0 formats
+    uint32_t standard;                     // TEGRA_VIC_YCC_* for the 4:2:0 formats
     uint32_t transfer, primaries;
-    uint32_t chromaSite;     // IOSurfaceAccelerator siting code 0..6 (0: unspecified)
+    uint32_t chromaSite;  // IOSurfaceAccelerator siting code 0..6 (0: unspecified)
     // Tegra block linear (16Bx2 sectors in 64Bx8 GOBs, 2^blockHeightLog2 GOBs a block: NVDEC writes blockHeightLog2
     // 1), as averne's FFmpeg nvtegra programs it on either side (SlotBlkKind, OutBlkKind GENERIC_16Bx2): pitch a whole
     // number of GOBs, each plane's rows whole blocks, `rows` the plane's aligned height (the engine reads and writes
@@ -567,7 +567,7 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
                          src->format->kind == dst->format->kind && src->standard == dst->standard &&
                          t->in.cbChannel == t->out.cbChannel;
     if (!copyYcc && ((dst->format->kind != TEGRA_VIC_KIND_RGB && dst->standard > TEGRA_VIC_YCC_2020) ||
-                    (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_2020)))
+                     (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_2020)))
         return "YCbCr matrix requires color conversion outside VIC's contract";
 
     if (!op->fill && ((src->transfer && dst->transfer && src->transfer != dst->transfer) ||

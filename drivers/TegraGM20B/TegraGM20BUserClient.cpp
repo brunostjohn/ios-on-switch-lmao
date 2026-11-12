@@ -56,8 +56,8 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||
 	    tgm_vm_kmap(vm_, fence_mem_, 4096, &fence_gpu_))
 		return false;
-	events_.attachWords(fence_va_, fence_gpu_, tgm_fence_offset(fence_va_), switch_gpu_fence_hold,
-			    switch_gpu_fence_put);
+	events_.attachWords(fence_va_, fence_gpu_, tgm_fence_offset(fence_va_),
+			    switch_gpu_fence_hold, switch_gpu_fence_put);
 	// the whole fence slot (gpu_internal.h TGM_FENCE_SLOT): one VM page
 	IOAddressRange range = {fence_pa_, static_cast<IOByteCount>(PAGE_SIZE)};
 	fence_view_ = IOMemoryDescriptor::withAddressRanges(
@@ -205,11 +205,11 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 			bo->wired->release();
 		}
 	}
-    if (bo->nativeView) {
-        switch_native_surface_gpu_release(bo->nativeView);
-        IODelete(bo->nativeView, switch_gpu_native_surface_view, 1);
-        bo->pas = nullptr;
-    }
+	if (bo->nativeView) {
+		switch_native_surface_gpu_release(bo->nativeView);
+		IODelete(bo->nativeView, switch_gpu_native_surface_view, 1);
+		bo->pas = nullptr;
+	}
 	if (bo->pas)
 		IODelete(bo->pas, uint64_t, bo->backing_pages);
 	switch_gpu_backing_release(bo->backing);
@@ -255,7 +255,8 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 				ret = slept ? kIOReturnNotResponding : kIOReturnBadArgument;
 			} else if (tgm_chan_error(chan)) {
 				ret = kIOReturnNotResponding;
-			} else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0) {
+			} else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >=
+				   0) {
 				ret = kIOReturnSuccess;
 				eventGeneration = eventChannels_[in->channel - 1].generation();
 			} else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns) {
@@ -409,12 +410,12 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 	tgm_info info;
 	tgm_get_info(&info);
 	uint32_t flags = static_cast<uint32_t>(TegraGM20BInfoHostImport) | TegraGM20BInfoKernelMap |
-		     TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
-		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
-		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
-		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
-		     TegraGM20BInfoCanonicalSurfaceLayout |
-		     TegraGM20BInfoPushFences;
+			 TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
+			 TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
+			 TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
+			 TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress |
+			 TegraGM20BInfoCpuPreserveDirty | TegraGM20BInfoCanonicalSurfaceLayout |
+			 TegraGM20BInfoPushFences;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
@@ -509,8 +510,10 @@ IOReturn AGXDeviceUserClient::externalCall(uint32_t selector, IOExternalMethodAr
 		   inSize == sizeof(TegraGM20BAbiEventObserve) && !outSize) {
 		ret = eventObserve(static_cast<const TegraGM20BAbiEventObserve *>(copy), arguments,
 				   asyncReference);
-	} else if (method == TegraGM20BMethodResourceObserve && inSize == sizeof(TegraGM20BAbiResourceObserve) && !outSize) {
-		ret = resourceObserve(static_cast<const TegraGM20BAbiResourceObserve *>(copy), arguments, asyncReference);
+	} else if (method == TegraGM20BMethodResourceObserve &&
+		   inSize == sizeof(TegraGM20BAbiResourceObserve) && !outSize) {
+		ret = resourceObserve(static_cast<const TegraGM20BAbiResourceObserve *>(copy),
+				      arguments, asyncReference);
 	} else {
 		ret = arguments->asyncReferenceCount ? kIOReturnBadArgument
 						     : run(method, inSize ? copy : nullptr, inSize,

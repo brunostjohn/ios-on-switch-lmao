@@ -15,8 +15,11 @@ bool presentNotDue(const OriginalLegacySwapRequest *request)
     memcpy(&requested, reinterpret_cast<const unsigned char *>(request) + swapRequestedPresentation, sizeof(requested));
     uint64_t horizon = 0;
     nanoseconds_to_absolutetime(kTimedPresentHorizonNs, &horizon);
-    const switch_timed_present::Clock clock = {mach_absolute_time(), mach_continuous_time(),
-                                               __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), vsyncInterval, horizon,
+    const switch_timed_present::Clock clock = {mach_absolute_time(),
+                                               mach_continuous_time(),
+                                               __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE),
+                                               vsyncInterval,
+                                               horizon,
                                                submittedAt(request)};
     const auto decision = switch_timed_present::decide(requested, clock);
     if (decision == switch_timed_present::Decision::Due)

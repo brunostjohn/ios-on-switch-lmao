@@ -647,11 +647,11 @@ int nvxnu_pool_setup(void)
 	for (unsigned long i = 0; i < pool_npages; i++)
 		pool_pages[i].pa = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
 	/* nothing zeroed them yet: the GPU's scrubber will (gpu_scrub.c "pool scrub") */
-    if (!zeroed)
-        bitmap_set(pool_dirty, 0, pool_npages);
-    switch_gpu_pool_remember(&pool_extents, 0, pool_npages, zeroed);
-    pool_clean_free = zeroed ? pool_npages : 0;
-    return 0;
+	if (!zeroed)
+		bitmap_set(pool_dirty, 0, pool_npages);
+	switch_gpu_pool_remember(&pool_extents, 0, pool_npages, zeroed);
+	pool_clean_free = zeroed ? pool_npages : 0;
+	return 0;
 }
 
 /* Cold kernel allocations retain a CPU clear path before the CE scrubber is available. */
@@ -836,7 +836,8 @@ int nvxnu_pool_alloc_chunks(unsigned long count, unsigned long long *pas)
 	spin_lock(&pool_lock);
 	dirty = tgm_comp_pick_chunks(pool_map, pool_dirty, pool_npages, (uint32_t)count, pas);
 	if (dirty > 0 || count > pool_clean_free / TGM_COMP_PAGES ||
-	    pool_clean_free - count * TGM_COMP_PAGES < SWITCH_GPU_POOL_CONTROL_READY_BYTES / PAGE_SIZE)
+	    pool_clean_free - count * TGM_COMP_PAGES <
+		    SWITCH_GPU_POOL_CONTROL_READY_BYTES / PAGE_SIZE)
 		dirty = -ENOMEM;
 	for (i = 0; dirty >= 0 && i < count; i++) {
 		switch_gpu_pool_claim(&pool_extents, pas[i] * TGM_COMP_PAGES, TGM_COMP_PAGES);
@@ -879,9 +880,9 @@ unsigned long nvxnu_pool_claim_dirty(unsigned long max_bytes, unsigned long long
 		while (n < max && first + n < pool_npages && test_bit(first + n, pool_dirty) &&
 		       !test_bit(first + n, pool_map))
 			n++;
-        switch_gpu_pool_claim(&pool_extents, first, n);
-	bitmap_set(pool_map, first, n);
-	pool_used += n;
+		switch_gpu_pool_claim(&pool_extents, first, n);
+		bitmap_set(pool_map, first, n);
+		pool_used += n;
 	}
 	spin_unlock(&pool_lock);
 	if (!n)

@@ -168,15 +168,18 @@ bool ExecSurfaces::validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes, bo
 	const auto *uses =
 		reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(pushes + in->push_count);
 	for (uint32_t i = 0; i < in->surface_count; i++) {
-		const uint32_t allowed = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite |
-					 (addressed ? uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRange) : 0u) |
-					 ((in->surface_flags & TegraGM20BSubmitVisibilityExplicit)
-						  ? uint32_t(TegraGM20BSurfaceHostWritten)
-						  : 0u);
+		const uint32_t allowed =
+			TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite |
+			(addressed ? uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRange)
+				   : 0u) |
+			((in->surface_flags & TegraGM20BSubmitVisibilityExplicit)
+				 ? uint32_t(TegraGM20BSurfaceHostWritten)
+				 : 0u);
 		const bool ranged = uses[i].access & TegraGM20BSurfaceRange;
 		if (!(uses[i].access & (TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite)) ||
 		    (ranged ? !(uses[i].access & TegraGM20BSurfaceGpuAddress) || !uses[i].reserved
-		            : uses[i].reserved != 0) || (uses[i].access & ~allowed))
+			    : uses[i].reserved != 0) ||
+		    (uses[i].access & ~allowed))
 			return false;
 	}
 	return true;

@@ -165,8 +165,9 @@ extern "C" int switch_gpu_backing_admission_ready(switch_gpu_backing *backing, u
 	if (!backing || !(access & accessMask) || (access & ~accessMask))
 		return -22;
 	IOLockLock(backing->lock);
-	const bool ready = !backing->cpu_writers && (!(access & SWITCH_GPU_BACKING_WRITE) ||
-						     !switch_gpu_backing_exclusive_readers(backing));
+	const bool ready =
+		!backing->cpu_writers && (!(access & SWITCH_GPU_BACKING_WRITE) ||
+					  !switch_gpu_backing_exclusive_readers(backing));
 	IOLockUnlock(backing->lock);
 	return ready ? 1 : 0;
 }
@@ -178,7 +179,8 @@ extern "C" int switch_gpu_backing_conversion_ready(switch_gpu_backing *backing, 
 	IOLockLock(backing->lock);
 	const bool ready = !backing->cpu_writers && !backing->gpu_admission_writers &&
 			   (!(access & SWITCH_GPU_BACKING_WRITE) ||
-			    (!switch_gpu_backing_exclusive_readers(backing) && !backing->gpu_admission_readers));
+			    (!switch_gpu_backing_exclusive_readers(backing) &&
+			     !backing->gpu_admission_readers));
 	IOLockUnlock(backing->lock);
 	return ready ? 1 : 0;
 }

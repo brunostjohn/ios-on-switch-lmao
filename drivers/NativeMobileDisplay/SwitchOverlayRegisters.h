@@ -100,8 +100,7 @@ void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool 
     }
     const Image &m = p.image;
     // CSC is live rather than shadowed; an incompatible active matrix is converted by VIC before admission.
-    if (m.yuv && !live &&
-        (planeCscOf(w)[0] != static_cast<int>(m.matrix) || planeCscOf(w)[1] != (m.fullRange ? 1 : 0)))
+    if (m.yuv && !live && (planeCscOf(w)[0] != static_cast<int>(m.matrix) || planeCscOf(w)[1] != (m.fullRange ? 1 : 0)))
         planeWriteCsc(w, m);
     if (!planeFiltersOf(w) && !live)
         planeStartWindowRegisters(w);
@@ -248,4 +247,3 @@ void planeFlipOnly(const PlaneSet &p)
     dc[kDcStateControl] = update;
     dc[kDcStateControl] = request;
 }
-

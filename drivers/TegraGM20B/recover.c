@@ -248,7 +248,8 @@ int tgm_recover_copy_reset(int chid, void (*mark)(void), uint32_t *status)
 			mark();
 			mutex_lock(&runl->mutex);
 			if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), chid)) {
-				tgm_engine_reset_locked(runl, engn, chid, "busy (HW Test) with kernel");
+				tgm_engine_reset_locked(runl, engn, chid,
+							"busy (HW Test) with kernel");
 				__atomic_fetch_add(&ctxsw.redone, 1, __ATOMIC_RELAXED);
 				reset = 1;
 			}
@@ -292,9 +293,9 @@ static void ctxsw_work(void *arg)
 			else if (tgm_engine_load_stuck(status))
 				verdict = tgm_ctxsw_load_decide(id, engn->engine->subdev.name);
 			else
-				verdict = tgm_ctxsw_decide(
-					id, engn->engine->subdev.name,
-					engn->engine->subdev.type == NVKM_ENGINE_GR);
+				verdict = tgm_ctxsw_decide(id, engn->engine->subdev.name,
+							   engn->engine->subdev.type ==
+								   NVKM_ENGINE_GR);
 			switch (verdict) {
 			case TGM_CTXSW_KILL:
 				stuck |= BIT((u32)engn->id);

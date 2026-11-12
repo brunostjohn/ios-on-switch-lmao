@@ -119,7 +119,9 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 			  (cpu && switch_gpu_backing_promise_pending_locked(backing))))
 		switch_gpu_backing_sleep_promised_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
-		backing->cpu_readers == UINT32_MAX ? -16 : 0;
+				     backing->cpu_readers == UINT32_MAX
+			     ? -16
+			     : 0;
 	int pending = 0;
 	if (!result && backing->promise_count) {
 		pending = switch_gpu_backing_promises_locked(backing, 0, 0, promises, capacity);
@@ -198,8 +200,8 @@ extern "C" int switch_gpu_backing_snapshot_read_promises(switch_gpu_backing *bac
 							 uint32_t capacity)
 {
 	uint32_t promised = 0;
-	const int result =
-		snapshot_read(backing, producer, out, true, true, false, promises, capacity, &promised);
+	const int result = snapshot_read(backing, producer, out, true, true, false, promises,
+					 capacity, &promised);
 	return result ? result : int(promised);
 }
 
@@ -233,7 +235,8 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
 	const bool write = access == SWITCH_GPU_BACKING_WRITE;
 	int result = 0;
 	while (backing->cpu_writers || backing->gpu_admission_writers ||
-	       (write && (switch_gpu_backing_exclusive_readers(backing) || backing->gpu_admission_readers))) {
+	       (write && (switch_gpu_backing_exclusive_readers(backing) ||
+			  backing->gpu_admission_readers))) {
 		if (avoid) {
 			result = -16;
 			break;

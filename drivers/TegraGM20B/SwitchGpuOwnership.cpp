@@ -27,24 +27,34 @@ void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token)
 
 void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count)
 {
-    uint32_t sorted = 1;
-    while (sorted < count && uses[sorted - 1].backing->id <= uses[sorted].backing->id)
-        ++sorted;
-    if (sorted >= count)
-        return;
-    const auto swap = [&](uint32_t a, uint32_t b) {
-        const auto value = uses[a]; uses[a] = uses[b]; uses[b] = value;
-    };
-    const auto sift = [&](uint32_t root, uint32_t end) {
-        while (root < end / 2) {
-            uint32_t child = root * 2 + 1;
-            if (child + 1 < end && uses[child].backing->id < uses[child + 1].backing->id) ++child;
-            if (uses[root].backing->id >= uses[child].backing->id) break;
-            swap(root, child); root = child;
-        }
-    };
-    for (uint32_t root = count / 2; root; --root) sift(root - 1, count);
-    for (uint32_t end = count; end > 1; --end) { swap(0, end - 1); sift(0, end - 1); }
+	uint32_t sorted = 1;
+	while (sorted < count && uses[sorted - 1].backing->id <= uses[sorted].backing->id)
+		++sorted;
+	if (sorted >= count)
+		return;
+	const auto swap = [&](uint32_t a, uint32_t b) {
+		const auto value = uses[a];
+		uses[a] = uses[b];
+		uses[b] = value;
+	};
+	const auto sift = [&](uint32_t root, uint32_t end) {
+		while (root < end / 2) {
+			uint32_t child = root * 2 + 1;
+			if (child + 1 < end &&
+			    uses[child].backing->id < uses[child + 1].backing->id)
+				++child;
+			if (uses[root].backing->id >= uses[child].backing->id)
+				break;
+			swap(root, child);
+			root = child;
+		}
+	};
+	for (uint32_t root = count / 2; root; --root)
+		sift(root - 1, count);
+	for (uint32_t end = count; end > 1; --end) {
+		swap(0, end - 1);
+		sift(0, end - 1);
+	}
 }
 
 namespace
@@ -143,7 +153,8 @@ bool reads_promised(const switch_gpu_backing &backing, const switch_gpu_backing_
 }
 
 // What a committed read reads: the backing's content after the promised writes it orders behind, else 0 (the current).
-uint64_t read_content(const switch_gpu_backing_transaction &transaction, const switch_gpu_backing &backing)
+uint64_t read_content(const switch_gpu_backing_transaction &transaction,
+		      const switch_gpu_backing &backing)
 {
 	if (!transaction.promised || !backing.promise_count)
 		return 0;
@@ -184,7 +195,8 @@ int reserve_access(switch_gpu_backing *backing)
 // waits for CPU holders to leave. With neither, the job takes no global lock for it.
 bool sweep_wanted(const switch_gpu_backing_use *uses, uint32_t count)
 {
-	if (__atomic_load_n(&switch_gpu_cpu_sleepers, __ATOMIC_ACQUIRE) || switch_gpu_ready_waiting())
+	if (__atomic_load_n(&switch_gpu_cpu_sleepers, __ATOMIC_ACQUIRE) ||
+	    switch_gpu_ready_waiting())
 		return true;
 	for (uint32_t i = 0; i < count; ++i)
 		if (__atomic_load_n(&uses[i].backing->cpu_readers, __ATOMIC_RELAXED) ||
@@ -213,10 +225,11 @@ bool uses_intact(const switch_gpu_backing_transaction *transaction, const char *
 	if (!transaction->uses_check ||
 	    uses_digest(transaction->uses, transaction->count) == transaction->uses_check)
 		return true;
-	IOLog("SwitchGpu: engine %u queue %u job %llu: its %u uses changed between begin and %s (the caller's array went "
+	IOLog("SwitchGpu: engine %u queue %u job %llu: its %u uses changed between begin and %s "
+	      "(the caller's array went "
 	      "away); nothing is recorded or unlocked\n",
-	      transaction->completion.engine, transaction->completion.queue, transaction->completion.value,
-	      transaction->count, step);
+	      transaction->completion.engine, transaction->completion.queue,
+	      transaction->completion.value, transaction->count, step);
 	return false;
 #else
 	(void)transaction, (void)step;
@@ -310,7 +323,8 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 				continue;
 			++matched_leases;
 			auto &owners = lease->access & SWITCH_GPU_BACKING_WRITE ? writers : readers;
-			if ((lease->producer.engine && (uses[i].access & SWITCH_GPU_BACKING_WRITE)) ||
+			if ((lease->producer.engine &&
+			     (uses[i].access & SWITCH_GPU_BACKING_WRITE)) ||
 			    ++owned > 1 || !owners ||
 			    !(lease->access & SWITCH_GPU_BACKING_CPU_NO_CACHE) || lease->offset ||
 			    lease->bytes != (uint64_t(backing->pages->count) << 12))
@@ -339,10 +353,10 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 		if (result)
 			break;
 		++transaction->prepared;
-        if (uses[i].access & SWITCH_GPU_BACKING_WRITE)
-            result = switch_gpu_backing_writer_prepare_locked(backing, *completion);
-        if (result)
-            break;
+		if (uses[i].access & SWITCH_GPU_BACKING_WRITE)
+			result = switch_gpu_backing_writer_prepare_locked(backing, *completion);
+		if (result)
+			break;
 		if (backing->dirty & SWITCH_GPU_BACKING_CPU_DIRTY) {
 			transaction->host_written = 1;
 			switch_gpu_backing_cache(
@@ -422,12 +436,15 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 		for (uint32_t j = 0; j < use.backing->access_count; ++j) {
 			auto &access = use.backing->accesses[j];
 			if (((access.access & SWITCH_GPU_BACKING_UNLISTED) && !follows_unlisted) ||
-			    !conflicts(access.access, use.access) || reads_promised(*use.backing, access))
+			    !conflicts(access.access, use.access) ||
+			    reads_promised(*use.backing, access))
 				continue;
-			const bool external = (access.access & SWITCH_GPU_BACKING_WRITE) &&
+			const bool external =
+				(access.access & SWITCH_GPU_BACKING_WRITE) &&
 				transaction->completion.engine != SWITCH_GPU_ENGINE_GM20B;
-			const int status = external ? switch_gpu_backing_token_external_status(&access.token) :
-				switch_gpu_backing_token_status(&access.token);
+			const int status =
+				external ? switch_gpu_backing_token_external_status(&access.token)
+					 : switch_gpu_backing_token_status(&access.token);
 			if (status < 0)
 				switch_gpu_backing_note_failure_locked(use.backing, access, status);
 			if (status != 0 ||
@@ -452,10 +469,12 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 }
 
 extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transaction *transaction,
-						       switch_gpu_backing_token *out, uint32_t capacity,
-						       uint32_t *needed, uint32_t own_first, uint32_t own_end)
+						       switch_gpu_backing_token *out,
+						       uint32_t capacity, uint32_t *needed,
+						       uint32_t own_first, uint32_t own_end)
 {
-	if (!transaction || !needed || *needed > capacity || transaction->locked != transaction->count)
+	if (!transaction || !needed || *needed > capacity ||
+	    transaction->locked != transaction->count)
 		return -22;
 	transaction->promised = 1;
 	transaction->promise_first = own_first;
@@ -466,13 +485,13 @@ extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transa
 		if (!backing->promise_count)
 			continue;
 		const uint32_t at = *needed + extra;
-		const int pending = switch_gpu_backing_promises_locked(backing, own_first, own_end,
-								       at < capacity ? out + at : nullptr,
-								       at < capacity ? capacity - at : 0);
+		const int pending = switch_gpu_backing_promises_locked(
+			backing, own_first, own_end, at < capacity ? out + at : nullptr,
+			at < capacity ? capacity - at : 0);
 		// past the room, the count alone: the caller grows by it, as for switch_gpu_backing_dependencies
 		extra += pending >= 0 ? uint32_t(pending)
-				      : uint32_t(switch_gpu_backing_promises_locked(backing, own_first, own_end,
-										   nullptr, 0));
+				      : uint32_t(switch_gpu_backing_promises_locked(
+						backing, own_first, own_end, nullptr, 0));
 	}
 	*needed += extra;
 	if (*needed > capacity)
@@ -490,18 +509,21 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 		auto *backing = transaction->uses[i].backing;
 		const uint32_t access = access_kind(transaction->uses[i].access);
 		if (transaction->completion.engine == SWITCH_GPU_ENGINE_GM20B &&
-		    backing->host_visible_epoch != backing->host_epoch && !backing->host_acquire.engine) {
+		    backing->host_visible_epoch != backing->host_epoch &&
+		    !backing->host_acquire.engine) {
 			if (!switch_gpu_backing_token_retain(&transaction->completion)) {
 				backing->host_acquire = transaction->completion;
 				backing->host_acquire_epoch = backing->host_epoch;
 			}
 		}
 		const uint32_t slot = access_slot(backing, transaction->completion, access);
-		uint64_t content = access & SWITCH_GPU_BACKING_WRITE ? backing->content + 1
-								     : read_content(*transaction, *backing);
+		uint64_t content = access & SWITCH_GPU_BACKING_WRITE
+					   ? backing->content + 1
+					   : read_content(*transaction, *backing);
 		if (slot < backing->access_count) {
 			// a later read on the same timeline runs after the earlier one, so after what that one waits for
-			if (!(access & SWITCH_GPU_BACKING_WRITE) && backing->accesses[slot].content > content)
+			if (!(access & SWITCH_GPU_BACKING_WRITE) &&
+			    backing->accesses[slot].content > content)
 				content = backing->accesses[slot].content;
 			switch_gpu_backing_drop_token(backing->accesses[slot].token);
 		} else {
@@ -509,7 +531,7 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 		}
 		backing->accesses[slot] = {transaction->completion, content, access, false};
 		if (access & SWITCH_GPU_BACKING_WRITE) {
-            switch_gpu_backing_writer_commit_locked(backing, transaction->completion);
+			switch_gpu_backing_writer_commit_locked(backing, transaction->completion);
 			++backing->content;
 			if (transaction->completion.engine != SWITCH_GPU_ENGINE_GM20B)
 				++backing->host_epoch;
@@ -524,23 +546,26 @@ extern "C" void switch_gpu_backing_abort(switch_gpu_backing_transaction *transac
 	if (!transaction || !uses_intact(transaction, "abort"))
 		return;
 	while (transaction->prepared) {
-        switch_gpu_backing_writer_abort_locked(transaction->uses[transaction->prepared - 1].backing);
+		switch_gpu_backing_writer_abort_locked(
+			transaction->uses[transaction->prepared - 1].backing);
 		switch_gpu_backing_drop_token(transaction->completion);
 		--transaction->prepared;
 	}
 	unlock_transaction(transaction);
 }
 
-int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing, const switch_gpu_backing_token *jobs,
-				    uint32_t count, uint32_t access)
+int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing,
+				    const switch_gpu_backing_token *jobs, uint32_t count,
+				    uint32_t access)
 {
 	const uint32_t kind = access_kind(access);
 	for (uint32_t i = 0; i < count; ++i) {
 		const auto &job = jobs[i];
 		const auto *ops = switch_gpu_backing_engine_ops(job.engine);
 		// A finished writer whose bytes may still be in the GPU L2 stays a user, as commit keeps it.
-		const int settled = kind & SWITCH_GPU_BACKING_WRITE ? switch_gpu_backing_token_external_status(&job)
-								    : switch_gpu_backing_token_status(&job);
+		const int settled = kind & SWITCH_GPU_BACKING_WRITE
+					    ? switch_gpu_backing_token_external_status(&job)
+					    : switch_gpu_backing_token_status(&job);
 		if (!ops || settled != 0)
 			continue;
 		const uint32_t slot = access_slot(backing, job, kind);

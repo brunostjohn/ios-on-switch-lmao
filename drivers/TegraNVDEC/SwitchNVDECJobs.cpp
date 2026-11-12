@@ -39,6 +39,7 @@ struct Submission {
     uint32_t *words = nullptr;
     uint32_t useCount = 0;
 };
+
 bool gCancelling, gRecovered, gRecoveredReady;  // a stalled job's cancellation (TegraNVDECCancel.cpp)
 
 using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_NVDEC>;
@@ -520,9 +521,8 @@ extern "C" int switch_nvdec_token_filter_status(const switch_gpu_backing_token *
         if (__atomic_load_n(&job.sequence, __ATOMIC_ACQUIRE) != token->value)
             continue;
         const auto *semantics = __atomic_load_n(&job.semantics, __ATOMIC_ACQUIRE);
-        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1)
-                   ? 1
-                   : 0;
+        return Stages::fenceReached(slot) && (!semantics || switch_gpu_event_waits_settled_status(semantics) == 1) ? 1
+                                                                                                                   : 0;
     }
     return 0;
 }

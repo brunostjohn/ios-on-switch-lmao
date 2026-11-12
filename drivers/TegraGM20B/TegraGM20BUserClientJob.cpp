@@ -47,10 +47,11 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 		    (access & ~uint32_t(kAccess | TegraGM20BSurfaceGpuAddress)))
 			return kIOReturnBadArgument;
 		const Bo *bo = access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
-								     : findBo(uses[i].handle);
+								    : findBo(uses[i].handle);
 		if (!bo)
 			return kIOReturnBadArgument;
-		if (!bo->backing || bo->surface || bo->nativeView || bo->representation || bo->readOnly)
+		if (!bo->backing || bo->surface || bo->nativeView || bo->representation ||
+		    bo->readOnly)
 			uses[i].access = 0;
 		else
 			members[count++] = {bo->backing, access & kAccess, 0};
@@ -64,16 +65,16 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 		return kIOReturnNoResources;
 	switch_gpu_resource_set *made = nullptr;
 	if (!sets_[index]) {
-		const int created =
-			switch_gpu_set_create(fence_va_ + TegraGM20BSetGenerationWord + index, &made);
+		const int created = switch_gpu_set_create(
+			fence_va_ + TegraGM20BSetGenerationWord + index, &made);
 		if (created)
 			return ioreturn(created);
 	}
 	uint32_t generation = 0;
 	for (;;) {
 		switch_gpu_backing *refused = nullptr;
-		const int attached = switch_gpu_set_attach(made ? made : sets_[index], members, count,
-							   &generation, &refused);
+		const int attached = switch_gpu_set_attach(made ? made : sets_[index], members,
+							   count, &generation, &refused);
 		if (!attached)
 			break;
 		if (!refused) {
@@ -90,8 +91,9 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 		}
 		count = kept;
 		for (uint32_t i = 0; i < in->count; ++i) {
-			const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
-										  : findBo(uses[i].handle);
+			const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress
+					       ? findAddress(uses[i].handle)
+					       : findBo(uses[i].handle);
 			if (uses[i].access && bo && bo->backing == refused)
 				uses[i].access = 0;
 		}

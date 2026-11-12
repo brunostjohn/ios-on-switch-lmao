@@ -560,12 +560,12 @@ void tgm_rail_up_locked(const void *site)
 	__atomic_store_n(&tgm_gpu.railed, 0, __ATOMIC_SEQ_CST);
 	tgm_deadline_resume();
 	if (TGM_STATS) {
-	if (site) {
-		if (!tgm_rail_ups.demand++)
-			tgm_rail_ups.first_site = site;
-	} else {
-		tgm_rail_ups.display++;
-	}
+		if (site) {
+			if (!tgm_rail_ups.demand++)
+				tgm_rail_ups.first_site = site;
+		} else {
+			tgm_rail_ups.display++;
+		}
 	}
 
 	/* the first site as an offset from tgm_stage: KASLR-free, resolved against the kernel's symbols */

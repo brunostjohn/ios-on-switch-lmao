@@ -264,8 +264,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 			ret = tgm_present_copy_read_dependencies(
 				source, copy->sourceStride, blockLog2, copy->width, copy->height,
 				target, copy->targetPitch, copy->blockHeightLog2,
-				SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, reads, nreads,
-				gPresentSnapshot.tokens, gPresentSnapshot.count);
+				SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, reads,
+				nreads, gPresentSnapshot.tokens, gPresentSnapshot.count);
 		if (ret && nreads)
 			tgm_readback_refused();
 #else
@@ -315,10 +315,9 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 		gPresentSnapshot.display = display;
 		gPresentSnapshot.done = presentDone;
 		// No copy (dst_va 0): only the acquires on the surface's producer and the fence; nothing of it is mapped.
-		ret = tgm_present_copy_dependencies(0, 0, -1, 1, 1, 0, 0, 0,
-						    SwitchGpuScanoutSnapshot::complete,
-						    &gPresentSnapshot, gPresentSnapshot.tokens,
-						    gPresentSnapshot.count);
+		ret = tgm_present_copy_dependencies(
+			0, 0, -1, 1, 1, 0, 0, 0, SwitchGpuScanoutSnapshot::complete,
+			&gPresentSnapshot, gPresentSnapshot.tokens, gPresentSnapshot.count);
 	}
 	if (ret && !presentBusy)
 		gPresentSnapshot.cancel();
@@ -343,5 +342,5 @@ extern "C" int tegra_gm20b_scanout_outstanding(const void *display)
 
 extern "C" bool switch_native_surface_gpu_ready(void)
 {
-    return true;
+	return true;
 }

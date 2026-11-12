@@ -391,8 +391,8 @@ static constexpr uint32_t kHDirection = 1u << 0, kVDirection = 1u << 2, kScanCol
 // line-counter latching, which tears); INT_STATUS WIN_B_UF_INT bit 9; MC TRANSLATION_ENABLE_0 display0b bit 3 (swgroup dc).
 static constexpr uint32_t kWinBBase = 0xd80, kWinbufBBase = 0xdc0, kWinABase = 0xb80;
 static constexpr uint32_t kWinCBase = 0xf80;
-static constexpr uint32_t kWinCActReq = 1u << 3, kWinCUpdate = 1u << 11,
-                          kWinCUnderflowInt = 1u << 10, kDisplay0cTranslation = 1u << 5;
+static constexpr uint32_t kWinCActReq = 1u << 3, kWinCUpdate = 1u << 11, kWinCUnderflowInt = 1u << 10,
+                          kDisplay0cTranslation = 1u << 5;
 static constexpr uint32_t kWinBActReq = 1u << 2, kWinBUpdate = 1u << 10, kWinBActHcntrSel = 1u << 4,
                           kWinCActHcntrSel = 1u << 6, kWinBUnderflowInt = 1u << 9, kDisplay0bTranslation = 1u << 3;
 // _di_winA_block: BLOCK | BLOCK_HEIGHT(4); the stride is the landscape line; H_OFFSET is the last byte of a line, where
@@ -1330,8 +1330,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         os_log(OS_LOG_DEFAULT,
                "SwitchFrames tickets since boot: accepted %llu shown %llu unshown %llu origin-unknown %llu "
                "deadline-unknown %llu deadline-missed %llu overflow %llu",
-               totals.accepted, totals.shown, totals.unshown, totals.unknownOrigin,
-               totals.unknownDeadline, totals.missedDeadline, totals.overflow);
+               totals.accepted, totals.shown, totals.unshown, totals.unknownOrigin, totals.unknownDeadline,
+               totals.missedDeadline, totals.overflow);
 #endif
     }
 
@@ -1768,8 +1768,9 @@ private:
         span("gpu-copy", stGpuCopy);
         add(" read %llu", static_cast<unsigned long long>(Span::ticksToUs(stRead)));
         add(") us mean/max; copy fast %u byte %u (cpu-copies %llu since boot) gpu %u (declined %u); vsync %u sent "
-            "%llu.%llu/s of %u vblanks,", stFast, stByte, copyFrames, stGpuCopies, stGpuDeclined, stVsyncs,
-            rate(stVsyncs) / 10, rate(stVsyncs) % 10, vblanks);
+            "%llu.%llu/s of %u vblanks,",
+            stFast, stByte, copyFrames, stGpuCopies, stGpuDeclined, stVsyncs, rate(stVsyncs) / 10, rate(stVsyncs) % 10,
+            vblanks);
         span("late", stVsyncLate);
         add(" us; %u gpu timeouts, %u new maps, %u underflow frames; attr source %#x target %#x", stGpuTimeouts,
             stNewMaps, stUnderflows, stSourceAttr,
@@ -3423,7 +3424,8 @@ public:
                 [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
                     static_cast<NativeLegacyDisplay *>(owner)->initializeScanout();
                     return kIOReturnSuccess;
-                }, this);
+                },
+                this);
         }
         if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
@@ -3920,7 +3922,7 @@ public:
 #if SWITCH_FRAME_TIMELINE
             const auto *ticket = frameInfo->tickets.find(request);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
-                  ticket ? ticket->swapId : 0, seqOf(request));
+                 ticket ? ticket->swapId : 0, seqOf(request));
 #endif
         }
         if (taken.submit && stats)
@@ -4390,8 +4392,7 @@ public:
             return;
         if (self->vicCopyLate())
             return;
-        const bool held = tegra_gm20b_scanout_outstanding(self) != 0 ||
-            self->planeFencePending;
+        const bool held = tegra_gm20b_scanout_outstanding(self) != 0 || self->planeFencePending;
         if (held)
             self->gpuDeadlines += 1;
         if (__atomic_load_n(&self->gpuDonePending, __ATOMIC_SEQ_CST) ||
@@ -4437,8 +4438,7 @@ public:
             dropLostFrame(request, directEntry);
             return;
         }
-        if (status &&
-            directEntry != kNoBuffer) {
+        if (status && directEntry != kNoBuffer) {
             releaseIdleDirectReads();  // the rendering never finished on the GPU: copy it on the CPU instead
             native_legacy_gpu_fallback_observed(status);
             untake(request);
@@ -4623,8 +4623,7 @@ public:
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FRAME_TICKET), ticket.id, ticket.swapId, ticket.take, ticket.gpu);
 #endif
         switch_frame_info::Frame frame;
-        if (frameInfo->pending.shown(seq, continuous, frame) &&
-            frameInfo->clients.any())
+        if (frameInfo->pending.shown(seq, continuous, frame) && frameInfo->clients.any())
             native_legacy_frame_info_notify(this, &frame);
     }
 
@@ -4749,7 +4748,6 @@ public:
         directAttached = directOn = latchRetire = true;
         return true;
     }
-
 
     // The display stops: the swgroup back to bypass, every slot given back.
     void stopDirect()
@@ -4968,7 +4966,7 @@ public:
 #if SWITCH_FRAME_TIMELINE
             const auto *ticket = frameInfo->tickets.find(request);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), ticket ? ticket->id : 0, ticket ? ticket->swapId : 0,
-                  ticket ? ticket->requested : 0, frameEnds);
+                 ticket ? ticket->requested : 0, frameEnds);
 #endif
             switch_sched_render_swapped();
             return;
@@ -5242,7 +5240,10 @@ public:
         return color->setAccessibilityScale(scale);
     }
 
-    void setEdrFactor(float factor) override { color->setEdrFactor(factor); }
+    void setEdrFactor(float factor) override
+    {
+        color->setEdrFactor(factor);
+    }
 
 #if SWITCH_IPSW_KIND_24B119
     IOReturn setProperties(OSObject *properties) override

@@ -35,7 +35,8 @@ struct Job {
 	uint32_t sequence;
 };
 
-constexpr SwitchGpuKqueueShape kShape = {"cached-scrub", TGM_FENCE_KERNEL_CACHED_ZERO, 1, kPushVa, 1, 0};
+constexpr SwitchGpuKqueueShape kShape = {
+	"cached-scrub", TGM_FENCE_KERNEL_CACHED_ZERO, 1, kPushVa, 1, 0};
 
 struct Queue {
 	IOLock *lock;
@@ -73,7 +74,8 @@ void retire(thread_call_param_t, thread_call_param_t)
 	uint32_t count = 0;
 	IOLockLock(queue.lock);
 	int failed = 0;
-	const uint32_t done = queue.space.channel ? tgm_chan_settled(queue.space.channel, &failed) : 0;
+	const uint32_t done =
+		queue.space.channel ? tgm_chan_settled(queue.space.channel, &failed) : 0;
 	for (auto &job : queue.jobs) {
 		if (!job.mapping || (!failed && int32_t(done - job.sequence) < 0))
 			continue;
@@ -208,8 +210,9 @@ int mapWindow(switch_gpu_cached_mapping *mapping)
 	mapping->mapped = true;
 	int result = tgm_mem_new(queue.space.vm, mapping->pages, mapping->count, &mapping->memory);
 	if (!result)
-		result = switch_gpu_vm_map_volatile(queue.space.vm, mapping->address, mapping->bytes,
-						    mapping->memory, 0, 0, 0, 1, &mapping->mapping);
+		result =
+			switch_gpu_vm_map_volatile(queue.space.vm, mapping->address, mapping->bytes,
+						   mapping->memory, 0, 0, 0, 1, &mapping->mapping);
 	if (result)
 		unmapWindow(mapping);
 	return result;
@@ -276,8 +279,11 @@ int switch_gpu_cached_zero(const uint64_t *pages, uint32_t count, void *cpu,
 		uint32_t *words = queue.space.words + slot * 32;
 		const tgm_push push = {
 			kPushVa + slot * 128,
-			tgm_relayout_clear(words, (*mapping)->address, uint64_t(count) * kPage), 0,
-			0, 0, 0};
+			tgm_relayout_clear(words, (*mapping)->address, uint64_t(count) * kPage),
+			0,
+			0,
+			0,
+			0};
 		uint32_t sequence = 0;
 		result = tgm_chan_exec(queue.space.channel, &push, 1, &sequence, nullptr);
 		if (!result) {

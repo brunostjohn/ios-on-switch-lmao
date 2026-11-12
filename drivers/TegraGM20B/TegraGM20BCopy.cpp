@@ -53,7 +53,8 @@ void discardSpace()
 bool openSpace()
 {
 	queue.dependencies = IONew(switch_gpu_backing_token, TegraGM20BMaxJobDependencies);
-	if (!queue.dependencies || !queue.authority.initialize() || !queue.space.openSpace(kShape, &queue)) {
+	if (!queue.dependencies || !queue.authority.initialize() ||
+	    !queue.space.openSpace(kShape, &queue)) {
 		discardSpace();
 		return false;
 	}
@@ -346,9 +347,10 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	const uint64_t destinationBytes =
 		to.tiled ? to.value.bytes : uint64_t(dst->pitch) * (rows - 1) + rowBytes;
 	if (!result)
-		result = switch_gpu_copy_mapping(
-			queue.space.vm, &queue.mappings, static_cast<IOMemoryDescriptor *>(src->memory),
-			src->offset, source, sourceOffset, sourceBytes, from.tiled, &job.source);
+		result = switch_gpu_copy_mapping(queue.space.vm, &queue.mappings,
+						 static_cast<IOMemoryDescriptor *>(src->memory),
+						 src->offset, source, sourceOffset, sourceBytes,
+						 from.tiled, &job.source);
 	if (!result)
 		result = switch_gpu_copy_mapping(queue.space.vm, &queue.mappings,
 						 static_cast<IOMemoryDescriptor *>(dst->memory),
@@ -369,7 +371,11 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 					   done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT};
 		const tgm_push push = {
 			PushVa + slot * Page,
-			tgm_copy_push(queue.space.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0, 0};
+			tgm_copy_push(queue.space.words + slot * (Page / 4), &copy, nullptr, 0),
+			0,
+			0,
+			0,
+			0};
 		result = submit(job, push, source, destination, ownership, events);
 		job.dwords = push.dwords;
 	}

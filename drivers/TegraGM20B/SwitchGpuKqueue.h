@@ -36,17 +36,20 @@ struct SwitchGpuKqueue {
 		uint32_t fenceOffset = 0;
 		if (!shape.pushPages || shape.pushPages > kMaxPages)
 			return false;
-		words = static_cast<uint32_t *>(tgm_pool_alloc(kPage * shape.pushPages, 0, &pushPa));
-		if (!words || tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, &fenceOffset) ||
+		words = static_cast<uint32_t *>(
+			tgm_pool_alloc(kPage * shape.pushPages, 0, &pushPa));
+		if (!words ||
+		    tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, &fenceOffset) ||
 		    tgm_vm_new(&vm))
 			return false;
 		tgm_vm_claim(vm, owner);
 		for (uint32_t i = 0; i < shape.pushPages; ++i)
 			pages[i] = pushPa + i * kPage;
 		if (tgm_mem_new(vm, pages, shape.pushPages, &push) ||
-		    switch_gpu_vm_map_volatile(vm, shape.pushVa, kPage * shape.pushPages, push, 0, 0,
-					       shape.pushReadOnly, 1, &pushMapping) ||
-		    tgm_mem_new(vm, &fencePage, 1, &fence) || tgm_vm_kmap(vm, fence, kPage, &fenceGpu))
+		    switch_gpu_vm_map_volatile(vm, shape.pushVa, kPage * shape.pushPages, push, 0,
+					       0, shape.pushReadOnly, 1, &pushMapping) ||
+		    tgm_mem_new(vm, &fencePage, 1, &fence) ||
+		    tgm_vm_kmap(vm, fence, kPage, &fenceGpu))
 			return false;
 		fenceGpu += fenceOffset;
 		return true;
@@ -64,11 +67,13 @@ struct SwitchGpuKqueue {
 	}
 
 	// The channel on an open space, made when there is none: 0, or the error making it.
-	int openChannel(const SwitchGpuKqueueShape &shape, const void *owner, void (*fenced)(void *))
+	int openChannel(const SwitchGpuKqueueShape &shape, const void *owner,
+			void (*fenced)(void *))
 	{
 		if (channel)
 			return 0;
-		const int result = tgm_chan_new_copy(vm, owner, fenceCpu, fenceGpu, shape.name, shape.high, &channel);
+		const int result = tgm_chan_new_copy(vm, owner, fenceCpu, fenceGpu, shape.name,
+						     shape.high, &channel);
 		if (!result && fenced)
 			tgm_chan_on_fence(channel, fenced, nullptr);
 		return result;

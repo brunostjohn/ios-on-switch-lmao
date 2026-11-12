@@ -81,7 +81,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_TRUE(kick.Has("if (!pd.uiNew) {"));
     EXPECT_TRUE(kick.Has("kickPlaneOnly(request, pd"));
     EXPECT_FALSE(kick.Has("+ 2624"));  // window A's surface is the effective UI layer, not layer 0's slot
-    const CodeText decide = Block(planes, "void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)");
+    const CodeText decide =
+        Block(planes, "void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)");
     EXPECT_TRUE(decide.Has("swapEffectiveSurfaces"));
     EXPECT_TRUE(decide.Has("native_planes::rolesOf("));
     // Window B goes out with window A in one UPDATE write and one ACT_REQ write.
@@ -95,7 +96,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_TRUE(frame.Has("beginPlaneRecovery("));
     EXPECT_TRUE(code.Has("if (status & kFrameEndInt) { planeFrameEnd(); landscapeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
-    EXPECT_TRUE(Block(source, "void startRotation(int target = kNoBuffer)").Has("entrySeq[target] = seqOf(flipRequest);"));
+    EXPECT_TRUE(
+        Block(source, "void startRotation(int target = kNoBuffer)").Has("entrySeq[target] = seqOf(flipRequest);"));
     EXPECT_TRUE(Block(source, "void checkRotation()").Has("retireThrough(entrySeq[asked], stamp);"));
     // Swaps wait while the plane probe covers the screen; a window B set out after planes went off never panics.
     EXPECT_TRUE(kick.Has("if (planeProbe.active()) {"));
@@ -106,9 +108,9 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const CodeText panic = Block(source, "void restorePitchOnPanic(const char *message)");
     EXPECT_EQ(panic.Count("dc[kWinBBase + native_planes::kOptions] = 0;"), 2u);
     // The limits Core Animation reads at the display's creation.
-    for (const char *key : {"IOMFBScalingLimits", "IOMFBMaxSrcPixels", "IOMFBNumLayers", "DisplayPipePlaneBaseAlignment",
-                            "RGBLayer_MinScaleFraction", "YUVLayer_MaxScale", "MaxSrcRectWidth", "MaxNumLayers",
-                            "PlaneBaseAlignmentLinear"})
+    for (const char *key : {"IOMFBScalingLimits", "IOMFBMaxSrcPixels", "IOMFBNumLayers",
+                            "DisplayPipePlaneBaseAlignment", "RGBLayer_MinScaleFraction", "YUVLayer_MaxScale",
+                            "MaxSrcRectWidth", "MaxNumLayers", "PlaneBaseAlignmentLinear"})
         EXPECT_TRUE(code.Has(std::string("\"") + key + "\""));
     // The gate: planes on and the IOSA quarter turns (transforms 4 and 7) proven.
     const CodeText gate = Block(source, "extern \"C\" bool native_legacy_detach_ready(void)");
@@ -230,8 +232,9 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
     const CodeText release(Configured(totals, "SWITCH_FRAME_TIMELINE", false));
     EXPECT_TRUE(debug.Has("switch_refusal_k(key, \"display\", \"plane-layout\","));
     EXPECT_FALSE(release.Has("switch_refusal_k(key, \"display\", \"plane-layout\","));
-    EXPECT_TRUE(release.Has("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
-                            "uint32_t, uint32_t) {}"));
+    EXPECT_TRUE(
+        release.Has("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
+                    "uint32_t, uint32_t) {}"));
 }
 
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
@@ -252,8 +255,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     EXPECT_TRUE(Block(source, "void startCopy(").Has("beginCopiedPlaneFence()"));
     EXPECT_TRUE(Block(source, "void copyFinished()").Has("copiedPixelsFinished()"));
     const CodeText only = Block(planes, "void kickPlaneOnly(");
-    EXPECT_TRUE(only.Before("native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow",
-                            "planeOut(p);"));
+    EXPECT_TRUE(only.Before(
+        "native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow", "planeOut(p);"));
     EXPECT_TRUE(only.Before("} else if (planeFence(p)) {", "transferred = true;"));
     const CodeText admission = Block(fence, "bool planeFence(const PlaneSet &p)");
     EXPECT_FALSE(admission.Has("switch_gpu_bridge_fence("));
@@ -265,8 +268,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     EXPECT_TRUE(Block(fence, "bool planeFenced(const PlaneSet &p) const").Has("planeOverlayWaits(*native)"));
     EXPECT_TRUE(Block(SourceText("../SwitchNativePlaneDisplay.h"), "static bool planeOverlayWaits(")
                     .Has("switch_gpu_backing_token_external_status"));
-    EXPECT_TRUE(Block(fence, "void finishPlaneFence(int status)").Before("if (status || !planesOn) {",
-                                                                        "planeOut(planeFencing);"));
+    EXPECT_TRUE(Block(fence, "void finishPlaneFence(int status)")
+                    .Before("if (status || !planesOn) {", "planeOut(planeFencing);"));
     EXPECT_TRUE(Block(source, "void finishGpuSwap(int status)")
                     .Has("if (gpuScanout && planeFencePending) { finishPlaneFence(status);"));
     EXPECT_TRUE(Block(fence, "uint64_t planeFencePa(const PlaneSet &p) const")

@@ -51,7 +51,10 @@ bool switch_host1x_fence_remove(struct switch_host1x_fence *fence);
 // that beats the filter leaves the threshold to the caller's ordinary fence. TEGRA_HOST1X_OK: armed (*handle cancels
 // it); SWITCH_HOST1X_FILTER_PASSED: the syncpoint is already there and fn never runs; TEGRA_HOST1X_ENOMEM: every
 // waiter is out; TEGRA_HOST1X_ENODEV while host1x is down. Thread context.
-enum { SWITCH_HOST1X_FILTER_PASSED = 1 };
+enum {
+    SWITCH_HOST1X_FILTER_PASSED = 1
+};
+
 typedef uint64_t switch_host1x_filter_handle;
 int switch_host1x_filter_wait(uint32_t syncpt, uint32_t threshold, void (*fn)(void *ctx), void *ctx,
                               switch_host1x_filter_handle *handle);
