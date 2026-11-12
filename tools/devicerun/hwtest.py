@@ -131,6 +131,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.semantic_fence',
             'gpu.path.shared_events',
             'gpu.path.resource_ready',
+            'gpu.path.lock_between_jobs',
             'gpu.path.submit_job',
             'gpu.path.relayout_history',
             'gpu.path.quiet_jobs',
