@@ -212,6 +212,7 @@ struct RMPass {
     } color[8];
 
     __unsafe_unretained id depth;
+    NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
     double clearDepth;
     uint32_t clearStencil;

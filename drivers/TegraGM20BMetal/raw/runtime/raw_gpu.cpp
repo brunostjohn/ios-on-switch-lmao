@@ -1893,7 +1893,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
 }
 
 bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled,
-                            Texture &t, const char **why)
+                            Texture &t, const char **why, uint32_t layers)
 {
     uint64_t bytes, align;
     *why = !zetaShape(width, height, format, 1, t, bytes, align) ? "a size or format the raw path renders no zeta of"
@@ -1902,7 +1902,8 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
            : m.blockDepth                                        ? "its image's blocks are deeper than one plane"
            : m.bpp != t.bpp                                      ? "its texel size is not the format's"
            : m.pitch < width * t.bpp || m.pitch % 64             ? "its row stride is not whole GOBs of its texels"
-           : m.bytes < m.layerBytes || uint64_t(m.pitch) * height > m.bytes ? "its image is smaller than its rows"
+           : m.bytes < m.layerBytes * layers || uint64_t(m.pitch) * height > m.bytes
+               ? "its image is smaller than its rows"
            : sampled && m.pitch != (width * t.bpp + 63) / 64 * 64
                ? "its row stride is not the one a texture header implies"
                : nullptr;
@@ -1913,8 +1914,9 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
     t.pitch = m.pitch;
     t.blockHeight = m.blockHeight;
     t.layerBytes = m.layerBytes;
+    t.layers = layers;
     t.comptags = m.compressed;
-    if (!sampled)
+    if (!sampled || layers > 1)
         return true;
     if (!(t.tic = allocTic())) {
         *why = "no texture header is left";
@@ -3465,9 +3467,10 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
-    // (raw_zcull.h's region is one plane's: a layered zeta keeps zcull off)
+    // (raw_zcull.h's region is one plane's: an array's zeta, or a layer of one, keeps zcull off)
     e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth && layers == 1;
+                         pass.depthStencil.clearDepth && layers == 1 && zeta->layers <= 1 &&
+                         (!zeta->storage.va || zeta->va == zeta->storage.va);
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)

@@ -338,6 +338,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
+    raw::Texture zetaPart;         // and its depth/stencil attachment's layer
 #if SWITCH_RAW_DIAGNOSTICS
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
@@ -551,6 +552,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
+                if (pass.depthSlice) {  // a layer of a 2D array or cube: its layers from there, layerBytes apart
+                    zetaPart = z->_raw;
+                    zetaPart.va += pass.depthSlice * z->_raw.layerBytes;
+                    zetaPart.layers -= uint32_t(pass.depthSlice);
+                    zetaPart.tic = 0;
+                    p.depthStencil.texture = &zetaPart;
+                }
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));

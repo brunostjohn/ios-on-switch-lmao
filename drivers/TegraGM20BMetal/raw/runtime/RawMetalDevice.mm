@@ -389,8 +389,10 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             z.blockDepth = m.z_log2;
             z.tiled = m.tiled;
             z.compressed = m.compressed;
+            const NSUInteger faces = d.textureType == MTLTextureTypeCube ? 6 : 1;
             t->_rawOk = gRM->raw->createZetaOver(z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                                 (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why);
+                                                 (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why,
+                                                 uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces));
         }
         if (!t->_rawOk)
             SWITCH_REFUSE_DETAIL("raw", "zeta.over", d.pixelFormat,

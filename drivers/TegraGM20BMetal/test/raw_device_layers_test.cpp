@@ -340,4 +340,39 @@ TEST_F(DeviceLayers, BlockCompressedTexturesOfLevelsAndLayersAreNilsImage)
     EXPECT_FALSE(dev.createBlockTexture(64, 64, 1, 1, kRGBA8, raw::fx::kTexTwoD, none)) << "not block-compressed";
 }
 
+TEST_F(DeviceLayers, ALayerOfADepthArrayIsItsZetaFromThere)
+{
+    constexpr uint32_t kDepth32Float = 252;
+    raw::Texture shape, zeta, cube, face;
+    uint64_t bytes = 0, align = 0;
+    ASSERT_TRUE(raw::zetaShape(32, 32, kDepth32Float, 1, shape, bytes, align));
+    raw::ZetaMemory m;
+    m.va = 0x7000000000;
+    m.bytes = shape.layerBytes * 6;
+    m.layerBytes = shape.layerBytes;
+    m.pitch = shape.pitch;
+    m.bpp = shape.bpp;
+    m.blockHeight = shape.blockHeight;
+    m.tiled = true;
+    const char *why = nullptr;
+    ASSERT_TRUE(dev.createZetaOver(m, 32, 32, kDepth32Float, true, zeta, &why, 6)) << why;
+    EXPECT_EQ(zeta.layers, 6u);
+    EXPECT_EQ(zeta.tic, 0u) << "an array's zeta is rendered, its samples m2v's";
+    ASSERT_TRUE(dev.createArray(32, 32, 6, kRGBA8, raw::fx::kTexCube, cube));
+    ASSERT_TRUE(raw::attachmentTarget(cube, 0, 2, face));
+    raw::Texture part = zeta;
+    part.va += 2 * zeta.layerBytes;
+    part.layers -= 2;
+    raw::PassDesc p = onto(face, 4);
+    p.depthStencil = {&part, true, false, 1.0f, 0};
+    const auto at = last(pass(p, none));
+    ASSERT_FALSE(at.empty());
+    EXPECT_EQ(at.at(NVB197_SET_ZT_B), uint32_t(m.va + 2 * zeta.layerBytes));
+    EXPECT_EQ(at.at(NVB197_SET_ZT_ARRAY_PITCH), uint32_t(zeta.layerBytes >> 2));
+    EXPECT_EQ(at.at(NVB197_SET_ZT_SIZE_C), 4u);
+    EXPECT_EQ(at.at(NVB197_SET_ZT_LAYER), 0u);
+    p.layers = 5;
+    EXPECT_TRUE(pass(p, none).empty()) << "past the zeta's layers";
+}
+
 }  // namespace

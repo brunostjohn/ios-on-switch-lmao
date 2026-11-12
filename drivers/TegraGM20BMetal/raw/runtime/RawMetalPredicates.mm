@@ -209,7 +209,8 @@ uint32_t arrayType(MTLTextureDescriptor *d)
 
 // A depth/stencil texture of a format the raw path renders (raw_zeta.h kZetaFormatInfo), one level, no rotation: memoryless, 2D
 // of one sample or 2D multisampled of 2 or 4; or stored (private), 2D of one sample, a render target that may also be sampled:
-// m2v's texture, which the raw path renders, samples and copies in place (one allocation for both drivers, NVK's image)
+// m2v's texture, which the raw path renders, samples and copies in place (one allocation for both drivers, NVK's image). A
+// stored 2D array or cube is rendered in place too, a slice at a time or layered (sampled by m2v)
 bool zetaDescriptor(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");
@@ -218,10 +219,11 @@ bool zetaDescriptor(MTLTextureDescriptor *d)
     const bool samples = d.textureType == MTLTextureType2D ? d.sampleCount <= 1
                                                            : d.textureType == MTLTextureType2DMultisample &&
                                                                  (d.sampleCount == 2 || d.sampleCount == 4);
-    const bool stored = d.storageMode == MTLStorageModePrivate && d.textureType == MTLTextureType2D &&
+    const bool layers = d.textureType == MTLTextureType2DArray || d.textureType == MTLTextureTypeCube;
+    const bool stored = d.storageMode == MTLStorageModePrivate && (d.textureType == MTLTextureType2D || layers) &&
                         (d.usage & ~MTLTextureUsageShaderRead) == MTLTextureUsageRenderTarget;
-    return samples && d.mipmapLevelCount <= 1 && d.arrayLength <= 1 && d.depth <= 1 && !turned &&
-           raw::zetaFormatIndex(uint32_t(d.pixelFormat)) < raw::kZetaFormats &&
+    return (samples || (layers && stored)) && d.mipmapLevelCount <= 1 && (d.arrayLength <= 1 || layers) &&
+           d.depth <= 1 && !turned && raw::zetaFormatIndex(uint32_t(d.pixelFormat)) < raw::kZetaFormats &&
            (d.storageMode == MTLStorageModeMemoryless || stored);
 }
 
