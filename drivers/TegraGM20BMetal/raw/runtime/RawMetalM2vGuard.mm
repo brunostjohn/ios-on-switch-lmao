@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
 // setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero, so
-// m2v draws without them), and a state the raw path made of tessellation, amplification, a dynamic attribute stride or a
-// stage-in kernel has no twin that draws it as Metal does. A range of a command buffer the raw path refused that holds
-// any of these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
+// m2v draws without them), a state the raw path made of tessellation, amplification, a dynamic attribute stride or a
+// stage-in kernel has no twin that draws it as Metal does, and the replay of indirect draw commands reads no range the GPU
+// wrote (replayCommands). A range of a command buffer the raw path refused that holds any of these never replays there:
+// the command buffer fails as Metal reports an error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
 
 namespace {
@@ -13,6 +14,10 @@ const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op)
     if (op == OpDrawPatches || op == OpDrawPatchesIndirect)
         return "a patch draw";
     const auto &plan = cb->_plan;
+    if (op == OpExecuteCommands && ([(__bridge RMIndirectCommandBuffer *)plan.draw(at).arguments kinds] & RMICBPatches))
+        return "indirect commands of patches";
+    if (op == OpExecuteCommands && plan.draw(at).indices)
+        return "an execute of indirect commands by a range the GPU reads";
     const raw::RenderStateRef &state = plan.renderStates[plan.draw(at).state];
     const raw::RasterState &raster = plan.raster[state.raster];
     if (raster.amplification[0] > 1)

@@ -22,6 +22,7 @@
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
 #include "raw_mme.h"
+#include "raw_icb.h"
 #include "raw_state_segment.h"
 #include "raw_replay_shape.h"
 #include "raw_split_reuse.h"
@@ -662,21 +663,39 @@ public:
     bool drawPatchesIndirect(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
                              const Buffer *pointIndices, uint64_t pointIndexOffset, const Buffer *arguments,
                              uint64_t offset, const char **why);
-    // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, drawn with the state they inherit
-    // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`), or with `range` the commands of the
-    // MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the buffer's). `written`: the GPU wrote some of the
-    // words, which the channel fetches after those writes land
+
+    // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, `slotWords` each, drawn with the
+    // state they inherit (`primitive` one of theirs: icb::kPatchPrimitive where they are patches; `indexed`: some draw
+    // indices), or with `range` the commands of the MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the
+    // buffer's), once per amplification of the encoder's. `buffers`: what the commands read (index buffers, patch commands'
+    // factors and indices). `written`: the GPU wrote some of the words, which the channel fetches after those writes land
     struct IcbExecute {
         const Buffer *slots;
-        uint32_t first, count;
+        uint32_t first, count, slotWords;
         const Buffer *range;
         uint64_t rangeOffset;
         uint32_t primitive;
         bool indexed, written;
-        const Buffer *const *indexBuffers;
-        size_t indexBufferCount;
+        const Buffer *const *buffers;
+        size_t bufferCount;
     };
     bool executeSlots(const IcbExecute &x, const char **why);
+
+    // An indirect command of patches as the CPU encoded it (Metal's drawPatches: and drawIndexedPatches: of a command,
+    // `scale` its factor scale, 1 where the call names none), and its words (raw_icb.h icb::patches) as raw_tessellation.cpp
+    // binds a draw's: false where Metal's validation stops it (*why)
+    struct IcbPatches {
+        uint32_t first, count, instances, baseInstance;
+        const Buffer *factors;
+        uint64_t factorOffset, factorStride;
+        float scale;
+        const Buffer *patchIndices;
+        uint64_t patchIndexOffset;
+        const Buffer *pointIndices;
+        uint64_t pointIndexOffset;
+    };
+
+    static bool icbPatchDraw(const Device &dev, const IcbPatches &in, icb::PatchDraw &out, const char **why);
     // A counter sample where the pass starts: in its prologue, after the barrier to the work before
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
@@ -782,6 +801,14 @@ private:
                      const Buffer *pointIndices, uint64_t pointIndexOffset, const char **why);
     Bound tessBuffer(uint8_t which) const;
     void controlWords(const PackPipeline &r, uint32_t (&want)[32]) const;
+    // An execute of patch commands: the state prepare() drew with as their layout's scratch words; after them, the root
+    // table's control words set back to what the encoder holds and set 0 built again, as the commands loaded both
+    bool icbPatchLayout(const char **why);
+    void icbPatchesDone();
+    // The amplification `a`'s id into the root table of the state prepare() drew with, between an execute's passes
+    void icbAmplification(uint32_t a);
+    const Pipeline *prepared_ = nullptr;  // what the last prepare() drew with, and its set 0's address
+    uint64_t preparedSet_ = 0;
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;

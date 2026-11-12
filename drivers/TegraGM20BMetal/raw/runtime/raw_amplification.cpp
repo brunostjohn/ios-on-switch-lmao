@@ -48,6 +48,19 @@ const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
     return nullptr;
 }
 
+void RenderEncoder::icbAmplification(uint32_t a)
+{
+    const PackPipeline &r = *prepared_->rec;
+    amplificationDirty_ = true;
+    if (!r.amplificationIdWord || r.amplificationIdWord > 32)
+        return;
+    if (p_.room() < 8)
+        reserve();
+    p_.m(NVB197_LOAD_CONSTANT_BUFFER_OFFSET, 0x700 + 4 * (r.amplificationIdWord - 1u));
+    p_.nonInc(NVB197_LOAD_CONSTANT_BUFFER(0), &a, 1);
+    cb_->rootPush_[r.amplificationIdWord - 1] = a;
+}
+
 void RenderEncoder::drawnWords(const PackPipeline &r, uint32_t (&want)[32])
 {
     if (r.amplificationIdWord && r.amplificationIdWord <= 32) {

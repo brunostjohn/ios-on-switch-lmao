@@ -4541,12 +4541,12 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 }
 
 // The state the commands inherit prepared once, as an indirect draw's, the range into the macros' scratch, then the
-// commands' words by reference. Each command sets its topology, restart, index buffer and draw parameters, which the
-// encoder holds unknown after them.
+// commands' words by reference, once per amplification with its id between. Each command sets its topology, restart, index
+// buffer and draw parameters, which the encoder holds unknown after them; patch commands their control-stage words too.
 bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
 {
-    if (amplifications_ > 1) {
-        *why = "an indirect command buffer executed under vertex amplification";
+    if (amplificationOffsets_ && amplifications_ > 1) {
+        *why = "a vertex amplification view mapping of a viewport offset: viewport arrays go to m2v";
         return false;
     }
     RAW_ENCODE_SPAN(Draw);
@@ -4560,7 +4560,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         refuseFetch(pl, refusal, x.primitive, 0, 0, why);
         return false;
     }
-    const uint64_t offset = uint64_t(x.first) * icb::kSlotWords * 4, bytes = uint64_t(x.count) * icb::kSlotWords * 4;
+    const uint64_t slotBytes = uint64_t(x.slotWords) * 4, offset = x.first * slotBytes, bytes = x.count * slotBytes;
     if (!x.slots->va || offset > x.slots->length || x.slots->length - offset < bytes) {
         *why = "indirect command buffer commands outside its memory";
         return false;
@@ -4574,14 +4574,15 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     indirectGeometry_ = true;
     const bool prepared = prepare(form, x.primitive, 0, 0, UINT32_MAX, x.indexed, why);
     indirectGeometry_ = false;
-    if (!prepared)
+    const bool patches = x.primitive == icb::kPatchPrimitive;
+    if (!prepared || (patches && !icbPatchLayout(why)))
         return false;
     cb_->use(*x.slots, false);
-    for (size_t i = 0; i < x.indexBufferCount; i++) {
-        const Buffer &ib = *x.indexBuffers[i];
-        cb_->use(ib, false);
-        if (ib.hostVisible && !ib.wc && ib.cpu)
-            cb_->clean(ib.cpu, ib.length);
+    for (size_t i = 0; i < x.bufferCount; i++) {
+        const Buffer &b = *x.buffers[i];
+        cb_->use(b, false);
+        if (b.hostVisible && !b.wc && b.cpu)
+            cb_->clean(b.cpu, b.length);
     }
     if (p_.room() < 16)
         reserve();
@@ -4597,14 +4598,22 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::icbRangeHeader(p_);
         bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
         bodies_.push_back({nullptr, nullptr, x.range->va + x.rangeOffset, 2, false});
+        bodyStart_ = p_.at;
     } else {
         mme::icbRange(p_, x.first, x.count);
-        bodies_.push_back({bodyStart_, p_.at});
     }
-    bodies_.push_back({nullptr, nullptr, x.slots->va + offset, uint32_t(bytes / 4), false});
-    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-    bodyStart_ = nullptr;
-    reserve();
+    for (uint32_t a = 0; a < amplifications_; a++) {
+        if (a)
+            icbAmplification(a);
+        if (p_.at > bodyStart_)
+            bodies_.push_back({bodyStart_, p_.at});
+        bodies_.push_back({nullptr, nullptr, x.slots->va + offset, uint32_t(bytes / 4), false});
+        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+        bodyStart_ = nullptr;
+        reserve();
+    }
+    if (patches)
+        icbPatchesDone();
     topology_ = restart_ = ~0u;
     ibVa_ = ibEnd_ = ~uint64_t(0);
     ibSize_ = 0;
@@ -5146,6 +5155,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
     const uint64_t setVa = prepared->address;
+    prepared_ = pl;
+    preparedSet_ = setVa;
     RAW_ENCODE_BEGIN(bindSpan, Bind);
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;

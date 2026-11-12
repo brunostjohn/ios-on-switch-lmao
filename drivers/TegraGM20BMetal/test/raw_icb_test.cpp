@@ -3,7 +3,9 @@
 // decoding and the Fermi MME simulator with the macros the channel loads, after the range an execute writes (the CPU's
 // scratch words, or kIcbRange reading a range from memory): each command inside the range sets its topology, restart and
 // index buffer, then draws as an indirect draw of its arguments does (root draw parameters, base registers, the instance
-// loop); one outside it sets the same and draws nothing; every other word is a no-op; the call sits at kCallWord.
+// loop); one outside it sets the same and draws nothing; every other word is a no-op; the call sits at kCallWord. A patch
+// command loads its control-stage descriptors and push words where its execute's layout says, inside the range or not, and
+// draws its patches inside it alone.
 #include <gtest/gtest.h>
 #include "../raw/runtime/raw_icb.h"
 #include "../raw/pack/mesa/mme_fermi.h"
@@ -62,6 +64,7 @@ struct Fifo {
     void macro(uint32_t slot)
     {
         const raw::mme::Program &p = slot == raw::mme::kIcbRange          ? raw::mme::kIcbRangeProgram
+                                     : slot == raw::mme::kIcbPatches      ? raw::mme::kIcbPatchesProgram
                                      : slot == raw::mme::kIcbDraw         ? raw::mme::kIcbDrawProgram
                                      : slot == raw::mme::kIcbDrawIndexed  ? raw::mme::kIcbDrawIndexedProgram
                                      : slot == raw::mme::kIndirect        ? raw::mme::kIndirectProgram
@@ -264,6 +267,111 @@ TEST(RawIcb, ACommandOutsideTheCpuRangeDrawsNothing)
     cpuRange(f, 2, 1);
     f.run(words.data(), words.size());
     EXPECT_EQ(firstVertices(f.methods), std::vector<uint32_t>{6});
+}
+
+constexpr uint64_t kSet = 0x1122334400ull, kRoot = 0x5566778800ull;
+constexpr uint32_t kControl = 0x700 + 4 * 4;
+
+// An execute's layout of a state whose factor and control-point index buffers are at set-0 bytes 0x40 and 0x80 and which
+// reads no patch index buffer
+void patchLayout(Fifo &f)
+{
+    uint32_t words[10];
+    raw::Push p{words, words + 10};
+    raw::mme::icbPatchLayout(p, kSet, kRoot, {0x40, raw::mme::kNoEntry, 0x80}, kControl);
+    f.run(words, size_t(p.at - words));
+}
+
+raw::icb::PatchDraw patchDraw()
+{
+    raw::icb::PatchDraw d{};
+    d.count = 2;
+    d.instances = 3;
+    d.first = 5;
+    d.baseInstance = 1;
+    for (uint32_t k = 0; k < 3; k++)
+        for (uint32_t w = 0; w < 3; w++)
+            d.buffers[k][w] = 0x100 * (k + 1) + w;
+    for (uint32_t w = 0; w < 6; w++)
+        d.control[w] = 0xc0 + w;
+    return d;
+}
+
+// What a patch command loads before it draws: the factor and control-point index descriptors into set 0, the push words
+// into the root table, the root table selected again
+std::vector<Method> patchLoads(const raw::icb::PatchDraw &d)
+{
+    std::vector<Method> m = {{NVB197_SET_PRIMITIVE_TOPOLOGY, raw::icb::topology(raw::icb::kPatchPrimitive)},
+                             {NVB197_SET_DA_PRIMITIVE_RESTART, 0},
+                             {NVB197_SET_CONSTANT_BUFFER_SELECTOR_A, raw::mme::kIcbSetBytes},
+                             {NVB197_SET_CONSTANT_BUFFER_SELECTOR_B, uint32_t(kSet >> 32)},
+                             {NVB197_SET_CONSTANT_BUFFER_SELECTOR_C, uint32_t(kSet)}};
+    for (const auto &[k, at] : {std::pair<uint32_t, uint32_t>{0, 0x40}, {2, 0x80}}) {
+        m.emplace_back(NVB197_LOAD_CONSTANT_BUFFER_OFFSET, at);
+        for (uint32_t w = 0; w < 3; w++)
+            m.emplace_back(NVB197_LOAD_CONSTANT_BUFFER(w), d.buffers[k][w]);
+        m.emplace_back(NVB197_LOAD_CONSTANT_BUFFER(3), 0);
+    }
+    m.insert(m.end(), {{NVB197_SET_CONSTANT_BUFFER_SELECTOR_A, raw::mme::kIcbRootBytes},
+                       {NVB197_SET_CONSTANT_BUFFER_SELECTOR_B, uint32_t(kRoot >> 32)},
+                       {NVB197_SET_CONSTANT_BUFFER_SELECTOR_C, uint32_t(kRoot)},
+                       {NVB197_LOAD_CONSTANT_BUFFER_OFFSET, kControl}});
+    for (uint32_t w = 0; w < 6; w++)
+        m.emplace_back(NVB197_LOAD_CONSTANT_BUFFER(w), d.control[w]);
+    m.insert(m.end(), {{NVB197_LOAD_CONSTANT_BUFFER_OFFSET, 0},
+                       {NVB197_LOAD_CONSTANT_BUFFER(0), d.first},
+                       {NVB197_LOAD_CONSTANT_BUFFER(1), d.baseInstance},
+                       {NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX, d.baseInstance},
+                       {NVB197_SET_GLOBAL_BASE_VERTEX_INDEX, 0},
+                       {NVB197_SET_VERTEX_ID_BASE, 0}});
+    return m;
+}
+
+TEST(RawIcb, APatchCommandLoadsItsControlStageWordsWhereTheLayoutSaysThenDrawsItsPatches)
+{
+    const raw::icb::PatchDraw d = patchDraw();
+    uint32_t slot[raw::icb::kPatchSlotWords];
+    raw::icb::patches(slot, 4, d);
+    EXPECT_EQ(slot[raw::icb::kIndexWord], 4u);
+    EXPECT_EQ(slot[raw::icb::kCallWord],
+              raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + 8 * raw::mme::kIcbPatches, raw::mme::kIcbPatchesArguments));
+    Fifo f;
+    patchLayout(f);
+    cpuRange(f, 4, 1);
+    f.run(slot, raw::icb::kPatchSlotWords);
+    std::vector<Method> want = patchLoads(d);
+    const auto loop = drawn(NVB197_SET_VERTEX_ARRAY_START, 5, 2, 3);
+    want.insert(want.end(), loop.begin(), loop.end());
+    EXPECT_EQ(f.methods, want);
+}
+
+TEST(RawIcb, APatchCommandOutsideTheRangeLoadsItsWordsAndDrawsNothing)
+{
+    const raw::icb::PatchDraw d = patchDraw();
+    uint32_t slot[raw::icb::kPatchSlotWords];
+    raw::icb::patches(slot, 4, d);
+    Fifo f;
+    patchLayout(f);
+    cpuRange(f, 0, 4);
+    f.run(slot, raw::icb::kPatchSlotWords);
+    EXPECT_EQ(f.methods, patchLoads(d));
+}
+
+TEST(RawIcb, CommandsOfAPatchBufferTakeItsSlotsWithTheirCallAtTheSameWord)
+{
+    std::vector<uint32_t> words(2 * raw::icb::kPatchSlotWords);
+    raw::icb::draw(words.data(), 0, {3, 3, 1, 0, 0}, raw::icb::kPatchSlotWords);
+    raw::icb::patches(words.data() + raw::icb::kPatchSlotWords, 1, patchDraw());
+    EXPECT_EQ(words[raw::icb::kIndexWord], 0u);
+    EXPECT_EQ(words[raw::icb::kPatchSlotWords + raw::icb::kIndexWord], 1u);
+    Fifo f;
+    patchLayout(f);
+    cpuRange(f, 0, 2);
+    f.run(words.data(), words.size());
+    size_t begins = 0;
+    for (const Method &m : f.methods)
+        begins += m.first == NVB197_BEGIN;
+    EXPECT_EQ(begins, 1u + 3u);
 }
 
 TEST(RawIcb, ACopyRewritesTheIndexWordAlone)
