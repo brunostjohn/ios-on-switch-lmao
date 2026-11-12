@@ -6,6 +6,7 @@
 // after the first completion flip latched as written; switch_completion_flip_proof_test has the unit that refuses.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -230,6 +231,42 @@ TEST_F(CompletionFlip, SuspendPutsAWrittenFlipInTheRingAndWithdrawsAnArmedOne)
     EXPECT_EQ(d.ring.pending, kSlot + 1);
     frame();
     EXPECT_EQ(d.ring.front, kSlot + 1);
+}
+
+// quiesceForSuspend reads what SC7 will take as shown before planesQuiesce and ring.settle, and retires through it once
+// hwSuspended holds any kick it makes for the resume.
+TEST(CompletionFlipSource, SuspendRetiresWhatItsSettlesTakeAsShown)
+{
+    using switch_ios::test::Between;
+    using switch_ios::test::SourceText;
+    const std::string quiesce =
+        Between(SourceText("../NativeLegacyDisplay.cpp"), "    void quiesceForSuspend()\n    {\n", "\n    }\n");
+    EXPECT_LT(quiesce.find("const uint64_t shown = suspendShownSeq();"), quiesce.find("planesQuiesce();"));
+    EXPECT_LT(quiesce.find("ring.settle();"), quiesce.find("hwSuspended = true;"));
+    EXPECT_LT(quiesce.find("hwSuspended = true;"), quiesce.find("retireSuspendShown(shown);"));
+}
+
+// SC7 takes window A's pending flip as shown: its swap completes at the settle, with nothing presented after the
+// resume, and a present after it completes nothing of it again.
+TEST_F(CompletionFlip, AFlipSettledAtSC7CompletesThereWithNothingPresentedAfter)
+{
+    ASSERT_EQ(d.offer(kSlot), 0);
+    const uint64_t mine = d.flipRequest;
+    d.complete(0);
+    d.donePass();
+    ASSERT_EQ(d.ring.pending, kSlot);
+    d.suspend();
+    EXPECT_EQ(d.retired, std::vector<uint64_t>{mine});
+    d.resume();
+    frame();
+    frame();
+    EXPECT_EQ(d.retired, std::vector<uint64_t>{mine});
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    d.complete(0);
+    d.donePass();
+    frame();
+    EXPECT_EQ(std::count(d.retired.begin(), d.retired.end(), mine), 1);
+    EXPECT_EQ(d.retired.back(), d.flipRequest);
 }
 
 // The ring sees each latch at the first frame end after the boundary that took it, whichever of a producer's filter

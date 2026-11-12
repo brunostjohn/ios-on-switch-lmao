@@ -621,13 +621,27 @@ struct Display {
         feStamp = mach_absolute_time();
     }
 
+    // Windows B and C as SwitchSuspendRetire.h reads them: off here.
+    struct {
+        int armed = -2, superseded = -2;
+        bool armedRequested = true;
+    } planeLatch;
+    bool planesOn = false;
+
+    Plane planeSetOf(int) const
+    {
+        return {};
+    }
+
     // quiesceForSuspend and finishResume as far as window A sees them.
     void suspend()
     {
         suspendCompletionFlip();
+        const uint64_t shown = suspendShownSeq();
         ring.settle();
         hwSuspended = true;
         model.clocked = false;
+        retireSuspendShown(shown);
     }
 
     void resume()
@@ -658,6 +672,7 @@ struct Display {
 #include "../SwitchScanoutStart.h"
 #include "../SwitchCompletionFlipDisplay.h"
 #include "../SwitchCompletionFlipFilter.h"
+#include "../SwitchSuspendRetire.h"
 #undef KDBG
 #undef SWITCH_FRAME_TIMELINE
 };

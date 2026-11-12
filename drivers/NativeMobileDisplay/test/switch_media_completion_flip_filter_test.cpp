@@ -231,28 +231,18 @@ TEST_F(MediaFlipFilter, SuspendAdoptsAnEarlySet)
 }
 
 // The client's swap completes exactly once, whichever of the filter, the completion, a frame end and SC7 comes first,
-// and never before the set is on screen. A set SC7 settles once its completion is in (a request the latch never judged)
-// completes at the first latch after the resume, the next set's, as every gate-written set at SC7 does
-// (planesQuiesce settles without a latch); the rest at their own latch.
+// with nothing presented after a resume (only the display's own frame ends), and never before its frame is seen shown.
+// A present after the resume completes nothing of it again.
 TEST_F(MediaFlipFilter, TheSwapCompletesExactlyOnceWhateverOrderTheyRunIn)
 {
-    struct Order {
-        const char *steps;
-        bool nextLatch;
+    const char *const orders[] = {
+        "filter completion pass frame",   "filter frame completion pass",          "completion pass frame",
+        "completion frame pass",          "filter suspend completion pass resume", "filter gate completion pass",
+        "completion suspend pass resume", "filter completion suspend pass resume", "completion pass suspend resume",
+        "suspend completion pass resume",
     };
-
-    const Order orders[] = {
-        {"filter completion pass frame", false},
-        {"filter frame completion pass", false},
-        {"completion pass frame", false},
-        {"completion frame pass", false},
-        {"filter suspend completion pass resume", false},
-        {"filter gate completion pass", false},
-        {"completion suspend pass resume", true},
-        {"filter completion suspend pass resume", true},
-    };
-    for (const auto &order : orders) {
-        const std::string steps = order.steps;
+    for (const char *order : orders) {
+        const std::string steps = order;
         ASSERT_TRUE(armed(2 + static_cast<int>(seq % 3))) << steps;
         const uint64_t mine = seq;
         for (size_t at = 0, next = 0; at < steps.size(); at = next + 1) {
@@ -279,15 +269,27 @@ TEST_F(MediaFlipFilter, TheSwapCompletesExactlyOnceWhateverOrderTheyRunIn)
         frame();
         frame();
         EXPECT_TRUE(d.mediaFlipIdle()) << steps;
-        if (order.nextLatch) {
-            EXPECT_EQ(d.completions(mine), 0u) << steps;
-            shownByGate(video(1 + static_cast<int>(seq % 2) * 4));
-        }
-        EXPECT_EQ(d.completions(mine), 1u) << steps;
-        if (!order.nextLatch)
-            EXPECT_TRUE(std::count(d.framesShown.begin(), d.framesShown.end(), mine)) << steps << ": not seen latched";
+        EXPECT_EQ(d.completions(mine), 1u) << steps << ": with nothing presented after it";
+        EXPECT_TRUE(std::count(d.framesShown.begin(), d.framesShown.end(), mine)) << steps << ": not seen shown";
+        shownByGate(video(1 + static_cast<int>(seq % 2) * 4));
+        EXPECT_EQ(d.completions(mine), 1u) << steps << ": with a present after it";
     }
     EXPECT_TRUE(gLog.empty());
+}
+
+// SC7 takes the requested set as shown: its swap completes at the settle, before any frame end after the resume.
+TEST_F(MediaFlipFilter, ASetSettledAtSC7CompletesThereWithNothingPresentedAfter)
+{
+    ASSERT_TRUE(armed(2));
+    d.complete(0);
+    d.donePass();
+    ASSERT_TRUE(d.planeLatch.requested());
+    d.suspend();
+    EXPECT_EQ(d.completions(seq), 1u);
+    EXPECT_EQ(d.framesShown.back(), seq);
+    d.resume();
+    frame();
+    EXPECT_EQ(d.completions(seq), 1u);
 }
 
 }  // namespace
