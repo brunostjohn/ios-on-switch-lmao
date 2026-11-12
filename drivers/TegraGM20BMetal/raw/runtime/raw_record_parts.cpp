@@ -280,6 +280,11 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         why = "more than " + std::to_string(kPackEntries) + " set-0 entries";
         return false;
     }
+    if (renderSetBytes(parts.setBytes) > kRenderSetBytes) {
+        why = "a set 0 of " + std::to_string(parts.setBytes) + " bytes, past the render encoder's " +
+              std::to_string(kRenderSetBytes);
+        return false;
+    }
     PackPipeline &p = out.pipeline;
     std::map<uint32_t, int> storageCodes;
     for (const LayoutEntry &e : parts.layout)

@@ -6,7 +6,15 @@
 
 namespace raw {
 
-using DescriptorWords = std::array<uint32_t, 64>;
+// A render state's set 0: its NVK layout's size (PackPipeline::setBytes) in 256-byte blocks, at most two. The words past a
+// state's own size stay zero, so two builds of a set compare whole.
+using DescriptorWords = std::array<uint32_t, 128>;
+constexpr uint32_t kRenderSetBytes = sizeof(DescriptorWords);
+
+constexpr uint32_t renderSetBytes(uint32_t layoutBytes)
+{
+    return layoutBytes <= 256 ? 256 : (layoutBytes + 255) & ~255u;
+}
 
 // The upload allocations must remain immutable and live until every draw using this encoder has retired.
 class DescriptorSnapshot {
@@ -61,6 +69,11 @@ public:
         }
         pipeline_ = pipeline;
         return &value_;
+    }
+
+    const PreparedDescriptorWords &last() const
+    {
+        return value_;
     }
 
 private:

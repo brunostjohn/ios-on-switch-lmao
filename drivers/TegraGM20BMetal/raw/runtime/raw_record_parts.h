@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "raw_descriptors.h"
 #include "raw_record.h"
 
 namespace raw {

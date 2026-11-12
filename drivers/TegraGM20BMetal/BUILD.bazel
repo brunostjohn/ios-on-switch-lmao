@@ -81,6 +81,7 @@ filegroup(
         "raw/runtime/raw_compute_record.h",
         "raw/runtime/raw_chip_facts.h",
         "raw/runtime/raw_cubic.h",
+        "raw/runtime/raw_descriptors.h",
         "raw/runtime/raw_direct.cpp",
         "raw/runtime/raw_direct.h",
         "raw/runtime/raw_direct_compute.cpp",

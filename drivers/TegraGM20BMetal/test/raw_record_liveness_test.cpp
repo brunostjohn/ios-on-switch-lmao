@@ -100,4 +100,25 @@ TEST(RawRecordLiveness, AVariantsSurfaceLoadIsTheRecords)
     EXPECT_TRUE(raw::loadsSurface(rec));
 }
 
+// A render state's set 0 takes its NVK layout's size in 256-byte blocks, two at most (raw_descriptors.h)
+TEST(RawRecordSet, ASetPastTheEncodersRoomIsSetAside)
+{
+    EXPECT_EQ(raw::renderSetBytes(0), 256u);
+    EXPECT_EQ(raw::renderSetBytes(260), 512u);
+    raw::CapturedProgram vs, fs;
+    vs.image.assign(96, 0);
+    fs.image.assign(96, 0);
+    vs.cbufTypes = fs.cbufTypes = {raw::CbufRoot};
+    raw::RecordParts parts;
+    parts.programs[0] = &vs;
+    parts.programs[1] = &fs;
+    raw::RuntimeRecord out;
+    std::string why;
+    parts.setBytes = 512;
+    EXPECT_TRUE(raw::assembleRecord(parts, "c0=80 | v vs | f fs", raw::PackRules{}, out, why)) << why;
+    parts.setBytes = 520;
+    EXPECT_FALSE(raw::assembleRecord(parts, "c0=80 | v vs | f fs", raw::PackRules{}, out, why));
+    EXPECT_EQ(why, "a set 0 of 520 bytes, past the render encoder's 512");
+}
+
 }  // namespace
