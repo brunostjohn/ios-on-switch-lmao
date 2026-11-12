@@ -110,7 +110,6 @@ static inline void stats_fences(struct tgm_chan *chan)
 	u64 now = nvxnu_nanotime();
 	u64 start = 0;
 	u64 end = 0;
-	u64 gap = 0;
 	volatile struct tgm_stamps *st = NULL;
 
 	if ((s32)(done - s) > CHAN_NSTAMPS) {
@@ -141,11 +140,6 @@ static inline void stats_fences(struct tgm_chan *chan)
 		if (chan->kernel) {
 			__atomic_fetch_add(&tgm_stats.copies, 1, __ATOMIC_RELAXED);
 			stats_add(&tgm_stats.copy_sum, &tgm_stats.copy_max, end - start);
-			gap = present_gap(s + 1, start);
-			if (gap != ~0ULL) {
-				__atomic_fetch_add(&tgm_stats.gaps, 1, __ATOMIC_RELAXED);
-				stats_add(&tgm_stats.gap_sum, &tgm_stats.gap_max, gap);
-			}
 			continue;
 		}
 		__atomic_fetch_add(&tgm_stats.timed, 1, __ATOMIC_RELAXED);
@@ -207,40 +201,17 @@ static inline void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
 	}
 }
 
-/* Whether a writer the present in flight waited for was killed before the submission it waited for ended. A wait on every
- * user channel (no address space imports the surface) names no writer, so no kill there is the frame's. Read before the
- * present is released: the next one rewrites the list. */
-static inline int present_source_lost(void)
-{
-	u32 i = 0;
-
-	if (!tgm_present.writers)
-		return 0;
-	for (i = 0; i < tgm_present.waits; i++) {
-		if (tgm_present.wait[i].fence &&
-		    tgm_fence_lost(tgm_present.wait[i].fence, tgm_present.wait[i].seqno))
-			return 1;
-	}
-	return 0;
-}
-
 /* From the present channel's nonstall interrupt (the interrupt pass, nvkm's event lock held): a present whose fence passed
- * is done, and its callback runs here (the display's only signals its work loop). completing covers the claim to the
+ * is done, and its completion work item reads its producers' result and calls back. completing covers the claim to the
  * callback's return, so tgm_present_outstanding never answers 0 for a present whose completion is not delivered yet. */
 static inline void present_fenced(struct tgm_chan *chan)
 {
 	u32 pending = __atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE);
-	void (*done)(void *, int) = NULL;
-	void *arg = NULL;
 	u64 queued = 0;
-	int status = 0;
 
 	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0)
 		return;
-	done = tgm_present.done;
-	arg = tgm_present.arg;
 	queued = tgm_present.queued;
-	status = present_source_lost() ? TEGRA_SCANOUT_SOURCE_LOST : 0;
 	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 	if (!__atomic_compare_exchange_n(&tgm_present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
 					 __ATOMIC_RELAXED)) {
@@ -254,35 +225,17 @@ static inline void present_fenced(struct tgm_chan *chan)
 			  nvxnu_nanotime() - tgm_present.queued);
 	}
 	tgm_deadline_presented(queued);
-	if (__atomic_load_n(&tgm_present.typed_pending, __ATOMIC_ACQUIRE)) {
-		tgm_present.completion_status = status;
-		nvxnu_work_schedule(tgm_present.completion_work);
-		return;
-	}
-	done(arg, status);
-	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+	nvxnu_work_schedule(tgm_present.completion_work);
 }
 
-/* stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
- * the last user submission present `seqno` waited for to the copy's start (its start stamp, after the acquires), ~0 when
- * it waited for none or a stamp is missing. The wait list is that present's: the next is queued only after
- * present_fenced. A user channel's stamps are in its ring, pool memory that stays mapped even after the channel is
- * gone; a reused page fails the payload check. */
-static inline u64 present_gap(u32 seqno, u64 start)
+/* A user channel's fence moved, in its interrupt pass or by its kill: a present watching its producer is due
+ * (SwitchGpuPresentWatch.h). The pass's end delivers it (tgm_present_pass); a kill runs outside a pass, so it hands the
+ * watch to the work item. */
+static inline void present_watch_fenced(struct tgm_chan *chan, int killed)
 {
-	u64 last = 0;
-	u32 i = 0;
-
-	if (tgm_present.stamped != seqno || !tgm_present.waits)
-		return ~0ULL;
-	for (i = 0; i < tgm_present.waits; i++) {
-		volatile struct tgm_stamp *end = tgm_present.wait_end[i];
-		if (!end || end->payload != tgm_present.wait[i].seqno)
-			return ~0ULL;
-		if (end->ns > last)
-			last = end->ns;
-	}
-	return start >= last ? start - last : 0;
+	if (switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, tgm_chan_completed(chan)) &&
+	    killed)
+		nvxnu_work_schedule(tgm_present.watch_work);
 }
 
 /* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean; then more claims. */

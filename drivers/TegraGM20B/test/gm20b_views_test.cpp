@@ -93,6 +93,7 @@ protected:
 		gMoveFails = false;
 		gCpuMoves = 0;
 		gScratchFails = false;
+		gScratchPurged = false;
 		gRefusals.clear();
 		gViews = ViewModel{};
 		gGpu = FakeGpu{};
@@ -341,6 +342,44 @@ TEST_F(Views, ReadersInSeveralTasksShareOneScratchAndAWriterAmongThem)
 	ASSERT_EQ(gMoves.size(), 2u);
 	EXPECT_EQ(gMoves[1].op, TGM_RELAYOUT_TO_TILED);
 	EXPECT_EQ(gViews.scratchesPut - put, 1);
+	tgm_coherency_put(s.coh);
+}
+
+// iconservicesagent reads each icon render back with three read-only locks in a row: only the first moves texels; a
+// GPU submission that may write the surface, a write lock or a purged scratch makes the next lock move them again
+TEST_F(Views, ReadOnlyLocksAfterTheFirstReuseItsRowsUntilTheGpuWrites)
+{
+	Tiled s(0xa0700000, 88);
+	map(1, s.id, 0x90000);
+	gMoves.clear();
+	const int reclaimed = gScratchesReclaimed;
+	for (int i = 0; i < 3; i++) {
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+		EXPECT_TRUE(s.rowsAre(s.seen(task(1), 0x90000), s.rows)) << i;
+		ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	}
+	EXPECT_EQ(gMoves.size(), 1u);
+	EXPECT_EQ(gScratchesReclaimed - reclaimed, 2);
+	tgm_coherency_wrote(s.coh, 1, 7, 1);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	EXPECT_EQ(gMoves.size(), 2u);
+	gBackingContent++;  // VIC or a CPU writer elsewhere, recorded on the backing
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	EXPECT_EQ(gMoves.size(), 3u);
+	gScratchPurged = true;
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	EXPECT_EQ(gMoves.size(), 4u);
+	gScratchPurged = false;
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, 0), 0);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, 0), 0);
+	EXPECT_EQ(gMoves.size(), 5u);  // reused rows, then the write back to the texels
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	EXPECT_EQ(gMoves.size(), 6u);
+	EXPECT_EQ(gMoves.back().op, TGM_RELAYOUT_TO_ROWS);
 	tgm_coherency_put(s.coh);
 }
 

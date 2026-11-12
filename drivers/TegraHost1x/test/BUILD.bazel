@@ -51,17 +51,32 @@ host_shims(
         "IOKit/IOWorkLoop.h",
         "kern/clock.h",
         "kern/thread.h",
+        "os/log.h",
     ],
     stubs = "switch_host1x_submit_stubs.h",
 )
 
-# TegraHost1x.cpp's submission with a memory register file: every engine's doorbell is preceded by EMC demand.
+host_test(
+    name = "switch_host1x_arena_test",
+    srcs = [
+        "switch_host1x_arena_test.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xArena.h",
+        "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
+    ],
+)
+
+# TegraHost1x.cpp and SwitchHost1xChannels.cpp with a memory register file: GATHERs of the arena words engines wrote,
+# room given back by fences, and every engine's doorbell preceded by EMC demand.
 host_test(
     name = "switch_host1x_submit_test",
     srcs = [
         "switch_host1x_submit_test.cpp",
         "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xArena.h",
+        "//drivers/TegraHost1x:SwitchHost1xChannels.h",
+        "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
         "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
         "//drivers/TegraHost1x:SwitchHost1xIntr.h",
         "//drivers/TegraHost1x:TegraHost1x.h",
         "//kits/SwitchCAR:SwitchCAR.h",
@@ -70,13 +85,19 @@ host_test(
         "//kits/SwitchIdle:switch_idle.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
         "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchTime:SwitchTime.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraHost1x:TegraHost1x.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
+        "//drivers/TegraHost1x:TegraHost1x.cpp",
+    ],
     data = [
         "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraNVDEC:TegraNVDEC.cpp",
         "//drivers/TegraNVENC:TegraNVENC.cpp",
         "//drivers/TegraNVJPG:TegraNVJPG.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.cpp",
+        "//drivers/TegraVIC:TegraVIC.cpp",
     ],
     deps = [":submit_kernel"],
 )
@@ -100,16 +121,21 @@ host_shims(
         "IOKit/IOWorkLoop.h",
         "kern/clock.h",
         "kern/thread_call.h",
+        "os/log.h",
     ],
     stubs = "switch_host1x_fence_stubs.h",
 )
 
-# TegraHost1x.cpp and SwitchHost1xFence.cpp with a memory register file: waits, the work-loop hand-off, bounds, SC7.
+# TegraHost1x.cpp, SwitchHost1xChannels.cpp and SwitchHost1xFence.cpp with a memory register file: waits, the
+# work-loop hand-off, bounds, SC7, and a submitter sleeping for arena room until a job's fence interrupt.
 host_test(
     name = "switch_host1x_fence_test",
     srcs = [
         "switch_host1x_fence_test.cpp",
         "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xArena.h",
+        "//drivers/TegraHost1x:SwitchHost1xChannels.h",
+        "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
         "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
         "//drivers/TegraHost1x:SwitchHost1xFence.h",
         "//drivers/TegraHost1x:SwitchHost1xFenceList.h",
@@ -121,8 +147,10 @@ host_test(
         "//kits/SwitchIdle:switch_idle.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
         "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchTime:SwitchTime.h",
     ],
     additional_compiler_inputs = [
+        "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
         "//drivers/TegraHost1x:SwitchHost1xFence.cpp",
         "//drivers/TegraHost1x:TegraHost1x.cpp",
     ],

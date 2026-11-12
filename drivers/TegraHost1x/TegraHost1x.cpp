@@ -3,29 +3,24 @@
 //
 // Sources (register map and order; Linux's host1x driver is GPL-2.0-only, so this is written from it, not copied):
 //   Linux drivers/gpu/host1x/dev.c host1x05_info (192 syncpoints, 14 channels, sync unit at +0x2100),
-//   hw/channel_hw.c host1x_channel_init (channel n at n * 0x4000), hw/hw_host1x05_{sync,channel}.h, hw/opcodes.h,
-//   hw/cdma_hw.c cdma_start/cdma_flush (DMASTART = push buffer, DMAPUT/DMAGET/DMAEND relative to it, a RESTART
-//   opcode after the last slot), hw/intr_hw.c (threshold interrupt: THRESH, then ENABLE_CPU0; the handler DISABLEs
-//   and clears INT_STATUS), host1x_intr_init_host_sync (IP_BUSY_TIMEOUT 0, CTXSW_TIMEOUT_CFG 0xff, USEC_CLK).
+//   hw/hw_host1x05_sync.h, hw/intr_hw.c (threshold interrupt: THRESH, then ENABLE_CPU0; the handler DISABLEs and
+//   clears INT_STATUS), host1x_intr_init_host_sync (IP_BUSY_TIMEOUT 0, CTXSW_TIMEOUT_CFG 0xff, USEC_CLK).
 //   tegra210.dtsi host1x@50000000: interrupts SPI 65 (syncpt) and 67 (general), CAR clock and reset 28.
 //   drivers/memory/tegra/tegra210.c: MC SMMU ASID of HC 0x250, client hot reset HC 0x200 bit 6.
 //   hekate bdk/soc/clock.c _clock_host1x: PLLP / 2.5 = 163.2 MHz, enabled for the display (di.c waits on syncpt 9).
-// The SMMU stays bypassed as for every other driver here: host1x fetches the push buffer by physical address, so it
-// is contiguous, below 4 GiB (DMASTART is 32-bit on host1x05) and cleaned to the point of coherency before DMAPUT.
+// The SMMU stays bypassed as for every other driver here: host1x fetches its commands (SwitchHost1xChannels.cpp) by
+// physical address.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
-#include <string.h>
 #include "TegraHost1x.h"
+#include "SwitchHost1xChannels.h"
 #include "SwitchHost1xFailureRelease.h"
 #include "SwitchHost1xIntr.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
-#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
-#include "../../kits/SwitchDMA/SwitchDcache.h"
-#include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
@@ -35,7 +30,6 @@ constexpr unsigned kClock = 28;  // TEGRA210_CLK_HOST1X: CAR bank L bit 28, also
 constexpr uint32_t kSyncOffset = 0x2100;
 constexpr uint32_t kIntid = 32 + 65;  // "syncpt" (tegra210.dtsi host1x@50000000)
 constexpr uint32_t kSyncpts = 192, kFirstOwn = 160;
-constexpr uint32_t kPushBytes = 16384;  // 2048 two-word slots (4x Linux's), + RESTART: room for 8 NVDEC jobs
 
 enum : uint32_t {  // clock and reset controller (Linux clk.h, clk-tegra-periph.c)
     CLK_OUT_ENB_L = 0x010,
@@ -51,52 +45,20 @@ enum : uint32_t {
     SMMU_ENABLE = 1u << 31
 };
 
-enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
-    CH_FIFOSTAT = 0x00,
-    CH_DMASTART = 0x14,
-    CH_DMAPUT = 0x18,
-    CH_DMAGET = 0x1c,
-    CH_DMAEND = 0x20,
-    CH_DMACTRL = 0x24,
-    DMACTRL_STOP = 1u << 0,
-    DMACTRL_GETRST = 1u << 1,
-    DMACTRL_INITGET = 1u << 2,
-};
-
 enum : uint32_t {  // sync unit, relative to kSyncOffset
-    SYNC_CMDPROC_STOP = 0x0ac,
-    SYNC_CH_TEARDOWN = 0x0b0,
     SYNC_USEC_CLK = 0x1a4,
     SYNC_CTXSW_TIMEOUT_CFG = 0x1a8,
     SYNC_IP_BUSY_TIMEOUT = 0x1bc,
-    SYNC_CBREAD0 = 0xc80,
-    SYNC_CBSTAT0 = 0xcc0,
     SYNC_INT_STATUS = 0xe80,
     SYNC_INT_DISABLE = 0xf00,
     SYNC_SYNCPT = 0xf80,
 };
 
-constexpr uint32_t opRestart(uint32_t byteOffset)
-{
-    return (5u << 28) | (byteOffset >> 4);
-}
-
-constexpr uint32_t kOpNop = 2u << 28;  // NONINCR, offset 0, count 0
-
 volatile uint8_t *gHost, *gMc;
 IOWorkLoop *gLoop;
 IOInterruptEventSource *gIrq;
-IOLock *gSubmitLock;  // every channel's push buffer, and suspend/resume
+IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resume
 
-// A command DMA channel and its push buffer. Channel n's registers are at n * 0x4000 (Linux host1x_channel_init).
-struct Channel {
-    switch_dma_buffer push;
-    uint32_t *va;
-    uint32_t put;  // byte offset of the next word
-};
-
-constexpr uint32_t kChannelStride = 0x4000;
-Channel gChannels[TEGRA_HOST1X_CHANNELS];
 uint32_t gNextSyncpt = kFirstOwn;
 int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
@@ -146,45 +108,6 @@ bool clockOn(unsigned *mhz, bool *enabled)
     return switch_car_clock_enabled(kClock) && !switch_car_reset_asserted(kClock);
 }
 
-uint32_t channelRead(uint32_t channel, uint32_t reg)
-{
-    return switch_mmio_read32(gHost, channel * kChannelStride + reg);
-}
-
-void channelWrite(uint32_t channel, uint32_t reg, uint32_t value)
-{
-    switch_mmio_write32(gHost, channel * kChannelStride + reg, value);
-}
-
-// Linux cdma_start for every channel: the push buffers are allocated once and reprogrammed after SC7.
-bool channelAlloc()
-{
-    for (Channel &c : gChannels) {
-        if (!switch_dma_alloc(&c.push, kPushBytes + PAGE_SIZE))
-            return false;
-        c.va = reinterpret_cast<uint32_t *>(c.push.va);
-    }
-    return true;
-}
-
-void channelProgram()
-{
-    for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++) {
-        Channel &c = gChannels[n];
-        memset(c.va, 0, kPushBytes + 4);
-        c.va[kPushBytes / 4] = opRestart(0);
-        switch_dcache_clean(c.va, kPushBytes + 4);
-        syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) & ~(1u << n));
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
-        channelWrite(n, CH_DMASTART, static_cast<uint32_t>(c.push.pa));
-        channelWrite(n, CH_DMAPUT, 0);
-        channelWrite(n, CH_DMAEND, kPushBytes + 4);
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
-        channelWrite(n, CH_DMACTRL, 0);
-        c.put = 0;
-    }
-}
-
 // host1x_intr_init_host_sync: what the sync unit needs after a reset (boot or SC7). Every threshold interrupt starts
 // disabled and clear; waiters arm their own.
 void syncConfigure()
@@ -230,12 +153,17 @@ int bringUp()
     syncConfigure();
     if (!attachInterrupt())
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
-    if (!channelAlloc())
-        return fail("no push buffer below 4 GiB", 0);
-    channelProgram();
+    if (!switch_host1x_channels_alloc(gHost, gHost + kSyncOffset, gSubmitLock))
+        return fail("no push buffer or command arena below 4 GiB", 0);
+    switch_host1x_channels_program();
     gState = 1;
     switch_host1x_intr_start();
-    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s\n", gClockMHz, enabled ? ", enabled here" : "");
+    const uint32_t filtered = switch_host1x_channels_filter_stuck();
+    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s\n", gClockMHz,
+          enabled ? ", enabled here" : "", filtered ? "on" : "off");
+    if (filtered)
+        IOLog("TegraHost1x: H1 FAIL the gather filter stays on for channels %#x: their streams' waits do not run\n",
+              filtered);
     return TEGRA_HOST1X_OK;
 }
 }  // namespace
@@ -291,98 +219,6 @@ extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshol
     return result;
 }
 
-// Linux push_buffer_push + cdma_flush: words go in at PUT (wrapping at the RESTART slot), are cleaned to DRAM, and
-// DMAPUT moves past them. The space check uses DMAGET, which host1x keeps relative to DMASTART like PUT.
-extern "C" int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t count)
-{
-    if (gState != 1)
-        return TEGRA_HOST1X_ENODEV;
-    if (!words || !count || count >= kPushBytes / 4 || channel >= TEGRA_HOST1X_CHANNELS)
-        return TEGRA_HOST1X_EINVAL;
-    Channel &c = gChannels[channel];
-    IOLockLock(gSubmitLock);
-    const uint32_t get = channelRead(channel, CH_DMAGET) % kPushBytes;
-    const uint32_t room = (get + kPushBytes - c.put - 4) % kPushBytes;
-    // A job must not straddle the RESTART slot: Linux's push buffer only holds two-word GATHERs, but these are the
-    // job's own opcodes, and a RESTART landing inside an opcode's data is taken as data, so the command processor runs
-    // on to DMAEND and stops (DMAGET 0x4004, DMAPUT 0x84, the fence never reached). Such a job starts at 0, the rest
-    // of the buffer NOPs (host1x_opcode_nop: NONINCR, count 0) up to the RESTART.
-    const uint32_t tail = kPushBytes - c.put;
-    const uint32_t bytes = count * 4;
-    const uint32_t pad = bytes > tail ? tail : 0;
-    if (pad + bytes > room) {
-        IOLockUnlock(gSubmitLock);
-        return TEGRA_HOST1X_ENOMEM;
-    }
-    if (pad) {
-        for (uint32_t at = c.put; at < kPushBytes; at += 4)
-            c.va[at / 4] = kOpNop;
-        switch_dcache_clean_lines((uint8_t *)c.va + c.put, pad);
-        c.put = 0;
-    }
-    const uint32_t from = c.put;
-    for (uint32_t i = 0; i < count; i++)
-        c.va[from / 4 + i] = words[i];
-    switch_dcache_clean((uint8_t *)c.va + from, bytes);  // its DSB also completes the padding's
-    c.put = (from + bytes) % kPushBytes;                 // a job that ends exactly at the RESTART slot leaves PUT at 0
-    switch_emc_gpu_submit();
-    channelWrite(channel, CH_DMAPUT, c.put);
-    IOLockUnlock(gSubmitLock);
-    return TEGRA_HOST1X_OK;
-}
-
-extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
-{
-    return tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_DEFAULT, words, count);
-}
-
-extern "C" void tegra_host1x_describe_channel(uint32_t channel, char *buffer, size_t size)
-{
-    if (!gHost || channel >= TEGRA_HOST1X_CHANNELS) {
-        snprintf(buffer, size, "host1x not mapped");
-        return;
-    }
-    const uint32_t cbstat = sync(SYNC_CBSTAT0 + 4 * channel);
-    snprintf(buffer, size,
-             "ch%u DMAGET %#x DMAPUT %#x DMACTRL %#x FIFOSTAT %#x class %#x offset %#x CBREAD %#x STOP %#x", channel,
-             channelRead(channel, CH_DMAGET), channelRead(channel, CH_DMAPUT), channelRead(channel, CH_DMACTRL),
-             channelRead(channel, CH_FIFOSTAT), (cbstat >> 16) & 0x3ff, cbstat & 0xffff,
-             sync(SYNC_CBREAD0 + 4 * channel), sync(SYNC_CMDPROC_STOP));
-}
-
-extern "C" void tegra_host1x_describe(char *buffer, size_t size)
-{
-    tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_DEFAULT, buffer, size);
-}
-
-// Linux cdma_freeze: the channel's command processor stops and the channel is torn down, so the methods it was
-// feeding an engine that stopped taking them are dropped. The engine is reset before tegra_host1x_channel_restart.
-extern "C" void tegra_host1x_channel_teardown(uint32_t channel)
-{
-    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
-        return;
-    IOLockLock(gSubmitLock);
-    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) | 1u << channel);
-    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
-    syncWrite(SYNC_CH_TEARDOWN, 1u << channel);
-    IOLockUnlock(gSubmitLock);
-}
-
-// Linux cdma_resume with nothing left to run: GET is set to PUT (INITGET loads it from PUT), so the torn-down stream
-// is skipped and the next submit runs first.
-extern "C" void tegra_host1x_channel_restart(uint32_t channel)
-{
-    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
-        return;
-    IOLockLock(gSubmitLock);
-    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
-    channelWrite(channel, CH_DMAPUT, gChannels[channel].put);
-    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
-    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) & ~(1u << channel));
-    channelWrite(channel, CH_DMACTRL, 0);
-    IOLockUnlock(gSubmitLock);
-}
-
 // Clients have quiesced (their last fences reached) before this. SC7 powers the sync unit and channels down, so the
 // syncpoint values handed out are saved (Linux host1x_syncpt_save) and the channels are stopped.
 extern "C" void tegra_host1x_suspend(void)
@@ -393,8 +229,7 @@ extern "C" void tegra_host1x_suspend(void)
     IOLockLock(gSubmitLock);
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
-    for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
+    switch_host1x_channels_stop();
     gState = 2;
     IOLockUnlock(gSubmitLock);
 }
@@ -423,7 +258,7 @@ extern "C" void tegra_host1x_resume(void)
     syncConfigure();
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
-    channelProgram();
+    switch_host1x_channels_program();
     gState = 1;
     switch_host1x_intr_start();
     IOLockUnlock(gSubmitLock);

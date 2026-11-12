@@ -396,6 +396,9 @@ typedef struct {
     uint32_t subRects;           // bit t: under transform t a destination rectangle inside a larger surface lands in
                                  // place (where the flips mirror is measured, not assumed); transform 0 always
     uint32_t surfaceFlips;       // measured flips precede transpose and mirror around the complete output surface
+    uint32_t multiSlot;          // 1: one job composes several slots, bottom first, each over those below
+                                 // (TegraVICCompose.h)
+    uint32_t slotAlpha;          // 1: a slot blends by its pixels' alpha or a global alpha, not only covers
 } TegraVICTraits;
 
 // VIC 4.0 as the unit measured it with a boot self-test on all 19 boots from 11-05 23:53 to 11-06 23:42, every line
@@ -424,6 +427,8 @@ static const TegraVICTraits kTegraVICTraits = {
     .packedYcc = 0,       // a packed 4:2:2 row's element size and byte order: probe gpu.x1.vic_packed422
     .subRects = 0x41,
     .surfaceFlips = 1,
+    .multiSlot = 1,  // no job has run two slots yet: probe gpu.x1.vic_compose
+    .slotAlpha = 1,  // the same probe's alpha cases, apart so an alpha failure leaves opaque composites on
 };
 
 #define TEGRA_VIC_MAX_METHODS 12

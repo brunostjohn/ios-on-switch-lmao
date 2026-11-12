@@ -73,15 +73,12 @@ uint32_t hevcnvenc_ctbs(const HEVCEncConfig *c)
     return (hevcenc_coded_width(c) / HEVCNVENC_CTB) * (hevcenc_coded_height(c) / HEVCNVENC_CTB);
 }
 
-void hevcnvenc_layout(const HEVCEncConfig *c, H264EncLayout *l)
+void hevcnvenc_layout(const HEVCEncConfig *c, uint32_t inputLayout, H264EncLayout *l)
 {
     memset(l, 0, sizeof(*l));
     const uint32_t width = hevcenc_coded_width(c), height = hevcenc_coded_height(c);
-    const uint32_t pitch = ALIGN(width, 64), rows = tegra_nvenc_surface_rows(height);
-    l->input.pitch = l->recon.pitch = pitch;
-    l->input.rows = l->recon.rows = rows;
-    l->input.chroma_offset = l->recon.chroma_offset = pitch * rows;
-    l->input.bytes = l->recon.bytes = pitch * rows + pitch * rows / 2;
+    h264enc_surface(inputLayout, width, height, &l->input);
+    h264enc_surface(TEGRA_NVENC_LAYOUT_TILED16, width, height, &l->recon);
     l->bitstream_bytes = ALIGN(tegra_nvenc_h265_bitstream_bytes(width, height), 65536);
     l->status_bytes = 4096;
     l->history_bytes = ALIGN(tegra_nvenc_history_bytes(width, height), 256);
@@ -104,12 +101,8 @@ static void surfaceConfig(const HEVCEncConfig *c, uint32_t layout, uint32_t chro
         cfg->tiled_16x16 = 1;  // references are always 16x16 tiled (nvenc_drv.h 1.5)
         return;
     }
-    if (layout == TEGRA_NVENC_LAYOUT_BL2_LOG)
-        cfg->block_height = 1;
-    else if (layout == TEGRA_NVENC_LAYOUT_BL2_RAW || layout == TEGRA_NVENC_LAYOUT_BL4_LOG)
-        cfg->block_height = 2;
-    else if (layout == TEGRA_NVENC_LAYOUT_TILED16)
-        cfg->tiled_16x16 = 1;
+    cfg->tiled_16x16 = layout == TEGRA_NVENC_LAYOUT_TILED16;
+    cfg->block_height = tegra_nvenc_layout_gobs(layout);
 }
 
 static uint8_t qp(uint32_t v)

@@ -187,6 +187,12 @@ public:
 
     std::shared_ptr<SharedEvents> sharedEvents();
 
+    // WriterPromise (method 34): the imports a command buffer will write, named before its job exists, so that no present
+    // latches one of them ahead of that writer. The cookie to end it with; 0: none taken (refused, or more than the kernel
+    // takes at once).
+    uint64_t promiseWrites(const uint64_t *handles, uint32_t count);
+    void endPromise(uint64_t cookie);
+
     uint32_t maxPushes() const
     {
         return (info_.flags & TegraGM20BInfoSubmitAddress) ? TegraGM20BMaxJobPushes : TegraGM20BMaxPushes;
@@ -235,6 +241,7 @@ public:
     }
 
 private:
+    std::atomic<uint64_t> promiseCookie_{1};
     void setError(std::string error)
     {
         std::lock_guard<std::mutex> lock(errorLock_);

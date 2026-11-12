@@ -228,11 +228,14 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
         return -22;
     *out = nullptr;
     for (uint32_t i = 0; i < count; ++i)
-        if ((tokens[i].engine != SWITCH_GPU_ENGINE_GM20B && tokens[i].engine != SWITCH_GPU_ENGINE_VIC &&
-             tokens[i].engine != SWITCH_GPU_ENGINE_NVDEC && tokens[i].engine != SWITCH_GPU_ENGINE_DISPLAY) ||
-            !tokens[i].reset_generation ||
-            (tokens[i].engine == SWITCH_GPU_ENGINE_GM20B && tokens[i].value > UINT32_MAX))
-            return -22;
+	    if ((tokens[i].engine != SWITCH_GPU_ENGINE_GM20B &&
+		 tokens[i].engine != SWITCH_GPU_ENGINE_VIC &&
+		 tokens[i].engine != SWITCH_GPU_ENGINE_NVDEC &&
+		 tokens[i].engine != SWITCH_GPU_ENGINE_DISPLAY &&
+		 tokens[i].engine != SWITCH_GPU_ENGINE_NVENC) ||
+		!tokens[i].reset_generation ||
+		(tokens[i].engine == SWITCH_GPU_ENGINE_GM20B && tokens[i].value > UINT32_MAX))
+		    return -22;
     if (!initialize())
         return -12;
     IOLockLock(queue.lock);

@@ -6,6 +6,13 @@ struct SwitchHost1xResult;
 struct switch_gpu_bridge;
 struct switch_gpu_event_waits;
 
+// Runs once per job on host1x's interrupt work loop (it must not sleep), with the job's fence and result (0, or a
+// negative errno), after the hardware and the semantic outcome are in and before the job's Results record completes.
+struct SwitchNVDECCompletion {
+    void (*done)(void *context, uint32_t fence, int result) = nullptr;
+    void *context = nullptr;
+};
+
 struct SwitchNVDECQueue {
     static constexpr uint32_t kSlots = 8;
 
@@ -15,6 +22,7 @@ struct SwitchNVDECQueue {
         switch_gpu_bridge *bridge = nullptr;
         switch_gpu_event_waits *semantics = nullptr;
         SwitchHost1xResult *outcome = nullptr;
+        SwitchNVDECCompletion completion = {};
     };
 
     Job jobs[kSlots] = {};
@@ -42,11 +50,11 @@ struct SwitchNVDECQueue {
     }
 
     bool publish(uint64_t submittedUs, switch_gpu_bridge *bridge = nullptr, switch_gpu_event_waits *semantics = nullptr,
-                 SwitchHost1xResult *outcome = nullptr)
+                 SwitchHost1xResult *outcome = nullptr, SwitchNVDECCompletion completion = {})
     {
         if (full() || submitted == UINT64_MAX)
             return false;
-        jobs[tail()] = {++submitted, submittedUs, bridge, semantics, outcome};
+        jobs[tail()] = {++submitted, submittedUs, bridge, semantics, outcome, completion};
         ++count;
         return true;
     }

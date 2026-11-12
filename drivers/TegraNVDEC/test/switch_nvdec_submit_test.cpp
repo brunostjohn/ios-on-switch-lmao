@@ -5,7 +5,6 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../SwitchNVDECJobs.cpp"
-#include "../SwitchNVDECSubmission.cpp"
 #include "../TegraNVDECCancel.cpp"
 #include "../../../kits/SwitchEngineGate/SwitchEngineGate.h"
 
@@ -16,6 +15,8 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
+uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
+uint32_t arenaShort, arenaWaits, cancels;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
 int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
 std::vector<switch_host1x_fence *> fences;
@@ -255,10 +256,44 @@ int switch_gpu_bridge_wait_room()
     return 0;
 }
 
-int tegra_host1x_submit(const uint32_t *words, uint32_t count)
+int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, uint32_t **words)
+{
+    EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_DEFAULT));
+    EXPECT_TRUE(switch_test_queue_locked);
+    EXPECT_EQ(reservedWords, 0u) << "one reservation at a time";
+    if (arenaShort) {
+        --arenaShort;
+        return TEGRA_HOST1X_EAGAIN;
+    }
+    reservedWords = capacity;
+    *words = arena;
+    return 0;
+}
+
+int switch_host1x_job_wait_room(uint32_t, uint32_t)
+{
+    EXPECT_FALSE(transactionLocked);
+    EXPECT_FALSE(switch_test_queue_locked);
+    ++arenaWaits;
+    return 0;
+}
+
+void switch_host1x_job_cancel(uint32_t)
+{
+    ++cancels;
+    reservedWords = 0;
+}
+
+// The stream host1x gathers is the one the job path wrote into the arena.
+int switch_host1x_job_submit(uint32_t, const uint32_t *first, uint32_t count, uint32_t syncpt, uint32_t threshold)
 {
     ++submits;
-    publishedWords.assign(words, words + count);
+    EXPECT_EQ(first, arena);
+    EXPECT_LE(count, reservedWords);
+    reservedWords = 0;
+    publishedWords.assign(first, first + count);
+    submittedSyncpt = syncpt;
+    submittedThreshold = threshold;
     return submitError;
 }
 
@@ -476,6 +511,7 @@ protected:
     void SetUp() override
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
+        reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = cancels = 0;
         powerUses = powerDones = 0;
         bridgeError = submitError = retainError = statusError = powerError = 0;
         semanticResult = 1;
@@ -523,8 +559,7 @@ protected:
             Results::cancel(&job.outcome);
         }
         EXPECT_EQ(bridges, released);
-        if (work.words)
-            IODelete(work.words, uint32_t, work.wordCapacity);
+        EXPECT_EQ(reservedWords, 0u) << "every reservation submitted or cancelled";
         IOLockFree(gLock);
         gLock = nullptr;
         switch_test_queue_lock = nullptr;
@@ -534,10 +569,13 @@ protected:
         gCancel = nullptr;
     }
 
-    int submit()
+    int submit(const SwitchNVDECCompletion &completion = {})
     {
-        return publish(request, work, &fence);
+        waitedForRoom = false;
+        return publish(request, work, completion, &fence, &waitedForRoom);
     }
+
+    bool waitedForRoom = false;
 
     void gpu(uint32_t count = 1)
     {
@@ -608,6 +646,26 @@ TEST_F(SwitchNVDECSubmitTest, PendingGpuUsesHardwareBridgeOutsideOwnershipLocks)
     EXPECT_EQ(publishedWords[0], tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5));
     EXPECT_EQ(publishedWords[1], 0x1000001u);
     EXPECT_EQ(publishedWords[2], 170u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AJobIsGatheredFromWhereItWasWrittenWithItsOwnFence)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(submits, 1u);
+    EXPECT_EQ(submittedSyncpt, gSyncpt);
+    EXPECT_EQ(submittedThreshold, fence);
+    EXPECT_EQ(publishedWords.back(), tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt));
+}
+
+TEST_F(SwitchNVDECSubmitTest, NoArenaRoomSleepsOutsideTheQueueAndOwnershipLocks)
+{
+    arenaShort = 1;
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(arenaWaits, 1u);
+    EXPECT_EQ(begins, 2u);
+    EXPECT_EQ(aborts, 1u);
+    EXPECT_EQ(commits, 1u);
+    EXPECT_EQ(submits, 1u);
 }
 
 TEST_F(SwitchNVDECSubmitTest, ExecutedGpuStillBridgesUntilExternalVisibility)
@@ -853,7 +911,8 @@ TEST_F(SwitchNVDECSubmitTest, AnIdleGatedEngineIsPoweredOnByTheNextDecode)
         return nullptr;
     };
     const char *why = nullptr;
-    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    bool waitedForRoom = false;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
     testGate = nullptr;
     EXPECT_TRUE(gate.powered());
     EXPECT_FALSE(gSuspended);
@@ -876,12 +935,12 @@ TEST_F(SwitchNVDECSubmitTest, EveryRunHoldsThePowerOnceAndReleasesIt)
         return nullptr;
     };
     const char *why = nullptr;
-    ASSERT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    ASSERT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
     EXPECT_EQ(powerUses, 1u);
     EXPECT_EQ(powerDones, 1u);
     powerError = -19;
     const uint32_t before = submits;
-    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), -19);
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), -19);
     EXPECT_EQ(submits, before);
     EXPECT_EQ(powerDones, 1u);
 }
@@ -902,4 +961,72 @@ TEST_F(SwitchNVDECSubmitTest, AParkedQueueHoldsTheNextJobUntilAResumeRebasesIt)
     EXPECT_FALSE(gSuspended);
     ASSERT_EQ(submit(), 0);
     EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence + 3));
+}
+
+namespace {
+struct Completed {
+    uint32_t fence;
+    int result, recordStatus;
+    bool queueLocked;
+};
+
+std::vector<Completed> completed;
+
+void recordCompletion(void *context, uint32_t fence, int result)
+{
+    const switch_gpu_backing_token token = {*static_cast<uint64_t *>(context), switch_nvdec_result_state.generation,
+                                            SWITCH_GPU_ENGINE_NVDEC, gSyncpt};
+    completed.push_back({fence, result, status(&token), switch_test_queue_locked});
+}
+}  // namespace
+
+// The AVD plug-in's emission hangs off this: a job's completion runs once from its fence-driven retirement, off the
+// queue lock, while a Wait on the job would still sleep (its Results record not yet complete).
+TEST_F(SwitchNVDECSubmitTest, ACompletionRunsOnceFromRetirementBeforeItsRecordCompletes)
+{
+    completed.clear();
+    uint64_t sequence = nextTestSequence + 1;
+    ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    interrupt(0);
+    EXPECT_TRUE(completed.empty()) << "the semantic outcome is not in yet";
+    semantic(sequence);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].fence, fence);
+    EXPECT_EQ(completed[0].result, 0);
+    EXPECT_EQ(completed[0].recordStatus, 0) << "the record completes after the completion";
+    EXPECT_FALSE(completed[0].queueLocked);
+    EXPECT_EQ(waitSequence(sequence), 0);
+    EXPECT_EQ(gQueue.jobs[0].completion.done, nullptr);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AFailedProducersJobCompletesWithItsError)
+{
+    completed.clear();
+    gpu();
+    uint64_t sequence = nextTestSequence + 1;
+    ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    bridged(0, -5);
+    interrupt(0);
+    semantic(sequence);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].result, -5);
+}
+
+// A client whose ring of input buffers is one deeper than the queue never writes one a job still reads: the submit that
+// finds the queue full sleeps until the oldest job retires, and says so.
+TEST_F(SwitchNVDECSubmitTest, ASubmitIntoAFullQueueSleepsUntilTheOldestRetiresAndSaysSo)
+{
+    for (uint32_t i = 0; i < SwitchNVDECQueue::kSlots; ++i) {
+        ASSERT_EQ(submit(), 0);
+        EXPECT_FALSE(waitedForRoom);
+    }
+    ASSERT_TRUE(gQueue.full());
+    switch_test_while_asleep = [] {
+        interrupt(0);
+        semantic(nextTestSequence + 1);
+    };
+    ASSERT_EQ(submit(), 0);
+    EXPECT_TRUE(waitedForRoom);
+    EXPECT_EQ(gQueue.completed, nextTestSequence + 1);
+    EXPECT_EQ(fence, nextTestSequence + SwitchNVDECQueue::kSlots + 1);
 }

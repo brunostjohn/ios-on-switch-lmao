@@ -16,6 +16,7 @@
 #include "../../AVD/AVDBits.h"
 #include "../../AVD/MPEG2NVDEC.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "fake_engine.h"
 #include "../MPEG2Clip.h"
 #include "../MPEG2Trace.h"
 
@@ -27,6 +28,7 @@ typedef struct {
     uint64_t firstAvail[TEGRA_NVDEC_MAX_ENTRIES];
     bool haveFirst;
     H264Picture out;
+    FakeEngine engine;
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -38,6 +40,7 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
         if (!(f->va[h] = calloc(1, size)))
             return -1;
         f->size[h] = size;
+        fake_engine_allocated(&f->engine, h);
         *handle = h;
         *va = f->va[h];
         return 0;
@@ -82,13 +85,14 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         f->haveFirst = true;
     }
     f->last = *s;
-    *fence = (uint32_t)++f->submits;
+    f->submits++;
+    *fence = fake_engine_submit(&f->engine, s);
     return 0;
 }
 
 static int fakeWait(void *ctx, const TegraNVDECWait *wait)
 {
-    (void)ctx, (void)wait;
+    fake_engine_wait(&((Fake *)ctx)->engine, wait->fence);
     return 0;
 }
 
@@ -127,7 +131,13 @@ static uint32_t slot(const TegraNVDECSubmit *s, int i)
 
 static MPEG2Decoder *create(Fake *f)
 {
-    const H264Backend backend = {f, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, NULL, NULL, NULL, NULL};
+    const H264Backend backend = {.ctx = f,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     return mpeg2_decoder_create(&backend);
 }
 
@@ -479,12 +489,13 @@ int main(int argc, char **argv)
     const bool unsupported =
         mpeg2_decoder_set_sequence(d, &chroma422) == -1 && mpeg2_decoder_set_sequence(d, &huge) == -1;
     mpeg2_decoder_destroy(d);
-    const bool ok =
-        !failed[0] && !failed[1] && !failed[2] && fields && skipped && refused > 0 && unsupported && !f.refused;
+    const bool ok = !failed[0] && !failed[1] && !failed[2] && fields && skipped && refused > 0 && unsupported &&
+                    !f.refused && !f.engine.waits && !f.engine.busyWrites;
     printf("%s mpeg2: clip A 18, clip B 12 (interlaced), clip C 15 (MPEG-1) pictures against FFmpeg, field pairs %s, "
-           "missing references %s, checker refuses %d bad submits, 4:2:2 and oversized %s, %d jobs refused\n",
+           "missing references %s, checker refuses %d bad submits, 4:2:2 and oversized %s, %d jobs refused, %u waits, "
+           "%u CPU writes into a buffer a queued job uses\n",
            ok ? "PASS" : "FAIL", fields ? "ok" : "wrong", skipped ? "skipped" : "decoded", refused,
-           unsupported ? "refused" : "taken", f.refused);
+           unsupported ? "refused" : "taken", f.refused, f.engine.waits, f.engine.busyWrites);
     if (failed[0] || failed[1] || failed[2])
         printf("failed at clip A %d, B %d, C %d\n", failed[0] - 1, failed[1] - 1, failed[2] - 1);
     return ok ? 0 : 1;

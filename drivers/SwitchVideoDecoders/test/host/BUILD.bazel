@@ -3,7 +3,11 @@
 #   blocklinear_host_test  BlockLinear.c's de-swizzle against the per-byte GOB formula
 #   h264_host_test         H264NVDEC over ../VDECClip.h's clip: every submit accepted by the kernel's own checker
 #                          (TegraNVDECCheck.h), pictures out in x264's display order, the checker refusing each kind of
-#                          bad submit
+#                          bad submit; and over ../H264MbaffClip.h's MBAFF clip: MBAFF frames accepted, display order
+#   h264_fields_host_test  H264NVDEC over field-coded streams of its own (PAFF: field pairs, frames among fields,
+#                          long-term fields, unpaired fields, frame_num gaps): each P picture's RefPicList0 built from
+#                          the dpb[] table as NVDEC builds it equals FFmpeg's, a second field goes into its first's
+#                          surface, every sample is answered once, and the checker refuses each bad field setup
 #   vp9_host_test          VP9NVDEC over libvpx's own trace (../VP9Trace.h, ../VP9Clip.h from ../vp9gen): headers, the
 #                          entropy contexts NVDEC is given, the counter mapping and backward adaptation equal libvpx's
 #                          frame by frame; every submit accepted by the kernel's checker, which refuses each bad one
@@ -51,6 +55,7 @@ FRAMEWORKS = [
 host_library(
     name = "nvdec_check",
     hdrs = [
+        "//drivers/TegraNVDEC:SwitchNVDECProbeABI.h",
         "//drivers/TegraNVDEC:TegraNVDECABI.h",
         "//drivers/TegraNVDEC:TegraNVDECCheck.h",
         "//drivers/TegraNVDEC:TegraNVDECCheckMPEG.h",
@@ -67,14 +72,18 @@ host_library(
 host_library(
     name = "h264",
     srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264DPB.c",
         "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.c",
         "//drivers/SwitchVideoDecoders:AVD/H264Syntax.c",
+        "//drivers/SwitchVideoDecoders:AVD/NVDECRing.c",
         "//drivers/TegraNVDEC:nvidia/clc5b0.h",
         "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
     ],
     hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264DPB.h",
         "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.h",
         "//drivers/SwitchVideoDecoders:AVD/H264Syntax.h",
+        "//drivers/SwitchVideoDecoders:AVD/NVDECRing.h",
     ],
     copts = ["-O1"],
     deps = [":nvdec_check"],
@@ -104,6 +113,8 @@ host_library(
     srcs = [
         "//drivers/SwitchVideoDecoders:AVD/HEVCDisplayProbe.c",
         "//drivers/SwitchVideoDecoders:AVD/HEVCNVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/HEVCSetup.c",
+        "//drivers/SwitchVideoDecoders:AVD/HEVCState.h",
         "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.c",
         "//drivers/TegraNVDEC:nvidia/clc5b0.h",
         "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
@@ -183,6 +194,8 @@ host_library(
     name = "h264_host",
     srcs = [
         "h264_host.c",
+        "fake_engine.h",
+        "//drivers/SwitchVideoDecoders:test/H264MbaffClip.h",
         "//drivers/SwitchVideoDecoders:test/VDECClip.h",
     ],
     copts = ["-O1"],
@@ -191,9 +204,24 @@ host_library(
 )
 
 host_library(
+    name = "h264_fields_host",
+    srcs = [
+        "fake_engine.h",
+        "h264_fields_host.c",
+        "h264_fields_scenarios.h",
+        "h264_fields_stream.c",
+        "h264_fields_stream.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=h264_fields_host_main"],
+    deps = [":h264"],
+)
+
+host_library(
     name = "vp9_host",
     srcs = [
         "vp9_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/VP9Clip.h",
         "//drivers/SwitchVideoDecoders:test/VP9Trace.h",
     ],
@@ -207,6 +235,7 @@ host_library(
     name = "hevc_host",
     srcs = [
         "hevc_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/HEVCClip.h",
         "//drivers/SwitchVideoDecoders:test/HEVCTrace.h",
     ],
@@ -219,6 +248,7 @@ host_library(
     name = "mpeg2_host",
     srcs = [
         "mpeg2_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/MPEG2Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG2Trace.h",
     ],
@@ -231,6 +261,7 @@ host_library(
     name = "mpeg4_host",
     srcs = [
         "mpeg4_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Trace.h",
     ],
@@ -250,9 +281,12 @@ host_library(
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDAlpha.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.c",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDMPEG.c",
+        "//drivers/SwitchVideoDecoders:AVD/AVDRoutes.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDTiles.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
         "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
@@ -278,6 +312,7 @@ host_library(
     srcs = [
         "avd_register_host.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDRegister.c",
@@ -319,6 +354,7 @@ host_library(
     "avd_host",
     "avd_register_host",
     "blocklinear_host",
+    "h264_fields_host",
     "h264_host",
     "hevc_host",
     "mpeg2_host",

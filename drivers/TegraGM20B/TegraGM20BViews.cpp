@@ -83,12 +83,29 @@ void noteBusy(tgm_tiled &t, uint32_t id)
 		os_log(OS_LOG_DEFAULT,
 		       "tegra-gm20b: IOSurface %u is block-linear and CPU-locked more than %u "
 		       "times a second (%s[%d]): "
-		       "each lock moves its texels",
+		       "a lock after each GPU write moves its texels",
 		       id, kBusyLocks, name, proc_selfpid());
 	}
 #else
 	(void)t;
 	(void)id;
+#endif
+}
+
+void noteReused(const tgm_coh *c, bool same)
+{
+#if TGM_STATS
+	static int announced;
+	if (!same || __atomic_exchange_n(&announced, 1, __ATOMIC_RELAXED))
+		return;
+	char name[32];
+	proc_selfname(name, sizeof(name));
+	os_log(OS_LOG_DEFAULT,
+	       "tegra-gm20b: IOSurface %u: a CPU lock reused the rows its last lock moved, no texels moved (%s[%d])",
+	       tgm_coh_surface_id(c), name, proc_selfpid());
+#else
+	(void)c;
+	(void)same;
 #endif
 }
 
@@ -110,6 +127,23 @@ void move(tgm_coh *c, const tgm_tiled &t, const tgm_relayout_pages &rows, int op
 	}
 }
 
+// The rows the last read-only locks gave back, if no GPU submission may have written the texels since they were moved
+// and the scratch still holds them (iconservicesagent reads each icon render back with three locks in a row): no move.
+tgm_scratch *reuse(tgm_coh *c, tgm_tiled &t, uint64_t written, tgm_relayout_pages &rows, bool &same)
+{
+	same = false;
+	tgm_scratch *kept = t.kept;
+	t.kept = nullptr;
+	int intact = 0;
+	tgm_scratch *scratch = kept ? tgm_scratch_reclaim(kept, t.kept_handout, &intact) : nullptr;
+	if (!scratch)
+		return nullptr;
+	tgm_scratch_pages(scratch, &rows);
+	same = intact && t.kept_written == written;
+	noteReused(c, same);
+	return scratch;
+}
+
 // The first lock: the texels into a cleared scratch as rows, behind the GPU's writers. Nonzero: refused, with nothing
 // done: kIOSurfaceLockAvoidSync while the GPU writes it, or no scratch to hold the rows (the CPU never sees texels).
 int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
@@ -117,9 +151,17 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 	if ((options & kLockAvoidSync) && tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS))
 		return 1;
+	const uint64_t written = tgm_coh_written(c);
 	tgm_relayout_pages rows;
-	tgm_scratch *scratch =
-		tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1, &rows);
+	bool same = false;
+	tgm_scratch *scratch = reuse(c, t, written, rows, same);
+	t.filled_written = written;
+	if (same) {
+		t.scratch = scratch;
+		return 0;
+	}
+	if (!scratch)
+		scratch = tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1, &rows);
 	if (!scratch) {
 		switch_refusal("iosurface-layout", "no-scratch",
 			       "IOSurface %u: no memory for a CPU lock's rows: the lock is refused",
@@ -187,6 +229,9 @@ void drain(tgm_coh *c, tgm_tiled &t)
 	if (t.stranded) {
 		tgm_scratch_discard(t.scratch);
 	} else {
+		t.kept = t.wrote ? nullptr : t.scratch;
+		t.kept_handout = tgm_scratch_handout(t.scratch);
+		t.kept_written = t.filled_written;
 		tgm_scratch_put(t.scratch);
 	}
 	t.scratch = nullptr;
@@ -275,13 +320,45 @@ void unlock(tgm_coh *c, tgm_tiled &t, void *client, uint32_t id, uint32_t option
 		released = true;
 	}
 }
+
+// A deferred surface (TegraGM20BCoherency.cpp: its last GPU import went while it was block-linear) has its texels moved
+// back to rows in place at its first lock, and is pitch from then on: the move its last import's release would have made.
+// A deferred entry another surface's ID finds is that surface's no longer: nothing to do for this lock.
+// A kIOSurfaceLockAvoidSync lock while its GPU writers still run goes to the view, which refuses it.
+bool lockedDeferred(tgm_coh *c, uint32_t index, uint32_t id, uint32_t options)
+{
+	const int deferred = tgm_coh_deferred_for(c, id);
+	if (deferred <= 0 || index != kLock)
+		return deferred < 0;
+	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
+	if ((options & kLockAvoidSync) && tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS))
+		return false;
+	if (tgm_tiled_untile_deferred(c))
+		return false;
+	tgm_coh_undefer(c);
+	return true;
+}
 }  // namespace
+
+extern "C" void tgm_views_deferred_lock(uint32_t id, uint32_t options)
+{
+	if (!tgm_coh_any_deferred())
+		return;
+	if (tgm_coh *c = tgm_coh_find_tiled(id)) {
+		lockedDeferred(c, kLock, id, options);
+		tgm_coherency_put(c);
+	}
+}
 
 extern "C" int tgm_views_trap(void *client, uint32_t index, uint32_t id, uint32_t options)
 {
 	tgm_coh *c = tgm_coh_find_tiled(id);
 	if (!c)
 		return 0;
+	if (lockedDeferred(c, index, id, options)) {
+		tgm_coherency_put(c);
+		return 0;
+	}
 	int refused = 0;
 	bool held = false;
 	bool released = false;

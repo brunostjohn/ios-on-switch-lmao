@@ -63,7 +63,7 @@ using lck_mtx_t = std::mutex;
 inline void lck_mtx_lock(lck_mtx_t *lock) __attribute__((no_thread_safety_analysis)) { lock->lock(); }
 inline void lck_mtx_unlock(lck_mtx_t *lock) __attribute__((no_thread_safety_analysis)) { lock->unlock(); }
 inline void IOLog(const char *, ...) {}
-namespace OriginalIOSurface { constexpr unsigned long baseOffset = 0x168, clientMemory = 0x150; }
+namespace OriginalIOSurface { constexpr unsigned long baseOffset = 0x168, clientMemory = 0x150, parent = 0x358, memoryRegions = 0x350; }
 namespace OriginalIOSurfaceClient { constexpr unsigned long sharedClient = 0x10, map = 0x20; }
 struct OriginalIOSurfaceRootUserClient {
 static constexpr unsigned long clientTableLock = 0x20, clientTable = 0x28, clientCapacity = 0x30, sharedClient = 0x38;

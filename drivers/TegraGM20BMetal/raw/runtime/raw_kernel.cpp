@@ -3,6 +3,7 @@
 // probe) is nvkmd_darwin's (out/gpu/nvk/nvk-darwin.patch, MIT), so whatever the kext admits for NVK it admits here.
 #include "raw_kernel.h"
 #include "raw_encode_profile.h"
+#include "TegraGM20BJobABI.h"
 
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
@@ -86,6 +87,25 @@ int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size
         memcpy(&buffer[2], in, inSize);
     return IOConnectCallStructMethod(conn_, selector_, buffer, 8 + inSize, outSize ? out : nullptr,
                                      outSize ? &outBytes : nullptr);
+}
+
+uint64_t Kernel::promiseWrites(const uint64_t *handles, uint32_t count)
+{
+    if (!count || count > TegraGM20BMaxPromisedWrites)
+        return 0;
+    TegraGM20BAbiSurfaceUse uses[TegraGM20BMaxPromisedWrites];
+    for (uint32_t i = 0; i < count; ++i)
+        uses[i] = {handles[i], TegraGM20BSurfaceWrite, 0};
+    const uint64_t cookie = promiseCookie_.fetch_add(1, std::memory_order_relaxed);
+    const TegraGM20BAbiWriterPromise in{cookie, uint64_t(uintptr_t(uses)), count, TegraGM20BPromiseBegin};
+    return call(TegraGM20BMethodWriterPromise, &in, sizeof in, nullptr, 0) == KERN_SUCCESS ? cookie : 0;
+}
+
+void Kernel::endPromise(uint64_t cookie)
+{
+    const TegraGM20BAbiWriterPromise in{cookie, 0, 0, TegraGM20BPromiseEnd};
+    if (cookie)
+        call(TegraGM20BMethodWriterPromise, &in, sizeof in, nullptr, 0);
 }
 
 bool Kernel::open(std::string &err)

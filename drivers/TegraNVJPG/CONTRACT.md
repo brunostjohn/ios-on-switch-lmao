@@ -209,7 +209,7 @@ Colour: NVJPG converts with JFIF's full-range BT.601 (T.871), programmed in its 
 | interface | nvjpg_dec_drv_pic_setup_s 0xb2c bytes, nvjpg_dec_status 0x20, cle7d0.h methods | nvidia/SOURCE [V]; works per averne's FFmpeg/oss-nvjpg [I]; on this unit [T] |
 | table order | huffTab[0] DC, [1] AC; codeNum = BITS, symbol = HUFFVAL, min codes 0; quant zig-zag | FFmpeg nvtegra_mjpeg.c, oss-nvjpg [I]; [T] |
 | outputs | NV12 (memory mode 0), planar, RGB (memory mode 3), downscale 1/2..1/8, pitch linear, strides 64 B | nvjpg_drv.h comments [I]; [T] |
-| clock | PLLP 408 MHz | below the T210B01 DVFS floor, as TegraNVDEC [I] |
+| clock | PLLC2 at the 637 mV point of this SoC process (422.4 MHz for process 1), else PLLP 408 MHz | tegra210b01-core-dvfs.c "nvjpg" row, kits/SwitchCAR/SwitchEngineClock.h [I] |
 
 Stages: J0 host1x + buffers, J1 SMMU (ASID 125 through TegraSMMU; VIC 127, display 126) + power + falcon, J2
 IMMEDIATE/OP_DONE by interrupt, J3 publish. Before J3 every failure is one line and the engine is parked (reset, clock
@@ -243,7 +243,7 @@ Pull logs read-only after boot (`idevicesyslog -u <udid> archive boot.tar --age-
 also in the boot console).
 
 1. **Bring-up**, in order, one line each, within a few seconds of NVDEC's N3 line:
-   `TegraNVJPG: J0 ok firmware 16640 bytes ...`, `J1 ok ASID 125 ... partition 26 ... 408 MHz, falcon started (OS code
+   `TegraNVJPG: J0 ok firmware 16640 bytes ...`, `J1 ok ASID 125 ... partition 26 ... 422400 kHz, falcon started (OS code
    0+0x300 data 0x3d00+0x200, 13 apps)`, `J2 ok host interface and falcon incremented syncpoint ...`,
    `J3 ok AppleJPEGDriver published (... interchange formats 1, ...)`.
    - A `J<n> FAIL` line ends the bring-up: nothing is published and JPEG stays on the CPU, as before. A

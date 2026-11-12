@@ -320,7 +320,8 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         static_cast<uint32_t>((gFirmware.pa + gImage.fce_data) >> 8),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, stream, sizeof(stream) / sizeof(stream[0]));
+    int ret =
+        switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_VIC, stream, sizeof(stream) / sizeof(stream[0]), id, from + 2);
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";

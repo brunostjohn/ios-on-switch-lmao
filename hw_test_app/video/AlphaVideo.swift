@@ -56,7 +56,7 @@ public enum AlphaVideo {
             throw VideoError.message("the alpha encoder's first sample has no format description")
         }
         return CompressedClip(
-            samples: samples, format: description,
+            samples: samples, decodeOrder: samples, format: description,
             usingHardware: Compressor.readFlag(session, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder),
             encoderID: Compressor.readString(session, kVTCompressionPropertyKey_EncoderID),
             seconds: CFAbsoluteTimeGetCurrent() - start,

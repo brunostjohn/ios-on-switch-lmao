@@ -282,6 +282,19 @@ extern "C" void tgm_scratch_put(struct tgm_scratch *s)
 	switch_scratch_put(s);
 }
 
+extern "C" struct tgm_scratch *tgm_scratch_reclaim(struct tgm_scratch *s, uint64_t handout, int *intact)
+{
+	bool kept = false;
+	auto *again = static_cast<tgm_scratch *>(switch_scratch_reclaim(s, handout, current_task(), &kept));
+	*intact = kept;
+	return again;
+}
+
+extern "C" uint64_t tgm_scratch_handout(const struct tgm_scratch *s)
+{
+	return s->handout;
+}
+
 extern "C" void tgm_scratch_discard(struct tgm_scratch *s)
 {
 	switch_scratch_discard(s);

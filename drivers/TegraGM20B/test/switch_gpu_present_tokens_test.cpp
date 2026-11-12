@@ -144,6 +144,23 @@ TEST_F(PresentTokens, ExternalCompletionJoinsLaggingSoftwareRetirementOnlyAfterH
 	EXPECT_EQ(references[1], 0);
 }
 
+// The interrupt pass's end finishes a watched present: nothing there may sleep, since only that pass's own interrupt could
+// end the sleep. A producer it finds not complete is a failure, never a wait.
+TEST_F(PresentTokens, TheInterruptPassFinishNeverWaits)
+{
+	const auto producer = token(1, SWITCH_GPU_ENGINE_GM20B);
+	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, &producer, 1), 0);
+	states[1] = 1;
+	EXPECT_EQ(switch_gpu_present_tokens_finish_ready(&held, nullptr), 0);
+	EXPECT_EQ(held.count, 0u);
+	EXPECT_EQ(references[1], 0);
+	states[1] = 0;
+	ASSERT_EQ(switch_gpu_present_tokens_prepare(&held, &producer, 1), 0);
+	EXPECT_EQ(switch_gpu_present_tokens_finish_ready(&held, nullptr), -5);
+	EXPECT_EQ(waits, 0u);
+	EXPECT_EQ(references[1], 0);
+}
+
 TEST_F(PresentTokens, TerminalFailureAndExistingCopyFailureRemainFailures)
 {
 	const auto producer = token(1);

@@ -9,6 +9,8 @@ public enum VideoCodec: String, CaseIterable, Sendable {
     case mpeg4
     case mpeg2
     case mpeg1
+    case h264Paff = "h264_paff"
+    case h264Mbaff = "h264_mbaff"
 
     public var bitDepth: Int { self == .hevc10 ? 10 : 8 }
     public var container: String { self == .vp9 ? "ivf" : "mp4" }
@@ -51,6 +53,11 @@ public struct Clip: Equatable, Sendable {
             ]
         case .mpeg1:
             return [Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 8_000_000)]
+        case .h264Paff:
+            // Interlaced H.264 in field pictures, mostly I_PCM (media/H264FieldWriter.swift): kept small.
+            return [Clip(codec: codec, width: 320, height: 256, fps: 30, frames: 30, bitrate: 0)]
+        case .h264Mbaff:
+            return [Clip(codec: codec, width: 1920, height: 1080, fps: 30, frames: 60, bitrate: 8_000_000)]
         default:
             return [
                 Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 1_000_000),

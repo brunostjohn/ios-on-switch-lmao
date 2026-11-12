@@ -374,6 +374,8 @@ class AGXDeviceUserClient : public IOUserClient
     SwitchGpuEventClient events_;
     SwitchGpuResourceClient resources_;
     SwitchGpuAdmission admissions_[kMaxChannels];
+    SwitchGpuAdmission promises_[TegraGM20BMaxWriterPromises];
+    uint64_t promiseCookies_[TegraGM20BMaxWriterPromises] = {};
     uint64_t admissionCookies_[kMaxChannels] = {}, lastAdmissionCookies_[kMaxChannels] = {};
     SwitchGpuEventChannel eventChannels_[kMaxChannels];
 
@@ -525,6 +527,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,
 			   switch_gpu_set_member *members, TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
+	IOReturn writerPromise(const TegraGM20BAbiWriterPromise *in);
+	IOReturn promiseWrites(const TegraGM20BAbiWriterPromise *in, const TegraGM20BAbiSurfaceUse *uses);
 	IOReturn submitJob(const TegraGM20BAbiSubmitAddress *in, TegraGM20BAbiExecReply *out);
 	IOReturn runJob(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out);
 	IOReturn runJobUses(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out,

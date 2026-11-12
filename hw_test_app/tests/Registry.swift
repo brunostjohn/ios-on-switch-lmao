@@ -18,11 +18,17 @@ public enum Registry {
     ]
 
     static let video: [any HWTest] =
-        VideoDecodeTest.all + [NativeExportTest.h264, NativeExportTest.main10, NativeExportTest.main10To8, HEVCAlphaTest()]
+        VideoDecodeTest.all + [
+            NativeExportTest.h264, NativeExportTest.main10, NativeExportTest.main10To8, HEVCAlphaTest(),
+            DecodeRouteTest(),
+        ]
         + PlaybackTest.all + VideoEncodeTest.all + VideoEncodeIdleTest.all
+        + [VideoEncodeBFramesTest(), NVENCInputLayoutTest(), VideoTranscodeTest()]
 
     static let images: [any HWTest] =
-        ImageDecodeTest.all + [HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test()]
+        ImageDecodeTest.all + [
+            JPEGAfterIdleTest(), HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test(),
+        ]
 
     static let audio: [any HWTest] = [
         AudioPlaybackTest(rate: 44_100), AudioPlaybackTest(rate: 48_000), AudioLatencyTest(), AudioRouteTest(),
@@ -31,7 +37,8 @@ public enum Registry {
 
     static let display: [any HWTest] = [
         DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest(), PlanesTest(),
-        PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
+        SmallDrawableTest(), PresentAtTimeTest(), PlaneInUseTest(), ScanoutRoutesTest(), PlainSurfacesTest(),
+        DisplaySnapshotTest(), WakeTest(),
     ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
 
     static let sensorsAndInput: [any HWTest] = [

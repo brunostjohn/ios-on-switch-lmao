@@ -75,6 +75,7 @@
 #include "SwitchGpuTimeline.h"
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuPresentTokens.h"
+#include "SwitchGpuPresentWatch.h"
 #include "SwitchGpuMapping.h"
 #include "SwitchGpuPathStats.h"
 #include "SwitchGpuJobStats.h"
@@ -401,18 +402,16 @@ struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 idle;            /* presents that found no user work pending */
-	u32 writer;          /* presents that waited for their surface's importers only */
+	u32 idle;            /* presents with no producer to wait for */
+	u32 writer;          /* presents that waited for their surfaces' producers */
 	u32 present_flushes; /* L2_FLUSH_DIRTYs the presents pushed */
 	u64 map_small, map_big, map_could; /* tgm_stats_map */
 	u32 allocs;                        /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
 	u64 lat_sum, lat_max;                         /* user submissions only */
 	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
-	u32 copies,
-		gaps; /* presents stamped: the copy's own GPU time; the GPU's gap from the end of the last user
-				   * work the copy waited for to the copy's start (scheduling and semaphore acquire latency) */
-	u64 copy_sum, copy_max, gap_sum, gap_max; /* PTIMER units */
+	u32 copies;                /* presents stamped: the copy's own GPU time */
+	u64 copy_sum, copy_max;    /* PTIMER units */
 	/* the compositor's submissions: the GPU queue (kick to start stamp) of all of them, and of those whose kick found an
 	 * app on the GPU (tgm_sched_kicked: preempted, mid-switch or deferred), PTIMER units */
 	u32 comp, behind;
@@ -439,9 +438,7 @@ void tgm_stats_mem(u64 ms);
 
 /* Submit-to-fence latency (CPU clock), seen from the fence's nonstall interrupt (every channel's handler runs on each
  * one), and from the GPU's stamps (PTIMER): queue = the GPU started the submission - the kernel kicked it, exec = the
- * GPU finished it (L2 flush included) - started it. The present channel's stamps time its copy instead
- * (present_gap: and the gap before it). */
-static u64 present_gap(u32 seqno, u64 start);
+ * GPU finished it (L2 flush included) - started it. The present channel's stamps time its copy instead. */
 const char *tgm_prof_name(unsigned int c, char *buf, unsigned int len);
 
 void tgm_present_stats(u32 *presents, u64 *sum, u64 *max);
@@ -567,17 +564,17 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
  * of waiting for the GPU and swizzling it with the CPU (TegraGM20BUserClient.cpp tegra_gm20b_scanout_copy). One kernel
  * channel in its own address space, which maps the scanout surfaces, the swapped surfaces and every connection's fence
  * page (tgm_fence_page_get), does per frame:
- *  - a semaphore ACQUIRE_GEQ (acquire switch on: the channel yields while it waits) on the last submitted seqno of every
- *    user channel whose address space imports the surface (its first page, tgm_vm_import_note; every user channel if
- *    none does), so the copy runs after the compositor's rendering in GPU order, no
- *    CPU waits for it, and an app's GPU work does not hold up the frame;
+ *  - a semaphore ACQUIRE_GEQ (acquire switch on: the channel yields while it waits) on each producer token the display's
+ *    snapshot of the surface's backing names (the exact submission that last wrote it, never every channel that maps
+ *    it), so the copy runs after the compositor's rendering in GPU order, no CPU waits for it, and unrelated GPU work
+ *    does not hold up the frame;
  *  - one MAXWELL_DMA_COPY_A LAUNCH_DMA, pitch source (the surface's row bytes) to a BLOCKLINEAR destination: GOBs of
  *    64 bytes x 8 lines (GOB_HEIGHT_FERMI_8), blocks one GOB wide and 16 GOBs high, width 5120 bytes: the layout window A
  *    column-scans (NativeScanout.h native_legacy_block_copy);
  *  - the kernel fence (chan_fence: WFI, the L2 flush, semaphore release, NON_STALL_INTERRUPT).
  * The fence's nonstall interrupt completes it: the caller's callback (native_legacy_gpu_complete, which any context may
- * call) runs from the interrupt pass, with TEGRA_SCANOUT_SOURCE_LOST when a writer it waited for was killed before that
- * submission ended (the acquire passed on the kill's release, over a partial frame). A present that has not completed 1 s
+ * call) runs from the completion work item, with TEGRA_SCANOUT_SOURCE_LOST when a producer it waited for failed (the
+ * acquire passed on the kill's release, over a partial frame). A present that has not completed 1 s
  * after it was queued panics, naming what it waits for. Every mapping is volatile: the source was written by work whose
  * fence flushed the L2 (or bypassed it), the destination is read by the display controller only. The copy is
  * kits/SwitchGM20BEmit's (TegraGM20BCopyEmit.c).
@@ -595,26 +592,16 @@ struct present_state {
 	struct tgm_mem *fence_mem, *fences_mem;
 	void *fence; /* the channel's own fence page (pool) */
 	u64 fence_pa, fence_gpu, fences_gpu;
-	void *deadline_work, *completion_work;
+	void *deadline_work, *completion_work, *watch_work;
 	struct switch_gpu_present_tokens tokens;
+	struct switch_gpu_present_watch watch; /* a present with no job: tgm_present_watch_dependencies */
 	u32 typed_pending;
-	int completion_status;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
 	void (*done)(void *, int);
 	void *arg;
 	u32 completing; /* completions claimed whose callback has not returned yet */
-	u32 waits;      /* the acquires of the present in flight, for the deadline's line */
-	int writers;    /* they are the surface's writers', not every user channel's */
-
-	struct {
-		u64 id;
-		u32 seqno;
-		const volatile struct TegraGM20BAbiFence *fence;
-	} wait[TGM_SYNC_MAX];
-	volatile struct tgm_stamp
-		*wait_end[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
-	u32 stamped;  /* stats: seqno of the present in flight, whose copy is stamped */
+	u32 stamped;    /* stats: seqno of the present in flight, whose copy is stamped */
 	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */

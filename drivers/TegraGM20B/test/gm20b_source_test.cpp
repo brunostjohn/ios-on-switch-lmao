@@ -391,22 +391,25 @@ TEST(GM20BPresentSource, OneL2FlushPerPresent)
 		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY");
 }
 
-// A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
-// B's registers for a surface the GPU renders only after that work; window B's own fence maps nothing and copies nothing.
-TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
+// A present waits for exactly the producers its surfaces' backings name (TegraScanoutCopy alsoWritten: window B's too),
+// never for every channel whose address space maps them; window B's own fence maps nothing and copies nothing.
+TEST(GM20BPresentSource, PresentWaitsForTheSurfacesProducersOnly)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	EXPECT_THAT(copy, HasSubstr("present_imports(user, src_pa, also_pa)"));
-	EXPECT_THAT(copy, HasSubstr("(matched && !present_imports(user, src_pa, also_pa))"));
-	EXPECT_THAT(flat(Between(gpu(), "static int present_imports(", "\n}\n")),
-		    HasSubstr("vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, "
-			      "also_pa))"));
+	EXPECT_THAT(copy, Not(HasSubstr("tgm_live_chans")));
+	EXPECT_THAT(copy, Not(HasSubstr("vm_imports")));
+	EXPECT_THAT(gpu(), Not(HasSubstr("int tgm_present_copy(")));
+	EXPECT_THAT(gpu(), Not(HasSubstr("int tgm_present_copy_read(")));
 	EXPECT_THAT(flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n")),
-		    HasSubstr("copy->alsoWritten & ~0xfffULL"));
+		    HasSubstr("switch_gpu_backing_find_pa(copy->alsoWritten & ~0xfffULL)"));
 	const std::string fence =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_fence(", "\n}\n"));
-	EXPECT_THAT(fence, HasSubstr("tgm_present_copy(0, pa & ~0xfffULL, 0, 0, -1, 1, 1, 0, 0, 0, "
-				     "presentDone, display)"));
+	expectBefore(fence, "switch_gpu_backing_find_pa(pa & ~0xfffULL)", "gPresentSnapshot.add(backing)");
+	expectBefore(fence, "gPresentSnapshot.add(backing)", "tgm_present_copy_dependencies(0, 0, -1, 1, 1, 0, 0, 0, "
+							      "SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, "
+							      "gPresentSnapshot.tokens, gPresentSnapshot.count)");
+	EXPECT_THAT(fence, HasSubstr("if (ret && !presentBusy) gPresentSnapshot.cancel();"));
+	EXPECT_THAT(fence, HasSubstr("switch_gpu_backing_release(backing);"));
 	EXPECT_THAT(fence, Not(HasSubstr("presentSurface(")));
 }
 
@@ -430,7 +433,8 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	const std::string scanout =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
 	expectBefore(scanout, "#if TGM_STATS tgm_present_read reads",
-		     "#else gPresentSnapshot.done = presentDone; ret = tgm_present_copy_dependencies(");
+		     "#else gPresentSnapshot.done = presentDone; ret = watch ? presentWatched() : 1; if (ret "
+		     "== 1) ret = tgm_present_copy_dependencies(");
 	EXPECT_THAT(scanout, HasSubstr("nreads ? tgm_readback_done : presentDone"));
 	EXPECT_THAT(scanout, HasSubstr("if (ret && nreads) tgm_readback_refused();"));
 
@@ -508,7 +512,8 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		const std::string body = flat(definition(gpu(), waits));
 		expectBefore(body, "gate_enter();", "gate_leave();");
 	}
-	for (const char *refused : {"int tgm_present_copy(", "int tgm_present_copy_read(",
+	for (const char *refused : {"int tgm_present_copy_dependencies(",
+				    "int tgm_present_copy_read_dependencies(",
 				    "int tgm_pool_scrub(uint64_t pa, uint64_t bytes)",
 				    "static void scrub_work(void *arg)"}) {
 		const std::string body = flat(definition(gpu(), refused));
@@ -532,7 +537,8 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
 	const std::string nonstall = flat(definition(
 		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)"));
-	EXPECT_THAT(nonstall, HasSubstr("} else { chan_wake_waiters(chan); }"));
+	EXPECT_THAT(nonstall,
+		    HasSubstr("} else { chan_wake_waiters(chan); present_watch_fenced(chan, 0); }"));
 	EXPECT_EQ(Count(nonstall, "nvxnu_wake();"),
 		  1u);  // the scrubber's, while the sleep gate is shut
 	const std::string wake =
@@ -807,10 +813,27 @@ TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {", "unlockedWrites |= bo->unlockedReads;");
 	EXPECT_THAT(exec, HasSubstr("switch_gpu_job_visibility(visibility, events && events->signals(), "
-				    "unlockedWrites, hostWritten || transaction.host_written)"));
+				    "unlockedWrites || scanoutWrites, hostWritten || transaction.host_written)"));
 	const std::string surfaces = flat(SourceText("../TegraGM20BSurfaceClient.cpp"));
 	EXPECT_THAT(flat(definition(surfaces, "int switch_gpu_surface_client_memory(const OSObject *surface)")),
 		    HasSubstr("at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0"));
+}
+
+// FRAMECPU C6.1: a job writing a backing the display scans in place (a direct scanout slot) ends External in both submit
+// paths, so its completion means its writes are in DRAM and the display may flip with no present job.
+TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {",
+		     "scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;");
+	const std::string job = flat(SourceText("../TegraGM20BUserClientJobSubmit.cpp"));
+	expectBefore(job, "if (access & TegraGM20BSurfaceWrite) {",
+		     "scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;");
+	EXPECT_THAT(job, HasSubstr("switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || "
+				   "scanoutWrites, hostWritten || transaction.host_written)"));
+	const std::string backing = flat(SourceText("../SwitchGpuBacking.cpp"));
+	EXPECT_THAT(flat(definition(backing, "extern \"C\" int switch_gpu_backing_scanned(")),
+		    HasSubstr("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
@@ -1267,6 +1290,69 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
 }
 
+// A held command buffer's writer promise (TegraGM20BMethodWriterPromise) is the connection's: method 34 reaches it, it
+// names writes of the connection's imports only, and the connection's close ends every one it still has.
+TEST(GM20BJobSource, AWriterPromiseIsTheConnectionsAndEndsWithIt)
+{
+	const std::string run = flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
+	EXPECT_THAT(run, HasSubstr("case TegraGM20BMethodWriterPromise: wantIn = sizeof(TegraGM20BAbiWriterPromise);"));
+	EXPECT_THAT(run, HasSubstr("return writerPromise(static_cast<const TegraGM20BAbiWriterPromise *>(in));"));
+	const std::string promise = flat(definition(
+		client(), "IOReturn AGXDeviceUserClient::promiseWrites(const TegraGM20BAbiWriterPromise *in,"));
+	EXPECT_THAT(promise, HasSubstr("uses[i].access != TegraGM20BSurfaceWrite"));
+	EXPECT_THAT(promise, HasSubstr("const Bo *bo = findBo(uses[i].handle); if (!bo || !bo->backing) return "
+				       "kIOReturnNotFound;"));
+	EXPECT_THAT(promise, HasSubstr("promises_[slot].promise(backings, in->count)"));
+	const std::string retire = flat(client());
+	EXPECT_THAT(retire, HasSubstr("for (auto &promise : promises_) promise.end(); bzero(promiseCookies_,"));
+}
+
+// A direct present whose producer still runs at the offer has no job (SwitchGpuPresentWatch.h): the producer's own
+// interrupt pass makes it due with plain loads, the pass's end delivers it with interrupts on, and a kill, a hidden
+// producer and the deadline go to the work item. The arm comes before the offer's own look.
+TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
+{
+	const auto fenced = flat(definition(gpu(), "static inline void present_watch_fenced("));
+	EXPECT_THAT(fenced, HasSubstr("switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, "
+				      "tgm_chan_completed(chan))"));
+	EXPECT_THAT(fenced, Not(HasSubstr("mutex_lock")));
+	EXPECT_THAT(fenced, Not(HasSubstr("finish_visible")));
+	const std::string killed = flat(definition(
+		gpu(), "int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
+	expectBefore(killed, "__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);",
+		     "present_watch_fenced(chan, 1);");
+	const std::string pass = flat(definition(
+		SourceText("../shim/xnu_glue.cpp"),
+		"void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)"));
+	expectBefore(pass, "nvxnu_poll_irqs();", "tgm_present_pass();");
+	expectBefore(pass, "tgm_present_pass();", "nvxnu_wake();");
+	const std::string deliver = flat(definition(gpu(), "void tgm_present_pass(void)"));
+	EXPECT_THAT(deliver, HasSubstr("switch_gpu_present_watch_take_visible("));
+	// the pass's own thread: nothing may wait for a GPU interrupt
+	EXPECT_THAT(deliver, HasSubstr("switch_gpu_present_tokens_finish_ready("));
+	EXPECT_THAT(deliver, Not(HasSubstr("finish_visible")));
+	EXPECT_THAT(deliver, Not(HasSubstr("_wait(")));
+	EXPECT_THAT(flat(Between(SourceText("../SwitchGpuPresentTokens.h"),
+				 "switch_gpu_present_tokens_finish_ready(", "\n}\n")),
+		    Not(HasSubstr("token_wait")));
+	EXPECT_THAT(deliver, HasSubstr("nvxnu_work_schedule(tgm_present.watch_work);"));
+	EXPECT_THAT(deliver, Not(HasSubstr("mutex_lock")));
+	const std::string arm =
+		flat(definition(gpu(), "int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,"));
+	expectBefore(arm, "switch_gpu_present_watch_arm(", "mutex_unlock(&tgm_present.lock);");
+	expectBefore(arm, "gate_leave();", "present_physical(&tgm_present.watch.token)");
+	EXPECT_THAT(arm, HasSubstr("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));
+	const std::string outstanding = flat(definition(gpu(), "int tgm_present_outstanding(const void *arg)"));
+	EXPECT_THAT(outstanding, HasSubstr("switch_gpu_present_watch_armed(&tgm_present.watch)"));
+	const std::string deadline = flat(definition(gpu(), "static void present_deadline(void *arg)"));
+	expectBefore(deadline, "present_watch_work(NULL);", "mutex_lock(&tgm_present.lock);");
+	EXPECT_THAT(deadline, HasSubstr("if (tgm_present.pending && (s32)(tgm_chan_completed(tgm_present.chan) - "
+					"tgm_present.pending) >= 0)"));
+	const std::string offer = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
+	EXPECT_THAT(offer, HasSubstr("ret = watch && !nreads ? presentWatched() : 1;"));
+	EXPECT_THAT(offer, HasSubstr("ret = watch ? presentWatched() : 1;"));
+}
+
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
 	const auto irq = flat(definition(gpu(), "static inline void present_fenced("));
@@ -1282,17 +1368,18 @@ TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEve
 		copy,
 		"tgm_backing_dependencies(chan, tgm_present.tokens.tokens, dependency_count, 1)",
 		"if (dst_va) {");
-	expectBefore(copy, "&tgm_present.typed_pending, exact != 0", "chan_fence(chan);");
-	EXPECT_THAT(copy, HasSubstr("(room + dependency_count) * 5"));
+	expectBefore(copy, "&tgm_present.typed_pending, 1", "chan_fence(chan);");
+	EXPECT_THAT(copy, HasSubstr("dependency_count * 5"));
 	EXPECT_THAT(copy, HasSubstr("push->cur = push_start"));
 }
 
 TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuTokens)
 {
     const auto copy = flat(definition(gpu(), "static int present_copy("));
-    EXPECT_EQ(Count(copy, "if (!exact) {"), 2u);
+    EXPECT_THAT(copy, Not(HasSubstr("exact")));
+    EXPECT_THAT(copy, Not(HasSubstr("list_for_each_entry")));
     const auto exact = flat(definition(gpu(), "int tgm_present_copy_dependencies("));
-    EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count, 1)"));
+    EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count);"));
     const auto scanout = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
     EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.add(sourceBacking)"));
     EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.tokens, gPresentSnapshot.count"));

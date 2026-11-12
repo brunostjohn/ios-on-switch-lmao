@@ -100,6 +100,27 @@ switch_gpu_present_tokens_finish_visible(struct switch_gpu_present_tokens *held,
 	return result;
 }
 
+/* The GPU interrupt pass's end (gpu_present.c tgm_present_pass), whose thread no GPU interrupt can reach while it runs:
+ * never waits. A token not complete is a failure here, not a sleep only that pass could end. */
+static inline int
+switch_gpu_present_tokens_finish_ready(struct switch_gpu_present_tokens *held,
+				       int (*promote)(const struct switch_gpu_backing_token *))
+{
+	uint32_t i;
+	int result = 0;
+	for (i = 0; i < held->count; ++i)
+		if (switch_gpu_backing_token_status(&held->tokens[i]) != 1)
+			result = -5;
+	if (!result && promote) {
+		for (i = 0; i < held->count; ++i)
+			if (held->tokens[i].engine == SWITCH_GPU_ENGINE_GM20B &&
+			    promote(&held->tokens[i]) != 1)
+				result = -5;
+	}
+	switch_gpu_present_tokens_drop(held);
+	return result;
+}
+
 static inline int switch_gpu_present_tokens_finish(struct switch_gpu_present_tokens *held,
 						   int result)
 {

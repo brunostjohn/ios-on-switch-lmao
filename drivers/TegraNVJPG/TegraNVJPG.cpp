@@ -5,8 +5,8 @@
 //       host1x is up, and NVJPG's kernel buffers are allocated: the firmware image, an arena (the setup and status
 //       slots, the service's sink page) and the SMMU page directory with its tables
 //   J1  NVJPG's SMMU domain (ASID 125 for the "nvjpg" swgroup, through TegraSMMU: the kernel buffers 1:1, two empty
-//       windows), power partition 26, clock (PLLP, 408 MHz), reset, the MBIST workaround, falcon firmware loaded and
-//       started
+//       windows), power partition 26, clock (PLLC2 at 422.4 MHz on this unit, or PLLP's 408 MHz), reset, the MBIST
+//       workaround, falcon firmware loaded and started
 //   J2  proof of life through host1x channel 0 in NVJPG's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface) then an OP_DONE one (the falcon firmware), each completed by interrupt
 //   J3  the AppleJPEGDriver service and its AppleJPEGDriverUserClient published (TegraNVJPGUserClient.cpp)
@@ -43,8 +43,9 @@
 //   0x234 bits 30/31; MC hot reset NVJPG 0x970 bit 8), drm/tegra/nvjpg.c (tegra210, host1x class 0xc0) and falcon.c
 //   falcon_boot (shared with TegraNVDEC/TegraNVENC/TegraVIC), iommu/tegra-smmu.c (as TegraVIC). The job's methods:
 //   nvidia/cle7d0.h, in the order averne's FFmpeg nvtegra MJPEG submits them on the Switch.
-//   Clock: PLLP undivided, 408 MHz, below the lowest T210B01 DVFS point of the NVDEC/NVJPG rail, so it is safe at any
-//   core voltage the boot chain left (TegraNVDEC.cpp makes the same choice).
+//   Clock: PLLC2, as L4T's c2bus, at the rate tegra210b01-core-dvfs.c allows NVJPG at VDD_CORE's 637 mV minimum for this
+//   chip's SoC process (422.4 MHz for process 1), or PLLP's 408 MHz where that is lower or PLLC2 is not ours
+//   (kits/SwitchCAR/SwitchEngineClock.h).
 // Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
 // queue) are bounded reads, as in TegraNVDEC/TegraVIC; every completion of work is a host1x syncpoint interrupt.
 #include <IOKit/IOLib.h>
@@ -58,6 +59,7 @@
 #include "TegraNVJPG.h"
 #include "nvidia/cle7d0.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -87,7 +89,7 @@ constexpr unsigned kNvdecClock = 194;                         // TEGRA210_CLK_NV
 constexpr uint64_t kArenaBytes = 3ULL * SWITCH_HW_PAGE_SIZE;  // the setup slot, the status slot, the service's sink
 constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_NVJPG;  // 125 (VIC 127, the display 126)
-constexpr uint32_t kClockMHz = 408;
+uint32_t gClockKHz;
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
@@ -95,8 +97,6 @@ enum : uint32_t {  // clock and reset controller
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVJPG = 0x69c,
     OVRE_NVJPG_MBIST = (1u << 9) | (1u << 31),
-    SOURCE_PLLP = 4u << 29,
-    NVJPG_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
 
 enum : uint32_t {
@@ -132,7 +132,7 @@ uint32_t gWindowMapped[TEGRA_NVJPG_WINDOWS];  // pages mapped from each window's
 
 // The job engine. A job's wait is bounded by kQueueUs (NVJPG shares host1x channel 0 with NVDEC, NVENC and VIC, whose
 // queued jobs may run first: up to 2 s by their own bounds) plus one microsecond per 16 pixels of the MCU grid (NVJPG
-// does several pixels per clock at 408 MHz; the firmware's GP timer, on for every job, ends a picture it cannot finish
+// does several pixels per clock at 408 MHz or more; the firmware's GP timer, on for every job, ends a picture it cannot finish
 // with an error status), at most kMaxBoundUs: only a hung engine gets there.
 constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
 
@@ -258,7 +258,7 @@ constexpr unsigned kNvdecPartition = 25;
 
 bool powerUp(bool *wasOn)
 {
-    switch_car_write(CLK_SOURCE_NVJPG, SOURCE_PLLP | NVJPG_DIV_1);
+    switch_car_write(CLK_SOURCE_NVJPG, switch_engine_clock_source(SWITCH_ENGINE_BUS_C2, &gClockKHz));
     IODelay(2);
     if (!switch_engine_power_up(kPower, wasOn)) {
         snprintf(gLine, sizeof(gLine),
@@ -301,7 +301,8 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, stream, sizeof(stream) / sizeof(stream[0]));
+    int ret =
+        switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, stream, sizeof(stream) / sizeof(stream[0]), id, from + 2);
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";
@@ -461,9 +462,9 @@ void bringUp(void *, wait_result_t)
         giveBack();
         return;
     }
-    IOLog("TegraNVJPG: J1 ok ASID %u (directory %#llx), partition %u %s, %u MHz, falcon started (OS code %#x+%#x data "
+    IOLog("TegraNVJPG: J1 ok ASID %u (directory %#llx), partition %u %s, %u kHz, falcon started (OS code %#x+%#x data "
           "%#x+%#x, %u apps)\n",
-          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", kClockMHz, gImage.code,
+          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", gClockKHz, gImage.code,
           gImage.code_size, gImage.data, gImage.data_size, gImage.apps);
     uint32_t id = 0;
     if (tegra_host1x_syncpt_alloc(&id)) {
@@ -588,7 +589,12 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_lines(gSetup.va, sizeof(job->setup));
     bzero(gStatus.va, sizeof(nvjpg_dec_status));
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
-    uint32_t words[1 + 3 * 11 + 1];
+    uint32_t *words = nullptr;
+    if (const int error = switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)) {
+        IOLockUnlock(gStateLock);
+        gGate.done();
+        return error;
+    }
     uint32_t n = 0;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     const auto method = [&](uint32_t offset, uint32_t value) {
@@ -611,7 +617,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
     const uint64_t start = switch_now_us();
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, words, n);
+    int ret = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence);
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));

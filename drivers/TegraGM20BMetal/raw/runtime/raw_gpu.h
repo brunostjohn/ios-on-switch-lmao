@@ -1460,6 +1460,16 @@ public:
         return k_.canOrder();
     }
 
+    uint64_t promiseWrites(const uint64_t *handles, uint32_t count)
+    {
+        return k_.promiseWrites(handles, count);
+    }
+
+    void endPromise(uint64_t cookie)
+    {
+        k_.endPromise(cookie);
+    }
+
     // A channel the kernel killed is made again first (between command buffers, as begin() would), so one GPU fault does not
     // leave the process ordered on the CPU for good
     int orderAfterOthers(uint32_t &waits)

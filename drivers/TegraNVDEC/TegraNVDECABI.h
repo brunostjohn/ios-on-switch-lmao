@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v11 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v12 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N3). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -27,11 +27,20 @@
 //   * Jobs run in submission order; a fence is a syncpoint threshold. Wait sleeps on the syncpoint interrupt. Every job
 //     runs with NVDEC's GP timer (required by the checker), so the kernel bounds each wait itself; timeout_us is
 //     ignored. A job past that bound is a hardware fault and panics.
+//   * Completion (v12, TEGRA_NVDEC_FEATURE_COMPLETION): a port registered with IOConnectSetNotificationPort (type
+//     SWITCH_NVDEC_COMPLETION_PORT; the IOSurfaceAccelerator route, which the decoding processes already take) gets
+//     one IOKit async completion per job submitted after it: result kIOReturnSuccess or the job's failure, then the
+//     arguments {fence, error_status, mbs_correctly_decoded}, which the kernel reads from the job's nvdec_status_s
+//     once its fence's interrupt retired it. Nothing waits for it.
+//   * Queue room: the engine holds TegraNVDECInfo.jobs_in_flight jobs of all connections. A Submit that finds them all
+//     taken sleeps until the oldest retires (SWITCH_NVDEC_FENCE_WAITED_FOR_ROOM), so when a connection's Submit
+//     returns, its job jobs_in_flight submits back has ended: a client cycling jobs_in_flight + 1 input buffers never
+//     writes one a job still reads, with no wait of its own.
 #ifndef TEGRA_NVDEC_ABI_H
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  11
+#define TEGRA_NVDEC_ABI_VERSION  12
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -39,7 +48,7 @@
 enum TegraNVDECMethod {
     TegraNVDECMethodGetInfo = 1,      // -> TegraNVDECInfo
     TegraNVDECMethodBufferAlloc = 2,  // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
-    TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the connection's jobs while one uses it)
     TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
     TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
     TegraNVDECMethodPresent = 6,      // TegraNVDECPresent -> (the picture is in the IOSurface)
@@ -49,6 +58,9 @@ enum TegraNVDECMethod {
 
 #define SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT (1u << 1)
 #define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
+#define TEGRA_NVDEC_FEATURE_COMPLETION     (1u << 2)
+#define SWITCH_NVDEC_COMPLETION_PORT       0x4e43  // 'NC': IOConnectSetNotificationPort's type for job completions
+#define SWITCH_NVDEC_COMPLETION_ARGS       3       // fence, error_status, mbs_correctly_decoded
 
 // Service properties, true for each codec in TegraNVDECInfo.codecs: a process that may not open a client finds them by
 // matching (IOPropertyMatch), which its sandbox does not filter as it filters property reads.
@@ -80,6 +92,7 @@ typedef struct {
     uint32_t codecs;                      // bit n: TEGRA_NVDEC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height;
     uint32_t features;                   // TEGRA_NVDEC_FEATURE_*
+    uint32_t jobs_in_flight, reserved;   // the jobs the engine queues (see Queue room above)
     uint64_t memory_limit, memory_free;  // what every session's buffers together may wire, and what is left
 } TegraNVDECInfo;
 
@@ -128,8 +141,10 @@ typedef struct {
 } TegraNVDECSubmit;
 
 typedef struct {
-    uint32_t fence, reserved;
+    uint32_t fence, flags;  // SWITCH_NVDEC_FENCE_*
 } TegraNVDECFence;
+
+#define SWITCH_NVDEC_FENCE_WAITED_FOR_ROOM (1u << 0)  // the Submit slept until the queue had room
 
 // A decoded picture of buffer `handle` (NV12 block linear, GOB height 2^block_height_log2: NVDEC's is 1) into the
 // '420v'/'420f' IOSurface `surface_id` of the calling task, or with 16-bit samples (sample_bytes 2: Main 10's P010)

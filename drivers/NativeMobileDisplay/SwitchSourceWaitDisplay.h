@@ -34,7 +34,7 @@ bool deferSource(const OriginalLegacySwapRequest *request, OSObject *surface)
     sourceWait->surface = surface;
     surface->retain();
     sourceWaitQueued = transferred = true;
-    copySource->interruptOccurred(nullptr, nullptr, 0);
+    watchSource();
     return true;
 }
 

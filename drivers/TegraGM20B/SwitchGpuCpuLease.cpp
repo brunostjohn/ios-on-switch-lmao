@@ -109,10 +109,20 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 		return -12;
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
-	while ((backing->cpu_writers || backing->gpu_admission_writers) && !avoid)
+	while ((backing->cpu_writers || backing->gpu_admission_writers || backing->promised_writers) &&
+	       !avoid)
 		switch_gpu_backing_sleep_cpu_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
-		backing->cpu_readers == UINT32_MAX ? -16 : 0;
+		backing->promised_writers || backing->cpu_readers == UINT32_MAX ? -16 : 0;
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+	static bool promiseRefusalLogged;
+	if (result && backing->promised_writers && !promiseRefusalLogged) {
+		promiseRefusalLogged = true;
+		IOLog("SwitchGpu: first snapshot of surface %u held off by a writer promise: the present waits for the "
+		      "promised job\n",
+		      backing->surface_id);
+	}
+#endif
 	const switch_gpu_backing_access *writer = nullptr;
 	bool failed_writer = false;
 	for (uint32_t i = 0; !result && i < backing->access_count; ++i) {

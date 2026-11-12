@@ -365,6 +365,8 @@ void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
 // (raw_private_comp.h storageSlotsToPlain) move to plain memory, which an encode may not ask for
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
+// RawMetalSchedule.mm: the writer promise a held command buffer made, ended once its writes reached the kernel or never will
+void endWriterPromise(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));

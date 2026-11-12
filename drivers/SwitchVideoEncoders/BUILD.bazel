@@ -34,6 +34,9 @@ ios_binary(
     name = "AVE",
     srcs = [
         "AVE/AVEEncoder.c",
+        "AVE/AVEInput.c",
+        "AVE/AVELayoutProbe.c",
+        "AVE/AVEReorder.c",
         "AVE/AVETiles.c",
         "AVE/H264NVENC.c",
         "AVE/HEVCEncSyntax.c",
@@ -69,6 +72,8 @@ ios_binary(
         "VideoToolbox",
         "-framework",
         "IOKit",
+        "-framework",
+        "IOSurface",
     ],
     pagesize = "4096",
     sign_identifier = "com.brunostjohn.switch.ave",

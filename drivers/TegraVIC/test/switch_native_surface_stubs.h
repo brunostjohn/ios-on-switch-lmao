@@ -32,9 +32,11 @@ public:
     virtual void free() { delete this; }
     void retain() { ++refs; }
     void release() { if (--refs == 0) free(); }
+    int getRetainCount() const { return static_cast<int>(refs.load()); }
 };
 struct IOMemoryDescriptorReserved {
     OSObject *switchAttachment = nullptr;
+    OSObject *switchGpuRecord = nullptr;
     uint32_t switchCpuUsers = 0;
     bool switchExclusive = false;
     uint64_t switchGeneration = 0;

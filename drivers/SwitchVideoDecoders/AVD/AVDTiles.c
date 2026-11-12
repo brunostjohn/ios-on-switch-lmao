@@ -6,7 +6,8 @@
 //
 // The contract is that of Apple's A10X decoder (H264H8.videodecoder AppleD5500WrapperHEVCDecoderStartTileSession /
 // DecodeTile, 21H461): requirements set once at the start, the destination and offset of each tile taken from
-// DecodeTile, each tile answered with VTDecoderSessionEmitDecodedTile before DecodeTile returns. What NVDEC and VIC
+// DecodeTile, each tile answered with VTDecoderSessionEmitDecodedTile before DecodeTile returns: unlike a frame, a tile
+// waits for its job, whose status its answer carries. What NVDEC and VIC
 // cannot take is refused at the start (sizes outside NVDEC's HEVC range, VIC's present off, Main 10 on a kernel without
 // it), and VideoToolbox then takes the next decoder. Main 10 tiles go into an 'x420'/'xf20' canvas: VIC places their
 // 16-bit samples as bytes of a row twice as wide, so such a canvas is at most half VIC's widest surface.
@@ -115,22 +116,19 @@ OSStatus avd_start_tile_session(VTVideoDecoderRef ref, VTTileDecoderSession sess
 
 void *avd_tile_decoded(Decoder *d, const H264Picture *picture)
 {
-    Output *out = calloc(1, sizeof(*out));
+    Output *out = avd_emitter_output(d->emitter, picture->token, picture->job, picture->first_field_job);
     if (!out)
         return NULL;
-    out->frame = picture->token;
-    out->status = picture->status ? kVTVideoDecoderBadDataErr : noErr;
-    if (picture->status)
-        d->errors++;
     if (d->tile.canvas)
-        avd_place_picture(d, picture, d->tile.canvas, d->tile.x, d->tile.y);
+        avd_place_picture(d, out, picture, d->tile.canvas, d->tile.x, d->tile.y);
     else
-        out->status = kVTVideoDecoderMalfunctionErr;
+        avd_emitter_fail(d->emitter, out, kVTVideoDecoderMalfunctionErr);
     return out;
 }
 
 void avd_tile_emit(Decoder *d, Output *out)
 {
+    avd_emitter_settle_output(d->emitter, out);
     VTDecoderSessionEmitDecodedTile(d->tileSession, (int64_t)(intptr_t)out->frame, out->status, 0, NULL);
     d->tile.answered = true;
     free(out);

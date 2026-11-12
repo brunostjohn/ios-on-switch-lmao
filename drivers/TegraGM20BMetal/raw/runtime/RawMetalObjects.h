@@ -317,6 +317,7 @@ struct RMSharedEventWait {
     // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
     // handlers still wait for its submission (raw_scheduled_wait.h)
     bool _held;
+    std::atomic<uint64_t> _promise;  // the kernel's writer promise for the surfaces it writes, from its hold to unhold()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
 #endif

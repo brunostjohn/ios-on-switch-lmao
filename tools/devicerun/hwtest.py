@@ -20,7 +20,7 @@ LITERAL = 'HWTEST '
 CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
 # hw_test_app/core/Media.swift's Clip.all: every codec at every size; MPEG-4 Part 2 and MPEG-2 without 4K, MPEG-1 at
-# 720p only
+# 720p only, interlaced H.264 in field pictures (PAFF) and in MBAFF frames at one size each
 CLIPS = (
     *(f'{codec}_{size}' for codec in CODECS for size in SIZES),
     'mpeg4_720p',
@@ -28,6 +28,8 @@ CLIPS = (
     'mpeg2_720p',
     'mpeg2_1080p',
     'mpeg1_720p',
+    'h264_paff_256p',
+    'h264_mbaff_1080p',
 )
 STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
 
@@ -128,6 +130,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.shared_events',
             'gpu.path.resource_ready',
             'gpu.path.submit_job',
+            'gpu.path.relayout_history',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',
@@ -141,12 +144,18 @@ TESTS: dict[str, bool] = {
     'decode.native_export_main10': False,
     'decode.native_export_main10_8bit': False,
     'decode.hevc_alpha': False,
+    'decode.async_emit': False,
     'decode.display_buffer': False,
     'playback.h264_1080p': False,
     'playback.hevc_1080p': False,
     **{f'encode.{codec}_{preset}': False for codec in ('h264', 'hevc') for preset in ('realtime', 'quality')},
     **{f'encode.{codec}_idle_gap': False for codec in ('h264', 'hevc')},
+    'encode.h264_client_pool': False,
+    'encode.h264_bframes': False,
+    'encode.nvenc_input_layouts': False,
+    'encode.h264_from_nvdec': False,
     **{f'image.{still}': False for still in STILLS},
+    'image.jpeg_after_idle': False,
     'image.heic_encode': False,
     'image.coreimage': False,
     'image.pixel_transfer': False,
@@ -162,6 +171,11 @@ TESTS: dict[str, bool] = {
     'display.brightness': False,
     'display.colour': False,
     'display.planes': False,
+    'display.planes_composite': False,
+    'display.small_drawable': False,
+    'display.present_at_time': False,
+    'display.plane_in_use': False,
+    'display.scanout_routes': False,
     'display.plain_surfaces': False,
     'display.snapshot': False,
     'display.wake_gpu': True,
@@ -277,6 +291,9 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_block_linear': False,
         'gpu.x1.vic_fractional': False,
         'gpu.x1.vic_packed422': False,
+        'gpu.x1.vic_transpose422': False,
+        'gpu.x1.vic_4k': False,
+        'gpu.x1.vic_compose': False,
     },
 }
 

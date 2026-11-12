@@ -14,9 +14,8 @@ static void present_typed_complete(void *unused)
 	mutex_lock(&tgm_present.lock);
 	done = tgm_present.done;
 	arg = tgm_present.arg;
-	status = tgm_present.completion_status;
 	mutex_unlock(&tgm_present.lock);
-	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, status,
+	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, 0,
 							  switch_gpu_timeline_promote);
 	mutex_lock(&tgm_present.lock);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
@@ -27,9 +26,115 @@ static void present_typed_complete(void *unused)
 
 int tgm_present_outstanding(const void *arg)
 {
-	if (__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) && tgm_present.arg == arg)
+	if ((__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) ||
+	     switch_gpu_present_watch_armed(&tgm_present.watch)) &&
+	    tgm_present.arg == arg)
 		return 1;
 	return __atomic_load_n(&tgm_present.completing, __ATOMIC_SEQ_CST) != 0;
+}
+
+static int present_physical(const struct switch_gpu_backing_token *token)
+{
+	return switch_gpu_backing_token_physical_status(token, 0);
+}
+
+static int present_visible(const struct switch_gpu_backing_token *token)
+{
+	return switch_gpu_backing_token_physical_status(token, 1);
+}
+
+/* The watch claimed and its producer's verdict in status: delivered as a present job's completion is. */
+static void present_watch_complete(int status, int from_pass)
+{
+	void (*done)(void *, int) = tgm_present.done;
+	void *arg = tgm_present.arg;
+#if TGM_STATS
+	static int logged;
+#endif
+
+	nvxnu_work_cancel(tgm_present.deadline_work);
+	tgm_deadline_presented(tgm_present.queued);
+	switch_gpu_present_watch_reset(&tgm_present.watch);
+	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
+#if TGM_STATS
+	if (from_pass && !status && !logged) {
+		logged = 1;
+		nvxnu_log("tegra-gm20b: first present completed from its producer's interrupt pass, with "
+			  "no present job\n");
+	}
+#else
+	(void)from_pass;
+#endif
+	done(arg, status);
+	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+}
+
+/* The producer ended with its writes possibly still in the GPU L2: the fence-only present job after all, on the same
+ * producer, whose fence flushes them. Its own completion delivers the present. */
+static void present_watch_flush(void)
+{
+	struct switch_gpu_present_tokens held;
+	void (*done)(void *, int) = tgm_present.done;
+	void *arg = tgm_present.arg;
+	int ret;
+
+	mutex_lock(&tgm_present.lock);
+	held = tgm_present.tokens;
+	tgm_present.tokens.count = 0;
+	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
+	switch_gpu_present_watch_reset(&tgm_present.watch);
+	mutex_unlock(&tgm_present.lock);
+	ret = tgm_present_copy_dependencies(0, 0, -1, 1, 1, 0, 0, 0, done, arg, held.tokens,
+					    held.count);
+	switch_gpu_present_tokens_drop(&held);
+	if (ret) {
+		nvxnu_work_cancel(tgm_present.deadline_work);
+		done(arg, ret);
+	}
+	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+}
+
+/* Thread context, may sleep: a kill, a semantic wait, a hidden producer, the offer's own late look, the deadline. */
+static void present_watch_work(void *unused)
+{
+	int found;
+	int status;
+
+	(void)unused;
+	found = switch_gpu_present_watch_claim(&tgm_present.watch, present_physical, present_visible);
+	if (found == SWITCH_GPU_PRESENT_WATCH_PENDING)
+		return;
+	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+	if (found == SWITCH_GPU_PRESENT_WATCH_HIDDEN) {
+		present_watch_flush();
+		return;
+	}
+	status = switch_gpu_present_tokens_finish_visible(
+		&tgm_present.tokens, found == SWITCH_GPU_PRESENT_WATCH_FAILED ? -5 : 0,
+		switch_gpu_timeline_promote);
+	present_watch_complete(status, 0);
+}
+
+/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released: a watch the pass made due
+ * is delivered here when its producer's writes are in DRAM; anything else goes to the watch work item. Nothing here may
+ * wait for the GPU, as no GPU interrupt is taken until this returns: the tokens finish without waiting, the snapshot's
+ * leases (SwitchGpuScanoutSnapshot::complete) release under their backings' locks, and done only signals. */
+void tgm_present_pass(void)
+{
+	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) != SWITCH_GPU_PRESENT_WATCH_DUE)
+		return;
+	if (!switch_gpu_present_watch_take_visible(&tgm_present.watch,
+						   switch_gpu_backing_token_status,
+						   switch_gpu_backing_token_external_status)) {
+		if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) ==
+		    SWITCH_GPU_PRESENT_WATCH_DUE)
+			nvxnu_work_schedule(tgm_present.watch_work);
+		return;
+	}
+	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+	present_watch_complete(switch_gpu_present_tokens_finish_ready(&tgm_present.tokens,
+								      switch_gpu_timeline_promote),
+			       1);
 }
 
 /* tgm_live_lock held; these descriptions only run after the present deadline expires. */
@@ -52,13 +157,15 @@ static void present_deadline(void *arg)
 	char state[TGM_HANG_LINE];
 	char what[96], current_owner[96], next_owner[96];
 	u64 age = 0;
-	u32 i = 0;
 	u32 seqno = 0;
 	u32 eng;
 
 	(void)arg;
+	present_watch_work(NULL);
 	mutex_lock(&tgm_present.lock);
-	if (!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE)) {
+	if (!__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) &&
+	    __atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
+		    SWITCH_GPU_PRESENT_WATCH_ARMED) {
 		mutex_unlock(&tgm_present.lock);
 		return;
 	}
@@ -71,7 +178,8 @@ static void present_deadline(void *arg)
 		return;
 	}
 	age = nvxnu_nanotime() - tgm_present.queued;
-	if ((s32)(tgm_chan_completed(tgm_present.chan) - tgm_present.pending) >= 0) {
+	if (tgm_present.pending &&
+	    (s32)(tgm_chan_completed(tgm_present.chan) - tgm_present.pending) >= 0) {
 		nvxnu_panic("tegra-gm20b: present fence %u complete after %llu ms but its nonstall "
 			    "interrupt never came",
 			    tgm_present.pending, age / 1000000);
@@ -86,17 +194,6 @@ static void present_deadline(void *arg)
 			seqno = (u32)pending.token.value;
 		}
 	}
-	for (i = 0; i < tgm_present.waits && !waited; i++) {
-		list_for_each_entry(chan, &tgm_live_chans, live)
-		{
-			if (chan->id == tgm_present.wait[i].id &&
-			    (s32)(tgm_chan_completed(chan) - tgm_present.wait[i].seqno) < 0) {
-				waited = chan;
-				seqno = tgm_present.wait[i].seqno;
-				break;
-			}
-		}
-	}
 	if (tgm_hang_recover(waited ? waited : tgm_present.chan, "present",
 			     waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
 		mutex_unlock(&tgm_live_lock);
@@ -108,8 +205,7 @@ static void present_deadline(void *arg)
 	if (waited) {
 		present_channel_brief(waited, waited->chid, what, sizeof(what));
 	} else {
-		scnprintf(what, sizeof(what), "no pending GPU producer; legacy waits %u",
-			  tgm_present.waits);
+		scnprintf(what, sizeof(what), "no pending GPU producer");
 	}
 	eng = nvkm_rd32(tgm_gpu.device, PFIFO_ENG_STATUS(0));
 	present_channel_brief(eng & PFIFO_ENG_ID_TSG ? NULL : live_by(0, PFIFO_ENG_ID(eng)),
@@ -152,8 +248,10 @@ int tgm_present_open(struct tgm_vm **pvm)
 	tgm_fence_page_put(probe);
 	tgm_present.deadline_work = nvxnu_work_alloc(present_deadline, NULL);
 	tgm_present.completion_work = nvxnu_work_alloc(present_typed_complete, NULL);
-	ret = tgm_present.deadline_work && tgm_present.completion_work ? tgm_vm_new(&tgm_present.vm)
-								       : -ENOMEM;
+	tgm_present.watch_work = nvxnu_work_alloc(present_watch_work, NULL);
+	ret = tgm_present.deadline_work && tgm_present.completion_work && tgm_present.watch_work
+		      ? tgm_vm_new(&tgm_present.vm)
+		      : -ENOMEM;
 	if (!ret) {
 		ret = tgm_pfence_get(
 			tgm_present
@@ -207,18 +305,6 @@ int tgm_present_unmap(uint64_t va, uint64_t bytes)
 	return tgm_present.vm ? tgm_vm_unmap(tgm_present.vm, va, bytes) : -ENODEV;
 }
 
-/* A present waits only for the address spaces that import its surface; a surface no address space imports by its first
- * page is the all-channel wait. */
-static int present_writer_on(void)
-{
-	return 1;
-}
-
-/* Whether user's address space imports the present's source or its other surface (also_pa, 0: none). */
-static int present_imports(const struct tgm_chan *user, uint64_t src_pa, uint64_t also_pa)
-{
-	return vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, also_pa));
-}
 #if TGM_STATS
 /* Each read-back waits for the copies before it (NON_PIPELINED: the scanout buffer is read after the frame's copy wrote
  * it); the fence after them flushes their writes past the L2. */
@@ -236,22 +322,16 @@ static void present_push_reads(struct nvif_push *push, const struct tgm_present_
 }
 
 #endif
-static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-			uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			void *arg, const struct tgm_present_read *reads, u32 nreads,
-			const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
-			int exact)
+static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2, uint32_t width,
+			uint32_t height, uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
+			void (*done)(void *, int), void *arg, const struct tgm_present_read *reads,
+			u32 nreads, const struct switch_gpu_backing_token *dependencies,
+			u32 dependency_count)
 {
 	struct tgm_chan *chan = tgm_present.chan;
-	struct tgm_chan *user = NULL;
 	struct nvif_push *push = NULL;
 	u32 *push_start = NULL;
-	u64 va = 0;
-	u32 n = 0;
-	u32 room = 0;
 	int ret = 0;
-	int matched = 0;
 
 	if (!chan || chan->error)
 		return -ENODEV;
@@ -276,16 +356,9 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
-	/* push room for an acquire per user channel there is now (one made meanwhile has nothing for this frame) */
-	if (!exact) {
-		mutex_lock(&tgm_live_lock);
-		list_for_each_entry(user, &tgm_live_chans, live) room +=
-			room < TGM_SYNC_MAX && !user->kernel;
-		mutex_unlock(&tgm_live_lock);
-	}
 	push = &chan->chan.push;
 	ret = chan_push_wait(chan,
-			     (room + dependency_count) * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+			     dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
 				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
 								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
@@ -305,46 +378,6 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
-	/* what the surface's writers (or, with none found, every user channel) have submitted so far and not completed yet */
-	if (!exact) {
-		mutex_lock(&tgm_live_lock);
-		list_for_each_entry(user, &tgm_live_chans, live)
-		{
-			if (present_writer_on() && !user->kernel &&
-			    present_imports(user, src_pa, also_pa))
-				matched = 1;
-		}
-		list_for_each_entry(user, &tgm_live_chans, live)
-		{
-			uintptr_t off = (uintptr_t)user->fence_cpu - (uintptr_t)tgm_fence_pages.va;
-			if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_BYTES ||
-			    n == room || (matched && !present_imports(user, src_pa, also_pa)) ||
-			    (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
-				continue;
-			tgm_present.wait[n].id = user->id;
-			tgm_present.wait[n].seqno = READ_ONCE(user->submitted);
-			tgm_present.wait[n].fence =
-				(const volatile struct TegraGM20BAbiFence *)user->fence_cpu;
-			tgm_hold_need(tgm_gpu.device, user->chid);
-			tgm_present.wait_end[n] =
-				stats_on() ? &chan_stamps(user, tgm_present.wait[n].seqno)->end
-					   : NULL;
-			va = tgm_present.fences_gpu + off;
-			/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-			/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-			PUSH_MTHD(push, NV906F, SEMAPHOREA,
-				  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)),
-				  SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
-				  tgm_present.wait[n].seqno, SEMAPHORED,
-				  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-					  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-			/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-			n++;
-		}
-		mutex_unlock(&tgm_live_lock);
-	}
-	tgm_present.waits = n;
-	tgm_present.writers = matched;
 	if (stats_on()) { /* the copy's start, after the acquires: stats_fences times the copy and the gap before it */
 		tgm_present.stamped = chan->submitted + 1;
 		push_stamp(push,
@@ -374,7 +407,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	tgm_present.done = done;
 	tgm_present.arg = arg;
 	tgm_present.queued = nvxnu_nanotime();
-	__atomic_store_n(&tgm_present.typed_pending, exact != 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	nvxnu_work_schedule_after(
 		tgm_present.deadline_work,
@@ -387,33 +420,16 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		chan_fence(chan);
 	if (!dst_va && stats_on())
 		__atomic_fetch_add(&tgm_stats.present_flushes, 1, __ATOMIC_RELAXED);
-	if (matched && stats_on())
-		__atomic_fetch_add(&tgm_stats.writer, 1, __ATOMIC_RELAXED);
-	if (!n && stats_on())
-		__atomic_fetch_add(&tgm_stats.idle, 1, __ATOMIC_RELAXED);
+	if (stats_on())
+		__atomic_fetch_add(dependency_count ? &tgm_stats.writer : &tgm_stats.idle, 1,
+				   __ATOMIC_RELAXED);
 	mutex_unlock(&tgm_present.lock);
 	return 0;
 }
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-		     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-		     void *arg)
-{
-	int ret = 0;
-
-	if (!gate_try())
-		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, NULL, 0, NULL, 0, 0);
-	gate_leave();
-	return ret;
-}
-
-int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				  uint64_t stride, int32_t src_block_log2, uint32_t width,
-				  uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
+				  uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 				  uint32_t block_height_log2, void (*done)(void *, int), void *arg,
 				  const struct switch_gpu_backing_token *dependencies,
 				  uint32_t dependency_count)
@@ -421,36 +437,18 @@ int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t als
 	int ret;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, NULL, 0, dependencies,
-			   dependency_count, 1);
+			   dependency_count);
 	gate_leave();
 	return ret;
 }
 #if TGM_STATS
-int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			  int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			  void *arg, const struct tgm_present_read *reads, uint32_t nreads)
-{
-	int ret = 0;
-
-	if (nreads > TGM_PRESENT_READS)
-		return -EINVAL;
-	if (!gate_try())
-		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, reads, nreads, NULL, 0, 0);
-	gate_leave();
-	return ret;
-}
-
-int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				       uint64_t stride, int32_t src_block_log2, uint32_t width,
-				       uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-				       uint32_t block_height_log2, void (*done)(void *, int),
-				       void *arg, const struct tgm_present_read *reads,
-				       uint32_t nreads,
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
+				       int32_t src_block_log2, uint32_t width, uint32_t height,
+				       uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
+				       void (*done)(void *, int), void *arg,
+				       const struct tgm_present_read *reads, uint32_t nreads,
 				       const struct switch_gpu_backing_token *dependencies,
 				       uint32_t dependency_count)
 {
@@ -459,10 +457,52 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_
 		return -EINVAL;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, reads, nreads, dependencies,
-			   dependency_count, 1);
+			   dependency_count);
 	gate_leave();
 	return ret;
 }
 #endif
+
+/* No present job: the producer's own interrupt pass completes it (SwitchGpuPresentWatch.h). 1: not exactly one GM20B
+ * producer still to wait for, so the caller queues the fence-only job; otherwise as tgm_present_copy_dependencies. */
+int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
+				   const struct switch_gpu_backing_token *dependencies,
+				   uint32_t dependency_count)
+{
+	int ret = 0;
+
+	if (!switch_gpu_present_watchable(dependencies, dependency_count) ||
+	    switch_gpu_backing_token_status(&dependencies[0]) < 0)
+		return 1;
+	if (!tgm_present.chan || tgm_present.chan->error || !tgm_present.watch_work)
+		return -ENODEV;
+	if (!gate_try())
+		return -EBUSY;
+	mutex_lock(&tgm_present.lock);
+	if (__atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE) ||
+	    __atomic_load_n(&tgm_present.typed_pending, __ATOMIC_ACQUIRE)) {
+		ret = -EBUSY;
+	} else {
+		ret = switch_gpu_present_tokens_prepare(&tgm_present.tokens, dependencies,
+							dependency_count);
+	}
+	if (!ret && tgm_present.tokens.count != 1) {
+		switch_gpu_present_tokens_drop(&tgm_present.tokens);
+		ret = 1;
+	}
+	if (!ret) {
+		tgm_present.done = done;
+		tgm_present.arg = arg;
+		tgm_present.queued = nvxnu_nanotime();
+		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
+		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
+		switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+	}
+	mutex_unlock(&tgm_present.lock);
+	gate_leave();
+	if (!ret && present_physical(&tgm_present.watch.token))
+		nvxnu_work_schedule(tgm_present.watch_work);
+	return ret;
+}

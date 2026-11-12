@@ -7,10 +7,13 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOUserClient.h>
 #include "SwitchVICJobs.h"
+#include "SwitchVICComposeProbe.h"
 #include "SwitchVICFractionProbe.h"
+#include "SwitchVICLargeProbe.h"
 #include "SwitchVICLayoutProbe.h"
 #include "SwitchVICPackedProbe.h"
 #include "SwitchVICPitchProbe.h"
+#include "SwitchVICTransposeProbe.h"
 
 namespace {
 struct Probe {
@@ -23,6 +26,11 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_LAYOUT_PROBE_MAGIC, sizeof(SwitchVICLayoutProbeReply), switch_vic_layout_probe_run},
     {SWITCH_VIC_FRACTION_PROBE_MAGIC, sizeof(SwitchVICFractionProbeReply), switch_vic_fraction_probe_run},
     {SWITCH_VIC_PACKED_PROBE_MAGIC, sizeof(SwitchVICPackedProbeReply), switch_vic_packed_probe_run},
+    {SWITCH_VIC_TRANSPOSE_PROBE_MAGIC, sizeof(SwitchVICTransposeProbeReply), switch_vic_transpose_probe_run},
+    {SWITCH_VIC_LARGE_PROBE_MAGIC, sizeof(SwitchVICLargeProbeReply), switch_vic_large_probe_run},
+    {SWITCH_VIC_COMPOSE_PROBE_MAGIC, sizeof(SwitchVICComposeProbeReply), switch_vic_compose_probe_run},
+    {SWITCH_VIC_COMPOSITE_ARM_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_arm_run},
+    {SWITCH_VIC_COMPOSITE_REPORT_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_report_run},
 };
 
 bool gBusy;
