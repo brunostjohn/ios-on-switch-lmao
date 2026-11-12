@@ -113,8 +113,8 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
     MTLVertexDescriptor *vertexDescriptor = descriptor.vertexDescriptor;
     std::vector<uint32_t> attributes;
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
-        if (a.isActive && (!vertexDescriptor ||
-                           vertexDescriptor.attributes[a.attributeIndex].format != MTLVertexFormatInvalid))
+        if (a.isActive &&
+            (!vertexDescriptor || vertexDescriptor.attributes[a.attributeIndex].format != MTLVertexFormatInvalid))
             attributes.push_back(uint32_t(a.attributeIndex));
     if (requested == PackForm::Barrier) {
         const CompileOutcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
