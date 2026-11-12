@@ -256,3 +256,67 @@ TEST_F(SwitchVICScanoutConvert, UnsupportedTransformCannotPublishDestination)
     EXPECT_EQ(exports, 0u);
 }
 } // namespace
+
+class SwitchVICScanoutPlace : public SwitchVICScanoutConvert {
+protected:
+    switch_gpu_backing windowB = {};
+    TegraVICImage layout = {};
+
+    void SetUp() override
+    {
+        SwitchVICScanoutConvert::SetUp();
+        layout.format = tegra_vic_format(TEGRA_VIC_FOURCC('B', 'G', 'R', 'A'));
+        layout.width = 128;
+        layout.height = 128;
+        layout.pitch[0] = 512;
+        layout.rows[0] = 128;
+        layout.span[0] = 512 * 128;
+        layout.blockLinear = 1;
+        layout.blockHeightLog2 = 4;
+    }
+
+    int place(const SwitchVICPlaceReads &also = {})
+    {
+        return switch_vic_scanout_place(&source, &image, &targetBacking, &layout, &operation, also, &output);
+    }
+};
+
+TEST_F(SwitchVICScanoutPlace, ABlockLinearDestinationIsWrittenAsTheCallerLaysItOut)
+{
+    ASSERT_EQ(place(), 0);
+    const auto &plane = output.view.layout.planes[0];
+    EXPECT_EQ(plane.layout, uint32_t(SWITCH_GPU_BACKING_BLOCK_LINEAR));
+    EXPECT_EQ(plane.block_height_log2, 4u);
+    EXPECT_EQ(plane.pitch, 512u);
+    EXPECT_EQ(plane.bytes, 65536u);
+    EXPECT_EQ(output.view.producer.engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
+    EXPECT_EQ(output.view.native, &targetBacking);
+    ASSERT_EQ(uses.size(), 3u);
+}
+
+TEST_F(SwitchVICScanoutPlace, BackingsTheFlipAlsoWaitsForAreUsesTheJobOrdersAfterNotMappings)
+{
+    ASSERT_EQ(place({{&windowB, nullptr}, 1}), 0);
+    ASSERT_EQ(uses.size(), 4u);
+    EXPECT_EQ(uses[3].backing, &windowB);
+    EXPECT_EQ(uses[3].access, uint32_t(SWITCH_GPU_BACKING_READ));
+    EXPECT_EQ(mapCalls, 2u);
+}
+
+TEST_F(SwitchVICScanoutPlace, ALayoutPastTheDestinationOrOfPartialBlocksIsRefused)
+{
+    layout.span[0] = 512 * 128 + 4096;
+    EXPECT_EQ(place(), -22);
+    EXPECT_EQ(mapCalls, 0u);
+    layout.span[0] = 512 * 128;
+    layout.rows[0] = 120;
+    EXPECT_EQ(place(), -95);
+    EXPECT_EQ(submissions, 0u);
+    EXPECT_EQ(mappings, 0u);
+}
+
+TEST_F(SwitchVICScanoutPlace, TheConversionKeepsItsPitchRule)
+{
+    EXPECT_EQ(switch_vic_scanout_convert(&source, &image, &targetBacking, 128, 64, 320, &operation, &output), -22);
+    EXPECT_EQ(mapCalls, 0u);
+}

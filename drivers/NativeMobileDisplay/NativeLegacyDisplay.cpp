@@ -3342,6 +3342,7 @@ public:
         }
         startCopyLoop();
         startGpuCopy();
+        startVicCopy();
         if (IOWorkLoop *loop = getWorkLoop()) {
             loop->runAction(
                 [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
@@ -3662,6 +3663,8 @@ public:
         if (gpuCopy && !gpuBypass &&
             offerGpuCopy(request, memory, sourceStride, allocation, width, height, blockLog2, kickAt))
             return;
+        if (offerVicCopy(request, surface, sourceStride, allocation, width, height, blockLog2, kickAt))
+            return;
         if (!asScanned) {
             native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);
             return;
@@ -3684,6 +3687,8 @@ public:
             }
             return;
         }
+        if (cpuCopyRefused(request, kickAt))
+            return;
         const uint64_t mapAt = stats ? mach_absolute_time() : 0;
         bool ownedSource = true;
         IOMemoryMap *source = sourceMapping(memory, ownedSource);
@@ -3951,6 +3956,7 @@ public:
                 self->copyQueued = false;
                 self->sourceWaitQueued = false;
                 self->stopPlaneConversion();
+                self->stopVicCopy();
                 self->cancelQueuedPlaneFence();
                 self->copyPlaneJoined = self->copyPlaneReady = self->copyPixelsReady = false;
                 self->releaseSourceWait();
@@ -4011,6 +4017,8 @@ public:
     // The copy thread, outside the family's gate: the part of a swap that reads the surface. job is not touched after copyFinished.
     void copyWork()
     {
+        if (vicCopyWork())
+            return;
         if (planeFenceQueued) {
             planeFenceWork();
             if (copyQueued && !__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE))
@@ -4135,6 +4143,8 @@ public:
     // The GPU client reported its copy (status 0) or lost it. Success retires the swap like a finished copy; anything else uses the CPU copy.
     void finishGpuSwap(int status)
     {
+        if (finishVicCopy(status))
+            return;
         if (gpuScanout && planeFencePending) {
             finishPlaneFence(status);
             return;
@@ -4295,6 +4305,8 @@ public:
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         if (!self->gpuScanout)
+            return;
+        if (self->vicCopyLate())
             return;
         const bool held = tegra_gm20b_scanout_outstanding(self) != 0 ||
             self->planeFencePending;
@@ -4694,6 +4706,7 @@ public:
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
 #include "SwitchPlaneSurfaceUseDisplay.h"
+#include "SwitchVICScanoutDisplay.h"
 #include "NativeColumnScanDisplay.h"
 #include "SwitchPaletteDisplay.h"
 #include "SwitchPlaneAdmissionDrop.h"

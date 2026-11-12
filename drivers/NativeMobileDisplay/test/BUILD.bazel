@@ -622,6 +622,28 @@ host_test(
     ],
 )
 
+# SwitchVICScanoutDisplay.h: a frame the GPU's copy engine declines is placed by VIC in window A's blocks and flips
+# from VIC's syncpoint; the CPU copies only while VIC is not up.
+host_test(
+    name = "switch_vic_scanout_test",
+    srcs = [
+        "switch_vic_scanout_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchVICScanoutDisplay.h",
+        "//drivers/TegraVIC:SwitchVICScanoutConvert.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    data = ["//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp"],
+    deps = [":native_scanout_kernel"],
+)
+
 # SwitchPlaneSurfaceUseDisplay.h: window B holds an IOSurface use count on what it scans, from the latch until the
 # lease goes; three pool buffers going round leave only the one shown in use.
 host_shims(
