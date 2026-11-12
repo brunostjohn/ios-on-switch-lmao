@@ -145,7 +145,7 @@ extern "C" void tegra_vic_surface_release(TegraVICSurface *s)
     *s = {};
 }
 
-int switch_native_surface_acquire(const TegraVICSurface *, SwitchNativeSurfaceView *, bool)
+int switch_native_surface_acquire(const TegraVICSurface *, SwitchNativeSurfaceView *, bool, bool)
 {
     return -2;
 }

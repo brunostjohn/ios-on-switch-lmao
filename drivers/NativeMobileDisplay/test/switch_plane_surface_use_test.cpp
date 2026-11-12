@@ -161,9 +161,10 @@ TEST_F(PlaneSurfaceUse, EveryPathALeaseEndsByReleasesItsCount)
     EXPECT_THAT(slots, testing::HasSubstr("void planeDropSlot(unsigned k)\n{\n    planeUseRelease(k);"));
     EXPECT_THAT(slots, testing::HasSubstr("void planeReleaseLease(unsigned k)\n{\n    planeUseRelease(k);"));
     EXPECT_THAT(slots, testing::HasSubstr("void planeReleaseIdle()\n{\n    planeUseHoldScanned();"));
-    EXPECT_THAT(native, testing::HasSubstr("return planeUseNoted(planeMapSnapshot(scanout, image), surface);"));
-    EXPECT_THAT(native, testing::HasSubstr(
-                            "planeUseRelease(unsigned(mapped));\n        switch_native_scanout_release(slot.native);"));
+    EXPECT_THAT(native, testing::HasSubstr("= planeUseNoted(planeMapSnapshot(scanout, image), surface);"));
+    EXPECT_THAT(native, testing::HasSubstr("planeUseRelease(unsigned(mapped));\n"
+                                           "        switch_native_scanout_deliver(slot.native);\n"
+                                           "        switch_native_scanout_release(slot.native);"));
     EXPECT_THAT(display, testing::HasSubstr("#include \"SwitchPlaneSurfaceUseDisplay.h\""));
 }
 }  // namespace

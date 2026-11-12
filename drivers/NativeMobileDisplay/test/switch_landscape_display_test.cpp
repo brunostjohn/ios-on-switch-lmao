@@ -147,6 +147,7 @@ struct Display {
 #include "../SwitchLandscapeState.h"
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
+#include "../SwitchPlaneAdmissionDrop.h"
 #include "../SwitchCompositionRegisters.h"
 #include "../SwitchOverlayRecovery.h"
 #include "../SwitchLandscapeDisplay.h"

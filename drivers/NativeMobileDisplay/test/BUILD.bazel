@@ -639,6 +639,7 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneAdmissionDrop.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
@@ -651,6 +652,8 @@ host_test(
     name = "switch_plane_composite_test",
     srcs = [
         "switch_plane_composite_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneComposite.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneCompositeDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutBuffer.h",

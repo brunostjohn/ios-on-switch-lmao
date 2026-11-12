@@ -8,6 +8,7 @@
 #include "../SwitchPlaneComposite.h"
 #include "../../TegraVIC/SwitchNativeVICImage.h"
 #include "../SwitchScanoutBuffer.h"
+#include "../SwitchLandscapeWindows.h"
 #define IONewZero(type, count)         static_cast<type *>(std::calloc(count, sizeof(type)))
 #define IODelete(pointer, type, count) std::free(pointer)
 
@@ -177,6 +178,7 @@ struct Loop {
 struct NativeLegacyDisplay : OSObject {
     bool entryPlaneSet[4] = {};
     using PlaneSet = switch_display::Composition;
+    using Window = switch_landscape::Window;
     using Commits = switch_display::Compositions<PlaneSet>;
     static constexpr uint32_t kWinABase = 0xb80, kWinBBase = 0xd80, kWinCBase = 0xf80;
     static constexpr uint32_t kWinbufBBase = 0xdc0, kWinbufCBase = 0xfc0, kWincBBase = 0xc00, kWincCBase = 0xe00;
@@ -218,6 +220,7 @@ struct NativeLegacyDisplay : OSObject {
 
     NativeLegacyDisplay()
     {
+        landscapeState = {};
         planeLatch.values = sets;
         for (unsigned i = 0; i < kPlaneSlots; ++i)
             planeSlots[i].native = &snapshots[i];
@@ -248,6 +251,11 @@ struct NativeLegacyDisplay : OSObject {
     const void *firstUntaken() const
     {
         return nullptr;
+    }
+
+    bool planeWindowIdle() const
+    {
+        return false;
     }
 
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
@@ -312,6 +320,12 @@ struct NativeLegacyDisplay : OSObject {
         return 6;
     }
 
+#include "../SwitchLandscapeState.h"
+
+    bool landscapeHolds(PlaneSet &) { return false; }
+    void landscapeLeaveNow(const char *) {}
+    void landscapeAbandonWant() {}
+
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
 #include "../SwitchPlaneAdmissionDrop.h"
@@ -332,6 +346,8 @@ struct NativeLegacyDisplay : OSObject {
         planeRetireBandwidth();
     }
 };
+
+NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeState;
 
 using Display = NativeLegacyDisplay;
 
