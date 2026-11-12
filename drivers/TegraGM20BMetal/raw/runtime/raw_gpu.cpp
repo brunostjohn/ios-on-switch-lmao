@@ -1120,8 +1120,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     }
     const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
     const uint8_t *code = heapCpu(fs.program + 0x50);
-    pl.turnSensitive =
-        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code), codeBytes / 4, pl.fetchBits || pl.storageBits);
+    pl.turnSensitive = !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code), codeBytes / 4,
+                                              pl.fetchBits || pl.storageBits);
     pl.rec = &pp;
 }
 
