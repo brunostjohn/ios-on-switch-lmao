@@ -9,9 +9,9 @@ import Metal
 /// Metal's measured store map (metal2vulkan-runtime rotated.rs). The raw path draws straight into the plane through the
 /// viewport coordinate swizzle, a state that reads the plane's axes through its turned variant (its position, one axis's
 /// derivative), a private depth texture neither loaded nor stored through a backing laid out as the plane, a 4x resolve
-/// into the plane through the resolve state's turned variant, a private colour texture stored beside the plane and a
-/// private depth texture loaded beside it (each through a stand-in laid out as the plane, turned in and back by the
-/// pack's turn copies), rotation 4's load, which Metal makes transposed in each tile a draw reaches (its expected bytes
+/// into the plane through the resolve state's turned variant, a private colour texture stored beside the plane, a
+/// private depth texture loaded beside it and a private depth/stencil texture stored then loaded beside it (each through a
+/// stand-in laid out as the plane, turned in and back by the pack's turn copies and stencil bits), rotation 4's load, which Metal makes transposed in each tile a draw reaches (its expected bytes
 /// the reference pass loading pass 1's frame flipped top to bottom, every tile reached by a full-frame draw whose fragments
 /// are discarded), a load with no draw, which leaves the plane as it is, a second plane of another turn and frame beside
 /// it and private textures of other sizes (each landing by its own store map over the render area, the rest kept): those
@@ -77,8 +77,8 @@ struct RotatedTargetTest: HWTest {
 }
 
 enum RotatedCell: String, CaseIterable {
-    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, turns,
-        sized, tie
+    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth,
+        keptStencil, turns, sized, tie
 
     enum Kind { case native, informational }
 
@@ -292,6 +292,8 @@ struct RotatedCells {
             return [mixedTurns]
         case .sized:
             return [mixedSizes]
+        case .keptStencil:
+            return [keptStencil]
         case .tie:
             return [encode(load: .clear) { e in shapes(e, halfPixelRect(10.5, 5.5, 30.5, 20.5), [1, 1, 1, 1], states.plain) }]
         }
@@ -379,6 +381,71 @@ struct RotatedCells {
         f.setDepthStencilState(states.lessEqual)
         shapes(f, at(rect(20, 10, 80, 55), 0.5), [1, 1, 0, 1], states.depthTested)
         f.endEncoding()
+    }
+
+    /// A pass into the target writing a private Depth32Float_Stencil8 texture of the frame beside it, stored: stencil 0xA5 at
+    /// depth 0.25 in one rectangle, 0x5A at 0.5 in another behind it. A pass into the target loading it draws red where the
+    /// stencil is 0xA5, green where 0x5A, then blue alone where the depth is past 0.375
+    private func keptStencil(_ commands: MTLCommandBuffer, _ target: MTLTexture) {
+        let zs = MTLPixelFormat.depth32Float_stencil8
+        guard let zeta = try? gpu.texture(zs, width, height, usage: .renderTarget),
+            let tested = try? gpu.render(
+                vertex: "rotated_vertex", fragment: "rotated_fragment", format: .bgra8Unorm, depth: zs, stencil: zs),
+            let blue = try? gpu.render(
+                vertex: "rotated_vertex", fragment: "rotated_fragment", format: .bgra8Unorm, depth: zs, stencil: zs,
+                configure: { $0.colorAttachments[0].writeMask = .blue }),
+            let writes = zetaState(.lessEqual, writes: true, stencil: .always, replace: true),
+            let equal = zetaState(.always, writes: false, stencil: .equal, replace: false),
+            let beyond = zetaState(.lessEqual, writes: false, stencil: .always, replace: false)
+        else { return }
+        let at = { (r: [SIMD4<Float>], z: Float) in r.map { SIMD4<Float>($0.x, $0.y, z, 1) } }
+        let whole = rect(0, 0, width, height)
+        for (n, load) in [MTLLoadAction.clear, .load].enumerated() {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            pass.depthAttachment.texture = zeta
+            pass.depthAttachment.loadAction = load
+            pass.depthAttachment.clearDepth = 1
+            pass.depthAttachment.storeAction = n == 0 ? .store : .dontCare
+            pass.stencilAttachment.texture = zeta
+            pass.stencilAttachment.loadAction = load
+            pass.stencilAttachment.clearStencil = 0
+            pass.stencilAttachment.storeAction = n == 0 ? .store : .dontCare
+            let e = commands.makeRenderCommandEncoder(descriptor: pass)!
+            if n == 0 {
+                e.setDepthStencilState(writes)
+                e.setStencilReferenceValue(0xA5)
+                shapes(e, at(rect(10, 5, 50, 45), 0.25), [1, 1, 0, 1], tested)
+                e.setStencilReferenceValue(0x5A)
+                shapes(e, at(rect(20, 10, 80, 55), 0.5), [0, 1, 1, 1], tested)
+            } else {
+                e.setDepthStencilState(equal)
+                e.setStencilReferenceValue(0xA5)
+                shapes(e, at(whole, 0.9), [1, 0, 0, 1], tested)
+                e.setStencilReferenceValue(0x5A)
+                shapes(e, at(whole, 0.9), [0, 1, 0, 1], tested)
+                e.setDepthStencilState(beyond)
+                shapes(e, at(whole, 0.375), [0, 0, 1, 1], blue)
+            }
+            e.endEncoding()
+        }
+    }
+
+    private func zetaState(
+        _ depth: MTLCompareFunction, writes: Bool, stencil: MTLCompareFunction, replace: Bool
+    ) -> MTLDepthStencilState? {
+        let face = MTLStencilDescriptor()
+        face.stencilCompareFunction = stencil
+        face.depthStencilPassOperation = replace ? .replace : .keep
+        let d = MTLDepthStencilDescriptor()
+        d.depthCompareFunction = depth
+        d.isDepthWriteEnabled = writes
+        d.frontFaceStencil = face
+        d.backFaceStencil = face
+        return gpu.device.makeDepthStencilState(descriptor: d)
     }
 
     /// The draws into a 4x private texture of the frame, resolved into the target

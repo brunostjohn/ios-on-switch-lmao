@@ -7,7 +7,7 @@
 #include <type_traits>
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmit3D.h"
 #include "raw_rotation.h"
-#include "raw_turn_copy.h"
+#include "raw_stencil_bits.h"
 
 namespace raw {
 
@@ -80,8 +80,8 @@ template <typename Pass> RotatedRefusal passRotation(const Pass &pass, Rotation 
 
 // Why the raw path does not draw `pass` at all, None where passRotation takes it as it is or once its turn copies have moved
 // what it keeps (raw_turned_pass.h): every attachment beside the pass's turned one that must move (turned another way or
-// of another frame, rotation 4 loaded, or not turned and loaded or stored) of a texel size or format a turn copy state
-// moves. Still refused: an attachment no turn copy state moves, a stencil plane loaded or stored among them.
+// of another frame, rotation 4 loaded, or not turned and loaded or stored) of a texel size or format turn copies move
+// (a stencil plane by its bits, raw_stencil_bits.h). Still refused: an attachment no turn copy moves.
 template <typename Pass> RotatedRefusal turnablePass(const Pass &pass)
 {
     const auto quarter = [](Rotation f) {
@@ -110,7 +110,7 @@ template <typename Pass> RotatedRefusal turnablePass(const Pass &pass)
             return RotatedRefusal::Mixed;
     }
     if (const auto *z = pass.depthStencil.texture;
-        z && !z->memoryless && (pass.depthStencil.loaded || pass.depthStencil.stored) && !turnDepthState(z->format))
+        z && !z->memoryless && (pass.depthStencil.loaded || pass.depthStencil.stored) && !turnMovesZeta(z->format))
         return RotatedRefusal::Mixed;
     return RotatedRefusal::None;
 }

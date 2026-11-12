@@ -223,6 +223,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         RMTexture *into = nil;
         uint32_t filter = 0;
     } depthResolve;
+    struct StencilResolve {  // CommandBuffer::stencilResolve's pass (raw_stencil_bits.h)
+        RMTexture *into = nil;
+        raw::StencilSample pick = raw::StencilSample::Zero;
+    } stencilResolve;
     static const raw::DepthStencilState depthWrites = [] {
         raw::DepthStencilDesc desc;
         desc.depthCompare = 7;  // MTLCompareFunctionAlways
@@ -234,6 +238,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         for (const Resolve &r : resolves)
             from[r.attachment] = re->target(r.attachment);
         const raw::Texture *depthFrom = depthResolve.into ? re->depthTarget() : nullptr;
+        const raw::Texture *stencilFrom = stencilResolve.into ? re->depthTarget() : nullptr;
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -286,6 +291,14 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 return refused();
             e->end();
             depthResolve = {};
+        }
+        if (RMTexture *into = stencilResolve.into) {
+            useTexture(rc, into, true);
+            if (!stencilFrom)
+                return fail(PredEncDepthStencil, "a stencil resolve without its source", into->_raw.format);
+            if (!rc->stencilResolve(into->_raw, *stencilFrom, stencilResolve.pick, width, height, why))
+                return fail(PredEncDepthStencil, *why, into->_raw.format);
+            stencilResolve = {};
         }
         return true;
     };
@@ -597,6 +610,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             if (RMTexture *r = (RMTexture *)pass.depthResolve)
                 depthResolve = {r, pass.depthFilter};
+            if (RMTexture *r = (RMTexture *)pass.stencilResolve)
+                stencilResolve = {r, pass.stencilPick};
             if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;

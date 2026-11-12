@@ -111,7 +111,12 @@ def key_hash(rec: dict) -> int:
             'turn',
             'turn_vert',
             tuple(f'copy{bits}_frag' for bits in (8, 16, 32, 64, 128))
-            + ('depth16_frag', 'depth32f_frag'),
+            + ('depth16_frag', 'depth32f_frag', 'depth32fs8_frag'),
+        ),
+        (
+            'stencil_bits',
+            'stencil_bits_vert',
+            ('s8_frag', 'd32fs8_frag', 'ms_s8_frag', 'ms_d32fs8_frag', 'ms_d32fs8_min_frag', 'ms_d32fs8_max_frag'),
         ),
         ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),

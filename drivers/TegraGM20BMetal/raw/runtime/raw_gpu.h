@@ -68,6 +68,7 @@
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
 #include "raw_turn_copy.h"
+#include "raw_stencil_bits.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -918,6 +919,14 @@ public:
     // A block-linear image of `width` x `height` texels of `format` (turnCopyFormat's, or a depth format), the device's backing
     // of tag `tag` for this command buffer: what a turn copy moves texels through; null where none can be had
     Texture *turnScratch(uint32_t format, uint32_t width, uint32_t height, uint32_t tag);
+    // raw_stencil_bits.h: `src`'s stencil drawn into `e`'s zeta of `format` (its stencil cleared to 0 at the pass's start, or
+    // `zeroFirst`: zeroed by a draw where `map`'s source rectangle reaches, the rest kept), each pixel's from `src`'s texel at
+    // `map` or its `pick` sample; `view` the stencil header's texture, read until e's end()
+    bool stencilBits(RenderEncoder &e, const Texture &src, Texture &view, uint32_t format, const TurnMap &map,
+                     StencilSample pick, const char **why, bool zeroFirst = false);
+    // A multisampled zeta's stencil resolve into one-sample `into` of its format, over (0, 0, width, height): a pass of its own
+    bool stencilResolve(Texture &into, const Texture &from, StencilSample pick, uint32_t width, uint32_t height,
+                        const char **why);
     BlitEncoder *blit();
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
@@ -1147,6 +1156,7 @@ public:
     // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
     Pipeline *mipPipeline(uint32_t format);
     Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState
+    Pipeline *stencilBitsPipeline(uint32_t format, uint32_t samples, StencilSample pick);  // raw_stencil_bits.h
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
