@@ -3,8 +3,8 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// The identity's layered rendering and viewports: 24B119's A13 (Apple6) renders a pass of several layers and takes 16
-/// viewports; 21H461's A10X (Apple3) has no layered rendering and one viewport.
+/// The identity's layered rendering and viewports: 24B119's A13 (Apple6) renders a pass of several layers and a vertex
+/// function's choice of 16 viewports; 21H461's A10X (Apple3) has neither (Metal Feature Set Tables: Apple5).
 enum Layering {
     static var a13: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 }
 

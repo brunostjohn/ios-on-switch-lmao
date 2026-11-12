@@ -52,7 +52,7 @@ enum ViewportTiles {
     }
 }
 
-/// setViewports:count: and setScissorRects:count: of 16 (as many as the identity takes: the A10X one, the A13 16) and a
+/// setViewports:count: and setScissorRects:count: of 16 (both identities' drivers keep every one they are given) and a
 /// vertex function that writes no [[viewport_array_index]]: every primitive goes through viewport 0 and scissor 0, so a
 /// full-target quad fills tile 0 inside its scissor and nothing else.
 struct NativeViewportsTest: NativeObjectTest {
@@ -88,7 +88,7 @@ struct NativeViewportsTest: NativeObjectTest {
 struct NativeViewportIndexTest: NativeObjectTest {
     let id = "metal.native.viewport_index"
     let name = "A vertex function chooses among 16 viewports and scissors, each tile its instance's"
-    var unavailable: String? { Layering.a13 ? nil : "21H461's A10X has one viewport" }
+    var unavailable: String? { Layering.a13 ? nil : "21H461's A10X (Apple3) has no multiple viewports (Apple5)" }
 
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let t = try ViewportTiles.target(gpu)

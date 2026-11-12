@@ -12,7 +12,8 @@
 
 namespace raw {
 
-// The most an encoder sets: 24B119's A13 answers maxViewportCount 16; 21H461's A10X 1 (raw_device_answers.h)
+// The most an encoder sets: GM20B's viewports and scissors (SET_VIEWPORT_*(j), j < 16), as many as the A13 answers
+// maxViewportCount; the A10X answers 1 and its driver keeps every viewport it is given
 constexpr uint32_t kMaxViewports = 16;
 
 // The vertex program writes ViewportIndex (or Layer): its shader header's output map, NAK's sysvals_out bit of attribute

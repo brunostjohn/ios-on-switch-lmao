@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
-#include "raw_device_answers.h"
 #import "RawMetalRotated.h"
 
 #include "raw_fetch_order.h"
@@ -564,11 +563,12 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
                     beforeStages:before];
 }
 
-// As many viewports and scissors as the identity has (maxViewportCount: 16 on 24B119's A13, one on 21H461's A10X)
+// Every viewport and scissor the encoder sets, as both identities' drivers keep them (the A10X's setViewports:count:
+// 0x21c9614cc stores its count unclamped and converts each one, though its device answers maxViewportCount 1), up to the
+// 16 GM20B holds (SET_VIEWPORT_*(j))
 static NSUInteger viewportCount(NSUInteger count)
 {
-    static_assert(raw::answers::countAnswer("maxViewportCount") <= raw::kMaxViewports);
-    return std::min<NSUInteger>(count, raw::answers::countAnswer("maxViewportCount"));
+    return std::min<NSUInteger>(count, raw::kMaxViewports);
 }
 
 - (void)setViewports:(const MTLViewport[])viewports count:(NSUInteger)count
