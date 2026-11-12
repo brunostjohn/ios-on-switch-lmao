@@ -207,7 +207,8 @@ int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_me
 #define CHAN_PROF                              \
 	(CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + \
 	 0x1000) /* one 16-byte stamp per push, TGM_PROF_MAX */
-_Static_assert(TGM_PROF_MAX * 16 <= 0x1000, "the push profile's stamps fit the channel's semaphore page above CHAN_PROF");
+_Static_assert(TGM_PROF_MAX * 16 <= 0x1000,
+	       "the push profile's stamps fit the channel's semaphore page above CHAN_PROF");
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 
@@ -250,7 +251,7 @@ struct tgm_chan {
 	u64 visible_gpu;
 	u64 fence_gpu;
 	u32 submitted;
-    u64 irq_state;
+	u64 irq_state;
 	u32 error;
 	u32 chid;
 	int nobj;
@@ -302,6 +303,7 @@ struct tgm_chan {
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
+
 	/* stats: each job's seqnos by its first, the job being timed, and this window's jobs (SwitchGpuJobTiming.h) */
 	struct {
 		u32 first, last;
@@ -310,10 +312,12 @@ struct tgm_chan {
 	struct switch_gpu_job_window stat_jobs;
 	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
 	 * class (PTIMER units) and the pushes counted, for its owner */
-	u32 prof_seqno, prof_first, prof_count, prof_subs; /* prof_seqno: the job's last, prof_first its first */
+	u32 prof_seqno, prof_first, prof_count,
+		prof_subs; /* prof_seqno: the job's last, prof_first its first */
 	u8 prof_cls[TGM_PROF_MAX], prof_ilk[TGM_PROF_MAX];
 	u16 prof_draws[TGM_PROF_MAX], prof_sdraws[TGM_PROF_MAX], prof_kpx[TGM_PROF_MAX];
-	struct switch_gpu_prof_seq prof_run, prof_slow; /* the profile being read, the window's slowest */
+	struct switch_gpu_prof_seq prof_run,
+		prof_slow; /* the profile being read, the window's slowest */
 	u64 prof_ns[TGM_PC_COUNT];
 	u32 prof_n[TGM_PC_COUNT];
 	u64 prof_dn[TGM_PC_COUNT],
@@ -351,15 +355,16 @@ void tgm_engine_state(char *buf, unsigned int len);
 #define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
 void tgm_acquire_arm(u32 chid);
+
 enum tgm_wait_source {
 	TGM_WAITS_NONE,
 	TGM_WAITS_CHANNEL, /* a live channel's fence */
 	TGM_WAITS_VICTIM,  /* a word the kernel releases (a bind epoch) or a host1x syncpoint */
 	TGM_WAITS_UNKNOWN, /* an acquire on an address only its own pushes name */
-	TGM_WAITS_UNREAD,  /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
+	TGM_WAITS_UNREAD, /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
 };
-enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source, char *what,
-					  unsigned int len);
+enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source,
+					  char *what, unsigned int len);
 void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
 
 /* client fault isolation:
@@ -471,11 +476,12 @@ struct idle_state {
 	u32 vco_coeff, vco_khz, maximum_khz, requested_khz;
 	int clock_available;
 	u64 last_busy; /* atomic: the last kick or hint (ns) */
-    u64 service_until;
-    u64 kicked, retired; /* atomic: seqnos kicked / retired since boot (SwitchGpuIdleDeadline.h) */
-    /* the periodic line (under clk) */
-    u64 log_start, low_since, low_ns, raise_sum, raise_max;
-    u32 drops, raises, hinted;
+	u64 service_until;
+	u64 kicked,
+		retired; /* atomic: seqnos kicked / retired since boot (SwitchGpuIdleDeadline.h) */
+	/* the periodic line (under clk) */
+	u64 log_start, low_since, low_ns, raise_sum, raise_max;
+	u32 drops, raises, hinted;
 };
 extern struct idle_state tgm_idle;
 int tgm_clock_ceiling_restore(void);

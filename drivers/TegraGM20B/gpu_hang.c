@@ -521,7 +521,8 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 			tgm_chan_isolate(chan, report, now);
 			tgm_engine_state(engine, sizeof(engine));
 			scnprintf(ctxsw_line, sizeof(ctxsw_line),
-				  "tegra-gm20b: context switch timed out, recovering %s (channel %u): "
+				  "tegra-gm20b: context switch timed out, recovering %s (channel "
+				  "%u): "
 				  "%s; %s\n",
 				  chan->owner, chan->chid, state, engine);
 			switch_linux_log_line(ctxsw_line);
