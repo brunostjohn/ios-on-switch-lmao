@@ -219,7 +219,11 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
         cb_->splitReuse_.remember(inputs, frontier);
         RAW_DIAGNOSTIC(d.stats.uploadBytes += s.rec.frontierBytes);
     }
-    p.inc(CB_SELECTOR_A, {cbufBindBytes(s.rec.frontierBytes), uint32_t(frontier >> 32), uint32_t(frontier)});
+    bool exact = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    exact = cb_->splitFrontierExact_;
+#endif
+    p.inc(CB_SELECTOR_A, {cbufBindBytes(s.rec.frontierBytes, exact), uint32_t(frontier >> 32), uint32_t(frontier)});
     p.m(BIND_GROUP_CB + 0x20 * kPixelGroup, 1 | uint32_t(s.rec.frontierCbuf) << 4);
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
 }

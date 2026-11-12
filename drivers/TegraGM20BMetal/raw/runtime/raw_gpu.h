@@ -1102,6 +1102,11 @@ public:
         splitFrontierWfi_ = wfi;
     }
 
+    void splitFrontierExact(bool exact)
+    {
+        splitFrontierExact_ = exact;
+    }
+
     // HW Test's bench: every draw the split plan would take if large enough is taken, without a plan
     void forceSplit(bool force)
     {
@@ -1190,6 +1195,7 @@ private:
     SplitProbe splitProbe_ = SplitProbe::Twin;
     bool splitForced_ = false;
     bool splitFrontierWfi_ = false;
+    bool splitFrontierExact_ = false;
     bool splitCapturing_ = false;  // the device's capture was armed at begin(): its draws may take a record
     std::vector<SplitCaptureRecord> splitCaptures_;
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic

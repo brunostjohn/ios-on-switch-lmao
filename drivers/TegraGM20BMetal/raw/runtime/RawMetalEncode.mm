@@ -50,6 +50,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
     rc->splitProbe(rmSplitProbe());
     rc->splitFrontierWfi(rmSplitFrontierWfi());
+    rc->splitFrontierExact(rmSplitFrontierExact());
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {

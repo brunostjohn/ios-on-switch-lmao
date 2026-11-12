@@ -531,5 +531,6 @@ bool rmWholePrograms();
 bool rmZeroNewBuffers();
 raw::SplitProbe rmSplitProbe();
 bool rmSplitFrontierWfi();
+bool rmSplitFrontierExact();
 void splitCaptureCommitted(raw::CommandBuffer &rc);
 #endif

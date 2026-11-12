@@ -15,7 +15,9 @@ import UIKit
 /// process: _whole (whole-programs: no split, variants as they are), _generic (split-generic: the generic whole program
 /// where a draw would split), _launch (split-launch-only: the prologue runs, the generic whole program draws) and, for
 /// glass, _noreuse (split-no-reuse: each split draw's frontier from its own prologue), _fwfi (split-frontier-wfi: the 3D
-/// class flushes, invalidates and waits for idle after the prologues too), then appear_late and glass_late,
+/// class flushes, invalidates and waits for idle after the prologues too), _exact (split-frontier-exact: the frontier
+/// bound at the pack's size, as before it was rounded to whole 256-byte units: black there and not in appear and glass
+/// says the chip read a short frontier as zeros), then appear_late and glass_late,
 /// split again: the control that the black has not faded over the run. Partial black gone under _generic but not _launch
 /// puts it on the compute segment at the command buffer's start; gone under _launch puts it on the frontier; gone under
 /// _noreuse puts it on the frontier's reuse; present under _generic puts it on the generic program. A switch stays on
@@ -34,7 +36,7 @@ struct UIGlassLiveTest: HWTest {
     let id = "ui.glass_live"
     let name = "Liquid Glass on screen over a moving backdrop, read back per presented frame"
     let subsystem = Subsystem.compositor
-    var timeout: TimeInterval { 300 }
+    var timeout: TimeInterval { 330 }
     static let seconds: TimeInterval = 3.5
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -143,15 +145,18 @@ enum LiveVariant: String, CaseIterable {
     case glassNoReuse = "glass_noreuse"
     case appearFwfi = "appear_fwfi"
     case glassFwfi = "glass_fwfi"
+    case appearExact = "appear_exact"
+    case glassExact = "glass_exact"
     case appearLate = "appear_late"
     case glassLate = "glass_late"
 
     var readsBack: Bool { self != .plain }
     var appears: Bool {
-        [.appear, .appearWhole, .appearGeneric, .appearLaunch, .appearFwfi, .appearLate].contains(self)
+        [.appear, .appearWhole, .appearGeneric, .appearLaunch, .appearFwfi, .appearExact, .appearLate].contains(self)
     }
     var moves: Bool {
-        [.glass, .glassWhole, .glassGeneric, .glassLaunch, .glassNoReuse, .glassFwfi, .glassLate].contains(self)
+        [.glass, .glassWhole, .glassGeneric, .glassLaunch, .glassNoReuse, .glassFwfi, .glassExact, .glassLate]
+            .contains(self)
     }
 
     /// The raw path's debug switch the variant runs under (RawMetalGlassProbe.mm)
@@ -162,6 +167,7 @@ enum LiveVariant: String, CaseIterable {
         case .appearLaunch, .glassLaunch: return "split-launch-only"
         case .glassNoReuse: return "split-no-reuse"
         case .appearFwfi, .glassFwfi: return "split-frontier-wfi"
+        case .appearExact, .glassExact: return "split-frontier-exact"
         default: return nil
         }
     }

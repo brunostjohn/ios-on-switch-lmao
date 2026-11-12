@@ -3563,6 +3563,7 @@ CommandBuffer *Device::begin()
     cb.splitProbe_ = SplitProbe::Twin;
     cb.splitForced_ = false;
     cb.splitFrontierWfi_ = false;
+    cb.splitFrontierExact_ = false;
     cb.splitCapturing_ = splitCaptureLeft.load(std::memory_order_relaxed) != 0;
     cb.splitCaptures_.clear();
     cb.foldCounts();

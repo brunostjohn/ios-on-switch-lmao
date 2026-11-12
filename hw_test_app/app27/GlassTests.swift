@@ -8,15 +8,15 @@ import UIKit
 /// composited picture must match the CPU's. Inside, away from the lensing at its edges, each column over the stripes
 /// stays constant down its length (no streak or block) and the grey stays flat and not black. The stripes' remaining
 /// contrast is reported (contrast=) but not judged: how much glass blurs is UIKit's choice, not the GPU's. The stripes'
-/// column spread is measured again under the raw path's debug switches whole-programs (column_spread_whole=) and
-/// split-frontier-wfi (column_spread_fwfi=), reported and not judged: whether bent stripes follow the split draws. A
-/// failed run saves each picture (composited.png, composited-whole.png, composited-fwfi.png).
+/// column spread is measured again under the raw path's debug switches whole-programs (column_spread_whole=),
+/// split-frontier-wfi (column_spread_fwfi=) and split-frontier-exact (column_spread_exact=), reported and not judged:
+/// whether bent stripes follow the split draws. A failed run saves each picture (composited.png, composited-<arm>.png).
 struct UIGlassTest: HWTest {
     let id = "ui.glass"
     let name = "UIGlassEffect over stripes and flat grey"
     let subsystem = Subsystem.compositor
 
-    static let arms = [("whole", "whole-programs"), ("fwfi", "split-frontier-wfi")]
+    static let arms = [("whole", "whole-programs"), ("fwfi", "split-frontier-wfi"), ("exact", "split-frontier-exact")]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (outside, inside) = await Self.snapshot(context)

@@ -15,4 +15,13 @@ constexpr uint32_t cbufBindBytes(uint32_t bytes)
     return std::min((bytes + kCbufUnit - 1) & ~(kCbufUnit - 1), kCbufMaxBytes);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// HW Test's debug switch split-frontier-exact: `bytes` as they are where `exact`, the size the split frontier was bound at
+// before it was rounded, so one boot compares the two
+constexpr uint32_t cbufBindBytes(uint32_t bytes, bool exact)
+{
+    return exact ? bytes : cbufBindBytes(bytes);
+}
+#endif
+
 }  // namespace raw
