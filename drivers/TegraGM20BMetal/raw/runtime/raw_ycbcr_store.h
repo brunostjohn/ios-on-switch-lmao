@@ -21,6 +21,10 @@ constexpr uint32_t kYcbcrTargetStandIn = 125;
 
 // A two-plane YCbCr format whose passes the raw path renders through its stand-in, or refuses (ycbcrTargetRefusal): all but
 // RGB8_444_2P, which the frontend renders through its own stand-in
+// The fragment buffer slot the _srgb store states read pack/srgb_encode.h from (Device::srgbEncodeTable)
+constexpr uint32_t kSrgbEncodeSlot = 1;
+constexpr uint32_t kSrgbEncodeEntries = 8193;
+
 inline bool ycbcrRenderedFormat(uint32_t pixelFormat)
 {
     return pixelFormat >= 500 && pixelFormat <= 548 && pixelFormat != 542;
@@ -70,7 +74,7 @@ struct YcbcrStoreShape {
     int32_t row[3][3] = {};
     uint32_t mul[3] = {};
     uint32_t termBits = 6;
-    uint32_t srgb = 0;    // the _srgb states': steps through pack/srgb_encode.h
+    uint32_t srgb = 0;    // the _srgb states': steps through pack/srgb_encode.h, bound at kSrgbEncodeSlot
     uint32_t packed = 0;  // the _packed states: R32Uint planes of three codes a word
 };
 

@@ -187,6 +187,7 @@ struct Gpu {
     id<MTLDevice> dev;
     id<MTLCommandQueue> q;
     id<MTLLibrary> lib, store;
+    id<MTLBuffer> encode;  // pack/srgb_encode.h, at the _srgb states' buffer(1) as the device binds it
 
     id<MTLRenderPipelineState> state(id<MTLLibrary> from, NSString *vertex, NSString *fragment, MTLPixelFormat f)
     {
@@ -222,6 +223,8 @@ struct Gpu {
                 [e setFragmentTexture:sampled atIndex:0];
             if (shape)
                 [e setFragmentBytes:shape length:sizeof *shape atIndex:0];
+            if (shape && shape->srgb)
+                [e setFragmentBuffer:encode offset:0 atIndex:raw::kSrgbEncodeSlot];
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
         [e endEncoding];
@@ -336,19 +339,16 @@ int main(int argc, char **argv)
         NSString *src = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"ycbcr_store.metal"]
                                                   encoding:NSUTF8StringEncoding
                                                      error:nil];
-        NSString *table = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"srgb_encode.h"]
-                                                    encoding:NSUTF8StringEncoding
-                                                       error:nil];
-        src = [src stringByReplacingOccurrencesOfString:@"#include \"srgb_encode.h\"" withString:table ?: @""];
         MTLCompileOptions *exact = [MTLCompileOptions new];
         exact.mathMode = MTLMathModeSafe;
-        g.store = src && table ? [g.dev newLibraryWithSource:src options:exact error:&e] : nil;
+        g.store = src ? [g.dev newLibraryWithSource:src options:exact error:&e] : nil;
         if (!g.lib || !g.store) {
             fprintf(stderr, "libraries: %s\n", e.localizedDescription.UTF8String);
             return 1;
         }
         uint16_t encode[raw::kYcbcrSrgbSteps + 1];
         raw::ycbcrSrgbEncodeTable(kKnots, encode);
+        g.encode = [g.dev newBufferWithBytes:encode length:sizeof encode options:MTLResourceStorageModeShared];
         std::vector<Config> configs = {{540, '420v', nullptr}, {540, '420f', nullptr}, {541, '422v', nullptr},
                                        {541, '422f', nullptr}, {543, 'x420', nullptr}, {543, 'xf20', nullptr},
                                        {544, 'x422', nullptr}, {544, 'xf22', nullptr}};

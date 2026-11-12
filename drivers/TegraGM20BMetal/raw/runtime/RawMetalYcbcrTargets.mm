@@ -59,6 +59,10 @@ int storeYcbcrPlanes(raw::CommandBuffer *rc, const raw::Texture &t, const raw::T
         e->setPipeline(d.ycbcrStorePipeline(chroma, *t.ycbcrStore));
         e->setTexture(0, &standIn);
         e->setBytes(2, 0, t.ycbcrStore, sizeof *t.ycbcrStore);
+        if (t.ycbcrStore->srgb) {
+            const raw::Bo &table = d.srgbEncodeTable();
+            e->setBytesAt(2, raw::kSrgbEncodeSlot, table.va, uint32_t(table.bytes), table.cpu);
+        }
         if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
             return 2;
         e->end();

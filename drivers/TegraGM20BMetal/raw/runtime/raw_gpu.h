@@ -1220,6 +1220,11 @@ public:
     // The pack's store state of a YCbCr texture's luma or chroma plane of `store`'s target (pack/ycbcr_store.metal): of 8-bit,
     // 16-bit or packed words, its steps through the sRGB encode or not
     Pipeline *ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store);
+    // pack/srgb_encode.h, which the _srgb store states read at kSrgbEncodeSlot (raw_ycbcr_store.h)
+    const Bo &srgbEncodeTable() const
+    {
+        return srgbEncode_;
+    }
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
@@ -1692,7 +1697,7 @@ private:
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
-    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, stamps_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, srgbEncode_, stamps_;
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap

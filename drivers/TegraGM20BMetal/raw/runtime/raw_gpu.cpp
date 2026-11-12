@@ -24,6 +24,7 @@
 #include "raw_residual.h"
 #include "raw_multisample.h"
 #include "raw_rotated_pass.h"
+#include "raw_ycbcr_store.h"
 #include "raw_fragment_tests.h"
 #include "raw_shader_tests.h"
 #include "raw_shader_test_push.h"
@@ -549,6 +550,7 @@ bool Device::init(std::string &err)
         !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
         !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
         !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
+        !k_.allocControl((kSrgbEncodeEntries * 2 + 255) & ~255u, srgbEncode_, ControlUse::ColorTable) ||
         !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_, ControlUse::Stamps)) {
         err = k_.error();
         return false;
@@ -574,6 +576,11 @@ bool Device::init(std::string &err)
     memset(zero_.cpu, 0, zero_.bytes);
     memset(tickets_.cpu, 0, tickets_.bytes);
     colorTableWords(reinterpret_cast<uint32_t *>(colorTable_.cpu));
+    static constexpr uint16_t kSrgbEncode[kSrgbEncodeEntries] = {
+#include "../pack/srgb_encode.h"
+    };
+    memset(srgbEncode_.cpu, 0, srgbEncode_.bytes);
+    memcpy(srgbEncode_.cpu, kSrgbEncode, sizeof kSrgbEncode);
     memset(stamps_.cpu, 0, stamps_.bytes);
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
@@ -3173,7 +3180,8 @@ std::string Device::vaOwner(uint64_t va)
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
         in(tickets_, tickets_.bytes, "the interlock tickets") ||
-        in(colorTable_, colorTable_.bytes, "the colour table") || in(stamps_, stamps_.bytes, "the GPU time stamps") ||
+        in(colorTable_, colorTable_.bytes, "the colour table") || in(srgbEncode_, srgbEncode_.bytes, "the sRGB encode table") ||
+        in(stamps_, stamps_.bytes, "the GPU time stamps") ||
         chunk(chunks_, "a pool chunk") || chunk(blChunks_, "a block-linear chunk") ||
         std::any_of(std::begin(zChunks_), std::end(zChunks_),
                     [&](const std::vector<Chunk> &z) {
@@ -3807,7 +3815,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             if (bo.handle)
                 surfaces_.add(bo.handle, write);
         };
-        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
+        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_, &d.srgbEncode_})
             control(*bo, false);
         for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
             control(*bo, true);
