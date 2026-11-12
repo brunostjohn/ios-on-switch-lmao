@@ -375,6 +375,20 @@ extern "C" int switch_gpu_event_waits_cached_status(const switch_gpu_event_waits
 	return batch ? __atomic_load_n(&batch->result, __ATOMIC_ACQUIRE) : -22;
 }
 
+extern "C" int switch_gpu_event_waits_settled_status(const switch_gpu_event_waits *batch)
+{
+	if (!batch)
+		return 0;
+	const int result = __atomic_load_n(&batch->result, __ATOMIC_ACQUIRE);
+	if (result)
+		return result > 0 ? 1 : 0;
+	const switch_gpu_event_waits *previous = __atomic_load_n(&batch->previous, __ATOMIC_ACQUIRE);
+	return !__atomic_load_n(&batch->count, __ATOMIC_ACQUIRE) &&
+			       (!previous || __atomic_load_n(&previous->result, __ATOMIC_ACQUIRE) > 0)
+		       ? 1
+		       : 0;
+}
+
 extern "C" int switch_gpu_event_waits_prepare_tokens(const switch_gpu_backing_token *tokens,
 						     uint32_t count, switch_gpu_event_waits **out)
 {

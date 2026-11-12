@@ -863,6 +863,31 @@ host_test(
     deps = [":timeline", ":timeline_kernel"],
 )
 
+host_library(
+    name = "present_filter",
+    srcs = ["//drivers/TegraGM20B:SwitchGpuPresentFilter.cpp"],
+    hdrs = [
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    deps = [":timeline_kernel"],
+)
+
+# The present watch's producer read in the nonstall interrupt's filter: the real timeline's lock-free view, the
+# display's callout once per watch and never after the claim's detach, and the hook order in gpu_present.c and
+# shim/xnu_glue.cpp.
+host_test(
+    name = "switch_gpu_present_filter_test",
+    srcs = ["switch_gpu_present_filter_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:gpu_present.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+    deps = [":present_filter", ":timeline", ":timeline_kernel"],
+)
+
 host_test(
     name = "switch_gpu_transfer_test",
     srcs = ["switch_gpu_transfer_test.cpp"],

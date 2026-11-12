@@ -289,25 +289,49 @@ unsigned roll(unsigned n)
     return static_cast<unsigned>(gRng % n);
 }
 
-// Offers, completions (some failed, some inside the frame-end action), passes, boundaries, frame ends, window A
-// flips and SC7 in random order: no latch is ever overdue, every boundary scans a surface whose producer finished,
-// and most sets go out by their completion.
-void randomWalk(Display &d, unsigned steps, unsigned &fromCompletions)
+// Offers, host1x filter writes and completions (some failed, some inside the frame-end action), passes, boundaries,
+// frame ends, window A flips and SC7 in random order: no latch is ever overdue, every boundary scans a surface whose
+// producer finished, and most sets go out by their completion or earlier by the filter, which writes only a set whose
+// producers are done and whose completion is a success.
+struct Walk {
+    unsigned fromCompletions = 0, fromFilters = 0;
+};
+
+void randomWalk(Display &d, unsigned steps, Walk &walk)
 {
     std::set<uint32_t> finished = {0};
     uint64_t seq = 0;
-    bool offered = false, done = false, boundarySince = false;
+    bool offered = false, done = false, fails = false, boundarySince = false, secondDone = true;
     Display::PlaneSet pending = {};
+    const auto finish = [&] {
+        for (unsigned plane = 0; plane != 2; ++plane)
+            finished.insert(d.windowAddress(pending.window[0], plane));
+    };
+    // With two producers the filter may run while the second is still writing: then it must write nothing.
+    const auto filter = [&] {
+        if (!offered || done || fails)
+            return;
+        secondDone = secondDone || roll(2);
+        gUncertain.clear();
+        if (!secondDone)
+            gUncertain.insert(seq + Display::kSecond);
+        if (secondDone)
+            finish();
+        d.model.written.clear();
+        d.filter();
+        walk.fromFilters += !d.model.written.empty();
+        if (!secondDone && !d.model.written.empty())
+            ADD_FAILURE() << "a set written while its second producer was running";
+    };
     const auto complete = [&] {
         if (!offered || done)
             return;
-        const int status = roll(16) ? 0 : -5;
+        const int status = fails ? -5 : 0;
         d.model.written.clear();
         d.complete(status);
-        fromCompletions += !d.model.written.empty();
+        walk.fromCompletions += !d.model.written.empty();
         if (!status)
-            for (unsigned plane = 0; plane != 2; ++plane)
-                finished.insert(d.windowAddress(pending.window[0], plane));
+            finish();
         done = true;
     };
     const auto boundary = [&] {
@@ -317,13 +341,16 @@ void randomWalk(Display &d, unsigned steps, unsigned &fromCompletions)
             ASSERT_TRUE(finished.count(d.model.active[kStartB])) << "a surface whose producer is still writing it";
     };
     for (unsigned step = 0; step < steps; ++step) {
-        switch (roll(9)) {
+        switch (roll(10)) {
         case 0:
         case 1:
             if (!d.transferred && !d.hwSuspended) {
                 pending = roll(24) ? video(1 + static_cast<int>(roll(4))) : video(5, (360u << 16) | 640);
-                offered = d.offer(pending, ++seq);
+                const unsigned producers = roll(4) ? 1 : 2;
+                offered = d.offer(pending, ++seq, producers);
                 done = false;
+                fails = roll(16) == 0;
+                secondDone = producers == 1;
             }
             break;
         case 2:
@@ -342,7 +369,10 @@ void randomWalk(Display &d, unsigned steps, unsigned &fromCompletions)
                 break;
             if (roll(4) == 0)
                 d.midFrameEnd = [&] {
-                    complete();
+                    if (roll(2))
+                        filter();
+                    else
+                        complete();
                     if (roll(2))
                         boundary();
                 };
@@ -364,6 +394,9 @@ void randomWalk(Display &d, unsigned steps, unsigned &fromCompletions)
                     ASSERT_NO_THROW(d.suspend()) << "step " << step;
             }
             break;
+        case 9:
+            filter();
+            break;
         }
         if (offered && done && !d.transferred)
             offered = false;
@@ -378,10 +411,15 @@ TEST_P(MediaFlipWalk, RandomOrdersNeverScanAnUnfinishedSurface)
     gFenceResult = 0;
     Display d;
     d.model.promote = GetParam();
-    unsigned fromCompletions = 0;
-    randomWalk(d, 200000, fromCompletions);
-    EXPECT_GT(fromCompletions, 4000u) << fromCompletions;
-    EXPECT_GT(d.shown.size(), 8000u) << d.shown.size();
+    gWaiters.clear();
+    gUncertain.clear();
+    Walk walk;
+    randomWalk(d, 200000, walk);
+    EXPECT_GT(walk.fromCompletions, 1500u) << walk.fromCompletions;
+    EXPECT_GT(walk.fromFilters, 1500u) << walk.fromFilters;
+    EXPECT_GT(walk.fromCompletions + walk.fromFilters, 4000u);
+    EXPECT_GT(d.shown.size(), 6000u) << d.shown.size();
+    EXPECT_LT(d.swaps.size(), 4u) << "swaps never completed: " << d.swaps.size() << ", the first " << d.swaps.front();
     EXPECT_TRUE(gLog.empty()) << gLog.front();
 }
 

@@ -45,6 +45,7 @@ host_shims(
     name = "submit_kernel",
     headers = [
         "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOFilterInterruptEventSource.h",
         "IOKit/IOInterruptEventSource.h",
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
@@ -115,6 +116,7 @@ host_shims(
     name = "fence_kernel",
     headers = [
         "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOFilterInterruptEventSource.h",
         "IOKit/IOInterruptEventSource.h",
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",

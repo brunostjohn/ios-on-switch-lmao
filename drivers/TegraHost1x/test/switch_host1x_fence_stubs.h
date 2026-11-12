@@ -44,6 +44,43 @@ inline void IOLockUnlock(IOLock *lock)
     lock->held = false;
 }
 
+// held: the filter's lock; disabled: taken by thread code (interrupts off), which the filter never is.
+struct IOSimpleLock {
+    bool held, disabled;
+};
+
+using IOInterruptState = bool;
+
+inline IOSimpleLock *IOSimpleLockAlloc()
+{
+    return new IOSimpleLock{};
+}
+
+inline void IOSimpleLockLock(IOSimpleLock *lock)
+{
+    if (lock->held)
+        throw std::runtime_error("simple lock taken twice");
+    lock->held = true;
+}
+
+inline void IOSimpleLockUnlock(IOSimpleLock *lock)
+{
+    lock->held = false;
+}
+
+inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
+{
+    IOSimpleLockLock(lock);
+    lock->disabled = true;
+    return true;
+}
+
+inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
+{
+    lock->disabled = false;
+    IOSimpleLockUnlock(lock);
+}
+
 inline uint32_t switch_test_wakeups;
 
 inline void IOLockWakeup(IOLock *, void *, bool)
@@ -125,6 +162,16 @@ public:
     void interruptOccurred(void *, IOService *, int)
     {
         ++switch_test_kicks;
+    }
+};
+
+class IOFilterInterruptEventSource : public IOInterruptEventSource {
+public:
+    using Filter = bool (*)(OSObject *, IOFilterInterruptEventSource *);
+
+    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *, Action, Filter, IOService *, int)
+    {
+        return new IOFilterInterruptEventSource;
     }
 };
 

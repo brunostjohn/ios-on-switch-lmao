@@ -103,6 +103,17 @@ public:
     {}
 };
 
+class IOFilterInterruptEventSource : public IOInterruptEventSource {
+public:
+    using Filter = bool (*)(OSObject *, IOFilterInterruptEventSource *);
+
+    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *, Action, Filter, IOService *, int)
+    {
+        static IOFilterInterruptEventSource source;
+        return &source;
+    }
+};
+
 class IOWorkLoop : public OSObject {
 public:
     static IOWorkLoop *workLoop()

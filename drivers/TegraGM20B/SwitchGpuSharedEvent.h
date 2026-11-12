@@ -92,6 +92,10 @@ void switch_gpu_event_waits_release(struct switch_gpu_event_waits **waits);
 int switch_gpu_event_waits_status(struct switch_gpu_event_waits *waits);
 /* Retained batches expose terminal truth before their deferred completion callback releases engine nodes. */
 int switch_gpu_event_waits_cached_status(const struct switch_gpu_event_waits *waits);
+/* Any context, no lock (a host1x filter waiter's read): 1 when the batch ends in success once its consumer is
+ * physically complete with success: it already has, or it has no waits of its own and inherits none still out or
+ * failed. 0 otherwise. */
+int switch_gpu_event_waits_settled_status(const struct switch_gpu_event_waits *waits);
 /* deadline_ns uses mach_absolute_time converted to nanoseconds; zero waits without a deadline. */
 int switch_gpu_event_waits_wait(struct switch_gpu_event_waits *waits, uint64_t deadline_ns);
 void switch_gpu_event_waits_commit(struct switch_gpu_event_waits **waits);

@@ -38,6 +38,50 @@ inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis)
 	lock->mutex.unlock();
 }
 
+// Held, interrupts are off: nothing under it may block (switchTimelineMayBlock aborts).
+struct IOSimpleLock {
+	std::mutex mutex;
+};
+
+using IOInterruptState = bool;
+
+inline IOSimpleLock *IOSimpleLockAlloc()
+{
+	switchTimelineMayBlock();
+	return new IOSimpleLock;
+}
+
+inline void IOSimpleLockFree(IOSimpleLock *lock)
+{
+	delete lock;
+}
+
+inline void IOSimpleLockLock(IOSimpleLock *lock) __attribute__((no_thread_safety_analysis))
+{
+	lock->mutex.lock();
+	switchTimelineAtomicContext = true;
+}
+
+inline void IOSimpleLockUnlock(IOSimpleLock *lock) __attribute__((no_thread_safety_analysis))
+{
+	switchTimelineAtomicContext = false;
+	lock->mutex.unlock();
+}
+
+inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
+{
+	IOSimpleLockLock(lock);
+	return true;
+}
+
+inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
+{
+	IOSimpleLockUnlock(lock);
+}
+
+inline void IOLog(const char *, ...)
+{}
+
 template <class T> T *switchTimelineNew(unsigned long count)
 {
 	switchTimelineMayBlock();

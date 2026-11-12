@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 struct switch_dma_buffer;
+struct switch_gpu_backing_token;
 
 bool switch_nvdec_jobs_start(const switch_dma_buffer &setup, uint32_t syncpt, uint32_t completed);
 // New jobs wait until switch_nvdec_jobs_resume. drain: once the queued ones are done; else only if none is queued and
@@ -28,3 +29,5 @@ uint32_t switch_nvdec_jobs_cancel(uint32_t reached);
 void switch_nvdec_jobs_recovered(bool ready);
 // Sleep: returns once no cancellation is under way.
 void switch_nvdec_jobs_settle();
+// switch_gpu_backing_token_filter_status for NVDEC's tokens (SwitchGpuBacking.h).
+extern "C" int switch_nvdec_token_filter_status(const switch_gpu_backing_token *token);
