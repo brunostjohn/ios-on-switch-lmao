@@ -45,6 +45,8 @@ OMAP_TARGETS = 576 // 8
 PER_TARGET = 0x1E00  # SET_BLEND_PER_TARGET_SEPARATE_FOR_ALPHA(j), then its op, source and dest for colour and alpha
 OP_ADD, OP_SUBTRACT, OP_REVERSE, OP_MIN, OP_MAX = 0x8006, 0x800A, 0x800B, 0x8007, 0x8008
 BOUND = 2
+FETCH_HANDLE = 0x7E5E0000  # a fetched colour's handle word: this, its colour in the low byte
+ENTRY_FETCH = 3  # runtime/raw_pack.h EntryFetch
 # a generic attribute's vec4 is seeded premultiplied (w the largest), as Core Animation's vertex colours are
 GENERIC = 0x80
 
@@ -78,7 +80,18 @@ class Seeded:
     def rng(self, *key: object) -> random.Random:
         return random.Random(int.from_bytes(hashlib.blake2b(repr((self.base, key)).encode(), digest_size=8).digest()))
 
-    def inputs(self, lane: int, bound: int, buffers: dict[int, int] | None = None) -> Inputs:
+    def inputs(
+        self,
+        lane: int,
+        bound: int,
+        buffers: dict[int, int] | None = None,
+        fetches: dict[tuple[int, int], int] | None = None,
+        blended: int = 0,
+    ) -> Inputs:
+        """`fetches`: the set-0 words that hold each fetched colour's handle, by (bank, byte), and their colour; a read
+        of the blended colour is the destination, a read of another the colour's own texel in both programs, whether it
+        is a storage form's surface load or a barrier form's texel load."""
+
         def attribute(addr: int) -> int:
             if addr < GENERIC:
                 return 0x3F800000 if addr == 0x7C else f32(self.rng('a', addr, lane).random())
@@ -88,11 +101,18 @@ class Seeded:
         def cbuf(bank: int, offset: int) -> int:
             if (bank, offset) in self.pinned:
                 return self.pinned[bank, offset]
+            if fetches and (bank, offset) in fetches:
+                return FETCH_HANDLE | fetches[bank, offset]
             if buffers and bank in buffers:
                 return half_pair(self.rng('u', buffers[bank], offset))
             return half_pair(self.rng('c', bank, offset))
 
         def texture(op: tuple) -> list[int]:
+            if fetches and op[0] in ('suld', 'tld', 'tex') and op[1] & ~0xFF == FETCH_HANDLE:
+                colour = op[1] & 0xFF
+                if colour != blended:
+                    return premultiplied(self.rng('fetch', colour, lane))
+                return [f32(code / 255) for code in self.destination]
             if op[0] == 'suld':
                 return [f32(code / 255) for code in self.destination]
             return premultiplied(self.rng('t', op[0], op[2:]) if op[0] == 'tex' else self.rng('t', op))
@@ -166,7 +186,7 @@ def pipe(record: dict) -> dict:
             'slot': slot,
             'ssbo': bool(sk & 1),
         }
-        for kind, stage, slot, sk in record.get('entries', [])
+        for kind, stage, slot, sk, *_ in record.get('entries', [])
     ]
     uniform = b''.join(bytes(r) for r in record.get('uniform', []))
     return {'uniform': uniform, 'entries': entries, 'fs_image': bytes.fromhex(record['fs'])}
@@ -213,8 +233,8 @@ def check(stored: dict, free: dict, n: int, seed: int) -> tuple[str, Counter]:
         seeded = Seeded(seed, i, dest, pinned)
         program = matrix_program(seeded, matrix) if matrix else table.PROGRAMS.get(free['free_program'])
         try:
-            a = run_quad(storage_code[isa.HEADER_BYTES :], quad(seeded, stored), 0)
-            b = run_quad(free_code[isa.HEADER_BYTES :], quad(seeded, free), outputs)
+            a = run_quad(storage_code[isa.HEADER_BYTES :], quad(seeded, stored, colour), 0)
+            b = run_quad(free_code[isa.HEADER_BYTES :], quad(seeded, free, colour), outputs)
         except UnsupportedError as e:
             return f'unsupported: {e}', differences
         for lane in range(LANES):
@@ -241,10 +261,22 @@ def verdict_of(differences: Counter) -> str:
     return 'exact' if worst == 0 else f'within {worst}' if worst <= BOUND else f'beyond: {worst} codes'
 
 
-def quad(seeded: Seeded, record: dict) -> list[Inputs]:
+def fetched(record: dict) -> dict[tuple[int, int], int]:
+    """Give the set-0 words a dumped record's fragment program reads its fetched colours' handles from: (bank, byte) ->
+    colour. Empty for a dump that names no entry's byte."""
+    out = {}
+    for bank in record.get('fs_set_banks', []):
+        for entry in record.get('entries', []):
+            if len(entry) > 4 and entry[0] == ENTRY_FETCH:
+                out[bank, entry[4]] = entry[2]
+    return out
+
+
+def quad(seeded: Seeded, record: dict, blended: int = 0) -> list[Inputs]:
     """Give a quad's inputs for a record's program: its bound textures' handles read from its own constant buffer."""
     buffers = {bank: slot for slot, bank in fetchfree_link.fragment_banks(pipe(record)).items()}
-    return [seeded.inputs(lane, record.get('fs_bound_textures', 0) - 1, buffers) for lane in range(LANES)]
+    bound, fetches = record.get('fs_bound_textures', 0) - 1, fetched(record)
+    return [seeded.inputs(lane, bound, buffers, fetches, blended) for lane in range(LANES)]
 
 
 def nakstat_outputs(image: bytes) -> int:
