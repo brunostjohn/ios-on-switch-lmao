@@ -19,3 +19,16 @@ host_test(
     ],
     deps = [":inputs_kernel"],
 )
+
+# The producers reach each job's record, and the client's Wait asks for their verdict (TegraNVENC.cpp itself builds
+# in no host test).
+host_test(
+    name = "tegra_nvenc_inputs_source_test",
+    srcs = ["tegra_nvenc_inputs_source_test.cpp"],
+    data = [
+        "//drivers/TegraNVENC:TegraNVENC.cpp",
+        "//drivers/TegraNVENC:TegraNVENCDirect.cpp",
+        "//drivers/TegraNVENC:TegraNVENCSource.cpp",
+        "//drivers/TegraNVENC:TegraNVENCUserClient.cpp",
+    ],
+)

@@ -47,7 +47,8 @@ static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA
 static bool gSurfaceInput;
 static int gRefuseSurfaces;  // 1: every surface (kIOReturnUnsupported); 2: every other one, for now (NotReady)
 static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
-static bool gRefuseB;  // the engine answers every B picture with an error, as NVENC would one it cannot code
+static bool gRefuseB;       // the engine answers every B picture with an error, as NVENC would one it cannot code
+static uint32_t gFailWait;  // the job whose Wait answers a failure: a producer of its input was cancelled
 static const char *gRefusal;
 static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
 static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
@@ -116,8 +117,8 @@ void nvenc_free(void *ctx, uint32_t handle)
 
 int nvenc_wait(void *ctx, const TegraNVENCWait *w)
 {
-    (void)ctx, (void)w;
-    return 0;
+    (void)ctx;
+    return gFailWait && w->fence == gFailWait ? kIOReturnError : 0;
 }
 
 static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
@@ -880,6 +881,21 @@ int main(void)
                    (gVIC - vic == 30 || !strstr(runs[r].frames, "inputs 30 by VIC")),
                "encode check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
+    // The Wait of one frame answers its input's failure (TegraNVENCInputs.h: VIC's input job, or a native picture's
+    // producer, was cancelled and its syncpoint released): that frame fails, the next is coded as an IDR and the
+    // session goes on. The check decodes only a complete session, so nothing is decoded here.
+    gLayout = TEGRA_NVENC_LAYOUT_TILED16;
+    gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    gSurfaceInput = true;
+    gRefuseSurfaces = 0;
+    encode_check_client_buffers = false;
+    gFailWait = (uint32_t)gSubmits + 6;
+    char failedLine[512];
+    encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, failedLine, sizeof(failedLine));
+    gFailWait = 0;
+    printf("a frame whose input's producer failed: %s\n", failedLine);
+    EXPECT(strstr(failedLine, "29/30 frames encoded (1 errors)") && strstr(failedLine, "sync samples 0 6 "),
+           "a failed Wait fails its frame, the next is an IDR and the session goes on");
     // AllowFrameReordering unset (true), MaxFrameDelayCount 1, AllowFrameReordering false; held frames coded later
     // from their own surfaces by the shipped route (the clip's CoreVideo rows are off VIC's grid: bounced).
     static const int kReorder[3][3] = {{-1, -1, 2}, {-1, 1, 1}, {0, -1, 0}};
