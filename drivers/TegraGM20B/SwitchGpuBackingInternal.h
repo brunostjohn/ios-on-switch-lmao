@@ -104,15 +104,18 @@ void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 extern uint32_t switch_gpu_cpu_sleepers;
 void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
 
+#define SWITCH_GPU_PROMISE_PARKED (2 * SWITCH_GPU_BACKING_PROMISES)
+
 // The promises a CPU reader parked on (SwitchGpuPromiseGiveUp.h), once each for its whole wait
 struct switch_gpu_promise_parked {
 	uint32_t count;
-	uint32_t offset[2 * SWITCH_GPU_BACKING_PROMISES], value[2 * SWITCH_GPU_BACKING_PROMISES];
+	uint32_t offset[SWITCH_GPU_PROMISE_PARKED], value[SWITCH_GPU_PROMISE_PARKED];
 };
 
 // The same where a pending writer promise may be what it waits for: a promise given up on wakes it too. A CPU reader
 // (`who`; null for one that orders behind the promise on the GPU) parks on each pending promise into `parked`, and
-// leaves them all with switch_gpu_promise_parked_leave once its wait is over.
+// leaves them all with switch_gpu_promise_parked_leave once its wait is over. A wait across more promises than `parked`
+// holds leaves the ones no longer pending first, so it parks on every promise it waits behind.
 void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing,
 					      switch_gpu_promise_parked *parked, const char *who);
 void switch_gpu_promise_parked_leave(switch_gpu_promise_parked *parked);

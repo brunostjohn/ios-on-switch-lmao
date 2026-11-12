@@ -242,6 +242,63 @@ TEST_F(Backing, CpuReadersParkOnAPromiseOnceForTheirWholeWait)
 	switch_gpu_backing_release(b);
 }
 
+// A writer that keeps promising the surface holds a CPU lock asleep across more promises than its parked list holds,
+// and never keeps the last one. The give-up knows a promise only through a park, so the lock must park on that one too:
+// the ones no longer pending are left to make room. The give-up of the last (a second after its park,
+// switch_gpu_promise_giveup_test) then lets the lock go.
+TEST_F(Backing, ACpuLockBehindAWriterThatKeepsPromisingIsLetGoByTheLastOnesGiveUp)
+{
+	constexpr uint32_t kWords[2] = {kOffset, kOffset + 4};
+	constexpr int kPromises = 2 * SWITCH_GPU_BACKING_PROMISES + 1;
+	auto *b = promised();
+	fence[kWords[1] / 4] = 0;
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		parks.clear();
+		leaves = 0;
+	}
+	std::atomic<int> locked{1};
+	std::thread lock([&] {
+		locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	for (int k = 1; k < kPromises; ++k) {
+		const uint32_t next = kWords[k % 2], kept = kWords[(k - 1) % 2];
+		const switch_gpu_promise_ref ref = {tgm_fence_word(next), next,
+						    fence[next / 4] + 1};
+		ASSERT_EQ(switch_gpu_backing_promise_add(b, &ref), 0);
+		fence[kept / 4] += 1;
+		switch_gpu_backing_promise_drop(b, kept);
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	const uint32_t last = kWords[(kPromises - 1) % 2], value = fence[last / 4] + 1;
+	bool parkedOnLast = false;
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		EXPECT_EQ(parks.size(), size_t(kPromises));
+		parkedOnLast =
+			!parks.empty() && parks.back() == "a CPU lock " + std::to_string(last) +
+								  " " + std::to_string(value);
+	}
+	EXPECT_EQ(locked.load(), 1);
+	if (parkedOnLast)
+		abandoned = uint64_t(last) << 32 | value;
+	switch_gpu_backing_promise_sleepers_wake();
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	EXPECT_EQ(locked.load(), 0)
+		<< "the lock is still asleep behind the promise nobody gives up";
+	abandoned = 0;
+	fence[last / 4] = value;
+	switch_gpu_backing_promise_drop(b, last);
+	lock.join();
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		EXPECT_EQ(leaves, unsigned(kPromises));
+	}
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, kRead), 0);
+	switch_gpu_backing_release(b);
+}
+
 // The give-up (SwitchGpuPromiseGiveUp.h) gives the promise up: CPU readers asleep behind it, a lock and the display's
 // CPU copy, go on at the abandonment's wake with no cancel or close of the promise, and read what the surface held
 // before (its last writer). The mark alone wakes nobody: the wake is what lets them go.

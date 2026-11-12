@@ -56,6 +56,31 @@ void unlink(switch_gpu_backing *backing)
 	backing->promise_sleep_next = backing->promise_sleep_prev = nullptr;
 }
 
+bool listed(const switch_gpu_backing_token *pending, int count, uint32_t offset, uint32_t value)
+{
+	for (int i = 0; i < count; ++i)
+		if (pending[i].queue == offset && uint32_t(pending[i].value) == value)
+			return true;
+	return false;
+}
+
+// The backing's lock held: the parked promises no longer pending are left. At most SWITCH_GPU_BACKING_PROMISES are
+// pending at once, so the list then has room for every one of them.
+void leaveSettled(switch_gpu_promise_parked *parked, const switch_gpu_backing_token *pending,
+		  int count)
+{
+	uint32_t kept = 0;
+	for (uint32_t i = 0; i < parked->count; ++i) {
+		if (!listed(pending, count, parked->offset[i], parked->value[i])) {
+			tgm_promise_leave(parked->offset[i], parked->value[i], 0);
+			continue;
+		}
+		parked->offset[kept] = parked->offset[i];
+		parked->value[kept++] = parked->value[i];
+	}
+	parked->count = kept;
+}
+
 // The backing's lock held
 void park(switch_gpu_backing *backing, switch_gpu_promise_parked *parked, const char *who)
 {
@@ -65,11 +90,13 @@ void park(switch_gpu_backing *backing, switch_gpu_promise_parked *parked, const 
 	char name[17] = {};
 	for (int i = 0; i < count; ++i) {
 		const uint32_t offset = pending[i].queue, value = uint32_t(pending[i].value);
-		bool known = parked->count == 2 * SWITCH_GPU_BACKING_PROMISES;
+		bool known = false;
 		for (uint32_t j = 0; !known && j < parked->count; ++j)
 			known = parked->offset[j] == offset && parked->value[j] == value;
 		if (known)
 			continue;
+		if (parked->count == SWITCH_GPU_PROMISE_PARKED)
+			leaveSettled(parked, pending, count);
 		if (!name[0])
 			proc_selfname(name, sizeof(name));
 		if (tgm_promise_park(offset, value, name, who, nullptr, 0) != 1)
