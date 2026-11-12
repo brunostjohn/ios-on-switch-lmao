@@ -476,6 +476,9 @@ uint64_t nextTraceId();
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
+    // A predication Start of this encoder named no buffer: its Ends answer NO from then on, as AGX's do (21H461
+    // 0x21c90e51c); every other End answers YES, since MPSGraph aborts on a NO (CSCBSuccess, 0x1810c10a4)
+    bool _predicateWithoutBuffer;
 }
 @end
 

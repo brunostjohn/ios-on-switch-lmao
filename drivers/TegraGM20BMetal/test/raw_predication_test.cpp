@@ -199,7 +199,7 @@ namespace {
 
 using Records = raw::PredicateRecords;
 
-TEST(RawPredicateRecords, EndsAnswerYesForTheirOwnBlockOnly)
+TEST(RawPredicateRecords, OnlyAnEndOfItsOwnBlockIsWellFormed)
 {
     Records r;
     r.computeEncoder(0);

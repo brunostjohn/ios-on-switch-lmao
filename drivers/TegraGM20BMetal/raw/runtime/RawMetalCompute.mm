@@ -289,10 +289,12 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
           comparison:(uint64_t)comparison
            reference:(uint32_t)reference
 {
-    const bool answer = _cb->_predicates.record(kind);
+    _cb->_predicates.record(kind);
     const bool rawBuffer = [(id)buffer isKindOfClass:[RMBuffer class]];
     const bool readsWord = kind == raw::PredicateRecords::StartIf || kind == raw::PredicateRecords::StartWhile ||
                            kind == raw::PredicateRecords::EndDoWhile;
+    if (!buffer && (kind == raw::PredicateRecords::StartIf || kind == raw::PredicateRecords::StartWhile))
+        _predicateWithoutBuffer = true;
     if (_cb->_predicates.misused())
         hit(_cb, PredComputePredicate, kind);
     else if (readsWord && (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
@@ -303,7 +305,7 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
     m.a = uint32_t(raw::predicateCompare(comparison));
     m.b = reference;
     [_cb record:m];
-    return answer;
+    return !_predicateWithoutBuffer;
 }
 
 - (void)encodeStartIf:(id<MTLBuffer>)buffer

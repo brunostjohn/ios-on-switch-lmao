@@ -43,7 +43,8 @@ public:
         loopAcrossEncoders();
     }
 
-    // Metal's answer for an End (YES where it closes a block of its kind)
+    // False: the record is misused (an End with no block of its kind open). It is not the End's answer to its caller,
+    // which AGX gives from its Starts' buffers alone (RawMetalCompute.mm)
     bool record(Kind k)
     {
         recorded_ = true;
