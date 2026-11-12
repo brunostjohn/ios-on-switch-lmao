@@ -3139,6 +3139,51 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# Every texture <-> buffer copy layout Metal takes, recorded on the raw facade: none refused but what Metal refuses itself
+host_test(
+    name = "raw_facade_copies_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_facade_copies_test.cpp",
+        "raw_facade_harness.h",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_host",
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
 # MTLComputeCommandEncoder's predicated loops through the raw facade's submission, each job run by the model GPU
 host_test(
     name = "raw_facade_loops_test",
