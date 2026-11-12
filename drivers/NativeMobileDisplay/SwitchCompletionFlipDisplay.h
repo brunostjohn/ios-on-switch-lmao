@@ -22,8 +22,9 @@
 // SURFACE_KIND and START_ADDR), and a settle that takes the last request as shown with no frame end to check it (SC7, the
 // scanout stopped) writes it again from the gate.
 
+// Static, as the landscape and window probe state: the instance is at the 16 KiB a kalloc_type class may have.
 static inline IOSimpleLock *completionFlipLock = nullptr;
-SwitchCompletionFlip completionFlip;
+static inline SwitchCompletionFlip completionFlip;
 static constexpr uint32_t kWinbufABase = 0xbc0;
 static constexpr uint32_t kWinAStart = kWinbufABase, kWinAKind = kWinbufABase + (kWinbufSurfaceKind - kWinbufStartAddr),
                           kWinAHOffset = kWinbufABase + (kWinbufHOffset - kWinbufStartAddr),
@@ -34,8 +35,8 @@ struct CompletionUnverified {
     uint32_t start;
 };
 
-CompletionUnverified completionUnverified = {kNoBuffer, 0};  // a completion flip in the ring no latch read has judged
-bool completionFlipsProven = false, completionFlipsRefused = false;
+static inline CompletionUnverified completionUnverified = {kNoBuffer, 0};  // in the ring, no latch read has judged it
+static inline bool completionFlipsProven = false, completionFlipsRefused = false;
 #if SWITCH_FRAME_TIMELINE
 static constexpr unsigned kFlipTotals = 5;
 static inline uint32_t flipTotals[kFlipTotals] = {};  // completion, gate, lead us, withdrawn, refused
