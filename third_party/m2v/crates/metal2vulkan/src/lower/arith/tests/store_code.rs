@@ -174,3 +174,50 @@ fn selected_unorm8_lanes_store_metals_codes() {
         &|_, x, w| rop_code(w, 8) == metal_code(x, 255),
     );
 }
+
+/// The half GM20B's ROP stores for `w` in a half-float channel (the bench loop's rop1): rounded
+/// toward zero, a finite value past the largest stored as 65504, infinities and -0 kept, a NaN
+/// stored as 0x7e00.
+fn rop_half(w: f32) -> u16 {
+    if w.is_nan() {
+        return 0x7e00;
+    }
+    let sign = if w.is_sign_negative() { 0x8000 } else { 0 };
+    let a = w.abs();
+    if a.is_infinite() {
+        return sign | 0x7c00;
+    }
+    if a >= 65504.0 {
+        return sign | 0x7bff;
+    }
+    if a < 2f32.powi(-14) {
+        return sign | (f64::from(a) * 2f64.powi(24)).floor() as u16;
+    }
+    let bits = a.to_bits();
+    let exponent = (bits >> 23) as u16 + 15 - 127;
+    sign | exponent << 10 | ((bits & 0x7f_ffff) >> 13) as u16
+}
+
+/// A `float` output's lane to a half-float channel written as computed (its NaN quiet, as the
+/// SM53 target writes it) stores what the in-shader rounding toward zero stores.
+#[test]
+fn half_lanes_written_as_computed_store_the_rounded_half() {
+    use crate::pipeline::color_writes;
+    let mut cases = values();
+    for h in 0x3c00u16..0x7c00 {
+        let x = f16_to_f64(h) as f32;
+        let above = f32::from_bits(x.to_bits() + 1);
+        cases.extend([x, -x, above, -above]);
+    }
+    let signalling_nan = f32::from_bits(0x7fa0_0001);
+    cases.extend([65504.0, 65519.0, 65520.0, 1e6, -65520.0, signalling_nan]);
+    let computed = Some(Lane::NanAs(0x7fc0_0000));
+    let rounded = Some(Lane::Rounded(color_writes::HALF));
+    run_lanes(
+        "GM20B half store",
+        &[computed, rounded, computed, rounded],
+        &cases,
+        None,
+        &|_, x, w| rop_half(w) == rop_half(x),
+    );
+}
