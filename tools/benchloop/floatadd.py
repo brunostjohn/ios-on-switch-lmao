@@ -104,7 +104,8 @@ def values(fmt: str) -> tuple[list[float], list[float]]:
 def methods() -> tuple[list[list[int]], list[list[int]]]:
     set_up = [[SET_BLEND, 1], [PER_TARGET, 1]]
     set_up += [[PER_TARGET + 4 * k, v] for k, v in enumerate((FUNC_ADD, ONE, ONE, FUNC_ADD, ONE, ONE), 1)]
-    return set_up, [[SET_BLEND, 0]]
+    # blend.py's rule: each method a draw sets goes back to 0 after it, the per-target factors too
+    return set_up, [[method, 0] for method, _ in set_up]
 
 
 def generate(formats: tuple[str, ...] = tuple(MODELS)) -> list[dict]:
