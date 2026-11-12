@@ -23,12 +23,23 @@ uint64_t fnv(const uint8_t *p, size_t n, uint64_t h = 0xcbf29ce484222325ull)
     return h;
 }
 
+// nvdec knows a compute program by its code's first kNvdecComputeHead bytes (pack/nvdec.h kComputeHead): a shorter one is
+// unknown:<hash of the memory after it> in the log
+constexpr uint32_t kNvdecComputeHead = 64;
+
+// PackKernelEntry.slot of a constexpr sampler (pack/kernels.py CONSTEXPR)
+constexpr uint32_t kConstexprSlot = 0x80;
+
 // The program named `id` in programs.bin (pack/mkprograms.py: 'NVPG', code, cbuf count, data, cbuf types, 80-byte header,
-// code, data; nvdec names it by the FNV-1a of header + code, then data)
+// code, data; nvdec names it by the FNV-1a of header + code, then data). An unknown id takes the one kernel (a zero header)
+// shorter than nvdec's head the file holds, as a kernel NAK compiles to its exit alone is.
 bool program(const char *path, const std::string &id, raw::ComputeRecord &r)
 {
     std::ifstream in(path, std::ios::binary);
     std::vector<uint8_t> b((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    static const uint8_t zeros[80] = {};
+    const bool unknown = id.rfind("unknown:", 0) == 0;
+    uint32_t taken = 0;
     for (size_t at = 0; at + 16 <= b.size();) {
         uint32_t code, count, data;
         memcpy(&code, &b[at + 4], 4);
@@ -37,16 +48,19 @@ bool program(const char *path, const std::string &id, raw::ComputeRecord &r)
         const uint8_t *types = &b[at + 16], *image = types + count, *bytes = image + 80 + code;
         char name[24];
         snprintf(name, sizeof name, "%llx", (unsigned long long)fnv(bytes, data, fnv(image, 80 + code)));
-        if (id == name) {
+        const bool shortKernel = unknown && code < kNvdecComputeHead && !memcmp(image, zeros, sizeof zeros);
+        if (id == name || shortKernel) {
             r.code.assign(image + 80, image + 80 + code);
             r.data.assign(bytes, bytes + data);
             for (uint32_t c = 0; c < count && c < 8; c++)
                 r.cbufType[c] = types[c];
-            return true;
+            if (!unknown)
+                return true;
+            taken++;
         }
         at += 16 + count + 80 + code + data;
     }
-    return false;
+    return taken == 1;
 }
 
 // The first dispatch's K lines of an NVDEC_KERNELS log (pack/nvdec_compute.cpp), read as pack/mkpack.py reads them
@@ -88,10 +102,15 @@ bool record(const char *log, const char *programs, raw::ComputeRecord &r)
             entry(offset, raw::KernelTexture, w - 16, 0);
         } else if (qmd && sscanf(line.c_str(), "K entry %u sampler %x %x %x %x %x %x %x %x", &offset, &t[0], &t[1],
                                  &t[2], &t[3], &t[4], &t[5], &t[6], &t[7]) == 9) {
-            const uint32_t lod = (t[2] >> 12) & 0xfff;  // max LOD clamp, 4.8 fixed: the probe's tag 1 + slot / 2
-            if (lod < 256 || lod % 128)
-                return false;
-            entry(offset, raw::KernelSampler, (lod - 256) / 128, 0);
+            // max LOD clamp, 4.8 fixed: the probe's tag 1 + slot / 2; any other is the kernel's own constexpr sampler, whose
+            // header the record carries (raw::ComputeRecord::samplers, slot 0x80 | its index), as the pack's kernels do
+            const uint32_t lod = (t[2] >> 12) & 0xfff;
+            if (lod >= 256 && lod % 128 == 0) {
+                entry(offset, raw::KernelSampler, (lod - 256) / 128, 0);
+            } else {
+                r.samplers.push_back({t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]});
+                entry(offset, raw::KernelSampler, kConstexprSlot | uint32_t(r.samplers.size() - 1), 0);
+            }
         } else if (qmd && line.rfind("DISPATCH", 0) == 0) {
             break;
         }
