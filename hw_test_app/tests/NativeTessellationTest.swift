@@ -150,8 +150,8 @@ struct NativeTessellationTest: NativeObjectTest {
                         numberOfPatchControlPoints: 4, patchStart: 0, patchCount: 1, patchIndexBuffer: patchOrder,
                         patchIndexBufferOffset: 0, instanceCount: 1, baseInstance: 0)
                 case "icb", "icb_indexed":
-                    encoder.useResource(factors, usage: .read)
-                    encoder.useResource(patchOrder, usage: .read)
+                    encoder.useResource(factors, usage: .read, stages: .vertex)
+                    encoder.useResource(patchOrder, usage: .read, stages: .vertex)
                     encoder.executeCommandsInBuffer(commands!, range: form == "icb" ? 0..<1 : 1..<2)
                 default:
                     encoder.drawPatches(
