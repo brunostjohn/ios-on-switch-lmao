@@ -117,10 +117,11 @@ static unsigned bo_new(struct bo o)
 }
 
 static uint64_t kill_next_va;
-static atomic_ulong calls[32];
-static atomic_uint fail_left[32]; /* mock_iokit_fail_next's, by method */
-static atomic_uint fail_skip[32]; /* mock_iokit_fail_after's calls that go through first */
-static atomic_int fail_kr[32];
+enum { kMethods = 64 };
+static atomic_ulong calls[kMethods];
+static atomic_uint fail_left[kMethods]; /* mock_iokit_fail_next's, by method */
+static atomic_uint fail_skip[kMethods]; /* mock_iokit_fail_after's calls that go through first */
+static atomic_int fail_kr[kMethods];
 static atomic_uint priority_now[2] = {2, 4}; /* Priority's (method 18): the connection's foreground and background */
 static atomic_ulong import_maps;             /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256];          /* VmBind map ops by PTE kind */
@@ -479,6 +480,7 @@ static uint32_t surface_layout(const struct bo *bo, const struct TegraGM20BAbiSu
 }
 
 #include "mock_submission.h"
+#include "mock_jobs.h"
 
 static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size_t insz, void *out, size_t *outsz)
 {
@@ -496,9 +498,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     if (sel == TegraGM20BTunnelProbe)
         return KERN_SUCCESS;
-    if (sel < 32)
+    if (sel < kMethods)
         atomic_fetch_add(&calls[sel], 1);
-    if (sel < 32 && atomic_load(&fail_left[sel])) {
+    if (sel < kMethods && atomic_load(&fail_left[sel])) {
         if (atomic_load(&fail_skip[sel])) {
             atomic_fetch_sub(&fail_skip[sel], 1);
         } else {
@@ -644,8 +646,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodChannelCreate: {
-        if (!fence)
-            fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
+        fence_page();
         pthread_mutex_lock(&gpu_lock);
         uint32_t ch = 1;
         while (ch < 16 && (live[ch] || (chan_conn[ch] && chan_conn[ch] != c)))
@@ -674,6 +675,12 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     case TegraGM20BMethodSubmitAddress:
         return mock_submit(c, in, insz, out, outsz);
+    case TegraGM20BMethodResourceSetCreate:
+        return mock_set_create(in, insz, out);
+    case TegraGM20BMethodResourceSetRelease:
+        return mock_set_release(in, insz);
+    case TegraGM20BMethodSubmitJob:
+        return mock_job(c, in, insz, out, outsz);
     case TegraGM20BMethodExec: {
         const struct TegraGM20BAbiExec *e = in;
         uint32_t ch = e->channel & 15;
@@ -927,7 +934,7 @@ void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
  * ChannelCreate, a WaitFence that fails with no kill) */
 void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr)
 {
-    if (method >= 32)
+    if (method >= kMethods)
         return;
     atomic_store(&fail_kr[method], kr);
     atomic_store(&fail_skip[method], skip);
@@ -941,7 +948,7 @@ void mock_iokit_fail_next(unsigned method, unsigned count, int kr)
 
 unsigned long mock_iokit_calls(unsigned method)
 {
-    return method < 32 ? calls[method] : 0;
+    return method < kMethods ? calls[method] : 0;
 }
 
 void mock_iokit_priority(uint32_t out[2])

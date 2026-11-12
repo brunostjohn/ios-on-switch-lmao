@@ -105,7 +105,7 @@ bool handleEntry(const LayoutEntry &e, RuntimeRecord &rec, PackEntry &p, std::st
 {
     p = {};
     p.offset = uint16_t(e.offset);
-    p.stage = 2;
+    p.stage = e.stage == 1 ? 1 : 2;
     switch (e.tex) {
     case Tex::None:
         p.kind = EntrySamplerOnly;
@@ -358,6 +358,83 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))
         out.keyString.pop_back();
     return true;
+}
+
+uint32_t recordSetReads(const RuntimeRecord &rec)
+{
+    constexpr size_t kHeaderBytes = 0x50;
+    const PackPipeline &p = rec.pipeline;
+    uint32_t reads = p.memoryEntries;
+    const auto add = [&](const CapturedProgram &program) {
+        if (program.image.size() > kHeaderBytes)
+            reads |=
+                programSetReads(program.image.data() + kHeaderBytes, program.image.size() - kHeaderBytes,
+                                program.cbufTypes.data(), uint32_t(program.cbufTypes.size()), program.boundTextures, p);
+    };
+    for (const RuntimeRecord::Variant &v : rec.variants)
+        add(v.program);
+    if (rec.split) {
+        add(rec.splitPrograms[0]);
+        add(rec.splitPrograms[1]);
+    }
+    return reads;
+}
+
+uint8_t dropUnreadFetches(RuntimeRecord &rec)
+{
+    PackPipeline &p = rec.pipeline;
+    const uint32_t reads = recordSetReads(rec);
+    uint8_t unread = 0, read = 0;
+    for (uint32_t k = 0; k < p.entries && k < kPackEntries; k++) {
+        const PackEntry &e = p.entry[k];
+        if (e.kind == EntryFetch && e.slot < 8)
+            (reads >> k & 1 ? read : unread) |= uint8_t(1u << e.slot);
+    }
+    const uint8_t dropped = unread & ~read;
+    if (!dropped)
+        return 0;
+    for (uint32_t k = 0; k < p.entries && k < kPackEntries; k++) {
+        PackEntry &e = p.entry[k];
+        if (e.kind == EntryFetch && e.slot < 8 && (dropped >> e.slot & 1))
+            e = {e.offset, EntrySamplerOnly, e.stage, 0, SamplerNone, 0, 0};
+    }
+    p.storageMask &= uint8_t(~dropped);
+    p.storageWriteMask &= uint8_t(~dropped);
+    p.storageBlendMask &= uint8_t(~dropped);
+    if (!p.storageBlendMask)
+        p.storageBlendModel = 0;
+    for (uint32_t c = 0; c < 8; c++)
+        if (dropped >> c & 1) {
+            p.storageTic[c] = 0;
+            p.fetchRung[c] = FetchNone;
+        }
+    if (!read)
+        p.flags &= ~uint32_t(PipelineFetches);
+    return dropped;
+}
+
+bool loadsSurface(const RuntimeRecord &rec)
+{
+    constexpr size_t kHeaderBytes = 0x50;
+    // tools/gpu/maxwell/opcodes.txt SULD: bits 63-53 1110 1011 000
+    constexpr uint16_t kSuldMask = 0xffe0, kSuld = 0xeb00;
+    const auto loads = [&](const CapturedProgram &program) {
+        for (size_t at = kHeaderBytes; at + 8 <= program.image.size(); at += 8) {
+            if ((at - kHeaderBytes) % 32 == 0)
+                continue;
+            uint64_t word;
+            memcpy(&word, program.image.data() + at, sizeof word);
+            if ((uint16_t(word >> 48) & kSuldMask) == kSuld)
+                return true;
+        }
+        return false;
+    };
+    if (loads(rec.programs[0]) || loads(rec.programs[1]))
+        return true;
+    for (const RuntimeRecord::Variant &v : rec.variants)
+        if (loads(v.program))
+            return true;
+    return rec.split && (loads(rec.splitPrograms[0]) || loads(rec.splitPrograms[1]));
 }
 
 uint64_t packKeyHash(const std::string &key)

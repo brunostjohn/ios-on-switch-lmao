@@ -33,7 +33,7 @@ struct LayoutEntry {
     uint32_t offset = 0;
     bool buffer = false;
     bool colorTable = false;      // m2v's sRGB colour table (EntryColorTable)
-    uint8_t stage = 0, slot = 0;  // a buffer's
+    uint8_t stage = 0, slot = 0;  // a buffer's; a handle's stage alone (0: the fragment stage)
     Tex tex = Tex::None;
     Smp smp = Smp::None;
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
@@ -71,5 +71,16 @@ bool programsBindable(const RecordParts &parts, std::string &why);
 // mkpack.py's record of `parts`, the state of pack key `key`; false: set aside (`why`)
 bool assembleRecord(const RecordParts &parts, const std::string &key, const PackRules &rules, RuntimeRecord &out,
                     std::string &why);
+
+// The set-0 entries the record's final programs read: its two programs' (PackPipeline::memoryEntries), its variants'
+// and its split's
+uint32_t recordSetReads(const RuntimeRecord &rec);
+// A fetch whose set-0 words none of the record's programs reads fetches nothing (the compiler removed every access):
+// it leaves the record with the colour's storage view and rung, and the record fetches only where another one stays.
+// Returns the colours dropped.
+uint8_t dropUnreadFetches(RuntimeRecord &rec);
+// Whether any of the record's programs loads a surface (SULD): a storage form whose programs load none only writes its
+// colours, what its barrier form's program does through the ROP with no interlock
+bool loadsSurface(const RuntimeRecord &rec);
 
 }  // namespace raw

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.gpu.rawpack import OS_BUILD, framework_line, library_view, own_build, probe_lines
+from tools.gpu.rawpack import OS_BUILD, framework_line, library_view, own_build, probe_lines, ycbcr_stand_in
 
 
 class NativeLibraries(unittest.TestCase):
@@ -61,6 +61,30 @@ class BuildTags(unittest.TestCase):
         line = 'R ok=1 label=x samples=1 topo=0 ds=0/0 | v a os=1  | f b | '
         with self.assertRaises(SystemExit):
             own_build([line], '24B119')
+
+
+class YcbcrStandIn(unittest.TestCase):
+    """A state of 8-bit two-plane code attachments is the runtime's state of their RGBA32Float stand-in."""
+
+    TAIL = ' a0=29:0:0:8:1:1 | v vertexBlur  | f fragmentBlur #0:53:01 | '
+
+    def test_an_8_bit_code_target_takes_the_stand_in(self):
+        line = 'R ok=1 label=- samples=1 topo=0 ds=0/0 c0=540:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL
+        self.assertEqual(
+            ycbcr_stand_in(line),
+            'R ok=1 label=- samples=1 topo=0 ds=0/0 c0=125:15:0:1:0:0:1:0:0 c1=80:15:1:1:5:0:1:5:0' + self.TAIL,
+        )
+
+    def test_a_state_the_runtime_leaves_to_m2v_keeps_its_formats(self):
+        for colors in (
+            'c0=543:15:0:1:0:0:1:0:0',
+            'c0=540:15:1:1:5:0:1:5:0',
+            'c0=541:8:0:1:0:0:1:0:0',
+            'c0=540:15:0:1:0:0:1:0:0 c1=544:15:0:1:0:0:1:0:0',
+            'c0=80:15:0:1:0:0:1:0:0',
+        ):
+            line = f'R ok=1 label=- samples=1 topo=0 ds=0/0 {colors}' + self.TAIL
+            self.assertEqual(ycbcr_stand_in(line), line)
 
 
 class CorpusTags(unittest.TestCase):

@@ -9,6 +9,8 @@ OUT=$(cd "$1" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 RAW=$(cd "$HERE/.." && pwd)
 TREE=$(cd "$HERE/../../../.." && pwd)
+# the frontend's MetalABI.h: bazel build //drivers/NativeMetal/abi:header (or METAL_ABI=<its directory>)
+METAL_ABI=${METAL_ABI:-$TREE/bazel-bin/drivers/NativeMetal/abi}
 FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all
     -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers")
 for source in mme_fermi mme_fermi_sim; do
@@ -32,10 +34,10 @@ xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
 SOURCES=()
 for source in gpu transfer split kernel shared_events alias arena pack ycbcr zeta comp completed compute \
-              record_parts direct direct_compute emit cache kernel_cache compiler metallib; do
+              record_parts direct direct_compute emit cache kernel_cache compiler metallib state_segment resource_set variants kernel_job encoder_state job_uses; do
     SOURCES+=("$RAW/runtime/raw_$source.cpp")
 done
-xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" \
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" \
     "$HERE/batchcheck.cpp" "${SOURCES[@]}" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -Wl,-U,_switch_nmb_blend_color_words -lobjc -framework Foundation -framework Metal \
     -framework IOSurface -framework IOKit -framework CoreFoundation -o "$OUT/batchcheck"

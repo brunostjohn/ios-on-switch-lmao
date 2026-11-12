@@ -81,8 +81,9 @@ def entry_bytes(entries: list[dict]) -> bytearray:
             sk = e['smp']
             tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4, 'depth_test': 6, 'stencil_test': 7}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
+            stage = 1 if e.get('stage') == 'v' else 2
             ents += struct.pack(
-                '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
+                '<HBBBBBB', e['off'], tkind, stage, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
             )
     ents += bytes(8 * (PACK_ENTRIES - len(entries)))
     return ents

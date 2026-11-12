@@ -7,6 +7,7 @@
 #include "raw_direct_compute.h"
 #include "bridge/NativeMetalDirect.h"
 #include "raw_pack.h"
+#include "raw_record_parts.h"
 
 // Weak, so the host benchmark links without the frontend
 extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
@@ -106,24 +107,42 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
                                                     : "the frontend or NVK has no direct compile";
         return CompileOutcome::Failed;
     }
+    // The function's reflection marks active an attribute a function constant gates (CoreRE's vsShadow texcoord, under
+    // kEnableAlphaCutoutShadows), which a state that leaves the constant undefined or false does not read: m2v links
+    // only what the specialised stage reads and refuses a state whose descriptor lacks one of those
+    // (pipeline/link/vertex.rs), so an attribute the descriptor leaves unset is not one the stage reads
+    MTLVertexDescriptor *vertexDescriptor = descriptor.vertexDescriptor;
     std::vector<uint32_t> attributes;
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
-        if (a.isActive)
+        if (a.isActive &&
+            (!vertexDescriptor || vertexDescriptor.attributes[a.attributeIndex].format != MTLVertexFormatInvalid))
             attributes.push_back(uint32_t(a.attributeIndex));
-    if (requested == PackForm::Barrier) {
-        const CompileOutcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-        if (outcome == CompileOutcome::Made)
-            out.pipeline.flags |= PipelineBarrierForm;
-        return outcome;
-    }
+    const auto barrierForm = [&](bool twin) {
+        const CompileOutcome made = form(descriptor, true, textures, key, attributes, out, why, registers, split);
+        if (made == CompileOutcome::Made) {
+            dropUnreadFetches(out);
+            if (twin || (out.pipeline.flags & PipelineFetches))
+                out.pipeline.flags |= PipelineBarrierForm;
+        }
+        return made;
+    };
+    if (requested == PackForm::Barrier)
+        return barrierForm(true);
     CompileOutcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
+    if (outcome == CompileOutcome::Made) {
+        const bool storage = out.pipeline.flags & PipelineStorageMetadata;
+        dropUnreadFetches(out);
+        if (!storage || (out.pipeline.storageMask && loadsSurface(out)))
+            return outcome;
+        // its program holds the pixel interlock around no load of a colour: made again without the interlock
+        storageRefusal_ = out.pipeline.storageMask ? "storage form: its program loads no colour"
+                                                   : "storage form: its program reads and writes no colour";
+        return barrierForm(false);
+    }
     if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
     storageRefusal_ = why;
-    outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-    if (outcome == CompileOutcome::Made)
-        out.pipeline.flags |= PipelineBarrierForm;
-    return outcome;
+    return barrierForm(false);
 }
 
 }  // namespace raw

@@ -14,7 +14,8 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. Every such line
         names the OS builds it is a state of (os=<build>[,<build>...] in its head): one of other builds is left out and
         counted in <report>, which the link puts at the end of the pack's report, but for a Core Animation line, kept
-        with its tag for its name; one naming none fails the step
+        with its tag for its name; one naming none fails the step. A state of two-plane YCbCr code attachments is
+        taken as the one the runtime makes for it (ycbcr_stand_in)
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
                      [--ca-preferences <stage-tegra-gm20b-metal.py>]
                      --out <bucket corpus>...
@@ -61,6 +62,14 @@ QUARTZCORE = '/QuartzCore.framework/'
 STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
 # The OS builds a line is a state of, in its head: an R line's (before " | v ") or a D line's
 OS_BUILD = re.compile(r' os=(\S+)')
+# A colour attachment of an R line's head: its index, MTLPixelFormat, write mask and blending
+COLOR = re.compile(r' c(\d)=(\d+):(\d+):(\d+):')
+# Two-plane YCbCr code formats (raw/runtime/raw_ycbcr_store.h ycbcrCodeFormat: RGB*_2P but RGB8_444_2P), of which the
+# raw path renders the 8-bit RGB8_420_2P and RGB8_422_2P into RGBA32Float (ycbcrTargetRefusal, kYcbcrTargetStandIn)
+YCBCR_CODE_FORMATS = frozenset({540, 541, 543, 544, 545, 546, 547, 548})
+YCBCR_RENDERED = frozenset({540, 541})
+YCBCR_STAND_IN = 125
+RGB_WRITES = 0b1110  # MTLColorWriteMaskRed | Green | Blue
 
 
 def framework_line(line: str) -> bool:
@@ -89,6 +98,24 @@ def probe_lines(corpus: str) -> list[str]:
         if (line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line)))
         or line.startswith('D ok=1 ')
     ]
+
+
+def ycbcr_stand_in(line: str) -> str:
+    """Give the line of the state the runtime makes for a render state of two-plane YCbCr code attachments.
+
+    RawMetalYcbcrTargets.mm ycbcrTargetState makes it with each such attachment's format the stand-in's, where every one
+    is an 8-bit code format, unblended, writing red, green and blue; m2v alone answers any other (it renders into no
+    code target), so its line stays the app's. The archives' declared keys stay the app's (raw/pack/archives.py).
+    """
+    head, bar, tail = line.partition(' | ')
+    targets = [m for m in COLOR.finditer(head) if int(m[2]) in YCBCR_CODE_FORMATS]
+    if not targets or any(
+        int(m[2]) not in YCBCR_RENDERED or int(m[3]) & RGB_WRITES != RGB_WRITES or m[4] != '0' for m in targets
+    ):
+        return line
+    for m in reversed(targets):
+        head = head[: m.start(2)] + str(YCBCR_STAND_IN) + head[m.end(2) :]
+    return head + bar + tail
 
 
 def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
@@ -270,6 +297,7 @@ def main() -> None:
         if args.archives:
             harvested = set(lines)
             lines += [line for line in archive_lines(Path(args.archives).read_text()) if line not in harvested]
+        lines = [ycbcr_stand_in(line) for line in lines]
         Path(args.out).write_text(''.join(line + '\n' for line in lines))
         Path(args.report).write_text(''.join(line + '\n' for line in report))
         print('\n'.join(report))

@@ -142,6 +142,8 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
             )
         else:
             entry = {'off': off, 'kind': 'handle', 'tex': (TEXTURE_KINDS[kind], slot) if kind else None, 'smp': None}
+            if stage == 1:
+                entry['stage'] = 'v'
             if sampler_kind == SAMPLER_SLOT:
                 entry['smp'] = ('slot', sampler)
             elif sampler_kind == SAMPLER_CONSTEXPR:

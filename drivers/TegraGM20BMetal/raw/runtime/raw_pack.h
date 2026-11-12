@@ -199,12 +199,22 @@ enum PackSamplerKind : uint8_t {
 struct PackEntry {
     uint16_t offset;      // byte in the 256-byte set 0
     uint8_t kind;         // PackEntryKind
-    uint8_t stage;        // UBO: 1 vertex, 2 fragment; handles: 2
-    uint8_t slot;         // UBO: Metal buffer index; texture: fragment texture index; fetch: color attachment
+    uint8_t stage;        // 1 vertex, 2 fragment: whose buffer, texture and sampler slots the entry names
+    uint8_t slot;         // UBO: Metal buffer index; texture: the stage's texture index; fetch: color attachment
     uint8_t samplerKind;  // handles: PackSamplerKind. Buffers: bufferStorage, bufferResidualWord
-    uint8_t sampler;      // handles: fragment sampler index, or constexpr sampler number. Buffers: the function's
+    uint8_t sampler;      // handles: the stage's sampler index, or constexpr sampler number. Buffers: the function's
     uint8_t pad;          //   window on the slot in 16-byte units (sampler | pad << 8), 0 = the whole buffer
 };
+
+// The texture and sampler slots of a render stage the raw encoder keeps (Metal's argument table on the A10X); a state
+// whose function reads a texture past them is not packed
+constexpr uint32_t kStageTextures = 31, kStageSamplers = 16;
+
+// A handle entry's stage's index in the encoder's per-stage tables: vertex 0, fragment 1
+inline uint32_t handleStage(const PackEntry &e)
+{
+    return e.stage == 1 ? 0 : 1;
+}
 
 // A buffer entry: storage, else uniform (NVK rounds its range up to the 256-byte cbuf alignment)
 inline bool bufferStorage(const PackEntry &e)

@@ -267,10 +267,11 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
                                         : @"a uniform buffer bound at an offset that is not a multiple of 256"];
                 return hit(_cb, PredEncUboOffset, uint64_t(e.stage) << 8 | e.slot, residual);
             }
-        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr && e.slot < 16 &&
-                   _tex[e.slot] && _tex[e.slot]->_raw.addressMap) {
+        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr &&
+                   e.slot < raw::kStageTextures && _tex[raw::handleStage(e)][e.slot] &&
+                   _tex[raw::handleStage(e)][e.slot]->_raw.addressMap) {
             [_cb takeReason:WhyEncode why:@"a planar texture sampled through a constexpr sampler"];
-            return hit(_cb, PredEncPlanarClamp, e.slot, _tex[e.slot]->_raw.addressMap);
+            return hit(_cb, PredEncPlanarClamp, e.slot, _tex[raw::handleStage(e)][e.slot]->_raw.addressMap);
         }
     }
     [self drawnRecord];
