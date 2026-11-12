@@ -85,5 +85,6 @@ public enum Registry {
     /// tests, so a failed recovery spoils none of them.
     public static let recovery: [any HWTest] = [
         PresentCopyResetTest(), RecoverKillOneTest(), RecoverKillUnderCompositorTest(), RecoverBusyEngineTest(),
+        RecoverKernelStallTest(),
     ]
 }

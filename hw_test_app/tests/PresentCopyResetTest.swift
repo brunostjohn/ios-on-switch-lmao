@@ -90,6 +90,6 @@ struct PresentCopyResetTest: HWTest {
     }
 
     static func call(_ gpu: GPUConnection, _ op: UInt32) -> (kern_return_t, [UInt8]) {
-        gpu.call(method, GPUConnection.words([op, 0]), outputSize: 16)
+        gpu.call(method, GPUConnection.words([op, 0]), outputSize: 24)
     }
 }
