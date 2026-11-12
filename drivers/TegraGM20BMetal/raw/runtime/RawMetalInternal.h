@@ -620,5 +620,6 @@ void watchGlassProbe(raw::Device *dev);
 void glassProbeCommitted(RMCommandBuffer *cb);
 bool rmWholePrograms();
 bool rmZeroNewBuffers();
+bool rmHalfViewRefused();
 void splitCaptureCommitted(raw::CommandBuffer &rc);
 #endif

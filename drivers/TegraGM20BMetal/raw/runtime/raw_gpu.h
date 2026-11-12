@@ -2516,6 +2516,8 @@ public:
     // the pipelines made while set bind their programs' shader data at its exact size (raw_cbuf.h): HW Test's bench
     // measuring what the chip reads of a constant buffer bound off a 256-byte multiple
     std::atomic<bool> probeExactCbufs{false};
+    // HW Test's debug switch plain-memory: textures, backings and shadows made while set take no compressible memory
+    std::atomic<bool> probePlainMemory{false};
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, as the next createOwnedZeta does for a one-sample zeta, which probeCompressed holds until destroyTexture;
     // any other texture takes the flag and stays plain

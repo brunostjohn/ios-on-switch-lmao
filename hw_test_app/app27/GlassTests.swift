@@ -7,19 +7,43 @@ import UIKit
 /// A Liquid Glass panel (UIGlassEffect, regular) across the middle of vertical stripes and of flat grey. Outside it the
 /// composited picture must match the CPU's. Inside, away from the lensing at its edges, each column over the stripes
 /// stays constant down its length (no streak or block) and the grey stays flat and not black. The stripes' remaining
-/// contrast is reported (contrast=) but not judged: how much glass blurs is UIKit's choice, not the GPU's. The stripes'
-/// column spread is measured again with every raw process drawing whole programs (column_spread_whole=, debug switch
-/// whole-programs), reported and not judged. A failed run saves both pictures (composited.png, composited-whole.png).
+/// contrast is reported (contrast=) but not judged: how much glass blurs is UIKit's choice, not the GPU's. Apple's own
+/// render of this scene (the iOS 27 simulator, iPad Pro 11-inch: out/agent-scratch/x1-glass/ref) measures
+/// column_spread=8 contrast=29 (reference=). Each arm stages the scene again under the raw path's debug switches, in
+/// every raw process, and reports column_spread_<arm>= and contrast_<arm>=, not judged:
+///   whole     every draw a whole program (whole-programs)
+///   plain     textures, backings and shadows made during the arm on plain memory (plain-memory), its glass 2 points
+///             shorter so the render server makes its intermediates again
+///   halfview  a kernel writing a half-float texture through m2v's view sent to m2v, as before T-v2 (half-view-refuse)
+///   noprobe   the glass probe disarmed in every process (glass-probe-off, glass-mem-watch-off)
+/// The first run arms the render server's split capture (split-capture: `raw: splitcap` lines of the glass shape's
+/// draws, tools/benchloop/capture.py). A failed run saves every picture (composited.png, composited-<arm>.png).
 struct UIGlassTest: HWTest {
     let id = "ui.glass"
     let name = "UIGlassEffect over stripes and flat grey"
     let subsystem = Subsystem.compositor
 
-    static let arms = [("whole", "whole-programs")]
+    struct Arm {
+        let name: String
+        let on: [String]
+        let off: [String]
+        var shorter: CGFloat = 0
+    }
+
+    static let reference = (columnSpread: 8, contrast: 29)
+    static let arms = [
+        Arm(name: "whole", on: ["whole-programs-on"], off: ["whole-programs-off"]),
+        Arm(name: "plain", on: ["plain-memory-on"], off: ["plain-memory-off"], shorter: 2),
+        Arm(name: "halfview", on: ["half-view-refuse-on"], off: ["half-view-refuse-off"]),
+        Arm(name: "noprobe", on: ["glass-probe-off", "glass-mem-watch-off"], off: []),
+    ]
 
     func run(_ context: TestContext) async throws -> Outcome {
+        GlassProbe.post("split-capture")
         let (outside, inside) = await Self.snapshot(context)
+        GlassProbe.post("split-capture-off")
         var metrics = Metrics()
+        metrics.set("reference", "\(Self.reference.columnSpread)/\(Self.reference.contrast)")
         var reasons: [String] = []
         outside.judge(&metrics, &reasons, "outside")
         let (stripes, grey) = Self.measure(inside)
@@ -28,12 +52,14 @@ struct UIGlassTest: HWTest {
         metrics.set("grey_spread", Int((grey.spread * 255).rounded()))
         metrics.set("grey_mean", grey.mean.map { String(Int(($0 * 255).rounded())) }.joined(separator: ","))
         var pictures = [("composited.png", inside)]
-        for (name, forced) in Self.arms {
-            GlassProbe.post(forced + "-on")
-            let (_, armed) = await Self.snapshot(context)
-            GlassProbe.post(forced + "-off")
-            metrics.set("column_spread_" + name, Int((Self.measure(armed).0.columnSpread * 255).rounded()))
-            pictures.append(("composited-\(name).png", armed))
+        for arm in Self.arms {
+            arm.on.forEach(GlassProbe.post)
+            let (_, armed) = await Self.snapshot(context, shorter: arm.shorter)
+            arm.off.forEach(GlassProbe.post)
+            let measured = Self.measure(armed).0
+            metrics.set("column_spread_" + arm.name, Int((measured.columnSpread * 255).rounded()))
+            metrics.set("contrast_" + arm.name, Int((measured.contrast * 255).rounded()))
+            pictures.append(("composited-\(arm.name).png", armed))
         }
         let checks: [(String, Bool)] = [
             ("each column constant down the glass (spread <= 6)", stripes.columnSpread <= 6.0 / 255),
@@ -58,7 +84,7 @@ struct UIGlassTest: HWTest {
         )
     }
 
-    static func snapshot(_ context: TestContext) async -> (CompositeCheck, Raster) {
+    static func snapshot(_ context: TestContext, shorter: CGFloat = 0) async -> (CompositeCheck, Raster) {
         await UISceneTests.staged(context) { stage, screen -> UIView in
             let root = UIView(frame: Snapshots.aligned(screen))
             root.addSubview(BackdropStripes(frame: CGRect(x: 0, y: 0, width: screen.width / 2, height: screen.height)))
@@ -67,7 +93,7 @@ struct UIGlassTest: HWTest {
             root.addSubview(grey)
             let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
             glass.frame = Snapshots.aligned(
-                CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2))
+                CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2 - shorter))
             root.addSubview(glass)
             stage.addSubview(root)
             return root
