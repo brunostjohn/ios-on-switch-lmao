@@ -191,6 +191,8 @@ int32_t Service::run(Work &work)
     const uint64_t wall = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
     int32_t result = engine_.compile(p, entry, why);
+    if (result == TegraGM20BCompileMade)
+        store_.putProgramSlots(p.key, entry);
     if (!entry.empty() && !publish(p.name, entry, why))
         result = TegraGM20BCompileFailed;
     if (result == TegraGM20BCompileMade)

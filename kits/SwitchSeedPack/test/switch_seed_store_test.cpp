@@ -255,6 +255,41 @@ TEST_F(SeedStore, AFullStoreRefusesAndCompactionKeepsOnlyWholeEntries)
     EXPECT_TRUE(holds(writer.reader(), 2));
 }
 
+// A program slot kept for a GPU client to run in place: a whole-page entry on pages no other entry shares, before and
+// after compaction
+TEST_F(SeedStore, AWholePageEntryHasItsPagesToItself)
+{
+    const auto pageOf = [](uint64_t offset) { return offset / pack::kStorePageBytes; };
+    const std::string page(pack::kStorePageBytes, 'p');
+    std::vector<uint8_t> slotName = nameOf(1000);
+    {
+        pack::StoreWriter writer;
+        std::string error;
+        ASSERT_TRUE(writer.open(path, identity, kSlots, 4 * kData, error)) << error;
+        ASSERT_EQ(put(writer, 1), pack::StoreWriter::Put::Added);
+        ASSERT_EQ(writer.put(slotName.data(), reinterpret_cast<const uint8_t *>(page.data()), uint32_t(page.size())),
+                  pack::StoreWriter::Put::Added);
+        ASSERT_EQ(put(writer, 2), pack::StoreWriter::Put::Added);
+        pack::Bytes slot, before, after;
+        ASSERT_TRUE(writer.reader().find(slotName.data(), slot));
+        ASSERT_TRUE(writer.reader().find(nameOf(1).data(), before));
+        ASSERT_TRUE(writer.reader().find(nameOf(2).data(), after));
+        const uint64_t at = uint64_t(slot.data - writer.base());
+        EXPECT_EQ(at % pack::kStorePageBytes, 0u);
+        EXPECT_LT(pageOf(uint64_t(before.data - writer.base()) + before.size - 1), pageOf(at));
+        EXPECT_GE(uint64_t(after.data - writer.base()), at + page.size()) << "the next entry starts past its pages";
+    }
+    std::string error;
+    ASSERT_TRUE(pack::compactStore(path, identity, kSlots, 4 * kData, error)) << error;
+    pack::StoreWriter writer;
+    ASSERT_TRUE(writer.open(path, identity, kSlots, 4 * kData, error)) << error;
+    pack::Bytes slot;
+    ASSERT_TRUE(writer.reader().find(slotName.data(), slot));
+    EXPECT_EQ(uint64_t(slot.data - writer.base()) % pack::kStorePageBytes, 0u);
+    EXPECT_TRUE(holds(writer.reader(), 1));
+    EXPECT_TRUE(holds(writer.reader(), 2));
+}
+
 TEST_F(SeedStore, AReplacementIsPublishedBeforeTheEntryItReplacesIsRetired)
 {
     pack::StoreWriter writer;
