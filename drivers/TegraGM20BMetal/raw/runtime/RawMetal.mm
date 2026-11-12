@@ -382,7 +382,7 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
             (void)relieved;
 #endif
         },
-        nullptr, &r->committed);
+        nullptr, &r->rangesInFlight);
     const bool renderServer = dev->role() == raw::Device::Role::RenderServer;
     if (renderServer)
         os_log(rawLog(), "raw: shader heap %llu KB, each program placed at its state's first use",

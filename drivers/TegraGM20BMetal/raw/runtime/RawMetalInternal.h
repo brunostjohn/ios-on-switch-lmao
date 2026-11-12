@@ -238,7 +238,10 @@ struct RawState {
     std::atomic<uint32_t> completionWaiters{0};
     dispatch_queue_t handlers;           // where scheduled handlers run (in order, never inside commit)
     raw::ProgressGate progress;          // whether a completion wakes the submit worker (raw_progress_gate.h)
-    std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (gRawRelease's drain)
+    std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (the arenas' purge)
+    // ranges handed to the kernel or m2v and not completed (rmRangeHandedOff): gRawRelease's drain and its idle rule's
+    // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
+    std::atomic<uint32_t> rangesInFlight{0};
     Stats stats;
     std::unique_ptr<raw::Completion> completion;  // the states the pack lacks (raw_metal_complete_states)
 };
@@ -557,6 +560,7 @@ void finish(RMCommandBuffer *cb, NSError *error);
 // The command buffer's error, unless it has one: under its lock, which waitUntilScheduled reads it under
 void failCommandBuffer(RMCommandBuffer *cb, NSString *reason,
                        MTLCommandBufferError code = MTLCommandBufferErrorInternal);
+void rmRangeHandedOff(RMCommandBuffer *cb);
 void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::RetirementWrites &writes, uint32_t dependencies,
                       const std::vector<RMNativeEventSignal> &signals = {},
                       const std::vector<raw::EventTimeline::Promise> &waits = {},

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // facadecost's checks of the memory a command buffer's job reads while the mock's GPU holds it: a command buffer
 // recorded behind it takes none of its setBytes chunks (MOCK_GPU_US), memory pressure's release gives back idle memory
-// at once and none of what the job reads, and the idle release waits for it.
+// at once and none of what the job reads, and the idle release waits for it but not for one parked on an event.
 #pragma once
 #import <Metal/Metal.h>
 #include <chrono>
@@ -22,6 +22,9 @@ extern "C" void mock_iokit_held(uint64_t *allocated, uint64_t *imported);  // th
 extern "C" void mock_iokit_pause(uint32_t channel, bool pause);            // a channel's jobs wait until unpaused
 
 namespace facade_held {
+
+// GpuMemoryRelease's idle second, its leeway and a margin
+constexpr auto kPastIdleDeadline = std::chrono::milliseconds(1000 + 100 + 400);
 
 inline std::set<uint64_t> bytesChunks(id<MTLCommandBuffer> cb)
 {
@@ -120,22 +123,20 @@ template <typename Encode> int pressureCheck(Encode encode, unsigned idle)
     return 1;
 }
 
-// The idle release (GpuMemoryRelease's second, its leeway and a margin) with a command buffer in flight past its deadline
-// (the GPU held): it gives back nothing then, and once the command buffer completes, at the deadline its drain set, it
-// does. The failures.
+// The idle release with a command buffer in flight past its deadline (the GPU held): it gives back nothing then, and once
+// the command buffer completes, at the deadline its drain set, it does. The failures.
 template <typename Encode> int idleCheck(Encode encode, unsigned idle)
 {
-    constexpr auto kPastDeadline = std::chrono::milliseconds(1000 + 100 + 400);
     settle(encode, idle);
     pauseGpu(true);
     id<MTLCommandBuffer> cb = encode();
     const uint64_t committed = heldBytes();
-    std::this_thread::sleep_for(kPastDeadline);
+    std::this_thread::sleep_for(kPastIdleDeadline);
     const uint64_t inFlight = heldBytes();
     const bool held = cb.status != MTLCommandBufferStatusCompleted;
     pauseGpu(false);
     [cb waitUntilCompleted];
-    std::this_thread::sleep_for(kPastDeadline);
+    std::this_thread::sleep_for(kPastIdleDeadline);
     const uint64_t drained = heldBytes();
     printf("facadecost idle: in flight %d past the deadline gave back %llu KiB, after its drain %llu KiB\n", int(held),
            (unsigned long long)(committed > inFlight ? (committed - inFlight) >> 10 : 0),
@@ -145,6 +146,48 @@ template <typename Encode> int idleCheck(Encode encode, unsigned idle)
     printf("FAIL: the idle check %s\n", !held                  ? "saw the command buffer complete while the GPU was held"
                                         : inFlight < committed ? "saw memory given back with a command buffer in flight"
                                                                : "saw nothing given back after the drain");
+    return 1;
+}
+
+// The idle release with only a command buffer that waits on the CPU for an event nobody has signalled (no GPU work in
+// flight): it gives back the idle memory at the deadline the last drain set, and the waiting command buffer's setBytes
+// chunks stay bound with their bytes until the event comes and it completes. `encodeAfter(event)`: a command buffer that
+// waits for `event` at 1. The failures.
+template <typename EncodeAfter> int eventParkedCheck(EncodeAfter encodeAfter, id<MTLDevice> device, unsigned idle)
+{
+    settle([&] { return encodeAfter(nil); }, idle);
+    id<MTLSharedEvent> event = [device newSharedEvent];
+    id<MTLCommandBuffer> cb = encodeAfter(event);
+    std::vector<std::pair<uint64_t, std::vector<uint8_t>>> chunks;
+    for (uint64_t va : bytesChunks(cb)) {
+        std::vector<uint8_t> bytes(256);
+        if (cap_read(va, bytes.data(), bytes.size()))
+            chunks.emplace_back(va, std::move(bytes));
+    }
+    const uint64_t parked = heldBytes();
+    std::this_thread::sleep_for(kPastIdleDeadline);
+    const uint64_t released = heldBytes();
+    const bool waiting = cb.status != MTLCommandBufferStatusCompleted;
+    size_t kept = 0;
+    for (const auto &[va, bytes] : chunks) {
+        std::vector<uint8_t> now(bytes.size());
+        kept += cap_read(va, now.data(), now.size()) && now == bytes;
+    }
+    event.signaledValue = 1;
+    [cb waitUntilCompleted];
+    const bool completed = cb.status == MTLCommandBufferStatusCompleted && !cb.error;
+    printf("facadecost event-parked: waiting %d, gave back %llu KiB past the deadline, %zu of %zu chunks bound with their "
+           "bytes, completed %d\n",
+           int(waiting), (unsigned long long)(parked > released ? (parked - released) >> 10 : 0), kept, chunks.size(),
+           int(completed));
+    if (waiting && released < parked && !chunks.empty() && kept == chunks.size() && completed)
+        return 0;
+    printf("FAIL: the event-parked check %s\n",
+           !waiting             ? "saw the command buffer run before its event"
+           : released >= parked ? "saw nothing given back with only an event-parked command buffer"
+           : chunks.empty()     ? "found no chunk"
+           : !completed         ? "saw the command buffer fail"
+                                : "found a chunk of the waiting command buffer freed or changed");
     return 1;
 }
 

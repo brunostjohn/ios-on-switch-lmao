@@ -80,6 +80,12 @@ const raw::RetirementWrites *captureWrittenRange(RMCommandBuffer *cb, size_t fro
     return &writes;
 }
 
+void rmRangeHandedOff(RMCommandBuffer *cb)
+{
+    cb->_finishState.submitted();
+    gRM->rangesInFlight.fetch_add(1, std::memory_order_relaxed);
+}
+
 void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
 {
     const raw::RetirementWrites *writes = captureWrittenRange(cb, from, to);
@@ -91,7 +97,7 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
             cached.push_back(&buffer);
     }
     auto cpu = gRM->raw->captureCpuCompletion(cb->_seqno, cb->_channelGeneration, cached);
-    cb->_finishState.submitted();
+    rmRangeHandedOff(cb);
     auto signals = publishRawEventSignals(cb);
     RAW_DIAGNOSTIC(gRM->stats.signalsPublished += signals.size());
     const bool quiet = cb->_rangeQuiet;
@@ -195,6 +201,8 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
             cb->_segError = error;
     }
     const bool last = cb->_finishState.completed();
+    if (gRM->rangesInFlight.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        gRawRelease.drained();
     if (gRM->progress.progressed())  // a queue head is parked: it is judged again (raw_progress_gate.h)
         wakeSubmit((__bridge void *)cb->_queue, dependencies);
     if (last)
@@ -222,8 +230,7 @@ static void completeBuffer(RMCommandBuffer *cb)
     cb->_computeJobs.clear();
     cb->_sharedEventWaits.clear();
     cb->_resourceReady.reset();
-    if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        gRawRelease.drained();
+    gRM->committed.fetch_sub(1, std::memory_order_acq_rel);
 #if SWITCH_FRAME_TIMELINE
     switch_frame::finished(cb->_frame);
 #endif

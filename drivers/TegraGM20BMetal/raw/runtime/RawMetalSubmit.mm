@@ -433,7 +433,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         RAW_DIAGNOSTIC(r.stats.m2v++);
         countPreds(cb);
         const auto writes = captureWrittenRange(cb, range.from, range.to);
-        cb->_finishState.submitted();
+        rmRangeHandedOff(cb);
         __block bool counted = false;
         {
             std::lock_guard<raw::Mutex> l(r.m2vLock);

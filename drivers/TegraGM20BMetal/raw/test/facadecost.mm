@@ -337,8 +337,11 @@ int main(int argc, char **argv)
         id<MTLCommandQueue> queue = [device newCommandQueue];
         static const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         static const uint8_t zeros[256] = {};
-        auto encode = [&](unsigned draws) {
+        // `after`: an event the command buffer waits for at value 1 before its passes
+        auto encode = [&](unsigned draws, id<MTLSharedEvent> after = nil) {
             id<MTLCommandBuffer> cb = [queue commandBuffer];
+            if (after)
+                [cb encodeWaitForEvent:after value:1];
             for (unsigned p = 0; p < kPasses; p++) {
                 id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:passes[p]];
                 [e setRenderPipelineState:fill];
@@ -530,6 +533,11 @@ int main(int argc, char **argv)
                 return encode(arms[0]);
             },
             buffers);
+        failures += facade_held::eventParkedCheck(
+            [&](id<MTLSharedEvent> after) {
+                return encode(arms[0], after);
+            },
+            device, buffers);
         for (const auto &[name, value] : counted[0]) {
             const double grown = counted[1][name] - value;
             if (name == "encodes" ? value < 1 : grown >= 0.5) {
