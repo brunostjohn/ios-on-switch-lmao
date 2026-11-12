@@ -9,6 +9,7 @@
 // passes a new high by a quarter; COMPILER_TRANSIENT_ENTRIES=<dir> keeps each state's entry there, to compare two builds'
 // records byte for byte.
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <malloc/malloc.h>
