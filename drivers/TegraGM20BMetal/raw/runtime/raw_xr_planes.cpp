@@ -40,6 +40,7 @@ void BlitEncoder::xrPlanes(const Texture &t, bool split)
     cb_->use(t, !split);
     cb_->use(temp, true);
     RAW_DIAGNOSTIC(dev_->stats.ceOps += 3);
+    RAW_DIAGNOSTIC((split ? dev_->stats.xrSplits : dev_->stats.xrMerges)++);
     RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(t.width) * t.height * xrPlaneBytes(split));
     room(kXrPlaneWords);
     const CopySurface image =

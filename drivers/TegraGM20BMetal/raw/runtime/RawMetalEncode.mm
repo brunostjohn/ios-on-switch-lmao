@@ -32,7 +32,7 @@ void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
         rc->use(t->_buffer->_raw, write);
     for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
         if (plane)
-            rc->use(*plane, false);
+            rc->use(*plane, write && t->_raw.xrPlanes);
 }
 
 void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
@@ -426,7 +426,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             if (!(use.access & raw::ResourceUse::Sample))
                 return;
             RMTexture *texture = (__bridge RMTexture *)use.object;
-            if (texture->_raw.standIn && !standInFresh.count(texture))
+            if (texture->_raw.standIn && !standInFresh.count(texture) &&
+                (!texture->_raw.xrPlanes || cb->_xrStandIns.count(texture)))
                 stale.push_back(texture);
         });
         for (RMTexture *t : stale) {
@@ -443,8 +444,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             codes.push_back(x);
             codes.back().standIn = nullptr;
             useTexture(rc, t, false);
-            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format)));
-            conv->setTexture(0, &codes.back());
+            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format), x.xrPlanes));
+            conv->setTexture(0, x.xrPlanes ? x.luma : &codes.back());
+            if (x.xrPlanes)
+                conv->setTexture(1, x.chroma);
             conv->setViewport(0, 0, x.width, x.height, 0, 1);
             conv->setScissor(0, 0, x.width, x.height);
             if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -618,6 +621,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             bool draws = false;
             for (size_t i = at + 1; i < to && !draws && cb->_plan.operation(i).op != OpEnd; i++)
                 draws = isPlanDraw(cb->_plan.operation(i).op);
+            if (const char *refused = raw::expandXrPlanes(p, *gRM->raw))
+                return fail(PredEncPassRender, refused);
             if (!turned.begin(*rc, p, draws, why))
                 return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))

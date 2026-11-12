@@ -10,6 +10,7 @@
 #include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_turn.h"
+#include "nvk_switch_xr_planes.h"
 #include "nvk_switch_capture.h"
 #include "nvk_switch_compile.h"
 #include "nvk_switch_split.h"
@@ -201,6 +202,8 @@ nvk_populate_fs_key(struct nak_fs_key *key,
    key->center_frag_depth = switch_nvk_center_frag_depth_current;
    key->texs_f16 = switch_nvk_texs_f16_current;
    key->turned = switch_nvk_turned_current;
+   for (unsigned i = 0; i < 8; i++)
+      key->xr_plane_bindings[i] = (uint8_t)(switch_nvk_xr_plane_bindings_current >> (8 * i));
 
    /* Turn underestimate on when no state is availaible or if explicitly set */
    if (state == NULL || state->rs == NULL ||
@@ -404,6 +407,8 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
 
    if (switch_nvk_turned_current)
       NIR_PASS(_, nir, switch_nvk_turn_fragment, nvk_root_descriptor_offset(switch_turn));
+
+   NIR_PASS(_, nir, switch_nvk_xr_planes, switch_nvk_xr_plane_bindings_current);
 
    const struct lower_ycbcr_state ycbcr_state = {
       .set_layout_count = set_layout_count,

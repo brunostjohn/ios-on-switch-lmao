@@ -140,6 +140,11 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
     return out
 
 
+def two_plane_colors(key: str) -> int:
+    """Give the RGB10A8_2P_XR10 colours of a state's key."""
+    return sum(1 for t in key.split(' | ')[0].split() if t[:1] == 'c' and t[1:2].isdigit() and t[3:7] == '550:')
+
+
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
     """Give a state's pipeline as mkpack.py's pipeline() gives the probe's."""
     p = rec['pipeline']
@@ -150,7 +155,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
     tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
-    blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
+    blend, half, xr_slots = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
     )
@@ -161,6 +166,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     regs = rec['probe']['records'][0]['regs']
+    # a two-plane record's alpha bytes are targets of their own past the key's (runtime/raw_xr_pass.h)
+    targets = mkpack.targets(rec['key']) + (two_plane_colors(rec['key']) if flags & 64 else 0)
     varying = list(varying)
     if storage_mask:
         for method in [0x0210, 0x0754, 0x1224] + [0x1a00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
@@ -175,13 +182,15 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'blob': [
             (m, regs.get(m, 0))
             for m in varying
-            if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, mkpack.targets(rec['key']))
+            if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, targets)
         ],
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1],
         'push_metadata': bool(flags & 4),
         'turn_refused': bool(flags & 32),
+        'two_plane': bool(flags & 64),
         'blend_color_word': blend,
         'half_blend_color_word': half,
+        'xr_slots': xr_slots,
         'storage_mask': storage_mask,
         'storage_write_mask': storage_write_mask,
         'storage_samples': storage_samples,
@@ -239,6 +248,8 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     split_identities(states)
     for index, rec in enumerate(states):
         n = mkpack.targets(rec['key'])
+        if PIPELINE.unpack_from(rec['pipeline'])[12] & 64:
+            n += two_plane_colors(rec['key'])
         regs = dict(context)
         regs.update(rec['regs'])
         for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):

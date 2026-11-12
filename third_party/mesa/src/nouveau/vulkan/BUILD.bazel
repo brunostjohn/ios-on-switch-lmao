@@ -338,6 +338,7 @@ mesa_cc_library(
         "nvk_switch_split_prologue.c",
         "nvk_switch_split_proof.c",
         "nvk_switch_turn.c",
+        "nvk_switch_xr_planes.c",
         "nvk_upload_queue.c",
         "nvk_video_session.c",
         "nvk_wsi.c",
@@ -887,6 +888,49 @@ py_test(
         "turn",
     ],
     data = [":turn_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
+)
+
+mesa_cc_library(
+    name = "xr_planes_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = [
+        "nvk_switch_xr_planes.c",
+        "nvk_switch_xr_planes_test.c",
+    ],
+)
+
+fs_depth_test_binary(
+    name = "xr_planes_test_bin",
+    testonly = True,
+    archives = [
+        ":xr_planes_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "xr_planes_test_host",
+    testonly = True,
+    srcs = [":xr_planes_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "xr_planes_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :xr_planes_test_host)",
+        "xr-planes",
+    ],
+    data = [":xr_planes_test_host"],
     main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
 )
 

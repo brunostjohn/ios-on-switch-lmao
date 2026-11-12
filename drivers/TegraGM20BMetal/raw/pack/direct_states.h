@@ -9,6 +9,7 @@
 #include <vector>
 #include "../runtime/RawDirect.h"
 #include "../runtime/RawRenderKey.h"
+#include "../runtime/raw_xr_pass.h"
 #include "probe_states.h"
 
 namespace probe {
@@ -24,6 +25,7 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
     const std::pair<const char *, raw::ProbeTextures> sets[] = {{"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},
                                                                 {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
                                                                 {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
+                                                                {"f xr_two_planes_frag", {MTLPixelFormatR32Uint, 1}},
                                                                 {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}},
                                                                 {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}},
                                                                 {"f turn_copy", {MTLPixelFormatR32Uint, 1}},
@@ -61,7 +63,7 @@ void eachState(id<MTLDevice> dev, id<MTLLibrary> qc, id<MTLLibrary> own, id<MTLL
                 continue;
             s.key = airKeyed.key + cubic;
         }
-        if (seen.insert(s.key).second)
+        if (seen.insert(s.key + (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string())).second)
             each(line, ours, s);
     }
 }

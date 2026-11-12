@@ -24,24 +24,29 @@ bool makeXrPlanes(RMTexture *t, IOSurfaceRef s)
                    alpha = uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at;
     const uint32_t wordPitch = uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 0)),
                    alphaPitch = uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 1));
-    if (!gRM->raw->createXrPlanesTexture(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, word, wordPitch, alpha,
-                                         alphaPitch, uint32_t(d.width), uint32_t(d.height), t->_raw)) {
-        SWITCH_REFUSE_DETAIL(
-            "raw", "xr.planes", 0,
-            "no raw texture over a %lux%lu two-plane surface (planes at %llu and %llu, rows %u and %u, "
-            "base&0xfff 0x%lx): m2v's",
-            (unsigned long)d.width, (unsigned long)d.height, (unsigned long long)word, (unsigned long long)alpha,
-            wordPitch, alphaPitch, (unsigned long)(at & 0xfff));
+    const char *why = "";
+    if (!gRM->raw->createXrPlaneTexture(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, word, wordPitch, alpha,
+                                        alphaPitch, uint32_t(d.width), uint32_t(d.height), t->_raw, &why)) {
+        SWITCH_REFUSE_DETAIL("raw", "xr.planes", 0,
+                             "no raw texture over a %lux%lu two-plane surface (planes at %llu and %llu, rows %u and %u, "
+                             "base&0xfff 0x%lx): %s: m2v's",
+                             (unsigned long)d.width, (unsigned long)d.height, (unsigned long long)word,
+                             (unsigned long long)alpha, wordPitch, alphaPitch, (unsigned long)(at & 0xfff), why);
         return false;
     }
     keepExtendedRange(d, t->_raw, false);
-    surfaceConverted(s, true);
     static std::atomic<bool> said{false};
-    if (!said.exchange(true))
-        os_log(rawLog(), "raw: two-plane XR on (%ux%u '%c%c%c%c', planes merged and split on the copy engine)",
+    if (!said.exchange(true)) {
+        const raw::Texture &w = *t->_raw.luma, &a = *t->_raw.chroma;
+        os_log(rawLog(),
+               "raw: two-plane XR on (%ux%u '%c%c%c%c', drawn in its planes: rows %u and %u, va&127 %llu and %llu, %s "
+               "and %s)",
                unsigned(d.width), unsigned(d.height), char(IOSurfaceGetPixelFormat(s) >> 24),
                char(IOSurfaceGetPixelFormat(s) >> 16), char(IOSurfaceGetPixelFormat(s) >> 8),
-               char(IOSurfaceGetPixelFormat(s)));
+               char(IOSurfaceGetPixelFormat(s)), w.pitch, a.pitch, (unsigned long long)(w.va & 127),
+               (unsigned long long)(a.va & 127), w.renderable ? "direct" : "shadowed",
+               a.renderable ? "direct" : "shadowed");
+    }
     return true;
 }
 

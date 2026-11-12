@@ -349,7 +349,7 @@ def state_key(line: str) -> str:
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
     key = (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
-    cubic = ''
+    cubic = sampled = ''
     for segment in line[bar3 + 3 :].split(' | ') if bar3 >= 0 else ():
         if segment.startswith(LINKED):
             tokens = segment.split()
@@ -358,7 +358,9 @@ def state_key(line: str) -> str:
             key += ' | ' + ' '.join(tokens[:2] + named) + ' ' + ' '.join(values)
         elif segment.startswith('cubic '):
             cubic = ' | ' + ' '.join(segment.split())
-    return (f'{key} | l {framework}' if framework else key) + cubic
+        elif segment.startswith('xrs='):
+            sampled = ' | ' + segment.strip()
+    return (f'{key} | l {framework}' if framework else key) + cubic + sampled
 
 
 def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:

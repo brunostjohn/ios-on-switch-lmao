@@ -60,6 +60,9 @@
 #                     (ycbcrStoreDrawn) against it, and the targets planYcbcr takes
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
 #                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
+#   raw_xr_pass_test  raw/runtime/raw_xr_pass.h: RGB10A8_2P_XR10 drawn in its planes: the alpha index (m2v's rule), a state's
+#                     plane formats, a Clear's plane words, raw_emit's alpha targets, and the header pair's join
+#                     (nvk_switch_xr_planes.c) giving each code's half
 #   raw_xr_planes_test  raw/runtime/raw_xr_planes.h: a two-plane XR surface's merge and split launches, run over bytes with
 #                     the copy engine's remap, and the copy-free form's output rule
 #   raw_clear_test    raw/runtime/raw_clear.h: the clear values the raw path hands NVK, m2v's for every format it renders
@@ -853,6 +856,19 @@ host_test(
 )
 
 host_test(
+    name = "raw_xr_pass_test",
+    srcs = [
+        "raw_xr_pass_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_sample_shading.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_xr_planes_test",
     srcs = [
         "raw_xr_planes_test.cpp",
@@ -1028,6 +1044,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
     ],
     copts = ["-Idrivers/NativeMetal"],
     cxx_std = "c++17",

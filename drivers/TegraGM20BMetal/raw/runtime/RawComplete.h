@@ -45,6 +45,8 @@ public:
         // its cubic variant's binds (raw_cubic.h), whose name the key ends with; empty: the state itself
         CubicBinds cubic;
         uint8_t fragmentTests = 0;
+        bool twoPlane = false;  // its " | xr2p" variant (raw_xr_pass.h)
+        uint16_t xrSlots = 0;   // its " | xrs=" variant's sampled two-plane slots (raw_xr_pass.h)
         bool resolveDescriptor = false;
     };
 

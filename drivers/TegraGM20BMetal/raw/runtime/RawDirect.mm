@@ -30,6 +30,7 @@ struct Asked {
     std::map<uint32_t, uint32_t> *registers;
     bool split;
     bool variants;
+    uint16_t xrSlots;
     std::string why;
     CompileOutcome outcome = CompileOutcome::Failed;
 };
@@ -37,8 +38,8 @@ struct Asked {
 bool made(const NmbDirectState *state, void *ctx)
 {
     Asked &a = *static_cast<Asked *>(ctx);
-    a.outcome =
-        directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split, a.variants);
+    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split,
+                             a.variants, a.xrSlots);
     return true;
 }
 
@@ -76,7 +77,7 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                             std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
-    Asked a = {nvk_, rules_, key, attributes, out, registers, split, variants_, {}};
+    Asked a = {nvk_, rules_, key, attributes, out, registers, split, variants_, textures.xrSlots, {}};
     std::vector<NmbDirectCubicSampler> cubic;
     std::vector<NmbDirectTextureFormat> formats;
     for (const CubicBinds::Sampler &c : textures.cubic.samplers)
@@ -84,11 +85,11 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
     const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
-                                  textures.fragmentTests};
+                                  textures.fragmentTests, textures.twoPlane};
+    const bool plain = textures.cubic.empty() && !textures.fragmentTests && !textures.twoPlane;
     const char *refused = nullptr;
-    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples,
-                                           textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made,
-                                           &a, &refused)) {
+    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples, plain ? nullptr : &binds,
+                                           made, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }

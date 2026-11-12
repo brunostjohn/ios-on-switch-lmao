@@ -42,12 +42,13 @@ inline XrForm xrForm(uint32_t mtlPixelFormat)
     }
 }
 
-// The pack's conversion state of a form (pack/xr.metal, keyed "raw.xr.<fragment function>"), null for none
-inline const char *xrConversion(XrForm f)
+// The pack's conversion state of a form (pack/xr.metal, keyed "raw.xr.<fragment function>"), null for none; `twoPlanes`:
+// RGB10A8_2P_XR10 held in its two planes (raw_xr_pass.h), read through both
+inline const char *xrConversion(XrForm f, bool twoPlanes = false)
 {
     switch (f) {
     case XrForm::Planes:
-        return "raw.xr.xr_planes_frag";
+        return twoPlanes ? "raw.xr.xr_two_planes_frag" : "raw.xr.xr_planes_frag";
     case XrForm::Bgra10:
         return "raw.xr.xr_bgra10_frag";
     case XrForm::Bgr10:

@@ -36,6 +36,7 @@
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
+#include "raw_xr_pass.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -827,12 +828,26 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
 {
     std::vector<std::pair<std::string, Pipeline *>> out;
     for (const PackPipeline *rec : pack_.variantRecords(keyHash)) {
+        const std::string name = pack_.string(rec->variantName);
+        // a barrier record is a storage form's twin unless it is the variant's one record (its storage form refused)
+        if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(keyHash, name, PackForm::Default))
+            continue;
         Pipeline *pl = nullptr;
         if (usableRecord(rec)) {
             std::lock_guard<std::mutex> l(lock_);
             pl = placeRecord(*rec, caTransform);
         }
-        out.emplace_back(pack_.string(rec->variantName), pl);
+        // a storage form's barrier twin, as Device::pipeline gives a state's own
+        const PackPipeline *barrier = pl && pl->storageBits && !pl->storageBlendBits
+                                          ? pack_.variantRecord(keyHash, name, PackForm::Barrier)
+                                          : nullptr;
+        if (usableRecord(barrier)) {
+            std::lock_guard<std::mutex> l(lock_);
+            Pipeline *twin = placeRecord(*barrier, caTransform);
+            if (twin && twin != pl && !twin->storageBits)
+                pl->barrierTwin = twin;
+        }
+        out.emplace_back(name, pl);
     }
     return out;
 }
@@ -982,6 +997,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                 pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
         }
     }
+    if (pp.flags & PipelineTwoPlane) {
+        const std::array<int8_t, 8> alpha = xrAlphaSlots(pl.colorFormats);
+        xrPlaneFormats(pl.colorFormats);
+        for (uint32_t j = 0; j < 8; j++)
+            if (alpha[j] >= 0 && (pl.readBits >> j & 1))
+                pl.readBits |= uint8_t(1u << alpha[j]);
+    }
     // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
     // or Float4, per vertex, from the stream's buffer
     unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
@@ -1025,6 +1047,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         pl.readBits &= ~pl.storageBits;
     }
     pl.turnRefused = pp.flags & PipelineTurnRefused;
+    pl.xrSlots = pp.xrSlots;
     pl.rec = &pp;
 }
 
@@ -1362,6 +1385,29 @@ void Device::freeTic(uint32_t tic)
         freeTic_.push_back(v->second.second);
     }
     viewTics_.erase(views.first, views.second);
+}
+
+uint32_t Device::allocTicPair()
+{
+    if (!freeTicPairs_.empty()) {
+        const uint32_t first = freeTicPairs_.back();
+        freeTicPairs_.pop_back();
+        return first;
+    }
+    if (nextTic_ + 1 >= kTicCount)
+        return 0;
+    const uint32_t first = nextTic_;
+    nextTic_ += 2;
+    return first;
+}
+
+// As freeTic leaves a freed header: header 0's null descriptor in both (an over-planes RGB10A8_2P_XR10 texture's pair,
+// raw_xr_texture.cpp)
+void Device::freeTicPair(uint32_t first)
+{
+    memcpy(tic_.cpu + 32 * first, tic_.cpu, 32);
+    memcpy(tic_.cpu + 32 * (first + 1), tic_.cpu, 32);
+    freeTicPairs_.push_back(first);
 }
 
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
@@ -2225,7 +2271,9 @@ void Device::destroyTexture(Texture &t)
         t.tic = 0;
     }
     std::lock_guard<std::mutex> l(lock_);
-    if (t.tic) {
+    if (t.tic && t.xrPlanes) {
+        freeTicPair(t.tic);
+    } else if (t.tic) {
         freeTic(t.tic);
     }
     if (t.zeta)
@@ -2632,9 +2680,9 @@ Pipeline *Device::ycbcrStorePipeline(bool chroma, bool wide)
     return pipeline(Pack::fnv(name, strlen(name)));
 }
 
-Pipeline *Device::xrPipeline(XrForm form)
+Pipeline *Device::xrPipeline(XrForm form, bool twoPlanes)
 {
-    const char *name = xrConversion(form);
+    const char *name = xrConversion(form, twoPlanes);
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
@@ -2658,7 +2706,7 @@ Pipeline *Device::mipPipeline(uint32_t format)
 
 bool Device::createStandIn(Texture &t)
 {
-    if (t.standIn || !xrPipeline(xrForm(t.format)))
+    if (t.standIn || !xrPipeline(xrForm(t.format), t.xrPlanes))
         return t.standIn != nullptr;
     Texture *s = new Texture;
     if (!createTexture(t.width, t.height, kXrStandInFormat, *s, false, true)) {
@@ -3389,6 +3437,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             return nullptr;
         const bool mixed = blockLinear && !t->blockLinear && !backed(*t);
         if ((t->shadowTarget && !backed(*t)) || mixed) {  // rendered through a pool image (end(): copied in before, back after)
+            RAW_DIAGNOSTIC(dev_->stats.xrPlaneShadows += t->xrPlane != 0);
             if (mixed) {
                 RAW_DIAGNOSTIC(dev_->stats.rtMixed++);
             } else {
@@ -4256,6 +4305,10 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl)
 {
     if (!pl || !pl->storageBits)
         return pl;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (cb_->forms_.barrierFetch && pl->barrierTwin)
+        return pl->barrierTwin;
+#endif
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None)
         return pl;
@@ -4907,9 +4960,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                         return false;
                     }
-                    if (t)
+                    // a two-plane texture's header pair where the program reads it so, else its stand-in
+                    const bool pair = t && t->xrPlanes && (pl->xrSlots >> e.slot & 1);
+                    if (!pair && (pl->xrSlots >> e.slot & 1)) {
+                        *why = "a state that reads a two-plane texture's header pair drawn without one";
+                        cb_->refusal = {RefNoTic, e.slot, t ? t->format : 0, t ? t->width : 0};
+                        return false;
+                    }
+                    if (pair) {
+                        cb_->use(*t->luma, false);
+                        cb_->use(*t->chroma, false);
+                        RAW_DIAGNOSTIC(dev_->stats.xrPairBinds++);
+                    } else if (t) {
                         cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
-                    tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
+                    }
+                    tic = !t ? 0 : pair ? t->tic : t->standIn ? t->standIn->tic : t->tic;
                 } else if (e.kind == EntryFetch) {
                     const Texture *t = pass_.color[e.slot].texture;
                     if (t && !t->tic) {
@@ -6176,6 +6241,8 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
+    if (t.xrPlanes && t.luma)  // plane 0's words alone (raw_xr.h bufferTexelBytes): the alpha plane stays as it is
+        return copyBufferTexels(va, pitch, *t.luma, x, y, z, w, h, toTexture, aspect);
     cb_->buffersWritten_ |= !toTexture;
     const uint32_t element = t.zeta && aspect == kAspectStencil ? 1 :
                              t.zeta && aspect == kAspectDepth ? 4 : bufferTexelBytes(t.format, t.bpp);

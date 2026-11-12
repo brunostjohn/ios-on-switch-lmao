@@ -40,6 +40,8 @@ struct ProbeTextures {
     NSUInteger samples = 1;
     CubicBinds cubic;  // the cubic samplers and the textures sampled through them (a state's cubic variant)
     uint8_t fragmentTests = 0;
+    bool twoPlane = false;  // its RGB10A8_2P_XR10 colours in their two planes (raw_xr_pass.h: its " | xr2p" variant)
+    uint16_t xrSlots = 0;   // fragment slots it samples two-plane RGB10A8_2P_XR10 at (its " | xrs=" variant)
 };
 
 class Direct {

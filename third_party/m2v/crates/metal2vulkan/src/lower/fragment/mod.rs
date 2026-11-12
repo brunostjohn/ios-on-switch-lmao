@@ -58,6 +58,7 @@ mod input_blend;
 mod rog;
 mod rop_blend;
 mod stencil;
+mod two_plane;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -216,6 +217,10 @@ pub struct FragmentPlan {
     /// The function returns a `[[depth(...)]]` output (`StageIoPlan::depth_clamp`). Inside an
     /// interlocked body each return records a positive NaN depth as discarded.
     pub depth_output: bool,
+    /// The pipeline's two-plane extended-range attachments by index, with the index each one's
+    /// alpha byte is held at (`LoweringInputs::two_plane_alphas`): their input attachments and
+    /// storage views are pairs (`two_plane`).
+    pub two_plane: BTreeMap<u32, u32>,
 }
 
 impl FragmentPlan {
@@ -487,6 +492,7 @@ pub fn declare(
         mb,
         &fp.colors,
         (&fp.fetch, &fp.input_blends),
+        &fp.two_plane,
         fp.fetch_sample.is_some(),
     )?;
     for (&color, sc) in &fp.fetch {
@@ -583,8 +589,32 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
 /// in the storage form is no interface variable. Then the loop over the covered samples, which
 /// decides how the stage interface reads `[[sample_id]]` and the sample-qualified varyings.
 pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    cx.families.fragment.two_plane = cx.inputs.two_plane_alphas.clone();
     fetch::plan(cx)?;
     input_blend::plan(cx)?;
+    let fp = &cx.families.fragment;
+    let fetched = |c: &u32| fp.fetch.contains_key(c) || fp.input_blends.contains_key(c);
+    // A two-plane attachment past the last free index has no alpha to fetch from.
+    let unpaired = cx.inputs.extended_range_colors.iter().any(|(c, e)| {
+        matches!(e.form, crate::metal::format::ExtendedRange::Planes { .. })
+            && crate::pipeline::two_plane::held(cx.profile)
+            && !fp.two_plane.contains_key(c)
+            && fetched(c)
+    });
+    if unpaired {
+        return Err(Unsupported::not_implemented(Feature::Format).into());
+    }
+    let paired: Vec<(u32, u32)> = fp
+        .two_plane
+        .iter()
+        .filter(|(c, _)| fetched(c))
+        .map(|(&c, &a)| (c, a))
+        .collect();
+    cx.families
+        .stage_io
+        .interface
+        .two_plane_alphas
+        .extend(paired);
     coverage::plan(cx)
 }
 

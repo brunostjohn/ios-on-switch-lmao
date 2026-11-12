@@ -1659,6 +1659,7 @@ pub(crate) fn fragment_inputs(
         d.color_attachments,
         d.texture_write_rounding_mode,
     );
+    out.two_plane_alphas = crate::pipeline::two_plane::alphas(d.color_attachments, p);
     out.rotated_colors = crate::pipeline::color_writes::rotated_colors(d.color_attachments);
     out.rotated_factors = crate::pipeline::color_writes::rotated_factors(d.color_attachments, p);
     out.rotated_blends = crate::pipeline::color_writes::rotated_blends(d.color_attachments, p);
