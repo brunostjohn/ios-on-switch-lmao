@@ -94,7 +94,8 @@ struct CAGlassScene: GPUScene {
             let format = line.colors[0].format
             let bytesPerPixel = format == MTLPixelFormat.rgba16Float.rawValue ? 8 : 4
             let bytes = try await gpu.read(attachments[0], bytesPerPixel: bytesPerPixel)
-            result.picture(short, bytes: bytes, metalFormat: format, width: size, height: size)
+            result.picture(
+                short, bytes: bytes, metalFormat: format, width: size, height: size, cleared: [0.1, 0.2, 0.3, 1])
         }
         return result
     }

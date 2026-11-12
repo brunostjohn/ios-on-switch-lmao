@@ -83,7 +83,7 @@ struct CAGenericStateScene: GPUScene {
                 let pixels = try await gpu.read(target, bytesPerPixel: 4)
                 result.picture(
                     label, bytes: pixels, metalFormat: target.pixelFormat.rawValue, width: Self.size,
-                    height: Self.size, golden: label == Self.mistyped ? "nothing" : label)
+                    height: Self.size, golden: label == Self.mistyped ? "nothing" : label, cleared: [0, 0, 0, 1])
             }
             guard raw else { continue }
             result.expect(!timing.path.hasPrefix("error:"), "\(label): \(timing.path)")

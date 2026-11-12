@@ -5,7 +5,7 @@ import Metal
 
 /// A GPU scene (gpu/scenes) as one test, judged on the process's default device alone: its CPU checks, each picture it
 /// has no CPU model of against the same picture drawn on a Mac's GPU (core/SceneGoldens.swift; golden_<picture>=exact,
-/// close, wrong or missing), and the scene's own judge. Fields carry the device's prefix (raw_ on the facade): checks,
+/// close, wrong or missing, or blind: the golden is the cleared target, which fails), and the scene's own judge. Fields carry the device's prefix (raw_ on the facade): checks,
 /// failed, wrong pixels, the scene's own measurements, and paths= (every command buffer's path as the facade reported
 /// it). raw_cbs=, m2v_cbs=, split_cbs= and m2v_why= are the facade's process-wide counters over the run, framework
 /// command buffers included. <prefix>_gpu_clock=host: some of the run's GPU times are the host's window, the facade
@@ -86,6 +86,13 @@ public struct GPUSceneTest: HWTest {
         var reasons: [String] = []
         for picture in pictures {
             let golden = goldens.golden(scene: scene.id, picture: picture.golden)
+            if let golden, let blank = picture.blank,
+                GoldenVerdict.of(blank, against: golden, metalFormat: picture.metalFormat).holds
+            {
+                metrics.set("golden_" + picture.label, "blind")
+                reasons.append("\(picture.label): blind, the Mac's golden is the cleared target, so no draw changes it")
+                continue
+            }
             let verdict = GoldenVerdict.of(picture.signature, against: golden, metalFormat: picture.metalFormat)
             metrics.set("golden_" + picture.label, verdict.rawValue)
             if verdict.holds { continue }

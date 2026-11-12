@@ -73,7 +73,7 @@ struct FirstTiledSurfaceScene: GPUScene {
                 if hashes.isEmpty {
                     result.picture(
                         "fill", bytes: region, metalFormat: MTLPixelFormat.bgra8Unorm.rawValue, width: drawn.width,
-                        height: drawn.height)
+                        height: drawn.height, cleared: Self.clear)
                 }
                 hashes.insert(Self.fnv(region))
                 result.metrics.set("fill_px\(round)", got.shown(got.pixel(drawn.x + 1, drawn.y + 1)))

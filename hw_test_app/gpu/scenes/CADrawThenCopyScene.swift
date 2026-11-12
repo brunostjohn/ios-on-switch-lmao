@@ -17,6 +17,7 @@ struct CADrawThenCopyScene: GPUScene {
     /// Cleared to a colour the fill draws none of (QuartzCore 27's fill comes out opaque black with zero uniforms), so a
     /// draw that never ran leaves a picture unlike the Mac's
     static let sentinel = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+    static let sentinelTexel: [Float] = [0.2, 0.4, 0.6, 1]
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
@@ -79,7 +80,7 @@ struct CADrawThenCopyScene: GPUScene {
             if round == 0 {
                 result.picture(
                     "round0", bytes: drawn, metalFormat: MTLPixelFormat.bgra8Unorm.rawValue, width: Self.width,
-                    height: Self.height)
+                    height: Self.height, cleared: Self.sentinelTexel)
             }
             result.metrics.set("path\(round)", timing.path)
         }

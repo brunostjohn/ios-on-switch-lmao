@@ -79,7 +79,9 @@ struct CABlurChainScene: GPUScene {
             result.metrics.set("t_\(short)", Stats.percentile(times, 0.5), digits: 3)
             if target === xr {
                 let bytes = try await gpu.read(xr, bytesPerPixel: 4)
-                result.picture(short, bytes: bytes, metalFormat: xr.pixelFormat.rawValue, width: size, height: size)
+                result.picture(
+                    short, bytes: bytes, metalFormat: xr.pixelFormat.rawValue, width: size, height: size,
+                    cleared: [0, 0, 0, 1])
             }
         }
         return result

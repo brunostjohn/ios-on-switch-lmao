@@ -127,7 +127,7 @@ struct CAGlassSplitScene: GPUScene {
             ? (.bgr10XR, 554) : (.rgba16Float, MTLPixelFormat.rgba16Float.rawValue)
         result.picture(
             name, bytes: Patterns.bytes(split.picture, read.format), metalFormat: read.metal, width: Self.size,
-            height: Self.size)
+            height: Self.size, cleared: [0.5, 0.5, 0.5, 1])
         if let twins = split.twins { result.metrics.set(name + "_twins_split", twins) }
         if let twins = whole.twins { result.metrics.set(name + "_twins_whole", twins) }
         for (drawn, half) in [("one draw", split), ("the tiles", whole)] {
