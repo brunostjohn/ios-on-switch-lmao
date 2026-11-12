@@ -9,6 +9,7 @@ struct TextureCpuShape {
     bool tiled, volume;
     const fx::MipChain *chain;
     const tgm_layout *importLayout;
+    uint64_t layerBytes;  // an array's layer stride (a mipmapped one's view: its chain's, past level 0's image)
 };
 
 struct TextureCpuRange {
@@ -49,7 +50,7 @@ inline TextureCpuRegion textureCpuRange(const TextureCpuShape &shape, const uint
         if (!fx::arrayLayout(shape.width, shape.height, shape.layers, 1, shape.bpp, made))
             return TextureCpuRegion::Invalid;
         chain = &made;
-        layerOffset = slice * made.arrayStride;
+        layerOffset = slice * (shape.layerBytes ? shape.layerBytes : made.arrayStride);
     } else if (level || slice || size[2] > 1) {
         return TextureCpuRegion::Unsupported;
     }

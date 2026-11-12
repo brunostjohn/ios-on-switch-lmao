@@ -13,10 +13,20 @@ public:
         const auto &image = texture->_raw;
         if (image.blockW > 1 || image.blockH > 1)
             return;
-        const raw::TextureCpuShape shape = {
-            image.width, image.height, image.depth, image.layers, image.pitch, image.surfaceX, image.surfaceY,
-            image.bpp, image.blockDepth, image.blockLinear, image.type == raw::fx::kTexThreeD,
-            image.chain ? &image.chain->layout : nullptr, textureCpuImportLayout(texture)};
+        const raw::TextureCpuShape shape = {image.width,
+                                            image.height,
+                                            image.depth,
+                                            image.layers,
+                                            image.pitch,
+                                            image.surfaceX,
+                                            image.surfaceY,
+                                            image.bpp,
+                                            image.blockDepth,
+                                            image.blockLinear,
+                                            image.type == raw::fx::kTexThreeD,
+                                            image.chain ? &image.chain->layout : nullptr,
+                                            textureCpuImportLayout(texture),
+                                            image.layerBytes};
         const uint64_t origin[] = {region.origin.x, region.origin.y, region.origin.z};
         const uint64_t size[] = {region.size.width, region.size.height, region.size.depth};
         raw::TextureCpuRange range;
