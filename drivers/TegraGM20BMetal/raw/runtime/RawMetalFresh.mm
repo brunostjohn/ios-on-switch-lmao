@@ -117,6 +117,7 @@ void establishFresh(RMTexture *t, MTLTextureDescriptor *d)
     if (!gUnwritten)
         gUnwritten = [NSMapTable weakToStrongObjectsMapTable];
     [gUnwritten setObject:@"" forKey:t];
+    t->_freshUnwritten.store(true, std::memory_order_relaxed);
 #endif
 }
 
@@ -216,10 +217,19 @@ bool writeFreshAhead(RMCommandBuffer *cb, size_t from, size_t to)
 #if SWITCH_RAW_DIAGNOSTICS
 void traceFreshUses(RMCommandBuffer *cb, size_t begin)
 {
-    std::lock_guard<std::mutex> l(gTraceLock);
-    if (!gUnwritten.count)
-        return;
     const size_t end = cb->_plan.encoderEnd(begin);
+    // Each texture it names, read with no lock, no message and no retain: an encoder of textures already written (every
+    // steady frame's) costs that alone
+    bool unwritten = false;
+    cb->_plan.forEachResource(begin, end, RMResourceKind::Texture, [&](const RMRangeResource &use) {
+        RMTexture *__unsafe_unretained t = (__bridge RMTexture *)use.object;
+        while (t && t->_kind == RMTextureView && t->_parent)
+            t = t->_parent;
+        unwritten |= t && t->_freshUnwritten.load(std::memory_order_relaxed);
+    });
+    if (!unwritten)
+        return;
+    std::lock_guard<std::mutex> l(gTraceLock);
     NSString *here = nil;
     auto describe = [&] {
         if (here)
@@ -246,6 +256,7 @@ void traceFreshUses(RMCommandBuffer *cb, size_t begin)
             return;
         if (t->_heap) {
             [gUnwritten removeObjectForKey:t];
+            t->_freshUnwritten.store(false, std::memory_order_relaxed);
             return;
         }
         const raw::Texture &x = t->_raw;
@@ -269,6 +280,7 @@ void traceFreshUses(RMCommandBuffer *cb, size_t begin)
                 "raw: fresh %ux%u format %u texture %{public}@ first written by %{public}@, after %{public}@ read it",
                 x.width, x.height, x.format, t.label ?: @"-", describe(), readBy);
         [gUnwritten removeObjectForKey:t];
+        t->_freshUnwritten.store(false, std::memory_order_relaxed);
     });
 }
 #endif

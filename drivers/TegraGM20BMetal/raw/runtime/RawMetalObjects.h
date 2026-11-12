@@ -171,6 +171,9 @@ enum class RMShareable : uint8_t {
     uint64_t _heapBytes;  // as RMBuffer's
     bool _aliasable;
     std::atomic<RMShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    std::atomic<bool> _freshUnwritten;  // a fresh texture no command wrote yet (RawMetalFresh.mm traceFreshUses)
+#endif
 }
 @end
 
