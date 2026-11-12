@@ -105,9 +105,14 @@ void planSegments(RMCommandBuffer *cb)
     cb->_gpuPrefixEligible = true;
     [cb closeEncoder];
     raw::ExecutionPlan plan;
-    // A predicated block may span its unit's encoders: one driver runs all of them
-    const bool whole = cb->_whole || (cb->_predicates.recorded() && cb->_reason != WhyRaw);
-    const auto error = makeExecutionPlan(cb->_plan, whole, plan, [](const RMPlanEvent &entry) {
+    // m2v's encoders take no predication records: a command buffer with records the raw path cannot run fails instead
+    // of running the work they skip
+    if (cb->_predicates.recorded() &&
+        (cb->_predicates.loops() || cb->_predicates.misused() || cb->_whole || cb->_reason != WhyRaw)) {
+        failCommandBuffer(cb, @"Command predication the raw path cannot run (a loop, a misused record or refused work)");
+        return;
+    }
+    const auto error = makeExecutionPlan(cb->_plan, cb->_whole, plan, [](const RMPlanEvent &entry) {
         id event = (__bridge id)entry.event;
         return [event respondsToSelector:@selector(signaledValue)] &&
                [event respondsToSelector:@selector(setSignaledValue:)] &&
@@ -269,10 +274,16 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
             }
             cb->_reason = WhyEncode;
             cb->_why = [NSString stringWithUTF8String:why ?: "?"];
-            if (cb->_predicates.recorded())
-                range.raw = false;
-            else
-                isolateRefused(cb, refusedEncoder);
+            if (cb->_predicates.recorded()) {
+                failCommandBuffer(cb, @"Command predication on work the raw path refused while encoding");
+                std::lock_guard<std::mutex> l(cb->_lock);
+                priorError = cb->_segError;
+            }
+            if (priorError) {
+                finish(cb, priorError);
+                return true;
+            }
+            isolateRefused(cb, refusedEncoder);
             return false;
         }
         RAW_DIAGNOSTIC(r.stats.raw++);

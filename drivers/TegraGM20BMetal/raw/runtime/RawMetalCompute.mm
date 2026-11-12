@@ -13,24 +13,6 @@
 
 using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
 
-@protocol RMPredicatedEncoder
-- (void)encodeStartIf:(id<MTLBuffer>)buffer
-               offset:(NSUInteger)offset
-           comparison:(NSUInteger)comparison
-       referenceValue:(uint32_t)reference;
-- (void)encodeStartElse;
-- (BOOL)encodeEndIf;
-- (void)encodeStartWhile:(id<MTLBuffer>)buffer
-                  offset:(NSUInteger)offset
-              comparison:(NSUInteger)comparison
-          referenceValue:(uint32_t)reference;
-- (BOOL)encodeEndWhile;
-- (void)encodeStartDoWhile;
-- (BOOL)encodeEndDoWhile:(id<MTLBuffer>)buffer
-                  offset:(NSUInteger)offset
-              comparison:(NSUInteger)comparison
-          referenceValue:(uint32_t)reference;
-@end
 using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @interface RMComputeEncoder () {
@@ -305,13 +287,13 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
            reference:(uint32_t)reference
 {
     const bool answer = _cb->_predicates.record(kind);
-    if (_cb->_predicates.loops())
-        [self refuse:PredComputePredicate value:kind why:@"a predicated loop, which the raw path does not run"];
-    else if (_cb->_predicates.misused())
-        [self refuse:PredComputePredicate value:kind why:@"a predication record with no block of its kind open"];
     const bool rawBuffer = [(id)buffer isKindOfClass:[RMBuffer class]];
-    if (kind == raw::PredicateRecords::StartIf &&
-        (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
+    if (_cb->_predicates.loops())
+        hit(_cb, PredComputePredicate, kind);
+    else if (_cb->_predicates.misused())
+        hit(_cb, PredComputePredicate, kind);
+    else if (kind == raw::PredicateRecords::StartIf &&
+             (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
         [self refuse:PredComputePredicate value:offset why:@"a predicate word outside a raw buffer"];
     Cmd m = cmd(OpPredicate, uint8_t(kind));
     m.obj = (__bridge void *)buffer;
@@ -385,35 +367,6 @@ bool isKernelCommand(Op op)
     return (op >= OpKernelState && op <= OpDispatch) || op == OpPredicate;
 }
 
-// m2v's encoder takes the same SPI (metal2vulkan-runtime/src/predication.rs)
-static void replayPredicate(id<MTLComputeCommandEncoder> e, const Cmd &c)
-{
-    id twin = twinOf((__bridge id)c.obj);
-    id<RMPredicatedEncoder> p = (id<RMPredicatedEncoder>)e;
-    switch (c.stage) {
-    case raw::PredicateRecords::StartIf:
-        [p encodeStartIf:twin offset:c.c comparison:c.a referenceValue:c.b];
-        break;
-    case raw::PredicateRecords::StartElse:
-        [p encodeStartElse];
-        break;
-    case raw::PredicateRecords::EndIf:
-        [p encodeEndIf];
-        break;
-    case raw::PredicateRecords::StartWhile:
-        [p encodeStartWhile:twin offset:c.c comparison:c.a referenceValue:c.b];
-        break;
-    case raw::PredicateRecords::EndWhile:
-        [p encodeEndWhile];
-        break;
-    case raw::PredicateRecords::StartDoWhile:
-        [p encodeStartDoWhile];
-        break;
-    case raw::PredicateRecords::EndDoWhile:
-        [p encodeEndDoWhile:twin offset:c.c comparison:c.a referenceValue:c.b];
-        break;
-    }
-}
 
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers)
 {
@@ -450,9 +403,6 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         break;
     case OpKernelBarrier:
         [e memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
-        break;
-    case OpPredicate:
-        replayPredicate(e, c);
         break;
     case OpDispatch: {
         const MTLSize grid = MTLSizeMake(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2)),

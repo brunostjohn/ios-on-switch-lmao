@@ -6,7 +6,9 @@ import Metal
 /// Metal's command predication SPI on the raw path (drivers/TegraGM20BMetal/raw/runtime/raw_predication.h): each of the
 /// six compares at its edge values, two levels of If/Else, a block spanning two compute encoders of its unit, and the
 /// draw, clear and blit after a failed block, all in one command buffer. Every predicate word is written by a dispatch
-/// before its record, so neither the CPU nor the test reads or writes it; marks says which branch each case ran.
+/// before its record, so neither the CPU nor the test reads or writes it, but for one buffer the CPU writes and nothing
+/// else binds; marks says which branch each case ran. Metal has no predication on render or blit encoders (no such
+/// selector on 21H461 or 24B119) and either one ends the unit, so the draw, clear and blit are the work after a block.
 struct PredicationTest: HWTest {
     let id = "gpu.raw.predication"
     let name = "Predicated dispatches on render enable: every compare, nesting, spanning encoders, work after"
@@ -45,7 +47,7 @@ struct PredicationTest: HWTest {
     struct Encoding {
         let device: GPU
         let store: MTLComputePipelineState, mark: MTLComputePipelineState
-        let words: MTLBuffer, marks: MTLBuffer
+        let words: MTLBuffer, marks: MTLBuffer, cpuWords: MTLBuffer
         var ends: [Bool] = []
 
         func dispatch(_ e: MTLComputeCommandEncoder, _ state: MTLComputePipelineState, _ buffer: MTLBuffer,
@@ -58,10 +60,11 @@ struct PredicationTest: HWTest {
                                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
         }
 
-        func startIf(_ e: MTLComputeCommandEncoder, word: Int, offsetBias: Int = 0, _ compare: Int, _ ref: UInt32) {
+        func startIf(_ e: MTLComputeCommandEncoder, word: Int, offsetBias: Int = 0, _ compare: Int, _ ref: UInt32,
+                     in buffer: MTLBuffer? = nil) {
             let o = e as AnyObject
             unsafeBitCast(o.method(for: PredicationTest.startIf), to: StartIf.self)(
-                o, PredicationTest.startIf, words, word * 4 + offsetBias, compare, ref)
+                o, PredicationTest.startIf, buffer ?? words, word * 4 + offsetBias, compare, ref)
         }
 
         func startElse(_ e: MTLComputeCommandEncoder) {
@@ -95,7 +98,10 @@ struct PredicationTest: HWTest {
         let caseCount = Self.cases.count, nestedMarks = Self.nested.count * 3
         var enc = Encoding(
             device: gpu, store: try gpu.compute("predication_store"), mark: try gpu.compute("predication_mark"),
-            words: try gpu.buffer(4 * 256), marks: try gpu.buffer(4 * 256))
+            words: try gpu.buffer(4 * 256), marks: try gpu.buffer(4 * 256), cpuWords: try gpu.buffer(16))
+        let cpu = enc.cpuWords.contents().bindMemory(to: UInt32.self, capacity: 4)
+        cpu[0] = 42
+        cpu[1] = 41
         let target = try gpu.texture(.bgra8Unorm, Self.side, Self.side, usage: [.renderTarget, .shaderRead])
         let solid = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm)
         let cleared = try gpu.buffer(64), copied = try gpu.buffer(64)
@@ -124,6 +130,8 @@ struct PredicationTest: HWTest {
             for k in 0..<3 where marks[base + k] != want[k] { nestedWrong += 1 }
         }
         let span = marks[caseCount + nestedMarks]
+        let spanFailed = marks[caseCount + nestedMarks + 1]
+        let cpuHeld = marks[caseCount + nestedMarks + 2], cpuFailed = marks[caseCount + nestedMarks + 3]
         let pixels = try await gpu.read(target, bytesPerPixel: 4)
         let drawn = stride(from: 0, to: pixels.count, by: 4).filter { pixels[$0 + 2] == 255 && pixels[$0 + 1] == 0 }.count
         let clearedOk = UnsafeRawBufferPointer(start: cleared.contents(), count: 64).allSatisfy { $0 == 0x5a }
@@ -133,6 +141,8 @@ struct PredicationTest: HWTest {
         if !compareWrong.isEmpty { metrics.set("compares_first", compareWrong.prefix(4).joined(separator: ",")) }
         metrics.set("nested_wrong", nestedWrong)
         metrics.set("span_mark", Int(span))
+        metrics.set("span_failed_mark", Int(spanFailed))
+        metrics.set("cpu_word_marks", "\(cpuHeld)/\(cpuFailed)")
         metrics.set("draw_after_pixels", drawn)
         metrics.set("clear_after", clearedOk ? "ok" : "wrong")
         metrics.set("blit_after", copiedOk ? "ok" : "wrong")
@@ -142,7 +152,8 @@ struct PredicationTest: HWTest {
         if ran.path != "raw" { wrong.append("path") }
         if !compareWrong.isEmpty { wrong.append("compares") }
         if nestedWrong != 0 { wrong.append("nested") }
-        if span != 1 { wrong.append("span") }
+        if span != 1 || spanFailed != 0 { wrong.append("span") }
+        if cpuHeld != 1 || cpuFailed != 0 { wrong.append("cpu_word") }
         if drawn != Self.side * Self.side { wrong.append("draw_after") }
         if !clearedOk { wrong.append("clear_after") }
         if !copiedOk { wrong.append("blit_after") }
@@ -186,6 +197,12 @@ struct PredicationTest: HWTest {
         enc.word(second, spanWord + 1, 0)
         enc.startIf(second, word: spanWord + 1, 0, 1)
         enc.dispatch(second, enc.mark, enc.marks, spanMark + 1, 1)
+        enc.endIf(second)
+        enc.startIf(second, word: 0, 0, 42, in: enc.cpuWords)
+        enc.dispatch(second, enc.mark, enc.marks, spanMark + 2, 1)
+        enc.endIf(second)
+        enc.startIf(second, word: 1, 0, 42, in: enc.cpuWords)
+        enc.dispatch(second, enc.mark, enc.marks, spanMark + 3, 1)
         enc.endIf(second)
         second.endEncoding()
 
