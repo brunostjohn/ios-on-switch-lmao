@@ -194,9 +194,11 @@ TEST(RawGlassMem, FullLineFitsOsLog)
     }
     const raw::GlassMemCb cb = probe.close(60, ~0ull, ~0ull);
     EXPECT_EQ(cb.count, raw::kGlassMemItems);
-    const std::string line = joined(probe.finish(cb, rows(60, {}).data(), true));
-    EXPECT_LT(line.size(), 1000u);
-    EXPECT_EQ(line.find("cb 60 mach "), 0u) << line;
+    const std::vector<std::string> lines = probe.finish(cb, rows(60, {}).data(), true);
+    for (const std::string &line : lines) {
+        EXPECT_LT(line.size(), 1000u) << line;
+        EXPECT_EQ(line.find("cb 60 mach "), 0u) << line;
+    }
 }
 
 // A slot whose cookie never landed (the fence passed without the copies' release) is no read: '?' and nothing counted
@@ -360,6 +362,32 @@ TEST(RawGlassMem, UnreadRowNamesWhy)
     probe.sampled(blur, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, 160);
     const std::string line = joined(probe.finish(probe.close(160, 16000, 0), rows(160, {}).data(), true));
     EXPECT_NE(line.find("/Tgbh/R0/n:-c"), std::string::npos) << line;
+}
+
+// A float texture a glass draw sampled is read a quarter and three quarters down too, and a zero row says whether its
+// alpha is zero: a mask with its data in alpha (zero.a) is told from an empty texture (zero.a0)
+TEST(RawGlassMem, GlassFloatZeroRowsNameTheirAlphaAndTwoMoreRows)
+{
+    raw::GlassMem probe;
+    raw::GlassMemItem mask = item(kCapture, 128, 1344, kRgba16f, 8);
+    probe.wrote(kCapture, 170, 0);
+    probe.sampled(mask, "PBGRABsovXmw_TgbgA3Xhf_Isrc_Isrc", 9, 1, 170);
+    raw::GlassMemCb cb = probe.close(170, 17000, 0);
+    ASSERT_TRUE(cb.items[0].quarters);
+    EXPECT_EQ(raw::glassMemTailPlan(true, cb).launches, 3u);
+    const std::vector<uint8_t> alphaOnly = {0, 0, 0, 0, 0, 0, 0, 0x3c};
+    std::vector<uint8_t> slot = rows(170, {alphaOnly});
+    memset(slot.data() + 3 * raw::kGlassMemRowBytes, 0, raw::kGlassMemRowBytes);
+    std::string line = joined(probe.finish(cb, slot.data(), true));
+    EXPECT_NE(line.find("/Tgbg/R0/n:zero.a,q1:zero.a,q3:zero.a0"), std::string::npos) << line;
+
+    probe.wrote(kPyramid, 171, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 171);
+    cb = probe.close(171, 17100, 0);
+    EXPECT_FALSE(cb.items[0].quarters);
+    line = joined(probe.finish(cb, rows(171, {kGrey}).data(), true));
+    EXPECT_NE(line.find("/Tgsg/R0/n:ok"), std::string::npos) << line;
+    EXPECT_EQ(line.find(",q1:"), std::string::npos) << line;
 }
 
 // A reach that covers the image leaves no outside row

@@ -2203,6 +2203,7 @@ host_test(
     srcs = [
         "raw_glass_mem_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_mem.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_mem_row.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
     ],
     cxx_std = "c++17",

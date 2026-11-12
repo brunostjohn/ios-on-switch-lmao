@@ -12,7 +12,10 @@
 // covered) and a second row is read outside that box: memory nothing of this command buffer wrote. A reused texture's row
 // is read where its last write's command buffer read it, so that the two compare. In the owner's watch a zero row of a
 // float texture a glass draw sampled is a line too, once in kGlassMemZeroEvery command buffers a texture: Settings' dark
-// backdrop blurs to zero, and every such row would fill the log.
+// backdrop blurs to zero, and every such row would fill the log. A float texture a glass draw sampled is read at two more
+// rows, a quarter and three quarters down it, and a zero row says whether its alpha is zero too (zero.a0) or not (zero.a),
+// so a mask that keeps its data in alpha is told from an empty one. A compressed texture whose kind the copy engine reads
+// as plain texels (raw_comp.h copyEngineReadsCompressed) is read through its own binding (+comp).
 // It runs only while armed (GlassMemArming): disarmed, the frame path pays one relaxed load and nothing else.
 #pragma once
 #include <algorithm>
@@ -25,11 +28,11 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "raw_nonfinite.h"
+#include "raw_glass_mem_row.h"
 
 namespace raw {
 
-constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8, kGlassMemRows = 2,
+constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8, kGlassMemRows = 4,
                    kGlassMemReaches = 32;
 constexpr uint32_t kGlassMemRowBytes = kGlassMemTexels * 16, kGlassMemItemBytes = kGlassMemRows * kGlassMemRowBytes;
 // The slot's end: the copies' completion release (its cookie) and, 16 bytes on, the release before them: their GPU time
@@ -47,111 +50,8 @@ enum : uint8_t {
     kGlassMemPitch = 2,      // pitch-linear
     kGlassMemUnsampled = 4,  // no row taken (compressed, memoryless, multisampled, converted)
     kGlassMemAliased = 8,    // an MTLHeap texture made aliasable by the command buffer's end: its rows may be another's
+    kGlassMemCompressed = 16,  // compressed memory, read through its compressible binding (the L2 decompresses)
 };
-
-// One row's read: every texel's colour (alpha left out) zero, any float component NaN or infinite, and its bytes' hash
-struct GlassMemRow {
-    bool black = false, nonFinite = false;
-    uint64_t hash = 0;
-};
-
-// The byte range of a texel's alpha in Metal format `format` ([begin, end): none for a format without one)
-inline void glassMemAlpha(uint32_t format, uint32_t &begin, uint32_t &end)
-{
-    switch (format) {
-    case 70:
-    case 71:
-    case 80:
-    case 81:
-        begin = 3, end = 4;
-        return;
-    case 115:
-        begin = 6, end = 8;
-        return;
-    case 125:
-        begin = 12, end = 16;
-        return;
-    default:
-        begin = end = 0;
-    }
-}
-
-inline GlassMemRow glassMemRow(const uint8_t *row, uint32_t texels, uint32_t bpp, uint32_t format)
-{
-    GlassMemRow r;
-    r.black = texels > 0;
-    r.hash = 0xcbf29ce484222325ull;
-    uint32_t alphaBegin, alphaEnd;
-    glassMemAlpha(format, alphaBegin, alphaEnd);
-    const uint32_t component = floatComponentBytes(format);
-    for (uint32_t t = 0; t < texels; t++) {
-        const uint8_t *texel = row + uint64_t(t) * bpp;
-        for (uint32_t b = 0; b < bpp; b++) {
-            r.hash = (r.hash ^ texel[b]) * 0x100000001b3ull;
-            const bool alpha = b >= alphaBegin && b < alphaEnd;
-            // a float zero's sign bit: -0 is black too
-            const bool sign = component && (b % component) == component - 1;
-            if (!alpha && (texel[b] & (sign ? 0x7f : 0xff)))
-                r.black = false;
-        }
-        for (uint32_t c = 0; component && c + component <= bpp; c += component)
-            r.nonFinite |= nonFiniteComponent(texel + c, component);
-    }
-    return r;
-}
-
-// What a command buffer's passes into one image reached: the first pass's load ('c', 'l', 'd'; 0: none seen), the box
-// their draws covered (the render area where their draws were not counted), the first pass's render area and the extent
-// its clears reached from the origin (0 x 0: none)
-struct GlassMemReach {
-    char load = 0;
-    uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-    uint32_t areaW = 0, areaH = 0, clearW = 0, clearH = 0;
-};
-
-// One sampled texture's rows in a command buffer's record
-struct GlassMemItem {
-    uint64_t key = 0;    // its storage address (Texture::storageRange): a view's is its parent's
-    uint64_t image = 0;  // the address of the image (level) sampled, which its passes name as their target
-    uint32_t width = 0, height = 0, format = 0, levels = 1, level = 0, texels = 0, bpp = 0;
-    uint8_t flags = 0;
-    // why a kGlassMemUnsampled one's row is not read: c compressed, m memoryless, z depth, v converted from planes,
-    // p read through a pool image, s a stand-in, o another layout the copy engine cannot read
-    char unread = 0;
-    char state[5] = "-";                                 // the sampling state's family (the "T..." term of its name)
-    bool rebuilt = false, moved = false, fresh = false;  // fresh: its first write ever is this command buffer's
-    bool glass = false;                                  // a glass draw (a "Tg" state) sampled it
-    uint64_t age = 0, events = 0;                        // command buffers and memory events since its last write
-    GlassMemReach reach;
-    bool outside = false;  // a second row was read outside the reach
-    uint32_t inX = 0, inY = 0, outX = 0, outY = 0;
-};
-
-// Where `it`'s rows are read: the first in the middle of what its passes reached (else of the image), the second outside
-// that box, below or above it, else beside it; false when the box leaves no room for a row outside it
-inline bool glassMemRowsAt(GlassMemItem &it)
-{
-    const GlassMemReach &r = it.reach;
-    const bool known = r.load && r.x1 > r.x0 && r.y1 > r.y0;
-    const uint32_t w = it.width, h = it.height, n = it.texels;
-    const auto across = [&](uint32_t centre) {
-        return std::min(centre > n / 2 ? centre - n / 2 : 0u, w - n);
-    };
-    it.inX = across(known ? (r.x0 + r.x1) / 2 : w / 2);
-    it.inY = std::min(known ? (r.y0 + r.y1) / 2 : h / 2, h - 1);
-    it.outside = known;
-    if (known && r.y1 < h)
-        it.outX = across(w / 2), it.outY = (r.y1 + h) / 2;
-    else if (known && r.y0 > 0)
-        it.outX = across(w / 2), it.outY = r.y0 / 2;
-    else if (known && r.x1 + n <= w)
-        it.outX = r.x1 + (w - r.x1 - n) / 2, it.outY = h / 2;
-    else if (known && r.x0 >= n)
-        it.outX = (r.x0 - n) / 2, it.outY = h / 2;
-    else
-        it.outside = false;
-    return it.outside;
-}
 
 struct GlassMemCb {
     uint64_t serial = 0, mach = 0, events = 0;
@@ -233,7 +133,7 @@ inline GlassMemTailPlan glassMemTailPlan(bool armed, const GlassMemCb &cb)
     GlassMemTailPlan plan;
     for (uint32_t i = 0; armed && i < cb.count; i++)
         if (!(cb.items[i].flags & kGlassMemUnsampled))
-            plan.launches += cb.items[i].outside ? 2 : 1;
+            plan.launches += 1 + cb.items[i].outside + 2 * cb.items[i].quarters;
     plan.ring = plan.launches > 0;
     return plan;
 }
@@ -379,6 +279,7 @@ public:
             } else {
                 it.inX = ref.inX, it.inY = ref.inY;
             }
+            it.quarters = it.glass && floatComponentBytes(it.format) && it.height >= 4;
         }
         return cb;
     }
@@ -422,9 +323,13 @@ public:
             char item[256];
             snprintf(item, sizeof item, " %04llx%s:%ux%u/f%u%s/%s%s/%s/%c%llu%s%s%s%s%s:%s",
                      (unsigned long long)(it.key >> 14 & 0xffff), level, it.width, it.height, it.format, levels,
-                     it.flags & kGlassMemPitch ? "pitch" : "bl", it.flags & kGlassMemHeap ? "+heap" : "", it.state,
-                     it.rebuilt ? 'R' : 'U', (unsigned long long)(it.rebuilt ? 0 : it.age), it.fresh ? "/n" : "", reach,
-                     events, it.moved ? "/mv" : "", it.flags & kGlassMemAliased ? "/al" : "", verdict.c_str());
+                     it.flags & kGlassMemPitch ? "pitch" : "bl",
+                     it.flags & kGlassMemCompressed ? "+comp"
+                     : it.flags & kGlassMemHeap     ? "+heap"
+                                                    : "",
+                     it.state, it.rebuilt ? 'R' : 'U', (unsigned long long)(it.rebuilt ? 0 : it.age),
+                     it.fresh ? "/n" : "", reach, events, it.moved ? "/mv" : "",
+                     it.flags & kGlassMemAliased ? "/al" : "", verdict.c_str());
             if (lines.back().size() + strlen(item) > kGlassMemLine)
                 lines.push_back(std::string(head) + " +|");
             lines.back() += item;
@@ -461,12 +366,24 @@ private:
         return true;
     }
 
-    // The inside row's verdict, then the outside row's after a comma (no reference: it was never meant to be written)
+    // The inside row's verdict, then the outside row's after a comma (no reference: it was never meant to be written), then
+    // the quarter rows' where any of the three is not ok
     std::string verdictOf(const GlassMemItem &it, const uint8_t *row, uint64_t serial, bool &notable)
     {
         std::string v = insideVerdict(it, row, serial, notable);
         if (it.flags & kGlassMemUnsampled)
             return it.unread ? v + it.unread : v;
+        if (it.quarters && !poisoned(it, row)) {
+            const GlassMemRow in = glassMemRow(row, it.texels, it.bpp, it.format);
+            const uint8_t *q1 = row + 2 * kGlassMemRowBytes, *q3 = row + 3 * kGlassMemRowBytes;
+            const GlassMemRow a = glassMemRow(q1, it.texels, it.bpp, it.format),
+                              b = glassMemRow(q3, it.texels, it.bpp, it.format);
+            if (in.black)
+                v += in.alphaZero ? ".a0" : ".a";
+            if (in.black || a.black || b.black || a.nonFinite || b.nonFinite)
+                v += std::string(",q1:") + (poisoned(it, q1) ? "?" : a.verdict()) +
+                     ",q3:" + (poisoned(it, q3) ? "?" : b.verdict());
+        }
         if (!it.outside)
             return v;
         const uint8_t *out = row + kGlassMemRowBytes;

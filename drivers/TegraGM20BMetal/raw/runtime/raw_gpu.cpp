@@ -5232,12 +5232,13 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
         if (t.import)
             continue;
         const uint32_t levels = t.chain ? t.chain->layout.levels : 1;
-        const char unread = t.comptags      ? 'c'
-                            : t.memoryless  ? 'm'
-                            : t.zeta        ? 'z'
-                            : t.converted() ? 'v'
-                            : t.sampled     ? 'p'
-                            : t.standIn     ? 's'
+        const bool compressed = t.comptags && !t.zeta && copyEngineReadsCompressed(compressedKind(t.bpp, 0, t.samples));
+        const char unread = t.comptags && !compressed ? 'c'
+                            : t.memoryless            ? 'm'
+                            : t.zeta                  ? 'z'
+                            : t.converted()           ? 'v'
+                            : t.sampled               ? 'p'
+                            : t.standIn               ? 's'
                             : t.blockW == 1 && t.blockH == 1 && t.bpp && t.bpp <= 16 && t.samples == 1 &&
                                     t.layers == 1 && t.type == fx::kTexTwoD && t.va
                                 ? 0
@@ -5262,8 +5263,9 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
             it.level = picks[p];
             it.bpp = t.bpp;
             it.texels = std::min(kGlassMemTexels, image.width);
-            it.flags = uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
-                               (unread || !image.height ? kGlassMemUnsampled : 0));
+            it.flags =
+                uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
+                        (compressed ? kGlassMemCompressed : 0) | (unread || !image.height ? kGlassMemUnsampled : 0));
             it.unread = unread ? unread : image.height ? 0 : 'o';
             const int index = dev_->glassMem->sampled(it, bound.caName, t.tic, header, dev_->commitCount_);
             if (index >= 0) {
@@ -6054,7 +6056,7 @@ void CommandBuffer::glassMemTail()
             slot = int(s);
     if (slot < 0)
         return;
-    const uint32_t words = 24 + record.count * 128;
+    const uint32_t words = 24 + record.count * 256;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 256, va));
     Push p{start, start + words};
@@ -6076,6 +6078,9 @@ void CommandBuffer::glassMemTail()
         if (it.outside)
             copySides(p, sideOf(image, it.outX, it.outY, 0), {row + kGlassMemRowBytes, it.texels * it.bpp}, it.texels,
                       1, it.bpp, d.stats);
+        for (uint32_t q = 0; it.quarters && q < 2; q++)
+            copySides(p, sideOf(image, it.inX, it.height * (1 + 2 * q) / 4, 0),
+                      {row + (2 + q) * kGlassMemRowBytes, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
     }
     p.inc(HOST_SEMAPHORE_A, {uint32_t(cookie >> 32) & 0xff, uint32_t(cookie), glassMemCookie(record.serial),
                              HOST_SEMAPHORE_RELEASE_16_WFI});
