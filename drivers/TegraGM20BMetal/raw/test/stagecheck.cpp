@@ -5,7 +5,9 @@
 // and slot, and each uniform buffer a program reads as a constant buffer must be bound, at that constant buffer slot of
 // its stage's group, to the buffer of the entry's stage and slot (the decoder's binds after the draw); stagecheck.py then
 // runs the state's programs over these words and over the words m2v's binding of the same slots makes.
-// usage: stagecheck <pack.bin> <key hash, hex> <out.json>
+// usage: stagecheck <pack.bin> <key hash, hex> <out.json> [swap|unbind]
+//   swap, unbind: the check's own controls, each of which it must fail: the vertex program's last uniform buffer
+//   constant buffer's entry takes another slot's buffer, or none
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -62,13 +64,26 @@ std::pair<unsigned, unsigned> checkUniforms(const raw::PackProgram &program, int
     return {checked, wrong};
 }
 
+// The stage and slot of the set-0 entry the vertex program's last uniform buffer constant buffer names ({0, 0}: none)
+Slot lastVertexUniform(const raw::Device &dev, const raw::PackPipeline &r)
+{
+    const raw::PackProgram &vs = dev.pack().section<raw::PackProgram>(raw::PackPrograms)[r.vs];
+    Slot found{0, 0};
+    for (uint32_t c = 1; c < vs.cbufs; c++)
+        if (raw::cbufKind(vs.cbufType[c]) == raw::CbufUbo)
+            for (uint32_t i = 0; i < r.entries; i++)
+                if (r.entry[i].kind == raw::EntryUbo && r.entry[i].offset == raw::cbufUboOffset(vs.cbufType[c]))
+                    found = {r.entry[i].stage, r.entry[i].slot};
+    return found;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
 {
     setenv("RAWCAP_LOG", "/dev/null", 0);  // the decoder runs only with a log, and cap_cbuf reads its binds
-    if (argc != 4) {
-        fprintf(stderr, "usage: stagecheck <pack.bin> <key hash, hex> <out.json>\n");
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "usage: stagecheck <pack.bin> <key hash, hex> <out.json> [swap|unbind]\n");
         return 2;
     }
     raw::Device dev;
@@ -144,8 +159,17 @@ int main(int argc, char **argv)
     }
     enc->setPipeline(pl);
     enc->setScissor(0, 0, 16, 16);
-    for (auto &[at, b] : buffers)
-        enc->setBuffer(int(at.first), at.second, &b, 0);
+    const std::string control = argc == 5 ? argv[4] : "";
+    const Slot controlled = lastVertexUniform(dev, r);
+    if (!control.empty())
+        printf("control %s: vertex uniform entry at stage %u slot %u\n", control.c_str(), controlled.first,
+               controlled.second);
+    for (auto &[at, b] : buffers) {
+        if (at == controlled && control == "unbind")
+            continue;
+        const bool swap = at == controlled && control == "swap";
+        enc->setBuffer(int(at.first), at.second, swap ? &buffers.at({at.first, (at.second + 1) % 31}) : &b, 0);
+    }
     for (auto &[at, t] : textures)
         enc->setTexture(int(at.first), at.second, &t);
     for (auto &[at, s] : samplers)
