@@ -148,6 +148,7 @@ LAYOUTS = {
     15: (536, 36, 12, struct.Struct('<QIHHIIBBBBHHI')),
     16: (540, 36, 12, struct.Struct('<QIIIIIBBBBHHI')),
     17: (540, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
+    18: (544, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
 }
 VARIANT_RECORD = 16  # PackPipelineFlags PipelineVariantRecord: a variant's record under its state's key
 FETCH_FREE_FORM = 32  # PipelineFetchFreeForm: the state drawn with no framebuffer fetch, under its state's key
