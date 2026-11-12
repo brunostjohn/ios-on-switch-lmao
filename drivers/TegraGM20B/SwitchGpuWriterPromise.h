@@ -167,10 +167,18 @@ static inline int switch_gpu_promise_waits_note(struct switch_gpu_promise_waits 
 	return 0;
 }
 
-/* Each one still pending released, and `released` told: the count. */
+/* How a pending promise's release went, as switch_gpu_promise_waits_release tells it */
+enum {
+	SWITCH_GPU_PROMISE_KEPT_FIRST = 0, /* the maker's own GPU release came first after all */
+	SWITCH_GPU_PROMISE_RAISING = 1,    /* before the word moves */
+	SWITCH_GPU_PROMISE_RAISED = 2,     /* the CPU raised it */
+};
+
+/* Each one still pending released, `released` told at each step: a reader that goes on because of the release already
+ * finds what RAISING recorded. The count the CPU raised. */
 static inline uint32_t switch_gpu_promise_waits_release(
 	struct switch_gpu_promise_waits *waits, switch_gpu_promise_word word,
-	void (*released)(uint32_t offset, uint32_t value, void *arg), void *arg)
+	void (*released)(uint32_t offset, uint32_t value, int step, void *arg), void *arg)
 {
 	uint32_t count = 0;
 
@@ -178,16 +186,65 @@ static inline uint32_t switch_gpu_promise_waits_release(
 		const uint64_t wait = __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED);
 		volatile uint32_t *at = wait ? word((uint32_t)(wait >> 32)) : 0;
 		uint32_t now = at ? __atomic_load_n(at, __ATOMIC_ACQUIRE) : 0;
+		int raised = 0;
 
+		if (!at || (int32_t)(now - (uint32_t)wait) >= 0)
+			continue;
+		released((uint32_t)(wait >> 32), (uint32_t)wait, SWITCH_GPU_PROMISE_RAISING, arg);
 		/* the maker's GPU release may land meanwhile: never lower the word under it */
-		while (at && (int32_t)(now - (uint32_t)wait) < 0) {
-			if (__atomic_compare_exchange_n(at, &now, (uint32_t)wait, 0,
-							__ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
-				released((uint32_t)(wait >> 32), (uint32_t)wait, arg);
-				++count;
-				break;
-			}
-		}
+		while (!raised && (int32_t)(now - (uint32_t)wait) < 0)
+			raised = __atomic_compare_exchange_n(at, &now, (uint32_t)wait, 0, __ATOMIC_RELEASE,
+							     __ATOMIC_ACQUIRE);
+		count += (uint32_t)raised;
+		released((uint32_t)(wait >> 32), (uint32_t)wait,
+			 raised ? SWITCH_GPU_PROMISE_RAISED : SWITCH_GPU_PROMISE_KEPT_FIRST, arg);
 	}
 	return count;
+}
+
+/* Promises given up on before their job wrote the surface (the hang rule's release, a kill or destruction of the channel
+ * that kept one, the connection's close, a present's deadline): a reader of one has no promised writes to show, so its
+ * token reads as a failed producer and a present of it is dropped (TEGRA_SCANOUT_SOURCE_LOST), the panel keeping the
+ * frame before it. The last SWITCH_GPU_PROMISE_ABANDONED, each offset << 32 | value, which names one promise: each make
+ * of a slot takes its word's next value. */
+#define SWITCH_GPU_PROMISE_ABANDONED 16
+
+struct switch_gpu_promise_abandoned {
+	uint64_t promise[SWITCH_GPU_PROMISE_ABANDONED];
+	uint32_t next;
+};
+
+static inline void switch_gpu_promise_abandoned_add(struct switch_gpu_promise_abandoned *set,
+						    uint32_t offset, uint32_t value)
+{
+	const uint32_t at =
+		__atomic_fetch_add(&set->next, 1u, __ATOMIC_RELAXED) % SWITCH_GPU_PROMISE_ABANDONED;
+
+	__atomic_store_n(&set->promise[at], (uint64_t)offset << 32 | value, __ATOMIC_RELEASE);
+}
+
+/* The maker's own release came first after all: no longer abandoned. */
+static inline void switch_gpu_promise_abandoned_drop(struct switch_gpu_promise_abandoned *set,
+						     uint32_t offset, uint32_t value)
+{
+	const uint64_t promise = (uint64_t)offset << 32 | value;
+
+	for (int i = 0; i < SWITCH_GPU_PROMISE_ABANDONED; ++i) {
+		uint64_t expected = promise;
+
+		if (__atomic_compare_exchange_n(&set->promise[i], &expected, 0, 0, __ATOMIC_ACQ_REL,
+						__ATOMIC_RELAXED))
+			return;
+	}
+}
+
+static inline int switch_gpu_promise_abandoned_has(const struct switch_gpu_promise_abandoned *set,
+						   uint32_t offset, uint32_t value)
+{
+	const uint64_t promise = (uint64_t)offset << 32 | value;
+
+	for (int i = 0; i < SWITCH_GPU_PROMISE_ABANDONED; ++i)
+		if (__atomic_load_n(&set->promise[i], __ATOMIC_ACQUIRE) == promise)
+			return 1;
+	return 0;
 }

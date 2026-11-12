@@ -16,16 +16,19 @@ void AGXDeviceUserClient::dropPromiseSurfaces(uint32_t promise)
 }
 
 // lock_ held. A word written here reaches a GPU reader parked on it only through the write-combined fence page.
-void AGXDeviceUserClient::releasePromise(uint32_t promise)
+// Abandoned (a kill, a destruction, the close): the promised writes never came, and it is marked so before the word
+// moves, so a reader the release lets go already finds it.
+void AGXDeviceUserClient::releasePromise(uint32_t promise, bool abandoned)
 {
-	const uint32_t value = promises_[promise].value;
+	const uint32_t offset = tgm_fence_offset(promiseWord(promise)), value = promises_[promise].value;
+	if (abandoned && promises_[promise].state != SWITCH_GPU_PROMISE_FREE &&
+	    int32_t(*promiseWord(promise) - value) < 0)
+		tgm_promise_abandon(offset, value);
 	if (!switch_gpu_promise_release(&promises_[promise], promiseWord(promise)))
 		return;
 	__asm__ volatile("dsb sy" ::: "memory");
 #if TGM_STATS
-	tgm_promise_cpu_raised(tgm_fence_offset(promiseWord(promise)), value);
-#else
-	(void)value;
+	tgm_promise_cpu_raised(offset, value);
 #endif
 }
 
@@ -43,7 +46,7 @@ void AGXDeviceUserClient::releasePromises(bool all)
 		if (kept)
 			__atomic_sub_fetch(&promisesKept_, 1u, __ATOMIC_RELAXED);
 		dropPromiseSurfaces(i);
-		releasePromise(i);
+		releasePromise(i, true);
 	}
 }
 
@@ -56,7 +59,7 @@ IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in
 		    promises_[in->promise].state != SWITCH_GPU_PROMISE_MADE)
 			return kIOReturnBadArgument;
 		dropPromiseSurfaces(in->promise);
-		releasePromise(in->promise);
+		releasePromise(in->promise, false);
 		return kIOReturnSuccess;
 	}
 	if (in->op != TegraGM20BPromiseMake || !in->count || in->count > TegraGM20BMaxPromiseUses ||
@@ -92,7 +95,7 @@ IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in
 	}
 	if (result) {
 		dropPromiseSurfaces(promise);
-		releasePromise(promise);
+		releasePromise(promise, false);
 		return result;
 	}
 	promises_[promise].channel = uint8_t(in->channel - 1);

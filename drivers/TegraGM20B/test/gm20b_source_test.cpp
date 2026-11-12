@@ -1373,7 +1373,10 @@ TEST(GM20BJobSource, AWriterPromiseIsTheConnectionsAndEndsWithIt)
 		promises, "IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in,"));
 	EXPECT_THAT(promise, HasSubstr("if (!bo || !bo->backing || !bo->surface || uses[i].access != TegraGM20BSurfaceWrite"));
 	EXPECT_THAT(promise, Not(HasSubstr("switch_gpu_promise_release(")));
-	const std::string release = flat(definition(promises, "void AGXDeviceUserClient::releasePromise(uint32_t promise)"));
+	const std::string release =
+		flat(definition(promises, "void AGXDeviceUserClient::releasePromise(uint32_t promise, bool abandoned)"));
+	expectBefore(release, "tgm_promise_abandon(offset, value);",
+		     "switch_gpu_promise_release(&promises_[promise], promiseWord(promise))");
 	expectBefore(release, "switch_gpu_promise_release(&promises_[promise], promiseWord(promise))",
 		     "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
 	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::drainResources()")), "releasePromises(true);",

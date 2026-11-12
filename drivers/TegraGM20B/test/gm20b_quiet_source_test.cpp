@@ -189,6 +189,11 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	expectBefore(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
 		     "tgm_chan_release_promises(chans[i], who, waited_ns);",
 		     "verdict = tgm_hang_blame(");
+	// on a confirmed strike only: the reader's wait on a word no live channel owns is a victim's, which the blame rule
+	// spares until then, so no first look gives the promise up
+	expectBefore(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
+		     "if (chans[i] && c[i].stuck && !c[i].moving)",
+		     "tgm_chan_release_promises(chans[i], who, waited_ns);");
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));

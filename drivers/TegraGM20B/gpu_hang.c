@@ -460,11 +460,10 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
 	}
-	/* A stuck reader of a surface whose promised writer never ran goes on with what the surface holds, at the first
-	 * look: its caller's own bound has passed, and a wait on a promise is never the GPU's hang (a kernel channel's
-	 * unconfirmed one with nothing else progressing is otherwise fatal below). */
+	/* a stuck reader of a surface whose promised writer never ran goes on, the promise abandoned: a present of it is
+	 * dropped, the panel keeping the frame before it */
 	for (i = 0; i <= n; i++)
-		if (chans[i] && !c[i].moving && chan_stuck(chans[i], now))
+		if (chans[i] && c[i].stuck && !c[i].moving)
 			released += tgm_chan_release_promises(chans[i], who, waited_ns);
 	if (released)
 		return TGM_HANG_PROGRESSING;

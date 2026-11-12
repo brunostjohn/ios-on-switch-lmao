@@ -597,6 +597,7 @@ void tgm_idle_settle(void *arg);
  * waits for */
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value);
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns);
+void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns);
 #if TGM_STATS
 void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u64 queued, int copy);
 #endif

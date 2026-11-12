@@ -69,19 +69,58 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 }
 #endif
 
-static void promise_released(uint32_t offset, uint32_t value, void *arg)
+static struct switch_gpu_promise_abandoned promise_abandoned;
+
+int tgm_promise_abandoned(uint32_t offset, uint32_t value)
+{
+	return switch_gpu_promise_abandoned_has(&promise_abandoned, offset, value);
+}
+
+void tgm_promise_abandon(uint32_t offset, uint32_t value)
+{
+	switch_gpu_promise_abandoned_add(&promise_abandoned, offset, value);
+}
+
+/* tgm_live_lock held: the process whose connection's fence page holds the word at `offset` */
+static const char *promise_maker(uint32_t offset)
+{
+	struct tgm_chan *chan = NULL;
+
+	list_for_each_entry(chan, &tgm_live_chans, live)
+	{
+		if (!chan->kernel && ((uintptr_t)chan->fence_cpu - (uintptr_t)tgm_fence_pages.va) /
+						 TGM_FENCE_SLOT ==
+					 offset / TGM_FENCE_SLOT)
+			return chan->owner;
+	}
+	return "a connection with no channel";
+}
+
+/* tgm_live_lock held, the promise abandoned: the writer is the one reported (the reader goes on, and a present of the
+ * surface is dropped). */
+void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns)
+{
+	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s waited %llu ms "
+		  "for it; it goes on without the promised writes, and a present of the surface is dropped\n",
+		  promise_maker(offset), offset, value, who, waited_ns / 1000000);
+}
+
+static void promise_released(uint32_t offset, uint32_t value, int step, void *arg)
 {
 	const struct promise_hang *hang = arg;
 
+	if (step == SWITCH_GPU_PROMISE_RAISING) {
+		tgm_promise_abandon(offset, value);
+		return;
+	}
+	if (step == SWITCH_GPU_PROMISE_KEPT_FIRST) {
+		switch_gpu_promise_abandoned_drop(&promise_abandoned, offset, value);
+		return;
+	}
 #if TGM_STATS
 	tgm_promise_cpu_raised(offset, value);
 #endif
-	nvxnu_log("tegra-gm20b: GPU hang, releasing the writer promise at fence offset %u (value "
-		  "%u) %s "
-		  "(channel %u) waited for: %s waited %llu ms, its maker's command buffer never "
-		  "ran\n",
-		  offset, value, hang->chan->owner, hang->chan->chid, hang->who,
-		  hang->waited_ns / 1000000);
+	tgm_promise_abandoned_report(offset, value, hang->chan->owner, hang->waited_ns);
 }
 
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns)

@@ -553,7 +553,7 @@ class AGXDeviceUserClient : public IOUserClient
 	}
 
 	void dropPromiseSurfaces(uint32_t promise);
-	void releasePromise(uint32_t promise);
+	void releasePromise(uint32_t promise, bool abandoned);
 	void releasePromises(bool all);
 	IOReturn keepPromises(const TegraGM20BAbiJobPromises *promises,
 			      switch_gpu_release *releases);

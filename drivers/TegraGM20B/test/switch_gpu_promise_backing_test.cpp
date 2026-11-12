@@ -7,6 +7,7 @@
 
 #include "switch_gpu_backing_fixture.h"
 #include "drivers/TegraGM20B/SwitchGpuAdmission.h"
+#include "drivers/TegraGM20B/SwitchGpuPresentTokens.h"
 #include "drivers/TegraGM20B/SwitchGpuWriterPromise.h"
 
 namespace
@@ -17,7 +18,13 @@ constexpr uint32_t kOffset = 2048;
 
 uint32_t fence[1024];
 int holds;
+uint64_t abandoned;  // offset << 32 | value of the one promise given up on
 }  // namespace
+
+extern "C" int tgm_promise_abandoned(uint32_t offset, uint32_t value)
+{
+	return abandoned == (uint64_t(offset) << 32 | value);
+}
 
 extern "C" volatile uint32_t *tgm_fence_word(uint32_t offset)
 {
@@ -292,6 +299,28 @@ TEST_F(Backing, AReadOutsideThePromisedRangeIsAnOrdinaryRead)
 	auto *b = promised();
 	readBehindPromises(b, token(9, 2), kOffset, kOffset + 4);
 	EXPECT_TRUE(has(waitedFor(b, token(3, 4)), SWITCH_GPU_ENGINE_GM20B));
+	switch_gpu_backing_promise_drop(b, kOffset);
+	switch_gpu_backing_release(b);
+}
+
+// A promise given up on (the hang rule's raise, a kill, a close) is a failed producer: the present that waited for it
+// finishes TEGRA_SCANOUT_SOURCE_LOST, and the display drops the frame, the panel keeping the one before it. The word
+// the release raised does not make it kept.
+TEST_F(Backing, AnAbandonedPromiseFailsThePresentThatWaitedForIt)
+{
+	auto *b = promised(3);
+	ASSERT_EQ(switch_gpu_promise_engine(), 0);
+	switch_gpu_backing_token tokens[1] = {};
+	ASSERT_EQ(switch_gpu_backing_promise_tokens(b, 0, 0, tokens, 1), 1);
+	switch_gpu_present_tokens present = {};
+	ASSERT_EQ(switch_gpu_present_tokens_prepare(&present, tokens, 1), 0);
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 0);
+	abandoned = uint64_t(kOffset) << 32 | 3;
+	fence[kOffset / 4] = 3;
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), -5);
+	EXPECT_EQ(switch_gpu_present_tokens_finish_ready(&present, nullptr), -5);
+	abandoned = 0;
+	EXPECT_EQ(switch_gpu_backing_token_status(&tokens[0]), 1) << "a cancel's raise: nothing was promised after all";
 	switch_gpu_backing_promise_drop(b, kOffset);
 	switch_gpu_backing_release(b);
 }

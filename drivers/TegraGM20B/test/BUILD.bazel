@@ -1440,6 +1440,7 @@ host_test(
     srcs = [
         "switch_gpu_backing_fixture.h",
         "switch_gpu_promise_backing_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.cpp",
     ],
     deps = [":backing", ":coherency_kernel"],

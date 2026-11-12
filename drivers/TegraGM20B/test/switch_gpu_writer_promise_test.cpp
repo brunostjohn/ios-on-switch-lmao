@@ -194,11 +194,62 @@ volatile uint32_t *poolWord(uint32_t offset)
 
 using Released = std::vector<std::pair<uint32_t, uint32_t>>;
 
-void told(uint32_t offset, uint32_t value, void *arg)
+void told(uint32_t offset, uint32_t value, int step, void *arg)
 {
-	static_cast<Released *>(arg)->push_back({offset, value});
+	if (step == SWITCH_GPU_PROMISE_RAISED)
+		static_cast<Released *>(arg)->push_back({offset, value});
+}
+
+struct Steps {
+	std::vector<int> steps;
+	std::vector<uint32_t> words;     // the word as each step found it
+	uint32_t makerAt = 0, makerTo = 0;  // the maker's GPU release, landing at RAISING when set
+};
+
+void stepped(uint32_t offset, uint32_t, int step, void *arg)
+{
+	auto *s = static_cast<Steps *>(arg);
+	s->steps.push_back(step);
+	s->words.push_back(uint32_t(pool[offset / 4]));
+	if (step == SWITCH_GPU_PROMISE_RAISING && s->makerAt == offset)
+		pool[offset / 4] = s->makerTo;
 }
 }  // namespace
+
+// The promise is marked given up on (RAISING) before the word moves, so a reader the raise lets go already finds it; and
+// a maker's GPU release that lands first after all (KEPT_FIRST) takes the mark back, its writes being there.
+TEST(WriterPromise, TheReleaseMarksBeforeTheWordMovesAndTellsWhoWon)
+{
+	switch_gpu_promise_waits waits = {};
+	Steps raised, kept;
+	pool[5] = 1;
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 20, 2), 0);
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &raised), 1u);
+	EXPECT_EQ(raised.steps, (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
+	EXPECT_EQ(raised.words, (std::vector<uint32_t>{1, 2}));
+	pool[5] = 1;
+	kept.makerAt = 20;
+	kept.makerTo = 2;
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &kept), 0u);
+	EXPECT_EQ(kept.steps, (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
+	EXPECT_EQ(pool[5], 2u);
+}
+
+// An abandoned promise is found until the maker's own release takes it back; the set keeps the latest ones.
+TEST(WriterPromise, TheAbandonedSetNamesEachPromiseByWordAndValue)
+{
+	switch_gpu_promise_abandoned set = {};
+	switch_gpu_promise_abandoned_add(&set, 20, 2);
+	EXPECT_TRUE(switch_gpu_promise_abandoned_has(&set, 20, 2));
+	EXPECT_FALSE(switch_gpu_promise_abandoned_has(&set, 20, 3));
+	EXPECT_FALSE(switch_gpu_promise_abandoned_has(&set, 24, 2));
+	switch_gpu_promise_abandoned_drop(&set, 20, 2);
+	EXPECT_FALSE(switch_gpu_promise_abandoned_has(&set, 20, 2));
+	for (uint32_t i = 0; i <= SWITCH_GPU_PROMISE_ABANDONED; ++i)
+		switch_gpu_promise_abandoned_add(&set, 4, i + 1);
+	EXPECT_FALSE(switch_gpu_promise_abandoned_has(&set, 4, 1));
+	EXPECT_TRUE(switch_gpu_promise_abandoned_has(&set, 4, SWITCH_GPU_PROMISE_ABANDONED + 1));
+}
 
 // A reader stuck behind a promise whose command buffer never runs is let go by the hang rule, once; a promise released
 // meanwhile is left alone, and so is one the maker's own release already passed.

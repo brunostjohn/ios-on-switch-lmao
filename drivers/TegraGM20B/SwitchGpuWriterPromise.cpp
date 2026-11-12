@@ -5,8 +5,11 @@
 
 namespace
 {
+// An abandoned promise is a failed producer: a reader goes on without it, and a present of it is dropped.
 int status(const switch_gpu_backing_token *token)
 {
+	if (tgm_promise_abandoned(token->queue, uint32_t(token->value)))
+		return -5;
 	const volatile uint32_t *word = tgm_fence_word(token->queue);
 	return !word || int32_t(__atomic_load_n(word, __ATOMIC_ACQUIRE) - uint32_t(token->value)) >=
 				       0
