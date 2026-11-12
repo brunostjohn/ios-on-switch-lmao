@@ -130,7 +130,8 @@
 #                     exactly one finishes it, in every interleaving
 #   raw_object_pool_test  raw/runtime/raw_object_pool.h: an instance is built on the block of one gone before, zeroed, one
 #                     still held keeps its block, warm frames make none, and dealloc destroys in place (C++ and ARC ivars,
-#                     weak references, associated objects); kept blocks are poisoned under ASan
+#                     weak references, associated objects); kept blocks are poisoned under ASan; a command buffer
+#                     held is never reused, and its block comes back with none of its weak references or associations
 #   raw_submit_gate_test  raw/runtime/raw_submit_gate.h: the submit worker's submissions and other threads' moves never
 #                     overlap, the worker taking no lock while no move waits
 #   raw_word_wait_test  raw/runtime/raw_word_wait.h: a command buffer's waiters, asleep on its change word with no lock,

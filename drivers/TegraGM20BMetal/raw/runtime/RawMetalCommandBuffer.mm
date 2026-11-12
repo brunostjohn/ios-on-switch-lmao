@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
+#include "raw_object_pool.h"
 #include "raw_parallel.h"
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
@@ -241,12 +242,22 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
     cb->_changes.waitFor(done);
 }
 
-@implementation RMCommandBuffer
-
-- (void)dealloc
+static void commandBufferDropped(void *object)
 {
-    giveRecording(self);
+    RMCommandBuffer *__unsafe_unretained b = (__bridge RMCommandBuffer *)object;
+    giveRecording(b);
 }
+
+// Command buffers on the storage their deallocs gave back, as the encoders (raw_object_pool.h): -dealloc is the pool's,
+// which gives the recording back first. A sub-encoder's (RMSubRecorder) allocates and frees as NSObject's do, and gives
+// its recording back the same.
+void rmPoolCommandBuffers()
+{
+    if (!rawPoolInstances([RMCommandBuffer class], commandBufferDropped))
+        os_log_error(rawLog(), "raw: command buffers are not pooled");
+}
+
+@implementation RMCommandBuffer
 
 - (void)retain:(id)object
 {

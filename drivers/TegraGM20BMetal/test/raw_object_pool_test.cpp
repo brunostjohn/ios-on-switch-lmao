@@ -48,11 +48,30 @@ struct Tracked {
 @implementation PoolProbeChild
 @end
 
+// A command buffer's shape (RawMetalCommandBuffer.mm): its pool's dropped gives its recording back
+@interface PoolBufferProbe : NSObject {
+@public
+    std::vector<int> _recording;
+}
+@end
+
+@implementation PoolBufferProbe
+@end
+
 namespace {
+
+std::atomic<int> gRecordingsGiven{0};
 
 void dropped(void *)
 {
     gDropped++;
+}
+
+void recordingGiven(void *object)
+{
+    PoolBufferProbe *__unsafe_unretained b = (__bridge PoolBufferProbe *)object;
+    if (!b->_recording.empty())
+        gRecordingsGiven++;
 }
 
 void pooled()
@@ -183,6 +202,45 @@ TEST(ObjectPool, ASubclassAllocatesAndFreesAsNSObjectDoes)
     }
     EXPECT_EQ(gDropped.load(), 1) << "the pooled class's dealloc work still runs";
     EXPECT_EQ(rawPoolMade([PoolProbe class]), before);
+}
+
+// A command buffer an app holds past its completion, with a weak reference and an associated object on it: no instance is
+// built on its block while it is held; once it goes its recording goes back first, and the one built on its block next
+// has no associated object, while the old weak reference stays nil
+TEST(ObjectPool, ACommandBufferHeldIsNeverReusedAndItsBlockComesBackWithNothingOfIt)
+{
+    static const bool once = rawPoolInstances([PoolBufferProbe class], recordingGiven);
+    ASSERT_TRUE(once);
+    static char key;
+    PoolBufferProbe *held = [PoolBufferProbe new];
+    held->_recording.push_back(1);
+    void *heldAt = (__bridge void *)held;
+    __weak PoolBufferProbe *toHeld = held;
+    __weak id toAssociated;
+    @autoreleasepool {
+        NSObject *associated = [NSObject new];
+        objc_setAssociatedObject(held, &key, associated, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        toAssociated = associated;
+        for (int i = 0; i < 200; i++)
+            @autoreleasepool {
+                PoolBufferProbe *b = [PoolBufferProbe new];
+                EXPECT_NE((__bridge void *)b, heldAt);
+            }
+        EXPECT_EQ(toHeld, held);
+        EXPECT_NE(toAssociated, nil);
+    }
+    const int given = gRecordingsGiven;
+    held = nil;
+    EXPECT_EQ(gRecordingsGiven - given, 1);
+    @autoreleasepool {
+        EXPECT_EQ(toHeld, nil);
+        EXPECT_EQ(toAssociated, nil);
+        PoolBufferProbe *next = [PoolBufferProbe new];
+        EXPECT_EQ((__bridge void *)next, heldAt);
+        EXPECT_EQ(objc_getAssociatedObject(next, &key), nil);
+        EXPECT_EQ(toHeld, nil) << "a weak reference to the one gone does not reach the one built on its block";
+        EXPECT_TRUE(next->_recording.empty());
+    }
 }
 
 // Made on one thread and let go on others, as the submit worker and completion threads drop their last references

@@ -294,6 +294,7 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
     if (gRM)
         return gRM->device;  // one per process
     rmPoolEncoders();
+    rmPoolCommandBuffers();
     raw::Device *dev = nullptr;
     std::string err;
     bool prepared = false;
