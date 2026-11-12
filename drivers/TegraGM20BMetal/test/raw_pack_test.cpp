@@ -86,6 +86,48 @@ TEST(RawPack, AStatesVariantRecordsAreFoundByNameNeverAsTheState)
     EXPECT_EQ(raw::variantNameAt("c0=80 | v a | f b"), 17u);
 }
 
+// A state's records under one key: its storage form, its barrier twin, and its fetch-free form that reads another colour
+// behind a barrier (a barrier form's flags too)
+std::string writeFormsPack(const char *name)
+{
+    std::vector<uint8_t> file(0x1000, 0);
+    raw::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = raw::kPackVersion;
+    h.pipelines = 3;
+    h.section[raw::PackPipelines] = {0x100, 3 * sizeof(raw::PackPipeline)};
+    memcpy(file.data(), &h, sizeof h);
+    raw::PackPipeline pp[3] = {};
+    const uint32_t flags[3] = {raw::PipelineFetches | raw::PipelineStorageMetadata,
+                               raw::PipelineFetches | raw::PipelineBarrierForm,
+                               raw::PipelineFetches | raw::PipelineBarrierForm | raw::PipelineFetchFreeForm};
+    for (uint32_t i = 0; i < 3; i++) {
+        pp[i].keyHash = 9;
+        pp[i].vs = 80000 + i;
+        pp[i].flags = flags[i];
+    }
+    memcpy(file.data() + 0x100, pp, sizeof pp);
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+TEST(RawPack, AFetchFreeFormThatReadsBehindABarrierIsFoundOnlyAsTheFetchFreeForm)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeFormsPack("forms.bin").c_str(), 0, err)) << err;
+    ASSERT_NE(pack.find(9), nullptr);
+    EXPECT_EQ(pack.find(9)->vs, 80000u);
+    ASSERT_NE(pack.find(9, raw::PackForm::Barrier), nullptr);
+    EXPECT_EQ(pack.find(9, raw::PackForm::Barrier)->vs, 80001u);
+    ASSERT_NE(pack.find(9, raw::PackForm::FetchFree), nullptr);
+    EXPECT_EQ(pack.find(9, raw::PackForm::FetchFree)->vs, 80002u);
+    EXPECT_EQ(raw::recordForm(*pack.find(9, raw::PackForm::FetchFree)), raw::PackForm::FetchFree);
+}
+
 TEST(RawPack, RefusesAPackOfAnotherVersion)
 {
     raw::Pack pack;
