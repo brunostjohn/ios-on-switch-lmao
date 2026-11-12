@@ -10,9 +10,14 @@
 
 namespace raw {
 
+inline size_t computeDataAt(const ComputeRecord &r)
+{
+    return r.data.empty() ? r.code.size() : (r.code.size() + 0xff) & ~size_t(0xff);
+}
+
 inline std::vector<uint8_t> computeSlot(const ComputeRecord &r)
 {
-    const size_t dataAt = r.data.empty() ? r.code.size() : (r.code.size() + 0xff) & ~size_t(0xff);
+    const size_t dataAt = computeDataAt(r);
     std::vector<uint8_t> slot(dataAt + r.data.size(), 0);
     memcpy(slot.data(), r.code.data(), r.code.size());
     if (!r.data.empty())
