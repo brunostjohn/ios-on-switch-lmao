@@ -5,7 +5,11 @@
  * The producer channel's interrupt pass makes it due with plain loads (nvkm's event lock is held there), and the pass's
  * end, in thread context, delivers it. A kill, a channel's teardown, a semantic wait and a producer that ended with its
  * writes still in the L2 go through the present's watch work item, which may sleep. The deadline takes none: it follows
- * work the asked interrupt is queued behind, and panics for one that was due and never came (gpu_present_deadline.c). */
+ * work the asked interrupt is queued behind, and panics for one that was due and never came (gpu_present_deadline.c).
+ * A frame whose one pending writer is a writer promise (SwitchGpuWriterPromise.h) is watched too: the watch waits
+ * PROMISED, which no pass looks at, until the promised job is submitted, and then watches that job as its producer (the
+ * promise's word is released by the same job's fence push, after its fence). A promise released or given up on from the
+ * CPU meanwhile goes to the work item; the deadline gives one still unkept up, and the present is dropped. */
 #pragma once
 #include <stdint.h>
 #include "SwitchGpuBacking.h"
@@ -15,6 +19,7 @@ enum {
 	SWITCH_GPU_PRESENT_WATCH_ARMED = 1,
 	SWITCH_GPU_PRESENT_WATCH_DUE = 2,
 	SWITCH_GPU_PRESENT_WATCH_CLAIMED = 3,
+	SWITCH_GPU_PRESENT_WATCH_PROMISED = 4,
 };
 
 enum {
@@ -35,13 +40,51 @@ typedef int (*switch_gpu_present_watch_status)(const struct switch_gpu_backing_t
 static inline int switch_gpu_present_watchable(const struct switch_gpu_backing_token *tokens,
 					       uint32_t count)
 {
-	return count == 1 && tokens && tokens[0].engine == SWITCH_GPU_ENGINE_GM20B;
+	return count == 1 && tokens &&
+	       (tokens[0].engine == SWITCH_GPU_ENGINE_GM20B || tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE);
 }
 
 static inline void switch_gpu_present_watch_arm(struct switch_gpu_present_watch *watch,
 						const struct switch_gpu_backing_token *token)
 {
 	watch->token = *token;
+	__atomic_store_n(&watch->state, SWITCH_GPU_PRESENT_WATCH_ARMED, __ATOMIC_SEQ_CST);
+}
+
+/* A writer promise's token, its job not submitted yet: no pass looks at the watch until switch_gpu_present_watch_kept. */
+static inline void switch_gpu_present_watch_promise(struct switch_gpu_present_watch *watch,
+						    const struct switch_gpu_backing_token *token)
+{
+	watch->token = *token;
+	__atomic_store_n(&watch->state, SWITCH_GPU_PRESENT_WATCH_PROMISED, __ATOMIC_SEQ_CST);
+}
+
+/* Waiting for the promise (its word's fence-pool offset and value) to be kept */
+static inline int switch_gpu_present_watch_promised(const struct switch_gpu_present_watch *watch, uint32_t offset,
+						    uint32_t value)
+{
+	return __atomic_load_n(&watch->state, __ATOMIC_ACQUIRE) == SWITCH_GPU_PRESENT_WATCH_PROMISED &&
+	       watch->token.engine == SWITCH_GPU_ENGINE_PROMISE && watch->token.queue == offset &&
+	       (uint32_t)watch->token.value == value;
+}
+
+/* The promise is kept by the job `producer`: a watch waiting for it takes that job as its token, CLAIMED (so neither the
+ * work item nor a pass acts on it) until switch_gpu_present_watch_rearm. 1: it was this watch's. */
+static inline int switch_gpu_present_watch_kept(struct switch_gpu_present_watch *watch, uint32_t offset,
+						uint32_t value, const struct switch_gpu_backing_token *producer)
+{
+	uint32_t promised = SWITCH_GPU_PRESENT_WATCH_PROMISED;
+
+	if (!switch_gpu_present_watch_promised(watch, offset, value) ||
+	    !__atomic_compare_exchange_n(&watch->state, &promised, SWITCH_GPU_PRESENT_WATCH_CLAIMED, 0,
+					 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+		return 0;
+	watch->token = *producer;
+	return 1;
+}
+
+static inline void switch_gpu_present_watch_rearm(struct switch_gpu_present_watch *watch)
+{
 	__atomic_store_n(&watch->state, SWITCH_GPU_PRESENT_WATCH_ARMED, __ATOMIC_SEQ_CST);
 }
 
@@ -87,7 +130,8 @@ static inline int switch_gpu_present_watch_claim(struct switch_gpu_present_watch
 	uint32_t from = __atomic_load_n(&watch->state, __ATOMIC_ACQUIRE);
 	int found;
 	int done;
-	if (from != SWITCH_GPU_PRESENT_WATCH_ARMED && from != SWITCH_GPU_PRESENT_WATCH_DUE)
+	if (from != SWITCH_GPU_PRESENT_WATCH_ARMED && from != SWITCH_GPU_PRESENT_WATCH_DUE &&
+	    from != SWITCH_GPU_PRESENT_WATCH_PROMISED)
 		return SWITCH_GPU_PRESENT_WATCH_PENDING;
 	done = completed(&watch->token);
 	if (!done)

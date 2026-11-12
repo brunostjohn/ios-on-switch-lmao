@@ -180,7 +180,7 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	// (switch_gpu_backing_promise_tokens) never returns on XNU
 	EXPECT_THAT(job, Not(HasSubstr("switch_gpu_backing_promise_tokens(")));
 	expectBefore(job, "switch_gpu_backing_commit(&transaction);",
-		     "keptPromises(record.promises, slot);");
+		     "keptPromises(record.promises, slot, completion);");
 	const std::string fence = Body(unit("gpu_exec.c"), "static u32 chan_fence_job(");
 	expectBefore(fence, "lower_32_bits(chan->fence_gpu)", "releases[s].value");
 	const std::string acquire = Body(unit("gpu_exec.c"), "int tgm_backing_dependencies(");

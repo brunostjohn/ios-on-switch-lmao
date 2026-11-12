@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Writer promises a channel waits for on the GPU (SwitchGpuWriterPromise.h), as the hang rule sees them.
+// Writer promises (SwitchGpuWriterPromise.h): those a channel waits for on the GPU, as the hang rule sees them, and the one
+// a direct present watches (SwitchGpuPresentWatch.h).
 #include "gpu_internal.h"
 
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value)
@@ -79,6 +80,7 @@ int tgm_promise_abandoned(uint32_t offset, uint32_t value)
 void tgm_promise_abandon(uint32_t offset, uint32_t value)
 {
 	switch_gpu_promise_abandoned_add(&promise_abandoned, offset, value);
+	tgm_present_promise_released(offset, value);
 }
 
 /* tgm_live_lock held: the process whose connection's fence page holds the word at `offset` */
@@ -134,4 +136,83 @@ uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 w
 	if (raised)
 		__asm__ volatile("dsb sy" ::: "memory");
 	return raised;
+}
+
+/* Promises kept lately, under tgm_present.lock: an offer whose snapshot took one just before its job was submitted
+ * watches that job. */
+#define PRESENT_KEPT 8
+struct present_kept {
+	u32 offset, value;
+	struct switch_gpu_backing_token producer;
+};
+static struct present_kept present_kept[PRESENT_KEPT];
+static u32 present_kept_next;
+#if TGM_STATS
+static int present_kept_logged;
+#endif
+
+/* tgm_present.lock held, the job retained: it takes the promise's place among the present's tokens, as the GM20B
+ * producer a watch of it finishes. Not the promise too: the job's fence push releases the word after the fence a pass
+ * may already have seen. */
+static void present_takes(const struct switch_gpu_backing_token *producer)
+{
+	switch_gpu_backing_token_release(&tgm_present.tokens.tokens[0]);
+	tgm_present.tokens.tokens[0] = *producer;
+}
+
+/* tgm_present.lock held, the offer's one token a writer promise: its job as *kept if it is submitted already, else
+ * nothing (the watch waits PROMISED). */
+void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
+{
+	const struct switch_gpu_backing_token promise = tgm_present.tokens.tokens[0];
+	u32 i;
+
+	for (i = 0; i < PRESENT_KEPT; i++) {
+		const struct present_kept *k = &present_kept[i];
+
+		if (k->producer.engine && k->offset == promise.queue && k->value == (u32)promise.value &&
+		    !switch_gpu_backing_token_retain(&k->producer)) {
+			present_takes(&k->producer);
+			*kept = k->producer;
+			return;
+		}
+	}
+}
+
+/* SubmitJob, the job that keeps the promise submitted: a watch waiting for it watches the job, whose fence push releases
+ * the word after its fence, and asks it for the interrupt whose pass completes the watch. */
+void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer)
+{
+	int watched = 0;
+
+	mutex_lock(&tgm_present.lock);
+	present_kept[present_kept_next++ % PRESENT_KEPT] = (struct present_kept){offset, value, *producer};
+	if (switch_gpu_present_watch_promised(&tgm_present.watch, offset, value) &&
+	    !switch_gpu_backing_token_retain(producer)) {
+		if (switch_gpu_present_watch_kept(&tgm_present.watch, offset, value, producer)) {
+			present_takes(producer);
+			switch_gpu_present_watch_rearm(&tgm_present.watch);
+			watched = 1;
+		} else {
+			switch_gpu_backing_token_release(producer);
+		}
+	}
+	mutex_unlock(&tgm_present.lock);
+	if (!watched)
+		return;
+#if TGM_STATS
+	if (!__atomic_exchange_n(&present_kept_logged, 1, __ATOMIC_RELAXED))
+		nvxnu_log("tegra-gm20b: first direct present of a frame behind a writer promise watches the job "
+			  "that keeps it, with no present job\n");
+#endif
+	tgm_chan_need_tokens(producer, 1);
+	if (switch_gpu_backing_token_physical_status(producer, 0))
+		nvxnu_work_schedule(tgm_present.watch_work);
+}
+
+/* A promise released or given up on from the CPU: a watch still waiting for its job goes to the work item. */
+void tgm_present_promise_released(uint32_t offset, uint32_t value)
+{
+	if (switch_gpu_present_watch_promised(&tgm_present.watch, offset, value) && tgm_present.watch_work)
+		nvxnu_work_schedule(tgm_present.watch_work);
 }

@@ -40,12 +40,14 @@ protected:
 	}
 };
 
-TEST(PresentWatchable, OnlyOneGm20bProducer)
+TEST(PresentWatchable, OnlyOneGm20bProducerOrWriterPromise)
 {
 	const switch_gpu_backing_token gm20b = {1, 1, SWITCH_GPU_ENGINE_GM20B, 1};
 	const switch_gpu_backing_token vic = {1, 1, SWITCH_GPU_ENGINE_VIC, 1};
+	const switch_gpu_backing_token promise = {9, 0, SWITCH_GPU_ENGINE_PROMISE, 2052};
 	const switch_gpu_backing_token both[2] = {gm20b, gm20b};
 	EXPECT_TRUE(switch_gpu_present_watchable(&gm20b, 1));
+	EXPECT_TRUE(switch_gpu_present_watchable(&promise, 1));
 	EXPECT_FALSE(switch_gpu_present_watchable(&vic, 1));
 	EXPECT_FALSE(switch_gpu_present_watchable(both, 2));
 	EXPECT_FALSE(switch_gpu_present_watchable(nullptr, 0));
@@ -123,5 +125,39 @@ TEST_F(PresentWatch, ADueWatchIsClaimedOnceByTheWorkItem)
 	EXPECT_FALSE(switch_gpu_present_watch_take_visible(&watch, semantic, external));
 	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external),
 		  SWITCH_GPU_PRESENT_WATCH_PENDING);
+}
+// A watch waiting for a promise: no pass looks at it; the job that keeps the promise becomes its producer, claimed while
+// it is handed over so neither the pass nor the work item acts on a half-written token.
+TEST(PromiseWatch, TheKeepingJobBecomesTheProducerAndOnlyItsOwnPromiseConverts)
+{
+	switch_gpu_present_watch watch = {};
+	const switch_gpu_backing_token promise = {9, 0, SWITCH_GPU_ENGINE_PROMISE, 2052};
+	const switch_gpu_backing_token job = {40, 3, SWITCH_GPU_ENGINE_GM20B, 17};
+	switch_gpu_present_watch_promise(&watch, &promise);
+	EXPECT_TRUE(switch_gpu_present_watch_armed(&watch));
+	EXPECT_FALSE(switch_gpu_present_watch_fenced(&watch, 2052, 9));
+	EXPECT_TRUE(switch_gpu_present_watch_promised(&watch, 2052, 9));
+	EXPECT_FALSE(switch_gpu_present_watch_kept(&watch, 2052, 8, &job));
+	EXPECT_FALSE(switch_gpu_present_watch_kept(&watch, 2056, 9, &job));
+	ASSERT_TRUE(switch_gpu_present_watch_kept(&watch, 2052, 9, &job));
+	EXPECT_EQ(watch.state, uint32_t(SWITCH_GPU_PRESENT_WATCH_CLAIMED));
+	completedStatus = externalStatus = 1;
+	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external), SWITCH_GPU_PRESENT_WATCH_PENDING);
+	switch_gpu_present_watch_rearm(&watch);
+	EXPECT_EQ(watch.token.engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
+	EXPECT_TRUE(switch_gpu_present_watch_fenced(&watch, kUid, 40));
+}
+
+// The work item claimed the promised watch first (a CPU release, the deadline): the late job's conversion finds it gone.
+TEST(PromiseWatch, AClaimedPromiseWatchIsNotConverted)
+{
+	switch_gpu_present_watch watch = {};
+	const switch_gpu_backing_token promise = {9, 0, SWITCH_GPU_ENGINE_PROMISE, 2052};
+	const switch_gpu_backing_token job = {40, 3, SWITCH_GPU_ENGINE_GM20B, 17};
+	switch_gpu_present_watch_promise(&watch, &promise);
+	completedStatus = -5;
+	EXPECT_EQ(switch_gpu_present_watch_claim(&watch, completed, external), SWITCH_GPU_PRESENT_WATCH_FAILED);
+	EXPECT_FALSE(switch_gpu_present_watch_kept(&watch, 2052, 9, &job));
+	EXPECT_EQ(watch.token.engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
 }
 }  // namespace

@@ -30,6 +30,7 @@ void AGXDeviceUserClient::releasePromise(uint32_t promise, bool abandoned)
 #if TGM_STATS
 	tgm_promise_cpu_raised(offset, value);
 #endif
+	tgm_present_promise_released(offset, value);
 }
 
 // lock_ held. All: the connection's close. Else the kept ones: those their jobs released are free, and those a kill or
@@ -125,10 +126,12 @@ IOReturn AGXDeviceUserClient::keepPromises(const TegraGM20BAbiJobPromises *promi
 	return result;
 }
 
-// Its job is submitted: its users from now on follow the job's own writes, and a user that already waits for the word
-// gets it at the job's end.
-void AGXDeviceUserClient::keptPromises(const TegraGM20BAbiJobPromises *promises, uint32_t slot)
+// Its job (`job`) is submitted: its users from now on follow the job's own writes, a user that already waits for the
+// word gets it at the job's end, and a direct present watching it watches the job.
+void AGXDeviceUserClient::keptPromises(const TegraGM20BAbiJobPromises *promises, uint32_t slot,
+				       const switch_gpu_backing_token &job)
 {
+	uint32_t kept[TegraGM20BMaxJobPromises][2], count = 0;
 	IOLockLock(lock_);
 	for (uint32_t i = 0; i < promises->count; ++i) {
 		const uint32_t promise = promises->promise[i];
@@ -137,6 +140,10 @@ void AGXDeviceUserClient::keptPromises(const TegraGM20BAbiJobPromises *promises,
 		dropPromiseSurfaces(promise);
 		switch_gpu_promise_kept(&promises_[promise], slot);
 		__atomic_add_fetch(&promisesKept_, 1u, __ATOMIC_RELAXED);
+		kept[count][0] = tgm_fence_offset(promiseWord(promise));
+		kept[count++][1] = promises_[promise].value;
 	}
 	IOLockUnlock(lock_);
+	for (uint32_t i = 0; i < count; ++i)
+		tgm_present_promise_kept(kept[i][0], kept[i][1], &job);
 }

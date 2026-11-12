@@ -6,9 +6,9 @@
 // A window B change going out with the frame keeps the present when it has writers of its own to wait for. A producer
 // still running at the offer, past the slot's first frame, is watched instead: its own interrupt pass completes the
 // fence-only offer with no present job (TEGRA_SCANOUT_COPY_PRODUCER_WATCH). A surface with a writer promise pending
-// (SwitchGpuWriterPromise.h) neither flips from the kick nor is watched: the DC's flip is a register write with no GPU
-// work in front of it to acquire the promise in, and the promised job does not exist yet for a watch to arm on, so the
-// fence-only present job acquires the promise on the GPU and its completion flips.
+// (SwitchGpuWriterPromise.h) never flips from the kick: the DC's flip is a register write with no GPU work in front of
+// it to acquire the promise in. Past the slot's first frame it is watched: the watch waits for the promise's job to be
+// submitted and then watches that job, whose interrupt pass writes the flip (SwitchGpuPresentWatch.h).
 // Included in the class body after SwitchDirectSlots.h; under the gate.
 
 switch_gpu_backing *scanoutHeld[kSlots] = {};

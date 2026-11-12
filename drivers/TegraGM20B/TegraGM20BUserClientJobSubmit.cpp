@@ -333,7 +333,7 @@ refresh:
 	else
 		switch_gpu_backing_abort(&transaction);
 	if (keptCount && !error)
-		keptPromises(record.promises, slot);
+		keptPromises(record.promises, slot, completion);
 	if (!error) {
 		events->commit();
 		if (set && (count || (head.flags & TegraGM20BJobHasEvents)))

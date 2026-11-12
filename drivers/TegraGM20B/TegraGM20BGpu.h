@@ -261,9 +261,13 @@ void switch_gpu_fence_put(const volatile uint32_t *fence);
  * base), or NULL; and the offset of one */
 volatile uint32_t *tgm_fence_word(uint32_t offset);
 uint32_t tgm_fence_offset(const volatile uint32_t *word);
-/* Writer promises given up on before their job wrote the surface (SwitchGpuWriterPromise.h): marked, and whether one is */
+/* Writer promises given up on before their job wrote the surface (SwitchGpuWriterPromise.h): marked, and whether one is;
+ * and, for a direct present watching one (SwitchGpuPresentWatch.h), the job that keeps it submitted, or its word
+ * released from the CPU */
 void tgm_promise_abandon(uint32_t offset, uint32_t value);
 int tgm_promise_abandoned(uint32_t offset, uint32_t value);
+void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer);
+void tgm_present_promise_released(uint32_t offset, uint32_t value);
 /* The stats' push profile (gpu_fenced.h "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears

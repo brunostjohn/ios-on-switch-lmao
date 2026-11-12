@@ -4,10 +4,15 @@
 // (tgm_chan_need_tokens, by switch_gpu_quiet_token_on), then looks at the producer once more. A producer's pass makes
 // the watch due and the pass's end delivers it; the work item takes what the last look found, a kill or a teardown. A
 // present the watch does not take is the fence-only present job: its acquires wait for the producers on the GPU, and its
-// fence, on a kernel channel, always interrupts. The deadline (gpu_present_deadline.c watch_late) never delivers.
+// fence, on a kernel channel, always interrupts. The deadline (gpu_present_deadline.c watch_late) never delivers. A
+// frame behind a writer promise is watched PROMISED until the job that keeps it is submitted (gpu_promise.c), then on
+// that job; the deadline gives up a promise still unkept, and the frame is dropped (`failed`: the display's
+// dropLostFrame keeps the frame before it on the panel).
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <set>
 #include <utility>
 #include <vector>
 #include "../SwitchGpuPresentWatch.h"
@@ -61,11 +66,18 @@ public:
 			return 1;
 		}
 		late = 0;
-		switch_gpu_present_watch_arm(&watch, &tokens[0]);
+		switch_gpu_backing_token watched = tokens[0];
+		for (const auto &k : keptJobs)
+			if (watched.engine == SWITCH_GPU_ENGINE_PROMISE && k.first == promise(watched))
+				watched = k.second;
+		if (watched.engine == SWITCH_GPU_ENGINE_PROMISE)
+			switch_gpu_present_watch_promise(&watch, &watched);
+		else
+			switch_gpu_present_watch_arm(&watch, &watched);
 		if (afterArm)
 			afterArm();
 		if (asks)
-			needTokens(tokens, count);
+			needTokens(&watched, 1);
 		if (afterAsk)
 			afterAsk();
 		if (physical(&watch.token))
@@ -80,6 +92,29 @@ public:
 			for (auto *producer : producers_)
 				if (switch_gpu_quiet_token_on(&tokens[i], producer->id))
 					producer->channel.need(uint32_t(tokens[i].value));
+	}
+
+	// tgm_present_promise_kept: SubmitJob submitted the job that keeps the promise
+	void kept(uint32_t offset, uint32_t value, const switch_gpu_backing_token &producer)
+	{
+		keptJobs.push_back({{offset, value}, producer});
+		if (!switch_gpu_present_watch_kept(&watch, offset, value, &producer))
+			return;
+		switch_gpu_present_watch_rearm(&watch);
+		if (asks)
+			needTokens(&producer, 1);
+		if (physical(&producer))
+			work();
+	}
+
+	// releasePromise: a cancel, or a kill or close that abandons it first; then tgm_present_promise_released
+	void cpuRelease(uint32_t offset, uint32_t value, bool abandon)
+	{
+		if (abandon)
+			abandoned.insert({offset, value});
+		words[offset] = value;
+		if (switch_gpu_present_watch_promised(&watch, offset, value))
+			work();
 	}
 
 	// the owners' thread calls
@@ -111,6 +146,14 @@ public:
 	// gpu_present_deadline.c at or after TGM_PRESENT_NS
 	Deadline deadline(uint64_t now)
 	{
+		if (watch.state == SWITCH_GPU_PRESENT_WATCH_PROMISED) {  // promise_unkept
+			if (physical(&watch.token) != 1) {
+				abandoned.insert(promise(watch.token));
+				++reported;
+			}
+			work();
+			return Deadline::Idle;
+		}
 		if (watch.state != SWITCH_GPU_PRESENT_WATCH_ARMED)
 			return Deadline::Idle;
 		const int status = physical(&watch.token);
@@ -138,13 +181,21 @@ public:
 	std::vector<switch_gpu_backing_token> job;
 	uint32_t syncpoints[256] = {};
 	bool asks = true;
-	unsigned presented = 0, workItems = 0, jobInterrupts = 0;
+	unsigned presented = 0, failed = 0, reported = 0, workItems = 0, jobInterrupts = 0;
+	std::map<uint32_t, uint32_t> words;  // a writer promise's word by its fence-pool offset
+	std::set<std::pair<uint32_t, uint32_t>> abandoned;
 	uint64_t late = 0;
 	uint32_t followed = 0;
 
 private:
 	static inline Display *current_ = nullptr;
 	std::vector<Producer *> producers_;
+	std::vector<std::pair<std::pair<uint32_t, uint32_t>, switch_gpu_backing_token>> keptJobs;
+
+	static std::pair<uint32_t, uint32_t> promise(const switch_gpu_backing_token &token)
+	{
+		return {token.queue, uint32_t(token.value)};
+	}
 
 	static const Producer *named(const switch_gpu_backing_token *token)
 	{
@@ -156,6 +207,10 @@ private:
 
 	static int physical(const switch_gpu_backing_token *token)
 	{
+		if (token->engine == SWITCH_GPU_ENGINE_PROMISE)
+			return current_->abandoned.count(promise(*token))
+				       ? -5
+				       : int32_t(current_->words[token->queue] - uint32_t(token->value)) >= 0;
 		if (token->engine != SWITCH_GPU_ENGINE_GM20B)
 			return int32_t(current_->syncpoints[token->queue] - uint32_t(token->value)) >= 0;
 		const Producer *producer = named(token);
@@ -178,8 +233,9 @@ private:
 	void work()
 	{
 		++workItems;
-		if (switch_gpu_present_watch_claim(&watch, physical, physical) !=
-		    SWITCH_GPU_PRESENT_WATCH_PENDING)
+		const int found = switch_gpu_present_watch_claim(&watch, physical, physical);
+		failed += found == SWITCH_GPU_PRESENT_WATCH_FAILED;
+		if (found != SWITCH_GPU_PRESENT_WATCH_PENDING)
 			deliver();
 	}
 

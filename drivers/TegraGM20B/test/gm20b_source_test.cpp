@@ -1417,9 +1417,19 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 		flat(definition(gpu(), "int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,"));
 	expectBefore(arm, "switch_gpu_present_watch_arm(", "mutex_unlock(&tgm_present.lock);");
 	expectBefore(arm, "gate_leave();", "present_physical(&tgm_present.watch.token)");
-	// every producer is asked, of the channel its token names, between the arm and the last look
-	expectBefore(arm, "switch_gpu_present_watch_arm(", "tgm_chan_need_tokens(dependencies, dependency_count);");
-	expectBefore(arm, "gate_leave();", "tgm_chan_need_tokens(dependencies, dependency_count);");
+	// every producer is asked, of the channel its token names, between the arm and the last look: the job that keeps a
+	// writer promise in the promise's place once it is submitted
+	const char *const ask = "tgm_chan_need_tokens(kept.engine ? &kept : dependencies, kept.engine ? 1 : dependency_count);";
+	expectBefore(arm, "switch_gpu_present_watch_arm(", ask);
+	expectBefore(arm, "gate_leave();", ask);
+	expectBefore(arm, "tgm_present_promise_watch(&kept);", "switch_gpu_present_watch_promise(");
+	// the job that keeps a watched promise takes its place, retained before the watch is handed over
+	const std::string kept = flat(definition(
+		SourceText("../gpu_promise.c"),
+		"void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer)"));
+	expectBefore(kept, "!switch_gpu_backing_token_retain(producer)", "switch_gpu_present_watch_kept(");
+	expectBefore(kept, "switch_gpu_present_watch_rearm(&tgm_present.watch);", "tgm_chan_need_tokens(producer, 1);");
+	expectBefore(kept, "tgm_chan_need_tokens(producer, 1);", "switch_gpu_backing_token_physical_status(producer, 0)");
 	expectBefore(arm, "tgm_chan_need_tokens(", "present_physical(&tgm_present.watch.token)");
 	EXPECT_THAT(arm, Not(HasSubstr("tgm_chan_need_uid(")));
 	EXPECT_THAT(arm, HasSubstr("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));

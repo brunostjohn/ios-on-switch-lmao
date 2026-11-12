@@ -404,11 +404,13 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
 #endif
 
 /* No present job: the producer's own interrupt pass completes it (SwitchGpuPresentWatch.h). 1: not exactly one GM20B
- * producer still to wait for, so the caller queues the fence-only job; otherwise as tgm_present_copy_dependencies. */
+ * producer or writer promise still to wait for, so the caller queues the fence-only job; otherwise as
+ * tgm_present_copy_dependencies. */
 int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 				   const struct switch_gpu_backing_token *dependencies,
 				   uint32_t dependency_count)
 {
+	struct switch_gpu_backing_token kept = {0};
 	int ret = 0;
 
 	if (!switch_gpu_present_watchable(dependencies, dependency_count) ||
@@ -430,6 +432,8 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		switch_gpu_present_tokens_drop(&tgm_present.tokens);
 		ret = 1;
 	}
+	if (!ret && tgm_present.tokens.tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE)
+		tgm_present_promise_watch(&kept);
 	if (!ret) {
 		tgm_present.done = done;
 		tgm_present.arg = arg;
@@ -437,9 +441,13 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.late = 0;
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
-		/* before the arm: a pass claiming the watch detaches the view after this */
-		tgm_present_filter_attach(&tgm_present.tokens.tokens[0]);
-		switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+		if (tgm_present.tokens.tokens[0].engine == SWITCH_GPU_ENGINE_PROMISE) {
+			switch_gpu_present_watch_promise(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+		} else {
+			/* before the arm: a pass claiming the watch detaches the view after this */
+			tgm_present_filter_attach(&tgm_present.tokens.tokens[0]);
+			switch_gpu_present_watch_arm(&tgm_present.watch, &tgm_present.tokens.tokens[0]);
+		}
 	}
 	mutex_unlock(&tgm_present.lock);
 	gate_leave();
@@ -447,7 +455,7 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 	 * runs the pass that completes the watch (SwitchGpuQuiet.h). The caller's tokens, not the watch's, which the pass
 	 * may already have dropped. */
 	if (!ret)
-		tgm_chan_need_tokens(dependencies, dependency_count);
+		tgm_chan_need_tokens(kept.engine ? &kept : dependencies, kept.engine ? 1 : dependency_count);
 	if (!ret && present_physical(&tgm_present.watch.token))
 		nvxnu_work_schedule(tgm_present.watch_work);
 	return ret;
