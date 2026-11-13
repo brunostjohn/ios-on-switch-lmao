@@ -83,7 +83,7 @@ TEST(BlurTwod, TheUniformsHalvesAndTheProvenMargins)
     EXPECT_FALSE(raw::blurTwodFormat(80, 2));
     EXPECT_TRUE(raw::blurTwodFormat(115, 3));
     EXPECT_FALSE(raw::blurTwodFormat(55, 1));
-    EXPECT_FALSE(raw::blurTwodRoute());
+    EXPECT_TRUE(raw::blurTwodRoute());
 }
 
 }  // namespace

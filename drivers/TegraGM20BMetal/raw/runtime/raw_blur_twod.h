@@ -11,9 +11,9 @@
 // aligned to the destination texel and the size ratio is 2^n on both axes, n 2:1 bilinear blits with the 2D engine's
 // corner origin at half a step (fx::kGm20bSampling, each step a 2x2 box: 2D-1, chip) give the pass's texels. The proven
 // margin is one code a step on 8-bit unorm and within one half ulp on RGBA16Float (gpu.raw.mip_twod), so 8-bit passes
-// qualify at one step and RGBA16Float ones at up to three. False until gpu.x1.twod_scale's 2to1_linear cells of those
-// formats (the engine's 2:1 bilinear step against the 3D route's linear sample) read exact or near on the chip; the glass
-// probe's `taps` lines (raw_glass_probe.h) say which passes of the chain qualify.
+// qualify at one step and RGBA16Float ones at up to three. gpu.x1.twod_scale's 2to1_linear cells judge the engine's 2:1
+// step on the chip and ui.glass the passes it draws; the glass probe's `taps` lines (raw_glass_probe.h) say which passes of
+// the chain qualify.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -23,7 +23,7 @@ namespace raw {
 
 constexpr bool blurTwodRoute()
 {
-    return false;
+    return true;
 }
 
 enum class BlurFunction : uint8_t {
