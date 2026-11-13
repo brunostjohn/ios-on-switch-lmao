@@ -1234,7 +1234,7 @@ vk_graphics_pipeline_cmd_bind(struct vk_command_buffer *cmd_buffer,
    }
 }
 
-static VkShaderCreateFlagsEXT
+VkShaderCreateFlagsEXT
 vk_pipeline_to_shader_flags(VkPipelineCreateFlags2KHR pipeline_flags,
                             mesa_shader_stage stage,
                             struct vk_pipeline_layout *pipeline_layout)

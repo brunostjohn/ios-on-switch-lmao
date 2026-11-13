@@ -1,5 +1,6 @@
 # The TegraGM20B Metal plugin's sources and the precompile/stage tools (m2v and our changes to it: third_party/m2v). The bundle itself is
 # built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -9,9 +10,11 @@ load("//kits/SwitchGM20BEmit:defs.bzl", "EMIT_SOURCES")
 
 package(default_visibility = ["//visibility:public"])
 
-# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.h is m2v's SRGB_KNOTS table, generated.
+# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.h is m2v's SRGB_KNOTS table and srgb_encode.h its
+# inverse (raw_ycbcr_converted_store_test holds it to the rule), generated.
 lint_files(exclude = [
     "raw/pack/mesa/**",
+    "raw/pack/srgb_encode.h",
     "raw/pack/srgb_knots.h",
 ])
 
@@ -27,7 +30,10 @@ filegroup(
     srcs = glob([
         "raw/runtime/*.h",
         "raw/fx/*.h",
-    ]) + ["raw/pack/probe_bind.h"],  # the probe's bind offsets, which name a record's residual words (raw_record.h)
+    ]) + [
+        "raw/pack/probe_bind.h",  # the probe's bind offsets, which name a record's residual words (raw_record.h)
+        "raw/pack/srgb_encode.h",  # the sRGB YCbCr store states' table, the device's copy of it (Device::srgbEncode_)
+    ],
 )
 
 # The raw facade's Objective-C++ units (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
@@ -82,13 +88,17 @@ filegroup(
         "raw/runtime/raw_compute_record.h",
         "raw/runtime/raw_chip_facts.h",
         "raw/runtime/raw_cubic.h",
+        "raw/runtime/raw_descriptors.h",
         "raw/runtime/raw_direct.cpp",
         "raw/runtime/raw_direct.h",
         "raw/runtime/raw_direct_compute.cpp",
         "raw/runtime/raw_direct_compute.h",
+        "raw/runtime/raw_direct_encode.h",
+        "raw/runtime/raw_direct_heap.h",
         "raw/runtime/raw_direct_nvk.h",
         "raw/runtime/raw_direct_push.h",
         "raw/runtime/raw_dynamic_push.h",
+        "raw/runtime/raw_spill_table.h",
         "raw/runtime/raw_direct_storage.h",
         "raw/runtime/raw_storage.h",
         "raw/runtime/raw_split_metadata.h",
@@ -96,14 +106,24 @@ filegroup(
         "raw/runtime/raw_emit.h",
         "raw/runtime/raw_metallib.cpp",
         "raw/runtime/raw_metallib.h",
+        "raw/runtime/raw_nak_target.h",
         "raw/runtime/raw_owned.h",
+        "raw/runtime/raw_program_pages.h",
         "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_pack.h",
+        "raw/runtime/raw_push.h",
         "raw/runtime/raw_record.h",
         "raw/runtime/raw_record_parts.cpp",
         "raw/runtime/raw_record_parts.h",
         "raw/runtime/raw_residual.h",
+        "raw/runtime/raw_rotation.h",
+        "raw/runtime/raw_set_layout.h",
+        "raw/runtime/raw_set_reads.h",
+        "raw/runtime/raw_written_textures.h",
+        "raw/runtime/raw_xr.h",
+        "raw/runtime/raw_xr_pass.h",
+        "raw/runtime/raw_zeta.h",  # the formats directpack.mm's test classes reach
     ],
 )
 
@@ -125,6 +145,7 @@ filegroup(
         "raw/fx/test/twod_sim.h",  # the 2D engine nvdec executes (pack/nvdec.cpp)
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
         "//kits/SwitchGM20B:class_headers",  # pack/nvdec.cpp's method numbers
+        "//kits/SwitchGM20BEmit:context",  # the channel's context init pack/context_state.cpp runs
     ],
 )
 
@@ -135,6 +156,8 @@ filegroup(
     name = "compiler_srcs",
     srcs = [
         "compiler/compiler_engine.mm",
+        "compiler/compiler_libraries.mm",
+        "compiler/compiler_record.mm",
         "compiler/compiler_request.mm",
         "compiler/compiler_sandbox.mm",
         "compiler/compiler_service.mm",
@@ -192,6 +215,7 @@ filegroup(
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/NativeMetal:frontend_headers",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
@@ -221,6 +245,7 @@ ios_binary(
         "raw/fx/fx_image.cpp",
         "raw/fx/fx_mip.cpp",
         "raw/runtime/raw_alias.cpp",
+        "raw/runtime/raw_amplification.cpp",
         "raw/runtime/raw_arena.cpp",
         "raw/runtime/raw_comp.cpp",
         "raw/runtime/raw_gpu.cpp",
@@ -229,6 +254,7 @@ ios_binary(
         "raw/runtime/raw_job_uses.cpp",
         "raw/runtime/raw_draw_shortcuts.cpp",
         "raw/runtime/raw_resolve_twod.cpp",
+        "raw/runtime/raw_tessellation.cpp",
         "raw/runtime/raw_transfer.cpp",
         "raw/runtime/raw_kernel.cpp",
         "raw/runtime/raw_kernel_job.cpp",
@@ -239,6 +265,7 @@ ios_binary(
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_split.cpp",
         "raw/runtime/raw_variants.cpp",
+        "raw/runtime/raw_vertex_streams.cpp",
         "raw/runtime/raw_zeta.cpp",
         "raw/test/fetchform.cpp",
     ] + ["//kits/SwitchGM20BEmit:" + s for s in EMIT_SOURCES],
@@ -288,8 +315,12 @@ py_library(
         [
             "raw/pack/*.py",
             "raw/pack/ca/*.py",
+            "raw/pack/iterated/*.py",
         ],
-        exclude = ["raw/pack/ca/*_test.py"],
+        exclude = [
+            "raw/pack/ca/*_test.py",
+            "raw/pack/iterated/*_test.py",
+        ],
     ),
     data = [
         "raw/pack/ca/qc-21H461.json",
@@ -321,6 +352,48 @@ py_test(
         "raw/pack/ca/qc-24B119.json",
     ],
     main = "raw/pack/ca/caspec27_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/ca/fetchfree.py: the fetch-free forms the pack makes of fetching Core Animation states, on both IPSWs' tables.
+py_test(
+    name = "fetchfree_test",
+    srcs = ["raw/pack/ca/fetchfree_test.py"],
+    data = [
+        "raw/pack/ca/qc-21H461.json",
+        "raw/pack/ca/qc-24B119.json",
+    ],
+    main = "raw/pack/ca/fetchfree_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/ca/deepcolour.py: the colour precision the device's QuartzCore names Core Animation's states with, from the
+# preferences the stager writes.
+py_test(
+    name = "deepcolour_test",
+    srcs = ["raw/pack/ca/deepcolour_test.py"],
+    data = [
+        "raw/pack/ca/qc-21H461.json",
+        "raw/pack/ca/qc-24B119.json",
+        "stage-tegra-gm20b-metal.py",
+    ],
+    main = "raw/pack/ca/deepcolour_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/fetchfree_link.py: where a colour matrix form's draws read the matrix uniform.
+py_test(
+    name = "fetchfree_link_test",
+    srcs = ["raw/pack/fetchfree_link_test.py"],
+    main = "raw/pack/fetchfree_link_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/iterated: every iterated blend program a fetch-free form names, against QuartzCore's formula.
+py_test(
+    name = "iterated_table_test",
+    srcs = ["raw/pack/iterated/table_test.py"],
+    main = "raw/pack/iterated/table_test.py",
     deps = [":raw_pack"],
 )
 
@@ -356,6 +429,12 @@ filegroup(
 filegroup(
     name = "ca_name_lists",
     srcs = glob(["precompile/ca-names/*.txt"]),
+)
+
+# Our own apps' render states the raw pack holds, per IPSW kind (//gpu/seed:raw_pack, tools/gpu/rawpack.py app_states).
+filegroup(
+    name = "app_state_lists",
+    srcs = glob(["precompile/app-states/*.log"]),
 )
 
 py_library(
@@ -419,6 +498,51 @@ py_test(
     deps = [
         ":archives",
         "//tools/gpu/shaders:metallib",
+    ],
+)
+
+# argcheck (raw/test/argcheck.py): HW Test's argument-buffer states' fragment programs on the Maxwell interpreter, over a
+# draw's root table as rootdump writes it with the device's own writer
+cc_binary(
+    name = "rootdump",
+    srcs = [
+        "raw/runtime/raw_heap_tables.h",
+        "raw/runtime/raw_pack.h",
+        "raw/runtime/raw_resource_id.h",
+        "raw/test/rootdump.cpp",
+    ],
+)
+
+py_binary(
+    name = "argcheck",
+    srcs = ["raw/test/argcheck.py"],
+    args = [
+        "--rootdump",
+        "$(rootpath :rootdump)",
+    ],
+    data = [
+        ":raw_pack_generator",
+        ":rootdump",
+    ],
+    main = "raw/test/argcheck.py",
+    deps = [
+        ":raw_pack",
+        "//tools/gpu/maxwell:interp",
+        "//tools/gpu/maxwell:isa",
+    ],
+)
+
+# boundcheck (raw/test/boundcheck.py): every record's words for the probe's bound draw against m2v's own instantiation of it,
+# and each record with an argument table drawn on the Maxwell interpreter over both: bazel run :boundcheck -- <records.bin>
+py_binary(
+    name = "boundcheck",
+    srcs = ["raw/test/boundcheck.py"],
+    data = [":raw_pack_generator"],
+    main = "raw/test/boundcheck.py",
+    deps = [
+        ":raw_pack",
+        "//tools/gpu/maxwell:interp",
+        "//tools/gpu/maxwell:isa",
     ],
 )
 

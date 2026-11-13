@@ -2,26 +2,30 @@
 // MTLIndirectCommandBuffer of draws that inherit their pipeline and buffers (raw_icb.h): the commands are push words in
 // write-combined GPU memory, written as the CPU encodes each, and a render encoder's executeCommandsInBuffer:withRange:
 // runs the range by reference after one prepare of the state they inherit. Commands that set their own pipeline, buffers or
-// raster state, and patches, have no form here: such a descriptor's creation is nil. A descriptor of dispatches makes a
+// raster state, and mesh draws, have no form here: such a descriptor's creation is nil. Patch commands
+// (RawMetalIndirectPatches.mm) where the device answers supportsIndirectTessellation. A descriptor of dispatches makes a
 // buffer of them (RawMetalIndirectCompute.mm).
 #include "raw_lock.h"
 #import "RawMetalIndirectCompute.h"
+#include "raw_device_answers.h"
 #include "raw_icb.h"
 
 namespace {
 
-// A buffer's commands of triangles, and of lines or points: the two take different raster state (raw::icb::triangles)
-enum PrimitiveKinds : uint8_t {
-    KindTriangles = 1,
-    KindOthers = 2
-};
-
 constexpr NSUInteger kDispatchTypes =
     MTLIndirectCommandTypeConcurrentDispatch | MTLIndirectCommandTypeConcurrentDispatchThreads;
+constexpr NSUInteger kPatchTypes = MTLIndirectCommandTypeDrawPatches | MTLIndirectCommandTypeDrawIndexedPatches;
+
+bool indirectTessellation()
+{
+    return raw::answers::thisKindCount("supportsIndirectTessellation") != 0;
+}
 
 const char *unsupportedDescriptor(MTLIndirectCommandBufferDescriptor *d)
 {
-    if (d.commandTypes & ~NSUInteger(MTLIndirectCommandTypeDraw | MTLIndirectCommandTypeDrawIndexed | kDispatchTypes))
+    const NSUInteger patches = indirectTessellation() ? kPatchTypes : 0;
+    if (d.commandTypes &
+        ~NSUInteger(MTLIndirectCommandTypeDraw | MTLIndirectCommandTypeDrawIndexed | kDispatchTypes | patches))
         return "patches or mesh draws";
     if (d.commandTypes & kDispatchTypes)
         return nullptr;
@@ -36,26 +40,36 @@ const char *unsupportedDescriptor(MTLIndirectCommandBufferDescriptor *d)
     return nullptr;
 }
 
-uint32_t *slot(RMIndirectCommandBuffer *b, NSUInteger index)
+// The RMICBKinds bits of command `c` (counted in RMIndirectCommandBuffer::_kinds by bit index)
+uint8_t kindsOf(const RMICBCommand &c)
 {
-    return reinterpret_cast<uint32_t *>(b->_raw.cpu) + index * raw::icb::kSlotWords;
-}
-
-// Command `index`'s words as `c` says, written by the CPU
-void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand &c)
-{
-    if (c.kind == RMICBCommand::Draw)
-        raw::icb::draw(slot(b, index), uint32_t(index), {c.primitive, c.count, c.instances, c.first, c.baseInstance});
-    else if (c.kind == RMICBCommand::Indexed)
-        raw::icb::indexed(slot(b, index), uint32_t(index),
-                          {c.primitive, c.indexType == MTLIndexTypeUInt16 ? 2u : 4u, c.indices->_raw.va + c.indexOffset,
-                           c.indices->_raw.va + c.indices->_raw.length - 1, c.count, c.instances, 0, c.baseVertex,
-                           c.baseInstance});
-    else
-        raw::icb::empty(slot(b, index));
+    if (c.kind == RMICBCommand::None)
+        return 0;
+    if (c.kind == RMICBCommand::Patches)
+        return RMICBPatches;
+    return uint8_t((raw::icb::triangles(c.primitive) ? RMICBTriangles : RMICBOthers) |
+                   (c.kind == RMICBCommand::Indexed ? RMICBIndexed : 0));
 }
 
 }  // namespace
+
+void rmWriteCommand(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand &c)
+{
+    uint32_t *slot = rmCommandSlot(b, index);
+    if (c.kind == RMICBCommand::Draw)
+        raw::icb::draw(slot, uint32_t(index), {c.primitive, c.count, c.instances, c.first, c.baseInstance},
+                       b->_slotWords);
+    else if (c.kind == RMICBCommand::Indexed)
+        raw::icb::indexed(slot, uint32_t(index),
+                          {c.primitive, c.indexType == MTLIndexTypeUInt16 ? 2u : 4u, c.indices->_raw.va + c.indexOffset,
+                           c.indices->_raw.va + c.indices->_raw.length - 1, c.count, c.instances, 0, c.baseVertex,
+                           c.baseInstance},
+                          b->_slotWords);
+    else if (c.kind == RMICBCommand::Patches && b->_slotWords >= raw::icb::kPatchSlotWords)
+        raw::icb::patches(slot, uint32_t(index), c.patches);
+    else
+        raw::icb::empty(slot, b->_slotWords);
+}
 
 @implementation RMIndirectCommandBuffer
 
@@ -65,33 +79,38 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
         gRM->raw->destroyBuffer(_raw);
 }
 
-// Command `index` is now `command` (its words already written): the index buffers and primitive kinds of the whole buffer
+// The buffers and kinds of the whole buffer follow each command's
 - (void)take:(RMICBCommand)command at:(NSUInteger)index
 {
     std::lock_guard<raw::Mutex> hold(_lock);
     RMICBCommand &was = _commands[index];
-    if (was.indices && --_indexBuffers[(__bridge void *)was.indices] == 0)
-        _indexBuffers.erase((__bridge void *)was.indices);
-    if (was.kind != RMICBCommand::None)
-        _kinds[raw::icb::triangles(was.primitive) ? 0 : 1]--;
-    if (command.indices)
-        _indexBuffers[(__bridge void *)command.indices]++;
-    if (command.kind != RMICBCommand::None)
-        _kinds[raw::icb::triangles(command.primitive) ? 0 : 1]++;
+    for (RMBuffer *read : {was.indices, was.factors, was.patchIndices, was.pointIndices})
+        if (read && --_buffers[(__bridge void *)read] == 0)
+            _buffers.erase((__bridge void *)read);
+    for (RMBuffer *read : {command.indices, command.factors, command.patchIndices, command.pointIndices})
+        if (read)
+            _buffers[(__bridge void *)read]++;
+    for (uint32_t bit = 0; bit < 4; bit++) {
+        _kinds[bit] -= kindsOf(was) >> bit & 1;
+        _kinds[bit] += kindsOf(command) >> bit & 1;
+    }
     was = command;
 }
 
 - (uint8_t)kinds
 {
     std::lock_guard<raw::Mutex> hold(_lock);
-    return uint8_t((_kinds[0] ? KindTriangles : 0) | (_kinds[1] ? KindOthers : 0));
+    uint8_t kinds = 0;
+    for (uint32_t bit = 0; bit < 4; bit++)
+        kinds |= uint8_t((_kinds[bit] ? 1 : 0) << bit);
+    return kinds;
 }
 
-- (std::vector<RMBuffer *>)indexBuffers
+- (std::vector<RMBuffer *>)buffers
 {
     std::lock_guard<raw::Mutex> hold(_lock);
     std::vector<RMBuffer *> out;
-    for (const auto &[buffer, uses] : _indexBuffers)
+    for (const auto &[buffer, uses] : _buffers)
         out.push_back((__bridge RMBuffer *)buffer);
     return out;
 }
@@ -120,7 +139,7 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 - (void)resetWithRange:(NSRange)range
 {
     for (NSUInteger i = range.location; i < std::min<NSUInteger>(NSMaxRange(range), _count); i++) {
-        raw::icb::empty(slot(self, i));
+        raw::icb::empty(rmCommandSlot(self, i), _slotWords);
         [self take:RMICBCommand {} at:i];
     }
 }
@@ -174,8 +193,9 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
          instanceCount:(NSUInteger)instances
           baseInstance:(NSUInteger)baseInstance
 {
-    raw::icb::draw(slot(_buffer, _index), uint32_t(_index),
-                   {uint32_t(type), uint32_t(count), uint32_t(instances), uint32_t(start), uint32_t(baseInstance)});
+    raw::icb::draw(rmCommandSlot(_buffer, _index), uint32_t(_index),
+                   {uint32_t(type), uint32_t(count), uint32_t(instances), uint32_t(start), uint32_t(baseInstance)},
+                   _buffer->_slotWords);
     RMICBCommand c;
     c.kind = RMICBCommand::Draw;
     c.primitive = uint8_t(type);
@@ -204,9 +224,10 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
         [self reset];
         return;
     }
-    raw::icb::indexed(slot(_buffer, _index), uint32_t(_index),
+    raw::icb::indexed(rmCommandSlot(_buffer, _index), uint32_t(_index),
                       {uint32_t(type), size, b->_raw.va + offset, b->_raw.va + b->_raw.length - 1, uint32_t(count),
-                       uint32_t(instances), 0, int32_t(baseVertex), uint32_t(baseInstance)});
+                       uint32_t(instances), 0, int32_t(baseVertex), uint32_t(baseInstance)},
+                      _buffer->_slotWords);
     RMICBCommand c;
     c.kind = RMICBCommand::Indexed;
     c.primitive = uint8_t(type);
@@ -222,7 +243,7 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 
 - (void)reset
 {
-    raw::icb::empty(slot(_buffer, _index));
+    raw::icb::empty(rmCommandSlot(_buffer, _index), _buffer->_slotWords);
     [_buffer take:RMICBCommand {} at:_index];
 }
 
@@ -247,58 +268,6 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 
 @end
 
-@implementation RMBlitEncoder (Indirect)
-
-- (void)resetCommandsInBuffer:(id<MTLIndirectCommandBuffer>)buffer withRange:(NSRange)range
-{
-    RMIndirectCommandBuffer *b =
-        [(id)buffer isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)buffer : nil;
-    if (!b || NSMaxRange(range) > b->_count) {
-        SWITCH_REFUSE("raw", "icb.range", "resetCommandsInBuffer: a buffer not this device's or a range past it");
-        return;
-    }
-    [_cb retain:b];
-    Cmd m = cmd(OpResetCommands);
-    m.obj = m.obj2 = (__bridge void *)b;
-    m.c = range.location;
-    m.x = range.length;
-    [_cb record:m];
-}
-
-- (void)copyIndirectCommandBuffer:(id<MTLIndirectCommandBuffer>)source
-                      sourceRange:(NSRange)range
-                      destination:(id<MTLIndirectCommandBuffer>)destination
-                 destinationIndex:(NSUInteger)index
-{
-    RMIndirectCommandBuffer *from =
-        [(id)source isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)source : nil;
-    RMIndirectCommandBuffer *to =
-        [(id)destination isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)destination : nil;
-    if (!from || !to || NSMaxRange(range) > from->_count || index + range.length > to->_count ||
-        [(id)from isKindOfClass:[RMIndirectComputeBuffer class]] !=
-            [(id)to isKindOfClass:[RMIndirectComputeBuffer class]]) {
-        SWITCH_REFUSE("raw", "icb.range", "copyIndirectCommandBuffer: a buffer not this device's or a range past one");
-        return;
-    }
-    [_cb retain:from];
-    [_cb retain:to];
-    Cmd m = cmd(OpCopyCommands);
-    m.obj = (__bridge void *)from;
-    m.obj2 = (__bridge void *)to;
-    m.c = range.location;
-    m.x = range.length;
-    m.a = uint32_t(index);
-    [_cb record:m];
-}
-
-// Metal's optimization keeps what the commands draw: these are already the channel's words
-- (void)optimizeIndirectCommandBuffer:(id<MTLIndirectCommandBuffer>)buffer withRange:(NSRange)range
-{
-    (void)buffer, (void)range;
-}
-
-@end
-
 @interface RMDevice (Indirect)
 @end
 @implementation RMDevice (Indirect)
@@ -317,14 +286,16 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
     RMIndirectCommandBuffer *b = [RMIndirectCommandBuffer new];
     b->_device = self;
     b->_count = count;
+    b->_patches = (d.commandTypes & kPatchTypes) != 0;
+    b->_slotWords = b->_patches ? raw::icb::kPatchSlotWords : raw::icb::kSlotWords;
     b->_commands.resize(count);
-    if (!count || !gRM->raw->createBuffer(uint64_t(count) * raw::icb::kSlotWords * 4, b->_raw, true)) {
+    if (!count || !gRM->raw->createBuffer(uint64_t(count) * b->_slotWords * 4, b->_raw, true)) {
         SWITCH_REFUSE("raw", "icb.memory", "no memory for an indirect command buffer of %lu commands",
                       (unsigned long)count);
         return nil;
     }
     for (NSUInteger i = 0; i < count; i++)
-        raw::icb::empty(slot(b, i));
+        raw::icb::empty(rmCommandSlot(b, i), b->_slotWords);
     return (id<MTLIndirectCommandBuffer>)b;
 }
 
@@ -370,20 +341,26 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
         return;
     }
     const uint8_t kinds = [b kinds];
-    if (kinds == (KindTriangles | KindOthers)) {
+    if ((kinds & RMICBPatches) && (kinds & (RMICBTriangles | RMICBOthers))) {
+        [_cb takeReason:WhyEncode why:@"an indirect command buffer of patches and primitives"];
+        hit(_cb, PredEncGeometry, 1, kinds);
+    } else if ((kinds & (RMICBTriangles | RMICBOthers)) == (RMICBTriangles | RMICBOthers)) {
         [_cb takeReason:WhyEncode why:@"an indirect command buffer of triangles and lines or points"];
         hit(_cb, PredEncGeometry, 0, kinds);
     }
-    const std::vector<RMBuffer *> indices = [b indexBuffers];
+    const std::vector<RMBuffer *> reads = [b buffers];
     [self checkDraw];
     [_cb retain:b];
     [_cb retain:rangeBuffer];
-    for (RMBuffer *i : indices)
-        [_cb retain:i];
-    Cmd m = cmd(OpExecuteCommands, kinds & KindTriangles ? 3 : 0);
+    for (RMBuffer *read : reads)
+        [_cb retain:read];
+    const uint8_t primitive = kinds & RMICBPatches     ? uint8_t(raw::icb::kPatchPrimitive)
+                              : kinds & RMICBTriangles ? 3
+                                                       : 0;
+    Cmd m = cmd(OpExecuteCommands, primitive);
     m.obj = (__bridge void *)rangeBuffer;
     m.obj2 = (__bridge void *)b;
-    m.a = !indices.empty();
+    m.a = (kinds & RMICBIndexed) != 0;
     m.b = uint32_t(offset);
     m.x = first;
     m.c = count;
@@ -395,59 +372,18 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
 bool encodeCommands(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlanDraw &draw, const char **why)
 {
     RMIndirectCommandBuffer *b = (__bridge RMIndirectCommandBuffer *)draw.arguments;
-    std::vector<const raw::Buffer *> indices;
-    for (RMBuffer *buffer : [b indexBuffers]) {
+    std::vector<const raw::Buffer *> reads;
+    for (RMBuffer *buffer : [b buffers]) {
         useBuffer(rc, buffer, false);
-        indices.push_back(&buffer->_raw);
+        reads.push_back(&buffer->_raw);
     }
     RMBuffer *range = (__bridge RMBuffer *)draw.indices;
     if (range)
         useBuffer(rc, range, false);
-    return re->executeSlots({&b->_raw, uint32_t(draw.argumentOffset), uint32_t(draw.indexOffset),
+    return re->executeSlots({&b->_raw, uint32_t(draw.argumentOffset), uint32_t(draw.indexOffset), b->_slotWords,
                              range ? &range->_raw : nullptr, draw.first, draw.primitive, draw.indexType != 0,
-                             b->_gpuWritten.load(std::memory_order_relaxed), indices.data(), indices.size()},
+                             b->_gpuWritten.load(std::memory_order_relaxed), reads.data(), reads.size()},
                             why);
-}
-
-void encodeCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
-{
-    if ([(__bridge id)c.obj2 isKindOfClass:[RMIndirectComputeBuffer class]]) {
-        encodeKernelCommandsBlit(be, c);
-        return;
-    }
-    RMIndirectCommandBuffer *from = (__bridge RMIndirectCommandBuffer *)c.obj;
-    RMIndirectCommandBuffer *to = (__bridge RMIndirectCommandBuffer *)c.obj2;
-    constexpr uint64_t kSlotBytes = raw::icb::kSlotWords * 4;
-    const NSUInteger first = NSUInteger(c.c), count = NSUInteger(c.x), into = c.op == OpCopyCommands ? c.a : first;
-    if (be) {
-        be->access(c.op == OpCopyCommands ? (__bridge void *)from : nullptr, (__bridge void *)to);
-    }
-    std::vector<RMICBCommand> commands(count);
-    if (c.op == OpCopyCommands) {
-        std::lock_guard<raw::Mutex> hold(from->_lock);
-        std::copy_n(from->_commands.begin() + ptrdiff_t(first), count, commands.begin());
-    }
-    if (be) {
-        if (c.op == OpResetCommands)
-            be->fillWords(to->_raw.va + first * kSlotBytes, count * kSlotBytes, raw::icb::kNop);
-        else
-            be->copyBytes(from->_raw.va + first * kSlotBytes, to->_raw.va + into * kSlotBytes, count * kSlotBytes);
-        // a copied command draws as its new index (the gated draw compares it with the range)
-        if (c.op == OpCopyCommands) {
-            be->barrier();
-            for (NSUInteger i = 0; i < count; i++)
-                if (commands[i].kind != RMICBCommand::None)
-                    be->fillWords(to->_raw.va + (into + i) * kSlotBytes + raw::icb::kIndexWord * 4, 4,
-                                  uint32_t(into + i));
-        }
-        to->_gpuWritten.store(true, std::memory_order_relaxed);
-    }
-    // with no copy engine (the blit encoder replayed on m2v) the words are the CPU's to write, as Metal's would be the GPU's
-    for (NSUInteger i = 0; i < count; i++) {
-        if (!be)
-            writeSlot(to, into + i, commands[i]);
-        [to take:commands[i] at:into + i];
-    }
 }
 
 void replayCommands(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const std::function<id(void *)> &use)

@@ -9,6 +9,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 namespace raw {
 
@@ -130,12 +131,53 @@ struct Rotation {
     }
 };
 
+// The root table's turn words (NVK's nvk_root_descriptor_table::switch_turn, nvk_switch_turn.h): a fragment program's turned
+// variant reads the frame through them, f.x = sx (swap ? p.y : p.x) + tx and f.y = sy (swap ? p.x : p.y) + ty of the plane's p,
+// a derivative the same without the offsets, a point coordinate with ox, oy (1 where an axis's sign is negative)
+constexpr uint32_t kRootTurn = 0x268, kTurnWords = 8;
+
+inline void turnWords(const Rotation &r, uint32_t out[kTurnWords])
+{
+    const auto bits = [](float f) {
+        uint32_t u;
+        memcpy(&u, &f, 4);
+        return u;
+    };
+    const float w = float(r.width), h = float(r.height);
+    float sx = 1, sy = 1, tx = 0, ty = 0;
+    uint32_t swap = 0;
+    switch (r.turn) {
+    case 1:
+    case 4:
+        swap = 1, sy = -1, ty = h;
+        break;
+    case 2:
+        sx = -1, tx = w, sy = -1, ty = h;
+        break;
+    case 3:
+        swap = 1, sx = -1, tx = w;
+        break;
+    default:
+        break;
+    }
+    out[0] = swap;
+    out[1] = bits(sx);
+    out[2] = bits(sy);
+    out[3] = bits(tx);
+    out[4] = bits(ty);
+    out[5] = bits(sx < 0 ? 1.0f : 0.0f);
+    out[6] = bits(sy < 0 ? 1.0f : 0.0f);
+    out[7] = 0;
+}
+
 // A pixel program a turned plane changes the result of: it reads the fragment's position x or y (SPH IMAP_POSITION_X/Y, bits
 // 188-189), a point sprite's coordinate (IMAP_POINT_SPRITE_S/T, bits 472-473), or takes a derivative along one axis (FSWZADD,
 // NAK's ddx/ddy on SM50, opcode 0x50f8 in bits 63:48 of an instruction; every fourth 64-bit word is a scheduling word). Those
 // see the plane's axes, not the frame's. A program that reads its position only to address its own pixel's attachment
 // (framebuffer fetch through the interlock or an input attachment) reads the same pixel either way: `fetches` exempts its
-// position reads. Implicit-LOD sampling and fwidth do not depend on the axes' order or signs.
+// position reads. Implicit-LOD sampling and fwidth do not depend on the axes' order or signs, which this code scan cannot tell
+// from a lone derivative: it only picks the programs whose turned variant is worth compiling (raw_direct.cpp), and the
+// variant's code (NVK's nvk_switch_turn.c over the program's NIR) decides.
 inline bool turnSensitive(const uint32_t sph[20], const uint32_t *code, uint32_t words, bool fetches)
 {
     const bool position = (sph[5] >> 28) & 3, sprite = (sph[14] >> 24) & 3;

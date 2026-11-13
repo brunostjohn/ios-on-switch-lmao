@@ -17,10 +17,7 @@ mkdir -p "$OUT"
 FLAGS=(-O2 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -I "$TREE/kits/SwitchGM20BEmit/mesa"
     -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers")
 for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$f.c" -o "$OUT/$f.o"; done
-# the pack's mock with the job methods the runtime submits by, in a copy (mock_jobs.py: raw/pack/** is the stack key's)
-cp "$RAW/pack/mock_iokit.c" "$OUT/mock_iokit.c"
-python3 "$HERE/mock_jobs.py" "$OUT/mock_iokit.c"
-xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" -I "$RAW/pack" "$OUT/mock_iokit.c" -o "$OUT/mock_iokit.o"
+xcrun clang -O1 -Wall -c -DSWITCH_MOCK_JOB_INTERFACE -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
 xcrun clang++ "${FLAGS[@]}" -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$OUT/cap.o"
 # the mock's decoder runs the 2D engine's blits too (raw/fx/test/twod_sim: the mip chains)
 xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec.cpp" -o "$OUT/nvdec.o"
@@ -28,7 +25,7 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec_co
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 # kits/SwitchGM20BEmit's emitters, which raw_gpu.cpp and raw_transfer.cpp call, in the mock library every harness links (their
 # generated headers: bazel build //kits/SwitchGM20BEmit:push_headers)
-for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier mesa/nouveau_copy_rect; do
+for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier SwitchGM20BEmitIterated mesa/nouveau_copy_rect; do
     xcrun clang -O2 -std=c11 -DNDEBUG -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" \
         -I "$TREE/third_party/mesa/src/nouveau/headers" -c "$TREE/kits/SwitchGM20BEmit/$f.c" -o "$OUT/kit_${f##*/}.o"
 done
@@ -38,7 +35,7 @@ OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HAR
 # the runtime's completion of states the pack lacks (RawComplete.mm, RawDirect.mm; raw_completed.cpp beside raw_gpu.cpp)
 # the facade's own runtime units: its recording plan (RawMetalPlan.h), XR planes and multisample resolves
 FACADE_RUNTIME=("$RAW/runtime/raw_semantic_plan.cpp" "$RAW/runtime/raw_semantic_resources.cpp" "$RAW/runtime/raw_semantic_setters.cpp"
-    "$RAW/runtime/raw_xr_planes.cpp" "$RAW/runtime/raw_multisample.cpp" "$RAW/runtime/raw_object_pool.cpp")
+    "$RAW/runtime/raw_xr_texture.cpp" "$RAW/runtime/raw_multisample.cpp" "$RAW/runtime/raw_object_pool.cpp")
 COMPLETION=("$RAW/runtime/raw_record_parts.cpp" "$RAW/runtime/raw_direct.cpp" "$RAW/runtime/raw_direct_compute.cpp" "$RAW/runtime/raw_emit.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp")
 # the raw facade (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
 FACADE=("$RAW"/runtime/Raw*.mm "$RAW/runtime/SwitchSharedEvent.mm")
@@ -257,6 +254,15 @@ xcrun clang++ -O1 -std=c++17 -fobjc-arc -I "$TREE/drivers/TegraGM20B" -I "$TREE/
     -x c++ "$RAW/fx/fx_mip.cpp" -framework Metal -framework Foundation -framework CoreVideo -framework IOSurface \
     -o "$OUT/ycbcrstoreoracle"
 echo "built $OUT/ycbcrstoreoracle"
+# packedplaneoracle: R10Unorm_PACKED and RG10Unorm_PACKED: the conversion and store states against this Mac's Metal's reads
+# ($OUT/packedplaneoracle pack)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/packedplaneoracle.mm" "$RAW/runtime/raw_ycbcr.cpp" -framework Metal \
+    -framework Foundation -framework CoreVideo -framework IOSurface -o "$OUT/packedplaneoracle"
+echo "built $OUT/packedplaneoracle"
+# packedreaders: whether Metal, VideoToolbox or Core Image reads a packed 10-bit surface's spare bits ($OUT/packedreaders)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/packedreaders.mm" -framework Metal -framework Foundation -framework CoreVideo \
+    -framework IOSurface -framework VideoToolbox -framework CoreImage -framework CoreMedia -o "$OUT/packedreaders"
+echo "built $OUT/packedreaders"
 # xroracle: the extended-range stand-ins, clears and Core Animation's passes against this Mac's Metal
 # ($OUT/xroracle pack/xr.metal <QuartzCore default.metallib>)
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/xroracle.mm" -framework Metal -framework Foundation -framework CoreVideo \

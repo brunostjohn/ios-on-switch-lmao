@@ -2,7 +2,7 @@
 #import <Metal/Metal.h>
 #include "../NativeBridgeMetalFrontend.h"
 #include "../bridge/NativeMetalDirect.h"
-#include "../../TegraGM20BMetal/raw/runtime/raw_direct_nvk.h"
+#include "device_compile.h"
 #include "../../../third_party/mesa/src/nouveau/vulkan/nvk_switch_ir.h"
 #include <algorithm>
 #include <cstdio>
@@ -42,7 +42,7 @@ static bool sameArtifact(const raw::NvkStage &a, const raw::NvkStage &b)
            a.interlockControl == b.interlockControl && a.usesSampleShading == b.usesSampleShading;
 }
 
-static bool rejectMalformed(const NmbDirectKernel *kernel, const raw::DirectNvk &compiler, raw::NvkStageInfo info,
+static bool rejectMalformed(const NmbDirectKernel *kernel, const raw::nvk::DeviceNvk &compiler, raw::NvkStageInfo info,
                             const raw::NvkStage &reference)
 {
     const auto &original = *static_cast<const switch_nvk_ir *>(kernel->stage.semantic);
@@ -104,7 +104,7 @@ static bool compile(const NmbDirectKernel *kernel, void *context)
                               stringByAppendingPathComponent:[NSString stringWithFormat:@"%s.typed", test.name]]
                atomically:YES];
     }
-    auto compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
+    auto compiler = raw::nvk::DeviceNvk::find(native_bridge_metal_nvk_symbol);
     raw::SubgroupSize subgroup;
     subgroup.size = kernel->stage.subgroupSize;
     Portable materialize = {&kernel->stage};

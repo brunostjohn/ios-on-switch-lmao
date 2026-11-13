@@ -28,6 +28,12 @@ public enum RawFacade {
         (device as AnyObject).responds(to: NSSelectorFromString("switchM2VDevice"))
     }
 
+    /// Whether the facade drew `state` from the raw pack's record rather than one made at its creation (nil off the
+    /// facade or in a release runtime, raw/runtime/RawMetalObjectProbe.mm).
+    public static func packed(_ state: MTLRenderPipelineState) -> Bool? {
+        ((ask(state, "switchRawObject") as? [String: Any])?["packed"] as? NSNumber)?.boolValue
+    }
+
     /// The facade's record of its m2v device, read without opening it (debug builds; empty off the facade):
     /// "opened", "opens", "opened_for" and "needs" (each need the process asked it for, with its count)
     public static func m2vRecord(of device: MTLDevice) -> [String: Any] {
@@ -81,6 +87,11 @@ public enum RawFacade {
     /// the host's window from submission to completion standing in for them; nil elsewhere.
     public static func gpuClock(of buffer: MTLCommandBuffer) -> String? {
         ask(buffer, "switchGpuClock") as? String
+    }
+
+    /// Whether a render state's record came out of the raw pack at its creation (nil off the facade or in a release build).
+    public static func packHit(_ state: MTLRenderPipelineState) -> Bool? {
+        (ask(state, "switchPackHit") as? NSNumber)?.boolValue
     }
 
     public static func wholePrograms(in buffer: MTLCommandBuffer) -> Bool {

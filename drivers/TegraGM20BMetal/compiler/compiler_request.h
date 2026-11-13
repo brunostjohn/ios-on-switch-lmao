@@ -13,14 +13,19 @@
 
 namespace switch_compiler {
 
-// The function lists of the system libraries asked for, read once per path (the system volume does not change)
+// The function lists of the system libraries asked for, read once per path (the system volume does not change), from the
+// system volumes at `root` ("" on the device)
 class SystemLibraries {
 public:
+    explicit SystemLibraries(std::string root = "") : root_(std::move(root))
+    {}
+
     bool air(const std::string &path, std::map<std::string, raw::AirHash> &out, std::string &why);
-    // Where `path` is, once it is known to stay on the system volume: what the compiler opens
-    static bool resolve(const std::string &path, std::string &real, std::string &why);
+    // Where `path` is under `root`, once it is known to stay on the system volume: what the compiler opens
+    static bool resolve(const std::string &root, const std::string &path, std::string &real, std::string &why);
 
 private:
+    const std::string root_;
     std::mutex lock_;
     std::map<std::string, std::map<std::string, raw::AirHash>> read_;
 };

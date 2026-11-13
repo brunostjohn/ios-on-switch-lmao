@@ -68,7 +68,7 @@ class SplitIdentityTest(unittest.TestCase):
             encoded = packfile.PACK_SPLIT.pack(
                 40, 1, 2, 3, 16, 7, 6, 1, 2, bytes(range(2, 8)) + bytes(2), version, threads, *qmd, *cost
             )
-            self.assertEqual(len(encoded), 316)
+            self.assertEqual(len(encoded), 322)
             decoded = splits.of_record(encoded, 'fs', 'prologue')
             self.assertEqual(decoded['batch_version'], version)
             self.assertEqual(decoded['batch_threads'], threads)

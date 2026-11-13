@@ -29,22 +29,29 @@ template <class Header> const char *qualifyStorage(const NmbDirectState &state, 
         (s.depthFormat && (s.depthFormat != 100 || s.testSamples != s.samples)) ||
         (s.stencilFormat && (s.stencilFormat != 13 || !s.depthFormat)))
         return "storage form: unsupported depth/stencil storage view";
+    constexpr int32_t kViewType2D = 1, kViewType2DArray = 5;
     for (const NmbDirectDraw &draw : state.draws) {
         uint32_t bound = 0;
         uint32_t tests = 0;
+        // a slice-choosing state's layered form (raw_pack.h layeredRecord) binds its attachments as arrays of the pass's
+        // layers, every other record as one 2D layer
+        const int32_t attachmentView = layeredRecord(uint8_t(draw.arrayLengthWord)) ? kViewType2DArray : kViewType2D;
         for (uint32_t i = 0; i < draw.writeCount; i++) {
             const NmbDirectWrite &w = draw.writes[i];
             if (w.source == NmbDirectDepthStandIn || w.source == NmbDirectStencilStandIn) {
-                if (w.stage != 2 || w.set || w.type != 3 || w.viewType != 1)
+                if (w.stage != 2 || w.set || w.type != 3 || w.viewType != kViewType2D)
                     return "storage form: invalid depth/stencil descriptor";
                 tests |= w.source == NmbDirectDepthStandIn ? 1u : 2u;
                 continue;
             }
             if (w.source != NmbDirectStorageAttachment)
                 continue;
-            if (w.slot >= 8 || w.stage != 2 || w.set != 0 || w.type != 3 || w.viewType != 1 ||
-                !(s.mask & (1u << w.slot)))
+            if (w.slot >= 8 || w.stage != 2 || w.set != 0 || w.type != 3 || !(s.mask & (1u << w.slot)))
                 return "storage form: attachment descriptor does not match its storage view";
+            if (w.viewType != attachmentView)
+                return w.viewType == kViewType2DArray
+                           ? "storage form: a layered storage view in a record not of the layered form"
+                           : "storage form: a record of the layered form whose storage view is one 2D layer";
             bound |= 1u << w.slot;
         }
         if (bound != s.mask)

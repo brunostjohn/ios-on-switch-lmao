@@ -20,6 +20,7 @@
 
 #include "nak.h"
 #include "nir.h"
+#include "nvk_switch_target.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,7 +104,7 @@ uint64_t switch_nvk_program_id(const struct nak_shader_info *info,
  * than `whole`, the stage's own program (`whole_id` names it in the proof).
  */
 struct switch_nvk_split *
-switch_nvk_split_compile(struct nvk_device *dev, const nir_shader *fs,
+switch_nvk_split_compile(const struct switch_nvk_target *t, const nir_shader *fs,
                          const struct nvk_cbuf_map *map,
                          nir_variable_mode robust2_modes,
                          const struct nak_fs_key *fs_key,

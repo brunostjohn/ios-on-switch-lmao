@@ -8,8 +8,9 @@
 // at the same words in every command, so a copy to another index rewrites one word (kComputeIndexWord), as a draw's does.
 // A buffer that inherits the encoder's buffers is written the same way, its set-0 buffer descriptors zero, and each command
 // also has a bind slot: a call of kIcbBind with each descriptor's address, its Metal buffer index, the kernel's window of
-// it and its residual's root word. An execute writes the encoder's buffers into the macros' scratch and runs the bind slots
-// of its commands by reference before their slots, so the GPU writes their descriptors with no CPU write per command.
+// it and its residual's root word, then each StageInStride root word of a stage-in kernel and its Metal buffer index. An
+// execute writes the encoder's buffers and bind strides into the macros' scratch and runs the bind slots of its commands by
+// reference before their slots, so the GPU writes their descriptors and strides with no CPU write per command.
 // A buffer that inherits its pipeline has its commands written the same way once for each pipeline it is executed under
 // (RawMetalIndirectCompute.h RMICBVariant), again only after a command changed: a QMD names its kernel's program.
 #pragma once
@@ -50,16 +51,29 @@ struct ComputeBind {
     uint32_t slot, window;
 };
 
-constexpr uint32_t kComputeBindSlotWords = 128, kComputeBindsMax = (kComputeBindSlotWords - 2) / 6;
+// A stage-in kernel's StageInStride root word in a command's region and the Metal buffer index whose bind stride it takes
+struct ComputeStride {
+    uint64_t word;
+    uint32_t slot;
+};
 
-// False: more descriptors than a bind slot holds
-inline bool binds(uint32_t *slot, const ComputeBind *b, uint32_t n)
+constexpr uint32_t kComputeBindSlotWords = 128, kComputeBindsMax = (kComputeBindSlotWords - 3) / 6;
+// the largest bind stride an execute's scratch word holds above an address (SWITCH_GM20B_ICB_STRIDE_SHIFT)
+constexpr uint32_t kComputeStrideLimit = (1u << (32 - SWITCH_GM20B_ICB_STRIDE_SHIFT)) - 1;
+
+inline bool bindsFit(uint32_t descriptors, uint32_t strides)
 {
-    if (n > kComputeBindsMax)
+    return 3 + 6 * descriptors + 3 * strides <= kComputeBindSlotWords;
+}
+
+// False: more descriptors and strides than a bind slot holds
+inline bool binds(uint32_t *slot, const ComputeBind *b, uint32_t n, const ComputeStride *s = nullptr, uint32_t m = 0)
+{
+    if (!bindsFit(n, m))
         return false;
     Push p{slot, slot + kComputeBindSlotWords};
-    if (n) {
-        mme::icbBindHeader(p, n);
+    if (n || m) {
+        mme::icbBindHeader(p, n, m);
         *p.at++ = n;
         for (uint32_t i = 0; i < n; i++) {
             *p.at++ = uint32_t(b[i].descriptor >> 32);
@@ -68,6 +82,12 @@ inline bool binds(uint32_t *slot, const ComputeBind *b, uint32_t n)
             *p.at++ = b[i].window;
             *p.at++ = uint32_t(b[i].residual >> 32);
             *p.at++ = uint32_t(b[i].residual);
+        }
+        *p.at++ = m;
+        for (uint32_t i = 0; i < m; i++) {
+            *p.at++ = uint32_t(s[i].word >> 32);
+            *p.at++ = uint32_t(s[i].word);
+            *p.at++ = 3 * s[i].slot;
         }
     }
     while (p.at < p.end)
@@ -81,9 +101,11 @@ inline void bindsEmpty(uint32_t *slot)
         slot[i] = kNop;
 }
 
-// An execute's inherited buffers (`va`, `size` by Metal buffer index) of `slots` (a mask) into the macros' scratch, after the
-// dispatches before have read the descriptors the bind slots write
-inline void computeBindHead(Push &p, const uint64_t (&va)[31], const uint32_t (&size)[31], uint32_t slots)
+// An execute's inherited buffers (`va`, `size`, bind `stride` by Metal buffer index; a stride at most kComputeStrideLimit, 0
+// where none) of `slots` (a mask) into the macros' scratch, after the dispatches before have read the descriptors the bind
+// slots write
+inline void computeBindHead(Push &p, const uint64_t (&va)[31], const uint32_t (&size)[31], const uint32_t (&stride)[31],
+                            uint32_t slots)
 {
     p.m(NVB1C0_WAIT_FOR_IDLE, 0, SUBC_COMPUTE);
     if (!slots)
@@ -92,7 +114,7 @@ inline void computeBindHead(Push &p, const uint64_t (&va)[31], const uint32_t (&
     *p.at++ = Push::hdr(1, SUBC_3D, NVB197_SET_MME_SHADOW_SCRATCH(mme::kScratchBuffers + 3 * lo), 3 * (hi - lo + 1));
     for (uint32_t s = lo; s <= hi; s++) {
         *p.at++ = uint32_t(va[s]);
-        *p.at++ = uint32_t(va[s] >> 32);
+        *p.at++ = uint32_t(va[s] >> 32) | stride[s] << SWITCH_GM20B_ICB_STRIDE_SHIFT;
         *p.at++ = size[s];
     }
 }

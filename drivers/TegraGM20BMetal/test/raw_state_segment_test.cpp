@@ -177,6 +177,48 @@ TEST(RawStateSegment, BodiesKeepIndirectArgumentsUnprefetchedAndBatchCuts)
     EXPECT_EQ(pushes.next(0, 255), 3u);  // the cut after the indirect arguments, never inside the call
 }
 
+// gpu_exec.c's and TegraGM20BUserClientJobSubmit.cpp's refusal: an incomplete push the job's last or before a prefetched one
+bool kernelTakes(const raw::PushBatches &pushes)
+{
+    for (size_t i = 0; i < pushes.size(); ++i)
+        if ((pushes[i].flags & TegraGM20BPushIncomplete) &&
+            (i + 1 == pushes.size() || !(pushes[i + 1].flags & TegraGM20BPushNoPrefetch)))
+            return false;
+    return true;
+}
+
+TEST(RawStateSegment, AColourMatrixCallReadsItsUniformUnprefetchedAndItsClampPairAfterTheRows)
+{
+    for (const uint32_t words : {11u, 10u}) {
+        Memory memory;
+        Body body(memory);
+        body.p.m(NVB197_NO_OPERATION, 3);
+        const uint64_t uniform = 0x30'0000'0000, clamp = 0x40'0000'0000;
+        uint32_t *rows = reinterpret_cast<uint32_t *>(memory.allocate(uniform, 4 * words));
+        for (uint32_t k = 0; k < words; ++k)
+            rows[k] = 0x3c00'0000 | k;
+        memset(memory.allocate(clamp, 4), 0, 4);
+        raw::matrixCall(body.bodies, body.start, body.p.at, uniform, words, clamp, 11 - words);
+        body.start = body.p.at;
+        body.draw(0);
+        const raw::PushBatches pushes = body.close();
+        ASSERT_EQ(pushes.size(), words == 11 ? 3u : 4u) << words;
+        EXPECT_TRUE(kernelTakes(pushes)) << words;
+        EXPECT_EQ(pushes[1].va, uniform);
+        EXPECT_EQ(pushes[1].dwords, words);
+        EXPECT_TRUE(pushes[1].flags & TegraGM20BPushNoPrefetch);
+        const std::vector<uint32_t> fetched = memory.fetch(pushes);
+        const size_t at = size_t(pushes[0].dwords);
+        for (uint32_t k = 0; k < words; ++k)
+            EXPECT_EQ(fetched[at + k], rows[k]);
+        if (words == 10) {
+            EXPECT_EQ(pushes[2].va, clamp);
+            EXPECT_EQ(pushes[2].flags, uint32_t(TegraGM20BPushNoPrefetch));
+            EXPECT_EQ(fetched[at + 10], 0u);
+        }
+    }
+}
+
 TEST(RawStateSegment, TheHeapCopiesEachStreamOnceAndNeverMovesIt)
 {
     Memory memory;

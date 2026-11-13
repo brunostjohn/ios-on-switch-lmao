@@ -265,7 +265,7 @@ TEST(CompileRequest, TheCompilerRefusesWhatItCannotTrust)
     EXPECT_FALSE(switch_compiler::prepare(cut, kStack, system, p, why));
 
     std::string real;
-    EXPECT_FALSE(switch_compiler::SystemLibraries::resolve("/System/Library/../../etc/x.metallib", real, why));
+    EXPECT_FALSE(switch_compiler::SystemLibraries::resolve("", "/System/Library/../../etc/x.metallib", real, why));
 }
 
 TEST(CompileRequest, ConstantsReadBackAsTheirText)

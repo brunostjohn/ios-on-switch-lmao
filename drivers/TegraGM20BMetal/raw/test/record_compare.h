@@ -76,6 +76,12 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
     }
     if (pp.pushes != rp.pushes || pp.pushMask != rp.pushMask || memcmp(pp.pushWords, rp.pushWords, sizeof pp.pushWords))
         why += " push";
+    const uint32_t spillWords = uint32_t(pp.spillWords[0]) + pp.spillWords[1];
+    const uint32_t *spills = pack.spills(pp);
+    if (memcmp(pp.spillEntry, rp.spillEntry, sizeof pp.spillEntry) ||
+        memcmp(pp.spillWords, rp.spillWords, sizeof pp.spillWords) || r.spill.size() != spillWords ||
+        (spillWords && (!spills || memcmp(spills, r.spill.data(), 4 * spillWords))))
+        why += " spills";
     if (pp.vertexSlot != rp.vertexSlot || pp.vertexStride != rp.vertexStride)
         why += " vertex";
     if (pp.setBytes != rp.setBytes)
@@ -90,7 +96,8 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
     bool rungs = true;
     for (uint32_t c = 0; c < 8; c++)
         rungs &= (pp.fetchRung[c] & raw::kFetchRungMask) == rp.fetchRung[c];
-    if (pp.boundEntries != rp.boundEntries || memcmp(pp.uniform, rp.uniform, sizeof pp.uniform) || !rungs)
+    if (pp.boundEntries != rp.boundEntries || pp.memoryEntries != rp.memoryEntries ||
+        memcmp(pp.uniform, rp.uniform, sizeof pp.uniform) || !rungs)
         why += " reads";
     if (pp.variantCount[0] != rp.variantCount[0] || pp.variantCount[1] != rp.variantCount[1])
         why += " variants";

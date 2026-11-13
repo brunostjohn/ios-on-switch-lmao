@@ -13,8 +13,10 @@
     _twin = nil;  // m2v's import over these pages goes first
     void *bytes = _raw.cpu;
     const NSUInteger length = NSUInteger(_raw.length);
-    if (_heap && !_raw.arena)
+    if (_heap && !_raw.arena) {
         _heap->_used -= _heapBytes;
+        rmHeapForget(_heap, _raw.va);
+    }
     if (gRM)
         gRM->raw->destroyBuffer(_raw);
     if (_deallocator)

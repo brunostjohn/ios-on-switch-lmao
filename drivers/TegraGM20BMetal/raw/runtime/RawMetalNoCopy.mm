@@ -290,6 +290,7 @@ static void wroteThroughLayout(const void *memory)
 - (void)dealloc
 {
     wrapped().prune(_bytes);
+    rmHeapForgetTexture(self);
     if (_rawOk && gRM)
         gRM->raw->destroyTexture(_raw);
     _rawOk = false;

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_zeta.h. Method numbers: NVIDIA's class headers (kits/SwitchGM20B: Mesa's clb197.h); the target words follow
 // Mesa NVK nvk_CmdBeginRendering, the state's emission nvk_flush_ds_state, the clears nvk_CmdClearAttachments (all MIT).
-#include "raw_lock.h"
 #include "raw_zeta.h"
 
 #include <algorithm>
@@ -67,13 +66,12 @@ void zetaTargetWords(Push &p, const Texture *z, uint32_t layers)
         p.m(ZT_SELECT, 0);
         return;
     }
-    p.inc(ZT_A, {uint32_t(z->va >> 32), uint32_t(z->va), kZetaFormatInfo[zetaFormatIndex(z->format)].zt,
-                 uint32_t(z->blockHeight & 0xf) << 4,  // WIDTH ONE_GOB, HEIGHT, DEPTH ONE_GOB
-                 uint32_t(z->layerBytes >> 2)});
+    const ZetaTargetValues v = zetaTargetValues(*z, sampleRows(*z));
+    p.incArray(ZT_A, v.a, 5);
     p.m(ZT_SELECT, 1);
-    // SIZE_A the row stride in texels (NVK: the Z/S hardware has no tile width), C the pass's layers from ZT_A's,
-    // THIRD_DIMENSION_DEFINES_ARRAY_SIZE
-    p.inc(ZT_SIZE_A, {z->pitch / z->bpp, sampleRows(*z), std::max(layers, 1u)});
+    // SIZE_C the pass's layers from ZT_A's (THIRD_DIMENSION_DEFINES_ARRAY_SIZE)
+    const uint32_t size[3] = {v.size[0], v.size[1], std::max(layers, 1u)};
+    p.incArray(ZT_SIZE_A, size, 3);
     p.m(ZT_LAYER, 0);
     p.m(Z_COMPRESSION, z->comptags);
     p.m(STENCIL_COMPRESSION, z->comptags);
@@ -90,7 +88,7 @@ bool DepthStencilRegs::operator==(const DepthStencilRegs &o) const
     return !memcmp(v, o.v, sizeof v);
 }
 
-bool RenderEncoder::hideZeta(const PassDesc &pass)
+Texture RenderEncoder::hiddenZetaShape(const PassDesc &pass) const
 {
     Texture shape;
     shape.width = pass.width;
@@ -105,17 +103,7 @@ bool RenderEncoder::hideZeta(const PassDesc &pass)
     shape.samples = samples_;
     shape.layers = std::max(pass.layers, 1u);
     shape.zeta = shape.memoryless = true;
-    Texture *b;
-    {
-        std::lock_guard<raw::Mutex> l(dev_->lock_);
-        b = dev_->backing(shape);
-    }
-    if (!b)
-        return false;
-    pass_.depthStencil = {b, true, true, 1.0f, 0};
-    hiddenZeta_ = true;
-    cb_->backings_.push_back(b);
-    return true;
+    return shape;
 }
 
 void zetaClearValues(Push &p, bool depth, float clearDepth, bool stencil, uint32_t clearStencil)

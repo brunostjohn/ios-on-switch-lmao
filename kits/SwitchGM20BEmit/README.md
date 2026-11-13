@@ -29,7 +29,7 @@ kit with the kernel toolchain and is never linked.
   on the host.
 - `mesa/nouveau_copy_rect.c` is NVK's `nouveau_copy_rect` on GM20B's copy class only, writing into the caller's push.
   Its origin methods continue the block-size method run, which saves one header word per block-linear side.
-- `mme/switch_gm20b_macros.c` builds the raw path's macro ABI v2 with Mesa's MME builder around NVK's pre-Pascal draw
+- `mme/switch_gm20b_macros.c` builds the raw path's macro ABI v5 with Mesa's MME builder around NVK's pre-Pascal draw
   loops. A zero instance count skips the loop, because Fermi's MME tests a loop's condition at its end. The indirect
   macros free their base registers before the loop, because the builder reuses a live register once all seven are
   taken.
@@ -37,6 +37,17 @@ kit with the kernel toolchain and is never linked.
 
 The emitters are C because the generated helpers use C designated initialisers. C++ code calls them through the
 prototypes. Without LTO a C++ caller pays a call per sequence; release builds inline them.
+
+## Context init
+
+`context/context.tsv` holds the channel's initial 3D and compute state: one row per method, in the order the channel
+takes them, each with its reason. `gen_context` expands it into `gen/SwitchGM20BContext.h`, one entry per method word,
+uploading NVK's 31 macro programs (`context/macros.txt`) where their rows stand. A row whose word is an address names
+its relocation and holds 0, and the channel opener supplies the address. The rows are NVK's queue init
+(`nvk_push_draw_state_init`, `nvk_push_dispatch_state_init` and the heap state). `context_test` checks them word for
+word against what NVK made on the pack generator's mock GM20B (`test/testdata/context_capture.txt`) and checks that each
+relocation takes one address throughout. To change a value, edit its row and reason and update the capture, saying why
+in the commit.
 
 ## Adding an emitter
 

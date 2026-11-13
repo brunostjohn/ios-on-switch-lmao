@@ -51,9 +51,12 @@ inline bool same(const raw::RuntimeRecord &a, const raw::RuntimeRecord &b)
                        (!a.split || (!memcmp(&a.splitRecord, &b.splitRecord, sizeof a.splitRecord) &&
                                      program(a.splitPrograms[0], b.splitPrograms[0]) &&
                                      program(a.splitPrograms[1], b.splitPrograms[1])));
+    const bool twins = !a.strideTwin == !b.strideTwin && (!a.strideTwin || same(*a.strideTwin, *b.strideTwin));
     return !memcmp(&a.pipeline, &b.pipeline, sizeof a.pipeline) && a.keyString == b.keyString &&
-           program(a.programs[0], b.programs[0]) && program(a.programs[1], b.programs[1]) && a.blob == b.blob &&
-           a.extras == b.extras && a.restore == b.restore && a.samplers == b.samplers && split && variants;
+           program(a.programs[0], b.programs[0]) && program(a.programs[1], b.programs[1]) &&
+           program(a.tessPrograms[0], b.tessPrograms[0]) && program(a.tessPrograms[1], b.tessPrograms[1]) &&
+           a.blob == b.blob && a.extras == b.extras && a.restore == b.restore && a.samplers == b.samplers &&
+           a.spill == b.spill && split && variants && twins;
 }
 
 inline raw::CacheKey keyOf(uint64_t stack, const std::string &key, uint8_t air)

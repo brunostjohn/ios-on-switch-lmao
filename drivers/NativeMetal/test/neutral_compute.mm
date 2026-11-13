@@ -3,6 +3,7 @@
 #include "../NativeBridgeMetalFrontend.h"
 #include "../bridge/NativeMetalDirect.h"
 #include "../../TegraGM20BMetal/raw/runtime/raw_direct_compute.h"
+#include "../../TegraGM20BMetal/raw/runtime/raw_direct_encode.h"
 #include "../../TegraGM20BMetal/raw/runtime/raw_direct_nvk.h"
 #include <algorithm>
 #include <cstdio>
@@ -29,8 +30,8 @@ static bool record(const NmbDirectKernel *kernel, void *context)
     unsigned images = 0, samplers = 0;
     for (unsigned i = 0; i < kernel->writeCount; ++i) {
         const auto &write = kernel->writes[i].write;
-        raw::NvkSetBinding layout = {};
-        if (!raw::nvk::setLayoutBinding(compiler, kernel->set0, write.binding, layout))
+        raw::SetSlot layout;
+        if (!raw::Set0(kernel->set0Bindings, kernel->set0BindingCount).slot(write.binding, layout))
             return false;
         const unsigned offset = layout.offset + write.element * layout.stride;
         const auto *begin = result.kernel.entry, *end = begin + result.kernel.entries;

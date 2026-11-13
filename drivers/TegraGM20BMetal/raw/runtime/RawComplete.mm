@@ -2,6 +2,7 @@
 // See RawComplete.h.
 #import "RawComplete.h"
 
+#include <algorithm>
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
@@ -43,6 +44,20 @@ public:
 private:
     uint64_t wallUs_;
 };
+
+// A made state's label and whole key, in parts no log line cuts (the made line keeps 400 characters of the key, and a
+// message stops near 1 KiB): tools/gpu/logharvest.py joins them into precompile corpus lines
+void logHarvest(uint64_t name, NSString *label, const std::string &key)
+{
+    std::string text = std::string("label=") + (label.length ? label.UTF8String : "-");
+    std::replace(text.begin(), text.end(), ' ', '_');
+    text += " " + key;
+    constexpr size_t kPart = 700;
+    const size_t parts = (text.size() + kPart - 1) / kPart;
+    for (size_t i = 0; i < parts; i++)
+        os_log(rawLog(), "raw: harvest %016llx %zu/%zu %{public}s", (unsigned long long)name, i + 1, parts,
+               text.substr(i * kPart, kPart).c_str());
+}
 #endif
 
 // A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
@@ -80,8 +95,10 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     remote_ = std::make_unique<Remote>(
         KernelTransport{kernel.connection(), kernel.tunnelled(), kernel.tunnelSelector()}, stack_);
     Remote *remote = remote_.get();
-    device_.runSlotsFrom([remote](const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes) {
-        return remote->findSlot(slot, size, mapping, bytes);
+    const RecordCache *cache = &cache_;
+    device_.runSlotsFrom([remote, cache](const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes) {
+        const uint8_t *found = remote->findSlot(slot, size, mapping, bytes);
+        return found ? found : cache->findSeedSlot(slot, size, mapping, bytes);
     });
     if (!remote_->serving())
         os_log_error(rawLog(),
@@ -113,7 +130,7 @@ Completion::~Completion()
 // one's. False: a function the raw path cannot name the AIR of (made from no metallib's bytes, or not one of them)
 bool Completion::keyOf(Ask &a, CacheKey &k)
 {
-    if (!renderCacheKey(a.descriptor, a.key, a.own, stack_, k))
+    if (!renderCacheKey(a.facade ?: a.descriptor, a.key, a.own, stack_, k, a.facade ? rmFunctionSource : nullptr))
         return false;
     a.key = k.key;
     return true;
@@ -174,10 +191,6 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             return;
         }
         Ask a = asked;
-        if (a.resolveDescriptor) {
-            a.descriptor = twinDescriptor(a.descriptor);
-            a.resolveDescriptor = false;
-        }
         CacheKey k;
         if (!keyOf(a, k)) {
             pending->ready(nullptr, std::string());
@@ -348,10 +361,15 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
     ProbeTextures textures;
     textures.cubic = a.cubic;
     textures.fragmentTests = a.fragmentTests;
+    textures.twoPlane = a.twoPlane;
+    textures.xrSlots = a.xrSlots;
+    textures.written = a.written;
 #if SWITCH_RAW_DIAGNOSTICS
     const CompileCost cost;
 #endif
-    const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why, textures);
+    // m2v's translation reads m2v's functions: the twins are made only for a state compiled in this process
+    MTLRenderPipelineDescriptor *twins = a.resolveDescriptor ? twinDescriptor(a.descriptor) : a.descriptor;
+    const Compiler::Outcome outcome = direct().make(twins, a.key, record, why, textures);
 #if SWITCH_RAW_DIAGNOSTICS
     os_log(
         rawLog(),
@@ -361,6 +379,8 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
                                                 : "not made",
         cost.text().c_str(), (unsigned long long)(Compiler::slotWaitUs() / 1000), (unsigned long long)k.name(),
         a.key.c_str());
+    if (outcome != Compiler::Outcome::Refused)
+        logHarvest(k.name(), a.descriptor.label, a.key);
 #endif
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
@@ -421,7 +441,11 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
 #if SWITCH_RAW_DIAGNOSTICS
                 const uint64_t began = nowUs();
 #endif
-                outcome = direct().kernel(descriptor, dispatch, key, record, why);
+                // m2v's translation reads m2v's functions: the twins are made only for a kernel compiled in this process
+                if (MTLComputePipelineDescriptor *twin = twinComputeDescriptor(descriptor))
+                    outcome = direct().kernel(twin, dispatch, key, record, why);
+                else
+                    why = "its function has no m2v twin to compile here";
                 if (outcome != Compiler::Outcome::Failed) {
                     const auto saved =
                         outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;

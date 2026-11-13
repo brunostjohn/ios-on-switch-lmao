@@ -63,6 +63,10 @@ def analysis_artifacts(row: dict, root: Path) -> dict:
     return artifacts
 
 
+# raw_program_pages.h kProgramSlotPage: a slot's entry is whole pages, which the seed pack keeps on pages of their own
+SLOT_PAGE_BYTES = 16384
+
+
 def add_record(row: dict, root: Path, stack: str, artifacts: dict) -> None:
     relative = Path(row['artifact'])
     if relative.parts != (f'raw-{stack}', row['name'] + '.rec'):
@@ -73,6 +77,18 @@ def add_record(row: dict, root: Path, stack: str, artifacts: dict) -> None:
     if row['artifact'] not in artifacts:
         data = path.read_bytes()
         artifacts[row['artifact']] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+    for slot in row.get('slots', []):
+        relative = Path(slot['path'])
+        if relative.parts != (f'raw-{stack}', slot['name'] + '.slot'):
+            raise ValueError('native program slot path does not match its stack and bytes')
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f'missing native program slot: {relative}')
+        if slot['path'] not in artifacts:
+            data = path.read_bytes()
+            if len(data) % SLOT_PAGE_BYTES:
+                raise ValueError(f'native program slot of part of a page: {relative}')
+            artifacts[slot['path']] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
 
 
 def region_signatures(line: str) -> dict[int, tuple[list[int], bool]] | None:
@@ -283,7 +299,8 @@ def pack_lists(manifest: dict) -> tuple[dict[str, tuple[int, str]], dict[str, tu
         if row.get('kind') == 'analysis':
             table, named = analyses, [(entry['name'][:64], entry['path']) for entry in row['analysis']]
         else:
-            table, named = records, [(row['name'], row['artifact'])]
+            slots = [(slot['name'], slot['path']) for slot in row.get('slots', [])]
+            table, named = records, [(row['name'], row['artifact'])] + slots
         for name, path in named:
             tier, known = int(bool(row['derived'])), table.get(name)
             if known and known[1] != path:

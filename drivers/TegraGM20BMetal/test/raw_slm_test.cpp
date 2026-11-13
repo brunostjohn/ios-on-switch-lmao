@@ -56,6 +56,15 @@ TEST(SlmNeed, AKernelsQmdFields)
     EXPECT_EQ(slmPerWarpOfQmd(qmd), 0u);
 }
 
+TEST(SlmNeed, AQmdAtAnEvenOffset)
+{
+    alignas(4) uint8_t record[2 + sizeof(uint32_t) * 64] = {};
+    const uint32_t low = 128, crs = 1024;
+    memcpy(record + 2 + 45 * 4, &low, sizeof low);
+    memcpy(record + 2 + 47 * 4, &crs, sizeof crs);
+    EXPECT_EQ(slmPerWarpOfQmd(record + 2), 128u * 32 + 1024);
+}
+
 TEST(SlmArea, NvksSizesOnTwoTpcs)
 {
     const SlmArea crs = slmArea(1024, kTpcs);

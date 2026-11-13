@@ -73,8 +73,7 @@ def _shader_crawl_impl(ctx):
         sources = [report]
     base_files, base_root = files, root
     if ctx.files.applications:
-        # Every seed bucket but the apps' own and every raw pack probe read this: an HW Test app's shader edit reruns
-        # only the apps' buckets.
+        # Every seed bucket but the apps' own reads this: an HW Test app's shader edit reruns only the apps' buckets.
         base = ctx.actions.declare_directory(named(ctx, "_base"))
         args = ctx.actions.args()
         args.add("--crawl", crawled)
@@ -361,11 +360,26 @@ _RAW_BUCKETS = 16
 # beside a script through the script's real path, so a module missing here still imported in the local sandbox (its
 # inputs are links into the source tree) and failed on a remote worker.
 _RAW_STAMP = ["rawpack.py", "packfile.py"]
-_RAW_SPLIT = _RAW_STAMP + ["ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
+_RAW_SPLIT = _RAW_STAMP + [
+    "ca/caset.py",
+    "ca/caspec.py",
+    "ca/caspec27.py",
+    "ca/deepcolour.py",
+    "ca/fetchfree.py",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
+]
 _RAW_PROBE = _RAW_STAMP
 _RAW_LINK = [
     "rawpack.py",
     "directlink.py",
+    "fetchfree_link.py",
+    "iterated/programs.py",
+    "iterated/programs_long.py",
+    "iterated/table.py",
+    "iterated/ucode.py",
     "mkpack.py",
     "kernels.py",
     "layouts.py",
@@ -373,6 +387,7 @@ _RAW_LINK = [
     "probelog.py",
     "splits.py",
     "archives.py",
+    "draw_context.txt",
     # Read beside the generator's directory: mkpack.py's owned methods, layouts.py's colour table, packfile.py's chip
     # facts.
     "../runtime/raw_owned.h",
@@ -397,11 +412,13 @@ def _seed_raw_pack_impl(ctx):
     corpus_report = ctx.actions.declare_file(named(ctx, "_work/corpus-report.txt"))
     kind = ctx.attr.ipsw[IpswInfo].kind
     archives = [f for f in ctx.files.archives if f.basename == kind + ".tsv"]
+    app_states = [f for f in ctx.files.app_states if f.basename == kind + ".log"]
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = ["corpus", "--corpus", ctx.file.corpus.path, "--out", lines.path, "--report", corpus_report.path] +
-                    ["--build", ctx.attr.ipsw[IpswInfo].build] + ["--archives=" + f.path for f in archives],
-        inputs = [ctx.file.corpus] + archives,
+                    ["--build", ctx.attr.ipsw[IpswInfo].build] + ["--archives=" + f.path for f in archives] +
+                    ["--app-states=" + f.path for f in app_states],
+        inputs = [ctx.file.corpus] + archives + app_states,
         outputs = [lines, corpus_report],
         mnemonic = "MetalRawCorpus",
         progress_message = "Picking the raw pack's corpus lines",
@@ -417,18 +434,19 @@ def _seed_raw_pack_impl(ctx):
     args.add("--qc", crawl.qc)
     args.add("--corpus", lines)
     args.add_all(names, before_each = "--ca-names")
+    args.add("--ca-preferences", ctx.file._ca_preferences)
     args.add_all("--out", corpora)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset([lines] + qc + tables + names + _generator_files(ctx, _RAW_SPLIT)),
+        inputs = depset([lines, ctx.file._ca_preferences] + qc + tables + names + _generator_files(ctx, _RAW_SPLIT)),
         outputs = corpora,
         mnemonic = "MetalRawSplit",
         progress_message = "Splitting the raw pack's states into buckets",
     )
 
     probe_inputs = depset([tools.twin] + tools.raw + ctx.files.device_libraries +
-                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.base_files])
+                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.files])
     buckets = []
     for i, bucket_corpus in enumerate(corpora):
         # rawpack.py knows a bucket by its directory's name (bucket0 also draws the raw path's own states).
@@ -438,12 +456,13 @@ def _seed_raw_pack_impl(ctx):
         args.add("--generator", ctx.file.generator)
         args.add("--raw", tools.raw_dir)
         args.add("--nvk", tools.twin)
+        args.add("--qc", crawl.qc)
 
-        # The probe reads every framework's library beside QuartzCore's (rawpack.py library_root): QuartzCore's copy in
-        # the base tree, which this step declares, not the crawl repository's, whose other libraries it does not. The
-        # local sandbox read those anyway; a remote worker has only the declared files (fewer states and kernels).
-        args.add("--qc", crawl.base_root + "/" + QUARTZCORE)
-        args.add("--data-dir", crawl.base_root + "/data")
+        # The probe reads every library under --root, the crawl's root/ with this build's applications (the pack's app
+        # states are theirs), not the base tree, which has none of them. crawl.files declares that whole tree: a remote
+        # worker has only the declared files.
+        args.add("--data-dir", crawl.root + "/data")
+        args.add("--root", crawl.root + "/root")
         args.add_all(ctx.files.device_libraries, before_each = "--data")
         args.add("--lines", bucket_corpus)
         args.add("--out", bucket.path)
@@ -512,8 +531,18 @@ seed_raw_pack = rule(
             allow_files = [".txt"],
             doc = "Core Animation states devices named missing (precompile/ca-names/<build>.txt): the IPSW kind's",
         ),
+        "app_states": attr.label_list(
+            allow_files = [".log"],
+            doc = "our own apps' states the pack holds (precompile/app-states/<build>.log): the IPSW kind's",
+        ),
         "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
         "srcs": attr.label_list(allow_files = True, doc = "the generator's modules and QuartzCore tables (raw/pack)"),
+        # The Core Animation preferences the device runs with decide which colour precision its QuartzCore names
+        # states with (raw/pack/ca/deepcolour.py)
+        "_ca_preferences": attr.label(
+            default = "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
+            allow_single_file = True,
+        ),
         "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
     },
 )

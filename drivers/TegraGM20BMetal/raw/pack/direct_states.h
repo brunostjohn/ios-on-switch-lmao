@@ -9,20 +9,29 @@
 #include <vector>
 #include "../runtime/RawDirect.h"
 #include "../runtime/RawRenderKey.h"
+#include "../runtime/raw_xr_pass.h"
 #include "probe_states.h"
 
 namespace probe {
 
-// probe.mm's tagged textures: BGRA8, but for the raw path's own states that read codes (pack/xr.metal), the two-plane stand-in
-// and, for its own resolves alone (pack/resolve.metal), multisampled colours
+// probe.mm's tagged textures: BGRA8, but for the raw path's own states that read codes (pack/xr.metal, packed YCbCr planes),
+// the two-plane stand-in and, for its own resolves alone (pack/resolve.metal, pack/stencil_bits.metal), multisampled colours,
+// depth or integers
 inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
 {
+    if (ours && line.find("| v resolve_vert | f resolve_depth") != std::string::npos)
+        return {MTLPixelFormatDepth32Float, 4};
+    if (ours && line.find("| f stencil_bits_ms_") != std::string::npos)
+        return {MTLPixelFormatR32Uint, 4};
     if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
         return {MTLPixelFormatBGRA8Unorm, 4};
-    const std::pair<const char *, raw::ProbeTextures> sets[] = {{"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},
-                                                                {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
-                                                                {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
-                                                                {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}}};
+    const std::pair<const char *, raw::ProbeTextures> sets[] = {
+        {"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},       {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
+        {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},     {"f xr_two_planes_frag", {MTLPixelFormatR32Uint, 1}},
+        {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}}, {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}},
+        {"f ycbcr_packed_", {MTLPixelFormatR32Uint, 1}},       {"f turn_copy", {MTLPixelFormatR32Uint, 1}},
+        {"f turn_masked", {MTLPixelFormatR32Uint, 1}},         {"f turn_reach", {MTLPixelFormatR32Uint, 1}},
+        {"f turn_depth", {MTLPixelFormatDepth32Float, 1}},     {"f stencil_bits_", {MTLPixelFormatR32Uint, 1}}};
     for (const auto &[fragment, textures] : sets)
         if (line.find(std::string("| ") + fragment) != std::string::npos)
             return textures;
@@ -56,7 +65,9 @@ void eachState(id<MTLDevice> dev, id<MTLLibrary> qc, id<MTLLibrary> own, id<MTLL
                 continue;
             s.key = airKeyed.key + cubic;
         }
-        if (seen.insert(s.key).second)
+        if (seen.insert(s.key + (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string()) +
+                        raw::writtenVariant(s.written))
+                .second)
             each(line, ours, s);
     }
 }

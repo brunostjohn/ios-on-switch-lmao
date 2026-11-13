@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 // The device's answers to Metal's capability and identity queries, per kind: the target's identity (iPad7,1's A10X on
 // 21H461, iPad12,1's A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's
-// device answers them today, but where the device has no form of a feature m2v's answers claim: no vertex amplification
-// above 1, predication, dynamic attribute stride or tessellation (RawMetalUnsupported.mm refuses their creations), and
-// where it has one m2v's lack: counter sampling at stage boundaries, as the identity's AGX driver answers it
-// (raw_counters.h). raw/test/selcover holds every other capability equal to the m2v device's on the host, for the kind its
-// bridge was built for.
+// device answers them today, but where the device has a form of a feature m2v's answers lack: counter sampling at stage
+// boundaries, as the identity's AGX driver answers it (raw_counters.h). maxPredicatedNestingDepth is the loop depth the
+// raw path lays down (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
+// the target's: the A13's supportsVertexAmplificationCount: takes 0 to 8 (AGXA13FamilyDevice, `cmp w2,#9; cset lo`),
+// its limits table's maxVertexAmplificationCount 2 and maxVertexAmplificationFactor 8, supportsDynamicAttributeStride
+// supportsFamily:Apple4; the A10X takes a count of 0 or 1 (`tst x2,#~1`) and no dynamic stride. Tessellation is the
+// target's: _MTLDevice's supportsTessellation is supportsFamily:Apple3 and supportsIndirectTessellation
+// supportsFamily:Apple5, maxTessellationFactor its limits table's 16 (A10X) or 64 (A13), as the Metal Feature Set
+// Tables list them. raw/test/selcover holds every other capability equal to the m2v device's on the host, for the kind
+// its bridge was built for.
 // An argument answer holds `value` for every argument in [first, last] and 0 elsewhere.
 #pragma once
 #include <cstddef>
@@ -148,9 +153,9 @@ inline constexpr Count kCounts21H461[] = {
     {"maxVertexAmplificationFactor", 1, false},
     {"maxComputeAttributes", 31, false},
     {"maxConstantBufferArguments", 31, false},
-    {"supportsTessellation", 0, true},
+    {"supportsTessellation", 1, true},
     {"supportsIndirectTessellation", 0, true},
-    {"maxTessellationFactor", 0, false},
+    {"maxTessellationFactor", 16, false},
 };
 
 inline constexpr ArgRange kArgs21H461[] = {
@@ -196,7 +201,7 @@ inline constexpr ArgRange kArgs21H461[] = {
 
 inline constexpr Count kCounts24B119[] = {
     {"gpuCoreCount", 2, false},
-    {"maxVertexAmplificationCount", 1, false},
+    {"maxVertexAmplificationCount", 2, false},
     {"deviceLinearTextureAlignmentBytes", 32, false},
     {"linearTextureAlignmentBytes", 32, false},
     {"iosurfaceTextureAlignmentBytes", 32, false},
@@ -231,7 +236,7 @@ inline constexpr Count kCounts24B119[] = {
     {"supportsCommandBufferJump", 0, true},
     {"supportsComputeCompressedTextureWrite", 0, true},
     {"supportsConditionalLoadStore", 0, true},
-    {"supportsDynamicAttributeStride", 0, true},
+    {"supportsDynamicAttributeStride", 1, true},
     {"supportsExtendedXR10Formats", 1, true},
     {"supportsFloat16BCubicFiltering", 1, true},
     {"supportsHeapWithAddressRanges", 0, true},
@@ -283,12 +288,12 @@ inline constexpr Count kCounts24B119[] = {
     {"maxIndirectSamplersPerDevice", 96, false},
     {"maxFenceInstances", 32768, false},
     {"maxCustomSamplePositions", 4, false},
-    {"maxVertexAmplificationFactor", 1, false},
+    {"maxVertexAmplificationFactor", 8, false},
     {"maxComputeAttributes", 31, false},
     {"maxConstantBufferArguments", 31, false},
-    {"supportsTessellation", 0, true},
-    {"supportsIndirectTessellation", 0, true},
-    {"maxTessellationFactor", 0, false},
+    {"supportsTessellation", 1, true},
+    {"supportsIndirectTessellation", 1, true},
+    {"maxTessellationFactor", 64, false},
 };
 
 inline constexpr ArgRange kArgs24B119[] = {
@@ -323,7 +328,7 @@ inline constexpr ArgRange kArgs24B119[] = {
     {"minimumLinearTextureAlignmentForPixelFormat:", false, 651, 652, 16},
     {"supportsTextureSampleCount:", true, 1, 2, 1},
     {"supportsTextureSampleCount:", true, 4, 4, 1},
-    {"supportsVertexAmplificationCount:", true, 0, 1, 1},
+    {"supportsVertexAmplificationCount:", true, 0, 8, 1},
     {"supportsRasterizationRateMapWithLayerCount:", true, 1, 2, 1},
     {"supportsCounterSampling:", true, 0, 0, 1},
     {"supportsFamily:", true, 1001, 1003, 1},
@@ -350,5 +355,24 @@ inline constexpr size_t kindIndex()
 
 static_assert(kindIndex() < std::size(kKinds), "no device answers for this kind (raw_device_answers.h)");
 inline constexpr const Kind &kThisKind = kKinds[kindIndex()];
+
+// The largest argument this kind answers argument query `selector` YES for (0: none)
+constexpr uint64_t thisKindLastYes(std::string_view selector)
+{
+    uint64_t last = 0;
+    for (size_t i = 0; i < kThisKind.argCount; i++)
+        if (kThisKind.args[i].selector == selector && kThisKind.args[i].value && kThisKind.args[i].last > last)
+            last = kThisKind.args[i].last;
+    return last;
+}
+
+// This kind's answer to count or flag query `selector` (0: none)
+constexpr uint64_t thisKindCount(std::string_view selector)
+{
+    for (size_t i = 0; i < kThisKind.countCount; i++)
+        if (kThisKind.counts[i].selector == selector)
+            return kThisKind.counts[i].value;
+    return 0;
+}
 
 }  // namespace raw::answers

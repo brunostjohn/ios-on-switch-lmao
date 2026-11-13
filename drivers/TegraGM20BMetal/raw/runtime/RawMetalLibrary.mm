@@ -2,22 +2,18 @@
 #import "RawMetalInternal.h"
 #import "RawPipelineKey.h"
 #include "NativeBridgeMetalFrontend.h"
-#include "raw_function_tess.h"
-
-// The function list entry's TESS tag in the metallib the m2v function's library was made of
-static raw::FunctionTess functionTess(id twin)
-{
-    const void *bytes = nullptr;
-    size_t length = 0;
-    raw::FunctionTess tess;
-    if (native_bridge_metal_function_metallib(twin, &bytes, &length))
-        raw::metallibFunctionTess(static_cast<const uint8_t *>(bytes), length,
-                                  native_bridge_metal_function_library_name(twin).UTF8String ?: "", tess);
-    return tess;
-}
 
 // The function's m2v twin, made of its library's at the first ask for one: `need` names what asked
 #define RM_FUNCTION_TWIN(f, need) ((f)->_twin ?: [(f) twinOn:RM_M2V(need)])
+
+// The function list entry's TESS tag in the AIR slice the facade read (MetallibEntries.h), as m2v's function answers it;
+// false where the facade read none. Every render state's creation asks it (its key, rmUnsupportedRenderState,
+// rmM2vMissingState), so it makes no twin.
+static bool ownTess(RMFunction *f, switch_metal::FunctionTess &tess)
+{
+    return f->_source && f->_source->bytes &&
+           switch_metal::metallibFunctionTess(f->_source->bytes, f->_source->size, f->_libraryName, tess);
+}
 
 @implementation RMFunction
 
@@ -82,26 +78,28 @@ static raw::FunctionTess functionTess(id twin)
 
 - (MTLPatchType)patchType
 {
-    return MTLPatchType(functionTess(_twin).patchType);
+    switch_metal::FunctionTess tess;
+    return ownTess(self, tess) ? MTLPatchType(tess.patchType) : [(id<MTLFunction>)_twin patchType];
 }
 
 - (NSInteger)patchControlPointCount
 {
-    return functionTess(_twin).controlPoints;
+    switch_metal::FunctionTess tess;
+    return ownTess(self, tess) ? tess.controlPoints : [(id<MTLFunction>)_twin patchControlPointCount];
 }
 
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
 {
-    return [(id<MTLFunction>)RM_FUNCTION_TWIN(self, "a function's argument encoder")
-        newArgumentEncoderWithBufferIndex:index];
+    return rmFunctionArgumentEncoder(self, index);
 }
 
+// No reflection object is made: the reflection form answers nil there, as Metal does when it was not asked for (m2v's)
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
                                                  reflection:(MTLAutoreleasedArgument *)reflection
 {
-    return [(id<MTLFunction>)RM_FUNCTION_TWIN(self, "a function's argument encoder")
-        newArgumentEncoderWithBufferIndex:index
-                               reflection:reflection];
+    if (reflection)
+        *reflection = nil;
+    return rmFunctionArgumentEncoder(self, index);
 }
 
 @end
@@ -346,6 +344,24 @@ RMLibrary *readLibrary(id device, NSString *path, NSData *bytes)
     l->_framework = raw::frameworkOf(l->_source->path);
     l->_functions = std::move(functions);
     return l;
+}
+
+bool rmFunctionSource(id<MTLFunction> function, const void **bytes, size_t *length, NSString **name)
+{
+    if (![(id)function isKindOfClass:[RMFunction class]])
+        return false;
+    RMFunction *f = (RMFunction *)function;
+    if (f->_source && f->_source->bytes) {
+        *bytes = f->_source->bytes;
+        *length = f->_source->size;
+        *name = [NSString stringWithUTF8String:libraryName(f).c_str()];
+        return true;
+    }
+    id twin = f->_twin;
+    if (!native_bridge_metal_function_metallib(twin, bytes, length))
+        return false;
+    *name = native_bridge_metal_function_library_name(twin);
+    return true;
 }
 
 // The library function a function of this facade was made from, which the journal names (its name is a specialized one's)

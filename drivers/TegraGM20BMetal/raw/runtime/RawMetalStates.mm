@@ -26,6 +26,7 @@
 
 - (void)dealloc
 {
+    rmHeapForgetSampler(self);
     if (gRM)
         gRM->raw->destroySampler(_raw);
 }
@@ -64,6 +65,14 @@ static id<MTLRenderPipelineState> laterTwin(MTLRenderPipelineDescriptor *d, MTLP
     return [(id<MTLDevice>)_device maxThreadsPerThreadgroup]
         .width;  // a tile dispatch's: the device's limit, as m2v answers
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's gpu.ca.asked_forms: whether the state's record came out of the pack at its creation
+- (NSNumber *)switchPackHit
+{
+    return @(_packed);
+}
+#endif
 
 @end
 
@@ -236,7 +245,8 @@ bool rmNeedsRecord(RMPipeline *p)
 raw::Completion::Ask rmRecordAsk(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
     raw::Completion::Ask a;
-    a.descriptor = twinDescriptor(d);
+    a.descriptor = d;
+    a.resolveDescriptor = true;
     a.facade = d;
     a.key = p->_key;
     a.caTransform = p->_caTransform;
@@ -255,8 +265,10 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     p->_raw = gRM->completion->makeNow(a, p->_failure);
     RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
-    if (p->_raw && native_bridge_metal_journal_render)
-        native_bridge_metal_journal_render(a.descriptor, 0);
+    // the journal names m2v's functions (the harvest's corpus lines), so it is written only where m2v's device is open
+    // already: a process without one is left to tools/gpu/logharvest.py, which reads its compile lines
+    if (p->_raw && native_bridge_metal_journal_render && rmM2VIfOpen())
+        native_bridge_metal_journal_render(twinDescriptor(a.descriptor), 0);
 #endif
     markRoute(p->_raw, d.label);
 #if SWITCH_RAW_DIAGNOSTICS
@@ -291,6 +303,7 @@ RMPipeline *rmPipelineShell(RMDevice *device, MTLRenderPipelineDescriptor *d, MT
     RMPipeline *p = [RMPipeline new];
     p->_device = device;
     p.label = d.label;
+    p->_m2vMissing = rmM2vMissingState(d);
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     // a state linking functions is packed under them too (its key names each), where they are framework libraries' as well
@@ -308,7 +321,7 @@ RMPipeline *rmPipelineShell(RMDevice *device, MTLRenderPipelineDescriptor *d, MT
     if (p->_packable) {
         p->_caTransform =
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
-    } else if (p->_completable && raw::renderCacheKey(twinDescriptor(d), p->_key, true, 0, own)) {
+    } else if (p->_completable && raw::renderCacheKey(d, p->_key, true, 0, own, rmFunctionSource)) {
         packKey = raw::Pack::fnv(own.key.data(), own.key.size());  // another library's: under its functions' AIR too
         lookedUp = true;
     }
@@ -487,7 +500,7 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(self, RM_M2V("a compute state"), d, MTLPipelineOptionNone, nil, error);
+    return rmComputeState(self, d, MTLPipelineOptionNone, nil, error);
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f
@@ -497,7 +510,7 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(self, RM_M2V("a compute state"), d, o, r, error);
+    return rmComputeState(self, d, o, r, error);
 }
 
 // _MTLDevice's own sends this to [self compiler], which answers nil on a device without Apple's compiler service: Core
@@ -513,7 +526,7 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
                                                           reflection:(MTLAutoreleasedComputePipelineReflection *)r
                                                                error:(NSError **)error
 {
-    return rmComputeState(self, RM_M2V("a compute state"), d, o, r, error);
+    return rmComputeState(self, d, o, r, error);
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)d

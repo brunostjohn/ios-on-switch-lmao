@@ -37,6 +37,10 @@ constexpr uint32_t kSequentialTriangles = 96;
 // computes the fixed-function blend there; refused, by reason, as recorded (the encoder to m2v) and at encoding
 struct FetchCounts {
     std::atomic<uint64_t> sequential{0}, sequentialTriangles{0}, interlocked{0}, interlockedBlends{0};
+    // drawn by their state's fetch-free form instead: through the ROP's blend (rung 2), its iterated blend (rung 3)
+    std::atomic<uint64_t> fetchFree[2]{};
+    // drawn by a blended storage form's barrier twin where a debug build's probe forces it (raw_fetch_rungs.h)
+    std::atomic<uint64_t> blendTwin{0};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
     std::atomic<uint64_t> storageFallback[kStorageFallbacks]{};
     // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback; and those of every draw in the

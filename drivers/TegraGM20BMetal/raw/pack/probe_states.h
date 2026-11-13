@@ -10,6 +10,7 @@
 #include <vector>
 #import "../runtime/RawPipelineKey.h"
 #include "../runtime/raw_cubic.h"
+#include "../runtime/raw_written_textures.h"
 
 namespace probe {
 
@@ -111,6 +112,12 @@ struct State {
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
     raw::CubicBinds cubic;  // a line naming the state's cubic variant (" | cubic ...", raw_cubic.h): its binds
+    // a line naming the state's sampled two-plane variant (" | xrs=<slots>", raw_xr_pass.h): its slots, which its key
+    // leaves out (the runtime names the variant after the test class and the two-plane pass, RawMetalCubic.mm)
+    uint16_t xrSlots = 0;
+    // a line naming the state's written variant (" | wtex=<slot>:<format>,...", raw_written_textures.h): the formats bound at
+    // the slots it writes, which its key leaves out as it does xrSlots
+    std::vector<raw::WrittenTexture> written;
 };
 
 // A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (raw_cubic.h key) as binds
@@ -180,15 +187,19 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             c.alphaBlendOperation = (MTLBlendOperation)x[8];
         } else if (h[0] == 'a' && isdigit(h[1])) {
             unsigned i, x[6] = {};
-            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7 || i >= 31 ||
-                x[2] >= 31)
+            unsigned long long stride = 0;
+            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%llu:%u:%u", &i, x, x + 1, x + 2, &stride, x + 4, x + 5) != 7 ||
+                i >= 31 || x[2] >= 31)
                 continue;
             if (!vd)
                 vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
-            vd.layouts[x[2]].stride = x[3];
+            // MTLBufferLayoutStrideDynamic, as a journal's key wrote it (NSUIntegerMax) or RawPipelineKey.h writes it now
+            const bool dynamic = stride == UINT64_MAX || stride == UINT32_MAX;
+            x[3] = dynamic ? UINT32_MAX : unsigned(stride);
+            vd.layouts[x[2]].stride = dynamic ? MTLBufferLayoutStrideDynamic : NSUInteger(stride);
             vd.layouts[x[2]].stepFunction = (MTLVertexStepFunction)x[4];
             vd.layouts[x[2]].stepRate = x[5];
             s.vertexBuffer = x[2];
@@ -211,6 +222,10 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             return false;
         if (segment.rfind("cubic ", 0) == 0 && !cubicBinds(segment, s.cubic))
             return false;
+        if (segment.rfind("xrs=", 0) == 0 && !(s.xrSlots = uint16_t(strtoul(segment.c_str() + 4, nullptr, 10))))
+            return false;
+        if (segment.rfind("wtex=", 0) == 0 && !raw::parseWritten(segment, s.written))
+            return false;
         at = next;
     }
     s.key = raw::pipelineKey(d, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework) +
@@ -224,8 +239,9 @@ inline bool endsWith(const std::string &s, const std::string &suffix)
     return s.size() >= suffix.size() && !s.compare(s.size() - suffix.size(), suffix.size(), suffix);
 }
 
-// A line's library (its vertex function's lib= path) where it is another framework's default.metallib than QuartzCore's, or a
-// bundle's or a framework resource library of the OS (tools/gpu/rawpack.py OS_LIBRARY)
+// A line's library (its vertex function's lib= path) where it is another framework's default.metallib than QuartzCore's, a
+// bundle's or a framework resource library of the OS (tools/gpu/rawpack.py OS_LIBRARY), or one of our own apps'
+// (APP_LIBRARY)
 inline std::string libraryPath(const std::string &line)
 {
     const size_t at = line.find(" lib=");
@@ -236,7 +252,9 @@ inline std::string libraryPath(const std::string &line)
     const bool resources =
         path.find(".bundle/") != std::string::npos || path.find(".framework/Resources/") != std::string::npos;
     const bool bundle = path.rfind("/System/Library/", 0) == 0 && endsWith(path, ".metallib") && resources;
-    if ((!framework && !bundle) || path.find("/QuartzCore.framework/") != std::string::npos)
+    const bool app = path.rfind("/Applications/Switch", 0) == 0 && endsWith(path, ".app/default.metallib") &&
+                     path.find('/', 14) == path.size() - 17;
+    if ((!framework && !bundle && !app) || path.find("/QuartzCore.framework/") != std::string::npos)
         return "";
     return path;
 }
@@ -309,13 +327,47 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                             "125 | v ycbcr_vert | f ycbcr_srgb_frag",
                             "70 | v ycbcr_vert | f ycbcr_codes_frag",
                             "90 | v ycbcr_vert | f ycbcr_codes10_frag",
+                            "115 | v ycbcr_vert | f ycbcr_packed_converted_frag",
+                            "125 | v ycbcr_vert | f ycbcr_packed_srgb_frag",
+                            "90 | v ycbcr_vert | f ycbcr_packed_codes10_frag",
+                            "90 | v ycbcr_vert | f ycbcr_packed_plane_frag",
+                            "10 | v ycbcr_store_vert | f ycbcr_store_luma8_frag",
+                            "20 | v ycbcr_store_vert | f ycbcr_store_luma16_frag",
+                            "30 | v ycbcr_store_vert | f ycbcr_store_chroma8_frag",
+                            "60 | v ycbcr_store_vert | f ycbcr_store_chroma16_frag",
+                            "10 | v ycbcr_store_vert | f ycbcr_store_luma8_srgb_frag",
+                            "20 | v ycbcr_store_vert | f ycbcr_store_luma16_srgb_frag",
+                            "30 | v ycbcr_store_vert | f ycbcr_store_chroma8_srgb_frag",
+                            "60 | v ycbcr_store_vert | f ycbcr_store_chroma16_srgb_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_luma_packed_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_chroma_packed_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_luma_packed_srgb_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_chroma_packed_srgb_frag",
+                            "53 | v ycbcr_store_vert | f ycbcr_store_plane_packed_frag",
+                            "13 | v turn_vert | f turn_copy8_frag",
+                            "23 | v turn_vert | f turn_copy16_frag",
+                            "53 | v turn_vert | f turn_copy32_frag",
+                            "103 | v turn_vert | f turn_copy64_frag",
+                            "123 | v turn_vert | f turn_copy128_frag",
+                            "13 | v turn_vert | f turn_masked8_frag",
+                            "23 | v turn_vert | f turn_masked16_frag",
+                            "53 | v turn_vert | f turn_masked32_frag",
+                            "103 | v turn_vert | f turn_masked64_frag",
+                            "123 | v turn_vert | f turn_masked128_frag",
+                            "13 | v turn_vert | f turn_reach_frag",
+                            "13 | v turn_vert | f turn_reach_reduce_frag",
                             "115 | v xr_vert | f xr_bgr10_frag",
                             "115 | v xr_vert | f xr_bgra10_frag",
                             "115 | v xr_vert | f xr_planes_frag",
+                            "115 | v xr_vert | f xr_two_planes_frag",
                             "70 | v resolve_vert | f resolve_rgba8_frag",
                             "70 | v resolve_vert | f resolve_rgba8_srgb_frag",
                             "80 | v resolve_vert | f resolve_bgra8_frag",
                             "80 | v resolve_vert | f resolve_bgra8_srgb_frag",
+                            "70 | v resolve_vert | f resolve_rgba8_2x_frag",
+                            "70 | v resolve_vert | f resolve_rgba8_4x_frag",
+                            "80 | v resolve_vert | f resolve_bgra8_2x_frag",
+                            "80 | v resolve_vert | f resolve_bgra8_4x_frag",
                             "92 | v resolve_vert | f resolve_rg11b10f_frag",
                             "115 | v resolve_vert | f resolve_rgba16f_frag",
                             "1 | v mip_vert | f mip_a8_frag",
@@ -339,8 +391,30 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
         lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) + ":15:0:1:0:0:1:0:0" +
                         o.substr(bar));
     }
+    for (const char *depth :
+         {"250/0 | v resolve_vert | f resolve_depth16_", "252/0 | v resolve_vert | f resolve_depth32f_",
+          "260/260 | v resolve_vert | f resolve_depth32fs8_"})
+        for (const char *filter : {"sample0_frag", "min_frag", "max_frag"})
+            lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth + filter);
+    for (const char *depth :
+         {"250/0 | v turn_vert | f turn_depth16_frag", "252/0 | v turn_vert | f turn_depth32f_frag",
+          "260/260 | v turn_vert | f turn_depth32fs8_frag", "0/253 | v stencil_bits_vert | f stencil_bits_s8_frag",
+          "260/260 | v stencil_bits_vert | f stencil_bits_d32fs8_frag",
+          "0/253 | v stencil_bits_vert | f stencil_bits_ms_s8_frag",
+          "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_frag",
+          "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_min_frag",
+          "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_max_frag"})
+        lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth);
+    // and the one-draw stencil route's (runtime/raw_zeta_colour.h): a multisampled Depth32Float_Stencil8 source's through
+    // write mask G alone (MTLColorWriteMaskGreen), its target's depth word kept
     for (const char *out : {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
-                            "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
+                            "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store",
+                            "c0=13:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_s8_colour_frag",
+                            "c0=103:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_d32fs8_colour_frag",
+                            "c0=13:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_s8_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_min_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_max_colour_frag"})
         lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);
     return lines;
 }

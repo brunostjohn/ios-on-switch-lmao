@@ -5,7 +5,7 @@
 // earlier build's store had (compiler_log.h) again at the background class, and takes
 // requests one by one on a thread that sleeps in the kernel between them. A request is prepared there (compiler_request.h),
 // answered from the store when its entry is in, and otherwise handed to the pool (compiler_pool.h), which makes each
-// record once for every process that asks, at the class of its most urgent waiter. The m2v device it compiles with is
+// record once for every process that asks, at the class of its most urgent waiter. The compile context it compiles with is
 // opened at the first compile (compiler_engine.h), inside the sandbox: a compiler whose store holds every state asked of
 // it never opens one.
 #import <Foundation/Foundation.h>
@@ -56,8 +56,9 @@ uint32_t restarts()
 
 struct Asked : Work {
     Prepared prepared;
-    std::string request;
-    int32_t pid = 0;  // the process that asked first, whose share of the store the record takes
+    std::string request;  // what the log keeps of a client's request ("": the log's own, which it keeps already)
+    int32_t pid = 0;      // the process that asked first, whose share of the store the record takes
+    dispatch_semaphore_t done = nullptr;  // signalled once it ran, for the replay that waits on it
 };
 
 // What a stored entry answers, -1 for one that is not `k`'s whole (retired, and made again)
@@ -156,7 +157,8 @@ private:
     bool open(uint64_t stack);
     void warm(uint64_t stack);
     void take(uint64_t stack);
-    void submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid);
+    bool submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid,
+                dispatch_semaphore_t done = nullptr);
 };
 
 // A job's result as the pool hands it to each waiter: TegraGM20BCompilerABI.h's result, whether the store held it when
@@ -212,7 +214,7 @@ int32_t Service::run(Work &work)
     int32_t result = engine_.compile(p, entry, why);
     if (!entry.empty() && !publish(&p.name, p.key, entry, result == TegraGM20BCompileMade, why))
         result = TegraGM20BCompileFailed;
-    if (result == TegraGM20BCompileMade)
+    if (result == TegraGM20BCompileMade && !asked.request.empty())
         log_.add(p.name, asked.request);
     if (result == TegraGM20BCompileFailed || result == TegraGM20BCompileUnavailable)
         os_log_error(logger(), "SwitchShaderCompiler: pid %d's state not made: %{public}s | %{public}.300s", asked.pid,
@@ -225,21 +227,26 @@ int32_t Service::run(Work &work)
     return packed(result, false, workerClass);
 }
 
-void Service::submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid)
+// True: a job of its own runs it, which signals `done` once it ran
+bool Service::submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid,
+                     dispatch_semaphore_t done)
 {
     std::string bytes;
     if (store_.find(prepared.name, bytes)) {
         const int32_t stored = storedResult(bytes, prepared.key);
-        if (stored >= 0)
-            return complete(waiter, stored, TegraGM20BCompileStored);
+        if (stored >= 0) {
+            complete(waiter, stored, TegraGM20BCompileStored);
+            return false;
+        }
         store_.retire(prepared.name);
     }
     auto work = std::make_unique<Asked>();
     work->pid = pid;
     work->request = std::move(request);
+    work->done = done;
     const raw::Digest name = prepared.name;
     work->prepared = std::move(prepared);
-    pool_->submit(name, std::move(work), waiter);
+    return pool_->submit(name, std::move(work), waiter);
 }
 
 #if SWITCH_DEBUG
@@ -339,8 +346,8 @@ bool Service::open(uint64_t stack)
 {
     root_ = geteuid() ? kMobileRoot : kSystemRoot;
     std::string why;
-    if (!connect(why) || !engine_.open(stack, why) || !store_.open(root_, stack, engine_.rules(), why) ||
-        !registerStore(stack, why)) {
+    if (!connect(why) || !engine_.open(stack, EngineInputs::installed(), why) ||
+        !store_.open(root_, stack, engine_.rules(), why) || !registerStore(stack, why)) {
         os_log_error(logger(), "SwitchShaderCompiler: not serving: %{public}s", why.c_str());
         decline();
         return false;
@@ -358,11 +365,14 @@ bool Service::open(uint64_t stack)
     return true;
 }
 
-// The requests an earlier store was made from, made again as background work nobody waits for. A store already holding
-// one gets the record's program slots it lacks (a store written before they were kept, or one that dropped them)
+// The requests an earlier store was made from, made again as background work nobody waits for, one at a time: the pool
+// runs one background compile at once, and a queued request would hold its libraries' bytes until it ran. A store
+// already holding one gets the record's program slots it lacks (a store written before they were kept, or one that
+// dropped them)
 void Service::warm(uint64_t stack)
 {
     uint32_t again = 0, dropped = 0;
+    dispatch_semaphore_t ran = dispatch_semaphore_create(0);
     log_.replay([&](const std::string &request, raw::Digest &name) {
         Prepared prepared;
         std::string why;
@@ -375,7 +385,8 @@ void Service::warm(uint64_t stack)
         const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, prepared.key) : -1;
         if (stored < 0) {
             again++;
-            submit(std::move(prepared), request, {0, 0, Band::Background, false}, 0);
+            if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
+                dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
         } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.key, bytes, true, why)) {
             os_log_error(logger(), "SwitchShaderCompiler: a stored record's program slots not kept: %{public}s",
                          why.c_str());
@@ -401,6 +412,8 @@ void Service::serve()
     hooks.run = [this](Work &work, const std::function<void(int32_t)> &primary) {
         const int32_t result = run(work);
         primary(result);
+        if (const dispatch_semaphore_t done = static_cast<Asked &>(work).done)
+            dispatch_semaphore_signal(done);
         return result;
     };
     hooks.complete = [this](const Waiter &waiter, int32_t result) {

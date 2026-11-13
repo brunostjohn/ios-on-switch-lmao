@@ -3,26 +3,17 @@
 // of the GM20B and names each push for the push profile (gpu_fenced.h "push profile"). Plain C++ with no kernel dependency, so
 // the host test (test/gm20b_push_scan_test.cpp) runs the same code over NVK's streams.
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's
-// subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 10 SET_ANTI_ALIAS,
-// 11..16 the draws); method numbers from Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h. The raw GM20B path
-// writes the methods those macros would, SET_ANTI_ALIAS among them, directly; its jobs' channels also call its own
-// indirect command buffer macros (kits/SwitchGM20BEmit/mme/switch_gm20b_macros.c, ABI v2), at slots NVK puts others in.
+// subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros at the slots both drivers load them at
+// (SwitchGM20BMacroSlots.h: NVK's clear and anti-alias, and the draws, NVK's and the raw path's); method numbers from
+// Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h. The raw GM20B path writes SET_ANTI_ALIAS directly, not
+// through NVK's macro; its jobs' channels also call its own macros past the draw slots, at slots NVK puts others in.
 #pragma once
 #include <stdint.h>
 #include "TegraGM20BGpu.h"
+#include "../../kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h"
 
 namespace tgm_scan
 {
-// The raw path's macros an indirect command buffer's draws call (ABI v2): the range an execute reads from GPU memory, the
-// gated draws (their first argument the command's index), and the shadow scratch words that hold the executed range
-enum : uint32_t {
-	kRawIcbRange = 4,
-	kRawIcbDraw = 5,
-	kRawIcbDrawIndexed = 6,
-	kRawScratchIcbLocation = 120,
-	kRawScratchIcbLength = 121,
-};
-
 // Colour target 0 as a pass sets it: WIDTH (bytes when pitch), HEIGHT, its layout, and the sample grid of the last
 // SET_ANTI_ALIAS as log2 samples across and down. A multisampled target's WIDTH and HEIGHT count its sample grid (NIL's
 // px_extent_sa), so a 4x 720x1280 image is a 1440x2560 target.
@@ -61,9 +52,9 @@ struct PushParse {
 	bool shadingKnown;
 	// the last method parsed for an engine (method 0x100 and up), subchannel << 16 | method; 0 before any
 	uint32_t lastEngine;
-	// a raw job's stream (scanPushes): its macro slots are the raw path's. An indirect command buffer's gated draw draws
-	// where its index lies in the executed range the shadow scratch holds, which the stream wrote or the GPU reads
-	// (icbRangeRead: every gated draw counts)
+	// a raw job's stream (scanPushes): the slots past the draw slots are the raw path's own macros. An indirect command
+	// buffer's gated draw or patch draws where its index lies in the executed range the shadow scratch holds, which the
+	// stream wrote or the GPU reads (icbRangeRead: every gated one counts)
 	bool rawMacros;
 	bool icbRangeRead;
 	uint32_t icbLocation, icbLength;
@@ -98,6 +89,40 @@ inline void antiAliasSamplesLog2(Target &t, uint32_t log2)
 inline bool multisampled(const Target &t)
 {
 	return (t.gridX | t.gridY) != 0;
+}
+
+inline void countDraw(PushCounts &c, PushParse &p)
+{
+	c.draws++;
+	c.sampleDraws += static_cast<uint64_t>(p.shadingKnown && shadingPassesLog2(p) != 0u);
+	p.drawn = p.rt;
+}
+
+// A raw job's call of one of the raw path's own macros, `first` its first argument. An amplified draw is one draw of all
+// its amplifications and a layered clear one clear of all its layers, as NVK's multiview draw and clear macros are.
+inline void rawMacro(PushCounts &c, PushParse &p, uint32_t slot, uint32_t first)
+{
+	switch (slot) {
+	case SWITCH_GM20B_MACRO_ICB_RANGE:
+		p.icbRangeRead = true;
+		break;
+	case SWITCH_GM20B_MACRO_ICB_DRAW:
+	case SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED:
+	case SWITCH_GM20B_MACRO_ICB_PATCHES:
+		if (p.icbRangeRead || first - p.icbLocation < p.icbLength)
+			countDraw(c, p);
+		break;
+	case SWITCH_GM20B_MACRO_AMPLIFY:
+	case SWITCH_GM20B_MACRO_AMPLIFY_INDEXED:
+		countDraw(c, p);
+		break;
+	case SWITCH_GM20B_MACRO_CLEAR_LAYERS:
+		c.clears++;
+		p.drawn = p.rt;
+		break;
+	default:
+		break;
+	}
 }
 
 inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint32_t data)
@@ -140,10 +165,7 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.clears++;  // CLEAR_SURFACE
 			p.drawn = p.rt;
 		} else if (mthd == 0x1618) {
-			c.draws++;  // BEGIN outside an MME macro
-			c.sampleDraws +=
-				static_cast<uint64_t>(p.shadingKnown && shadingPassesLog2(p) != 0u);
-			p.drawn = p.rt;
+			countDraw(c, p);  // BEGIN outside an MME macro
 		} else if (mthd == 0x15d0) {
 			antiAliasMode(p.rt, data);  // SET_ANTI_ALIAS
 			c.msaaPasses += static_cast<uint64_t>(multisampled(p.rt));
@@ -159,41 +181,38 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.linearTargets += static_cast<uint64_t>(pitch);
 			if (mthd == 0x0814)
 				p.rt.pitch = pitch;
-		} else if (p.rawMacros && mthd == 0x3400 + 4 * kRawScratchIcbLocation) {
+		} else if (p.rawMacros && mthd == 0x3400 + 4 * SWITCH_GM20B_SCRATCH_ICB_LOCATION) {
 			p.icbLocation = data;  // SET_MME_SHADOW_SCRATCH(j)
 			p.icbRangeRead = false;
-		} else if (p.rawMacros && mthd == 0x3400 + 4 * kRawScratchIcbLength) {
+		} else if (p.rawMacros && mthd == 0x3400 + 4 * SWITCH_GM20B_SCRATCH_ICB_LENGTH) {
 			p.icbLength = data;
 		} else if (p.rawMacros && mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7) &&
-			   (mthd - 0x3800) / 8 >= kRawIcbRange &&
-			   (mthd - 0x3800) / 8 <= kRawIcbDrawIndexed) {
-			const uint32_t j = (mthd - 0x3800) / 8;
-			if (j == kRawIcbRange) {
-				p.icbRangeRead = true;
-			} else if (p.icbRangeRead || data - p.icbLocation < p.icbLength) {
-				c.draws++;
-				c.sampleDraws += static_cast<uint64_t>(p.shadingKnown &&
-								       shadingPassesLog2(p) != 0u);
-				p.drawn = p.rt;
-			}
+			   (mthd - 0x3800) / 8 > SWITCH_GM20B_MACRO_DRAWS_LAST &&
+			   (mthd - 0x3800) / 8 < SWITCH_GM20B_MACRO_RAW_END) {
+			rawMacro(c, p, (mthd - 0x3800) / 8, data);
 		} else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
+			static_assert((0x3c00 - 0x3800) / 8 == SWITCH_GM20B_MACRO_SLOTS,
+				      "a call per slot");
 			const uint32_t j = (mthd - 0x3800) / 8;
-			if (j == 10) {
+			const bool draw = j >= SWITCH_GM20B_MACRO_DRAWS_FIRST &&
+					  j <= SWITCH_GM20B_MACRO_DRAWS_LAST;
+			if (j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS) {
 				const uint32_t mask = data >> 16;
 				p.antiAlias = (p.antiAlias & ~mask) | (data & mask);
 				p.shadingKnown = p.shadingKnown || ((mask & 0xf) != 0u);
 			}
-			c.draws += static_cast<uint64_t>(j >= 11 && j <= 16);
-			c.sampleDraws += static_cast<uint64_t>(
-				j >= 11 && j <= 16 && p.shadingKnown && shadingPassesLog2(p) != 0u);
-			c.clears += static_cast<uint64_t>(j == 2);
+			c.draws += static_cast<uint64_t>(draw);
+			c.sampleDraws += static_cast<uint64_t>(draw && p.shadingKnown &&
+							       shadingPassesLog2(p) != 0u);
+			c.clears += static_cast<uint64_t>(j == SWITCH_GM20B_MACRO_NVK_CLEAR);
 			// SET_ANTI_ALIAS (once per vkCmdBeginRendering), its argument the macro's data: a sample count
 			// (log2 in bits 7:4, under mask 0xf0 in bits 23:16) above one
 			c.msaaPasses += static_cast<uint64_t>(
-				j == 10 && ((data & 0x00f00000) != 0u) && (data & 0xf0) != 0u);
-			if (j == 10 && (data & 0x00f00000))
+				j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS &&
+				((data & 0x00f00000) != 0u) && (data & 0xf0) != 0u);
+			if (j == SWITCH_GM20B_MACRO_NVK_SET_ANTI_ALIAS && (data & 0x00f00000))
 				antiAliasSamplesLog2(p.rt, (data >> 4) & 0xf);
-			if ((j >= 11 && j <= 16) || j == 2)
+			if (draw || j == SWITCH_GM20B_MACRO_NVK_CLEAR)
 				p.drawn = p.rt;
 		}
 		break;

@@ -144,8 +144,13 @@ void foreignSampler()
 {
     const auto [device, library] = openWithLibrary(writePack(packKey(kPacked)));
     ASSERT_TRUE(device != nil);
+    MTLSamplerDescriptor *compared = [MTLSamplerDescriptor new];
+    compared.compareFunction = MTLCompareFunctionLess;
+    EXPECT_TRUE([(id)[device newSamplerStateWithDescriptor:compared] isKindOfClass:NSClassFromString(@"RMSampler")]);
+    EXPECT_EQ(gOpens, 0);
     MTLSamplerDescriptor *s = [MTLSamplerDescriptor new];
-    s.compareFunction = MTLCompareFunctionLess;
+    s.sAddressMode = MTLSamplerAddressModeClampToBorderColor;
+    s.borderColor = MTLSamplerBorderColorOpaqueWhite;
     (void)[device newSamplerStateWithDescriptor:s];
     expectOpenedFor(device, "a sampler's twin");
 }
@@ -162,6 +167,36 @@ void inheritedMethod()
     expectOpenedFor(device, "m2v's -[MTLDevice harnessSelfRegistry]");
     EXPECT_EQ([(HarnessM2VMethods *)device harnessSelfRegistry], kRegistryID);
     EXPECT_EQ(gOpens, 1);
+}
+
+// A compute state the pack answers is made without m2v, its answers the pack's; one it has no answers of opens m2v
+void computeStates()
+{
+    const std::string metallib = writeMetallib();
+    const uint64_t state = computeStateHash(metallib, "k");
+    ASSERT_NE(state, 0u);
+    id<MTLDevice> device = open(writePack(packKey(kPacked), {}, {{state, 768, 32, 1024, 0}}));
+    ASSERT_TRUE(device != nil);
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
+    id<MTLFunction> kernel = [library newFunctionWithName:@"k"];
+    ASSERT_TRUE(kernel != nil) << text(error);
+    id<MTLComputePipelineState> made = [device newComputePipelineStateWithFunction:kernel error:&error];
+    ASSERT_TRUE(made != nil) << text(error);
+    EXPECT_EQ(made.maxTotalThreadsPerThreadgroup, 768u);
+    EXPECT_EQ(made.threadExecutionWidth, 32u);
+    EXPECT_EQ(made.staticThreadgroupMemoryLength, 1024u);
+    EXPECT_EQ(gOpens, 0);
+    EXPECT_EQ([m2vRecord(device)[@"needs"] count], 0u) << text(m2vRecord(device));
+    MTLComputePipelineDescriptor *other = [MTLComputePipelineDescriptor new];
+    other.computeFunction = kernel;
+    other.maxTotalThreadsPerThreadgroup = 256;
+    (void)[device newComputePipelineStateWithDescriptor:other
+                                                options:MTLPipelineOptionNone
+                                             reflection:nil
+                                                  error:&error];
+    EXPECT_EQ(gOpens, 1);
+    EXPECT_NE(m2vRecord(device)[@"needs"][@"a compute state the pack has no facts of"], nil) << text(m2vRecord(device));
 }
 
 // A buffer over an IOSurface's pages and a linear texture's row are the raw device's own answers
@@ -214,6 +249,7 @@ void ownDevice()
                                               "maxLineWidth",
                                               "maxPointSize",
                                               "padmaxBufferLength",
+                                              "maxTessellationFactor",
                                               "maxIOCommandsInFlight",
                                               "maxAccelerationStructureLevels"};
     for (const LimitField &field : kLimitFields) {
@@ -325,6 +361,11 @@ TEST(RawFacadeLazy, ForeignSamplerOpensM2VForItsTwin)
 TEST(RawFacadeLazy, InheritedMethodOpensM2VAtItsFirstCall)
 {
     switch_ios::test::ExpectPassesInFreshProcess(inheritedMethod);
+}
+
+TEST(RawFacadeLazy, AComputeStateThePackAnswersOpensNoM2V)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(computeStates);
 }
 
 TEST(RawFacadeLazy, SurfaceBufferAndLinearRowOpenNoM2V)

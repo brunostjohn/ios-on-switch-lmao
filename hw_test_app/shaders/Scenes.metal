@@ -61,6 +61,19 @@ fragment float4 linear_fragment(TexturedVertex in [[stage_in]], texture2d<float>
     return texture.sample(bilinear, in.uv, level(0));
 }
 
+/// The four texels' alpha, then red, about the texel corner nearest uv (Metal's gather)
+fragment float4 gather_alpha_fragment(TexturedVertex in [[stage_in]], texture2d<float> texture [[texture(0)]])
+{
+    constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
+    return texture.gather(nearest, in.uv, int2(0), component::w);
+}
+
+fragment float4 gather_red_fragment(TexturedVertex in [[stage_in]], texture2d<float> texture [[texture(0)]])
+{
+    constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
+    return texture.gather(nearest, in.uv, int2(0), component::x);
+}
+
 /// A8's coverage as grey, so an R8 or RGBA8 target shows it where R8's .r would be.
 fragment float4 alpha_fragment(TexturedVertex in [[stage_in]], texture2d<float> texture [[texture(0)]])
 {

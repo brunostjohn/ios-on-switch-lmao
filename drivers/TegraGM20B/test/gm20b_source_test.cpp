@@ -584,17 +584,18 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 	EXPECT_TRUE(reopen.Before("p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);",
 				  "p.m(WAIT_FOR_IDLE, 0);"));
 	const CodeText context = Block(raw, "void Device::emitContext(Push &p)");
-	EXPECT_TRUE(context.Has("p.m(LOAD_CB_OFFSET, kRootInterlockTickets);"));
-	// the init template relocated to this device's own addresses (raw_pack.cpp relocated, shared with the runtime's capture)
-	EXPECT_TRUE(context.Has("const InitAddresses here = {heap_.va, zero_.va, root_.va, "
-				"tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};"));
+	// the init template relocated to this device's own addresses (raw_pack.cpp relocated, shared with the runtime's capture),
+	// the interlock's ticket buffer among them
+	EXPECT_TRUE(context.Has("const InitAddresses here{heap_.va, zero_.va, root_.va, "
+				"tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1, tickets_.va};"));
 	EXPECT_TRUE(context.Has("relocated(im[i], here)"));
 	const CodeText relocated =
 		Block(SourceText("../../TegraGM20BMetal/raw/runtime/raw_pack.cpp"),
 		      "uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)");
 	for (const char *reloc :
 	     {"case RelocHeapHi:", "case RelocHeapLo:", "case RelocTicHi:", "case RelocTicLo:",
-	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:"})
+	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:",
+	      "case RelocTicketsLo:", "case RelocTicketsHi:"})
 		EXPECT_TRUE(relocated.Has(reloc));
 	EXPECT_TRUE(context.Has("sampleWords(p, 1, root_.va);"));
 	EXPECT_TRUE(Block(raw, "void sampleWords(Push &p, uint32_t samples, uint64_t root,")

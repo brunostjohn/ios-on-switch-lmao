@@ -4,6 +4,7 @@
 #include "raw_device_harness.h"
 #include "../raw/fx/fx_image.h"
 #include "../raw/runtime/raw_attachment_target.h"
+#include "../raw/runtime/raw_layers.h"
 #include "../raw/runtime/raw_mme.h"
 #include "../raw/runtime/raw_record.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20B3D.h"
@@ -56,6 +57,22 @@ std::vector<uint32_t> valuesOf(const std::vector<Method> &m, uint32_t method)
     return out;
 }
 
+// The last word each root table push word took in `m` (LOAD_CONSTANT_BUFFER from its offset, the root left selected)
+std::map<uint32_t, uint32_t> rootWords(const std::vector<Method> &m)
+{
+    std::map<uint32_t, uint32_t> out;
+    uint32_t offset = 0;
+    for (const Method &x : m) {
+        if (x.method == NVB197_LOAD_CONSTANT_BUFFER_OFFSET) {
+            offset = x.value;
+        } else if (x.method >= NVB197_LOAD_CONSTANT_BUFFER(0) && x.method <= NVB197_LOAD_CONSTANT_BUFFER(15)) {
+            out[offset] = x.value;
+            offset += 4;
+        }
+    }
+    return out;
+}
+
 class DeviceLayers : public harness::DeviceTest {
 protected:
     raw::Pipeline *plain = nullptr, *choosing = nullptr;
@@ -69,8 +86,10 @@ protected:
         ASSERT_NE(choosing, nullptr);
     }
 
-    // A state of an RGBA8 target whose vertex program writes ViewportIndex (its header's OMAP bit 426) or not
-    raw::Pipeline *record(uint64_t key, bool viewportIndex)
+    // A state of an RGBA8 target whose vertex program writes ViewportIndex (its header's OMAP bit 426) or not, and Layer
+    // (bit 425) or not; the push words + 1 its draws write the pass's layer count and the encoder's viewport count into
+    raw::Pipeline *record(uint64_t key, bool viewportIndex, bool layer = false, uint8_t arrayLengthWord = 0,
+                          uint8_t viewportCountWord = 0)
     {
         raw::RuntimeRecord r;
         r.keyString = "samples=1 c0=70 ds=0/0 ";
@@ -78,11 +97,18 @@ protected:
             p.image.assign(80 + 64, 0);
             p.gprs = 8;
         }
-        r.programs[0].id = viewportIndex ? "vs-viewport" : "vs";  // (placed programs are shared by id)
+        // placed programs are shared by id
+        r.programs[0].id = std::string("vs") + (viewportIndex ? "-viewport" : "") + (layer ? "-layer" : "");
         r.programs[1].id = "fs";
         if (viewportIndex)
             r.programs[0].image[53] |= 4;
+        if (layer)
+            r.programs[0].image[53] |= 2;
         r.pipeline.keyHash = key;
+        r.pipeline.arrayLengthWord = arrayLengthWord;
+        r.pipeline.viewportCountWord = viewportCountWord;
+        r.pipeline.pushMask = (arrayLengthWord && arrayLengthWord <= 32 ? 1u << (arrayLengthWord - 1) : 0) |
+                              (viewportCountWord ? 1u << (viewportCountWord - 1) : 0);
         r.blob = {0x1a00, 0x1111};
         std::string why;
         return dev.addRecord(r, false, why);
@@ -228,8 +254,12 @@ TEST_F(DeviceLayers, ALayeredPassPastItsTargetsLayersIsRefused)
     EXPECT_TRUE(pass(onto(view, 4), none, &why).empty());
 }
 
-TEST_F(DeviceLayers, ADrawInALayeredPassGoesWhereItsLayerIsKnown)
+// A layered pass draws a state whose vertex program writes no Layer into its first layer (SET_RT_LAYER 0), and one that
+// writes Layer into the slice it chooses (SET_RT_LAYER's control the shader's), the pass's length in its push word
+TEST_F(DeviceLayers, ALayeredPassDrawsEachStateIntoItsLayer)
 {
+    raw::Pipeline *layering = record(0xa3, false, true, 3);
+    ASSERT_NE(layering, nullptr);
     raw::Texture array, view;
     ASSERT_TRUE(dev.createArray(32, 32, 4, kRGBA8, raw::fx::kTexTwoDArray, array));
     ASSERT_TRUE(raw::attachmentTarget(array, 0, 0, view));
@@ -238,11 +268,16 @@ TEST_F(DeviceLayers, ADrawInALayeredPassGoesWhereItsLayerIsKnown)
         onto(view, 4),
         [&](raw::RenderEncoder &e, const char **refused) {
             e.setPipeline(plain);
+            if (!e.draw(kTriangleStrip, 0, 4, 1, 0, refused))
+                return false;
+            e.setPipeline(layering);
             return e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
         },
         &why);
-    EXPECT_TRUE(m.empty());
-    EXPECT_NE(why.find("layered pass"), std::string::npos) << why;
+    ASSERT_FALSE(m.empty()) << why;
+    const uint32_t shader = NVDEF(NVB197, SET_RT_LAYER, CONTROL, GEOMETRY_SHADER_SELECTS_LAYER);
+    EXPECT_EQ(valuesOf(m, NVB197_SET_RT_LAYER), (std::vector<uint32_t>{0, shader}));
+    EXPECT_EQ(rootWords(m).at(0x700 + 4 * 2), 4u);
 }
 
 TEST_F(DeviceLayers, ViewportsAndScissorsPastTheFirstAreWrittenAtTheirIndex)
@@ -279,25 +314,66 @@ TEST_F(DeviceLayers, ViewportsAndScissorsPastTheFirstAreWrittenAtTheirIndex)
     }
 }
 
-TEST_F(DeviceLayers, AVertexFunctionChoosingAmongViewportsIsRefusedItsRecordDrawsZero)
+// A state whose vertex function chooses its slice but whose record is one layer's (m2v had no layered form of it) draws
+// in a pass of one layer and is refused in a layered pass
+TEST_F(DeviceLayers, AOneLayerRecordOfASliceChoosingStateIsRefusedInALayeredPass)
 {
-    raw::Texture t;
-    ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, t, false, true));
-    double viewports[2][6] = {{0, 0, 32, 32, 0, 1}, {32, 32, 32, 32, 0, 1}};
-    const auto draw = [&](uint32_t count) {
+    raw::Pipeline *dropped = record(0xa5, false, false, raw::kLayerDropped);
+    ASSERT_NE(dropped, nullptr);
+    raw::Texture array, view;
+    ASSERT_TRUE(dev.createArray(32, 32, 4, kRGBA8, raw::fx::kTexTwoDArray, array));
+    ASSERT_TRUE(raw::attachmentTarget(array, 0, 0, view));
+    const auto drawn = [&](uint32_t layers) {
         std::string why;
         const auto m = pass(
-            onto(t),
+            onto(view, layers),
             [&](raw::RenderEncoder &e, const char **refused) {
-                e.setPipeline(choosing);
-                e.setViewports(viewports, count);
+                e.setPipeline(dropped);
                 return e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
             },
             &why);
         return m.empty() ? why : std::string();
     };
-    EXPECT_EQ(draw(1), "");
-    EXPECT_NE(draw(2).find("viewports"), std::string::npos);
+    EXPECT_EQ(drawn(1), "");
+    EXPECT_NE(drawn(4).find("layered pass"), std::string::npos);
+}
+
+// The m2v guard's rule (RawMetalM2vGuard.mm fails such a command buffer rather than replay it): only a one-layer record of
+// a slice-choosing state, only in a layered pass
+TEST(RawLayers, AOneLayerRecordInALayeredPassHasNoRenderer)
+{
+    EXPECT_NE(raw::layeredDrawMissing(raw::kLayerDropped, 2, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(raw::kLayerDropped, 1, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(3, 6, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(0, 6, raw::kLayerDropped), nullptr);
+}
+
+// A vertex function choosing among the encoder's viewports draws below its count, which its draws write: a record made
+// without that word, whose function would draw viewport 0, is refused past one viewport
+TEST_F(DeviceLayers, AVertexFunctionChoosesAmongTheEncodersViewports)
+{
+    raw::Pipeline *counted = record(0xa4, true, false, 0, 5);
+    ASSERT_NE(counted, nullptr);
+    raw::Texture t;
+    ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, t, false, true));
+    double viewports[2][6] = {{0, 0, 32, 32, 0, 1}, {32, 32, 32, 32, 0, 1}};
+    std::vector<Method> drawn;
+    const auto draw = [&](raw::Pipeline *pl, uint32_t count) {
+        std::string why;
+        drawn = pass(
+            onto(t),
+            [&](raw::RenderEncoder &e, const char **refused) {
+                e.setPipeline(pl);
+                e.setViewports(viewports, count);
+                return e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
+            },
+            &why);
+        return drawn.empty() ? why : std::string();
+    };
+    EXPECT_EQ(draw(choosing, 1), "");
+    EXPECT_NE(draw(choosing, 2).find("viewports"), std::string::npos);
+    EXPECT_EQ(draw(counted, 2), "");
+    EXPECT_EQ(rootWords(drawn).at(0x700 + 4 * 4), 2u);
 }
 
 TEST_F(DeviceLayers, MipmappedArraysCubesAndVolumesAreChainsOfTheirLayout)

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace switch_metal {
@@ -20,9 +21,10 @@ constexpr uint8_t kMetallibExternType = 5;
 struct MetallibEntry {
     std::string name;
     std::optional<uint8_t> type;
-    uint64_t bitcodeOffset = 0;  // OFFT's third u64, into the bitcode section
-    uint64_t bitcodeBytes = 0;   // MDSZ
-    bool placed = false;         // both OFFT and MDSZ are there
+    uint64_t bitcodeOffset = 0;   // OFFT's third u64, into the bitcode section
+    uint64_t bitcodeBytes = 0;    // MDSZ
+    bool placed = false;          // both OFFT and MDSZ are there
+    std::optional<uint8_t> tess;  // TESS: a post-tessellation vertex function's patch (decodeTess)
 };
 
 // Each entry, in order, until `visit` answers false. False when the metallib is malformed or there are no bytes.
@@ -59,6 +61,8 @@ template <class Visit> bool forEachMetallibEntry(const uint8_t *file, size_t len
                 entry.name.assign(reinterpret_cast<const char *>(v), strnlen(reinterpret_cast<const char *>(v), n));
             else if (!memcmp(file + t, "TYPE", 4) && n >= 1)
                 entry.type = v[0];
+            else if (!memcmp(file + t, "TESS", 4) && n == 1)
+                entry.tess = v[0];
             else if (!memcmp(file + t, "MDSZ", 4) && n >= 8) {
                 memcpy(&entry.bitcodeBytes, v, 8);
                 sized = true;
@@ -89,6 +93,36 @@ inline std::vector<std::string> metallibExternNames(const uint8_t *file, size_t 
     if (!whole)
         names.clear();
     return names;
+}
+
+// A function's patch as MTLFunction answers it. The TESS byte holds the patch type in its low two bits (MTLPatchType's
+// numbering) and the control point count above them, 63 for a patch that names none (Xcode's metal and metallib:
+// [[patch(triangle, 3)]] 0x0d, [[patch(quad, 16)]] 0x42, [[patch(quad)]] 0xfe; an M4 Max answers patchType 1, 2, 2 and
+// patchControlPointCount 3, 16, -1 for them). A function with no TESS tag is no patch function.
+struct FunctionTess {
+    uint8_t patchType = 0;
+    int32_t controlPoints = -1;
+};
+
+inline FunctionTess decodeTess(uint8_t tag)
+{
+    const uint8_t count = tag >> 2;
+    return {uint8_t(tag & 3), count == 63 ? -1 : int32_t(count)};
+}
+
+// `name`'s patch in a metallib (Metal's AIR slice of one: MetallibSlice.h). False: no entry of that name before the list
+// ends or turns out malformed, and `out` is left as it was.
+inline bool metallibFunctionTess(const uint8_t *file, size_t length, std::string_view name, FunctionTess &out)
+{
+    bool found = false;
+    forEachMetallibEntry(file, length, [&](const MetallibEntry &entry) {
+        if (entry.name != name)
+            return true;
+        out = entry.tess ? decodeTess(*entry.tess) : FunctionTess{};
+        found = true;
+        return false;
+    });
+    return found;
 }
 
 }  // namespace switch_metal

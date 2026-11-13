@@ -5,7 +5,8 @@
 //  - Volatile (TegraGM20BBindMapVolatile): the L2 keeps none of its lines, so what the CPU writes for a job, and what the
 //    CPU reads after one, needs no L2 flush or invalidate. Every GPU access is a DRAM round trip.
 //  - Cached: memory the GPU alone reads and writes after the CPU's one fill, made between its bind and the first
-//    submission, which invalidates the L2 for the new mapping (TegraGM20BTlb.h). No CPU reads it.
+//    submission, which invalidates the L2 for the new mapping (TegraGM20BTlb.h); or memory the CPU writes now and then,
+//    named host-written to the next submission's job so the kernel invalidates the L2 first. No CPU reads it.
 #pragma once
 #include <cstdint>
 
@@ -28,6 +29,11 @@ enum class ControlUse : uint8_t {
     InterlockTickets,  // NAK's pixel interlock spins on and atomically increments its words, per 32-pixel group
     ColorTable,        // sRGB colour writes read it, per pixel
     StateSegments,  // the CPU appends a state's methods at its creation, after the GPU fetched the chunk's earlier ones
+    // m2v's handle tables and heap sets (raw_heap_tables.h): the CPU writes an entry per texture or sampler an argument
+    // buffer may name and names them host-written to the next job (Device::tablesWritten_); programs search them per pixel
+    HandleTables,
+    // m2v's root table, its identity resident set, sink and ExecutionStatus words: one CPU fill, then the GPU's writes
+    ArgumentRoots,
 };
 
 constexpr ControlMapping controlMapping(ControlUse use)
@@ -37,6 +43,8 @@ constexpr ControlMapping controlMapping(ControlUse use)
     case ControlUse::ZeroPage:
     case ControlUse::InterlockTickets:
     case ControlUse::ColorTable:
+    case ControlUse::ArgumentRoots:
+    case ControlUse::HandleTables:
         return ControlMapping::Cached;
     case ControlUse::TextureHeaders:
     case ControlUse::SamplerHeaders:

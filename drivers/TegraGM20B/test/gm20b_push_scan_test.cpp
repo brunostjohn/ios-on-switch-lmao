@@ -12,17 +12,8 @@
 #include <vector>
 
 #include "../TegraGM20BPushScan.h"
-#include "SwitchGM20BMacros.h"
 
 using namespace tgm_scan;
-
-static_assert(kRawIcbRange == SWITCH_GM20B_MACRO_ICB_RANGE &&
-		      kRawIcbDraw == SWITCH_GM20B_MACRO_ICB_DRAW &&
-		      kRawIcbDrawIndexed == SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,
-	      "the push scan's raw indirect command buffer macros are the generator's");
-static_assert(kRawScratchIcbLocation == SWITCH_GM20B_SCRATCH_ICB_LOCATION &&
-		      kRawScratchIcbLength == SWITCH_GM20B_SCRATCH_ICB_LENGTH,
-	      "the push scan's executed range is the generator's scratch");
 
 #define CHECK(cond) EXPECT_TRUE(cond) << #cond
 
@@ -322,7 +313,10 @@ TEST(GM20BPushScan, PerSampleDraws)
 static void icb_command(Push &p, uint32_t index, bool indexed)
 {
 	p.push_back(immd(0, 0x1970, 5));  // SET_PRIMITIVE_TOPOLOGY
-	p.push_back(one_inc(0, 0x3800 + 8 * (indexed ? kRawIcbDrawIndexed : kRawIcbDraw), 5));
+	p.push_back(one_inc(0,
+			    0x3800 + 8 * (indexed ? SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED
+						  : SWITCH_GM20B_MACRO_ICB_DRAW),
+			    5));
 	for (uint32_t w : {index, 4u, 1u, 0u, 0u})
 		p.push_back(w);
 }
@@ -343,7 +337,7 @@ static PushCounts scan_raw(const std::vector<const Push *> &pushes, bool raw)
 TEST(GM20BPushScan, RawIndirectCommandBufferDrawsInTheirRange)
 {
 	Push range, slots;
-	range.push_back(inc(0, 0x3400 + 4 * kRawScratchIcbLocation, 2));
+	range.push_back(inc(0, 0x3400 + 4 * SWITCH_GM20B_SCRATCH_ICB_LOCATION, 2));
 	range.push_back(3);
 	range.push_back(2);
 	icb_command(slots, 3, false);
@@ -353,11 +347,88 @@ TEST(GM20BPushScan, RawIndirectCommandBufferDrawsInTheirRange)
 	CHECK(c.draws == 2);
 
 	Push read, words;
-	read.push_back(one_inc(0, 0x3800 + 8 * kRawIcbRange, 2));
+	read.push_back(one_inc(0, 0x3800 + 8 * SWITCH_GM20B_MACRO_ICB_RANGE, 2));
 	words.push_back(3);
 	words.push_back(2);
 	const PushCounts g = scan_raw({&read, &words, &slots}, true);
 	CHECK(g.draws == 3);
 
 	CHECK(scan_raw({&range, &slots}, false).draws == 0);
+}
+
+// A call of macro `slot` with its arguments, as the raw path writes one (raw/runtime/raw_mme.h)
+static Push macro_call(uint32_t slot, const std::vector<uint32_t> &arguments)
+{
+	Push p = {one_inc(0, 0x3800 + 8 * slot, uint32_t(arguments.size()))};
+	p.insert(p.end(), arguments.begin(), arguments.end());
+	return p;
+}
+
+// One raw job per kind of draw and clear the raw path writes, into a 1280x720 one-sample block-linear target, an indirect
+// command buffer's commands inside their execute's range: each counts once as a draw or a clear and latches that target,
+// which its push's profile class names. An Exec's stream reads the raw path's own slots as NVK's macros there: no draws.
+TEST(GM20BPushScan, EachRawDrawAndClearCountsOnceAndLatchesItsTarget)
+{
+	constexpr uint32_t kIndex = 7;
+	std::vector<uint32_t> patch(3 + 3 * SWITCH_GM20B_ICB_PATCH_BUFFERS +
+					    SWITCH_GM20B_ICB_PATCH_CONTROL_WORDS + 2,
+				    0);
+	patch[0] = kIndex;
+
+	struct Kind {
+		const char *name;
+		Push call;
+		bool clear, rawSlot;
+	};
+
+	const Kind kinds[] = {
+		{"draw", macro_call(SWITCH_GM20B_MACRO_DRAW, {1, 0, 6}), false, false},
+		{"indexed draw", macro_call(SWITCH_GM20B_MACRO_DRAW_INDEXED, {1, 0, 6}), false,
+		 false},
+		{"ICB draw", macro_call(SWITCH_GM20B_MACRO_ICB_DRAW, {kIndex, 6, 1, 0, 0}), false,
+		 true},
+		{"ICB indexed draw",
+		 macro_call(SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED, {kIndex, 6, 1, 0, 0, 0}), false,
+		 true},
+		{"patch draw", macro_call(SWITCH_GM20B_MACRO_ICB_PATCHES, patch), false, true},
+		{"amplified draw", macro_call(SWITCH_GM20B_MACRO_AMPLIFY, {6, 1, 0, 0}), false,
+		 true},
+		{"amplified indexed draw",
+		 macro_call(SWITCH_GM20B_MACRO_AMPLIFY_INDEXED, {6, 1, 0, 0, 0}), false, true},
+		{"clear", {immd(0, 0x19d0, 0x3c)}, true, false},  // CLEAR_SURFACE
+		{"layered clear", macro_call(SWITCH_GM20B_MACRO_CLEAR_LAYERS, {0x3c, 2}), true,
+		 true},
+	};
+	Push pass;
+	raw_target(pass, 1280, 720);
+	pass.push_back(inc(0, 0x3400 + 4 * SWITCH_GM20B_SCRATCH_ICB_LOCATION, 2));
+	pass.push_back(kIndex);
+	pass.push_back(1);
+	for (const Kind &k : kinds) {
+		for (const bool raw : {true, false}) {
+			PushParse p = {};
+			p.rawMacros = raw;
+			PushCounts c = {};
+			bool whole = true;
+			scanPush(c, p, whole, pass.data(), pass.size());
+			const uint8_t cls = scanPush(c, p, whole, k.call.data(), k.call.size());
+			const bool counted = raw || !k.rawSlot;
+			EXPECT_EQ(c.draws, counted && !k.clear ? 1u : 0u)
+				<< k.name << (raw ? " (job)" : " (Exec)");
+			EXPECT_EQ(c.clears, counted && k.clear ? 1u : 0u)
+				<< k.name << (raw ? " (job)" : " (Exec)");
+			const TargetImage drawn = targetImage(p);
+			if (!counted) {
+				EXPECT_TRUE(cls == TGM_PC_STATE) << k.name;
+				EXPECT_EQ(drawn.width, 0u) << k.name;
+				continue;
+			}
+			// full, block-linear, one sample
+			EXPECT_TRUE(cls == (k.clear ? TGM_PC_CLEAR : TGM_PC_DRAW) + 0 * 4 + 0 + 0)
+				<< k.name;
+			EXPECT_EQ(drawn.width, 1280u) << k.name;
+			EXPECT_EQ(drawn.height, 720u) << k.name;
+			EXPECT_EQ(drawn.samples, 1u) << k.name;
+		}
+	}
 }

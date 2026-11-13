@@ -27,7 +27,8 @@ void rmStoredZetaForM2v(RMTexture *t);
 // (raw_sample_positions.h); false: ones the raw path keeps Metal's refusal of
 bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out);
 
-// The first stored multisampled depth/stencil texture range [from, to) of `cb` loads, stores, binds or copies: m2v's twin of
+// The first stored multisampled depth/stencil texture, or depth/stencil texture of an MTLHeap (its arena's zeta view), range
+// [from, to) of `cb` loads, stores, binds or copies: m2v's twin of
 // it is a texture of its own memory, so a replay of the range fails by name, before m2v encodes any of it, rather than read
 // or keep depth the raw path's memory does not hold. A range that only attaches it, cleared or not loaded and not stored,
 // replays on the twin.

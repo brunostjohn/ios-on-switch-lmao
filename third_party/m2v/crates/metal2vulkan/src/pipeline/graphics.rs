@@ -813,6 +813,13 @@ impl StorageAttachmentUse {
         }
     }
 
+    /// Whether the function's write stores a channel: it writes the attachment and the
+    /// pipeline's write mask covers one of the format's channels ([`kept`](Self::kept) is not
+    /// all four). One that stores none only reads the attachment.
+    pub fn stores(&self) -> bool {
+        self.writes && self.kept != vk::ColorComponentFlags::known_bits()
+    }
+
     /// The format of the storage view: [`uint_view`](Self::uint_view) where it is set, else
     /// `format`.
     pub fn view_format(&self) -> vk::Format {
@@ -821,15 +828,17 @@ impl StorageAttachmentUse {
 
     /// The unsigned-integer format of the texel size an attachment of the sRGB format `format`
     /// is viewed in, where a fragment function reads it in the storage form
-    /// ([`uint_view`](Self::uint_view)): `R32_UINT` for `B8G8R8A8_SRGB` and `R8G8B8A8_SRGB`,
-    /// `R16_UINT` for `R8G8_SRGB` and `A1R5G5B5_UNORM_PACK16`, `R8_UINT` for `R8_SRGB`; `None` for
-    /// any other format. A consumer that makes an attachment's image before it knows the pipeline
-    /// (a memoryless attachment's backing) makes it mutable to this format. The compile layer sets
-    /// the view only where it builds the form (today the four-byte sRGB formats and
-    /// `A1R5G5B5_UNORM_PACK16`).
+    /// ([`uint_view`](Self::uint_view)): `R32_UINT` for `B8G8R8A8_SRGB`, `R8G8B8A8_SRGB` and
+    /// `A2R10G10B10_UNORM_PACK32`, `R16_UINT` for `R8G8_SRGB` and `A1R5G5B5_UNORM_PACK16`,
+    /// `R8_UINT` for `R8_SRGB`; `None` for any other format. A consumer that makes an attachment's
+    /// image before it knows the pipeline (a memoryless attachment's backing) makes it mutable to
+    /// this format. The compile layer sets the view only where it builds the form (today the
+    /// four-byte sRGB formats, `A1R5G5B5_UNORM_PACK16` and `A2R10G10B10_UNORM_PACK32`).
     pub fn uint_view_of(format: vk::Format) -> Option<vk::Format> {
         match format {
-            vk::Format::B8G8R8A8_SRGB | vk::Format::R8G8B8A8_SRGB => Some(vk::Format::R32_UINT),
+            vk::Format::B8G8R8A8_SRGB
+            | vk::Format::R8G8B8A8_SRGB
+            | vk::Format::A2R10G10B10_UNORM_PACK32 => Some(vk::Format::R32_UINT),
             vk::Format::R8G8_SRGB | vk::Format::A1R5G5B5_UNORM_PACK16 => Some(vk::Format::R16_UINT),
             vk::Format::R8_SRGB => Some(vk::Format::R8_UINT),
             _ => None,

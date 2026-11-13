@@ -329,6 +329,7 @@ mesa_cc_library(
         "nvk_switch_ir_image.c",
         "nvk_switch_ir_image_types.c",
         "nvk_switch_ir_values.c",
+        "nvk_switch_offline.c",
         "nvk_switch_rank.c",
         "nvk_switch_push.c",
         "nvk_switch_round.c",
@@ -337,6 +338,8 @@ mesa_cc_library(
         "nvk_switch_split_nir.c",
         "nvk_switch_split_prologue.c",
         "nvk_switch_split_proof.c",
+        "nvk_switch_turn.c",
+        "nvk_switch_xr_planes.c",
         "nvk_upload_queue.c",
         "nvk_video_session.c",
         "nvk_wsi.c",
@@ -847,6 +850,92 @@ py_test(
 )
 
 mesa_cc_library(
+    name = "turn_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = [
+        "nvk_switch_turn.c",
+        "nvk_switch_turn_test.c",
+    ],
+)
+
+fs_depth_test_binary(
+    name = "turn_test_bin",
+    testonly = True,
+    archives = [
+        ":turn_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "turn_test_host",
+    testonly = True,
+    srcs = [":turn_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "turn_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :turn_test_host)",
+        "turn",
+    ],
+    data = [":turn_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
+)
+
+mesa_cc_library(
+    name = "xr_planes_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = [
+        "nvk_switch_xr_planes.c",
+        "nvk_switch_xr_planes_test.c",
+    ],
+)
+
+fs_depth_test_binary(
+    name = "xr_planes_test_bin",
+    testonly = True,
+    archives = [
+        ":xr_planes_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "xr_planes_test_host",
+    testonly = True,
+    srcs = [":xr_planes_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "xr_planes_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :xr_planes_test_host)",
+        "xr-planes",
+    ],
+    data = [":xr_planes_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
+)
+
+mesa_cc_library(
     name = "bound_textures_test_objects",
     testonly = True,
     c_args = NVK_C_ARGS,
@@ -886,5 +975,48 @@ py_test(
         "bound-textures",
     ],
     data = [":bound_textures_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
+)
+
+mesa_cc_library(
+    name = "interlock_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = ["nvk_switch_interlock_test.c"],
+)
+
+fs_depth_test_binary(
+    name = "interlock_test_bin",
+    testonly = True,
+    archives = [
+        ":interlock_test_objects",
+        ":nvk",
+    ] + NVK_ARCHIVES,
+    # the entry-point tables' weak references nothing defines, as the dylib's first link leaves them (bazel/link.bzl)
+    linkopts = [
+        "-Wl,-undefined,dynamic_lookup",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
+mesa_files(
+    name = "interlock_test_host",
+    testonly = True,
+    srcs = [":interlock_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "interlock_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :interlock_test_host)",
+        "interlock",
+    ],
+    data = [":interlock_test_host"],
     main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
 )

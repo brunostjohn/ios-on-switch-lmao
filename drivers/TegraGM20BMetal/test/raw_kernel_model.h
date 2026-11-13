@@ -31,8 +31,9 @@ constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFe
 
 struct BoState {
     bool import = false, cached = false, cpuReached = false;
-    bool hostWritten = false;  // a CPU write lease released on it since a job last named it
-    uint32_t set = 0;          // the set it is a member of, 0: none
+    bool hostWritten = false;         // a CPU write lease released on it since a job last named it
+    uint32_t set = 0;                 // the set it is a member of, 0: none
+    uint64_t address = 0, bytes = 0;  // an import's host range
 };
 
 struct SetState {
@@ -45,9 +46,10 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    uint32_t flags = 0;           // SubmitAddress: TegraGM20BAbiSubmit.surface_flags; SubmitJob: TegraGM20BAbiJob.flags
+    std::vector<uint32_t> words;  // its pushes' method stream, in push order, where the model's memory holds them
     std::vector<TegraGM20BAbiPush> pushes;  // a SubmitJob's GP entries
-    std::vector<uint32_t> words;
-    bool hostWritten = false;  // the kernel drops the GPU L2's lines before the job (gpu_exec.c)
+    bool hostWritten = false;               // the kernel drops the GPU L2's lines before the job (gpu_exec.c)
 };
 
 struct Slot {
@@ -117,8 +119,9 @@ struct Model {
     std::function<void()> jobAdded;
     std::function<void(const TegraGM20BAbiBindOp &op)> bound;  // each VmBind's op, as the kernel takes it
     std::function<bool(uint32_t channel, uint32_t seqno)> blockUntil;
-    unsigned refuse = 0;           // submissions refused from now, with `refusal`
-    uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
+    unsigned refuse = 0;  // submissions refused from now, with `refusal`
+    // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
+    uint64_t vaEnd = uint64_t(1) << 40;
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
@@ -208,11 +211,12 @@ struct Model {
         return words;
     }
 
-    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply)
+    int run(Slot &s, uint32_t channel, std::vector<TegraGM20BAbiSurfaceUse> uses, TegraGM20BAbiExecReply &reply,
+            uint32_t flags, std::vector<uint32_t> words = {})
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses), {}, {}};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags, std::move(words)};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -241,8 +245,8 @@ struct Model {
         const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(
             reinterpret_cast<const uint8_t *>(head + 1) + head->push_count * sizeof(TegraGM20BAbiPush));
         addressJobs++;
-        const int kr = run(*s, head->channel, {uses, uses + head->surface_count}, reply);
-        jobs.back().words = pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count);
+        const int kr = run(*s, head->channel, {uses, uses + head->surface_count}, reply, head->surface_flags,
+                           pushWords(reinterpret_cast<const TegraGM20BAbiPush *>(head + 1), head->push_count));
         if (jobAdded)
             jobAdded();
         return kr;
@@ -317,11 +321,10 @@ struct Model {
                 hostWritten |= std::exchange(bo->second.hostWritten, false);
         }
         submitJobs++;
-        const int kr = run(*s, head->channel, std::move(uses), reply);
-        jobs.back().hostWritten = hostWritten;
         const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
+        const int kr = run(*s, head->channel, std::move(uses), reply, head->flags, pushWords(pushes, head->push_count));
+        jobs.back().hostWritten = hostWritten;
         jobs.back().pushes.assign(pushes, pushes + head->push_count);
-        jobs.back().words = pushWords(pushes, head->push_count);
         if (jobAdded)
             jobAdded();
         return kr;
@@ -485,7 +488,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     }
     case TegraGM20BMethodBoImport: {
         const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
-        model.bos[model.nextHandle] = {true, true, 0};
+        model.bos[model.nextHandle] = {true, true, false, false, 0, in.address, in.bytes};
         model.imports[model.nextHandle] = {in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;

@@ -22,6 +22,7 @@
 #include "raw_metallib.h"
 #include "raw_obtained.h"
 #include "raw_remote.h"
+#include "raw_written_textures.h"
 
 struct NmbDirectDispatch;
 
@@ -40,15 +41,20 @@ public:
     ~Completion();
 
     struct Ask {
-        MTLRenderPipelineDescriptor *descriptor;  // over m2v's functions, whose metallibs name their AIR
-        std::string key;                          // the pack key
-        bool caTransform = false;                 // Pipeline::caTransform
+        // over m2v's functions, or with resolveDescriptor the facade's, whose m2v twins are made only for a state
+        // compiled in this process (m2v's translation)
+        MTLRenderPipelineDescriptor *descriptor;
+        std::string key;           // the pack key
+        bool caTransform = false;  // Pipeline::caTransform
         // its functions are not a framework's default library's: no pack names the key, so the record is kept under the
         // key and both functions' AIR (two apps' alike-named functions are not one state)
         bool own = false;
         // its cubic variant's binds (raw_cubic.h), whose name the key ends with; empty: the state itself
         CubicBinds cubic;
         uint8_t fragmentTests = 0;
+        bool twoPlane = false;                // its " | xr2p" variant (raw_xr_pass.h)
+        uint16_t xrSlots = 0;                 // its " | xrs=" variant's sampled two-plane slots (raw_xr_pass.h)
+        std::vector<WrittenTexture> written;  // its " | wtex=" variant's written textures (raw_written_textures.h)
         bool resolveDescriptor = false;
         // the descriptor over this facade's own functions, which a compile request names (nil: none can)
         MTLRenderPipelineDescriptor *facade = nil;

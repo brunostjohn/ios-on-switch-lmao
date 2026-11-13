@@ -13,7 +13,7 @@
 #include <vector>
 #include "../runtime/raw_compute_key.h"
 #import "../runtime/RawPipelineKey.h"
-#include "NativeBridgeMetalFrontend.h"
+#import "../runtime/RawRenderKey.h"
 
 namespace probe {
 
@@ -228,7 +228,7 @@ inline MTLFunctionConstantValues *constantValues(const std::string &text)
 inline id<MTLLibrary> library(id<MTLDevice> dev, const std::string &name)
 {
     static NSMutableDictionary<NSString *, id<MTLLibrary>> *loaded = [NSMutableDictionary dictionary];
-    NSString *key = @(name.c_str());
+    NSString *key = [NSString stringWithFormat:@"%p %s", (void *)dev, name.c_str()];
     if (!loaded[key]) {
         std::string path;
         if (name.rfind("data:", 0) == 0) {
@@ -257,8 +257,9 @@ inline id<MTLFunction> function(id<MTLDevice> dev, const Shape &s, raw::AirHash 
                                                                 : [lib newFunctionWithName:@(s.function.c_str())];
     const void *bytes = nullptr;
     size_t length = 0;
+    std::string entry;
     std::map<std::string, raw::AirHash> hashes;
-    if (!f || !native_bridge_metal_function_metallib(f, &bytes, &length) ||
+    if (!f || !raw::functionLibrary(f, bytes, length, entry) ||
         !raw::metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes) || !hashes.count(s.function))
         return nil;
     air = hashes[s.function];
@@ -294,11 +295,11 @@ inline id<MTLComputePipelineState> state(id<MTLDevice> dev, const Shape &s, id<M
     return made;
 }
 
-// The shape's textures, each of its tag size, (16 + slot) x (8 + slot), read and written where its format allows
-inline NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<raw::BoundTexture> &bound,
-                                         std::string &why)
+// The shape's textures, each of its tag size, (16 + slot) x (8 + slot): read and written, but read only where swizzled
+// (Metal makes no swizzled texture shaders write)
+inline NSArray<MTLTextureDescriptor *> *textures(const std::vector<raw::BoundTexture> &bound)
 {
-    NSMutableArray<id<MTLTexture>> *out = [NSMutableArray array];
+    NSMutableArray<MTLTextureDescriptor *> *out = [NSMutableArray array];
     for (const raw::BoundTexture &b : bound) {
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(b.pixelFormat)
                                                                                      width:16 + b.slot
@@ -306,17 +307,10 @@ inline NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<ra
                                                                                  mipmapped:NO];
         d.swizzle = MTLTextureSwizzleChannelsMake(MTLTextureSwizzle(b.swizzle[0]), MTLTextureSwizzle(b.swizzle[1]),
                                                   MTLTextureSwizzle(b.swizzle[2]), MTLTextureSwizzle(b.swizzle[3]));
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-        id<MTLTexture> t = [dev newTextureWithDescriptor:d];
-        if (!t) {
-            d.usage = MTLTextureUsageShaderRead;
-            t = [dev newTextureWithDescriptor:d];
-        }
-        if (!t) {
-            why = "no texture of format " + std::to_string(b.pixelFormat);
-            return nil;
-        }
-        [out addObject:t];
+        const bool swizzled = b.swizzle[0] != MTLTextureSwizzleRed || b.swizzle[1] != MTLTextureSwizzleGreen ||
+                              b.swizzle[2] != MTLTextureSwizzleBlue || b.swizzle[3] != MTLTextureSwizzleAlpha;
+        d.usage = MTLTextureUsageShaderRead | (swizzled ? 0 : MTLTextureUsageShaderWrite);
+        [out addObject:d];
     }
     return out;
 }

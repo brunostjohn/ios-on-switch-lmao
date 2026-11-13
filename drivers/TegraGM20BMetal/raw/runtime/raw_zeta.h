@@ -70,6 +70,22 @@ bool zetaShape(uint32_t width, uint32_t height, uint32_t format, uint32_t sample
 constexpr uint32_t kZetaTargetWords = 24;
 void zetaTargetWords(Push &p, const Texture *z, uint32_t layers = 1);
 
+// The values of SET_ZT_A .. SET_ZT_ARRAY_PITCH and SET_ZT_SIZE_A .. C that zetaTargetWords writes for zeta `z` of `rows`
+// rows (raw_samples.h sampleRows)
+struct ZetaTargetValues {
+    uint32_t a[5], size[3];
+};
+
+template <typename Zeta> ZetaTargetValues zetaTargetValues(const Zeta &z, uint32_t rows)
+{
+    return {{uint32_t(z.va >> 32), uint32_t(z.va), kZetaFormatInfo[zetaFormatIndex(z.format)].zt,
+             uint32_t(z.blockHeight & 0xf) << 4,  // WIDTH ONE_GOB, HEIGHT, DEPTH ONE_GOB
+             uint32_t(z.layerBytes >> 2)},
+            // SIZE_A the row stride in texels (NVK: the Z/S hardware has no tile width), C one layer,
+            // THIRD_DIMENSION_DEFINES_ARRAY_SIZE
+            {z.pitch / z.bpp, rows, 1}};
+}
+
 // MTLStencilDescriptor and MTLDepthStencilDescriptor, enums as Metal numbers them (MTLCompareFunction, MTLStencilOperation)
 struct StencilFace {
     uint8_t compare = 7;                        // Always

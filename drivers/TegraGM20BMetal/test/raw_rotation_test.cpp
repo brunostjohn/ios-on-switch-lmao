@@ -198,6 +198,8 @@ struct FakeTexture {
     uint8_t rotation = 0;
     uint32_t width = 0, height = 0;
     bool memoryless = false;
+    uint8_t bpp = 4;
+    uint32_t format = 80;
 };
 
 struct FakeAttachment {
@@ -208,10 +210,13 @@ struct FakeAttachment {
         Load,
         Clear
     } load = DontCare;
+
+    bool store = true;
 };
 
 struct FakeZeta {
     const FakeTexture *texture = nullptr;
+    bool loaded = true, stored = true;
 };
 
 struct FakePass {
@@ -245,11 +250,20 @@ TEST(RawRotation, WhichPassesDrawIntoThePlane)
     EXPECT_EQ(backing.height, 1280u);
     p.color[1].texture = &stored;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.color[1].store = false;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);  // transient: a plane-shaped backing stands in
+    EXPECT_TRUE(raw::standsInTurned(stored, r));
+    EXPECT_FALSE(raw::standsInTurned(drawable, r));
+    p.color[1].load = FakeAttachment::Load;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.color[1] = {};
     p.color[1].texture = &other;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
     p.color[1].texture = nullptr;
     p.depthStencil.texture = &storedDepth;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.depthStencil.loaded = p.depthStencil.stored = false;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);
     p.depthStencil.texture = nullptr;
     const FakeTexture fourth{4, 720, 1280};
     p.color[0].texture = &fourth;
@@ -260,6 +274,151 @@ TEST(RawRotation, WhichPassesDrawIntoThePlane)
     p.color[0].texture = &stored;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);
     EXPECT_FALSE(r.turned());
+}
+
+// The root table's turn words map each plane pixel's centre to the frame pixel Metal stores there
+TEST(RawRotation, TurnWordsMapThePlaneOntoTheFrame)
+{
+    const auto value = [](uint32_t u) {
+        float f;
+        memcpy(&f, &u, 4);
+        return f;
+    };
+    for (uint8_t turn = 1; turn <= 4; turn++) {
+        const Rotation r = turned(turn, 96, 64);
+        uint32_t w[raw::kTurnWords];
+        raw::turnWords(r, w);
+        for (uint32_t px = 0; px < r.planeWidth(); px += 5)
+            for (uint32_t py = 0; py < r.planeHeight(); py += 3) {
+                const float x = px + 0.5f, y = py + 0.5f;
+                const float fx = value(w[1]) * (w[0] ? y : x) + value(w[3]);
+                const float fy = value(w[2]) * (w[0] ? x : y) + value(w[4]);
+                // the frame texel whose store lands at (px, py)
+                const raw::Rect at = r.rect({uint32_t(fx), uint32_t(fy), uint32_t(fx) + 1, uint32_t(fy) + 1});
+                EXPECT_EQ(at, (raw::Rect{px, py, px + 1, py + 1})) << int(turn) << " " << px << " " << py;
+                EXPECT_EQ(fx - std::floor(fx), 0.5f);
+                EXPECT_EQ(fy - std::floor(fy), 0.5f);
+            }
+    }
+}
+
+// A turned pass the raw path draws once its turn copies have moved what it keeps
+TEST(RawRotation, WhichPassesTheTurnCopiesMakeDrawable)
+{
+    const FakeTexture drawable{1, 720, 1280}, fourth{4, 720, 1280}, stored{0, 1280, 720}, small{0, 640, 360},
+        odd{0, 1280, 720, false, 3}, depth{0, 1280, 720, false, 4, 252}, depthStencil{0, 1280, 720, false, 8, 260},
+        third{3, 720, 1280}, smallTurned{1, 360, 640}, oddTurned{2, 1280, 720, false, 3},
+        stencil{0, 1280, 720, false, 1, 253}, smallStencil{0, 640, 360, false, 8, 260};
+    FakePass p;
+    p.count = 2;
+    p.color[0].texture = &drawable;
+    p.color[1].texture = &stored;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.color[1].texture = &small;  // an unturned attachment of another size moves over the render area
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.color[1].texture = &third;  // another turn, and another frame
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.color[1].texture = &smallTurned;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.color[1].texture = &oddTurned;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::Mixed);
+    p.color[1].texture = &odd;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::Mixed);
+    p.color[1].texture = &fourth;  // rotation 4 stores as rotation 1
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.color[1].load = FakeAttachment::Load;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.count = 1;
+    p.depthStencil.texture = &depth;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.texture = &depthStencil;  // its stencil moved by bits (raw_stencil_bits.h)
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.texture = &stencil;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.texture = &smallStencil;  // another size moves over the render area
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+    p.depthStencil.loaded = p.depthStencil.stored = false;
+    EXPECT_EQ(raw::turnablePass(p), raw::RotatedRefusal::None);
+}
+
+// The turn copies' maps send each texel where Metal's store map does, and back
+TEST(RawRotation, TurnCopiesFollowTheStoreMap)
+{
+    const auto at = [](const raw::TurnMap &m, int32_t x, int32_t y) {
+        return std::pair<int32_t, int32_t>{m.ax * x + m.ay * y + m.cx, m.bx * x + m.by * y + m.cy};
+    };
+    for (uint8_t turn = 1; turn <= 4; turn++) {
+        const Rotation r = turned(turn, 96, 64);
+        for (uint32_t y = 0; y < r.height; y += 3)
+            for (uint32_t x = 0; x < r.width; x += 5) {
+                const raw::Rect p = r.rect({x, y, x + 1, y + 1});
+                const std::pair<int32_t, int32_t> plane{int32_t(p.x0), int32_t(p.y0)}, frame{int32_t(x), int32_t(y)};
+                EXPECT_EQ(at(raw::planeToFrame(r), frame.first, frame.second), plane) << int(turn);
+                EXPECT_EQ(at(raw::frameToPlane(r), plane.first, plane.second), frame) << int(turn);
+            }
+    }
+    // rotation 4's Load reads the plane transposed: after the mirror, rotation 1's store map reads plane (y, x)
+    const Rotation one = turned(1, 96, 64);
+    for (uint32_t y = 0; y < 64; y += 7)
+        for (uint32_t x = 0; x < 96; x += 11) {
+            const raw::Rect p = one.rect({x, y, x + 1, y + 1});
+            EXPECT_EQ(at(raw::planeMirror(one.planeWidth()), int32_t(p.x0), int32_t(p.y0)),
+                      (std::pair<int32_t, int32_t>{int32_t(y), int32_t(x)}));
+        }
+}
+
+// An attachment beside the pass's turned one, turned another way or of another frame, goes into a stand-in of the pass's
+// plane through its own load map and back through its store map: the pass sees each frame texel as Metal loads it, and the
+// attachment ends with each texel inside the render area where Metal stores it and every other texel kept
+TEST(RawRotation, StandInsMoveEachTexelByTheAttachmentsOwnMaps)
+{
+    const auto at = [](const raw::TurnMap &m, int32_t x, int32_t y, int32_t &sx, int32_t &sy) {
+        sx = m.ax * x + m.ay * y + m.cx;
+        sy = m.bx * x + m.by * y + m.cy;
+        return sx >= m.x0 && sy >= m.y0 && sx < m.x1 && sy < m.y1;
+    };
+    const auto value = [](int32_t i, int32_t j) {
+        return i + 4096 * j + 7;
+    };
+    for (uint8_t own = 1; own <= 4; own++)
+        for (uint8_t other = 1; other <= 4; other++)
+            for (const auto &frame : {std::pair<uint32_t, uint32_t>{96, 64}, {128, 80}, {64, 40}})
+                for (bool draws : {false, true}) {
+                    Rotation pass = turned(own == 4 ? 1 : own, 96, 64);
+                    const Rotation s = turned(other, frame.first, frame.second);
+                    const raw::Rect area{0, 0, std::min(pass.width, s.width), std::min(pass.height, s.height)};
+                    const raw::TurnMap load = raw::after(raw::planeLoad(s, draws), raw::frameToPlane(pass));
+                    const raw::TurnMap back =
+                        raw::within(raw::after(raw::planeToFrame(pass), raw::frameToPlane(s)), pass.rect(area));
+                    const raw::TurnMap loadMap = raw::planeLoad(s, draws), storeMap = raw::frameToPlane(s);
+                    const auto sources = [&](const raw::TurnMap &m) {
+                        raw::TurnMap b = m;
+                        b.x1 = std::min(b.x1, int32_t(s.planeWidth()));
+                        b.y1 = std::min(b.y1, int32_t(s.planeHeight()));
+                        return b;
+                    };
+                    for (uint32_t y = 0; y < area.y1; y += 3)
+                        for (uint32_t x = 0; x < area.x1; x += 5) {
+                            int32_t u, v, i, j, li, lj;
+                            ASSERT_TRUE(at(raw::planeToFrame(pass), int32_t(x), int32_t(y), u, v));
+                            ASSERT_TRUE(at(sources(load), u, v, i, j));
+                            ASSERT_TRUE(at(loadMap, int32_t(x), int32_t(y), li, lj));
+                            EXPECT_EQ(value(i, j), value(li, lj)) << int(own) << " " << int(other) << " " << draws;
+                        }
+                    for (uint32_t j = 0; j < s.planeHeight(); j += 3)
+                        for (uint32_t i = 0; i < s.planeWidth(); i += 5) {
+                            int32_t x, y, u, v;
+                            ASSERT_TRUE(at(storeMap, int32_t(i), int32_t(j), x, y));
+                            const bool inside = uint32_t(x) < area.x1 && uint32_t(y) < area.y1;
+                            EXPECT_EQ(at(back, int32_t(i), int32_t(j), u, v), inside) << int(own) << " " << int(other);
+                            if (!inside)
+                                continue;
+                            int32_t fx, fy;
+                            ASSERT_TRUE(at(raw::frameToPlane(pass), u, v, fx, fy));
+                            EXPECT_EQ(fx, x);
+                            EXPECT_EQ(fy, y);
+                        }
+                }
 }
 
 // The words a turned pass's draw state is: the swizzle, the viewport and the scissor through the kit, read back as methods

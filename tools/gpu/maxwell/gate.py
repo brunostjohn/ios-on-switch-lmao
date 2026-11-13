@@ -3,12 +3,16 @@
 
 usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N] [--seed S] [--after-variant N]
                [--zero bank:first-last]...
+       gate.py --rungs <dump> --corpus <R lines>... [--invocations N] [--seed S]
+           each fetch-free form of the dump with the ROP unit that stands in for its fetch against its storage form,
+           counted per rung (rungcheck.py)
 
 Every state of the corpora in both dumps runs N quads of each program (quad.py over interp.py's lanes) on the same
 seeded attributes, constant buffers, texture and storage-image results (specials included: NaNs with payloads,
 infinities, signed zeros, f32 denormals, values past half's range). A state passes when every lane kills alike and makes
 the same storage stores, and every lane that is not killed writes the same output registers (a discarded pixel's
-registers are written nowhere); it is unsupported when either program uses an instruction the interpreter does not run.
+registers are written nowhere), compared as the codes GM20B's store makes of them where the state's attachment is a
+unorm format (rop.py); it is unsupported when either program uses an instruction the interpreter does not run.
 """
 
 import argparse
@@ -22,7 +26,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from tools.gpu.maxwell import isa, nakstat
+from tools.gpu.maxwell import isa, nakstat, rop, rungcheck
 from tools.gpu.maxwell.interp import Inputs, UnsupportedError
 from tools.gpu.maxwell.quad import LANES, run_quad
 
@@ -84,24 +88,36 @@ class Seeded:
         return Inputs(attribute, cbuf, texture, bound_cbuf)
 
 
-def outputs(image: bytes) -> int:
-    return struct.unpack_from('<I', image, OMAP_TARGET_BYTE)[0].bit_count()
+def run_pixel(image: bytes, quad: list[Inputs], widths: list | None = None) -> list[tuple]:
+    """Run a pixel program's quad; give each lane killed with its stores, or the components it writes and its stores.
+
+    Where `widths` names a component's channel width, the component is the code the ROP stores (rop.store_code).
+    """
+    registers = rungcheck.written_registers(image)
+    out = []
+    for regs, killed, stores in run_quad(image[isa.HEADER_BYTES :], quad, rungcheck.nakstat_outputs(image)):
+        if killed:
+            out.append((killed, stores))
+            continue
+        written = [regs[r] for r in registers]
+        if widths:
+            written = [rop.store_code(v, w) if w else v for v, w in zip(written, widths, strict=False)]
+        out.append((written, killed, stores))
+    return out
 
 
-def lane_result(result: tuple) -> tuple:
-    _, killed, stores = result
-    return (killed, stores) if killed else result
-
-
-def compare(before: tuple, after: tuple, n: int, seed: int, pinned: dict | None = None) -> str:
+def compare(  # noqa: PLR0913, PLR0917  the inputs' seed and pins and the state's attachments
+    before: tuple, after: tuple, n: int, seed: int, pinned: dict | None = None, key: str = ''
+) -> str:
     """Compare two programs, each (image, the constant buffer its bound textures read handles from or -1)."""
-    count = outputs(before[0])
-    if count != outputs(after[0]):
+    if rungcheck.written_registers(before[0]) != rungcheck.written_registers(after[0]):
         return 'different: output maps'
+    widths = rop.widths(key, struct.unpack_from('<I', before[0], OMAP_TARGET_BYTE)[0])
 
     def run(program: tuple, i: int) -> list:
-        quad = [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)]
-        return [lane_result(r) for r in run_quad(program[0][isa.HEADER_BYTES :], quad, count)]
+        return run_pixel(
+            program[0], [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)], widths
+        )
 
     for i in range(n):
         try:
@@ -110,15 +126,26 @@ def compare(before: tuple, after: tuple, n: int, seed: int, pinned: dict | None 
             return f'unsupported: {e}'
         if a != b:
             lane = next(k for k in range(LANES) if a[k] != b[k])
-            return f'different: quad {i} lane {lane}: {describe(a[lane])} vs {describe(b[lane])}'
+            return f'different: quad {i} lane {lane}: {describe(a[lane], b[lane])}'
     return 'identical'
 
 
-def describe(result: tuple) -> str:
-    return 'killed' if result[0] is True else str([hex(x) for x in result[0]])
+def describe(a: tuple, b: tuple) -> str:
+    """Where two lanes' results part: a kill, the output registers, or the first store that differs."""
+    if a[0] is True or b[0] is True or a[0] != b[0]:
+        name = lambda r: 'killed' if r[0] is True else str([hex(x) for x in r[0]])  # noqa: E731
+        return f'{name(a)} vs {name(b)}'
+    sa, sb = a[2], b[2]
+    at = next((k for k in range(min(len(sa), len(sb))) if sa[k] != sb[k]), min(len(sa), len(sb)))
+    store = lambda s: str(s[at]) if at < len(s) else 'none'  # noqa: E731
+    return f'store {at}: {store(sa)} vs {store(sb)}'
 
 
 def main() -> None:
+    if '--rungs' in sys.argv:
+        sys.argv.remove('--rungs')
+        rungcheck.main()
+        return
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('before', type=Path)
     ap.add_argument('after', type=Path)
@@ -158,7 +185,7 @@ def main() -> None:
             print(f'{label}: missing from a dump')
             continue
         pins = pinned | residuals[key] if a.zero_residuals else pinned
-        verdict = compare(before[key], after[key], a.invocations, a.seed, pins)
+        verdict = compare(before[key], after[key], a.invocations, a.seed, pins, key)
         failed |= verdict.startswith('different')
         print(f'{label}: {verdict}')
     sys.exit(1 if failed else 0)

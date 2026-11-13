@@ -10,6 +10,12 @@ extern "C" {
 // accelerator service's registry entry. missing (may be null) is told the class and selector of every unimplemented call.
 id native_bridge_metal_open(const char *loader, const char *cache, uint64_t registryID,
                             void (*missing)(const char *, const char *));
+// The system shader compiler's: no device, only what the direct compiles below need (bridge/NativeMetalCompile.h), over NVK
+// at `loader`. False with nmb_last_error. A process opens this or the device, never both
+bool native_bridge_metal_compile_open(const char *loader);
+// A library of a metallib file or of `data`'s bytes (nil `path`) to compile directly over the compile context: its functions
+// answer as a device library's do, and make no pipeline state. Nil with `error`
+id native_bridge_metal_compile_library(const char *path, dispatch_data_t data, NSError **error);
 // Every Metal selector `cls` (and its subclasses) lacks that an MTL* protocol declares is answered zero/nil/NO through message
 // forwarding, `answered` (may be null) told each class and selector once; respondsToSelector: still answers NO. Each selector's
 // protocols are looked up once: a forwarded call costs an NSInvocation. Counted in the rates line (fwd=).
@@ -78,6 +84,13 @@ bool native_bridge_metal_compute_save(id artifact, const char *directory, char *
 bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
                                         bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
                                         const char **why);
+// The layouts of the argument buffer `function` (this device's) takes at buffer `index`, as its AIR lays them out, for the raw
+// GM20B path's encoder (bridge/NativeMetalObjects.h nmb_function_argument_layouts): false with `why` (valid until the next
+// call on the thread) where Metal makes no encoder, or `each` returns false
+struct NmbArgumentLayout;
+bool native_bridge_metal_argument_layouts(id function, NSUInteger index,
+                                          bool (*each)(const struct NmbArgumentLayout *, uint32_t count, void *),
+                                          void *ctx, const char **why);
 // A dispatch of compute `state` (this device's) the raw GM20B path ran instead, journaled as its own dispatches are (a D line)
 void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTLSize group, bool threads, const char *memory,
                                           const char *textures, const char *samplers);

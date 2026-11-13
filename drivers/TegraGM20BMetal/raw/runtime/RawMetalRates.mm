@@ -211,19 +211,20 @@ size_t raw_metal_rates(char *out, size_t size)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// "fetch seq=S/Tt ilk=I/Bb rec=<reason>:n,... enc=<reason>:n,... sto=<reason>:n,...": drawn a triangle at a time (the
-// triangles), inside the pixel interlock (B of them with the fixed-function blend computed in the shader), refused as
-// recorded and at encoding by reason, and storage forms left for their barrier form by reason ("-" for none).
+// "fetch seq=S/Tt ilk=I/Bb r2=F r3=G rec=<reason>:n,... enc=<reason>:n,... sto=<reason>:n,...": drawn a triangle at a time
+// (the triangles), inside the pixel interlock (B of them with the fixed-function blend computed in the shader), by their
+// state's fetch-free form through the ROP's blend (r2) or its iterated blend (r3), refused as recorded and at encoding by
+// reason, and storage forms left for their barrier form by reason ("-" for none).
 // The plugin's rates timer only (its 5 s windows).
 size_t raw_metal_fetch_rates(char *out, size_t size)
 {
     if (!gRM || !size)
         return 0;
     const raw::FetchCounts &k = gRM->raw->stats.fetch;
-    constexpr size_t kTotals = 4, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
+    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
     static uint64_t last[kAll];
-    uint64_t now[kAll] = {k.sequential.load(), k.sequentialTriangles.load(), k.interlocked.load(),
-                          k.interlockedBlends.load()};
+    uint64_t now[kAll] = {k.sequential.load(),        k.sequentialTriangles.load(), k.interlocked.load(),
+                          k.interlockedBlends.load(), k.fetchFree[0].load(),        k.fetchFree[1].load()};
     for (size_t r = 0; r < raw::kFetchRefusals; ++r) {
         now[kTotals + r] = k.refusedAtRecord[r].load();
         now[kTotals + raw::kFetchRefusals + r] = k.refusedAtEncode[r].load();
@@ -254,8 +255,9 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     reasons(d + kTotals + 2 * raw::kFetchRefusals, raw::kStorageFallbacks, raw::kStorageFallbackNames, storage,
             sizeof storage);
     const int n =
-        snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub rec=%s enc=%s sto=%s", (unsigned long long)d[0],
-                 (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3], record, encode, storage);
+        snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub r2=%llu r3=%llu rec=%s enc=%s sto=%s",
+                 (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
+                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 

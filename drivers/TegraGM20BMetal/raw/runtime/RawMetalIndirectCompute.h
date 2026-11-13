@@ -22,6 +22,7 @@ struct RMICBDispatch {
     RMComputeState *pipeline = nil;
     RMBuffer *buffers[31] = {};
     uint64_t offsets[31] = {};
+    std::array<uint32_t, 31> strides = raw::StageIn::unbound();  // setKernelBuffer:offset:attributeStride:atIndex:'s
     std::vector<std::pair<uint32_t, uint32_t>> memory;  // threadgroup memory lengths by index, as the encoder keys them
     std::array<uint64_t, 3> grid{};
     std::array<uint32_t, 3> threads{};
@@ -30,10 +31,11 @@ struct RMICBDispatch {
     std::shared_ptr<RMKernelSet> kernels;  // its own pipeline's at its shape
     std::shared_ptr<RMICBBlock> block;
     raw::icb::ComputeCommand words{};  // what its slot launches
-    // a buffer that inherits the encoder's buffers: its descriptors' binds (its bind slot's words), the Metal buffer indices
-    // they read and those of them with no residual word
+    // a buffer that inherits the encoder's buffers: its descriptors' and stage-in strides' binds (its bind slot's words),
+    // the Metal buffer indices they read, those of them with no residual word, and those whose bind stride it reads
     std::vector<raw::icb::ComputeBind> binds;
-    uint32_t bindSlots = 0, alignedSlots = 0;
+    std::vector<raw::icb::ComputeStride> strideWords;
+    uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
     bool raw = false;  // its slot launches it (a buffer that inherits no pipeline)
 };
 
@@ -44,7 +46,7 @@ struct RMICBVariant {
     raw::Buffer slots, binds;
     std::vector<raw::Buffer> chunks;
     uint64_t chunkUsed = 0;
-    uint32_t bindSlots = 0, alignedSlots = 0;
+    uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
     std::vector<uint8_t> missing;  // a command dispatched that the raw path has no kernel or form for at the pipeline
     ~RMICBVariant();
 };
@@ -59,8 +61,8 @@ struct RMICBVariant {
     raw::Buffer _binds;    // a buffer that inherits the encoder's buffers: each command's bind slot
     uint64_t _generation;  // bumped by every change of a command
     std::map<RMComputeState *, std::shared_ptr<RMICBVariant>> _variants;  // a buffer that inherits the pipeline
-    // every command's bindSlots and alignedSlots, made again at an execute after a command changed
-    uint32_t _bindSlots, _alignedSlots;
+    // every command's bindSlots, alignedSlots and strideSlots, made again at an execute after a command changed
+    uint32_t _bindSlots, _alignedSlots, _strideSlots;
     bool _bindsChanged;
     id<MTLIndirectCommandBuffer> _m2v;  // m2v's buffer, into which its replay encodes the commands again
 }
@@ -95,10 +97,11 @@ id rmNewComputeCommandBuffer(id device, MTLIndirectCommandBufferDescriptor *d, N
 // dispatch of the shape made them, and `shape` its regions
 std::shared_ptr<RMKernelSet> rmCommandKernels(RMComputeState *pipeline, const RMICBDispatch &c,
                                               raw::ComputeDispatch &shape);
-// Command `c`'s regions written into `block` (computeRegionBytes each) with `buffers` bound, and the words that launch them
-bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape,
-                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const RMICBBlock &block,
-                      raw::icb::ComputeCommand &words, const char **why);
+// Command `c`'s regions written into `block` (computeRegionBytes each) with `buffers` bound at `strides`, and the words that
+// launch them
+bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape, const RMICBDispatch &c,
+                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const std::array<uint32_t, 31> &strides,
+                      const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why);
 uint32_t rmCommandBytes(const RMKernelSet &kernels);
 void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&out)[31]);
 // Command `c`'s binds of its regions in `block` into c.binds and its masks; false: refused (*why)

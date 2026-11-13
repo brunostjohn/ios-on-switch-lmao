@@ -150,6 +150,9 @@ int main(int argc, char **argv)
         uint32_t lines = 0;
         probe::eachKernel(
             dev, text,
+            [&](const probe::Kernel &k, std::string &why) {
+                return probe::state(dev, k.shape, k.descriptor.computeFunction, why) != nil;
+            },
             [&](const probe::Kernel &k) {
                 if (shapes)
                     checkShapes(direct, k, n);

@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR LGPL-3.0-or-later
-// MTLArgumentEncoder over a layout of argument descriptors (raw_argument_layout.h). Each argument is the 8 bytes a program
-// could write itself: a buffer's GPU address plus its offset, any other object's gpuResourceID (raw_resource_id.h); a
-// constant is the program's own bytes (constantDataAtIndex:). What Metal's validation stops writes nothing and is one
-// refusal line, as metal2vulkan's encoder refuses it (metal2vulkan-runtime argument_encoder.rs, measured on an M3 Max and
-// an M4): a setter before an argument buffer, an argument buffer the CPU cannot write or whose encoded length passes its end,
-// a buffer offset past the buffer, an argument of another type at the index. Plain Metal's answers stand where validation
-// would assert: a setter at an index no argument has writes at the arguments' offset 0 while 8 bytes fit there, and
-// constantDataAtIndex: there answers the arguments' start.
+// MTLArgumentEncoder over a layout of argument descriptors, or of a function's argument buffer as its AIR lays it out
+// (raw_argument_layout.h), whose writes and refusals are raw::ArgumentEncoder's (raw_argument_encoder.h). Each argument is
+// the 8 bytes a program could write itself: a buffer's GPU address plus its offset, any other object's gpuResourceID
+// (raw_resource_id.h); a constant is the program's own bytes (constantDataAtIndex:). A refusal writes nothing and is one line.
 #import "RawMetalInternal.h"
-#include "raw_argument_layout.h"
-#include "raw_resource_id.h"
+#include "NativeBridgeMetalFrontend.h"
+#include "bridge/NativeMetalObjects.h"
+#include "raw_argument_encoder.h"
 
 // MTLDataTypeDepthStencilState (iOS 26): spelled as its value, so the iOS 17 build names no constant its SDK floor lacks
 static constexpr NSUInteger kDataTypeDepthStencilState = 139;
@@ -181,11 +178,38 @@ static void refuse(const char *call, NSString *why)
     once([NSString stringWithFormat:@"argument encoder %s refused: %@", call, why]);
 }
 
+static bool refused(const char *call, raw::ArgumentRefusal why, NSUInteger index = 0)
+{
+    using R = raw::ArgumentRefusal;
+    switch (why) {
+    case R::None:
+        return false;
+    case R::NotWritable:
+        refuse(call, @"an argument buffer the CPU cannot write");
+        break;
+    case R::PastTheEnd:
+        refuse(call, @"the encoded length passes the argument buffer's end");
+        break;
+    case R::NoBuffer:
+        refuse(call, @"no argument buffer is set");
+        break;
+    case R::OtherType:
+        refuse(call, [NSString stringWithFormat:@"index %lu holds an argument of another type", (unsigned long)index]);
+        break;
+    case R::NoIndex:
+        refuse(call, [NSString stringWithFormat:@"no argument has index %lu", (unsigned long)index]);
+        break;
+    case R::OffsetPastEnd:
+        refuse(call, @"an offset at or past the buffer's end");
+        break;
+    }
+    return true;
+}
+
 @interface RMArgumentEncoder : RMObject <MTLArgumentEncoder> {
 @public
-    raw::ArgumentLayout _layout;
-    id<MTLBuffer> _buffer;
-    uint64_t _start;  // the arguments' offset in _buffer
+    raw::ArgumentEncoder _encoder;
+    id<MTLBuffer> _buffer;  // what _encoder writes into, kept alive while it does
 }
 @end
 
@@ -199,28 +223,27 @@ static void refuse(const char *call, NSString *why)
 
 - (NSUInteger)encodedLength
 {
-    return NSUInteger(_layout.encodedLength);
+    return NSUInteger(_encoder.layout().encodedLength);
 }
 
 - (NSUInteger)alignment
 {
-    return NSUInteger(_layout.alignment);
+    return NSUInteger(_encoder.layout().alignment);
 }
 
 - (void)setArgumentBuffer:(id<MTLBuffer>)buffer startOffset:(NSUInteger)start arrayElement:(NSUInteger)element
 {
     _buffer = nil;
+    _encoder.clearBuffer();
     if (!buffer)
         return;
     if (![(id)buffer isKindOfClass:[RMBuffer class]])
         return refuse("setArgumentBuffer", @"an argument buffer of another device");
-    if (buffer.storageMode == MTLStorageModePrivate || !buffer.contents)
-        return refuse("setArgumentBuffer", @"an argument buffer the CPU cannot write");
-    const uint64_t at = uint64_t(start) + uint64_t(element) * _layout.encodedLength;
-    if (at > buffer.length || buffer.length - at < _layout.encodedLength)
-        return refuse("setArgumentBuffer", @"the encoded length passes the argument buffer's end");
-    _buffer = buffer;
-    _start = at;
+    uint8_t *cpu = buffer.storageMode == MTLStorageModePrivate ? nullptr : static_cast<uint8_t *>(buffer.contents);
+    if (!refused("setArgumentBuffer", _encoder.setBuffer(cpu, buffer.length, start, element))) {
+        _buffer = buffer;
+        ((RMBuffer *)buffer)->_rawArguments = true;
+    }
 }
 
 - (void)setArgumentBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset
@@ -228,65 +251,30 @@ static void refuse(const char *call, NSString *why)
     [self setArgumentBuffer:buffer startOffset:offset arrayElement:0];
 }
 
-// Where argument `index` of `kind` goes in the argument buffer's bytes; null where Metal's validation stops the call
-- (uint8_t *)at:(NSUInteger)index kind:(raw::ArgumentKind)kind call:(const char *)call
-{
-    if (!_buffer) {
-        refuse(call, @"no argument buffer is set");
-        return nullptr;
-    }
-    raw::ArgumentPlace place;
-    uint64_t offset = 0;
-    if (index <= UINT32_MAX && _layout.place(uint32_t(index), place)) {
-        if (place.kind != kind) {
-            refuse(call,
-                   [NSString stringWithFormat:@"index %lu holds an argument of another type", (unsigned long)index]);
-            return nullptr;
-        }
-        offset = place.offset;
-    } else if (_buffer.length - _start < raw::kArgumentHandleBytes) {
-        refuse(call, [NSString stringWithFormat:@"no argument has index %lu", (unsigned long)index]);
-        return nullptr;
-    }
-    return static_cast<uint8_t *>(_buffer.contents) + _start + offset;
-}
-
-- (bool)write:(uint64_t)word index:(NSUInteger)index kind:(raw::ArgumentKind)kind call:(const char *)call
-{
-    uint8_t *at = [self at:index kind:kind call:call];
-    if (at)
-        memcpy(at, &word, sizeof word);
-    return at != nullptr;
-}
-
-- (bool)fits:(NSRange)range kind:(raw::ArgumentKind)kind call:(const char *)call
-{
-    for (NSUInteger i = 0; i < range.length; i++)
-        if (![self at:range.location + i kind:kind call:call])
-            return false;
-    return true;
-}
-
 - (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
-    if (buffer && offset >= buffer.length)
-        return refuse("setBuffer", @"an offset at or past the buffer's end");
-    [self write:buffer ? buffer.gpuAddress + offset : 0 index:index kind:raw::ArgumentKind::Buffer call:"setBuffer"];
+    refused("setBuffer",
+            _encoder.writeBuffer(buffer ? buffer.gpuAddress : 0, buffer ? buffer.length : 0, offset, index), index);
 }
 
 - (void)setBuffers:(const id<MTLBuffer> __unsafe_unretained[])buffers
            offsets:(const NSUInteger[])offsets
          withRange:(NSRange)range
 {
-    if (![self fits:range kind:raw::ArgumentKind::Buffer call:"setBuffers"])
+    if (refused("setBuffers", _encoder.fits(range.location, range.length, raw::ArgumentKind::Buffer), range.location))
         return;
+    for (NSUInteger i = 0; i < range.length; i++)
+        if (buffers[i] && offsets[i] >= buffers[i].length) {
+            refused("setBuffers", raw::ArgumentRefusal::OffsetPastEnd, range.location + i);
+            return;
+        }
     for (NSUInteger i = 0; i < range.length; i++)
         [self setBuffer:buffers[i] offset:offsets[i] atIndex:range.location + i];
 }
 
 - (void)object:(id)object index:(NSUInteger)index kind:(raw::ArgumentKind)kind call:(const char *)call
 {
-    [self write:resourceWord(object) index:index kind:kind call:call];
+    refused(call, _encoder.write(resourceWord(object), index, kind), index);
 }
 
 - (void)objects:(const id __unsafe_unretained[])objects
@@ -294,7 +282,7 @@ static void refuse(const char *call, NSString *why)
            kind:(raw::ArgumentKind)kind
            call:(const char *)call
 {
-    if (![self fits:range kind:kind call:call])
+    if (refused(call, _encoder.fits(range.location, range.length, kind), range.location))
         return;
     for (NSUInteger i = 0; i < range.length; i++)
         [self object:objects[i] index:range.location + i kind:kind call:call];
@@ -398,45 +386,21 @@ static void refuse(const char *call, NSString *why)
 
 - (void *)constantDataAtIndex:(NSUInteger)index
 {
-    if (!_buffer) {
-        refuse("constantDataAtIndex", @"no argument buffer is set");
-        return nullptr;
-    }
-    raw::ArgumentPlace place;
-    const uint64_t offset = index <= UINT32_MAX && _layout.place(uint32_t(index), place) ? place.offset : 0;
-    return static_cast<uint8_t *>(_buffer.contents) + _start + offset;
+    raw::ArgumentRefusal why;
+    void *at = _encoder.constantData(index, why);
+    refused("constantDataAtIndex", why, index);
+    return at;
 }
 
-// A layout of descriptors holds no nested argument buffer: Metal answers nil ("No argument buffer at that index")
 - (id<MTLArgumentEncoder>)newArgumentEncoderForBufferAtIndex:(NSUInteger)index
 {
-    (void)index;
-    return nil;
-}
-
-@end
-
-@implementation RMTexture (ResourceID)
-
-- (MTLResourceID)gpuResourceID
-{
-    rmTexturePlain(self);
-    MTLResourceID resource;
-    const uint64_t word = raw::textureResourceId(_raw.tic);
-    memcpy(&resource, &word, sizeof word);
-    return resource;
-}
-
-@end
-
-@implementation RMSampler (ResourceID)
-
-- (MTLResourceID)gpuResourceID
-{
-    MTLResourceID resource;
-    const uint64_t word = raw::samplerResourceId(_raw.tsc);
-    memcpy(&resource, &word, sizeof word);
-    return resource;
+    raw::ArgumentEncoder inner;
+    if (!_encoder.nested(index, inner))
+        return nil;
+    RMArgumentEncoder *nested = [RMArgumentEncoder new];
+    nested->_encoder = std::move(inner);
+    nested->_device = _device;
+    return nested;
 }
 
 @end
@@ -458,15 +422,41 @@ static void refuse(const char *call, NSString *why)
         d.constantBlockAlignment = uint32_t(a.constantBlockAlignment);
         descriptions.push_back(d);
     }
-    RMArgumentEncoder *encoder = [RMArgumentEncoder new];
+    raw::ArgumentLayout layout;
     size_t position = 0;
-    if (raw::ArgumentLayout::fromDescriptions(descriptions, encoder->_layout, position) !=
-        raw::ArgumentLayoutError::None) {
+    if (raw::ArgumentLayout::fromDescriptions(descriptions, layout, position) != raw::ArgumentLayoutError::None) {
         refuse("creation", [NSString stringWithFormat:@"descriptor %zu is one Metal refuses", position]);
         return nil;
     }
+    RMArgumentEncoder *encoder = [RMArgumentEncoder new];
+    encoder->_encoder = raw::ArgumentEncoder(std::move(layout));
     encoder->_device = self;
     return encoder;
 }
 
 @end
+
+static bool collectLayouts(const NmbArgumentLayout *layouts, uint32_t count, void *ctx)
+{
+    static_assert(sizeof(raw::ArgumentRun) == sizeof(NmbArgumentRun), "the bridge's runs");
+    std::vector<raw::ArgumentRuns> runs(count);
+    for (uint32_t i = 0; i < count; i++)
+        runs[i] = {layouts[i].encoded_length, layouts[i].alignment,
+                   reinterpret_cast<const raw::ArgumentRun *>(layouts[i].runs), layouts[i].run_count};
+    return raw::ArgumentEncoder::fromRuns(runs.data(), count, *static_cast<raw::ArgumentEncoder *>(ctx));
+}
+
+id<MTLArgumentEncoder> rmFunctionArgumentEncoder(RMFunction *function, NSUInteger index)
+{
+    raw::ArgumentEncoder made;
+    const char *why = "";
+    id twin = function->_twin ?: [function twinOn:RM_M2V("a function's argument encoder")];
+    if (!native_bridge_metal_argument_layouts(twin, index, collectLayouts, &made, &why)) {
+        refuse("creation", [NSString stringWithFormat:@"buffer %lu: %s", (unsigned long)index, why ?: ""]);
+        return nil;
+    }
+    RMArgumentEncoder *encoder = [RMArgumentEncoder new];
+    encoder->_encoder = std::move(made);
+    encoder->_device = function->_device;
+    return encoder;
+}

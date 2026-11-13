@@ -305,6 +305,8 @@ void rmPoolCommandBuffers()
         facts.surfaceWrites = root->_surfaceWrites;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
+    else if ([object isKindOfClass:[RMHeap class]])
+        facts.kind = RMResourceKind::Heap;
     _plan.registerResource((__bridge void *)object, facts);
 }
 
@@ -348,21 +350,35 @@ void rmPoolCommandBuffers()
                                          uint8_t(raw::ResourceUse::Read |
                                                  (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
-                                       entry.slot < 31) {
-                                bound.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
-                                                 raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                                       entry.slot < raw::kStageTextures) {
+                                const uint32_t at = raw::handleStage(entry);
+                                const bool written = entry.stage == 2 && entry.slot < raw::kWrittenSlots &&
+                                                     (native->writtenSlots >> entry.slot & 1);
+                                bound.push_back({_plan.textures[at][state.textures[at]].objects[entry.slot],
+                                                 uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample |
+                                                         (written ? raw::ResourceUse::Write : 0))});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&
-                                entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
-                                bound.push_back({_plan.samplers[1][state.samplers[1]].objects[entry.sampler],
+                                entry.samplerKind == raw::SamplerSlot && entry.sampler < raw::kStageSamplers) {
+                                const uint32_t at = raw::handleStage(entry);
+                                bound.push_back({_plan.samplers[at][state.samplers[at]].objects[entry.sampler],
                                                  raw::ResourceUse::Read});
+                            }
                         }
                         if (record.vertexSlot < 31 && record.vertexStride) {
                             const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
                             if (binding.source == raw::BufferBinding::Source::Buffer)
                                 bound.push_back({binding.object, raw::ResourceUse::Read});
                         }
+                        // the buffer slots a stage reaches through its root table, which may be written there too
+                        for (uint32_t stage = 0; stage < 2; ++stage)
+                            for (uint32_t slots = record.rootSlots[stage]; slots; slots &= slots - 1) {
+                                const auto &binding = _plan.buffers[stage][state.buffers[stage]][__builtin_ctz(slots)];
+                                if (binding.source == raw::BufferBinding::Source::Buffer)
+                                    bound.push_back(
+                                        {binding.object, uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Write)});
+                            }
                     });
                 }
             }
@@ -388,6 +404,10 @@ void rmPoolCommandBuffers()
             for (const RMPass::Color &a : pass.color)
                 if (a.resolve)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
+            if (pass.depthResolve)
+                uses.push_back({(__bridge void *)pass.depthResolve, raw::ResourceUse::Write});
+            if (pass.stencilResolve)
+                uses.push_back({(__bridge void *)pass.stencilResolve, raw::ResourceUse::Write});
         } else if (cmd.op == OpVisibility && cmd.obj) {
             uses.push_back({cmd.obj, raw::ResourceUse::Write});
         } else if (cmd.op == OpPredicate && cmd.obj) {

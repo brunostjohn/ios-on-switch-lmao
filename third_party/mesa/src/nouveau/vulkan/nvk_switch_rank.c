@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "nvk_switch_compile.h"
+#include "nvk_switch_offline.h"
 #include "nvk_shader.h"
 
 #define SWITCH_EXPORT __attribute__((visibility("default")))
@@ -44,12 +45,21 @@ dominates(const struct switch_nvk_stage_metrics *a,
        a->static_cycles < b->static_cycles);
 }
 
-SWITCH_EXPORT VkResult
-switch_nvk_compile_ranked_stage(VkDevice device,
-                                const struct switch_nvk_stage_info *info,
-                                struct switch_nvk_stage *out)
+struct ranked_compiler {
+   VkResult (*compile)(const void *ctx, const struct switch_nvk_stage_info *info,
+                       struct switch_nvk_stage *out);
+   void (*finish)(const void *ctx, struct switch_nvk_stage *stage);
+   const void *ctx;
+};
+
+/* The stage compiled from its native program and from its portable SPIR-V:
+ * the portable one where it dominates on every metric
+ */
+static VkResult
+ranked(const struct ranked_compiler *c, const struct switch_nvk_stage_info *info,
+       struct switch_nvk_stage *out)
 {
-   VkResult result = switch_nvk_compile_stage(device, info, out);
+   VkResult result = c->compile(c->ctx, info, out);
    if (result != VK_SUCCESS || !out->semantic_version)
       return result;
    struct switch_nvk_stage_info portable_info = *info;
@@ -59,17 +69,69 @@ switch_nvk_compile_ranked_stage(VkDevice device,
                                           &portable_info.spirv, &portable_info.spirv_bytes)))
       return VK_SUCCESS;
    struct switch_nvk_stage portable = {0};
-   result = switch_nvk_compile_stage(device, &portable_info, &portable);
+   result = c->compile(c->ctx, &portable_info, &portable);
    if (result != VK_SUCCESS)
       return VK_SUCCESS;
    struct switch_nvk_stage_metrics native_cost, portable_cost;
    if (switch_nvk_stage_metrics(out, &native_cost, sizeof(native_cost)) &&
        switch_nvk_stage_metrics(&portable, &portable_cost, sizeof(portable_cost)) &&
        dominates(&portable_cost, &native_cost)) {
-      switch_nvk_stage_finish(device, out);
+      c->finish(c->ctx, out);
       *out = portable;
    } else {
-      switch_nvk_stage_finish(device, &portable);
+      c->finish(c->ctx, &portable);
    }
    return VK_SUCCESS;
+}
+
+static VkResult
+device_compile(const void *ctx, const struct switch_nvk_stage_info *info,
+               struct switch_nvk_stage *out)
+{
+   return switch_nvk_compile_stage((VkDevice)ctx, info, out);
+}
+
+static void
+device_finish(const void *ctx, struct switch_nvk_stage *stage)
+{
+   switch_nvk_stage_finish((VkDevice)ctx, stage);
+}
+
+SWITCH_EXPORT VkResult
+switch_nvk_compile_ranked_stage(VkDevice device,
+                                const struct switch_nvk_stage_info *info,
+                                struct switch_nvk_stage *out)
+{
+   const struct ranked_compiler c = {device_compile, device_finish, device};
+   return ranked(&c, info, out);
+}
+
+struct offline_ctx {
+   const struct switch_nak_frozen *frozen;
+   const struct switch_nak_layout *layout;
+};
+
+static VkResult
+offline_compile(const void *ctx, const struct switch_nvk_stage_info *info,
+                struct switch_nvk_stage *out)
+{
+   const struct offline_ctx *o = ctx;
+   return switch_nak_compile_stage(o->frozen, info, o->layout, out);
+}
+
+static void
+offline_finish(UNUSED const void *ctx, struct switch_nvk_stage *stage)
+{
+   switch_nak_stage_finish(stage);
+}
+
+SWITCH_EXPORT VkResult
+switch_nak_compile_ranked_stage(const struct switch_nak_frozen *frozen,
+                                const struct switch_nvk_stage_info *info,
+                                const struct switch_nak_layout *layout,
+                                struct switch_nvk_stage *out)
+{
+   const struct offline_ctx o = {frozen, layout};
+   const struct ranked_compiler c = {offline_compile, offline_finish, &o};
+   return ranked(&c, info, out);
 }

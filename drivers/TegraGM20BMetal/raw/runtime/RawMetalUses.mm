@@ -20,7 +20,7 @@ __attribute__((objc_externally_retained)) void useTexture(raw::CommandBuffer *rc
         rc->use(t->_buffer->_raw, write);
     for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
         if (plane)
-            rc->use(*plane, false);
+            rc->use(*plane, write && t->_raw.xrPlanes);
 }
 
 __attribute__((objc_externally_retained)) void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)

@@ -49,7 +49,8 @@ std::shared_ptr<RMKernelJob> requestKernel(RMComputeState *state, const raw::Com
             run.result.retry = false;
             return;
         }
-        run.result.state = completion->kernel(state->_direct, ask.dispatch(), key, &run.result.retry);
+        run.result.state =
+            completion->kernel(state->_direct, ask.dispatch(), key, &run.result.retry, nullptr, state->_function);
     });
 }
 
@@ -80,7 +81,7 @@ std::shared_ptr<RMICBBlock> newBlock(RMIndirectComputeBuffer *b, uint32_t bytes)
 std::shared_ptr<RMKernelSet> rmCommandKernels(RMComputeState *pipeline, const RMICBDispatch &c,
                                               raw::ComputeDispatch &shape)
 {
-    if (!pipeline || !pipeline->_keyed || !c.dispatched || c.stageIn)
+    if (!pipeline || !pipeline->_keyed || !c.dispatched)
         return nullptr;
     shape = raw::computeDispatch(c.grid, c.threads, c.perThread, pipeline->_threadLimit);
     if (shape.reason != raw::ComputeDispatch::Ready || !shape.count)
@@ -120,16 +121,17 @@ void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&o
 bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDispatch &c, const char **why)
 {
     c.binds.clear();
-    c.bindSlots = c.alignedSlots = 0;
+    c.strideWords.clear();
+    c.bindSlots = c.alignedSlots = c.strideSlots = 0;
     uint32_t at = 0;
     for (uint8_t region = 0; region < kernels.count; ++region) {
         const raw::ComputeState &k = *kernels.jobs[region]->value();
-        if (!raw::ComputeEncoder::icbBinds(k, block.va + at, c.binds, why))
+        if (!raw::ComputeEncoder::icbBinds(k, block.va + at, c.binds, c.strideWords, why))
             return false;
         at += raw::icb::computeRegionBytes(k.rec->setBytes);
     }
-    if (c.binds.size() > raw::icb::kComputeBindsMax) {
-        *why = "more inherited buffer descriptors than a bind slot holds";
+    if (!raw::icb::bindsFit(uint32_t(c.binds.size()), uint32_t(c.strideWords.size()))) {
+        *why = "more inherited buffer descriptors and strides than a bind slot holds";
         return false;
     }
     for (const raw::icb::ComputeBind &b : c.binds) {
@@ -137,6 +139,8 @@ bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDi
         if (!b.residual)
             c.alignedSlots |= 1u << b.slot;
     }
+    for (const raw::icb::ComputeStride &s : c.strideWords)
+        c.strideSlots |= 1u << s.slot;
     return true;
 }
 
@@ -180,7 +184,7 @@ std::shared_ptr<RMICBVariant> rmPipelineVariant(RMIndirectComputeBuffer *b, RMCo
         const RMKernelSet *k = i < kernels.size() ? kernels[i].get() : nullptr;
         if (!c.dispatched)
             continue;
-        if (!k || c.stageIn) {
+        if (!k) {
             v->missing[i] = 1;
             continue;
         }
@@ -191,30 +195,37 @@ std::shared_ptr<RMICBVariant> rmPipelineVariant(RMIndirectComputeBuffer *b, RMCo
             rmCommandBuffers(c, buffers);
         RMICBDispatch bound;
         raw::icb::ComputeCommand words{};
-        if (!block || !rmCommandRegions(*k, shape, buffers, *block, words, why) ||
+        if (!block || !rmCommandRegions(*k, shape, c, buffers, c.strides, *block, words, why) ||
             (bind && !rmCommandBinds(*k, *block, bound, why)))
             return nullptr;
         words.barrier = c.barrier;
         raw::icb::dispatch(slot, uint32_t(i), words);
         if (bind) {
-            raw::icb::binds(bind, bound.binds.data(), uint32_t(bound.binds.size()));
+            raw::icb::binds(bind, bound.binds.data(), uint32_t(bound.binds.size()), bound.strideWords.data(),
+                            uint32_t(bound.strideWords.size()));
             v->bindSlots |= bound.bindSlots;
             v->alignedSlots |= bound.alignedSlots;
+            v->strideSlots |= bound.strideSlots;
         }
     }
     return v;
 }
 
-bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape,
-                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const RMICBBlock &block,
-                      raw::icb::ComputeCommand &words, const char **why)
+bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape, const RMICBDispatch &c,
+                      const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const std::array<uint32_t, 31> &strides,
+                      const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why)
 {
+    raw::StageIn stageIn;
+    stageIn.strides = strides;
+    if (c.stageIn)
+        stageIn.setRegion({c.stageInRegion.origin.x, c.stageInRegion.origin.y, c.stageInRegion.origin.z,
+                           c.stageInRegion.size.width, c.stageInRegion.size.height, c.stageInRegion.size.depth});
     uint32_t at = 0;
     words.regions = kernels.count;
     for (uint8_t region = 0; region < kernels.count; ++region) {
         const raw::ComputeState &k = *kernels.jobs[region]->value();
         if (!raw::ComputeEncoder::icbRegion(*gRM->raw, k, shape.regions[region], shape.grid, shape.nominal, buffers,
-                                            block.cpu + at, block.va + at, why))
+                                            stageIn, block.cpu + at, block.va + at, why))
             return false;
         words.qmd[region] = block.va + at;
         at += raw::icb::computeRegionBytes(k.rec->setBytes);
@@ -238,7 +249,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     RMICBDispatch &c = _dispatches[index];
     c.raw = false;
     c.binds.clear();
-    c.bindSlots = c.alignedSlots = 0;
+    c.strideWords.clear();
+    c.bindSlots = c.alignedSlots = c.strideSlots = 0;
     _bindsChanged = true;
     _generation++;
     if (_inheritBuffers)
@@ -260,7 +272,7 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     if (!_inheritBuffers)
         rmCommandBuffers(c, buffers);
     const char *why = nullptr;
-    if (!c.block || !rmCommandRegions(*c.kernels, shape, buffers, *c.block, c.words, &why) ||
+    if (!c.block || !rmCommandRegions(*c.kernels, shape, c, buffers, c.strides, *c.block, c.words, &why) ||
         (_inheritBuffers && !rmCommandBinds(*c.kernels, *c.block, c, &why))) {
         SWITCH_REFUSE_DETAIL("raw", "icb.region", uintptr_t(why), "indirect dispatch command %lu: %s",
                              (unsigned long)index, why ? why : "no memory for its regions");
@@ -270,7 +282,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     c.words.barrier = c.barrier;
     raw::icb::dispatch(computeSlot(self, index), uint32_t(index), c.words);
     if (_inheritBuffers)
-        raw::icb::binds(rmBindSlot(self, index), c.binds.data(), uint32_t(c.binds.size()));
+        raw::icb::binds(rmBindSlot(self, index), c.binds.data(), uint32_t(c.binds.size()), c.strideWords.data(),
+                        uint32_t(c.strideWords.size()));
     c.raw = true;
 }
 
@@ -340,6 +353,15 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 
 - (void)setKernelBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
+    [self setKernelBuffer:buffer offset:offset attributeStride:NSUIntegerMax atIndex:index];
+}
+
+// A stage-in kernel's layout of MTLBufferLayoutStrideDynamic reads the stride (StageInStride); any other ignores it
+- (void)setKernelBuffer:(id<MTLBuffer>)buffer
+                 offset:(NSUInteger)offset
+        attributeStride:(NSUInteger)stride
+                atIndex:(NSUInteger)index
+{
     if (_buffer->_inheritBuffers || index >= 31) {
         SWITCH_REFUSE("raw", "icb.inherited",
                       "an indirect dispatch command set a buffer its buffer inherits or past 30");
@@ -349,16 +371,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     [self edit:^(RMICBDispatch &c) {
         c.buffers[index] = b;
         c.offsets[index] = offset;
+        c.strides[index] = stride >= raw::kNoBindStride ? raw::kNoBindStride : uint32_t(stride);
     }];
-}
-
-- (void)setKernelBuffer:(id<MTLBuffer>)buffer
-                 offset:(NSUInteger)offset
-        attributeStride:(NSUInteger)stride
-                atIndex:(NSUInteger)index
-{
-    (void)buffer, (void)offset, (void)stride, (void)index;
-    SWITCH_REFUSE("raw", "icb.stride", "setKernelBuffer:offset:attributeStride:atIndex:: no dynamic attribute stride");
 }
 
 - (void)setThreadgroupMemoryLength:(NSUInteger)length atIndex:(NSUInteger)index
@@ -372,7 +386,6 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     }];
 }
 
-// The compute encoder's setStageInRegion: is m2v's: a command that sets one runs there too
 - (void)setStageInRegion:(MTLRegion)region
 {
     [self edit:^(RMICBDispatch &c) {

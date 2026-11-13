@@ -10,14 +10,18 @@ struct FramebufferFetchDepthScene: GPUScene {
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
+        var packed: [Bool] = []
         for samples in [1, 2, 4, 8] where gpu.device.supportsTextureSampleCount(samples) {
             for stencil in [false, true] {
                 do {
-                    try await draw(gpu, samples: samples, stencil: stencil, &result)
+                    try await draw(gpu, samples: samples, stencil: stencil, &packed, &result)
                 } catch {
                     result.expect(false, "\(Self.key(samples, stencil)): \(GPU.describe(error))")
                 }
             }
+        }
+        if !packed.isEmpty {
+            result.metrics.set("packed", "\(packed.filter { $0 }.count)/\(packed.count)")
         }
         return result
     }
@@ -27,7 +31,9 @@ struct FramebufferFetchDepthScene: GPUScene {
     }
 
     /// One case in a command buffer of its own: a case that throws leaves the other cases' compares
-    private func draw(_ gpu: GPU, samples: Int, stencil: Bool, _ result: inout SceneResult) async throws {
+    private func draw(
+        _ gpu: GPU, samples: Int, stencil: Bool, _ packed: inout [Bool], _ result: inout SceneResult
+    ) async throws {
         let key = Self.key(samples, stencil)
         let format: MTLPixelFormat = stencil ? .depth32Float_stencil8 : .depth32Float
         let depth = try gpu.texture(format, Self.size, Self.size, usage: [.renderTarget], samples: samples)
@@ -103,6 +109,10 @@ struct FramebufferFetchDepthScene: GPUScene {
         result.metrics.set("path_\(key)", timing.path)
         if RawFacade.kind(of: gpu.device) == "raw" {
             result.expect(timing.path == "raw", "\(key) did not execute entirely raw: \(timing.path)")
+            if let fetchPacked = RawFacade.packed(fetch), let ordinaryPacked = RawFacade.packed(ordinary) {
+                packed.append(fetchPacked && ordinaryPacked)
+                result.expect(packed.last!, "\(key): a state made at its creation, not the pack's")
+            }
             let after = RawFacade.counters(of: gpu.device)
             let draws = (after["interlock_draws"] ?? 0) - (before["interlock_draws"] ?? 0)
             result.metrics.set("interlock_\(key)", draws)

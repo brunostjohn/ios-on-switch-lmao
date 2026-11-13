@@ -176,33 +176,97 @@ bool readEntryHead(const std::string &bytes, Reader &r, const CacheKey &k, uint3
            !memcmp(fragmentAir, k.fragmentAir, sizeof fragmentAir) && key == k.key;
 }
 
+namespace {
+
+// A record's body in an entry, its stride twin's after it
+void writeRecord(Writer &w, const RuntimeRecord *record)
+{
+    w.value(record->pipeline);
+    w.text(record->keyString);
+    writeProgram(w, record->programs[0]);
+    writeProgram(w, record->programs[1]);
+    if (tessellates(record->pipeline)) {
+        writeProgram(w, record->tessPrograms[0]);
+        writeProgram(w, record->tessPrograms[1]);
+    }
+    w.list(record->blob);
+    w.list(record->extras);
+    w.list(record->restore);
+    w.list(record->samplers);
+    w.value(record->amplificationLayerWord);
+    w.value(record->amplificationViewportWord);
+    w.value(uint8_t((record->splitTried ? kSplitTried : 0) | (record->split ? kSplit : 0)));
+    if (record->split) {
+        w.value(record->splitRecord);
+        writeProgram(w, record->splitPrograms[0]);
+        writeProgram(w, record->splitPrograms[1]);
+    }
+    w.value(uint32_t(record->variants.size()));
+    for (const RuntimeRecord::Variant &v : record->variants) {
+        w.value(v.assume);
+        writeProgram(w, v.program);
+    }
+    w.list(record->spill);
+    w.value(uint8_t(record->strideTwin != nullptr));
+    if (record->strideTwin)
+        writeRecord(w, record->strideTwin.get());
+}
+
+// The record writeRecord wrote; a stride twin only where `twinned` (a twin has none)
+bool readRecord(Reader &r, RuntimeRecord &rec, bool twinned)
+{
+    rec.pipeline = r.value<PackPipeline>();
+    rec.keyString = r.text();
+    rec.programs[0] = readProgram(r);
+    rec.programs[1] = readProgram(r);
+    if (tessellates(rec.pipeline)) {
+        rec.tessPrograms[0] = readProgram(r);
+        rec.tessPrograms[1] = readProgram(r);
+    }
+    rec.blob = r.list<uint32_t>();
+    rec.extras = r.list<std::pair<uint32_t, uint32_t>>();
+    rec.restore = r.list<std::pair<uint32_t, uint32_t>>();
+    rec.samplers = r.list<std::array<uint32_t, 8>>();
+    rec.amplificationLayerWord = r.value<uint8_t>();
+    rec.amplificationViewportWord = r.value<uint8_t>();
+    const uint8_t split = r.value<uint8_t>();
+    rec.splitTried = split & kSplitTried;
+    rec.split = split & kSplit;
+    if (rec.split) {
+        rec.splitRecord = r.value<PackSplit>();
+        rec.splitPrograms[0] = readProgram(r);
+        rec.splitPrograms[1] = readProgram(r);
+    }
+    const uint32_t variants = r.value<uint32_t>();
+    for (uint32_t i = 0; r.ok() && i < variants && i < 2u * 255; i++) {
+        RuntimeRecord::Variant &v = rec.variants.emplace_back();
+        v.assume = r.value<uint32_t>();
+        v.program = readProgram(r);
+    }
+    if (rec.variants.size() != variants || variants != 0u + rec.pipeline.variantCount[0] + rec.pipeline.variantCount[1])
+        return false;
+    rec.spill = r.list<uint32_t>();
+    if (rec.spill.size() != 0u + rec.pipeline.spillWords[0] + rec.pipeline.spillWords[1])
+        return false;
+    if (r.value<uint8_t>()) {
+        auto twin = std::make_shared<RuntimeRecord>();
+        if (!twinned || !readRecord(r, *twin, false))
+            return false;
+        rec.strideTwin = std::move(twin);
+    }
+    return r.ok();
+}
+
+}  // namespace
+
 std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal)
 {
     Writer w;
     writeEntryHead(w, k, record ? kKindRecord : kKindRefusal);
-    if (record) {
-        w.value(record->pipeline);
-        w.text(record->keyString);
-        writeProgram(w, record->programs[0]);
-        writeProgram(w, record->programs[1]);
-        w.list(record->blob);
-        w.list(record->extras);
-        w.list(record->restore);
-        w.list(record->samplers);
-        w.value(uint8_t((record->splitTried ? kSplitTried : 0) | (record->split ? kSplit : 0)));
-        if (record->split) {
-            w.value(record->splitRecord);
-            writeProgram(w, record->splitPrograms[0]);
-            writeProgram(w, record->splitPrograms[1]);
-        }
-        w.value(uint32_t(record->variants.size()));
-        for (const RuntimeRecord::Variant &v : record->variants) {
-            w.value(v.assume);
-            writeProgram(w, v.program);
-        }
-    } else {
+    if (record)
+        writeRecord(w, record);
+    else
         w.text(refusal);
-    }
     w.value(Pack::fnv(w.out.data(), w.out.size()));
     return w.out;
 }
@@ -220,31 +284,7 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
     if (kind != kKindRecord)
         return RecordCache::Found::None;
     RuntimeRecord rec;
-    rec.pipeline = r.value<PackPipeline>();
-    rec.keyString = r.text();
-    rec.programs[0] = readProgram(r);
-    rec.programs[1] = readProgram(r);
-    rec.blob = r.list<uint32_t>();
-    rec.extras = r.list<std::pair<uint32_t, uint32_t>>();
-    rec.restore = r.list<std::pair<uint32_t, uint32_t>>();
-    rec.samplers = r.list<std::array<uint32_t, 8>>();
-    const uint8_t split = r.value<uint8_t>();
-    rec.splitTried = split & kSplitTried;
-    rec.split = split & kSplit;
-    if (rec.split) {
-        rec.splitRecord = r.value<PackSplit>();
-        rec.splitPrograms[0] = readProgram(r);
-        rec.splitPrograms[1] = readProgram(r);
-    }
-    const uint32_t variants = r.value<uint32_t>();
-    for (uint32_t i = 0; r.ok() && i < variants && i < 2u * 255; i++) {
-        RuntimeRecord::Variant &v = rec.variants.emplace_back();
-        v.assume = r.value<uint32_t>();
-        v.program = readProgram(r);
-    }
-    if (rec.variants.size() != variants || variants != 0u + rec.pipeline.variantCount[0] + rec.pipeline.variantCount[1])
-        return RecordCache::Found::None;
-    if (!r.ok() || r.at() != bytes.size() - 8)
+    if (!readRecord(r, rec, true) || r.at() != bytes.size() - 8)
         return RecordCache::Found::None;
     record = std::move(rec);
     return RecordCache::Found::Record;
@@ -290,6 +330,22 @@ bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
     stack_ = stack;
     seed_ = std::move(seed);
     return true;
+}
+
+const uint8_t *RecordCache::findSeedSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping,
+                                         uint64_t &bytes) const
+{
+    const uint64_t value = seedSlotName(slot, size);
+    uint8_t name[sizeof value];
+    for (unsigned i = 0; i < sizeof name; ++i)
+        name[i] = uint8_t(value >> (8 * (sizeof name - 1 - i)));
+    switch_seed_pack::Bytes found, pack;
+    if (!seed_ || !seed_->find(name, found) || found.size < size || memcmp(found.data, slot, size) ||
+        !seed_->packOf(found.data, pack))
+        return nullptr;
+    mapping = pack.data;
+    bytes = pack.size;
+    return found.data;
 }
 
 void RecordCache::tidy()

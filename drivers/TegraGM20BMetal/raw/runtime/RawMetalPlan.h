@@ -41,6 +41,16 @@ struct RMPlanDraw {
     void *arguments = nullptr;
     uint64_t argumentOffset = 0;
     uint8_t primitive = 0, indexType = 0;
+    uint32_t patches = raw::kNoSnapshot;  // a patch draw's RMPlanPatches
+};
+
+// A patch draw's (OpDrawPatches, OpDrawPatchesIndirect): the encoder's factor buffer, offset, instance stride and scale, its
+// control points, and its control-point index buffer (its patch index buffer is the draw's `indices`)
+struct RMPlanPatches {
+    void *factors = nullptr, *pointIndices = nullptr;
+    uint64_t factorOffset = 0, pointIndexOffset = 0;
+    uint32_t factorStride = 0, controlPoints = 0;
+    float scale = 1;
 };
 
 struct RMPlanDispatch {
@@ -51,6 +61,7 @@ struct RMPlanDispatch {
     size_t encoderBegin = 0;
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};
+    std::array<uint32_t, 6> stageIn{};  // setStageInRegion:'s origin and size
     bool perThread = false;
     raw::ComputeDispatch regions;
 };
@@ -88,6 +99,7 @@ enum class RMResourceKind : uint8_t {
     Buffer,
     Texture,
     Sampler,
+    Heap,
     Count
 };
 
@@ -120,6 +132,7 @@ class RMCommandPlan {
     std::vector<RMPlanRasterGroup> rasterGroups_;
     uint32_t lastRasterGroup_ = raw::kNoSnapshot;
     std::vector<RMPlanDispatch> dispatches_;
+    std::vector<RMPlanPatches> patches_;
     std::vector<RMPlanTransfer> transfers_;
     std::vector<RMPlanControl> controls_;
     std::vector<RMPlanEvent> events_;
@@ -270,6 +283,11 @@ public:
     const RMPlanDraw &draw(size_t at) const
     {
         return draws_[operations_[at].payload];
+    }
+
+    const RMPlanPatches &patches(size_t at) const
+    {
+        return patches_[draw(at).patches];
     }
 
     template <typename F> void forEachRasterGroup(size_t begin, F visit) const

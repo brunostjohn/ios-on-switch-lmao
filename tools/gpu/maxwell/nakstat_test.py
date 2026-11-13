@@ -32,6 +32,12 @@ class NakstatTest(unittest.TestCase):
         line = 'R ok=1 label=x samples=1 topo=0 ds=0/0 c0=80:15 a0=31:0 | v vf  | f ff  | '
         self.assertEqual(nakstat.state_key(line), 'samples=1 topo=0 ds=0/0 c0=80:15 a0=31:0  | v vf  | f ff')
 
+    def test_framework_state_key_names_its_framework_and_variant(self):
+        lib = ' lib=/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib '
+        line = f'R ok=1 label=- samples=1 topo=0 c0=80:15 | v plane__vertex{lib} | f uber{lib}#0:36:01 | wtex=1:23'
+        want = 'samples=1 topo=0 c0=80:15  | v plane__vertex  | f uber #0:36:01 | l RenderBox | wtex=1:23'
+        self.assertEqual(nakstat.state_key(line), want)
+
 
 if __name__ == '__main__':
     unittest.main()

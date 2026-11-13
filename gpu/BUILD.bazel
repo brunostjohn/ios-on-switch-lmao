@@ -47,6 +47,16 @@ llvm_as(
     out = "air/function_constant.air",
 )
 
+# The selected IPSW build's compile profile: the m2v runtime device the bridge's offline compile makes its translator
+# devices of (bridge/NativeMetalOffline.rs). Another build needs its own, frozen from its runtime.
+alias(
+    name = "compile_profile",
+    actual = select({
+        "//ipsw:21H461": METAL + ":bridge/compile_profile/21H461.json",
+        "//ipsw:24B119": METAL + ":bridge/compile_profile/24B119.json",
+    }),
+)
+
 # The Metal bridge: NativeMetal's bridge (drivers/NativeMetal/bridge) over m2v's runtime and translator, a static
 # library the plugin links. One crate graph, built per crate (bazel/rust/defs.bzl): each m2v crate and crates.io crate is
 # its own cached rustc action, so an edit recompiles that crate and its dependents only.
@@ -54,18 +64,27 @@ rust_static_library(
     name = "bridge",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalCompile.rs",
         METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalDirectCompute.rs",
+        METAL + ":bridge/NativeMetalOffline.rs",
+        METAL + ":bridge/NativeMetalHeap.rs",
+        METAL + ":bridge/NativeMetalArguments.rs",
+        METAL + ":bridge/NativeMetalDirectTess.rs",
+        METAL + ":bridge/NativeMetalTessModes.rs",
         METAL + ":bridge/NativeMetalComputeArtifact.rs",
         METAL + ":bridge/NativeMetalArtifactCodec.rs",
         METAL + ":bridge/NativeMetalReflection.rs",
         METAL + ":bridge/NativeMetalVariants.rs",
         METAL + ":bridge/NativeMetalFailure.rs",
+        METAL + ":bridge/NativeMetalFunctions.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
     ],
-    # The AIR fixtures it compiles in (include_bytes!(env!(...)); rules_rust makes $(execpath) absolute).
+    # The AIR fixtures and the compile profile it compiles in (include_bytes!(env!(...)); rules_rust makes $(execpath)
+    # absolute).
     compile_data = [
+        ":compile_profile",
         ":function_constant_air",
         ":runtime_examples_air",
     ],
@@ -73,6 +92,7 @@ rust_static_library(
     crate_root = METAL + ":bridge/NativeMetalBridge.rs",
     edition = "2024",
     rustc_env = {
+        "NMB_COMPILE_PROFILE": "$(execpath :compile_profile)",
         "NMB_FC_AIR": "$(execpath :function_constant_air)",
         "NMB_FIXTURE_AIR": "$(execpath :runtime_examples_air)",
     },
@@ -92,6 +112,8 @@ rust_static_library(
         "//third_party/m2v/crates/metal2vulkan-runtime",
         "@rust_crates//:ash",
         "@rust_crates//:libc",
+        "@rust_crates//:serde",
+        "@rust_crates//:serde_json",
         "@rust_crates//:sha2",
     ],
 )
@@ -128,6 +150,7 @@ raw_stack(
     include_markers = [
         METAL + ":NativeBridgeMetalFrontend.h",
         GM20B_ABI,
+        "//kits/SwitchGM20BEmit:context",
         # where NVIDIA's class headers find "nvtypes.h" (raw/pack/nvdec.cpp)
         "//third_party/mesa/src/nouveau/headers:nvtypes.h",
     ],
@@ -176,9 +199,12 @@ metal_plugin(
     bridge = ":bridge_ios",
     c_srcs = ["//kits/SwitchGM20BEmit:" + s for s in EMIT_SOURCES],
     cc_srcs = [
+        GM20B_METAL + ":raw/runtime/raw_amplification.cpp",
+        GM20B_METAL + ":raw/runtime/raw_vertex_streams.cpp",
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_draw_bands.cpp",
         GM20B_METAL + ":raw/runtime/raw_job_uses.cpp",
+        GM20B_METAL + ":raw/runtime/raw_tessellation.cpp",
         GM20B_METAL + ":raw/runtime/raw_transfer.cpp",
         GM20B_METAL + ":raw/runtime/raw_split.cpp",
         GM20B_METAL + ":raw/runtime/raw_variants.cpp",
@@ -194,7 +220,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_shared_events.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
-        GM20B_METAL + ":raw/runtime/raw_xr_planes.cpp",
+        GM20B_METAL + ":raw/runtime/raw_xr_texture.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
         GM20B_METAL + ":raw/runtime/raw_visibility.cpp",
         GM20B_METAL + ":raw/runtime/raw_visibility_pass.cpp",
@@ -206,6 +232,12 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_multisample.cpp",
         GM20B_METAL + ":raw/runtime/raw_object_pool.cpp",
         GM20B_METAL + ":raw/runtime/raw_surface_image.cpp",
+        GM20B_METAL + ":raw/runtime/raw_turn_copy.cpp",
+        GM20B_METAL + ":raw/runtime/raw_stencil_bits.cpp",
+        GM20B_METAL + ":raw/runtime/raw_zeta_colour.cpp",
+        GM20B_METAL + ":raw/runtime/raw_turned_pass.cpp",
+        GM20B_METAL + ":raw/runtime/raw_area_load.cpp",
+        GM20B_METAL + ":raw/runtime/raw_reach.cpp",
         GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_record_parts.cpp",
         GM20B_METAL + ":raw/runtime/raw_direct.cpp",

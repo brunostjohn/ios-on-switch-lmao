@@ -65,16 +65,17 @@ raw::RotatedRefusal rotatedPassRefusal(const RMPass &pass)
         p.color[c].load = a.load == MTLLoadActionLoad    ? raw::ColorAttachment::Load
                           : a.load == MTLLoadActionClear ? raw::ColorAttachment::Clear
                                                          : raw::ColorAttachment::DontCare;
+        p.color[c].store = a.store != MTLStoreActionDontCare;
         p.count = c + 1;
         any |= p.color[c].texture && p.color[c].texture->rotation;
-        if (raw::Texture *r = rawOf(a.resolve); r && r->rotation)
-            return raw::RotatedRefusal::Resolve;
     }
     if (!any)
         return raw::RotatedRefusal::None;
     p.depthStencil.texture = rawOf(pass.zeta[0].texture ?: pass.zeta[1].texture);
-    raw::Rotation r;
-    return raw::passRotation(p, r);
+    p.depthStencil.loaded = pass.zeta[0].load == MTLLoadActionLoad || pass.zeta[1].load == MTLLoadActionLoad;
+    p.depthStencil.stored = (pass.zeta[0].texture && pass.zeta[0].store != MTLStoreActionDontCare) ||
+                            (pass.zeta[1].texture && pass.zeta[1].store != MTLStoreActionDontCare);
+    return raw::turnablePass(p);
 }
 
 uint8_t passTurn(const RMPass &pass)

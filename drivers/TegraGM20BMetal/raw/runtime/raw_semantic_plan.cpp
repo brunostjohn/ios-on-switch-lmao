@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "RawMetalPlan.h"
+#include <cstring>
 #include <unordered_set>
 
 namespace {
@@ -125,11 +126,35 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpDrawIndexed:
     case OpDrawIndirect:
     case OpDrawIndexedIndirect:
-    case OpExecuteCommands: {
+    case OpExecuteCommands:
+    case OpDrawPatches:
+    case OpDrawPatchesIndirect: {
         RMPlanDraw draw;
         draw.state = captureRender();
         draw.primitive = c.stage;
-        if (c.op == OpDraw) {
+        if (c.op == OpDrawPatches || c.op == OpDrawPatchesIndirect) {
+            const uint64_t *e = extra.data() + c.x;
+            if (c.op == OpDrawPatches) {
+                draw.first = c.a;
+                draw.count = c.b;
+                draw.instances = uint32_t(c.c >> 32);
+                draw.baseInstance = uint32_t(c.c);
+            }
+            draw.indices = c.obj;
+            draw.indexOffset = e[PatchIndexOffset];
+            draw.arguments = c.obj2;
+            draw.argumentOffset = e[PatchArgumentOffset];
+            RMPlanPatches patches;
+            patches.factors = reinterpret_cast<void *>(uintptr_t(e[PatchFactors]));
+            patches.pointIndices = reinterpret_cast<void *>(uintptr_t(e[PatchPointIndices]));
+            patches.factorOffset = e[PatchFactorOffset];
+            patches.pointIndexOffset = e[PatchPointIndexOffset];
+            patches.factorStride = uint32_t(e[PatchFactorStride]);
+            patches.controlPoints = uint32_t(e[PatchControlPoints]);
+            const uint32_t scale = uint32_t(e[PatchScale]);
+            memcpy(&patches.scale, &scale, sizeof scale);
+            draw.patches = append(patches_, patches);
+        } else if (c.op == OpDraw) {
             draw.first = c.a;
             draw.count = c.b;
             draw.instances = uint32_t(c.c >> 32);
@@ -176,6 +201,7 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         dispatch.threads = {uint32_t(c.c & 0xffff), uint32_t((c.c >> 16) & 0xffff), uint32_t(c.c >> 32)};
         std::copy_n(extra.begin() + c.x, 3, dispatch.grid.begin());
         std::copy_n(extra.begin() + c.x + 3, 3, dispatch.groups.begin());
+        std::copy_n(extra.begin() + c.x + 6, 6, dispatch.stageIn.begin());
         dispatch.regions = raw::computeDispatch(dispatch.grid, dispatch.threads, dispatch.perThread);
         operation.uses = kernelStates[dispatch.state].uses;
         operation.payload = append(dispatches_, dispatch);
@@ -259,6 +285,9 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     if (isPlanDraw(c.op)) {
         const auto &last = draw(size() - 1);
         operations_.back().uses = drawUses(operations_.back().uses, last.indices, last.arguments);
+        if (last.patches != raw::kNoSnapshot)
+            addUses(size() - 1, {{patches_[last.patches].factors, raw::ResourceUse::Read},
+                                 {patches_[last.patches].pointIndices, raw::ResourceUse::Read}});
     }
     return true;
 }
@@ -320,7 +349,9 @@ Cmd RMCommandPlan::legacy(size_t at) const
     case OpDrawIndexed:
     case OpDrawIndirect:
     case OpDrawIndexedIndirect:
-    case OpExecuteCommands: {
+    case OpExecuteCommands:
+    case OpDrawPatches:
+    case OpDrawPatchesIndirect: {
         const auto &draw = draws_[operation.payload];
         c.stage = draw.primitive;
         c.a = c.op == OpDraw ? draw.first : draw.count;
@@ -390,12 +421,12 @@ size_t RMCommandPlan::storageBytes() const
     snapshots +=
         renderStates.capacity() * sizeof(raw::RenderStateRef) + kernelStates.capacity() * sizeof(raw::KernelStateRef);
     return snapshots + operations_.capacity() * sizeof(RMPlanOperation) + draws_.capacity() * sizeof(RMPlanDraw) +
-           dispatches_.capacity() * sizeof(RMPlanDispatch) + transfers_.capacity() * sizeof(RMPlanTransfer) +
-           controls_.capacity() * sizeof(RMPlanControl) + begins_.capacity() * sizeof(RMPlanBegin) +
-           events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse) +
-           useSpans_.capacity() * sizeof(UseSpan) + rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) +
-           rangeStorageBytes() + drawUseSpans_.storageBytes() + renderUseSpans_.storageBytes() +
-           kernelUseSpans_.storageBytes() +
+           dispatches_.capacity() * sizeof(RMPlanDispatch) + patches_.capacity() * sizeof(RMPlanPatches) +
+           transfers_.capacity() * sizeof(RMPlanTransfer) + controls_.capacity() * sizeof(RMPlanControl) +
+           begins_.capacity() * sizeof(RMPlanBegin) + events_.capacity() * sizeof(RMPlanEvent) +
+           uses_.capacity() * sizeof(raw::ResourceUse) + useSpans_.capacity() * sizeof(UseSpan) +
+           rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) + rangeStorageBytes() + drawUseSpans_.storageBytes() +
+           renderUseSpans_.storageBytes() + kernelUseSpans_.storageBytes() +
            (mergeUses_.capacity() + buildUses_.capacity() + recordUses_.capacity()) * sizeof(raw::ResourceUse);
 }
 
@@ -407,6 +438,7 @@ void RMCommandPlan::clear()
     rasterGroups_.clear();
     lastRasterGroup_ = raw::kNoSnapshot;
     dispatches_.clear();
+    patches_.clear();
     transfers_.clear();
     controls_.clear();
     events_.clear();

@@ -35,6 +35,7 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <os/proc.h>
+#include "bridge/NativeMetalCompile.h"
 #include "bridge/NativeMetalDirect.h"
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
@@ -63,6 +64,7 @@
 #endif
 
 static NmbDevice *gDevice;
+static NmbCompileContext *gCompile;
 static NativeComputeArtifactStorage gNativeArtifactStorage;
 static std::atomic<uint32_t> gNativeArtifactWrites{0};
 // Never destroyed: its dispatch sources' handlers may still run while the process exits.
@@ -1637,7 +1639,10 @@ static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
     return out;
 }
 
-@implementation NBFunction
+@implementation NBFunction {
+    std::once_flag _tessRead;
+    switch_metal::FunctionTess _tess;
+}
 
 - (void)dealloc
 {
@@ -1647,6 +1652,25 @@ static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
 - (NSString *)libraryName
 {
     return _libraryName ?: _name;
+}
+
+// Its library's function list entry's TESS tag (the library's bytes are the AIR slice Metal reads)
+- (switch_metal::FunctionTess)tess
+{
+    std::call_once(_tessRead, [self] {
+        switch_metal::metallibFunctionTess(_library.bytes, _library.length, self.libraryName.UTF8String ?: "", _tess);
+    });
+    return _tess;
+}
+
+- (MTLPatchType)patchType
+{
+    return MTLPatchType([self tess].patchType);
+}
+
+- (NSInteger)patchControlPointCount
+{
+    return [self tess].controlPoints;
 }
 
 // MPS reads its kernels' constants (kMPSDeviceCaps, MPSMaxBatchSize, ...) here before specializing them.
@@ -1769,7 +1793,6 @@ static uint64_t constantBytes(uint64_t type)
     default:
         return 0;
     }
-
 }
 
 #if SWITCH_FRAME_TIMELINE
@@ -2160,10 +2183,27 @@ static NSData *functionBitcode(NBFunction *function)
 }
 @end
 @implementation NBNativeComputeArtifact
-- (void)dealloc { nmb_compute_artifact_release(_artifact); }
-- (NSUInteger)maxTotalThreadsPerThreadgroup { return _info.max_threads; }
-- (NSUInteger)threadExecutionWidth { return _info.execution_width; }
-- (NSUInteger)staticThreadgroupMemoryLength { return _info.static_memory; }
+
+- (void)dealloc
+{
+    nmb_compute_artifact_release(_artifact);
+}
+
+- (NSUInteger)maxTotalThreadsPerThreadgroup
+{
+    return _info.max_threads;
+}
+
+- (NSUInteger)threadExecutionWidth
+{
+    return _info.execution_width;
+}
+
+- (NSUInteger)staticThreadgroupMemoryLength
+{
+    return _info.static_memory;
+}
+
 @end
 
 static char computeArtifactKey;
@@ -2173,9 +2213,9 @@ static dispatch_queue_t persistQueue()
     static dispatch_queue_t queue;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        queue = dispatch_queue_create("switch.native-analysis.persist",
-                                       dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
-                                                                              QOS_CLASS_UTILITY, 0));
+        queue =
+            dispatch_queue_create("switch.native-analysis.persist",
+                                  dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     });
     return queue;
 }
@@ -2371,7 +2411,9 @@ extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^obs
         return state.handle ? 1 : -1;
     std::function<void()> notify;
     if (observer)
-        notify = [observer] { observer(); };
+        notify = [observer] {
+            observer();
+        };
     return nbasync::observe(making, std::move(notify));
 }
 
@@ -3284,7 +3326,7 @@ NB_RESIDENCY_SETS(use)
     MTLWinding _winding;
     MTLTriangleFillMode _fill;
 }
-@property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
+@property (nonatomic) bool skipDraws;  // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
 @end
 @implementation NBRenderEncoder
@@ -5336,6 +5378,20 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
     p->samples = d.rasterSampleCount;
     p->topology = d.inputPrimitiveTopology;
     p->rasterization = d.rasterizationEnabled;
+    // Metal's defaults are what the bridge takes without it (m2v TessellationDescriptor::default)
+    if (d.maxTessellationFactor != 16 || d.tessellationPartitionMode || d.tessellationFactorFormat ||
+        d.tessellationFactorStepFunction || d.tessellationOutputWindingOrder || d.tessellationControlPointIndexType ||
+        d.tessellationFactorScaleEnabled) {
+        p->tessellation = 1;
+        p->max_tessellation_factor = d.maxTessellationFactor;
+        p->partition_mode = d.tessellationPartitionMode;
+        p->factor_format = d.tessellationFactorFormat;
+        p->factor_step_function = d.tessellationFactorStepFunction;
+        p->winding = d.tessellationOutputWindingOrder;
+        p->control_point_index_type = d.tessellationControlPointIndexType;
+        p->factor_scale_enabled = d.tessellationFactorScaleEnabled;
+    }
+    p->max_amplification = d.maxVertexAmplificationCount;
     if (MTLVertexDescriptor *v = d.vertexDescriptor) {
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = v.attributes[i];
@@ -5673,11 +5729,13 @@ extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, N
     NmbRenderPipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
     NSError *error = nil;
-    if (!gDevice || !renderDescriptor((MTLRenderPipelineDescriptor *)descriptor, &p, linked, &error)) {
-        *why = gDevice ? "a function of another device" : "no device";
+    if ((!gDevice && !gCompile) || !renderDescriptor((MTLRenderPipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why = gDevice || gCompile ? "a function of another device" : "no device";
         return false;
     }
-    if (nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, uint32_t(textureSamples), binds, each, ctx))
+    const uint32_t samples = uint32_t(textureSamples);
+    if (gDevice ? nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, samples, binds, each, ctx)
+                : nmb_compile_render_direct(gCompile, &p, barrier, textureFormat, samples, binds, each, ctx))
         return true;
     *why = nmb_last_error();
     return false;
@@ -5692,20 +5750,21 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbComputePipelin
             *error = nbError(@"foreign compute function");
         return false;
     }
-    // Metal may materialize empty stage/linked descriptors on access. Preserve the
-    // default meaning while refusing state this frontend cannot yet represent.
-    MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor;
-    bool empty = !stage || (stage.indexType == MTLIndexTypeUInt16 && stage.indexBufferIndex == 0);
-    for (NSUInteger index = 0; stage && index < 31; ++index) {
-        MTLAttributeDescriptor *a = stage.attributes[index];
-        MTLBufferLayoutDescriptor *b = stage.layouts[index];
-        empty = empty && a.format == MTLAttributeFormatInvalid && !a.offset && !a.bufferIndex && !b.stride &&
-                b.stepFunction == MTLStepFunctionPerVertex && b.stepRate == 1;
-    }
-    if (!empty) {
-        if (error)
-            *error = nbError(@"compute stage inputs are not implemented");
-        return false;
+    // Metal materializes an empty stage input descriptor on access: no attribute set is none
+    if (MTLStageInputOutputDescriptor *stage = d.stageInputDescriptor) {
+        for (NSUInteger index = 0; index < 31; ++index) {
+            MTLAttributeDescriptor *a = stage.attributes[index];
+            if (a.format == MTLAttributeFormatInvalid)
+                continue;
+            p->stage_inputs = 1;
+            p->stage_attributes[index] = {(uint64_t)a.format, a.offset, a.bufferIndex};
+            if (a.bufferIndex < 31) {
+                MTLBufferLayoutDescriptor *l = stage.layouts[a.bufferIndex];
+                p->stage_layouts[a.bufferIndex] = {l.stride, (uint64_t)l.stepFunction, l.stepRate};
+            }
+        }
+        p->stage_index_type = stage.indexType;
+        p->stage_index_buffer = stage.indexBufferIndex;
     }
     // Visible functions the kernel calls by name (MPS's ND-array kernels import their prologue and epilogue, prefixPrimary_f and the like,
     // through these); binary functions, call-site groups and dynamic libraries are not represented yet.
@@ -5748,8 +5807,8 @@ extern "C" id native_bridge_metal_compute_prepare(id descriptor, NSUInteger opti
     if (reflection)
         *reflection = nil;
     auto *d = (MTLComputePipelineDescriptor *)descriptor;
-    if ((options & ~(MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo)) ||
-        d.binaryArchives.count || d.supportIndirectCommandBuffers || d.supportAddingBinaryFunctions)
+    if ((options & ~(MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo)) || d.binaryArchives.count ||
+        d.supportIndirectCommandBuffers || d.supportAddingBinaryFunctions)
         return nil;
     NmbComputePipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
@@ -5804,11 +5863,27 @@ extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct N
     NmbComputePipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
     NSError *error = nil;
-    if (!gDevice || !computeDescriptor((MTLComputePipelineDescriptor *)descriptor, &p, linked, &error)) {
-        *why = gDevice ? "a function of another device, or what the frontend does not represent" : "no device";
+    if ((!gDevice && !gCompile) || !computeDescriptor((MTLComputePipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why =
+            gDevice || gCompile ? "a function of another device, or what the frontend does not represent" : "no device";
         return false;
     }
-    if (nmb_compute_pipeline_direct(gDevice, &p, dispatch, each, ctx))
+    if (gDevice ? nmb_compute_pipeline_direct(gDevice, &p, dispatch, each, ctx)
+                : nmb_compile_compute_direct(gCompile, &p, dispatch, each, ctx))
+        return true;
+    *why = nmb_last_error();
+    return false;
+}
+
+extern "C" bool native_bridge_metal_argument_layouts(id function, NSUInteger index,
+                                                     bool (*each)(const struct NmbArgumentLayout *, uint32_t, void *),
+                                                     void *ctx, const char **why)
+{
+    if (![function isKindOfClass:[NBFunction class]] || index > UINT32_MAX) {
+        *why = "a function of another device";
+        return false;
+    }
+    if (nmb_function_argument_layouts(((NBFunction *)function).handle, uint32_t(index), each, ctx))
         return true;
     *why = nmb_last_error();
     return false;
@@ -6018,8 +6093,10 @@ static void compileReplyWrite(const std::string &name, NSData *metallib, NSStrin
     static const std::string osBuild = [] {
         char value[128] = {};
         size_t bytes = sizeof value;
-        return sysctlbyname("kern.osversion", value, &bytes, nullptr, 0) == 0 && bytes && bytes <= sizeof value && value[bytes - 1] == 0
-                   ? std::string(value) : std::string();
+        return sysctlbyname("kern.osversion", value, &bytes, nullptr, 0) == 0 && bytes && bytes <= sizeof value &&
+                       value[bytes - 1] == 0
+                   ? std::string(value)
+                   : std::string();
     }();
     switch_compile_reply::write(gCompileCache, name, uuid, type, request.data(), request.size(), file, metallib,
                                 osBuild, SWITCH_METAL_KIND);
@@ -7105,7 +7182,8 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg);
 
 // A library of a metallib's AIR slice, the one this IPSW's Metal takes (MetallibSlice.h): its functions, and the bytes their
 // bitcode and extern entries are read from. `storage` keeps the file's bytes.
-static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length, NSError **error)
+static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length, NSError **error,
+                                  bool compileOnly = false)
 {
     size_t offset = 0, size = 0;
     if (!switch_metal::airSlice(file, length, offset, size)) {
@@ -7119,7 +7197,8 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
         return nil;
     }
     SWITCH_METAL_DIAGNOSTIC(const uint64_t libraryBegan = nowUs());
-    NmbLibrary *handle = nmb_library_new(gDevice, file + offset, size, false);
+    NmbLibrary *handle = compileOnly ? nmb_compile_library_new(file + offset, size, false)
+                                     : nmb_library_new(gDevice, file + offset, size, false);
     SWITCH_METAL_DIAGNOSTIC(gTimeLibrary.add(libraryBegan));
     if (!handle)
         return failWith<NBLibrary *>(error, @"library", nil);
@@ -7260,8 +7339,9 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     NmbComputePipeline *handle =
         nmb_compute_pipeline_new_with_options(gDevice, [(NBFunction *)function handle], &creation);
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
-    SWITCH_METAL_DIAGNOSTIC(std::string journaled = journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan,
-                                                               handle ? nullptr : nmb_last_error()));
+    SWITCH_METAL_DIAGNOSTIC(std::string journaled =
+                                journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan,
+                                                       handle ? nullptr : nmb_last_error()));
     if (!handle)
         return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
@@ -7293,7 +7373,7 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     NmbComputePipeline *handle = nmb_compute_pipeline_new_with_descriptor(gDevice, &p, &creation);
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(std::string journaled = journalComputePipeline(d, nil, options, pipelineBegan,
-                                                               handle ? nullptr : nmb_last_error()));
+                                                                           handle ? nullptr : nmb_last_error()));
     if (!handle)
         return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
@@ -7347,7 +7427,7 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
     SWITCH_METAL_DIAGNOSTIC(gTimePipeline.add(pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(gHistPso.add(nowUs() - pipelineBegan));
     SWITCH_METAL_DIAGNOSTIC(journalRenderPipeline(d, options, pipelineBegan, handle ? nullptr : nmb_last_error(),
-                                        !journalOn() ? std::string() : NBCost::now().since(costBegan)));
+                                                  !journalOn() ? std::string() : NBCost::now().since(costBegan)));
     if (!handle)
         return failWith<id<MTLRenderPipelineState>>(error, @"render pipeline", nil);
     NBRenderPipeline *state = [NBRenderPipeline new];
@@ -7659,6 +7739,32 @@ extern "C" id native_bridge_metal_library_with_air(const void *bytes, size_t len
     NBLibrary *library = [NBLibrary new];
     library.handle = handle;
     return library;
+}
+
+extern "C" bool native_bridge_metal_compile_open(const char *loader)
+{
+    if (!gCompile) {
+        gNvkPath = loader ? loader : "";
+        gCompile = nmb_compile_context_open(loader);
+    }
+    return gCompile != nullptr;
+}
+
+extern "C" id native_bridge_metal_compile_library(const char *path, dispatch_data_t data, NSError **error)
+{
+    if (!gCompile) {
+        if (error)
+            *error = nbError(@"no compile context");
+        return nil;
+    }
+    if (path) {
+        NSData *bytes = [NSData dataWithContentsOfFile:@(path) options:NSDataReadingMappedIfSafe error:error];
+        return bytes ? metallibLibrary(bytes, (const uint8_t *)bytes.bytes, bytes.length, error, true) : nil;
+    }
+    const void *bytes = nullptr;
+    size_t size = 0;
+    dispatch_data_t mapped = dispatch_data_create_map(data, &bytes, &size);
+    return metallibLibrary(mapped, (const uint8_t *)bytes, size, error, true);
 }
 
 extern "C" bool native_bridge_metal_shader_cache_stats(NmbShaderCacheStats *out)

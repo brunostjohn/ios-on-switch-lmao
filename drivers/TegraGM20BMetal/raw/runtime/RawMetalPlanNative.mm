@@ -17,6 +17,10 @@ struct NativePlanSink {
     {
         RAW_ENCODE_SPAN(Apply);
         RAW_ENCODE_COUNT(Applied);
+        if (stage == 3)
+            compute->setBufferStride(slot, binding.stride);
+        else if (stage == 1)
+            render->setVertexStride(slot, binding.stride);
         if (binding.source == raw::BufferBinding::Source::Offset) {
             if (stage == 3)
                 compute->setBufferOffset(slot, binding.offset);
@@ -48,7 +52,6 @@ struct NativePlanSink {
             render->setBuffer(stage, slot, object ? &object->_raw : nullptr, binding.offset);
     }
 
-    // A vertex texture (stage 1) binds nothing: no raw record reads one, raw_direct.cpp refuses a vertex-stage handle
     void texture(uint32_t stage, uint32_t slot, void *value)
     {
         RAW_ENCODE_SPAN(Apply);
@@ -56,8 +59,8 @@ struct NativePlanSink {
         __unsafe_unretained RMTexture *object = (__bridge RMTexture *)value;
         if (stage == 3)
             compute->setTexture(slot, object ? &object->_raw : nullptr);
-        else if (stage == 2)
-            render->setTexture(slot, object ? &object->_raw : nullptr);
+        else
+            render->setTexture(int(stage), slot, object ? &object->_raw : nullptr);
     }
 
     void sampler(uint32_t stage, uint32_t slot, void *value)
@@ -67,8 +70,8 @@ struct NativePlanSink {
         __unsafe_unretained RMSampler *object = (__bridge RMSampler *)value;
         if (stage == 3)
             compute->setSampler(slot, object ? &object->_raw : nullptr);
-        else if (stage == 2)
-            render->setSampler(slot, object ? &object->_raw : nullptr);
+        else
+            render->setSampler(int(stage), slot, object ? &object->_raw : nullptr);
     }
 
     void kernel(const raw::KernelState &, const raw::KernelState *)
@@ -142,6 +145,14 @@ struct NativePlanSink {
         if (rasterChanged(next, previous, R::DepthBias, &R::depthBias))
             render->setDepthBias(raw::stateFloat(next.depthBias[0]), raw::stateFloat(next.depthBias[1]),
                                  raw::stateFloat(next.depthBias[2]));
+        if (rasterChanged(next, previous, R::Amplification, &R::amplification)) {
+            uint32_t viewports[kAmplificationMappings], layers[kAmplificationMappings];
+            for (uint32_t k = 0; k < kAmplificationMappings; k++) {
+                viewports[k] = next.amplification[1 + 2 * k];
+                layers[k] = next.amplification[2 + 2 * k];
+            }
+            render->setAmplification(next.amplification[0], viewports, layers);
+        }
     }
 };
 

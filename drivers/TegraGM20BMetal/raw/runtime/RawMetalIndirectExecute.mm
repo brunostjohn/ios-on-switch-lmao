@@ -20,9 +20,7 @@ uint32_t *slotOf(RMIndirectComputeBuffer *b, NSUInteger index)
     return reinterpret_cast<uint32_t *>(b->_raw.cpu) + index * raw::icb::kComputeSlotWords;
 }
 
-const char *const kStageIn = "an indirect dispatch command that sets a stage-in region (the encoder's is m2v's)",
-                  *const kNoKernel =
-                      "an indirect dispatch command the raw path has no kernel for at the encoder's pipeline";
+const char *const kNoKernel = "an indirect dispatch command the raw path has no kernel for at the encoder's pipeline";
 
 // Each command's kernels at the encoder's pipeline, for a buffer with no variant for it at its generation
 void pipelineKernels(RMKernelExecute *x)
@@ -32,7 +30,7 @@ void pipelineKernels(RMKernelExecute *x)
     x->_kernelsGeneration = b->_generation;
     for (uint32_t i = 0; i < b->_count; i++) {
         raw::ComputeDispatch shape;
-        if (b->_dispatches[i].dispatched && !b->_dispatches[i].stageIn)
+        if (b->_dispatches[i].dispatched)
             x->_kernels[i] = rmCommandKernels(x->_pipeline, b->_dispatches[i], shape);
     }
 }
@@ -51,8 +49,6 @@ const char *admit(RMKernelExecute *x)
             pipelineKernels(x);
         for (uint32_t i = from; i < to; i++) {
             const RMICBDispatch &c = b->_dispatches[i];
-            if (c.dispatched && c.stageIn)
-                return kStageIn;
             if (c.dispatched && (current ? made->second->missing[i] : !x->_kernels[i]))
                 return kNoKernel;
         }
@@ -60,8 +56,6 @@ const char *admit(RMKernelExecute *x)
     }
     for (uint32_t i = from; i < to; i++) {
         const RMICBDispatch &c = b->_dispatches[i];
-        if (c.dispatched && c.stageIn)
-            return kStageIn;
         if (c.dispatched && !c.raw)
             return "an indirect dispatch command the raw path has no kernel for";
     }
@@ -211,20 +205,23 @@ bool encodeKernelCommands(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMKern
             run.binds = &x->_variant->binds;
             run.bindSlots = x->_variant->bindSlots;
             run.alignedSlots = x->_variant->alignedSlots;
+            run.strideSlots = x->_variant->strideSlots;
         }
     } else if (b->_inheritBuffers) {
         std::lock_guard<raw::Mutex> hold(b->_lock);
         if (b->_bindsChanged) {
-            b->_bindSlots = b->_alignedSlots = 0;
+            b->_bindSlots = b->_alignedSlots = b->_strideSlots = 0;
             for (const RMICBDispatch &c : b->_dispatches) {
                 b->_bindSlots |= c.bindSlots;
                 b->_alignedSlots |= c.alignedSlots;
+                b->_strideSlots |= c.strideSlots;
             }
             b->_bindsChanged = false;
         }
         run.binds = &b->_binds;
         run.bindSlots = b->_bindSlots;
         run.alignedSlots = b->_alignedSlots;
+        run.strideSlots = b->_strideSlots;
     }
     if (x->_range)
         useBuffer(&rc, x->_range, false);
@@ -237,9 +234,10 @@ void replayKernelCommands(id<MTLComputeCommandEncoder> encoder, RMKernelExecute 
     const auto [from, to] = reach(x);
     std::lock_guard<raw::Mutex> hold(b->_lock);
     if (!b->_m2v)
-        b->_m2v = [gRM->fallback newIndirectCommandBufferWithDescriptor:b->_descriptor
-                                                        maxCommandCount:b->_count
-                                                                options:0];
+        b->_m2v = [RM_M2V("an indirect command buffer of dispatches replayed on it")
+            newIndirectCommandBufferWithDescriptor:b->_descriptor
+                                   maxCommandCount:b->_count
+                                           options:0];
     if (!b->_m2v) {
         SWITCH_REFUSE("raw", "icb.replay", "m2v made no indirect command buffer of dispatches: none run");
         return;
@@ -253,7 +251,13 @@ void replayKernelCommands(id<MTLComputeCommandEncoder> encoder, RMKernelExecute 
         for (uint32_t slot = 0; slot < 31 && !b->_inheritBuffers; slot++)
             if (RMBuffer *used = c.buffers[slot]) {
                 buffers.insert(used);
-                [t setKernelBuffer:twinOf(used) offset:c.offsets[slot] atIndex:slot];
+                if (c.strides[slot] == raw::kNoBindStride)
+                    [t setKernelBuffer:twinOf(used) offset:c.offsets[slot] atIndex:slot];
+                else
+                    [t setKernelBuffer:twinOf(used)
+                                 offset:c.offsets[slot]
+                        attributeStride:c.strides[slot]
+                                atIndex:slot];
             }
         for (const auto &[index, bytes] : c.memory)
             [t setThreadgroupMemoryLength:bytes atIndex:index];
@@ -320,7 +324,8 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
     for (NSUInteger i = 0; i < count; i++) {
         if (copy && !from->_inheritBuffers) {
             commands[i].binds.clear();
-            commands[i].bindSlots = commands[i].alignedSlots = 0;
+            commands[i].strideWords.clear();
+            commands[i].bindSlots = commands[i].alignedSlots = commands[i].strideSlots = 0;
         }
         to->_dispatches[into + i] = commands[i];
         // with no copy engine (the blit encoder replayed on m2v) the words are the CPU's to write, as Metal's would be the GPU's
@@ -331,6 +336,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
         else
             raw::icb::computeEmpty(slotOf(to, into + i));
         if (to->_inheritBuffers)
-            raw::icb::binds(rmBindSlot(to, into + i), commands[i].binds.data(), uint32_t(commands[i].binds.size()));
+            raw::icb::binds(rmBindSlot(to, into + i), commands[i].binds.data(), uint32_t(commands[i].binds.size()),
+                            commands[i].strideWords.data(), uint32_t(commands[i].strideWords.size()));
     }
 }

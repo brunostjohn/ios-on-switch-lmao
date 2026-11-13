@@ -90,8 +90,7 @@ unsigned computeStateChecks(id<MTLDevice> native, MTLComputePipelineDescriptor *
     MTLComputePipelineDescriptor *wrapped = [descriptor copy];
     wrapped.computeFunction = (id<MTLFunction>)function;
     NSError *error = nil;
-    RMComputeState *state =
-        rmComputeState(native, (id<MTLDevice>)fallback, wrapped, MTLPipelineOptionNone, nil, &error);
+    RMComputeState *state = rmComputeState(native, wrapped, MTLPipelineOptionNone, nil, &error);
     check(state && state->_keyed && !error && !state->_compatibility && fallback->calls.load() == 0,
           "facade creates no compatibility pipeline");
     if (!state)
@@ -128,11 +127,11 @@ unsigned computeStateChecks(id<MTLDevice> native, MTLComputePipelineDescriptor *
           "native metadata survives compatibility publication");
 
     fallback->fail = true;
-    state = rmComputeState(native, (id<MTLDevice>)fallback, wrapped, MTLPipelineOptionNone, nil, &error);
+    state = rmComputeState(native, wrapped, MTLPipelineOptionNone, nil, &error);
     const unsigned before = fallback->calls.load();
     check(state && ![state rmTwin] && ![state rmTwin] && fallback->calls.load() == before + 1,
           "failed deferred creation stays a failed compatibility request");
-    state = rmComputeState(native, (id<MTLDevice>)fallback, descriptor, MTLPipelineOptionNone, nil, &error);
+    state = rmComputeState(native, descriptor, MTLPipelineOptionNone, nil, &error);
     check(!state && error && fallback->calls.load() == before + 2,
           "ineligible factory preserves immediate compatibility error");
     return failures;

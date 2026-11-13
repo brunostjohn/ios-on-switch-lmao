@@ -10,15 +10,15 @@ import Metal
 /// does). Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
 /// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks,
-/// Objective-C sends, job uses that reached a job's list and vertices the CPU read must not grow with its draws, none
-/// may pass what the host's facade harness counts of the same command buffers with the encode and its retire lock-free
-/// (raw/test/facadecost.mm: at most the trim's lock once in 64 command buffers, no send, 4 allocations and 2 frees),
-/// and every command buffer is the raw path's. Beside the encode's own: the runtime's locks on every thread over the
-/// batch (facade_locks, raw_lock.h's count of its wrappers), at most 4 a command buffer, and the growth of the blocks
-/// in use in every malloc zone while the batch is recorded and held (held_blocks), a coarse bound on what each keeps
-/// allocated (the whole process's, so no per-draw check). The pooled encoders' blocks (raw_object_pool.h): none freed
-/// in the batch (its pool kept too few for what the batch holds at once), and the most each pool made in the process.
-/// The profile is the facade's; a release runtime has none and the test skips.
+/// Objective-C sends, job uses that reached a job's list, vertices the CPU read and set-0 uploads must not grow with
+/// its draws, none may pass what the host's facade harness counts of the same command buffers with the encode and its
+/// retire lock-free (raw/test/facadecost.mm: at most the trim's lock once in 64 command buffers, no send, 4 allocations
+/// and 2 frees), and every command buffer is the raw path's. Beside the encode's own: the runtime's locks on every
+/// thread over the batch (facade_locks, raw_lock.h's count of its wrappers), at most 4 a command buffer, and the growth
+/// of the blocks in use in every malloc zone while the batch is recorded and held (held_blocks), a coarse bound on what
+/// each keeps allocated (the whole process's, so no per-draw check). The pooled encoders' blocks (raw_object_pool.h):
+/// none freed in the batch (its pool kept too few for what the batch holds at once), and the most each pool made in the
+/// process. The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
     let name =
@@ -35,7 +35,9 @@ struct EncodeCostPathTest: HWTest {
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
         "geometry_vertices", "facade_locks", "held_blocks", "render_encoders_freed",
     ]
-    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices", "facade_locks"]
+    static let perDrawFree = [
+        "mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices", "facade_locks", "descriptor_uploads",
+    ]
     static let ceilings: [(event: String, most: Double)] = [
         ("locks", 0.1), ("sends", 0), ("mallocs", 4), ("frees", 2), ("geometry_vertices", 0), ("facade_locks", 4),
         ("held_blocks", heldBlocksMost), ("render_encoders_freed", 0),

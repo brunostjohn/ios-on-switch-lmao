@@ -154,9 +154,9 @@ bool RenderEncoder::blurTwod(const Pipeline &pl, uint32_t primitive, uint32_t fi
     const Texture *source = nullptr;
     const Sampler *sampler = nullptr;
     for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++)
-        if (const PackEntry &e = rec.entry[k]; e.kind == EntryTexture && e.slot < 16) {
-            source = textures_[e.slot];
-            sampler = e.samplerKind == SamplerSlot && e.sampler < 16 ? samplers_[e.sampler] : nullptr;
+        if (const PackEntry &e = rec.entry[k]; e.kind == EntryTexture) {
+            source = boundTexture(e);
+            sampler = e.samplerKind == SamplerSlot ? boundSampler(e) : nullptr;
         }
     const Bound &u = bufs_[2][1], &edr = bufs_[2][6], &texmat = bufs_[1][3];
     if (!source || !sampler || source->samples > 1 || source->format != target->format || u.buffer || !u.cpu ||

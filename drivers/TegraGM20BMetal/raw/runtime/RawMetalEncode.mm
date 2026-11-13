@@ -3,17 +3,19 @@
 #import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
+#import "RawMetalReach.h"
 #import "RawMetalResolveAsk.h"
 #import "RawMetalSplitPlan.h"
-#import "RawMetalXrPlanes.h"
 #import "RawMetalIndirect.h"
 #include "raw_attachment_target.h"
 #import "RawMetalFresh.h"
+#include <array>
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
 #include "raw_clear.h"
 #include "raw_samples.h"
+#include "raw_turned_pass.h"
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
@@ -108,6 +110,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         cleanBuffer(use);
         useTexture(rc, (__bridge RMTexture *)use.object, use.access & raw::ResourceUse::Write);
     });
+    cb->_plan.forEachResource(from, to, RMResourceKind::Heap, [&](const RMRangeResource &use) {
+        if (__unsafe_unretained RMHeap *heap = (__bridge RMHeap *)use.object; heap->_members)
+            rc->useHeap(*heap->_members);
+    });
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
@@ -157,8 +163,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     // A planar render target's stand-in passes (raw::Texture::planarStandIn), the frontend's: the planes' codes into the stand-in
     // before a pass that loads it (its code image from the planes first, the copy engine's remaps), the stand-in into the planes
     // after one that stores it. 0: drawn; else fail()'s or refused()'s answer.
-    std::vector<__unsafe_unretained RMTexture *> standInLoads, standInStores, planesWritten;
-    XrPlaneSync xrPlanes(*rc);
+    std::vector<__unsafe_unretained RMTexture *> standInLoads, planesWritten;
+    std::vector<std::pair<__unsafe_unretained RMTexture *, uint32_t>> standInStores;  // and their attachment slots
     auto standInPass = [&](__unsafe_unretained RMTexture *t, bool store) -> int {
         raw::Texture &x = t->_raw;
         if (!store) {
@@ -168,7 +174,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         }
         raw::PassDesc p;
         p.color[0].texture = store ? x.luma : x.planarStandIn;
-        p.color[1].texture = !store ? nullptr : x.chromaCodes ? x.chromaCodes : x.chroma;
+        p.color[1].texture = store ? x.chroma : nullptr;
         for (raw::ColorAttachment &a : p.color) {
             a.load = raw::ColorAttachment::DontCare;
             a.store = true;
@@ -186,11 +192,34 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             return 2;
         }
         e->end();
-        if (store && x.chromaCodes)
-            storeYcbcrChroma(rc, x);
         if (store)
             planesWritten.push_back(t);
         return 0;
+    };
+    // The pass's backings of its YCbCr targets' stand-ins, read before the resolve passes take the encoder over, then the
+    // stand-ins stored into the planes
+    std::array<const raw::Texture *, 8> backings{};
+    auto standInBackings = [&] {
+        backings = {};
+        for (const auto &[t, j] : standInStores)
+            if (t->_raw.ycbcrStore && re)
+                backings[j] = re->target(j);
+    };
+    auto storeStandIns = [&]() -> bool {
+        for (const auto &[t, j] : standInStores) {
+            if (!t->_raw.ycbcrStore) {
+                if (standInPass(t, true))
+                    return false;
+                continue;
+            }
+            if (!backings[j])
+                return fail(PredEncPlanarRT, "a YCbCr texture's pass left no stand-in backing", j);
+            if (const int failed = storeYcbcrPlanes(rc, t->_raw, *backings[j], why))
+                return failed == 1 ? fail(PredEncPlanarRT, *why, j) : refused();
+            planesWritten.push_back(t);
+        }
+        standInStores.clear();
+        return true;
     };
 
     // Multisampled attachments' resolves (MTLStoreActionMultisampleResolve): after their pass, a pass of the pack's resolve state
@@ -205,10 +234,36 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
 
     std::vector<Resolve> resolves;
     std::deque<raw::Texture> resolveTargets;  // the encoder reads them until its end()
+    raw::TurnedPass turned;                   // the open pass's turn copies (raw_turned_pass.h)
+
+    // A depth attachment's resolve (raw_samples.h depthResolveState): a pass of the depth resolve state of its format and filter
+    // into the resolve texture, writing each pixel's depth whatever it held
+    struct DepthResolve {
+        __unsafe_unretained RMTexture *into = nil;
+        uint32_t filter = 0;
+    } depthResolve;
+
+    struct StencilResolve {  // CommandBuffer::stencilResolve's pass (raw_stencil_bits.h)
+        __unsafe_unretained RMTexture *into = nil;
+        raw::StencilSample pick = raw::StencilSample::Zero;
+    } stencilResolve;
+
+    static const raw::DepthStencilState depthWrites = [] {
+        raw::DepthStencilDesc desc;
+        desc.depthCompare = 7;  // MTLCompareFunctionAlways
+        desc.depthWrite = true;
+        return raw::DepthStencilState(desc);
+    }();
     auto resolvePasses = [&]() -> bool {
         const raw::Texture *from[8] = {};
         for (const Resolve &r : resolves)
             from[r.attachment] = re->target(r.attachment);
+        const raw::Texture *depthFrom = depthResolve.into ? re->depthTarget() : nullptr;
+        const raw::Texture *stencilFrom = stencilResolve.into ? re->depthTarget() : nullptr;
+        // a memoryless zeta's compressed backing is made without a texture header (Device::compBacking)
+        if (const raw::Texture *z = depthFrom ? depthFrom : stencilFrom;
+            z && !d.sampleable(*const_cast<raw::Texture *>(z)))
+            return fail(PredEncDepthStencil, "no texture header for a multisampled zeta's resolve", z->format);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
             const raw::ResolveAsk ask = resolveAsk(r.into, *from[r.attachment], width, height);
@@ -219,6 +274,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             else if (raw::twodResolveShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
                 route = raw::ResolveByComplement;
 #endif
+            // a turned target's resolve is its state's turned variant, which reads the frame's position
+            const bool turned = r.into->_raw.rotation;
+            if (turned)
+                route = raw::ResolveByPass;
             const bool twod = route != raw::ResolveByPass, exact = route == raw::ResolveByComplement;
             if (twod) {
                 useTexture(rc, r.into, true);
@@ -226,7 +285,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     continue;
             }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            if (rc->probeForms().resolveTwoD) {
+            if (!turned && rc->probeForms().resolveTwoD) {
                 useTexture(rc, r.into, true);
                 if (rc->probeResolve(*from[r.attachment], r.into->_raw))
                     continue;
@@ -242,13 +301,13 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             p.width = width;
             p.height = height;
             useTexture(rc, r.into, true);
-            raw::Pipeline *resolve = d.resolvePipeline(r.into->_raw.format);
+            const uint32_t samples = from[r.attachment]->samples;
+            raw::Pipeline *resolve = d.resolvePipeline(r.into->_raw.format, samples);
             if (!resolve)
                 return fail(PredEncPassRender, "a resolve format with no resolve state", r.attachment);
             raw::RenderEncoder *e = rc->render(p);
             if (!e)
                 return fail(PredEncPassRender, "a resolve texture the raw path cannot render", r.attachment);
-            const uint32_t samples = from[r.attachment]->samples;
             e->setPipeline(resolve);
             e->setTexture(0, from[r.attachment]);
             e->setBytes(2, 0, &samples, sizeof samples);
@@ -258,6 +317,34 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             RAW_DIAGNOSTIC(d.stats.resolveRoute[raw::ResolveByPass][raw::resolveSampleSlot(samples)]++);
         }
         resolves.clear();
+        if (__unsafe_unretained RMTexture *into = depthResolve.into) {
+            raw::PassDesc p;
+            p.depthStencil.texture = &into->_raw;
+            p.width = width;
+            p.height = height;
+            useTexture(rc, into, true);
+            raw::RenderEncoder *e = depthFrom ? rc->render(p) : nullptr;
+            if (!e)
+                return fail(PredEncDepthStencil, "a depth resolve texture the raw path cannot render",
+                            into->_raw.format);
+            const uint32_t samples = depthFrom->samples;
+            e->setPipeline(d.depthResolvePipeline(into->_raw.format, depthResolve.filter));
+            e->setDepthStencil(&depthWrites);
+            e->setTexture(0, depthFrom);
+            e->setBytes(2, 0, &samples, sizeof samples);
+            if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                return refused();
+            e->end();
+            depthResolve = {};
+        }
+        if (__unsafe_unretained RMTexture *into = stencilResolve.into) {
+            useTexture(rc, into, true);
+            if (!stencilFrom)
+                return fail(PredEncDepthStencil, "a stencil resolve without its source", into->_raw.format);
+            if (!rc->stencilResolve(into->_raw, *stencilFrom, stencilResolve.pick, width, height, why))
+                return fail(PredEncDepthStencil, *why, into->_raw.format);
+            stencilResolve = {};
+        }
         return true;
     };
 
@@ -399,11 +486,11 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                                       if (!(use.access & raw::ResourceUse::Sample))
                                           return;
                                       __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
-                                      if (texture->_raw.standIn && !standInFresh.count(texture))
+                                      if (texture->_raw.standIn && !standInFresh.count(texture) &&
+                                          (!texture->_raw.xrPlanes || cb->_xrStandIns.count(texture)))
                                           stale.push_back(texture);
                                   });
         for (__unsafe_unretained RMTexture *t : stale) {
-            xrPlanes.read(t);
             raw::Texture &x = t->_raw;
             raw::PassDesc p;
             p.color[0].texture = x.standIn;
@@ -416,8 +503,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             codes.push_back(x);
             codes.back().standIn = nullptr;
             useTexture(rc, t, false);
-            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format)));
-            conv->setTexture(0, &codes.back());
+            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format), x.xrPlanes));
+            conv->setTexture(0, x.xrPlanes ? x.luma : &codes.back());
+            if (x.xrPlanes)
+                conv->setTexture(1, x.chroma);
             conv->setViewport(0, 0, x.width, x.height, 0, 1);
             conv->setScissor(0, 0, x.width, x.height);
             if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -468,6 +557,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 copyShadows(false);
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const auto &regions = dispatch.regions;
+            ce->setStageInRegion(dispatch.stageIn);
             if (!kernels || kernels->count != regions.count)
                 return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
             for (uint8_t region = 0; region < regions.count; ++region) {
@@ -525,7 +615,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     refresh(sub);
                 if (cb->_standIns && !standIns(sub))
                     return false;
-                p.storageMask |= passStorageMask(cb, sub);
+                passStorageMasks(cb, sub, p);
+                p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
             }
             for (unsigned j = 0; j < 8; j++) {
                 const RMPass::Color &a = pass.color[j];
@@ -535,7 +626,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 if (t->_raw.planar && !t->_raw.planarStandIn)
                     return fail(PredEncPlanarRT, "a planar texture as a render target", j);
                 useTexture(rc, t, true);
-                xrPlanes.attach(t, a.load, pass);
                 if (t->_raw.planarStandIn) {
                     // Metal's DontCare load keeps the planes' codes where no draw writes, and the store writes every texel
                     // (raw/test/standinoracle.mm): such a pass loads them too. A YCbCr code target's undrawn texels are
@@ -544,7 +634,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     if (a.load == MTLLoadActionLoad || (a.load == MTLLoadActionDontCare && stores && !t->_raw.ycbcr))
                         standInLoads.push_back(t);
                     if (stores)
-                        standInStores.push_back(t);
+                        standInStores.push_back({t, j});
                 }
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
@@ -570,6 +660,9 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 p.color[j].texture = !whole                  ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
                                                              : &t->_raw;
+                p.color[j].image = whole ? nullptr : &t->_raw;
+                p.color[j].level = uint32_t(a.level);
+                p.color[j].slice = uint32_t(a.slice);
                 p.color[j].load = a.load == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.load == MTLLoadActionLoad ? raw::ColorAttachment::Load
                                                                 : raw::ColorAttachment::DontCare;
@@ -583,8 +676,15 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 if (!raw::integerClearSlots(t->_raw.format, exact, p.color[j].clear))
                     for (int c = 0; c < 4; c++)
                         p.color[j].clear[c] = float(exact[c]);
+                if (t->_raw.ycbcrStore)  // Metal holds a clear's colour rounded to the nearest half, a draw's maybe not
+                    for (float &c : p.color[j].clear)
+                        c = float(_Float16(c));
                 p.count = j + 1;
             }
+            if (__unsafe_unretained RMTexture *r = (RMTexture *)pass.depthResolve)
+                depthResolve = {r, pass.depthFilter};
+            if (__unsafe_unretained RMTexture *r = (RMTexture *)pass.stencilResolve)
+                stencilResolve = {r, pass.stencilPick};
             if (__unsafe_unretained RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
                 if (pass.depthSlice && !z->_raw.memoryless) {  // a layer of a 2D array or cube: its layers from there
@@ -596,10 +696,11 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 }
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
+                p.depthStencil.loaded = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad;
+                p.depthStencil.stored =
+                    pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
-            } else {
-                p.hiddenZeta = pass.testsHiddenZeta;
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
@@ -609,6 +710,11 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 if (standInPass(t, false))
                     return false;
             standInLoads.clear();
+            PlanDraws draws(cb, at, to, *rc);
+            if (const char *refused = raw::expandXrPlanes(p, *gRM->raw))
+                return fail(PredEncPassRender, refused);
+            if (!turned.begin(*rc, p, draws, why))
+                return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
             counters.started(at, *re);
@@ -634,18 +740,21 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     continuing = true;
                     break;
                 }
-                // the next pass's facts are the next boundary's first pass's
-                const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
-                fused = fusionPass(cb, at + 1);
-                fusedAt = at + 1;
-                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && !counters.at(at) &&
-                    !counters.at(at + 1) && raw::canFusePasses(first, fused)) {
-                    continuing = true;
-                    break;
+                if (!re->turned() && !rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) &&
+                    !counters.at(at) && !counters.at(at + 1)) {
+                    // the next pass's facts are the next boundary's first pass's
+                    const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
+                    fused = fusionPass(cb, at + 1);
+                    fusedAt = at + 1;
+                    if (raw::canFusePasses(first, fused)) {
+                        continuing = true;
+                        break;
+                    }
                 }
             }
             if (re)
                 re->end();
+            standInBackings();
             if (re && !resolvePasses())
                 return false;
             if (be)
@@ -654,10 +763,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 ce->end();
                 ce.reset();
             }
-            for (__unsafe_unretained RMTexture *t : standInStores)
-                if (standInPass(t, true))
-                    return false;
-            standInStores.clear();
+            if (!turned.end(*rc, why))
+                return fail(PredPassRotated, *why);
+            if (!storeStandIns())
+                return false;
             counters.ended(at);
             re = nullptr;
             be = nullptr;
@@ -707,6 +816,11 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             if (!encodeCommands(re, rc, cb->_plan.draw(at), why))
                 return refused();
             break;
+        case OpDrawPatches:
+        case OpDrawPatchesIndirect:
+            if (!encodePatches(re, rc, cb->_plan.draw(at), cb->_plan.patches(at), c.op == OpDrawPatchesIndirect, why))
+                return refused();
+            break;
         case OpResetCommands:
         case OpCopyCommands:
             encodeCommandsBlit(be, c);
@@ -732,7 +846,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         case OpCopyBufferToTexture:
         case OpCopyTextureToBuffer: {
             RAW_ENCODE_SPAN(Blit);
-            xrPlanes.blit(c, be);
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
         }
@@ -741,7 +854,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 break;
             computeUnit = false;
             rc->endPredicationUnit();
-            xrPlanes.flush();
             if (!releaseInlineSignal(cb, at, rc)) {
                 encoder = to;
                 return fail(PredEvent, "a signal inside a raw range whose event the kernel no longer holds");
@@ -755,16 +867,17 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     RAW_ENCODE_SPAN(Tail);
     if (re)
         re->end();
+    standInBackings();
     if (re && !resolvePasses())
         return false;
     if (be)
         be->end();
     if (ce)
         ce->end();
-    for (__unsafe_unretained RMTexture *t : standInStores)
-        if (standInPass(t, true))
-            return false;
-    xrPlanes.flush();
+    if (!turned.end(*rc, why))
+        return fail(PredPassRotated, *why);
+    if (!storeStandIns())
+        return false;
     encoder = to;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
@@ -832,7 +945,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         c.t->_imageCurrent = true;
     }
     noteSurfaceWrites(cb, from, to);
-    xrPlanes.submitted();
     for (__unsafe_unretained RMTexture *t :
          planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;

@@ -99,6 +99,13 @@ struct PushBody {
 // The open stretch [start, at) closed, the segment after it, and the stretch going on from `at`
 void bindSegment(std::vector<PushBody> &bodies, uint32_t *&start, uint32_t *at, const StateSegment &segment);
 
+// A colour matrix macro call (raw_gpu.cpp matrixConstants): the stretch [start, at) that ends in its header, then the
+// uniform's `words` at `uniformVa` as the GPU reads them, and where that uniform holds the rows alone, `clampWords` of 0 at
+// `clampVa`. The call's data runs on across the pushes: each but the last is incomplete, and the kernel takes an incomplete
+// push only before a non-prefetched one.
+void matrixCall(std::vector<PushBody> &bodies, uint32_t *start, uint32_t *at, uint64_t uniformVa, uint32_t words,
+                uint64_t clampVa, uint32_t clampWords);
+
 // The bodies as the job's pushes, ring stretches at their GPU address (`ringCpu` maps `ringVa`). Returns the ring words.
 uint64_t appendBodies(PushBatches &pushes, const std::vector<PushBody> &bodies, const uint8_t *ringCpu,
                       uint64_t ringVa);

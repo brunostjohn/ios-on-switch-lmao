@@ -336,7 +336,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	}
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0,
 		 writtenCount = 0, rangedUses = 0, nativeReads = 0;
-	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
+	bool hostWritten = switch_gpu_submit_acquires_host_writes(visibility);
 	bool unlockedWrites = false, scanoutWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access

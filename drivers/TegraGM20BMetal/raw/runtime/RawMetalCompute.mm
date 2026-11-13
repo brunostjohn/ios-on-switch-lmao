@@ -17,8 +17,6 @@
 
 using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
 
-using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
-
 @interface RMComputeEncoder () {
     RMComputeState *_state;
     raw::ComputeSpecialization _specialization;
@@ -253,7 +251,8 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
                                                    pending->allowRetry();
                                                });
                             }
-                            if (run.result.state && !region)
+                            // the journal names m2v's state: a state the pack answered has none
+                            if (run.result.state && !region && state->_metadata)
                                 native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
                                                                      text.memory.c_str(), text.textures.c_str(),
                                                                      text.samplers.c_str());
@@ -273,8 +272,9 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
     Cmd m = cmd(OpDispatch, 3, perThread);
     m.c = uint64_t(t[0]) | uint64_t(t[1]) << 16 | uint64_t(t[2]) << 32;
     m.x = _cb->_extra.size();
-    for (uint64_t v :
-         {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1], groups[2]})
+    for (uint64_t v : {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1],
+                       groups[2], uint64_t(_stageIn.origin.x), uint64_t(_stageIn.origin.y), uint64_t(_stageIn.origin.z),
+                       uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth)})
         _cb->_extra.push_back(v);
     if (kernels) {
         _cb->_computeJobs.try_emplace(kernels.get(), kernels);
@@ -393,6 +393,12 @@ bool isKernelCommand(Op op)
     return (op >= OpKernelState && op <= OpDispatch) || op == OpPredicate || op == OpExecuteKernels;
 }
 
+// A binding command's attributeStride (RawMetalStrides.mm: its x the stride + 1, 0 none)
+static uint32_t commandStride(const Cmd &c)
+{
+    return c.x && c.x <= UINT32_MAX ? uint32_t(c.x - 1) : UINT32_MAX;
+}
+
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers)
 {
     id<MTLComputeCommandEncoder> e = encoder;
@@ -402,15 +408,24 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         [e setComputePipelineState:twinOf(object)];
         break;
     case OpKernelBytes:
-        [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
+        if (c.x)
+            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
         break;
     case OpKernelBuffer:
         if ([object isKindOfClass:[RMBuffer class]])
             buffers.insert((RMBuffer *)object);
-        [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
+        if (c.x)
+            [e setBuffer:twinOf(object) offset:c.c attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
         break;
     case OpKernelBufferOffset:
-        [e setBufferOffset:c.c atIndex:c.index];
+        if (c.x)
+            [e setBufferOffset:c.c attributeStride:commandStride(c) atIndex:c.index];
+        else
+            [e setBufferOffset:c.c atIndex:c.index];
         break;
     case OpKernelClockAnchors: {
         const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
@@ -429,7 +444,8 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpKernelUse:
         if ([object isKindOfClass:[RMBuffer class]])
             buffers.insert((RMBuffer *)object);
-        [e useResource:twinOf(object) usage:MTLResourceUsage(c.c)];
+        if (![object isKindOfClass:[RMHeap class]])
+            [e useResource:twinOf(object) usage:MTLResourceUsage(c.c)];
         break;
     case OpKernelBarrier:
         [e memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
@@ -437,6 +453,8 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpDispatch: {
         const MTLSize grid = MTLSizeMake(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2)),
                       threads = MTLSizeMake(c.c & 0xffff, (c.c >> 16) & 0xffff, c.c >> 32);
+        [e setStageInRegion:MTLRegionMake3D(extra(cb, c.x + 6), extra(cb, c.x + 7), extra(cb, c.x + 8),
+                                            extra(cb, c.x + 9), extra(cb, c.x + 10), extra(cb, c.x + 11))];
         if (c.index)
             [e dispatchThreads:grid threadsPerThreadgroup:threads];
         else
@@ -493,6 +511,8 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
                   const char **why)
 {
     id object = (__bridge id)c.obj;
+    if (c.op == OpKernelBytes || c.op == OpKernelBuffer || c.op == OpKernelBufferOffset)
+        e.setBufferStride(c.index, commandStride(c));
     switch (c.op) {
     case OpKernelBytes: {
         const raw::Buffer &k = cb->_bytes.chunks[c.c];
@@ -530,6 +550,9 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
                                     uint32_t(extra(cb, c.x + 5))},
                        threads[3] = {uint32_t(c.c & 0xffff), uint32_t(c.c >> 16) & 0xffff, uint32_t(c.c >> 32)};
         e.setState(static_cast<const raw::ComputeState *>(c.obj2));
+        e.setStageInRegion({uint32_t(extra(cb, c.x + 6)), uint32_t(extra(cb, c.x + 7)), uint32_t(extra(cb, c.x + 8)),
+                            uint32_t(extra(cb, c.x + 9)), uint32_t(extra(cb, c.x + 10)),
+                            uint32_t(extra(cb, c.x + 11))});
         return e.dispatch(groups, threads, why);
     }
     case OpExecuteKernels:

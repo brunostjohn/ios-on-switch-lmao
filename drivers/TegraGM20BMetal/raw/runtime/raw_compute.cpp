@@ -77,6 +77,8 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
     c.instructions = std::max(1u, (p.dataBytes ? p.dataOffset : p.bytes) / 8);
     memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));
+    c.spill = dev.pack().spills(*k);
+    dev.bindKernelArguments(c, *k);
     return &gStates.emplace(std::make_pair(&dev, keyHash), c).first->second;
 }
 
@@ -112,9 +114,40 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
     c.data = r.data.empty() ? 0 : dev.heap_.va + at + computeSlotDataAt(r);
+    c.spill = r.spill.size() == r.kernel.spillWords ? r.spill.data() : nullptr;
+    dev.bindKernelArguments(c, r.kernel);
     ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
     placed.rec = &placed.placed;
     return &placed;
+}
+
+// What a kernel's reads through argument buffers take of every dispatch, as bindArguments for a state: its root table
+// address (a kernel whose root table holds buffer slots takes its own per dispatch) and ExecutionStatus address words,
+// and its set 1. Its dispatches are refused where the device has no memory for them.
+void Device::bindKernelArguments(ComputeState &c, const PackKernel &k)
+{
+    const PackKernelEntry *end = k.entry + std::min<uint32_t>(k.entries, kKernelEntries);
+    const bool tables = std::any_of(k.entry, end, [](const PackKernelEntry &e) {
+        return e.kind == KernelTextureTable || e.kind == KernelSamplerTable;
+    });
+    if (!k.rootTableWord && !k.statusWord && !k.heapArrays && !tables)
+        return;
+    std::lock_guard<raw::Mutex> l(lock_);
+    if (!heapMemory()) {
+        c.heapMissing = true;
+        return;
+    }
+    const auto address = [&](uint8_t word, uint64_t va) {
+        if (!word || word > 31)
+            return;
+        c.argumentPush[word - 1] = uint32_t(va);
+        c.argumentPush[word] = uint32_t(va >> 32);
+        c.argumentMask |= 3u << (word - 1);
+    };
+    address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
+    address(k.statusWord, heapTables_.statusVa());
+    if (k.heapArrays && !(c.heapSet = heapSet(heapLayout(k))))
+        c.heapMissing = true;
 }
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
@@ -193,6 +226,23 @@ void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
         setBuffer(slot, bufs_[slot].buffer, offset);
 }
 
+void ComputeEncoder::setBufferStride(uint32_t slot, uint32_t stride)
+{
+    if (slot < 31 && stageIn_.strides[slot] != stride) {
+        stageIn_.strides[slot] = stride;
+        rootVa_ = 0;
+    }
+}
+
+void ComputeEncoder::setStageInRegion(const std::array<uint32_t, 6> &region)
+{
+    const std::array<uint32_t, 8> words = {region[0], region[1], region[2], 0, region[3], region[4], region[5], 0};
+    if (words != stageIn_.region) {
+        stageIn_.region = words;
+        rootVa_ = 0;
+    }
+}
+
 void ComputeEncoder::barrier()
 {
     room(8);
@@ -258,6 +308,11 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
     uint32_t *set = descriptorWords_.data();
     residuals_.fill(0);
     residualMask_ = 0;
+    spilled_ = {};
+    if (r.spillEntry && !state_->spill) {
+        *why = "an argument table whose words the kernel's record does not hold";
+        return false;
+    }
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackKernelEntry &e = r.entry[i];
         const bool writes = kernelEntryWrites(r, i);
@@ -273,7 +328,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                 *why = "a buffer bound at an offset that is not a multiple of 16";
                 return false;
             }
-            if (desc.word >= 0) {
+            if (spilledWord(desc.word)) {
+                spilled_.set(desc.word, desc.residual);
+            } else if (desc.word >= 0) {
                 residuals_[desc.word] = desc.residual;
                 residualMask_ |= 1u << desc.word;
             }
@@ -308,6 +365,16 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                 }
             }
             at[0] |= tic;
+        } else if (e.kind == KernelSpillTable) {
+            continue;
+        } else if (e.kind == KernelTextureTable || e.kind == KernelSamplerTable) {
+            const HeapTables &tables = dev_.heapTables_;
+            const bool textures = e.kind == KernelTextureTable;
+            const uint64_t va = textures ? tables.textureTableVa() : tables.samplerTableVa();
+            at[0] = uint32_t(va);
+            at[1] = uint32_t(va >> 32);
+            at[2] = textures ? tables.textureTableBytes() : tables.samplerTableBytes();
+            at[3] = 0;
         } else if (e.slot & kConstexprSampler) {
             const uint32_t index = e.slot & ~kConstexprSampler;
             if (index >= dev_.constexprCount_) {
@@ -319,6 +386,13 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
             at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
         }
+    }
+    if (r.spillEntry && r.spillEntry <= r.entries) {
+        uint32_t words[kSpillWordsMax];
+        composeSpill(state_->spill, r.spillWords, spilled_, words);
+        uint64_t va = 0;
+        memcpy(dev_.alloc(dev_.upload_, spillRange(r.spillWords), 256, va), words, r.spillWords * sizeof(uint32_t));
+        spillDescriptor(va, r.spillWords, set + r.entry[r.spillEntry - 1].offset / 4);
     }
     // All descriptor read/modify/write operations above touch cached CPU scratch, never the WC upload.
     uint8_t *upload = dev_.alloc(dev_.upload_, setBytes, 256, setVa_);
@@ -361,8 +435,31 @@ void ComputeEncoder::rootWords(const PackKernel &r, const uint32_t base[3], cons
         memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(8 * 4, 4 * (32 - r.regionWord)));
 }
 
-bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out, const char **why)
+// A command's root table and set 0 hold the record's 32 push words and the bound buffers and samplers: nothing a kernel
+// reads through argument buffers (argumentRoot's words, set 1, the handle tables, an argument table), and no residual of a
+// bind offset spilled past the push words
+const char *ComputeEncoder::icbRefusal(const ComputeState &k)
 {
+    const PackKernel &r = *k.rec;
+    if (k.argumentMask || k.heapSet || k.heapMissing || r.rootSlots || r.spillEntry)
+        return "a kernel that reads argument buffers";
+    for (uint32_t i = 0; i < r.entries; i++) {
+        const PackKernelEntry &e = r.entry[i];
+        if (e.kind == KernelTextureTable || e.kind == KernelSamplerTable || e.kind == KernelSpillTable)
+            return "a kernel that reads argument buffers";
+        if (e.kind == KernelBuffer && spilledWord(kernelResidualWord(e)))
+            return "a kernel whose bind offset spills past its push window";
+    }
+    return nullptr;
+}
+
+bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out,
+                              std::vector<icb::ComputeStride> &strides, const char **why)
+{
+    if (const char *refusal = icbRefusal(k)) {
+        *why = refusal;
+        return false;
+    }
     const PackKernel &r = *k.rec;
     const uint64_t rootVa = va + icb::kComputeQmdBytes, setVa = rootVa + icb::kComputeRootBytes;
     for (uint32_t i = 0; i < r.entries; i++) {
@@ -378,6 +475,9 @@ bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<ic
         out.push_back(
             {setVa + e.offset, word >= 0 ? rootVa + kRootPush + 4 * uint32_t(word) : 0, e.slot, kernelBufferWindow(e)});
     }
+    for (const auto &stride : r.stageInStride)
+        if (stride[1] && stride[1] <= 32 && stride[0] < 31)
+            strides.push_back({rootVa + kRootPush + 4 * (stride[1] - 1u), stride[0]});
     return true;
 }
 
@@ -397,7 +497,7 @@ bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], u
             va = rootVa;
             break;
         case CbufSet:
-            va = setVa;
+            va = k.cbufType[i] == kCbufHeapSet ? (k.heapSet ? k.heapSet->memory.va : 0) : setVa;
             break;
         case CbufShaderData:
             va = k.data;
@@ -434,6 +534,10 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         *why = "a threadgroup m2v's dispatch region cannot name";
         return false;
     }
+    if (state_->heapMissing) {
+        *why = "no memory for the tables a kernel reads argument buffers through";
+        return false;
+    }
     if (!prepareDescriptors(why))
         return false;
     const std::array<uint32_t, 3> grid{groups[0], groups[1], groups[2]};
@@ -456,6 +560,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         cutBatch();
     DrawTiming timing;
     const bool measured = !looping && measureDispatch(pieces > 1 ? units / pieces : units, timing);
+    slotTableVa_ = 0;
     for (uint32_t i = 0; i < pieces; i++) {
         if (measured && i == 0)
             stampDispatch(timing, false);
@@ -493,6 +598,8 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
     if (!rootVa_ || grid_ != grid || base_ != piece.base || region_ != region) {
         uint32_t root[kRootBytes / 4] = {};
         rootWords(r, piece.base.data(), grid.data(), setVa_, residualMask_, residuals_, region.data(), root);
+        argumentRoot(r, root);
+        stageInWords(r, stageIn_, root + kRootPush / 4);
         uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
         memcpy(upload, root, sizeof root);
         grid_ = grid;
@@ -549,6 +656,49 @@ void ComputeEncoder::stampDispatch(const DrawTiming &t, bool end)
 {
     room(kStampWords);
     emitStamp(p_, dev_.stamps_.va + drawStampOffset(t.slot, end), t.payload);
+}
+
+// The root table words of the kernel's reads through argument buffers: the device's root table and ExecutionStatus
+// addresses, NVK's sets[1] for its heap arrays, and for a kernel whose root table holds buffer slots, that table of this
+// dispatch's bound buffers in the upload ring (raw_heap_tables.h writeDrawRoots), each slot's buffer used as written
+void ComputeEncoder::argumentRoot(const PackKernel &r, uint32_t *root)
+{
+    for (uint32_t m = state_->argumentMask; m; m &= m - 1)
+        root[kRootPush / 4 + __builtin_ctz(m)] = state_->argumentPush[__builtin_ctz(m)];
+    if (const HeapSet *heap = state_->heapSet) {
+        root[kRootSets / 4 + 4] = uint32_t(heap->memory.va);
+        root[kRootSets / 4 + 5] = uint32_t(heap->memory.va >> 32);
+        root[kRootSets / 4 + 6] = r.heapBytes;
+    }
+    if (!r.rootSlots || !r.rootTableWord || r.rootTableWord > 31)
+        return;
+    if (slotTableVa_) {
+        root[kRootPush / 4 + r.rootTableWord - 1] = uint32_t(slotTableVa_);
+        root[kRootPush / 4 + r.rootTableWord] = uint32_t(slotTableVa_ >> 32);
+        return;
+    }
+    const uint32_t entries = drawRootEntries(r.rootSlots);
+    RootSlot slot[32];
+    for (uint32_t n = 0; kFirstSlotRoot + n < entries; n++) {
+        const Bound &b = bufs_[n];
+        slot[n] = {};
+        if (!(r.rootSlots >> n & 1) || !b.va)
+            continue;
+        if (b.buffer) {
+            cb_.use(*b.buffer, true);
+            slot[n] = {b.buffer->va, b.buffer->length, b.offset};
+        } else {
+            cb_.useAddress(b.va, b.size, true);
+            slot[n] = {b.va, b.size, 0};
+        }
+    }
+    uint64_t va = 0;
+    auto *table = reinterpret_cast<RootEntry *>(dev_.alloc(dev_.upload_, entries * sizeof(RootEntry), 256, va));
+    writeDrawRoots(table, va, r.rootSlots, slot, dev_.heapTables_.sinkVa(), dev_.heapTables_.identityVa());
+    slotTableVa_ = va;
+    root[kRootPush / 4 + r.rootTableWord - 1] = uint32_t(va);
+    root[kRootPush / 4 + r.rootTableWord] = uint32_t(va >> 32);
+    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += entries * sizeof(RootEntry));
 }
 
 void ComputeEncoder::timestamp(uint64_t va)

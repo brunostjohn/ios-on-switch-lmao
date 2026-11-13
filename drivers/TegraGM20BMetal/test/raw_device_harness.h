@@ -4,13 +4,99 @@
 // submitted, or holds them until a kill, and the test reads what the device submitted.
 #pragma once
 #include "raw_kernel_model.h"
+#include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_gpu.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+
+namespace raw {
+
+// The device's own state a harness reads (Device declares it a friend in the harness builds, SWITCH_RAW_HARNESS_MARKS)
+struct DeviceHarness {
+    // What the GPU's root table holds at push word `word` after everything submitted
+    static uint32_t rootPush(const Device &d, uint32_t word)
+    {
+        return d.rootPush_[word];
+    }
+
+    // The CPU's view of `bytes` at `va` in the upload ring, null outside it
+    static const uint8_t *upload(const Device &d, uint64_t va, uint64_t bytes)
+    {
+        const Bo &bo = d.upload_.bo;
+        return va >= bo.va && va - bo.va + bytes <= bo.bytes ? bo.cpu + (va - bo.va) : nullptr;
+    }
+
+    static const HeapTables &tables(const Device &d)
+    {
+        return d.heapTables_;
+    }
+
+    static const Bo &handleTables(const Device &d)
+    {
+        return d.handleTables_;
+    }
+
+    static const Bo &arena(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].bo;
+    }
+
+    static bool arenaWriteCombined(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].wc;
+    }
+
+    static const uint8_t *arenaPages(const Device &d, uint32_t arena)
+    {
+        return d.arenas_[arena].cpu;
+    }
+
+    // The mappings of an arena's BO besides its own: its pitch view (a private heap's), then the views of other kinds
+    static size_t arenaViews(const Device &d, uint32_t arena)
+    {
+        const auto &a = d.arenas_[arena];
+        return (a.bufferVa != a.va) + a.views.size();
+    }
+
+    // An m2v view's hold on an arena (raw_alias.cpp's lease), which the harness's own connection never makes
+    static void holdArena(Device &d, uint32_t arena, bool hold)
+    {
+        auto &leases = d.arenas_[arena].leases;
+        leases = hold ? leases + 1 : leases - 1;
+    }
+
+    static std::array<uint32_t, 8> header(const Device &d, uint32_t tic)
+    {
+        std::array<uint32_t, 8> w;
+        memcpy(w.data(), d.tic_.cpu + 32 * tic, sizeof w);
+        return w;
+    }
+
+    // What the root table holds at push word `word` after the command buffer's work encoded so far
+    static uint32_t rootPush(const CommandBuffer &cb, uint32_t word)
+    {
+        return cb.rootPush_[word];
+    }
+
+    // Where the encoder's last upload of stage `k`'s argument table lies (raw_spill_table.h), 0: none
+    static uint64_t spillTable(const RenderEncoder &e, uint32_t k)
+    {
+        return e.spillUploads_[k].va();
+    }
+
+    // The set-0 words a compute encoder made for its last dispatch, null: none
+    static const uint32_t *kernelSet(const ComputeEncoder &e)
+    {
+        return e.descriptorWords_.empty() ? nullptr : e.descriptorWords_.data();
+    }
+};
+
+}  // namespace raw
 
 namespace harness {
 
@@ -37,7 +123,6 @@ protected:
     void SetUp() override
     {
         kernel_model::model = {};
-        kernel_model::model.vaEnd = uint64_t(1) << 40;  // the program window's quarter of the client VA
         std::string err;
         ASSERT_TRUE(dev.open(emptyPack().c_str(), 0, err, raw::Device::Role::Client)) << err;
     }

@@ -1,8 +1,7 @@
 # file	name	nv|tegra|mismatch|policy	expression or reason	note
 raw_gpu.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
-raw_gpu.cpp	kSetBytes	policy	NVK's descriptor set slot
 raw_gpu.cpp	kUboChunk	policy	upload granule
-raw_gpu.cpp	kRootInterlockTickets	policy	offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
+raw_gpu.cpp	kSetGroups	policy	nvk_pipeline_bind_group of the vertex, pixel, tessellation init and tessellation programs
 raw_gpu.cpp	kTicCount	policy	texture header pool size the runtime allocates
 raw_gpu.cpp	kTscCount	policy	sampler pool size the runtime allocates
 raw_gpu.cpp	kEngines	policy	TegraGM20BABI.h engine mask
@@ -19,6 +18,7 @@ raw_gpu.cpp	kSampleWords	policy	push words of a sample layout
 raw_gpu.cpp	kFillConstA	policy	NVB0B5_SET_REMAP_COMPONENTS DST_X..W CONST_A (NVK nvk_cmd_fill_memory_ce)
 raw_gpu.cpp	kFillMaxDim	policy	the copy engine's line length and count per launch NVK fills with
 raw_gpu.cpp	kFillLaunch	policy	NVB0B5_LAUNCH_DMA PIPELINED, FLUSH, pitch both sides, REMAP (NVK nvk_cmd_fill_memory_ce)
+raw_gpu.cpp	kTurnWordsMethods	policy	push words of a turned pass's root-table turn words
 raw_compute.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_compute.cpp	kRootSets	policy	NVK root table offset
 raw_compute.cpp	kRootPush	policy	NVK root table offset
@@ -65,6 +65,7 @@ raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot
 raw_mme.h	kIndirect	policy	raw macro slot
 raw_mme.h	kIndexedIndirect	policy	raw macro slot
+raw_mme.h	kMatrix	policy	raw macro slot
 raw_mme.h	kDrawParams	policy	raw macro slot
 raw_mme.h	kIndexedParams	policy	raw macro slot
 raw_mme.h	kIcbRange	policy	raw macro slot
@@ -75,7 +76,17 @@ raw_mme.h	kIcbBind	policy	raw macro slot
 raw_mme.h	kClearLayers	policy	raw macro slot
 raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kIcbPatches	policy	raw macro slot
+raw_mme.h	kScratchSetHi	policy	MME shadow scratch words of a patch execute's layout, after the range's
+raw_mme.h	kNoEntry	policy	a patch execute's layout word for a control-stage buffer its state names no entry of
+raw_mme.h	kIcbSetBytes	policy	NVK's descriptor set slot, as the patch macro selects it
+raw_mme.h	kIcbRootBytes	policy	NVK's root descriptor table size (raw_gpu.cpp kRootBytes), as the patch macro selects it
+raw_mme.h	kIcbPatchesArguments	policy	the patch macro's call data words
 raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, above NVK's
+raw_mme.h	kAmplify	policy	raw macro slot
+raw_mme.h	kAmplifyIndexed	policy	raw macro slot
+raw_mme.h	kAmplifyCallWords	policy	push words of an amplify call: its header and an indexed draw's five words
+raw_mme.h	kAmplificationScratchWords	policy	push words of the amplify macros' scratch writes: the count, both maps, a state's words
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

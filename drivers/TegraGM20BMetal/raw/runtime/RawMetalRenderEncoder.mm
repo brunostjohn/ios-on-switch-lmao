@@ -242,7 +242,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
     }
-    if (_turn && pl.turnSensitive) {
+    if (_turn && pl.turnRefused) {
         [_cb takeReason:WhyEncode why:@(raw::rotatedRefusalText(raw::RotatedRefusal::Variant))];
         return hit(_cb, PredPassRotated, uint64_t(raw::RotatedRefusal::Variant), _turn);
     }
@@ -267,10 +267,11 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
                                         : @"a uniform buffer bound at an offset that is not a multiple of 256"];
                 return hit(_cb, PredEncUboOffset, uint64_t(e.stage) << 8 | e.slot, residual);
             }
-        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr && e.slot < 16 &&
-                   _tex[e.slot] && _tex[e.slot]->_raw.addressMap) {
+        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr &&
+                   e.slot < raw::kStageTextures && _tex[raw::handleStage(e)][e.slot] &&
+                   _tex[raw::handleStage(e)][e.slot]->_raw.addressMap) {
             [_cb takeReason:WhyEncode why:@"a planar texture sampled through a constexpr sampler"];
-            return hit(_cb, PredEncPlanarClamp, e.slot, _tex[e.slot]->_raw.addressMap);
+            return hit(_cb, PredEncPlanarClamp, e.slot, _tex[raw::handleStage(e)][e.slot]->_raw.addressMap);
         }
     }
     [self drawnRecord];
@@ -526,15 +527,17 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [self useResource:resource usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
+// The heap as one use for reading (an argument buffer may reach any of its resources): its jobs name what it holds when
+// they are submitted (raw_heap_members.h), whatever it holds
 - (void)useHeap:(id<MTLHeap>)heap
 {
-    (void)heap;  // the facade's heaps hold ordinary resources: nothing to make resident
+    [self useHeap:heap stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
-    (void)heap;
-    (void)stages;
+    if ([(id)heap isKindOfClass:[RMHeap class]])
+        [self useResource:(id<MTLResource>)heap usage:MTLResourceUsageRead stages:stages];
 }
 
 - (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
@@ -555,15 +558,14 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
 {
-    (void)heaps;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k]];
 }
 
 - (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count stages:(MTLRenderStages)stages
 {
-    (void)heaps;
-    (void)count;
-    (void)stages;
+    for (NSUInteger k = 0; k < count; k++)
+        [self useHeap:heaps[k] stages:stages];
 }
 
 // A barrier on some resources is the scope barrier over all of them (iOS's texture scope covers render attachments)

@@ -7,34 +7,32 @@
 #include <type_traits>
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmit3D.h"
 #include "raw_rotation.h"
+#include "raw_stencil_bits.h"
 
 namespace raw {
 
 enum class RotatedRefusal : uint8_t {
     None,
-    // attachments of two rotations, or of two frame sizes, or a stored attachment that is not turned beside one that is: one
-    // swizzle serves every target of a pass
+    // attachments of two rotations, or of two frame sizes, or an attachment that is not turned beside one that is whose
+    // contents outside the pass matter (loaded or stored): one swizzle serves every target of a pass, and no turn copy state
+    // moves this one's texels
     Mixed,
     // rotation 4 loaded: Metal loads the plane transposed and stores it as rotation 1, so a kept texel moves
     LoadsTransposed,
-    // a resolve into a turned texture: the resolve state reads its own position, which the swizzle turns
-    Resolve,
-    // a state whose pixel program sees the plane's axes (Pipeline::turnSensitive): its turned variant is the pack's to make
-    Variant
+    // a state whose pixel program sees the plane's axes and has no turned variant (PipelineTurnRefused)
+    Variant = 4
 };
 
 inline const char *rotatedRefusalText(RotatedRefusal r)
 {
     switch (r) {
     case RotatedRefusal::Mixed:
-        return "a pass of a turned attachment beside one of another rotation, size or a stored one not turned";
+        return "a turned attachment beside one of another rotation or size, or a kept one not turned, of a texel no "
+               "turn copy moves";
     case RotatedRefusal::LoadsTransposed:
         return "a rotation-4 attachment loaded: Metal loads it transposed";
-    case RotatedRefusal::Resolve:
-        return "a resolve into a turned texture";
     case RotatedRefusal::Variant:
-        return "a state whose pixel program reads its position, a point coordinate or one axis's derivative, into a "
-               "turned plane";
+        return "a state whose pixel program reads a turned plane's axes and whose turned variant could not be made";
     case RotatedRefusal::None:
         break;
     }
@@ -52,7 +50,8 @@ template <typename Texture> Rotation frameOf(const Texture &t)
 }
 
 // The pass's rotation (`out`): one turn and one frame shared by every turned colour attachment, every other attachment
-// memoryless (its backing is laid out as the plane)
+// memoryless or neither loaded nor stored (transient: a backing laid out as the plane stands in for it, planeShaped), or a
+// depth stand-in laid out as the plane already (raw_turned_pass.h: its rotation set)
 template <typename Pass> RotatedRefusal passRotation(const Pass &pass, Rotation &out)
 {
     using Attachment = std::decay_t<decltype(pass.color[0])>;
@@ -71,11 +70,56 @@ template <typename Pass> RotatedRefusal passRotation(const Pass &pass, Rotation 
     if (!out.turned())
         return RotatedRefusal::None;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const auto *t = pass.color[j].texture; t && !t->rotation && !t->memoryless)
+        if (const auto *t = pass.color[j].texture;
+            t && !t->rotation && !t->memoryless && (pass.color[j].load == Attachment::Load || pass.color[j].store))
             return RotatedRefusal::Mixed;
-    if (const auto *z = pass.depthStencil.texture; z && !z->memoryless)
+    if (const auto *z = pass.depthStencil.texture;
+        z && !z->memoryless && !z->rotation && (pass.depthStencil.loaded || pass.depthStencil.stored))
         return RotatedRefusal::Mixed;
     return RotatedRefusal::None;
+}
+
+// Why the raw path does not draw `pass` at all, None where passRotation takes it as it is or once its turn copies have moved
+// what it keeps (raw_turned_pass.h): every attachment beside the pass's turned one that must move (turned another way or
+// of another frame, rotation 4 loaded, or not turned and loaded or stored) of a texel size or format turn copies move
+// (a stencil plane by its bits, raw_stencil_bits.h). Still refused: an attachment no turn copy moves.
+template <typename Pass> RotatedRefusal turnablePass(const Pass &pass)
+{
+    const auto quarter = [](Rotation f) {
+        if (f.turn == 4)
+            f.turn = 1;
+        return f;
+    };
+    Rotation r;
+    for (uint32_t j = 0; j < pass.count && j < 8 && !r.turned(); j++)
+        if (const auto *t = pass.color[j].texture; t && t->rotation)
+            r = quarter(frameOf(*t));
+    if (!r.turned())
+        return RotatedRefusal::None;
+    using Attachment = std::decay_t<decltype(pass.color[0])>;
+    for (uint32_t j = 0; j < pass.count && j < 8; j++) {
+        const auto *t = pass.color[j].texture;
+        if (!t)
+            continue;
+        const bool loaded = pass.color[j].load == Attachment::Load;
+        const Rotation f = quarter(frameOf(*t));
+        const bool own = t->rotation && f.turn == r.turn && f.width == r.width && f.height == r.height;
+        if (own && t->rotation == 4 && loaded && !turnCopyState(t->bpp))
+            return RotatedRefusal::LoadsTransposed;
+        const bool moves = t->rotation ? !own : !t->memoryless && (loaded || pass.color[j].store);
+        if (moves && !turnCopyState(t->bpp))
+            return RotatedRefusal::Mixed;
+    }
+    if (const auto *z = pass.depthStencil.texture;
+        z && !z->memoryless && (pass.depthStencil.loaded || pass.depthStencil.stored) && !turnMovesZeta(z->format))
+        return RotatedRefusal::Mixed;
+    return RotatedRefusal::None;
+}
+
+// An attachment of a turned pass that a backing laid out as the plane stands in for
+template <typename Texture> bool standsInTurned(const Texture &t, const Rotation &r)
+{
+    return r.turned() && !t.rotation;
 }
 
 // The render area of a turned pass, in its frame: the turned attachments' frame, each other attachment's extent within it

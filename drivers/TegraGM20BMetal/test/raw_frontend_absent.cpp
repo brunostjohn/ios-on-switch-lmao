@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <objc/message.h>
 #include "NativeBridgeMetalFrontend.h"
+#include "bridge/NativeMetalDirect.h"
 #include "bridge/NativeMetalObjects.h"
 
 static id standInAnswer(id object, const char *selector)
@@ -19,6 +20,16 @@ static id standInAnswer(id object, const char *selector)
 extern "C" {
 
 id native_bridge_metal_open(const char *, const char *, uint64_t, void (*)(const char *, const char *))
+{
+    return nil;
+}
+
+bool native_bridge_metal_compile_open(const char *)
+{
+    return false;
+}
+
+id native_bridge_metal_compile_library(const char *, dispatch_data_t, NSError **)
 {
     return nil;
 }
@@ -116,8 +127,30 @@ id native_bridge_metal_texture_tiled_in_place(id, id, NSUInteger)
     return nil;
 }
 
+bool native_bridge_metal_argument_layouts(id, NSUInteger, bool (*)(const struct NmbArgumentLayout *, uint32_t, void *),
+                                          void *, const char **why)
+{
+    *why = "no argument buffer at that index";
+    return false;
+}
+
 const char *nmb_last_error(void)
 {
     return "no device";
+}
+
+bool switch_nmb_heap_holds(uint32_t, const NmbHeapTextureFacts *)
+{
+    return true;
+}
+
+uint32_t switch_nmb_heap_texture_flags(const NmbHeapTextureFacts *)
+{
+    return 0;
+}
+
+uint32_t switch_nmb_sampler_word(const struct NmbSamplerDescriptor *)
+{
+    return 0;
 }
 }

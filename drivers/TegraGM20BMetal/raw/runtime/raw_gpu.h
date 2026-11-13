@@ -23,6 +23,7 @@
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
 #include "raw_mme.h"
+#include "raw_icb.h"
 #include "raw_state_segment.h"
 #include "raw_replay_shape.h"
 #include "raw_split_capture.h"
@@ -30,6 +31,7 @@
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
 #include "raw_attachment_order.h"
+#include "raw_attachment_view.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
@@ -68,6 +70,7 @@
 #include "raw_encode_profile.h"
 #include "raw_use_memo.h"
 #include "raw_transfer.h"
+#include "raw_fetch_free.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
 #include "raw_channel_recovery.h"
@@ -75,6 +78,8 @@
 #include "raw_host_access.h"
 #include "raw_arena_trim.h"
 #include "raw_heap.h"
+#include "raw_heap_members.h"
+#include "raw_heap_tables.h"
 #include "raw_order.h"
 #include "raw_variants.h"
 #include "raw_pack.h"
@@ -89,6 +94,10 @@
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
+#include "raw_viewports.h"
+#include "raw_turn_copy.h"
+#include "raw_stencil_bits.h"
+#include "raw_reach.h"
 #include "raw_draw_bands.h"
 #include "raw_band_rates.h"
 #include "raw_span_marks.h"
@@ -211,6 +220,31 @@ struct Span {
     }
 };
 
+// An MTLHeap's arena a texture is made in (raw_arena.cpp): at `offset` of a placement heap's, else wherever it fits
+struct ArenaAt {
+    uint32_t arena = 0;
+    std::optional<uint64_t> offset;
+};
+
+// A texture of one of the kinds the device makes, by the Device::create* that makes it, with that one's arguments
+// (Device::footprint, arenaTexture)
+struct TextureAsk {
+    enum Kind : uint8_t {
+        Plain,        // createTexture: `tiled` its block-linear ask
+        Line,         // createLine
+        Mips,         // createMipTexture
+        Volume,       // createVolume: `view2d`, `levels`
+        Array,        // createArray: `type` its header's, `layers` (six a cube), `levels`
+        Multisample,  // createStoredMultisample
+        Zeta          // createOwnedZeta: `sampled` (a multisampled one has a header either way)
+    } kind = Plain;
+
+    uint32_t width = 0, height = 1, depth = 1, layers = 1, levels = 1, samples = 1, format = 0;
+    uint8_t type = 0;
+    bool tiled = false, view2d = false, sampled = false;
+    bool standIn = false;  // an extended-range Plain one's stand-in (createStandIn) beside it
+};
+
 struct Texture {
     struct StorageRange {
         uint64_t va = 0, bytes = 0;
@@ -251,10 +285,10 @@ struct Texture {
     // and chroma (RG8Unorm over plane 1): the frontend's two-plane stand-in (TwoPlaneStandIn.metal), as m2v renders it. Never
     // sampled: Metal reads the texture's codes (span)
     Texture *planarStandIn = nullptr;
-    // A two-plane YCbCr code texture rendered into (raw_ycbcr_store.h) renders through planarStandIn too; its store writes the
-    // luma plane and each texel's chroma codes into chromaCodes (RG8Unorm, pitch), which the 2D engine halves into chromaHalved
-    // (block-linear) and the copy engine moves into the chroma plane
-    Texture *chromaCodes = nullptr, *chromaHalved = nullptr;
+    // A two-plane YCbCr texture rendered into (raw_ycbcr_store.h) renders through planarStandIn too, a memoryless RGBA32Float
+    // attachment whose backing is the pass's; the pack's store states then draw the luma plane and the chroma blocks from that
+    // backing, ycbcrStore their fragment buffer
+    YcbcrStoreShape *ycbcrStore = nullptr;
     // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
     // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
     // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
@@ -290,6 +324,11 @@ struct Texture {
     // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
     // pack's conversion state draws from the codes (tic) before the work that samples it. Null: not sampled.
     Texture *standIn = nullptr;
+    // RGB10A8_2P_XR10 held in Metal's two planes (raw_xr_pass.h): luma the words (R32Uint), chroma the alpha bytes (R8Uint),
+    // each a target and a fetch's header; this texture has no memory, and its header (tic, an over-planes one's) is plane
+    // 0's words read as RGB10A2Unorm codes, plane 1's bytes as R8Unorm at the next index. xrPlane on luma (1) and chroma (2)
+    bool xrPlanes = false;
+    uint8_t xrPlane = 0;
     // Metal keeps it losslessly compressed (m2v nan_clear.rs keeps_nan_sign): an extended-range Clear in a pass that records
     // no draw call stores Metal's straight route's codes
     bool compressed = false;
@@ -331,7 +370,7 @@ struct Texture {
     // colour target, sampled (tic) only where it was made to be. A stored one (not memoryless) is NVK's image, rendered,
     // sampled and copied in place, by aspect
     // (BlitEncoder::copyBufferTexels): a Depth32Float_Stencil8 one's stencil through stencilTemp, two bytes a texel (NVK's
-    // stencil_copy_temp), as an RGB10A8_2P_XR10 surface texture's alpha byte goes (Device::createXrPlanesTexture)
+    // stencil_copy_temp)
     bool zeta = false;
     Texture *stencilTemp = nullptr;
 
@@ -414,6 +453,9 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
 
 struct Sampler {
     uint32_t tsc = 0;
+    // its header with depth comparison on (desc.compare), which a state that samples its slot by comparison reads
+    // (entryCompares): m2v makes the slot's sampler per use, compare-enabled for such a state
+    uint32_t compareTsc = 0;
     SamplerDesc desc;
     // its headers under a planar texture's address map (Texture::addressMap 1 to 3): m2v samples those textures through the
     // sampler with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
@@ -438,7 +480,11 @@ struct Pipeline {
     bool namesViewportClipRange = false;   // it sets SET_VIEWPORT_CLIP_MIN_Z or MAX_Z
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
-    uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
+    // the constant buffer slot the vertex, pixel, tessellation init and tessellation program read set 0 at (0: none), whose
+    // bind groups are kSetGroups'
+    uint8_t setSlot[4] = {};
+    uint16_t streamStride[kPackVertexStreams] =
+        {};  // each vertex stream's static stride (its SET_VERTEX_STREAM_A_FORMAT)
 
     // the uniform buffers of set 0 its programs read as constant buffers: the group (0 vertex, 4 pixel), the slot and the set's
     // entry that names the buffer; false where a program reads one no entry names (its draws are refused)
@@ -446,9 +492,12 @@ struct Pipeline {
         uint8_t group, slot, entry;
     };
 
-    UboCbuf ubos[2 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
+    UboCbuf ubos[4 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
     uint8_t uboCount = 0;
     bool ubosNamed = true;
+    // set 0's entries its programs read from the set's upload: the record's (PackPipeline::memoryEntries), and those a
+    // variant's or a split twin's own programs read
+    uint32_t memoryEntries = ~0u;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
@@ -460,11 +509,25 @@ struct Pipeline {
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
+    // a storage form that computes the pipeline's blend: its barrier form, placed in debug builds only and drawn only where
+    // the probe forces it (raw_fetch_rungs.h kProbeBlendTwinTriangles, kProbeBlendTwinWhole)
+    Pipeline *blendTwin = nullptr;
+    // a state of bind-stride vertex streams: the same state with those layouts pulled in the shader (RuntimeRecord's
+    // strideTwin), which a draw takes where a stream's bind stride is past SET_VERTEX_STREAM_A_FORMAT's 12 bits
+    Pipeline *strideTwin = nullptr;
+    // the same state's fetch-free form (raw_fetch_free.h), which a draw takes where its rung's rule holds; null where the
+    // pack has none. On that form: the rung it draws on and the colour it blends
+    Pipeline *fetchFree = nullptr;
+    FetchFreeForm freeForm;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
     bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
     bool viewportIndex = false;     // its vertex program writes ViewportIndex (SPH OMAP, raw_viewports.h)
+    bool writesLayer = false;       // its last stage before the rasterizer writes Layer: SET_RT_LAYER takes it
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
+    // an amplifying runtime record's push words + 1 of m2v's AmplificationLayerOffset and AmplificationViewportOffset
+    // (RuntimeRecord's; 0: none), which each amplification writes
+    uint8_t amplificationLayerWord = 0, amplificationViewportWord = 0;
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
     bool caTransform = false;
@@ -474,7 +537,6 @@ struct Pipeline {
     // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
     bool dropsPixels = true;
     bool primitiveId = false;  // fragment input observes primitive numbering, which a split BEGIN would reset
-    bool vertexStores = true;  // its vertex program writes memory (SPH DOES_GLOBAL_STORE), which bands would repeat
     uint8_t samples = 1;       // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
@@ -513,7 +575,24 @@ struct Pipeline {
     uint8_t caRoute = 0, blurFunction = 0;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
-    bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
+    // raw_rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
+    // runtime record's turned variant's pipeline (a pack record's is one of `chosen`)
+    bool turnedVariant = false, turnRefused = false;
+    // the fragment slots its programs read two-plane RGB10A8_2P_XR10 textures at through their header pairs (PackPipeline)
+    uint16_t xrSlots = 0;
+    uint16_t writtenSlots = 0;  // the fragment slots its programs write textures at (raw_written_textures.h)
+    Pipeline *turnedTwin = nullptr;
+    // its vertex program writes memory (SPH DOES_GLOBAL_STORE), which a reach twin or bands would write again
+    bool vertexStores = false;
+    Pipeline *reachTwin = nullptr;  // Device::reachTwin's
+    // its record's set 1 (raw_heap_tables.h, null: none) and the constant buffer slot each program reads it at (0: none); its
+    // draws refused where the device had no memory for it (heapMissing), or where a tessellation program reads it, which
+    // has no slot of its own here (tessReadsHeap)
+    const HeapSet *heapSet = nullptr;
+    uint8_t heapSlot[2] = {};
+    bool heapMissing = false, tessReadsHeap = false;
+    // its argument tables' words (raw_spill_table.h), vertex then fragment: the pack's or its runtime record's; null: none
+    const uint32_t *spill[2] = {};
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -565,6 +644,9 @@ struct CapturedProgram;
 // A render pass's attachments (Core Animation: color 0 the target, color 1 a memoryless attachment, writeMask 0 or 15)
 struct ColorAttachment {
     Texture *texture = nullptr;
+    // A level or slice of `image` (raw_attachment_target.h): what the pass's other views of the attachment are made of
+    const Texture *image = nullptr;
+    uint32_t level = 0, slice = 0;
 
     enum Load : uint8_t {
         DontCare,
@@ -582,6 +664,7 @@ struct DepthStencilAttachment {
     bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)
     float depth = 1;
     uint32_t stencil = 0;
+    bool loaded = true, stored = true;  // an aspect is loaded, or stored: its contents outside the pass matter
 };
 
 struct PassDesc {
@@ -594,6 +677,9 @@ struct PassDesc {
     // colors a draw of the pass binds as storage images (a pipeline's storage form): their memoryless backings take no
     // compression, which the surface unit cannot read through
     uint8_t storageMask = 0;
+    // of those, the colors a layered record's draws bind as 2D arrays (raw_pack.h layeredRecord): a pitch one renders
+    // through a block-linear backing, as a pitch header has no array form
+    uint8_t arrayedStorageMask = 0;
     SamplePositions positions;
     // no depth/stencil attachment, and a draw's state tests depth or stencil (testsHiddenZeta): the pass renders over a hidden
     // Depth32Float_Stencil8 backing of its own, cleared to 1.0 and 0, as plain Metal tests such a draw
@@ -601,7 +687,16 @@ struct PassDesc {
     // renderTargetArrayLength: every target binds this many layers from its attachment's slice (a 3D level's planes from its
     // depth plane), each cleared; 0 and 1 render one
     uint32_t layers = 1;
+    // a pass of another one's clears alone: its Clear loads reach past the render area as that pass's do, which has a draw
+    // call (raw_turned_pass.cpp)
+    bool drawn = false;
 };
+
+// Whether a pass of colour attachments `color` draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h): one of them an
+// over-planes texture, each a texture held so; null, else what refuses the pass (another 550 beside one, no free index)
+const char *xrPlanesPass(const Texture *const color[8], bool &planes);
+// `p` with each such colour's planes as its targets (raw_xr_pass.h); null, else xrPlanesPass's refusal
+const char *expandXrPlanes(PassDesc &p, Device &d);
 
 class RenderEncoder {
 public:
@@ -616,13 +711,37 @@ public:
                     const Buffer *allocation = nullptr);
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
+    // A vertex buffer slot's bind stride (UINT32_MAX: none, MTLAttributeStrideStatic), which a state of a dynamic stride
+    // reads (raw_amplification.cpp)
+    void setVertexStride(uint32_t slot, uint32_t stride);
+    // setVertexAmplificationCount:viewMappings: (raw_amplification.cpp): each draw after draws `count` amplifications, one
+    // after another, amplification a through its mapping's viewport and render target offsets (0 past the mappings)
+    static constexpr uint32_t kAmplificationMaps = SWITCH_GM20B_AMP_MAX;
+    void setAmplification(uint32_t count, const uint32_t (&viewports)[kAmplificationMaps],
+                          const uint32_t (&layers)[kAmplificationMaps]);
 
-    void setTexture(uint32_t slot, const Texture *t);
+    // stage 1 vertex, 2 fragment; the one-argument forms bind the fragment stage
+    void setTexture(int stage, uint32_t slot, const Texture *t);
+
+    void setTexture(uint32_t slot, const Texture *t)
+    {
+        setTexture(2, slot, t);
+    }
 
     // what the pass renders color `j` into (a memoryless attachment: its backing) and its render area, kept after end()
     const Texture *target(uint32_t j) const
     {
         return j < 8 ? pass_.color[j].texture : nullptr;
+    }
+
+    const Texture *depthTarget() const
+    {
+        return pass_.depthStencil.texture;
+    }
+
+    bool turned() const
+    {
+        return rot_.turned();
     }
 
     uint32_t areaWidth() const
@@ -635,18 +754,26 @@ public:
         return areaH_;
     }
 
+    void setSampler(int stage, uint32_t slot, const Sampler *s)
+    {
+        const uint32_t at = stage == 1 ? 0 : 1;
+        if (slot < kStageSamplers && samplers_[at][slot] != s) {
+            samplers_[at][slot] = s;
+            ++bindingRevision_;
+            moved_.samplers[at] |= uint16_t(1u << slot);
+        }
+    }
+
     void setSampler(uint32_t slot, const Sampler *s)
     {
-        if (slot < 16 && samplers_[slot] != s) {
-            samplers_[slot] = s;
-            invalidateDescriptors();
-        }
+        setSampler(2, slot, s);
     }
 
     // Materializing a bound texture or sampler header must invalidate this encoder's descriptors.
     void invalidateDescriptors()
     {
         ++bindingRevision_;
+        moved_.all = true;
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -695,23 +822,51 @@ public:
     bool drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why);
     bool drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices, uint64_t indexOffset,
                              const Buffer *arguments, uint64_t argumentOffset, const char **why);
+    // A tessellation state's draws (raw_tessellation.cpp): the encoder's factor buffer (null: none, whose patches are
+    // culled) and scale, and patches of `controlPoints` each, from the draw's patch and control-point index buffers (null:
+    // none)
+    void setTessellationFactors(const Buffer *buffer, uint64_t offset, uint64_t instanceStride);
+    void setTessellationFactorScale(float scale);
+    bool drawPatches(uint32_t controlPoints, uint32_t start, uint32_t count, uint32_t instances, uint32_t baseInstance,
+                     const Buffer *patchIndices, uint64_t patchIndexOffset, const Buffer *pointIndices,
+                     uint64_t pointIndexOffset, const char **why);
+    bool drawPatchesIndirect(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
+                             const Buffer *pointIndices, uint64_t pointIndexOffset, const Buffer *arguments,
+                             uint64_t offset, const char **why);
 
-    // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, drawn with the state they inherit
-    // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`), or with `range` the commands of the
-    // MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the buffer's). `written`: the GPU wrote some of the
-    // words, which the channel fetches after those writes land
+    // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, `slotWords` each, drawn with the
+    // state they inherit (`primitive` one of theirs: icb::kPatchPrimitive where they are patches; `indexed`: some draw
+    // indices), or with `range` the commands of the MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the
+    // buffer's), once per amplification of the encoder's. `buffers`: what the commands read (index buffers, patch commands'
+    // factors and indices). `written`: the GPU wrote some of the words, which the channel fetches after those writes land
     struct IcbExecute {
         const Buffer *slots;
-        uint32_t first, count;
+        uint32_t first, count, slotWords;
         const Buffer *range;
         uint64_t rangeOffset;
         uint32_t primitive;
         bool indexed, written;
-        const Buffer *const *indexBuffers;
-        size_t indexBufferCount;
+        const Buffer *const *buffers;
+        size_t bufferCount;
     };
 
     bool executeSlots(const IcbExecute &x, const char **why);
+
+    // An indirect command of patches as the CPU encoded it (Metal's drawPatches: and drawIndexedPatches: of a command,
+    // `scale` its factor scale, 1 where the call names none), and its words (raw_icb.h icb::patches) as raw_tessellation.cpp
+    // binds a draw's: false where Metal's validation stops it (*why)
+    struct IcbPatches {
+        uint32_t first, count, instances, baseInstance;
+        const Buffer *factors;
+        uint64_t factorOffset, factorStride;
+        float scale;
+        const Buffer *patchIndices;
+        uint64_t patchIndexOffset;
+        const Buffer *pointIndices;
+        uint64_t pointIndexOffset;
+    };
+
+    static bool icbPatchDraw(const Device &dev, const IcbPatches &in, icb::PatchDraw &out, const char **why);
     // A counter sample where the pass starts: in its prologue, after the barrier to the work before
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
@@ -721,6 +876,21 @@ public:
     bool setVisibility(uint32_t mode, const Buffer *results, uint64_t offset);
     // the Metal encoder's results to their offsets, at its end (a fused pass's too)
     void finishVisibility();
+    // raw_reach.h: the pass a reach target's, at `step` frame pixels a texel, of a frame `width` x `height`: viewports and
+    // scissors in the target's units, no depth/stencil state; and the state set last, its reach twin for the draws after
+    void beginReach(uint32_t step, uint32_t width, uint32_t height);
+    void takeReachTwin();
+
+    // the state's vertex program writes memory, so its draws are not drawn again: the reach pass covers their viewports
+    bool reachCovers() const
+    {
+        return reachCover_;
+    }
+
+    const char *reachRefusal() const
+    {
+        return reachWhy_;
+    }
 
     void beginSplitPlan()
     {
@@ -741,6 +911,10 @@ public:
 
 private:
     friend class CommandBuffer;
+#ifdef SWITCH_RAW_HARNESS_MARKS
+    friend struct EncoderHarness;
+    friend struct DeviceHarness;
+#endif
 
     struct Bound {
         uint64_t va = 0;
@@ -758,6 +932,12 @@ private:
     Device *dev_ = nullptr;
     PassDesc pass_;
     Push p_;
+    uint32_t reachStep_ = 0, reachW_ = 0, reachH_ = 0;
+    uint32_t reachScissor_[4] = {};  // a reach draw's Metal scissor and viewport, each bounding the other
+    double reachViewport_[4] = {};
+    const char *reachWhy_ = nullptr;
+    const Pipeline *reachTwin_ = nullptr;  // the twin takeReachTwin set
+    bool reachCover_ = false;
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
     std::array<counters::Stamp, 8> startStamps_{};
@@ -769,6 +949,86 @@ private:
     bool indirectGeometry_ = false;
     mme::DrawParams params_;  // what the channel holds: the context's zeros at a pass's start, put back at its end
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
+
+    struct Tessellation {
+        Bound buffers[TessBufferCount];
+        uint32_t instanceStride = 0, scaleBits = 0x3f800000, indexed = 0;
+        bool scaleValid = true;
+    };
+
+    Tessellation tess_;
+    bool tessWordsDirty_ = true;
+    uint32_t vertexStrides_[31] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                   UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    uint32_t amplifications_ = 1, amplification_ = 0;
+    uint32_t amplificationViewports_[kAmplificationMaps] = {}, amplificationLayers_[kAmplificationMaps] = {};
+    bool amplifying_ = false, amplificationDirty_ = true;
+    // what the amplify macros' scratch words hold (raw_mme.h), written before an amplified draw where they changed
+    bool amplificationScratchDirty_ = true;
+    mme::AmplificationWords heldAmplification_ = {~0u};
+
+    // A draw under vertex amplification is one amplify macro call (raw_amplification.cpp), but where runs of its
+    // primitives are drawn apart with barriers between: that draw is drawn once per amplification
+    bool amplifies() const
+    {
+        return amplifications_ > 1 && !amplifying_;
+    }
+
+    bool runsPerAmplification(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed);
+    void amplificationScratch(Push &p, const Pipeline &pl);
+    void amplifyCall(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
+                     uint32_t root, uint32_t baseInstance);
+    // the root words an amplify call leaves: the last amplification's id and offsets, the count
+    void heldAmplifyWords(const Pipeline &pl);
+
+    // `draw` once per amplification, its id and offsets in the state's words
+    template <typename Draw> bool amplified(const Draw &draw)
+    {
+        amplifying_ = true;
+        bool drawn = true;
+        for (uint32_t a = 0; drawn && a < amplifications_; a++) {
+            amplification_ = a;
+            amplificationDirty_ = true;
+            drawn = draw();
+        }
+        amplifying_ = false;
+        amplification_ = 0;
+        amplificationDirty_ = true;
+        return drawn;
+    }
+
+    // What of a draw's amplification and bind strides the state does not take (null: it takes them)
+    const char *drawnWordsRefusal(const PackPipeline &r) const;
+    // A vertex stream of the state's takes its bind's stride, and that stride is past the stream's 12-bit field
+    bool bindStridePastStream(const PackPipeline &r) const;
+    void drawnWords(const Pipeline &pl, uint32_t (&want)[32]);
+    // The state's vertex streams at their binds (raw_vertex_streams.cpp): a stream's location and limit where its bind
+    // moved, its format where its stride is its bind's, and its vertices [vFirst, vFirst + count) cleaned
+    void bindStreams(Push &p, const Pipeline &pl, bool indexed, uint32_t vFirst, uint32_t count);
+    void bindStream(Push &p, uint32_t stream, uint8_t slot, uint32_t stride, bool bindStride, bool indexed,
+                    uint32_t vFirst, uint32_t count);
+
+    uint32_t vertexStride(uint32_t slot) const
+    {
+        return slot < 31 && vertexStrides_[slot] != UINT32_MAX ? vertexStrides_[slot] : 0;
+    }
+
+    static Bound boundFrom(const Buffer *buffer, uint64_t offset);
+    bool bindPatches(uint32_t controlPoints, const Buffer *patchIndices, uint64_t patchIndexOffset,
+                     const Buffer *pointIndices, uint64_t pointIndexOffset, const char **why);
+    Bound tessBuffer(uint8_t which) const;
+    void controlWords(const PackPipeline &r, uint32_t (&want)[32]) const;
+    // An execute of patch commands: the state prepare() drew with as their layout's scratch words; after them, the root
+    // table's control words set back to what the encoder holds and set 0 built again, as the commands loaded both
+    bool icbPatchLayout(const char **why);
+    void icbPatchesDone();
+    // The amplification `a`'s id into the root table of the state prepare() drew with, before each of an execute's passes
+    void icbAmplification(uint32_t a);
+    const Pipeline *prepared_ = nullptr;  // what the last prepare() drew with, and its set 0's address
+    uint64_t preparedSet_ = 0;
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     void cutBatch();
@@ -780,6 +1040,11 @@ private:
     uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     bool measureDraw(uint64_t units, DrawTiming &t);
     void stampDraw(Push &p, const DrawTiming &t, bool end);
+    // whether the prepared draw of `pl` is drawn whole, never in bands: it amplifies, or may choose a viewport past 0 and so
+    // its scissor, which bands do not narrow; and its words so, an amplify call where it amplifies
+    bool drawnWhole(const Pipeline &pl) const;
+    void wholeDraw(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
+                   uint32_t baseVertex, uint32_t baseInstance);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
     void bindState(Push &p, const Pipeline &pl);
     bool measuringInline() const;
@@ -788,12 +1053,54 @@ private:
     uint32_t compatibleSampleMasks_[4]{};
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
     PreparedDescriptors descriptors_;
+    SpillUpload spillUploads_[2];  // each stage's argument table as the encoder uploaded it last (raw_spill_table.h)
+    // a fragment argument table's dynamic words may have moved since its last upload: the blend colour, the depth and
+    // stencil state and references, the viewport's depth range
+    bool spillDirty_ = true;
+    bool blendWords(const PackPipeline &r, const char **why);
+    bool fillSpills(const Pipeline &pl, uint32_t moved, PreparedDescriptorWords &prepared, uint32_t *set,
+                    const char **why);
     uint64_t bindingRevision_ = 0;
+
+    // the bindings set 0's entries are built from that moved since the last draw's set (descriptors_)
+    struct MovedBindings {
+        uint32_t buffers[3] = {};
+        uint32_t textures[2] = {};  // vertex, fragment (handleStage)
+        uint16_t samplers[2] = {};
+        bool all = true;
+    } moved_;
+
+    void bufferMoved(int stage, uint32_t slot)
+    {
+        ++bindingRevision_;
+        moved_.buffers[stage] |= 1u << slot;
+    }
+
+    void textureMoved(uint32_t at, uint32_t slot)
+    {
+        ++bindingRevision_;
+        moved_.textures[at] |= 1u << slot;
+    }
+
+    uint32_t movedEntries(const PackPipeline &rec) const;
     DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
-    const Texture *textures_[16] = {};
-    const Sampler *samplers_[16] = {};
-    uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
+    const Texture *textures_[2][kStageTextures] = {};  // vertex, fragment (handleStage)
+    const Sampler *samplers_[2][kStageSamplers] = {};
+
+    const Texture *boundTexture(const PackEntry &e) const
+    {
+        return e.slot < kStageTextures ? textures_[handleStage(e)][e.slot] : nullptr;
+    }
+
+    const Sampler *boundSampler(const PackEntry &e) const
+    {
+        return e.sampler < kStageSamplers ? samplers_[handleStage(e)][e.sampler] : nullptr;
+    }
+
+    // what each vertex stream's location and limit registers hold (raw_vertex_streams.cpp)
+    uint64_t streamVa_[kPackVertexStreams] = {}, streamLimit_[kPackVertexStreams] = {};
+    uint64_t ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
     // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
     // the stream are CPU-cleaned): the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to
@@ -803,6 +1110,9 @@ private:
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     uint32_t bindingFacts(const Pipeline &pl);
+#if SWITCH_RAW_DIAGNOSTICS
+    void logUniformTuple(const Pipeline &pl) const;
+#endif
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;
@@ -827,6 +1137,7 @@ private:
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
     uint8_t shaderTestsActive_ = 0;
     bool prepareShaderTests(const Pipeline &pipeline, const char **why);
+    uint64_t rootTable(const PackPipeline &r, uint32_t k);
     void copyShaderTests(uint8_t flags, bool toAttachment);
     void endShaderTests();
 
@@ -860,14 +1171,18 @@ private:
     AttachmentWrites attachmentWrites_;
     bool memoryless_[8] = {};
     bool hiddenZeta_ = false;  // pass_.depthStencil.texture is PassDesc::hiddenZeta's backing: the pass declares none
-    // At begin, after the colors' backings: the hidden zeta over the plane they cover, of the pass's samples
-    bool hideZeta(const PassDesc &pass);
+    // The hidden zeta: over the plane the colors' backings cover (once they are taken), of the pass's samples
+    Texture hiddenZetaShape(const PassDesc &pass) const;
     const Texture *shadowOf_[8] =
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
     bool called_ = false, drew_ = false, whole_ = false;
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
+    // rung-2 forms' ROP blends over each colour so far (rule fetch.blend's layers), and whether SET_CT_SELECT holds a rung-3
+    // form's one target in place of the pass's
+    std::array<uint8_t, 8> ropLayers_ = {};
+    bool narrowed_ = false;
     uint64_t drawPixels_ = 0;
     PixelBox drawBox_;
     uint8_t samples_ = 1;  // its attachments' samples a pixel
@@ -909,6 +1224,9 @@ public:
 private:
     // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
     Pipeline *formFor(Pipeline *pl);
+    Pipeline *fetchFreeFor(const Pipeline &pl);
+    bool matrixConstants(const Pipeline &pl, const char **why);
+    uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;
 #if SWITCH_RAW_DIAGNOSTICS
     void probeEdges() const;
@@ -955,12 +1273,19 @@ private:
     // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
     // copies): asked of the device once a pass, not under its lock at each draw's descriptors
     struct PassView {
-        uint32_t ownTic, word0, tic;
+        uint32_t ownTic;
+        AttachmentView view;
+        uint32_t tic;
     };
 
     std::array<PassView, 8> passViews_{};
     uint8_t passViewCount_ = 0;
     uint32_t passViewTic(const Texture &t, uint32_t word0);
+    uint32_t passViewTic(const Texture &owner, const AttachmentView &v, const char **why);
+    // The header a draw's fetch of attachment `a` binds: the storage form's view of word 0 `storage`, a 2D array of the
+    // pass's layers for a record of the layered form (`layeredRecord`), or (storage 0) the input-attachment form's, which
+    // NVK fetches at (x, y, Layer) (nvk_nir_lower_descriptors.c lower_load_input_attachment_coord); 0: none (`why`)
+    uint32_t fetchTic(const ColorAttachment &a, uint32_t storage, bool layeredRecord, const char **why);
 
     Rotation
         rot_;  // the pass's turned plane (raw_rotation.h): its frame is what areaW_, areaH_ and the rectangles count in
@@ -1012,14 +1337,9 @@ public:
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
-    // An RGB10A8_2P_XR10 surface texture's image from its planes, or (`split`) its planes from its image (raw_xr_planes.h)
-    void xrPlanes(const Texture &t, bool split);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine as surface format `fmt2d`: levels first + 1 ..
     // last from the one above, in place (fx_mip_route.h MipRun; `unproven` of its steps)
     void generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, uint32_t unproven);
-    // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
-    // height, into `halved` (block-linear), each code the rounded mean of its block's (Texture::chromaCodes)
-    void halveChroma(const Texture &codes, const Texture &halved);
     // The next command reads the memory `read` names and writes the memory `write` names (null: none; a name is any pointer
     // that stands for one memory): where it reads or writes what an earlier command of this encoder wrote, or writes what one
     // read, it waits for those first (barrier), as Metal orders a blit encoder's commands on one resource
@@ -1056,13 +1376,13 @@ enum RefusalId : uint8_t {
     RefColorFormats,
     RefUboOffset,
     RefNoTic,
-    RefDepthStencil,  // a: the state's depth format, b: the pass's
-    RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
-    RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
-    RefStorageView,   // a: the attachment, b: its format, c: its width (raw_storage_form.h)
-    RefRotated,       // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
-    RefLayered,       // a: the pass's layers
-    RefViewports      // a: the encoder's viewport count
+    RefDepthStencil,   // a: the state's depth format, b: the pass's
+    RefSamples,        // a: the state's samples, b: the pass's, c: the state's shading passes
+    RefGeometry,       // CPU ordering proof unavailable; requires an interlocked native program
+    RefStorageView,    // a: the attachment, b: its format, c: its width (raw_storage_form.h)
+    RefRotated,        // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
+    RefViewports,      // a: the encoder's viewport count
+    RefWrittenTexture  // a: the slot, b: the bound format, c: the format the record's programs store
 };
 
 struct Refusal {
@@ -1074,6 +1394,34 @@ class CommandBuffer {
 public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
+    // raw_turn_copy.h: each texel of `dst` from `src`'s at `map`, both of one texel size or depth format (a pass of the pack's
+    // turn copy state; `src` given a texture header where it has none), over `dst`'s first width x height (0: all of an axis);
+    // false: *why
+    bool turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
+                  const TurnMask *mask = nullptr, uint32_t width = 0, uint32_t height = 0);
+    // raw_reach.h: the tiles of the `width` x `height` frame of `pass` that its draws reach, drawn again from `draws`; false: *why
+    bool reach(const PassDesc &pass, uint32_t width, uint32_t height, DrawReplay &draws, PassReach &out,
+               const char **why);
+    // A block-linear image of `width` x `height` texels of `format` (turnCopyFormat's, or a depth format), the device's backing
+    // of tag `tag` for this command buffer: what a turn copy moves texels through; null where none can be had
+    Texture *turnScratch(uint32_t format, uint32_t width, uint32_t height, uint32_t tag);
+    // raw_stencil_bits.h: `src`'s stencil drawn into `e`'s zeta of `format` (its stencil cleared to 0 at the pass's start, or
+    // `zeroFirst`: zeroed by a draw where `map`'s source rectangle reaches, the rest kept), each pixel's from `src`'s texel at
+    // `map` or its `pick` sample; `view` the stencil header's texture, read until e's end()
+    bool stencilBits(RenderEncoder &e, const Texture &src, Texture &view, uint32_t format, const TurnMap &map,
+                     StencilSample pick, const char **why, bool zeroFirst = false);
+    // `src`'s stencil bound for a stencil program into a zeta of `format`: its stencil header's texture `view` at 0, or with
+    // `depth` `src` itself at 0 (its depth, read as its float's bits) and `view` at 1; `view` read until e's end()
+    bool bindStencilSource(RenderEncoder &e, const Texture &src, Texture &view, uint32_t format, bool depth,
+                           const char **why);
+    // A multisampled zeta's stencil resolve into one-sample `into` of its format, over (0, 0, width, height): a pass of its own
+    bool stencilResolve(Texture &into, const Texture &from, StencilSample pick, uint32_t width, uint32_t height,
+                        const char **why);
+    // raw_zeta_colour.h: whether one draw of the colour ROP writes `into`'s stencil from `src` (its `pick` sample), and that
+    // draw's pass: each texel from `src`'s at `map`, or its pick sample's stencil, over (0, 0, width, height) (0: all)
+    bool zetaColourTakes(const Texture &into, const Texture &src, StencilSample pick);
+    bool zetaColour(const Texture &into, const Texture &src, StencilSample pick, const TurnMap &map, uint32_t width,
+                    uint32_t height, const char **why);
     BlitEncoder *blit();
 
     // Metal's predication unit ended (raw_predication.h)
@@ -1209,6 +1557,14 @@ public:
 
     // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
     void useAddress(uint64_t va, uint64_t bytes, bool write);
+
+    // An MTLHeap an encoder used (useHeap): named once per command buffer, its jobs name what it holds at their commit
+    void useHeap(const HeapMembers &heap)
+    {
+        if (std::find(heaps_.begin(), heaps_.end(), &heap) == heaps_.end())
+            heaps_.push_back(&heap);
+    }
+
     bool useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten);
     void use(const Buffer &buffer, bool write);
     void use(const Texture &texture, bool write);
@@ -1233,7 +1589,9 @@ private:
     BatchWork batchWork_;
     uint64_t batchLimit() const;
     DirtyRanges dirty_;
-    std::vector<Texture *> backings_;  // memoryless backings it uses
+    std::vector<Texture *> backings_;         // memoryless backings it uses
+    std::vector<const HeapMembers *> heaps_;  // useHeap's, each kept alive by the facade's command buffer
+    void nameHeaps();                         // lock_ held
     SurfaceList surfaces_;
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
@@ -1294,6 +1652,7 @@ private:
     uint64_t pushStart_ = 0, uploadStart_ = 0;
     uint32_t rootPush_[32] = {};
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
+    uint32_t rtLayer_ = ~0u;                // and SET_RT_LAYER (~0: not known)
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     HeldSegment heldSegment_;               // and the state segment its registers hold
@@ -1389,6 +1748,7 @@ public:
         return raw::packHolds(pack_, pl.rec);
     }
 
+    bool fetchFreeReachable(uint64_t keyHash) const;
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
@@ -1403,7 +1763,7 @@ public:
     // `tiled`: block-linear (TegraGM20BLayout.h) where its shape tiles and its format is a colour target's, for a texture the
     // CPU never touches
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
-                       bool tiled = false);
+                       bool tiled = false, const ArenaAt *at = nullptr);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
     bool probeCompressible(const tgm_layout &bl, Texture &t);
@@ -1467,13 +1827,20 @@ public:
     // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
     // An extended-range texture's stand-in (Texture::standIn), made if the pack has its conversion state
-    bool createStandIn(Texture &t);
+    bool createStandIn(Texture &t, const ArenaAt *at = nullptr);
     // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
-    Pipeline *xrPipeline(XrForm form);
+    Pipeline *xrPipeline(XrForm form, bool twoPlanes = false);
     // The pack's resolve state into a target of `format` (raw_samples.h resolveState), null if the pack has none
-    Pipeline *resolvePipeline(uint32_t format);
+    Pipeline *resolvePipeline(uint32_t format, uint32_t samples);
     // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
     Pipeline *mipPipeline(uint32_t format);
+    Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState
+    Pipeline *stencilBitsPipeline(uint32_t format, uint32_t samples, StencilSample pick);    // raw_stencil_bits.h
+    Pipeline *stencilColourPipeline(uint32_t format, uint32_t samples, StencilSample pick);  // raw_zeta_colour.h
+    // raw_zeta_colour.h: the chip fact, or a debug build's probe asking for the route
+    bool zetaColourTaken() const;
+    // raw_reach.h: `pl` drawing its geometry into a reach target; null: *why
+    Pipeline *reachTwin(Pipeline &pl, const char **why);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
@@ -1486,13 +1853,25 @@ public:
     // states or a plane cannot be rendered
     bool createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t);
     // RGB10A8_2P_XR10 over a two-plane surface, its planes at `word` and `alpha` (offsets in the allocation, with their
-    // pitches): raw's form of the format in a pool image (raw_xr_planes.h), the planes as luma and chroma, the copies' temp
-    // as stencilTemp
-    bool createXrPlanesTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t word,
-                               uint32_t wordPitch, uint64_t alpha, uint32_t alphaPitch, uint32_t width, uint32_t height,
-                               Texture &t);
+    // pitches), held in them (raw_xr_pass.h, Texture::xrPlanes): the planes imported as luma and chroma; false with *why
+    // where a plane cannot be one
+    bool createXrPlaneTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t word,
+                              uint32_t wordPitch, uint64_t alpha, uint32_t alphaPitch, uint32_t width, uint32_t height,
+                              Texture &t, const char **why);
+    // A memoryless RGB10A8_2P_XR10 texture's planes, memoryless too (Texture::xrPlanes)
+    bool createXrMemoryless(Texture &t);
     // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
     Pipeline *standInPipeline(bool store);
+    // The pack's store state of a YCbCr texture's luma or chroma plane of `store`'s target (pack/ycbcr_store.metal): of 8-bit,
+    // 16-bit or packed words, its steps through the sRGB encode or not
+    Pipeline *ycbcrStorePipeline(bool chroma, const YcbcrStoreShape &store);
+
+    // pack/srgb_encode.h, which the _srgb store states read at kSrgbEncodeSlot (raw_ycbcr_store.h)
+    const Bo &srgbEncodeTable() const
+    {
+        return srgbEncode_;
+    }
+
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
@@ -1516,13 +1895,18 @@ public:
                         const char **why, uint32_t layers = 1);
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
-    bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
+    bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t,
+                                 const ArenaAt *at = nullptr);
     // A stored depth/stencil texture of `samples` samples in zeta memory of its own (raw_multisample.cpp), with a header
     // where `sampled`; a one-sample 2D array or cube of `layers` layers, layerBytes apart, has none (as createZetaOver's).
     // NVK views no zeta memory it did not make: a multisampled one never has an m2v twin, a one-sample one only once a
     // range replays on m2v (moveOwnedZeta).
     bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t,
                          uint32_t layers = 1);
+    // The same with a header always (texture2d_ms reads it, and a depth resolve's pass samples it): a multisampled one,
+    // or one of a single sample in an arena (an MTLHeap's, whose depth is not NVK's image)
+    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t,
+                         const ArenaAt *at = nullptr);
     // A one-sample owned zeta's texels, every layer, copied into NVK's image `m` (its m2v twin's, made for a replay), the
     // texture over that image from then on. Its own memory and header stay until it is destroyed: the copy and the work before it may
     // still use them. False (*why): the texture keeps its own memory.
@@ -1531,18 +1915,19 @@ public:
     bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
-    bool createLine(uint32_t width, uint32_t format, Texture &t);
+    bool createLine(uint32_t width, uint32_t format, Texture &t, const ArenaAt *at = nullptr);
     // A 3D texture of `levels` levels: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v
     // makes a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
     bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
-                      uint32_t levels = 1);
+                      uint32_t levels = 1, const ArenaAt *at = nullptr);
     // A 2D array, cube or cube array of `levels` levels: NIL's image of `layers` layers (fx_image.h) under a header of `type`
     // (fx::kTexTwoDArray, kTexCube, kTexCubeArray)
     bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
-                     uint32_t levels = 1);
+                     uint32_t levels = 1, const ArenaAt *at = nullptr);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
-    bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
+                          const ArenaAt *at = nullptr);
     // A block-compressed 2D texture (or 2D array, `type`) of `levels` levels and `layers` layers in block-linear memory of its
     // own: NIL's image (fx::blockChainLayout), which the copy engine and the CPU (in its view of kind-0xFE memory) address
     bool createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
@@ -1578,7 +1963,13 @@ public:
     // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
     // with t's header; 0: no header slot left. The encoding thread's: what it answered is kept there and answered again
     // with no lock (raw_view_cache.h, keyed as viewTics_)
-    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access);
+    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access = ViewAccess::Texture);
+    // The header of view `v` of `owner`, an attachment's image (v.part) or the attachment itself (raw_attachment_view.h),
+    // made on first use and freed with owner's header; 0: none (`why`)
+    uint32_t attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why);
+    // `t` with a texture header (a depth/stencil texture made only to be rendered gets one, a turn copy reading it); false: no
+    // header slot left
+    bool sampleable(Texture &t);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
     bool shared() const
@@ -1683,10 +2074,19 @@ public:
     // TGM_LAYOUT_KIND for a private heap's block-linear textures or pitch for a shared heap's textures and buffers, its
     // resources placed in it (raw_heap.h). Purged, its pages go back and its VA and CPU range stay reserved, so restoring it
     // binds fresh pages where its resources' addresses and texture headers already point.
+    // A kind of memory the arena's own mapping is not (a private heap's pitch, a shared heap's block-linear, a depth
+    // format's) is a view of its one BO, bound under that kind at the first texture that takes it: a job naming the arena
+    // names every view.
     bool createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool explicitPlacement = false);
     void destroyArena(uint32_t arena);  // once its resources are gone; an m2v view's lease keeps it until its last drop
     bool arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t,
                       std::optional<uint64_t> offset = {});
+    // Any kind the device makes (TextureAsk), made as its create* makes it, in the arena; an extended-range one's stand-in
+    // there too
+    bool arenaTexture(const ArenaAt &at, const TextureAsk &ask, Texture &t);
+    // What `ask` takes of an arena (its stand-in's after it, at the stand-in's alignment); false: the device makes no such
+    // texture. A placement heap's offset is aligned to `align`.
+    static bool footprint(const TextureAsk &ask, uint64_t &bytes, uint64_t &align);
     bool arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::optional<uint64_t> offset = {});
     // makeAliasable: the range goes back for later placements (at an m2v view's last drop, if one aliases it)
     void arenaRelease(Texture &t);
@@ -1733,6 +2133,26 @@ public:
     static void dropLease(void *lease);
     bool createSampler(const SamplerDesc &d, Sampler &s);
     void destroySampler(Sampler &s);
+
+    // m2v's handle tables and heap (raw_heap_tables.h): texture header `tic` now names `texture`, sampler header `tsc`
+    // `sampler` (null: none). False: no memory for the tables.
+    bool heapTexture(uint32_t tic, const HeapTexture *texture);
+    bool heapSampler(uint32_t tsc, const HeapSampler *sampler);
+    // A texture or sampler whose gpuResourceID was asked for, named in the tables until it is forgotten as it goes. A sample
+    // through a texture's ID reads it as a slot binds it: its stand-in where it has one, none for a planar texture (its
+    // samplers take its address map, which no argument buffer's sampler carries). A sampler of pixel coordinates samples
+    // through `twin`, made here with normalized ones, since m2v's program scales such a sampler's coordinates itself.
+    static HeapTexture heapTextureOf(const Texture &t, const HeapTextureFacts &facts, uint32_t flags);
+    bool nameTexture(const Texture &t, const HeapTextureFacts &facts, uint32_t flags);
+    void forgetTexture(const Texture &t);
+    bool nameSampler(const Sampler &s, uint32_t word, Sampler &twin);
+    void forgetSampler(const Sampler &s, Sampler &twin);
+
+    // Which texture an image array of a heap holds (the facade's: the bridge's switch_nmb_heap_holds), before any ID is named
+    void heapHolds(HeapHolds holds)
+    {
+        heapHolds_ = holds;
+    }
 
     // The first pool chunk made now (its pages wired and imported), off the render thread's first texture (raw_metal_prepare),
     // and the pool's grower started: the next chunk of the pool, of block-linear images or of a zeta format is made on its own
@@ -1982,6 +2402,9 @@ public:
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
+        // passes that drew RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h), the planes those rendered through a shadow, and
+        // the draws' binds of a two-plane texture's header pair; the copy engine's merges and splits of a one-image form
+        std::atomic<uint64_t> xrPlanePasses{0}, xrPlaneShadows{0}, xrPairBinds{0};
         // passes into a chain level
         std::atomic<uint64_t> levelPasses{0};
         // pack programs placed in the shader heap, and states not made because it was full
@@ -2018,6 +2441,9 @@ public:
         std::atomic<uint64_t> resolveRoute[3][3] = {};
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
+        // stencil plane draws encoded: the eight-draw route's (raw_stencil_bits.h) and the one-draw route's
+        // (raw_zeta_colour.h)
+        std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
         std::atomic<uint64_t> splitPrologues{0};         // split draws' prologue launches (raw_split.cpp)
         std::atomic<uint64_t> reopenTicks{0};            // the last reopen that made a channel, mach_absolute_time
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // raw_draw_bands.h
@@ -2054,6 +2480,8 @@ public:
     std::atomic<bool> probeMipCandidates{false};
     // memoryless zetas the copy engine fills and drains for the shader's depth tests take their compressible kind (raw_comp.h)
     std::atomic<bool> probeZetaKinds{false};
+    // stencil planes take the one-draw route (raw_zeta_colour.h) where it writes them, whatever kColourRopWritesZeta says
+    std::atomic<bool> probeZetaColour{false};
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     // hw_test_app's gpu.sched.long_draw_bands: the band budget its unbanded arm sets to 0 (RawMetalProbe.mm)
     std::atomic<uint64_t> bandBudgetNs_{TGM_APP_BAND_NS};
@@ -2083,6 +2511,10 @@ public:
     std::atomic<bool> probeResolveExact{false};
     // storage forms view compressed attachments and storage-bound memoryless backings compress (gpu.raw.storage_compressed)
     std::atomic<bool> probeStorageCompressed{false};
+    // A fetching draw whose state has a fetch-free form of this rung takes it whatever its rule (2, 3), or keeps the storage
+    // form (4); a blended storage form's barrier twin (5 a barrier a triangle, 6 one a draw: raw_fetch_rungs.h); 0: the
+    // rules decide (raw_fetch_free.h fetchFreeTaken)
+    std::atomic<uint8_t> probeFetchRung{0};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
     std::atomic<uint64_t> unflushed_{0};     // signalsUnflushed
 #endif
@@ -2239,7 +2671,7 @@ private:
     // heap_: the shader heap's GPU VA reservation (bytes: the program window). The pack's pages are bound at its start where
     // programs run in place (packPages_), and from heapCopiesAt_ on parts of host memory, through heapBound_, hold the
     // programs copied there
-    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, stamps_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, srgbEncode_, stamps_;
     // visibility results' report slots (raw_visibility.h), made at first use
     uint64_t visibilitySlot();
     Buffer visibilityPage_;
@@ -2248,6 +2680,22 @@ private:
 #if SWITCH_RAW_DIAGNOSTICS
     Bo spanMarks_;
 #endif
+    // m2v's handle tables and roots, made at the first ID named or state drawn through an argument buffer, and each record's
+    // set 1 (raw_heap_tables.h), under lock_
+    Bo handleTables_, argumentRoots_;
+    std::vector<Bo> heapSets_;
+    HeapTables heapTables_;
+    // the tables' and sets' CPU writes (counted under lock_, read by commit without it), and their count as of the last
+    // submission that invalidated the L2 for them (the submitting thread's): an exact job names them host-written while the
+    // two differ
+    std::atomic<uint64_t> tablesWritten_{0};
+    uint64_t tablesInvalidated_ = 0;
+    HeapHolds heapHolds_ = nullptr;
+    bool heapMemory();
+    const HeapSet *heapSet(const HeapLayout &layout);
+    void bindKernelArguments(ComputeState &c, const PackKernel &k);
+    void bindArguments(Pipeline &pl, const PackPipeline &pp);
+    void tablesWritten();
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap
@@ -2300,11 +2748,13 @@ private:
     // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
     bool contextless_ = false;
-    std::vector<uint32_t> freeTic_, freeTsc_;
+    std::vector<uint32_t> freeTic_, freeTsc_, freeTicPairs_;
     ViewCache views_{kTextureHeaders};  // viewTic's answers, the encoding thread's
     // by header: its views' word 0 (above it, the sample grid of a storage view: raw_view.h viewHeader) and header (viewTic)
     std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> viewTics_;
-    uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
+    // by header: its attachment views and their headers (attachmentViewTic)
+    std::unordered_multimap<uint32_t, std::pair<AttachmentView, uint32_t>> attachmentViewTics_;
+    uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0, neutralCompareTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;
@@ -2331,8 +2781,11 @@ private:
     bool placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fileOffset, uint32_t size, uint64_t &offset);
     bool placeFromStore(const uint8_t *slot, uint32_t size, uint64_t &offset);
     const uint8_t *heapCpu(uint64_t at) const;
+    // `spills`: its argument tables' words (PackPipeline::spillWords), null where it has none. `tess`: a tessellation state's
+    // control and evaluation programs (null: not one)
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
-               const uint32_t *blob, const char *keyString, bool caTransform);
+               const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
+               const PlacedProgram *tess = nullptr);
     // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads
     bool usableRecord(const PackPipeline *rec) const;
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
@@ -2340,8 +2793,12 @@ private:
     // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
     void offerVariants(Pipeline &pl, const PackPipeline &pp);
-    bool placePackProgram(uint16_t index, PlacedProgram &out);
+    bool placePackProgram(uint32_t index, PlacedProgram &out);
     std::deque<Pipeline> variantPipelines_;
+    std::deque<Pipeline> reachPipelines_;
+    std::deque<PackPipeline> reachRecords_;
+    // lock_ held: the push words a reach twin adds to its state's methods and to its restore (made with the first twin)
+    std::vector<uint32_t> reachMethods_, reachRestore_;
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
                             uint32_t &prologueDataBytes);
@@ -2357,9 +2814,9 @@ private:
     struct Completed {
         PackPipeline record;
         std::string keyString;
-        std::vector<uint32_t> blob;
+        std::vector<uint32_t> blob, spill;
         PackProgram programs[2];
-        Pipeline pipeline;
+        Pipeline pipeline, turned;
     };
 
     std::deque<Completed> completedStore_;
@@ -2387,6 +2844,7 @@ private:
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index
+    uint32_t rtLayer_ = ~0u;      // and SET_RT_LAYER (~0: not known)
     DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
@@ -2435,6 +2893,15 @@ private:
         HeapPlacement place;
         uint32_t leases = 0;  // m2v views of its resources (raw_alias.cpp): never purged or freed under one
         bool used = false, isVolatile = false, purged = false, dying = false;
+        bool wc = false;  // its host pages are write-combined (raw_arena.cpp hostPages)
+
+        // its BO bound again under another PTE kind (createArena's comment)
+        struct View {
+            uint64_t va = 0;
+            uint32_t kind = 0;
+        };
+
+        std::vector<View> views;
         // trimmed (raw_arena_trim.h): `bo` is empty, its pages are bound as `parts` (each with its offset), and `holes`
         // are unbound, their host pages untouched
         std::vector<std::pair<uint64_t, Bo>> parts;
@@ -2454,6 +2921,20 @@ private:
     void freeArena(Arena &a);  // lock_ held
     void arenaFree(Span &s);   // lock_ held
     bool aliasArena(const Span &s, Lease *&lease, Alias &a);
+    // lock_ held: the arena's mapping of `kind` (its own, its pitch view, or a view made now); 0: none
+    uint64_t arenaView(Arena &a, uint32_t kind);
+    // The kind of the arena's mapping `va` lies in; false: none of its
+    static bool arenaKindAt(const Arena &a, uint64_t va, uint64_t &base, uint32_t &kind);
+    // The layout every create* but createTexture's own memory gives its kind of texture: t's shape, rows and kind fields
+    // with no memory or header, what its memory takes and the PTE kind it is bound with, `chain` a Mips, Volume or Array
+    // one's levels. False: the device makes no such texture.
+    static bool layout(const TextureAsk &ask, Texture &t, uint64_t &bytes, uint64_t &align, uint32_t &kind,
+                       fx::MipChain *chain = nullptr);
+    static TextureAsk standInAsk(const Texture &t);
+    // `ask` laid out in `at`'s arena, else (any kind but Plain) in the device's chunks of its kind, with its header
+    bool createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at);
+    // lock_ held: `bytes` of the arena under `kind` as t's memory (Texture::arena)
+    bool arenaSpan(const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind, Texture &t);
 
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
@@ -2660,6 +3141,9 @@ private:
     bool outgrow(Ring &r, uint32_t bytes, uint64_t &at);
     uint32_t allocTic();
     void freeTic(uint32_t tic);  // lock_ held
+    // Two headers at consecutive indices (an over-planes RGB10A8_2P_XR10 texture's), the first's index; 0: none left. lock_ held
+    uint32_t allocTicPair();
+    void freeTicPair(uint32_t first);
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
     void poolFree(Span &s);
@@ -2745,5 +3229,8 @@ private:
 
 // NV topology for an MTLPrimitiveType (point, line, lineStrip, triangle, triangleStrip)
 uint32_t nvTopology(uint32_t mtlPrimitive);
+// The tessellation factor scale m2v's control stage takes (raw_tessellation.cpp): Metal's, rounded to half; false where it is
+// not a positive half
+bool tessellationScaleBits(float scale, uint32_t &bits);
 
 }  // namespace raw

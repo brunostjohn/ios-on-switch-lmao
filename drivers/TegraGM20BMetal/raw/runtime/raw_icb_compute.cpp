@@ -12,13 +12,19 @@ namespace raw {
 namespace {
 
 constexpr uint8_t kConstexprSamplerSlot = 0x80;
+constexpr uint32_t kRootPush = 0x700;
 
 }  // namespace
 
 bool ComputeEncoder::icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
                                const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
-                               const IcbBuffer (&buffers)[31], uint8_t *block, uint64_t va, const char **why)
+                               const IcbBuffer (&buffers)[31], const StageIn &stageIn, uint8_t *block, uint64_t va,
+                               const char **why)
 {
+    if (const char *refusal = icbRefusal(k)) {
+        *why = refusal;
+        return false;
+    }
     const PackKernel &r = *k.rec;
     const uint32_t setBytes = icb::computeSetBytes(r.setBytes);
     const uint64_t rootVa = va + icb::kComputeQmdBytes, setVa = rootVa + icb::kComputeRootBytes;
@@ -66,11 +72,13 @@ bool ComputeEncoder::icbRegion(Device &dev, const ComputeState &k, const Compute
     }
     const uint32_t base[3] = {};  // an indirect dispatch is never cut into pieces
     rootWords(r, base, region.groups.data(), setVa, residualMask, residuals, words, root);
+    stageInWords(r, stageIn, root + kRootPush / 4);
     return qmdWords(k, region.groups.data(), rootVa, setVa, qmd, why);
 }
 
-void ComputeEncoder::inheritBuffers(IcbBuffer (&out)[31])
+void ComputeEncoder::inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 31> &strides)
 {
+    strides = stageIn_.strides;
     for (uint32_t slot = 0; slot < 31; slot++) {
         const Bound &b = bufs_[slot];
         out[slot] = {b.va, b.size};
@@ -110,12 +118,19 @@ bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
     dispatched_ = true;
     if (x.binds) {
         IcbBuffer inherited[31];
-        inheritBuffers(inherited);
+        std::array<uint32_t, 31> strides;
+        inheritBuffers(inherited, strides);
         uint64_t va[31] = {};
-        uint32_t size[31] = {};
+        uint32_t size[31] = {}, stride[31] = {};
         for (uint32_t s = 0; s < 31; s++) {
             if ((x.alignedSlots >> s & 1) && (inherited[s].va & 15)) {
                 *why = "a buffer bound at an offset that is not a multiple of 16";
+                return false;
+            }
+            // a bind without a stride reads at 0, as Metal's does (raw_stage_in.h)
+            stride[s] = strides[s] == kNoBindStride ? 0 : strides[s];
+            if ((x.strideSlots >> s & 1) && stride[s] > icb::kComputeStrideLimit) {
+                *why = "a bind stride past the 24 bits an execute's scratch word holds";
                 return false;
             }
             va[s] = inherited[s].va;
@@ -123,7 +138,7 @@ bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
         }
         cb_.use(*x.binds, false);
         room(8 + 3 * 31);
-        icb::computeBindHead(p_, va, size, x.bindSlots);
+        icb::computeBindHead(p_, va, size, stride, x.bindSlots | x.strideSlots);
         cb_.segment(start_, p_.at);
         cb_.segments_.append({x.binds->va + uint64_t(x.at) * icb::kComputeBindSlotWords * 4,
                               x.count * icb::kComputeBindSlotWords, TegraGM20BPushNoPrefetch},

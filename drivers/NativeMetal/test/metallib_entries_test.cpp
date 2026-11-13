@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // MetallibEntries.h against what Metal answers (macOS 27 on an Apple GPU; the same for iOS 17's and 27's Core Image metallibs):
-// externFunctionNames lists the TYPE 5 entries and functionNames the others, whatever the header's file type.
+// externFunctionNames lists the TYPE 5 entries and functionNames the others, whatever the header's file type; a function's
+// patch is its entry's TESS byte, as Xcode's metal writes it (xcrun -sdk iphoneos metal and metallib).
 #include "drivers/NativeMetal/MetallibEntries.h"
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -10,14 +11,17 @@
 
 namespace {
 using switch_metal::forEachMetallibEntry;
+using switch_metal::FunctionTess;
 using switch_metal::MetallibEntry;
 using switch_metal::metallibExternNames;
+using switch_metal::metallibFunctionTess;
 
 struct Entry {
     std::string name;
     uint8_t type;
     uint64_t bitcodeOffset, bitcodeBytes;
     bool placed = true;
+    int tess = -1;  // the TESS byte; -1: no tag
 };
 
 void put(std::vector<uint8_t> &out, const void *bytes, size_t n)
@@ -60,6 +64,8 @@ std::vector<uint8_t> metallib(uint8_t fileType, const std::vector<Entry> &entrie
             tag(tags, "VERS", words(uint16_t(2), uint16_t(9), uint16_t(4), uint16_t(1)));
             tag(tags, "MDSZ", words(e.bitcodeBytes));
         }
+        if (e.tess >= 0)
+            tag(tags, "TESS", {uint8_t(e.tess)});
         put(tags, "ENDT", 4);
         put(list, uint32_t(4 + tags.size()));
         put(list, tags.data(), tags.size());
@@ -163,6 +169,47 @@ TEST(MetallibEntries, NoBytesOrAMalformedListHasNoExterns)
     const uint16_t past = 0xffff;
     memcpy(truncatedTag.data() + switch_metal::kMetallibHeaderBytes + 8 + 4, &past, 2);
     EXPECT_TRUE(externs(truncatedTag).empty());
+}
+
+TEST(MetallibEntries, DecodesThePatchBytesXcodeWrites)
+{
+    const FunctionTess triangle = switch_metal::decodeTess(0x0d), quad = switch_metal::decodeTess(0x42),
+                       any = switch_metal::decodeTess(0xfe);
+    EXPECT_EQ(triangle.patchType, 1);
+    EXPECT_EQ(triangle.controlPoints, 3);
+    EXPECT_EQ(quad.patchType, 2);
+    EXPECT_EQ(quad.controlPoints, 16);
+    EXPECT_EQ(any.patchType, 2);
+    EXPECT_EQ(any.controlPoints, -1);
+}
+
+TEST(MetallibEntries, EachFunctionHasItsOwnPatch)
+{
+    const auto file = metallib(0, {{"quad_vertex", 0, 0, 16},
+                                   {"tri_post", 0, 16, 16, true, 0x0d},
+                                   {"quad_post", 0, 32, 16, true, 0x42},
+                                   {"solid_fragment", 1, 48, 16}});
+    FunctionTess t;
+    ASSERT_TRUE(metallibFunctionTess(file.data(), file.size(), "tri_post", t));
+    EXPECT_EQ(t.patchType, 1);
+    EXPECT_EQ(t.controlPoints, 3);
+    ASSERT_TRUE(metallibFunctionTess(file.data(), file.size(), "quad_post", t));
+    EXPECT_EQ(t.patchType, 2);
+    EXPECT_EQ(t.controlPoints, 16);
+    ASSERT_TRUE(metallibFunctionTess(file.data(), file.size(), "quad_vertex", t));
+    EXPECT_EQ(t.patchType, 0);
+    EXPECT_EQ(t.controlPoints, -1);
+    EXPECT_FALSE(metallibFunctionTess(file.data(), file.size(), "missing", t));
+}
+
+TEST(MetallibEntries, ACutListIsNoPatch)
+{
+    const auto file = metallib(0, {{"a", 0, 0, 0}, {"tri_post", 0, 0, 0, true, 0x0d}}, 0);
+    const std::vector<uint8_t> cut(file.begin(), file.end() - 6);
+    FunctionTess t;
+    t.patchType = 7;
+    EXPECT_FALSE(metallibFunctionTess(cut.data(), cut.size(), "tri_post", t));
+    EXPECT_EQ(t.patchType, 7);
 }
 
 }  // namespace

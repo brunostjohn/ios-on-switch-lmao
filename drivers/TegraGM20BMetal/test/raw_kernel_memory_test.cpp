@@ -118,8 +118,8 @@ protected:
 TEST(RawControlMemory, MemoryTheGpuAloneTouchesPerPixelOrDrawIsCached)
 {
     using raw::ControlUse;
-    for (ControlUse use :
-         {ControlUse::InterlockTickets, ControlUse::RootTable, ControlUse::ZeroPage, ControlUse::ColorTable})
+    for (ControlUse use : {ControlUse::InterlockTickets, ControlUse::RootTable, ControlUse::ZeroPage,
+                           ControlUse::ColorTable, ControlUse::ArgumentRoots, ControlUse::HandleTables})
         EXPECT_EQ(raw::controlMapping(use), raw::ControlMapping::Cached) << int(use);
     for (ControlUse use : {ControlUse::TextureHeaders, ControlUse::SamplerHeaders, ControlUse::Stamps, ControlUse::Ring,
                            ControlUse::Bytes, ControlUse::TransferSlot, ControlUse::StateSegments})

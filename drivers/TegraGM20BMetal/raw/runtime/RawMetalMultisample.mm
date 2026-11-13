@@ -27,9 +27,8 @@ bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::T
     const uint32_t width = uint32_t(d.width), height = uint32_t(d.height), format = uint32_t(d.pixelFormat),
                    samples = uint32_t(d.sampleCount);
     const bool zeta = kind == RMStoredSamples::Zeta;
-    const bool made =
-        zeta ? gRM->raw->createOwnedZeta(width, height, format, samples, (d.usage & MTLTextureUsageShaderRead) != 0, t)
-             : gRM->raw->createStoredMultisample(width, height, format, samples, t);
+    const bool made = zeta ? gRM->raw->createOwnedZeta(width, height, format, samples, t)
+                           : gRM->raw->createStoredMultisample(width, height, format, samples, t);
     static std::atomic<bool> said[2];
     if (made && !said[zeta].exchange(true))
         os_log(rawLog(), "raw: stored %ux multisampled %{public}s on (first %ux%u format %u: %llu bytes of %{public}s)",
@@ -161,7 +160,7 @@ static bool ownedZeta(void *object)
     if (![o isKindOfClass:[RMTexture class]])
         return false;
     const RMTexture *t = (RMTexture *)o;
-    return t->_rawOk && t->_raw.zeta && t->_raw.samples > 1;
+    return t->_rawOk && t->_raw.zeta && (t->_raw.samples > 1 || t->_raw.arena);
 }
 
 // Whether every pass of the range that attaches `t` neither loads nor stores it: m2v's own texture of its descriptor then
@@ -220,9 +219,9 @@ void failOwnedZeta(RMCommandBuffer *cb, RMTexture *t)
         "%u samples whose memory m2v has no texture of",
         t->_raw.width, t->_raw.height, unsigned(t->_raw.samples));
     NSString *text = [NSString
-        stringWithFormat:
-            @"The multisampled depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
-            [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height, (unsigned long)t->_descriptor.pixelFormat];
+        stringWithFormat:@"The depth/stencil texture %s (%ux%u, pixel format %lu) has no compatibility texture",
+                         [t label].UTF8String ?: "-", t->_raw.width, t->_raw.height,
+                         (unsigned long)t->_descriptor.pixelFormat];
     NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                          code:MTLCommandBufferErrorInternal
                                      userInfo:@{NSLocalizedDescriptionKey : text}];

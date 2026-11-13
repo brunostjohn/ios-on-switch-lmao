@@ -24,6 +24,7 @@ bazel run //tools/benchloop -- latency                 # SM53 latency, throughpu
 bazel run //tools/benchloop -- latency --family stall --op FFMA
 bazel run //tools/benchloop -- blend "$PWD/table.json" --blend-enable both
 bazel run //tools/benchloop -- rop                     # float to unorm rounding
+bazel run //tools/benchloop -- floatadd                # the ROP's fp32 and fp16 ONE, ONE, ADD against the shader's sum
 bazel run //tools/benchloop -- precision               # store and blend under each ROP option set the other way
 bazel run //tools/benchloop -- iterated "$PWD/microcode.tsv"  # iterated blend, colour 0 bound alone
 bazel run //tools/benchloop -- twod                    # 2D-engine fills, scaled copies and resolves, with compares

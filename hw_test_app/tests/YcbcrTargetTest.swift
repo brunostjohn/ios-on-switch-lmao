@@ -7,9 +7,10 @@ import Metal
 
 /// Render passes into two-plane YCbCr attachments over CoreVideo surfaces, as cameracaptured renders its frames
 /// (RGB8_420_2P over '420v'/'420f'): a clear, a draw of floats and a draw of halves into each, every byte of both planes
-/// against Metal's store (YcbcrStore, an M4 Max's bytes) and every command buffer on the raw path. The raw path
-/// renders the 8-bit code formats (device log: "raw: YCbCr code target stored on the GPU"); the converted 500 and the
-/// 10-bit 543 need the pack's store states, which come with a stack key change, so their checks fail until then.
+/// against Metal's store (YcbcrStore, an M4 Max's bytes: the code formats, the converted YCBCR*_2P and their sRGB twins)
+/// and every command buffer on the raw path. The raw path renders each pass into a memoryless stand-in and draws both planes from it with the
+/// pack's store states (device log: "raw: YCbCr target stored on the GPU"). wrong_luma_ and wrong_chroma_ split each
+/// target's count by plane.
 struct YcbcrTargetTest: HWTest {
     let id = "gpu.ycbcr_target"
     let name = "Render passes into two-plane YCbCr surfaces"
@@ -18,27 +19,49 @@ struct YcbcrTargetTest: HWTest {
     struct Target {
         let format: UInt
         let fourcc: OSType
-        let pending: String?
 
         var label: String {
             let code = String(bytes: withUnsafeBytes(of: fourcc.bigEndian) { Array($0) }, encoding: .ascii) ?? "?"
             return "\(format) over '\(code)'"
         }
+
+        var bits: Int { [500, 502, 503, 520, 522, 523, 540, 541].contains(format) ? 8 : 10 }
+        var tenBit: Bool { bits == 10 }
+        var converted: Bool { (500...527).contains(format) }
+        var srgb: Bool { (520...527).contains(format) }
+        var halvedAcross: Bool { ![503, 507, 523, 527, 545].contains(format) }
+        var halvedDown: Bool { [500, 505, 520, 525, 540, 543].contains(format) }
+        var full: Bool {
+            [
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+                kCVPixelFormatType_444YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                kCVPixelFormatType_422YpCbCr10BiPlanarFullRange, kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+            ].contains(fourcc)
+        }
     }
 
     static let targets: [Target] = [
-        Target(format: 540, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, pending: nil),
-        Target(format: 540, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, pending: nil),
-        Target(format: 541, fourcc: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange, pending: nil),
-        Target(
-            format: 500, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-            pending: "needs the pack's converted store state (stack key change)"),
-        Target(
-            format: 500, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-            pending: "needs the pack's converted store state (stack key change)"),
-        Target(
-            format: 543, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-            pending: "needs the pack's 10-bit code store state (stack key change)"),
+        Target(format: 540, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        Target(format: 540, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+        Target(format: 541, fourcc: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange),
+        Target(format: 500, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        Target(format: 500, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+        Target(format: 502, fourcc: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange),
+        Target(format: 543, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        Target(format: 544, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange),
+        Target(format: 545, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange),
+        Target(format: 503, fourcc: kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange),
+        Target(format: 505, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        Target(format: 505, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange),
+        Target(format: 506, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange),
+        Target(format: 507, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarFullRange),
+        Target(format: 520, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        Target(format: 520, fourcc: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+        Target(format: 522, fourcc: kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange),
+        Target(format: 523, fourcc: kCVPixelFormatType_444YpCbCr8BiPlanarFullRange),
+        Target(format: 525, fourcc: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange),
+        Target(format: 526, fourcc: kCVPixelFormatType_422YpCbCr10BiPlanarFullRange),
+        Target(format: 527, fourcc: kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange),
     ]
     static let width = 128, height = 64
     static let clear = MTLClearColor(red: 0.70196, green: 0.501960784, blue: 0.17058829, alpha: 1)
@@ -52,27 +75,28 @@ struct YcbcrTargetTest: HWTest {
         var checks: [(String, Bool)] = []
         for target in Self.targets {
             let gpu = try GPU.make()
-            let wrong: Int
+            let wrong: (luma: Int, chroma: Int)
             let note: String?
             do {
                 (wrong, note) = try await exercise(gpu, target)
             } catch {
-                (wrong, note) = (0, "failed: \(GPU.describe(error))")
+                (wrong, note) = ((0, 0), "failed: \(GPU.describe(error))")
             }
             let raw = !gpu.paths.isEmpty && gpu.paths.paths.keys.allSatisfy { $0 == "raw" }
             let key = target.label.filter { $0.isLetter || $0.isNumber }
             metrics.set("paths_" + key, gpu.paths.isEmpty ? "-" : gpu.paths.text)
-            metrics.set("wrong_" + key, wrong)
+            metrics.set("wrong_" + key, wrong.luma + wrong.chroma)
+            metrics.set("wrong_luma_" + key, wrong.luma)
+            metrics.set("wrong_chroma_" + key, wrong.chroma)
             var check = "\(target.label): every byte Metal's, every command buffer raw"
             if let note { check += " (\(note))" }
-            if let pending = target.pending { check += " [\(pending)]" }
-            checks.append((check, note == nil && wrong == 0 && raw))
+            checks.append((check, note == nil && wrong.luma + wrong.chroma == 0 && raw))
         }
         return .judged(checks, metrics, proof: probe.proof)
     }
 
-    /// The bytes off Metal's store over the target's passes, and why the passes could not run.
-    func exercise(_ gpu: GPU, _ target: Target) async throws -> (Int, String?) {
+    /// The codes off Metal's store over the target's passes in each plane, and why the passes could not run.
+    func exercise(_ gpu: GPU, _ target: Target) async throws -> ((luma: Int, chroma: Int), String?) {
         let (w, h) = (Self.width, Self.height)
         var made: CVPixelBuffer?
         let attributes =
@@ -80,19 +104,19 @@ struct YcbcrTargetTest: HWTest {
         guard CVPixelBufferCreate(nil, w, h, target.fourcc, attributes, &made) == kCVReturnSuccess, let buffer = made,
             let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue(),
             let format = MTLPixelFormat(rawValue: target.format)
-        else { return (0, "no surface") }
+        else { return ((0, 0), "no surface") }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: format, width: w, height: h, mipmapped: false)
         descriptor.usage = [.renderTarget, .shaderRead]
         guard let texture = gpu.device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0) else {
-            return (0, "no texture")
+            return ((0, 0), "no texture")
         }
         let floats: MTLRenderPipelineState, halves: MTLRenderPipelineState
         do {
             floats = try gpu.render(fragment: "texel_values", format: format)
             halves = try gpu.render(fragment: "texel_halves", format: format)
         } catch {
-            return (0, "no state: \(GPU.describe(error))")
+            return ((0, 0), "no state: \(GPU.describe(error))")
         }
         let values = Self.values(w * h)
         let halved = values.map { SIMD4<Float>(Float16($0.x).float, Float16($0.y).float, Float16($0.z).float, 1) }
@@ -101,7 +125,7 @@ struct YcbcrTargetTest: HWTest {
             (nil, Array(repeating: clear, count: w * h), .clear), (floats, values, .drawnFloat),
             (halves, halved, .drawnHalf),
         ]
-        var wrong = 0
+        var wrong = (luma: 0, chroma: 0)
         for (index, (state, texels, source)) in passes.enumerated() {
             Self.scribble(buffer, seed: UInt8(index))
             let data = try gpu.buffer(state == nil ? [clear] : values)
@@ -123,31 +147,42 @@ struct YcbcrTargetTest: HWTest {
                 }
                 encoder.endEncoding()
             }
-            wrong += Self.mismatches(buffer, Self.expected(target, texels, source), wide: target.format == 543)
+            let off = Self.mismatches(buffer, Self.expected(target, texels, source), wide: target.tenBit)
+            wrong = (wrong.luma + off[0], wrong.chroma + off[1])
         }
         return (wrong, nil)
     }
 
-    /// The planes Metal stores: plane 0's codes, then plane 1's Cb, Cr pairs.
+    /// The planes Metal stores: plane 0's codes, then plane 1's Cb, Cr pairs, each a 10-bit target's in its word's high
+    /// bits.
     static func expected(_ target: Target, _ texels: [SIMD4<Float>], _ source: YcbcrStore.Source) -> [[UInt16]] {
-        let down = target.fourcc != kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange
-        let full = target.fourcc == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        let (luma, chroma) =
-            target.format == 500
-            ? YcbcrStore.converted(texels, width: width, height: height, full: full, halvedDown: down)
-            : YcbcrStore.codes(
-                texels, width: width, height: height, max: target.format == 543 ? 1023 : 255, halvedDown: down,
-                source: source)
-        let shift: UInt16 = target.format == 543 ? 6 : 0
-        return [luma.map { $0 << shift }, chroma.map { $0 << shift }]
+        let shift: UInt16 = target.tenBit ? 6 : 0
+        return codes(target, texels, source).map { $0.map { $0 << shift } }
     }
 
-    static func mismatches(_ buffer: CVPixelBuffer, _ planes: [[UInt16]], wide: Bool) -> Int {
+    /// The codes of the planes Metal stores.
+    static func codes(_ target: Target, _ texels: [SIMD4<Float>], _ source: YcbcrStore.Source) -> [[UInt16]] {
+        let (luma, chroma) =
+            target.converted
+            ? YcbcrStore.converted(
+                texels, width: width, height: height, bits: target.bits, full: target.full,
+                halvedAcross: target.halvedAcross, halvedDown: target.halvedDown, srgb: target.srgb, source: source)
+            : YcbcrStore.codes(
+                texels, width: width, height: height, max: target.tenBit ? 1023 : 255,
+                halvedAcross: target.halvedAcross, halvedDown: target.halvedDown, source: source)
+        return [luma, chroma]
+    }
+
+    /// Each plane's codes that differ from `planes`
+    static func mismatches(_ buffer: CVPixelBuffer, _ planes: [[UInt16]], wide: Bool) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        var wrong = 0
+        var wrong = [0, 0]
         for (plane, codes) in planes.enumerated() {
-            guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) else { return codes.count }
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) else {
+                wrong[plane] = codes.count
+                continue
+            }
             let row = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane)
             let rows = CVPixelBufferGetHeightOfPlane(buffer, plane)
             let perRow = codes.count / rows
@@ -159,7 +194,7 @@ struct YcbcrTargetTest: HWTest {
                         ? UInt16(line.load(fromByteOffset: 2 * x, as: UInt8.self))
                             | UInt16(line.load(fromByteOffset: 2 * x + 1, as: UInt8.self)) << 8
                         : UInt16(line.load(fromByteOffset: x, as: UInt8.self))
-                    wrong += stored == codes[y * perRow + x] ? 0 : 1
+                    wrong[plane] += stored == codes[y * perRow + x] ? 0 : 1
                 }
             }
         }

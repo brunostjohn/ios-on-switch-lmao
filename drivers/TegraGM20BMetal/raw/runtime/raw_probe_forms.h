@@ -68,11 +68,13 @@ struct ProbeForms {
     // an indexed draw's index fetch ends this many bytes past its offset (SET_INDEX_BUFFER_C/D), its indices never
     // padded: the hardware's answer past the limit is the draw's (0: today's)
     uint32_t indexLimit = 0;
+    // a storage form's draws take its barrier twin wherever it has one (HW Test gpu.raw.xr_two_plane's barrier cells)
+    bool barrierFetch = false;
 
     bool any() const
     {
         return pass != PassForm::Today || entry != EntryForm::Today || switchForm != SwitchForm::Today || resolveTwoD ||
-               indexLimit;
+               indexLimit || barrierFetch;
     }
 
     bool keepsTiledFlush() const
@@ -101,7 +103,7 @@ struct ProbeTaken {
 };
 
 // "pass=<today|pixel|pixel_nowfi|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
-// resolve=<draw|twod> index=<bytes>", any subset in any order; false on anything else
+// resolve=<draw|twod> index=<bytes> fetch=<today|barrier>", any subset in any order; false on anything else
 inline bool parseProbeForms(const char *text, ProbeForms &out)
 {
     ProbeForms f;
@@ -144,6 +146,8 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
         else if (key == "index" && !value.empty() && value.size() < 9 &&
                  value.find_first_not_of("0123456789") == std::string::npos && std::stoul(value))
             f.indexLimit = uint32_t(std::stoul(value));
+        else if (key == "fetch" && (value == "today" || value == "barrier"))
+            f.barrierFetch = value == "barrier";
         else
             return false;
     }

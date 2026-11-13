@@ -29,9 +29,11 @@ struct EmitRegister {
 
 // `keyFields`: the state key's fields before " | v" (Pack::string(keyString), RuntimeRecord::keyString). `blended`: the
 // color attachments m2v hands a Vulkan blend (bit j: attachment j), where its translation is at hand; null: taken from the
-// key, a blend of ONE and ZERO left off. False: a field it can't read (`why`)
+// key, a blend of ONE and ZERO left off. `twoPlane`: its RGB10A8_2P_XR10 colours drawn in their two planes (raw_xr_pass.h),
+// each alpha byte a target of its own. False: a field it can't read (`why`)
 bool emitState(const std::string &keyFields, const EmitProgram &vertex, const EmitProgram &fragment,
-               std::vector<EmitRegister> &out, std::string &why, const uint32_t *blended = nullptr);
+               std::vector<EmitRegister> &out, std::string &why, const uint32_t *blended = nullptr,
+               bool twoPlane = false);
 
 // The vertex input's registers (SET_VERTEX_ATTRIBUTE_A(0..31), SET_VERTEX_STREAM_A_FORMAT of each stream) from the key's
 // vertex descriptor fields and `attributes`, the vertex function's [[attribute(n)]] inputs it reads (its reflection's active
@@ -40,6 +42,17 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
 // lacks, or a format or step m2v would fetch in the shader (`why`)
 bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
                      std::vector<EmitRegister> &out, std::string &why);
+
+// A fixed-function vertex stream emitVertexInput lays out: its Metal buffer index, and whether its stride is its bind's
+// (the key's UINT32_MAX)
+struct EmitStream {
+    uint8_t buffer;
+    bool bindStride;
+};
+
+// The same, with the streams in stream order
+bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
+                     std::vector<EmitRegister> &out, std::vector<EmitStream> &streams, std::string &why);
 
 // Every method emitState and emitVertexInput may write
 std::set<uint32_t> emittableMethods();

@@ -169,6 +169,7 @@ static raw::Device *openDevice(const char *packPath, uint64_t stack, raw::Device
 {
     raw::Device *dev = new raw::Device;
     dev->indexZeroPastLimit = raw::answers::chipFeature(SWITCH_GM20B_FEATURE_3D_B11);
+    dev->heapHolds(rmHeapHolds);
     if (!dev->open(packPath, stack, err, role)) {
         delete dev;  // its connection closes: the kernel frees what it held
         return nullptr;

@@ -4,7 +4,8 @@
 // pack of one state is written for each process: its two programs a page or more, so they run in place from the pack's
 // pages, and a metallib at <dir>/QuartzCore.framework/default.metallib listing the state's functions, so the state is the
 // framework's and looked up in the pack. The m2v device is a stand-in that answers zero: what a test reads is whether, and
-// for what, the facade opened it.
+// for what, the facade opened it. facade::device() is instead opened once per process over a pack of no states with no m2v
+// device, the frontend and the bridge answered by raw_facade_standins.mm.
 #pragma once
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -12,21 +13,28 @@
 #import <objc/runtime.h>
 #include "raw_kernel_model.h"
 #include "made_metallib.h"
+#include "empty_pack.h"
+#include "raw_facade_standins.h"
 #include "../raw/runtime/RawMetal.h"
+#include "../raw/runtime/RawMetalInternal.h"
 #include "../raw/runtime/RawPipelineKey.h"
+#include "../raw/runtime/raw_compute_key.h"
+#include "../raw/runtime/raw_metallib.h"
 #include "../raw/runtime/raw_pack.h"
+#include <algorithm>
 #include <dlfcn.h>
+#include <map>
 #include <libproc.h>
 #include <mach/mach.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
-#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
+#include <gtest/gtest.h>
 
 // The m2v device: no object of its own, every Metal selector answered zero; harnessSelfRegistry is m2v's device class's
 // method the raw device has none of, run on whichever device it was sent to (RawM2V.methods)
@@ -107,11 +115,13 @@ inline std::vector<uint8_t> slot(uint32_t k)
 }
 
 // A pack of this build's version holding the state of `key`: vertex program slot 0, fragment slot 1, each kSlot bytes in
-// the heap section at kHeap, so a page-multiple slot of the pack's own pages; and `kernels`, each with a program slot of
-// its own after those (its `program` set here)
-inline std::string writePack(const std::string &key, std::vector<raw::PackKernel> kernels = {})
+// the heap section at kHeap, so a page-multiple slot of the pack's own pages; `kernels`, each with a program slot of its
+// own after those (its `program` set here); `facts`: its compute states' answers
+inline std::string writePack(const std::string &key, std::vector<raw::PackKernel> kernels = {},
+                             std::vector<raw::PackComputeFacts> facts = {})
 {
-    constexpr uint64_t kPrograms = 0x100, kPipelines = 0x800, kStrings = 0xe00, kKernels = 0x2000;
+    constexpr uint64_t kPrograms = 0x180, kPipelines = 0x800, kComputeStates = 0xc00, kStrings = 0xe00,
+                       kKernels = 0x2000;
     const uint32_t programs = 2 + uint32_t(kernels.size());
     std::vector<uint8_t> file(kHeap + programs * kSlot + 0x1000, 0);
     raw::PackHeader h = {};
@@ -128,6 +138,11 @@ inline std::string writePack(const std::string &key, std::vector<raw::PackKernel
     h.section[raw::PackStrings] = {kStrings, strings.size()};
     h.section[raw::PackKernels] = {kKernels, kernels.size() * sizeof(raw::PackKernel)};
     h.section[raw::PackHeap] = {kHeap, programs * kSlot + 0x1000};
+    std::sort(facts.begin(), facts.end(), [](const auto &a, const auto &b) {
+        return a.keyHash < b.keyHash;
+    });
+    h.section[raw::PackComputeStates] = {kComputeStates, facts.size() * sizeof(raw::PackComputeFacts)};
+    memcpy(file.data() + kComputeStates, facts.data(), facts.size() * sizeof(raw::PackComputeFacts));
     memcpy(file.data(), &h, sizeof h);
     for (uint32_t k = 0; k < programs; k++) {
         raw::PackProgram p = {};
@@ -161,15 +176,25 @@ inline std::string writePack(const std::string &key, std::vector<raw::PackKernel
     return path;
 }
 
-// QuartzCore's default library as the facade reads it: "v" a vertex function, "f" a fragment one
+// QuartzCore's default library as the facade reads it: "v" a vertex function, "f" a fragment one, "k" a kernel
 inline std::string writeMetallib()
 {
     const std::string framework = dir() + "/QuartzCore.framework";
     mkdir(framework.c_str(), 0755);
     const std::string path = framework + "/default.metallib";
-    const std::string bytes = made_metallib::universal({"v", "f"}, 0xA0, 0xEE, {0, 1});
+    const std::string bytes = made_metallib::universal({"v", "f", "k"}, 0xA0, 0xEE, {0, 1, 2});
     std::ofstream(path, std::ios::binary).write(bytes.data(), std::streamsize(bytes.size()));
     return path;
+}
+
+// The pack's hash of the compute state the library at `metallib` makes of `function` with no descriptor fields
+inline uint64_t computeStateHash(const std::string &metallib, const std::string &function)
+{
+    std::map<std::string, raw::AirHash> hashes;
+    if (!raw::metallibAirHashes(metallib, hashes) || !hashes.count(function))
+        return 0;
+    const std::string key = raw::computeStateKey(hashes[function], "", 0, false);
+    return raw::Pack::fnv(key.data(), key.size());
 }
 
 // What the opener was asked: each process's m2v device opens once, at most
@@ -292,3 +317,79 @@ inline id<MTLCommandBuffer> draw(id<MTLDevice> device, id<MTLRenderPipelineState
 }
 
 }  // namespace harness
+
+namespace facade {
+
+inline id<MTLDevice> device()
+{
+    static id<MTLDevice> opened = [] {
+        NSString *why = nil;
+        id<MTLDevice> made = raw_metal_device_open(emptyPack().c_str(), 0, nil, &why);
+        EXPECT_NE(made, nil) << (why ? why.UTF8String : "");
+        return made;
+    }();
+    return opened;
+}
+
+inline uint64_t word(MTLResourceID id)
+{
+    uint64_t w;
+    memcpy(&w, &id, sizeof w);
+    return w;
+}
+
+inline id<MTLBuffer> shared(NSUInteger length)
+{
+    return [device() newBufferWithLength:length options:MTLResourceStorageModeShared];
+}
+
+// An argument buffer of `fill` bytes, none of which an encoder's word or a test's constant is
+inline id<MTLBuffer> filled(NSUInteger length, uint8_t fill = 0xA5)
+{
+    id<MTLBuffer> b = shared(length);
+    memset(b.contents, fill, length);
+    return b;
+}
+
+inline id<MTLTexture> texture(MTLStorageMode mode = MTLStorageModeShared, id<MTLHeap> heap = nil)
+{
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                 width:16
+                                                                                height:16
+                                                                             mipmapped:NO];
+    d.storageMode = mode;
+    d.usage = MTLTextureUsageShaderRead;
+    return heap ? [heap newTextureWithDescriptor:d] : [device() newTextureWithDescriptor:d];
+}
+
+inline id<MTLSamplerState> sampler(bool normalized = true)
+{
+    MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
+    d.supportArgumentBuffers = YES;
+    d.normalizedCoordinates = normalized;
+    return [device() newSamplerStateWithDescriptor:d];
+}
+
+inline id<MTLHeap> heap(MTLStorageMode mode, NSUInteger bytes)
+{
+    MTLHeapDescriptor *d = [MTLHeapDescriptor new];
+    d.size = bytes;
+    d.storageMode = mode;
+    d.type = MTLHeapTypeAutomatic;
+    return [device() newHeapWithDescriptor:d];
+}
+
+inline std::vector<uint8_t> bytesOf(id<MTLBuffer> b)
+{
+    const auto *at = static_cast<const uint8_t *>(b.contents);
+    return {at, at + b.length};
+}
+
+inline uint64_t at(id<MTLBuffer> b, uint64_t offset)
+{
+    uint64_t w;
+    memcpy(&w, static_cast<const uint8_t *>(b.contents) + offset, sizeof w);
+    return w;
+}
+
+}  // namespace facade

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_dynamic_push.h"
 #include "raw_pack.h"
 #include "raw_zeta.h"
 #include <cstring>
@@ -13,16 +14,15 @@ inline uint32_t shaderStencilWord(const StencilFace &face)
 }
 
 inline void patchShaderTestPush(const PackShaderTests &tests, const DepthStencilDesc &state,
-                                const uint32_t references[2], const float depthRange[2], bool clamp, uint32_t push[32])
+                                const uint32_t references[2], const float depthRange[2], bool clamp, uint32_t *at,
+                                uint32_t first = 0, uint32_t count = 32)
 {
-    if (tests.depthWord) {
-        auto *words = push + tests.depthWord - 1;
+    if (uint32_t *words = fieldWords(at, first, count, tests.depthWord, 4)) {
         words[0] = (state.depthCompare & 7u) | uint32_t(state.depthWrite) << 3 | uint32_t(clamp) << 4;
         memcpy(words + 1, depthRange, 2 * sizeof(float));
         words[3] = 0;
     }
-    if (tests.stencilWord) {
-        auto *words = push + tests.stencilWord - 1;
+    if (uint32_t *words = fieldWords(at, first, count, tests.stencilWord, 4)) {
         words[0] = shaderStencilWord(state.front);
         words[1] = shaderStencilWord(state.back);
         words[2] = (references[0] & 255u) | (references[1] & 255u) << 8;

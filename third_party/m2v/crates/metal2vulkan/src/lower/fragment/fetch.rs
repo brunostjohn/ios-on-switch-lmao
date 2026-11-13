@@ -62,9 +62,9 @@
 //!   `unorm4x8_srgb`; EV XRR2-srgb1-m4 on the M4: every byte read, a texel an earlier draw of the
 //!   pass wrote read as the decode of its stored byte, every encode threshold, 4, 194, 304 floats
 //!   and every half written). The one- and two-channel sRGB formats are not measured, and stay
-//!   refused. `BGR5A1Unorm`, where the device grants `A1R5G5B5_UNORM_PACK16` no storage access
-//!   (NVK), is viewed in `R16_UINT` alike, its channels unpacked and packed by the function
-//!   (`packed`).
+//!   refused. `BGR5A1Unorm` and `BGR10A2Unorm`, where the device grants `A1R5G5B5_UNORM_PACK16`
+//!   and `A2R10G10B10_UNORM_PACK32` no storage access (NVK), are viewed in `R16_UINT` and
+//!   `R32_UINT` alike, their channels unpacked and packed by the function (`packed`).
 //!
 //! **Per sample**. Metal runs a function that reads a color attachment of a multisampled pass once
 //! per covered sample, reading its own sample, in draw order per sample, with `[[position]]`'s x
@@ -539,11 +539,11 @@ pub(crate) fn storage_form(
     // twelve-bit decode of the stored byte, `math::unpack`'s, even after an earlier draw of the
     // pass wrote it, and a write stores `math::pack`'s encode). The one- and two-channel sRGB
     // formats are not measured, nor is a blend into one.
-    // A `BGR5A1Unorm` attachment, which NVK grants no storage access, is viewed in `R16_UINT`, its
-    // channels unpacked and packed by the function (`packed`).
+    // A `BGR5A1Unorm` or `BGR10A2Unorm` attachment, which NVK grants no storage access, is viewed
+    // in `R16_UINT` or `R32_UINT`, its channels unpacked and packed by the function (`packed`).
     let uint_view = StorageAttachmentUse::uint_view_of(format).filter(|&u| {
         mapping.emulation == FormatEmulation::Direct
-            && ((srgb && u == vk::Format::R32_UINT) || format == packed::FORMAT)
+            && ((srgb && u == vk::Format::R32_UINT) || packed::is_packed(format))
     });
     let viewed = uint_view.unwrap_or(format);
     let writes = use_.writes;
@@ -1288,6 +1288,22 @@ pub(super) fn plan_sample(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Plan the invocation's layer for a function compiled for a layered pass
+/// (`LoweringInputs::layered_storage`), at which each storage-form image is addressed; nothing
+/// otherwise. A multisampled function's storage form in a layered pass is not implemented (its
+/// sample planes are an image's layers already).
+pub(super) fn plan_layer(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    if !cx.inputs.layered_storage || cx.families.fragment.fetch_layer.is_some() {
+        return Ok(());
+    }
+    if cx.inputs.multisampled {
+        return Err(not_implemented().into());
+    }
+    cx.families.fragment.fetch_layer = Some(stage_io::layer(cx)?);
+    cx.facts.insert(RuntimeFact::LayeredStorage);
+    Ok(())
+}
+
 /// Whether the function reads color attachment `color` in the storage form.
 pub(crate) fn is_storage(cx: &SelectCx<'_>, color: u32) -> bool {
     cx.families.fragment.fetch.contains_key(&color)
@@ -1328,10 +1344,11 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         cx.families.arith.converts(e);
     }
     // An sRGB texel decodes through Metal's twelve-bit table.
-    if sc.view.uint_view.is_some() && sc.view.format != packed::FORMAT {
+    if sc.view.uint_view.is_some() && !packed::is_packed(sc.view.format) {
         cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
     }
     plan_sample(cx)?;
+    plan_layer(cx)?;
     let coord = stage_io::frag_coord(cx);
     cx.families.fragment.fetch_coord = Some(coord);
     Ok(())
@@ -1452,6 +1469,7 @@ pub fn select_output(
         }));
     }
     plan_sample(cx)?;
+    plan_layer(cx)?;
     // The write rounds to the code Metal stores where the format converts it; an sRGB attachment's
     // write encodes its bytes itself (`math::pack` of a `float` or `half` output), and records the
     // pipeline's map, which link checks, without rounding a lane.
@@ -1463,7 +1481,7 @@ pub fn select_output(
         if !measured || form.lanes != 4 {
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
-        if sc.view.format != packed::FORMAT {
+        if !packed::is_packed(sc.view.format) {
             cx.families.arith.srgb.get_or_insert(PackDir::Pack);
         }
         if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
@@ -1593,14 +1611,19 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
 
 /// Declare storage-form attachment `color`'s storage image: a 2D storage image of its declared
 /// format and its numeric type, multisampled or arrayed as it holds the samples
-/// ([`StorageSamples`]).
-pub(super) fn declare(mb: &mut ModuleBuilder, color: u32, sc: &StorageColor) -> BResult<GlobalId> {
+/// ([`StorageSamples`]), or arrayed over a layered pass's layers (`layered`).
+pub(super) fn declare(
+    mb: &mut ModuleBuilder,
+    color: u32,
+    sc: &StorageColor,
+    layered: bool,
+) -> BResult<GlobalId> {
     let sampled_type = scalar_type(mb, sc.view.numeric)?;
     let ty = mb.ty(SType::Image(ImageType {
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: sc.view.samples == StorageSamples::Planes,
+        arrayed: sc.view.samples == StorageSamples::Planes || layered,
         multisampled: sc.view.samples == StorageSamples::Multisampled,
         usage: ImageUsage::Storage,
         format: sc.view.declared,
@@ -1694,6 +1717,27 @@ fn scalar_type(mb: &mut ModuleBuilder, numeric: SampledType) -> BResult<crate::s
 /// The storage image of attachment `color` held as `samples`, the texel of the invocation's
 /// sample, and the access's image operands: the invocation's [`pixel`] with its [`operands`],
 /// or, for planes, the pixel and the invocation's `SampleId` as the layer.
+/// The texel of storage-form attachment `color` at the invocation's pixel (at its sample as
+/// `samples` holds them), read inside the interlock: a two-plane attachment's raw texel joined
+/// from its two views.
+fn read_texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    samples: StorageSamples,
+) -> BResult<SValue> {
+    let (image, at, ops) = image_and_texel(cx, fb, color, samples)?;
+    let mem = memory_model::coherence(cx.plan).texel(fb)?;
+    let texel = fb.read(image, at, &ops, mem)?;
+    let Some(alpha) = super::two_plane::alpha(cx, color) else {
+        return Ok(texel);
+    };
+    let (image, at, ops) = image_and_texel(cx, fb, alpha, samples)?;
+    let mem = memory_model::coherence(cx.plan).texel(fb)?;
+    let byte = fb.read(image, at, &ops, mem)?;
+    super::two_plane::join(fb, texel, byte)
+}
+
 fn image_and_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1705,7 +1749,7 @@ fn image_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
-    let pixel = pixel(cx, fb)?;
+    let pixel = storage_texel(cx, fb)?;
     if samples != StorageSamples::Planes {
         let ops = operands(cx, fb)?;
         return Ok((image, pixel, ops));
@@ -1771,6 +1815,26 @@ pub(super) fn pixel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResul
     fb.composite_construct(uvec2, &[x, y])
 }
 
+/// The texel of a storage-form image at the invocation's pixel: the [`pixel`], and under the
+/// layered storage form (`FragmentPlan::fetch_layer`) the layer its primitive renders as well.
+pub(super) fn storage_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+    let pixel = pixel(cx, fb)?;
+    let Some(object) = cx.plan.families.fragment.fetch_layer else {
+        return Ok(pixel);
+    };
+    let g = stage_io::object_global(cx, object)?;
+    let p = fb.module().global_value(g)?;
+    let layer = fb.load(p, MemAccess::default())?;
+    let u32_ = fb.module().ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let uvec3 = fb.module().ty(SType::Vector { elem: u32_, len: 3 })?;
+    let x = fb.composite_extract(pixel, &[0])?;
+    let y = fb.composite_extract(pixel, &[1])?;
+    fb.composite_construct(uvec3, &[x, y, layer])
+}
+
 /// A `uvec4` of a signed-integer texel's bits, or the texel itself.
 fn as_held(fb: &mut FunctionBuilder<'_>, texel: SValue, numeric: SampledType) -> BResult<SValue> {
     if numeric != SampledType::Sint {
@@ -1802,11 +1866,7 @@ pub(super) fn value(
     };
     let texel = match texel {
         Some(held) => held,
-        None => {
-            let (image, at, ops) = image_and_texel(cx, fb, c.color, sc.view.samples)?;
-            let mem = memory_model::coherence(cx.plan).texel(fb)?;
-            fb.read(image, at, &ops, mem)?
-        }
+        None => read_texel(cx, fb, c.color, sc.view.samples)?,
     };
     let texel = match (sc.view.extended, sc.view.uint_view) {
         (Some(_), _) if sc.shadowed => texel,
@@ -1814,9 +1874,9 @@ pub(super) fn value(
             let table = crate::lower::texture::extended_table(cx, form)?;
             extended_range::tile_value(fb, form, texel, table)?
         }
-        (None, Some(_)) if sc.view.format == packed::FORMAT => {
+        (None, Some(_)) if packed::is_packed(sc.view.format) => {
             let word = fb.composite_extract(texel, &[0])?;
-            packed::decode(fb, word)?
+            packed::decode(fb, sc.view.format, word)?
         }
         (None, Some(_)) => {
             let Some(table) = cx.decl.families.arith.srgb else {
@@ -1900,9 +1960,10 @@ pub(super) fn emit_return(
                     true => rop_blended(cx, fb, color, &sc, (form, part), second)?,
                     false => (form, part),
                 };
-                match sc.view.format {
-                    packed::FORMAT => packed::texel(cx, fb, color, &sc, form, part)?,
-                    _ => srgb_texel(cx, fb, color, &sc, form, part)?,
+                if packed::is_packed(sc.view.format) {
+                    packed::texel(cx, fb, color, &sc, form, part)?
+                } else {
+                    srgb_texel(cx, fb, color, &sc, form, part)?
                 }
             }
             (None, _) => {
@@ -1926,8 +1987,19 @@ pub(super) fn emit_return(
                 texel_of(fb, part, form, sc.view.numeric)?
             }
         };
-        let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
-        texels.push((image, at, texel, ops));
+        match super::two_plane::alpha(cx, color) {
+            Some(alpha) => {
+                let [word, byte] = super::two_plane::split(fb, texel)?;
+                let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
+                texels.push((image, at, word, ops));
+                let (image, at, ops) = image_and_texel(cx, fb, alpha, sc.view.samples)?;
+                texels.push((image, at, byte, ops));
+            }
+            None => {
+                let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
+                texels.push((image, at, texel, ops));
+            }
+        }
         if let Some(held) = held {
             let (image, at) = shadow_and_texel(cx, fb, color)?;
             texels.push((image, at, held, ImageOperands::default()));
@@ -2165,9 +2237,7 @@ fn blended(
         if let Some(texel) = codes {
             return Ok(texel);
         }
-        let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
-        let mem = memory_model::coherence(cx.plan).texel(fb)?;
-        let texel = fb.read(image, at, &ops, mem)?;
+        let texel = read_texel(cx, fb, color, sc.view.samples)?;
         codes = Some(texel);
         Ok(texel)
     };

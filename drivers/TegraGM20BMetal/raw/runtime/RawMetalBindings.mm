@@ -150,8 +150,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
             hit(_cb, RMPred(x->_pred ?: (x->_rawOk && !x->_raw.rotation ? PredEncNoTic : PredTexShape)),
                 x->_descriptor.pixelFormat, x->_kind);
     }
-    if (stage == 2 && index < 16)
-        _tex[index] = x;
+    if ((stage == 1 || stage == 2) && index < raw::kStageTextures)
+        _tex[stage - 1][index] = x;
     if (x && x->_raw.sampled)
         _cb->_sampledShadows = true;
     if (x && x->_raw.standIn)
@@ -181,15 +181,18 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         [self texture:1 object:t[k] index:r.location + k];
 }
 
-// No raw record reads a vertex-stage texture or sampler (raw_direct.cpp and raw_record.cpp take stage 2's alone): a vertex
-// sampler is recorded for m2v's replay and binds nothing here, and a state whose vertex function samples is not the raw
-// path's, which its draws' state predicate decides
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index
 {
     SWITCH_API(ApiBind);
     if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
         [_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(_cb, PredCallSamplerForeign, index);
+    }
+    // m2v filters through a cubic sampler in the shader, which only the fragment stage's records have variants of
+    // (RawMetalCubic.mm)
+    if (stage == 1 && [(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.cubic) {
+        [_cb takeReason:WhyCall why:@"a cubic vertex sampler"];
+        hit(_cb, PredCallVertexSampler, index);
     }
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;

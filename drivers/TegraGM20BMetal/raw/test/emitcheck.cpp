@@ -74,7 +74,8 @@ int main(int argc, char **argv)
         const std::map<uint32_t, uint32_t> regs = registers(pack, pipes[i]);
         std::vector<raw::EmitRegister> made;
         std::string why;
-        if (!raw::emitState(pack.string(pipes[i].keyString), info[pipes[i].vs], info[pipes[i].fs], made, why)) {
+        if (!raw::emitState(pack.string(pipes[i].keyString), info[pipes[i].vs], info[pipes[i].fs], made, why, nullptr,
+                            pipes[i].flags & raw::PipelineTwoPlane)) {
             if (!unparsed++)
                 printf("emitcheck: %s\n", why.c_str());
             continue;

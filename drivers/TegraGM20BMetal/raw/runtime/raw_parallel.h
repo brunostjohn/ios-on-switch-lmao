@@ -35,12 +35,17 @@ inline size_t extraWords(const Cmd &c)
     case OpScissor:
         return c.index > 1 ? 4 * size_t(c.index) : 0;
     case OpDispatch:
-        return 6;
+        return 12;
     case OpBlendColor:
         return 4;
     case OpDepthBias:
     case OpDrawIndexed:
         return 3;
+    case OpDrawPatches:
+    case OpDrawPatchesIndirect:
+        return PatchExtraWords;
+    case OpAmplification:
+        return kAmplificationExtraWords;
     default:
         return 0;
     }

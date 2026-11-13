@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #import "RawMetalMultisample.h"
-#import "RawMetalXrPlanes.h"
 #include "raw_texture_cpu_range.h"
 
 namespace {
@@ -108,10 +107,14 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 - (void)dealloc
 {
     _twin = nil;
-    if (_heap && !_raw.arena)
+    if (_heap && !_raw.arena) {
         _heap->_used -= _heapBytes;
-    if (_rawOk && _surface && (_raw.converted() || xrOverPlanes(_raw)))
+        const raw::Texture::StorageRange storage = _raw.storageRange();
+        rmHeapForget(_heap, storage.bytes ? storage.va : _raw.va);
+    }
+    if (_rawOk && _surface && _raw.converted())
         surfaceConverted(_surfaceWrites, false);
+    rmHeapForgetTexture(self);
     if (_rawOk)
         if (gRM)
             gRM->raw->destroyTexture(_raw);
@@ -137,8 +140,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
             rmTexturePlain(self);
-            if (_raw.zeta &&
-                _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
+            // zeta memory of its own (raw::Device::createOwnedZeta): only a range that keeps none of it replays (ownedZetaIn)
+            if (_raw.zeta && (_raw.samples > 1 || _raw.arena)) {
                 made = [m2v newTextureWithDescriptor:_descriptor];
                 break;
             }
@@ -153,11 +156,16 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             const bool released = _raw.arena && !_raw.span.valid() && _heap && _heap->_arena;
             uint8_t *cpu = released ? _raw.cpu : _raw.span.cpu;
             uint64_t bytes = _raw.span.bytes, align;
+            const auto releasedBytes = [&] {
+                raw::TextureAsk ask;
+                if (!heapTextureAsk(_descriptor, _heap->_descriptor.storageMode == MTLStorageModePrivate, ask))
+                    return false;
+                ask.standIn = false;
+                return raw::Device::footprint(ask, bytes, align);
+            };
             const bool shared =
                 heapResident(_heap) &&
-                (released ? raw::Device::arenaFootprint(_raw.width, _raw.height, uint32_t(_descriptor.pixelFormat),
-                                                        _raw.blockLinear, bytes, align) &&
-                                gRM->raw->aliasArenaRange(_heap->_arena - 1, _raw.va, bytes, a)
+                (released ? releasedBytes() && gRM->raw->aliasArenaRange(_heap->_arena - 1, _raw.va, bytes, a)
                           : gRM->raw->alias(_raw, a));
             id<MTLBuffer> pages = shared ? rawAliasBuffer(a, cpu, (NSUInteger(bytes) + page - 1) & ~(page - 1),
                                                           MTLResourceStorageModeShared)

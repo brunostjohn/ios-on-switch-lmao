@@ -65,9 +65,15 @@ struct nak_fs_key {
 
    /** Maxwell: fetches rounded to half take TEXS's F16 forms (a chip fact) */
    bool texs_f16;
+
+   /** Switch: drawn into a turned plane (NVK's nvk_switch_turn.h) */
+   bool turned;
+
+   /** Switch: the set-0 bindings read in two planes, little endian (NVK's nvk_switch_xr_planes.h) */
+   uint8_t xr_plane_bindings[8];
 };
 PRAGMA_DIAGNOSTIC_POP
-static_assert(sizeof(struct nak_fs_key) == 5, "This struct has no holes");
+static_assert(sizeof(struct nak_fs_key) == 14, "This struct has no holes");
 
 struct nak_constant_offset_info {
    /**
@@ -130,6 +136,10 @@ void nak_postprocess_nir(nir_shader *nir, const struct nak_compiler *nak,
                          nir_variable_mode robust2_modes,
                          const struct nak_fs_key *fs_key,
                          bool has_task_shader);
+/* Switch: the shader's functions freed, its variables, info and constant
+ * data kept, once NAK has the code in its own IR.
+ */
+void nak_release_nir_body(nir_shader *nir);
 
 enum ENUM_PACKED nak_ts_domain {
    NAK_TS_DOMAIN_ISOLINE = 0,

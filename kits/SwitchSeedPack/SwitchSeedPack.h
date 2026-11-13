@@ -33,6 +33,8 @@ namespace switch_seed_pack {
 constexpr char kMagic[8] = {'S', 'W', 'S', 'E', 'E', 'D', 'P', 'K'};
 constexpr uint32_t kVersion = 1, kMaxPrefixBits = 24, kMinNameBytes = 4, kMaxNameBytes = 64;
 constexpr size_t kHeaderBytes = 64, kIdentityBytes = 32, kEntryTailBytes = 12;
+// The page an entry of whole pages starts on (SwitchSeedPackWriter.h), SwitchSeedStore.h's kStorePageBytes
+constexpr uint64_t kPageBytes = 16384;
 
 inline uint32_t le32(const uint8_t *p)
 {
@@ -174,6 +176,17 @@ public:
                 return true;
             }
         }
+        return false;
+    }
+
+    // The pack mapping `at` lies in (a find's bytes): its first byte and size; false: none of this seed's
+    bool packOf(const uint8_t *at, Bytes &pack) const
+    {
+        for (const Bytes &p : packs_)
+            if (p.data && at >= p.data && at < p.data + p.size) {
+                pack = p;
+                return true;
+            }
         return false;
     }
 

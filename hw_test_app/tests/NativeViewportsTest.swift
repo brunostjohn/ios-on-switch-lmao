@@ -88,7 +88,7 @@ struct NativeViewportsTest: NativeObjectTest {
 struct NativeViewportIndexTest: NativeObjectTest {
     let id = "metal.native.viewport_index"
     let name = "A vertex function chooses among 16 viewports and scissors, each tile its instance's"
-    var unavailable: String? { Layering.a13 ? nil : "21H461's A10X (Apple3) has no multiple viewports (Apple5)" }
+    var unavailable: String? { Layering.a13 ? nil : "the A10X's Metal has no [[viewport_array_index]] (Apple5)" }
 
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let t = try ViewportTiles.target(gpu)

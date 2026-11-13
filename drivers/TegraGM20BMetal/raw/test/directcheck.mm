@@ -8,15 +8,19 @@
 //   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
 //   that it met every record of the pack)
 //   DIRECTCHECK_DUMP=<dir>: writes each record made to <dir>/<key hash>.json (its key, programs and blob), what
-//   tools/gpu/maxwell/nakstat.py --dump reads
+//   tools/gpu/maxwell/nakstat.py --dump reads, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json
+//   with its rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
 // Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
-// device's harvest against the pack it booted with, they are the states its runtime refused.
+// device's harvest against the pack it booted with, they are the states its runtime refused. A state made in the barrier
+// form because its storage form was refused is listed with that reason (BARRIER FORM lines).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
 #include <cstdio>
 #include <set>
+#include <sys/stat.h>
 #include "../pack/direct_states.h"
+#include "../pack/fetch_free_make.h"
 #include "../runtime/RawDirect.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
@@ -53,11 +57,15 @@ std::string jsonString(const std::string &text)
     return out + "\"";
 }
 
-void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecord &rec)
+void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecord &rec,
+                const probe::FetchFree *free = nullptr)
 {
     char name[32];
     snprintf(name, sizeof name, "/%016llx.json", (unsigned long long)raw::packKeyHash(key));
-    const std::string path = std::string(dir) + name;
+    const std::string folder = std::string(dir) + (free ? "/free" : "");
+    if (free)
+        mkdir(folder.c_str(), 0755);
+    const std::string path = folder + name;
     FILE *f = fopen(path.c_str(), "w");
     if (!f)
         return;
@@ -69,6 +77,23 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
         if (u.entry < rec.pipeline.entries && raw::bufferResidualWord(rec.pipeline.entry[u.entry]) >= 0)
             residuals += std::string(residuals.empty() ? "" : ", ") +
                          std::to_string(0x700 + 4 * raw::bufferResidualWord(rec.pipeline.entry[u.entry]));
+    std::string uniform, entries;
+    for (const raw::PackUniformRange &u : rec.pipeline.uniform)
+        uniform += std::string(uniform.empty() ? "" : ", ") + "[" + std::to_string(u.entry) + ", " +
+                   std::to_string(u.bank) + ", " + std::to_string(u.first) + ", " + std::to_string(u.end) + "]";
+    for (uint32_t k = 0; k < rec.pipeline.entries; k++) {
+        const raw::PackEntry &e = rec.pipeline.entry[k];
+        entries += std::string(k ? ", " : "") + "[" + std::to_string(e.kind) + ", " + std::to_string(e.stage) + ", " +
+                   std::to_string(e.slot) + ", " + std::to_string(e.samplerKind) + ", " + std::to_string(e.offset) +
+                   "]";
+    }
+    std::string setBanks;
+    for (size_t b = 0; b < rec.programs[1].cbufTypes.size(); b++)
+        if (raw::cbufKind(rec.programs[1].cbufTypes[b]) == raw::CbufSet)
+            setBanks += std::string(setBanks.empty() ? "" : ", ") + std::to_string(b);
+    std::string cbufs;
+    for (size_t b = 0; b < rec.programs[1].cbufTypes.size(); b++)
+        cbufs += std::string(b ? ", " : "") + std::to_string(rec.programs[1].cbufTypes[b]);
     std::string variants;
     for (size_t i = 0; i < rec.variants.size(); i++) {
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
@@ -81,14 +106,30 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
             "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
             "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
-            "\"half_blend_color_word\": %u}\n",
+            "\"half_blend_color_word\": %u, \"free_rung\": %d, \"free_colour\": %u, \"free_program\": %s, "
+            "\"uniform\": [%s], \"entries\": [%s], \"fs_set_banks\": [%s], \"storage_write_mask\": %u, "
+            "\"fs_cbufs\": [%s], \"fs_data\": \"%s\"}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
             rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
             rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str(),
             rec.pipeline.storageMask, rec.pipeline.storageBlendMask, rec.pipeline.storageBlendModel,
-            rec.pipeline.halfBlendColorWord);
+            rec.pipeline.halfBlendColorWord, free ? free->rung : 0, free ? free->colour : 0,
+            jsonString(free ? free->program : "").c_str(), uniform.c_str(), entries.c_str(), setBanks.c_str(),
+            rec.pipeline.storageWriteMask, cbufs.c_str(), hexOf(rec.programs[1].data).c_str());
     fclose(f);
+}
+
+// The state's fetch-free form, made as directpack.mm makes it (fetch_free_make.h)
+void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &line, const std::string &key,
+                   raw::ProbeTextures textures, const char *dir)
+{
+    probe::FetchFree form;
+    raw::RuntimeRecord rec;
+    std::string why;
+    bool barrier = false;
+    if (probe::makeFetchFree(direct, qc, line, textures, form, rec, nullptr, why, barrier) == probe::FreeOutcome::Made)
+        dumpRecord(dir, key, rec, &form);
 }
 
 }  // namespace
@@ -146,22 +187,33 @@ int main(int argc, char **argv)
                     textures.fragmentTests = uint8_t(atoi(tests));
                     key += " | tests=" + std::to_string(textures.fragmentTests);
                 }
+                textures.written = s.written;
+                key += raw::writtenVariant(s.written);
                 const size_t named = raw::variantNameAt(key);
                 const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
-                const raw::PackPipeline *pp =
-                    named < key.size() ? pack.variantRecord(keyHash, key.substr(named)) : pack.find(keyHash);
+                // DIRECTCHECK_BARRIER=1: each state's barrier form against the pack's
+                const bool barrierForm = getenv("DIRECTCHECK_BARRIER") && *getenv("DIRECTCHECK_BARRIER") == '1';
+                const raw::PackPipeline *pp = named < key.size() ? pack.variantRecord(keyHash, key.substr(named))
+                                              : barrierForm      ? pack.find(keyHash, raw::PackForm::Barrier)
+                                                                 : pack.find(keyHash);
                 const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
                 raw::RuntimeRecord rec;
                 std::string why;
                 const auto began = std::chrono::steady_clock::now();
-                const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, nullptr, true);
+                const raw::CompileOutcome outcome =
+                    direct.make(s.d, key, rec, why, textures, nullptr, true,
+                                barrierForm ? raw::PackForm::Barrier : raw::PackForm::Default);
                 if (pp && named < key.size()) {
                     rec.pipeline.keyHash = keyHash;
                     rec.pipeline.flags |= raw::PipelineVariantRecord;
                 }
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
-                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made)
+                if (outcome == raw::CompileOutcome::Made && !direct.storageRefusal().empty())
+                    printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
+                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made) {
                     dumpRecord(dir, key, rec);
+                    dumpFetchFree(direct, qc, line, key, textures, dir);
+                }
                 std::string verdict;
                 if (outcome == raw::CompileOutcome::Failed) {
                     verdict = " failed (" + why + ")";

@@ -2,13 +2,13 @@
 """directlink: the raw pack (runtime/raw_pack.h) from the direct compile's records (directpack.mm), by mkpack's rules.
 
 A record holds the 3D registers raw_emit makes for its state. Every other register is the context a draw meets: the
-warm-up draw's registers (one probe draw: the context init and what NVK writes alike for every state), over which each
-state's own are laid as the probe saw them. mkpack.py's split_registers then tells the per-pipeline registers from the
-baseline, and the programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
+channel's registers after its context init (context.log), with what draw_context.txt changes of them, over which each
+state's own are laid. mkpack.py's split_registers then tells the per-pipeline registers from the baseline, and the
+programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
 
 usage: directlink.py <out dir> [--archives <inventory.tsv>] <bucket dir>...
-(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds warm.out and warm.log; the inventory gives
-the binary archives' declared states, archives.py)
+(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds context.log, the context init as nvdec ran
+it: context_state.cpp; the inventory gives the binary archives' declared states, archives.py)
 writes <out dir>/pack.bin, pack.json, layouts.txt, programs.bin (every render program, for nvdec) and report.txt
 """
 
@@ -17,18 +17,35 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'iterated'))
 import archives
+import fetchfree_link
 import kernels
 import mkpack
 import packfile
-import probelog
 import splits
 
-PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
+PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
-PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
+PIPELINE_BYTES = (
+    PIPELINE.size
+    + packfile.PACK_ENTRIES * 8
+    + 4
+    + 32 * 4
+    + 4
+    + 36
+    + 16
+    + packfile.PIPELINE_V15.size
+    + packfile.PIPELINE_V18.size
+    + packfile.PIPELINE_V20.size
+    + packfile.PIPELINE_V21.size
+    + packfile.PIPELINE_V22.size
+)
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
+TABLE_KINDS = {code: kind for kind, code in packfile.TABLE_KINDS.items()}
+# SET_VERTEX_STREAM_A_FORMAT(0), 16 bytes apart, and its STRIDE field (bits 11:0)
+STREAM_FORMAT, STREAM_STRIDE = 0x1C00, 0xFFF
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
 
@@ -58,6 +75,10 @@ def program(r: Reader) -> dict:
     return out
 
 
+def words_of(blob: bytes) -> list[int]:
+    return list(struct.unpack(f'<{len(blob) // 4}I', blob))
+
+
 def headers(blob: bytes) -> list[list[int]]:
     return [list(struct.unpack_from('<8I', blob, 32 * i)) for i in range(len(blob) // 32)]
 
@@ -78,6 +99,8 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
                 rec['kernel'] = r.blob()
                 rec['program'] = {'image': bytes(80) + r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
                 rec['samplers'] = headers(r.blob())
+                rec['spill'] = words_of(r.blob())
+                rec['facts'] = struct.unpack('<3I', r.blob())
             kernel_recs.append(rec)
             continue
         if outcome == 0:
@@ -90,6 +113,10 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
             if r.u32():
                 rec['split'] = {'record': r.blob(), 'programs': [program(r) for _ in range(2)]}
             rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
+            rec['iterated'] = r.blob().decode()
+            rec['spill'] = words_of(r.blob())
+            mask, push = r.u32(), words_of(r.blob())
+            rec['bound'] = {'mask': mask, 'push': push, 'spill': [words_of(r.blob()), words_of(r.blob())]}
         states.append(rec)
     return states, kernel_recs
 
@@ -114,6 +141,8 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
         )
         if kind == ENTRY_COLOR_TABLE:
             out.append({'off': off, 'kind': 'color_table'})
+        elif kind in TABLE_KINDS:
+            out.append({'off': off, 'kind': TABLE_KINDS[kind], 'stage': stage})
         elif kind == ENTRY_UBO:
             residual = sampler_kind >> 2
             out.append(
@@ -129,8 +158,11 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
             )
         else:
             entry = {'off': off, 'kind': 'handle', 'tex': (TEXTURE_KINDS[kind], slot) if kind else None, 'smp': None}
+            if stage == 1:
+                entry['stage'] = 'v'
             if sampler_kind == SAMPLER_SLOT:
                 entry['smp'] = ('slot', sampler)
+                entry['compare'] = bool(pad & packfile.ENTRY_COMPARES)
             elif sampler_kind == SAMPLER_CONSTEXPR:
                 header = samplers[sampler]
                 if header not in constexpr_tsc:
@@ -138,6 +170,37 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
                 entry['smp'] = ('constexpr', constexpr_tsc.index(header))
             out.append(entry)
     return out
+
+
+def layout_strides(key: str) -> dict[int, int]:
+    """Give each Metal vertex buffer's layout stride, as the key's a<i>=format:offset:buffer:stride:... fields say."""
+    out = {}
+    for field in key.partition(' | ')[0].split():
+        name, _, value = field.partition('=')
+        parts = value.split(':')
+        if name[:1] == 'a' and name[1:].isdigit() and len(parts) == 6 and all(p.isdigit() for p in parts):
+            out[int(parts[2])] = int(parts[3])
+    return out
+
+
+def check_streams(key: str, slot: int, streams: list[int], regs: dict[int, int]) -> None:
+    """Refuse a record whose fixed-function vertex stream fetches at another stride than its layout's.
+
+    m2v pulls a layout past maxVertexInputBindingStride (2048) in the shader, so no stream's stride is past the format's
+    12 bits; a record that says otherwise would draw at its stride's low bits.
+    """
+    buffers = ([slot] if slot != 0xFF else []) + [(s & ~packfile.STREAM_BIND_STRIDE) - 1 for s in streams]
+    strides = layout_strides(key)
+    for k, buffer in enumerate(buffers):
+        stride = strides.get(buffer)
+        held = regs.get(STREAM_FORMAT + 0x10 * k, 0) & STREAM_STRIDE
+        if stride is None or stride > STREAM_STRIDE or held != stride:
+            raise ValueError(f'vertex stream {k} of buffer {buffer} at stride {held}, its layout {stride}: {key}')
+
+
+def two_plane_colors(key: str) -> int:
+    """Give the RGB10A8_2P_XR10 colours of a state's key."""
+    return sum(1 for t in key.split(' | ')[0].split() if t[:1] == 'c' and t[1:2].isdigit() and t[3:7] == '550:')
 
 
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
@@ -149,7 +212,19 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
+    v22_at = PIPELINE_BYTES - packfile.PIPELINE_V22.size
+    *written_format, xr_slots = packfile.PIPELINE_V22.unpack_from(p, v22_at)
+    head, array_length_word, pulled, streams, viewport_count_word = packfile.PIPELINE_V21.unpack_from(
+        p, v22_at - packfile.PIPELINE_V21.size
+    )
+    runtime_only = head != packfile.RUNTIME_ONLY_HEAD or pulled != packfile.RUNTIME_ONLY_PULLED
+    if runtime_only or any(s & packfile.STREAM_BIND_STRIDE for s in streams):
+        raise ValueError(
+            'a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none'
+        )
+    streams = streams[: streams.index(0)] if 0 in streams else streams
+    v20_at = v22_at - packfile.PIPELINE_V21.size - packfile.PIPELINE_V20.size
+    tail = v20_at - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
@@ -160,10 +235,17 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     v15 = packfile.PIPELINE_V15.unpack_from(p, tail)
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
     bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
+    (memory_entries,) = packfile.PIPELINE_V18.unpack_from(p, tail + packfile.PIPELINE_V15.size)
+    v20 = packfile.PIPELINE_V20.unpack_from(p, v20_at)
+    heap_arrays, heap_bytes, heap_words = v20[6], v20[7], v20[8:24]
+    spill_entry, spill_words, spill = list(v20[24:26]), v20[26:28], rec.get('spill', [])
     regs = rec['probe']['records'][0]['regs']
+    check_streams(rec['key'], slot, streams, regs)
+    # a two-plane record's alpha bytes are targets of their own past the key's (runtime/raw_xr_pass.h)
+    targets = mkpack.targets(rec['key']) + (two_plane_colors(rec['key']) if flags & 128 else 0)
     varying = list(varying)
     if storage_mask:
-        for method in [0x0210, 0x0754, 0x1224] + [0x1a00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
+        for method in [0x0210, 0x0754, 0x1224] + [0x1A00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
             if method not in varying:
                 varying.append(method)
     return {
@@ -172,15 +254,14 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'form': rec['probe']['form'],
         'vs': prog_index[program_id(rec['programs'][0])],
         'fs': prog_index[program_id(rec['programs'][1])],
-        'blob': [
-            (m, regs.get(m, 0))
-            for m in varying
-            if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, mkpack.targets(rec['key']))
-        ],
+        'blob': [(m, regs.get(m, 0)) for m in varying if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, targets)],
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1],
         'push_metadata': bool(flags & 4),
+        'turn_refused': bool(flags & 64),
+        'two_plane': bool(flags & 128),
         'blend_color_word': blend,
         'half_blend_color_word': half,
+        'xr_slots': xr_slots,
         'storage_mask': storage_mask,
         'storage_write_mask': storage_write_mask,
         'storage_samples': storage_samples,
@@ -196,12 +277,26 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'set_size': set_bytes,
         'entries': entries_of(p, entries, rec['samplers'], constexpr_tsc),
         'vbs': [{'stream': 0, 'slot': slot, 'stride': stride}] if slot != 0xFF else [],
+        'vertex_streams': list(streams),
+        'array_length_word': array_length_word,
+        'viewport_count_word': viewport_count_word,
         'fetch': bool(flags & 1),
         'clears': 0,
         'problems': [],
         'bound_entries': bound_entries,
+        'memory_entries': memory_entries,
+        'root_table_word': list(v20[0:2]),
+        'status_word': list(v20[2:4]),
+        'root_slots': list(v20[4:6]),
+        'heap': [{'class': heap_words[2 * i], 'offset': heap_words[2 * i + 1]} for i in range(heap_arrays)],
+        'heap_bytes': heap_bytes,
+        'spill_entry': spill_entry,
+        'spill': [spill[: spill_words[0]], spill[spill_words[0] : spill_words[0] + spill_words[1]]],
         'uniform': uniform,
         'fetch_rung': list(fetch_rung),
+        'iterated_name': rec.get('iterated', ''),
+        'fs_image': rec['programs'][1]['image'],
+        'written_format': written_format,
         'variants': [
             {
                 'stage': 0 if i < vertex_variants else 1,
@@ -213,12 +308,26 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     }
 
 
-def warm_registers(out_path: str, log_path: str) -> dict[int, int]:
-    """Give the registers the warm-up probe's draw met (its context: every register a state does not set)."""
-    for p in probelog.load(out_path, log_path):
-        if p['records']:
-            return p['records'][0]['regs']
-    raise ValueError(f'{log_path}: no draw')
+def init_records(path: str) -> list[tuple[int, int, int, int]]:
+    """Give the context init as the pack holds it: each method's subchannel, method, word and relocation (I lines)."""
+    with open(path) as f:
+        rows = [line.split()[1:] for line in f if line.startswith('I ')]
+    return [(int(sc), int(m, 16), int(d, 16), int(reloc)) for sc, m, d, reloc in rows]
+
+
+def draw_context(post: dict[int, int]) -> dict[int, int]:
+    """Give the registers a state's draw meets but does not set: post-init's, as draw_context.txt changes them."""
+    context = dict(post)
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'draw_context.txt')) as f:
+        for line in f:
+            if not line.strip() or line.startswith('#'):
+                continue
+            method, value = line.split()
+            if value == '-':
+                context.pop(int(method, 16), None)
+            else:
+                context[int(method, 16)] = int(value, 16)
+    return context
 
 
 def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], list[dict]]:
@@ -226,7 +335,8 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     states, seen, refused = [], set(), []
     for d in buckets:
         for rec in load_records(os.path.join(d, 'records.bin'))[0]:
-            form = 'barrier' if rec['outcome'] == 0 and PIPELINE.unpack_from(rec['pipeline'])[12] & 2 else ''
+            flags = PIPELINE.unpack_from(rec['pipeline'])[12] if rec['outcome'] == 0 else 0
+            form = 'free' if flags & 32 else 'barrier' if flags & 2 else ''
             if (form, rec['key']) in seen:
                 continue
             seen.add((form, rec['key']))
@@ -238,6 +348,8 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     split_identities(states)
     for index, rec in enumerate(states):
         n = mkpack.targets(rec['key'])
+        if PIPELINE.unpack_from(rec['pipeline'])[12] & 128:
+            n += two_plane_colors(rec['key'])
         regs = dict(context)
         regs.update(rec['regs'])
         for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
@@ -253,8 +365,11 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     return states, refused
 
 
-def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tuple, report: list[str]) -> list[dict]:
-    """Give the buckets' kernels (kernels.py), their programs appended to the heap image `laid` holds."""
+def compute_kernels(
+    buckets: list[str], constexpr_tsc: list[list[int]], laid: tuple, report: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Give the buckets' kernels (kernels.py), their programs appended to the heap image `laid` holds, and their states'
+    answers."""
     records = [rec for d in buckets for rec in load_records(os.path.join(d, 'records.bin'))[1]]
     programs = {}
     for rec in records:
@@ -265,7 +380,9 @@ def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tu
     kernels.lay_out(computes, programs, *laid)
     report.append(f'{len(computes)} compute kernels, {len(skipped)} dispatch shapes left out')
     report += [f'  skipped kernel {key}: {why}' for key, why in skipped]
-    return computes
+    facts = kernels.state_facts(records)
+    report.append(f'{len(facts)} compute states answered')
+    return computes, facts
 
 
 def split_identities(states: list[dict]) -> None:
@@ -320,6 +437,30 @@ def write_programs(path: str, programs: dict[str, dict]) -> None:
             f.write(bytes(p['cbufs']) + p['image'] + p['data'])
 
 
+# The forms a variant record's name holds (runtime/raw_pack.h variantNameAt), as the report counts them
+VARIANT_FORMS = (
+    ('tests=', 'of a test class'),
+    ('cubic', 'of cubic samplers'),
+    ('xr2p', 'of two-plane passes'),
+    ('xrs=', 'of sampled two-plane textures'),
+    ('wtex=', 'of written formats'),
+)
+
+
+def variant_report(states: list[dict]) -> list[str]:
+    """Give the report's count of variant records by form, then each sampled two-plane variant a corpus line named."""
+    named = [packfile.variant_name(rec['key']) for rec in states]
+    counts = ', '.join(f'{sum(1 for n in named if tag in n)} {what}' for tag, what in VARIANT_FORMS)
+    sampled = dict.fromkeys(
+        (n, rec['key'])
+        for rec, n in zip(states, named, strict=True)
+        if 'xrs=' in n and 'tests=' not in n and 'xr2p' not in n
+    )
+    return [f'{sum(1 for n in named if n)} variant records: {counts}'] + [
+        f'  sampled two-plane variant ({n.removeprefix(" | ")}): {key[:150]}' for n, key in sampled
+    ]
+
+
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
     inventory = ''
@@ -328,19 +469,14 @@ def main() -> None:
         with open(buckets[at + 1]) as f:
             inventory = f.read()
         del buckets[at : at + 2]
-    warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'warm.log')))
-    warm_log = os.path.join(warm, 'warm.log')
-    init, post = mkpack.load_init(warm_log)
-    states, refused = gather(buckets, warm_registers(os.path.join(warm, 'warm.out'), warm_log))
+    warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
+    _, post = mkpack.load_init(os.path.join(warm, 'context.log'))
+    states, refused = gather(buckets, draw_context(post[0]))
     programs = {program_id(p): p for rec in states for p in rec['programs']}
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
-    named = [packfile.variant_name(rec['key']) for rec in states]
-    report.append(
-        f'{sum(1 for n in named if n)} variant records: {sum(1 for n in named if "tests=" in n)} of a test class, '
-        f'{sum(1 for n in named if "cubic" in n)} of cubic samplers'
-    )
+    report += variant_report(states)
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')
@@ -349,15 +485,26 @@ def main() -> None:
     lay_out_variants(states, programs, laid, report)
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
-    computes = compute_kernels(buckets, constexpr_tsc, laid, report)
+    pipes, iterated = fetchfree_link.attach(pipes, report)
+    computes, compute_facts = compute_kernels(buckets, constexpr_tsc, laid, report)
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
     split = splits.lay_out(used, found, programs, laid, report)
-    init_recs = [(sc, m, d, mkpack.RELOC_CODE.get(mkpack.RELOC.get((sc, m)), 0)) for sc, m, d in init]
+    init_recs = init_records(os.path.join(warm, 'context.log'))
     declared, kinds = archives.declared(inventory)
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))
     pack = packfile.Pack(
-        pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split, archives.section(declared, held)
+        pipes,
+        prog_recs,
+        constexpr_tsc,
+        baseline,
+        init_recs,
+        heap,
+        computes,
+        split,
+        archives.section(declared, held),
+        iterated,
+        compute_facts,
     )
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)

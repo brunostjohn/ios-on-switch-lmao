@@ -77,15 +77,17 @@ bool kernelKey(Prepared &p, const std::vector<std::map<std::string, raw::AirHash
 
 }  // namespace
 
-bool SystemLibraries::resolve(const std::string &path, std::string &real, std::string &why)
+bool SystemLibraries::resolve(const std::string &root, const std::string &path, std::string &real, std::string &why)
 {
     char resolved[PATH_MAX];
-    if (!raw::systemLibraryPath(path) || !realpath(path.c_str(), resolved))
+    if (!raw::systemLibraryPath(path) || !realpath((root + path).c_str(), resolved))
         return why = "not a system library: " + path, false;
     real = resolved;
+    const std::string onVolume = real.compare(0, root.size(), root) ? std::string() : real.substr(root.size());
     // an OS cryptex's library resolves into its read-only volume under /private/preboot
     static const std::string cryptexes = "/private/preboot/Cryptexes/";
-    if (!raw::systemLibraryPath(real) && !(real.rfind(cryptexes, 0) == 0 && real.find("/../") == std::string::npos))
+    if (!raw::systemLibraryPath(onVolume) &&
+        !(onVolume.rfind(cryptexes, 0) == 0 && onVolume.find("/../") == std::string::npos))
         return why = path + " leaves the system volumes: " + real, false;
     return true;
 }
@@ -101,7 +103,7 @@ bool SystemLibraries::air(const std::string &path, std::map<std::string, raw::Ai
         }
     }
     std::string real;
-    if (!resolve(path, real, why))
+    if (!resolve(root_, path, real, why))
         return false;
     if (!raw::metallibAirHashes(real, out))
         return why = "not a metallib: " + path, false;

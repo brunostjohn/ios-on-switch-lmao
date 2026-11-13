@@ -102,6 +102,7 @@ protected:
             cb->abandon();
         }
         // the debug per-draw counts are the command buffer's until its commit folds them into the device's
+        // (CommandBuffer::foldCounts)
         d.interlocked = k.interlocked - interlocked;
         d.split = k.sequential - split;
         d.triangles = k.sequentialTriangles - triangles;

@@ -9,7 +9,7 @@ import statistics
 import struct
 from pathlib import Path
 
-from tools.benchloop import blend, cbufsize, qmdchain, rop, sweeps, twod, units
+from tools.benchloop import blend, cbufsize, floatadd, qmdchain, rop, sweeps, twod, units
 
 
 def per_draw(result: dict) -> tuple[float | None, float | None, float | None]:
@@ -69,6 +69,8 @@ def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs
         }
     if command in ('rop', 'store16'):
         return {command: [rop.check(e, results.get(e['id'], {'status': 'missing'})) for e in planned]}
+    if command == 'floatadd':
+        return {'floatadd': [floatadd.check(e, results.get(e['id'], {'status': 'missing'})) for e in planned]}
     sweep = {
         'precision': sweeps.analyse_precision,
         'iterated': sweeps.analyse_iterated,

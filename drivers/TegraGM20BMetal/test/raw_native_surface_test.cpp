@@ -134,17 +134,19 @@ struct CommandBuffer {
     void releaseNativeReads();
 };
 
+constexpr uint32_t kStageTextures = 31;  // raw_pack.h
+
 struct RenderEncoder {
     CommandBuffer *cb_ = nullptr;
-    const Texture *textures_[16] = {};
+    const Texture *textures_[2][kStageTextures] = {};
     unsigned dirties = 0;
 
-    void invalidateDescriptors()
+    void textureMoved(uint32_t, uint32_t)
     {
         ++dirties;
     }
 
-    void setTexture(uint32_t, const Texture *);
+    void setTexture(int, uint32_t, const Texture *);
 };
 }  // namespace raw
 
@@ -197,7 +199,7 @@ TEST_F(RawNativeSurface, UnchangedReadsReuseOneMappingAndHeader)
     encoder.cb_ = &cb;
     for (unsigned i = 0; i < 10000; ++i) {
         EXPECT_EQ(cb.readTexture(&y), native);
-        encoder.setTexture(0, &y);
+        encoder.setTexture(2, 0, &y);
     }
     EXPECT_EQ(device.k_.queries, 1u);
     EXPECT_EQ(device.writes, 1u);

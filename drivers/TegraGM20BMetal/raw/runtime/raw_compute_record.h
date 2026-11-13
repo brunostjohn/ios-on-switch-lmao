@@ -47,6 +47,7 @@ struct ComputeRecord {
     std::string keyString;
     // the sampler headers its sampler entries name (slot 0x80 | index), placed among the device's at placeCompute
     std::vector<std::array<uint32_t, 8>> samplers;
+    std::vector<uint32_t> spill;  // its argument table's words (PackKernel::spillWords): in a pack, its blob section's
 };
 
 }  // namespace raw

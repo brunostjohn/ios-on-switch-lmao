@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
-// raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment, against bytes an M4 Max's Metal
-// stored (the measured texels below; every byte of its passes: raw/test/ycbcrstoreoracle.mm), and the raw path's route to it:
-// each texel's code from the stand-in's half, then the 2D engine's 2:1 halving (fx::emitHalve run on the 2D engine model)
-// giving each chroma block's code. Also which YCbCr textures planYcbcr takes as render targets.
+// raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr code attachment, against bytes an M4 Max's
+// Metal stored (the measured texels below; every byte of its passes: raw/test/ycbcrstoreoracle.mm), and the raw path's route to
+// it: the pack's store states (pack/ycbcr_store.metal, step for step ycbcrStoreDrawn) over the pass's stand-in. Also which
+// YCbCr textures planYcbcr takes as render targets. The converted and sRGB targets: raw_ycbcr_converted_store_test.cpp.
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <vector>
 
-#include "../raw/fx/fx_mip.h"
-#include "../raw/fx/test/twod_sim.h"
 #include "../raw/runtime/raw_ycbcr.h"
 #include "../raw/runtime/raw_ycbcr_store.h"
 
@@ -150,7 +150,8 @@ TEST(RawYcbcrStore, ConvertedFormatsAreMtwovsRule)
 
     for (const auto &w : want) {
         uint16_t luma[4], chroma[2];
-        ASSERT_TRUE(raw::ycbcrStoreConverted(w.full, raw::YcbcrMatrix::Bt601, true, v.data(), 2, 2, luma, chroma));
+        ASSERT_TRUE(raw::ycbcrStoreConverted({8, false, w.full, raw::YcbcrMatrix::Bt601, true, true}, nullptr, v.data(),
+                                             2, 2, raw::YcbcrTexelSource::DrawnFloat, luma, chroma));
         for (int i = 0; i < 4; i++)
             EXPECT_EQ(luma[i], w.luma[i]);
         EXPECT_EQ(chroma[0], w.cb);
@@ -158,55 +159,69 @@ TEST(RawYcbcrStore, ConvertedFormatsAreMtwovsRule)
     }
 }
 
-// The raw route: the store state writes each texel's codes (RG8: Cb, Cr) into a pitch image, which fx::emitHalve halves on the
-// 2D engine (its model: the class's methods decoded, bilinear at 1/256 weights) into a block-linear one
-std::vector<uint8_t> halvedOnTheTwoDEngine(const std::vector<uint8_t> &codes, uint32_t w, uint32_t h, bool down)
+// A pass's floats: uniform ones beside [0, 1], the ties of every code width, and specials
+std::vector<float> passTexels(uint32_t w, uint32_t h, uint32_t seed)
 {
-    constexpr uint64_t kSrc = 0x1000000000ull, kDst = 0x2000000000ull;
-    const uint32_t dw = w / 2, dh = down ? h / 2 : h, pitch = (w * 2 + 255) & ~255u;
-    std::vector<uint8_t> src(size_t(pitch) * h);
-    for (uint32_t y = 0; y < h; y++)
-        memcpy(&src[size_t(y) * pitch], &codes[size_t(y) * w * 2], w * 2);
-    raw::fx::MipChain c;
-    EXPECT_TRUE(raw::fx::mipChainLayout(dw, dh, 1, 2, c));
-    std::vector<uint8_t> dst(c.bytes);
-    std::vector<uint32_t> words(raw::fx::twodInitWords() + raw::fx::halveWords());
-    raw::Push p{words.data(), words.data() + words.size()};
-    raw::fx::emitTwodInit(p);
-    raw::fx::emitHalve(p, {kSrc, pitch, w, h}, kDst, c.level[0].yLog2, dw, dh, raw::fx::twodFormat(30));
-    twodsim::Sim sim;
-    sim.map(kSrc, src);
-    sim.map(kDst, dst);
-    EXPECT_TRUE(sim.run(words.data(), size_t(p.at - words.data()))) << sim.error();
-    EXPECT_EQ(sim.launches, 1u);
-    EXPECT_TRUE(sim.endsSampleable);
-    std::vector<uint8_t> out(size_t(dw) * dh * 2);
-    raw::fx::readLevel(c, dst.data(), 0, 0, 0, dw, dh, out.data(), dw * 2);
-    return out;
+    std::mt19937 rng(seed);
+    std::vector<float> rgba(4 * w * h);
+    const float specials[] = {
+        std::numeric_limits<float>::quiet_NaN(), INFINITY, -INFINITY, -0.0f, 0.0f, 1.0f, 0.5f, 1.5f, -0.25f};
+    for (float &x : rgba) {
+        const uint32_t pick = rng() % 8;
+        if (pick == 0)
+            x = specials[rng() % 9];
+        else if (pick == 1)
+            x = (float(rng() % 255) + 0.5f) / 255.0f;
+        else if (pick == 2)
+            x = (float(rng() % 1023) + 0.5f) / 1023.0f;
+        else
+            x = std::uniform_real_distribution<float>(-0.05f, 1.05f)(rng);
+    }
+    return rgba;
 }
 
-TEST(RawYcbcrStore, TheTwoDEngineHalvesTexelCodesIntoMetalsChromaCodes)
+TEST(RawYcbcrStore, TheStoreStatesStoreMetalsCodes)
 {
-    std::mt19937 rng(540);
-    for (bool down : {true, false}) {
-        constexpr uint32_t w = 96, h = 40;
-        std::vector<float> rgba(4 * w * h);
-        for (float &x : rgba)
-            x = std::uniform_real_distribution<float>(-0.05f, 1.05f)(rng);
-        std::vector<uint8_t> codes(w * h * 2);
-        for (uint32_t i = 0; i < w * h; i++) {
-            codes[2 * i] = uint8_t(raw::ycbcrTexelCode(rgba[4 * i + 2], raw::YcbcrTexelSource::DrawnFloat, 255));
-            codes[2 * i + 1] = uint8_t(raw::ycbcrTexelCode(rgba[4 * i], raw::YcbcrTexelSource::DrawnFloat, 255));
+    constexpr uint32_t w = 96, h = 40;
+    for (uint32_t bits : {8u, 10u})
+        for (bool down : {true, false}) {
+            const std::vector<float> rgba = passTexels(w, h, bits * 2 + down);
+            std::vector<uint16_t> luma(w * h), chroma(w * h), wantLuma(w * h), wantChroma(w * h);
+            ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(bits, true, down), nullptr, rgba.data(), w, h,
+                                             luma.data(), chroma.data()));
+            ASSERT_TRUE(raw::ycbcrStore({(1u << bits) - 1, down}, rgba.data(), w, h, raw::YcbcrTexelSource::DrawnFloat,
+                                        wantLuma.data(), wantChroma.data()));
+            EXPECT_EQ(luma, wantLuma) << bits << (down ? " 4:2:0" : " 4:2:2");
+            EXPECT_EQ(chroma, wantChroma) << bits << (down ? " 4:2:0" : " 4:2:2");
         }
-        std::vector<uint16_t> luma(w * h), chroma(w * (down ? h / 2 : h));
-        ASSERT_TRUE(raw::ycbcrStore({255, down}, rgba.data(), w, h, raw::YcbcrTexelSource::DrawnFloat, luma.data(),
-                                    chroma.data()));
-        const std::vector<uint8_t> halved = halvedOnTheTwoDEngine(codes, w, h, down);
-        ASSERT_EQ(halved.size(), chroma.size());
-        int off = 0;
-        for (size_t i = 0; i < chroma.size(); i++)
-            off += halved[i] != chroma[i];
-        EXPECT_EQ(off, 0) << (down ? "4:2:0" : "4:2:2");
+}
+
+TEST(RawYcbcrStore, AClearsColourRoundedToItsHalfFirstStoresMetalsClearCodes)
+{
+    constexpr uint32_t w = 32, h = 16;
+    const std::vector<float> rgba = passTexels(w, h, 7);
+    std::vector<float> rounded(rgba.size());
+    for (size_t i = 0; i < rgba.size(); i++)
+        rounded[i] = float(_Float16(rgba[i]));
+    std::vector<uint16_t> luma(w * h), chroma(w * h), wantLuma(w * h), wantChroma(w * h);
+    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, true, true), nullptr, rounded.data(), w, h, luma.data(),
+                                     chroma.data()));
+    ASSERT_TRUE(raw::ycbcrStore({1023, true}, rgba.data(), w, h, raw::YcbcrTexelSource::Clear, wantLuma.data(),
+                                wantChroma.data()));
+    EXPECT_EQ(luma, wantLuma);
+    EXPECT_EQ(chroma, wantChroma);
+}
+
+TEST(RawYcbcrStore, FourFourFourChromaIsEachTexelsOwnCodes)
+{
+    constexpr uint32_t w = 8, h = 4;
+    const std::vector<float> rgba = passTexels(w, h, 444);
+    std::vector<uint16_t> luma(w * h), chroma(2 * w * h);
+    ASSERT_TRUE(raw::ycbcrStoreDrawn(raw::ycbcrCodesShape(10, false, false), nullptr, rgba.data(), w, h, luma.data(),
+                                     chroma.data()));
+    for (uint32_t i = 0; i < w * h; i++) {
+        EXPECT_EQ(chroma[2 * i], raw::ycbcrTexelCode(rgba[4 * i + 2], raw::YcbcrTexelSource::DrawnFloat, 1023));
+        EXPECT_EQ(chroma[2 * i + 1], raw::ycbcrTexelCode(rgba[4 * i], raw::YcbcrTexelSource::DrawnFloat, 1023));
     }
 }
 
@@ -226,9 +241,10 @@ raw::YcbcrFacts target(uint32_t format, uint32_t fourcc, uint32_t w, uint32_t h,
     return f;
 }
 
-constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, kX420 = 0x78343230;
+constexpr uint32_t k420v = 0x34323076, k422v = 0x34323276, k444v = 0x34343476, kX420 = 0x78343230, kXf20 = 0x78663230,
+                   kP420 = 0x70343230;
 
-TEST(RawYcbcrStore, EightBitCodeTargetsAreTakenOverTheirOwnChroma)
+TEST(RawYcbcrStore, TargetsAreTakenOverTheirOwnChroma)
 {
     raw::YcbcrPlan p;
     EXPECT_EQ(raw::planYcbcr(target(540, k420v, 1920, 1080, 540), p), nullptr);
@@ -240,9 +256,48 @@ TEST(RawYcbcrStore, EightBitCodeTargetsAreTakenOverTheirOwnChroma)
     EXPECT_NE(raw::planYcbcr(target(540, k420v, 1919, 1080, 540), p), nullptr);
     EXPECT_NE(raw::planYcbcr(target(540, k420v, 1920, 1079, 540), p), nullptr);
     EXPECT_NE(raw::planYcbcr(target(540, k422v, 1920, 1080, 1080), p), nullptr);
-    EXPECT_STREQ(raw::planYcbcr(target(543, kX420, 1920, 1080, 540), p),
-                 "10-bit codes: no pack state stores a code in a 16-bit word's high bits");
-    EXPECT_NE(raw::planYcbcr(target(500, k420v, 1920, 1080, 540), p), nullptr);
+    raw::YcbcrFacts ten = target(543, kX420, 1920, 1080, 540);
+    ten.pitch[0] = ten.pitch[1] = 3840;
+    ten.offset[1] = uint64_t(ten.pitch[0]) * 1080;
+    ten.allocBytes = ten.offset[1] + uint64_t(ten.pitch[1]) * 540;
+    EXPECT_EQ(raw::planYcbcr(ten, p), nullptr);
+    EXPECT_EQ(p.store.max, 1023u);
+    EXPECT_EQ(p.store.shift, 6u);
+    EXPECT_EQ(p.store.towardZero, 1u);
+    EXPECT_EQ(p.lumaFormat, 20u);
+    EXPECT_EQ(p.chromaFormat, 60u);
+    EXPECT_EQ(raw::planYcbcr(target(500, k420v, 1920, 1080, 540), p), nullptr);
+    EXPECT_EQ(p.store.converted, 1u);
+    EXPECT_EQ(p.store.offset[0], 16);
+    EXPECT_EQ(p.store.srgb, 0u);
+    raw::YcbcrFacts four = target(503, k444v, 1920, 1080, 1080);
+    four.pitch[1] = 3840;
+    four.allocBytes = four.offset[1] + uint64_t(four.pitch[1]) * 1080;
+    EXPECT_EQ(raw::planYcbcr(four, p), nullptr);
+    EXPECT_EQ(p.store.converted, 1u);
+    EXPECT_EQ(p.store.across, 0u);
+    raw::YcbcrFacts srgb = ten;
+    srgb.pixelFormat = 525;
+    srgb.fourcc = kXf20;
+    EXPECT_EQ(raw::planYcbcr(srgb, p), nullptr);
+    EXPECT_EQ(p.store.srgb, 1u);
+    EXPECT_EQ(p.store.max, 1023u);
+    EXPECT_EQ(p.store.termBits, 4u);
+    EXPECT_EQ(p.store.offset[0], 0);
+    EXPECT_EQ(p.store.offset[1], 512);
+    EXPECT_EQ(p.store.mul[0], 1023u);
+    EXPECT_NE(raw::planYcbcr(target(546, kX420, 1920, 1080, 540), p), nullptr);
+    raw::YcbcrFacts packed = target(546, kP420, 1920, 1080, 540);
+    packed.pitch[0] = packed.pitch[1] = 2560;
+    packed.offset[1] = uint64_t(packed.pitch[0]) * 1080;
+    packed.allocBytes = packed.offset[1] + uint64_t(packed.pitch[1]) * 540;
+    EXPECT_EQ(raw::planYcbcr(packed, p), nullptr);
+    EXPECT_EQ(p.store.packed, 1u);
+    EXPECT_EQ(p.store.shift, 0u);
+    EXPECT_EQ(p.store.max, 1023u);
+    EXPECT_EQ(p.store.converted, 0u);
+    EXPECT_EQ(p.lumaWidth, 640u);
+    EXPECT_EQ(p.chromaWidth, 640u);
     raw::YcbcrFacts sampled = target(500, k420v, 1920, 1080, 540);
     sampled.target = false;
     EXPECT_EQ(raw::planYcbcr(sampled, p), nullptr);

@@ -57,12 +57,6 @@
     d[@"blur_twod_passes"] = @(gRM->raw->stats.blurTwodPasses.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
-    d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
-    d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
-    d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
-    d[@"private_compressed"] = @(gRM->raw->privateMade());
-    d[@"private_moves"] = @(gRM->raw->privateTransitions());
-    d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
@@ -78,13 +72,27 @@
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
     d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
+    d[@"stencil_bit_draws"] = @(gRM->raw->stats.stencilBitDraws.load());
+    d[@"zeta_colour_draws"] = @(gRM->raw->stats.zetaColourDraws.load());
+    d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
+    d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
+    d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
+    d[@"private_compressed"] = @(gRM->raw->privateMade());
+    d[@"private_moves"] = @(gRM->raw->privateTransitions());
+    d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
 #if SWITCH_RAW_DIAGNOSTICS
     d[@"loop_continuations"] = @(gRM->stats.loopContinuations.load());
 #endif
+    d[@"xr_plane_passes"] = @(gRM->raw->stats.xrPlanePasses.load());
+    d[@"xr_plane_shadows"] = @(gRM->raw->stats.xrPlaneShadows.load());
+    d[@"xr_pair_binds"] = @(gRM->raw->stats.xrPairBinds.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
     d[@"fetch_interlocked"] = @(fetch.interlocked.load());
+    d[@"fetch_rung2"] = @(fetch.fetchFree[0].load());
+    d[@"fetch_rung3"] = @(fetch.fetchFree[1].load());
+    d[@"fetch_blend_twin"] = @(fetch.blendTwin.load());
     for (size_t r = 1; r < raw::kFetchRefusals; r++) {
         if (const uint64_t n = fetch.refusedAtRecord[r].load())
             d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);
@@ -100,6 +108,14 @@
     for (int p = 1; p < PredCount; p++)
         if (const uint64_t n = gPredCbs[p].load(std::memory_order_relaxed))
             d[[NSString stringWithFormat:@"pred.%s", kPredNames[p]]] = @(n);
+#if SWITCH_RAW_DIAGNOSTICS
+    // states created that the pack lacked: found in this build's record cache or compiled (states_compiled)
+    if (gRM->completion) {
+        const raw::Compiler::Stats made = gRM->completion->stats();
+        d[@"pack_misses"] = @(made.hits + made.misses);
+        d[@"states_compiled"] = @(made.misses);
+    }
+#endif
     return d;
 }
 
@@ -380,7 +396,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             uint8_t(array ? raw::fx::kTexTwoDArray : raw::fx::kTexTwoD), t->_raw);
         if (t->_rawOk)
             return (id<MTLTexture>)t;
-        RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        id<MTLDevice> m2v = RM_M2V("a texture the raw path made no memory for");
+        RMTexture *w = (RMTexture *)[self wrapTwin:[m2v newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;
@@ -424,6 +441,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk =
             gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                        std::max<uint32_t>(uint32_t(d.sampleCount), 1), std::max(transientLayers, 1u));
+        if (t->_rawOk && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes)
+            t->_rawOk = gRM->raw->createXrMemoryless(t->_raw);
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
@@ -556,13 +575,14 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                  (unsigned long)d.width, (unsigned long)d.height);
     } else if (xrPlanesShape(d, s, plane)) {
         t->_rawOk = makeXrPlanes(t, s);
-    } else if (raw::isYcbcrFormat(uint32_t(d.pixelFormat)) && !ycbcrPlan(d, s, plane, ycbcr)) {
-        // a YCbCr texture: an image the pack's conversion state draws
+    } else if ((raw::isYcbcrFormat(uint32_t(d.pixelFormat)) || raw::packedPlaneChannels(uint32_t(d.pixelFormat))) &&
+               !ycbcrPlan(d, s, plane, ycbcr)) {
+        // a YCbCr texture or a packed 10-bit plane: an image the pack's conversion state draws
         t->_rawOk =
             gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
-            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
+            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat), ycbcr.store);
     } else if (raw::SurfaceImage image; (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
         // a shared texture in the device's layout of its descriptor (RawMetalSharedTextures.mm): a surface of no rows
         t->_rawOk = gRM->raw->createSurfaceImage(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s),

@@ -52,7 +52,7 @@ algebraic_lowering = [
         ('iadd3', ('ineg', a), c, ('ineg', b)), 'options->has_iadd3'),
 
     (('iadd', 'a@32', ('ishl', 'b@32', '#s@32')),
-        ('lea_nv', a, b, s), 'nak->sm >= 70'),
+        ('lea_nv', a, b, s), 'nak->sm >= 50'),
     (('iadd', 'a@64', ('ishl', 'b@64', '#s@32')),
         ('lea_nv', a, b, s), 'nak->sm >= 70'),
 ]
@@ -94,6 +94,13 @@ for op in ['fadd', 'fmul']:
                 (('f2f16_rtne', (op, x, y)),
                     ('!' + op, ('fneg', a) if na else a, ('fneg', b) if nb else b), half_exact),
             ]
+
+# ios-on-switch-lmao: a comparison of two halves widened to f32 is their
+# comparison as halves (the widening is exact, NaNs included), one HSETP2.
+for cmp in ['flt', 'fge', 'feq', 'fneu', 'fltu', 'fgeu', 'fequ', 'fneo']:
+    algebraic_lowering += [
+        ((cmp, ('f2f32', 'a@16'), ('f2f32', 'b@16')), (cmp, a, b), 'nak->sm >= 53 && nak->sm < 70'),
+    ]
 
 # ios-on-switch-lmao: metal2vulkan rounds a half sum (or difference) as
 # fquantize2f16 and, where that gave zero, the f32 sum itself: a sum of two

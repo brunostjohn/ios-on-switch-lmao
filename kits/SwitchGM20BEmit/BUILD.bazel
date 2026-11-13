@@ -113,8 +113,10 @@ cc_library(
 cc_binary(
     name = "gen_macros",
     srcs = MESA_MME_SOURCES + MESA_MME_HEADERS + SWITCH_GM20B_MESA_HEADERS + [
+        "SwitchGM20BMacroSlots.h",
         "mme/switch_gm20b_macros.c",
         ":push_headers_mesa",
+        "//kits/SwitchGM20B:SwitchGM20BTegra.h",
     ],
     copts = MESA_MME_COPTS,
     tags = ["no-lint"],
@@ -129,6 +131,36 @@ genrule(
 
 cc_library(
     name = "macros_h",
-    hdrs = [":macros"],
+    hdrs = [
+        "SwitchGM20BMacroSlots.h",
+        ":macros",
+    ],
+    includes = ["gen"],
+)
+
+# The channel's context init: context/context.tsv and NVK's macros (context/macros.txt) as gen/SwitchGM20BContext.h.
+py_binary(
+    name = "gen_context",
+    srcs = ["context/gen_context.py"],
+    main = "context/gen_context.py",
+)
+
+genrule(
+    name = "context",
+    srcs = [
+        "context/context.tsv",
+        "context/macros.txt",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb1c0.h",
+    ],
+    outs = ["gen/SwitchGM20BContext.h"],
+    cmd = "$(execpath :gen_context) --table $(execpath context/context.tsv) --macros $(execpath context/macros.txt) " +
+          "--classes $$(dirname $(execpath //third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h)) --out $@",
+    tools = [":gen_context"],
+)
+
+cc_library(
+    name = "context_h",
+    hdrs = [":context"],
     includes = ["gen"],
 )

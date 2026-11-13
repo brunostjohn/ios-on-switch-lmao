@@ -185,4 +185,33 @@ TEST(ArgumentLayout, WhatMetalRefusesIsRefusedAndALaterClaimWins)
     EXPECT_EQ((std::vector<uint64_t>{at(inside, 0), at(inside, 1), at(inside, 2)}), (std::vector<uint64_t>{0, 24, 16}));
 }
 
+// m2v's bind/argument_runs.rs runs of a struct array whose elements hold a texture array: `struct S { sampler s [[id(0)]];
+// texture2d t[2] [[id(1)]]; } arr[3] [[id(10)]]` (24 bytes each, from 16), a pointer to an argument buffer at 40, and a later
+// constant at index 12 that wins over the second element's sampler
+TEST(ArgumentLayout, AFunctionsRunsPlaceStructArraysOfArraysAndNestedBuffers)
+{
+    const raw::ArgumentRun runs[] = {
+        {10, 3, 3, 1, uint32_t(K::Sampler), 0, 16, 24, 0, 8},
+        {11, 3, 3, 2, uint32_t(K::Texture), 0, 24, 24, 8, 8},
+        {40, 1, 1, 1, uint32_t(K::Buffer), 2, 88, 8, 0, 8},
+        {13, 1, 1, 1, uint32_t(K::Constant), 0, 96, 4, 0, 4},
+    };
+    ArgumentLayout l;
+    ASSERT_TRUE(ArgumentLayout::fromRuns(104, 8, runs, 4, 2, l));
+    EXPECT_EQ(sized(l), std::make_pair(uint64_t(104), uint64_t(8)));
+    EXPECT_EQ((std::vector<uint64_t>{at(l, 10), at(l, 11), at(l, 12), at(l, 13), at(l, 14), at(l, 16), at(l, 17)}),
+              (std::vector<uint64_t>{16, 24, 32, 96, 48, 64, 72}));
+    raw::ArgumentPlace place;
+    for (uint32_t gap : {9u, 19u, 20u, 39u, 41u})
+        EXPECT_FALSE(l.place(gap, place)) << gap;
+    ASSERT_TRUE(l.place(40, place));
+    EXPECT_EQ(place.kind, K::Buffer);
+    EXPECT_EQ(place.nested, 1);
+    ASSERT_TRUE(l.place(13, place));
+    EXPECT_EQ(place.kind, K::Constant);
+    EXPECT_EQ(place.nested, -1);
+    const raw::ArgumentRun past = {0, 1, 1, 1, uint32_t(K::Buffer), 3, 0, 8, 0, 8};
+    EXPECT_FALSE(ArgumentLayout::fromRuns(8, 8, &past, 1, 2, l));
+}
+
 }  // namespace

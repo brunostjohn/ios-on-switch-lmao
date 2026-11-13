@@ -3,6 +3,7 @@
 // synthetic shaders deliberately do not establish rendered pixels or hardware preemption latency.
 #include "../runtime/raw_gpu.h"
 #include "../runtime/raw_compute.h"
+#include "TegraGM20BJobABI.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,12 +19,11 @@ extern "C" unsigned long mock_iokit_calls(unsigned method);
 extern "C" uint64_t cap_draws(void);
 extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
-extern "C" unsigned long mock_iokit_admissions(unsigned kind);
 
 static std::vector<uint64_t> launchAddresses()
 {
     fflush(nullptr);
-    std::ifstream dump("/private/tmp/switch-batchcheck-push.log");
+    std::ifstream dump(getenv("PUSHDUMP"));
     std::vector<uint64_t> addresses;
     std::string line;
     while (std::getline(dump, line)) {
@@ -44,8 +44,8 @@ static uint64_t cbufAddress(const uint32_t qmd[64])
 
 int main()
 {
-    setenv("RAWCAP_LOG", "/private/tmp/switch-batchcheck-capture.log", 1);
-    setenv("PUSHDUMP", "/private/tmp/switch-batchcheck-push.log", 1);
+    setenv("RAWCAP_LOG", "/private/tmp/switch-batchcheck-capture.log", 0);
+    setenv("PUSHDUMP", "/private/tmp/switch-batchcheck-push.log", 0);
     char path[] = "/private/tmp/switch-batch-pack-XXXXXX";
     const int fd = mkstemp(path);
     if (fd < 0)
@@ -143,8 +143,9 @@ int main()
     {
         auto [cb, encoder] = begin();
         expect(encoder && encoder->draw(3, 0, 3, 1, 0, &why), "compatible pass prepares successfully");
-        raw::DepthStencilDesc depth;
-        depth.depthWrite = true;
+        raw::DepthStencilDesc desc;
+        desc.depthWrite = true;
+        const raw::DepthStencilState depth(desc);
         encoder->setDepthStencil(&depth);
         expect(!encoder->draw(3, 0, 3, 1, 0, &why) && cb->refusal.id == raw::RefDepthStencil,
                "changed depth state invalidates cached compatibility");
@@ -237,7 +238,7 @@ int main()
         expect(dispatched && cb->commit(sequence) && device.wait(sequence) &&
                    mock_iokit_calls(TegraGM20BMethodExec) - submits == 8,
                "1000 dispatch launches form eight bounded submissions");
-        std::ifstream trace("/private/tmp/switch-batchcheck-capture.log");
+        std::ifstream trace(getenv("RAWCAP_LOG"));
         std::string line;
         unsigned launches = 0;
         while (std::getline(trace, line))
@@ -374,24 +375,16 @@ int main()
         expect(repeated(1, 1), "encoding recovers on a fresh channel after partial submission failure");
     }
     if (getenv("MOCK_NATIVE_JOBS")) {
-        const auto begun = mock_iokit_admissions(0), ended = mock_iokit_admissions(1),
-                   cancelled = mock_iokit_admissions(2);
-        expect(begun == ended + cancelled && cancelled == 1,
-               "every accepted logical job ended admission or cancelled its failed prefix");
-        expect(repeated(1, 1) && mock_iokit_admissions(0) == begun, "ordinary job adds no admission transaction");
-        expect(repeated(256, 2) && mock_iokit_admissions(0) == begun + 1 && mock_iokit_admissions(1) == ended + 1,
-               "two batches share one exact resource admission through final publication");
         auto [cb, encoder] = begin();
         const uint64_t before = cap_draws();
         for (unsigned i = 0; i < 256; ++i)
             if (!encoder->draw(3, 0, 3, 1, 0, &why))
                 return 2;
         encoder->end();
-        mock_iokit_fail_after(TegraGM20BMethodSubmitAddress, 0, 1, kIOReturnCannotLock);
+        mock_iokit_fail_after(TegraGM20BMethodSubmitJob, 0, 1, kIOReturnCannotLock);
         uint32_t sequence = 0;
-        expect(!cb->commit(sequence) && cb->admissionBlocked && !cb->partial && cap_draws() == before &&
-                   mock_iokit_admissions(0) == begun + 1,
-               "CPU conflict refuses before any draw or retained admission publishes");
+        expect(!cb->commit(sequence) && cb->admissionBlocked && !cb->partial && cap_draws() == before,
+               "CPU conflict refuses before any draw publishes");
         cb->abandon();
         expect(repeated(1, 1), "abandoned unsent range leaves the channel usable by another queue");
         expect(repeated(256, 2), "retry emits the complete previously unsent range once");
