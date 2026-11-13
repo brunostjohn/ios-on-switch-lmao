@@ -225,6 +225,15 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     if (o.dx + o.dw > o.dst.width || o.dy + o.dh > o.dst.height)
         return @"a rectangle outside the written texture";
     _probeOps.push_back({_encAt, o, read, written});
+    // The blit encoder's uses, as a copy's: a new texture's first contents (RawMetalFresh.mm) then go ahead of this
+    // encoder, not ahead of the next command buffer that names the texture, over what the 2D engine wrote
+    std::vector<raw::ResourceUse> uses = {{(__bridge void *)written, raw::ResourceUse::Write}};
+    [self retain:written];
+    if (read) {
+        uses.push_back({(__bridge void *)read, raw::ResourceUse::Read});
+        [self retain:read];
+    }
+    _plan.addUses(_plan.size() - 1, uses);
     return nil;
 }
 
