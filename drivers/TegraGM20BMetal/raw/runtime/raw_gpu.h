@@ -3266,6 +3266,7 @@ private:
     // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with
     // none held
     uint64_t compDeadline() const;
+
     // private textures on compressed memory and their memory (raw_private_comp.h), lock_
     struct PrivateCompTexture {
         PrivateComp comp;
@@ -3274,6 +3275,7 @@ private:
         std::vector<Texture *> views;          // raw views of its compressed memory (createView, createPartView)
         Buffer headers;                        // the views' moved headers the move's job copies in place
     };
+
     // `view` of memory `of` names: a view of a private texture on compressed memory follows it to plain memory, lock_ held
     void noteView(const Texture &of, Texture &view);
     void forgetView(const Texture &view);  // lock_ held

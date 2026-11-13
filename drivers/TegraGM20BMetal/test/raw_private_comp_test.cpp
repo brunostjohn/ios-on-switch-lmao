@@ -72,8 +72,10 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
 
 TEST(RawPrivateComp, ShaderWriteUsageIsTakenWithStorageReadingCompressed)
 {
-    const std::string facade = Body(SourceText("../raw/runtime/RawMetalPrivateComp.mm"), "uint32_t privateCompressedKind(");
-    EXPECT_THAT(facade, HasSubstr("MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite"))
+    const std::string facade =
+        Body(SourceText("../raw/runtime/RawMetalPrivateComp.mm"), "uint32_t privateCompressedKind(");
+    EXPECT_THAT(facade,
+                HasSubstr("MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite"))
         << "gpu.raw.private_compression shader_write";
     EXPECT_TRUE(raw::storageReadsCompressed());
 }

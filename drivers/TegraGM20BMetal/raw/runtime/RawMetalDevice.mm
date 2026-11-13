@@ -344,10 +344,9 @@
 // caller pages stay pitch, as another binding names those bytes.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-    return swizzled(
-        [self rmNewTexture:d
-                     tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
-        d.swizzle);
+    return swizzled([self rmNewTexture:d
+                                 tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
+                    d.swizzle);
 }
 
 #if SWITCH_RAW_DIAGNOSTICS
@@ -382,9 +381,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_device = self;
         t->_descriptor = [d copy];
         t->_kind = RMTexturePool;
-        t->_rawOk = gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                               uint32_t(d.mipmapLevelCount), t->_raw, nullptr,
-                                               privateCompressedKind(d));
+        t->_rawOk =
+            gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                                       uint32_t(d.mipmapLevelCount), t->_raw, nullptr, privateCompressedKind(d));
         if (t->_rawOk) {
 #if SWITCH_RAW_DIAGNOSTICS
             reportNonFiniteStart(t, d);

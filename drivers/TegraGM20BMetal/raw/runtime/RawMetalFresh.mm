@@ -217,7 +217,9 @@ bool writeFreshAhead(RMCommandBuffer *cb, size_t from, size_t to)
 bool freshBeforeTransfer(RMTexture *t)
 {
     t = ownerOf(t);
-    if (!t || !gFresh.extract([t](const FreshEntry &e) { return e.texture == t; }))
+    if (!t || !gFresh.extract([t](const FreshEntry &e) {
+            return e.texture == t;
+        }))
         return true;
     return rmExcludingSubmissions([t]() -> bool {
         raw::CommandBuffer *rc = gRM->raw->begin();

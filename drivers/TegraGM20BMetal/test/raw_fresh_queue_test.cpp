@@ -185,13 +185,17 @@ TEST(RawFreshQueue, ACpuTransferWritesItsTexturesFillFirst)
     Runtime rt;
     auto a = rt.make("a");
     auto b = rt.make("b");
-    ASSERT_TRUE(rt.fresh.extract([&](const Entry &e) { return e.texture.lock() == a; }));
+    ASSERT_TRUE(rt.fresh.extract([&](const Entry &e) {
+        return e.texture.lock() == a;
+    }));
     rt.gpu.submitRaw({"fill:a"});
     rt.gpu.submitRaw({"write:a"});
     rt.raw({"draw"});
     EXPECT_FALSE(rt.gpu.fillMayFollowWrite("a"));
     EXPECT_EQ(rt.gpu.raw.back().commands, (std::vector<std::string>{"fill:b", "draw"})) << "b stays fresh";
-    EXPECT_FALSE(rt.fresh.extract([&](const Entry &e) { return e.texture.lock() == a; })) << "extracted once";
+    EXPECT_FALSE(rt.fresh.extract([&](const Entry &e) {
+        return e.texture.lock() == a;
+    })) << "extracted once";
 }
 
 // Without the extract the next raw submission fills the texture over what the transfer wrote

@@ -3666,8 +3666,8 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
-    BackingAsk ask{m.width, m.height,    m.format,    tag,    std::max(m.layers, 1u), m.samples,
-                   m.zeta,  blockLinear, compression, copied, kindProbes()};
+    BackingAsk ask{m.width,     m.height,    m.format, tag,         std::max(m.layers, 1u), m.samples, m.zeta,
+                   blockLinear, compression, copied,   kindProbes()};
     blockLinear |= m.zeta;
     // a layered pass's backing: plain memory of its layers (compressed backings are one layer's)
     const uint32_t kind = compression && m.layers <= 1 ? compKind(m, blockLinear, copied) : 0;

@@ -129,10 +129,10 @@ TEST_F(DevicePrivateComp, AChainTakesCompressedMemoryAndMovesEveryLevelToPlain)
     EXPECT_FALSE(level.comptags);
     const auto launched = copies(jobs);
     for (uint32_t level = 0; level < layout.levels; level++)
-        EXPECT_NE(std::find(launched.begin(), launched.end(),
-                            std::make_pair(compressed + layout.level[level].offset,
-                                           chain.va + layout.level[level].offset)),
-                  launched.end())
+        EXPECT_NE(
+            std::find(launched.begin(), launched.end(),
+                      std::make_pair(compressed + layout.level[level].offset, chain.va + layout.level[level].offset)),
+            launched.end())
             << "level " << level;
     dev.destroyTexture(chain);
     dev.destroyTexture(first);
@@ -198,7 +198,8 @@ TEST(PrivateCompHeaders, AMovedHeaderIsTheHeaderOfItsNewAddress)
     raw::fx::MipChain c;
     ASSERT_TRUE(raw::fx::mipChainLayout(256, 128, 4, 4, c));
     for (const auto &[from, to] : {std::pair<uint64_t, uint64_t>{0xc100520000, 0xc100580000},
-                                   {0x1000000200, 0xffff0003fe00}, {0xc100520000 + 0x40000, 0xc1005c0000}}) {
+                                   {0x1000000200, 0xffff0003fe00},
+                                   {0xc100520000 + 0x40000, 0xc1005c0000}}) {
         uint32_t moved[8], made[8];
         raw::fx::mipChainTic(c, from, 0x12345678, true, 1, 3, moved, raw::fx::kTexTwoD);
         EXPECT_EQ(raw::ticAddress(moved), from);

@@ -37,7 +37,7 @@ struct PrivateTextureFacts {
     // usage is RenderTarget, ShaderRead and/or ShaderWrite (the surface unit's stores go through the binding's kind, rule
     // storage.compressed), nothing else (not Unknown)
     bool compressibleUsage = false;
-    bool plainColour = false;             // a colour format the 3D engine renders, no extended-range or planar form
+    bool plainColour = false;  // a colour format the 3D engine renders, no extended-range or planar form
     uint32_t bpp = 0;
     bool compression = false;  // the kernel compresses (TegraGM20BInfoCompression)
 };
@@ -60,8 +60,7 @@ constexpr bool privateShapeCompresses(const PrivateTextureFacts &f)
 // The compressed kind such a texture binds, or 0
 inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
 {
-    if (!f.compression || !f.privateStorage || !privateShapeCompresses(f) || !f.compressibleUsage ||
-        !f.plainColour)
+    if (!f.compression || !f.privateStorage || !privateShapeCompresses(f) || !f.compressibleUsage || !f.plainColour)
         return 0;
     const uint32_t kind = compressedKind(f.bpp, 0, std::max(f.samples, 1u));
     return copyEngineReadsCompressed(kind) ? kind : 0;
