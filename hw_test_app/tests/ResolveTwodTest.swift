@@ -10,8 +10,8 @@ import Metal
 /// Metal's exact rule); then the read arm (ResolveReadArm.swift), whose target a blit copies out in the same command buffer.
 /// PASS: all on the raw path, the picked route (a target first read in a later command buffer) the 2D engine's within one
 /// code of the pass, the complement route taken and within one code, exact at 2x, the kept samples resolving as the
-/// pass's, and the read arm through the complement byte for byte Metal's rule computed from the samples
-/// (`<n>x_read_route=exact <n>x_read_differ=0`). `2x_exact_differ=0` with
+/// pass's, and the read arm through the pack's pass byte for byte Metal's rule computed from the samples
+/// (`<n>x_read_route=pass <n>x_read_differ=0`). `2x_exact_differ=0` with
 /// `2x_kept_differ=0` flips twodResolveComplementProven, `4x_exact_differ=0` twodResolveSingleRounding4x.
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
@@ -60,7 +60,7 @@ struct ResolveTwodTest: HWTest {
             metrics.set("\(tag)_read_differ", readDiffer)
             metrics.set("\(tag)_read_gpu_ms", read.gpuMs, digits: 3)
             metrics.set("\(tag)_pass_reference_differ", passReferenceDiffer)
-            if read.exact == 0 { wrong.append("\(tag)_read_not_exact") }
+            if read.exact + read.twod > 0 { wrong.append("\(tag)_read_not_pass") }
             if readDiffer > 0 { wrong.append("\(tag)_read_differ") }
             if read.path != "raw" { wrong.append("\(tag)_read_path") }
             let (beyond, oneOff) = Self.compare(picked.bytes, pass.bytes)

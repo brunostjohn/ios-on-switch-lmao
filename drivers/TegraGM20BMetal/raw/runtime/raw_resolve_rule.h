@@ -72,15 +72,16 @@ constexpr bool twodResolveSingleRounding4x()
     return false;
 }
 
-// resolve.exact, the same engine through the complement: for every resolve a reader takes as data, now (host-proven;
-// gpu.raw.resolve_twod's read arm and bench resolvetie2 read it on the chip), and for the screen-bound ones too once the
-// device proves it. The complement writes the multisampled image in place: a compressed one is written by the 2D engine
-// through a multisample kind no open driver writes with it, unproven, so those take the pass
+// resolve.exact, the same engine through the complement, for screen-bound resolves once the device proves it. A resolve
+// a reader takes as data takes the pack's pass: on the chip it is Metal's rule byte for byte and faster than the
+// complement (gpu.raw.resolve_twod, boot 21: 2x 1.871 ms against 2.416, 4x 3.271 against 5.223, the complement 51,921
+// and 26,583 texels one code off). The complement writes the multisampled image in place: a compressed one is written
+// by the 2D engine through a multisample kind no open driver writes with it, unproven, so those take the pass
 constexpr bool twodResolveExact(const ResolveAsk &a)
 {
-    if (!twodResolveShape(a) || a.compressedSamples)
+    if (!twodResolveShape(a) || a.compressedSamples || a.readable)
         return false;
-    return a.readable || (twodResolveComplementProven() && (a.samples == 2 || twodResolveSingleRounding4x()));
+    return twodResolveComplementProven() && (a.samples == 2 || twodResolveSingleRounding4x());
 }
 
 enum ResolveRoute : uint8_t {

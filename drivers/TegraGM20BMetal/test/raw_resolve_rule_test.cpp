@@ -92,9 +92,10 @@ TEST(ResolveRule, TakenForScreenBoundUnorm8Only)
     EXPECT_FALSE(raw::twodResolveAcceptable(a)) << "the 2D engine would write a pitch the render hardware refuses";
 }
 
-// A reader that takes the texels as data (the CPU, another process, a blit, a kernel) makes the resolve exact through
-// the complement, the same engine, at 2x and 4x; a screen-bound or pass-sampled target keeps the one-code route
-TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesTheComplement)
+// A reader that takes the texels as data (the CPU, another process, a blit, a kernel) gets the pack's resolve pass, at
+// 2x and 4x: Metal's rule on the chip and faster than the complement; a screen-bound or pass-sampled target keeps the
+// one-code route
+TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesThePass)
 {
     EXPECT_FALSE(raw::resolveTargetReadable({}));
     const raw::ResolveTarget each[] = {
@@ -107,10 +108,10 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesTheComplement)
             raw::ResolveAsk a = screenBound(samples);
             a.readable = raw::resolveTargetReadable(t);
             EXPECT_FALSE(raw::twodResolveAcceptable(a));
-            EXPECT_TRUE(raw::twodResolveExact(a));
-            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByComplement);
+            EXPECT_FALSE(raw::twodResolveExact(a));
+            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass);
             a.compressedSamples = true;
-            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass) << "the complement on compressed samples is unproven";
+            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass);
         }
     for (uint8_t samples : {2, 4})
         EXPECT_EQ(raw::resolveRoute(screenBound(samples)),
@@ -134,7 +135,7 @@ TEST(ResolveRule, TheComplementWaitsOnTheDeviceAndThen4xOnOneRounding)
     EXPECT_FALSE(raw::twodResolveExact(a));
     a = screenBound(2);
     a.readable = true;
-    EXPECT_TRUE(raw::twodResolveExact(a));
+    EXPECT_FALSE(raw::twodResolveExact(a));
     EXPECT_EQ(raw::resolveSampleSlot(2), 0u);
     EXPECT_EQ(raw::resolveSampleSlot(4), 1u);
     EXPECT_EQ(raw::resolveSampleSlot(8), 2u);
