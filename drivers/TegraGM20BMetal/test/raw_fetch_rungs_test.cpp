@@ -44,7 +44,7 @@ TEST(RawFetchRungs, EachFormatTheFormatArmsJudgeTakesTheRop)
 
 TEST(RawFetchRungs, DataTargetsKeepTheExactBlend)
 {
-    for (uint16_t format : {uint16_t(90), uint16_t(110), uint16_t(72)}) {
+    for (uint16_t format : {uint16_t(90), uint16_t(110), uint16_t(72), uint16_t(550), uint16_t(552), uint16_t(554)}) {
         raw::FixedBlendAsk a = screenLayer();
         a.format = format;
         EXPECT_FALSE(raw::fixedBlendAcceptable(a)) << format;

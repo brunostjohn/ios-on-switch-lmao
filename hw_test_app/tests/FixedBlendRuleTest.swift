@@ -10,9 +10,9 @@ import Metal
 /// shader-computed colour), from shaders/FixedBlendRule.metal's hash. The rule's claim: the ROP stays within 2 codes for
 /// 8-bit sources at any depth and for computed sources up to 2 layers; 8 computed layers are reported (x1-units' model
 /// says 4). Then 8 layers over 1280x720 both ways give each route's GPU time. The format arms draw 8-bit sources through
-/// the ROP into each further target format the rule takes (RGBA16F, BGRA8 sRGB, RGBA8 sRGB, BGR10_XR) against Metal's
-/// blend in that format: rop_<format>_<layers>_worst in its codes (half-float steps for RGBA16F; sRGB codes blended in
-/// linear light), held to 2 at every depth as BGRA8's 8-bit sources are; <format>_path= where it drew.
+/// the ROP into each further target format the rule takes (RGBA16F, BGRA8 sRGB, RGBA8 sRGB) against Metal's blend in
+/// that format: rop_<format>_<layers>_worst in its codes (half-float steps for RGBA16F; sRGB codes blended in linear
+/// light), held to 2 at every depth as BGRA8's 8-bit sources are; <format>_path= where it drew.
 struct FixedBlendRuleTest: HWTest {
     let id = "gpu.raw.fixed_blend_rule"
     let name = "Fixed-function blend against the fetch rung: codes within the rule's bounds, GPU time both ways"
@@ -147,7 +147,6 @@ struct FixedBlendRuleTest: HWTest {
 
     static let formatArms: [(label: String, format: MTLPixelFormat)] = [
         ("rgba16f", .rgba16Float), ("bgra8_srgb", .bgra8Unorm_srgb), ("rgba8_srgb", .rgba8Unorm_srgb),
-        ("bgr10_xr", .bgr10_xr),
     ]
 
     static func srgbToLinear(_ c: Double) -> Double {
@@ -159,11 +158,10 @@ struct FixedBlendRuleTest: HWTest {
     }
 
     /// A channel's stored code of `value`, and its value, as `format` holds it (sRGB colour channels encoded; RGBA16F as
-    /// the half's bits; BGR10_XR's (code - 384) / 510)
+    /// the half's bits)
     static func store(_ value: Double, _ format: MTLPixelFormat, colour: Bool) -> Int {
         switch format {
         case .rgba16Float: return Int(Float16(Float(value)).bitPattern)
-        case .bgr10_xr: return Int(min(max((value * 510 + 384).rounded(), 0), 1023))
         case .bgra8Unorm_srgb, .rgba8Unorm_srgb:
             let v = min(max(value, 0), 1)
             return Int(((colour ? linearToSrgb(v) : v) * 255).rounded())
@@ -174,22 +172,17 @@ struct FixedBlendRuleTest: HWTest {
     static func load(_ code: Int, _ format: MTLPixelFormat, colour: Bool) -> Double {
         switch format {
         case .rgba16Float: return Double(Float(Float16(bitPattern: UInt16(code))))
-        case .bgr10_xr: return (Double(code) - 384) / 510
         case .bgra8Unorm_srgb, .rgba8Unorm_srgb: return colour ? srgbToLinear(Double(code) / 255) : Double(code) / 255
         default: return Double(code) / 255
         }
     }
 
-    /// The RGBA codes a texel of `format` holds (BGR10_XR: no alpha, -1)
+    /// The RGBA codes a texel of `format` holds
     static func codes(_ bytes: [UInt8], _ x: Int, _ y: Int, _ format: MTLPixelFormat) -> [Int] {
         switch format {
         case .rgba16Float:
             let at = (y * size + x) * 8
             return (0..<4).map { Int(bytes[at + 2 * $0]) | Int(bytes[at + 2 * $0 + 1]) << 8 }
-        case .bgr10_xr:
-            let at = (y * size + x) * 4
-            let w = (0..<4).reduce(0) { $0 | Int(bytes[at + $1]) << (8 * $1) }
-            return [w >> 20 & 0x3ff, w >> 10 & 0x3ff, w & 0x3ff, -1]
         case .bgra8Unorm_srgb:
             let t = Array(bytes.pixel(x, y, width: size))
             return [Int(t[2]), Int(t[1]), Int(t[0]), Int(t[3])]
@@ -212,7 +205,7 @@ struct FixedBlendRuleTest: HWTest {
                     }
                 }
                 let got = codes(bytes, x, y, format)
-                for c in 0..<4 where got[c] >= 0 {
+                for c in 0..<4 {
                     worst = max(worst, abs(got[c] - d[c]))
                 }
             }

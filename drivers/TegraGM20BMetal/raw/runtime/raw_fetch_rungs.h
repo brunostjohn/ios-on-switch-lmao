@@ -35,7 +35,10 @@ struct FixedBlendAsk {
     uint8_t computedLayers = 0;    // shader-computed colours stacked over one pixel, where the sources are not 8-bit
 };
 
-// RGBA8Unorm and BGRA8Unorm (the fit's); RGBA16Float, judged by gpu.raw.fixed_blend_rule rop_rgba16f_*_worst; BGRA8Unorm_sRGB, rop_bgra8_srgb_*_worst; RGBA8Unorm_sRGB, rop_rgba8_srgb_*_worst
+// RGBA8Unorm and BGRA8Unorm (the fit's); RGBA16Float, BGRA8Unorm_sRGB and RGBA8Unorm_sRGB, each judged by its
+// gpu.raw.fixed_blend_rule arm (rop_rgba16f_*_worst, rop_bgra8_srgb_*_worst, rop_rgba8_srgb_*_worst). Never an
+// extended-range format: the raw path renders those through an unsigned-integer target, its codes encoded in the program
+// (raw_xr.h), which the ROP cannot blend
 constexpr bool fixedBlendFormat(uint16_t format)
 {
     return format == 70 || format == 80 || format == 115 || format == 81 || format == 71;
