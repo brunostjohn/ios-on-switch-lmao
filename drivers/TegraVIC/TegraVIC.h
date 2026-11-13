@@ -14,8 +14,8 @@
 
 class IOMemoryDescriptor;
 
-// The periodic job and present lines and the pitch probe (SwitchVICPitchProbe.h): debug kernels only, so a release
-// kernel has none of their code or strings.
+// The periodic job and present lines and the probes (SwitchVICKernelTest.h): debug kernels only, so a release kernel
+// has none of their code or strings.
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 #define TEGRA_VIC_STATS 1
 #else
@@ -56,11 +56,32 @@ void tegra_vic_describe(char *buffer, size_t size);  // the falcon's state, for 
 
 // Service (TegraVICUserClient.cpp): V3.
 int tegra_vic_publish(void);
+
+// Idle power gating (TegraVIC.cpp): a submission holds the powered engine (on again first if it was off), and the
+// queue draining starts the idle timer.
+int switch_vic_power_use(void);
+void switch_vic_power_done(void);
+void switch_vic_power_idle(void);
 }
+
+struct SwitchVICPowerUse {
+    SwitchVICPowerUse() : error(switch_vic_power_use())
+    {}
+
+    ~SwitchVICPowerUse()
+    {
+        if (!error)
+            switch_vic_power_done();
+    }
+
+    SwitchVICPowerUse(const SwitchVICPowerUse &) = delete;
+    SwitchVICPowerUse &operator=(const SwitchVICPowerUse &) = delete;
+    const int error;
+};
 
 #if TEGRA_VIC_STATS
 struct IOExternalMethodArguments;
-int switch_vic_pitch_probe_call(const IOExternalMethodArguments *arguments);  // an IOReturn
+int switch_vic_kernel_test_call(const IOExternalMethodArguments *arguments);  // an IOReturn
 #endif
 
 #endif

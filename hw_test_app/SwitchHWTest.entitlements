@@ -20,5 +20,22 @@
 	<array>
 		<string>/private/var/mobile/Media/Switch/benchloop/</string>
 	</array>
+	<key>com.apple.security.exception.sysctl.read-only</key>
+	<array>
+		<string>kern.switch_planes_flips</string>
+		<string>kern.switch_planes_latched</string>
+		<string>kern.switch_planes_maps</string>
+		<string>kern.switch_planes_dropped</string>
+		<string>kern.switch_joycon</string>
+		<string>kern.switch_gpu_paths</string>
+		<string>kern.a64x.images</string>
+		<string>kern.a64x.images_native</string>
+		<string>kern.a64x.images_marked</string>
+		<string>kern.a64x.text_pages</string>
+		<string>kern.a64x.stub_words</string>
+		<string>kern.a64x.stub_mismatch</string>
+		<string>kern.a64x.traps</string>
+		<string>kern.a64x.traps_unhandled</string>
+	</array>
 </dict>
 </plist>

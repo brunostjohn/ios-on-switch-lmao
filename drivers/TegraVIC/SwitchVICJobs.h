@@ -8,7 +8,8 @@ constexpr uint32_t kSwitchVICConfigStride = 4096;
 constexpr uint32_t kSwitchVICConfigBytes = SwitchVICQueue::kSlots * kSwitchVICConfigStride;
 
 bool switch_vic_jobs_start(const TegraVICBuffer &configs, uint32_t syncpt, uint32_t completed);
-void switch_vic_jobs_suspend();
+// New jobs wait until switch_vic_jobs_resume. drain: once the queued ones are done; else only if none is queued.
+bool switch_vic_jobs_park(bool drain);
 void switch_vic_jobs_resume(bool ready, uint32_t completed);
 
 extern "C" int switch_vic_wait(uint32_t fence);
@@ -35,3 +36,5 @@ struct SwitchVICOwnership {
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
                               uint32_t *fence, SwitchVICEvents *events = nullptr);
+// Debug kernels: which check of switch_vic_submit_checked refused the last job it refused.
+const char *switch_vic_last_refusal();

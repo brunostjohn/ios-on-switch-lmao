@@ -114,6 +114,7 @@
             underflowRun = 0;
             dc[kDcIntStatus] = kWinAUnderflowInt;
             stopConsoleTape();  // window A has left it
+            applyUiMemoryPlan();
             if (!rotationAnnounced) {
                 rotationAnnounced = true;
                 IOLog("SwitchDisplay: window A scanout latched at %#x after %llu frame ends\n",
@@ -136,12 +137,14 @@
         }
         if (ring.pending != kNoBuffer)
             checkFlip(true);
-        const uint32_t underflow = dc[kDcIntStatus] & kWinAUnderflowInt;
+        const uint32_t underflow = dc[kDcIntStatus] & uiUnderflow();
+        landscapeRunUnderflow(underflow);
         if (!underflow) {
             underflowRun = 0;
             return;
         }
         dc[kDcIntStatus] = underflow;
+        noteLatchedUnderflow(underflow);
         if (stats)
             stUnderflows++;
         if (probe.active())
@@ -154,14 +157,14 @@
         }
         if (++underflowRun < kUnderflowFrames)
             return;
-        panic("SwitchDisplay: window A underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
+        panic("SwitchDisplay: window %c underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
               "%#x KIND %#x STRIDE %#x",
-              underflowRun, windowActive(kWinbufUnderflow), windowActive(kWinOptions), windowActive(kWinbufSurfaceKind),
-              windowActive(kWinLineStride));
+              uiName(), underflowRun, underflowCounts[uiName() - 'A'], uiActive(kWinOptions),
+              uiActive(kWinbufSurfaceKind), uiActive(kWinLineStride));
     }
 
-    // Under the gate: window A to surface i from the next frame boundary (its layout once direct scanout is on, START_ADDR, then
-    // the window and general requests).
+    // Under the gate: the UI window (A; B in landscape) to surface i from the next frame boundary (its layout once direct
+    // scanout is on, START_ADDR, then the window and general requests).
     void writeFlip(int i)
     {
         scanoutMemoryBarrier();  // the frame is in memory before the window can fetch it
@@ -172,15 +175,15 @@
             uint32_t stride = 0;
             uint32_t hOffset = 0;
             layoutOf(i, kind, stride, hOffset);
-            dc[kWinbufSurfaceKind] = kind;
-            dc[kWinLineStride] = stride;
-            dc[kWinbufHOffset] = hOffset;
+            uiWord(kWinbufSurfaceKind) = kind;
+            uiWord(kWinLineStride) = stride;
+            uiWord(kWinbufHOffset) = hOffset;
         }
-        dc[kWinbufStartAddr] = surfaceAddress(i);
-        // Window B's change for this frame, if any, into its assembly registers: one UPDATE write arms both windows and one
-        // ACT_REQ write latches them at the same boundary (the ARM copy makes a replaced pair whole either way).
-        uint32_t update = kGeneralUpdate | kWinAUpdate;
-        uint32_t request = kGeneralActReq | kWinAActReq;
+        uiWord(kWinbufStartAddr) = surfaceAddress(i);
+        // The overlays' change for this frame, if any, into their assembly registers: one UPDATE write arms every window and
+        // one ACT_REQ write latches them at the same boundary (the ARM copy makes a replaced pair whole either way).
+        uint32_t update = kGeneralUpdate | uiUpdate();
+        uint32_t request = kGeneralActReq | uiRequest();
         // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound): i is a ring entry, never kNoBuffer
         if (entryPlaneSet[i]) {
             entryPlaneSet[i] = false;

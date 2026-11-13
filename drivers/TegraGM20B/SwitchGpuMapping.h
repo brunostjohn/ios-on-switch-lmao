@@ -53,4 +53,20 @@ static inline int switch_gpu_mapping_next(const uint64_t *pages, uint32_t count,
 	run->shift = (uint8_t)(big ? SWITCH_GPU_BIG_SHIFT : SWITCH_GPU_SMALL_SHIFT);
 	return 1;
 }
+
+/* The bytes of a range 128 KiB PTEs could map (VA and physical pages aligned and contiguous), whatever it is mapped with */
+static inline uint64_t switch_gpu_mapping_big_bytes(const uint64_t *pages, uint32_t count,
+						    uint64_t va, uint64_t offset, uint64_t bytes)
+{
+	struct switch_gpu_mapping_run run;
+	uint64_t at = 0, big = 0;
+
+	while (at < bytes &&
+	       switch_gpu_mapping_next(pages, count, va + at, offset + at, bytes - at, &run)) {
+		if (run.shift == SWITCH_GPU_BIG_SHIFT)
+			big += run.bytes;
+		at += run.bytes;
+	}
+	return big;
+}
 #endif

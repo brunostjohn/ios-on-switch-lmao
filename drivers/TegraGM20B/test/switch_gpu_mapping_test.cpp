@@ -182,3 +182,19 @@ TEST(GpuMapping, AlignedPhysicalInteriorCanStartAnIndependentBigView)
     EXPECT_EQ(runs[1].shift, 12);
     EXPECT_EQ(runs[1].bytes, 16 * kPage);
 }
+
+// LIMITS C5: a 720p present surface is 3,686,400 bytes. Contiguous and 128 KiB-aligned, 28 128 KiB PTEs could map all
+// but its last 4 KiB pages; scattered, or at a VA off the 128 KiB grid, none.
+TEST(GpuMapping, BigBytesCountsWhat128KiBPtesCouldMap)
+{
+    constexpr uint64_t kSurface = 3686400, kBig = 128 * 1024;
+    const uint32_t count = uint32_t((kSurface + 4095) / 4096);
+    std::vector<uint64_t> pages(count);
+    for (uint32_t i = 0; i < count; ++i)
+        pages[i] = 0x80000000ull + uint64_t(i) * 4096;
+    EXPECT_EQ(switch_gpu_mapping_big_bytes(pages.data(), count, 0x40000000, 0, kSurface), 28 * kBig);
+    EXPECT_EQ(switch_gpu_mapping_big_bytes(pages.data(), count, 0x40001000, 0, kSurface - 4096), 0u);
+    for (uint32_t i = 0; i < count; i += 2)
+        pages[i] += 0x100000000ull;
+    EXPECT_EQ(switch_gpu_mapping_big_bytes(pages.data(), count, 0x40000000, 0, kSurface), 0u);
+}

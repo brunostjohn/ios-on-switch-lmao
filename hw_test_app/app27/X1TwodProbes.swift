@@ -11,13 +11,19 @@ import Metal
 enum X1TwodProbes {
     /// claim_verdict: PASS when every cell keeps Metal's rule, FAIL when a cell is beyond one code or fits no rule,
     /// INCONCLUSIVE between; margin_verdict: PASS when every cell is within one code by a named rule. Cells whose
-    /// command buffer left the raw path are listed apart (off_path_cells=) and judge nothing.
-    static func finding(_ rule: String, _ cells: [(String, X1RuleTally)], ops: Int, offPath: [String]) -> ProbeFinding {
+    /// command buffer left the raw path are listed apart (off_path_cells=) and judge nothing. `explained`, where given,
+    /// holds each cell under the reading of the unit's arithmetic that fits it best (its weights, its order of rounding):
+    /// the rules come from those.
+    static func finding(
+        _ rule: String, _ cells: [(String, X1RuleTally)], ops: Int, offPath: [String],
+        explained: [(String, X1RuleTally)]? = nil
+    ) -> ProbeFinding {
         var metrics = Metrics()
         metrics.set("rule", rule)
         metrics.set("ops", ops)
         let exact = cells.filter { $0.1.offMetal == 0 }.count
-        let unexplained = cells.filter { $0.1.rules.isEmpty }.map(\.0)
+        let ruled = explained ?? cells
+        let unexplained = ruled.filter { $0.1.rules.isEmpty }.map(\.0)
         let wrong = cells.filter { $0.1.beyondOne > 0 }.map(\.0)
         metrics.set("exact_cells", exact)
         metrics.set("near_cells", cells.count - exact - wrong.count)
@@ -25,7 +31,7 @@ enum X1TwodProbes {
         metrics.set("margin_verdict", wrong.isEmpty && unexplained.isEmpty && !cells.isEmpty ? "PASS" : "FAIL")
         metrics.set("unexplained", unexplained.isEmpty ? "-" : unexplained.joined(separator: ","))
         if let first = cells.first(where: { $0.1.offMetal > 0 }) { metrics.set("first", "\(first.0)@\(first.1.first)") }
-        metrics.set("rules", ruleSummary(cells))
+        metrics.set("rules", ruleSummary(ruled))
         metrics.set("cells", cells.map { "\($0.0):\($0.1.text)" }.joined(separator: ","))
         metrics.set("off_path_cells", offPath.isEmpty ? "-" : offPath.joined(separator: ","))
         if cells.isEmpty { return ProbeFinding(.inconclusive, metrics, note: "no cell ran on the raw path") }

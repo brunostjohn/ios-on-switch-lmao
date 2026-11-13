@@ -45,6 +45,8 @@ IOReturn AGXDeviceUserClient::cpuComplete(const TegraGM20BAbiCpuComplete *input,
         switch_gpu_backing_retain(bo->backing);
     }
     IOLockUnlock(lock_);
+    for (uint32_t i = 0; !result && i < count; ++i)
+        switch_gpu_backing_member_cpu(resolved[i].backing);
     if (!result) {
         result = ioreturn(switch_gpu_cpu_complete(prefix, resolved, count, reply));
         switch_gpu_path_taken(SWITCH_GPU_PATH_CPU_COMPLETE, 1);

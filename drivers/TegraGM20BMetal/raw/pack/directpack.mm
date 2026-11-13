@@ -20,8 +20,9 @@
 // form is under the state's key (PipelineFetchFreeForm).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
-// shader data and constant buffer types, its sampler headers, which its sampler entries number from 0 (slot 0x80 | n), and its
-// argument table's words (u32 count and words).
+// shader data and constant buffer types, its sampler headers, which its sampler entries number from 0 (slot 0x80 | n), its
+// argument table's words (u32 count and words), and its state's answers as the runtime's compute prepare gives them
+// (runtime/raw_pack.h PackComputeFacts: three u32).
 // PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -286,7 +287,7 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
 }
 
 void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
-            const raw::ComputeRecord &rec)
+            const raw::ComputeRecord &rec, const uint32_t facts[3])
 {
     if (!head(w, "DKRN", key, outcome, why))
         return;
@@ -296,6 +297,7 @@ void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
     w.bytes(rec.cbufType, rec.cbufs);
     w.list(rec.samplers);
     w.list(rec.spill);
+    w.bytes(facts, 3 * sizeof *facts);
 }
 
 }  // namespace
@@ -351,12 +353,15 @@ int main(int argc, char **argv)
                 probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
                 raw::ComputeRecord rec;
                 std::string why;
-                raw::CompileOutcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                uint32_t facts[3] = {};
+                raw::CompileOutcome outcome = !offline::kernelFacts(k.descriptor, facts, why)
+                                                  ? raw::CompileOutcome::Refused
+                                                  : direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
                 if (const char *runtime = outcome == raw::CompileOutcome::Made ? runtimeOnly(rec.kernel) : nullptr) {
                     outcome = raw::CompileOutcome::Refused;
                     why = runtime;
                 }
-                kernel(w, k.key, outcome, why, rec);
+                kernel(w, k.key, outcome, why, rec, facts);
                 kernels[uint32_t(outcome)]++;
             },
             [](const std::string &, const std::string &) {});

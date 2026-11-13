@@ -1,0 +1,14 @@
+batch	experiment	row	what the result shows when the row holds
+cc1	cc-off	3D-G13	texels = the program's (control)
+cc1	cc-float	3D-G13	every texel 0.8,0.1,0.3,1.0 (SET_CONSTANT_COLOR_RENDERING with RF32 colour replaces the program's output)
+cc1	cc-unorm	3D-G13	every texel the constant in the encoding the kill name implies; a class error 0x138 names a missing pre-PS coverage setup
+cc1	cc-half	3D-G13	as cc-unorm, half colour
+cc1	cc-float-blend	3D-G13	source-over of the constant onto the fill
+cc1	cc-time-*	3D-G13	gpu ns per draw: on below off at 16 and 64 draws
+fvt1	fvt-disabled	3D-D6	one source over the fill (fill via triangle off)
+fvt1	fvt-all	3D-D6	two sources over the fill where both triangles widen to the quad
+fvt1	fvt-bbox	3D-D6	as fvt-all, bounding-box mode
+fvt1	fvt-time-*	3D-D6	gpu ns per draw: bbox below off
+decompress1	dec-none	3D-G10	texels = the program's (control)
+decompress1	dec-mrt0	3D-G10	texels = the program's and no class error: DECOMPRESS_SURFACE (0x02e0) MRT 0 is legal on the bound target
+decompress1	dec-mrt0-twice	3D-G10	as dec-mrt0

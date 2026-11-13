@@ -240,6 +240,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret && !bo->pool_va && !compressible && !system &&
 	    !(in->flags & TegraGM20BBoContiguous))
 		spare = spareTake(in->bytes);
+	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
+		spareIneligible();
 	if (!ret && bo->pool_va) {
 		for (uint32_t i = 0; i < bo->npages; i++)
 			bo->pas[i] = bo->pool_pa + (static_cast<uint64_t>(i) << 12);

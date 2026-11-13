@@ -236,6 +236,20 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     return found;
 }
 
+void Compiler::keep(const CacheKey &k, RecordCache::Found found, const RuntimeRecord &record, const std::string &why)
+{
+    if (found == RecordCache::Found::None)
+        return;
+    std::lock_guard<std::mutex> l(lock_);
+    const auto [it, first] = entries_.try_emplace(k.name());
+    if (!first)
+        return;
+    it->second.state = found == RecordCache::Found::Record ? State::Ready : State::Refused;
+    it->second.why = why;
+    if (found == RecordCache::Found::Record)
+        it->second.record = std::make_unique<RuntimeRecord>(record);
+}
+
 bool Compiler::retryAfter(const CacheKey &k, uint64_t &us) const
 {
     std::lock_guard<std::mutex> l(lock_);

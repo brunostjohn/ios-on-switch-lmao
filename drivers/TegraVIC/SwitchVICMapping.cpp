@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#ifdef KERNEL
+#include <libkern/libkern.h>
+#else
+#include <stdio.h>
+#endif
 #include "SwitchVICMapping.h"
 
 struct SwitchVICMapping {
@@ -15,7 +20,7 @@ constexpr uint32_t kMappings = 32;
 constexpr uint64_t kPinnedBytes = 128ULL << 20;
 SwitchVICMapping gMappings[kMappings];
 IOLock *gLock;
-uint64_t gClock, gBytes;
+uint64_t gClock, gBytes, gMade;
 
 void evict(SwitchVICMapping &mapping)
 {
@@ -79,6 +84,7 @@ SwitchVICMapping *switch_vic_mapping_acquire_range(switch_gpu_backing *backing, 
         const uint64_t address = switch_vic_mapping_create(info.pages + firstPage, pageCount, writable);
         if (address) {
             switch_gpu_backing_retain(backing);
+            __atomic_add_fetch(&gMade, uint64_t(1), __ATOMIC_RELAXED);
             *mapping = {backing, info.allocation_id, info.allocation_generation, address, ++gClock,
                         firstPage, pageCount, 1, writable};
             gBytes += bytes;
@@ -110,6 +116,39 @@ void switch_vic_mapping_release(SwitchVICMapping *mapping)
     mapping->used = ++gClock;
     IOLockUnlock(gLock);
 }
+
+uint64_t switch_vic_mapping_take_made()
+{
+    return __atomic_exchange_n(&gMade, uint64_t(0), __ATOMIC_RELAXED);
+}
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// For the GPU stats line's memory-controller error: where a VIC read (client 0x6c, vicsrd) the SMMU refused fell,
+// against the mappings VIC holds now (a refused read past a surface's pages names the over-fetch a521ab19b maps).
+extern "C" int switch_vic_mapping_describe(uint32_t iova, char *out, size_t size)
+{
+    if (!gLock || !out || !size)
+        return -22;
+    IOLockLock(gLock);
+    const SwitchVICMapping *nearest = nullptr;
+    for (const auto &mapping : gMappings) {
+        if (mapping.backing && mapping.address <= iova && (!nearest || mapping.address > nearest->address))
+            nearest = &mapping;
+    }
+    if (!nearest) {
+        snprintf(out, size, "no VIC mapping below %#x", iova);
+    } else {
+        const uint64_t offset = iova - nearest->address;
+        const uint64_t bytes = static_cast<uint64_t>(nearest->pages) << 12;
+        snprintf(out, size, "VIC %s mapping %#llx of %u pages: %#llx %s", nearest->writable ? "write" : "read",
+                 static_cast<unsigned long long>(nearest->address), nearest->pages,
+                 static_cast<unsigned long long>(offset < bytes ? offset : offset - bytes),
+                 offset < bytes ? "into its pages" : "past its last page");
+    }
+    IOLockUnlock(gLock);
+    return 0;
+}
+#endif
 
 uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
 {

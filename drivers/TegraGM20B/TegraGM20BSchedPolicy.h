@@ -51,6 +51,20 @@ static inline int tgm_kick_victim(uint32_t eng, int eng_high, int pbdma_busy, ui
 	return TGM_VICTIM_NONE;
 }
 
+/* While GR is mid-switch, what a high kick preempts: the app channel GR is loading (a load, or a save and a load), which
+ * the host picked while no high channel had work and which would keep GR for its timeslice; TGM_VICTIM_SWITCHING for a
+ * save alone or a switch to a high channel or a TSG, which the interleaved runlist follows with a high channel. */
+static inline int tgm_kick_loading(uint32_t eng, int next_high)
+{
+	const uint32_t ctx = PFIFO_ENG_CTX_STATUS(eng);
+
+	if ((eng & PFIFO_ENG_BUSY) && (eng & PFIFO_ENG_CHSW) &&
+	    (ctx == PFIFO_ENG_CTX_LOAD || ctx == PFIFO_ENG_CTX_SWITCH) &&
+	    !(eng & PFIFO_ENG_NEXT_ID_TSG) && !next_high)
+		return (int)PFIFO_ENG_NEXT_ID(eng);
+	return TGM_VICTIM_SWITCHING;
+}
+
 /* Whether a high kick preempts its victim: never one high work waits for (the present's waits, the compositor's acquires,
  * tgm_hold_need): the compositor would only yield at its acquire and the host switch back. */
 static inline int tgm_kick_may_preempt(int victim, int needed)
@@ -236,6 +250,24 @@ static inline uint64_t tgm_gpu_span(uint64_t end, uint64_t start, uint64_t last_
 	const uint64_t from = start > last_end ? start : last_end;
 
 	return end > from ? end - from : 0;
+}
+
+/* Which channels a window holds; with none tracked no window opens. One whose preemption latency stays within the
+ * slack is left to the compositor's kick, whose preempt then costs the compositor at most that: holding it every frame
+ * would only take GPU time from it. One whose latency exceeds a 60 Hz frame cannot leave in time for any hold, and its
+ * learned latency is mostly the compositor waiting on something else after the ask (F-v1: SwitchHWTest, mediaanalysisd
+ * and the kernel's own channels at the 100 ms cap): holding it every frame would starve it for nothing. */
+#define TGM_HOLD_SLACK_NS (1000ull * 1000)
+#define TGM_HOLD_CEILING_NS (16666667ull)
+
+/* The longest an app channel's draw is estimated to keep GR (drivers/TegraGM20BMetal raw_draw_bands.h): a longer one is
+ * drawn as scissor bands, each ending a batch of its own (its wait-for-idle seqno release), so a compositor kick waits
+ * for one band at most. The hold's slack: a channel whose draws fit it is never worth a hold. */
+#define TGM_APP_BAND_NS TGM_HOLD_SLACK_NS
+
+static inline int tgm_hold_worth(uint64_t preempt)
+{
+	return (preempt > TGM_HOLD_SLACK_NS && preempt <= TGM_HOLD_CEILING_NS) ? 1 : 0;
 }
 
 /* The one-period bound: a channel held in the last window that has not had its preemption latency's worth of GPU time

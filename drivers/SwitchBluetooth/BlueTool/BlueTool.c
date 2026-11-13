@@ -27,7 +27,12 @@
 // which registers the apps a deploy changed. For that the stand-in has no sandbox profile (the original's
 // com.apple.private.sandbox.profile:embedded "BlueTool" would refuse the spawn); it touches nothing but its XPC
 // listener and those spawns. Children are not waited for (SIGCHLD ignored): joyconpaird runs for the boot and keeps a
-// single instance itself, and switch-appregd ends once it has applied the deploy's journal.
+// single instance itself, and switch-appregd ends once it has applied the deploy's journal. It starts the system shader
+// compiler, /usr/libexec/SwitchShaderCompiler (../../TegraGM20BMetal/compiler), as soon as it runs and again at each chip
+// boot (one still running keeps its lock and the new one exits), as an interactive daemon: a compile runs at the class of
+// the GPU client waiting on it. It watches each compiler it starts and starts it again when one dies (killed, or a
+// failing exit), up to the kernel's three losses (SwitchGpuShaderCompilerPolicy.h kLosses); an exit of 0 is one that
+// found another running or declined, and is left alone.
 //
 // iOS 27 sandboxes it either way. Without a seatbelt profile the kernel applies the original's learned autobox profile
 // ("apply-protobox", keyed by the executable name), so the 27 build carries the original's seatbelt-profiles
@@ -44,7 +49,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/event.h>
 #include <sys/sysctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
 
@@ -58,6 +65,12 @@ static const char kFirmware[] = "CYW4356A3_001.004.009.0092.0095.hcd";  // nx-fi
 #if SWITCH_BLUETOOL_STARTS_HELPERS
 static const char kPairingAgent[] = "/usr/libexec/joyconpaird";
 static const char kAppRegistration[] = "/usr/libexec/switch-appregd";
+static const char kShaderCompiler[] = "/usr/libexec/SwitchShaderCompiler";
+
+// libsystem_kernel (spawn_private.h) and xnu's bsd/sys/spawn_internal.h POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE: a daemon
+// whose threads may run at the class of the client threads waiting on it, as launchd's ProcessType Interactive
+extern int posix_spawnattr_setprocesstype_np(posix_spawnattr_t *attr, const int type);
+static const int kDaemonInteractive = 0x400;
 #endif
 
 extern char **environ;
@@ -77,6 +90,67 @@ static void startHelper(const char *path, bool *reported)
     const int error = posix_spawn(&pid, path, NULL, NULL, argv, environ);
     if (error)
         os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", path, error);
+}
+
+// The kernel stops waiting for a compiler at its third loss (SwitchGpuShaderCompilerPolicy.h kLosses)
+static const int kCompilerDeaths = 3;
+static int compilerDeaths;
+
+static void startShaderCompiler(void);
+
+// The child's exit, from a kqueue the main queue reads when it fires: its wait status comes with it (NOTE_EXITSTATUS, as
+// its parent), whatever SIGCHLD's disposition reaps. A child gone before the watch is set is left alone.
+static void watchShaderCompiler(pid_t pid)
+{
+    const int kq = kqueue();
+    if (kq < 0)
+        return;
+    struct kevent watch;
+    EV_SET(&watch, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT | NOTE_EXITSTATUS, 0, NULL);
+    if (kevent(kq, &watch, 1, NULL, 0, NULL) < 0) {
+        close(kq);
+        return;
+    }
+    dispatch_source_t exited =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)kq, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(exited, ^{
+        struct kevent event;
+        const struct timespec none = {0, 0};
+        if (kevent(kq, NULL, 0, &event, 1, &none) != 1)
+            return;
+        dispatch_source_cancel(exited);
+        const int status = (int)event.data;
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+            return;
+        compilerDeaths++;
+        os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s (pid %d) died (status 0x%x), death %d of %d",
+                     kShaderCompiler, pid, status, compilerDeaths, kCompilerDeaths);
+        startShaderCompiler();
+    });
+    dispatch_source_set_cancel_handler(exited, ^{
+        close(kq);
+    });
+    dispatch_resume(exited);
+}
+
+static void startShaderCompiler(void)
+{
+    if (compilerDeaths >= kCompilerDeaths)
+        return;
+    char *argv[] = {(char *)kShaderCompiler, NULL};
+    posix_spawnattr_t attributes;
+    pid_t pid;
+    int error = posix_spawnattr_init(&attributes);
+    if (!error) {
+        error = posix_spawnattr_setprocesstype_np(&attributes, kDaemonInteractive);
+        if (!error)
+            error = posix_spawn(&pid, kShaderCompiler, NULL, &attributes, argv, environ);
+        posix_spawnattr_destroy(&attributes);
+    }
+    if (error)
+        os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kShaderCompiler, error);
+    else
+        watchShaderCompiler(pid);
 }
 
 // The pairing agent, after a chip-boot request has been answered (see the file comment): at every one, so a bluetoothd
@@ -230,8 +304,10 @@ static void answer(xpc_connection_t peer, xpc_object_t message)
     xpc_connection_send_message(peer, reply);
     xpc_release(reply);
 #if SWITCH_BLUETOOL_STARTS_HELPERS
-    if (id && !strcmp(id, "RunBuiltinScript"))
+    if (id && !strcmp(id, "RunBuiltinScript")) {
         startPairingAgent();
+        startShaderCompiler();
+    }
 #endif
 }
 
@@ -240,6 +316,7 @@ int main(void)
     // "-R" (server mode) is the only way launchd runs it; arguments are ignored.
     signal(SIGCHLD, SIG_IGN);  // the helpers are never waited for
 #if SWITCH_BLUETOOL_STARTS_HELPERS
+    startShaderCompiler();
     static bool appRegistrationReported;
     startHelper(kAppRegistration, &appRegistrationReported);
 #endif

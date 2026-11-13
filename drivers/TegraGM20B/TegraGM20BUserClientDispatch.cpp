@@ -314,10 +314,16 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #endif
 #if SWITCH_GPU_PATH_STATS
 	if (method == TegraGM20BMethodPaths) {
-		if (static_cast<const TegraGM20BAbiPaths *>(in)->op)
-			return kIOReturnBadArgument;
+		const uint32_t op = static_cast<const TegraGM20BAbiPaths *>(in)->op;
 		auto *reply = static_cast<TegraGM20BAbiPathsReply *>(out);
-		switch_gpu_path_line(reply->line, sizeof(reply->line));
+		if (op == TegraGM20BPathsOpCounts)
+			switch_gpu_path_line(reply->line, sizeof(reply->line));
+#if TGM_STATS
+		else if (op == TegraGM20BPathsOpTargetPeaks)
+			tgm_target_peaks_line(reply->line, sizeof(reply->line));
+#endif
+		else
+			return kIOReturnBadArgument;
 		return kIOReturnSuccess;
 	}
 #endif

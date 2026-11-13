@@ -10,6 +10,15 @@ import Metal
 /// same pass drawn with it off is the reference. PASS: every round's picture with compressed zetas is the reference's
 /// byte for byte and zeta_ce_copies moved; INCONCLUSIVE: no switch, the work left the raw path, or no copy went through
 /// compressed memory (the facade had none made yet).
+///
+/// T-v2's run died on the draws of a multisampled case with INVALID_A_A_COMBINATION03 (class error 0x134 at
+/// DRAW_VERTEX_ARRAY), as framebuffer_fetch_depth and fetch_routes do, before judging anything. Our context differs from
+/// NVIDIA's on two anti-alias controls: 0x15b4 (golden 1, NVIDIA's userspace writes 0; nvk_cmd_draw.c) and
+/// SET_ANTI_ALIAS_ENABLE 0x1534 (NVK 1, golden 0). So the single-sample case runs first, as is, and each multisampled
+/// case runs with NVIDIA's 0x15b4 around every draw (`<case>_aa=csaa_off`), then, if that killed its command buffer, with
+/// 0x1534 cleared instead (aa_off); a case whose arms all failed is named (`<case>_aa=killed`) and the multisampled cases
+/// after it are not run. A multisampled case whose words the channel refused or never emitted judges nothing and makes the
+/// claim INCONCLUSIVE. Each case is journaled before it runs.
 enum X1CompressedDepthProbe {
     static let probe = X1Probe(
         id: "gpu.x1.ce_compressed_depth",
@@ -31,6 +40,31 @@ enum X1CompressedDepthProbe {
         return true
     }
 
+    static let csaa: UInt32 = 0x15b4, antiAliasEnable: UInt32 = 0x1534
+
+    /// The anti-alias controls a case's draws run under: name, words before each draw, words after it
+    static let aaArms: [(String, [(UInt32, UInt32)], [(UInt32, UInt32)])] = [
+        ("csaa_off", [(csaa, 0)], [(csaa, 1)]), ("aa_off", [(antiAliasEnable, 0)], [(antiAliasEnable, 1)]),
+    ]
+
+    /// One case's reference and compressed rounds: (pictures that differ, rounds through compressed memory)
+    static func rounds(_ gpu: GPU, _ scene: Scene) async throws -> (Int, Int) {
+        _ = zetaKinds(gpu.device, false)
+        let reference = try await scene.draw()
+        _ = zetaKinds(gpu.device, true)
+        var bad = 0, compressed = 0
+        for _ in 0..<attempts where compressed < rounds {
+            let before = RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0
+            let picture = try await scene.draw()
+            if (RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0) > before {
+                compressed += 1
+                if picture != reference { bad += 1 }
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return (bad, compressed)
+    }
+
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
         var metrics = Metrics()
         metrics.set("rule", "copy.ce_compressed_depth")
@@ -38,27 +72,44 @@ enum X1CompressedDepthProbe {
             return ProbeFinding(.inconclusive, metrics, note: "the facade has no zeta probe switch (a release build)")
         }
         defer { _ = zetaKinds(gpu.device, false) }
+        let journal = ProbeJournal(probe: "gpu.x1.ce_compressed_depth")
         var wrong: [String: Int] = [:]
         var engaged = 0
-        for (name, format, samples) in cases where gpu.device.supportsTextureSampleCount(samples) {
+        var killed: [String] = [], refused: [String] = []
+        var dead: String?
+        cases: for (name, format, samples) in cases where gpu.device.supportsTextureSampleCount(samples) {
             let scene = try Scene(gpu: gpu, format: format, samples: samples)
-            _ = zetaKinds(gpu.device, false)
-            let reference = try await scene.draw()
-            _ = zetaKinds(gpu.device, true)
-            var bad = 0, compressed = 0
-            for _ in 0..<attempts where compressed < rounds {
-                let before = RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0
-                let picture = try await scene.draw()
-                if (RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0) > before {
-                    compressed += 1
-                    if picture != reference { bad += 1 }
+            let arms = samples > 1 ? aaArms : [("as_is", [], [])]
+            for (arm, before, after) in arms {
+                journal.starting("\(name) \(arm)")
+                if !before.isEmpty, let refusal = RawMethods.arm(gpu.device, before: before, after: after) {
+                    metrics.set("\(name)_aa", LogLine.sanitized(refusal))
+                    refused.append(name)
+                    continue cases
                 }
-                try await Task.sleep(nanoseconds: 50_000_000)
+                do {
+                    let (bad, compressed) = try await rounds(gpu, scene)
+                    let emitted = before.isEmpty ? 0 : RawMethods.disarm(gpu.device)
+                    if !before.isEmpty && emitted == 0 {
+                        metrics.set("\(name)_aa", "\(arm)_not_emitted")
+                        refused.append(name)
+                        continue cases
+                    }
+                    wrong[name] = bad
+                    metrics.set("\(name)_aa", arm)
+                    metrics.set("\(name)_compressed_rounds", compressed)
+                    engaged += compressed
+                    continue cases
+                } catch {
+                    if !before.isEmpty { _ = RawMethods.disarm(gpu.device) }
+                    killed.append("\(name):\(arm)")
+                }
             }
-            wrong["\(name)"] = bad
-            metrics.set("\(name)_compressed_rounds", compressed)
-            engaged += compressed
+            metrics.set("\(name)_aa", "killed")
+            dead = name
+            break
         }
+        metrics.set("killed_arms", killed.isEmpty ? "-" : killed.joined(separator: ","))
         metrics.set("compressed_rounds", engaged)
         let paths = gpu.paths.paths.keys.map { $0 }
         if engaged == 0 {
@@ -67,7 +118,15 @@ enum X1CompressedDepthProbe {
             finding.note = "no shader-test copy went through a compressed zeta"
             return finding
         }
-        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)
+        var finding = ProbeFinding.counted(wrong, paths: paths, metrics: metrics)
+        if finding.verdict == .pass, let dead {
+            finding.verdict = .inconclusive
+            finding.note = "\(dead)'s draws were killed under every anti-alias arm"
+        } else if finding.verdict == .pass, !refused.isEmpty {
+            finding.verdict = .inconclusive
+            finding.note = "no anti-alias words reached the draws of \(refused.joined(separator: ","))"
+        }
+        return finding
     }
 
     /// FramebufferFetchDepthScene's draws over a memoryless zeta: fetching draws test depth in the shader, the plain one

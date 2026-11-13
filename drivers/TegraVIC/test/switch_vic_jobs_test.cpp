@@ -13,9 +13,18 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
-uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits;
-int bridgeError, submitError, retainError, statusError;
-int bridgeResult = 1;
+uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
+int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
+switch_gpu_event_waits *preparedBatch;
+std::vector<switch_host1x_fence *> fences;
+std::vector<uint32_t> fenceBounds, watchedBounds;
+
+struct Notification {
+    void (*completed)(void *, int);
+    void *context;
+};
+
+std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
 bool transactionLocked, changeProducer, busyOnce;
 volatile uint64_t *changeGeneration;
@@ -155,9 +164,34 @@ int switch_gpu_bridge_status(const switch_gpu_bridge *)
     return 1;
 }
 
-int switch_gpu_bridge_wait(const switch_gpu_bridge *)
+int switch_gpu_bridge_notify(const switch_gpu_bridge *, void (*completed)(void *, int), void *context)
 {
-    return bridgeResult;
+    EXPECT_FALSE(switch_test_queue_locked);
+    notifications.push_back({completed, context});
+    return 0;
+}
+
+void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint32_t threshold,
+                              void (*signaled)(switch_host1x_fence *, int))
+{
+    *fence = {};
+    fence->syncpt = syncpt;
+    fence->threshold = threshold;
+    fence->signaled = signaled;
+}
+
+int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boundUs)
+{
+    EXPECT_TRUE(switch_test_queue_locked);
+    fence->state = SWITCH_HOST1X_FENCE_QUEUED;
+    fences.push_back(fence);
+    fenceBounds.push_back(boundUs);
+    return 0;
+}
+
+void switch_host1x_fence_watch(switch_host1x_fence *, uint32_t boundUs)
+{
+    watchedBounds.push_back(boundUs);
 }
 
 void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
@@ -194,11 +228,25 @@ int tegra_host1x_syncpt_wait(uint32_t, uint32_t, uint32_t)
 void tegra_vic_describe(char *, size_t)
 {}
 
+int switch_vic_power_use()
+{
+    ++powerUses;
+    return powerError;
+}
+
+void switch_vic_power_done()
+{
+    ++powerDones;
+}
+
+void switch_vic_power_idle()
+{}
+
 void tegra_host1x_describe_channel(uint32_t, char *, size_t)
 {}
 }
 
-bool switch_vic_semantics_start(uint32_t)
+bool switch_vic_semantics_start(uint32_t, void (*)(switch_gpu_event_waits *))
 {
     return true;
 }
@@ -220,8 +268,6 @@ void switch_vic_semantics_commit(SwitchVICSemantic *)
 void switch_vic_semantics_physical(uint64_t)
 {}
 
-void switch_vic_semantics_retire(switch_gpu_event_waits *)
-{}
 
 switch_gpu_event_waits *switch_vic_events_batch(SwitchVICEvents *)
 {
@@ -255,9 +301,9 @@ void switch_gpu_event_waits_abort(switch_gpu_event_waits **)
 void switch_gpu_event_waits_commit(switch_gpu_event_waits **)
 {}
 
-int switch_gpu_event_waits_wait(switch_gpu_event_waits *, uint64_t)
+int switch_gpu_event_waits_cached_status(const switch_gpu_event_waits *)
 {
-    return 1;
+    return semanticResult;
 }
 
 int switch_gpu_event_waits_covers_token(switch_gpu_event_waits *, const switch_gpu_backing_token *)
@@ -270,8 +316,9 @@ int switch_gpu_event_waits_prepare_tokens(const switch_gpu_backing_token *, uint
     return 0;
 }
 
-int switch_gpu_event_waits_prepare(switch_gpu_event_use *const *, uint32_t, switch_gpu_event_waits **)
+int switch_gpu_event_waits_prepare(switch_gpu_event_use *const *, uint32_t, switch_gpu_event_waits **out)
 {
+    *out = preparedBatch;
     return 0;
 }
 
@@ -290,9 +337,14 @@ protected:
 
     void SetUp() override
     {
-        begins = aborts = commits = retained = bridges = released = roomWaits = submits = 0;
-        bridgeError = submitError = retainError = statusError = 0;
-        bridgeResult = 1;
+        begins = aborts = commits = retained = bridges = released = roomWaits = submits = powerUses = powerDones = 0;
+        bridgeError = submitError = retainError = statusError = powerError = 0;
+        semanticResult = 1;
+        preparedBatch = nullptr;
+        fences.clear();
+        fenceBounds.clear();
+        watchedBounds.clear();
+        notifications.clear();
         transactionLocked = changeProducer = busyOnce = false;
         changeGeneration = nullptr;
         sourceTokens.clear();
@@ -302,6 +354,8 @@ protected:
         gQueue.submitted = gQueue.completed = nextTestSequence;
         gCompleted = nextTestSequence;
         gFailed = gSuspended = false;
+        for (auto &stage : Stages::stages)
+            stage = {};
         gLock = IOLockAlloc();
         switch_test_queue_lock = gLock;
         gSyncpt = 161;
@@ -328,10 +382,25 @@ protected:
         switch_test_queue_lock = nullptr;
     }
 
-    int submit(uint32_t count = 1, const switch_gpu_backing_guard *guard = nullptr)
+    int submit(uint32_t count = 1, const switch_gpu_backing_guard *guard = nullptr,
+               void (*completion)(void *, int) = nullptr, void *context = nullptr)
     {
         const SwitchVICOwnership ownership = {uses, 1, guard, guard ? 1u : 0u, nullptr, 0};
-        return switch_vic_submit_checked(jobs, count, nullptr, ownership, nullptr, nullptr, nullptr);
+        return switch_vic_submit_checked(jobs, count, nullptr, ownership, completion, context, nullptr);
+    }
+
+    // The threshold interrupt's delivery of a job's fence, on host1x's work loop.
+    static void interrupt(size_t which)
+    {
+        auto *fence = fences.at(which);
+        fence->state = SWITCH_HOST1X_FENCE_IDLE;
+        fence->signaled(fence, 0);
+    }
+
+    static void bridged(size_t which, int status)
+    {
+        const auto notification = notifications.at(which);
+        notification.completed(notification.context, status);
     }
 
     void gpu(uint32_t count = 1)
@@ -471,23 +540,126 @@ TEST_F(SwitchVICJobsTest, FailedProducerDoesNotPublishConsumer)
 }
 }  // namespace
 
+TEST_F(SwitchVICJobsTest, AJobRetiresFromItsFenceOnTheWorkLoopWithNoThread)
+{
+    jobs[0].pixels = 8000;
+    int heard = 1;
+    const auto record = [](void *context, int status) { *static_cast<int *>(context) = status; };
+    ASSERT_EQ(submit(1, nullptr, record, &heard), 0);
+    ASSERT_EQ(fences.size(), 1u);
+    EXPECT_EQ(fences[0]->syncpt, 161u);
+    EXPECT_EQ(fences[0]->threshold, static_cast<uint32_t>(gQueue.submitted));
+    EXPECT_EQ(fenceBounds[0], 2000000u + 1000u);
+    EXPECT_TRUE(notifications.empty());
+    EXPECT_EQ(heard, 1);
+    const uint64_t fence = gQueue.submitted;
+    interrupt(0);
+    EXPECT_EQ(heard, 0);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(gQueue.completed, fence);
+    EXPECT_EQ(waitSequence(fence), 0);
+}
+
+// The bound times VIC alone: it starts when the GPU producer is done (D8), whichever of the two finishes first.
+TEST_F(SwitchVICJobsTest, ABridgedJobEndsWhenItsFenceAndItsBridgeHaveBothFinishedInEitherOrder)
+{
+    gpu();
+    ASSERT_EQ(submit(), 0);
+    ASSERT_EQ(fences.size(), 1u);
+    EXPECT_EQ(fenceBounds[0], 0u);
+    ASSERT_EQ(notifications.size(), 1u);
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 1u);
+    EXPECT_EQ(released, 0u);
+    bridged(0, 0);
+    EXPECT_EQ(watchedBounds, std::vector<uint32_t>{2000000u + 2000000u});
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(released, 1u);
+
+    sourceTokens.clear();
+    gpu();
+    ASSERT_EQ(submit(), 0);
+    bridged(1, 0);
+    EXPECT_EQ(gQueue.count, 1u);
+    interrupt(1);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(waitSequence(gQueue.completed), 0);
+}
+
 TEST_F(SwitchVICJobsTest, CompletedHardwareWithFailedProducerRetiresOnlyItsOwnJob)
 {
     gpu();
     ASSERT_EQ(submit(), 0);
-    bridgeResult = -5;
-    auto failed = gQueue.jobs[gQueue.head];
-    EXPECT_EQ(completeJob(failed), -5);
-    ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(failed.fence)));
-    EXPECT_EQ(waitSequence(failed.fence), -5);
+    const uint64_t failed = gQueue.submitted;
+    bridged(0, -5);
+    interrupt(0);
+    EXPECT_EQ(waitSequence(failed), -5);
     sourceTokens.clear();
-    bridgeResult = 1;
     ASSERT_EQ(submit(), 0);
-    auto independent = gQueue.jobs[gQueue.head];
-    EXPECT_EQ(completeJob(independent), 0);
-    ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(independent.fence)));
-    EXPECT_EQ(waitSequence(independent.fence), 0);
-    EXPECT_EQ(waitSequence(failed.fence), -5);
+    const uint64_t independent = gQueue.submitted;
+    interrupt(1);
+    EXPECT_EQ(waitSequence(independent), 0);
+    EXPECT_EQ(waitSequence(failed), -5);
+}
+
+TEST_F(SwitchVICJobsTest, ABatchRetiresWholeOnItsLastJobsFence)
+{
+    jobs[0].pixels = jobs[1].pixels = jobs[2].pixels = 0;
+    int heard = 1;
+    ASSERT_EQ(submit(3, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    ASSERT_EQ(fences.size(), 1u);
+    EXPECT_EQ(fences[0]->threshold, static_cast<uint32_t>(gQueue.submitted));
+    EXPECT_EQ(fenceBounds[0], 3u * 2000000u);
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(heard, 0);
+}
+
+// The semantic outcome comes from the events' retirement after the physical result is published; the job ends there.
+TEST_F(SwitchVICJobsTest, AJobWithASemanticBatchEndsOnItsSemanticCompletion)
+{
+    preparedBatch = reinterpret_cast<switch_gpu_event_waits *>(uintptr_t(0x50));
+    int heard = 1;
+    ASSERT_EQ(submit(1, nullptr, [](void *context, int status) { *static_cast<int *>(context) = status; }, &heard), 0);
+    const uint64_t fence = gQueue.submitted;
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 1u);
+    EXPECT_EQ(heard, 1);
+    semanticRetired(reinterpret_cast<switch_gpu_event_waits *>(uintptr_t(0x60)));
+    EXPECT_EQ(gQueue.count, 1u);
+    semanticResult = -125;
+    semanticRetired(preparedBatch);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(heard, -125);
+    EXPECT_EQ(waitSequence(fence), -125);
+}
+
+TEST_F(SwitchVICJobsTest, JobsRetireAndCompleteInSubmissionOrder)
+{
+    std::vector<int> order;
+    const auto record = [](void *context, int) {
+        auto *pair = static_cast<std::pair<std::vector<int> *, int> *>(context);
+        pair->first->push_back(pair->second);
+    };
+    std::pair<std::vector<int> *, int> first{&order, 1}, second{&order, 2};
+    gpu();
+    ASSERT_EQ(submit(1, nullptr, record, &first), 0);
+    sourceTokens.clear();
+    ASSERT_EQ(submit(1, nullptr, record, &second), 0);
+    interrupt(0);
+    interrupt(1);
+    EXPECT_TRUE(order.empty());
+    EXPECT_EQ(gQueue.count, 2u);
+    bridged(0, 0);
+    EXPECT_EQ(order, (std::vector<int>{1, 2}));
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+TEST_F(SwitchVICJobsTest, AFenceThatFailsPanicsWithTheEngineAndChannelState)
+{
+    ASSERT_EQ(submit(), 0);
+    auto *fence = fences.at(0);
+    EXPECT_THROW(fence->signaled(fence, TEGRA_HOST1X_ETIMEDOUT), std::runtime_error);
 }
 
 // A submission records its output as a write, or VIC refuses it: an unrecorded write would leave the GPU's L2 lines of the
@@ -500,4 +672,47 @@ TEST_F(SwitchVICJobsTest, ASubmissionWithoutAWriteUseIsRefused)
     EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {readOnly, 1, nullptr, 0, nullptr, 0}, nullptr, nullptr,
                                         nullptr), -22);
     EXPECT_EQ(gQueue.submitted, gQueue.completed);
+}
+
+// Idle power gating (TegraVIC.cpp, SwitchEngineGate.h): a submission holds the powered engine for the whole call, an
+// idle power-off parks only an empty queue, and the power-on's proof stream moves the syncpoint the queue rebases on.
+TEST_F(SwitchVICJobsTest, EverySubmissionHoldsThePowerOnceAndReleasesIt)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(powerUses, 1u);
+    EXPECT_EQ(powerDones, 1u);
+    submitError = -5;
+    EXPECT_EQ(submit(), -5);
+    EXPECT_EQ(powerUses, 2u);
+    EXPECT_EQ(powerDones, 2u);
+    submitError = 0;
+    powerError = -19;
+    const uint32_t before = submits;
+    EXPECT_EQ(submit(), -19);
+    EXPECT_EQ(submits, before);
+    EXPECT_EQ(powerDones, 2u);
+}
+
+TEST_F(SwitchVICJobsTest, AnIdlePowerOffParksOnlyAnEmptyQueue)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_FALSE(switch_vic_jobs_park(false));
+    EXPECT_FALSE(gSuspended);
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_TRUE(switch_vic_jobs_park(false));
+    EXPECT_TRUE(gSuspended);
+}
+
+TEST_F(SwitchVICJobsTest, AParkedQueueHoldsTheNextSubmissionUntilAResumeRebasesIt)
+{
+    ASSERT_TRUE(switch_vic_jobs_park(false));
+    EXPECT_THROW(submit(), std::runtime_error) << "the submission sleeps until resume";
+    IOLockUnlock(gLock);
+    const uint64_t base = gQueue.submitted;
+    switch_vic_jobs_resume(true, static_cast<uint32_t>(base) + 2);
+    EXPECT_FALSE(gSuspended);
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(gQueue.submitted, base + 3);
+    EXPECT_EQ(powerUses, powerDones);
 }

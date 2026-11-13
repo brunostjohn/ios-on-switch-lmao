@@ -51,6 +51,7 @@ bool finishResume()
     dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
     dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
     dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
+    clearUnderflowCounts();
     dc[kDcIntEnable] = savedIntEnable;
     writeIntMask(~0u, savedIntMask);
     __atomic_store_n(&dcPending, 0u, __ATOMIC_RELAXED);

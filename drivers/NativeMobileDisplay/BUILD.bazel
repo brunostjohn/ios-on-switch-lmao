@@ -60,6 +60,8 @@ kernel_driver(
         # TegraGM20BLayout.h: the column-scan experiment's block-linear surfaces (NativeColumnScan.h).
         "drivers/TegraGM20B",
         "drivers/TegraGPIO",
+        # SwitchHost1xTokenFence.h: video planes flip from VIC's and NVDEC's syncpoint interrupts.
+        "drivers/TegraHost1x",
         "drivers/TegraSMMU",
         # TegraVICConfig.h: the traits the detach gate reads (r18-planes).
         "drivers/TegraVIC",

@@ -4,7 +4,8 @@
 //   raw     a method of the facade's class (the device: of the raw device class itself, not one it inherits);
 //   zero    the facade answers it zero (answerZero), as m2v's object would: neither class has a method for it;
 //   m2v     m2v's class has a method the facade's lacks: an encoder or command buffer records it for m2v's replay, any other
-//           facade object answers it zero with a fault (answerMissing), and the raw device class inherits the m2v device's;
+//           facade object answers it zero with a fault (answerMissing), and the raw device class forwards it to the m2v
+//           device, which it opens for it (RawMetalM2V.mm);
 //   m2vobj  the device hands out m2v's own object for the protocol (argument encoders, events, fences, binary archives);
 //   base    the device only: _MTLDevice's own method on the iPad (the kind's table, "base"), which the host does not have
 //           (NMB_DEVICE_BASE_NSOBJECT);
@@ -20,6 +21,7 @@
 // usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <tree> <tree>/drivers/NativeMetal/abi/kinds/<kind>.json...
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #include <cstdio>
 #include <cstring>
@@ -168,6 +170,8 @@ const char *who(const Object &o, SEL sel, NSDictionary *base)
     if (strcmp(class_getName(cls), "RawGM20BMetalDevice") == 0) {
         Class inherited = class_getSuperclass(cls);
         Method own = class_getInstanceMethod(cls, sel);
+        if (own && method_getImplementation(own) == _objc_msgForward)
+            return "m2v";  // a forwarder: m2v's device class's method, the m2v device opened for it (RawMetalM2V.mm)
         if (own && (!answers(inherited, sel) ||
                     method_getImplementation(own) != class_getMethodImplementation(inherited, sel)))
             return "raw";

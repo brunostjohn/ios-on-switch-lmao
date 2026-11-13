@@ -21,8 +21,11 @@ enum {
 
 /* Method 31. Members are the BOs a SubmitJob names by set instead of by use, named as TegraGM20BAbiSurfaceUse records
  * (a handle, or with TegraGM20BSurfaceGpuAddress a VA in a live binding; the whole BO is the member). Write: the GPU may
- * write it; otherwise the set's jobs only read it. Only private memory can be a member: an import, an IOSurface, a native
- * view or a BO whose pages another connection or engine reaches is refused, and so is a BO in another set.
+ * write it; otherwise the set's jobs only read it. Only private memory can be a member: the connection's BOs and its
+ * task's own imported pages. An IOSurface, a read-only import, a native view, a BO whose pages another connection or
+ * engine reaches, a BO a CPU lease or CpuComplete ever named, and a BO in another set are refused: each comes back with
+ * access 0 in the caller's records and the set holds the rest. A member a CPU lease or CpuComplete names later leaves the
+ * set (its generation ends) with the set's jobs as its users; so does one a replace no longer lists.
  * set 0 makes a new set; a live set's id replaces its members and returns a new generation. */
 struct TegraGM20BAbiResourceSetCreate {
 	uint64_t uses_address;
@@ -46,7 +49,8 @@ enum {
 	TegraGM20BSetCauseShared = 2,   /* a member's pages were reached from outside the set's connection */
 	TegraGM20BSetCauseKill = 3,     /* a channel that used the set was killed */
 	TegraGM20BSetCauseReplace = 4,  /* method 31 replaced the members */
-	TegraGM20BSetCauses = 5,
+	TegraGM20BSetCauseCpu = 5,      /* a CPU lease or CpuComplete named a member */
+	TegraGM20BSetCauses = 6,
 };
 
 /* TegraGM20BAbiJob.flags */

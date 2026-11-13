@@ -29,8 +29,11 @@
 #   gm20b_prefault_test      TegraGM20BSurfacePrefault.h over a mock create ABI: which IOSurfaceRootUserClient outputs
 #                            name a new surface, and which surfaces are faulted in (size, memory pressure)
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
-#                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
-#                            method continues, one the kernel could not read or one with an opcode NVK never writes
+#                            streams laid out as NVK and the raw path write them: every counter, each drawn target's
+#                            image under its sample grid, and no profile stamp after a push whose method continues, one
+#                            the kernel could not read or one with an opcode NVK never writes
+#   gm20b_target_peaks_test  SwitchGpuTargetPeaks.h: each process's largest target image since boot, and its line
+#   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
 #                            late wait kills (the context GR cannot switch, a self-hung channel, never slow work)
@@ -53,7 +56,11 @@
 #                            gpu_bringup.c's lock protocol on threads; GPU time never backwards across rail cycles
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
-#                            applies them; GR's reset in a recovery with gating off
+#                            applies them; GR's reset in a recovery with gating off; TegraGM20BTherm.h's slowdown arming
+#                            against L4T's captured THERM registers
+#   gm20b_tex_trap_test      TegraGM20BTexTrap.h: GR traps that are TEX exceptions alone, their ESR line and repeats; nouveau's
+#                            handler reports them as nvgpu does and leaves the channel running, other traps as before
+#   gm20b_gr_init_test       GR floorsweeps at every init as nvgpu's power-on setup does; every GR context's debug line
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
 #                            order and list id; the dump's lines are the capture's form, one value per register; the
 #                            kernel log's lines carry every value once, in order, under a count and sum
@@ -205,6 +212,15 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_target_peaks_test",
+    srcs = [
+        "gm20b_target_peaks_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTargetPeaks.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_hang_detail_test",
     srcs = [
         "gm20b_hang_detail_test.cpp",
@@ -287,6 +303,15 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_cost_hist_test",
+    srcs = [
+        "gm20b_cost_hist_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BCostHist.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_sched_test",
     srcs = [
         "gm20b_sched_test.cpp",
@@ -334,6 +359,7 @@ host_test(
     srcs = [
         "gm20b_clkgate_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BClkgate.h",
+        "//drivers/TegraGM20B:TegraGM20BTherm.h",
     ],
     data = [
         "//drivers/TegraGM20B:clkgate.c",
@@ -348,6 +374,59 @@ host_test(
         'GPU_POWER_C=\\"$(rootpath //drivers/TegraGM20B:gpu_power.c)\\"',
         'GR_BASE_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/base.c)\\"',
         'REGLIST=\\"$(rootpath //drivers/TegraGM20B:nvidia/gm20b_gating_reglist.c)\\"',
+    ],
+)
+
+host_test(
+    name = "gm20b_tex_trap_test",
+    srcs = [
+        "gm20b_tex_trap_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BTexTrap.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:gpu_chan.c",
+        "//drivers/TegraGM20B:gpu_fault.c",
+        "//drivers/TegraGM20B:gpu_hang.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c",
+        "//drivers/TegraGM20B:recover.c",
+    ],
+    defines = [
+        'GF100_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c)\\"',
+        'GK20A_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c)\\"',
+        'GPU_CHAN_C=\\"$(rootpath //drivers/TegraGM20B:gpu_chan.c)\\"',
+        'GPU_FAULT_C=\\"$(rootpath //drivers/TegraGM20B:gpu_fault.c)\\"',
+        'GPU_HANG_C=\\"$(rootpath //drivers/TegraGM20B:gpu_hang.c)\\"',
+        'RECOVER_C=\\"$(rootpath //drivers/TegraGM20B:recover.c)\\"',
+    ],
+)
+
+host_test(
+    name = "switch_gpu_spares_test",
+    srcs = [
+        "switch_gpu_spares_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
+    ],
+)
+
+host_test(
+    name = "gm20b_gr_init_test",
+    srcs = ["gm20b_gr_init_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:gpu_chan.c",
+        "//drivers/TegraGM20B:gpu_fenced.h",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgf100.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgm20b.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c",
+    ],
+    defines = [
+        'CTXGF100_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgf100.c)\\"',
+        'CTXGM20B_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgm20b.c)\\"',
+        'GK20A_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c)\\"',
+        'GM20B_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c)\\"',
+        'GPU_CHAN_C=\\"$(rootpath //drivers/TegraGM20B:gpu_chan.c)\\"',
+        'GPU_FENCED_H=\\"$(rootpath //drivers/TegraGM20B:gpu_fenced.h)\\"',
     ],
 )
 
@@ -551,6 +630,16 @@ host_test(
     ],
     deps = [
         ":backing",
+        ":coherency_kernel",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_program_pages_test",
+    srcs = ["switch_gpu_program_pages_test.cpp"],
+    deps = [
+        ":backing",
+        ":coherency",
         ":coherency_kernel",
     ],
 )
@@ -1446,4 +1535,15 @@ host_test(
     name = "gm20b_copy_emit_test",
     srcs = ["gm20b_copy_emit_test.cpp"],
     deps = [":copy_emit"],
+)
+
+# SwitchGpuShaderCompilerPolicy.h: the shader compiler broker stops waiting for a compiler that declined, has nothing to
+# start it again, or was lost a third time
+host_test(
+    name = "switch_gpu_compiler_policy_test",
+    srcs = [
+        "switch_gpu_compiler_policy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
 )

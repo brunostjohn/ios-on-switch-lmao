@@ -14,11 +14,13 @@
 // nvenc_drv.h's comments; the slice, ME, MD and quant controls, reference lists, slicing and history size of a
 // 1280x720 High IDR and P picture are byte for byte those of NVIDIA's own T210 driver (driverControls) and the checker
 // accepts them; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets are a
-// bijection; the rate control converges on a synthetic bits-versus-QP model.
+// bijection; the rate control converges on a synthetic bits-versus-QP model; the HEVC tile slots (TileCheck.c, whose
+// fake H.265 job is answered by tile_check_engine) in the same three layouts.
 // Prints "PASS ave ..." (test:ave_host_test).
 #include "../AVE/AVEEncoder.c"
 #include <stdio.h>
 #include "EncodeCheck.h"
+#include "TileCheck.h"
 #include "../../SwitchVideoDecoders/AVD/H264Syntax.h"
 #include "../../TegraNVENC/TegraNVENCCheck.h"
 
@@ -45,6 +47,7 @@ bool nvenc_service_present(void)
     return true;
 }
 
+
 NVENCClient *nvenc_open(int *error)
 {
     (void)error;
@@ -67,7 +70,7 @@ bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
     memset(info, 0, sizeof(*info));
     info->abi_version = TEGRA_NVENC_ABI_VERSION;
     info->nvenc_version = 0x50;
-    info->codecs = 1u << TEGRA_NVENC_CODEC_H264;
+    info->codecs = 1u << TEGRA_NVENC_CODEC_H264 | 1u << TEGRA_NVENC_CODEC_H265;
     info->input_layout = gLayout;
     info->chroma_mode = gChroma;
     info->p_frames = 1;
@@ -263,6 +266,12 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
         gRefused++;
         gRefusal = why;
         return -1;
+    }
+    if (s->codec == TEGRA_NVENC_CODEC_H265) {
+        if (tile_check_engine(s, c->va, gLayout, gChroma))
+            return -1;
+        *fence = (uint32_t)++gSubmits;
+        return 0;
     }
     const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
     if (!gHaveP && p->pic_control.pic_type == H264ENC_P) {
@@ -722,7 +731,9 @@ int main(void)
     const void *values[] = {CFSTR("com.brunostjohn.switch.ave-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
+    OSStatus registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
+    if (!registered)
+        registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_HEVC, info, createInstance);
     CFRelease(info);
     if (registered) {
         printf("FAIL ave: VTRegisterVideoEncoderWithInfo %d\n", (int)registered);
@@ -752,6 +763,16 @@ int main(void)
         EXPECT(ok && gSubmits - submits == 30 && gRefused == refused, "encode check, layout %u", gLayout);
     }
     CFRelease(spec);
+    for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
+        gLayout = runs[r].layout;
+        gChroma = runs[r].chroma;
+        const int refused = gRefused;
+        char line[512];
+        const bool ok = tile_check(CFSTR("com.brunostjohn.switch.ave-host"), line, sizeof(line));
+        printf("tiles, layout %u chroma %u: %s (refused %d%s%s)\n", gLayout, gChroma, line, gRefused - refused,
+               gRefusal ? ": " : "", gRefusal ? gRefusal : "");
+        EXPECT(ok && gRefused == refused, "tile check, layout %u", gLayout);
+    }
     refusals();
     printf("I_PCM macroblocks %d, skipped %d, IDR %d, P %d, opens %d\n", gPcm, gSkipped, gIdr, gP, gOpens);
     EXPECT(gSkipped > 0 && gP > 0 && gIdr >= 12, "the clip exercised P_Skip and key frames");

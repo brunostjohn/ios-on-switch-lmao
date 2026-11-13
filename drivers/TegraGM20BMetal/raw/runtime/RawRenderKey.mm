@@ -10,14 +10,21 @@ extern "C" NSString *native_bridge_metal_function_library_name(id function) __at
 namespace raw {
 namespace {
 
-bool functionAir(id<MTLFunction> function, AirHash &out)
+bool functionAir(id<MTLFunction> function, FunctionSource source, AirHash &out)
 {
     const void *bytes = nullptr;
     size_t length = 0;
     std::string entry;
+    if (source) {
+        NSString *name = nil;
+        if (!source(function, &bytes, &length, &name))
+            return false;
+        entry = name.UTF8String ?: "";
+    } else if (!functionLibrary(function, bytes, length, entry)) {
+        return false;
+    }
     std::map<std::string, AirHash> hashes;
-    if (!functionLibrary(function, bytes, length, entry) ||
-        !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
+    if (!metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
         return false;
     const auto found = hashes.find(entry);
     if (found == hashes.end())
@@ -43,10 +50,11 @@ bool functionLibrary(id<MTLFunction> function, const void *&bytes, size_t &lengt
 }
 
 bool renderCacheKey(MTLRenderPipelineDescriptor *descriptor, const std::string &key, bool own, uint64_t stack,
-                    CacheKey &out)
+                    CacheKey &out, FunctionSource source)
 {
     AirHash vertex, fragment;
-    if (!functionAir(descriptor.vertexFunction, vertex) || !functionAir(descriptor.fragmentFunction, fragment))
+    if (!functionAir(descriptor.vertexFunction, source, vertex) ||
+        !functionAir(descriptor.fragmentFunction, source, fragment))
         return false;
     std::vector<LinkedStageAir> linked;
     const std::pair<char, MTLLinkedFunctions *> stages[] = {{'v', descriptor.vertexLinkedFunctions},
@@ -55,7 +63,7 @@ bool renderCacheKey(MTLRenderPipelineDescriptor *descriptor, const std::string &
         for (NSArray *list : {functions.functions, functions.privateFunctions})
             for (id<MTLFunction> function in list) {
                 LinkedStageAir identity{stage, {}};
-                if (!functionAir(function, identity.air))
+                if (!functionAir(function, source, identity.air))
                     return false;
                 linked.push_back(identity);
             }

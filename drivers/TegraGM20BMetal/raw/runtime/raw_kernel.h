@@ -37,6 +37,7 @@ struct Bo {
     bool gpuVolatile = false;
     bool vaReserved =
         false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
+    bool allocated = false;  // a BoAlloc's (Kernel::allocatedBytes counts it), not an import
 };
 
 // The offset into `bo` of the CPU bytes [cpu, cpu + bytes): bo.cpu is the CPU address of bo.va, which lies bo.va - bo.vaBase
@@ -63,13 +64,29 @@ struct KernelJob {
     uint32_t set = 0, generation = 0;
     JobVisibility visibility = JobVisibility::External;
     JobEvents events;
-    bool hostWritten = false;  // the CPU wrote memory a member of the set holds since the last job that said so
+    bool hostWritten = false;  // the CPU wrote a member's memory the job reads through the GPU L2 since the last job
 };
 
 class Kernel {
 public:
     ~Kernel();
     bool open(std::string &err);
+
+    // The connection and the form its calls take (raw_kernel_transport.h)
+    uint32_t connection() const
+    {
+        return conn_;
+    }
+
+    bool tunnelled() const
+    {
+        return tunnel_;
+    }
+
+    uint32_t tunnelSelector() const
+    {
+        return selector_;
+    }
 
     // The connection is NVK's: m2v's views of this path's memory may name its BOs and VAs.
     bool shared() const
@@ -82,9 +99,16 @@ public:
         return info_;
     }
 
-    // `control`: from the kernel's control reserve (TegraGM20BBoControl, coherent kind-0 memory only)
+    // `control`: from the kernel's control reserve (TegraGM20BBoControl, coherent kind-0 memory only). `cpu`: mapped for the
+    // CPU at bo.cpu; an IOKit mapping counts whole in the task's phys_footprint (iokit_mapped), touched or not.
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
-               bool gpuVolatile = false, bool control = false);
+               bool gpuVolatile = false, bool control = false, bool cpu = true);
+
+    // Memory only the GPU reads and writes (shader local memory): no CPU mapping
+    bool allocGpu(uint64_t bytes, Bo &bo)
+    {
+        return alloc(bytes, false, bo, 0, 0x10000, false, false, false);
+    }
 
     bool allocControl(uint64_t bytes, Bo &bo, ControlUse use)
     {
@@ -171,9 +195,9 @@ public:
 
     // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
     bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);
-    // Method 31: `set` (0: a new one) made with exactly `members`, its id and generation; `mirror`, the generation's word in the
-    // fence page. The kern_return_t.
-    int resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
+    // Method 31: `set` (0: a new one) made with `members`, but each the kernel refused, which comes back with access 0; its
+    // id and generation; `mirror`, the generation's word in the fence page. The kern_return_t.
+    int resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
                     const volatile uint32_t *&mirror);
 
     std::shared_ptr<SharedEvents> sharedEvents();
@@ -225,6 +249,12 @@ public:
         return vaUsed_.load(std::memory_order_relaxed);
     }
 
+    // The bytes of the BOs this connection allocated and holds (MTLDevice.currentAllocatedSize)
+    uint64_t allocatedBytes() const
+    {
+        return allocated_.load(std::memory_order_relaxed);
+    }
+
 private:
     void setError(std::string error)
     {
@@ -258,6 +288,7 @@ private:
     std::mutex eventsLock_;
     std::shared_ptr<SharedEvents> events_;
     std::atomic<uint64_t> vaUsed_{0};
+    std::atomic<uint64_t> allocated_{0};
     std::string err_;
     mutable std::mutex errorLock_;
 };

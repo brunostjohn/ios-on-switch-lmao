@@ -72,6 +72,20 @@ void switch_interrupt_describe(uint32_t, char *buffer, size_t size)
     snprintf(buffer, size, "host test");
 }
 
+bool switch_host1x_intr_init(IOWorkLoop *, volatile uint8_t *, uint32_t)
+{
+    return true;
+}
+
+void switch_host1x_intr_start()
+{}
+
+void switch_host1x_intr_stop()
+{}
+
+void switch_host1x_intr_handle()
+{}
+
 extern "C" void switch_emc_gpu_submit(void)
 {
     std::array<uint32_t, TEGRA_HOST1X_CHANNELS> puts{};
@@ -117,7 +131,7 @@ TEST(Host1xSubmit, EveryEngineSubmitsThroughHost1x)
     EXPECT_THAT(SourceText("../../TegraVIC/SwitchVICJobs.cpp"),
                 testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, words, n)"));
     EXPECT_THAT(SourceText("../../TegraNVENC/TegraNVENC.cpp"),
-                testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words, n)"));
+                testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first)"));
     EXPECT_THAT(SourceText("../../TegraNVJPG/TegraNVJPG.cpp"),
                 testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, words, n)"));
 }

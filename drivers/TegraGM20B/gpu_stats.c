@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The statistics the rest of the driver feeds (TGM_STATS): counters, memory, imports, waits and profiles.
 #include "gpu_internal.h"
+#include "TegraGM20BCostHist.h"
 
 #if TGM_STATS
 struct stats_state tgm_stats;
@@ -75,6 +76,15 @@ void tgm_stats_compositor_pool(int64_t bytes)
  * cleans). Callers on several connections at once: each field on its own atomics. */
 struct frame_gpu_state tgm_frame_gpu;
 
+void tgm_stats_map(u64 small, u64 big, u64 could_be_big)
+{
+	if (!stats_on())
+		return;
+	__atomic_fetch_add(&tgm_stats.map_small, small, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.map_big, big, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.map_could, could_be_big, __ATOMIC_RELAXED);
+}
+
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner)
 {
@@ -128,9 +138,7 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 		__atomic_fetch_add(&mstat.import_phase[i], phase_ns[i], __ATOMIC_RELAXED);
 }
 #if TGM_STATS
-/* The "imports" line's histograms: quarter-octave buckets of microseconds (each about 19% wide; below 4 us one per
- * microsecond), so a percentile reads as the upper bound of the bucket it falls in. */
-#define COST_BUCKETS 100
+/* The "imports" line's histograms (TegraGM20BCostHist.h's buckets) and sums. */
 #define SLOW_IMPORT_NS (4 * NSEC_PER_MSEC)
 #define SLOW_IMPORT_LINES 8 /* a window's "slow import" lines at most */
 
@@ -138,39 +146,10 @@ extern uint64_t thread_get_runtime_self(void); /* DEVELOPMENT kernels export eve
 extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
 
 static struct {
-	u32 total[COST_BUCKETS], wire[COST_BUCKETS], bind[COST_BUCKETS];
+	u32 total[TGM_COST_BUCKETS], wire[TGM_COST_BUCKETS], bind[TGM_COST_BUCKETS];
 	u64 n, bytes, total_max, wire_ns, wire_max, wire_cpu_ns, zero_fills, pages_ns, mem_ns,
 		lock_ns, lock_max, coh_ns, clean_ns, slow, slow_logged;
 } icost;
-
-static u32 cost_bucket(u64 ns)
-{
-	const u64 us = ns / 1000;
-	u32 octave = 0;
-	if (us < 4)
-		return (u32)us;
-	octave = 63 - __builtin_clzll(us);
-	return min_t(u32, octave * 4 + ((u32)(us >> (octave - 2)) & 3), COST_BUCKETS - 1);
-}
-
-static u64 cost_bucket_top_us(u32 b)
-{
-	return b < 4 ? b : ((u64)(4 + (b & 3) + 1) << (b / 4 - 2)) - 1;
-}
-
-/* The upper bound (us) of the bucket holding the `per_mille`th part of the window's `n` samples, taken from `hist`. */
-static u64 cost_percentile(const u32 *hist, u64 n, u32 per_mille)
-{
-	const u64 want = (n * per_mille + 999) / 1000;
-	u64 seen = 0;
-	u32 b = 0;
-	for (b = 0; b < COST_BUCKETS; b++) {
-		seen += hist[b];
-		if (seen >= want && seen)
-			return cost_bucket_top_us(b);
-	}
-	return 0;
-}
 
 uint64_t tgm_stats_cpu_ns(void)
 {
@@ -188,8 +167,8 @@ uint64_t tgm_stats_zero_fills(void)
 
 void tgm_stats_import_cost(const struct tgm_import_cost *c)
 {
-	__atomic_fetch_add(&icost.total[cost_bucket(c->total_ns)], 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&icost.wire[cost_bucket(c->wire_ns)], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.total[tgm_cost_bucket(c->total_ns)], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.wire[tgm_cost_bucket(c->wire_ns)], 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&icost.n, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&icost.bytes, c->bytes, __ATOMIC_RELAXED);
 	stats_add(&icost.wire_ns, &icost.wire_max, c->wire_ns);
@@ -219,9 +198,9 @@ void tgm_stats_import_cost(const struct tgm_import_cost *c)
 /* The window's "imports" line (tgm_stats_mem): its histograms and sums taken, as mstat's are. */
 static void stats_imports(u64 ms, u64 map_n)
 {
-	u32 total[COST_BUCKETS];
-	u32 wire[COST_BUCKETS];
-	u32 bind[COST_BUCKETS];
+	u32 total[TGM_COST_BUCKETS];
+	u32 wire[TGM_COST_BUCKETS];
+	u32 bind[TGM_COST_BUCKETS];
 	u64 n = 0;
 	u64 bytes = 0;
 	u64 total_max = 0;
@@ -237,7 +216,7 @@ static void stats_imports(u64 ms, u64 map_n)
 	u64 clean = 0;
 	u64 slow = 0;
 	unsigned int b = 0;
-	for (b = 0; b < COST_BUCKETS; b++) {
+	for (b = 0; b < TGM_COST_BUCKETS; b++) {
 		total[b] = __atomic_exchange_n(&icost.total[b], 0, __ATOMIC_RELAXED);
 		wire[b] = __atomic_exchange_n(&icost.wire[b], 0, __ATOMIC_RELAXED);
 		bind[b] = __atomic_exchange_n(&icost.bind[b], 0, __ATOMIC_RELAXED);
@@ -265,13 +244,13 @@ static void stats_imports(u64 ms, u64 map_n)
 		    "%llu us; wire p50 %llu p99 %llu max %llu us, %llu%% on CPU, %llu zero-fill "
 		    "faults; mean pages %llu, nvkm %llu (gpu.lock wait %llu, max %llu), coherency "
 		    "%llu, clean %llu us; %llu over 4 ms; VmBind %llu: p50 %llu p99 %llu us",
-		    n, ms, bytes >> 10, cost_percentile(total, n, 500),
-		    cost_percentile(total, n, 990), total_max / 1000, cost_percentile(wire, n, 500),
-		    cost_percentile(wire, n, 990), wire_max / 1000,
-		    wire_ns ? wire_cpu * 100 / wire_ns : 0, zero_fills, n ? pages / n / 1000 : 0,
-		    n ? mem / n / 1000 : 0, n ? lock / n / 1000 : 0, lock_max / 1000,
-		    n ? coh / n / 1000 : 0, n ? clean / n / 1000 : 0, slow, map_n,
-		    cost_percentile(bind, map_n, 500), cost_percentile(bind, map_n, 990));
+		    n, ms, bytes >> 10, tgm_cost_percentile(total, n, 500),
+		    tgm_cost_percentile(total, n, 990), total_max / 1000,
+		    tgm_cost_percentile(wire, n, 500), tgm_cost_percentile(wire, n, 990),
+		    wire_max / 1000, wire_ns ? wire_cpu * 100 / wire_ns : 0, zero_fills,
+		    n ? pages / n / 1000 : 0, n ? mem / n / 1000 : 0, n ? lock / n / 1000 : 0,
+		    lock_max / 1000, n ? coh / n / 1000 : 0, n ? clean / n / 1000 : 0, slow, map_n,
+		    tgm_cost_percentile(bind, map_n, 500), tgm_cost_percentile(bind, map_n, 990));
 }
 
 #endif
@@ -283,7 +262,7 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
 	__atomic_fetch_add(&tgm_frame_gpu.bind_ns, ns, __ATOMIC_RELAXED);
 	if (map) {
 #if TGM_STATS
-		__atomic_fetch_add(&icost.bind[cost_bucket(ns)], 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&icost.bind[tgm_cost_bucket(ns)], 1, __ATOMIC_RELAXED);
 #endif
 		__atomic_fetch_add(&mstat.map_n, 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&mstat.map_pages, pages, __ATOMIC_RELAXED);

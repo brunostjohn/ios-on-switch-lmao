@@ -133,6 +133,21 @@ static irqreturn_t fifo_intr(struct nvkm_inth *inth)
 }
 
 /* nvkm's PBDMA handler writes a NOP over the pending method for any interrupt, so it runs only for the bits left. */
+/* A channel nvkm still has and is not recovering or has not errored. */
+static bool chan_alive(struct nvkm_runq *runq, u32 chid)
+{
+	unsigned long flags = 0;
+	struct nvkm_chan *chan = nvkm_chan_get_chid(&runq->fifo->engine, (int)chid, &flags);
+	bool alive = false;
+
+	if (chan) {
+		alive = !atomic_read(&chan->errored) &&
+			atomic_read(&chan->cgrp->rc) == NVKM_CGRP_RC_NONE;
+		nvkm_chan_put(&chan, flags);
+	}
+	return alive;
+}
+
 static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)
 {
 	struct nvkm_device *device = runq->fifo->engine.subdev.device;
@@ -146,10 +161,17 @@ static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)
 		nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_INTR_ACQUIRE);
 	}
 	if (intr0 & TGM_PBDMA_ENG_RESET) {
+		const u32 chid = PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id)));
+		const bool dead = !chan_alive(runq, chid);
+
+		/* A killed channel's method would make the reset engine load that channel's context, a load that does not
+		 * finish: replaced with a NOP, as nvkm's PBDMA handler replaces a faulting one. */
+		if (dead)
+			nvkm_wr32(device, PBDMA_METHOD0(runq->id), PBDMA_METHOD_NOP);
 		nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_ENG_RESET);
 		nvxnu_log("tegra-gm20b: PBDMA%d was on channel %u when a recovery reset its engine "
-			  "(ENG_RESET): cleared\n",
-			  runq->id, PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))));
+			  "(ENG_RESET): cleared%s\n",
+			  runq->id, chid, dead ? ", the killed channel's method dropped" : "");
 	}
 	if (!tgm_pbdma_for_nvkm(intr0) && !intr1)
 		return true;
@@ -357,6 +379,29 @@ void tgm_recover_fault(struct nvkm_device *device, int chid)
 		ctxsw.nvkm(device->fifo, engm);
 }
 
+int tgm_recover_residue(struct nvkm_device *device, int chid)
+{
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	int reset = 0;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		mutex_lock(&runl->mutex);
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+		{
+			if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), chid)) {
+				engine_reset_locked(runl, engn, chid, "still on dead");
+				reset++;
+			}
+		}
+		mutex_unlock(&runl->mutex);
+	}
+	return reset;
+}
+
 void tgm_recover_stats(char *buf, unsigned int len)
 {
 	scnprintf(buf, len,
@@ -394,7 +439,8 @@ int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max)
 		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
 		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 		{
-			if (!(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)) & PFIFO_ENG_BUSY))
+			if (!(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)) &
+			      (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)))
 				continue;
 			id = engn->func->cxid(engn, &cgid);
 			if (id >= 0 && !cgid)

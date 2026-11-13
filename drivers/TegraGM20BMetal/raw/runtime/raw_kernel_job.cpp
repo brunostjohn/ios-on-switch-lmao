@@ -94,7 +94,7 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
     return false;
 }
 
-int Kernel::resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
+int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
                         const volatile uint32_t *&mirror)
 {
     const TegraGM20BAbiResourceSetCreate in = {uint64_t(reinterpret_cast<uintptr_t>(members.data())),

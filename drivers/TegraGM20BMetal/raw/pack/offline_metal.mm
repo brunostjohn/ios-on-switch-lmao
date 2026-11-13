@@ -427,6 +427,20 @@ bool kernelMade(MTLComputePipelineDescriptor *descriptor, std::string &why)
     return false;
 }
 
+bool kernelFacts(MTLComputePipelineDescriptor *descriptor, uint32_t facts[3], std::string &why)
+{
+    NmbOfflineComputePipelineDescriptor p = {};
+    std::vector<NmbOfflineFunction *> linked;
+    if (!computeDescriptor(descriptor, p, linked)) {
+        why = "a function of another device, or what the frontend does not represent";
+        return false;
+    }
+    if (nmb_offline_compute_pipeline_facts(&p, facts))
+        return true;
+    why = std::string("no compute prepare: ") + nmb_last_error();
+    return false;
+}
+
 raw::DirectTranslator translator(const char *nvk)
 {
     gNvk = dlopen(nvk, RTLD_NOW | RTLD_LOCAL);

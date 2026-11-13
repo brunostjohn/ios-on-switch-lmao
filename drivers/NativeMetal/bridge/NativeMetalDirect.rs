@@ -95,6 +95,7 @@ pub struct NmbDirectWrite {
     pub range: u64,
     pub view_type: i32,
     pub format: u32,
+    pub compare: u32,
 }
 
 #[repr(C)]
@@ -745,11 +746,17 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
         range: 0,
         view_type: -1,
         format: 0,
+        compare: 0,
     };
     let sampler_of = |s: &SamplerSource| match s {
         SamplerSource::Slot { slot, .. } => slot.index,
         SamplerSource::Immutable => NMB_DIRECT_IMMUTABLE,
         _ => NMB_DIRECT_NEUTRAL,
+    };
+    let compares = |s: &SamplerSource| match s {
+        SamplerSource::Slot { compare, .. } => u32::from(*compare),
+        SamplerSource::Neutral(NeutralResource::Sampler { compare }) => u32::from(*compare),
+        _ => 0,
     };
     match &w.source {
         WriteSource::Buffer { slot } | WriteSource::InlineBytes { slot } => {
@@ -769,10 +776,11 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
             (out.stage, out.slot) = slot_parts(slot);
             out.view_type = avk::ImageViewType::from(view.view_type).as_raw();
         }
-        WriteSource::Sampler { slot, .. } => {
+        WriteSource::Sampler { slot, compare, .. } => {
             out.source = NmbDirectSource::Sampler;
             (out.stage, out.slot) = slot_parts(slot);
             out.sampler = slot.index;
+            out.compare = u32::from(*compare);
         }
         WriteSource::CombinedImageSampler { image, sampler } => {
             out.source = NmbDirectSource::Combined;
@@ -787,6 +795,7 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
                 }
             }
             out.sampler = sampler_of(sampler);
+            out.compare = compares(sampler);
         }
         WriteSource::Attachment { color_index } => {
             out.source = NmbDirectSource::Attachment;
@@ -940,6 +949,7 @@ fn immutable_samplers(layout: &PipelineLayout, written: &[NmbDirectWrite]) -> Ve
                 range: 0,
                 view_type: -1,
                 format: 0,
+                compare: 0,
             });
         }
     }

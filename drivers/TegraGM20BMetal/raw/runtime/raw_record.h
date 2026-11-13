@@ -133,4 +133,15 @@ uint64_t packKeyHash(const std::string &key);
 // A program's heap slot as the pack lays one out (mkpack.py lay_out_programs) and its PackProgram, at heap offset 0
 std::vector<uint8_t> programSlot(const CapturedProgram &p, PackProgram &info);
 
+// The programs of a record that take heap slots of their own: its stages', each variant's and its split's per-pixel one
+inline std::vector<const CapturedProgram *> slotPrograms(const RuntimeRecord &r)
+{
+    std::vector<const CapturedProgram *> programs = {&r.programs[0], &r.programs[1]};
+    for (const RuntimeRecord::Variant &v : r.variants)
+        programs.push_back(&v.program);
+    if (r.split)
+        programs.push_back(&r.splitPrograms[0]);
+    return programs;
+}
+
 }  // namespace raw

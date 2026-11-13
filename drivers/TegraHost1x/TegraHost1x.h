@@ -86,8 +86,9 @@ uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.
 int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments);
 
-// Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass. A threshold interrupt that
-// is pending at the controller but never reaches the CPU panics (one line, with the GIC's state) once a client has
+// Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass, on a fence of the
+// syncpoint's list (SwitchHost1xFence.h), so any number of waiters and fences share a syncpoint. A threshold the
+// syncpoint reached whose interrupt never reaches the CPU panics (one line, with the GIC's state) once a client has
 // proven its engine (tegra_host1x_set_strict); before that it returns TEGRA_HOST1X_ELOST, so a probe that meets a
 // missing interrupt logs its own failure line and leaves its engine unpublished instead of stopping the boot.
 int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs);
@@ -109,6 +110,10 @@ enum {
 int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t count);
 // The same on the default channel.
 int tegra_host1x_submit(const uint32_t *words, uint32_t count);
+// A job its engine stopped making progress on: teardown drops the channel's pending methods (its engine is reset next),
+// restart resumes it empty at its PUT. The caller holds off its own submits in between.
+void tegra_host1x_channel_teardown(uint32_t channel);
+void tegra_host1x_channel_restart(uint32_t channel);
 
 // Sleep (called through tegra_nvdec_suspend/resume below, after NVDEC has quiesced). Suspend saves the
 // handed-out syncpoint values and stops every channel; resume re-adopts the clock, reconfigures the sync unit, restores

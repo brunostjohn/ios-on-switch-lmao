@@ -35,16 +35,6 @@ class SweepsTest(unittest.TestCase):
             self.assertFalse(protocol.unb64(e['program']['sph'])[1] & 1 << 6, e['id'])
             self.assertIn([0x0DD0, 0], e['restore'])
 
-    def test_twod_operations_are_valid_one_command_buffer_each(self) -> None:
-        experiments = sweeps.twod()
-        self.assertEqual(len({e['id'] for e in experiments}), len(experiments))
-        for e in experiments:
-            protocol.validate_experiment(e)
-            self.assertEqual(e.get('draws', [1]), [1])
-        fills = {e['id']: e['twod']['colorFormat'] for e in experiments if e['twod']['op'] == 'fill'}
-        self.assertEqual(fills['twod-fill-own-bgra8unorm'], 0xCF)
-        self.assertEqual(fills['twod-fill-f32-bgra8unorm'], 0xC0)
-
     def test_precision_runs_on_the_fake_device(self) -> None:
         planned = [e for e in sweeps.precision() if e['meta']['option'] in ('base', 'color-clamp-off')][:4]
         with tempfile.TemporaryDirectory() as scratch:

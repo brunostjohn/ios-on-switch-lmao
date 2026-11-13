@@ -70,7 +70,7 @@ int columnScanTrigger(uint8_t yLog2)
         return ENODEV;
     int result = EBUSY;
     columnScanOnLoop([&] {
-        if (columnScan.run.stage == native_column_scan::Run::kIdle) {
+        if (columnScan.run.stage == native_column_scan::Run::kIdle && !windowProbeBusy()) {
             columnScan.run.stage = native_column_scan::Run::kPreparing;
             result = 0;
         }

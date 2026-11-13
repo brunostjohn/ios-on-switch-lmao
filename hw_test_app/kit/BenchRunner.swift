@@ -41,6 +41,13 @@ final class BenchRunner {
         .compute: SWITCH_BENCH_COMPUTE, .readback: SWITCH_BENCH_READBACK, .twod: SWITCH_BENCH_TWOD,
     ]
     static let statuses = ["ok", "invalid", "refused", "killed", "error"]
+    static let twodOps: [BenchTwodOp: switch_bench_twod_op] = [
+        .fill: SWITCH_BENCH_TWOD_FILL, .scale: SWITCH_BENCH_TWOD_SCALE, .resolve: SWITCH_BENCH_TWOD_RESOLVE,
+    ]
+    static let compares: [String: switch_bench_compare] = [
+        "program": SWITCH_BENCH_COMPARE_PROGRAM, "copy": SWITCH_BENCH_COMPARE_COPY,
+        "resolve3d": SWITCH_BENCH_COMPARE_RESOLVE3D, "plain": SWITCH_BENCH_COMPARE_PLAIN,
+    ]
 
     func run(_ e: BenchExperiment) -> BenchOutcome {
         let started = DispatchTime.now().uptimeNanoseconds
@@ -64,12 +71,20 @@ final class BenchRunner {
         x.single_target = e.singleTarget ? 1 : 0
         x.template_key = e.templateKey
         if let t = e.twod {
-            x.twod.op = (t.scale ? SWITCH_BENCH_TWOD_SCALE : SWITCH_BENCH_TWOD_FILL).rawValue
+            x.twod.op = Self.twodOps[t.op]!.rawValue
             (x.twod.fmt2d, x.twod.color_format) = (t.fmt2d, t.colorFormat)
             x.twod.color = (t.color[0], t.color[1], t.color[2], t.color[3])
             (x.twod.du, x.twod.dv, x.twod.sx, x.twod.sy) = (t.du, t.dv, t.sx, t.sy)
             (x.twod.bilinear, x.twod.corner) = (t.bilinear ? 1 : 0, t.corner ? 1 : 0)
+            (x.twod.reference, x.twod.bracketed, x.twod.samples) = (t.reference ? 1 : 0, t.bracketed ? 1 : 0, t.samples)
         }
+        if let s = e.source {
+            x.source = switch_bench_source(
+                format: s.formatRaw, width: s.width, height: s.height, data: pinned.bytes(s.data))
+        }
+        x.compare = (e.compare.flatMap { Self.compares[$0] } ?? SWITCH_BENCH_COMPARE_NONE).rawValue
+        x.compressed = e.compressed ? 1 : 0
+        x.output_bytes = UInt32(e.outputBytes)
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()
@@ -77,6 +92,9 @@ final class BenchRunner {
         r.wall_ns = pinned.zeroed(UInt64.self, timed)
         r.texels = texelBytes > 0 ? pinned.zeroed(UInt8.self, texelBytes) : nil
         r.texel_bytes = texelBytes
+        r.compare_texels = texelBytes > 0 && e.compare != nil ? pinned.filled(UInt8.self, texelBytes, Self.unread) : nil
+        r.output = e.outputBytes > 0 ? pinned.filled(UInt8.self, e.outputBytes, Self.unread) : nil
+        r.output_bytes = e.outputBytes
         switch_bench_run(bench, &x, &r)
         var outcome = BenchOutcome(status: Self.statuses[Int(r.status)], why: Self.text(&r.why))
         let gpu = Array(UnsafeBufferPointer(start: r.gpu_ns, count: timed))
@@ -88,11 +106,27 @@ final class BenchRunner {
                 return (draws, Array(gpu[slice]), Array(wall[slice]))
             }
             if let texels = r.texels { outcome.texels = Data(bytes: texels, count: texelBytes) }
+            if let other = r.compare_texels, r.compare_status == SWITCH_BENCH_OK.rawValue {
+                outcome.compareTexels = Data(bytes: other, count: texelBytes)
+            }
+            if let output = r.output { outcome.output = Data(bytes: output, count: e.outputBytes) }
+        }
+        if r.form.set != 0 {
+            outcome.form = [
+                "comptags": Int(r.form.comptags), "block_linear": Int(r.form.block_linear),
+                "bracketed": Int(r.form.bracketed), "reference": Int(r.form.reference), "samples": Int(r.form.samples),
+            ]
         }
         (outcome.lostError, outcome.faultVA, outcome.templateKey) = (r.lost_error, r.fault_va, r.template_key)
+        if e.compare != nil, r.compare_status != SWITCH_BENCH_OK.rawValue {
+            outcome.compareFailure = (Self.statuses[Int(r.compare_status)], Self.text(&r.compare_why))
+        }
         outcome.milliseconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
         return outcome
     }
+
+    /// What the app's copies of a compare target and an output buffer hold until the GPU's bytes are copied in
+    static let unread: UInt8 = 0xEE
 
     private static func text<T>(_ tuple: inout T) -> String {
         withUnsafeBytes(of: &tuple) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
@@ -120,8 +154,12 @@ private final class Pinned {
     }
 
     func zeroed<T>(_: T.Type, _ count: Int) -> UnsafeMutablePointer<T> {
+        filled(T.self, count, 0)
+    }
+
+    func filled<T>(_: T.Type, _ count: Int, _ byte: UInt8) -> UnsafeMutablePointer<T> {
         let buffer = allocate(max(1, count) * MemoryLayout<T>.stride)
-        buffer.initializeMemory(as: UInt8.self, repeating: 0)
+        buffer.initializeMemory(as: UInt8.self, repeating: byte)
         return buffer.baseAddress!.assumingMemoryBound(to: T.self)
     }
 

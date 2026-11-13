@@ -55,9 +55,15 @@
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 #include "SwitchVICTransform.h"
+#include "SwitchVICMapping.h"
+#include "SwitchVICJobs.h"
 #include "SwitchVICEvents.h"
 #include "SwitchVICRequests.h"
+#include "../NativeMobileDisplay/DisplayWindowProbeABI.h"
 #include "SwitchVICStats.h"
+#include "SwitchVICTurn.h"
+#include "SwitchVICTurnRun.h"
+#include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -245,6 +251,7 @@ struct Job {
 #if TEGRA_VIC_STATS
     uint64_t submittedUs;
     int pid;  // the transform caller's (the job runs on the engine thread)
+    uint8_t origin;
 #endif
 };
 
@@ -270,8 +277,10 @@ void finishJob(Job *job, IOReturn status);
 void firstFailure(const Job *job, const char *stage, int status)
 {
     char line[160];
-    if (gStats.firstFailure(stage, status, job->src.desc.fourcc, job->dst.desc.fourcc, job->pid, line, sizeof(line)))
-        os_log(OS_LOG_DEFAULT, "%s", line);
+    if (gStats.firstFailure(stage, status, job->src.desc.fourcc, job->dst.desc.fourcc, job->pid, line, sizeof(line))) {
+        const char *refusal = status < 0 ? switch_vic_last_refusal() : nullptr;
+        os_log(OS_LOG_DEFAULT, "%s%s%s", line, refusal ? ", refused at " : "", refusal ? refusal : "");
+    }
 }
 #endif
 
@@ -292,6 +301,22 @@ bool runJob(Job *job, IOReturn *status)
         firstFailure(job, "events", prepared);
 #endif
         *status = ioreturn(prepared);
+        return true;
+    }
+#if TEGRA_VIC_STATS
+    const uint64_t entered = mach_absolute_time();
+    const bool eventTurn = job->events && job->plan.count == 1 && (job->plan.op[0].transform & TEGRA_VIC_ROT90);
+    const uint8_t origin = job->origin;
+#endif
+    // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
+    SwitchDisplayTraits traits = switch_display_traits();
+    traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
+    if (!job->bounceSrc && !job->bounceDst &&
+        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits)) {
+#if TEGRA_VIC_STATS
+        switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
+#endif
+        *status = kIOReturnSuccess;
         return true;
     }
     int submitted = 0;
@@ -319,6 +344,7 @@ bool runJob(Job *job, IOReturn *status)
     }
 #if TEGRA_VIC_STATS
     gStats.submission(operations, bounced, switch_now_us() - began, addressed);
+    switch_vic_turn_count(origin, true, false, eventTurn, mach_absolute_time() - entered);
 #endif
     return false;
 }
@@ -326,7 +352,8 @@ bool runJob(Job *job, IOReturn *status)
 #if TEGRA_VIC_STATS
 void statsLine()
 {
-    char line[220];
+    char line[240];
+    gStats.add(gStats.maps, switch_vic_mapping_take_made());
     if (gStats.line(switch_now_us(), line, sizeof(line)))
         os_log(OS_LOG_DEFAULT, "%s", line);
 }
@@ -454,6 +481,19 @@ IOReturn awaitJob(Conn *conn, Job *job)
 
 IOReturn transform(Conn *conn, const void *in, uint32_t size)
 {
+#if TEGRA_VIC_STATS
+    struct Charge {
+        uint64_t at = mach_absolute_time();
+        void stop()
+        {
+            if (at)
+                switch_vic_turn_count(SWITCH_DISPLAY_LANDSCAPE_ORIGIN_OTHER, false, false, false,
+                                      mach_absolute_time() - at);
+            at = 0;
+        }
+        ~Charge() { stop(); }
+    } charge;
+#endif
     if (size != sizeof(TegraVICRequest))
         return kIOReturnBadArgument;
     if (!tegra_vic_ready())
@@ -465,6 +505,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         return kIOReturnNoMemory;
 #if TEGRA_VIC_STATS
     job->pid = proc_selfpid();
+    job->origin = switch_vic_turn_origin(job->pid);
 #endif
     // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
     IOReturn ret = tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst);
@@ -477,6 +518,10 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         why = tegra_vic_plan(&r, &job->src.desc, &job->dst.desc, &job->plan, &kind);
         if (why)
             ret = kind == TEGRA_VIC_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+#if TEGRA_VIC_STATS
+        else
+            switch_vic_turn_request_seen(r, job->src.desc, job->dst.desc, job->pid);
+#endif
     }
     // Every job checked now, against the surfaces as they will be mapped (window addresses are page-aligned, like the
     // real ones), so a refusal is this call's result and the caller can fall back at once.
@@ -551,8 +596,28 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         abandonUnqueued(job);
         return kIOReturnAborted;
     }
+#if TEGRA_VIC_STATS
+    charge.stop();
+#endif
     return async ? kIOReturnSuccess : awaitJob(conn, job);
 }
+
+#if TEGRA_VIC_STATS
+// The display's window probes come through here too: the app's sandbox admits this client, not the display's.
+extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *) __attribute__((weak));
+
+static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
+{
+    uint32_t magic = 0;
+    if (a->structureInput && a->structureInputSize >= sizeof(magic))
+        memcpy(&magic, a->structureInput, sizeof(magic));
+    if (magic == SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC)
+        return switch_vic_landscape_call(conn, a);
+    if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
+        return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
+    return switch_vic_kernel_test_call(a);
+}
+#endif
 
 // --- The client's vtable slots ------------------------------------------------------------------------------------
 IOReturn tegra_vic_external_method(const IOUserClient *self, uint32_t selector, const IOExternalMethodArguments *a,
@@ -580,7 +645,7 @@ IOReturn tegra_vic_external_method(const IOUserClient *self, uint32_t selector, 
         return a->structureInputSize == 0x20 ? kIOReturnSuccess : kIOReturnBadArgument;
     case 6:  // kernel tests (Apple's: release kernels refuse)
 #if TEGRA_VIC_STATS
-        return switch_vic_pitch_probe_call(a);
+        return kernelTest(conn, a);
 #else
         return kIOReturnNotPermitted;
 #endif
@@ -616,6 +681,9 @@ IOReturn tegra_vic_register_port(const IOUserClient *self, mach_port_t port, UIn
 IOReturn tegra_vic_client_close(IOUserClient *self)
 {
     if (Conn *conn = connOf(self)) {
+#if TEGRA_VIC_STATS
+        switch_display_traits_release(conn);
+#endif
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);
         IOLockLock(gQueueLock);
         gRequests.cancel(conn, -125);
@@ -759,7 +827,8 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     // VideoToolbox gates 420f<->420v pairs on it: range conversion reads 4:2:0 through the slot matrix.
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesIdentityCSC", (t->yccIn & TEGRA_VIC_YCC_IN_RGB) ? 1 : 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesTiling", 0);
-    putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalXYOffsetsSupported", 0);
+    // gpu.x1.vic_fractional (SwitchVICFractionProbe.h) decides it: quarter-pixel offsets against the interpolation.
+    putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalXYOffsetsSupported", 1);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalDimensions", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesDirectionalScaling", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesHDR", 0);

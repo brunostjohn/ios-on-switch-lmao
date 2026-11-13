@@ -28,6 +28,12 @@ public enum RawFacade {
         ((ask(state, "switchRawObject") as? [String: Any])?["packed"] as? NSNumber)?.boolValue
     }
 
+    /// The facade's record of its m2v device, read without opening it (debug builds; empty off the facade):
+    /// "opened", "opens", "opened_for" and "needs" (each need the process asked it for, with its count)
+    public static func m2vRecord(of device: MTLDevice) -> [String: Any] {
+        ask(device, "switchRawM2V") as? [String: Any] ?? [:]
+    }
+
     /// The facade's cumulative command buffer counters (empty off the facade).
     public static func counters(of device: MTLDevice) -> [String: Int] {
         guard let counters = ask(device, "switchRawCounters") as? [String: NSNumber] else { return [:] }
@@ -89,6 +95,19 @@ public enum RawFacade {
     /// The buffer binds every state as the inline copy it was before state segments (debug builds, before its commit).
     public static func inlineStates(in buffer: MTLCommandBuffer) -> Bool {
         (ask(buffer, "switchRawInlineStates") as? NSNumber)?.boolValue ?? false
+    }
+
+    /// How the facade got a render state's record (debug builds; nil elsewhere): "how" (pack, table, store, compiled,
+    /// joined, stored, here, none), "wait_us" and "qos" (the creating thread's wait for the shader compiler and its
+    /// class), "ran_class" (the compiler's band for it, 4 user-interactive).
+    public static func compile(of state: MTLRenderPipelineState) -> [String: Any]? {
+        ask(state, "switchRawCompile") as? [String: Any]
+    }
+
+    /// The shader compiler's store the facade maps (debug builds): its stack key and pack rules' digest in hex, "" for
+    /// none; nil off the facade.
+    public static func compilerStore(of device: MTLDevice) -> String? {
+        ask(device, "switchCompilerStore") as? String
     }
 
     static func ask(_ object: Any, _ name: String) -> Any? {

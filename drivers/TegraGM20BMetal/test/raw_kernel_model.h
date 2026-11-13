@@ -5,9 +5,10 @@
 // whose fence is behind the old one. Jobs (SubmitAddress, SubmitJob) complete as they are submitted, or stay in flight
 // until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does. Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
-// (staleReads). A SubmitJob naming a set uses every member as registered. Sets refuse what the kernel refuses (imports,
-// cached BoAllocs, a BO of another set) and end their generation, mirrored in the fence page, when a member is freed, a
-// channel that used the set is destroyed killed, or the set is made again. Its IOKit calls replace the framework's:
+// (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
+// a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
+// fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed killed, or the set is
+// made again. Its IOKit calls replace the framework's:
 // include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
@@ -23,7 +24,7 @@ namespace kernel_model {
 constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFencePageBytes = 4096;
 
 struct BoState {
-    bool import = false, cached = false;
+    bool import = false, cached = false, cpuReached = false;
     uint32_t set = 0;                 // the set it is a member of, 0: none
     uint64_t address = 0, bytes = 0;  // an import's host range
 };
@@ -54,12 +55,15 @@ struct Model {
     uint64_t nextHandle = 1, nextUid = 1;
     std::map<uint32_t, std::vector<uint8_t>> memory;
     std::map<uint64_t, BoState> bos;
-    std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
+    std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
+    std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;    // va: the BO bound there and its bytes
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
+    // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
+    uint64_t vaEnd = uint64_t(1) << 40;
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
@@ -242,20 +246,23 @@ struct Model {
             ++index;
         if (index == TegraGM20BMaxResourceSets)
             return kIOReturnNoResources;
-        const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
+        auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
         constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
-        for (uint32_t i = 0; i < in.count; ++i) {
-            const auto it = bos.find(uses[i].handle);
-            if (uses[i].reserved || !(uses[i].access & kAccess) || (uses[i].access & ~kAccess) || it == bos.end() ||
-                it->second.import || it->second.cached)
+        for (uint32_t i = 0; i < in.count; ++i)
+            if (uses[i].reserved || !(uses[i].access & kAccess) || (uses[i].access & ~kAccess) ||
+                !bos.count(uses[i].handle))
                 return kIOReturnBadArgument;
-            if (it->second.set && it->second.set != index + 1)
-                return kIOReturnExclusiveAccess;
-        }
         for (const auto &member : sets[index].members)
             if (const auto it = bos.find(member.handle); it != bos.end())
                 it->second.set = 0;
-        sets[index].members.assign(uses, uses + in.count);
+        sets[index].members.clear();
+        for (uint32_t i = 0; i < in.count; ++i) {
+            const BoState &bo = bos.at(uses[i].handle);
+            if (bo.cpuReached || (bo.set && bo.set != index + 1))
+                uses[i].access = 0;
+            else
+                sets[index].members.push_back(uses[i]);
+        }
         for (const auto &member : sets[index].members)
             bos[member.handle].set = index + 1;
         sets[index].live = true;
@@ -279,8 +286,24 @@ struct Model {
             endGeneration(set - 1);
         }
         bos.erase(it);
+        imports.erase(handle);
         for (auto bound = binds.begin(); bound != binds.end();)
             bound = bound->second.first == handle ? binds.erase(bound) : std::next(bound);
+    }
+
+    void cpuLease(uint64_t handle)
+    {
+        const auto it = bos.find(handle);
+        if (it == bos.end())
+            return;
+        it->second.cpuReached = true;
+        if (const uint32_t set = it->second.set) {
+            auto &members = sets[set - 1].members;
+            for (auto at = members.begin(); at != members.end();)
+                at = at->handle == handle ? members.erase(at) : std::next(at);
+            it->second.set = 0;
+            endGeneration(set - 1);
+        }
     }
 
     void destroyed(uint32_t channel, bool killed)
@@ -334,7 +357,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
-        info.va_end = uint64_t(1) << 40;  // a raw::Device's shader heap reserves a 4 GiB program window
+        info.va_end = model.vaEnd;
         info.page_size = 4096;
         return KERN_SUCCESS;
     }
@@ -348,7 +371,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     }
     case TegraGM20BMethodBoImport: {
         const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
-        model.bos[model.nextHandle] = {true, true, 0, in.address, in.bytes};
+        model.bos[model.nextHandle] = {true, true, false, 0, in.address, in.bytes};
+        model.imports[model.nextHandle] = {in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
     }
@@ -366,6 +390,11 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         model.binds[op.va] = {op.handle, op.range};
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodCpuAcquire:
+        model.cpuLease(static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle);
+        return KERN_SUCCESS;
+    case TegraGM20BMethodCpuRelease:
+        return KERN_SUCCESS;
     case TegraGM20BMethodResourceSetCreate:
         return model.setCreate(*static_cast<const TegraGM20BAbiResourceSetCreate *>(input),
                                *static_cast<TegraGM20BAbiResourceSetCreateReply *>(output));
@@ -404,8 +433,6 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
                             *static_cast<TegraGM20BAbiStatus *>(output));
     case TegraGM20BMethodUnmap:
-    case TegraGM20BMethodCpuAcquire:
-    case TegraGM20BMethodCpuRelease:
         return KERN_SUCCESS;
     default:
         return kIOReturnUnsupported;

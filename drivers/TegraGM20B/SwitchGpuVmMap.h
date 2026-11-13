@@ -50,6 +50,12 @@ int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_me
 	gate_leave();
 	if (!ret && page_shift)
 		*page_shift = shift;
+	if (!ret && stats_on())
+		tgm_stats_map(shift == PAGE_SHIFT ? range : 0, shift == PAGE_SHIFT ? 0 : range,
+			      shift == PAGE_SHIFT
+				      ? switch_gpu_mapping_big_bytes(mem->pages, mem->npages, va,
+								     offset, range)
+				      : 0);
 	return ret;
 }
 
@@ -223,6 +229,12 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_
 		kfree(made);
 	else
 		*mapping = made;
+	for (i = 0; !ret && stats_on() && i < count; ++i) {
+		const struct switch_gpu_mapping_entry *entry = &made->entries[i];
+		const bool big = entry->shift != PAGE_SHIFT;
+
+		tgm_stats_map(big ? 0 : entry->bytes, big ? entry->bytes : 0, 0);
+	}
 	return ret;
 }
 

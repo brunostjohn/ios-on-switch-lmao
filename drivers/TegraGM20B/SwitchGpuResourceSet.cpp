@@ -51,14 +51,33 @@ uint32_t read_jobs(const switch_gpu_resource_set *set, switch_gpu_backing_token 
 	return count;
 }
 
-// The set's jobs as the member's users: writers when they may write it, else readers.
+// The set's jobs as the member's users: writers when they may write it, else readers. A CPU-tracked member's writers
+// cover it whole, so CpuComplete maintains what any of them wrote.
 int adopt_locked(switch_gpu_backing *backing, const switch_gpu_resource_set *set)
 {
 	switch_gpu_backing_token jobs[SWITCH_GPU_SET_SLOTS];
 	const uint32_t count = read_jobs(set, jobs);
-	const uint32_t access = backing->set_access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE
-										 : SWITCH_GPU_BACKING_READ;
-	return switch_gpu_backing_adopt_locked(backing, jobs, count, access);
+	const bool writes = backing->set_access & SWITCH_GPU_BACKING_WRITE;
+	int result = switch_gpu_backing_adopt_locked(backing, jobs, count,
+						     writes ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ);
+	for (uint32_t i = 0; !result && writes && backing->cpu_tracking && i < count; ++i) {
+		result = switch_gpu_backing_writer_prepare_locked(backing, jobs[i]);
+		if (!result)
+			switch_gpu_backing_writer_commit_locked(backing, jobs[i]);
+	}
+	return result;
+}
+
+// Setup only (the set's submissions excluded): a member the set lets go keeps the set's pending jobs as its users.
+void leave(switch_gpu_backing *backing, const switch_gpu_resource_set *set)
+{
+	IOLockLock(backing->lock);
+	if (backing->set == set) {
+		adopt_locked(backing, set);
+		backing->set = nullptr;
+		backing->set_access = 0;
+	}
+	IOLockUnlock(backing->lock);
 }
 
 void wait_inside(switch_gpu_resource_set *set)
@@ -173,8 +192,10 @@ extern "C" void switch_gpu_set_invalidate(switch_gpu_resource_set *set, uint32_t
 }
 
 extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_gpu_set_member *members,
-				     uint32_t count, uint32_t *generation)
+				     uint32_t count, uint32_t *generation, switch_gpu_backing **refused)
 {
+	if (refused)
+		*refused = nullptr;
 	if (!set || !generation || (count && !members))
 		return -22;
 	auto *uses = count ? IONew(switch_gpu_backing_use, count) : nullptr;
@@ -189,15 +210,18 @@ extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_
 		IOLockLock(backing->lock);
 		if (backing->set && backing->set != set) {
 			result = -16;
-		} else if (backing->shared || backing->surface_id || backing->cpu_tracking) {
+		} else if (backing->shared || backing->surface_id || backing->cpu_reached) {
 			result = -22;
 		} else if (!backing->set) {
 			backing->set = set;
 			backing->set_access = uses[attached].access;
 		}
 		IOLockUnlock(backing->lock);
-		if (result)
+		if (result) {
+			if (refused)
+				*refused = backing;
 			break;
+		}
 		switch_gpu_backing_retain(backing);
 		kept[attached] = {backing, uses[attached].access, 0};
 	}
@@ -219,7 +243,7 @@ extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_
 	}
 	for (uint32_t i = 0; i < set->count; ++i) {
 		if (!listed(kept, unique, set->members[i].backing))
-			detach(set->members[i].backing, set);
+			leave(set->members[i].backing, set);
 		switch_gpu_backing_release(set->members[i].backing);
 	}
 	IODelete(set->members, switch_gpu_set_member, set->capacity);
@@ -238,7 +262,7 @@ extern "C" void switch_gpu_set_destroy(switch_gpu_resource_set *set)
 	if (!set)
 		return;
 	for (uint32_t i = 0; i < set->count; ++i) {
-		detach(set->members[i].backing, set);
+		leave(set->members[i].backing, set);
 		switch_gpu_backing_release(set->members[i].backing);
 	}
 	IODelete(set->members, switch_gpu_set_member, set->capacity);
@@ -338,17 +362,16 @@ extern "C" switch_gpu_resource_set *switch_gpu_backing_set(switch_gpu_backing *b
 	return backing ? __atomic_load_n(&backing->set, __ATOMIC_ACQUIRE) : nullptr;
 }
 
-extern "C" int switch_gpu_backing_member_lease(switch_gpu_backing *backing, uint32_t access)
+extern "C" void switch_gpu_backing_member_cpu(switch_gpu_backing *backing)
 {
 	if (!backing)
-		return -22;
+		return;
 	IOLockLock(backing->lock);
-	int result = 0;
-	const bool writes = backing->set_access & SWITCH_GPU_BACKING_WRITE;
-	if (backing->set && (writes || (access & SWITCH_GPU_BACKING_WRITE)))
-		result = adopt_locked(backing, backing->set);
+	backing->cpu_reached = true;
+	const bool member = backing->set != nullptr;
 	IOLockUnlock(backing->lock);
-	return result;
+	if (member)
+		switch_gpu_set_reached(backing, SWITCH_GPU_SET_CAUSE_CPU);
 }
 
 void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause)

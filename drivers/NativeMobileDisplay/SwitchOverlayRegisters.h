@@ -8,39 +8,78 @@ bool planeOnScreen(int window = -1) const
     return false;
 }
 
-switch_display::WindowState planeWindowState(unsigned window) const
+// Some set written, armed or scanned puts an overlay on physical window w: its CSC and filter taps are in use.
+bool planeWindowLive(Window w) const
 {
-    return {planeOnScreen(int(window)), planeTarget.window[window].on ? planeTarget.window[window].slot : -1,
-            planeCsc[window][0], planeCsc[window][1]};
+    const int ids[] = {planeLatch.active, planeLatch.armed, planeLatch.superseded};
+    for (const int id : ids) {
+        if (id < 0)
+            continue;
+        const PlaneSet &set = planeSetOf(id);
+        for (unsigned index = 0; index != 2; ++index)
+            if (set.window[index].on && planeWindowOf(set, index) == w)
+                return true;
+    }
+    return false;
 }
 
-static uint32_t planeWindowBase(unsigned window) { return window ? kWinCBase : kWinBBase; }
-static uint32_t planeBufferBase(unsigned window) { return window ? kWinbufCBase : kWinbufBBase; }
-static uint32_t planeControlBase(unsigned window) { return window ? kWincCBase : kWincBBase; }
+const int *planeCscOf(Window w) const
+{
+    return w == switch_landscape::kA ? landscapeState.csc : planeCsc[w - 1];
+}
 
-void planeWriteCsc(unsigned window, const native_planes::Image &m)
+int *planeCscOf(Window w)
+{
+    return w == switch_landscape::kA ? landscapeState.csc : planeCsc[w - 1];
+}
+
+bool &planeFiltersOf(Window w)
+{
+    return w == switch_landscape::kA ? landscapeState.filtersWritten : planeFiltersWritten[w - 1];
+}
+
+switch_display::WindowState planeWindowState(Window w) const
+{
+    int slot = -1;
+    for (unsigned index = 0; index != 2; ++index)
+        if (planeTarget.window[index].on && planeWindowOf(planeTarget, index) == w)
+            slot = planeTarget.window[index].slot;
+    return {planeWindowLive(w), slot, planeCscOf(w)[0], planeCscOf(w)[1]};
+}
+
+void planeWriteCsc(Window w, const native_planes::Image &m)
 {
     const uint32_t *k = native_planes::kCsc[m.matrix][m.fullRange ? 1 : 0];
     for (unsigned i = 0; i < 8; ++i)
-        dc[planeControlBase(window) + native_planes::kCscYof + i] = k[i];
-    planeCsc[window][0] = static_cast<int>(m.matrix);
-    planeCsc[window][1] = m.fullRange ? 1 : 0;
+        dc[switch_landscape::controlBase(w) + native_planes::kCscYof + i] = k[i];
+    planeCscOf(w)[0] = static_cast<int>(m.matrix);
+    planeCscOf(w)[1] = m.fullRange ? 1 : 0;
 }
 
 // Filter taps are live, so only initialize a window whose previous scanout has retired.
-void planeStartWindowRegisters(unsigned window)
+void planeStartWindowRegisters(Window w)
 {
     for (unsigned i = 0; i < 16; ++i) {
-        dc[planeControlBase(window) + native_planes::kHFilter0 + i] = native_planes::kHFilterTaps[i];
-        dc[planeControlBase(window) + native_planes::kVFilter0 + i] = native_planes::vFilterTap(i);
+        dc[switch_landscape::controlBase(w) + native_planes::kHFilter0 + i] = native_planes::kHFilterTaps[i];
+        dc[switch_landscape::controlBase(w) + native_planes::kVFilter0 + i] = native_planes::vFilterTap(i);
     }
-    planeFiltersWritten[window] = true;
+    planeFiltersOf(w) = true;
+}
+
+void planeForgetUnshadowed()
+{
+    for (unsigned window = 0; window != 2; ++window) {
+        planeCsc[window][0] = planeCsc[window][1] = -1;
+        planeFiltersWritten[window] = false;
+    }
+    landscapeState.csc[0] = landscapeState.csc[1] = -1;
+    landscapeState.filtersWritten = false;
 }
 
 void planeStartRegisters()
 {
-    for (unsigned window = 0; window != 2; ++window)
-        planeStartWindowRegisters(window);
+    planeStartWindowRegisters(switch_landscape::kB);
+    planeStartWindowRegisters(switch_landscape::kC);
     dc[kDcRegActControl] = dc[kDcRegActControl] & ~(kWinBActHcntrSel | kWinCActHcntrSel);
     // Every later write of hekate's REG_ACT_CONTROL keeps windows B and C on frame-boundary latching.
     pitchActControl &= ~(kWinBActHcntrSel | kWinCActHcntrSel);
@@ -48,11 +87,11 @@ void planeStartRegisters()
     dc[kDcIntEnable] = dc[kDcIntEnable] | kWinBUnderflowInt | kWinCUnderflowInt;
 }
 
-void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p, bool live)
+void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)
 {
     using namespace native_planes;
-    const SwitchMMIOWords win = dc + planeWindowBase(window);
-    const SwitchMMIOWords buf = dc + planeBufferBase(window);
+    const SwitchMMIOWords win = dc + switch_landscape::windowBase(w);
+    const SwitchMMIOWords buf = dc + switch_landscape::bufferBase(w);
     if (!p.on) {
         win[kOptions] = 0;
         return;
@@ -60,10 +99,10 @@ void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p
     const Image &m = p.image;
     // CSC is live rather than shadowed; an incompatible active matrix is converted by VIC before admission.
     if (m.yuv && !live &&
-        (planeCsc[window][0] != static_cast<int>(m.matrix) || planeCsc[window][1] != (m.fullRange ? 1 : 0)))
-        planeWriteCsc(window, m);
-    if (!planeFiltersWritten[window] && !live)
-        planeStartWindowRegisters(window);
+        (planeCscOf(w)[0] != static_cast<int>(m.matrix) || planeCscOf(w)[1] != (m.fullRange ? 1 : 0)))
+        planeWriteCsc(w, m);
+    if (!planeFiltersOf(w) && !live)
+        planeStartWindowRegisters(w);
     win[kColorDepth] = m.colorDepth;
     win[kByteSwap] = 0;
     win[kPosition] = m.position;
@@ -140,19 +179,24 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
         holdPlaneRecovery(p);
         return false;
     }
-    const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
-    auto assignment = switch_display::assign(p.window, windows);
-    if (assignment.convert) {
-        planeTarget = p;
-        if (planeHoldForLatch(p))
-            return false;
-        planeDropOverlays(p, assignment.convert);
-        assignment = switch_display::assign(p.window, windows);
-    }
-    if (assignment.window[0] != 0) {
-        const auto first = p.window[0];
-        p.window[0] = p.window[1];
-        p.window[1] = first;
+    if (landscapeHolds(p))
+        return false;
+    if (!p.landscape) {
+        const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
+                                                        planeWindowState(switch_landscape::kC)};
+        auto assignment = switch_display::assign(p.window, windows);
+        if (assignment.convert) {
+            planeTarget = p;
+            if (planeHoldForLatch(p))
+                return false;
+            planeDropOverlays(p, assignment.convert);
+            assignment = switch_display::assign(p.window, windows);
+        }
+        if (assignment.window[0] != 0) {
+            const auto first = p.window[0];
+            p.window[0] = p.window[1];
+            p.window[1] = first;
+        }
     }
     planeTarget = p;
     if (!planeLatch.mayWrite()) {
@@ -170,17 +214,18 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
     if (!commit.pendingSeq)
         commit.pendingSeq = commit.seq;
     // Publishing the new commit must not make its first CSC initialization appear live.
-    const bool live[2] = {planeOnScreen(0), planeOnScreen(1)};
+    const bool live[2] = {planeWindowLive(planeWindowOf(p, 0)), planeWindowLive(planeWindowOf(p, 1))};
     if (planeLatch.write(commit) < 0) {
         planeHeld = p;
         planeHeldSet = true;
         return false;
     }
-    for (unsigned window = 0; window != 2; ++window)
-        planeWriteWindowRegisters(window, p.window[window], live[window]);
-    planeBlendA(p.on(), update, request);
-    update |= kGeneralUpdate | kWinBUpdate | kWinCUpdate;
-    request |= kGeneralActReq | kWinBActReq | kWinCActReq;
+    for (unsigned index = 0; index != 2; ++index)
+        planeWriteWindowRegisters(planeWindowOf(p, index), p.window[index], live[index]);
+    if (!p.landscape)
+        planeBlendA(p.on(), update, request);
+    update |= kGeneralUpdate | switch_landscape::overlayUpdates(p.landscape);
+    request |= kGeneralActReq | switch_landscape::overlayRequests(p.landscape);
     planeRequestedAt = frameEnds;
     armFlipDeadline();
     if (stats)

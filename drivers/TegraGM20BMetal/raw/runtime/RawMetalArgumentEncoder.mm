@@ -450,7 +450,8 @@ id<MTLArgumentEncoder> rmFunctionArgumentEncoder(RMFunction *function, NSUIntege
 {
     raw::ArgumentEncoder made;
     const char *why = "";
-    if (!native_bridge_metal_argument_layouts(function->_twin, index, collectLayouts, &made, &why)) {
+    id twin = function->_twin ?: [function twinOn:RM_M2V("a function's argument encoder")];
+    if (!native_bridge_metal_argument_layouts(twin, index, collectLayouts, &made, &why)) {
         refuse("creation", [NSString stringWithFormat:@"buffer %lu: %s", (unsigned long)index, why ?: ""]);
         return nil;
     }

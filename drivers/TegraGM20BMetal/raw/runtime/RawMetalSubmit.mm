@@ -264,6 +264,7 @@ bool submitRange(RMCommandBuffer *cb)
 #endif
     } else {
         cb->_gpuPrefixEligible = false;
+        rmRangePlain(cb, range.from, range.to);
         if (r.gpuOrder && r.rawSinceM2v) {
             uint32_t waits = 0;
             const int kr = r.raw->orderOthersAfter(waits);
@@ -278,7 +279,8 @@ bool submitRange(RMCommandBuffer *cb)
         cb->_frame.mark(switch_frame::ReplayStart);
         tTwinTicks = 0;
 #endif
-        id<MTLCommandBuffer> m = r.fallback ? replay(cb, range.from, range.to, true) : nil;
+        id<MTLCommandBuffer> m =
+            RM_M2V("a command buffer replayed on m2v") ? replay(cb, range.from, range.to, true) : nil;
 #if SWITCH_FRAME_TIMELINE
         cb->_frame.mark(switch_frame::ReplayEnd);
         cb->_frame.set(switch_frame::Twins, tTwinTicks);

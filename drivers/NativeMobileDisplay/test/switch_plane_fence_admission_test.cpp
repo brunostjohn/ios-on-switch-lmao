@@ -50,7 +50,8 @@ struct Display {
     struct Snapshot { void *lease; struct { switch_gpu_backing_token producer; } view; } snapshot[2] = {};
     struct Slot { Snapshot *native; } planeSlots[2] = {{&snapshot[0]}, {&snapshot[1]}};
     struct Set { unsigned count = 1; } planeFencing;
-    unsigned planeDependencies(const Set &p, switch_gpu_backing_token tokens[2]) const
+    static constexpr unsigned kPlaneDependencies = 6;
+    unsigned planeDependencies(const Set &p, switch_gpu_backing_token tokens[kPlaneDependencies]) const
     {
         for (unsigned i = 0; i < p.count; ++i) tokens[i] = planeSlots[i].native->view.producer;
         return p.count;

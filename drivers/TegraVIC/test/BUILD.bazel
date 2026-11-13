@@ -16,6 +16,11 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 # libdrm/ is NVIDIA's (MIT), kept as upstream has it.
 lint_files(exclude = ["libdrm/**"])
 
+exports_files([
+    "TegraVICProbe.h",
+    "vic_model.h",
+])
+
 host_test(
     name = "switch_vic_queue_test",
     srcs = [
@@ -37,6 +42,43 @@ host_test(
     srcs = [
         "switch_vic_pitch_probe_test.cpp",
         "//drivers/TegraVIC:SwitchVICPitchProbe.h",
+    ],
+)
+
+host_library(
+    name = "block_linear",
+    srcs = ["//drivers/SwitchVideoDecoders:AVD/BlockLinear.c"],
+    hdrs = ["//drivers/SwitchVideoDecoders:AVD/BlockLinear.h"],
+)
+
+host_test(
+    name = "switch_vic_layout_probe_test",
+    srcs = [
+        "switch_vic_layout_probe_test.cpp",
+        "//drivers/TegraVIC:SwitchVICLayoutProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+    deps = [":block_linear"],
+)
+
+host_test(
+    name = "switch_vic_fraction_probe_test",
+    srcs = [
+        "switch_vic_fraction_probe_test.cpp",
+        "//drivers/TegraVIC:SwitchVICFractionProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+)
+
+host_test(
+    name = "switch_vic_packed_probe_test",
+    srcs = [
+        "switch_vic_packed_probe_test.cpp",
+        "//drivers/TegraVIC:SwitchVICPackedProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
     ],
 )
 
@@ -288,7 +330,11 @@ host_test(
     srcs = [
         "switch_native_surface_test.cpp",
         "switch_native_picture_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchVICEvents.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraVIC:SwitchVICTurn.h",
         "//drivers/TegraVIC:SwitchNativeScanout.h",
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
         "//drivers/TegraVIC:SwitchNativePicture.h",
@@ -327,7 +373,10 @@ host_test(
     name = "switch_vic_transform_test",
     srcs = [
         "switch_vic_transform_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeRunABI.h",
         "//drivers/TegraVIC:SwitchVICTransform.h",
+        "//drivers/TegraVIC:SwitchVICTurn.h",
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
         "//drivers/TegraVIC:SwitchNativeSurface.h",
         "//drivers/TegraVIC:SwitchNativePicture.h",
@@ -349,7 +398,10 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchDMA:SwitchDcache.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICTransform.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraVIC:SwitchVICTransform.cpp",
+        "//drivers/TegraVIC:SwitchVICTurn.cpp",
+    ],
     deps = [":backing_kernel"],
 )
 
@@ -401,7 +453,9 @@ host_test(
         "//drivers/TegraVIC:SwitchVICQueue.h",
         "//drivers/TegraVIC:SwitchVICDependencies.h",
         "//drivers/TegraHost1x:SwitchHost1xDependencies.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
         "//drivers/TegraHost1x:SwitchHost1xResults.h",
+        "//drivers/TegraHost1x:SwitchHost1xStages.h",
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",

@@ -218,6 +218,20 @@ void installDeviceAnswers(Class cls)
     return s <= 14 && s != 11;
 }
 
+// (SPI) A linear texture's row of `width` texels rounded up to the format's linear alignment, as m2v answers: 0 for a format
+// of blocks, which has no texel size
+- (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)d
+{
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
+    const uint64_t align = [(id<MTLDevice>)self minimumLinearTextureAlignmentForPixelFormat:d.pixelFormat];
+    if (raw::blockCompressed(f))
+        return 0;
+    if (!f || !align)
+        return [(id<RMDeviceSPI>)RM_M2V("a linear row of a format raw does not lay out")
+            requiredLinearTextureBytesPerRowForDescriptor:d];
+    return NSUInteger((uint64_t(d.width) * f->bpp + align - 1) / align * align);
+}
+
 // The linear alignment m2v's texel rows take (IconRendering's textures over buffers)
 - (NSUInteger)minimumTextureBufferAlignmentForPixelFormat:(MTLPixelFormat)format
 {

@@ -143,6 +143,7 @@ bool handleEntry(const LayoutEntry &e, RuntimeRecord &rec, PackEntry &p, std::st
     case Smp::Slot:
         p.samplerKind = SamplerSlot;
         p.sampler = e.smpSlot;
+        p.pad = e.smpCompare ? kEntryCompares : 0;
         break;
     case Smp::Derived:
         why = "a sampler m2v derives from a bound one (YCbCr conversion)";

@@ -11,7 +11,7 @@ typedef struct NVDECClient NVDECClient;
 
 bool nvdec_service_present(void);
 // The codecs the service says it decodes (TEGRA_NVDEC_DECODES_*), found without opening it: TegraNVDECInfo.codecs'
-// bits for H.264, VP9 and HEVC.
+// bits for H.264, VP9, HEVC, MPEG-4 Part 2 and MPEG-1/2.
 uint32_t nvdec_service_codecs(void);
 NVDECClient *nvdec_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvdec_close(NVDECClient *client);

@@ -236,7 +236,7 @@ TEST_F(SwitchNVDECOutputTest, AFailedExportNamesItsRefusalAndTheSurfacesSizes)
     vicReady = true;
     request.dst_x = 2;
     EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task, &refusal), -95);
-    EXPECT_STREQ(refusal.why, "native output of a placed or 16-bit picture");
+    EXPECT_STREQ(refusal.why, "native output of a placed picture");
     request.dst_x = 0;
     publishError = -22;
     surfaceMemory.length = 1703936;
@@ -247,15 +247,20 @@ TEST_F(SwitchNVDECOutputTest, AFailedExportNamesItsRefusalAndTheSurfacesSizes)
     EXPECT_EQ(refusal.baseOffset, 0u);
 }
 
-TEST_F(SwitchNVDECOutputTest, UnsupportedPlacementAndWideSamplesDoNotPublish)
+TEST_F(SwitchNVDECOutputTest, PlacedPicturesDoNotPublish)
 {
     request.dst_x = 2;
     EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), -95);
-    request.dst_x = 0;
+    EXPECT_EQ(lookups, 0u);
+}
+
+TEST_F(SwitchNVDECOutputTest, TenBitPicturesPublishTheirSixteenBitPlanes)
+{
     request.sample_bytes = 2;
     request.width = 640;
-    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), -95);
-    EXPECT_EQ(lookups, 0u);
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), 0);
+    EXPECT_EQ(exportedPicture.sampleBytes, 2u);
+    EXPECT_EQ(publishes, 1u);
 }
 
 TEST_F(SwitchNVDECOutputTest, InvalidGeometryLeavesOutputUnchanged)
@@ -273,5 +278,24 @@ TEST_F(SwitchNVDECOutputTest, InvalidGeometryLeavesOutputUnchanged)
     invalid.rows = UINT32_MAX;
     EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &invalid, &picture), -22);
     EXPECT_EQ(picture.width, 73u);
+}
+
+TEST_F(SwitchNVDECOutputTest, AlphaPlaneTakesEightBitLumaAndIsNeverExported)
+{
+    TegraVICPicture picture = {};
+    auto alpha = request;
+    alpha.plane = 2;
+    EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), 0);
+    EXPECT_EQ(picture.plane, 2u);
+    for (const uint32_t plane : {1u, 3u}) {
+        alpha.plane = plane;
+        EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), -22) << plane;
+    }
+    alpha.plane = 2;
+    alpha.sample_bytes = 2;
+    EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), -22);
+    alpha.sample_bytes = 1;
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &alpha, task), -95);
+    EXPECT_EQ(publishes, 0u);
 }
 }  // namespace

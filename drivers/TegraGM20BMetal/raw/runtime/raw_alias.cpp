@@ -246,10 +246,19 @@ bool Device::aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias 
     uint64_t base = 0;
     if (!bytes || !arenaKindAt(ar, va, base, a.kind) || bytes > ar.bytes || va - base > ar.bytes - bytes)
         return false;
-    a.cpu = ar.cpu;
-    a.bytes = ar.bytes;
-    a.handle = ar.bo.handle;
-    a.va = base;
+    uint64_t from = 0, held = ar.bytes, handle = ar.bo.handle;
+    for (const auto &[offset, part] : ar.parts)
+        if (va - base >= offset && va - base + bytes <= offset + part.bytes) {
+            from = offset;
+            held = part.bytes;
+            handle = part.handle;
+        }
+    if (!handle)
+        return false;  // a trimmed arena's range across two parts: no one BO holds it
+    a.cpu = ar.cpu + from;
+    a.bytes = held;
+    a.handle = handle;
+    a.va = base + from;
     a.lease = new Lease{this, 1, Memory::Arena, {arena, va - base, bytes, va, ar.cpu + (va - base)}, nullptr, false};
     ar.leases++;
     return true;

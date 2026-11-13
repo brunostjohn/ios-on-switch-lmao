@@ -50,6 +50,7 @@ struct switch_gpu_backing {
 	switch_gpu_resource_set *set;
 	uint32_t set_access;
 	bool shared;
+	bool cpu_reached;  // a CPU lease or CpuComplete named it: sticky, and it is never a set member again
 };
 
 struct switch_gpu_cpu_lease {

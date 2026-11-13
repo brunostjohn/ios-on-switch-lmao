@@ -3,6 +3,9 @@
 #include "gpu_internal.h"
 
 #if TGM_STATS
+/* TegraVIC (drivers/TegraVIC/SwitchVICMapping.cpp, debug kernels) */
+extern int switch_vic_mapping_describe(nvxnu_u32 iova, char *out, unsigned long size) __attribute__((weak_import));
+
 /* stats:
  * GPU-side times come from 16-byte semaphore releases, which write PTIMER. On this Tegra PTIMER is not in nanoseconds:
  * its source is 19.2 MHz while its 32 ns step assumes 31.25 MHz (nvgpu gm20b_tegra_platform.ptimer_src_freq,
@@ -12,40 +15,6 @@
  * stamps are converted to nanoseconds with PTIMER's rate measured over that window against the CPU clock, which the
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
-
-static void clk_measure(char *buf, unsigned int len)
-{
-	static int started;
-	struct nvkm_device *device = tgm_gpu.device;
-	u32 cnt = nvkm_rd32(device, TRIM_GPC0_NCGPCCLK_CNT);
-	u32 ref_khz = gk20a_clk(device->clk)->parent_rate / 1000;
-	u32 vco = nvkm_rd32(device, 0x137100);
-	u32 out = nvkm_rd32(device, 0x137250);
-	u32 slow = nvkm_rd32(device, 0x020160);
-	u32 gate = nvkm_rd32(device, 0x020200);
-	int pll = nvkm_clk_read(device->clk, nv_clk_src_gpc);
-	char meas[40] = "-";
-
-	if (started && !badf(cnt)) {
-		scnprintf(meas, sizeof(meas), "%llu kHz",
-			  (unsigned long long)ref_khz * (cnt & 0xfffff) / NCGPCCLK_CYCLES);
-	} else if (started) {
-		scnprintf(meas, sizeof(meas), "unread (%08x)", cnt);
-	}
-	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG, NCGPCCLK_CFG_RESET);
-	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG,
-		  NCGPCCLK_CFG_ENABLE | NCGPCCLK_CFG_WRITE_EN | NCGPCCLK_CYCLES);
-	started = 1;
-	const char *divider = "";
-
-	if (!(vco & 1)) {
-		divider = " BYPASSED";
-	} else if (out & 0x3f00) {
-		divider = " DIVIDED";
-	}
-	scnprintf(buf, len, "GPU clock %d kHz%s, measured %s (slowdown %u, ELCG %u)", pll, divider,
-		  meas, (slow >> 16) & 0x3f, gate & 3);
-}
 
 /* A process's SubmitAddress calls over the window, by phase (ns), with the longest call */
 struct stats_submits {
@@ -241,7 +210,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
  * got, those above the minimum or with a turn, by owner. */
 static void stats_deadline(char *buf, unsigned int len)
 {
-	char deadline[240];
+	char deadline[320];
 	char holds[240];
 	struct tgm_chan *chan = NULL;
 	unsigned int n = 0;
@@ -295,6 +264,7 @@ void tgm_stats_tick(void)
 	u32 presents = 0;
 	u32 idle = 0;
 	u32 writer = 0;
+	u32 present_flushes = 0;
 	u32 allocs = 0;
 	u32 mc_int = 0;
 	u32 mc_err = 0;
@@ -356,6 +326,7 @@ void tgm_stats_tick(void)
 	tgm_present_stats(&presents, &ps, &pm);
 	idle = __atomic_exchange_n(&tgm_stats.idle, 0, __ATOMIC_RELAXED);
 	writer = __atomic_exchange_n(&tgm_stats.writer, 0, __ATOMIC_RELAXED);
+	present_flushes = __atomic_exchange_n(&tgm_stats.present_flushes, 0, __ATOMIC_RELAXED);
 	allocs = __atomic_exchange_n(&tgm_stats.allocs, 0, __ATOMIC_RELAXED);
 	abytes = __atomic_exchange_n(&tgm_stats.alloc_bytes, 0, __ATOMIC_RELAXED);
 	ans = __atomic_exchange_n(&tgm_stats.alloc_ns, 0, __ATOMIC_RELAXED);
@@ -384,9 +355,14 @@ void tgm_stats_tick(void)
 	lfs = __atomic_exchange_n(&tgm_stats.lock_free_sum, 0, __ATOMIC_RELAXED);
 	lfm = __atomic_exchange_n(&tgm_stats.lock_free_max, 0, __ATOMIC_RELAXED);
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
+	if ((mc_err & 0xff) == 0x6c && switch_vic_mapping_describe) {
+		char vic[128];
+		if (!switch_vic_mapping_describe(mc_adr, vic, sizeof(vic)))
+			nvxnu_log("tegra-gm20b: MC refused a VIC read at %08x: %s", mc_adr, vic);
+	}
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
-	clk_measure(clk, sizeof(clk));
+	tgm_clk_measure(clk, sizeof(clk));
 	tgm_scrub_stats(scrubbed, sizeof(scrubbed), ms);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */
@@ -395,7 +371,7 @@ void tgm_stats_tick(void)
 		  "queue "
 		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy "
 		  "%llu%% (PTIMER x%llu.%03llu), "
-		  "L2 %s, %u presents (%u writer-only), "
+		  "L2 %s, %u presents (%u writer-only, %u L2 flushes), "
 		  "offer to done mean %llu us max "
 		  "%llu us, %s; compositor GPU queue mean %llu us max %llu us (%u), with an app on "
 		  "the GPU at its kick mean %llu us max %llu us (%u); %s; %s",
@@ -403,7 +379,7 @@ void tgm_stats_tick(void)
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
 		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile", presents, writer,
-		  presents ? ps / presents / 1000 : 0, pm / 1000, clk,
+		  present_flushes, presents ? ps / presents / 1000 : 0, pm / 1000, clk,
 		  comp ? PT_NS(cos) / comp / 1000 : 0, PT_NS(com) / 1000, comp,
 		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched, recov);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
@@ -447,6 +423,16 @@ void tgm_stats_tick(void)
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
 		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
+	{
+		const u64 small = __atomic_exchange_n(&tgm_stats.map_small, 0, __ATOMIC_RELAXED);
+		const u64 big = __atomic_exchange_n(&tgm_stats.map_big, 0, __ATOMIC_RELAXED);
+		const u64 could = __atomic_exchange_n(&tgm_stats.map_could, 0, __ATOMIC_RELAXED);
+
+		if (small || big)
+			nvxnu_stats("tegra-gm20b: maps %llu KiB in 128 KiB PTEs, %llu KiB in 4 KiB "
+				    "PTEs, %llu KiB of those 128 KiB PTEs could have mapped",
+				    big >> 10, small >> 10, could >> 10);
+	}
 	switch_gpu_path_window(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: paths %s", line);
 	switch_gpu_job_window(line, sizeof(line));

@@ -260,6 +260,9 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			if (result == -16) {
 				// every scrub slot busy: a retiring scrub's completion runs this again
 				IOLockLock(p->lock);
+#if TGM_STATS
+				++p->zeroBusy;
+#endif
 				--p->zeroing[spareClass(s->bytes)];
 				p->cleaningBytes -= s->bytes;
 				p->clean -= s->bytes;
@@ -269,8 +272,12 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 				IOLockUnlock(p->lock);
 				return;
 			}
-			if (result)
+			if (result) {
+#if TGM_STATS
+				__atomic_add_fetch(&p->zeroFailed, 1, __ATOMIC_RELAXED);
+#endif
 				spareZeroed(s, result);
+			}
 			continue;
 		}
 		if (pressure) {  // give every spare back; refill nothing while it lasts
@@ -306,6 +313,9 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		IOLockLock(p->lock);
 		if (!s) {  // the VM could not give it: try again at the next event, not now
 			p->clean -= classBytes(c);
+#if TGM_STATS
+			++p->refillRefused;
+#endif
 			IOLockUnlock(p->lock);
 			return;
 		}
@@ -372,13 +382,32 @@ Spare *spareTake(uint64_t bytes)
 			p->clean -= s->bytes;
 		}
 	}
-	if (!s && classBytes(c) <= kLearnMaxBytes && !p->target[c])
-		p->target[c] = 1;
+	if (!s) {
+		const switch_gpu_spare_miss why =
+			switch_gpu_spare_miss_of(p->target[c], p->zeroing[c], memoryPressure());
+		p->target[c] = switch_gpu_spare_depth_after_miss(
+			p->target[c], classBytes(c) <= kLearnMaxBytes, why);
+#if TGM_STATS
+		++p->misses[why];
+#endif
+	}
 	const bool kick = !memoryPressure() ? p->count[c] < p->target[c] : p->clean != 0;
 	IOLockUnlock(p->lock);
 	if (kick)
 		thread_call_enter(p->call);
 	return s;
+}
+
+// Debug kernels: a cached BoAlloc that no spare can serve by its flags (contiguous, write-combined).
+void spareIneligible()
+{
+#if TGM_STATS
+	if (SparePool *p = spares()) {
+		IOLockLock(p->lock);
+		++p->misses[SWITCH_GPU_SPARE_INELIGIBLE];
+		IOLockUnlock(p->lock);
+	}
+#endif
 }
 
 // A freed cached BO (its prepared descriptor, which nothing else holds, with its `bytes` and page list) to the spares:
@@ -489,7 +518,26 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 		if (n > 0)
 			at = at + n < size ? at + n : size - 1;
 	}
+	uint32_t missed = p->zeroBusy + p->zeroFailed + p->refillRefused;
+	for (const uint32_t m : p->misses)
+		missed += m;
+	const int n =
+		missed ? snprintf(out + at, size - at,
+				  "%sspare misses: first %u, zeroing %u, drained %u, pressure %u, "
+				  "ineligible %u; copy-engine zero busy %u, failed %u; refill "
+				  "refused %u",
+				  at ? "; " : "", p->misses[SWITCH_GPU_SPARE_FIRST],
+				  p->misses[SWITCH_GPU_SPARE_ZEROING],
+				  p->misses[SWITCH_GPU_SPARE_DRAINED],
+				  p->misses[SWITCH_GPU_SPARE_PRESSURE],
+				  p->misses[SWITCH_GPU_SPARE_INELIGIBLE], p->zeroBusy,
+				  p->zeroFailed, p->refillRefused)
+		       : 0;
+	if (n > 0)
+		at = at + n < size ? at + n : size - 1;
 	bzero(p->owners, sizeof(p->owners));
+	bzero(p->misses, sizeof(p->misses));
+	p->zeroBusy = p->zeroFailed = p->refillRefused = 0;
 	IOLockUnlock(p->lock);
 	return at;
 #else

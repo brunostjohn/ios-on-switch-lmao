@@ -31,6 +31,16 @@
 #   display_column_scan_test            NativeColumnScan.h: window A's column-scan registers against a fetch model held
 #                                       to the landscape UI's hardware rotation; the 4K test surface and the reference
 #                                       frame showing the same panel; the run's decisions for a pass and each failure
+#   display_window_probe_test           DisplayWindowProbe.h: each window probe's claim steps show their reference's
+#                                       panel pixel for pixel through a fetch model of windows A and B (also with
+#                                       chroma interpolated at the crops' edges), its control another; the run's
+#                                       decisions for a pass and each failure, and the reply HW Test reads
+#   switch_landscape_test               SwitchLandscape.h: window A's column scan of a decoder's picture shows each
+#                                       IOSurfaceAccelerator quarter turn as TegraVIC lands it, pixel for pixel at 1:1
+#                                       through a fetch model, inside the source rectangle scaled
+#   switch_landscape_display_test       SwitchLandscapeDisplay.h against DC A's register file: a change of mode held
+#                                       for a quiet frame end, then the UI and the video moved in one request for all
+#                                       three windows, the latch checked on the UI window, the exits that cannot wait
 #   display_plane_fence_test            NativePlaneFence.h: window B never writes a surface the GPU renders before its
 #                                       writers' work is done, nor later than the present that orders it, against a
 #                                       model of the GPU present
@@ -258,6 +268,41 @@ host_test(
 )
 
 host_test(
+    name = "display_window_probe_test",
+    srcs = [
+        "display_window_probe_test.cpp",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbe.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeABI.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeRun.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-O1"],
+)
+
+host_test(
+    name = "switch_landscape_test",
+    srcs = [
+        "switch_landscape_test.cpp",
+        "//drivers/TegraVIC/test:TegraVICProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscape.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+    ],
+    copts = ["-O1"],
+)
+
+host_test(
     name = "display_column_scan_test",
     srcs = [
         "display_column_scan_test.cpp",
@@ -285,6 +330,7 @@ host_test(
     name = "switch_native_plane_test",
     srcs = [
         "switch_native_plane_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
@@ -309,6 +355,7 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchPlaneSlot.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneSlots.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
@@ -350,6 +397,7 @@ host_test(
 host_test(
     name = "switch_display_admission_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_display_admission_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
@@ -398,6 +446,7 @@ host_test(
 host_test(
     name = "switch_composition_registers_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_composition_registers_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
         "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
@@ -455,6 +504,8 @@ host_test(
 host_test(
     name = "switch_overlay_registers_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "switch_overlay_registers_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlanesResume.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
@@ -473,8 +524,35 @@ host_test(
 )
 
 host_test(
+    name = "switch_landscape_display_test",
+    srcs = [
+        "switch_landscape_display_test.cpp",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscape.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+    ],
+)
+
+host_test(
     name = "switch_plane_selection_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_plane_selection_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
@@ -512,6 +590,15 @@ host_test(
 
 
 host_test(
+    name = "switch_underflow_accounting_test",
+    srcs = [
+        "switch_underflow_accounting_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchUnderflowAccounting.h",
+        "//drivers/NativeMobileDisplay:SwitchUnderflowDisplay.h",
+    ],
+)
+
+host_test(
     name = "switch_display_memory_envelope_test",
     srcs = [
         "switch_display_memory_envelope_test.cpp",
@@ -529,5 +616,19 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchDisplayMemoryTiming.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
+    ],
+)
+
+# SwitchMediaPlaneFence.h: video planes armed on VIC's and NVDEC's syncpoints, the GPU's left on the bridge.
+host_test(
+    name = "switch_media_plane_fence_test",
+    srcs = [
+        "switch_media_plane_fence_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchMediaPlaneFence.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
     ],
 )

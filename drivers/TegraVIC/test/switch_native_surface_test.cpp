@@ -210,6 +210,73 @@ extern "C" int switch_vic_present_surface_queue(const TegraVICPicture *picture, 
     }
     return error;
 }
+
+unsigned turns = 0;
+bool turnQueued = false;
+SwitchVICEvents *turnEvents = nullptr;
+
+// A request's events as the record holds them: its resolved waits, and what was done with its signals.
+struct SwitchVICEvents {
+    switch_gpu_backing_token tokens[2] = {};
+    uint32_t tokenCount = 0;
+    unsigned binds = 0, commits = 0, stages = 0, releases = 0;
+    switch_gpu_backing_token boundTo = {};
+    bool staged = false;
+};
+
+uint32_t switch_vic_events_tokens(SwitchVICEvents *work, const switch_gpu_backing_token **tokens)
+{
+    *tokens = work ? work->tokens : nullptr;
+    return work ? work->tokenCount : 0;
+}
+
+int switch_vic_events_bind(SwitchVICEvents *work, const switch_gpu_backing_token *token)
+{
+    ++work->binds;
+    work->boundTo = *token;
+    return 0;
+}
+
+void switch_vic_events_commit(SwitchVICEvents *work)
+{
+    ++work->commits;
+}
+
+int switch_vic_events_stage(SwitchVICEvents *source, SwitchVICEvents **out)
+{
+    ++source->stages;
+    *out = new SwitchVICEvents(*source);
+    (*out)->staged = true;
+    return 0;
+}
+
+void switch_vic_events_release(SwitchVICEvents **owned)
+{
+    if (!*owned)
+        return;
+    ++(*owned)->releases;
+    if ((*owned)->staged)
+        delete *owned;
+    *owned = nullptr;
+}
+
+int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVICOp &op, uint32_t,
+                            const TegraVICSurface *destination, switch_gpu_cpu_lease *owned, bool queue, const char **,
+                            SwitchVICEvents *events)
+{
+    turnEvents = events;
+    EXPECT_NE(source.native, owned->backing);
+    EXPECT_TRUE(owned->access & kWrite);
+    EXPECT_EQ(owned->backing, destination->memory->backing);
+    EXPECT_EQ(op.transform, 7u);
+    ++turns;
+    turnQueued = queue;
+    if (queue) {
+        ++owned->backing->content;
+        owned->backing->producer = {23, 1, SWITCH_GPU_ENGINE_VIC, 9};
+    }
+    return transferError;
+}
 namespace {
 class NativeSurface : public testing::Test {
 protected:
@@ -325,6 +392,255 @@ TEST_F(NativeSurface, PublicationRetainsDecoderAllocationAndGuardedViews)
     switch_gpu_cpu_lease *writeLease = nullptr;
     EXPECT_EQ(acquire(&native, kWrite | kAvoidSync, &writeLease), -16);
     switch_native_surface_release(&view);
+}
+
+// Core Animation's portrait destination for a landscape video: a whole 720x1280 '420v' surface the picture turned by
+// transform 7 fills (SwitchVICTurn.h).
+class TurnedSurface : public NativeSurface {
+protected:
+    IOMemoryDescriptor *turnedMemory = nullptr;
+    Surface *turnedObject = nullptr;
+    TegraVICSurface turned = {};
+    TegraVICOp op = {};
+    SwitchVICEvents request;
+
+    void SetUp() override
+    {
+        NativeSurface::SetUp();
+        turns = 0;
+        turnQueued = false;
+        turnEvents = nullptr;
+        request = {};
+        request.tokens[0] = {900, 2, SWITCH_GPU_ENGINE_GM20B, 41};
+        request.tokens[1] = {901, 3, SWITCH_GPU_ENGINE_VIC, 42};
+        request.tokenCount = 2;
+        turnedMemory = new IOMemoryDescriptor;
+        turnedMemory->length = 768 * 1280 * 3 / 2;
+        turnedMemory->backing = &replacement;
+        replacement.pageCount = (turnedMemory->length + 4095) / 4096;
+        turnedObject = new Surface(turnedMemory, 8);
+        auto &d = turnedObject->desc;
+        d.fourcc = 0x34323076;
+        d.width = 720;
+        d.height = 1280;
+        d.planes = 2;
+        d.length = turnedMemory->length;
+        d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 768;
+        d.planeWidth[0] = 720;
+        d.planeWidth[1] = 360;
+        d.planeHeight[0] = 1280;
+        d.planeHeight[1] = 640;
+        d.planeOffset[1] = 768 * 1280;
+        turned = {turnedObject, turnedMemory, d, 0, 8, false};
+        op.srcW = 1280ull << 16;
+        op.srcH = 720ull << 16;
+        op.dstW = 720;
+        op.dstH = 1280;
+        op.transform = 7;
+    }
+
+    void TearDown() override
+    {
+        turnedObject->release();
+        turnedMemory->release();
+        NativeSurface::TearDown();
+    }
+
+    int publishTurned(SwitchVICEvents *events = nullptr)
+    {
+        SwitchNativeSurfaceView source = {};
+        int error = native.readers ? 0 : switch_native_surface_publish(&surface, &picture);
+        if (!error)
+            error = switch_native_surface_acquire(&surface, &source, false);
+        if (!error)
+            error = switch_native_surface_publish_turned(&turned, source, op, 0, nullptr, events);
+        switch_native_surface_release(&source);
+        return error;
+    }
+};
+
+TEST_F(TurnedSurface, TheDestinationIsTheDecodersPictureTurnedForTheDisplayOnly)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    const unsigned held = native.refs;
+    ASSERT_EQ(publishTurned(), 0);
+    EXPECT_EQ(native.refs, held + 2);  // the destination holds the decoder's picture as its source does, and its lease
+    EXPECT_EQ(native.readers, 2u);
+    EXPECT_EQ(turns, 0u);  // no VIC work
+    SwitchNativeSurfaceView view = {};
+    EXPECT_EQ(switch_native_surface_acquire(&turned, &view, false), -95);
+    ASSERT_EQ(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    EXPECT_EQ(view.native, &native);
+    EXPECT_EQ(view.logical, &replacement);
+    EXPECT_EQ(view.turn.transform, 7u);
+    EXPECT_EQ(view.turn.width, 1280u);
+    EXPECT_EQ(view.turn.height, 720u);
+    EXPECT_EQ(view.layout.planes[0].height, 736u);
+    switch_native_surface_release(&view);
+}
+
+// The display's acquire of a turned destination (SwitchLandscapeSelection.h): the decoder's picture, read-leased, with
+// the turn; without `turns` the destination is not a picture the display may scan as it is.
+TEST_F(TurnedSurface, TheDisplayAcquiresTheTurnedPictureItself)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    const unsigned readers = native.readers;
+    SwitchNativeScanout scanout = {};
+    EXPECT_EQ(switch_native_scanout_acquire(turnedObject, &scanout), -95);
+    EXPECT_EQ(scanout.lease, nullptr);
+    ASSERT_EQ(switch_native_scanout_acquire(turnedObject, &scanout, true), 0);
+    EXPECT_EQ(scanout.view.native, &native);
+    EXPECT_EQ(scanout.view.turn.transform, 7u);
+    EXPECT_EQ(scanout.view.turn.width, 1280u);
+    EXPECT_NE(scanout.lease, nullptr);
+    EXPECT_EQ(native.readers, readers + 1);
+    EXPECT_EQ(turns, 0u);
+    switch_native_scanout_release(&scanout);
+    EXPECT_EQ(native.readers, readers);
+}
+
+// The request's waits come with the picture to every reader: the display orders the frame after them as after the
+// picture's producer.
+TEST_F(TurnedSurface, TheRequestsWaitsOrderTheDisplaysScan)
+{
+    ASSERT_EQ(publishTurned(&request), 0);
+    SwitchNativeScanout scanout = {};
+    ASSERT_EQ(switch_native_scanout_acquire(turnedObject, &scanout, true), 0);
+    ASSERT_EQ(scanout.view.waitCount, 2u);
+    switch_gpu_backing_token tokens[3] = {};
+    ASSERT_EQ(switch_native_scanout_dependencies(scanout, tokens, 3), 3u);
+    EXPECT_EQ(tokens[0].value, scanout.view.producer.value);
+    EXPECT_EQ(tokens[1].value, 900u);
+    EXPECT_EQ(tokens[2].value, 901u);
+    switch_native_scanout_release(&scanout);
+}
+
+// The display's latch delivers the signals, bound to the picture's completion, once; a reader after it still waits
+// for the request's waits but signals nothing.
+TEST_F(TurnedSurface, TheDisplaysLatchDeliversTheSignalsOnce)
+{
+    ASSERT_EQ(publishTurned(&request), 0);
+    SwitchNativeScanout scanout = {};
+    ASSERT_EQ(switch_native_scanout_acquire(turnedObject, &scanout, true), 0);
+    switch_native_scanout_deliver(&scanout);
+    switch_native_scanout_deliver(&scanout);
+    EXPECT_EQ(request.binds, 1u);
+    EXPECT_EQ(request.commits, 1u);
+    EXPECT_EQ(request.boundTo.value, scanout.view.producer.value);
+    switch_native_scanout_release(&scanout);
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    ASSERT_EQ(prepareCpu(turnedObject, 1, &backing, &owned), 0);
+    ASSERT_NE(turnEvents, nullptr);
+    EXPECT_NE(turnEvents, &request);
+    EXPECT_EQ(request.stages, 1u);
+    EXPECT_EQ(request.commits, 1u);
+    finishCpu(turnedObject, backing, &owned);
+}
+
+// A reader before the display: its VIC job takes the request's signals (they go with the rows), the display's latch
+// delivers nothing more.
+TEST_F(TurnedSurface, AReaderBeforeTheDisplayTakesTheSignals)
+{
+    ASSERT_EQ(publishTurned(&request), 0);
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    ASSERT_EQ(prepareCpu(turnedObject, 1, &backing, &owned), 0);
+    EXPECT_EQ(turnEvents, &request);
+    finishCpu(turnedObject, backing, &owned);
+    SwitchNativeScanout scanout = {};
+    ASSERT_EQ(switch_native_scanout_acquire(turnedObject, &scanout, true), 0);
+    switch_native_scanout_deliver(&scanout);
+    EXPECT_EQ(request.binds, 0u);
+    EXPECT_EQ(request.commits, 0u);
+    switch_native_scanout_release(&scanout);
+}
+
+// Replaced on its destination before anything showed or read it (a dropped frame): the signals go then, and the
+// record lets go of the events.
+TEST_F(TurnedSurface, ADroppedRecordStillSignals)
+{
+    ASSERT_EQ(publishTurned(&request), 0);
+    EXPECT_EQ(request.commits, 0u);
+    ASSERT_EQ(publishTurned(), 0);
+    EXPECT_EQ(request.binds, 1u);
+    EXPECT_EQ(request.commits, 1u);
+    EXPECT_EQ(request.releases, 1u);
+}
+
+TEST_F(TurnedSurface, APictureTheDecoderReplacedIsNotRecorded)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    native.producer.value = 12;  // the decoder wrote the buffer again after the source was acquired
+    EXPECT_EQ(switch_native_surface_publish_turned(&turned, source, op, 0), SWITCH_GPU_BACKING_STALE);
+    switch_native_surface_release(&source);
+    SwitchNativeSurfaceView view = {};
+    EXPECT_EQ(switch_native_surface_acquire(&turned, &view, false, true), -2);  // nothing on the destination
+    EXPECT_EQ(turns, 0u);
+}
+
+TEST_F(TurnedSurface, ACpuReaderGetsRowsVicTurnsOnce)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    for (unsigned index = 0; index != 2; ++index) {
+        switch_gpu_backing *backing = nullptr;
+        switch_gpu_cpu_lease *owned = nullptr;
+        ASSERT_EQ(prepareCpu(turnedObject, 1, &backing, &owned), 0);
+        EXPECT_EQ(owned->backing, &replacement);
+        EXPECT_EQ(turns, 1u);
+        EXPECT_FALSE(turnQueued);
+        EXPECT_EQ(transfers, 0u);  // never the picture copied unturned
+        finishCpu(turnedObject, backing, &owned);
+    }
+}
+
+TEST_F(TurnedSurface, AGpuReaderQueuesTheTurn)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    const int entered = SwitchMemoryAttachment::enterCpu(turnedMemory, false);
+    ASSERT_EQ(entered, 0);
+    ASSERT_EQ(switch_native_surface_prepare_gpu(turnedObject, 8, nullptr, 1, &backing, &owned), 0);
+    EXPECT_EQ(turns, 1u);
+    EXPECT_TRUE(turnQueued);
+    EXPECT_EQ(replacement.producer.engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
+    finishCpu(turnedObject, backing, &owned);
+}
+
+TEST_F(TurnedSurface, OnlyAQuarterTurnOntoAWholeYuvDestinationIsRecorded)
+{
+    SwitchNativeSurfaceTurn turn = {};
+    const SwitchNativeSurfaceCrop crop = {0, 0, 1280, 720};
+    EXPECT_EQ(switch_vic_turn_of(op, turned.desc, crop, turn), nullptr);
+    EXPECT_EQ(turn.transform, 7u);
+    TegraVICOp other = op;
+    other.transform = 3;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.dstH = 1000;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcX = 1ull << 16;
+    other.srcW -= 1ull << 16;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcW += 1;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcH = 722ull << 16;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    TegraVICSurfaceDesc bgra = turned.desc;
+    bgra.fourcc = TEGRA_VIC_FOURCC('B', 'G', 'R', 'A');
+    bgra.planes = 0;
+    EXPECT_NE(switch_vic_turn_of(op, bgra, crop, turn), nullptr);
+    TegraVICSurfaceDesc nv16 = turned.desc;  // Core Animation's detached-video destination on iPadOS 27
+    nv16.fourcc = TEGRA_VIC_FOURCC('4', '2', '2', 'v');
+    EXPECT_EQ(switch_vic_turn_of(op, nv16, crop, turn), nullptr);
+    nv16.fourcc = TEGRA_VIC_FOURCC('x', '4', '2', '0');
+    EXPECT_NE(switch_vic_turn_of(op, nv16, crop, turn), nullptr);
 }
 
 TEST_F(NativeSurface, ReadOnlyRowsMaterializeOnceAndReturnContinuousOwnership)

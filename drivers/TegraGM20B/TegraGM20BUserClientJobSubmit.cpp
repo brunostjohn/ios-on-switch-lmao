@@ -294,6 +294,7 @@ refresh:
 #endif
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

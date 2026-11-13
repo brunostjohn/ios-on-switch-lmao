@@ -37,7 +37,7 @@ class LatencyTest(unittest.TestCase):
             for lat in (2, 6, 13, 15):
                 table = timing_sim.Table({r.key: lat})
                 for delay in (lat - 1, lat):
-                    prog = build(r, delay)
+                    prog = build(r, delay).fragment()
                     regs, _ = timing_sim.run(prog.code, prog.data, table)
                     right = regs == program.expected_texel(prog.code, prog.data)
                     self.assertEqual(right, delay >= lat, (r.key, lat, delay))

@@ -12,6 +12,7 @@
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
+#include "SwitchGpuSpares.h"
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -45,6 +46,7 @@
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuJobVisibility.h"
 #include "SwitchGpuPathStats.h"
+#include "SwitchGpuTargetPeaks.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -114,6 +116,8 @@ extern "C" kern_return_t vm_map_region_recurse_64(vm_map_t map, uint64_t *addres
 						  natural_t *depth, vm_region_submap_info_64_t info,
 						  mach_msg_type_number_t *count);
 
+// SwitchGpuTargetPeaks.h's line of every process's largest target image since boot
+void tgm_target_peaks_line(char *line, size_t size);
 #endif
 static inline uint64_t nowNs()
 {
@@ -173,12 +177,14 @@ struct SparePool {
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 #if TGM_STATS
 	OwnerStat owners[kOwners];
+	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused;
 #endif
 };
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
 Spare *spareTake(uint64_t bytes);
+void spareIneligible();
 bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 
@@ -298,6 +304,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint8_t kind, vol;
 		uint32_t
 			epoch;  // a pending binding's: the bind epoch released once its PTEs are in
+		bool unmapped;  // its install failed: logged once, tried again at each retirement
 	};
 
 	struct Binding {
@@ -527,8 +534,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn execSurfaces(const TegraGM20BAbiExecSurfaces *in);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
-	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in,
-			   const TegraGM20BAbiSurfaceUse *uses, switch_gpu_set_member *members,
+	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,
+			   switch_gpu_set_member *members,
 			   TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
 	IOReturn submitJob(const TegraGM20BAbiSubmitAddress *in, TegraGM20BAbiExecReply *out);

@@ -208,7 +208,8 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 				return nullptr;
 			auto *kept = *spare;
 			*spare++ = nullptr;
-			*kept = {nullptr, from, bytes, b.bo, part, {}, record->kind, record->vol, 0};
+			*kept = {nullptr, from,         bytes,       b.bo, part,
+				 {},      record->kind, record->vol, 0,    false};
 			++b.bo->bindings;
 			const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, from);
 			memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
@@ -264,7 +265,7 @@ IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo,
 		IODelete(record, RetiredBinding, 1);
 		return ioreturn(err);
 	}
-	*record = {nullptr, op.va, op.range, bo, mapping, {}, kind, vol, 0};
+	*record = {nullptr, op.va, op.range, bo, mapping, {}, kind, vol, 0, false};
 	++bo->bindings;
 	const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, op.va);
 	memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
@@ -345,11 +346,20 @@ void AGXDeviceUserClient::installPendingBinds()
 				done = b.retirement->epoch - 1;
 			continue;
 		}
-		if (switch_gpu_vm_install(vm_, mapping, b.bo->mem, b.retirement->kind,
-					  int(b.bo->readOnly), b.retirement->vol))
-			IOLog("tegra-gm20b: %s: bind %#llx+%#llx could not be mapped; it stays "
-			      "unmapped\n",
+		// A failed install (no page tables, or no comptag lines for a compressed kind) keeps its epoch back: work
+		// waiting for it would otherwise run on a VA with no PTEs and fault in a process told the bind succeeded.
+		// Retirements free page tables and comptag lines, so each one tries the install again; a bind that never maps
+		// leaves its waiter on the GPU acquire, which the hang rule kills with a report.
+		if (!switch_gpu_vm_install(vm_, mapping, b.bo->mem, b.retirement->kind,
+					   int(b.bo->readOnly), b.retirement->vol))
+			continue;
+		if (!b.retirement->unmapped)
+			IOLog("tegra-gm20b: %s: bind %#llx+%#llx could not be mapped yet; the work "
+			      "after it waits\n",
 			      owner_, b.va, b.range);
+		b.retirement->unmapped = true;
+		if (int32_t(b.retirement->epoch - 1 - done) < 0)
+			done = b.retirement->epoch - 1;
 	}
 	if (int32_t(done - bindDone_) <= 0)
 		return;

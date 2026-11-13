@@ -282,4 +282,27 @@ TEST_F(SeedPack, MisnamedOrDuplicateEntriesAreNotWritten)
     EXPECT_FALSE(pack::write((root / "unreadable").string(), 8, identity, unreadable, error));
 }
 
+// An entry of whole pages starts on a page of its pack and shares none of its pages: a GPU client imports them and runs
+// the program slot they hold in place (raw_program_pages.h)
+TEST_F(SeedPack, AnEntryOfWholePagesHasItsPagesToItself)
+{
+    std::vector<pack::Entry> list = {entries[0], entries[1], entries[2]};
+    list[1].bytes = std::string(2 * pack::kPageBytes, 'p');
+    const std::string directory = write("pages", list, uint64_t(1) << 30);
+    pack::Seed seed;
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    pack::Bytes found[3], in;
+    for (unsigned i = 0; i < 3; ++i)
+        ASSERT_TRUE(seed.find(reinterpret_cast<const uint8_t *>(list[i].name.data()), found[i]));
+    ASSERT_TRUE(seed.packOf(found[1].data, in));
+    EXPECT_EQ((found[1].data - in.data) % pack::kPageBytes, 0);
+    for (unsigned i : {0u, 2u}) {
+        const bool before = found[i].data + found[i].size <= found[1].data;
+        const bool after = found[i].data >= found[1].data + found[1].size;
+        EXPECT_TRUE(before || after) << i;
+        EXPECT_EQ(std::string(reinterpret_cast<const char *>(found[i].data), found[i].size), list[i].bytes);
+    }
+    EXPECT_EQ(std::string(reinterpret_cast<const char *>(found[1].data), found[1].size), list[1].bytes);
+}
+
 }  // namespace

@@ -3,6 +3,7 @@
 // place before the process's own directory, refused whole when another build's or damaged.
 #include "../raw/runtime/raw_cache.h"
 #include "../raw/runtime/raw_cache_io.h"
+#include "../raw/runtime/raw_program_pages.h"
 #include "../raw/test/cache_checks.h"
 #include "../../../kits/SwitchSeedPack/SwitchSeedPackWriter.h"
 
@@ -199,6 +200,43 @@ TEST_F(NativeSeed, ComputeRecordLoadsFromTheSameImmutableLayer)
     EXPECT_EQ(cache.loadKernel(key, loaded, why), raw::RecordCache::Found::Record);
     EXPECT_EQ(loaded.code, original.code);
     EXPECT_EQ(loaded.keyString, original.keyString);
+}
+
+// A program slot the seed holds as an entry of its own (native_seed_manifest.h writeSlots) is found by its bytes on a page
+// boundary of its pack's mapping, the prefetch's zeros after it, for the device to import and run in place
+TEST_F(NativeSeed, AProgramSlotIsFoundInPlaceOnPagesOfItsOwn)
+{
+    std::vector<uint8_t> slot(20000);
+    for (size_t i = 0; i < slot.size(); ++i)
+        slot[i] = uint8_t(i * 7 + 1);
+    std::vector<uint8_t> entry = slot;
+    entry.resize(raw::programSlotEntryBytes(slot.size()));
+    const fs::path records = staged / ("raw-" + hex16(key.stack));
+    const fs::path file = records / (hex16(raw::seedSlotName(slot.data(), slot.size())) + ".slot");
+    std::ofstream(file, std::ios::binary)
+        .write(reinterpret_cast<const char *>(entry.data()), std::streamsize(entry.size()));
+    std::vector<fs::path> files = {file};
+    for (const auto &f : fs::directory_iterator(records))
+        if (f.path().extension() == ".rec")
+            files.push_back(f.path());
+    packRecords(staged, seed, key.stack, key.stack, files);
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
+    const uint8_t *mapping = nullptr;
+    uint64_t bytes = 0;
+    const uint8_t *found = cache.findSeedSlot(slot.data(), slot.size(), mapping, bytes);
+    ASSERT_NE(found, nullptr);
+    ASSERT_TRUE(found >= mapping && found + entry.size() <= mapping + bytes);
+    EXPECT_EQ(uint64_t(found - mapping) % raw::kProgramSlotPage, 0u);
+    EXPECT_EQ(memcmp(found, slot.data(), slot.size()), 0);
+    EXPECT_TRUE(std::all_of(found + slot.size(), found + entry.size(), [](uint8_t b) {
+        return !b;
+    }));
+    raw::RuntimeRecord loaded;
+    std::string why;
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
+    slot[100] ^= 1;
+    EXPECT_EQ(cache.findSeedSlot(slot.data(), slot.size(), mapping, bytes), nullptr);
 }
 
 // A handful of a built seed's own records (SWITCH_SEED_TREE: an image's ngpu/addons, per-file native records), packed

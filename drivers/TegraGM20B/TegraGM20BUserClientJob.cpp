@@ -23,18 +23,24 @@ IOReturn AGXDeviceUserClient::resourceSetCreate(const TegraGM20BAbiResourceSetCr
 		}
 		IOLockUnlock(lock_);
 	}
+	if (!result && copyout(uses, in->uses_address, in->count * sizeof(*uses)))
+		result = kIOReturnBadArgument;
 	IODelete(uses, TegraGM20BAbiSurfaceUse, in->count);
 	IODelete(members, switch_gpu_set_member, in->count);
 	return result;
 }
 
-// lock_ held, every submission excluded
+// lock_ held, every submission excluded. A member the kernel refuses comes back with access 0 in `uses`.
 IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in,
-					const TegraGM20BAbiSurfaceUse *uses,
+					TegraGM20BAbiSurfaceUse *uses,
 					switch_gpu_set_member *members,
 					TegraGM20BAbiResourceSetCreateReply *out)
 {
 	constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
+	static_assert(uint32_t(TegraGM20BSurfaceRead) == SWITCH_GPU_BACKING_READ &&
+			      uint32_t(TegraGM20BSurfaceWrite) == SWITCH_GPU_BACKING_WRITE,
+		      "use access");
+	uint32_t count = 0;
 	for (uint32_t i = 0; i < in->count; ++i) {
 		const uint32_t access = uses[i].access;
 		if (uses[i].reserved || !(access & kAccess) ||
@@ -42,13 +48,12 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 			return kIOReturnBadArgument;
 		const Bo *bo = access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
 								     : findBo(uses[i].handle);
-		if (!bo || !bo->backing || bo->wired || bo->surface || bo->coh || bo->nativeView ||
-		    bo->representation || bo->readOnly)
+		if (!bo)
 			return kIOReturnBadArgument;
-		static_assert(uint32_t(TegraGM20BSurfaceRead) == SWITCH_GPU_BACKING_READ &&
-				      uint32_t(TegraGM20BSurfaceWrite) == SWITCH_GPU_BACKING_WRITE,
-			      "use access");
-		members[i] = {bo->backing, access & kAccess, 0};
+		if (!bo->backing || bo->surface || bo->nativeView || bo->representation || bo->readOnly)
+			uses[i].access = 0;
+		else
+			members[count++] = {bo->backing, access & kAccess, 0};
 	}
 	uint32_t index = in->set ? in->set - 1 : 0;
 	if (in->set && !sets_[index])
@@ -65,11 +70,31 @@ IOReturn AGXDeviceUserClient::attachSet(const TegraGM20BAbiResourceSetCreate *in
 			return ioreturn(created);
 	}
 	uint32_t generation = 0;
-	const int attached =
-		switch_gpu_set_attach(made ? made : sets_[index], members, in->count, &generation);
-	if (attached) {
-		switch_gpu_set_destroy(made);
-		return attached == -16 ? kIOReturnExclusiveAccess : ioreturn(attached);
+	for (;;) {
+		switch_gpu_backing *refused = nullptr;
+		const int attached = switch_gpu_set_attach(made ? made : sets_[index], members, count,
+							   &generation, &refused);
+		if (!attached)
+			break;
+		if (!refused) {
+			switch_gpu_set_destroy(made);
+			return ioreturn(attached);
+		}
+		uint32_t kept = 0;
+		for (uint32_t m = 0; m < count; ++m)
+			if (members[m].backing != refused)
+				members[kept++] = members[m];
+		if (kept == count) {
+			switch_gpu_set_destroy(made);
+			return ioreturn(attached);
+		}
+		count = kept;
+		for (uint32_t i = 0; i < in->count; ++i) {
+			const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle)
+										  : findBo(uses[i].handle);
+			if (uses[i].access && bo && bo->backing == refused)
+				uses[i].access = 0;
+		}
 	}
 	if (made)
 		sets_[index] = made;

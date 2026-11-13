@@ -24,10 +24,9 @@ struct TegraNVENCBlock {
 // Resolves a submit's buffer handle; every user client supplies its own.
 typedef bool (*TegraNVENCResolve)(void *context, uint32_t handle, TegraNVENCBlock *block);
 
-// The codecs Submit takes and GetInfo reports (bit n: TEGRA_NVENC_CODEC_* n). H.265's checker and setup are in the
-// tree (TegraNVENCCheckH265.h, AVE/HEVCNVENC.c) but it is not offered until its P pictures are established and its
-// IDR setup has run on the unit (nvidia/SOURCE-H265).
-constexpr uint32_t kTegraNVENCCodecs = 1u << TEGRA_NVENC_CODEC_H264;
+// The codecs Submit takes and GetInfo reports (bit n: TEGRA_NVENC_CODEC_* n). H.265 is IDR pictures only: its P
+// pictures' reference fields are not established (nvidia/SOURCE-H265).
+constexpr uint32_t kTegraNVENCCodecs = 1u << TEGRA_NVENC_CODEC_H264 | 1u << TEGRA_NVENC_CODEC_H265;
 
 extern "C" {
 // NVENC's address space (E1): its tables, the firmware, setup slots and scratch identity-mapped, the swgroup translated.
@@ -47,9 +46,14 @@ void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
 // or a negative errno-style value.
 int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, uint32_t *fence,
                     const char **why);
-// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound: a one-line panic.
+// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound the jobs in flight
+// are cancelled (-5) and the engine is reset for the next one.
 int tegra_nvenc_wait(uint32_t fence);
 bool tegra_nvenc_ready(void);
+
+// A stalled job's line (TegraNVENCDump.cpp): the falcon's state, and where the app the job runs is stuck.
+const char *tegra_nvenc_falcon_dump(volatile uint8_t *nvenc);
+const char *tegra_nvenc_app_dump(volatile uint8_t *nvenc, uint32_t codec);
 
 int tegra_nvenc_publish(void);  // E3
 }

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <unordered_set>
 #include "raw_nonfinite.h"
 
@@ -117,6 +118,37 @@ inline int glassProbeUniform(char *out, size_t size, uint32_t stage, uint32_t sl
         return snprintf(out, size, "u%u.%u:%llu/nocpu", stage, slot, (unsigned long long)bytes);
     const NonFiniteUniforms found = nonFiniteUniforms(cpu, std::min(bytes, kGlassProbeUniformBytes));
     return snprintf(out, size, "u%u.%u:%llu/%uf%uh", stage, slot, (unsigned long long)bytes, found.words, found.halves);
+}
+
+// Core Animation's blur-chain states (downsample_4/6/8, downsample_blur_2/4, narrow_blur_*, the chain's last pass):
+// their fragment function sums weight[i] * texture0.sample(uv + offset[i]) over the uniform `u` at fragment buffer 1,
+// eight float2 offsets then eight half weights (QuartzCore's default.metallib, reflected on an M4 Max), which the CPU
+// fills per pass
+inline bool glassProbeBlurState(const char *caName)
+{
+    if (!caName)
+        return false;
+    for (const char *f : {"_Tds", "_Tdb", "_Tnb", "_Tn1", "_Tn2", "_Tsb"})
+        if (strstr(caName, f))
+            return true;
+    return false;
+}
+
+// "taps <x>,<y>:<w> ...": the blur pass's taps with a weight, from `u`'s CPU view
+inline int glassProbeTaps(char *out, size_t size, const uint8_t *cpu, uint64_t bytes)
+{
+    if (!cpu || bytes < 80)
+        return snprintf(out, size, "taps -");
+    int at = snprintf(out, size, "taps");
+    for (int i = 0; i < 8 && at > 0 && size_t(at) < size; i++) {
+        float offset[2];
+        _Float16 weight;
+        memcpy(offset, cpu + 8 * i, sizeof offset);
+        memcpy(&weight, cpu + 64 + 2 * i, sizeof weight);
+        if (weight != _Float16(0))
+            at += snprintf(out + at, size - size_t(at), " %.6g,%.6g:%.6g", offset[0], offset[1], double(weight));
+    }
+    return at;
 }
 
 }  // namespace raw

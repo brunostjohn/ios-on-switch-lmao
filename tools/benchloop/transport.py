@@ -8,6 +8,7 @@ Two roots, as hw_test_app/kit/BenchLoop.swift watches them:
 
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,16 @@ class Afc:
     def rm(self, remote: str) -> None:
         self._call('rm', '-rf', remote)
 
+    def read(self, remote: str) -> bytes | None:
+        """Give one file's bytes, None where it cannot be read."""
+        with tempfile.TemporaryDirectory() as scratch:
+            local = Path(scratch) / 'file'
+            try:
+                self._call('get', remote, str(local))
+            except TransportError:
+                return None
+            return local.read_bytes() if local.is_file() else None
+
     def get(self, remote: str, local: Path) -> None:
         """`remote`'s folder into `local` itself, whichever way afcclient nests it."""
         staging = local.with_name(local.name + '.get')
@@ -130,6 +141,10 @@ class Local:
             shutil.rmtree(at)
         elif at.exists():
             at.unlink()
+
+    def read(self, remote: str) -> bytes | None:
+        at = self._at(remote)
+        return at.read_bytes() if at.is_file() else None
 
     def get(self, remote: str, local: Path) -> None:
         shutil.copytree(self._at(remote), local, dirs_exist_ok=True)

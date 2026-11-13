@@ -23,4 +23,9 @@ raw::DirectTranslator translator(const char *nvk);
 // device compiles the kernel. False with `why`.
 bool kernelMade(MTLComputePipelineDescriptor *descriptor, std::string &why);
 
+// The answers the runtime's compute prepare gives `descriptor`'s state (of RawOfflineDevice's functions): its
+// maxTotalThreadsPerThreadgroup, threadExecutionWidth and staticThreadgroupMemoryLength (raw_pack.h PackComputeFacts).
+// False with `why`.
+bool kernelFacts(MTLComputePipelineDescriptor *descriptor, uint32_t facts[3], std::string &why);
+
 }  // namespace offline

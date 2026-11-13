@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 static bool planeSame(const PlaneSet &a, const PlaneSet &b)
 {
+    if (a.landscape != b.landscape)
+        return false;
     for (unsigned window = 0; window != 2; ++window) {
         const auto &first = a.window[window];
         const auto &second = b.window[window];
@@ -84,6 +86,8 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
                           (((updated & (1u << static_cast<uint32_t>(roles.ui))) != 0u) || d.ui != planeShownUi));
     if (any && roles.ui < 0 && stats)
         ++stPlaneDropped;  // no UI layer: window A keeps the last one
+    if (planeLandscapeDecide(roles, width, height, d))
+        return;
     PlaneSet want = {};
     switch_display::Overlay wanted[2] = {};
     const int selected[2] = {roles.plane, roles.second};
@@ -115,7 +119,8 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
         overlay.depth = index + 1;
         planeBuildingSlots |= 1u << unsigned(slot);
     }
-    const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
+    const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
+                                                    planeWindowState(switch_landscape::kC)};
     const auto assignment = switch_display::assign(wanted, windows);
     for (unsigned index = 0; index != 2; ++index) {
         auto &overlay = wanted[index];

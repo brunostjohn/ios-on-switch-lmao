@@ -41,6 +41,10 @@ struct Display {
     PlaneSet planeRecoveryTarget = {};
     struct Probe { bool on = false; bool active() const { return on; } } probe, planeProbe;
     bool kickDeferred = false, tapeSettle = false, probeRequest = false, hwSuspended = false, scanoutStopped = false;
+    struct {
+        bool wanted = false;
+        PlaneSet held;
+    } landscapeState;
 #include "../SwitchRetireDisplay.h"
 };
 

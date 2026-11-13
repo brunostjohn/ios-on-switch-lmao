@@ -8,6 +8,7 @@
 #include "SwitchNVDECSemantics.h"
 #include "../TegraHost1x/SwitchHost1xResults.h"
 #include "../TegraHost1x/SwitchHost1xDependencies.h"
+#include "../TegraHost1x/SwitchHost1xStages.h"
 #include "SwitchNVDECAccess.h"
 #include "TegraNVDEC.h"
 #include "TegraNVDECCheck.h"
@@ -67,47 +68,65 @@ void release(const switch_gpu_backing_token *token)
     Results::release(token);
 }
 
-int completeJob(SwitchNVDECQueue::Job &job)
-{
-    int result = job.bridge ? switch_gpu_bridge_wait(job.bridge) : 1;
-    switch_gpu_bridge_release(&job.bridge);
-    Results::physical(job.outcome, result);
-    switch_nvdec_semantics_physical(0);
-    if (job.semantics) {
-        const int semantic = switch_gpu_event_waits_wait(job.semantics, 0);
-        if (semantic < 0)
-            result = semantic;
-        switch_nvdec_semantics_retire(job.semantics);
-        switch_gpu_event_waits_release(&job.semantics);
-    }
-    Results::complete(&job.outcome, result);
-    return result < 0 ? result : 0;
-}
+struct Retirement;
+using Stages = SwitchHost1xStages<Retirement, SwitchNVDECQueue::kSlots>;
 
-void retireThread(void *, wait_result_t)
-{
-    for (;;) {
+struct Retirement {
+    [[noreturn]] static void fault(uint32_t slot, int status, int)
+    {
+        const auto &job = gQueue.jobs[slot];
+        switch_nvdec_job_fault(static_cast<uint32_t>(job.sequence), status, switch_now_us() - job.submittedUs);
+    }
+
+    static void physical(uint32_t slot, int result)
+    {
+        auto &job = gQueue.jobs[slot];
+        switch_gpu_bridge_release(&job.bridge);
+        Results::physical(job.outcome, result);
+        switch_nvdec_semantics_physical(0);
+    }
+
+    static void ended(uint32_t slot, int result)
+    {
         IOLockLock(gLock);
-        while (!gQueue.count)
-            IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
-        auto job = gQueue.jobs[gQueue.head];
+        auto *semantics = gQueue.jobs[slot].semantics;
+        auto *outcome = gQueue.jobs[slot].outcome;
+        gQueue.jobs[slot].semantics = nullptr;
+        gQueue.jobs[slot].outcome = nullptr;
         IOLockUnlock(gLock);
-        // The bound is NVDEC's own work: a GPU producer the stream waits for, slow or killed, is waited for first.
-        if (job.bridge)
-            (void)switch_gpu_bridge_wait(job.bridge);
-        const uint32_t fence = static_cast<uint32_t>(job.sequence);
-        const int error = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
-        if (error)
-            switch_nvdec_job_fault(fence, error, switch_now_us() - job.submittedUs);
-        completeJob(job);
+        if (semantics) {
+            const int semantic = switch_gpu_event_waits_cached_status(semantics);
+            if (semantic < 0)
+                result = semantic;
+            switch_gpu_event_waits_release(&semantics);
+        }
+        Results::complete(&outcome, result);
         IOLockLock(gLock);
-        gQueue.retire(fence);
+        Stages::stages[slot].ended = true;
+        while (gQueue.count && Stages::stages[gQueue.head].ended)
+            gQueue.retire(static_cast<uint32_t>(gQueue.jobs[gQueue.head].sequence));
+        if (!gQueue.count)
+            switch_nvdec_power_idle();
         __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
         IOLockWakeup(gLock, &gQueue.count, false);
         IOLockWakeup(gLock, &gQueue.completed, false);
         IOLockUnlock(gLock);
         switch_gpu_backing_completed();
     }
+};
+
+void semanticRetired(switch_gpu_event_waits *batch)
+{
+    uint32_t slot = SwitchNVDECQueue::kSlots;
+    IOLockLock(gLock);
+    for (uint32_t i = 0; i < gQueue.count && slot == SwitchNVDECQueue::kSlots; ++i) {
+        const uint32_t at = (gQueue.head + i) % SwitchNVDECQueue::kSlots;
+        if (gQueue.jobs[at].semantics == batch)
+            slot = at;
+    }
+    IOLockUnlock(gLock);
+    if (slot < SwitchNVDECQueue::kSlots)
+        Stages::semantic(slot);
 }
 
 using Check = const char *(*)(const TegraNVDECSubmit *, const uint64_t *);
@@ -329,6 +348,8 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, uint32_t *fence)
         work.words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
         const uint64_t began = switch_now_us();
         error = tegra_host1x_submit(work.words, n);
+        const uint32_t queued = gQueue.tail();
+        const switch_gpu_bridge *bridge = nullptr;
         if (!error) {
             gQueue.publish(began, dependencies.takeBridge(), batch.value, outcome.take());
             if (batch.value)
@@ -337,11 +358,19 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, uint32_t *fence)
             switch_nvdec_semantics_commit(semantic);
             switch_gpu_event_waits_commit(&batch.value);
             *fence = static_cast<uint32_t>(gQueue.submitted);
+            const auto &job = gQueue.jobs[queued];
+            bridge = job.bridge;
+            if (const int failed = Stages::start(queued, gSyncpt, *fence, bridge != nullptr, job.semantics != nullptr,
+                                                 kWaitBoundUs))
+                Retirement::fault(queued, failed, 1);
             IOLockWakeup(gLock, &gQueue.count, false);
         } else {
             switch_gpu_backing_abort(&transaction);
         }
         IOLockUnlock(gLock);
+        if (bridge)
+            if (const int failed = Stages::notify(queued, bridge))
+                Retirement::fault(queued, failed, 1);
         return error;
     }
 }
@@ -357,19 +386,12 @@ bool switch_nvdec_jobs_start(const switch_dma_buffer &setup, uint32_t syncpt, ui
     __atomic_store_n(&gCompleted, completed, __ATOMIC_RELEASE);
     const switch_gpu_backing_engine operations = {status, wait, retain, release, 64};
     if (switch_gpu_backing_register_engine(SWITCH_GPU_ENGINE_NVDEC, &operations) ||
-        !switch_nvdec_semantics_start(syncpt)) {
+        !switch_nvdec_semantics_start(syncpt, semanticRetired)) {
         IOLockFree(gLock);
         gLock = nullptr;
         return false;
     }
     switch_nvdec_semantics_physical(completed);
-    thread_t thread = THREAD_NULL;
-    if (kernel_thread_start(retireThread, nullptr, &thread) != KERN_SUCCESS) {
-        IOLockFree(gLock);
-        gLock = nullptr;
-        return false;
-    }
-    thread_deallocate(thread);
     return true;
 }
 
@@ -392,7 +414,11 @@ int run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context
         return -12;
     int error = prepare(*submit, resolve, context, check, *work, why);
     if (!error)
+        error = switch_nvdec_power_use();
+    if (!error) {
         error = publish(*submit, *work, fence);
+        switch_nvdec_power_done();
+    }
     if (work->words)
         IODelete(work->words, uint32_t, work->wordCapacity);
     IODelete(work, Submission, 1);
@@ -442,13 +468,16 @@ extern "C" int tegra_nvdec_wait(uint32_t fence)
     return valid ? waitSequence(sequence) : -22;
 }
 
-void switch_nvdec_jobs_suspend()
+bool switch_nvdec_jobs_park(bool drain)
 {
     IOLockLock(gLock);
-    gSuspended = true;
-    while (gQueue.count)
+    const bool parked = drain || !gQueue.count;
+    if (parked)
+        gSuspended = true;
+    while (parked && gQueue.count)
         IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
     IOLockUnlock(gLock);
+    return parked;
 }
 
 void switch_nvdec_jobs_resume(bool ready, uint32_t completed)

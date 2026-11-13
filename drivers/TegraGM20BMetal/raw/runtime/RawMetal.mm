@@ -19,9 +19,9 @@
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
 #import "RawMetalIndirect.h"
 #include "raw_device_answers.h"
-#include "raw_limits_fill.h"
 
-#include <mach/mach.h>
+#include <dlfcn.h>
+#include <malloc/malloc.h>
 
 #if SWITCH_FRAME_TIMELINE
 std::atomic<uint64_t> gSurfaceTextures{0}, gTwinsMade{0};  // the frame timeline's churn counts (SwitchFrameTimeline.h)
@@ -153,33 +153,6 @@ RawState *gRM;
 
 @end
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// What the process keeps once the GPU's idle memory went back: jetsam reads phys_footprint against the daemon's limits
-// (JetsamProperties: iconservicesagent's ActiveSoft 200 MB, InactiveHard 15 MB); the rest of it is mostly IOKit's mappings
-extern "C" bool native_bridge_metal_memory(uint64_t out[3]) __attribute__((weak_import));
-
-static void logGivenBack()
-{
-    task_vm_info_data_t vm = {};
-    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) != KERN_SUCCESS)
-        return;
-    raw::Device &d = *gRM->raw;
-    uint64_t m2v[3] = {};
-    if (native_bridge_metal_memory)
-        native_bridge_metal_memory(m2v);
-    const uint64_t footprint = vm.phys_footprint >> 20, internal = vm.internal >> 20, compressed = vm.compressed >> 20;
-    os_log(rawLog(),
-           "raw: idle memory given back: pool %llu MB in %llu chunks (heaps %llu MB), write-combined %llu MB, shader "
-           "heap %llu KB, m2v %llu MB; footprint %llu MB (internal %llu, compressed %llu, other %llu)",
-           (unsigned long long)(d.stats.poolBytes.load() >> 20), (unsigned long long)d.stats.poolChunks.load(),
-           (unsigned long long)(d.arenaBytes() >> 20), (unsigned long long)(d.wcChunkBytesHeld() >> 20),
-           (unsigned long long)(d.heapBytes() >> 10), (unsigned long long)(m2v[0] >> 20), (unsigned long long)footprint,
-           (unsigned long long)internal, (unsigned long long)compressed,
-           (unsigned long long)(footprint > internal + compressed ? footprint - internal - compressed : 0));
-}
-#endif
-
 // raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
 static struct {
     std::mutex lock;
@@ -226,7 +199,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
 
 void raw_metal_complete_states(const char *cacheDir, const char *nativeSeed)
 {
-    if (gRM && gRM->fallback && !gRM->completion)
+    if (gRM && gRM->m2v.open && !gRM->completion)
         gRM->completion =
             std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack, nativeSeed);
 }
@@ -260,7 +233,60 @@ dispatch_queue_t followingSerialQueue(const char *label)
     return queue;
 }
 
+// The device class: a subclass of _MTLDevice, as the frontend's m2v device class is (conforming to MTLDevice and MTLDeviceSPI,
+// with no instance variables of its own: the base class's ABI is the IPSW kind's), with the facade's methods, the kind's
+// capability answers and a forwarder for each method only m2v's device class has
+static Class deviceClass(const RawM2V &m2v, NSString **error)
+{
+    Class base = NSClassFromString(@"_MTLDevice") ?: [NSObject class];
+#if TARGET_OS_IPHONE
+    if (class_getInstanceSize(base) != kMTLDeviceInstanceSize) {
+        if (error)
+            *error = @"unexpected _MTLDevice ABI";
+        return nil;
+    }
+#endif
+    Class cls = objc_allocateClassPair(base, "RawGM20BMetalDevice", 0);
+    if (!cls) {
+        if (error)
+            *error = @"the device class could not be made";
+        return nil;
+    }
+    unsigned count = 0;
+    Method *methods = class_copyMethodList([RMDevice class], &count);
+    for (unsigned i = 0; i < count; i++)
+        class_addMethod(cls, method_getName(methods[i]), method_getImplementation(methods[i]),
+                        method_getTypeEncoding(methods[i]));
+    free(methods);
+    installDeviceAnswers(cls);
+    installSharedTextureMethods(cls);
+    installM2VForwarders(cls, m2v);
+    class_addProtocol(cls, @protocol(MTLDevice));
+    // _MTLAddDevice asserts the private device protocol too, which the target's own drivers get from their IOGPU base class
+    if (Protocol *spi = objc_getProtocol("MTLDeviceSPI"))
+        class_addProtocol(cls, spi);
+    objc_registerClassPair(cls);
+    return cls;
+}
+
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error)
+{
+    static const auto answerSelector =
+        reinterpret_cast<const char *(*)(size_t, uint32_t *)>(dlsym(RTLD_DEFAULT, "nmb_device_answer_selector"));
+    RawM2V m2v;
+    if (fallback)
+        m2v.open = ^{
+            return fallback;
+        };
+    m2v.methods = NSClassFromString(@"NBDeviceMethods");
+    m2v.answerSelector = answerSelector;
+    static const SEL registry = NSSelectorFromString(@"registryID");
+    const uint64_t registryID = [fallback respondsToSelector:registry] ? [fallback registryID] : 0;
+    return raw_metal_device_open_lazy(packPath, stack, registryID, m2v, error);
+}
+
+id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, uint64_t registryID, RawM2V m2v,
+                                         NSString **error)
 {
     static std::mutex once;
     std::lock_guard<std::mutex> l(once);
@@ -273,7 +299,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         std::unique_lock<std::mutex> m(gPrepared.lock);
         if (gPrepared.started && gPrepared.thread.joinable()) {
             m.unlock();
-            gPrepared.thread.join();  // what is left of it: it began with the plugin, before the m2v device's open
+            gPrepared.thread.join();  // what is left of it: it began with the plugin
             m.lock();
         }
         if (gPrepared.started && gPrepared.path == packPath && gPrepared.stack == stack) {
@@ -285,7 +311,9 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     }
     if (!prepared)
         dev = openDevice(packPath, stack, raw::Device::Role::Client, err);
-    if (dev && fallback && !dev->shared()) {
+    // m2v's views of the raw path's memory are made in the GPU VM the two drivers share: NVK's connection, whichever opens it
+    // first (raw_kernel.h)
+    if (dev && m2v.open && !dev->shared()) {
         err = "the kernel connection is not NVK's, so m2v cannot alias the raw path's memory";
         delete dev;
         dev = nullptr;
@@ -295,27 +323,11 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
             *error = [NSString stringWithUTF8String:err.c_str()];
         return nil;
     }
-    // The device class: a subclass of the m2v device's own (an _MTLDevice conforming to MTLDevice and MTLDeviceSPI on the iPad),
-    // with no instance variables of its own, and the facade's methods over the inherited ones
-    Class base = fallback ? object_getClass(fallback) : [NSObject class];
-    Class cls = objc_allocateClassPair(base, "RawGM20BMetalDevice", 0);
+    Class cls = deviceClass(m2v, error);
     if (!cls) {
-        if (error)
-            *error = @"the device class could not be made";
         delete dev;
         return nil;
     }
-    for (Class from : {[RMDevice class]}) {
-        unsigned count = 0;
-        Method *methods = class_copyMethodList(from, &count);
-        for (unsigned i = 0; i < count; i++)
-            class_addMethod(cls, method_getName(methods[i]), method_getImplementation(methods[i]),
-                            method_getTypeEncoding(methods[i]));
-        free(methods);
-    }
-    installDeviceAnswers(cls);
-    installSharedTextureMethods(cls);
-    objc_registerClassPair(cls);
     // Each facade class conforms to its Metal protocol, as the m2v objects it stands in for do (the frontend's adoptMetalProtocols).
     const std::pair<Class, Protocol *> classes[] = {
         {[RMBuffer class], @protocol(MTLBuffer)},
@@ -341,42 +353,28 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     RawState *r = new RawState;
     r->raw = dev;
     r->sharedEvents = dev->sharedEvents();
-    r->fallback = fallback;
-    r->device = [cls new];
-    // Before the limits fill: RMDevice's answers (name, maxBufferLength) read the kernel's info through gRM
+    r->m2v = m2v;
+    r->registryID = registryID;
+    // Before the device object: RMDevice's answers (name, maxBufferLength) read the kernel's info through gRM, and its init
+    // may ask them
     gRM = r;
-    // The base class's limits table (_MTLDevice's own accessors read it; the frontend's fillLimits filled the m2v device's from its
-    // answers): the same for this device, then this device's own answers (RMDevice's) where _MTLDevice reads them there.
-    static const SEL limits = NSSelectorFromString(@"limits");
-    Class owner = NSClassFromString(@"_MTLDevice");
-    if (fallback && owner && [fallback respondsToSelector:limits] && [r->device respondsToSelector:limits]) {
-        const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
-        void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
-        if (from && to && from != to) {
-            memcpy(to, from, kMTLDeviceLimitsBytes);
-            fillRawLimits(r->device, owner, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
-                if (how != LimitFill::Filled)
-                    SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,
-                                         "limits: %s not written at 0x%x (_MTLDevice does not read it there)",
-                                         field.selector, field.offset);
-            });
-        }
-    }
+    r->device = [cls new];
+    fillDeviceLimits(r->device);
+    r->gpuOrder = dev->canOrder();
     r->handlers = followingSerialQueue("com.brunostjohn.switch.raw.handlers");
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
-    r->gpuOrder = dev->canOrder();
-    if (!r->gpuOrder && fallback)
-        ::once(@"CPU-ordered: the kernel has no Order (TegraGM20BInfoOrder): raw and m2v command buffers wait for each "
-               @"other's "
-               @"work to complete");
-    if (fallback)
-        rawAliasSurfaces(dev);
     gRawRelease.start(
         [](void *) {
             gRM->raw->trim();
             gRM->raw->purgeArenas(gRM->committed);
+            gRM->raw->trimArenas(gRM->committed);
+            // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
+            // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
+            const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            logGivenBack();
+            logGivenBack(relieved);
+#else
+            (void)relieved;
 #endif
         },
         nullptr);

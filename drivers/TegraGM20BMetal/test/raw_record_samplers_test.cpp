@@ -94,6 +94,27 @@ TEST(RecordSamplers, AnEntryIndexesItsRecordsOwnHeaders)
     EXPECT_EQ(r.pipeline.entry[2].sampler, r.pipeline.entry[0].sampler);
 }
 
+// A slot the state samples by comparison (the direct compile's write, the probe's captured compare header) is a compared
+// entry, which the draw binds the sampler's compare header at; a slot sampled plainly is not
+TEST(RecordSamplers, ASlotSampledByComparisonIsACompareEntry)
+{
+    raw::LayoutEntry compared, plain;
+    for (raw::LayoutEntry *e : {&compared, &plain}) {
+        e->tex = raw::Tex::Slot;
+        e->smp = raw::Smp::Slot;
+    }
+    compared.offset = 0x10;
+    compared.smpCompare = true;
+    plain.offset = 0x14;
+    plain.texSlot = plain.smpSlot = 1;
+    const raw::RuntimeRecord r = assemble({compared, plain});
+    ASSERT_EQ(r.pipeline.entries, 2u);
+    EXPECT_TRUE(raw::entryCompares(r.pipeline.entry[0]));
+    EXPECT_EQ(r.pipeline.entry[0].sampler, 0);
+    EXPECT_FALSE(raw::entryCompares(r.pipeline.entry[1]));
+    EXPECT_EQ(r.pipeline.entry[1].sampler, 1);
+}
+
 // gpu.draw.render_then_sample on device: a record of the native seed (its first header at index 0) drawn on a pack whose
 // sampler 0 repeats sampled column 127 through the repeating sampler, halfway to column 0
 TEST(RecordSamplers, ASeededRecordSamplesItsOwnHeaderNotThePacksOfTheSameIndex)

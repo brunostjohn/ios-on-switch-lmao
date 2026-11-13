@@ -21,7 +21,7 @@ void CommandBuffer::nameHeaps()
         const uint32_t written = heap->hostVisible() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u;
         if (heap->arena() < d.arenas_.size()) {
             const Device::Arena &a = d.arenas_[heap->arena()];
-            if (a.used && !a.purged && !d.member(a.bo)) {
+            if (a.used && !a.purged && a.bo.handle && !d.member(a.bo)) {
                 RAW_ENCODE_COUNT(UseAdds);
                 surfaces_.addAccess(a.bo.handle, TegraGM20BSurfaceRead | written);
             }
@@ -40,7 +40,7 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     RAW_ENCODE_SPAN(Use);
     RAW_ENCODE_COUNT(Uses);
-    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1)) {
+    if (va && dev_->k_.exactJobs() && !useMember(va, bytes ? bytes : 1, write, false)) {
         RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
                              bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
@@ -58,7 +58,8 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
-    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length)) {
+    if (buffer.va && buffer.length && dev_->k_.exactJobs() &&
+        !useMember(buffer.va, buffer.length, write, buffer.hostVisible)) {
         RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(buffer.va, buffer.length, write,
                              (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
@@ -79,8 +80,13 @@ void CommandBuffer::use(const Texture &texture, bool write)
         use(view->import, write);
     const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
     externalWrites_ |= hostVisible && write;
+#if SWITCH_RAW_DIAGNOSTICS
+    if (write && dev_->glassMemLive_)
+        dev_->glassMem->wrote(storage.va ? storage.va : view->va, dev_->commitCount_,
+                              dev_->stats.memEvents.load(std::memory_order_relaxed));
+#endif
     if (view->va && dev_->k_.exactJobs() &&
-        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1)) {
+        !useMember(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write, hostVisible)) {
         RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
                              (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |

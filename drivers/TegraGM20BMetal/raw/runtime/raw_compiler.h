@@ -46,6 +46,9 @@ public:
     // The state made now, on the caller's thread (sharing the bounded compile slots with queued work), as a queued ask would: Ready with
     // its record, Refused, Failed (a later ask tries again), or Pending (the queue is making it)
     State makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // A state's record or refusal found outside this table (the shader compiler's store), kept as its result unless an ask
+    // came first
+    void keep(const CacheKey &k, RecordCache::Found found, const RuntimeRecord &record, const std::string &why);
     // A state whose probe failed and may be tried again: true, and in *us how long until an ask tries it
     bool retryAfter(const CacheKey &k, uint64_t &us) const;
     void drain();  // host tests: waits for everything asked so far

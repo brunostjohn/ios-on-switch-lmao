@@ -332,11 +332,14 @@ struct tgm_chan {
 	/* tgm_hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 	u64 get_seen, get_ns;
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
+	u32 fault_seqno;             /* faulted: the seqno a GR error stopped in (gpu_fault.c) */
+	int faulted;
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
 	u64 stat_submit_ns[TGM_SUBMIT_PHASES], stat_submit_total, stat_submit_max;
 	u32 stat_submits;
+	unsigned int gr_slot; /* gpu_stats_ctx.c's slot for its GR context, plus 1; 0: none */
 #endif
 };
 
@@ -404,9 +407,11 @@ struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 idle;   /* presents that found no user work pending */
-	u32 writer; /* presents that waited for their surface's importers only */
-	u32 allocs; /* BoAllocs */
+	u32 idle;            /* presents that found no user work pending */
+	u32 writer;          /* presents that waited for their surface's importers only */
+	u32 present_flushes; /* L2_FLUSH_DIRTYs the presents pushed */
+	u64 map_small, map_big, map_could; /* tgm_stats_map */
+	u32 allocs;                        /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
 	u64 lat_sum, lat_max;                         /* user submissions only */
 	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
@@ -462,6 +467,13 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_ENABLE 0x00100000u
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
+void tgm_clk_measure(char *buf, unsigned int len);
+void tgm_engines_line(char *buf, unsigned int len);
+/* Debug kernels: a map's bytes in 4 KiB and in 128 KiB PTEs, and of its 4 KiB ones those 128 KiB PTEs could have mapped */
+void tgm_stats_map(u64 small, u64 big, u64 could_be_big);
+void tgm_stats_gr_bind(struct tgm_chan *chan);
+void tgm_stats_gr_unbind(struct tgm_chan *chan);
+void tgm_stats_gr_context(void);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
@@ -548,6 +560,14 @@ int tgm_order_waits(struct tgm_chan *chan);
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 48
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
+/* external: TGM_FENCE_VOLATILE_WRITES when every write the fence covers went around the L2: the engines idle and their
+ * writes committed, no L2 flush */
+#define TGM_FENCE_VOLATILE_WRITES 2
+/* gpu_fault.c; TGM_KILL_GR_ERROR is the kill record's error for a GR error (gpu_hang.c fault_code) */
+#define TGM_KILL_GR_ERROR 2
+void tgm_fault_publish(struct tgm_chan *chan);
+void tgm_fault_unpublish(struct tgm_chan *chan);
+void tgm_fence_kill_record(volatile u32 *fence_cpu, u32 first, u32 last, u32 error);
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit);

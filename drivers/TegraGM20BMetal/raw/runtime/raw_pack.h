@@ -31,10 +31,11 @@ enum PackSectionId {
     PackVariants,
     PackArchives,
     PackIterated,
+    PackComputeStates,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 22;
+constexpr uint32_t kPackVersion = 23;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -132,6 +133,17 @@ struct PackArchive {
 
 // The PackArchive whose keys are the compute states the pack holds kernels for, at any dispatch shape (computeStateKey)
 constexpr uint64_t kPackHeldKernels = 0;
+
+// A compute state's answers to Metal's per-state queries as m2v's front end gave them when the pack was made (its
+// ComputePipelineMetalInfo, which no kernel's compile changes), so a state of the pack is made without m2v. The
+// PackComputeStates section, ascending by keyHash: Pack::fnv of its computeStateKey.
+struct PackComputeFacts {
+    uint64_t keyHash;
+    uint32_t maxThreads;      // maxTotalThreadsPerThreadgroup
+    uint32_t executionWidth;  // threadExecutionWidth
+    uint32_t staticMemory;    // staticThreadgroupMemoryLength
+    uint32_t reserved;
+};
 
 // The rung of the fetch ladder a color attachment's framebuffer fetch needs: FetchNone where it is not fetched
 enum PackFetchRung : uint8_t {
@@ -240,6 +252,14 @@ constexpr uint32_t kStageTextures = 31, kStageSamplers = 16;
 inline uint32_t handleStage(const PackEntry &e)
 {
     return e.stage == 1 ? 0 : 1;
+}
+
+// PackEntry::pad of a handle whose sampler slot the state samples by comparison: the sampler's compare header goes there
+constexpr uint8_t kEntryCompares = 1;
+
+inline bool entryCompares(const PackEntry &e)
+{
+    return e.kind != EntryUbo && e.samplerKind == SamplerSlot && (e.pad & kEntryCompares);
 }
 
 // A buffer entry: storage, else uniform (NVK rounds its range up to the 256-byte cbuf alignment)
@@ -601,6 +621,8 @@ static_assert(offsetof(PackPipeline, writtenFormat) == 660 && offsetof(PackPipel
 static_assert(sizeof(PackProgram) == 44, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
+static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
+static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16, "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
 static_assert(offsetof(PackKernel, stageInRegionWord) == 1012, "pack layout: packfile.py KERNEL_V21");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
@@ -643,6 +665,7 @@ public:
     const uint32_t *spills(const PackPipeline &pp) const;
     const uint32_t *spills(const PackKernel &k) const;
     bool declares(const PackArchive &archive, uint64_t keyHash) const;
+    const PackComputeFacts *computeFacts(uint64_t keyHash) const;  // nullptr: the pack has no facts of that state
 
     const char *string(uint32_t off) const
     {

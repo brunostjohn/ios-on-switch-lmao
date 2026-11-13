@@ -34,7 +34,10 @@ ios_binary(
     name = "AVE",
     srcs = [
         "AVE/AVEEncoder.c",
+        "AVE/AVETiles.c",
         "AVE/H264NVENC.c",
+        "AVE/HEVCEncSyntax.c",
+        "AVE/HEVCNVENC.c",
         "AVE/NVENCClient.c",
         "//kits/SwitchRefusal:SwitchRefusal.c",
     ],

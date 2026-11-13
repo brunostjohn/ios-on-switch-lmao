@@ -85,3 +85,49 @@ void tgm_engine_state(char *buf, unsigned int len)
 	r.hdr_shadow = nvkm_rd32(device, 0x040118);
 	tgm_engine_format(buf, len, &r);
 }
+
+static const char *chid_owner(int chid)
+{
+	const struct tgm_chan *chan = live_by(0, chid);
+
+	return chan ? chan->owner : "-";
+}
+
+/* tgm_live_lock held: each engine's PFIFO_ENG_STATUS with the owners of the channels it holds and switches to, then each
+ * PBDMA's status, channel and owner. The ctxsw lines print only ENG0 otherwise, and on GM20B the copy engine (ce2, engine
+ * 1) shares runlist 0 and PBDMA0 with GR. */
+void tgm_engines_line(char *buf, unsigned int len)
+{
+	struct nvkm_device *device = tgm_gpu.device;
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	unsigned int at = 0;
+	int i = 0;
+
+	buf[0] = 0;
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+		{
+			const u32 eng = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+			char decoded[48];
+
+			tgm_hang_engine(eng, decoded, sizeof(decoded));
+			at += scnprintf(buf + at, len - at, "%s%s %08x (%s; %s -> %s)",
+					at ? ", " : "", engn->engine->subdev.name, eng, decoded,
+					chid_owner((int)PFIFO_ENG_ID(eng)),
+					chid_owner((int)PFIFO_ENG_NEXT_ID(eng)));
+		}
+		for (i = 0; i < runl->runq_nr; i++) {
+			const u32 chid =
+				PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runl->runq[i]->id)));
+
+			at += scnprintf(buf + at, len - at, ", PBDMA%d %08x ch %u %s",
+					runl->runq[i]->id,
+					nvkm_rd32(device, PBDMA_STATUS(runl->runq[i]->id)), chid,
+					chid_owner((int)chid));
+		}
+	}
+}

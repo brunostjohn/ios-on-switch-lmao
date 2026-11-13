@@ -237,8 +237,8 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
                                 return;
                             }
                             uint64_t retryAtUs = 0;
-                            run.result.state =
-                                completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry, &retryAtUs);
+                            run.result.state = completion->kernel(state->_direct, ask->dispatch(), key,
+                                                                  &run.result.retry, &retryAtUs, state->_function);
                             if (run.result.retry && retryAtUs) {
                                 run.result.deferredRetry = true;
                                 const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;
@@ -247,7 +247,8 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
                                                    pending->allowRetry();
                                                });
                             }
-                            if (run.result.state && !region)
+                            // the journal names m2v's state: a state the pack answered has none
+                            if (run.result.state && !region && state->_metadata)
                                 native_bridge_metal_journal_dispatch(state->_metadata, grid, threads, perThread,
                                                                      text.memory.c_str(), text.textures.c_str(),
                                                                      text.samplers.c_str());

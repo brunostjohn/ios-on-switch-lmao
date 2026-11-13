@@ -70,6 +70,9 @@ public enum X1Rounding: String, CaseIterable, Sendable {
     case tiesEven = "ties_even"
     case down
     case up
+    /// The ROP's unorm store as the bench measured it: the value cut to four bits below the code, then nearest with
+    /// ties down (a float channel: ties down)
+    case trunc4TiesDown = "trunc4_ties_down"
 
     public func code(_ v: Double, _ channel: X1Channel) -> UInt32 {
         let (low, high) = channel.bracket(v)
@@ -78,6 +81,10 @@ public enum X1Rounding: String, CaseIterable, Sendable {
         switch self {
         case .down: return low
         case .up: return high
+        case .trunc4TiesDown:
+            guard let bits = channel.codeBits else { return X1Rounding.tiesDown.code(v, channel) }
+            let sixteenths = (min(max(v, 0), 1) * Double((1 << bits) - 1) * 16).rounded(.down)
+            return sixteenths - Double(low) * 16 > 8 ? high : low
         case .nearest, .tiesDown, .tiesEven:
             let d = (v - a) - (b - v)
             if d < 0 { return low }

@@ -56,17 +56,29 @@ extension X1TwodProbes {
         }
     }
 
+    /// Per format, the reading its bilinear cells fit best, by how many: "bgra8=o0_w8:4"
+    static func weightSummary(_ weights: [String: [String: Int]]) -> String {
+        X1Format.all.compactMap { f in
+            guard let counts = weights[f.name] else { return nil }
+            let top = counts.max { $0.value < $1.value || ($0.value == $1.value && $0.key > $1.key) }!
+            return "\(f.name)=\(top.key):\(top.value)"
+        }.joined(separator: ",")
+    }
+
     /// gpu.x1.twod_scale (copy.twod, METALMAP d4/d18): scaled copies by the 2D engine, point and bilinear, corner origin
     /// at half a step (the mip chain's sampling, fx::kGm20bSampling), at 1:1, 2:1, 3:7 (up) and 3:2 (down), against
     /// the CPU's filter of the source's known codes under each reading (Filter) and rounding. A cell grades against
-    /// Metal's reading and names the reading and rules that fit it with the fewest misses.
+    /// Metal's reading and names the reading and rules that fit it with the fewest misses; the rules on the line come
+    /// from each cell's best reading (`weights=` names it per format), so 3:2 and 3:7 cells are held to the engine's
+    /// weights rather than exact ones.
     static let scale = X1Probe(
         id: "gpu.x1.twod_scale", name: "2D-engine scaled copies against the CPU's filter, per format, ratio and filter",
         probe: "copy.twod", risky: true, timeout: 240
     ) { gpu in
         let journal = ProbeJournal(probe: "gpu.x1.twod_scale")
-        var cells: [(String, X1RuleTally)] = []
+        var cells: [(String, X1RuleTally)] = [], explained: [(String, X1RuleTally)] = []
         var readings: [String] = [], offPath: [String] = []
+        var weights: [String: [String: Int]] = [:]
         var ops = 0
         let ratios = [("1to1", 64, 64), ("2to1", 128, 64), ("3to7", 30, 70), ("3to2", 96, 64)]
         for format in X1Format.all {
@@ -110,11 +122,14 @@ extension X1TwodProbes {
                     }
                     cells.append((name, tallies[metal]))
                     let best = tallies.indices.min { tallies[$0].fewestMisses < tallies[$1].fewestMisses } ?? metal
+                    explained.append((name, tallies[best]))
                     readings.append("\(name):\(filters[best].name):\(tallies[best].text)")
+                    if !point { weights[format.name, default: [:]][filters[best].name, default: 0] += 1 }
                 }
             }
         }
-        var finding = finding("copy.twod", cells, ops: ops, offPath: offPath)
+        var finding = finding("copy.twod", cells, ops: ops, offPath: offPath, explained: explained)
+        finding.metrics.set("weights", Self.weightSummary(weights))
         finding.metrics.set("best_readings", readings.joined(separator: ","))
         return finding
     }

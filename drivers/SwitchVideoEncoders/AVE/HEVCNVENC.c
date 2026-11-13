@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// See HEVCNVENC.h. Every value below is NVIDIA's T210 driver's for an IDR picture (L4T 32.7.6 libnvtvmr, read with
-// llvm-objdump; the reading, its addresses and its three sizes are in TegraNVENC/nvidia/SOURCE-H265), and
-// test/hevcnvenc_host.c checks the setup against that driver's byte for byte. Setup and methods: NVIDIA's
+// See HEVCNVENC.h. Every value below is NVIDIA's T210 driver's for an IDR or P picture (L4T 32.7.6 libnvtvmr, read
+// with llvm-objdump; the reading, its addresses and its three sizes are in TegraNVENC/nvidia/SOURCE-H265), and
+// test/hevcnvenc_host.c checks the setups against that driver's byte for byte. Setup and methods: NVIDIA's
 // nvenc_drv.h and clc5b7.h (MIT, drivers/TegraNVENC/nvidia), whose H.265 layout NVENC 5.0's app 3 reads as written.
 #include "HEVCNVENC.h"
 #include <string.h>
@@ -97,7 +97,9 @@ static void surfaceConfig(const HEVCEncConfig *c, uint32_t layout, uint32_t chro
     cfg->frame_width_minus1 = (unsigned short)(hevcenc_coded_width(c) - 1);
     cfg->frame_height_minus1 = (unsigned short)(hevcenc_coded_height(c) - 1);
     cfg->sfc_pitch = cfg->sfc_pitch_chroma = (unsigned short)s->pitch;
-    cfg->chroma_top_frm_offset = chromaMode == TEGRA_NVENC_CHROMA_OFFSET ? s->chroma_offset / 256 : 0;
+    // Only the input has a chroma method app 3 reads: it finds reconstructions and references at their luma address
+    // plus this offset (SOURCE-H265).
+    cfg->chroma_top_frm_offset = chromaMode == TEGRA_NVENC_CHROMA_OFFSET || !input ? s->chroma_offset / 256 : 0;
     if (!input) {
         cfg->tiled_16x16 = 1;  // references are always 16x16 tiled (nvenc_drv.h 1.5)
         return;
@@ -115,7 +117,15 @@ static uint8_t qp(uint32_t v)
     return (uint8_t)(v > 51 ? 51 : v);
 }
 
-// The driver's constant-QP rate control block: its initial QPs are the I picture's, +2 for P and +5 for B.
+// The driver's DPB at its default of one reference (two slots, libnvtvmr 0x46160): picture POC n is reconstructed in
+// slot n & 1, so a P picture's reference is in slot (n - 1) & 1.
+static uint32_t referenceSlot(const HEVCEncPicture *p)
+{
+    return (p->poc - 1) & 1;
+}
+
+// The driver's constant-QP rate control block: its initial QPs are the I picture's, +2 for P and +5 for B. App 3
+// reads the block only under rate control (nvenc.bin 0x1493d); the picture's QP is its slice control's.
 static void rateControl(nvenc_h265_rc_s *rc, uint8_t iqp)
 {
     rc->hrd_type = 2;
@@ -149,7 +159,7 @@ static void pictureControl(const HEVCEncConfig *c, const H264EncLayout *l, const
     pc->q_control_offset = Q_OFF;
     pc->hist_buf_size = l->history_bytes;
     pc->bitstream_buf_size = tegra_nvenc_h265_bitstream_bytes(hevcenc_coded_width(c), hevcenc_coded_height(c));
-    pc->pic_type = 3;  // IDR
+    pc->pic_type = p->idr ? 3 : 0;
     pc->ref_pic_flag = 1;
     pc->codec = 5;
     uint32_t log2 = 0;
@@ -163,6 +173,16 @@ static void pictureControl(const HEVCEncConfig *c, const H264EncLayout *l, const
     pc->short_term_ref_pic_set_sps_flag = 1;
     pc->nal_unit_type = hevcenc_nal_type(p);
     pc->nuh_temporal_id_plus1 = 1;
+    if (p->idr)
+        return;
+    pc->l0[0] = (char)(referenceSlot(p) << 1);
+    pc->temp_dist_l0[0] = 1;
+    // The driver's (0x402b8): (16384 + |td| / 2) / td x td, rounded to 8 fractional bits, is 256 for every entry.
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++)
+            pc->dist_scale_factor[i][j] = 256;
+    }
+    pc->ref_pic_list_modification.NumPocTotalCurr = 1;
 }
 
 static void setup(const HEVCEncConfig *c, uint32_t layout, uint32_t chromaMode, const H264EncLayout *l,
@@ -186,14 +206,16 @@ static void setup(const HEVCEncConfig *c, uint32_t layout, uint32_t chromaMode, 
     sps->num_short_term_ref_pic_sets = 1;
     s->pps_data.transform_skip_enabled_flag = 1;
     s->pps_data.pps_loop_filter_across_slices_enabled_flag = 1;
-    rateControl(&s->rate_control, qp(p->qp));
+    rateControl(&s->rate_control, p->idr || p->qp < 2 ? qp(p->qp) : qp(p->qp - 2u));  // a P picture's is I + 2
     pictureControl(c, l, p, &s->pic_control);
     s->gpTimer_timeout_val = TEGRA_NVENC_GPTIMER_MAX;  // unread: app 3 times a picture by its size (SOURCE-H265)
 
     nvenc_h265_slice_control_s *slice = (nvenc_h265_slice_control_s *)(bytes + SLICE_OFF);
     slice->num_ctus = hevcnvenc_ctbs(c);
     slice->qp_avr = qp(p->qp);
-    slice->slice_type = 2;  // I
+    // The driver's P (0x3eb9c, 0x3f510): slice_type takes pic_type's numbering (0 P, 1 B, 2 I), not nvenc_drv.h's
+    // (0 B, 1 P); which type NVENC writes into the slice header is not established (SOURCE-H265).
+    slice->slice_type = p->idr ? 2 : 0;
     slice->slice_loop_filter_across_slices_enabled_flag = 1;
     slice->qp_slice_max = 51;
     memcpy(bytes + ME_OFF, kMeControl, sizeof(kMeControl));
@@ -217,14 +239,17 @@ void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_
     VALUE(NVC5B7_SET_APPLICATION_ID, NVC5B7_SET_APPLICATION_ID_ID_NVENC_H265);
     // The driver's control word (codec type 3, FORCE_OUTPIC, SLICE_STAT_ON, constant QP) with the GP timer on.
     VALUE(NVC5B7_SET_CONTROL_PARAMS, NVC5B7_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 8) | (1u << 11) | (1u << 12));
-    VALUE(NVC5B7_SET_PICTURE_INDEX, 0);
+    VALUE(NVC5B7_SET_PICTURE_INDEX, p->picture_index);
     RELOC(NVC5B7_SET_IN_CUR_PIC, h->input, 0);
     RELOC(NVC5B7_SET_IN_CUR_PIC_CHROMA_U, h->input, method ? l->input.chroma_offset : 0);
     RELOC(NVC5B7_SET_OUT_REF_PIC_LUMA, h->recon, 0);
-    if (method)
-        RELOC(NVC5B7_SET_OUT_REF_PIC_CHROMA, h->recon, l->recon.chroma_offset);
-    RELOC(NVC5B7_SET_IN_MEPRED_DATA, h->mepred[0], 0);
-    RELOC(NVC5B7_SET_OUT_MEPRED_DATA, h->mepred[1], 0);
+    if (!p->idr) {
+        // The driver's for P pictures only (0x3f370): the predictors the picture before wrote, and its reference's
+        // luma in the slot its list entry names (0x3fedc, one method a reference; chroma by refpic_cfg's offset).
+        RELOC(NVC5B7_SET_IN_MEPRED_DATA, h->mepred[~p->poc & 1], 0);
+        RELOC(NVC5B7_SET_OUT_MEPRED_DATA, h->mepred[p->poc & 1], 0);
+        RELOC(NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * referenceSlot(p), h->ref, 0);
+    }
     RELOC(NVC5B7_SET_OUT_BITSTREAM, h->bitstream, 0);
     RELOC(NVC5B7_SET_OUT_ENC_STATUS, h->aux, 0);
     RELOC(NVC5B7_SET_IOHISTORY, h->aux, l->history_offset);

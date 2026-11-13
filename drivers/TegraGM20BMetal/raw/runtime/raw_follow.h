@@ -69,9 +69,11 @@ private:
     sched_param param_{};
 };
 
+// Never destroyed: the submit and completion threads are detached and may join or leave while the process exits, after
+// its static destructors ran (a destroyed mutex throws, and the process aborts)
 inline Followers &followers()
 {
-    static Followers f;
+    static Followers &f = *new Followers;
     return f;
 }
 

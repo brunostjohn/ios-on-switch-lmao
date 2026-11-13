@@ -321,6 +321,7 @@ bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &
             } else if (w.sampler < kStageSamplers) {
                 e.smp = Smp::Slot;
                 e.smpSlot = uint8_t(w.sampler);
+                e.smpCompare = w.compare != 0;
             } else {
                 why = "a neutral sampler at " + std::to_string(e.offset);
                 return false;

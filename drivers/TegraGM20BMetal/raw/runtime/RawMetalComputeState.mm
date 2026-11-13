@@ -23,10 +23,11 @@
     std::call_once(_twinOnce, [self] {
         if (!_compatibility) {
             NSError *error = nil;
-            _compatibility = [_fallback newComputePipelineStateWithDescriptor:_direct
-                                                                      options:MTLPipelineOptionNone
-                                                                   reflection:nil
-                                                                        error:&error];
+            _compatibility =
+                [RM_M2V("a compute state's twin") newComputePipelineStateWithDescriptor:twinComputeDescriptor(_direct)
+                                                                                options:MTLPipelineOptionNone
+                                                                             reflection:nil
+                                                                                  error:&error];
             if (!_compatibility)
                 once([NSString stringWithFormat:@"a deferred compute pipeline could not be created: %@", error]);
         }
@@ -52,17 +53,17 @@
 
 - (NSUInteger)maxTotalThreadsPerThreadgroup
 {
-    return [_metadata maxTotalThreadsPerThreadgroup];
+    return _facts.keyHash ? _facts.maxThreads : [_metadata maxTotalThreadsPerThreadgroup];
 }
 
 - (NSUInteger)threadExecutionWidth
 {
-    return [_metadata threadExecutionWidth];
+    return _facts.keyHash ? _facts.executionWidth : [_metadata threadExecutionWidth];
 }
 
 - (NSUInteger)staticThreadgroupMemoryLength
 {
-    return [_metadata staticThreadgroupMemoryLength];
+    return _facts.keyHash ? _facts.staticMemory : [_metadata staticThreadgroupMemoryLength];
 }
 
 // The descriptor's, as Metal's state answers it, without making m2v's twin
@@ -73,24 +74,33 @@
 
 @end
 
-static bool airOf(id<MTLFunction> function, raw::AirHash &out)
+MTLComputePipelineDescriptor *twinComputeDescriptor(MTLComputePipelineDescriptor *d)
+{
+    id<MTLFunction> twin = twinOf(d.computeFunction);
+    if (!twin)
+        return nil;
+    MTLComputePipelineDescriptor *t = [d copy];
+    t.binaryArchives = nil;  // this device's (RawMetalBinaryArchive.mm), which m2v cannot read
+    t.computeFunction = twin;
+    return t;
+}
+
+// The function's AIR hash and its library function's name, from the AIR slice the facade's library read
+static bool airOf(id<MTLFunction> function, raw::AirHash &out, NSString *__strong &libraryName)
 {
     const void *bytes = nullptr;
     size_t length = 0;
     std::map<std::string, raw::AirHash> hashes;
-    if (!native_bridge_metal_function_metallib(twinOf(function), &bytes, &length) ||
+    if (!rmFunctionSource(function, &bytes, &length, &libraryName) ||
         !raw::metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
         return false;
-    const auto f = hashes.find(native_bridge_metal_function_library_name(twinOf(function)).UTF8String ?: "");
+    const auto f = hashes.find(libraryName.UTF8String ?: "");
     if (f == hashes.end())
         return false;
     out = f->second;
     return true;
 }
 
-// The archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists (this device's, RawMetalBinaryArchive.mm), as
-// Metal's answer: false (and Metal's error) where none holds the state and the pack holds no kernel of it, never compiled.
-// m2v's state goes without the archives or the option either way: it reads none of this device's archives.
 // A stage input descriptor's set attributes and their layouts, as a key names them (a dynamic stride as UINT32_MAX, as
 // RawPipelineKey.h's vertex layouts): "" for none, so a kernel without one keys as before
 static std::string stageInText(MTLStageInputOutputDescriptor *in)
@@ -114,11 +124,14 @@ static std::string stageInText(MTLStageInputOutputDescriptor *in)
     return " | in" + text + b;
 }
 
+// The creations under MTLPipelineOptionFailOnBinaryArchiveMiss lists (this device's, RawMetalBinaryArchive.mm), as
+// Metal's answer: false (and Metal's error) where none holds the state and the pack holds no kernel of it, never compiled.
+// m2v's state goes without the archives or the option either way: it reads none of this device's archives.
 static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &options, NSError **error)
 {
     raw::ArchiveAnswer answer = raw::ArchiveAnswer::NotAsked;
     if (f) {
-        NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
+        NSString *name = s->_libraryName ?: f.name;
         const std::string key =
             raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
         answer = rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
@@ -134,47 +147,74 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
     return false;
 }
 
-id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
-                  MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
+// m2v's state of `s`, whose answers and reflection it then gives: for a state the pack has no facts of, or a reflection
+static bool m2vAnswers(RMComputeState *s, MTLPipelineOption options,
+                       MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
+{
+    id<MTLDevice> m2v =
+        reflection ? RM_M2V("a compute state's reflection") : RM_M2V("a compute state the pack has no facts of");
+    MTLComputePipelineDescriptor *twin = m2v ? twinComputeDescriptor(s->_direct) : nil;
+    if (!twin) {
+        if (error)
+            *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                         code:MTLLibraryErrorFunctionNotFound
+                                     userInfo:@{NSLocalizedDescriptionKey : @"the compute function has no m2v twin"}];
+        return false;
+    }
+    id nativeReflection = nil;
+    NSError *nativeError = nil;
+    if (s->_keyed)
+        s->_metadata =
+            native_bridge_metal_compute_prepare(twin, options, reflection ? &nativeReflection : nullptr, &nativeError);
+    if (s->_metadata) {
+        if (reflection)
+            *reflection = nativeReflection;
+        if (error)
+            *error = nil;
+        return true;
+    }
+    s->_compatibility = [m2v newComputePipelineStateWithDescriptor:twin
+                                                           options:options
+                                                        reflection:reflection
+                                                             error:error];
+    s->_metadata = s->_compatibility;
+    return s->_metadata != nil;
+}
+
+id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
+                  MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
     if (const char *why = rmUnsupportedComputeState(descriptor))
         return rmRefuseUnsupported(why, error);
     id<MTLFunction> function = descriptor.computeFunction;
     RMComputeState *s = [RMComputeState new];
     s->_device = device;
-    s->_fallback = fallback;
     RMFunction *f = [(id)function isKindOfClass:[RMFunction class]] ? (RMFunction *)function : nil;
+    NSString *libraryName = nil;
     // linked functions are no part of the key: such a state's dispatches stay m2v's
     s->_keyed = f && !descriptor.linkedFunctions.functions.count &&
-                !descriptor.linkedFunctions.privateFunctions.count && airOf(function, s->_air);
+                !descriptor.linkedFunctions.privateFunctions.count && airOf(function, s->_air, libraryName);
+    s->_libraryName = libraryName;
     s->_constants = (f ? f->_constants : "") + stageInText(descriptor.stageInputDescriptor);
     s->_m2vMissing = rmM2vMissingKernel(descriptor);
     s->_maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];
-    s->_direct.computeFunction = twinOf(function);
+    s->_function = f;
     if (!archivesAnswer(s, f, options, error))
         return nil;
-    id nativeReflection = nil;
-    NSError *nativeError = nil;
-    if (s->_keyed)
-        s->_metadata = native_bridge_metal_compute_prepare(s->_direct, options,
-                                                           reflection ? &nativeReflection : nullptr, &nativeError);
-    if (!s->_metadata) {
-        s->_compatibility = [fallback newComputePipelineStateWithDescriptor:s->_direct
-                                                                    options:options
-                                                                 reflection:reflection
-                                                                      error:error];
-        s->_metadata = s->_compatibility;
-        if (!s->_metadata)
-            return nil;
-    } else {
-        if (reflection)
-            *reflection = nativeReflection;
+    const raw::PackComputeFacts *facts =
+        s->_keyed && !reflection
+            ? rmPackComputeFacts(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth))
+            : nullptr;
+    if (facts) {
+        s->_facts = *facts;
         if (error)
             *error = nil;
+    } else if (!m2vAnswers(s, options, reflection, error)) {
+        return nil;
     }
-    s->_threadLimit = uint32_t(std::min<NSUInteger>(1024, [s->_metadata maxTotalThreadsPerThreadgroup]));
+    s->_threadLimit = uint32_t(std::min<NSUInteger>(1024, s.maxTotalThreadsPerThreadgroup));
     if (s->_maxThreads)
         s->_threadLimit = std::min(s->_threadLimit, s->_maxThreads);
     s.label = descriptor.label;

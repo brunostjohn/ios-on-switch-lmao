@@ -89,6 +89,21 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// Private textures made while `on` is true stay on plain memory (raw_private_comp.h), for a probe's uncompressed
+// reference
+- (NSString *)switchRawProbePlainPrivate:(NSNumber *)on
+{
+    gRM->raw->probePlainPrivate.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
+// The longest a draw this process encodes from now on is estimated to keep GR before it goes in scissor bands
+// (raw_draw_bands.h), in nanoseconds; 0: never banded. Answers the budget it replaced.
+- (NSString *)switchRawBandBudget:(NSNumber *)ns
+{
+    return [NSString stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
+}
+
 // A fetching draw whose state has a fetch-free form of rung `rung` (2 or 3) takes it whatever its rule; 4 keeps every draw
 // on the storage form; 5 and 6 draw a blended storage form's barrier twin, a barrier a triangle or one a draw
 // (raw_fetch_rungs.h); 0 gives the decision back to the rules (raw_fetch_free.h), for HW Test gpu.raw.fetch_rung2/3 and

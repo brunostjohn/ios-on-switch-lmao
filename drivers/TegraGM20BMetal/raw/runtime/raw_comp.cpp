@@ -201,6 +201,7 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
             RAW_DIAGNOSTIC(stats.compMade++);
             RAW_DIAGNOSTIC(stats.compHeld++);
             RAW_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
+            RAW_DIAGNOSTIC(glassMemEvent("compressed memory made", bo.bytes));
             RAW_DIAGNOSTIC(os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
                                         (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
             continue;
@@ -240,6 +241,7 @@ void Device::compFree(Backing &b)
         return;
     RAW_DIAGNOSTIC(stats.compHeld--);
     RAW_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
+    RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed", mem->bo.bytes));
     set_.free(k_, mem->bo);
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
@@ -269,6 +271,7 @@ void Device::compTrim(uint64_t now)
         if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
             RAW_DIAGNOSTIC(stats.compHeld--);
             RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
+            RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
             set_.free(k_, it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commitCount_);

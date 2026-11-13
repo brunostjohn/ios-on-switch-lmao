@@ -24,7 +24,9 @@ extension X1TwodProbes {
     /// gpu.x1.twod_resolve (resolve.twod, METALMAP d5): a multisampled pass's resolve by the 2D engine, its sample
     /// grid read as one image at 2:1 (corner origin at half a step), held to the average of the codes the samples
     /// store, which one-sample draws of each sample's colour measure first; resolve.draw (the pack's resolve state,
-    /// today's route) is judged the same way where the format has one. Under resolve=twod the facade needs no resolve
+    /// today's route) is judged the same way where the format has one. T-v2 found no single rounding for the 4x cells:
+    /// each is also read as two rounded 2:1 steps (PairReading, either pairing, each rule), and the rules on the line come
+    /// from whichever reading fits it with fewer misses (`pair_readings=` lists the cells a pair reading explained). Under resolve=twod the facade needs no resolve
     /// state for the format; a cell whose command buffer still leaves the raw path is listed apart.
     static let resolve = X1Probe(
         id: "gpu.x1.twod_resolve", name: "2D-engine MSAA resolves against the samples' average, per format and count",
@@ -32,7 +34,8 @@ extension X1TwodProbes {
     ) { gpu in
         let journal = ProbeJournal(probe: "gpu.x1.twod_resolve")
         var cells: [(String, X1RuleTally)] = [], draws: [(String, X1RuleTally)] = []
-        var linear: [String] = [], offPath: [String] = []
+        var explained: [(String, X1RuleTally)] = []
+        var linear: [String] = [], offPath: [String] = [], readings: [String] = []
         var ops = 0
         let (w, h) = (96, 64)
         for format in X1Format.named(["bgra8", "rgba8", "bgra8srgb", "rgba8srgb", "rgba16f", "rgb10a2", "rg11b10f"]) {
@@ -73,6 +76,8 @@ extension X1TwodProbes {
                     }
                     let bytes = try await gpu.read(into, bytesPerPixel: format.bytesPerTexel)
                     var tally = X1RuleTally(), codesTally = X1RuleTally()
+                    let pairReadings = samples == 4 && arm == "twod" ? separable : []
+                    var pairTallies = [X1RuleTally](repeating: X1RuleTally(), count: pairReadings.count)
                     for t in 0..<w * h {
                         let set = (t % w + 3 * (t / w)) % 4
                         let got = format.codes(bytes, t)
@@ -82,9 +87,23 @@ extension X1TwodProbes {
                         codesTally.add(
                             got, exact: average(format, stored[set], samples, srgbLinear: false),
                             channels: format.channels, metal: format.metalRounding, at: t)
+                        for (k, reading) in pairReadings.enumerated() {
+                            pairTallies[k].add(
+                                got, exact: pairAverage(format, stored[set], reading),
+                                channels: format.channels, metal: format.metalRounding, at: t)
+                        }
                     }
                     if arm == "twod" {
                         cells.append((name, tally))
+                        let best = pairTallies.indices.min {
+                            pairTallies[$0].fewestMisses < pairTallies[$1].fewestMisses
+                        }
+                        if let best, pairTallies[best].fewestMisses < tally.fewestMisses {
+                            explained.append((name, pairTallies[best]))
+                            readings.append("\(name):\(pairReadings[best].name):\(pairTallies[best].text)")
+                        } else {
+                            explained.append((name, tally))
+                        }
                         if format.channels.contains(.srgb8) { linear.append("\(name):\(codesTally.text)") }
                     } else {
                         draws.append((name, tally))
@@ -92,7 +111,8 @@ extension X1TwodProbes {
                 }
             }
         }
-        var finding = finding("resolve.twod", cells, ops: ops, offPath: offPath)
+        var finding = finding("resolve.twod", cells, ops: ops, offPath: offPath, explained: explained)
+        finding.metrics.set("pair_readings", readings.isEmpty ? "-" : readings.joined(separator: ","))
         finding.metrics.set("srgb_codes_cells", linear.isEmpty ? "-" : linear.joined(separator: ","))
         finding.metrics.set("draw_rules", ruleSummary(draws))
         finding.metrics.set("draw_cells", draws.map { "\($0.0):\($0.1.text)" }.joined(separator: ","))
@@ -139,6 +159,29 @@ extension X1TwodProbes {
     /// x1_sample_fragment's colours: class set's sample s at set * 4 + s
     static func sampleColors(_ gpu: GPU, _ format: X1Format) throws -> MTLBuffer {
         try gpu.buffer((0..<16).map { sampleColor(format, set: $0 / 4, s: $0 % 4) })
+    }
+
+    /// A 4x resolve read as two 2:1 steps: samples averaged in pairs, each pair rounded to a code by `rounding`, the two
+    /// codes averaged
+    struct PairReading {
+        let pairs: [(Int, Int)]
+        let rounding: X1Rounding
+
+        var name: String { "p\(pairs[0].1)_\(rounding.rawValue)" }
+    }
+
+    static let separable: [PairReading] = [[(0, 1), (2, 3)], [(0, 2), (1, 3)]].flatMap { pairs in
+        X1Rounding.allCases.map { PairReading(pairs: pairs, rounding: $0) }
+    }
+
+    /// The exact value PairReading leaves for the last rounding; sRGB colour channels in their codes' space
+    static func pairAverage(_ format: X1Format, _ stored: [[UInt32]], _ r: PairReading) -> [Double] {
+        format.channels.enumerated().map { c, channel in
+            let halves = r.pairs.map { a, b in
+                channel.value(r.rounding.code((channel.value(stored[a][c]) + channel.value(stored[b][c])) / 2, channel))
+            }
+            return (halves[0] + halves[1]) / 2
+        }
     }
 
     /// The exact average of the first `samples` samples' values per channel; sRGB colour channels averaged as linear

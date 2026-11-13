@@ -90,11 +90,12 @@ static bool takesArgumentBuffers(id<MTLFunction> f)
         return false;
     RMFunction *function = (RMFunction *)f;
     if (!function->_argumentBuffers) {
+        id twin = function->_twin ?: [function twinOn:RM_M2V("a replay's argument-buffer check")];
         bool takes = false;
         for (NSUInteger index = 0; index < 31 && !takes; index++) {
             const char *why = nullptr;
             takes = native_bridge_metal_argument_layouts(
-                function->_twin, index,
+                twin, index,
                 [](const NmbArgumentLayout *, uint32_t, void *) {
                     return true;
                 },

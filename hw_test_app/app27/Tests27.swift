@@ -9,7 +9,8 @@ enum Tests27 {
         [
             GPUSceneTest(scene: CAGlassScene()), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
             Metal4Test(), BinaryArchiveTest(), UIGlassABTest(), UIGlassTest(), UIGlassMotionTest(),
-            UIGlassFirstFrameTest(), UIGlassLiveTest(), PocketStripTest(), PocketKeylineTest(),
+            UIGlassFirstFrameTest(), UIGlassLiveTest(), UIGlassSidebarTest(), PocketStripTest(),
+            PocketKeylineTest(),
             TrueToneDefaultTest(), GlassPacing.over,
             GlassPacing.under, NoCameraTest(), FrameProcessorTest(),
         ] + X1Probes.all

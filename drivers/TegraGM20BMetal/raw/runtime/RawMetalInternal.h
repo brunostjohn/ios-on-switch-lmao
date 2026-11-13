@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -156,9 +157,9 @@ private:
 };
 
 // The process's one raw device (the render server's): its state. The device object Core Animation holds is an instance of a
-// subclass of the m2v device's own class (raw_metal_device_open), so it is an _MTLDevice that conforms to Metal's protocols as
-// the m2v device does and answers every selector the facade does not override with the m2v device's own method; it has no
-// instance variables of its own (the base class's ABI is fixed), so its state lives here.
+// subclass of _MTLDevice (raw_metal_device_open_lazy) that conforms to Metal's protocols as the m2v device does; a selector
+// only m2v's device class has a method for opens the m2v device at its first use (RawMetalM2V.mm). It has no instance
+// variables of its own (the base class's ABI is fixed), so its state lives here.
 struct RMNativeEventSignal {
     void *event;
     raw::EventTimeline::Promise promise;
@@ -177,8 +178,11 @@ struct RMRawRetirement {
 struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
-    id<MTLDevice> fallback;  // the m2v device
-    id device;               // the raw device object
+    RawM2V m2v;              // how the m2v device is opened (RawMetalM2V.mm)
+    id<MTLDevice> fallback;  // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
+    std::atomic<bool> m2vOpened{false};
+    uint64_t registryID = 0;
+    id device;  // the raw device object
     std::mutex schedule;
     std::mutex eventValues;
     raw::EventTimeline events;
@@ -210,6 +214,29 @@ struct RawState {
 };
 
 extern RawState *gRM;
+
+// RawMetalM2V.mm: the m2v device, for something the raw path has no own for (`need`, a string literal), opened now if this is
+// the process's first need (nil: none can be had). Debug builds name each need once a process and keep their count
+// (switchRawM2V): what made its m2v device open.
+id<MTLDevice> rmM2V(const char *need);
+// The m2v device if something opened it already, else nil: what holds no need of its own (a twin made already, the
+// counters)
+id<MTLDevice> rmM2VIfOpen();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
+// "m2v device never opened", or what opened it and in how long: the give-back line's
+std::string rmM2VState();
+#define RM_M2V(need)                          \
+    ([]() -> id<MTLDevice> {                  \
+        static std::atomic<bool> said{false}; \
+        return rmM2VFor(need, said);          \
+    }())
+#else
+#define RM_M2V(need) rmM2V(need)
+#endif
+// The device class's selectors m2v's device class has a method for and the raw path has none: each opens the m2v device at
+// its first use, then runs m2v's method (RawMetalM2V.mm)
+void installM2VForwarders(Class cls, const RawM2V &m2v);
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
@@ -259,9 +286,23 @@ uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, u
 
 // RawMetalLibrary.mm
 RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
+// A library of the metallib `bytes` (a file's at `path`, or data) read by the facade, with no m2v twin; nil: bytes it does
+// not read (m2v's library answers then)
+RMLibrary *readLibrary(id device, NSString *path, NSData *bytes);
+// raw::FunctionSource for the facade's functions (RawRenderKey.h): the AIR slice its library read, else its m2v twin's
+bool rmFunctionSource(id<MTLFunction> function, const void **bytes, size_t *length, NSString **name);
+std::string libraryName(RMFunction *f);
 
 // RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
+// The device SPI m2v's device answers and the raw device answers too (RawMetalDevice.mm, RawMetalDeviceAnswers.mm)
+@protocol RMDeviceSPI
+- (id<MTLBuffer>)newBufferWithIOSurface:(IOSurfaceRef)surface;
+- (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
+@end
+
+// A compute descriptor over m2v's functions (RawMetalComputeState.mm): for m2v's state, or a kernel compiled in process
+MTLComputePipelineDescriptor *twinComputeDescriptor(MTLComputePipelineDescriptor *d);
 
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
 // cubic sampler where it samples), and a packed state's variants, the pack's records of them (under its pack key's hash)
@@ -407,6 +448,14 @@ void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
 bool submitRange(RMCommandBuffer *cb);
+
+// RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of compressed private textures take the submit
+// lock; a move inside a raw encode is refused
+std::recursive_mutex &submitLock();
+extern thread_local bool tRawEncoding;
+uint32_t privateCompressedKind(MTLTextureDescriptor *d);
+bool rmTexturePlain(RMTexture *t);
+void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
@@ -434,6 +483,10 @@ uint64_t surfaceWrites(const SurfaceWriteCount *count);
 void noteSurfaceWrite(SurfaceWriteCount *count);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
+// RawMetalDeviceBase.mm: the base class's limits table filled with the device's own answers (Metal's registration asks again:
+// initLimits)
+void fillDeviceLimits(id device);
+
 // RawMetalDeviceAnswers.mm: the per-kind capability answers (raw_device_answers.h) as methods of the device class `cls`, where
 // it has none of its own; and an argument query's answer
 void installDeviceAnswers(Class cls);
@@ -456,6 +509,11 @@ void submitLoop();
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
                           const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
+
+// RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void logGivenBack(size_t relieved);
+#endif
 
 // RawMetalRates.mm
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

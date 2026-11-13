@@ -503,7 +503,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual((off, kind, stage, slot), (228, 4, 2, 0xFF))
 
     def test_a_vertex_handle_keeps_its_stage(self):
-        vertex = dict(handle(('tex3d', 0)), smp=('slot', 7), stage='v')
+        vertex = dict(handle(('tex3d', 0)), smp=('slot', 7), stage='v', compare=False)
         data = packfile.entry_bytes([vertex, handle(('slot', 20))])
         self.assertEqual(struct.unpack_from('<HBBBBBB', data, 0), (228, 4, 1, 0, 1, 7, 0))
         self.assertEqual(struct.unpack_from('<HBBBBBB', data, 8), (228, 2, 2, 20, 0, 0, 0))
@@ -518,6 +518,20 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(mask, 0b1101)
         self.assertEqual([mkpack.foreign(0x1A00 + 4 * j, mask) for j in range(5)], [False, True, False, False, True])
         self.assertEqual([mkpack.foreign(0x1E04 + 0x20 * j, mask) for j in range(4)], [False, True, False, False])
+
+    def test_a_slot_m2v_binds_its_compare_header_at_is_a_compared_entry(self):
+        problems: list[str] = []
+        lod2 = 2 * 256 << 12  # the probe's tag of sampler slot 2: max LOD 2, nearest, repeating U
+        tsc = {5: [0x26090 | 1 << 9 | 1 << 10, 0x291, lod2, 0, 0, 0, 0, 0], 6: [0x26090, 0x291, lod2, 0, 0, 0, 0, 0]}
+        compared = mkpack.handle_entry((64, 'handle', ('tex', 0), ('smp', 2), 5 << 20), tsc, [], problems)
+        plain = mkpack.handle_entry((72, 'handle', ('tex', 1), ('smp', 2), 6 << 20), tsc, [], problems)
+        self.assertEqual(problems, [])
+        self.assertEqual((compared['compare'], plain['compare']), (True, False))
+        ents = packfile.entry_bytes([compared, plain])
+        self.assertEqual([struct.unpack_from('<HBBBBBB', ents, 8 * i)[6] for i in range(2)], [1, 0])
+        pipeline = bytes(directlink.PIPELINE.size) + bytes(ents)
+        read = directlink.entries_of(pipeline, 2, [], [])
+        self.assertEqual([e['compare'] for e in read], [True, False])
 
     def test_a_pipeline_holds_32_entries(self):
         ents = packfile.entry_bytes([handle(('slot', 3))] * 27)
@@ -573,6 +587,25 @@ def record(key: str, entries: list[tuple[int, int, int, int]], samplers: list[li
 
 
 class KernelRecordsTest(unittest.TestCase):
+    def test_a_states_answers_are_packed_once_ascending_and_must_agree(self):
+        state = 'aa | k  | max=0 tgm=0'
+        recs = [dict(record(state + ' | tg=8,8,1 | tgmem= | tex= | smp=', [], []), facts=(512, 32, 64))]
+        recs.append(dict(record(state + ' | tg=16,16,1 | tgmem= | tex= | smp=', [], []), facts=(512, 32, 64)))
+        recs.append(
+            dict(record('bb | k  | max=0 tgm=0 | tg=1,1,1 | tgmem= | tex= | smp=', [], []), facts=(1024, 32, 0))
+        )
+        facts = kernels.state_facts(recs)
+        self.assertEqual(len(facts), 2)
+        section = packfile.compute_facts_bytes(facts)
+        rows = [struct.unpack_from('<QIIII', section, 24 * i) for i in range(len(section) // 24)]
+        self.assertEqual(
+            [r[0] for r in rows], sorted(packfile.fnv(k.encode()) for k in (state, 'bb | k  | max=0 tgm=0'))
+        )
+        self.assertIn((packfile.fnv(state.encode()), 512, 32, 64, 0), rows)
+        recs.append(dict(record(state + ' | tg=4,4,1 | tgmem= | tex= | smp=', [], []), facts=(256, 32, 64)))
+        with self.assertRaises(ValueError):
+            kernels.state_facts(recs)
+
     def test_a_record_is_the_pack_kernel_it_holds(self):
         self.assertEqual(len(record('k', [], [])['kernel']), kernels.KERNEL_BYTES)
         (k,), skipped = kernels.from_records([record('k', [(0, kernels.BUFFER, 2, 64 | 4 << 24)], [])], [])

@@ -208,18 +208,18 @@ void rmHeapForget(RMHeap *heap, uint64_t va)
 // NonVolatile answers Empty when they went, its resources' contents then undefined, as Metal's are.
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
-    const bool purged = _arena && gRM->raw->arenaPurged(_arena - 1);
     const int asked = _purgeable.load();
-    const MTLPurgeableState old = purged  ? MTLPurgeableStateEmpty
-                                  : asked ? MTLPurgeableState(asked)
-                                          : MTLPurgeableStateNonVolatile;
+    const auto answer = [&](bool purged) {
+        return purged ? MTLPurgeableStateEmpty : asked ? MTLPurgeableState(asked) : MTLPurgeableStateNonVolatile;
+    };
     if (state == MTLPurgeableStateKeepCurrent)
-        return old;
+        return answer(_arena && gRM->raw->arenaPurged(_arena - 1));
     const bool keep = state == MTLPurgeableStateNonVolatile;
     _purgeable = keep ? MTLPurgeableStateNonVolatile : MTLPurgeableStateVolatile;
     if (!_arena)
-        return old;
-    gRM->raw->setArenaVolatile(_arena - 1, !keep);
+        return answer(false);
+    // whether the pages had gone and the new volatility in one step: no purge falls between the answer and the promise
+    const MTLPurgeableState old = answer(gRM->raw->setArenaVolatile(_arena - 1, !keep));
     if (keep)
         resident(self);
     else if (state == MTLPurgeableStateEmpty)
@@ -328,7 +328,7 @@ void rmHeapForget(RMHeap *heap, uint64_t va)
     if (arenaKind(d.storageMode, blockLinear) && heapTextureAsk(d, blockLinear, ask) &&
         raw::Device::footprint(ask, bytes, align))
         return {NSUInteger(bytes), NSUInteger(align)};
-    return [gRM->fallback heapTextureSizeAndAlignWithDescriptor:d];
+    return [RM_M2V("a heap texture's size the raw path does not place") heapTextureSizeAndAlignWithDescriptor:d];
 }
 
 - (MTLSizeAndAlign)heapBufferSizeAndAlignWithLength:(NSUInteger)length options:(MTLResourceOptions)options

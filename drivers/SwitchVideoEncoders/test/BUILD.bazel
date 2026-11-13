@@ -4,12 +4,13 @@
 #                  (TegraNVENCCheck.h), the encode check (EncodeCheck.c, the one the Switch runs once per boot) decoding
 #                  every frame back exactly with Apple's decoder in three input layouts, sync samples where they
 #                  belong, P_Skip from the reference the setup names; the SPS/PPS/avcC parsing back with AVD's
-#                  H264Syntax.c; the checker refusing each kind of bad submit; the rate control on a synthetic encoder
+#                  H264Syntax.c; the checker refusing each kind of bad submit; the rate control on a synthetic encoder;
+#                  the HEVC tile slots through VTTileCompressionSession as CMPhoto drives them (TileCheck.c)
 #   h264nvenc_host_test  H264NVENC.c's surfaces at the coded size where it is not the display size (1080p), the
 #                  kernel's checker taking those submits and refusing the display size
-#   hevcnvenc_host_test  HEVCNVENC.c's H.265 IDR setups byte for byte against NVIDIA's T210 driver's (three sizes),
-#                  the kernel's H.265 checker taking them and refusing each kind of bad submit, the SPS/PPS stating
-#                  the coding tools the setup does
+#   hevcnvenc_host_test  HEVCNVENC.c's H.265 IDR and P setups byte for byte against NVIDIA's T210 driver's (three
+#                  sizes), the kernel's H.265 checker taking them and refusing each kind of bad submit, the SPS/PPS
+#                  and P slice header stating what the setup does
 #   hevcenc_host_test  HEVCEncSyntax.c's VPS, SPS, PPS and slice headers parsed back by AVD's HEVCSyntax.c and taken by
 #                  CoreMedia, the level each size and rate gets
 #
@@ -57,6 +58,14 @@ host_library(
         "ave_host.c",
         "EncodeCheck.c",
         "EncodeCheck.h",
+        "TileCheck.c",
+        "TileCheck.h",
+        "//drivers/SwitchVideoEncoders:AVE/AVEEncoder.h",
+        "//drivers/SwitchVideoEncoders:AVE/AVETiles.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.h",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCNVENC.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCNVENC.h",
         "//drivers/SwitchVideoEncoders:AVE/NVENCClient.h",
         "//drivers/SwitchVideoEncoders:AVE/RateControl.h",
         "//drivers/SwitchVideoEncoders:AVE/VTEncoderSPI.h",
@@ -98,11 +107,12 @@ host_library(
     deps = [":h264_nvenc"],
 )
 
-# HEVCNVENC.c's IDR setups against NVIDIA's T210 driver's, the kernel's H.265 checker, and the parameter sets agreeing
-# with the setup.
+# HEVCNVENC.c's IDR and P setups against NVIDIA's T210 driver's, the kernel's H.265 checker, and the parameter sets
+# agreeing with the setup.
 host_library(
     name = "hevcnvenc_host",
     srcs = [
+        "hevcnvenc_goldens.h",
         "hevcnvenc_host.c",
         "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.c",
         "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.c",

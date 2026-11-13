@@ -44,6 +44,7 @@ bool same(const raw::CacheKey &a, const raw::CacheKey &b)
 struct Compiled {
     raw::CacheKey key;
     NSString *status = nil, *reason = nil, *artifact = nil;
+    NSArray *slots = nil;
 };
 
 bool compile(raw::Direct &direct, raw::RecordCache &cache, const precompile::RenderInput &input,
@@ -62,7 +63,8 @@ bool compile(raw::Direct &direct, raw::RecordCache &cache, const precompile::Ren
     raw::RuntimeRecord loaded;
     if (!cache.store(result.key, &record, "") ||
         cache.load(result.key, loaded, why) != raw::RecordCache::Found::Record ||
-        loaded.keyString != record.keyString || chmod((output + "/" + relative).c_str(), 0644) != 0) {
+        loaded.keyString != record.keyString || chmod((output + "/" + relative).c_str(), 0644) != 0 ||
+        !rawseed::writeSlots(record, result.key.stack, output, result.slots)) {
         result.status = @"failed";
         result.reason = @"native record write/readback failed";
         return false;
@@ -176,6 +178,8 @@ int main(int argc, char **argv)
                                 row[@"reason"] = result.reason;
                                 if (result.artifact)
                                     row[@"artifact"] = result.artifact;
+                                if (result.slots)
+                                    row[@"slots"] = result.slots;
                             }
                         }
                     }

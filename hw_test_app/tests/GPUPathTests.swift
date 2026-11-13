@@ -293,21 +293,35 @@ struct UseRangesPathTest: GPUPathTest {
 /// come from the decoder's own block-linear picture through a native view, and give the bytes a CPU lock of the frame
 /// converts to rows. The GPU reads both planes before the CPU's lock prepares the rows; a blit would read the pitch
 /// planes instead.
+/// gpu.path.native_surface_view_p010 does the same with HEVC Main 10's first picture: 'x420' planes as r16Unorm and
+/// rg16Unorm over the decoder's 16-bit block-linear picture, each sample's 16 bits against the CPU's rows.
 struct NativeSurfaceViewPathTest: GPUPathTest {
-    let id = "gpu.path.native_surface_view"
-    let name = "Draws sample a decoded picture where the decoder put it, matching its CPU rows"
+    let id: String
+    let name: String
+    let codec: VideoCodec
     let counters = ["native_tiled_views", "native_reads"]
 
+    static let nv12 = NativeSurfaceViewPathTest(
+        id: "gpu.path.native_surface_view",
+        name: "Draws sample a decoded picture where the decoder put it, matching its CPU rows", codec: .h264)
+    static let p010 = NativeSurfaceViewPathTest(
+        id: "gpu.path.native_surface_view_p010",
+        name: "Draws sample a decoded Main 10 picture's 16-bit planes where the decoder put them, matching its CPU rows",
+        codec: .hevc10)
+
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
-        guard let clip = Clip.all.first(where: { $0.codec == .h264 && $0.height == 720 }) else {
-            throw TestFailure("no 720p H.264 clip")
+        guard let clip = Clip.all.first(where: { $0.codec == codec && $0.height == 720 }) else {
+            throw TestFailure("no 720p \(codec) clip")
         }
         let frame = try Self.decodeFirst(try await Demux.load(clip, from: context.media), clip)
+        let sampleBytes = codec.bitDepth > 8 ? 2 : 1
+        let scale = sampleBytes == 2 ? 65535.0 : 255.0
         var made: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, gpu.device, nil, &made) == kCVReturnSuccess, let cache = made else {
             throw TestFailure("CVMetalTextureCacheCreate failed")
         }
-        let planes: [(format: MTLPixelFormat, channels: Int)] = [(.r8Unorm, 1), (.rg8Unorm, 2)]
+        let planes: [(format: MTLPixelFormat, channels: Int)] =
+            sampleBytes == 2 ? [(.r16Unorm, 1), (.rg16Unorm, 2)] : [(.r8Unorm, 1), (.rg8Unorm, 2)]
         var sampled: [[UInt8]] = []
         var held: [CVMetalTexture] = []
         for (plane, shape) in planes.enumerated() {
@@ -320,11 +334,18 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
             else { throw TestFailure("no Metal texture of plane \(plane)") }
             held.append(texture)
             let texels = try await gpu.texels(metal)
-            sampled.append(texels.flatMap { texel in (0..<shape.channels).map { UInt8((texel[$0] * 255).rounded()) } })
+            sampled.append(
+                texels.flatMap { texel in
+                    (0..<shape.channels).flatMap { channel -> [UInt8] in
+                        let value = UInt16((Double(texel[channel]) * scale).rounded())
+                        return sampleBytes == 2 ? [UInt8(value & 0xff), UInt8(value >> 8)] : [UInt8(value)]
+                    }
+                })
         }
         var failures: [String] = []
         for (plane, shape) in planes.enumerated() {
-            let wrong = Self.wrong(sampled[plane], Self.rows(frame, plane: plane, bytesPerPixel: shape.channels))
+            let wrong = Self.wrong(
+                sampled[plane], Self.rows(frame, plane: plane, bytesPerPixel: shape.channels * sampleBytes))
             metrics.set("plane\(plane)_wrong_bytes", wrong)
             if wrong != 0 { failures.append("plane \(plane): \(wrong) bytes differ from the CPU's rows") }
         }
@@ -342,7 +363,7 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
             kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true
         ]
         let destination = PatternPixels.attributes(
-            width: clip.width, height: clip.height, format: PatternPixels.format(bitDepth: 8))
+            width: clip.width, height: clip.height, format: PatternPixels.format(bitDepth: clip.codec.bitDepth))
         var made: VTDecompressionSession?
         let created = VTDecompressionSessionCreate(
             allocator: nil, formatDescription: demuxed.format, decoderSpecification: specification as CFDictionary,
@@ -523,7 +544,8 @@ struct ResourceReadyPathTest: GPUPathTest {
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
-        UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(), SharedEventsPathTest(),
+        UseRangesPathTest(), NativeSurfaceViewPathTest.nv12, NativeSurfaceViewPathTest.p010, SemanticFencePathTest(),
+        SharedEventsPathTest(),
         ResourceReadyPathTest(), SubmitJobPathTest(), StateSegmentsPathTest(), EncodeCostPathTest(),
     ]
 }

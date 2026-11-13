@@ -625,6 +625,34 @@ pub unsafe extern "C" fn nmb_compute_pipeline_offline(
     })
 }
 
+/// The answers the runtime's compute prepare gives a state of offline functions (nmb_compute_artifact_new's metal_info,
+/// on the compile profile's native device), into `facts`: maxTotalThreadsPerThreadgroup, threadExecutionWidth,
+/// staticThreadgroupMemoryLength
+///
+/// # Safety
+/// The descriptor and its function handles are live for this call; `facts` holds three words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_offline_compute_pipeline_facts(
+    descriptor: *const NmbOfflineComputePipelineDescriptor,
+    facts: *mut u32,
+) -> bool {
+    guard(false, || {
+        if facts.is_null() {
+            return Err("null compute facts".into());
+        }
+        let descriptor = compute_descriptor(descriptor)?;
+        let made = compiled(&offline_devices()?.native, &descriptor, &VariantKey::new(), &Budget::standard())?;
+        let info = &made.metal_info;
+        // SAFETY: the caller's three words.
+        unsafe { std::slice::from_raw_parts_mut(facts, 3) }.copy_from_slice(&[
+            info.max_total_threads_per_threadgroup,
+            info.thread_execution_width,
+            info.static_threadgroup_memory_length,
+        ]);
+        Ok(true)
+    })
+}
+
 /// # Safety
 /// The artifact and dispatch are live; the callback is valid for this call.
 #[unsafe(no_mangle)]

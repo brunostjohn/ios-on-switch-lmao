@@ -17,6 +17,7 @@ struct SwitchVICStats {
     static constexpr uint64_t kWindowUs = 5000000;
     uint64_t windowStart, jobs, ops, refused, pitch, failed, submitted, bounced, engineUs, cpuUs, bytes;
     uint64_t presents, presentWaits;  // decoded pictures VIC placed, and those a CPU thread waited for
+    uint64_t maps;                    // SMMU mappings made: a cached surface costs none (LIMITS V11)
     bool failureLogged;
 
     void present(bool waited)
@@ -74,12 +75,12 @@ struct SwitchVICStats {
         const uint64_t j = take(jobs), s = take(submitted);
         const uint64_t o = take(ops), r = take(refused), p = take(pitch), f = take(failed), b = take(bounced);
         const uint64_t e = take(engineUs), c = take(cpuUs), m = take(bytes);
-        const uint64_t pr = take(presents), pw = take(presentWaits);
+        const uint64_t pr = take(presents), pw = take(presentWaits), mp = take(maps);
         snprintf(out, size,
                  "TegraVIC: %llus jobs=%llu ops=%llu refused=%llu pitch=%llu failed=%llu engine=%lluus/job "
-                 "cpu=%lluus/job mapped=%lluKB/job bounced=%llu presents=%llu present_waits=%llu",
+                 "cpu=%lluus/job mapped=%lluKB/job bounced=%llu presents=%llu present_waits=%llu maps=%llu",
                  ull((now - start) / 1000000), ull(j), ull(o), ull(r), ull(p), ull(f), ull(j ? e / j : 0),
-                 ull(s ? c / s : 0), ull(s ? (m >> 10) / s : 0), ull(b), ull(pr), ull(pw));
+                 ull(s ? c / s : 0), ull(s ? (m >> 10) / s : 0), ull(b), ull(pr), ull(pw), ull(mp));
         return true;
     }
 

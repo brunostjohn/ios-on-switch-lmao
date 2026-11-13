@@ -257,6 +257,16 @@ const PackArchive *Pack::archive(uint64_t pathHash) const
     return at != end && at->pathHash == pathHash && uint64_t(at->first) + at->count <= counts[1] ? at : nullptr;
 }
 
+const PackComputeFacts *Pack::computeFacts(uint64_t keyHash) const
+{
+    const PackComputeFacts *f = section<PackComputeFacts>(PackComputeStates);
+    const PackComputeFacts *end = f + bytes(PackComputeStates) / sizeof *f;
+    const PackComputeFacts *at = std::lower_bound(f, end, keyHash, [](const PackComputeFacts &x, uint64_t h) {
+        return x.keyHash < h;
+    });
+    return at != end && at->keyHash == keyHash ? at : nullptr;
+}
+
 bool Pack::declares(const PackArchive &archive, uint64_t keyHash) const
 {
     const uint32_t *counts = section<uint32_t>(PackArchives);

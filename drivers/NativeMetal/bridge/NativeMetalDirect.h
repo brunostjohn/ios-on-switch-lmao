@@ -61,6 +61,8 @@ typedef struct NmbDirectWrite {
     uint64_t range;    // a buffer's bound range
     int32_t viewType;  // an image\'s VkImageViewType (a neutral\'s too), -1 for no image
     uint32_t format;   // a fragment texture's: the MTLPixelFormat of the texture the probe bound at its slot, 0 for none
+    uint32_t
+        compare;  // 1: a sampler slot the state samples by comparison (m2v's compare-enabled VkSampler for this use)
 } NmbDirectWrite;
 
 // A sampler's state as vk_sampler_state_init makes it of the VkSamplerCreateInfo metal2vulkan creates (Vulkan values;
@@ -332,6 +334,9 @@ bool nmb_compute_pipeline_offline(const NmbOfflineComputePipelineDescriptor *des
 // Whether the m2v runtime's own compile device compiles `descriptor`'s kernel, as its compute state creation does (false
 // with nmb_last_error)
 bool nmb_offline_compute_pipeline_compiles(const NmbOfflineComputePipelineDescriptor *descriptor);
+// The answers the runtime's compute prepare gives `descriptor`'s state (its native compute artifact's metal_info), into
+// `facts`: maxTotalThreadsPerThreadgroup, threadExecutionWidth, staticThreadgroupMemoryLength (false with nmb_last_error)
+bool nmb_offline_compute_pipeline_facts(const NmbOfflineComputePipelineDescriptor *descriptor, uint32_t facts[3]);
 
 // The build's compile profile held to `device`'s runtime (false: they differ, nmb_last_error says how), and the profile of
 // `device`'s runtime as JSON into `out` (`length` bytes, unterminated): its length, 0 on failure

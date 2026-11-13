@@ -16,9 +16,10 @@ MAGIC = b'GM20BPK1'
 # words in the blob section); 21: the runtime records' tessellation, amplification, dynamic stride and stage-in
 # fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words; 22:
 # the formats a state's written textures were compiled for, the fragment slots it samples two-plane RGB10A8_2P_XR10
-# textures at
-VERSION = 22
-SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
+# textures at; 23: compute states' answers (PackComputeFacts), compared sampler slots
+VERSION = 23
+SECTIONS = 14  # runtime/raw_pack.h PackSectionCount
+ENTRY_COMPARES = 1  # runtime/raw_pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
 ITERATED = struct.Struct('<BBBBHBBIIQQ24H128I')
@@ -109,8 +110,16 @@ def entry_bytes(entries: list[dict]) -> bytearray:
             tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4, 'depth_test': 6, 'stencil_test': 7}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
             stage = 1 if e.get('stage') == 'v' else 2
+            compares = ENTRY_COMPARES if e.get('compare') else 0  # raw_pack.h kEntryCompares
             ents += struct.pack(
-                '<HBBBBBB', e['off'], tkind, stage, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
+                '<HBBBBBB',
+                e['off'],
+                tkind,
+                stage,
+                0 if tk is None else tk[1],
+                skind,
+                0 if sk is None else sk[1],
+                compares,
             )
     ents += bytes(8 * (PACK_ENTRIES - len(entries)))
     return ents
@@ -479,6 +488,7 @@ class Pack:
     splits: list[dict] = field(default_factory=list)
     archives: bytes = b''  # the PackArchives section (archives.py)
     iterated: list[dict] = field(default_factory=list)  # the PackIterated section's programs (iterated_bytes)
+    compute_facts: list[dict] = field(default_factory=list)  # the PackComputeStates section (kernels.py state_facts)
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
@@ -515,6 +525,14 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
         placed = dict(rec, spill_at=spill_at)
         pipe_bin += pipeline_bytes(placed, key_off, blobs[pairs], variants_off, string(name) if name else 0)
     return pipe_bin, blob, strings, variant_bin
+
+
+def compute_facts_bytes(facts: list[dict]) -> bytes:
+    """Give the PackComputeStates section: each compute state's answers, ascending by its key's hash."""
+    return b''.join(
+        struct.pack('<QIIII', f['hash'], f['max_threads'], f['execution_width'], f['static_memory'], 0)
+        for f in sorted(facts, key=lambda f: f['hash'])
+    )
 
 
 def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
@@ -558,9 +576,10 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         bytes(variant_bin),
         pack.archives,
         iterated_bytes(pack.iterated),
+        compute_facts_bytes(pack.compute_facts),
     ]
     assert len(sections) == SECTIONS
-    header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
+    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16  # the section table, then the stack key and chip facts
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
     for s in sections:

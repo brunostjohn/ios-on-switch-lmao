@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Writes the seed SwitchSeedPack.h reads. The same entries always make the same bytes. Each tier (0: observed,
 // 1: derived) gets packs of its own, about kBucketBytes each, and an entry's pack within its tier is picked by its
-// name's leading bits: adding or changing one entry rewrites one pack and the index, not every pack after it.
+// name's leading bits: adding or changing one entry rewrites one pack and the index, not every pack after it. An entry
+// of a whole number of kPageBytes pages starts on such a page and has its pages to itself, as SwitchSeedStore.h places
+// one: a GPU client imports those pages and runs the program slot they hold in place.
 #pragma once
 #include "SwitchSeedPack.h"
 #include <sys/stat.h>
@@ -64,6 +66,11 @@ inline void putLe(std::string &out, uint64_t value, unsigned bytes)
         out += char(value >> (8 * i));
 }
 
+inline uint64_t alignmentOf(uint64_t length)
+{
+    return length && !(length % kPageBytes) ? kPageBytes : kAlignment;
+}
+
 inline uint32_t prefixBits(size_t entries)
 {
     uint32_t bits = 0;
@@ -101,7 +108,7 @@ inline bool write(const std::string &directory, uint32_t nameBytes, const uint8_
         placed[i].length = entry.path.empty() ? entry.bytes.size() : uint64_t(info.st_size);
         if (placed[i].length > UINT32_MAX)
             return error = "an entry past 4 GiB: " + entry.path, false;
-        tierBytes[entry.tier] += (placed[i].length + kAlignment - 1) / kAlignment * kAlignment;
+        tierBytes[entry.tier] += (placed[i].length + alignmentOf(placed[i].length) - 1) / kAlignment * kAlignment;
     }
     uint32_t tierPacks[kTiers] = {}, tierFirst[kTiers] = {}, packs = 0;
     for (uint32_t tier = 0; tier < kTiers; ++tier) {
@@ -134,6 +141,8 @@ inline bool write(const std::string &directory, uint32_t nameBytes, const uint8_
             if (!(entries[i].path.empty() ? (bytes = entries[i].bytes, true) : readWhole(entries[i].path, bytes)) ||
                 bytes.size() != placed[i].length)
                 return error = "unreadable: " + entries[i].path, false;
+            const uint64_t align = alignmentOf(bytes.size());
+            pack.resize((pack.size() + align - 1) / align * align);
             if (pack.size() + bytes.size() > UINT32_MAX)
                 return error = "a pack past 4 GiB", false;
             placed[i].offset = uint32_t(pack.size());

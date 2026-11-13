@@ -7,7 +7,10 @@
     rop                        the ROP's float to unorm rounding, against each rounding model
     precision                  the store and fixed-function blend under every ROP option set the other way (sweeps.py)
     iterated [microcode.tsv]   the iterated blend unit with colour 0 bound alone; the table's programs after the setups
-    twod                       the 2D engine's solid fill and scaled copy, one operation a command buffer
+    twod                       the 2D engine's fills, scaled copies and resolves, with their 3D and copy-engine compares
+    store16                    the ROP's float to unorm16 rounding (R16, RGBA16)
+    compressed                 draws into compressible memory through the copy engine, against a plain target
+    cstall                     the stall family as kernels storing their results (latency by correctness)
 
 --fake <folder> runs on the fake device (fakedevice.py) instead of USB. Results land in --out (default
 ~/Library/Application Support/switch-ios/benchloop/<time>/): the device's files, results.tsv and report.json.
@@ -20,13 +23,12 @@ import time
 from pathlib import Path
 
 from tools.benchloop import blend, doctor, floatadd, report, rop, session, sweeps
+from tools.benchloop.generators import GENERATORS
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument(
-        'command', choices=('doctor', 'run', 'latency', 'blend', 'rop', 'floatadd', 'precision', 'iterated', 'twod')
-    )
+    p.add_argument('command', choices=('doctor', 'run', 'latency', 'blend', 'rop', 'floatadd', *GENERATORS))
     p.add_argument('inputs', nargs='*', type=Path)
     p.add_argument('--udid')
     p.add_argument('--fake', type=Path, help='a folder the fake device works in')
@@ -56,7 +58,7 @@ def experiments(args: argparse.Namespace) -> list[dict]:
         return floatadd.generate()
     if args.command == 'iterated':
         return sweeps.iterated(args.inputs[0] if args.inputs else None)
-    return {'precision': sweeps.precision, 'twod': sweeps.twod}.get(args.command, rop.generate)()
+    return GENERATORS[args.command]() if args.command in GENERATORS else rop.generate()
 
 
 def main(argv: list[str]) -> int:
