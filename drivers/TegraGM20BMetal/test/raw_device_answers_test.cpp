@@ -78,6 +78,15 @@ TEST(RawDeviceAnswers, BuffersOverIOSurfacesAreMade)
         EXPECT_EQ(count(k, "supportsBufferWithIOSurface"), 1u) << k.kind;
 }
 
+// The translator lowers simd_sum, the prefix sums and shuffle-and-fill to SHFL and VOTE (gpu.compute.simd_group)
+TEST(RawDeviceAnswers, SimdReductionAndShiftAndFillAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "supportsSIMDReduction"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsSIMDShuffleAndFill"), 1u) << k.kind;
+    }
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {

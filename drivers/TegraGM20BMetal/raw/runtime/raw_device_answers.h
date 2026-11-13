@@ -2,7 +2,9 @@
 // The device's answers to Metal's capability and identity queries, per kind: the target's identity (iPad7,1's A10X on
 // 21H461, iPad12,1's A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's
 // device answers them today, but where the device has a form of a feature m2v's answers lack: counter sampling at stage
-// boundaries, as the identity's AGX driver answers it (raw_counters.h). maxPredicatedNestingDepth is the loop depth the
+// boundaries, as the identity's AGX driver answers it (raw_counters.h); buffers over IOSurfaces (RawMetalDevice.mm
+// newBufferWithIOSurface:); SIMD-group reduction and shift-and-fill, which the translator lowers to SHFL and VOTE
+// (HW Test gpu.compute.simd_group). maxPredicatedNestingDepth is the loop depth the
 // raw path lays down (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
 // the target's: the A13's supportsVertexAmplificationCount: takes 0 to 8 (AGXA13FamilyDevice, `cmp w2,#9; cset lo`),
 // its limits table's maxVertexAmplificationCount 2 and maxVertexAmplificationFactor 8, supportsDynamicAttributeStride
@@ -109,8 +111,8 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsProgrammableSamplePositions", 1, true},
     {"supportsResourceDetachBacking", 1, true},
     {"supportsSharedTextureHandles", 1, true},
-    {"supportsSIMDReduction", 0, true},
-    {"supportsSIMDShuffleAndFill", 0, true},
+    {"supportsSIMDReduction", 1, true},
+    {"supportsSIMDShuffleAndFill", 1, true},
     {"supportsTexture2DMultisampleArray", 0, true},
     {"supportsTileShaders", 0, true},
     {"maxThreadgroupMemoryLength", 16384, false},
@@ -247,8 +249,8 @@ inline constexpr Count kCounts24B119[] = {
     {"supportsProgrammableSamplePositions", 1, true},
     {"supportsResourceDetachBacking", 1, true},
     {"supportsSharedTextureHandles", 1, true},
-    {"supportsSIMDReduction", 0, true},
-    {"supportsSIMDShuffleAndFill", 0, true},
+    {"supportsSIMDReduction", 1, true},
+    {"supportsSIMDShuffleAndFill", 1, true},
     {"supportsTexture2DMultisampleArray", 0, true},
     {"supportsTileShaders", 0, true},
     {"maxThreadgroupMemoryLength", 32768, false},
