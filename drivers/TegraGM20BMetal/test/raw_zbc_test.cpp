@@ -61,4 +61,17 @@ TEST(RawZbc, Rgb10a2EntriesPackRedLowAlphaHigh)
     EXPECT_FALSE(raw::zbcColorEntry(90, ds, e)) << "306.9: no code";
 }
 
+// gpu.raw.compressed_targets zbc_rgba16unorm
+TEST(RawZbc, Rgba16UnormEntriesPackTwoChannelsAWord)
+{
+    TegraGM20BAbiZbc e;
+    const float codes[4] = {10000 / 65535.0f, 20000 / 65535.0f, 40000 / 65535.0f, 1.0f};
+    ASSERT_TRUE(entry(110, codes, e));
+    EXPECT_EQ(e.format, raw::kZbcR16x4);
+    EXPECT_EQ(e.l2[0], 10000u | 20000u << 16);
+    EXPECT_EQ(e.l2[1], 40000u | 65535u << 16);
+    uint32_t ds[4] = {raw::clear_detail::bitsOf(0.5f), 0, 0, raw::clear_detail::bitsOf(1.0f)};
+    EXPECT_FALSE(raw::zbcColorEntry(110, ds, e)) << "32767.5: the ROP's tie";
+}
+
 }  // namespace

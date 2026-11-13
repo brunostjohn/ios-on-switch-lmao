@@ -20,6 +20,7 @@
 namespace raw {
 
 enum : uint32_t {
+    kZbcR16x4 = 0x08,        // FERMI_A_ZBC_COLOR_V0_FMT_R16_G16_B16_A16: RGBA16Unorm's
     kZbcRf16x4 = 0x16,       // FERMI_A_ZBC_COLOR_V0_FMT_RF16_GF16_BF16_AF16
     kZbcA8R8G8B8 = 0x18,     // BGRA8Unorm's
     kZbcA8Rl8Gl8Bl8 = 0x1c,  // BGRA8Unorm_sRGB's
@@ -131,6 +132,13 @@ inline bool zbcColorEntry(uint32_t mtl, const uint32_t ds[4], TegraGM20BAbiZbc &
         if (!unorm(1023, 1023, 1023, 3))
             return false;
         out.l2[0] = c[0] | c[1] << 10 | c[2] << 20 | c[3] << 30;
+        return true;
+    case 110:  // RGBA16Unorm
+        out.format = kZbcR16x4;
+        if (!unorm(65535, 65535, 65535, 65535))
+            return false;
+        out.l2[0] = c[0] | c[1] << 16;
+        out.l2[1] = c[2] | c[3] << 16;
         return true;
     case 115:  // RGBA16Float
         out.format = kZbcRf16x4;
