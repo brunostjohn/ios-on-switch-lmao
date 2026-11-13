@@ -4,14 +4,18 @@ import HWTestGPU
 import Metal
 
 /// The features the device has no form of are NO wherever Metal lets a caller ask, and every creation past a NO fails:
-/// no predication, and on 21H461's A10X one view of amplification and no dynamic attribute stride (render or compute
-/// stage-in), which 24B119's A13 answers YES (metal.native.amplification, metal.native.dynamic_stride). A
+/// on 21H461's A10X one view of amplification and no dynamic attribute stride (render or compute stage-in), which
+/// 24B119's A13 answers YES (metal.native.amplification, metal.native.dynamic_stride). Predicated loops nest as deep as
+/// the raw path lays them down (raw_loop_copies.h LoopCopies::kMaxDepth, 8; gpu.raw.predication runs them). A
 /// post-tessellation vertex function reads as one, and a state of a maximum tessellation factor past the device's is
 /// refused (metal.native.tessellation draws patches). Linear textures align to the pitch texture header's 32 bytes. The
 /// amplification count Metal defaults to, 1, draws on the raw path.
 struct NativeUnsupportedTest: NativeObjectTest {
     let id = "metal.native.unsupported"
     let name = "Features the device has no form of answer NO and refuse their creations; amplification 1 draws raw"
+
+    /// raw_loop_copies.h LoopCopies::kMaxDepth
+    static let loopDepth = 8
 
     static let patchSource = """
         #include <metal_stdlib>
@@ -50,11 +54,14 @@ struct NativeUnsupportedTest: NativeObjectTest {
         // dynamic strides; 21H461's A10X does neither
         let a13 = device.name.contains("A13")
         metrics.set("identity", a13 ? "A13" : "A10X")
-        let zeroes =
-            ["maxPredicatedNestingDepth"]
-            + (a13 ? [] : ["supportsDynamicAttributeStride"])
+        let zeroes = a13 ? [] : ["supportsDynamicAttributeStride"]
         for selector in zeroes where Self.answer(device, selector) != 0 {
             work.failures.append("\(selector) answers \(Self.answer(device, selector).map(String.init) ?? "nothing")")
+        }
+        let nesting = Self.answer(device, "maxPredicatedNestingDepth")
+        metrics.set("predicated_nesting", nesting ?? -1)
+        if nesting != Self.loopDepth {
+            work.failures.append("maxPredicatedNestingDepth is not the raw path's loop depth")
         }
         if a13 && Self.answer(device, "supportsDynamicAttributeStride") != 1 {
             work.failures.append("supportsDynamicAttributeStride is not the A13's YES")
