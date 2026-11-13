@@ -11,8 +11,9 @@ import UIKit
 /// fades in, the reverse, and a UIKit zoom transition (iOS 18 and later; iOS 17 runs the open twice), five rounds each.
 /// A probe CAMetalLayer presents every display-link frame and collects when the display showed it. Around each round the
 /// debug kernel answers the compositor's round (SwitchGpuCompositorRound.h through the spans op): its jobs and GPU time,
-/// jobs longer than a refresh period, surfaces it imported, and the passes of its push-scanned submissions. A round fails
-/// on a missed display period, an import, or a compositor job over one period.
+/// jobs longer than a refresh period, surfaces it imported, BoAllocs it made on its own thread (no zeroed spare), and the
+/// passes of its push-scanned submissions. A round fails on a missed display period, an import, a cold BoAlloc, a
+/// compositor job over one period, fewer than half its frames shown by the probe, or a compositor that did not animate.
 struct ScalePacingTest: HWTest {
     let id = "ui.scale_pacing"
     let name = "Scale animations hold every display period with no import and no compositor job over a period"
@@ -29,8 +30,8 @@ struct ScalePacingTest: HWTest {
     }
 
     struct Round {
-        var missed = 0, imports = 0, importUs = 0, overPeriod = 0, jobs = 0, gpuUs = 0, scanned = 0, passes = 0,
-            jobMaxUs = 0
+        var missed = 0, shown = 0, imports = 0, importUs = 0, coldAllocs = 0, overPeriod = 0, jobs = 0, gpuUs = 0,
+            scanned = 0, passes = 0, jobMaxUs = 0
     }
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -51,11 +52,12 @@ struct ScalePacingTest: HWTest {
                 _ = LaunchHitchTest.spans(connection)
                 let from = CACurrentMediaTime()
                 await probe.animate(kind, seconds: Self.seconds)
-                try await Task.sleep(nanoseconds: UInt64((Self.seconds + 0.15) * 1e9))
+                try await Task.sleep(nanoseconds: 150_000_000)
                 let to = CACurrentMediaTime()
                 let reading = SpanReading.parse(LaunchHitchTest.spans(connection) ?? "")
                 var r = Round()
-                r.missed = await probe.missed(from: from, to: to, period: Self.period)
+                (r.missed, r.shown) = await probe.missed(from: from, to: to, period: Self.period)
+                r.coldAllocs = reading.counts["cold_allocs"] ?? 0
                 r.imports = reading.counts["imports"] ?? 0
                 r.importUs = reading.counts["import_us"] ?? 0
                 r.overPeriod = reading.counts["over_period"] ?? 0
@@ -66,6 +68,8 @@ struct ScalePacingTest: HWTest {
                 r.jobMaxUs = reading.jobMaxUs
                 let key = "\(kind.rawValue)\(i)"
                 metrics.set("\(key)_missed", r.missed)
+                metrics.set("\(key)_shown", r.shown)
+                metrics.set("\(key)_cold_allocs", r.coldAllocs)
                 metrics.set("\(key)_imports", r.imports)
                 metrics.set("\(key)_import_us", r.importUs)
                 metrics.set("\(key)_over_period", r.overPeriod)
@@ -75,6 +79,12 @@ struct ScalePacingTest: HWTest {
                 if r.missed > 0 { failures.append("\(key) missed \(r.missed) periods") }
                 if r.imports > 0 { failures.append("\(key) imported \(r.imports) surfaces (\(r.importUs) us)") }
                 if r.overPeriod > 0 { failures.append("\(key) had \(r.overPeriod) compositor jobs over a period") }
+                if r.coldAllocs > 0 { failures.append("\(key) made \(r.coldAllocs) compositor BoAllocs with no spare") }
+                let frames = Int((to - from) / Self.period)
+                if r.shown < frames / 2 { failures.append("\(key) showed \(r.shown) probe frames of \(frames)") }
+                if r.jobs < Int(Self.seconds * 60) / 2 {
+                    failures.append("\(key) ran \(r.jobs) compositor jobs: the animation did not run")
+                }
             }
         }
         await probe.stop()
@@ -153,53 +163,63 @@ final class ScaleProbe: NSObject {
         probe.removeFromSuperlayer()
     }
 
-    func animate(_ kind: ScalePacingTest.Kind, seconds: Double) {
+    /// Runs one round's animation and returns once it has ended
+    func animate(_ kind: ScalePacingTest.Kind, seconds: Double) async {
         switch kind {
         case .open:
-            scale(from: 0.3, to: 1, alpha: (0, 1), seconds: seconds)
+            await scale(from: 0.3, to: 1, alpha: (0, 1), seconds: seconds)
         case .close:
-            scale(from: 1, to: 0.3, alpha: (1, 0), seconds: seconds)
+            await scale(from: 1, to: 0.3, alpha: (1, 0), seconds: seconds)
         case .zoom:
-            zoom(seconds: seconds)
+            await zoom(seconds: seconds)
         }
     }
 
-    private func scale(from: CGFloat, to: CGFloat, alpha: (CGFloat, CGFloat), seconds: Double) {
+    private func scale(from: CGFloat, to: CGFloat, alpha: (CGFloat, CGFloat), seconds: Double) async {
         card.transform = CGAffineTransform(scaleX: from, y: from)
         card.alpha = alpha.0
-        UIView.animate(withDuration: seconds, delay: 0, options: [.curveEaseInOut]) {
-            self.card.transform = CGAffineTransform(scaleX: to, y: to)
-            self.card.alpha = alpha.1
-        } completion: { _ in
-            self.card.transform = .identity
-            self.card.alpha = 1
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            UIView.animate(withDuration: seconds, delay: 0, options: [.curveEaseInOut]) {
+                self.card.transform = CGAffineTransform(scaleX: to, y: to)
+                self.card.alpha = alpha.1
+            } completion: { _ in
+                self.card.transform = .identity
+                self.card.alpha = 1
+                done.resume()
+            }
         }
     }
 
-    private func zoom(seconds: Double) {
+    /// UIKit's zoom transition in and out of a full-screen controller, each awaited to its end
+    private func zoom(seconds: Double) async {
         guard let host = stage.window?.rootViewController, #available(iOS 18.0, *) else {
-            scale(from: 0.3, to: 1, alpha: (0, 1), seconds: seconds)
+            await scale(from: 0.3, to: 1, alpha: (0, 1), seconds: seconds)
             return
         }
         let presented = UIViewController()
         presented.view = ScaleProbe.appLike(frame: UIScreen.main.bounds)
+        presented.modalPresentationStyle = .fullScreen
         let source = card
         presented.preferredTransition = .zoom(sourceViewProvider: { _ in source })
-        host.present(presented, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            presented.dismiss(animated: false)
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            host.present(presented, animated: true) { done.resume() }
+        }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            presented.dismiss(animated: true) { done.resume() }
         }
     }
 
-    /// Display periods the probe's presents skipped between `from` and `to` (CACurrentMediaTime's clock)
-    func missed(from: Double, to: Double, period: Double) -> Int {
-        let times = shown.measured.filter { $0 > from && $0 < to }.sorted()
+    /// Display periods the probe's presents skipped between `from` and `to` (CACurrentMediaTime's clock), counting from
+    /// `from` to the first one shown, and how many it showed
+    func missed(from: Double, to: Double, period: Double) -> (missed: Int, shown: Int) {
+        let shownTimes = shown.measured.filter { $0 > from && $0 < to }.sorted()
+        let times = [from] + shownTimes
         var missed = 0
         for (a, b) in zip(times, times.dropFirst()) {
             let periods = Int(((b - a) / period).rounded())
             missed += max(0, periods - 1)
         }
-        return missed
+        return (missed, shownTimes.count)
     }
 
     @objc private func tick(_: CADisplayLink) {
