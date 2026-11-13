@@ -26,6 +26,7 @@ Slots slots(std::initializer_list<int> v)
     return out;
 }
 
+// The pack generator's copy of the rule (raw/pack/mkpack.py xr_alpha_slots) takes these cases too: mkpack_owned_test
 TEST(XrPass, TheAlphaIndexIsTheLowestFreeOne)
 {
     const uint32_t one[8] = {550};

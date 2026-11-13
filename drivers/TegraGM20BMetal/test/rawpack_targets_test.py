@@ -2,7 +2,7 @@
 """Each record of the built pack holds its own colour targets' registers, and none holds a target's separate alpha.
 
 The targets a record's draw writes are its key's colours and, in its two-plane form (PipelineTwoPlane), each
-RGB10A8_2P_XR10 colour's alpha target (runtime/raw_xr_pass.h). Its blob holds every one of their SET_CT_WRITE (0x1a00),
+RGB10A8_2P_XR10 colour's alpha target (mkpack.target_mask). Its blob holds every one of their SET_CT_WRITE (0x1a00),
 SET_BLEND (0x1360) and per-target blend (0x1e00 block) registers that varies across the pack, and no other target's: a
 register it leaves out is the previous draw's. Metal's blend always has separate alpha factors, so every target's
 SET_BLEND_PER_TARGET_SEPARATE_FOR_ALPHA (0x1e00 + 0x20 j) is 1 under every draw: no record holds one, and target 0's is
@@ -56,28 +56,9 @@ def load(path: str) -> tuple[list[Record], dict[int, int]]:
     return records, dict(struct.iter_unpack('<II', data[at : at + size]))
 
 
-def two_plane_alpha_targets(key: str) -> int:
-    """Give the targets a two-plane state's RGB10A8_2P_XR10 colours put their alpha at (raw_xr_pass.h xrAlphaSlots)."""
-    formats = [0] * 8
-    for t in key.partition(' | ')[0].split():
-        if t[:1] == 'c' and t[1:2].isdigit() and t[2:3] == '=':
-            formats[int(t[1])] = int(t[3:].partition(':')[0])
-    out, free = 0, 0
-    for f in formats:
-        if f != 550:
-            continue
-        while free < 8 and formats[free]:
-            free += 1
-        if free == 8:
-            break
-        out |= 1 << free
-        free += 1
-    return out
-
-
 def drawn_targets(record: Record) -> int:
     """Give the targets a record's draw writes, bit j target j."""
-    return mkpack.targets(record.key) | (two_plane_alpha_targets(record.key) if record.two_plane else 0)
+    return mkpack.target_mask(record.key, record.two_plane)
 
 
 def target_of(method: int) -> int | None:

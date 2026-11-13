@@ -198,11 +198,6 @@ def check_streams(key: str, slot: int, streams: list[int], regs: dict[int, int])
             raise ValueError(f'vertex stream {k} of buffer {buffer} at stride {held}, its layout {stride}: {key}')
 
 
-def two_plane_colors(key: str) -> int:
-    """Give the RGB10A8_2P_XR10 colours of a state's key."""
-    return sum(1 for t in key.split(' | ')[0].split() if t[:1] == 'c' and t[1:2].isdigit() and t[3:7] == '550:')
-
-
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
     """Give a state's pipeline as mkpack.py's pipeline() gives the probe's."""
     p = rec['pipeline']
@@ -241,8 +236,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     spill_entry, spill_words, spill = list(v20[24:26]), v20[26:28], rec.get('spill', [])
     regs = rec['probe']['records'][0]['regs']
     check_streams(rec['key'], slot, streams, regs)
-    # a two-plane record's alpha bytes are targets of their own past the key's (runtime/raw_xr_pass.h)
-    targets = mkpack.targets(rec['key']) + (two_plane_colors(rec['key']) if flags & 128 else 0)
+    targets = rec['probe']['targets']
     varying = list(varying)
     if storage_mask:
         for method in [0x0210, 0x0754, 0x1224] + [0x1A00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
@@ -347,22 +341,29 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
                 states.append(rec)
     split_identities(states)
     for index, rec in enumerate(states):
-        n = mkpack.targets(rec['key'])
-        if PIPELINE.unpack_from(rec['pipeline'])[12] & 128:
-            n += two_plane_colors(rec['key'])
-        regs = dict(context)
-        regs.update(rec['regs'])
-        for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
-            regs[method] = int(program_id(program), 16) & 0xFFFFFFFF
-        regs = {m: 0 if mkpack.disabled_stream(m, v) else v for m, v in regs.items() if not mkpack.foreign(m, n)}
-        ids = [program_id(program) for program in rec['programs']]
-        rec['probe'] = {
-            'index': index,
-            'key': rec['key'],
-            'form': rec['form'],
-            'records': [{'regs': regs, 'prog': {1: (ids[0],), 5: (ids[1],)}}],
-        }
+        rec['probe'] = probe_of(rec, index, context)
     return states, refused
+
+
+def probe_of(rec: dict, index: int, context: dict[int, int]) -> dict:
+    """Give a made state as mkpack.py takes a probe's.
+
+    Its registers are laid over `context`, less those of the targets its draw does not write (mkpack.target_mask).
+    """
+    n = mkpack.target_mask(rec['key'], bool(PIPELINE.unpack_from(rec['pipeline'])[12] & 128))
+    regs = dict(context)
+    regs.update(rec['regs'])
+    for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
+        regs[method] = int(program_id(program), 16) & 0xFFFFFFFF
+    regs = {m: 0 if mkpack.disabled_stream(m, v) else v for m, v in regs.items() if not mkpack.foreign(m, n)}
+    ids = [program_id(program) for program in rec['programs']]
+    return {
+        'index': index,
+        'key': rec['key'],
+        'form': rec['form'],
+        'targets': n,
+        'records': [{'regs': regs, 'prog': {1: (ids[0],), 5: (ids[1],)}}],
+    }
 
 
 def compute_kernels(

@@ -359,6 +359,47 @@ def targets(key: str) -> int:
     return sum(1 << int(t[1]) for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
 
+XR_PLANES = 550  # RGB10A8_2P_XR10 (runtime/raw_xr.h XrForm::Planes)
+
+
+def colour_formats(key: str) -> list[int]:
+    """Give the MTLPixelFormat of each colour a key names, by index, 0 for none."""
+    formats = [0] * 8
+    for t in key.partition(' | ')[0].split():
+        if t[:1] == 'c' and t[1:2].isdigit() and t[2:3] == '=':
+            formats[int(t[1])] = int(t[3:].partition(':')[0])
+    return formats
+
+
+def xr_alpha_slots(formats: list[int]) -> list[int]:
+    """Give each colour's alpha index as runtime/raw_xr_pass.h xrAlphaSlots does, -1 for none.
+
+    A two-plane RGB10A8_2P_XR10 colour's alpha byte is a target of its own: the lowest index no colour holds and no
+    earlier colour's alpha took. mkpack_owned_test holds this to raw_xr_pass_test's cases.
+    """
+    alpha, free = [-1] * 8, 0
+    for j, f in enumerate(formats):
+        if f != XR_PLANES:
+            continue
+        while free < 8 and formats[free]:
+            free += 1
+        if free == 8:
+            break
+        alpha[j] = free
+        free += 1
+    return alpha
+
+
+def target_mask(key: str, two_plane: bool) -> int:
+    """Give the targets a state's draw writes, bit j target j.
+
+    Those are its key's colours and, in its two-plane form (PipelineTwoPlane), each RGB10A8_2P_XR10 colour's alpha
+    target.
+    """
+    alpha = xr_alpha_slots(colour_formats(key)) if two_plane else []
+    return targets(key) | sum(1 << a for a in alpha if a >= 0)
+
+
 def foreign(m: int, mask: int) -> bool:
     """Whether `m` is a color target's own register for a target `mask` lacks, past its last or between two."""
     for base, stride in ((0x1E00, 0x20), (0x1A00, 4), (0x1360, 4)):
@@ -377,13 +418,13 @@ def split_registers(simple: list[dict], post: dict[int, dict[int, int]]) -> tupl
     # registers: varying across states -> per-pipeline blob; equal -> baseline (when it differs from post-init). A
     # register foreign to a state (a target it lacks) is not its, so it decides nothing: a state with no color target
     # (Portrait's depth-only states) would otherwise move target 0's per-target blend (0x1e00) out of the baseline, and
-    # every record would take it from the warm-up draw where the runtime's direct compile takes the init template's
+    # every record would take it from the warm-up draw where the runtime's direct compile takes the init template's.
+    # A state's targets are its maker's mask (p['targets']): a two-plane state's alpha targets are its own too
     allregs = set(post[0])
     for p in simple:
         allregs |= set(p['records'][0]['regs'])
-    counts = {id(p): targets(p['key']) for p in simple}
     vals = {
-        m: {p['records'][0]['regs'].get(m, 0) for p in simple if not foreign(m, counts[id(p)])}
+        m: {p['records'][0]['regs'].get(m, 0) for p in simple if not foreign(m, p['targets'])}
         for m in allregs
         if not owned(m)
     }
@@ -555,7 +596,7 @@ def pipeline(
         'fs': prog_index[r['prog'][5][0]],
     }
     rec['blob'] = [
-        (m, r['regs'].get(m, 0)) for m in varying if m not in (0x2044, 0x2144) and not foreign(m, targets(p['key']))
+        (m, r['regs'].get(m, 0)) for m in varying if m not in (0x2044, 0x2144) and not foreign(m, p['targets'])
     ]
     root = r['root'][1]
     rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
@@ -618,7 +659,7 @@ def main() -> None:
     simple, aside = raw_bound(simple, programs)
     skipped += aside
     for p in simple:
-        n = targets(p['key'])
+        n = p['targets'] = targets(p['key'])
         p['records'][0]['regs'] = {
             m: 0 if disabled_stream(m, v) else v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)
         }

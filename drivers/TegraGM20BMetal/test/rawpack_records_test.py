@@ -50,7 +50,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='barrier', records=[dict(regs={})]),
+            probe=dict(index=0, form='barrier', targets=1, records=[dict(regs={})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
@@ -83,7 +83,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | 16})]),
+            probe=dict(index=0, form='', targets=1, records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | 16})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['vertex_streams'], [5])
@@ -126,7 +126,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={})]),
+            probe=dict(index=0, form='', targets=0b11, records=[dict(regs={})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual((back['turn_refused'], back['two_plane'], back['xr_slots']), (True, True, 0x8001))
@@ -152,7 +152,9 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | (4100 & 0xFFF)})]),
+            probe=dict(
+                index=0, form='', targets=1, records=[dict(regs={0x1C00: 0x1000 | 12, 0x1C10: 0x1000 | (4100 & 0xFFF)})]
+            ),
         )
         with self.assertRaisesRegex(ValueError, 'vertex stream 1 of buffer 4'):
             directlink.pipeline_of(record, [], ids, [])
@@ -188,7 +190,7 @@ class RecordsTest(unittest.TestCase):
             programs=programs[:2],
             samplers=[],
             variants=[dict(assume=1, program=programs[2])],
-            probe=dict(index=0, form='', records=[dict(regs={})]),
+            probe=dict(index=0, form='', targets=1, records=[dict(regs={})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['variants'], [dict(stage=1, assume=1, program=2)])
@@ -236,7 +238,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(len(data), directlink.PIPELINE_BYTES)
         programs = [{'image': bytes([i]), 'data': b'', 'cbufs': []} for i in range(2)]
         ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
-        probe = {'index': 0, 'form': '', 'records': [{'regs': {}}]}
+        probe = {'index': 0, 'form': '', 'targets': 1, 'records': [{'regs': {}}]}
         record = {'pipeline': data, 'key': rec['key'], 'programs': programs, 'samplers': [], 'probe': probe}
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['entries'], tables)
@@ -266,7 +268,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(packfile.PIPELINE_V20.unpack_from(data, v20)[24:], (1, 2, 2, 4, 5))
         programs = [{'image': bytes([i]), 'data': b'', 'cbufs': []} for i in range(2)]
         ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
-        probe = {'index': 0, 'form': '', 'records': [{'regs': {}}]}
+        probe = {'index': 0, 'form': '', 'targets': 1, 'records': [{'regs': {}}]}
         record = {
             'pipeline': data,
             'key': rec['key'],
@@ -309,7 +311,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={})]),
+            probe=dict(index=0, form='', targets=1, records=[dict(regs={})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['written_format'], rec['written_format'])
@@ -393,7 +395,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={0x0210: 1, 0x0754: 1, 0x1224: 2, 0x1A00: 0})]),
+            probe=dict(index=0, form='', targets=1, records=[dict(regs={0x0210: 1, 0x0754: 1, 0x1224: 2, 0x1A00: 0})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(back['storage_mask'], 1)
@@ -446,7 +448,7 @@ class RecordsTest(unittest.TestCase):
             key=rec['key'],
             programs=programs,
             samplers=[],
-            probe=dict(index=0, form='', records=[dict(regs={0x0754: 20, 0x1224: 2})]),
+            probe=dict(index=0, form='', targets=1, records=[dict(regs={0x0754: 20, 0x1224: 2})]),
         )
         back = directlink.pipeline_of(record, [], ids, [])
         self.assertEqual(

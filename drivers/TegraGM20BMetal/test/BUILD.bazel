@@ -63,7 +63,9 @@
 #   raw_tic_words_test  raw/runtime/raw_zeta.h and raw_gpu.cpp's block-compressed rows: each depth/stencil format's
 #                     SET_ZT_FORMAT and texture header word 0, its stencil view's word 0 (raw_stencil_bits.h), and each
 #                     compressed format's word 0, rebuilt from NIL's row of NVK's format by NIL's generator rules
-#   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
+#   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns, or one of a target the
+#                     state's draw does not write; a two-plane state's alpha targets are its own, where raw_xr_pass.h
+#                     puts them (raw_xr_pass_test's cases)
 #   splits_layout_test  raw/pack/splits.py: a split is packed only where its per-pixel program binds its uniform
 #                     buffers as its whole program does
 #   raw_state_segment_test  raw/runtime/raw_state_segment.h: a bound segment's GPFIFO entries fetch the words the inline
