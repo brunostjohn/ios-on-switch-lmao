@@ -3,13 +3,15 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// gpu.raw.compressed_targets' ZBC arms (drivers/TegraGM20BMetal/raw/runtime/raw_zbc.h zbcColorEntry, zbcDepthEntry): a
-/// one-sample memoryless target of each format (compressed memory once the facade has made some) cleared again and
-/// again to a value the boot table lacks, its texels read back by a framebuffer-fetching draw into a private
-/// RGBA32Float target; for Depth16, an EQUAL-tested quad at the clear depth over a private BGRA8 target. The first
-/// round's clear writes texels (the facade asks for the entry at the third), so every later round must read back the
-/// first round's bits: an entry's L2 texel is what the ROP writes for the value. `zbc_<arm>=<first round texels off the
-/// value>:<last round texels off the first>:<ZBC hits>`; FAIL on either count or on no hit.
+/// gpu.raw.compressed_targets' ZBC arms (drivers/TegraGM20BMetal/raw/runtime/raw_zbc.h zbcColorEntry, zbcDepthEntry):
+/// a private one-sample target of each 4- and 8-byte format (compressed memory once the facade has made some of its
+/// shape: raw_private_comp.h, so a first texture asks and the arm's own comes after) cleared again and again to a value
+/// the boot table lacks, read back through the copy engine; for Depth16, a memoryless depth and an EQUAL-tested quad at
+/// the clear depth over a private BGRA8 target. The first round's clear writes texels (the facade asks for the entry at
+/// the third), so every later round must read back the first round's bytes: an entry's L2 texel is what the ROP writes
+/// for the value. `zbc_<arm>=<first round texels off the value>:<last round texels off the first>:<ZBC hits>`; FAIL on
+/// either count, on no hit, or on an arm that could not run (`zbc_<arm>_error`). RGBA32Float has no arm: a compressed
+/// one is a memoryless target, which only framebuffer fetch reads, whose storage form takes plain memory.
 enum CompressedZbcArms {
     static let width = 256, height = 128, rounds = 12
 
@@ -17,78 +19,71 @@ enum CompressedZbcArms {
         let name: String
         let format: MTLPixelFormat
         let clear: [Double]
-        let want: [Float]
-        let tolerance: Float
+        let texel: [UInt8]  // the bytes the clear writes
     }
 
     static func linear(_ code: Double) -> Double { X1Channel.linear(code / 255) }
 
-    static func unorm(_ codes: [Double], _ max: [Double]) -> [Double] { zip(codes, max).map { $0 / $1 } }
+    static func le(_ v: UInt32, _ n: Int) -> [UInt8] { (0..<n).map { UInt8(truncatingIfNeeded: v >> (8 * $0)) } }
 
     static let srgb = [linear(51), linear(102), linear(204), 1]
 
     static let arms: [Arm] = [
-        Arm(name: "bgra8srgb", format: .bgra8Unorm_srgb, clear: srgb, want: srgb.map(Float.init), tolerance: 2e-3),
-        Arm(name: "rgba8srgb", format: .rgba8Unorm_srgb, clear: srgb, want: srgb.map(Float.init), tolerance: 2e-3),
+        Arm(name: "bgra8srgb", format: .bgra8Unorm_srgb, clear: srgb, texel: [204, 102, 51, 255]),
+        Arm(name: "rgba8srgb", format: .rgba8Unorm_srgb, clear: srgb, texel: [51, 102, 204, 255]),
         Arm(
-            name: "rgb10a2", format: .rgb10a2Unorm, clear: unorm([300, 600, 900, 2], [1023, 1023, 1023, 3]),
-            want: unorm([300, 600, 900, 2], [1023, 1023, 1023, 3]).map(Float.init), tolerance: 1e-4),
+            name: "rgb10a2", format: .rgb10a2Unorm, clear: [300.0 / 1023, 600.0 / 1023, 900.0 / 1023, 2.0 / 3],
+            texel: le(300 | 600 << 10 | 900 << 20 | 2 << 30, 4)),
         Arm(
             name: "rgba16unorm", format: .rgba16Unorm,
-            clear: unorm([10000, 20000, 40000, 65535], [65535, 65535, 65535, 65535]),
-            want: unorm([10000, 20000, 40000, 65535], [65535, 65535, 65535, 65535]).map(Float.init), tolerance: 1e-6),
-        Arm(
-            name: "rgba32f", format: .rgba32Float, clear: [0.3, -1.5, 7.25, 0.5], want: [0.3, -1.5, 7.25, 0.5],
-            tolerance: 0),
+            clear: [10000.0 / 65535, 20000.0 / 65535, 40000.0 / 65535, 1],
+            texel: le(10000, 2) + le(20000, 2) + le(40000, 2) + le(65535, 2)),
     ]
 
     static let depth16 = Float(39321) / 65535
 
-    static func run(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
+    static func run(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String]) async {
         for arm in arms {
-            let before = RawFacade.compression(of: gpu.device)
-            let (first, last) = try await colourRounds(gpu, arm)
-            let hits = (RawFacade.compression(of: gpu.device)["zbc_hits"] ?? 0) - (before["zbc_hits"] ?? 0)
-            var firstOff = 0, lastOff = 0
-            first.withUnsafeBytes { f in
-                last.withUnsafeBytes { l in
-                    let a = f.bindMemory(to: Float.self), b = l.bindMemory(to: Float.self)
-                    for t in 0..<width * height {
-                        if (0..<4).contains(where: { abs(a[t * 4 + $0] - arm.want[$0]) > arm.tolerance }) {
-                            firstOff += 1
-                        }
-                        if (0..<4).contains(where: { a[t * 4 + $0].bitPattern != b[t * 4 + $0].bitPattern }) {
-                            lastOff += 1
-                        }
-                    }
+            await judged(arm.name, gpu, &metrics, &wrong) {
+                let (first, last) = try await colourRounds(gpu, arm)
+                let size = arm.texel.count
+                var firstOff = 0, lastOff = 0
+                for t in 0..<width * height {
+                    if Array(first[t * size..<(t + 1) * size]) != arm.texel { firstOff += 1 }
+                    if first[t * size..<(t + 1) * size] != last[t * size..<(t + 1) * size] { lastOff += 1 }
                 }
+                return (firstOff, lastOff)
             }
-            judge(arm.name, firstOff, lastOff, hits, &metrics, &wrong)
         }
+        await judged("depth16", gpu, &metrics, &wrong) {
+            let (first, last) = try await depthRounds(gpu)
+            return (unwritten(first), unwritten(last))
+        }
+    }
+
+    static func judged(
+        _ name: String, _ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String],
+        _ body: () async throws -> (Int, Int)
+    ) async {
         let before = RawFacade.compression(of: gpu.device)
-        let (first, last) = try await depthRounds(gpu)
-        let hits = (RawFacade.compression(of: gpu.device)["zbc_hits"] ?? 0) - (before["zbc_hits"] ?? 0)
-        judge("depth16", unwritten(first), unwritten(last), hits, &metrics, &wrong)
-    }
-
-    static func judge(
-        _ name: String, _ firstOff: Int, _ lastOff: Int, _ hits: Int, _ metrics: inout Metrics,
-        _ wrong: inout [String]
-    ) {
-        metrics.set("zbc_\(name)", "\(firstOff):\(lastOff):\(hits)")
-        if firstOff > 0 { wrong.append("zbc_\(name)_first") }
-        if lastOff > 0 { wrong.append("zbc_\(name)_held_texel") }
-        if hits == 0 { wrong.append("zbc_\(name)_no_hit") }
-    }
-
-    /// The fetched copy after the first round and after the last
-    static func colourRounds(_ gpu: GPU, _ arm: Arm) async throws -> ([UInt8], [UInt8]) {
-        let target = try gpu.texture(arm.format, width, height, usage: [.renderTarget], storage: .memoryless)
-        let copy = try gpu.texture(.rgba32Float, width, height, usage: [.renderTarget, .shaderRead])
-        let state = try gpu.render(fragment: "zbc_fetch_copy_fragment", format: arm.format) { d in
-            d.colorAttachments[0].writeMask = []
-            d.colorAttachments[1].pixelFormat = .rgba32Float
+        do {
+            let (firstOff, lastOff) = try await body()
+            let hits = (RawFacade.compression(of: gpu.device)["zbc_hits"] ?? 0) - (before["zbc_hits"] ?? 0)
+            metrics.set("zbc_\(name)", "\(firstOff):\(lastOff):\(hits)")
+            if firstOff > 0 { wrong.append("zbc_\(name)_first") }
+            if lastOff > 0 { wrong.append("zbc_\(name)_held_texel") }
+            if hits == 0 { wrong.append("zbc_\(name)_no_hit") }
+        } catch {
+            metrics.set("zbc_\(name)_error", String(describing: error).prefix(80).description)
+            wrong.append("zbc_\(name)_error")
         }
+    }
+
+    /// The target's bytes after the first round and after the last
+    static func colourRounds(_ gpu: GPU, _ arm: Arm) async throws -> ([UInt8], [UInt8]) {
+        _ = try gpu.texture(arm.format, width, height)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let target = try gpu.texture(arm.format, width, height)
         var first: [UInt8] = []
         for round in 0..<rounds {
             _ = try await gpu.run { commands in
@@ -97,21 +92,13 @@ enum CompressedZbcArms {
                 pass.colorAttachments[0].loadAction = .clear
                 pass.colorAttachments[0].clearColor = MTLClearColor(
                     red: arm.clear[0], green: arm.clear[1], blue: arm.clear[2], alpha: arm.clear[3])
-                pass.colorAttachments[0].storeAction = .dontCare
-                pass.colorAttachments[1].texture = copy
-                pass.colorAttachments[1].loadAction = .dontCare
-                pass.colorAttachments[1].storeAction = .store
-                let e = commands.makeRenderCommandEncoder(descriptor: pass)!
-                e.setRenderPipelineState(state)
-                var corners = GPU.fullScreen
-                e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
-                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                e.endEncoding()
+                pass.colorAttachments[0].storeAction = .store
+                commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
             }
-            if round == 0 { first = try await gpu.read(copy, bytesPerPixel: 16) }
+            if round == 0 { first = try await gpu.read(target, bytesPerPixel: arm.texel.count) }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        return (first, try await gpu.read(copy, bytesPerPixel: 16))
+        return (first, try await gpu.read(target, bytesPerPixel: arm.texel.count))
     }
 
     /// The BGRA8 target after the first round and after the last: white where the quad passed EQUAL at the clear depth
