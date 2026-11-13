@@ -122,3 +122,33 @@ int tgm_clock_ceiling_restore(void)
 	nvxnu_mutex_unlock(tgm_idle.clk);
 	return result;
 }
+
+/* At a wake (gpu_power.c, tgm_gpu.lock held): the idle clock back in use. A GPCPLL that came back off the run rate (another
+ * PL, or another VCO than the idle clock's) is put back on it first, as idle_fail does; one that cannot be leaves the
+ * divider marked low, so the first raise tries again. The text is the wake line's. */
+const char *tgm_idle_wake(void)
+{
+	const char *clock = "on";
+	nvxnu_mutex_lock(tgm_idle.clk);
+	const u32 coeff = nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R);
+	if ((coeff & 0xffff) != tgm_idle.vco_coeff || ((coeff >> 16) & 0x3f) != tgm_idle.run_pl) {
+		int back =
+			(coeff & 0xffff) == tgm_idle.vco_coeff ? pl_switch(tgm_idle.run_pl) : -EIO;
+		if (back)
+			back = clk_prog_khz(tgm_gpu.device, tgm_idle.run_khz);
+		WRITE_ONCE(tgm_idle.low, back ? 1 : 0);
+		if (back && tgm_idle.failures < UINT32_MAX)
+			tgm_idle.failures++;
+		clock = back ? "on, its run rate not put back (the first raise tries again)"
+			     : "on, its run rate put back";
+		nvxnu_log(
+			"tegra-gm20b: wake: GPCPLL COEFF %08x is not the idle clock's run rate (PL "
+			"%u, VCO %04x): %s\n",
+			coeff, tgm_idle.run_pl, tgm_idle.vco_coeff, clock);
+	}
+	tgm_idle.log_start = nvxnu_nanotime();
+	__atomic_store_n(&tgm_idle.last_busy, tgm_idle.log_start, __ATOMIC_SEQ_CST);
+	WRITE_ONCE(tgm_idle.on, 1);
+	nvxnu_mutex_unlock(tgm_idle.clk);
+	return clock;
+}

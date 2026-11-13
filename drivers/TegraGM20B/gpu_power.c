@@ -410,22 +410,8 @@ static const char *wake_open_locked(void)
 {
 	const char *clock = "not in use";
 
-	if (tgm_idle.clk && sc7.idle_on) {
-		nvxnu_mutex_lock(tgm_idle.clk);
-		if (((nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R) >> 16) & 0x3f) == tgm_idle.run_pl) {
-			tgm_idle.log_start = nvxnu_nanotime();
-			__atomic_store_n(&tgm_idle.last_busy, tgm_idle.log_start, __ATOMIC_SEQ_CST);
-			WRITE_ONCE(tgm_idle.on, 1);
-			clock = "on";
-		} else {
-			clock = "OFF for this boot";
-			nvxnu_log("tegra-gm20b: wake: GPCPLL COEFF %08x is not the idle clock's PL "
-				  "%u: idle clock off, GPU at %d kHz\n",
-				  nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R), tgm_idle.run_pl,
-				  sc7.khz);
-		}
-		nvxnu_mutex_unlock(tgm_idle.clk);
-	}
+	if (tgm_idle.clk && sc7.idle_on)
+		clock = tgm_idle_wake();
 	return clock;
 }
 

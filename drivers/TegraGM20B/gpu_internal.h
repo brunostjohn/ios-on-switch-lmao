@@ -549,6 +549,7 @@ struct idle_state {
 };
 extern struct idle_state tgm_idle;
 int tgm_clock_ceiling_restore(void);
+const char *tgm_idle_wake(void);
 u64 tgm_idle_raise(void);
 void tgm_idle_start(void);
 extern u64 tgm_high_end_ns, tgm_high_end_pt;

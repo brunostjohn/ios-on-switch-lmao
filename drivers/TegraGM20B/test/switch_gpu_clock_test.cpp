@@ -26,6 +26,7 @@ struct {
 	u32 run_pl, idle_pl;
 	int on, low, clock_available;
 	u32 failures;
+	u64 log_start, last_busy;
 } tgm_idle;
 
 u32 coefficient;
@@ -99,6 +100,11 @@ int pl_switch(u32 pl)
 	return 0;
 }
 
+u64 nvxnu_nanotime()
+{
+	return 1000;
+}
+
 void nvxnu_log(const char *, ...)
 {
 	++logs;
@@ -114,7 +120,8 @@ class GpuClock : public testing::Test
 	void SetUp() override
 	{
 		tgm_gpu.device = &device;
-		tgm_idle = {&device, 768000, 76800, 768000, 0, 1536000, 0x2801, 1, 10, 1, 0, 1, 0};
+		tgm_idle = {&device, 768000, 76800, 768000, 0, 1536000, 0x2801, 1,
+			    10,      1,      0,     1,      0, 0,       0};
 		coefficient = 0x12801;
 		inside = locked = reads = reprograms = logs = 0;
 		fail_switch = fail_reprogram = false;
@@ -248,6 +255,49 @@ TEST_F(GpuClock, ARunRateThatCouldNotBePutBackLeavesTheNextRaiseToTryAgain)
 	idle_fail("drop", 10);
 	EXPECT_EQ(tgm_idle.low, 0);
 	locked = 0;
+}
+
+TEST_F(GpuClock, AWakeOffTheRunPlPutsItBackAndKeepsTheIdleClock)
+{
+	tgm_idle.on = 0;
+	coefficient = 0x32801;
+	EXPECT_STREQ(tgm_idle_wake(), "on, its run rate put back");
+	EXPECT_EQ(coefficient >> 16, 1u);
+	EXPECT_EQ(tgm_idle.on, 1);
+	EXPECT_EQ(tgm_idle.low, 0);
+	EXPECT_EQ(tgm_idle.failures, 0u);
+	EXPECT_EQ(tgm_idle.last_busy, 1000u);
+}
+
+TEST_F(GpuClock, AWakeOnAnotherVcoReprogramsTheRunRate)
+{
+	tgm_idle.on = 0;
+	coefficient = 0x33001;
+	EXPECT_STREQ(tgm_idle_wake(), "on, its run rate put back");
+	EXPECT_EQ(reprograms, 1u);
+	EXPECT_TRUE(switches.empty());
+	EXPECT_EQ(tgm_idle.on, 1);
+}
+
+TEST_F(GpuClock, AWakeWhoseRunRateCannotBePutBackLeavesTheFirstRaiseToTryAgain)
+{
+	tgm_idle.on = 0;
+	coefficient = 0x32801;
+	fail_switch = fail_reprogram = true;
+	EXPECT_STREQ(tgm_idle_wake(),
+		     "on, its run rate not put back (the first raise tries again)");
+	EXPECT_EQ(tgm_idle.on, 1);
+	EXPECT_EQ(tgm_idle.low, 1);
+	EXPECT_EQ(tgm_idle.failures, 1u);
+}
+
+TEST_F(GpuClock, AWakeAtTheRunPlTouchesNothing)
+{
+	tgm_idle.on = 0;
+	EXPECT_STREQ(tgm_idle_wake(), "on");
+	EXPECT_TRUE(switches.empty());
+	EXPECT_EQ(logs, 0u);
+	EXPECT_EQ(tgm_idle.on, 1);
 }
 
 TEST_F(GpuClock, StateQueryDoesNotWakeTheGpuOrTouchRegisters)
