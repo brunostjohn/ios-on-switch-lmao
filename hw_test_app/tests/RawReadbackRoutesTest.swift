@@ -12,10 +12,11 @@ import SwitchTexturePattern
 /// texels read as rows. Its render ran on WidgetRenderer's own raw device (states with a 260x260 target) and no IOSurface
 /// of that size was ever block-linear, so the rows came back through one of the raw path's own readbacks. This draws an
 /// opaque pattern whose every byte of a GOB differs into a 260x260 BGRA target with the 3D engine, then reads it back by
-/// each route raw offers, and by SwiftUI's ImageRenderer (RenderBox, as WidgetRenderer draws): `<route>_wrong` (bytes
-/// off by more than the route's tolerance) and `<route>_gob` (its first row is the pattern laid out in GOBs, whatever
-/// pitch the misread took). `surface_bare` reads a block-linear surface with no lock, which only a lock can show as rows
-/// (TegraGM20BViews.cpp): reported with the surface's layout, not judged.
+/// each route raw offers (heap textures among them, as RenderBox places its own), and by SwiftUI's ImageRenderer
+/// (RenderBox, as WidgetRenderer draws): `<route>_wrong` (bytes off by more than the route's tolerance) and
+/// `<route>_gob` (its first row is the pattern laid out in GOBs, whatever pitch the misread took). `surface_bare` reads
+/// a block-linear surface with no lock, which only a lock can show as rows (TegraGM20BViews.cpp): reported with the
+/// surface's layout, not judged.
 struct RawReadbackRoutesTest: HWTest {
     let id = "gpu.raw.readback_routes"
     let name = "A 260x260 BGRA render reads back as rows by every readback route"
@@ -55,6 +56,14 @@ struct RawReadbackRoutesTest: HWTest {
         judge("shared_getbytes", Self.getBytes(sharedTarget))
         judge("shared_blit", try await gpu.read(sharedTarget, bytesPerPixel: 4))
         judge("ci_texture", Self.ciRows(CIImage(mtlTexture: sharedTarget)?.oriented(.downMirrored), gpu.device))
+
+        for storage in [MTLStorageMode.private, .shared] {
+            let label = storage == .private ? "heap_private" : "heap_shared"
+            let target = try Self.heapTexture(gpu, storage)
+            try await draw(target)
+            judge("\(label)_blit", try await gpu.read(target, bytesPerPixel: 4))
+            if storage == .shared { judge("\(label)_getbytes", Self.getBytes(target)) }
+        }
 
         let (bufferTexture, backing, pitch) = try Self.bufferTexture(gpu)
         try await draw(bufferTexture)
@@ -131,6 +140,21 @@ struct RawReadbackRoutesTest: HWTest {
                 $0.baseAddress!, bytesPerRow: row, from: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0)
         }
         return out
+    }
+
+    /// A target placed in a heap of `storage` (RenderBox's ResourceHeap places its textures so)
+    static func heapTexture(_ gpu: GPU, _ storage: MTLStorageMode) throws -> MTLTexture {
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: side, height: side, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = storage
+        let h = MTLHeapDescriptor()
+        h.storageMode = storage
+        h.size = gpu.device.heapTextureSizeAndAlign(descriptor: d).size
+        guard let heap = gpu.device.makeHeap(descriptor: h), let texture = heap.makeTexture(descriptor: d) else {
+            throw TestFailure("no \(storage == .private ? "private" : "shared") heap texture")
+        }
+        return texture
     }
 
     /// A linear texture over a shared buffer, whose bytes a CGImage can wrap with no copy
