@@ -139,7 +139,9 @@ static void notePipeline(RMCommandBuffer *cb, const RMPass &pass, const raw::Pip
     }
     if (!pl || !pl->rec)
         return;
-    const uint8_t slots = raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed;
+    const uint8_t slots =
+        raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr, gRM->raw->storageCompressedOk()) &
+        pass.compressed;
     for (uint32_t slot = 0; slots >> slot; ++slot) {
         RMTexture *t = (RMTexture *)pass.color[slot].texture;
         if ((slots >> slot & 1) && fitsOncePlain(*pl, slot, t->_raw) &&

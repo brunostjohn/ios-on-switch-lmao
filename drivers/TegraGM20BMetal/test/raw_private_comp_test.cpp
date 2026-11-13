@@ -26,7 +26,7 @@ struct Target {
 // barrier form ("twin"), or the refusal that sends it to m2v ("enc.storage"), once the plain move ran before the encode
 std::string route(uint8_t storageBits, bool twin, Target &t)
 {
-    if (raw::storageSlotsToPlain(storageBits, twin) & 1)
+    if (raw::storageSlotsToPlain(storageBits, twin, raw::storageReadsCompressed()) & 1)
         t.comptags = false;
     const auto reason = raw::storageViewMismatch(4, 1, t);
     if (reason == raw::StorageFallback::None)
@@ -85,10 +85,19 @@ TEST(RawPrivateComp, AFetchingStateWithNoBarrierFormDrawsAPlainTargetOnTheRawPat
 TEST(RawPrivateComp, AStateWithABarrierFormKeepsTheCompressedTarget)
 {
     Target t{4, 1, true};
-    EXPECT_EQ(raw::storageSlotsToPlain(0x3, true), 0);
+    EXPECT_EQ(raw::storageSlotsToPlain(0x3, true, false), 0);
     EXPECT_EQ(route(0x1, true, t), "twin");
     EXPECT_TRUE(t.comptags);
-    EXPECT_EQ(raw::storageSlotsToPlain(0x6, false), 0x6);
+    EXPECT_EQ(raw::storageSlotsToPlain(0x6, false, false), 0x6);
+}
+
+// gpu.raw.storage_compressed's storage arm turns storage views of compressed memory on (switchRawProbeStorageCompressed:):
+// its no-twin fetching draw must keep the compressed target it judges, not move it to plain memory first
+TEST(RawPrivateComp, StorageViewsOfCompressedMemoryMoveNothing)
+{
+    EXPECT_EQ(raw::storageSlotsToPlain(0x3, false, true), 0);
+    Target t{4, 1, true};
+    EXPECT_EQ(raw::storageViewMismatch(4, 1, t, true), raw::StorageFallback::None);
 }
 
 // A compositor drawing a no-twin fetch pass over a private target every frame, keeping the target or making a new one
@@ -102,7 +111,7 @@ uint32_t movesOver(uint32_t frames, bool newTargetEachFrame)
     for (uint32_t frame = 0; frame < frames; ++frame) {
         if (!frame || newTargetEachFrame)
             target = Target{4, 1, !plain.holds(shape)};
-        if (raw::storageSlotsToPlain(0x1, false) & 1 && target.comptags) {
+        if (raw::storageSlotsToPlain(0x1, false, false) & 1 && target.comptags) {
             plain.add(shape);
             target.comptags = false;
             ++moves;
@@ -138,8 +147,8 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
                                   "encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);"));
     const std::string facade = SourceText("../raw/runtime/RawMetalPrivateComp.mm");
     const std::string note = Body(facade, "static void notePipeline(");
-    EXPECT_THAT(note,
-                HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed"));
+    EXPECT_THAT(note, HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr, "
+                                "gRM->raw->storageCompressedOk()) &\n        pass.compressed"));
     EXPECT_THAT(note, HasSubstr("cb->_scanStorageTargets = true;")) << "a variant still being made is looked at later";
     const std::string move = Body(facade, "void rmStorageTargetsPlain(");
     EXPECT_THAT(move, HasSubstr("if (cb->_scanStorageTargets)"));

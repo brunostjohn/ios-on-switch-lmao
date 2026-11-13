@@ -39,12 +39,12 @@ constexpr uint32_t privateCompressedKind(const PrivateTextureFacts &f)
 }
 
 // The colour slots a draw binds as storage images where its state has no barrier form to take instead: a compressed
-// attachment there refuses the draw (raw_storage_form.h, the surface unit reads a compressible kind's raw bytes), so it
-// moves to plain memory before the range encodes. A state with a barrier form keeps the compressed attachment and draws
-// through that form.
-constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin)
+// attachment there refuses the draw unless storage views may name compressed memory (`compressedOk`:
+// Device::storageCompressedOk, raw_storage_form.h), so it moves to plain memory before the range encodes. A state with a
+// barrier form keeps the compressed attachment and draws through that form.
+constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin, bool compressedOk)
 {
-    return barrierTwin ? 0 : storageBits;
+    return barrierTwin || compressedOk ? 0 : storageBits;
 }
 
 // What a target is made for, by its descriptor: a target of the same shape as one a storage form needed plain is made
