@@ -1467,7 +1467,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted || completionFlipOut();
+               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted || completionFlipOut() ||
+               scanoutAttachWaits;
     }
 
     void maskIdleFrameEnd()
@@ -1680,8 +1681,10 @@ private:
         }
         if ((status & kFrameEndInt) && tapeSettle)
             checkTapeSettled();
-        if (status & kFrameEndInt)
+        if (status & kFrameEndInt) {
             probeFrameEnd();
+            scanoutAttachFrameEnd();
+        }
         if (status & kFrameEndInt) {
             planeFrameEnd();
             landscapeFrameEnd();
@@ -4797,6 +4800,7 @@ public:
 #include "SwitchLandscapeSelection.h"
 #include "SwitchPlaneConversionDisplay.h"
 #include "SwitchPlaneCompositeDisplay.h"
+#include "SwitchScanoutAttach.h"
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
