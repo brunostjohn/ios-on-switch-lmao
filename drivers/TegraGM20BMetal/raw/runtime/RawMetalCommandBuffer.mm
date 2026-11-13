@@ -6,6 +6,7 @@
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
 #include "raw_take_pool.h"
+#import "RawMetalPipeline.h"
 
 // ---- the device's submission machinery ----
 
@@ -420,8 +421,12 @@ void rmPoolCommandBuffers()
         }
         if (!uses.empty())
             _plan.addUses(_plan.size() - 1, uses);
-        if (cmd.op == OpEnd && _encOpen)
+        if (cmd.op == OpEnd && _encOpen) {
             _plan.prepareRange(_encAt, _plan.size());
+            // its refusal is final now, into its first command before the worker may read it
+            [self closeEncoder];
+            rmPublishEncoder(self);
+        }
     }
     const size_t consumed = raw::extraWords(cmd);
     if (consumed && cmd.x + consumed == _extra.size())
@@ -442,6 +447,7 @@ void rmPoolCommandBuffers()
         _encRefused = true;  // this encoder goes to m2v
     else
         _whole = true;
+    rmPipelineVeto(self, _active ? VetoRefused : VetoWhole);
     if (_reason != WhyRaw)
         return;
     _reason = reason;
@@ -451,6 +457,7 @@ void rmPoolCommandBuffers()
 // A refusal of the command buffer's own (an event m2v must see, a call on the command buffer): the whole of it goes to m2v
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why
 {
+    rmPipelineVeto(self, VetoWhole);
     _whole = true;
     [self takeReason:reason why:why];
 }
@@ -724,6 +731,7 @@ void rmPoolCommandBuffers()
     std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
+    rmPipelineVeto(self, VetoProbes);
     _forceWholePrograms = true;
     return @YES;
 }
@@ -734,6 +742,7 @@ void rmPoolCommandBuffers()
     std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
+    rmPipelineVeto(self, VetoProbes);
     _inlineStates = true;
     return @YES;
 }
@@ -763,6 +772,22 @@ void rmPoolCommandBuffers()
     if (!route.onlyCompatibility() && !_m2v)
         return @"raw";
     return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
+}
+
+// raw_facade_commit_test's, final once it completed: of its raw ranges' encoders, those the worker encoded ahead of its
+// commit; the encodes ahead of it the worker gave back and why (given_back), the reasons the recording gave (veto, both
+// RMPipelineVeto)
+- (NSDictionary<NSString *, NSNumber *> *)switchRawPipelined
+{
+    if (!_completedSent)
+        return nil;
+    return @{
+        @"encoders" : @(_pipelineEncoders),
+        @"pipelined" : @(_pipelinedEncoders),
+        @"abandons" : @(_pipelineAbandons),
+        @"veto" : @(_pipelineVeto.load(std::memory_order_relaxed)),
+        @"given_back" : @(_pipelineGivenBack),
+    };
 }
 
 // facadecost's held-chunk check: the GPU addresses of its setBytes chunks, read while its job is held in flight (they go

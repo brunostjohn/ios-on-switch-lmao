@@ -4138,6 +4138,7 @@ CommandBuffer *Device::begin()
     cb.nativeReads_.clear();
     cb.nativeSurfaces_.clear();
     cb.pitchImports_.clear();
+    cb.deferContents = cb.contentsDeferred = false;
     overflowing_ = false;
     overflow_.clear();
     cb.pushStart_ = push_.head;
@@ -4494,6 +4495,10 @@ uint64_t CommandBuffer::batchLimit() const
 // would allow a producer to replace the vertices between the snapshot and this draw's GPU read.
 bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, uint64_t bytes)
 {
+    if (deferContents) {
+        contentsDeferred = true;
+        return false;
+    }
     Device &d = *dev_;
     if (!cpu || !buffer.cpu || uintptr_t(cpu) < uintptr_t(buffer.cpu) || !bytes)
         return false;

@@ -187,6 +187,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
 {
     SWITCH_API(ApiEncoder);
     RMParallelRenderEncoder *e = [RMParallelRenderEncoder new];
+    rmPipelineVeto(self, VetoParallel);
     [self begin:e];
     e->_descriptor = [d copy];
     [self retain:e->_descriptor];

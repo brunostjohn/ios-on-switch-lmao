@@ -369,6 +369,8 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
     gRawRelease.start(
         [](void *) {
+            gRM->orphanCheck.store(true, std::memory_order_release);
+            gRM->schedule.wake();
             gRM->raw->trim();
             gRM->raw->purgeArenas(gRM->committed);
             gRM->raw->trimArenas(gRM->committed);

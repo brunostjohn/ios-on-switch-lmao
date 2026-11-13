@@ -162,6 +162,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @"committed already";
+    rmPipelineVeto(self, VetoProbes);
     _probeForms = f;
     return nil;
 }
@@ -193,6 +194,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
         o.value = uint32_t(number(op, @"value"));
         if (o.method >= 0x8000 || o.method % 4)
             return @"a 3D-class method below 0x8000";
+        rmPipelineVeto(self, VetoProbes);
         _probeOps.push_back({_encAt, o, nil, written});
         return nil;
     }
@@ -223,6 +225,7 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
         return @"a fill's colour format is its destination's own 2D format, not an sRGB one (probeSolidFill)";
     if (o.dx + o.dw > o.dst.width || o.dy + o.dh > o.dst.height)
         return @"a rectangle outside the written texture";
+    rmPipelineVeto(self, VetoProbes);
     _probeOps.push_back({_encAt, o, read, written});
     return nil;
 }

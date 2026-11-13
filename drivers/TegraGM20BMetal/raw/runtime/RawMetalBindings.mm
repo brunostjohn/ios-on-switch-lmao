@@ -151,10 +151,14 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
     }
     if ((stage == 1 || stage == 2) && index < raw::kStageTextures)
         _tex[stage - 1][index] = x;
-    if (x && x->_raw.sampled)
+    if (x && x->_raw.sampled) {
+        rmPipelineVeto(_cb, VetoShadows);
         _cb->_sampledShadows = true;
-    if (x && x->_raw.standIn)
+    }
+    if (x && x->_raw.standIn) {
+        rmPipelineVeto(_cb, VetoShadows);
         _cb->_standIns = true;
+    }
     setBinding(_cb, OpTexture, stage, index, t, 0);
 }
 

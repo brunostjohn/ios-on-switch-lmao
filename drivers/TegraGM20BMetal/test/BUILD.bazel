@@ -5014,8 +5014,9 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
-# Core Animation shaped command buffers through the facade over the kernel model (raw_scale_frames.h): the words of
-# their jobs (outputs/words.txt) for a comparison between builds
+# Core Animation shaped command buffers through the facade over the kernel model (raw_scale_frames.h), recorded at the
+# render thread's pace: the words of their jobs (outputs/words.txt) for a comparison between builds, what the submit
+# worker encoded ahead of their commits, and the commit's latency with a GPU that holds the jobs (outputs/commit_latency.txt)
 host_test(
     name = "raw_facade_commit_test",
     srcs = [
@@ -5025,6 +5026,7 @@ host_test(
         "raw_job_methods.h",
         "raw_facade_commit_test.cpp",
         "raw_scale_frames.h",
+        "timed_gpu.h",
         "raw_facade_standins.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
@@ -5054,6 +5056,91 @@ host_test(
     deps = [
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+)
+
+# The facade and runtime as raw_facade_plugin_host and raw_runtime_plugin_host build them, thread-sanitized: the caller's
+# recording against the submit worker's encode ahead (raw_facade_commit_tsan_test)
+host_library(
+    name = "raw_facade_plugin_tsan",
+    srcs = [":raw_facade_units"],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-fsanitize=thread",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS,
+)
+
+host_library(
+    name = "raw_runtime_plugin_tsan",
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS + ["-fsanitize=thread"],
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+)
+
+# raw_facade_commit_test's command buffers thread-sanitized
+host_test(
+    name = "raw_facade_commit_tsan_test",
+    size = "medium",
+    srcs = [
+        "empty_pack.h",
+        "made_metallib.h",
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+        "raw_facade_commit_test.cpp",
+        "raw_scale_frames.h",
+        "timed_gpu.h",
+        "raw_facade_standins.h",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    # the recording against the worker's encode ahead; the latency and cost measures time the model's GPU, whose fence
+    # writes race the device's reads of the fence page by design (the hardware writes it)
+    args = ["--gtest_filter=-*CommitLatency*:*RecordingCost*"],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-fsanitize=thread",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {
+        "SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)",
+        "TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+        "-fsanitize=thread",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_tsan",
+        ":raw_runtime_plugin_tsan",
         "//kits/SwitchRefusal:switch_refusal",
         "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,

@@ -1473,6 +1473,13 @@ public:
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
     void requirePitch(const Import *source);
+    // An import required pitch after a texture over it was read through its native image
+    bool pitchAfterNativeRead() const;
+    // Encoded before its command buffer's commit (RawMetalRangeEncode.h): the CPU may still write a buffer, so the encode
+    // reads no buffer's contents; one that would have is `contentsDeferred` (the encode then stops, and goes again at the
+    // commit)
+    bool deferContents = false;
+    bool contentsDeferred = false;
     void invalidateNativeReads();
     void releaseNativeReads();
 
@@ -2163,6 +2170,12 @@ public:
     uint64_t channelGeneration() const
     {
         return generations_.current();
+    }
+
+    // The channel an encode began on (channelGeneration() then) is the one begin() would hand out now
+    bool channelCurrent(uint64_t generation) const
+    {
+        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_);
     }
 
     uint32_t completed() const

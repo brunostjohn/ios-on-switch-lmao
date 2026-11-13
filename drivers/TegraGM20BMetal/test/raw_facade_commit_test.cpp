@@ -1,23 +1,30 @@
 // SPDX-License-Identifier: MIT
-// Core Animation shaped command buffers through the raw facade over the kernel model: the words each job carries, written
-// to the test's outputs (words.txt) for a comparison with another build's, and one hash of them.
+// Core Animation shaped command buffers through the raw facade over the kernel model, recorded at the render thread's
+// pace (a pass every few hundred microseconds), so the submit worker encodes the ended encoders ahead of the commit
+// (RawMetalPipeline.mm): the words each job carries, written to the test's outputs (words.txt) for a comparison with
+// another build's; what was encoded ahead and what took it back; and, with a GPU that holds each job, the time from the
+// commit to its return, to waitUntilScheduled's and to the first job's submission (commit_latency.txt).
 #include "raw_scale_frames.h"
+#include "timed_gpu.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <thread>
 
 namespace {
 
 using namespace harness;
+using Clock = std::chrono::steady_clock;
 
 struct Opened {
     id<MTLDevice> device;
     id<MTLRenderPipelineState> state;
 };
 
-// One device a process (raw_facade_harness.h)
-const Opened &openScale()
+const Opened &opened()
 {
     static const Opened made = [] {
         const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
@@ -34,6 +41,14 @@ const Opened &openScale()
     return made;
 }
 
+double percentileOf(std::vector<double> v, double p)
+{
+    if (v.empty())
+        return 0;
+    std::sort(v.begin(), v.end());
+    return v[std::min(v.size() - 1, size_t(p * double(v.size())))];
+}
+
 uint64_t fnv(const std::string &text)
 {
     uint64_t h = 1469598103934665603ull;
@@ -48,31 +63,90 @@ std::string outputs()
     return at ? at : dir();
 }
 
+size_t jobCount()
+{
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    return kernel_model::model.jobs.size();
+}
+
+// `shape` recorded on `queue` a pass every `pace`
+id<MTLCommandBuffer> paced(id<MTLCommandQueue> queue, const std::vector<id<MTLTexture>> &into,
+                           const scale_frames::Shape &shape, uint32_t frame, std::chrono::microseconds pace)
+{
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    for (int p = 0; p < shape.passes; p++) {
+        scale_frames::pass(cb, opened().state, into, shape, p, frame);
+        std::this_thread::sleep_for(pace);
+    }
+    return cb;
+}
+
+// What the worker encoded of `cb` ahead of its commit (RMCommandBuffer switchRawPipelined); empty on a build without it
+NSDictionary *pipelined(id<MTLCommandBuffer> cb)
+{
+    const SEL selector = sel_registerName("switchRawPipelined");
+    if (![(id)cb respondsToSelector:selector])
+        return nil;
+    return ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)cb, selector);
+}
+
+std::string path(id<MTLCommandBuffer> cb)
+{
+    return [[(id)cb performSelector:@selector(switchRawPath)] UTF8String];
+}
+
 TEST(RawFacadeCommit, ScaleShapedJobWords)
 {
-    const Opened opened = openScale();
-    ASSERT_TRUE(opened.device != nil && opened.state != nil);
-    id<MTLCommandQueue> queue = [opened.device newCommandQueue];
+    ASSERT_TRUE(opened().device != nil && opened().state != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
     const scale_frames::Shape shapes[] = {{1, 6, 1}, {15, 90, 4}, {12, 134, 3}, {7, 20, 2}};
     std::vector<std::vector<id<MTLTexture>>> into;
     for (const auto &shape : shapes)
-        into.push_back(scale_frames::targets(opened.device, shape));
-    const size_t first = [] {
-        std::lock_guard<std::mutex> l(kernel_model::callLock);
-        return kernel_model::model.jobs.size();
-    }();
+        into.push_back(scale_frames::targets(opened().device, shape));
+    const size_t first = jobCount();
     for (uint32_t frame = 0; frame < 3; frame++)
         for (size_t s = 0; s < std::size(shapes); s++) {
-            id<MTLCommandBuffer> cb = scale_frames::record(queue, opened.state, into[s], shapes[s], frame);
+            id<MTLCommandBuffer> cb = paced(queue, into[s], shapes[s], frame, std::chrono::microseconds(300));
             [cb commit];
             [cb waitUntilCompleted];
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
-            EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
+            EXPECT_EQ(path(cb), "raw");
+            if (NSDictionary *p = pipelined(cb))
+                printf("shape %zu frame %u: %s\n", s, frame,
+                       [[p description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "].UTF8String);
         }
     const std::string words = scale_frames::jobWords(first);
     std::ofstream(outputs() + "/words.txt") << words;
     printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)fnv(words));
     EXPECT_FALSE(words.empty());
+}
+
+TEST(RawFacadeCommit, EncodersEndedBeforeTheCommitAreEncodedAhead)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    NSDictionary *before = counters(opened().device);
+    for (uint32_t frame = 0; frame < 4; frame++) {
+        id<MTLCommandBuffer> cb = paced(queue, into, shape, frame, std::chrono::milliseconds(1));
+        [cb commit];
+        [cb waitUntilCompleted];
+        ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+        NSDictionary *p = pipelined(cb);
+        ASSERT_NE(p, nil);
+        EXPECT_EQ([p[@"encoders"] intValue], 15);
+        // all but what was recorded since the last hand-off (kHandOff) and the two encoders held for the look-ahead
+        EXPECT_GE([p[@"pipelined"] intValue], 10) << [[p description] UTF8String];
+        EXPECT_EQ([p[@"abandons"] intValue], 0);
+        EXPECT_EQ([p[@"veto"] intValue], 0);
+    }
+    NSDictionary *after = counters(opened().device);
+    const auto delta = [&](NSString *key) {
+        return [after[key] longLongValue] - [before[key] longLongValue];
+    };
+    printf("hand-offs over 4 frames: %lld, %lld of them woke the worker\n", delta(@"pipeline_handoffs"),
+           delta(@"pipeline_handoff_wakes"));
 }
 
 // Copy-engine launches in the model's jobs from `first` on: a fresh texture's fill is one (RawMetalFresh.mm writeFresh)
@@ -99,23 +173,212 @@ size_t copyLaunches(size_t first)
     return launches;
 }
 
+id<MTLTexture> newTarget()
+{
+    return scale_frames::targets(opened().device, {1, 1, 1})[0];
+}
+
 // A new target its first pass clears and stores whole, with no renderTargetWidth set: Metal renders over the attachment
 // whole, so nothing writes its contents first
 TEST(RawFacadeCommit, ANewTargetClearedWholeTakesNoFill)
 {
-    const Opened opened = openScale();
-    ASSERT_TRUE(opened.device != nil && opened.state != nil);
-    id<MTLCommandQueue> queue = [opened.device newCommandQueue];
-    const size_t first = [] {
-        std::lock_guard<std::mutex> l(kernel_model::callLock);
-        return kernel_model::model.jobs.size();
-    }();
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const size_t first = jobCount();
     id<MTLCommandBuffer> cb = [queue commandBuffer];
-    scale_frames::pass(cb, opened.state, scale_frames::targets(opened.device, {1, 1, 1}), {1, 6, 1}, 0, 0);
+    scale_frames::pass(cb, opened().state, {newTarget()}, {1, 6, 1}, 0, 0);
     [cb commit];
     [cb waitUntilCompleted];
     ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
     EXPECT_EQ(copyLaunches(first), 0u);
+}
+
+// Each frame draws into two new targets, as the render server's close animations do: one cleared whole (no fill), one
+// loaded first (its contents written ahead of the pass that loads it, in a blit of their own)
+TEST(RawFacadeCommit, NewTargetsEachFrameAreEncodedAhead)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    for (uint32_t frame = 0; frame < 4; frame++) {
+        const size_t first = jobCount();
+        const id<MTLTexture> cleared = newTarget(), loaded = newTarget();
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        for (int p = 0; p < shape.passes; p++) {
+            if (p == 2)
+                scale_frames::pass(cb, opened().state, {cleared}, {1, 6, 1}, 0, frame);
+            else if (p == 5)
+                scale_frames::pass(cb, opened().state, {loaded}, {1, 6, 1}, 1, frame);
+            else
+                scale_frames::pass(cb, opened().state, into, shape, p, frame);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        [cb commit];
+        [cb waitUntilCompleted];
+        ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+        NSDictionary *p = pipelined(cb);
+        ASSERT_NE(p, nil);
+        printf("two new targets, frame %u: %d of %d encoders encoded ahead, %zu copy launches\n", frame,
+               [p[@"pipelined"] intValue], [p[@"encoders"] intValue], copyLaunches(first));
+        EXPECT_GE([p[@"pipelined"] intValue], [p[@"encoders"] intValue] - 5) << [[p description] UTF8String];
+        EXPECT_EQ([p[@"abandons"] intValue], 0);
+        EXPECT_GE(copyLaunches(first), 1u);
+    }
+}
+
+TEST(RawFacadeCommit, AnotherQueuesSubmissionTakesTheDeviceBack)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> recorded = [opened().device newCommandQueue], other = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4}, small{1, 6, 1};
+    const auto into = scale_frames::targets(opened().device, shape);
+    const auto elsewhere = scale_frames::targets(opened().device, small);
+    id<MTLCommandBuffer> cb = [recorded commandBuffer];
+    for (int p = 0; p < shape.passes; p++) {
+        scale_frames::pass(cb, opened().state, into, shape, p, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (p == 9) {
+            id<MTLCommandBuffer> between = scale_frames::record(other, opened().state, elsewhere, small, 0);
+            [between commit];
+            [between waitUntilCompleted];
+            EXPECT_EQ(between.status, MTLCommandBufferStatusCompleted);
+        }
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(path(cb), "raw");
+    NSDictionary *p = pipelined(cb);
+    ASSERT_NE(p, nil);
+    EXPECT_EQ([p[@"abandons"] intValue], 1) << [[p description] UTF8String];
+    EXPECT_EQ([p[@"pipelined"] intValue], 0);
+}
+
+TEST(RawFacadeCommit, ACommandBufferWithAComputeEncoderIsEncodedAtTheCommit)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    for (int p = 0; p < shape.passes; p++) {
+        scale_frames::pass(cb, opened().state, into, shape, p, 0);
+        if (p == 11)
+            [[cb computeCommandEncoder] endEncoding];
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    NSDictionary *p = pipelined(cb);
+    ASSERT_NE(p, nil);
+    EXPECT_EQ([p[@"pipelined"] intValue], 0) << [[p description] UTF8String];
+}
+
+struct Latency {
+    std::vector<double> commit, scheduled, firstSubmit;
+};
+
+double us(Clock::duration d)
+{
+    return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
+}
+
+// Frames of `shape` at 60 Hz with the GPU taking `gpuUs` for each frame's jobs and up to three frames in flight: each
+// recorded at the render thread's pace, committed, waited for scheduled as Core Animation does before its swap
+Latency frames(const scale_frames::Shape &shape, int gpuUs, int count)
+{
+    timed_gpu::Gpu gpu;
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const auto into = scale_frames::targets(opened().device, shape);
+    const auto pace = std::chrono::microseconds(6000 / std::max(shape.passes, 1));
+    {
+        id<MTLCommandBuffer> warm = scale_frames::record(queue, opened().state, into, shape, 0);
+        [warm commit];
+        [warm waitUntilCompleted];
+        gpu.setPerJob(std::chrono::microseconds(gpuUs / int(std::max<size_t>(gpu.submitted(), 1))));
+    }
+    std::vector<id<MTLCommandBuffer>> inFlight;
+    Latency out;
+    auto next = Clock::now();
+    for (int frame = 0; frame < count; frame++) {
+        if (inFlight.size() == 3) {
+            [inFlight.front() waitUntilCompleted];
+            inFlight.erase(inFlight.begin());
+        }
+        id<MTLCommandBuffer> cb = paced(queue, into, shape, uint32_t(frame), pace);
+        const size_t before = gpu.submitted();
+        const auto committing = Clock::now();
+        [cb commit];
+        const auto returned = Clock::now();
+        [cb waitUntilScheduled];
+        const auto scheduled = Clock::now();
+        for (int spin = 0; spin < 2000 && gpu.submitted() <= before; spin++)
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        out.commit.push_back(us(returned - committing));
+        out.scheduled.push_back(us(scheduled - returned));
+        out.firstSubmit.push_back(us(gpu.submittedAt(before) - committing));
+        inFlight.push_back(cb);
+        next += std::chrono::microseconds(16667);
+        std::this_thread::sleep_until(next);
+    }
+    for (id<MTLCommandBuffer> cb : inFlight)
+        [cb waitUntilCompleted];
+    return out;
+}
+
+uint64_t threadNs()
+{
+    return clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+}
+
+// The caller's CPU recording a 15-pass, 90-draw command buffer (its encoders, not its commit), as many after it as
+// before, the worker encoding ahead beside it: what the tape's publication and its growth cost the recording thread
+TEST(RawFacadeCommit, RecordingCost)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    std::vector<double> recordUs, commitUs;
+    for (uint32_t frame = 0; frame < 60; frame++) {
+        const uint64_t began = threadNs();
+        id<MTLCommandBuffer> cb = scale_frames::record(queue, opened().state, into, shape, frame);
+        const uint64_t recorded = threadNs();
+        [cb commit];
+        const uint64_t committed = threadNs();
+        [cb waitUntilCompleted];
+        if (frame < 20)
+            continue;
+        recordUs.push_back(double(recorded - began) / 1000.0);
+        commitUs.push_back(double(committed - recorded) / 1000.0);
+    }
+    char line[200];
+    snprintf(line, sizeof line, "recording 15 passes 90 draws: thread cpu p50 %.1f p90 %.1f us, commit p50 %.1f us\n",
+             percentileOf(recordUs, 0.5), percentileOf(recordUs, 0.9), percentileOf(commitUs, 0.5));
+    std::ofstream(outputs() + "/recording_cost.txt") << line;
+    printf("%s", line);
+}
+
+TEST(RawFacadeCommit, CommitLatency)
+{
+    ASSERT_TRUE(opened().device != nil);
+    std::ofstream report(outputs() + "/commit_latency.txt");
+    const scale_frames::Shape shapes[] = {{1, 6, 1}, {15, 90, 4}};
+    for (const auto &shape : shapes)
+        for (const int gpuUs : {2000, 16000}) {
+            const Latency l = frames(shape, gpuUs, 24);
+            char line[320];
+            snprintf(line, sizeof line,
+                     "passes %d draws %d gpu %d us: commit p50 %.1f p90 %.1f us, waitUntilScheduled p50 %.1f p90 %.1f "
+                     "us, commit to first job p50 %.1f p90 %.1f us\n",
+                     shape.passes, shape.draws, gpuUs, percentileOf(l.commit, 0.5), percentileOf(l.commit, 0.9),
+                     percentileOf(l.scheduled, 0.5), percentileOf(l.scheduled, 0.9), percentileOf(l.firstSubmit, 0.5),
+                     percentileOf(l.firstSubmit, 0.9));
+            report << line;
+            printf("%s", line);
+        }
 }
 
 }  // namespace

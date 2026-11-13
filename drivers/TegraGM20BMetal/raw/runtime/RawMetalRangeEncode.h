@@ -18,19 +18,36 @@
 
 class RMRangeEncode {
 public:
-    // `whole`: [from, to) is the whole range, its resources and first contents taken at once; else they are taken as each
-    // encoder is stepped into, and `to` is only where the range will end at most. False: *why (and *refusedEncoder where
-    // one encoder is to blame); nothing of it was submitted.
+    // `whole`: [from, to) is the whole range, its resources and first contents taken at once, after its commit. Else it is
+    // encoded ahead, before the commit, as its caller records more: each encoder's resources and first contents are taken
+    // as it is stepped into, nothing reads what the CPU may write until the commit (buffer contents, a surface's seed),
+    // and an encoder whose encode would read such a thing stops it (vetoed()). False: *why (and *refusedEncoder where one
+    // encoder is to blame); nothing of it was submitted.
     bool open(RMCommandBuffer *cb, size_t from, size_t to, bool whole, const char **why, size_t *refusedEncoder);
+    // The range's commands up to `until`; false: failed (*why) or, encoded ahead, stopped (vetoed())
     bool step(size_t until);
+    // An encode opened ahead goes on after its command buffer's commit, up to `to` where its range ends; false: as open()
+    bool resume(size_t to, const char **why, size_t *refusedEncoder);
     // False: *why, or `stale` (a native surface changed: encode it again)
     bool seal(size_t to, bool &stale);
-    // What open() took that no seal() submitted goes back
+    // What open() took that no seal() submitted goes back (the raw command buffer abandoned where it is still open)
     void reset();
 
     size_t position() const
     {
         return at_;
+    }
+
+    // Why an encode ahead stopped (RMPipelineVeto), 0 where it did not
+    uint32_t vetoed() const
+    {
+        return veto_;
+    }
+
+    // The channel it began on (raw::Device::channelGeneration)
+    uint64_t generation() const
+    {
+        return generation_;
     }
 
 private:
@@ -74,6 +91,9 @@ private:
 
     bool fail(RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0);
     bool refused();
+    bool stop(uint32_t veto);
+    uint32_t ineligible(size_t from, size_t until);
+    bool enter(size_t begin);
     bool resources(size_t from, size_t to);
     bool conversions();
     int standInPass(RMTexture *t, bool store);
@@ -94,6 +114,10 @@ private:
     size_t *refusedEncoder_ = nullptr;
     size_t from_ = 0, to_ = 0, at_ = 0;
     bool whole_ = true;
+    bool ahead_ = false;  // before its commit: the recording goes on
+    bool abandoned_ = false, sealed_ = false;
+    uint32_t veto_ = 0;
+    bool sampledShadows_ = false, standIns_ = false;  // the command buffer's, as of its commit (ahead: none)
     uint64_t generation_ = 0;
     std::optional<FreshWrites> firstContents_;
     std::optional<RMCounterEmit> counters_;
@@ -108,6 +132,7 @@ private:
     size_t renderBegin_ = SIZE_MAX;
     bool continuing_ = false;
     size_t encoder_ = SIZE_MAX;  // the encoder being encoded, to blame for a refusal (SIZE_MAX: none)
+    size_t freshAt_ = SIZE_MAX;  // encoded ahead: the encoder whose first uses of fresh textures were claimed last
 
     // A planar render target's stand-in passes (raw::Texture::planarStandIn)
     std::vector<__unsafe_unretained RMTexture *> standInLoads_, planesWritten_;

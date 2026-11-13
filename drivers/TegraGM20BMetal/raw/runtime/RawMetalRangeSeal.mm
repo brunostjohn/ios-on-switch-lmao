@@ -208,9 +208,9 @@ bool RMRangeEncode::beginPass(size_t at)
     }
     raw::PassDesc p;
     for (size_t sub = at; sub == at || (sub < to_ && rmContinuesPass(cb, sub)); sub = cb->_plan.encoderEnd(sub)) {
-        if (cb->_sampledShadows)
+        if (sampledShadows_)
             refresh(sub);
-        if (cb->_standIns && !standIns(sub))
+        if (standIns_ && !standIns(sub))
             return false;
         passStorageMasks(cb, sub, p);
         p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
@@ -322,7 +322,13 @@ bool RMRangeEncode::endEncoder(size_t at)
     RMCommandBuffer *cb = cb_;
     if (re_)
         re_->finishVisibility();
-    if (re_ && at + 1 < to_ && cb->_plan.operation(at + 1).op == OpRender) {
+    // encoded ahead, the fresh textures the next encoder uses first are written between the two, so it fuses with none
+    bool fresh = false;
+    if (!whole_ && at + 1 < to_ && RMCommandPlan::isEncoderBegin(cb->_plan.operation(at + 1).op)) {
+        freshAt_ = at + 1;
+        fresh = firstContents_->claim(cb, at + 1, cb->_plan.encoderEnd(at + 1));
+    }
+    if (re_ && !fresh && at + 1 < to_ && cb->_plan.operation(at + 1).op == OpRender) {
         if (rmContinuesPass(cb, at + 1)) {
             continuing_ = true;
             return true;
@@ -330,8 +336,9 @@ bool RMRangeEncode::endEncoder(size_t at)
         if (!re_->turned() && !rmGroupedPass(cb, renderBegin_) && !rmGroupedPass(cb, at + 1) && !counters_->at(at) &&
             !counters_->at(at + 1)) {
             // the next pass's facts are the next boundary's first pass's
-            const raw::FusionPass first = fusedAt_ == renderBegin_ ? fused_ : fusionPass(cb, renderBegin_);
-            fused_ = fusionPass(cb, at + 1);
+            const bool shadows = sampledShadows_ || standIns_;
+            const raw::FusionPass first = fusedAt_ == renderBegin_ ? fused_ : fusionPass(cb, renderBegin_, shadows);
+            fused_ = fusionPass(cb, at + 1, shadows);
             fusedAt_ = at + 1;
             if (raw::canFusePasses(first, fused_)) {
                 continuing_ = true;
@@ -341,6 +348,8 @@ bool RMRangeEncode::endEncoder(size_t at)
     }
     if (!endEncoders())
         return false;
+    if (fresh)
+        firstContents_->written(*rc_);
     counters_->ended(at);
     re_ = nullptr;
     be_ = nullptr;
@@ -373,6 +382,7 @@ bool RMRangeEncode::seal(size_t to, bool &stale)
     raw::CommandBuffer *rc = rc_;
     raw::Device &d = *d_;
     to_ = to;
+    sealed_ = true;
     RAW_ENCODE_SPAN(Tail);
     if (re_)
         re_->end();

@@ -197,6 +197,8 @@ static std::array<uint32_t, 2> xrSampledSlots(const raw::Pipeline &pl,
         else
             standIns[1] |= xrSlots;
     }
+    if (standIns[0] | standIns[1])
+        rmPipelineVeto(_cb, VetoShadows);
     for (uint32_t stage = 0; stage < 2; stage++)
         for (uint32_t slots = standIns[stage]; slots; slots &= slots - 1)
             _cb->_xrStandIns.insert(_tex[stage][__builtin_ctz(slots)]);

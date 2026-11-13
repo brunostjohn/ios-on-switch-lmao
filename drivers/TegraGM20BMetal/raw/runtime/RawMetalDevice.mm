@@ -22,8 +22,11 @@
 // line's windows stay its own). Keys: raw, m2v, split, split_m2v, aborted, reopens (channels the kernel killed and this
 // process opened again), reopen_us (the last one's time), set_refusals and set_rebuilds (resource set registrations
 // the kernel refused, and those it took once made again without what it refused), gpu_order (1: the drivers order on
-// the GPU now), cpu_ordered (the Orders the kernel refused, each a CPU-ordered line), m2v.<reason>, pred.<predicate>
-// (nonzero only).
+// the GPU now), cpu_ordered (the Orders the kernel refused, each a CPU-ordered line), pipelined_encoders and
+// sealed_encoders (encoders the worker encoded ahead of their commit, of all it sealed), pipeline_handoffs and
+// pipeline_handoff_wakes (command buffers handed to the worker as encoders ended, and those that found it asleep),
+// pipeline_abandons.<reason>,
+// m2v.<reason>, pred.<predicate> (nonzero only).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCounters
 {
     const Stats &s = gRM->stats;
@@ -45,6 +48,16 @@
         d[@"gpu_order"] = @(gRM->gpuOrder ? 1 : 0);
     }
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());
+    d[@"pipelined_encoders"] = @(s.pipelinedEncoders.load());
+    d[@"sealed_encoders"] = @(s.sealedEncoders.load());
+    d[@"pipeline_handoffs"] = @(s.handoffs.load());
+    d[@"pipeline_handoff_wakes"] = @(s.handoffWakes.load());
+    static const char *const vetoes[VetoKinds] = {"whole",    "counters", "shadows",    "storage", "probes",
+                                                  "parallel", "ops",      "refused",    "planar",  "contents",
+                                                  "native",   "failed",   "other_work", "device"};
+    for (uint32_t k = 0; k < VetoKinds; ++k)
+        if (const uint64_t n = s.pipelineAbandons[k].load())
+            d[[NSString stringWithFormat:@"pipeline_abandons.%s", vetoes[k]]] = @(n);
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());

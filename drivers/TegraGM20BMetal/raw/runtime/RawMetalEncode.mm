@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalRangeEncode.h"
+#import "RawMetalPipeline.h"
 #include "raw_lock.h"
 
 // ---- the tape onto the raw path ----
@@ -13,13 +14,24 @@ RMRangeEncode &rmRangeEncode()
     return *encode;
 }
 
+// Encoded ahead, a failure is not the command buffer's yet: its encode at the commit meets it again and counts it
 bool RMRangeEncode::fail(RMPred p, const char *w, uint64_t a, uint64_t b)
 {
     *why_ = w;
-    hit(cb_, p, a, b);
+    if (ahead_)
+        veto_ = VetoFailed;
+    else
+        hit(cb_, p, a, b);
     if (encoder_ != SIZE_MAX)
         *refusedEncoder_ = encoder_;
     rc_->abandon();
+    abandoned_ = true;
+    return false;
+}
+
+bool RMRangeEncode::stop(uint32_t veto)
+{
+    veto_ = veto;
     return false;
 }
 
@@ -30,10 +42,17 @@ bool RMRangeEncode::refused()
                                  PredEncNoTic,       PredEncDepthStencil, PredEncSamples,      PredEncGeometry,
                                  PredEncStorageView, PredPassRotated};
     const raw::Refusal &f = rc_->refusal;
-    hit(cb_, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a, uint64_t(f.b) | uint64_t(f.c) << 32);
+    if (rc_->contentsDeferred)
+        veto_ = VetoContents;
+    else if (ahead_)
+        veto_ = VetoFailed;
+    else
+        hit(cb_, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
+            uint64_t(f.b) | uint64_t(f.c) << 32);
     if (encoder_ != SIZE_MAX)
         *refusedEncoder_ = encoder_;
     rc_->abandon();
+    abandoned_ = true;
     return false;
 }
 
@@ -48,9 +67,15 @@ __attribute__((objc_externally_retained)) bool RMRangeEncode::open(RMCommandBuff
     from_ = at_ = from;
     to_ = to;
     whole_ = whole;
+    ahead_ = !whole;
+    abandoned_ = false;
+    veto_ = 0;
+    sampledShadows_ = whole && cb->_sampledShadows;
+    standIns_ = whole && cb->_standIns;
     raw::Device &d = *d_;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    d.nextForms = cb->_probeForms;
+    if (whole)
+        d.nextForms = cb->_probeForms;
 #endif
     rc_ = d.begin();
     if (!rc_) {
@@ -67,17 +92,24 @@ __attribute__((objc_externally_retained)) bool RMRangeEncode::open(RMCommandBuff
     rc_->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
     rc_->inlineStates(cb->_inlineStates);
 #endif
-    if (validateNativeEventWaits(cb, generation_) != raw::EventDependencyState::ready) {
+    rc_->deferContents = ahead_;
+    if (whole && validateNativeEventWaits(cb, generation_) != raw::EventDependencyState::ready) {
         rc_->abandon();
+        abandoned_ = true;
         *why = "an event producer failed or is pending on a channel made again since";
         return false;
     }
     if (whole)
         firstContents_.emplace(cb, from, to, *rc_);
+    else
+        firstContents_.emplace();
     RAW_ENCODE_BEGIN(resourceSpan, Resources);
-    if (whole)
+    if (whole) {
         resources(from, to);
-    counters_.emplace(cb, from, whole ? to : from, *rc_);
+        counters_.emplace(cb, from, to, *rc_);
+    } else {
+        counters_.emplace(*rc_);
+    }
     // A range that starts inside a compute encoder (a loop's continuation, or what follows a block that holds loops:
     // RMSegment::held): that encoder's work goes on in a new raw encoder, the planned state applied at its first dispatch
     for (size_t at = from; at-- > 0;) {
@@ -250,19 +282,102 @@ bool RMRangeEncode::conversions()
     return true;
 }
 
+// What an encode ahead cannot take from [from, until): work it is not built for, or what only the commit makes final
+uint32_t RMRangeEncode::ineligible(size_t from, size_t until)
+{
+    const RMCommandPlan &plan = cb_->_plan;
+    for (size_t at = from; at < until; ++at) {
+        const Op op = plan.operation(at).op;
+        if (op == OpSignalEvent || op == OpWaitEvent || op == OpCompute || op == OpDispatch || isKernelCommand(op) ||
+            op == OpExecuteCommands || op == OpDrawPatches || op == OpDrawPatchesIndirect || op == OpInvocation ||
+            op == OpPredicate || op == OpResetCommands || op == OpCopyCommands)
+            return VetoOps;
+        if (!RMCommandPlan::isEncoderBegin(op))
+            continue;
+        const size_t end = plan.encoderEnd(at);
+        if (plan.begin(at).refused)
+            return VetoRefused;
+        if (plan.nativeRangeRefusal(at, end))
+            return VetoPlanar;
+        bool planar = false;
+        plan.forEachResource(at, end, RMResourceKind::Texture, [&](const RMRangeResource &use) {
+            planar |= (use.access & raw::ResourceUse::Sample) && (use.facts.roles & RMResourceFacts::Converted);
+        });
+        if (planar)
+            return VetoPlanar;
+    }
+    return 0;
+}
+
+// Encoded ahead, the encoder at `begin` is entered: its resources named, the fresh textures it uses first written ahead
+// of it (where the end of the encoder before it did not). A surface it writes that an encoder before it read through the
+// native image stops it: the whole range's encode names the pitch view to every encoder.
+bool RMRangeEncode::enter(size_t begin)
+{
+    const size_t end = cb_->_plan.encoderEnd(begin);
+    resources(begin, end);
+    if (rc_->pitchAfterNativeRead()) {
+        rc_->abandon();
+        abandoned_ = true;
+        return stop(VetoNative);
+    }
+    if (freshAt_ != begin) {
+        freshAt_ = begin;
+        if (firstContents_->claim(cb_, begin, end))
+            firstContents_->written(*rc_);
+    }
+    return true;
+}
+
 bool RMRangeEncode::step(size_t until)
 {
     const Encoding encoding;
+    if (!whole_)
+        if (const uint32_t veto = ineligible(at_, until)) {
+            rc_->abandon();
+            abandoned_ = true;
+            return stop(veto);
+        }
     RAW_ENCODE_BEGIN(loopSpan, Loop);
-    for (; at_ < until; ++at_)
+    for (; at_ < until; ++at_) {
+        if (!whole_ && RMCommandPlan::isEncoderBegin(cb_->_plan.operation(at_).op) && !enter(at_))
+            return false;
         if (!command(at_))
             return false;
+        if (rc_->contentsDeferred) {
+            rc_->abandon();
+            abandoned_ = true;
+            return stop(VetoContents);
+        }
+    }
     RAW_ENCODE_END(loopSpan);
+    return true;
+}
+
+bool RMRangeEncode::resume(size_t to, const char **why, size_t *refusedEncoder)
+{
+    why_ = why;
+    refusedEncoder_ = refusedEncoder;
+    to_ = to;
+    ahead_ = false;
+    rc_->deferContents = false;
+    sampledShadows_ = cb_->_sampledShadows;
+    standIns_ = cb_->_standIns;
+    if (validateNativeEventWaits(cb_, generation_) != raw::EventDependencyState::ready) {
+        rc_->abandon();
+        abandoned_ = true;
+        *why = "an event producer failed or is pending on a channel made again since";
+        return false;
+    }
     return true;
 }
 
 void RMRangeEncode::reset()
 {
+    if (rc_ && !abandoned_ && !sealed_)
+        rc_->abandon();
+    sealed_ = abandoned_ = ahead_ = false;
+    veto_ = 0;
     firstContents_.reset();
     counters_.reset();
     ce_.reset();
@@ -273,7 +388,7 @@ void RMRangeEncode::reset()
     serialCompute_ = computeUnit_ = continuing_ = false;
     stateCursor_ = {};
     fused_ = {};
-    fusedAt_ = renderBegin_ = encoder_ = SIZE_MAX;
+    fusedAt_ = renderBegin_ = encoder_ = freshAt_ = SIZE_MAX;
     standInLoads_.clear();
     planesWritten_.clear();
     standInStores_.clear();
@@ -303,13 +418,29 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
         return false;
     }
     RMRangeEncode &encode = rmRangeEncode();
+    // what was encoded ahead of the commit goes on: the rest of the range, then the seal
+    if (rmPipelineTake(cb, from)) {
+        bool stale = false;
+        const bool encoded = encode.resume(to, why, refusedEncoder) && encode.step(to) && encode.seal(to, stale);
+        const bool stopped = !encoded && encode.vetoed();
+        encode.reset();
+        if (encoded) {
+            rmPipelineSealed(cb, to);
+            return true;
+        }
+        cb->_released.clear();
+        if (!stopped && !stale)
+            return false;
+    }
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
         bool stale = false;
         const bool encoded =
             encode.open(cb, from, to, true, why, refusedEncoder) && encode.step(to) && encode.seal(to, stale);
         encode.reset();
-        if (encoded)
+        if (encoded) {
+            rmPipelineSealed(cb, to);
             return true;
+        }
         cb->_released.clear();
         if (!stale)
             return false;
