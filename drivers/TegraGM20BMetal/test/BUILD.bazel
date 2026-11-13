@@ -5086,6 +5086,51 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# Core Animation shaped command buffers through the facade over the kernel model (raw_scale_frames.h): the words of
+# their jobs (outputs/words.txt) for a comparison between builds
+host_test(
+    name = "raw_facade_commit_test",
+    srcs = [
+        "empty_pack.h",
+        "made_metallib.h",
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+        "raw_facade_commit_test.cpp",
+        "raw_scale_frames.h",
+        "raw_facade_standins.h",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+)
+
 # Every texture <-> buffer copy layout Metal takes, recorded on the raw facade: none refused but what Metal refuses itself
 host_test(
     name = "raw_facade_copies_test",
