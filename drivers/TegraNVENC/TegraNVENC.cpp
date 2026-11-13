@@ -48,6 +48,7 @@
 // queue) are bounded reads, as in TegraNVDEC; every completion of work is a host1x syncpoint interrupt.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOService.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <string.h>
@@ -127,7 +128,7 @@ IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 uint32_t gFailedThrough;           // with gFailed: every fence up to this one failed (wrapping compare)
 uint8_t gJobCodec[kSetupSlots];    // by setup slot: the codec of the job using it
-bool gUp, gWedged, gSuspended, gFailed, gAttached = true;
+bool gUp, gWedged, gSuspended, gFailed, gAttached = true, gPublished;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 TegraNVENCInputs gInputs;
@@ -352,7 +353,7 @@ void park()
     switch_car_clock_disable(kClock);
 }
 
-void bringUp(void *, wait_result_t)
+void bringUpStages()
 {
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), then
     // its address space and kernel buffers returned.
@@ -417,7 +418,14 @@ void bringUp(void *, wait_result_t)
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     if (!tegra_nvenc_engine_start())
         IOLog("TegraNVENC: E2 could not register as a memory engine; native pictures go through VIC\n");
-    tegra_nvenc_publish();
+    gPublished = !tegra_nvenc_publish();
+}
+
+void bringUp(void *, wait_result_t)  // NOLINT(misc-const-correctness): thread_continue_t's signature
+{
+    bringUpStages();
+    if (!gPublished)
+        IOService::publishResource(TEGRA_NVENC_ABSENT_RESOURCE);
 }
 }  // namespace
 
@@ -735,8 +743,10 @@ void engineResume()
 extern "C" int tegra_nvenc_probe(void)
 {
     static volatile int started;
-    if (switch_boot_flag("switch-no-nvdec"))
+    if (switch_boot_flag("switch-no-nvdec")) {
+        IOService::publishResource(TEGRA_NVENC_ABSENT_RESOURCE);
         return 0;
+    }
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;
     thread_t thread = nullptr;

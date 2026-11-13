@@ -45,6 +45,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "AVEEncoder.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 #pragma clang diagnostic push
@@ -889,7 +890,18 @@ __attribute__((visibility("default"))) void H264H7EncoderRegister(void);
 void H264H7EncoderRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
-    if (!nvenc_service_present())
+    // The registry is filled once per process: one filled before TegraNVENC publishes waits for it.
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
+    const bool published = nvenc_service_wait();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t waitedMs = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000;
+    if (waitedMs)
+        os_log(gLog, "AVE: %{public}s waited %llu ms for TegraNVENC: %{public}s", getprogname(), waitedMs,
+               published ? "published" : "absent");
+#endif
+    if (!published)
         return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
     OSStatus status = registerEncoder(kCMVideoCodecType_H264, CFSTR(AVE_ENCODER_ID), CFSTR("Apple H.264 (HW)"));
     if (status)

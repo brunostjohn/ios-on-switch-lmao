@@ -410,3 +410,15 @@ host_test(
     ],
     data = ["//drivers/SwitchVideoDecoders:AVD/AVDDecoder.c"],
 )
+
+# AVDRegister waits for TegraNVDEC or the kernel's TegraNVDECAbsent resource before deciding, and the kernel publishes
+# that resource whenever its bring-up ends without the service.
+host_test(
+    name = "avd_service_wait_source_test",
+    srcs = ["avd_service_wait_source_test.cpp"],
+    data = [
+        "//drivers/SwitchVideoDecoders:AVD/AVDRegister.c",
+        "//drivers/SwitchVideoDecoders:AVD/NVDECClient.c",
+        "//drivers/TegraNVDEC:TegraNVDEC.cpp",
+    ],
+)

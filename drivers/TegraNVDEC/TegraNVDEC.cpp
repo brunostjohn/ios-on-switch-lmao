@@ -51,6 +51,7 @@
 // interrupt (TegraHost1x), and a lost one panics there.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOService.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <string.h>
@@ -311,6 +312,8 @@ void settle(int how)
     gSettled = how;
     IOLockWakeup(lock, &gSettled, false);
     IOLockUnlock(lock);
+    if (how != 1)
+        IOService::publishResource(TEGRA_NVDEC_ABSENT_RESOURCE);
 }
 
 void bringUpStages()
@@ -374,9 +377,8 @@ void bringUpStages()
     }
     __atomic_store_n(&gUp, true, __ATOMIC_RELEASE);
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
-    gPublished = true;
     tegra_host1x_set_strict();
-    tegra_nvdec_publish();
+    gPublished = !tegra_nvdec_publish();
 }
 
 void bringUp(void *, wait_result_t)  // NOLINT(misc-const-correctness): thread_continue_t's signature

@@ -57,7 +57,7 @@ static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
 static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
 static bool gHaveP;
 
-bool nvenc_service_present(void)
+bool nvenc_service_wait(void)
 {
     return true;
 }
