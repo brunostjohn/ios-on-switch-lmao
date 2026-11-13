@@ -90,13 +90,13 @@ protected:
         // each, which says nothing about how the arena is named
         const uint64_t own[2] = {kernel_model::model.resolve({from.va, TegraGM20BSurfaceGpuAddress, 0}),
                                  kernel_model::model.resolve({to.va, TegraGM20BSurfaceGpuAddress, 0})};
-        std::vector<TegraGM20BAbiSurfaceUse> uses = kernel_model::model.jobs.back().uses;
-        uses.erase(std::remove_if(uses.begin(), uses.end(),
+        std::vector<TegraGM20BAbiSurfaceUse> left = kernel_model::model.jobs.back().uses;
+        left.erase(std::remove_if(left.begin(), left.end(),
                                   [&](const TegraGM20BAbiSurfaceUse &u) {
                                       return u.handle == own[0] || u.handle == own[1];
                                   }),
-                   uses.end());
-        return uses;
+                   left.end());
+        return left;
     }
 
     size_t named(const std::vector<TegraGM20BAbiSurfaceUse> &uses, uint64_t handle, uint32_t *access = nullptr)
