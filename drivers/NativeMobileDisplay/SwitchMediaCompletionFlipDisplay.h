@@ -80,7 +80,7 @@ const PlaneSet &newestRequestedSet() const
 // planeStage would write p at once, whatever latches before the completion: assigned is p as it would place it.
 bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
 {
-    if (mediaFlipsRefused || !planesOn || !planesAttached || planesAbandoned || planeRecovering || planeHeldSet ||
+    if (mediaFlipsRefused || !planesOn || !planesAttached || planeRecovering || planeHeldSet ||
         planeProbe.active() || copyPlaneJoined || hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer ||
         !planeLatch.mayWrite() || !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() ||
         !mediaFlipIdle() || p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy())

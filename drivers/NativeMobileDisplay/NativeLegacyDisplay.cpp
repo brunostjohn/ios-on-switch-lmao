@@ -1467,7 +1467,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecovering || landscapeState.wanted || completionFlipOut();
+               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted || completionFlipOut();
     }
 
     void maskIdleFrameEnd()
@@ -1850,9 +1850,9 @@ private:
             planesState = "off";
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u, "
-            "composited %u",
+            "composited %u, stuck %u asked %u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneDropped,
-            stPlaneUnderflows, stPlaneUnready, stPlaneComposited);
+            stPlaneUnderflows, stPlaneUnready, stPlaneComposited, planeRecoveriesStuck, planeRecoveryAsks);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
@@ -2543,14 +2543,14 @@ private:
             }
             return;
         }
-        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) && !planeRecovering) ||
+        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) && !planeRecoveryWaits()) ||
             hwSuspended || scanoutStopped || gPanicRestore.panicking)
             return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             return;
         }
-        if (planeRecovering)
+        if (planeRecoveryWaits())
             panic("SwitchDisplay: overlay recovery has no completed stop after %u ms", kFlipDeadlineMS);
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
@@ -2982,7 +2982,7 @@ private:
             // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
             // the last flip of every burst. The next writeFlip arms it again.
         } else if (ring.pending == kNoBuffer && !probeRequest && !planeLatch.requested() && !planeHeldSet &&
-                   !planeRecovering && flipTimer) {
+                   !planeRecoveryWaits() && flipTimer) {
             flipTimer->cancelTimeout();
             settleArmed = false;
         }

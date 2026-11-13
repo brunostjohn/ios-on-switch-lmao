@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-bool planeRecovering = false, planesAbandoned = false;
+bool planeRecovering = false, planeRecoveryStuck = false;
 uint64_t planeRecoveryAt = 0;
 PlaneSet planeRecoveryTarget = {};
+uint32_t planeRecoveryAsks = 0, planeRecoveriesStuck = 0;  // since boot: off requests written again, stuck recoveries
+
+// A recovery still inside its off request's latch window: frame ends stay unmasked for it and the flip deadline watches it.
+// A stuck one is checked at the frame ends other work brings, and holds no swap's retirement.
+bool planeRecoveryWaits() const
+{
+    return planeRecovering && !planeRecoveryStuck;
+}
 
 void holdPlaneRecovery(const PlaneSet &p)
 {
+    if (planeRecoveryStuck) {
+        if (stats)
+            ++stPlaneDropped;
+        retireUnshown(p.seq);
+        return;
+    }
     uint64_t first = planeRecoveryTarget.pendingSeq ? planeRecoveryTarget.pendingSeq : planeRecoveryTarget.seq;
     const uint64_t incoming = p.pendingSeq ? p.pendingSeq : p.seq;
     if (!first || (incoming && incoming < first))
@@ -61,17 +75,27 @@ void beginPlaneRecovery(const char *why)
     writePlaneRecoveryOff();
 }
 
-// Windows B and C did not take their off request: they may still scan every slot their sets name, so nothing of theirs
-// is released for the rest of the boot, no overlay is asked for again, and the swaps they carried retire without them.
-void abandonPlanes()
+// Windows B and C did not take their off request in kLatchFrames: they may still scan every slot their sets name, so the
+// recovery holds those slots and asks for the windows off again every kLatchFrames frame ends until a frame end reads them
+// off. Meanwhile no overlay is asked for and the swaps the held sets carried retire without them.
+void planeRecoveryNotStopped()
 {
-    IOLog("SwitchDisplay: overlay windows did not stop in %u frames: overlays off for this boot, their memory kept\n",
-          kLatchFrames);
-    __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
-    planesAbandoned = true;
-    planeRecovering = false;
-    planeRecoveryTarget = {};
-    planeHeldSet = false;
+    if (!planeRecoveryStuck) {
+        IOLog("SwitchDisplay: overlay windows did not stop in %u frames: overlays off until they read off, their memory "
+              "kept\n",
+              kLatchFrames);
+        planeRecoveryStuck = true;
+        ++planeRecoveriesStuck;
+        __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
+        const uint64_t seq = planeRecoveryTarget.seq;
+        planeRecoveryTarget = {};
+        planeTarget = {};
+        planeHeldSet = false;
+        if (seq)
+            retireUnshown(seq);
+    }
+    ++planeRecoveryAsks;
+    writePlaneRecoveryOff();
 }
 
 bool planeRecoveryFrameEnd()
@@ -85,7 +109,7 @@ bool planeRecoveryFrameEnd()
     dc[kDcStateAccess] = access;
     if (!disabled || (dc[kDcStateControl] & (kWinBActReq | kWinCActReq))) {
         if (frameEnds - planeRecoveryAt >= kLatchFrames)
-            abandonPlanes();
+            planeRecoveryNotStopped();
         return true;
     }
     // Only observed inactive windows permit replacing their live CSC/filter state or releasing old snapshots.
@@ -93,6 +117,10 @@ bool planeRecoveryFrameEnd()
     planeForgetUnshadowed();
     planeUnderflowRun = 0;
     planeRecovering = false;
+    if (planeRecoveryStuck) {
+        planeRecoveryStuck = false;
+        __atomic_store_n(&planesOn, true, __ATOMIC_RELEASE);
+    }
     PlaneSet restore = planeRecoveryTarget;
     if (!planesOn || restore.landscape)
         restore.window[0] = restore.window[1] = {};
