@@ -169,6 +169,11 @@ extern "C" void switch_gpu_compositor_import(uint64_t ns)
 	switch_gpu_comp_round_import(&gRound, ns);
 }
 
+extern "C" void switch_gpu_compositor_alloc(uint64_t ns, int cold)
+{
+	switch_gpu_comp_round_alloc(&gRound, ns, cold);
+}
+
 extern "C" void switch_gpu_compositor_scanned(uint64_t passes, uint64_t draws)
 {
 	switch_gpu_comp_round_scanned(&gRound, passes, draws);
@@ -203,7 +208,8 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	switch_gpu_comp_round_take(&gRound, &round);
 	char head[320];
 	const int put = switch_gpu_comp_round_format(head, sizeof(head), &round);
-	const size_t used = put > 0 && static_cast<size_t>(put) < sizeof(head) ? static_cast<size_t>(put) : 0;
+	const size_t used =
+		put > 0 && static_cast<size_t>(put) < sizeof(head) ? static_cast<size_t>(put) : 0;
 	switch_gpu_comp_sync_format(head + used, sizeof(head) - used, &sync);
 	IOLockLock(held);
 	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED),

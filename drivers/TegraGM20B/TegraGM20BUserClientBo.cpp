@@ -389,6 +389,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		__atomic_add_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
 	tgm_stats_bo_alloc(bo->bytes, kind, mark - start, phase, owner_);
+	if (critical_)
+		switch_gpu_compositor_alloc(mark - start, kind == TGM_BO_CACHED);
 	ownerNote(owner_, bo->bytes, mark - start, kind == TGM_BO_CACHED);
 	bo->handle = next_handle_++;
 	bo->token = next_token_++;

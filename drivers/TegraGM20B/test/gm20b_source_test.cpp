@@ -104,7 +104,8 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 	EXPECT_TRUE(Block(client(), "const uint32_t *AGXDeviceUserClient::pushView(")
 			    .Has("if (hit) { if (hit->bo->pool_va) {"));
 	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::scanPushes(")
-			    .Has("pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit)"));
+			    .Has("pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * "
+				 "4, hit)"));
 	EXPECT_TRUE(Block(client(), "int AGXDeviceUserClient::hungInterlocks(")
 			    .Has("pushView(va[i], static_cast<uint64_t>(dwords[i]) * 4, hit)"));
 }
@@ -395,7 +396,8 @@ TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
 	EXPECT_TRUE(defer.Has("hit->bo->pool_va"));
 	EXPECT_TRUE(defer.Has("thread_call_enter(d->call);"));
 	EXPECT_FALSE(defer.Has("scanRead("));
-	EXPECT_TRUE(Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
+	EXPECT_TRUE(
+		Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
 	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::boImport(")
 			    .Has("if (critical_) switch_gpu_compositor_import(cost.total_ns);"));
 }

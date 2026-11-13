@@ -46,7 +46,8 @@ bool pushLockMade()
 
 void logWindow(const PushOwner (&window)[kPushOwners])
 {
-	static char line[700];  // only the read that ends a window (one per 5 s, chosen under gPushLock) logs
+	static char line
+		[700];  // only the read that ends a window (one per 5 s, chosen under gPushLock) logs
 	for (const auto &i : window) {
 		const PushCounts &w = i.c;
 		if (!w.scanned)
@@ -165,8 +166,21 @@ void scanRead(const switch_gpu_scan_words *push, uint32_t count, tgm_prof *prof,
 		log = true;
 	}
 	IOLockUnlock(gPushLock);
-	if (log)
-		logWindow(window);
+	if (!log)
+		return;
+	logWindow(window);
+	uint64_t dropped = 0;
+	if (Deferral *d = __atomic_load_n(&gDeferral, __ATOMIC_ACQUIRE)) {
+		IOLockLock(d->lock);
+		dropped = gQueue.dropped;
+		gQueue.dropped = 0;
+		IOLockUnlock(d->lock);
+	}
+	if (dropped)
+		os_log(OS_LOG_DEFAULT,
+		       "tegra-gm20b: push scan: %llu submissions not read (every slot waited for "
+		       "the thread call)",
+		       (unsigned long long)dropped);
 }
 
 void deferredWork(thread_call_param_t param, thread_call_param_t)
@@ -255,8 +269,9 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	switch_gpu_scan_words words[TGM_PROF_MAX];
 	const Binding *hit = nullptr;
 	for (uint32_t i = 0; i < count; i++)
-		words[i] = {pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit),
-			    pushes[i].dwords};
+		words[i] = {
+			pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit),
+			pushes[i].dwords};
 	scanRead(words, count, prof, rawMacros, owner_, critical_);
 }
 
@@ -275,7 +290,8 @@ void AGXDeviceUserClient::deferScan(const tgm_push *pushes, uint32_t count, bool
 		switch_gpu_scan_fill(*r, owner_, rawMacros, kept, kDeferredPushes, [&](uint32_t i) {
 			const uint64_t bytes = static_cast<uint64_t>(pushes[i].dwords) * 4;
 			const uint32_t *words = pushView(pushes[i].va, bytes, hit);
-			return switch_gpu_scan_words{words && hit && hit->bo->pool_va ? words : nullptr,
+			return switch_gpu_scan_words{words && hit && hit->bo->pool_va ? words
+										      : nullptr,
 						     pushes[i].dwords};
 		});
 		r->compositor = critical_;

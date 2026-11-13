@@ -71,6 +71,7 @@ void switch_gpu_compositor_job(uint64_t ns);
 void switch_gpu_span_line(char *line, size_t size);
 /* SwitchGpuCompositorRound.h: a compositor import (the importing thread), a push-scanned compositor submission */
 void switch_gpu_compositor_import(uint64_t ns);
+void switch_gpu_compositor_alloc(uint64_t ns, int cold);
 void switch_gpu_compositor_scanned(uint64_t passes, uint64_t draws);
 /* SwitchGpuCompositorSync.h: a profiled compositor submission's sync pushes (the interrupt pass), and the window's line */
 void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind);
@@ -111,6 +112,12 @@ static inline void switch_gpu_compositor_job(uint64_t ns)
 static inline void switch_gpu_compositor_import(uint64_t ns)
 {
 	(void)ns;
+}
+
+static inline void switch_gpu_compositor_alloc(uint64_t ns, int cold)
+{
+	(void)ns;
+	(void)cold;
 }
 
 static inline void switch_gpu_compositor_scanned(uint64_t passes, uint64_t draws)
