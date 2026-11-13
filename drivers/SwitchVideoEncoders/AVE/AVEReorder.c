@@ -140,10 +140,21 @@ static Outcome code(Encoder *e, const AVEHeld *h, uint8_t type)
     return CODED;
 }
 
+// A B picture refused: it and the rest of its group are I pictures; refusals in a row start a run of anchors only.
+static void refusedB(AVEReorder *r)
+{
+    const uint32_t run = ave_backoff_refused(&r->bBackoff);
+    if (run)
+        os_log_error(gLog, "AVE: NVENC refused the B pictures of %u groups in a row; the next %u groups code none",
+                     r->bBackoff.refusals, run);
+}
+
 // `anchor`, then the held frames before it as B pictures.
 static void codeGroup(Encoder *e, const AVEHeld *anchor)
 {
     AVEReorder *r = &e->reorder;
+    if (!r->heldCount)
+        ave_backoff_spend(&r->bBackoff);
     const Outcome outcome = code(e, anchor, H264ENC_P);
     if (outcome == REFUSED) {  // the anchor's P picture refused: every frame of the group an IDR, in display order
         for (unsigned i = 0; i < r->heldCount; i++)
@@ -154,13 +165,18 @@ static void codeGroup(Encoder *e, const AVEHeld *anchor)
     } else if (outcome == DROPPED) {
         return;  // the held frames wait for the next anchor
     } else {
+        bool refused = false;
         for (unsigned i = 0; i < r->heldCount; i++) {
-            if (r->bPictures && code(e, &r->held[i], H264ENC_B) != REFUSED)
+            if (!refused && code(e, &r->held[i], H264ENC_B) != REFUSED)
                 continue;
-            r->bPictures = 0;
+            refused = true;
             if (code(e, &r->held[i], H264ENC_I) == REFUSED)
                 drop(e, &r->held[i], kVTVideoEncoderMalfunctionErr, true);
         }
+        if (refused)
+            refusedB(r);
+        else if (r->heldCount)
+            ave_backoff_coded(&r->bBackoff);
     }
     for (unsigned i = 0; i < r->heldCount; i++)
         CVPixelBufferRelease(r->held[i].image);
@@ -184,7 +200,7 @@ OSStatus ave_reorder_frame(Encoder *e, VTVideoEncoderFrame frame, CVPixelBufferR
         return noErr;
     }
     r->display++;
-    if (r->heldCount < r->bPictures) {
+    if (r->heldCount < (ave_backoff_holds(&r->bBackoff) ? 0 : r->bPictures)) {
         h.image = CVPixelBufferRetain(image);
         r->held[r->heldCount++] = h;
         return noErr;
