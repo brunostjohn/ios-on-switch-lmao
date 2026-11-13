@@ -46,10 +46,11 @@ void environment()
 }
 
 // The sample: every corpus state linking functions, a few of each other kind, a stride through the rest, a RenderBox
-// state's cubic and test-class variants as the device asked for them, VectorKit states the direct compile refuses (a
-// sampler m2v's layout leaves untagged), kernels at an edge of their grid, and Core Animation states that may fetch
-// their attachment over a depth attachment and multisampled (their storage forms). Each kind is drawn from lines both
-// crawls' libraries hold, but for the private linked functions, which only iOS 27's libraries have.
+// state's cubic and test-class variants as the device asked for them, multisampled VectorKit ground states, kernels at
+// an edge of their grid, Core Animation states that may fetch their attachment over a depth attachment and multisampled
+// (their storage forms), and a state of the function the build's libraries refuse (SWITCH_REFUSED_FRAGMENT_FUNCTION).
+// Each kind is drawn from lines both crawls' libraries hold, but for the private linked functions, which only iOS 27's
+// libraries have.
 std::vector<std::string> sample()
 {
     const std::vector<std::string> lines = compiler_test::corpusLines(getenv("SWITCH_CORPUS"));
@@ -77,7 +78,11 @@ std::vector<std::string> sample()
             take("depth", l, 6);
         if (l[0] == 'R' && l.find("samples=4 ") != std::string::npos &&
             l.find("| v DaVinci::ground_base_vertex ") != std::string::npos)
-            take("neutral sampler", l, 2);
+            take("VectorKit ground", l, 2);
+#ifdef SWITCH_REFUSED_FRAGMENT_FUNCTION
+        if (l[0] == 'R' && l.find("| f " SWITCH_REFUSED_FRAGMENT_FUNCTION " ") != std::string::npos)
+            take("refused", l, 1);
+#endif
         if (l[0] == 'D' && std::regex_search(l, samplers)) {
             take("samplers", l, 6);
             if (regionable && l.find(" lib=/System/") != std::string::npos)
@@ -230,12 +235,14 @@ TEST(CompilerCompileOnly, ItsRecordsAreTheDevicesByteForByte)
             return s.tag == "fp" || s.tag == "vp";
         });
     }
-    for (const char *kind :
-         {"render", "refused", "constexpr samplers", "storage form", "cubic", "test class", "multisampled",
-          "specialized", "kernel", "kernel with textures and samplers", "region kernel"})
+    for (const char *kind : {"render", "constexpr samplers", "storage form", "cubic", "test class", "multisampled",
+                             "specialized", "kernel", "kernel with textures and samplers", "region kernel"})
         EXPECT_GT(covered[kind], 0u) << "the sample made no " << kind << " record";
 #if SWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS
     EXPECT_GT(covered["private linked"], 0u) << "the sample made no private linked record";
+#endif
+#ifdef SWITCH_REFUSED_FRAGMENT_FUNCTION
+    EXPECT_GT(covered["refused"], 0u) << "the sample made no refused record";
 #endif
     std::string counts;
     for (const auto &[kind, n] : covered)
