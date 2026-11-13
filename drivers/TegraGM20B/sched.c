@@ -52,7 +52,7 @@ static struct {
 } rl[SCHED_RUNLS];
 
 static struct {
-	u32 kicks, preempted, switching, deferred, followed;
+	u32 kicks, preempted, switching, deferred, followed, unread;
 	u32 interleaved; /* runlists sched_update lists, for good */
 } st;
 
@@ -374,8 +374,11 @@ enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int ch
 		if (runl->func->update != sched_update || !is_high(chid) ||
 		    (int)chid >= runl->chid->nr || !test_bit(chid, runl->chid->used))
 			continue;
-		if (!switch_gpu_busy_low(&tgm_busy))
+		if (!switch_gpu_busy_low(&tgm_busy)) {
+			if (TGM_STATS)
+				__atomic_fetch_add(&st.unread, 1, __ATOMIC_RELAXED);
 			return counted(TGM_KICK_CLEAR);
+		}
 		victim = sched_victim(device, runl);
 		if (victim == TGM_VICTIM_SWITCHING) {
 			const u32 eng = sched_gr_status(device, runl);
@@ -416,4 +419,9 @@ void tgm_sched_stats(char *buf, unsigned int len)
 		  "way, %u deferred, %u left the app they wait for running",
 		  __atomic_load_n(&st.interleaved, __ATOMIC_RELAXED), kicks, preempted, switching,
 		  deferred, followed);
+}
+
+uint32_t tgm_sched_unread(void)
+{
+	return __atomic_exchange_n(&st.unread, 0, __ATOMIC_RELAXED);
 }

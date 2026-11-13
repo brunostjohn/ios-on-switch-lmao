@@ -203,9 +203,11 @@ Model SchedKick::m;
 TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 {
 	unsigned read = 0;
+	tgm_sched_unread();
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u) << "PFIFO and PBDMA status read with no app channel's work in flight";
 	EXPECT_EQ(preempts, 0u);
+	EXPECT_EQ(tgm_sched_unread(), 1u) << "the waits line's count";
 	unsigned resident = reads;
 	EXPECT_EQ(tgm_sched_resident(&m.device), TGM_VICTIM_NONE);
 	EXPECT_EQ(reads - resident, 0u) << "the hold's resident look read registers with no app work";
