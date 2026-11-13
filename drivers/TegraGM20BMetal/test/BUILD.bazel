@@ -2012,6 +2012,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_retirement.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
@@ -2107,6 +2108,28 @@ host_test(
 )
 
 host_test(
+    name = "raw_grow_list_test",
+    srcs = [
+        "raw_grow_list_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_grow_list_tsan_test",
+    srcs = [
+        "raw_grow_list_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    cxx_std = "c++17",
+    env = {"TSAN_OPTIONS": "halt_on_error=1"},
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
     name = "raw_handoff_queue_test",
     srcs = [
         "raw_handoff_queue_test.cpp",
@@ -2138,6 +2161,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_dispatch_regions.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
@@ -2156,6 +2180,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pointer_map.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanApply.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
@@ -3105,6 +3130,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split_cost.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_raster_area.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_grow_list.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_slot_snapshots.h",
     ],
     cxx_std = "c++17",

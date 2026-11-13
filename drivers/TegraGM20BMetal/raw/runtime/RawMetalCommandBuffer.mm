@@ -15,11 +15,11 @@
 // with no lock (raw_take_pool.h): a command buffer takes one where it is made and keeps it where it is freed.
 struct RMRecording {
     RMCommandPlan plan;
-    std::vector<RMPass> passes;
+    raw::GrowList<RMPass> passes;
     RMBytes bytes;
     std::deque<raw::RetirementWrites> retirements;
-    std::vector<uint8_t> shadow;
-    std::vector<uint64_t> extra;
+    raw::GrowList<uint8_t> shadow;
+    raw::GrowList<uint64_t> extra;
     std::vector<id> owners;
     raw::PointerMap<bool> ownerKeys;
     std::vector<RMSegment> segs;
@@ -315,22 +315,22 @@ void rmPoolCommandBuffers()
     if (_commandLog) {
         RMSubCommand s{cmd, {}};
         if (const size_t words = raw::extraWords(cmd))
-            s.extra.assign(_extra.begin() + ptrdiff_t(cmd.x), _extra.begin() + ptrdiff_t(cmd.x + words));
+            s.extra.assign(_extra.ownData() + cmd.x, _extra.ownData() + cmd.x + words);
         _commandLog->push_back(s);
     }
-    if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes[_recordedPass].compressed)
-        rmNoteStorageTargets(self, _passes[_recordedPass], cmd);
+    if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes.own(_recordedPass).compressed)
+        rmNoteStorageTargets(self, _passes.own(_recordedPass), cmd);
     if (cmd.op == OpCompute)
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
-    if (_plan.record(cmd, _extra)) {
+    if (_plan.record(cmd, _extra.ownData())) {
         std::vector<raw::ResourceUse> &uses = _plan.recordUses();
         if (isPlanDraw(cmd.op)) {
-            const uint32_t index = _plan.draw(_plan.size() - 1).state;
-            const auto &state = _plan.renderStates[index];
+            const uint32_t index = _plan.ownDraw(_plan.size() - 1).state;
+            const auto &state = _plan.renderStates.own(index);
             if (!state.usesFinal) {
-                const auto &raster = _plan.raster[state.raster];
+                const auto &raster = _plan.raster.own(state.raster);
                 RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
                 const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline);
                 if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
@@ -389,7 +389,7 @@ void rmPoolCommandBuffers()
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
             _recordedPass = uint32_t(cmd.x);
-            const RMPass &pass = _passes[cmd.x];
+            const RMPass &pass = _passes.own(cmd.x);
             for (const RMPass::Color &a : pass.color)
                 if (a.texture)
                     uses.push_back({(__bridge void *)a.texture,

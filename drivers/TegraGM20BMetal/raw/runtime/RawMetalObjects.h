@@ -292,9 +292,9 @@ struct RMPass {
 // (m2v's replay reads them back), each copy 256-byte aligned and zero to the next 256 bytes as an upload chunk is. The chunks go
 // with the recording (giveRecording), so they outlive every submission that reads them.
 struct RMBytes {
-    std::vector<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
-    size_t at = 0;                    // the chunk being filled
-    uint32_t used = 0;                // its bytes taken
+    raw::GrowList<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
+    size_t at = 0;                      // the chunk being filled
+    uint32_t used = 0;                  // its bytes taken
 };
 
 // A command buffer's first error, set under its lock; whether it has one is readable with no lock
@@ -419,8 +419,8 @@ struct RMSharedEventWait {
     // variant for them (raw_xr_pass.h): only these of that format get their stand-in drawn
     std::set<RMTexture *> _xrStandIns;
     RMCommandPlan _plan;
-    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
-    uint32_t _recordedPass;       // the OpRender the draws being recorded belong to
+    raw::GrowList<RMPass> _passes;  // OpRender's (Cmd::x)
+    uint32_t _recordedPass;         // the OpRender the draws being recorded belong to
     // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
     std::vector<RMTexture *> _plainForStorage;
     bool _scanStorageTargets;                  // a pipeline bound in such a pass was a variant still being made
@@ -431,8 +431,8 @@ struct RMSharedEventWait {
     size_t _retired;
     // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
     // the encode reads (the first draw's cover test) is not read from the write-combined chunk
-    std::vector<uint8_t> _shadow;
-    std::vector<uint64_t> _extra;
+    raw::GrowList<uint8_t> _shadow;
+    raw::GrowList<uint64_t> _extra;
     std::vector<id> _owners;
     raw::PointerMap<bool> _ownerKeys;  // everything the tape names, retained until completion
     RMReason _reason;

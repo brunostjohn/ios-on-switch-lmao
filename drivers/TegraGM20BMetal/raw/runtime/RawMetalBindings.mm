@@ -6,7 +6,7 @@
 // Room for `padded` bytes in the command buffer's setBytes chunks (RMBytes): false when only heap memory had it
 static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &offset)
 {
-    while (s.at < s.chunks.size() && s.used + padded > s.chunks[s.at].length) {
+    while (s.at < s.chunks.size() && s.used + padded > s.chunks.own(s.at).length) {
         s.at++;
         s.used = 0;
     }
@@ -23,7 +23,7 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     chunk = uint32_t(s.at);
     offset = s.used;
     s.used += padded;
-    return s.chunks[s.at].va != 0;
+    return s.chunks.own(s.at).va != 0;
 }
 
 void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow)
@@ -31,8 +31,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
     constexpr NSUInteger kShadowed = 1024;  // a Core Animation draw's vertices and its transform
     if (shadow && length <= kShadowed) {
         m.x = cb->_shadow.size() + 1;
-        cb->_shadow.insert(cb->_shadow.end(), static_cast<const uint8_t *>(bytes),
-                           static_cast<const uint8_t *>(bytes) + length);
+        cb->_shadow.append(static_cast<const uint8_t *>(bytes), static_cast<const uint8_t *>(bytes) + length);
     }
     const uint32_t padded = std::max<uint32_t>((uint32_t(length) + 255) & ~255u, 256);
     uint32_t chunk, offset;
@@ -47,7 +46,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
                          (unsigned long)length, gRM->raw->kernel().error().c_str());
         failCommandBuffer(cb, @"no GPU memory for setBytes", MTLCommandBufferErrorOutOfMemory);
     }
-    uint8_t *to = cb->_bytes.chunks[chunk].cpu + offset;
+    uint8_t *to = cb->_bytes.chunks.own(chunk).cpu + offset;
     memcpy(to, bytes, length);
     memset(to + length, 0, padded - length);
     m.a = offset;

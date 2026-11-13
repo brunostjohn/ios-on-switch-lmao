@@ -13,6 +13,12 @@ void *object(uintptr_t value)
     return reinterpret_cast<void *>(value);
 }
 
+// a command's extra words, alive to the end of the record call
+template <size_t N> const uint64_t *words(const uint64_t (&extra)[N])
+{
+    return extra;
+}
+
 Cmd binding(Op op, uint8_t stage, uint16_t slot, uintptr_t value, uint64_t offset = 0)
 {
     Cmd c = cmd(op, stage, slot);
@@ -461,7 +467,7 @@ TEST(SemanticPlan, KernelResourcePlansSurviveOffsetAndDispatchChanges)
         plan.record(binding(OpKernelBufferOffset, 3, 0, 0, i * 16), {});
         Cmd dispatch = cmd(OpDispatch);
         dispatch.c = 1 | uint64_t(1) << 16 | uint64_t(1) << 32;
-        plan.record(dispatch, {i + 1, 1, 1, i + 1, 1, 1, 0, 0, 0, 0, 0, 0});
+        plan.record(dispatch, words({i + 1, 1, 1, i + 1, 1, 1, 0, 0, 0, 0, 0, 0}));
         plan.setKernelUses(plan.size() - 1, object(90), [&](std::vector<raw::ResourceUse> &out) {
             ++builds;
             out = std::vector<raw::ResourceUse>{{object(42), raw::ResourceUse::Read}};
@@ -525,9 +531,9 @@ TEST(SemanticPlan, FloatBitPatternsRemainDistinct)
     RMCommandPlan plan;
     plan.record(cmd(OpRender), {});
     Cmd blend = cmd(OpBlendColor);
-    plan.record(blend, {0, 0, 0, 0});
+    plan.record(blend, words({0, 0, 0, 0}));
     draw(plan);
-    plan.record(blend, {0x80000000, 0, 0, 0});
+    plan.record(blend, words({0x80000000, 0, 0, 0}));
     draw(plan);
     const auto &first = plan.renderStates[plan.draw(1).state];
     const auto &second = plan.renderStates[plan.draw(2).state];
@@ -655,8 +661,8 @@ TEST(SemanticPlan, KernelDispatchHasTypedGridAndSharedState)
     dispatch.a = 1u << 2;
     dispatch.c = 8 | uint64_t(4) << 16 | uint64_t(2) << 32;
     dispatch.obj2 = object(999);
-    plan.record(dispatch, {16, 12, 8, 2, 3, 4, 0, 0, 0, 0, 0, 0});
-    plan.record(dispatch, {24, 12, 8, 3, 3, 4, 0, 0, 0, 0, 0, 0});
+    plan.record(dispatch, words({16, 12, 8, 2, 3, 4, 0, 0, 0, 0, 0, 0}));
+    plan.record(dispatch, words({24, 12, 8, 3, 3, 4, 0, 0, 0, 0, 0, 0}));
     ASSERT_EQ(plan.kernelStates.size(), 1u);
     EXPECT_EQ(plan.dispatch(1).groups, (std::array<uint64_t, 3>{2, 3, 4}));
     EXPECT_EQ(plan.dispatch(2).grid, (std::array<uint64_t, 3>{24, 12, 8}));
@@ -684,7 +690,7 @@ TEST(SemanticPlan, CachedRangeSummariesUnionAccessAndExcludeOtherRanges)
     plan.record(binding(OpKernelBuffer, 3, 0, 2), {});
     Cmd dispatch = cmd(OpDispatch);
     dispatch.c = 1 | uint64_t(1) << 16 | uint64_t(1) << 32;
-    plan.record(dispatch, {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
+    plan.record(dispatch, words({1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0}));
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, 3);
     plan.prepareRange(0, plan.size());
@@ -732,7 +738,7 @@ TEST(SemanticPlan, IndexedArgumentsPreserveSignedBaseVertex)
     Cmd indexed = binding(OpDrawIndexed, 3, 0, 21, 256);
     indexed.a = 6;
     indexed.b = 1;
-    plan.record(indexed, {4, uint64_t(int64_t(-7)), 9});
+    plan.record(indexed, words({4, uint64_t(int64_t(-7)), 9}));
     const auto &draw = plan.draw(1);
     EXPECT_EQ(draw.baseVertex, -7);
     EXPECT_EQ(draw.baseInstance, 9u);
@@ -794,7 +800,7 @@ TEST(SemanticPlan, EligibilityIgnoresRasterChangesButTracksBindingsAndOpaqueCall
     scissor.a = 4;
     scissor.b = 8;
     plan.record(scissor, {});
-    plan.record(cmd(OpBlendColor), {0, 0, 0, 0});
+    plan.record(cmd(OpBlendColor), words({0, 0, 0, 0}));
     EXPECT_EQ(plan.eligibilityGeneration(), initial);
     plan.record(binding(OpTexture, 2, 0, 7), {});
     const auto bound = plan.eligibilityGeneration();
@@ -867,12 +873,12 @@ TEST(SemanticPlan, ComputeAccessIsCachedPerNativeKernelAndPreservesEarlierDispat
                                             {object(20), raw::ResourceUse::Read | raw::ResourceUse::Sample}};
     };
     for (unsigned i = 0; i < 10000; ++i) {
-        plan.record(cmd(OpDispatch), dimensions);
+        plan.record(cmd(OpDispatch), dimensions.data());
         plan.setKernelUses(plan.size() - 1, object(40), readSource);
     }
     EXPECT_EQ(builds, 1u);
     const size_t boundary = plan.size();
-    plan.record(cmd(OpDispatch), dimensions);
+    plan.record(cmd(OpDispatch), dimensions.data());
     plan.setKernelUses(plan.size() - 1, object(41), [](std::vector<raw::ResourceUse> &out) {
         out = std::vector<raw::ResourceUse>{{object(20), raw::ResourceUse::Read | raw::ResourceUse::Write}};
     });
@@ -899,14 +905,14 @@ TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
     plan.record(binding(OpKernelBuffer, 3, 0, 10, 64), {});
     Cmd pending = cmd(OpDispatch);
     pending.obj = object(100);
-    plan.record(pending, dimensions);
+    plan.record(pending, dimensions.data());
     plan.record(binding(OpKernelBuffer, 3, 0, 20, 128), {});
-    plan.record(pending, dimensions);
+    plan.record(pending, dimensions.data());
     plan.record(cmd(OpEnd), {});
     const auto boundary = plan.size();
     plan.prepareRange(0, boundary);
     plan.record(cmd(OpCompute), {});
-    plan.record(pending, dimensions);
+    plan.record(pending, dimensions.data());
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(boundary, plan.size());
     plan.prepareRange(0, plan.size());
@@ -940,7 +946,7 @@ TEST(SemanticPlan, DeferredComputeRebuildsRangeOwnershipFromTheOriginalSnapshot)
     EXPECT_EQ(uses[object(20)], raw::ResourceUse::Write);
     plan.clear();
     plan.record(cmd(OpCompute), {});
-    plan.record(cmd(OpDispatch), dimensions);
+    plan.record(cmd(OpDispatch), dimensions.data());
     plan.record(cmd(OpEnd), {});
     plan.prepareRange(0, plan.size());
     EXPECT_TRUE(plan.pendingComputes(0, plan.size()).empty());
@@ -950,7 +956,7 @@ TEST(SemanticPlan, ComputeAliasesUnionAccessAndExplicitWritesRemainDependencies)
 {
     RMCommandPlan plan;
     plan.record(cmd(OpCompute), {});
-    plan.record(cmd(OpDispatch), {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
+    plan.record(cmd(OpDispatch), words({1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0}));
     plan.setKernelUses(1, object(1), [](std::vector<raw::ResourceUse> &out) {
         out =
             std::vector<raw::ResourceUse>{{object(10), raw::ResourceUse::Read}, {object(10), raw::ResourceUse::Write}};
@@ -1063,13 +1069,13 @@ TEST(SemanticPlan, NonuniformRegionsKeepOneOriginalReplayOperationAndImmutableGr
     Cmd dispatch = cmd(OpDispatch, 3, 1);
     dispatch.c = 8 | uint64_t(5) << 16 | uint64_t(3) << 32;
     dispatch.obj = object(40);
-    plan.record(dispatch, {19, 11, 7, 3, 3, 3, 0, 0, 0, 0, 0, 0});
+    plan.record(dispatch, words({19, 11, 7, 3, 3, 3, 0, 0, 0, 0, 0, 0}));
     ASSERT_EQ(plan.size(), 2u);
     ASSERT_EQ(plan.dispatch(1).regions.count, 8);
     EXPECT_EQ(plan.dispatch(1).grid, (std::array<uint64_t, 3>{19, 11, 7}));
     EXPECT_EQ(plan.dispatch(1).threads, (std::array<uint32_t, 3>{8, 5, 3}));
     plan.resolveDispatch(1, object(41), 0);
-    plan.record(dispatch, {3, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0});
+    plan.record(dispatch, words({3, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0}));
     EXPECT_EQ(plan.dispatch(1).regions.count, 8);
     EXPECT_EQ(plan.dispatch(2).regions.count, 1);
     EXPECT_EQ(plan.dispatch(1).kernel, object(41));
