@@ -10,6 +10,8 @@
 
 #[path = "NativeMetalArguments.rs"]
 mod arguments;
+#[path = "NativeMetalCompile.rs"]
+pub mod compile;
 #[path = "NativeMetalComputeArtifact.rs"]
 pub mod compute_artifact;
 #[path = "NativeMetalDirect.rs"]
@@ -20,6 +22,8 @@ pub mod direct_compute;
 mod direct_tess;
 #[path = "NativeMetalFailure.rs"]
 mod failure;
+#[path = "NativeMetalFunctions.rs"]
+mod functions;
 #[path = "NativeMetalHeap.rs"]
 mod heap;
 #[path = "NativeMetalObjects.rs"]

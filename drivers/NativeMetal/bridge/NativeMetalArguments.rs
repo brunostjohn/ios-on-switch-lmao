@@ -79,7 +79,7 @@ pub unsafe extern "C" fn nmb_function_argument_layouts(
 ) -> bool {
     guard(false, || {
         let encoder = get(function)?
-            .function()
+            .function()?
             .new_argument_encoder_with_buffer_index(index)
             .map_err(e("argument encoder"))?;
         let flat: Vec<FlatLayout> = flat_layouts(encoder.layout());

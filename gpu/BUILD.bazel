@@ -64,6 +64,7 @@ rust_static_library(
     name = "bridge",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalCompile.rs",
         METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalDirectCompute.rs",
         METAL + ":bridge/NativeMetalOffline.rs",
@@ -76,6 +77,7 @@ rust_static_library(
         METAL + ":bridge/NativeMetalReflection.rs",
         METAL + ":bridge/NativeMetalVariants.rs",
         METAL + ":bridge/NativeMetalFailure.rs",
+        METAL + ":bridge/NativeMetalFunctions.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
     ],

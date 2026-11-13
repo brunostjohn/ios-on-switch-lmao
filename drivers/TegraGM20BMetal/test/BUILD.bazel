@@ -3960,3 +3960,162 @@ host_test(
     sanitize = False,
     deps = [":frontend_host"],
 )
+
+# The system shader compiler's compile context (compiler/compiler_engine.mm over bridge/NativeMetalCompile.h) against the
+# m2v device it replaced, each a process over the mock GM20B: the same enable set and compile devices, and byte-identical
+# records of a sample of the corpus's states (render and compute) made from the crawl's libraries
+host_test(
+    name = "compiler_compile_only_test",
+    size = "medium",
+    srcs = [
+        "compiler_compile_only_test.cpp",
+        "compiler_requests.h",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:raw/pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS + select({
+        # the corpus's states of private linked functions are iOS 27's libraries' alone
+        "//ipsw:24B119": ["-DSWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS=1"],
+        "//conditions:default": [],
+    }),
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "//gpu/nvk:host_dylib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+        "SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)",
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":frontend_host",
+        ":raw_facade_host",
+        ":raw_runtime_host",
+    ] + RAW_HOST_DEPS,
+)
+
+# What the system shader compiler holds as it serves boot 12's requests (compiler_boot12.log), with the m2v device it opened
+# before and with its compile context, each step's heap, footprint and peak (compiler_footprint_test.cpp)
+host_test(
+    name = "compiler_footprint_test",
+    size = "medium",
+    srcs = [
+        "compiler_footprint_test.cpp",
+        "compiler_requests.h",
+        "footprint_breakdown.h",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:raw/pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [
+        "compiler_boot12.log",
+        "//gpu/nvk:host_dylib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_BOOT12": "$(rootpath compiler_boot12.log)",
+        "SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)",
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":frontend_host",
+        ":raw_facade_host",
+        ":raw_runtime_host",
+    ] + RAW_HOST_DEPS,
+)
+
+# What one compile of the heaviest states costs at its peak (RenderBox's uber states, Core Animation's generic state), each
+# in a process of its own, and which part of the compile the heap peaks in (compiler_transient_test.cpp)
+host_test(
+    name = "compiler_transient_test",
+    size = "large",
+    srcs = [
+        "compiler_requests.h",
+        "compiler_transient_test.cpp",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:raw/pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "//gpu/nvk:host_dylib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+        "SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)",
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":frontend_host",
+        ":raw_facade_host",
+        ":raw_runtime_host",
+    ] + RAW_HOST_DEPS,
+)

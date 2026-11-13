@@ -16,6 +16,16 @@ id native_bridge_metal_open(const char *, const char *, uint64_t, void (*)(const
     return nil;
 }
 
+bool native_bridge_metal_compile_open(const char *)
+{
+    return false;
+}
+
+id native_bridge_metal_compile_library(const char *, dispatch_data_t, NSError **)
+{
+    return nil;
+}
+
 id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *, void *, NSUInteger, NSUInteger)
 {
     return nil;

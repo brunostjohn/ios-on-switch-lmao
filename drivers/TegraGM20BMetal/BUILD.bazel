@@ -155,6 +155,8 @@ filegroup(
     name = "compiler_srcs",
     srcs = [
         "compiler/compiler_engine.mm",
+        "compiler/compiler_libraries.mm",
+        "compiler/compiler_record.mm",
         "compiler/compiler_request.mm",
         "compiler/compiler_sandbox.mm",
         "compiler/compiler_service.mm",

@@ -136,6 +136,10 @@ void nak_postprocess_nir(nir_shader *nir, const struct nak_compiler *nak,
                          nir_variable_mode robust2_modes,
                          const struct nak_fs_key *fs_key,
                          bool has_task_shader);
+/* Switch: the shader's functions freed, its variables, info and constant
+ * data kept, once NAK has the code in its own IR.
+ */
+void nak_release_nir_body(nir_shader *nir);
 
 enum ENUM_PACKED nak_ts_domain {
    NAK_TS_DOMAIN_ISOLINE = 0,

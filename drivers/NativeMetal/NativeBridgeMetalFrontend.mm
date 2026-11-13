@@ -35,6 +35,7 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <os/proc.h>
+#include "bridge/NativeMetalCompile.h"
 #include "bridge/NativeMetalDirect.h"
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
@@ -63,6 +64,7 @@
 #endif
 
 static NmbDevice *gDevice;
+static NmbCompileContext *gCompile;
 static NativeComputeArtifactStorage gNativeArtifactStorage;
 static std::atomic<uint32_t> gNativeArtifactWrites{0};
 // Never destroyed: its dispatch sources' handlers may still run while the process exits.
@@ -5727,11 +5729,13 @@ extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, N
     NmbRenderPipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
     NSError *error = nil;
-    if (!gDevice || !renderDescriptor((MTLRenderPipelineDescriptor *)descriptor, &p, linked, &error)) {
-        *why = gDevice ? "a function of another device" : "no device";
+    if ((!gDevice && !gCompile) || !renderDescriptor((MTLRenderPipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why = gDevice || gCompile ? "a function of another device" : "no device";
         return false;
     }
-    if (nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, uint32_t(textureSamples), binds, each, ctx))
+    const uint32_t samples = uint32_t(textureSamples);
+    if (gDevice ? nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, samples, binds, each, ctx)
+                : nmb_compile_render_direct(gCompile, &p, barrier, textureFormat, samples, binds, each, ctx))
         return true;
     *why = nmb_last_error();
     return false;
@@ -5859,11 +5863,13 @@ extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct N
     NmbComputePipelineDescriptor p = {};
     std::vector<NmbFunction *> linked;
     NSError *error = nil;
-    if (!gDevice || !computeDescriptor((MTLComputePipelineDescriptor *)descriptor, &p, linked, &error)) {
-        *why = gDevice ? "a function of another device, or what the frontend does not represent" : "no device";
+    if ((!gDevice && !gCompile) || !computeDescriptor((MTLComputePipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why =
+            gDevice || gCompile ? "a function of another device, or what the frontend does not represent" : "no device";
         return false;
     }
-    if (nmb_compute_pipeline_direct(gDevice, &p, dispatch, each, ctx))
+    if (gDevice ? nmb_compute_pipeline_direct(gDevice, &p, dispatch, each, ctx)
+                : nmb_compile_compute_direct(gCompile, &p, dispatch, each, ctx))
         return true;
     *why = nmb_last_error();
     return false;
@@ -7176,7 +7182,8 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg);
 
 // A library of a metallib's AIR slice, the one this IPSW's Metal takes (MetallibSlice.h): its functions, and the bytes their
 // bitcode and extern entries are read from. `storage` keeps the file's bytes.
-static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length, NSError **error)
+static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length, NSError **error,
+                                  bool compileOnly = false)
 {
     size_t offset = 0, size = 0;
     if (!switch_metal::airSlice(file, length, offset, size)) {
@@ -7190,7 +7197,8 @@ static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length
         return nil;
     }
     SWITCH_METAL_DIAGNOSTIC(const uint64_t libraryBegan = nowUs());
-    NmbLibrary *handle = nmb_library_new(gDevice, file + offset, size, false);
+    NmbLibrary *handle = compileOnly ? nmb_compile_library_new(file + offset, size, false)
+                                     : nmb_library_new(gDevice, file + offset, size, false);
     SWITCH_METAL_DIAGNOSTIC(gTimeLibrary.add(libraryBegan));
     if (!handle)
         return failWith<NBLibrary *>(error, @"library", nil);
@@ -7731,6 +7739,32 @@ extern "C" id native_bridge_metal_library_with_air(const void *bytes, size_t len
     NBLibrary *library = [NBLibrary new];
     library.handle = handle;
     return library;
+}
+
+extern "C" bool native_bridge_metal_compile_open(const char *loader)
+{
+    if (!gCompile) {
+        gNvkPath = loader ? loader : "";
+        gCompile = nmb_compile_context_open(loader);
+    }
+    return gCompile != nullptr;
+}
+
+extern "C" id native_bridge_metal_compile_library(const char *path, dispatch_data_t data, NSError **error)
+{
+    if (!gCompile) {
+        if (error)
+            *error = nbError(@"no compile context");
+        return nil;
+    }
+    if (path) {
+        NSData *bytes = [NSData dataWithContentsOfFile:@(path) options:NSDataReadingMappedIfSafe error:error];
+        return bytes ? metallibLibrary(bytes, (const uint8_t *)bytes.bytes, bytes.length, error, true) : nil;
+    }
+    const void *bytes = nullptr;
+    size_t size = 0;
+    dispatch_data_t mapped = dispatch_data_create_map(data, &bytes, &size);
+    return metallibLibrary(mapped, (const uint8_t *)bytes, size, error, true);
 }
 
 extern "C" bool native_bridge_metal_shader_cache_stats(NmbShaderCacheStats *out)

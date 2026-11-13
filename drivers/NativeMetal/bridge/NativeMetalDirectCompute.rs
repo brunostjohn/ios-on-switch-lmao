@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! The raw GM20B path's direct compile of a compute state at one dispatch shape (NativeMetalDirect.h): what m2v's translator
-//! makes of the kernel for the three dispatches the pack's kernel probe ran (drivers/TegraGM20BMetal/raw/pack/kernels.py),
-//! with no pipeline state, command buffer or capture. Only the translator's public API is used; the runtime device lends its
-//! compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
+//! The raw GM20B path's direct compile of a compute state at one dispatch shape (NativeMetalDirect.h): what m2v's
+//! translator makes of the kernel for the three dispatches the pack's kernel probe ran
+//! (drivers/TegraGM20BMetal/raw/pack/kernels.py), with no pipeline state, command buffer or capture. Only the
+//! translator's public API is used. A runtime device lends its compile device and its Vulkan device, on which the
+//! variant's layout and samplers are made too; the offline compile (the pack generator's, and the compile context's:
+//! NativeMetalCompile.rs) runs on the compile profile's native device with the layout as data alone.
 
 use crate::compute_artifact::NmbComputeArtifact;
 use crate::direct::{
@@ -10,10 +12,10 @@ use crate::direct::{
     compile_error, residual_words, sampler_state, spill_table, write_of,
 };
 use crate::objects::{
-    NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
-    sampler_descriptor,
+    DescriptorFunction, NmbComputePipelineDescriptor, NmbComputePipelineDescriptorOf, NmbDevice, NmbSamplerDescriptor,
+    compute_descriptor, e, get, guard, raw, sampler_descriptor,
 };
-use crate::offline::{NmbOfflineComputePipelineDescriptor, offline_devices};
+use crate::offline::{Devices, NmbOfflineComputePipelineDescriptor, offline_devices};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
@@ -486,7 +488,11 @@ impl Samplers<'_> {
         let mut reduction = avk::SamplerReductionModeCreateInfo::default();
         let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
         let info = metal2vulkan::ash_interop::sampler_create_info(&desc, &mut reduction, &mut border);
-        let made = sampler_state(&info, desc.reduction.into(), desc.border_components.map(avk::ComponentMapping::from));
+        let made = sampler_state(
+            &info,
+            desc.reduction.into(),
+            desc.border_components.map(avk::ComponentMapping::from),
+        );
         Ok(Some((self.create(&info)?, made)))
     }
 
@@ -619,10 +625,21 @@ pub unsafe extern "C" fn nmb_compute_pipeline_offline(
     ctx: *mut c_void,
 ) -> bool {
     guard(false, || {
-        let native = &offline_devices()?.native;
-        let descriptor = compute_descriptor(descriptor)?;
-        direct(None, native, &descriptor, None, get(dispatch)?, each, ctx)
+        compute_offline(offline_devices()?, descriptor, dispatch, each, ctx)
     })
+}
+
+/// nmb_compute_pipeline_offline's compile on `devices`, of a descriptor of either function handle: the pack generator's
+/// offline functions, or the compile context's (NativeMetalCompile.rs)
+pub(crate) fn compute_offline<F: DescriptorFunction>(
+    devices: &Devices,
+    descriptor: *const NmbComputePipelineDescriptorOf<F>,
+    dispatch: *const NmbDirectDispatch,
+    each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    let descriptor = compute_descriptor(descriptor)?;
+    direct(None, &devices.native, &descriptor, None, get(dispatch)?, each, ctx)
 }
 
 /// The answers the runtime's compute prepare gives a state of offline functions (nmb_compute_artifact_new's metal_info,
@@ -641,7 +658,12 @@ pub unsafe extern "C" fn nmb_offline_compute_pipeline_facts(
             return Err("null compute facts".into());
         }
         let descriptor = compute_descriptor(descriptor)?;
-        let made = compiled(&offline_devices()?.native, &descriptor, &VariantKey::new(), &Budget::standard())?;
+        let made = compiled(
+            &offline_devices()?.native,
+            &descriptor,
+            &VariantKey::new(),
+            &Budget::standard(),
+        )?;
         let info = &made.metal_info;
         // SAFETY: the caller's three words.
         unsafe { std::slice::from_raw_parts_mut(facts, 3) }.copy_from_slice(&[
@@ -826,7 +848,13 @@ fn direct(
         stage_in_region_word,
         stage_in_strides,
     };
-    arguments_of(&plain.commands, &bound.commands, &plain.pipeline.layout, &layout, &mut kernel)?;
+    arguments_of(
+        &plain.commands,
+        &bound.commands,
+        &plain.pipeline.layout,
+        &layout,
+        &mut kernel,
+    )?;
     // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
     Ok(unsafe { each(&kernel, ctx) })
 }

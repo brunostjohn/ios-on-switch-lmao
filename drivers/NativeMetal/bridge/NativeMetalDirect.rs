@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! The raw GM20B path's direct compile of a render state (NativeMetalDirect.h): what m2v's translator makes of the state for
-//! each of the pack generator's probe draws (drivers/TegraGM20BMetal/raw/pack/probe.mm), with no pipeline state, command
-//! buffer or capture. Only the translator's public API is used; the runtime device lends its compile device and its Vulkan
-//! device, on which the variants' layouts are made for NVK's stage compile.
+//! The raw GM20B path's direct compile of a render state (NativeMetalDirect.h): what m2v's translator makes of the
+//! state for each of the pack generator's probe draws (drivers/TegraGM20BMetal/raw/pack/probe.mm), with no pipeline
+//! state, command buffer or capture. Only the translator's public API is used. A runtime device lends its compile
+//! device and its Vulkan device, on which the variants' layouts are made too; the offline compile (the pack
+//! generator's, and the system shader compiler's compile context: NativeMetalCompile.rs) runs on the compile profile's
+//! devices with the layouts as data alone.
 
-use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor};
-use crate::offline::{NmbOfflineRenderPipelineDescriptor, offline_devices};
+use crate::objects::{
+    DescriptorFunction, NmbDevice, NmbRenderPipelineDescriptor, NmbRenderPipelineDescriptorOf, e, get, guard, raw,
+    render_descriptor,
+};
+use crate::offline::{Devices, NmbOfflineRenderPipelineDescriptor, offline_devices};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
@@ -134,7 +139,11 @@ pub(crate) fn sampler_state(
         min_lod: info.min_lod,
         max_lod: info.max_lod,
         max_anisotropy: info.max_anisotropy,
-        compare_op: if info.compare_enable != 0 { info.compare_op.as_raw() as u32 } else { 0 },
+        compare_op: if info.compare_enable != 0 {
+            info.compare_op.as_raw() as u32
+        } else {
+            0
+        },
         border_color: info.border_color.as_raw() as u32,
         reduction: reduction.as_raw() as u32,
         border_components: [c.r, c.g, c.b, c.a].map(|s| s.as_raw() as u32),
@@ -423,7 +432,7 @@ pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan:
     Ok(device)
 }
 
-fn specialized_device(nmb: &NmbDevice, barrier: bool) -> Result<Arc<metal2vulkan::device::Device>, String> {
+pub(crate) fn specialized_device(nmb: &NmbDevice, barrier: bool) -> Result<Arc<metal2vulkan::device::Device>, String> {
     let mut kept = if barrier { &BARRIER } else { &ORDERED }
         .lock()
         .map_err(|_| "native compile device lock")?;
@@ -716,7 +725,11 @@ fn probed_format(state: &BindState, w: &NmbDirectWrite) -> u32 {
     if w.stage != 2 || !matches!(w.source, NmbDirectSource::Texture | NmbDirectSource::Combined) {
         return 0;
     }
-    match state.stages.get(&Stage::Fragment).and_then(|table| table.textures.get(&w.slot)) {
+    match state
+        .stages
+        .get(&Stage::Fragment)
+        .and_then(|table| table.textures.get(&w.slot))
+    {
         Some(BoundTexture::Texture { facts, .. }) => facts.pixel_format.as_raw(),
         _ => 0,
     }
@@ -1535,11 +1548,51 @@ pub unsafe extern "C" fn nmb_render_pipeline_offline(
 ) -> bool {
     guard(false, || {
         // SAFETY: the caller's contract.
-        let binds = unsafe { Binds::of(binds) }?;
-        let descriptor = render_descriptor(descriptor)?;
-        let compile = offline_devices()?.render(barrier, binds.fragment_tests);
-        translate(compile, &descriptor, None, texture_format, texture_samples, &binds, each, ctx)
+        unsafe {
+            render_offline(
+                offline_devices()?,
+                descriptor,
+                barrier,
+                texture_format,
+                texture_samples,
+                binds,
+                each,
+                ctx,
+            )
+        }
     })
+}
+
+/// nmb_render_pipeline_offline's compile on `devices`, of a descriptor of either function handle: the pack generator's
+/// offline functions, or the compile context's (NativeMetalCompile.rs)
+///
+/// # Safety
+/// As nmb_render_pipeline_direct's.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn render_offline<F: DescriptorFunction>(
+    devices: &Devices,
+    descriptor: *const NmbRenderPipelineDescriptorOf<F>,
+    barrier: bool,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: *const NmbDirectBinds,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    // SAFETY: the caller's contract.
+    let binds = unsafe { Binds::of(binds) }?;
+    let descriptor = render_descriptor(descriptor)?;
+    let compile = devices.render(barrier, binds.fragment_tests);
+    translate(
+        compile,
+        &descriptor,
+        None,
+        texture_format,
+        texture_samples,
+        &binds,
+        each,
+        ctx,
+    )
 }
 
 /// The state `descriptor` describes as the translator makes it on `compile` (its two-plane profile where `binds` ask)
