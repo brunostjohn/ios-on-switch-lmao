@@ -234,6 +234,7 @@ TESTS: dict[str, bool] = {
     'display.pacing': False,
     'display.completion_flip': False,
     'display.media_completion_flip': False,
+    'display.scan_returned': False,
     'display.brightness': False,
     'display.colour': False,
     'display.planes': False,
