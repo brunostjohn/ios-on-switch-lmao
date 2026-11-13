@@ -66,6 +66,7 @@ host_test(
     name = "switch_vic_fraction_probe_test",
     srcs = [
         "switch_vic_fraction_probe_test.cpp",
+        "vic_model.h",
         "//drivers/TegraVIC:SwitchVICFractionProbe.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",
@@ -100,6 +101,17 @@ host_test(
         "switch_vic_transpose_probe_test.cpp",
         "vic_model.h",
         "//drivers/TegraVIC:SwitchVICTransposeProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+)
+
+host_test(
+    name = "switch_vic_odd_probe_test",
+    srcs = [
+        "switch_vic_odd_probe_test.cpp",
+        "vic_model.h",
+        "//drivers/TegraVIC:SwitchVICOddProbe.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",
     ],
@@ -144,6 +156,19 @@ host_test(
     name = "tegra_vic_test",
     srcs = ["tegra_vic_test.cpp"],
     deps = [":vic_host"],
+)
+
+host_test(
+    name = "tegra_vic_odd_test",
+    srcs = [
+        "tegra_vic_odd_test.cpp",
+        "vic_model.h",
+        "//drivers/TegraVIC:TegraVICBounce.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+    ],
 )
 
 host_test(
@@ -729,6 +754,12 @@ host_test(
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",
     ],
+)
+
+host_test(
+    name = "switch_vic_capabilities_source_test",
+    srcs = ["switch_vic_capabilities_source_test.cpp"],
+    data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
 )
 
 host_test(

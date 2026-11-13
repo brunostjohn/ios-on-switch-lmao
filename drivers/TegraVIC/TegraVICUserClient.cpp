@@ -842,9 +842,10 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     // VideoToolbox gates 420f<->420v pairs on it: range conversion reads 4:2:0 through the slot matrix.
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesIdentityCSC", (t->yccIn & TEGRA_VIC_YCC_IN_RGB) ? 1 : 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesTiling", 0);
-    // gpu.x1.vic_fractional (SwitchVICFractionProbe.h) decides it: quarter-pixel offsets against the interpolation.
+    // gpu.x1.vic_fractional (SwitchVICFractionProbe.h) judges both: quarter-pixel offsets and 24.75-pixel widths and
+    // heights against the interpolation (tegra_vic_build hands 16.16 rectangles through).
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalXYOffsetsSupported", 1);
-    putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalDimensions", 0);
+    putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalDimensions", 1);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesDirectionalScaling", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesHDR", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesEnhancement", 0);

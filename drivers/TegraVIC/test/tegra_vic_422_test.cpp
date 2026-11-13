@@ -80,8 +80,8 @@ uint64_t out(const TegraVICJob &j, uint32_t bit, uint32_t width)
 #define OUT_FIELD(j, name) out((j), name##_BIT, name##_WIDTH)
 
 // The refused request: 1920x1080 '420v' (rows on 256 bytes, as everything sized for this display) a quarter turn and
-// 3.6x down into a 300x534 '422v'. The output is described before the transpose: 534x300 of N422R, luma 534 rows of
-// 512, chroma 534 rows of 256 pairs, the siting exchanged.
+// 3.6x down into a 300x534 '422v'. The output is described before the transpose: 534x300 of N422 (its memory as it
+// lies, probe gpu.x1.vic_transpose422), luma 534 rows of 512, chroma 534 rows of 256 pairs, Center across memory rows.
 TEST(Vic422, TheDetachedLayerCopyBuilds)
 {
     const TegraVICSurfaceDesc src = surface(k420v, 1920, 1080, 2048);
@@ -89,15 +89,15 @@ TEST(Vic422, TheDetachedLayerCopyBuilds)
     for (uint32_t transform : {4u, 7u}) {
         const Built b = build(src, dst, detachCopy(transform, 2));
         ASSERT_EQ(b.why, nullptr) << b.why;
-        EXPECT_EQ(OUT_FIELD(b.job, SURF_FORMAT), uint64_t(TEGRA_VIC_T_Y8___U8V8_N422R));
+        EXPECT_EQ(OUT_FIELD(b.job, SURF_FORMAT), uint64_t(TEGRA_VIC_T_Y8___U8V8_N422));
         EXPECT_EQ(OUT_FIELD(b.job, SURF_WIDTH), 533u);
         EXPECT_EQ(OUT_FIELD(b.job, SURF_HEIGHT), 299u);
         EXPECT_EQ(OUT_FIELD(b.job, SURF_LUMA_WIDTH), 533u);
         EXPECT_EQ(OUT_FIELD(b.job, SURF_LUMA_HEIGHT), 511u);
         EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_WIDTH), 533u);
         EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_HEIGHT), 255u);
-        EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_LOC_HORIZ), 0u);
-        EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_LOC_VERT), 1u) << "Center siting across memory is down before it";
+        EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_LOC_HORIZ), 1u) << "Center across memory rows, transposed or not";
+        EXPECT_EQ(OUT_FIELD(b.job, SURF_CHROMA_LOC_VERT), 0u);
         EXPECT_EQ(TEGRA_VIC_GET(b.job.config, TEGRA_VIC_OUTPUT, OUT_TRANSPOSE), 1u);
     }
     const Built flat = build(src, surface(k422v, 534, 300, 768), detachCopy(0, 2));
@@ -109,7 +109,7 @@ TEST(Vic422, TheDetachedLayerCopyBuilds)
     EXPECT_EQ(OUT_FIELD(flat.job, SURF_CHROMA_LOC_VERT), 0u);
 }
 
-// Transposed 4:2:0 output keeps the siting it ran with on the unit; only 4:2:2's is exchanged.
+// Transposed 4:2:0 output keeps the siting it ran with on the unit, as 4:2:2's does.
 TEST(Vic422, Transposed420KeepsItsSiting)
 {
     const TegraVICSurfaceDesc src = surface(kBgra, 720, 1280, 2880 + 192);
@@ -146,7 +146,7 @@ TEST(Vic422, ShapesAndRefusals)
 {
     const TegraVICSurfaceDesc src = surface(k420v, 1920, 1080, 2048);
     EXPECT_EQ(build(src, surface(k422v, 300, 533, 512), detachCopy(4, 1)).why, nullptr) << "odd height";
-    EXPECT_STREQ(build(src, surface(k422v, 301, 534, 512), detachCopy(4, 1)).why, "4:2:2 surface of odd width");
+    EXPECT_EQ(build(src, surface(k422v, 301, 534, 512), detachCopy(4, 1)).why, nullptr) << "odd width, whole pairs";
     TegraVICRequest r = detachCopy(0, 1);
     r.dst_x = 1;
     r.dst_w = 200;
