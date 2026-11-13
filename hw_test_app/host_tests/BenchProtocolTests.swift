@@ -196,6 +196,13 @@ final class BenchProtocolTests: XCTestCase {
         guard case .experiment(let big) = decoded.entries[3] else { return XCTFail("128 KiB of code refused") }
         XCTAssertFalse(big.compete)
         guard case .invalid = decoded.entries[4] else { return XCTFail("code past 128 KiB accepted") }
+        var outcome = BenchOutcome()
+        (outcome.competitorBuffers, outcome.competitorWhy) = (12, "")
+        let bytes = BenchResult.encode(batch: "compete", entry: decoded.entries[0], outcome: outcome)
+        let top = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        XCTAssertEqual((top["competitor"] as? [String: Any])?["buffers"] as? Int, 12)
+        let alone = BenchResult.encode(batch: "compete", entry: decoded.entries[3], outcome: outcome)
+        XCTAssertNil((try JSONSerialization.jsonObject(with: alone) as? [String: Any])?["competitor"])
     }
 
     func testResultFileCarriesRunsAndTexels() throws {

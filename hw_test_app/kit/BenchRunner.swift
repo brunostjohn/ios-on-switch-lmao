@@ -7,6 +7,7 @@ import SwitchBench
 /// The bench's raw device (hw_test_app/bench/switch_bench.h): one experiment at a time, on its caller's thread.
 final class BenchRunner {
     private let bench: OpaquePointer
+    private var rival: BenchRunner?
 
     private init(_ bench: OpaquePointer) { self.bench = bench }
 
@@ -137,6 +138,8 @@ final class BenchRunner {
         (x.storage_bytes, x.storage_va_at) = (e.storage?.bytes ?? 0, e.storage?.vaAt ?? 0)
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
+        let competition = e.compete ? competitor() : nil
+        competition?.start()
         var r = switch_bench_result()
         r.gpu_ns = pinned.zeroed(UInt64.self, timed)
         r.wall_ns = pinned.zeroed(UInt64.self, timed)
@@ -153,6 +156,11 @@ final class BenchRunner {
         r.storage_bytes = storageBytes
         switch_bench_run(bench, &x, &r)
         var outcome = BenchOutcome(status: Self.statuses[Int(r.status)], why: Self.text(&r.why))
+        if let competition {
+            (outcome.competitorBuffers, outcome.competitorWhy) = competition.stop()
+        } else if e.compete {
+            outcome.competitorWhy = "no second bench device"
+        }
         let gpu = Array(UnsafeBufferPointer(start: r.gpu_ns, count: timed))
         let wall = Array(UnsafeBufferPointer(start: r.wall_ns, count: timed))
         let repeats = Int(e.repeats)
@@ -189,6 +197,12 @@ final class BenchRunner {
 
     /// What the app's copies of a compare target and an output buffer hold until the GPU's bytes are copied in
     static let unread: UInt8 = 0xEE
+
+    /// The second device a `compete` experiment draws on, opened once
+    private func competitor() -> BenchCompetition? {
+        if rival == nil { rival = try? BenchRunner.open() }
+        return rival.flatMap(BenchCompetition.init(runner:))
+    }
 
     private static func text<T>(_ tuple: inout T) -> String {
         withUnsafeBytes(of: &tuple) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
