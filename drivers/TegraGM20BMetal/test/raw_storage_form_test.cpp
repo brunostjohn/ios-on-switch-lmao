@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <string>
+#include "bazel/testing/source_text.h"
 #include <thread>
 #include <vector>
 #include "../raw/runtime/raw_key_tally.h"
@@ -109,6 +111,14 @@ TEST(KeyTally, AFullTableCountsTheRestAsOverflow)
     for (uint64_t key = 1; key <= raw::KeyTally::kSlots + 3; key++)
         tally.note(key);
     EXPECT_EQ(tally.overflow.load(), 3u);
+}
+
+// Rule storage.compressed: a shadow a storage form views, like a memoryless backing it views, takes compressed memory
+TEST(StorageForm, StorageBoundBackingsAndShadowsCompressUnderTheRule)
+{
+    const std::string encoder = switch_ios::test::SourceText("../raw/runtime/raw_gpu.cpp");
+    EXPECT_EQ(switch_ios::test::Count(encoder, "dev_->storageCompressedOk() || !(pass.storageMask >> j & 1)"), 2u)
+        << "the shadow's backing and the memoryless one's";
 }
 
 }  // namespace

@@ -4361,7 +4361,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            Texture *b = backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
+            Texture *b = backing(*t, scratchTags[j], blockLinear,
+                                 dev_->storageCompressedOk() || !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
