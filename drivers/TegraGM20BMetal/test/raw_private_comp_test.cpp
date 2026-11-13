@@ -77,6 +77,15 @@ TEST(RawPrivateComp, AMipChainTakesItsKind)
     EXPECT_EQ(raw::privateCompressedKind(f), uint32_t(raw::kCompKindC32)) << "gpu.raw.private_compression mips";
 }
 
+TEST(RawPrivateComp, AOneLevelArrayTakesItsKind)
+{
+    raw::PrivateTextureFacts f = target(8);
+    f.shape = raw::PrivateShape2D::Array;
+    EXPECT_EQ(raw::privateCompressedKind(f), uint32_t(raw::kCompKindC64)) << "gpu.raw.private_compression array";
+    f.levels = 2;
+    EXPECT_EQ(raw::privateCompressedKind(f), 0u) << "an array's levels are no chain the move copies";
+}
+
 // The copy engine moves a multisampled texture as fx::msLayout's grid of its samples
 TEST(RawPrivateComp, AMultisampledTextureMovesAsItsSampleGrid)
 {

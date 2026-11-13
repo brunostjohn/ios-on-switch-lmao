@@ -14,7 +14,12 @@ extension PrivateCompressionTest {
         var paths: [String] = []
     }
 
-    static let shapeArms = ["mips"]
+    static let shapeArms = ["mips", "array"]
+    /// Clear colours the boot ZBC table holds (black, white, zero), one a slice
+    static let sliceClears = [
+        MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1), MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1),
+        MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0),
+    ]
 
     func shapeArms(_ gpu: GPU, _ facade: NSObject, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
         for arm in Self.shapeArms {
@@ -51,17 +56,18 @@ extension PrivateCompressionTest {
     func shapeArm(_ arm: String, _ gpu: GPU, _ facade: NSObject, plain: Bool) async throws -> ShapeRun {
         var run = ShapeRun()
         let pattern = try gpu.render(fragment: "comp_pattern_fragment", format: .bgra8Unorm)
-        func draw(_ target: MTLTexture, slice: Int = 0) -> (MTLCommandBuffer) -> Void {
+        /// The pattern over all of `target` (`half`: its left half, the slice's own clear colour beside it)
+        func draw(_ target: MTLTexture, slice: Int = 0, half: Bool = false) -> (MTLCommandBuffer) -> Void {
             { commands in
                 let p = MTLRenderPassDescriptor()
                 p.colorAttachments[0].texture = target
                 p.colorAttachments[0].slice = slice
                 p.colorAttachments[0].loadAction = .clear
-                p.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+                p.colorAttachments[0].clearColor = Self.sliceClears[slice % Self.sliceClears.count]
                 p.colorAttachments[0].storeAction = .store
                 let e = commands.makeRenderCommandEncoder(descriptor: p)!
                 e.setRenderPipelineState(pattern)
-                var corners = GPU.fullScreen
+                var corners = half ? GPU.quad(x0: -1, y0: -1, x1: 0, y1: 1, z: 0.5) : GPU.fullScreen
                 e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
@@ -81,6 +87,21 @@ extension PrivateCompressionTest {
             for level in 0..<target.mipmapLevelCount {
                 run.bytes += try await gpu.read(target, bytesPerPixel: 4, level: level)
             }
+            run.compressed = comptags(facade, target)
+        case "array":
+            let target = try await made(facade, plain: plain) {
+                let d = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .bgra8Unorm, width: 128, height: 128, mipmapped: false)
+                d.textureType = .type2DArray
+                d.arrayLength = 3
+                d.storageMode = .private
+                d.usage = [.renderTarget, .shaderRead]
+                guard let t = gpu.device.makeTexture(descriptor: d) else { throw TestFailure("no 2D array made") }
+                return t
+            }
+            run.made = comptags(facade, target)
+            for slice in 0..<3 { run.paths.append(try await gpu.run(draw(target, slice: slice, half: true)).path) }
+            for slice in 0..<3 { run.bytes += try await gpu.read(target, bytesPerPixel: 4, slice: slice) }
             run.compressed = comptags(facade, target)
         default:
             throw TestFailure("no shape arm \(arm)")
