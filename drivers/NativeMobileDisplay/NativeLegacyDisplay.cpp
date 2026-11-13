@@ -32,6 +32,7 @@
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraDisplayFlip/SwitchDisplayPriority.h"
+#include "../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
@@ -947,8 +948,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // ("swap %u completed, recycling surface 0x%x from swap %u"), so from then on every swap, direct or copied, retires when its
     // frame is seen on screen, with every older one (latchRetire); a frame replaced before it showed retires with the one that
     // replaced it. A slot keeps its surface's descriptor retained and prepared until another surface needs the slot and it is
-    // neither scanned nor asked for. Window A underflowing kDirectUnderflowFrames in a row from a slot turns direct off (one
-    // line); swaps keep retiring at their latch.
+    // neither scanned nor asked for. Window A underflowing kDirectUnderflowFrames in a row from a slot holds direct off (one
+    // line) for a run of frame ends with no window A underflow (directHold); swaps keep retiring at their latch.
     static constexpr int kSlot0 = static_cast<int>(TegraScanoutRing::kMaxBuffers);
     static constexpr unsigned kSlots = TegraScanoutRing::kMaxEntries - TegraScanoutRing::kMaxBuffers,
                               kDirectUnderflowFrames = 3;
@@ -970,6 +971,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     DirectSlot slots[kSlots] = {};
     uint64_t slotUses = 0, takeSeq = 0;
     bool directOn = false, directAttached = false, latchRetire = false;
+    // Static: the instance is at the 16 KiB a kalloc_type class may have. 10 s of clean frames after the first hold, at
+    // most 160 s, forgiven after a minute with direct on.
+    static inline SwitchRouteBackoff directHold{600, 9600, 3600};
     int gpuDirect = kNoBuffer, gpuPresentedEntry = kNoBuffer;  // the slot entry a fence-only present is for
 
     struct Taken {
@@ -1826,7 +1830,11 @@ private:
             static_cast<unsigned long long>(stPWait.maxUs()), static_cast<unsigned long long>(stPCopy.meanUs()),
             static_cast<unsigned long long>(stPCopy.maxUs()), static_cast<unsigned long long>(stPLatch.meanUs()),
             static_cast<unsigned long long>(stPLatch.maxUs()));
-        add("; direct %u%s", stDirect, !directOn && latchRetire ? " (off)" : "");
+        add("; direct %u%s held %u retried %u", stDirect,
+            !directOn && latchRetire ? " (off)"
+            : !directHold.on()       ? " (held off)"
+                                     : "",
+            directHold.failures, directHold.retries);
         stDirect = 0;
         const char *buffering = "";
         if (doubleBuffer && !ring.replace)
@@ -3591,7 +3599,7 @@ public:
         planeNext = pd.set;
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
-        const bool direct = directOn && !gpuBypass && directCandidate(pd.ui);
+        const bool direct = directOn && directHold.on() && !gpuBypass && directCandidate(pd.ui);
         const bool noSurface = doubleBuffer && (direct ? ring.held != kNoBuffer || ring.superseded != kNoBuffer
                                                        : ring.target() == kNoBuffer);
         if (noSurface || hwSuspended) {

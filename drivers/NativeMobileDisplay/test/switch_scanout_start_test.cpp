@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 
 namespace {
 
@@ -104,6 +105,7 @@ struct Display {
     std::array<Plane, TegraScanoutRing::kMaxEntries> entryPlane{};
     Plane planeNext{}, planeTarget{}, stagedPlane{};
     bool doubleBuffer = true, directAttached = true, directOn = true;
+    SwitchRouteBackoff directHold{600, 9600, 3600};
     bool rotated = false, rotationLatched = false, rotationAnnounced = false;
     bool planeNextSet = false, stats = false, probeUnderflow = false;
     uint32_t pitchActControl = kWinAActHcntrSel | 0x40, pitchOptions = 0x40000000;
@@ -557,6 +559,41 @@ TEST(ScanoutStart, LatchedUnderflowAfterTheRotationIsNotedForTheFrame)
     EXPECT_EQ(d.notedUnderflow, Display::kWinAUnderflowInt);
     EXPECT_EQ(d.dc.values[Display::kDcIntStatus], 0u);
     EXPECT_EQ(d.underflowRun, 1u);
+}
+
+// Window A underflowing from a slot holds direct scanout off, not for the boot: after a run of frame ends with no
+// underflow it is chosen again, and a second storm holds it off for twice as long.
+TEST(ScanoutStart, DirectScanoutHeldOffByUnderflowsComesBackAfterACleanRun)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    d.frameEnd(true);
+    const auto underflowFrames = [&d](unsigned n) {
+        for (unsigned i = 0; i < n; ++i) {
+            d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
+            d.frameEnd(false);
+        }
+    };
+    const auto directChosen = [&d] {
+        return d.directOn && d.directHold.on();
+    };
+    underflowFrames(Display::kDirectUnderflowFrames);
+    EXPECT_FALSE(directChosen());
+    EXPECT_TRUE(d.directOn);
+    EXPECT_EQ(d.directHold.failures, 1u);
+    for (unsigned i = 0; i < 599; ++i)
+        d.frameEnd(false);
+    EXPECT_FALSE(directChosen());
+    underflowFrames(1);
+    for (unsigned i = 0; i < 599; ++i)
+        d.frameEnd(false);
+    EXPECT_FALSE(directChosen());
+    d.frameEnd(false);
+    EXPECT_TRUE(directChosen());
+    EXPECT_EQ(d.directHold.retries, 1u);
+    underflowFrames(Display::kDirectUnderflowFrames);
+    EXPECT_FALSE(directChosen());
+    EXPECT_EQ(d.directHold.run, 1200u);
 }
 
 }  // namespace

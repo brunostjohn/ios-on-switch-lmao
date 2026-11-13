@@ -400,6 +400,7 @@ host_test(
 host_test(
     name = "switch_scanout_start_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_scanout_start_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
@@ -410,6 +411,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_harness.h",
         "switch_completion_flip_test.cpp",
         "switch_completion_flip_walk.h",
@@ -440,6 +442,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_filter_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_filter_test.cpp",
         "switch_completion_flip_harness.h",
         "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
@@ -462,6 +465,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_proof_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_harness.h",
         "switch_completion_flip_proof_test.cpp",
         "switch_completion_flip_walk.h",
