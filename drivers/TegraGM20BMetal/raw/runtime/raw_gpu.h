@@ -2460,10 +2460,10 @@ public:
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
-        std::atomic<uint64_t> blurTwodPasses{0};  // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
-        std::atomic<uint64_t> fillTwod{0};        // fillTexture: regions by the 2D engine (raw_twod_fill.h)
-        std::atomic<uint64_t> resolveTwod{0};     // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
-        std::atomic<uint64_t> resolveExact{0};    // those through the grid's complement (the probe's)
+        std::atomic<uint64_t> blurTwodPasses{0};         // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
+        std::atomic<uint64_t> fillTwod{0};               // fillTexture: regions by the 2D engine (raw_twod_fill.h)
+        std::atomic<uint64_t> resolveTwod{0};            // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
+        std::atomic<uint64_t> resolveExact{0};           // those through the grid's complement (the probe's)
         std::atomic<uint64_t> resolveTwodCompressed{0};  // those whose sample grid has comptags
         // MSAA resolves by route, 2x and 4x: resolve.twod, the probe's complement, the pack's pass (index 2: other
         // sample counts)

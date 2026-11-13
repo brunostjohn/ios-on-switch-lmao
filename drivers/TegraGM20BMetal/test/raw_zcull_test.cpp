@@ -247,8 +247,9 @@ TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
     EXPECT_FALSE(unkept.store) << "no recorded pass loads the depth";
     EXPECT_EQ(unkept.storage, 0u);
     raw::ZcullPass full;
-    raw::zcullBegin(full, clearedDepth(), x1, 0, 0, 1280, 720, 1, raw::ZcullStored(), true,
-                    [](uint64_t) { return uint64_t(0); });
+    raw::zcullBegin(full, clearedDepth(), x1, 0, 0, 1280, 720, 1, raw::ZcullStored(), true, [](uint64_t) {
+        return uint64_t(0);
+    });
     EXPECT_TRUE(full.candidate);
     EXPECT_FALSE(full.store) << "no storage to be had";
 
@@ -262,8 +263,8 @@ TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
     raw::zcullRegionWords(p, second.region, 252, second.dir, second.storage, second.storageBytes);
     bool storageWords = false;
     for (uint32_t *w = words.data(); w + 4 < p.at; w++)
-        storageWords |= w[1] == 0 && w[2] == uint32_t(kStorage) && w[3] == 0 &&
-                        w[4] == uint32_t(kStorage + second.storageBytes);
+        storageWords |=
+            w[1] == 0 && w[2] == uint32_t(kStorage) && w[3] == 0 && w[4] == uint32_t(kStorage + second.storageBytes);
     EXPECT_TRUE(storageWords) << "SET_ZCULL_STORAGE_A..D: the storage and its end";
 }
 

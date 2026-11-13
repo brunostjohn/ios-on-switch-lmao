@@ -31,9 +31,9 @@ inline bool sameZcullRegion(const ZcullRegion &a, const ZcullRegion &b)
 }
 
 struct ZcullStored {
-    uint64_t zetaVa = 0;                    // the depth texture's address, which passes find it by
+    uint64_t zetaVa = 0;                     // the depth texture's address, which passes find it by
     uint64_t memoryVa = 0, memoryBytes = 0;  // the depth's memory, which writes to it are matched against
-    uint64_t va = 0, bytes = 0;          // the region's storage
+    uint64_t va = 0, bytes = 0;              // the region's storage
     ZcullRegion region;
     uint8_t dir = kZcullLess;  // the direction the region was built in
     bool valid = false;

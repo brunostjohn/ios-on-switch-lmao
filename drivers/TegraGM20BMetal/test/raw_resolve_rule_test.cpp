@@ -109,7 +109,7 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesThePass)
             a.readable = raw::resolveTargetReadable(t);
             EXPECT_FALSE(raw::twodResolveAcceptable(a));
             EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass);
-                }
+        }
     for (uint8_t samples : {2, 4})
         EXPECT_EQ(raw::resolveRoute(screenBound(samples)), raw::ResolveByTwod);
     raw::ResolveAsk eight = screenBound(8);

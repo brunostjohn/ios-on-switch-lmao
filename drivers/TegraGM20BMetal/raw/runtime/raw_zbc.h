@@ -28,7 +28,7 @@ enum : uint32_t {
     kZbcA2B10G10R10 = 0x20,  // RGB10A2Unorm's
     kZbcA8B8G8R8 = 0x28,     // RGBA8Unorm's
     kZbcA8Bl8Gl8Rl8 = 0x2c,  // RGBA8Unorm_sRGB's
-    kZbcDepthFp32 = 1,    // FERMI_A_ZBC_DEPTH_V0_FMT_FP32
+    kZbcDepthFp32 = 1,       // FERMI_A_ZBC_DEPTH_V0_FMT_FP32
 };
 
 inline float zbcFloat(uint32_t bits)

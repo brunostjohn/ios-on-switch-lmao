@@ -106,8 +106,10 @@ struct FramebufferFetchScene: GPUScene {
         }
         if RawFacade.kind(of: gpu.device) == "raw" {
             let object = gpu.device as AnyObject as! NSObject
-            for (key, selector) in [("read_answer", "isFramebufferReadSupported"),
-                                    ("blending_answer", "supportsProgrammableBlending")] {
+            for (key, selector) in [
+                ("read_answer", "isFramebufferReadSupported"),
+                ("blending_answer", "supportsProgrammableBlending"),
+            ] {
                 let answer = (object.value(forKey: selector) as? NSNumber)?.intValue ?? -1
                 result.metrics.set(key, answer)
                 result.expect(answer == 1, "\(selector) answers \(answer)")

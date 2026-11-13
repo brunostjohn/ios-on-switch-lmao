@@ -108,11 +108,11 @@ inline void zcullRegionWords(Push &p, const ZcullRegion &r, uint32_t zetaFormat,
                              uint64_t storageBytes = 0)
 {
     const uint64_t end = storage ? storage + storageBytes : 0;
-    p.m(0x1590, 0);                                           // SET_ACTIVE_ZCULL_REGION
+    p.m(0x1590, 0);                                                    // SET_ACTIVE_ZCULL_REGION
     p.inc(0x07e0, {r.aliquotCount * r.layers << 16, r.aliquotCount});  // SET_ZCULL_REGION_LOCATION, _ALIQUOTS
     p.inc(0x07e8, {uint32_t(storage >> 32), uint32_t(storage), uint32_t(end >> 32), uint32_t(end)});  // _STORAGE_A..D
-    p.m(0x15c8, 0);                                                    // SET_ZCULL_REGION_FORMAT Z_4X4
-    p.inc(0x07c0, {r.width, r.height, r.layers, 0});  // SET_ZCULL_REGION_SIZE_A..C, _PIXEL_OFFSET_C
+    p.m(0x15c8, 0);                                           // SET_ZCULL_REGION_FORMAT Z_4X4
+    p.inc(0x07c0, {r.width, r.height, r.layers, 0});          // SET_ZCULL_REGION_SIZE_A..C, _PIXEL_OFFSET_C
     p.inc(0x15fc, {r.x, r.y});                                // SET_ZCULL_REGION_PIXEL_OFFSET_A, _B
     p.m(0x02e8, 1 | (r.normalizedAliquots & 0xffffff) << 4);  // SET_ZCULL_SUBREGION
     p.m(0x0dd8, 0);                                           // SET_ZCULL_CRITERION: SFUNC_NEVER
@@ -131,11 +131,11 @@ constexpr uint32_t kInvalidateZcull = 0x1958;
 
 // What zcull's region rule reads of a pass and its depth target
 struct ZcullAsk {
-    bool on = false;       // the kernel reported zcull's layout
-    bool depth = false;    // the pass has a zeta with a depth aspect
-    bool cleared = false;  // its depth is cleared at the pass start
-    uint32_t layers = 1;      // the pass renders layers [0, layers)
-    uint32_t zetaLayers = 1;  // the zeta's
+    bool on = false;            // the kernel reported zcull's layout
+    bool depth = false;         // the pass has a zeta with a depth aspect
+    bool cleared = false;       // its depth is cleared at the pass start
+    uint32_t layers = 1;        // the pass renders layers [0, layers)
+    uint32_t zetaLayers = 1;    // the zeta's
     bool atStorageBase = true;  // the zeta starts at its memory's base (not a layer view of an array)
     // its depth is loaded, and an earlier pass of the command buffer stored its region over this pass's
     // (raw_zcull_planes.h)
