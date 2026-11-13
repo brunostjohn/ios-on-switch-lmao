@@ -74,8 +74,9 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 static void chan_doorbell(struct tgm_chan *chan)
 {
 	wmb();
-	if (chan->app && !chan->high && tgm_deadline_app_kicked())
+	if (chan->app && !chan->high && tgm_deadline_app_kicked()) {
 		wmb();
+	}
 	writel_relaxed(chan->chan.gpfifo.cur, (u8 __iomem *)chan->chan.userd.map.ptr + 0x8c);
 }
 
