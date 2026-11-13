@@ -9,7 +9,7 @@ import Metal
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
 /// switch_gm20b_pass_barrier), pixel (the planner's form), none (no barrier: the arm that shows a cell can see the
-/// hazard), each with today's engine changes; rule forces nothing, so production's rules pick every barrier
+/// hazard), each with today's engine changes and job entry; rule forces nothing, so production's rules pick every barrier
 /// (raw_pass_hazard.h: the pixel barrier only where every dependency is a cell this line held), rule_passes= the passes
 /// it opened with the pixel barrier, and a cell where rule read other texels than control fails the line. Cells: format x
 /// layout x read shape x size. 0x1288 in place of 0x0f74 after the barrier is never sent: F-v1
@@ -22,8 +22,8 @@ enum X1PassBarrierProbe {
         probe: "barrier.pass_pixel", timeout: 420, body: run)
 
     static let arms = [
-        ("control", "pass=today switch=today"), ("pixel", "pass=pixel switch=today"),
-        ("none", "pass=none switch=today"), ("rule", ""),
+        ("control", "pass=today switch=today entry=today"), ("pixel", "pass=pixel switch=today entry=today"),
+        ("none", "pass=none switch=today entry=today"), ("rule", ""),
     ]
     static let batch = 8
     static let seeds = 16

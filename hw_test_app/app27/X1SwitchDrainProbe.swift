@@ -13,7 +13,7 @@ import Metal
 /// readback's own engine change is not the arm's. Arms: control (today), nowfi, noflush, none, and hazard, the
 /// positive control: pass B taps T straight after pass A with no barrier between (3D to 3D), which the pass barrier
 /// probe saw corrupt at these sizes; a cell judges the switch arms only once hazard differed there. Every forced arm
-/// keeps today's pass barrier; rule forces nothing, so production's rules (raw_barrier_forms.h) pick every barrier, and
+/// keeps today's pass barrier and job entry; rule forces nothing, so production's rules (raw_barrier_forms.h) pick every barrier, and
 /// rule_switches= counts the engine changes they relaxed. Every arm draws pass A with the same spins, so the control's
 /// race is the arms' race.
 enum X1SwitchDrainProbe {
@@ -22,8 +22,9 @@ enum X1SwitchDrainProbe {
         probe: "barrier.switch_drain", timeout: 300, body: run)
 
     static let arms = [
-        ("hazard", "pass=none"), ("control", "switch=today pass=today"), ("nowfi", "switch=nowfi pass=today"),
-        ("noflush", "switch=nowfi_noflush pass=today"), ("none", "switch=none pass=today"), ("rule", ""),
+        ("hazard", "pass=none entry=today"), ("control", "switch=today pass=today entry=today"),
+        ("nowfi", "switch=nowfi pass=today entry=today"), ("noflush", "switch=nowfi_noflush pass=today entry=today"),
+        ("none", "switch=none pass=today entry=today"), ("rule", ""),
     ]
     static let batch = 8
 
