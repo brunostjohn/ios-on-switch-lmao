@@ -15,7 +15,7 @@ public enum Registry {
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), IntegerTargetTest(),
         BlendKillTest(), WrittenTextureTest(),
         Float32FilterTest(), CompareSamplerTest(), SurfaceBufferTest(), CompressedTargetsTest(), ZcullTest(),
-        MipTwodTest(), MipCandidatesTest(),
+        MipTwodTest(), MipCandidatesTest(), MipLodTest(),
         VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(),
         CompileSharedTest(), CompileFirstDrawTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(),
         ResolveCostTest(),
