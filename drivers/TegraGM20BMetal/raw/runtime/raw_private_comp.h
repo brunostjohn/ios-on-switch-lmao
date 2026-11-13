@@ -127,7 +127,6 @@ private:
 
 struct PrivateComp {
     Bo bo;
-    uint32_t staleTic = 0;  // the header work submitted before the move binds; freed with the texture
 };
 
 }  // namespace raw

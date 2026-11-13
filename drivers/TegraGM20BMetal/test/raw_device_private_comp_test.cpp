@@ -3,6 +3,7 @@
 // textures on compressed memory made off the render thread (TextureAsk::compressKind), and the move to plain memory
 // before an m2v twin, every level, layer and sample copied by the copy engine.
 #include "raw_device_harness.h"
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -221,6 +222,7 @@ TEST_F(DevicePrivateComp, AViewKeepsCompressedMemoryAndFollowsTheMove)
     EXPECT_TRUE(view.comptags) << "a raw view names the compressed memory";
     EXPECT_EQ(view.va, t.va);
     const uint32_t tic = t.tic, viewTic = view.tic;
+    const std::array<uint32_t, 8> before = raw::DeviceHarness::header(dev, tic);
     const size_t jobs = kernel_model::model.jobs.size();
     ASSERT_TRUE(dev.plainFromCompressed(t));
     EXPECT_EQ(t.tic, tic) << "the texture's header index is kept";
@@ -234,6 +236,15 @@ TEST_F(DevicePrivateComp, AViewKeepsCompressedMemoryAndFollowsTheMove)
                }) != launched.end();
     };
     EXPECT_TRUE(into(raw::DeviceHarness::ticVa(dev, tic))) << "the texture's header rewritten by the move's job";
+    for (const auto &[src, dst] : launched)
+        if (dst == raw::DeviceHarness::ticVa(dev, tic)) {
+            uint32_t written[8];
+            memcpy(written, kernel_model::model.host(src), 32);
+            uint32_t want[8];
+            memcpy(want, before.data(), 32);
+            raw::ticAt(want, t.va);
+            EXPECT_EQ(memcmp(written, want, 32), 0) << "its own header (swizzle, format) naming the plain memory";
+        }
     EXPECT_TRUE(into(raw::DeviceHarness::ticVa(dev, viewTic))) << "the view's header rewritten by the move's job";
     dev.destroyTexture(view);
     dev.destroyTexture(t);
