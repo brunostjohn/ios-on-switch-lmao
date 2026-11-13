@@ -87,10 +87,17 @@ void corpusNeeds()
         if (![l hasPrefix:@"C ok=1 "] || ![l containsString:@"/QuartzCore.framework/"] || [l containsString:@" #"])
             continue;
         const std::string line = l.UTF8String;
+        if (build && line.find(" os=") != std::string::npos && line.find(ours) == std::string::npos)
+            continue;
         const size_t at = line.find(" | k ") + 5;
         const std::string function = line.substr(at, line.find(' ', at) - at);
         MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
-        d.computeFunction = [qc newFunctionWithName:@(function.c_str())];
+        id<MTLFunction> kernel = [qc newFunctionWithName:@(function.c_str())];
+        if (!kernel) {
+            tally["QuartzCore compute"]["no such function in this build's library"]++;
+            continue;
+        }
+        d.computeFunction = kernel;
         if (line.find(" label=") != std::string::npos)
             d.label = @(function.c_str());
         const auto before = needsOf(device);
