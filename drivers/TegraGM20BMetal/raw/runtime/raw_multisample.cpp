@@ -33,11 +33,10 @@ bool Device::createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, u
     }
     const uint32_t z = zetaFormatIndex(format);
     std::lock_guard<raw::Mutex> l(lock_);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (const uint32_t kind = samples == 1 && layers == 1 ? compressedKind(t.bpp, format) : 0;
-        kind && probeCompressNext.exchange(false) && probeCompressibleZeta(bytes, kind, sampled, t))
+    if (const uint32_t kind =
+            storedZetaKind((k_.info().flags & TegraGM20BInfoCompression) != 0, format, samples, layers);
+        kind && createCompressedZeta(bytes, kind, sampled, t))
         return true;
-#endif
     Span span;
     if (!tiledAlloc(zChunks_[z], kZetaFormatInfo[z].kind, bytes, std::max(align, kBlAlign), span))
         return false;
@@ -74,12 +73,10 @@ bool Device::moveOwnedZeta(Texture &t, const ZetaMemory &m, const char **why)
     bool owned;
     {
         std::lock_guard<raw::Mutex> l(lock_);
-        owned = ownedZeta_.count(t.va) != 0;
+        owned = ownedZeta_.count(t.va) != 0 || compZeta_.count(t.va) != 0;
     }
     if (!owned || t.samples > 1) {
-        *why = t.comptags ? "its memory is compressed, which the copy engine is not proven to read as zeta"
-               : !owned   ? "it is in no zeta memory of its own"
-                          : "it is multisampled";
+        *why = !owned ? "it is in no zeta memory of its own" : "it is multisampled";
         return false;
     }
     const uint32_t layers = std::max<uint32_t>(t.layers, 1);
@@ -114,25 +111,5 @@ bool Device::moveOwnedZeta(Texture &t, const ZetaMemory &m, const char **why)
     t.tic = over.tic;
     return true;
 }
-
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-bool Device::probeCompressibleZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t)
-{
-    Bo bo;
-    if (k_.allocCompressible(compBytes(bytes), bo) != KERN_SUCCESS)
-        return false;
-    if (k_.bindCompressed(bo, kind) != KERN_SUCCESS || (sampled && !(t.tic = allocTic()))) {
-        k_.free(bo);
-        return false;
-    }
-    t.va = bo.va;
-    t.storage = {bo.va, bytes, false};
-    t.comptags = true;
-    probeCompressed[bo.va] = bo;
-    if (t.tic)
-        writeTic(t);
-    return true;
-}
-#endif
 
 }  // namespace raw

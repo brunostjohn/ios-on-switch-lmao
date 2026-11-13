@@ -14,6 +14,7 @@ namespace {
 using switch_ios::test::Body;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
+using testing::Not;
 
 // An attachment as the storage view sees it
 struct Target {
@@ -146,6 +147,22 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
     EXPECT_THAT(move, HasSubstr("rmTexturePlain(t)"));
     EXPECT_THAT(Body(facade, "uint32_t privateCompressedKind("), HasSubstr("gPlainShapes.holds("));
     EXPECT_THAT(SourceText("../raw/runtime/RawMetalEncode.mm"), HasSubstr("tRawEncoding = true;"));
+}
+
+TEST(RawPrivateComp, AStoredZetaTakesCompressedMemoryInEveryBuildAndKeepsItsTwinMove)
+{
+    const std::string zeta = Body(SourceText("../raw/runtime/raw_multisample.cpp"), "bool Device::createOwnedZeta(");
+    EXPECT_THAT(zeta, HasSubstr("storedZetaKind("));
+    EXPECT_THAT(zeta, HasSubstr("createCompressedZeta(bytes, kind, sampled, t)"));
+    EXPECT_THAT(zeta, Not(HasSubstr("#if"))) << "the compressed route is the release one, not a probe's";
+    const std::string move = Body(SourceText("../raw/runtime/raw_multisample.cpp"), "bool Device::moveOwnedZeta(");
+    EXPECT_THAT(move, HasSubstr("compZeta_.count(t.va)")) << "a compressed zeta still moves into its m2v twin's image";
+    const std::string made =
+        Body(SourceText("../raw/runtime/raw_private_comp.cpp"), "bool Device::createCompressedZeta(");
+    EXPECT_THAT(made, HasSubstr("comp_.fit(need, kind)")) << "memory made off the render thread, as colour's";
+    EXPECT_THAT(made, Not(HasSubstr("allocCompressible")));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_gpu.h"), "    void freeOwnedZeta(uint64_t va)"),
+                HasSubstr("freeCompressedZeta(va);"));
 }
 
 }  // namespace

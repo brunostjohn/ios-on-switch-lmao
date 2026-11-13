@@ -156,6 +156,18 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(raw::backingKind(true, true, 253, 1, 1, false), 0u);   // Stencil8
 }
 
+// A stored depth texture binds its compressible kind at one sample and one layer, where the copy engine (its readback
+// and aspect copies) reads that kind as plain texels
+TEST(RawComp, StoredOneSampleDepth32FloatBindsZF32_2CZ)
+{
+    EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 1), 0x86u);
+    EXPECT_EQ(raw::storedZetaKind(false, 252, 1, 1), 0u);
+    EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 2), 0u) << "an array or cube";
+    EXPECT_EQ(raw::storedZetaKind(true, 252, 4, 1), 0u);
+    EXPECT_EQ(raw::storedZetaKind(true, 253, 1, 1), 0u) << "Stencil8 has no compressible kind";
+    EXPECT_EQ(raw::storedZetaKind(true, 0, 1, 1), 0u);
+}
+
 // A ZBC entry holds the texel the ROP writes for the clear: packed in the format's channel order, unorm channels only at
 // exact codes, halves rounded to nearest even
 TEST(RawComp, ZbcEntriesHoldTheTexelTheRopWrites)

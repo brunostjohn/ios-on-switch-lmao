@@ -1763,8 +1763,6 @@ public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
     bool probeCompressible(const tgm_layout &bl, Texture &t);
-    // createOwnedZeta's one-sample zeta over compressible memory of its own (probeCompressNext), under lock_
-    bool probeCompressibleZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t);
 #endif
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
@@ -1993,6 +1991,8 @@ public:
     // moved to plain memory before anything names its pages through another binding (the caller serialises submissions
     // and has no command buffer open)
     bool createCompressedTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t kind, Texture &t);
+    // createOwnedZeta's zeta of `bytes` on compressed memory of kind `kind` where some of its size is ready, lock_ held
+    bool createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t);
     bool privateCompressed(const Texture &t);
     bool plainFromCompressed(Texture &t);
 
@@ -2529,8 +2529,7 @@ public:
     // (RawMetalProbeKinds.mm switchRawProbePlainMemory:)
     std::atomic<bool> probePlainMemory{false};
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
-    // target, as the next createOwnedZeta does for a one-sample zeta, which probeCompressed holds until destroyTexture;
-    // any other texture takes the flag and stays plain
+    // target, which probeCompressed holds until destroyTexture; any other createTexture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
     // split draws the capture still takes (raw_split_capture.h); 0: disarmed
     std::atomic<uint32_t> splitCaptureLeft{0};
@@ -3042,6 +3041,9 @@ private:
     // createOwnedZeta's memory by its address: its format's index and span, outside Texture::span, which alias() and
     // freeSpan() take for block-linear colour memory
     std::map<uint64_t, std::pair<uint32_t, Span>> ownedZeta_;
+    // createCompressedZeta's memory by its address
+    std::map<uint64_t, Bo> compZeta_;
+    void freeCompressedZeta(uint64_t va);  // lock_ held
 
     // moveOwnedZeta's textures by their new address: their own memory's address and their header before the move
     struct MovedZeta {
@@ -3059,6 +3061,7 @@ private:
             va = moved->second.ownedVa;
             movedZeta_.erase(moved);
         }
+        freeCompressedZeta(va);
         const auto at = ownedZeta_.find(va);
         if (at == ownedZeta_.end())
             return;

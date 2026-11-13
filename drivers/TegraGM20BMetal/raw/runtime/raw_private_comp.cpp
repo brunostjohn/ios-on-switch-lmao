@@ -40,6 +40,44 @@ bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t f
     return true;
 }
 
+bool Device::createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t)
+{
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (probePlainPrivate.load(std::memory_order_relaxed) || probePlainMemory.load(std::memory_order_relaxed))
+        return false;
+#endif
+    const uint64_t need = compClassBytes(compBytes(bytes));
+    auto it = comp_.fit(need, kind);
+    if (it == comp_.ready.end()) {
+        compAsk({need, kind});
+        return false;
+    }
+    if (sampled && !(t.tic = allocTic()))
+        return false;
+    const Bo bo = it->bo;
+    comp_.ready.erase(it);
+    t.va = bo.va;
+    t.storage = {bo.va, bytes, false};
+    t.comptags = true;
+    compZeta_[bo.va] = bo;
+    if (t.tic)
+        writeTic(t);
+    privateMade_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+void Device::freeCompressedZeta(uint64_t va)
+{
+    const auto it = compZeta_.find(va);
+    if (it == compZeta_.end())
+        return;
+    RAW_DIAGNOSTIC(stats.compHeld--);
+    RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.bytes);
+    k_.free(it->second);
+    compZeta_.erase(it);
+    comp_.freed(commitCount_);
+}
+
 bool Device::privateCompressed(const Texture &t)
 {
     std::lock_guard<raw::Mutex> l(lock_);

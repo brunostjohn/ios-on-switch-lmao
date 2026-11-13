@@ -47,10 +47,6 @@ enum : uint32_t {
 // shadow's do. One-sample ZF32_2CZ by gpu.x1.ce_compressed_depth (boot 19 and boot 21, the context as shipped: d32f_1x=0
 // over 16 compressed rounds of shader-test copies both ways). Not asked: C128, the multisampled colour kinds and the other
 // zeta kinds (the multisampled ones read exact only under anti-alias words no context row writes).
-// Rule flip pending: a stored one-sample depth/stencil texture (Device::createOwnedZeta) stays on plain zeta memory, as
-// its readback and aspect copies are the copy engine's, until HW Test gpu.raw.stored_depth reads
-// compressed_readback_wrong=0 with compressed_readback_facts comptags=1 (T-v3g's gpu.x1.ce_compressed_depth ran no
-// one-sample compressed round: d32f_1x_compressed_rounds=0).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
     return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindZF32;
@@ -90,6 +86,15 @@ inline uint32_t compressedKind(uint32_t bpp, uint32_t zeta, uint32_t samples = 1
     default:
         return 0;
     }
+}
+
+// The compressible kind a stored depth/stencil texture of Metal format `zeta` binds (Device::createOwnedZeta), or 0: one
+// sample and one layer, where the copy engine reads that kind as plain texels, as its readback and aspect copies are the
+// copy engine's. Depth32Float: gpu.raw.stored_depth read compressed_readback_wrong=0 with comptags=1 on boot 19 and 21.
+inline uint32_t storedZetaKind(bool compression, uint32_t zeta, uint32_t samples, uint32_t layers)
+{
+    const uint32_t kind = compression && samples == 1 && layers == 1 ? compressedKind(0, zeta) : 0;
+    return copyEngineReadsCompressed(kind) ? kind : 0;
 }
 
 // The kind gm200_mmu_kind demotes a compressible one to: the zeta format's plain kind (raw_zeta.h kZetaFormatInfo), else

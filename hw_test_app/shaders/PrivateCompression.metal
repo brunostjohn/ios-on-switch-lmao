@@ -18,3 +18,9 @@ fragment float4 comp_reduce_fragment(float4 position [[position]], texture2d<flo
     constexpr sampler linear(filter::linear, address::clamp_to_edge);
     return above.sample(linear, position.xy / float2(above.get_width() / 2, above.get_height() / 2));
 }
+
+// tests/StoredDepthTest.swift: the texture unit's reading of a depth texture, in red
+fragment float4 stored_depth_read_fragment(float4 position [[position]], depth2d<float> depth [[texture(0)]])
+{
+    return float4(depth.read(uint2(position.xy)), 0, 0, 1);
+}
