@@ -243,6 +243,9 @@ TEST(CompilerCompileOnly, ItsRecordsAreTheDevicesByteForByte)
 #endif
 #ifdef SWITCH_REFUSED_FRAGMENT_FUNCTION
     EXPECT_GT(covered["refused"], 0u) << "the sample made no refused record";
+#else
+    EXPECT_EQ(covered["refused"], 0u) << "a request was refused on a build that names no refused state: give the build "
+                                         "its SWITCH_REFUSED_FRAGMENT_FUNCTION (test/BUILD.bazel)";
 #endif
     std::string counts;
     for (const auto &[kind, n] : covered)
