@@ -14,13 +14,13 @@ struct switch_gpu_wake_word {
 static inline int switch_gpu_wake_bump(struct switch_gpu_wake_word *w)
 {
 	__atomic_fetch_add(&w->seq, 1u, __ATOMIC_SEQ_CST);
-	return __atomic_load_n(&w->sleepers, __ATOMIC_SEQ_CST) != 0;
+	return __atomic_load_n(&w->sleepers, __ATOMIC_SEQ_CST) != 0u ? 1 : 0;
 }
 
 /* Around a sleep on w->seq: on before it reads the sequence, off once it is awake. */
 static inline void switch_gpu_wake_sleep(struct switch_gpu_wake_word *w, int on)
 {
-	if (on) {
+	if (on != 0) {
 		__atomic_fetch_add(&w->sleepers, 1u, __ATOMIC_SEQ_CST);
 		__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	} else {

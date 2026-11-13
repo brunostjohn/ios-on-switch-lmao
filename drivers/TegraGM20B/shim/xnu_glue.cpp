@@ -254,7 +254,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
 #if DEVELOPMENT || DEBUG
 	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&gIrqCpus[cpu_number() & 3], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gIrqCpus[static_cast<unsigned>(cpu_number()) % 4], 1, __ATOMIC_RELAXED);
 #else
 	(void)source;
 #endif
@@ -284,7 +284,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
 {
 #if DEVELOPMENT || DEBUG
-	__atomic_fetch_add(&gFilterCpus[cpu_number() & 3], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gFilterCpus[static_cast<unsigned>(cpu_number()) % 4], 1, __ATOMIC_RELAXED);
 #endif
 	tgm_present_filter();
 	return true;

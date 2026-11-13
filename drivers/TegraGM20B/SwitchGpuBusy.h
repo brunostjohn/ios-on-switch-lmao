@@ -26,9 +26,10 @@ static inline int switch_gpu_busy_kicked(struct switch_gpu_busy *b, uint32_t chi
 {
 	const uint64_t bit = UINT64_C(1) << (chid % 64u);
 
-	if (chid >= SWITCH_GPU_BUSY_CHIDS)
+	if (chid >= SWITCH_GPU_BUSY_CHIDS) {
 		return 0;
-	return !(__atomic_fetch_or(&b->busy[chid / 64u], bit, __ATOMIC_SEQ_CST) & bit);
+	}
+	return (__atomic_fetch_or(&b->busy[chid / 64u], bit, __ATOMIC_SEQ_CST) & bit) == 0u ? 1 : 0;
 }
 
 /* The pass found the channel's fence at `completed`: its bit goes once that is its newest seqno. */
@@ -36,26 +37,29 @@ static inline void switch_gpu_busy_settled(struct switch_gpu_busy *b, uint32_t c
 					   uint32_t completed, const uint32_t *submitted)
 {
 	const uint64_t bit = UINT64_C(1) << (chid % 64u);
-	uint64_t *word = NULL;
 
 	if (chid >= SWITCH_GPU_BUSY_CHIDS ||
-	    __atomic_load_n(submitted, __ATOMIC_RELAXED) != completed)
+	    __atomic_load_n(submitted, __ATOMIC_RELAXED) != completed) {
 		return;
-	word = &b->busy[chid / 64u];
-	if (!(__atomic_load_n(word, __ATOMIC_RELAXED) & bit))
+	}
+	uint64_t *const word = &b->busy[chid / 64u];
+	if ((__atomic_load_n(word, __ATOMIC_RELAXED) & bit) == 0u) {
 		return;
+	}
 	__atomic_fetch_and(word, ~bit, __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
-	if (__atomic_load_n(submitted, __ATOMIC_RELAXED) != completed)
+	if (__atomic_load_n(submitted, __ATOMIC_RELAXED) != completed) {
 		__atomic_fetch_or(word, bit, __ATOMIC_SEQ_CST);
+	}
 }
 
 /* The channel is being destroyed: nothing of it runs any more, and its id may be handed out again. */
 static inline void switch_gpu_busy_gone(struct switch_gpu_busy *b, uint32_t chid)
 {
-	if (chid < SWITCH_GPU_BUSY_CHIDS)
+	if (chid < SWITCH_GPU_BUSY_CHIDS) {
 		__atomic_fetch_and(&b->busy[chid / 64u], ~(UINT64_C(1) << (chid % 64u)),
 				   __ATOMIC_SEQ_CST);
+	}
 }
 
 /* The scheduler: whether `chid` is at the high level now. */
@@ -63,12 +67,14 @@ static inline void switch_gpu_busy_level(struct switch_gpu_busy *b, uint32_t chi
 {
 	const uint64_t bit = UINT64_C(1) << (chid % 64u);
 
-	if (chid >= SWITCH_GPU_BUSY_CHIDS)
+	if (chid >= SWITCH_GPU_BUSY_CHIDS) {
 		return;
-	if (high)
+	}
+	if (high != 0) {
 		__atomic_fetch_or(&b->high[chid / 64u], bit, __ATOMIC_SEQ_CST);
-	else
+	} else {
 		__atomic_fetch_and(&b->high[chid / 64u], ~bit, __ATOMIC_SEQ_CST);
+	}
 }
 
 /* Whether a channel below the high level has work in flight. */
@@ -76,10 +82,12 @@ static inline int switch_gpu_busy_low(const struct switch_gpu_busy *b)
 {
 	uint32_t i = 0;
 
-	for (i = 0; i < SWITCH_GPU_BUSY_WORDS; i++)
-		if (__atomic_load_n(&b->busy[i], __ATOMIC_SEQ_CST) &
-		    ~__atomic_load_n(&b->high[i], __ATOMIC_RELAXED))
+	for (i = 0; i < SWITCH_GPU_BUSY_WORDS; i++) {
+		if ((__atomic_load_n(&b->busy[i], __ATOMIC_SEQ_CST) &
+		     ~__atomic_load_n(&b->high[i], __ATOMIC_RELAXED)) != 0u) {
 			return 1;
+		}
+	}
 	return 0;
 }
 
@@ -88,14 +96,20 @@ static inline int switch_gpu_busy_among(const struct switch_gpu_busy *b, const u
 {
 	uint32_t i = 0;
 
-	for (i = 0; i < SWITCH_GPU_BUSY_WORDS; i++)
-		if (__atomic_load_n(&b->busy[i], __ATOMIC_SEQ_CST) & mask[i])
+	for (i = 0; i < SWITCH_GPU_BUSY_WORDS; i++) {
+		if ((__atomic_load_n(&b->busy[i], __ATOMIC_SEQ_CST) & mask[i]) != 0u) {
 			return 1;
+		}
+	}
 	return 0;
 }
 
 static inline int switch_gpu_busy_chan(const struct switch_gpu_busy *b, uint32_t chid)
 {
-	return chid < SWITCH_GPU_BUSY_CHIDS &&
-	       ((__atomic_load_n(&b->busy[chid / 64u], __ATOMIC_SEQ_CST) >> (chid % 64u)) & 1u);
+	if (chid >= SWITCH_GPU_BUSY_CHIDS) {
+		return 0;
+	}
+	return ((__atomic_load_n(&b->busy[chid / 64u], __ATOMIC_SEQ_CST) >> (chid % 64u)) & 1u) != 0u
+		       ? 1
+		       : 0;
 }
