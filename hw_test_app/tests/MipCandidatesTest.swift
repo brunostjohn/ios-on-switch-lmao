@@ -15,23 +15,6 @@ struct MipCandidatesTest: HWTest {
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 240 }
 
-    static let candidates = [
-        MipTwodTest.Format(name: "a8", pixel: .a8Unorm, layout: .unorm([8])),
-        MipTwodTest.Format(name: "r16", pixel: .r16Unorm, layout: .unorm([16])),
-        MipTwodTest.Format(name: "r16f", pixel: .r16Float, layout: .floats([16])),
-        MipTwodTest.Format(name: "b5g6r5", pixel: .b5g6r5Unorm, layout: .unorm([5, 6, 5])),
-        MipTwodTest.Format(name: "bgr5a1", pixel: .bgr5A1Unorm, layout: .unorm([1, 5, 5, 5])),
-        MipTwodTest.Format(name: "r32f", pixel: .r32Float, layout: .floats([32])),
-        MipTwodTest.Format(name: "rg16", pixel: .rg16Unorm, layout: .unorm([16, 16])),
-        MipTwodTest.Format(name: "rg16f", pixel: .rg16Float, layout: .floats([16, 16])),
-        MipTwodTest.Format(name: "rgb10a2", pixel: .rgb10a2Unorm, layout: .unorm([10, 10, 10, 2])),
-        MipTwodTest.Format(name: "rg11b10f", pixel: .rg11b10Float, layout: .floats([11, 11, 10])),
-        MipTwodTest.Format(name: "bgr10a2", pixel: .bgr10a2Unorm, layout: .unorm([10, 10, 10, 2])),
-        MipTwodTest.Format(name: "rg32f", pixel: .rg32Float, layout: .floats([32, 32])),
-        MipTwodTest.Format(name: "rgba16", pixel: .rgba16Unorm, layout: .unorm([16, 16, 16, 16])),
-        MipTwodTest.Format(name: "rgba32f", pixel: .rgba32Float, layout: .floats([32, 32, 32, 32])),
-    ]
-
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
         guard RawFacade.kind(of: gpu.device) == "raw" else {
@@ -43,7 +26,7 @@ struct MipCandidatesTest: HWTest {
         var cells: [String] = []
         var paths: Set<String> = []
         let before = RawFacade.counters(of: gpu.device)
-        for f in Self.candidates {
+        for f in MipFormats.candidates {
             let chains = MipChains(gpu: gpu, format: f)
             var proven = MipTally(), odd = MipTally(), level1 = MipTally()
             do {

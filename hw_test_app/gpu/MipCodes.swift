@@ -4,20 +4,32 @@ import Metal
 /// A chain format's texel as codes: bit fields of a little-endian texel, each an unorm, an sRGB-encoded unorm or an
 /// unsigned-range float of its width (16 half, 32 float, 11 and 10 the packed float's), compared code by code: one code
 /// apart is one unorm step or one float ulp (every value here is non-negative, so float codes order as their values).
-struct MipLayout {
-    enum Kind { case unorm, srgb, float }
+public struct MipLayout {
+    public enum Kind { case unorm, srgb, float }
 
-    struct Field {
-        let shift: Int
-        let width: Int
-        let kind: Kind
-        var mask: UInt32 { width == 32 ? .max : (1 << UInt32(width)) - 1 }
+    public struct Field {
+        public let shift: Int
+        public let width: Int
+        public let kind: Kind
+
+        public init(shift: Int, width: Int, kind: Kind) {
+            self.shift = shift
+            self.width = width
+            self.kind = kind
+        }
+
+        public var mask: UInt32 { width == 32 ? .max : (1 << UInt32(width)) - 1 }
     }
 
-    let bytes: Int
-    let fields: [Field]
+    public let bytes: Int
+    public let fields: [Field]
 
-    static func unorm(_ widths: [Int], srgb: Bool = false) -> MipLayout {
+    public init(bytes: Int, fields: [Field]) {
+        self.bytes = bytes
+        self.fields = fields
+    }
+
+    public static func unorm(_ widths: [Int], srgb: Bool = false) -> MipLayout {
         var shift = 0
         var fields: [Field] = []
         for (i, w) in widths.enumerated() {
@@ -27,7 +39,7 @@ struct MipLayout {
         return MipLayout(bytes: shift / 8, fields: fields)
     }
 
-    static func floats(_ widths: [Int]) -> MipLayout {
+    public static func floats(_ widths: [Int]) -> MipLayout {
         var shift = 0
         var fields: [Field] = []
         for w in widths {
@@ -37,7 +49,7 @@ struct MipLayout {
         return MipLayout(bytes: shift / 8, fields: fields)
     }
 
-    func code(_ bytes: [UInt8], texel: Int, field f: Field) -> UInt32 {
+    public func code(_ bytes: [UInt8], texel: Int, field f: Field) -> UInt32 {
         let at = texel * self.bytes
         if self.bytes <= 4 {
             var word: UInt32 = 0
@@ -49,7 +61,7 @@ struct MipLayout {
         return value
     }
 
-    func put(_ code: UInt32, _ bytes: inout [UInt8], texel: Int, field f: Field) {
+    public func put(_ code: UInt32, _ bytes: inout [UInt8], texel: Int, field f: Field) {
         let at = texel * self.bytes
         if self.bytes <= 4 {
             var word: UInt32 = 0
@@ -62,7 +74,7 @@ struct MipLayout {
     }
 
     /// The field's value: an unorm's fraction, an sRGB code's linear value, a float's value
-    func value(_ code: UInt32, _ f: Field) -> Double {
+    public func value(_ code: UInt32, _ f: Field) -> Double {
         switch f.kind {
         case .unorm: return Double(code) / Double(f.mask)
         case .srgb:
@@ -78,7 +90,7 @@ struct MipLayout {
     }
 
     /// The code of `value`, rounded to nearest
-    func code(of value: Double, _ f: Field) -> UInt32 {
+    public func code(of value: Double, _ f: Field) -> UInt32 {
         switch f.kind {
         case .unorm: return UInt32(min(max(value, 0), 1) * Double(f.mask) + 0.5)
         case .srgb:
@@ -94,21 +106,21 @@ struct MipLayout {
         }
     }
 
-    static func half(_ bits: UInt32) -> Double {
+    public static func half(_ bits: UInt32) -> Double {
         smallFloat(bits & 0x7fff, mantissa: 10)
     }
 
-    static func halfBits(_ value: Double) -> UInt32 {
+    public static func halfBits(_ value: Double) -> UInt32 {
         smallFloatBits(value, mantissa: 10)
     }
 
     /// An unsigned float of a 5-bit exponent (bias 15) and `mantissa` bits
-    static func smallFloat(_ bits: UInt32, mantissa m: Int) -> Double {
+    public static func smallFloat(_ bits: UInt32, mantissa m: Int) -> Double {
         let e = Int(bits >> UInt32(m)) & 31, f = Double(bits & ((1 << UInt32(m)) - 1)) / Double(1 << m)
         return e == 0 ? f * pow(2, -14) : (1 + f) * pow(2, Double(e - 15))
     }
 
-    static func smallFloatBits(_ value: Double, mantissa m: Int) -> UInt32 {
+    public static func smallFloatBits(_ value: Double, mantissa m: Int) -> UInt32 {
         guard value > 0 else { return 0 }
         let scale = Double(1 << m)
         var e = Int(floor(log2(value))) + 15
@@ -124,8 +136,8 @@ struct MipLayout {
 
 /// One step of a chain as Metal defines it (an M4 Max's generateMipmaps): destination texel x is one bilinear tap at
 /// (x + 1/2) s / d - 1/2 in the level above, weights at 1/256, clamped to the edge, sRGB filtered in linear space
-enum MipReference {
-    static func tap(_ x: Int, _ s: Int, _ d: Int) -> (Int, Int, Double) {
+public enum MipReference {
+    public static func tap(_ x: Int, _ s: Int, _ d: Int) -> (Int, Int, Double) {
         let u = (Double(x) + 0.5) * Double(s) / Double(d) - 0.5
         let f = floor(u)
         var w = (u - f) * 256
@@ -134,7 +146,9 @@ enum MipReference {
         return w == 256 ? (i1, i1, 0) : (i0, i1, w / 256)
     }
 
-    static func step(_ above: [UInt8], _ sw: Int, _ sh: Int, _ dw: Int, _ dh: Int, _ layout: MipLayout) -> [UInt8] {
+    public static func step(
+        _ above: [UInt8], _ sw: Int, _ sh: Int, _ dw: Int, _ dh: Int, _ layout: MipLayout
+    ) -> [UInt8] {
         var out = [UInt8](repeating: 0, count: dw * dh * layout.bytes)
         let xs = (0..<dw).map { tap($0, sw, dw) }, ys = (0..<dh).map { tap($0, sh, dh) }
         for y in 0..<dh {
@@ -153,13 +167,15 @@ enum MipReference {
 }
 
 /// Codes compared field by field: equal, one apart, further apart, and the largest distance
-struct MipTally {
-    var exact = 0, withinOne = 0, wrong = 0, maxDiff: UInt32 = 0
+public struct MipTally {
+    public var exact = 0, withinOne = 0, wrong = 0, maxDiff: UInt32 = 0
+
+    public init() {}
 
     /// "exact", "near" (within one code) or "wrong"; "-" with nothing compared
-    var verdict: String { wrong > 0 ? "wrong" : withinOne > 0 ? "near" : exact > 0 ? "exact" : "-" }
+    public var verdict: String { wrong > 0 ? "wrong" : withinOne > 0 ? "near" : exact > 0 ? "exact" : "-" }
 
-    mutating func add(_ got: [UInt8], _ want: [UInt8], texels: Int, _ layout: MipLayout) {
+    public mutating func add(_ got: [UInt8], _ want: [UInt8], texels: Int, _ layout: MipLayout) {
         for t in 0..<texels {
             for f in layout.fields {
                 let a = layout.code(got, texel: t, field: f), b = layout.code(want, texel: t, field: f)
@@ -174,10 +190,12 @@ struct MipTally {
 /// How a 2:1 step rounds 8-bit codes: of the four codes' sums with a remainder of 1, 2 or 3 (a quarter, half, three
 /// quarters past a code), how many came out at the lower code. Truncation lowers all three; rounding to nearest lowers the
 /// quarters and, with ties to the lower code, the halves; an M4 Max's generateMipmaps lowers about half of the halves
-final class MipRounding {
-    var seen = [0, 0, 0], low = [0, 0, 0]
+public final class MipRounding {
+    public var seen = [0, 0, 0], low = [0, 0, 0]
 
-    func add(_ above: [UInt8], _ sw: Int, _ level: [UInt8], _ dw: Int, _ dh: Int, _ layout: MipLayout) {
+    public init() {}
+
+    public func add(_ above: [UInt8], _ sw: Int, _ level: [UInt8], _ dw: Int, _ dh: Int, _ layout: MipLayout) {
         for f in layout.fields where f.kind == .unorm && f.width == 8 {
             for y in 0..<dh {
                 for x in 0..<dw {
@@ -193,7 +211,7 @@ final class MipRounding {
         }
     }
 
-    var rule: String {
+    public var rule: String {
         guard seen.allSatisfy({ $0 > 0 }) else { return "-" }
         let all = (0..<3).map { low[$0] == seen[$0] }, none = (0..<3).map { low[$0] == 0 }
         if all[0] && all[1] && all[2] { return "truncate" }
