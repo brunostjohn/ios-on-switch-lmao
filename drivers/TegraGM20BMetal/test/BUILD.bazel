@@ -106,6 +106,8 @@
 #                     encode table (raw/pack/srgb_encode.h) against its rule over the read's knots
 #   raw_packed_plane_test  raw/runtime/raw_packed_plane.h: R10Unorm_PACKED and RG10Unorm_PACKED over 'p4xx' planes, the
 #                     codes their conversion reads and their store writes (Metal's reads: raw/test/packedplaneoracle.mm)
+#   raw_uniform_tuples_test  raw/runtime/raw_uniform_tuples.h: the DEVELOPMENT count of a generic merge state's uniform
+#                     value tuples per 5 s window, over the bytes its record's ranges read, in bounded memory
 #   raw_written_textures_test  raw/runtime/raw_written_textures.h: the bound formats a state's record was not compiled for
 #                     (RenderBox's uber_resolve: R16Uint where the probe bound RGBA8Uint) and its variant's name
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
@@ -2973,6 +2975,20 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_written_textures.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_uniform_tuples_test",
+    srcs = [
+        "raw_uniform_tuples_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_uniform_tuples.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+    ],
 )
 
 host_test(
