@@ -85,6 +85,7 @@ static inline int switch_gpu_busy_low(const struct switch_gpu_busy *b)
 }
 
 /* Setup paths, which several channels' creations, level changes and teardowns may reach at once */
+// NOLINTNEXTLINE(readability-non-const-parameter): the atomic read-modify-writes below write through it
 static inline void switch_gpu_busy_mark(uint64_t *mask, uint32_t chid, int on)
 {
 	const uint64_t bit = UINT64_C(1) << (chid % 64u);
