@@ -125,10 +125,22 @@ namespace
 SparePool *gSpares;
 // XNU's vm_pressure_level_t: 0 normal, 1 warning, 2 urgent, 4 critical.
 extern "C" int memorystatus_vm_pressure_level;
+#if XNU_12377_121_6
+extern "C" uint32_t memorystatus_available_pages;
+extern "C" uint32_t memstat_reaper_threshold;
+#endif
 
 bool memoryPressure()
 {
-	return __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED) != 0;
+	const int level = __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED);
+#if XNU_12377_121_6
+	return switch_gpu_spares_give_back(
+		level, __atomic_load_n(&memorystatus_available_pages, __ATOMIC_RELAXED),
+		__atomic_load_n(&memstat_reaper_threshold, __ATOMIC_RELAXED),
+		kSpareCapBytes / PAGE_SIZE);
+#else
+	return switch_gpu_spares_give_back(level, 0, 0, 0);
+#endif
 }
 
 // The class a spare of `bytes` serves: the largest class not past it.
