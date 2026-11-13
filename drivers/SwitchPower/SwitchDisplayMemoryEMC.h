@@ -84,14 +84,33 @@ int SwitchEMC::reserveMemory(const switch_display_memory_head &request)
     return error;
 }
 
-// A plan that no longer covers the running rate turns display memory admission off for the boot: the display shows the
-// UI alone (window A needs no admission) and its overlays are dropped, never a panic.
-void SwitchEMC::dropDisplayMemory(const char *why)
+// A plan that no longer covers the rate running now (0: not known) is made again at that rate, keeping each head that
+// still fits there. A head that does not gives up its reservation, and its next request is planned at this rate like
+// any other (-28 if it cannot fit). Admission stays on.
+void SwitchEMC::replanDisplayMemory(uint32_t runningKhz, const char *why)
 {
-    if (__atomic_exchange_n(&memoryQualified, false, __ATOMIC_ACQ_REL))
-        os_log_error(OS_LOG_DEFAULT, "SwitchEMC: display memory admission off: %s", why);
+    static constexpr bool kKeep[][2] = {{true, true}, {true, false}, {false, true}};
+    const auto held = memoryState;
     memoryState = {};
+    for (const auto &keep : kKeep) {
+        auto next = held;
+        for (unsigned head = 0; head != 2; ++head)
+            next.owned[head] = held.owned[head] && keep[head];
+        if (runningKhz && next.program(mcRegs, runningKhz, runningKhz)) {
+            memoryState = next;
+            break;
+        }
+    }
+    memoryAppliedKhz = runningKhz;
     memoryDirty = false;
+    const bool lost[2] = {held.owned[0] && !memoryState.owned[0], held.owned[1] && !memoryState.owned[1]};
+    if (lost[0] || lost[1]) {
+        os_log_error(OS_LOG_DEFAULT, "SwitchEMC: display memory planned again at %u kHz, as %s: %s released",
+                     runningKhz, why,
+                     lost[0] && lost[1] ? "heads 0 and 1"
+                     : lost[0]          ? "head 0"
+                                        : "head 1");
+    }
 }
 
 extern "C" int switch_emc_display_memory_reserve(const switch_display_memory_head *request)

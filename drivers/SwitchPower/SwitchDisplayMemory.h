@@ -23,8 +23,9 @@ struct switch_display_memory_head {
 extern "C" {
 #endif
 int switch_emc_display_memory_reserve(const struct switch_display_memory_head *request);
-// 1 while the EMC governor can admit display memory: its MC registers are mapped, the chip and DRAM are the qualified
-// profile, and no rate change has left a reservation uncovered. Any context.
+// 1 when the EMC governor can admit display memory: its MC registers are mapped and the chip and DRAM are the qualified
+// profile. A rate change that leaves a reservation uncovered plans it again at the new rate; a head that no longer fits
+// is released and planned afresh at its next request. Any context.
 int switch_emc_display_memory_ready(void);
 #ifdef __cplusplus
 }

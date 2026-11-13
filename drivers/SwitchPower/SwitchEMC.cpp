@@ -87,7 +87,7 @@ class SwitchEMC : public OSObject {
 
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned first) const;
-    void dropDisplayMemory(const char *why);
+    void replanDisplayMemory(uint32_t runningKhz, const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
     static IOReturn memoryAction(OSObject *owner, void *request, void *result, void *, void *);
     static IOReturn displayAction(OSObject *owner, void *bytes, void *result, void *, void *);

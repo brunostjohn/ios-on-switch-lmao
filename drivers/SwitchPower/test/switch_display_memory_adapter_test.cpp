@@ -21,10 +21,14 @@ using IOReturn = int;
 constexpr int kIOReturnSuccess = 0, kIOReturnError = -1;
 constexpr int OS_LOG_DEFAULT = 0;
 
-template <class... T> void os_log_error(T...)
-{}
+std::vector<std::string> gLines, gErrors;
 
-std::vector<std::string> gLines;
+template <class... T> void os_log_error(int, const char *format, T... args)
+{
+    char line[256];
+    snprintf(line, sizeof(line), format, args...);
+    gErrors.emplace_back(line);
+}
 
 template <class... T> void os_log(int, const char *format, T... args)
 {
@@ -87,7 +91,7 @@ public:
     bool governing = false, refusalLogged = false;
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned) const;
-    void dropDisplayMemory(const char *);
+    void replanDisplayMemory(uint32_t, const char *);
 
     bool displayMemoryReady() const
     {
@@ -183,6 +187,7 @@ protected:
         requestedRates.clear();
         activeDemandsAtSet.clear();
         gLines.clear();
+        gErrors.clear();
         getResult = 0;
         getRate = 204000;
     }
@@ -285,27 +290,36 @@ TEST_F(MemoryAdapter, UnknownResumeClockReconcilesBeforeActmonStarts)
     EXPECT_TRUE(emc.governing);
 }
 
-TEST_F(MemoryAdapter, UnrecoverableClockTurnsDisplayAdmissionOffInsteadOfPanicking)
+TEST_F(MemoryAdapter, ARateOutsideTheTablePlansAgainWhereTheClockRuns)
 {
     ASSERT_EQ(emc.reserveMemory(request()), 0);
     getRate = 1300000;
     setResults.push_back({0, 1310000});
     EXPECT_NO_THROW(SwitchEMC::governAction(&emc, nullptr, nullptr, nullptr, nullptr));
-    EXPECT_FALSE(emc.displayMemoryReady());
-    EXPECT_FALSE(emc.memoryState.owned[0] || emc.memoryState.owned[1]);
-    EXPECT_EQ(emc.reserveMemory(request()), -95);
-    EXPECT_EQ(switch_emc_display_memory_ready(), 0);
+    EXPECT_TRUE(emc.displayMemoryReady());
+    EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_TRUE(gErrors.empty());
+    EXPECT_EQ(emc.reserveMemory(request(400000000)), 0);
+    EXPECT_EQ(switch_emc_display_memory_ready(), 1);
 }
 
-TEST_F(MemoryAdapter, ResumeWhoseBpmpRefusesTheTopRateKeepsRunningWithoutAdmission)
+TEST_F(MemoryAdapter, ResumeWhoseBpmpRefusesTheTopRateReleasesWhatTheRateCannotCarry)
 {
     ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
     EXPECT_EQ(switch_emc_display_memory_ready(), 1);
     getRate = 204000;
     setResults.push_back({-5, 204000});
     EXPECT_NO_THROW(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr));
-    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_TRUE(emc.displayMemoryReady());
     EXPECT_FALSE(emc.memoryState.owned[0]);
+    ASSERT_EQ(gErrors.size(), 1u);
+    EXPECT_EQ(gErrors[0],
+              "SwitchEMC: display memory planned again at 204000 kHz, as the BPMP did not restore a rate in "
+              "the table: head 0 released");
+    requestedRates.clear();
+    EXPECT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_GE(emc.khz[emc.cur], 1331200u);
 }
 
 TEST_F(MemoryAdapter, FailedResumeReadDoesNotUsePreviousRow)
@@ -364,6 +378,29 @@ TEST_F(MemoryAdapter, T210ReplansAtTheRateWarmbootRestores)
     ASSERT_EQ(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr), 0);
     EXPECT_EQ(emc.khz[0], 204000u);
     EXPECT_EQ(emc.count, 1u);
-    EXPECT_FALSE(emc.displayMemoryReady());
     EXPECT_TRUE(requestedRates.empty());
+    EXPECT_TRUE(emc.displayMemoryReady());
+    EXPECT_FALSE(emc.memoryState.owned[0]);
+    ASSERT_EQ(gErrors.size(), 1u);
+    EXPECT_EQ(gErrors[0], "SwitchEMC: display memory planned again at 204000 kHz, as its plan does not cover the rate "
+                          "the boot chain left: head 0 released");
+    EXPECT_EQ(emc.reserveMemory(request(2000000000)), -28);
+    const unsigned writes = emc.mcRegs.writes;
+    EXPECT_EQ(emc.reserveMemory(request()), 0);
+    EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_GT(emc.mcRegs.writes, writes);
+    EXPECT_EQ(emc.memoryAppliedKhz, 204000u);
+    EXPECT_TRUE(requestedRates.empty());
+}
+
+TEST_F(MemoryAdapter, T210KeepsTheHeadsTheRestoredRateStillCarries)
+{
+    emc.carRate = 1600000;
+    ASSERT_TRUE(emc.useFixedRate(emc.carRate));
+    ASSERT_EQ(emc.reserveMemory(request()), 0);
+    emc.carRate = 1331200;
+    ASSERT_EQ(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr), 0);
+    EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_EQ(emc.memoryAppliedKhz, 1331200u);
+    EXPECT_TRUE(gErrors.empty());
 }
