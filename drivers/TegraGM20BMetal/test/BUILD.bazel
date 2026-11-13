@@ -3803,6 +3803,18 @@ host_test(
 )
 
 host_test(
+    name = "raw_replay_selectors_test",
+    srcs = ["raw_replay_selectors_test.cpp"],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalCompute.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanReplay.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
+    ],
+)
+
+host_test(
     name = "raw_private_comp_test",
     srcs = [
         "raw_private_comp_test.cpp",

@@ -13,12 +13,10 @@ struct ReplayPlanSink {
     uint64_t (*offsets)[31];
     RMPipeline *__strong &pipeline;
 
+    // A stride form's attributeStride is read by a layout of MTLBufferLayoutStrideDynamic alone, whose states m2v never
+    // draws (rmM2vMissingState, rmM2vMissingKernel): every binding replays as the plain form, which m2v's frontend has
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &binding)
     {
-        if (binding.stride != raw::kStaticStride && (stage == 1 || stage == 3)) {
-            stridedBuffer(stage, slot, binding);
-            return;
-        }
         if (binding.source == raw::BufferBinding::Source::Offset) {
             if (stage < 3)
                 offsets[stage][slot] = binding.offset;
@@ -61,44 +59,6 @@ struct ReplayPlanSink {
             [encoder setFragmentBuffer:twinOf(object) offset:binding.offset atIndex:slot];
         else
             [encoder setBuffer:twinOf(object) offset:binding.offset atIndex:slot];
-    }
-
-    // The stride forms (setVertexBuffer:offset:attributeStride:atIndex: and the compute encoder's), whose stride a layout of
-    // MTLBufferLayoutStrideDynamic reads
-    void stridedBuffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &binding)
-    {
-        const NSUInteger stride = binding.stride;
-        id<MTLRenderCommandEncoder> render = encoder;
-        id<MTLComputeCommandEncoder> compute = encoder;
-        if (binding.source == raw::BufferBinding::Source::Offset) {
-            if (stage == 1) {
-                offsets[stage][slot] = binding.offset;
-                [render setVertexBufferOffset:binding.offset attributeStride:stride atIndex:slot];
-            } else
-                [compute setBufferOffset:binding.offset attributeStride:stride atIndex:slot];
-            return;
-        }
-        if (binding.source == raw::BufferBinding::Source::Bytes) {
-            const void *bytes = cb->_bytes.chunks[binding.chunk].cpu + binding.offset;
-            if (stage == 1) {
-                bound[stage][slot] = nil;
-                [render setVertexBytes:bytes length:binding.length attributeStride:stride atIndex:slot];
-            } else {
-                [compute setBytes:bytes length:binding.length attributeStride:stride atIndex:slot];
-            }
-            return;
-        }
-        id object = (__bridge id)binding.object;
-        RMBuffer *buffer = [object isKindOfClass:[RMBuffer class]] ? object : nil;
-        if (stage == 1) {
-            bound[stage][slot] = buffer;
-            offsets[stage][slot] = binding.offset;
-            [render setVertexBuffer:twinOf(object) offset:binding.offset attributeStride:stride atIndex:slot];
-        } else {
-            if (buffer)
-                buffers.insert(buffer);
-            [compute setBuffer:twinOf(object) offset:binding.offset attributeStride:stride atIndex:slot];
-        }
     }
 
     void texture(uint32_t stage, uint32_t slot, void *object)
@@ -147,26 +107,15 @@ struct ReplayPlanSink {
         if (rasterChanged(next, previous, R::Scissor, &R::scissor) ||
             rasterChanged(next, previous, R::Scissor, &R::scissors) ||
             rasterChanged(next, previous, R::Scissor, &R::scissorsAt)) {
-            MTLScissorRect rects[raw::kMaxViewports];
-            const uint32_t count = std::clamp<uint32_t>(next.scissors, 1, raw::kMaxViewports);
-            rects[0] = (MTLScissorRect){next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]};
-            for (uint32_t j = 1; j < count; j++) {
-                const uint64_t *at = cb->_plan.viewArrays.data() + next.scissorsAt + 4 * j;
-                rects[j] = (MTLScissorRect){at[0], at[1], at[2], at[3]};
-            }
-            [encoder setScissorRects:rects count:count];
+            [encoder
+                setScissorRect:(MTLScissorRect){next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]}];
         }
         if (rasterChanged(next, previous, R::Viewport, &R::viewport) ||
             rasterChanged(next, previous, R::Viewport, &R::viewports) ||
             rasterChanged(next, previous, R::Viewport, &R::viewportsAt)) {
-            MTLViewport viewports[raw::kMaxViewports];
-            const uint32_t count = std::clamp<uint32_t>(next.viewports, 1, raw::kMaxViewports);
-            for (uint32_t j = 0; j < count; j++) {
-                const uint64_t *v = j ? cb->_plan.viewArrays.data() + next.viewportsAt + 6 * j : next.viewport.data();
-                viewports[j] = (MTLViewport){raw::stateDouble(v[0]), raw::stateDouble(v[1]), raw::stateDouble(v[2]),
-                                             raw::stateDouble(v[3]), raw::stateDouble(v[4]), raw::stateDouble(v[5])};
-            }
-            [encoder setViewports:viewports count:count];
+            const uint64_t *v = next.viewport.data();
+            [encoder setViewport:(MTLViewport){raw::stateDouble(v[0]), raw::stateDouble(v[1]), raw::stateDouble(v[2]),
+                                               raw::stateDouble(v[3]), raw::stateDouble(v[4]), raw::stateDouble(v[5])}];
         }
         if (rasterChanged(next, previous, R::Cull, &R::cull))
             [encoder setCullMode:MTLCullMode(next.cull)];
@@ -190,12 +139,6 @@ struct ReplayPlanSink {
         if (rasterChanged(next, previous, R::Visibility, &R::visibility) ||
             rasterChanged(next, previous, R::Visibility, &R::visibilityOffset))
             [encoder setVisibilityResultMode:MTLVisibilityResultMode(next.visibility) offset:next.visibilityOffset];
-        if (rasterChanged(next, previous, R::Amplification, &R::amplification)) {
-            MTLVertexAmplificationViewMapping mappings[kAmplificationMappings];
-            for (uint32_t k = 0; k < kAmplificationMappings; k++)
-                mappings[k] = {next.amplification[1 + 2 * k], next.amplification[2 + 2 * k]};
-            [encoder setVertexAmplificationCount:next.amplification[0] viewMappings:mappings];
-        }
     }
 };
 

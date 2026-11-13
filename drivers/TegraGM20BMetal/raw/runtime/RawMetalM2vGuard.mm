@@ -2,7 +2,8 @@
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
 // setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero,
 // so m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
-// amplification, a dynamic attribute stride or stage-in is drawn by raw alone; the replay of indirect draw commands
+// amplification, a dynamic attribute stride or stage-in is drawn by raw alone (a stride form's stride is read by such
+// states only, so the replay binds every other state's buffers by the plain forms); the replay of indirect draw commands
 // reads no range the GPU wrote (replayCommands); m2v has no layered form of a state the raw path made for one layer only
 // (raw_layers.h layeredDrawMissing). A range of a command buffer the raw path refused that holds any of these never
 // replays there: the command buffer fails as Metal reports an error, naming the refusal.
@@ -31,10 +32,6 @@ const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op, uint32_t layers)
             [pipeline isKindOfClass:[RMPipeline class]] ? ((RMPipeline *)pipeline)->_raw : nullptr)
         if (const char *missing = raw::layeredDrawMissing(made->rec->arrayLengthWord, layers, raw::kLayerDropped))
             return missing;
-    const auto &vertexBuffers = plan.buffers[0][state.buffers[0]];
-    for (uint32_t slot = 0; slot < 31; slot++)
-        if (vertexBuffers[slot].stride != raw::kStaticStride)
-            return "a vertex buffer bound with an attribute stride";
     return nullptr;
 }
 
@@ -48,13 +45,7 @@ const char *kernelStateMissing(RMCommandBuffer *cb, uint32_t index)
 {
     const auto &plan = cb->_plan;
     const raw::KernelStateRef &state = plan.kernelStates[index];
-    if (const char *missing = kernelMissing((__bridge id)plan.kernel[state.state].pipeline))
-        return missing;
-    const auto &buffers = plan.buffers[2][state.buffers];
-    for (uint32_t slot = 0; slot < 31; slot++)
-        if (buffers[slot].stride != raw::kStaticStride)
-            return "a kernel buffer bound with an attribute stride";
-    return nullptr;
+    return kernelMissing((__bridge id)plan.kernel[state.state].pipeline);
 }
 
 // m2v's frontend makes no indirect command buffer (its device answers newIndirectCommandBufferWithDescriptor: nil), so
