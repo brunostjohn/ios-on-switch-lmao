@@ -30,7 +30,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
 {
     constexpr NSUInteger kShadowed = 1024;  // a Core Animation draw's vertices and its transform
     if (shadow && length <= kShadowed) {
-        m.x = cb->_shadow.size() + 1;
+        m.shadow = uint32_t(cb->_shadow.size() + 1);
         cb->_shadow.insert(cb->_shadow.end(), static_cast<const uint8_t *>(bytes),
                            static_cast<const uint8_t *>(bytes) + length);
     }

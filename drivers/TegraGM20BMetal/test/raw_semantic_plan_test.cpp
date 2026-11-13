@@ -164,6 +164,29 @@ Cmd bytes(uint8_t stage, uint16_t slot, uint64_t offset)
     return c;
 }
 
+// Boot 21: Core Animation's and RenderBox's vertex bytes before an encoder's first draw keep a shadow copy, whose index
+// was read as an attributeStride, so every range the raw path refused with one failed as "a vertex buffer bound with an
+// attribute stride"; a real stride form's bytes named a shadow at its stride
+TEST(SemanticPlan, ABytesShadowIsNeverItsAttributeStride)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    Cmd shadowed = bytes(1, 0, 0);
+    shadowed.shadow = 1;
+    plan.record(shadowed, {});
+    Cmd strided = bytes(1, 1, 256);
+    strided.x = 17;
+    plan.record(strided, {});
+    draw(plan);
+    const auto &state = plan.renderStates[plan.draw(1).state];
+    const raw::BufferBinding &first = plan.buffers[0][state.buffers[0]][0];
+    const raw::BufferBinding &second = plan.buffers[0][state.buffers[0]][1];
+    EXPECT_EQ(first.stride, raw::kStaticStride);
+    EXPECT_EQ(first.shadow, 1u);
+    EXPECT_EQ(second.stride, 16u);
+    EXPECT_EQ(second.shadow, 0u);
+}
+
 TEST(SemanticPlan, ADrawsSetBytesCaptureCopiesOnlyTheChunkOfSlotsTheyEdited)
 {
     RMCommandPlan plan;
