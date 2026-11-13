@@ -116,6 +116,7 @@ kernel_driver(
         "TegraGM20BUserClientPool.cpp",
         "TegraGM20BUserClientBo.cpp",
         "TegraGM20BUserClientChannel.cpp",
+        "TegraGM20BPushScanRun.cpp",
         "TegraGM20BUserClientSubmit.cpp",
         "TegraGM20BUserClientDispatch.cpp",
         "TegraGM20BUserClientPresent.cpp",

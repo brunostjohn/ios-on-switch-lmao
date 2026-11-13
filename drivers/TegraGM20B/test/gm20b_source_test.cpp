@@ -30,7 +30,8 @@ const std::string &client()
 		for (const char *unit : {"", "Pool", "Bo", "Channel", "Submit", "Dispatch",
 					 "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
-		return units + SourceText("../TegraGM20BUserClientInternal.h") +
+		return units + SourceText("../TegraGM20BPushScanRun.cpp") +
+		       SourceText("../TegraGM20BUserClientInternal.h") +
 		       SourceText("../SwitchGpuClientRetirement.h");
 	}();
 	return source;
@@ -103,7 +104,7 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 	EXPECT_TRUE(Block(client(), "const uint32_t *AGXDeviceUserClient::pushView(")
 			    .Has("if (hit) { if (hit->bo->pool_va) {"));
 	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::scanPushes(")
-			    .Has("pushView(va, bytes, hit)"));
+			    .Has("pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit)"));
 	EXPECT_TRUE(Block(client(), "int AGXDeviceUserClient::hungInterlocks(")
 			    .Has("pushView(va[i], static_cast<uint64_t>(dwords[i]) * 4, hit)"));
 }
@@ -335,7 +336,7 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_TRUE(clientCode().Has("#include \"TegraGM20BPushScan.h\""));
 	EXPECT_FALSE(clientCode().Has("void pushMethod("));
 	EXPECT_FALSE(clientCode().Has("void pushParse("));
-	const CodeText scan = Block(client(), "void AGXDeviceUserClient::scanPushes(");
+	const CodeText scan = Block(client(), "void scanRead(");
 	EXPECT_TRUE(scan.Has("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_TRUE(scan.Has("prof->cls[i] = cls;"));
 	// A stamp only after a push the profile's rule left a class (switch_gpu_prof_stamped), only on a profiled submission.
@@ -379,6 +380,22 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 	EXPECT_TRUE(Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")
 			    .Has("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % "
 				 "kScanEvery"));
+}
+
+// The render server waits for its submissions' thread (waitUntilScheduled), so only a profiled submission, whose kick
+// stamps what the read classed, is read on it; the others are read on a thread call, and only where their words lie in
+// the pool, whose kernel mapping outlives every BO (boot 21: 36-57 KiB of write-combined reads every 4th compositor job).
+TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
+{
+	const CodeText submission =
+		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
+	EXPECT_TRUE(submission.Before("deferScan(pushes, count, rawMacros);",
+				      "scanPushes(pushes, count, &prof, rawMacros);"));
+	const CodeText defer = Block(client(), "void AGXDeviceUserClient::deferScan(");
+	EXPECT_TRUE(defer.Has("hit->bo->pool_va"));
+	EXPECT_TRUE(defer.Has("thread_call_enter(d->call);"));
+	EXPECT_FALSE(defer.Has("scanRead("));
+	EXPECT_TRUE(Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
 }
 
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence

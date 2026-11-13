@@ -645,6 +645,14 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_push_scan_queue_test",
+    srcs = [
+        "switch_gpu_push_scan_queue_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPushScanQueue.h",
+    ],
+)
+
+host_test(
     name = "switch_gpu_spares_test",
     srcs = [
         "switch_gpu_spares_test.cpp",
@@ -728,6 +736,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BSurfaceClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BPushScanRun.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientChannel.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientDispatch.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientInternal.h",
