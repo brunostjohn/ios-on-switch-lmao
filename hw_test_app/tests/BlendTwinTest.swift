@@ -6,12 +6,12 @@ import Metal
 /// A state that fetches its own colour, by its storage form (the fetch, and the pipeline's blend where it has one, inside
 /// the pixel interlock) against its barrier twin (the colour read through the texture unit behind the fetch barrier, the
 /// ROP blending), both forced through the facade's probe channel (raw_fetch_rungs.h): the twin a triangle at a time
-/// (twin1) and as one draw behind one barrier (twinW). Per state, keyed by its program's size: worst_<arm>_<scene> the
+/// (twin1) and as one draw behind one barrier (twinw). Per state, keyed by its program's size: worst_<arm>_<scene> the
 /// largest difference in codes from the storage form's colour, on convex quads (CAStateSweep's strip and rectangle), a
 /// strip folded back over its first triangle and a quad crossing w = 0 under perspective; us_<arm>_<target>_<quads> one
 /// draw's GPU time from the facade's stamps, `quads` overlapping full-target quads into 64x64 or 1280x720. twins= the
-/// draws the facade counted on a twin. verdict=PASS: twin1 within the bound everywhere and twinW within it on the convex
-/// quads, every forced draw counted; the folded quad's twinW difference is the measurement's proof that it sees a
+/// draws the facade counted on a twin. verdict=PASS: twin1 within the bound everywhere and twinw within it on the convex
+/// quads, every forced draw counted; the folded quad's twinw difference is the measurement's proof that it sees a
 /// draw's own triangles out of order (folded_seen). Debug builds only (the probe channel).
 struct BlendTwinTest: HWTest {
     let id = "gpu.raw.blend_twin"
@@ -30,7 +30,7 @@ struct BlendTwinTest: HWTest {
         ("PBGRABaddXm_ThrmA2Xhf", "harmony"),
     ]
     static let arms: [(rung: Int, name: String)] = [
-        (BlendTwinScene.twinTriangles, "twin1"), (BlendTwinScene.twinWhole, "twinW"),
+        (BlendTwinScene.twinTriangles, "twin1"), (BlendTwinScene.twinWhole, "twinw"),
     ]
     static let sizes: [(name: String, width: Int, height: Int, quads: [Int])] = [
         ("64", 64, 64, [1, 4, 16]), ("720p", 1280, 720, [1]),
