@@ -8,7 +8,8 @@ import Metal
 /// pod icons' 54 pixels and the large ones' 136 (27 and 68 points at scale 2) on the default device, into a private and
 /// a shared target, against its own CPU drawing (HWTestGPU RenderBoxCorner: `beyond`, `max_diff`, `partial` and
 /// `ref_partial`), with the command buffers that went to m2v and the fetch routes of those draws.
-/// `strip_<storage>_*` and `strip_restart_<storage>_*`: RenderBox's draw shape alone (HWTestGPU FetchStrip).
+/// `strip_<storage>_*` and `strip_restart_<storage>_*`: RenderBox's draw shape alone, on the raw path; `replay_scissor_*`
+/// the same draw culled and scissored, which raw leaves to m2v, scissored there (HWTestGPU FetchStrip).
 /// `icon<pt>_*`: iconservicesagent draws Settings' icon at 27 and 68 points, scale 2, uncached (-[ISImageDescriptor
 /// setIgnoreCache:]); the small one's corners against the large one reduced to its size (`icon27_corner_beyond`), and
 /// the cached 27-point image the App Library shows (`icon27_cached_corner_beyond`, reported). FAIL: a RenderBox or
@@ -31,7 +32,8 @@ struct IconCornersTest: HWTest {
             metrics.set("\(cell.name)_path", cell.path)
             metrics.set("\(cell.name)_routes", cell.routes)
             metrics.set("\(cell.name)_wrong", cell.wrong)
-            if cell.wrong > 0 || (cell.path != "raw" && cell.path != "device") { wrong.append(cell.name) }
+            let offPath = cell.name != "replay_scissor" && cell.path != "raw" && cell.path != "device"
+            if cell.wrong > 0 || offPath { wrong.append(cell.name) }
         }
         if RenderBoxCorner.available {
             for side in [54, 136] {
