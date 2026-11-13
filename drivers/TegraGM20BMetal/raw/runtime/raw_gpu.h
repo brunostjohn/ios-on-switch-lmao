@@ -666,7 +666,7 @@ struct DepthStencilAttachment {
     float depth = 1;
     uint32_t stencil = 0;
     bool loaded = true, stored = true;  // an aspect is loaded, or stored: its contents outside the pass matter
-    bool loadedSomewhere = false;       // a recorded pass loads this depth (RMTexture::_depthLoaded)
+    bool loadedLater = false;           // a later pass of the command buffer loads this depth
 };
 
 struct PassDesc {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Zcull for a loaded depth, as NVK's zcull plane carries it (nvk_image.c's plane, nvk_CmdBeginRendering's LOAD_ZCULL,
-// nvk_CmdEndRendering's STORE_ZCULL), within one command buffer: a pass with a region that stores a depth some recorded
-// pass loads stores the region (STORE_ZCULL) into the command buffer's upload ring, and a later pass of the same
+// nvk_CmdEndRendering's STORE_ZCULL), within one command buffer: a pass with a region that stores a depth a later pass
+// loads stores the region (STORE_ZCULL) into the command buffer's upload ring, and a later pass of the same
 // command buffer that loads that depth over the same region loads it (LOAD_ZCULL) where it would otherwise take none.
 // Any write the command buffer makes to the depth's memory in between leaves the stored region stale, and a pass that
 // invalidated its region stores none. A private depth texture is written by nothing outside the command buffer while it
@@ -84,7 +84,7 @@ private:
 
 // A pass's zcull at its begin: `ask` (but its loadedRegion) and the region over x, y, width, height and `layers`. It
 // loads `held`, its depth's stored region, where that is this region and it does not clear the depth, and stores its
-// region at its end where `keep` (it stores a one-layer depth a recorded pass loads), into the storage it loaded or
+// region at its end where `keep` (it stores a one-layer depth a later pass loads), into the storage it loaded or
 // into `storage(bytes)`'s (0: none to have)
 template <typename Storage>
 inline void zcullBegin(ZcullPass &z, ZcullAsk ask, const TegraGM20BAbiZcullInfo &dev, uint32_t x, uint32_t y,

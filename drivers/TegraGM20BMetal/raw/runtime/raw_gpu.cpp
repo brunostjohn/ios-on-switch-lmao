@@ -4408,8 +4408,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
     zask.atStorageBase = zeta && (!zeta->storage.va || zeta->va == zeta->storage.va);
     const Rect zcullArea = e.planeArea();
-    const bool zcullKeep = zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored &&
-                           pass.depthStencil.loadedSomewhere;
+    const bool zcullKeep =
+        zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored && pass.depthStencil.loadedLater;
     zcullBegin(e.zcull_, zask, dev_->zcullInfo_, zcullArea.x0, zcullArea.y0, zcullArea.x1 - zcullArea.x0,
                zcullArea.y1 - zcullArea.y0, layers, zcullHeld, zcullKeep, [this](uint64_t bytes) {
                    uint64_t va = 0;
