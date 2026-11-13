@@ -2875,6 +2875,14 @@ private:
     uint32_t rtLayer_ = ~0u;      // and SET_RT_LAYER (~0: not known)
     DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
+    // Surface imports no texture holds, kept for the surface's next texture: Core Animation makes a texture over its
+    // pooled surface every frame after it drops the last, and an import made again is bound, untiled, cleaned and laid
+    // out again (boot 21: 3.4-4 ms of each app-close frame). Oldest first, at most kKeptImports and kKeptImportBytes;
+    // trim (idle, memory pressure) gives them all back. Each holds its surface (Import::owner) until then.
+    static constexpr size_t kKeptImports = 8;
+    static constexpr uint64_t kKeptImportBytes = 64ull << 20;
+    std::vector<Import *> keptImports_;
+    uint64_t keptImportBytes_ = 0;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     uint64_t nativeGeneration_ = 0;
     const Texture *nativeRead(const Texture &source, NativeSurface *&owner, int &error);
@@ -3187,7 +3195,11 @@ private:
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
                              Texture *sampled);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask = nullptr);
+    // lock_ held: a texture's hold on its import goes. A surface's import no texture holds is kept (keepImport)
     void release(Import *i);
+    void keepImport(Import *i);
+    void dropImport(Import *i);
+    void dropKeptImports();
     // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
     Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
     void dropLocked(Lease *lease);

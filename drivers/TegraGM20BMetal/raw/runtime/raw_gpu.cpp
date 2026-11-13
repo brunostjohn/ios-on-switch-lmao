@@ -496,6 +496,7 @@ Device::~Device()
     {
         std::lock_guard<raw::Mutex> l(lock_);
         stopping_ = true;
+        dropKeptImports();
     }
     grow_.notify_all();
     if (grower_.joinable())
@@ -1686,6 +1687,7 @@ void Device::freeChunk(Chunk &ch)
 void Device::trim()
 {
     std::lock_guard<raw::Mutex> l(lock_);
+    dropKeptImports();
     reapNativeSurfaces();
     for (const Spare &sp : spares_)
         freeChunk(chunks_[sp.chunk]);
@@ -1719,9 +1721,13 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
     if (id) {
         auto it = surfaces_.find(key);
         if (it != surfaces_.end()) {
-            it->second->refs++;
+            Import *kept = it->second;
+            if (!kept->refs++) {
+                keptImports_.erase(std::find(keptImports_.begin(), keptImports_.end(), kept));
+                keptImportBytes_ -= kept->bo.bytes;
+            }
             RAW_DIAGNOSTIC(stats.importHits++);
-            return it->second;
+            return kept;
         }
     }
     Import *i = new Import;
@@ -1763,6 +1769,34 @@ void Device::release(Import *i)
 {
     if (!i || --i->refs)
         return;
+    if (i->id && i->owner)
+        keepImport(i);
+    else
+        dropImport(i);
+}
+
+void Device::keepImport(Import *i)
+{
+    keptImports_.push_back(i);
+    keptImportBytes_ += i->bo.bytes;
+    while (keptImports_.size() > kKeptImports || keptImportBytes_ > kKeptImportBytes) {
+        Import *oldest = keptImports_.front();
+        keptImports_.erase(keptImports_.begin());
+        keptImportBytes_ -= oldest->bo.bytes;
+        dropImport(oldest);
+    }
+}
+
+void Device::dropKeptImports()
+{
+    for (Import *i : keptImports_)
+        dropImport(i);
+    keptImports_.clear();
+    keptImportBytes_ = 0;
+}
+
+void Device::dropImport(Import *i)
+{
     if (i->id)
         if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
             it != surfaces_.end() && it->second == i)
