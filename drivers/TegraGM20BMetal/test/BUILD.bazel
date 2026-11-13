@@ -5131,6 +5131,107 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# The recording thread's messages, locks and allocations (record_count.c), interposed by a library the test links
+cc_binary(
+    name = "librecord_count.dylib",
+    testonly = True,
+    srcs = ["record_count.c"],
+    linkopts = [
+        "-lobjc",
+        "-Wl,-install_name,@rpath/librecord_count.dylib",
+    ],
+    linkshared = True,
+)
+
+RECORD_COST_SRCS = [
+    "empty_pack.h",
+    "made_metallib.h",
+    "raw_facade_harness.h",
+    "raw_job_methods.h",
+    "raw_record_cost_test.cpp",
+    "raw_facade_standins.h",
+    "raw_frontend_absent.cpp",
+    "raw_kernel_model.h",
+    ":librecord_count.dylib",
+] + RAW_HOST_HEADERS
+
+RECORD_COST_BUILDS = [
+    ("_o2", ["-O2"]),
+    ("_o2_release", [
+        "-O2",
+        "-DSWITCH_DEBUG=0",
+    ]),
+]
+
+RECORD_COST_LINKOPTS = [
+    "-framework",
+    "Foundation",
+    "-framework",
+    "Metal",
+    "-framework",
+    "IOSurface",
+    "-framework",
+    "IOKit",
+    "-framework",
+    "CoreFoundation",
+    "-lobjc",
+]
+
+# The facade and runtime at the plugin's -O2 (gpu/defs.bzl _PLUGIN_CFLAGS), as debug builds have them and with
+# SWITCH_DEBUG=0 as release builds do: what raw_record_cost_test times the recording thread over
+[host_library(
+    name = "raw_facade_plugin_host" + suffix,
+    testonly = True,
+    srcs = [":raw_facade_units"],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS,
+) for suffix, extra in RECORD_COST_BUILDS]
+
+[host_library(
+    name = "raw_runtime_plugin_host" + suffix,
+    testonly = True,
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+) for suffix, extra in RECORD_COST_BUILDS]
+
+# What recording a compositor scale frame costs the recording thread through the facade over the kernel model
+# (raw_record_cost_test.cpp): with the plugin's debug diagnostics, and without them
+[host_test(
+    name = "raw_record_cost" + suffix.replace("_o2", "") + "_test",
+    srcs = RECORD_COST_SRCS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = RECORD_COST_LINKOPTS,
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host" + suffix,
+        ":raw_runtime_plugin_host" + suffix,
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+) for suffix, extra in RECORD_COST_BUILDS]
+
 # Every texture <-> buffer copy layout Metal takes, recorded on the raw facade: none refused but what Metal refuses itself
 host_test(
     name = "raw_facade_copies_test",
