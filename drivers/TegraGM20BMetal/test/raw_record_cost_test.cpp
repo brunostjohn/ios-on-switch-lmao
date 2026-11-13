@@ -279,7 +279,12 @@ TEST(RawRecordCost, CompositorScaleFrame)
     print("changed-state draw", difference(doubled, frame), kDraws, "draw");
     print("empty encoder", encoders, kEncoders, "encoder");
     print("unchanged-state draw", difference(repeated, one), 300, "draw");
-    EXPECT_GT(frame.counts.sends, 0u);
+    // the API calls' own messages alone: 6 a compositor draw, 1 a draw with nothing set before it, 3 an encoder's
+    // begin, state and end (plus the pass copy's own at a new shape), and no allocation once the recording is warm
+    EXPECT_EQ(difference(doubled, frame).counts.sends, uint64_t(6 * kDraws));
+    EXPECT_EQ(difference(repeated, one).counts.sends, 300u);
+    EXPECT_LE(encoders.counts.sends, uint64_t(7 * kEncoders));
+    EXPECT_EQ(frame.counts.mallocs, 0u);
 }
 
 // Each call of a compositor draw, its instructions apart (less what two counter reads cost), over a frame's 90 draws

@@ -76,4 +76,14 @@ TEST(Spares, RoomComesFromTheLargestClassKeptPastItsDepth)
 	EXPECT_EQ(switch_gpu_spare_over_depth(smaller, target, 4), 1u);
 }
 
+// A class that would not fit even with every spare past its depth given back gives none back: the spares that serve
+// other classes' takes stay
+TEST(Spares, NoSpareIsGivenBackForAClassThatStillWouldNotFit)
+{
+	constexpr uint64_t kCap = 96ULL << 20;
+	EXPECT_TRUE(switch_gpu_spare_fits_after(94ULL << 20, 24ULL << 20, 16ULL << 20, kCap));
+	EXPECT_FALSE(switch_gpu_spare_fits_after(94ULL << 20, 8ULL << 20, 16ULL << 20, kCap));
+	EXPECT_TRUE(switch_gpu_spare_fits_after(64ULL << 20, 0, 16ULL << 20, kCap));
+}
+
 }  // namespace

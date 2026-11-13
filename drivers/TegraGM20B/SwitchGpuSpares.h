@@ -38,6 +38,13 @@ inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap)
 // The class to give a ready spare back from so that a class below its depth fits under the cap: the largest class
 // (classes by size, smallest first) holding more ready spares than its depth, or `classes` when none does. Freed BOs are
 // kept while they fit, so without this a pool full of classes no one asks for refills none that someone does.
+// Whether a class of `need` bytes fits under `cap` once the spares kept past their depth (`over` bytes of the `clean`)
+// are given back: when it does not, none are given back for it
+inline bool switch_gpu_spare_fits_after(uint64_t clean, uint64_t over, uint64_t need, uint64_t cap)
+{
+	return clean - over + need <= cap;
+}
+
 inline uint32_t switch_gpu_spare_over_depth(const uint16_t *count, const uint16_t *target,
 					    uint32_t classes)
 {

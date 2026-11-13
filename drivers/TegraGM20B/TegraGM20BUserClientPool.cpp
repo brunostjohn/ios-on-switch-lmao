@@ -304,6 +304,12 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		for (; c < kClasses; c++) {
 			if (p->count[c] + p->zeroing[c] >= p->target[c])
 				continue;
+			uint64_t over = 0;
+			for (uint32_t d = 0; d < kClasses; d++)
+				if (p->count[d] > p->target[d])
+					over += uint64_t(p->count[d] - p->target[d]) * classBytes(d);
+			if (!switch_gpu_spare_fits_after(p->clean, over, classBytes(c), kSpareCapBytes))
+				continue;
 			while (p->clean + classBytes(c) > kSpareCapBytes) {
 				const uint32_t d =
 					switch_gpu_spare_over_depth(p->count, p->target, kClasses);
