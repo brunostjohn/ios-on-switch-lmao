@@ -10,6 +10,7 @@ import Metal
 /// compressed zeta memory (raw_comp.h storedZetaKind): a 64x64 one drawn and read back by the copy engine and sampled by
 /// the texture unit, exact, and a 1280x720 one taking 16 clear-only passes (ZBC's case), timed against one held on plain
 /// memory where a debug facade can (switchRawProbePlainPrivate:). The d32f case is sampled too, as the reference read.
+/// Each other format storedZetaKind compresses (compressedCases) is drawn, read back and sampled on compressed memory.
 struct StoredDepthTest: HWTest {
     let id = "gpu.raw.stored_depth"
     let name = "Stored depth/stencil in raw zeta memory: no m2v twin, exact readback, ZBC clear cost"
@@ -184,14 +185,14 @@ struct StoredDepthTest: HWTest {
         }
         var ran = Ran()
         try await drawAndRead(gpu, c, texture, &ran)
-        if c.format == .depth32Float { ran.sampledWrong = try await sampledWrong(gpu, texture, &ran) }
+        if c.format == .depth32Float { ran.sampledWrong = try await sampledWrong(gpu, c, texture, &ran) }
         ran.facts = facts(gpu, texture)
         return ran
     }
 
-    /// The texture unit's reading of a Depth32Float texture drawAndRead drew: each texel's depth in red of an R32Float
-    /// target, the texels that are not the drawn or cleared depth
-    func sampledWrong(_ gpu: GPU, _ texture: MTLTexture, _ ran: inout Ran) async throws -> Int {
+    /// The texture unit's reading of a depth texture drawAndRead drew: each texel's depth in red of an R32Float target,
+    /// the texels that are not the drawn (0.25; Depth16Unorm's nearest codes) or cleared depth
+    func sampledWrong(_ gpu: GPU, _ c: Case, _ texture: MTLTexture, _ ran: inout Ran) async throws -> Int {
         let size = Self.size
         let out = try gpu.texture(.r32Float, size, size)
         let pipeline = try gpu.render(fragment: "stored_depth_read_fragment", format: .r32Float)
@@ -208,36 +209,67 @@ struct StoredDepthTest: HWTest {
                 encoder.endEncoding()
             }.path)
         let red = try await gpu.read(out, bytesPerPixel: 4)
+        let slack: Float = c.format == .depth16Unorm ? 2.0 / 65535 : 0
         var wrong = 0
         for y in 0..<size {
             for x in 0..<size {
                 let at = (y * size + x) * 4
-                if Array(red[at..<at + 4]) != (x < size / 2 ? Self.cases[0].left : Self.cases[0].right) { wrong += 1 }
+                let depth = Float(bitPattern: red[at..<at + 4].reversed().reduce(0) { $0 << 8 | UInt32($1) })
+                if abs(depth - (x < size / 2 ? 0.25 : 1)) > slack { wrong += 1 }
             }
         }
         return wrong
     }
 
-    /// A private Depth32Float target as the device makes it, on compressed memory where it can: compressed memory of a
-    /// size is made off the render thread after its first ask, so the target is made again until it binds some (20 tries;
-    /// a release facade, which answers no facts, keeps the second)
-    func compressedDepth(_ gpu: GPU, _ width: Int, _ height: Int) async throws -> MTLTexture {
-        var made = try gpu.texture(.depth32Float, width, height, usage: [.renderTarget, .shaderRead])
+    /// A private depth target as the device makes it, on compressed memory where it can: compressed memory of a size is
+    /// made off the render thread after its first ask, so the target is made again until it binds some (20 tries; a
+    /// release facade, which answers no facts, keeps the second)
+    func compressedDepth(
+        _ gpu: GPU, _ format: MTLPixelFormat = .depth32Float, _ width: Int = StoredDepthTest.size,
+        _ height: Int = StoredDepthTest.size
+    ) async throws -> MTLTexture {
+        var made = try gpu.texture(format, width, height, usage: [.renderTarget, .shaderRead])
         let known = facts(gpu, made) != "-"
         for attempt in 0..<20 where known ? !facts(gpu, made).contains("comptags=1") : attempt == 0 {
             try await Task.sleep(nanoseconds: 50_000_000)
-            made = try gpu.texture(.depth32Float, width, height, usage: [.renderTarget, .shaderRead])
+            made = try gpu.texture(format, width, height, usage: [.renderTarget, .shaderRead])
         }
         return made
+    }
+
+    /// The formats besides Depth32Float whose stored one-sample textures bind compressed memory (raw_comp.h
+    /// storedZetaKind)
+    static let compressedCases = ["d16"]
+
+    /// A case on a compressed target: drawn, each aspect read back by the copy engine and its depth sampled, exact
+    func compressedCase(_ gpu: GPU, _ c: Case, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
+        let texture = try await compressedDepth(gpu, c.format)
+        var ran = Ran()
+        try await drawAndRead(gpu, c, texture, &ran)
+        let sampled = try await sampledWrong(gpu, c, texture, &ran)
+        let made = facts(gpu, texture)
+        let name = c.name + "_compressed"
+        metrics.set(name + "_facts", made)
+        metrics.set(name + "_wrong_depth", ran.wrongDepth)
+        metrics.set(name + "_wrong_stencil", ran.wrongStencil)
+        metrics.set(name + "_sampled_wrong", sampled)
+        metrics.set(name + "_paths", ran.paths.joined(separator: "/"))
+        if ran.wrongDepth + ran.wrongStencil > 0 { wrong.append(name) }
+        if sampled > 0 { wrong.append(name + "_sampled") }
+        if ran.paths.contains(where: { $0 != "raw" }) { wrong.append(name + "_path") }
+        if made != "-" && !made.contains("comptags=1") { wrong.append(name + "_not_made") }
     }
 
     /// A 64x64 compressed Depth32Float target drawn, read back by the copy engine and sampled, exact; and GPU
     /// milliseconds of 16 clear-only passes of a 1280x720 one, and of one on plain memory where the facade can hold it there
     func compressedArm(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
-        let small = try await compressedDepth(gpu, Self.size, Self.size)
+        for c in Self.cases where Self.compressedCases.contains(c.name) {
+            try await compressedCase(gpu, c, &metrics, &wrong)
+        }
+        let small = try await compressedDepth(gpu)
         var ran = Ran()
         try await drawAndRead(gpu, Self.cases[0], small, &ran)
-        let sampled = try await sampledWrong(gpu, small, &ran)
+        let sampled = try await sampledWrong(gpu, Self.cases[0], small, &ran)
         let smallFacts = facts(gpu, small)
         metrics.set("compressed_readback_facts", smallFacts)
         metrics.set("compressed_readback_wrong", ran.wrongDepth)
@@ -248,7 +280,7 @@ struct StoredDepthTest: HWTest {
         if ran.paths.contains(where: { $0 != "raw" }) { wrong.append("compressed_path") }
         if smallFacts != "-" && !smallFacts.contains("comptags=1") { wrong.append("compressed_not_made") }
 
-        let big = try await compressedDepth(gpu, 1280, 720)
+        let big = try await compressedDepth(gpu, .depth32Float, 1280, 720)
         metrics.set("zbc_compressed_facts", facts(gpu, big))
         var targets: [(String, MTLTexture)] = [("compressed", big)]
         if let facade = gpu.device as? NSObject, facade.responds(to: Self.plainSelector) {

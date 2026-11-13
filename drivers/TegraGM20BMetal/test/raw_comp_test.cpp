@@ -114,13 +114,15 @@ TEST(RawComp, MemoryIsWholeComptagLines)
 }
 
 // What the copy engine fills or drains compresses only at the kinds gpu.x1.ce_compressed proved (one-sample C32 and C64)
-// and gpu.x1.ce_compressed_depth proved as shipped (one-sample ZF32_2CZ)
+// and gpu.x1.ce_compressed_depth proved as shipped (one-sample ZF32_2CZ), and one-sample Z16_2C, which
+// gpu.raw.stored_depth's d16_compressed arm judges
 TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
 {
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xdb));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xe9));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0x86));
-    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x02u, 0x87u, 0x88u, 0xceu, 0xcfu, 0xd0u})
+    EXPECT_TRUE(raw::copyEngineReadsCompressed(0x02));
+    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x03u, 0x04u, 0x87u, 0x88u, 0xceu, 0xcfu, 0xd0u})
         EXPECT_FALSE(raw::copyEngineReadsCompressed(kind)) << std::hex << kind;
 
     // memoryless: the copy engine never reaches them
@@ -158,9 +160,10 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
 
 // A stored depth texture binds its compressible kind at one sample and one layer, where the copy engine (its readback
 // and aspect copies) reads that kind as plain texels
-TEST(RawComp, StoredOneSampleDepth32FloatBindsZF32_2CZ)
+TEST(RawComp, StoredOneSampleDepthBindsItsCompressibleKind)
 {
     EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 1), 0x86u);
+    EXPECT_EQ(raw::storedZetaKind(true, 250, 1, 1), 0x02u) << "Depth16Unorm: Z16_2C";
     EXPECT_EQ(raw::storedZetaKind(false, 252, 1, 1), 0u);
     EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 2), 0u) << "an array or cube";
     EXPECT_EQ(raw::storedZetaKind(true, 252, 4, 1), 0u);
