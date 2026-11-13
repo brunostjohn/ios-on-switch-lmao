@@ -81,6 +81,16 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// `texture` moved off compressed memory now, as an m2v twin moves it (rmTexturePlain): @YES where it was compressed and
+// moved
+- (NSNumber *)switchRawProbeMovePlain:(id<MTLTexture>)texture
+{
+    RMTexture *t = [(id)texture isKindOfClass:[RMTexture class]] ? (RMTexture *)texture : nil;
+    if (!t || !t->_rawOk || !gRM->raw->privateCompressed(t->_raw))
+        return @NO;
+    return @(rmTexturePlain(t) && !gRM->raw->privateCompressed(t->_raw));
+}
+
 // Private textures made while `on` is true stay on plain memory (raw_private_comp.h), for a probe's uncompressed
 // reference
 - (NSString *)switchRawProbePlainPrivate:(NSNumber *)on

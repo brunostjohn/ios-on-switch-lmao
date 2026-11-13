@@ -10,7 +10,7 @@ import Metal
 /// one it lacks, read by it; a clear then a half-target draw (mixed tiles); the copy engine writing all of it and half
 /// of it over rendered tiles, read by the texture unit and by itself; and copies between a compressed and a plain
 /// target both ways. Every case runs on the compressed target and on a plain one; the plain one's bytes and the CPU's
-/// reading are the reference.
+/// reading are the reference. The multisampled cases follow (X1CompressedMSCases.swift).
 enum X1CompressedCopyProbe {
     static let probe = X1Probe(
         id: "gpu.x1.ce_compressed", name: "The copy engine reads and writes compressed colour targets as plain texels",
@@ -60,6 +60,7 @@ enum X1CompressedCopyProbe {
                 }
             }
         }
+        try await multisampled(gpu, &metrics, &wrong)
         metrics.set("compressed_targets", compressedMade)
         metrics.set("repeats", repeats)
         metrics.set("first", firsts.isEmpty ? "-" : firsts.joined(separator: ";"))

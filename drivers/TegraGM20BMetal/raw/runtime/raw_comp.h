@@ -48,12 +48,28 @@ enum : uint32_t {
 // shadow's do. One-sample ZF32_2CZ by gpu.x1.ce_compressed_depth (boot 19 and boot 21, the context as shipped: d32f_1x=0
 // over 16 compressed rounds of shader-test copies both ways). One-sample Z16_2C and ZF32_X24S8_2CSZV (its depth and stencil
 // aspect copies too) ship on unread: gpu.raw.stored_depth's d16_compressed and d32fs8_compressed arms judge them; so does
-// one-sample C128_2CR, which gpu.x1.ce_compressed's RGBA32Float cases judge. Not asked: the multisampled colour kinds
-// and the multisampled zeta kinds (which read exact only under anti-alias words no context row writes).
+// one-sample C128_2CR, which gpu.x1.ce_compressed's RGBA32Float cases judge, and the 2x and 4x colour kinds, whose sample
+// grid the copy engine copies when a stored multisampled target moves to plain memory (gpu.x1.ce_compressed's ms cases).
+// Not asked: the multisampled zeta kinds (which read exact only under anti-alias words no context row writes).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
-    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindC128 || kind == kCompKindZF32 ||
-           kind == kCompKindZ16 || kind == kCompKindZeta;
+    switch (kind) {
+    case kCompKindC32:
+    case kCompKindC64:
+    case kCompKindC128:
+    case 0xcc:  // C32_MS2_2CRA
+    case 0xe2:  // C32_MS4_2CRA
+    case 0xcd:  // C64_MS2_2CRA
+    case 0xf0:  // C64_MS4_2CRA
+    case 0xf7:  // C128_MS2_2CR
+    case 0xf9:  // C128_MS4_2CR
+    case kCompKindZF32:
+    case kCompKindZ16:
+    case kCompKindZeta:
+        return true;
+    default:
+        return false;
+    }
 }
 
 // The compressible kind of a block-linear colour target of `bpp`-byte texels at `samples` samples, or of the depth/stencil
