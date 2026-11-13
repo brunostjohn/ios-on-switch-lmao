@@ -5,6 +5,7 @@
 // leaves a block-linear surface on its memory's record, whose first CPU lock, next import or other engine moves its
 // texels back to rows, and whose memory going ends it unmoved.
 #include <gtest/gtest.h>
+#include "drivers/TegraGM20B/TegraGM20BLayoutAsk.h"
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
 #include "drivers/TegraGM20B/TegraGM20BRelayout.h"
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
@@ -133,6 +134,23 @@ TEST_F(Deferred, AnyWriteBeforeTheDecisionBringsTheTilingMoveBack)
 		tgm_coherency_record_gone(&record);
 		EXPECT_TRUE(gone(p[0])) << k.what;
 	}
+}
+
+// KERN-28: a sampler's first ask of a surface whose seed never moved still moves its contents into the tiled layout,
+// since a CPU writer without IOSurfaceLock leaves rows there and no seed; only a writer's ask skips that move
+TEST_F(Deferred, ASamplerOfAFreshSurfaceTilesWhatItHolds)
+{
+	gSurfaceUnwritten = true;
+	gBackingContent = 0;
+	const auto p = pages(0xd0f00000);
+	tgm_record record{nullptr, 303};
+	tgm_coh *c = import(p, 303, record, 1);
+	tgm_coh_hold_asker(c);
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, TGM_LAYOUT_ASK_UNWRITTEN), 1);
+	tgm_coh_put_asker(c);
+	EXPECT_EQ(movesOf(TGM_RELAYOUT_TILE_IN_PLACE), 1);
+	tgm_coherency_put(c);
+	tgm_coherency_record_gone(&record);
 }
 
 TEST_F(Deferred, ALastImportLeavesTheSurfaceBlockLinearOnItsRecord)

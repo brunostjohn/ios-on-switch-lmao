@@ -13,7 +13,9 @@ import SwitchTexturePattern
 /// while the app reads (block-linear, a held import); the same with the peer's texture gone first (the deferred untile);
 /// the app samples a surface of its own first, while nothing has written it (block-linear), before the peer renders it;
 /// and the same sampled surface written by the app's CPU under a write lock instead, whose lock and unlock move its
-/// texels on the copy engine (`cpu<size>_write_us`; `<case>_read_us` times each read lock). Two shapes: 256x256 and
+/// texels on the copy engine (`cpu<size>_write_us`; `<case>_read_us` times each read lock); and a surface the app's CPU
+/// wrote with no lock (its seed still 0) before it sampled it first, whose rows must survive its tiling. The app-made
+/// surfaces must read block-linear (`<case>_layout=1`). Two shapes: 256x256 and
 /// the 260x260 of the home screen's large widget. A read that matches the pattern laid out in GOBs reports
 /// `<case>_gob=1`: block-linear texels seen as rows (the Maps widget's garbage on boot 21).
 struct SurfaceCrossProcessTest: HWTest {
@@ -47,7 +49,7 @@ struct SurfaceCrossProcessTest: HWTest {
         var metrics = Metrics()
         var checks: [(String, Bool)] = []
         for size in Self.sizes {
-            for order in ["held", "dropped", "sampled", "cpu"] {
+            for order in ["held", "dropped", "sampled", "cpu", "unlocked"] {
                 let label = "\(order)\(size)"
                 guard let (surface, sampler) = try await Self.rendered(gpu, connection, order, size, &metrics)
                 else {
@@ -57,6 +59,9 @@ struct SurfaceCrossProcessTest: HWTest {
                 if let gpuConnection = GPUConnection() {
                     let (kr, layout) = gpuConnection.surfaceLayout(surface)
                     metrics.set("\(label)_layout", kr == KERN_SUCCESS ? String(layout) : GPUConnection.hex(kr))
+                    if order != "dropped" {
+                        checks.append(("\(label): block-linear", kr == KERN_SUCCESS && layout == 1))
+                    }
                 }
                 let (cpu, readUs) = Self.cpuRows(surface)
                 metrics.set("\(label)_read_us", readUs)
@@ -98,7 +103,9 @@ struct SurfaceCrossProcessTest: HWTest {
             .width: size, .height: size, .bytesPerElement: 4, .pixelFormat: UInt32(0x4247_5241),
         ]
         guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface \(size) not made") }
+        if order == "unlocked" { write(surface) }
         let (_, sampler) = try await gpuRows(gpu, surface)
+        if order == "unlocked" { return (surface, sampler) }
         if order == "cpu" {
             metrics.set("cpu\(size)_write_us", cpuWrite(surface))
             return (surface, sampler)
@@ -141,14 +148,19 @@ struct SurfaceCrossProcessTest: HWTest {
     static func cpuWrite(_ surface: IOSurface) -> Int {
         let start = DispatchTime.now().uptimeNanoseconds
         surface.lock(options: [], seed: nil)
+        write(surface)
+        surface.unlock(options: [], seed: nil)
+        return Int((DispatchTime.now().uptimeNanoseconds - start) / 1000)
+    }
+
+    /// The pattern into every texel through the surface's own mapping, with or without a lock around it
+    static func write(_ surface: IOSurface) {
         for y in 0..<surface.height {
             let row = surface.baseAddress + y * surface.bytesPerRow
             for x in 0..<surface.width {
                 for c in 0..<4 { row.storeBytes(of: byte(x, y, c), toByteOffset: x * 4 + c, as: UInt8.self) }
             }
         }
-        surface.unlock(options: [], seed: nil)
-        return Int((DispatchTime.now().uptimeNanoseconds - start) / 1000)
     }
 
     /// Its texels as rows, through this process's own GPU import of it (a blit into a buffer), and that texture

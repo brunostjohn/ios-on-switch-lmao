@@ -65,10 +65,12 @@ void note(Decision, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
 }
 #endif
 
+// `samples`: the asker only samples a surface nothing wrote as far as its seed tells (TGM_LAYOUT_ASK_UNWRITTEN). A CPU
+// writer without IOSurfaceLock leaves the seed at 0, so that surface may hold rows: its tiling move is never skipped.
 Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint32_t bpp,
-		uint32_t bytesPerRow, bool writes, bool fit)
+		uint32_t bytesPerRow, bool writes, bool samples, bool fit)
 {
-	if (!writes)
+	if (!writes && !samples)
 		return PitchSampledFirst;
 	if (!tgm_coh_unshared(c) || !tgm_coh_pinned(c))
 		return PitchShared;
@@ -81,7 +83,7 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 	    static_cast<uint64_t>(bytesPerRow) * height > bytes)
 		return PitchShape;
 	t.bytes_per_row = bytesPerRow;
-	if (tgm_coh_fresh(c)) {
+	if (writes && tgm_coh_fresh(c)) {
 		tgm_tiled_count(TGM_RELAYOUT_FRESH);
 		return DecidedTiled;
 	}
@@ -134,9 +136,9 @@ int askLayout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 		t = IONew(tgm_tiled, 1);
 	if ((fresh || again) && t) {
 		bzero(t, sizeof(*t));
-		const Decision d = decide(
-			c, *t, width, height, bpp, bytes_per_row,
-			(writes & (TGM_LAYOUT_ASK_WRITES | TGM_LAYOUT_ASK_UNWRITTEN)) != 0, fit);
+		const Decision d = decide(c, *t, width, height, bpp, bytes_per_row,
+					  (writes & TGM_LAYOUT_ASK_WRITES) != 0,
+					  (writes & TGM_LAYOUT_ASK_UNWRITTEN) != 0, fit);
 		t->retry = static_cast<int>(d == PitchMoveFailed);
 		__atomic_store_n(&t->tiled, static_cast<int>(d == DecidedTiled), __ATOMIC_RELEASE);
 		if (t->tiled)
