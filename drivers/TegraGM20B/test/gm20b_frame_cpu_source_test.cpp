@@ -53,7 +53,19 @@ TEST(GM20BFrameCpuSource, ChannelWaitsSleepOnTheirChannel)
 		EXPECT_FALSE(body.Has("nvxnu_idle(")) << wait;
 		EXPECT_TRUE(body.Has("tgm_waiter_idle(")) << wait;
 	}
-	const CodeText del = Block(unit("gpu_chan.c"), "void tgm_chan_del(struct tgm_chan **pchan)");
+	const CodeText del =
+		Block(unit("gpu_chan.c"), "void tgm_chan_del(struct tgm_chan **pchan)");
 	EXPECT_FALSE(del.Has("nvxnu_idle(")) << "the teardown's drain sleeps on the global word";
 	EXPECT_TRUE(del.Has("tgm_waiter_idle("));
+}
+
+// A slow app's first kick into a frame whose window was kept takes its holds before the doorbell (gm20b_deadline_window_test
+// runs the holds); only a user channel's kick asks.
+TEST(GM20BFrameCpuSource, AnAppsFirstKickIsHeldBeforeItsDoorbell)
+{
+	const CodeText fence = Block(unit("gpu_exec.c"), "static u32 chan_fence_job(");
+	EXPECT_TRUE(fence.Before(
+		"WRITE_ONCE(chan->submitted, next);",
+		"switch_gpu_busy_kicked(&tgm_busy, chan->chid) && chan->app && !chan->high"));
+	EXPECT_TRUE(fence.Before("tgm_deadline_app_kicked();", "PUSH_KICK(push);"));
 }

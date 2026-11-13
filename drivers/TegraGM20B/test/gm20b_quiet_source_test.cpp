@@ -59,12 +59,15 @@ TEST(GM20BQuietSource, EverySleepOnAUserChannelAsksFirst)
 			  power = unit("gpu_power.c");
 	EXPECT_TRUE(Block(chan, "void tgm_chan_want(")
 			    .Before("switch_gpu_waiter_want(", "tgm_chan_need(chan, seqno);"));
-	EXPECT_TRUE(Block(chan, "void tgm_chan_del(")
-			    .Before("tgm_chan_quiet_wake(chan);", "tgm_waiter_idle(waiter, seq, end)"));
+	EXPECT_TRUE(
+		Block(chan, "void tgm_chan_del(")
+			.Before("tgm_chan_quiet_wake(chan);", "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(sync, "static int sync_wait(")
-			    .Before("tgm_chan_need_id(id, seqno);", "tgm_waiter_idle(waiter, seq, end)"));
+			    .Before("tgm_chan_need_id(id, seqno);",
+				    "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(sync, "static void writer_wait(")
-			    .Before("tgm_chan_need_uid(uid, seqno);", "tgm_waiter_idle(waiter, seq, end)"));
+			    .Before("tgm_chan_need_uid(uid, seqno);",
+				    "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(power, "static void sleep_fences(")
 			    .Before("tgm_chan_wake_push(chan);", "nvxnu_idle(seq, end)"));
 	const CodeText room = Block(unit("gpu_exec.c"), "int tgm_chan_wait_ready(");

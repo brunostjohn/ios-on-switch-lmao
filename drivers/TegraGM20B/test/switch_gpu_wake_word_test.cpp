@@ -32,7 +32,9 @@ struct Word {
 		switch_gpu_wake_sleep(&word, 1);
 		{
 			std::unique_lock<std::mutex> held(lock);
-			asleep.wait(held, [&] { return __atomic_load_n(&word.seq, __ATOMIC_ACQUIRE) != seq; });
+			asleep.wait(held, [&] {
+				return __atomic_load_n(&word.seq, __ATOMIC_ACQUIRE) != seq;
+			});
 		}
 		switch_gpu_wake_sleep(&word, 0);
 	}

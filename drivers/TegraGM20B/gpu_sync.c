@@ -303,7 +303,8 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 				return;
 			if (nvxnu_nanotime() >= end)
 				break;
-			if (!tgm_waiter_idle(waiter, seq, end) && tgm_chan_announced_uid(uid, seqno))
+			if (!tgm_waiter_idle(waiter, seq, end) &&
+			    tgm_chan_announced_uid(uid, seqno))
 				tgm_waiter_unwoken(waiter, seq, seqno);
 		}
 		if (tgm_gpu.stage < 3)

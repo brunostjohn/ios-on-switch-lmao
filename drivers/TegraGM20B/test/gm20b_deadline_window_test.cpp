@@ -15,7 +15,8 @@ namespace
 {
 constexpr u64 kPeriod = 16666667, kStatusReads = 3;
 u64 now;
-unsigned schedules, statusReads, dues, spinDepth;
+unsigned schedules, statusReads, dues, spinDepth, releases;
+int workAsksUntilKick = -1;  // tgm_hold_wanted(1) calls before an app's kick lands (-1: none lands)
 u64 dueVblank;
 int lastResident;
 bool slow = true, appWork;
@@ -117,6 +118,8 @@ int tgm_sched_resident(nvkm_device *)
 
 int tgm_hold_wanted(int withWork)
 {
+	if (withWork && workAsksUntilKick >= 0 && workAsksUntilKick-- == 0)
+		appWork = true;
 	return slow && (!withWork || appWork);
 }
 
@@ -150,6 +153,7 @@ void tgm_hold_unneed(uint64_t)
 
 void tgm_hold_release(nvkm_device *, uint64_t)
 {
+	++releases;
 }
 }
 
@@ -169,9 +173,10 @@ protected:
 		runDue();
 		for (Work *w : works)
 			w->pending = false;
-		schedules = statusReads = dues = 0;
+		schedules = statusReads = dues = releases = 0;
 		slow = true;
 		appWork = false;
+		workAsksUntilKick = -1;
 	}
 
 	// A frame end at `now`: the display's stamp for it and the period
@@ -193,7 +198,8 @@ TEST_F(DeadlineWindow, NoAppWorkSchedulesNothing)
 		now += kPeriod;
 		runDue();
 	}
-	EXPECT_EQ(schedules, 0u) << "hold_work and expire_work scheduled with no app work in flight";
+	EXPECT_EQ(schedules, 0u)
+		<< "hold_work and expire_work scheduled with no app work in flight";
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(dues, 0u);
 }
@@ -253,4 +259,50 @@ TEST_F(DeadlineWindow, AnAppKickPastTheVblankOpensNothing)
 	runDue();
 	EXPECT_EQ(schedules, 0u);
 	EXPECT_EQ(dues, 0u);
+}
+
+// The compositor kicked before the app did: the window the app's kick opens counts that kick, so at its vblank it gets
+// one more interval for the frame in flight instead of closing as one with no frame (as the frame end's window did).
+TEST_F(DeadlineWindow, AKeptWindowCountsTheCompositorsEarlierKick)
+{
+	const u64 vblank = now + kPeriod;
+	frameEnd();
+	tgm_deadline_kicked(1, 0);
+	now += kPeriod / 4;
+	appWork = true;
+	tgm_deadline_app_kicked();
+	ASSERT_EQ(dues, 1u);
+	now = vblank;
+	runDue();
+	EXPECT_EQ(releases, 0u)
+		<< "the holds released at the vblank with the compositor's frame still in flight";
+	EXPECT_EQ(schedules, 2u) << "the expiry again, one interval on";
+	now += kPeriod;
+	runDue();
+	EXPECT_EQ(releases, 1u);
+}
+
+// The frame's present came before any app kicked: the kept window is that frame's and goes with it.
+TEST_F(DeadlineWindow, APresentEndsTheKeptWindow)
+{
+	frameEnd();
+	tgm_deadline_kicked(1, 0);
+	now += kPeriod / 4;
+	tgm_deadline_presented(now);
+	now += 1000;
+	appWork = true;
+	tgm_deadline_app_kicked();
+	EXPECT_EQ(dues, 0u);
+	EXPECT_EQ(schedules, 0u);
+}
+
+// An app's kick lands between the frame end's look at the busy word and its keeping the window: the frame end's second
+// look finds it and opens the window there.
+TEST_F(DeadlineWindow, AKickBetweenTheLookAndTheKeepIsSeen)
+{
+	workAsksUntilKick = 1;
+	frameEnd();
+	EXPECT_EQ(schedules, 2u) << "hold_work and expire_work, as for app work at the frame end";
+	runDue();
+	EXPECT_EQ(dues, 1u);
 }

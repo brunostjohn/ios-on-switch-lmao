@@ -201,7 +201,7 @@ constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did no
 volatile uint32_t gIrqRuns;
 switch_gpu_wake_word gWake;
 #if DEVELOPMENT || DEBUG
-uint64_t gIrqPasses[2];  // by line: stall, nonstall
+uint64_t gIrqPasses[2];                // by line: stall, nonstall
 uint64_t gIrqCpus[4], gFilterCpus[4];  // passes and nonstall filters by the CPU that ran them
 uint64_t gGlobalWakeups;               // threads woken on the global word
 #endif

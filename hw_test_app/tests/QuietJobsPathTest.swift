@@ -8,7 +8,7 @@ import Metal
 /// fourth's; the others' jobs end quiet. The interrupts a frame costs are counted as its jobs that interrupt
 /// (submit_jobs - quiet_jobs) and the wake entries waits asked for (wake_asks). Then a waiter of a quiet job with nothing
 /// submitted behind it (the next command buffer waits for a shared event) asks the kernel for its wake entry and is
-/// woken. A quiet full-screen draw of over ten milliseconds runs ahead of that job, so the job is still in flight when
+/// woken. gpu.sched.long_draw_bands' blend draws, quiet too, run ahead of that job, so the job is still in flight when
 /// its waiter asks: a 16x16 clear alone was done before the ask (boot 19, quiet_wait_ms=0.1), and a done job needs none.
 /// A wake that never came is the kernel's one-line panic ("... was done but its wake never came"), not a failure here.
 struct QuietJobsPathTest: GPUPathTest {
@@ -97,20 +97,19 @@ struct QuietJobsPathTest: GPUPathTest {
         return failures
     }
 
-    /// gpu.sched.long_draw_bands' full-screen draw (DrawBands.metal): over ten milliseconds of fragment work.
+    /// gpu.sched.long_draw_bands' blend case as it draws it (DrawBandsTest.encode): two full-screen draws of over ten
+    /// milliseconds of fragment work each.
     func longDraw(_ gpu: GPU, _ commands: MTLCommandBuffer) throws {
-        let target = try gpu.texture(.rgba8Unorm, 1280, 720)
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .dontCare
-        pass.colorAttachments[0].storeAction = .store
-        guard let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else {
-            throw TestFailure("no render encoder")
+        let blend = DrawBandsTest.cases[0]
+        let pipeline = try gpu.render(vertex: "bands_vertex", fragment: blend.fragment, format: .bgra8Unorm) {
+            descriptor in
+            let target = descriptor.colorAttachments[0]!
+            target.isBlendingEnabled = blend.blend
+            target.sourceRGBBlendFactor = .sourceAlpha
+            target.destinationRGBBlendFactor = .oneMinusSourceAlpha
         }
-        encoder.setRenderPipelineState(
-            try gpu.render(vertex: "bands_vertex", fragment: "bands_blend_fragment", format: .rgba8Unorm))
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
+        let target = try gpu.texture(.bgra8Unorm, DrawBandsTest.width, DrawBandsTest.height)
+        DrawBandsTest.encode(commands, pipeline, target, samples: blend.samples, resolve: nil)
     }
 
     /// A quiet job whose follower parks on a shared event, behind a long quiet draw: the completion thread's wait asks

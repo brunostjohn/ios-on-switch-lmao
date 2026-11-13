@@ -5,11 +5,11 @@
  * never one a high kick preempts or the hold takes. A bit left set (a quiet job whose end no pass has seen yet) costs
  * the register reads it would have saved.
  *
- * Order: the kick publishes the seqno, then reads its bit; the pass clears the bit, then reads the seqno. Each side's
- * fence between the two makes one of them see the other, so a kick racing the clear keeps its bit. A high kick that
- * reads the word in that instant finds the app idle, as one that reads PFIFO before the app's doorbell lands does. */
+ * Order: the kick publishes the seqno, then sets its bit; the pass clears the bit, then reads the seqno again and sets
+ * the bit back if it moved. A clear that follows the set acquires the seqno the set released, so a kick racing the
+ * clear keeps its bit. A high kick that reads the word in that instant finds the app idle, as one that reads PFIFO
+ * before the app's doorbell lands does. */
 #pragma once
-#include <stddef.h>
 #include <stdint.h>
 
 #define SWITCH_GPU_BUSY_CHIDS 512u /* GM20B's channels (CCSR_CHANNEL__SIZE_1) */
@@ -20,19 +20,15 @@ struct switch_gpu_busy {
 	uint64_t high[SWITCH_GPU_BUSY_WORDS];
 };
 
-/* After the kick published `chid`'s newest seqno: 1 when the channel had no work in flight before it. */
+/* After the kick published `chid`'s newest seqno: 1 when the channel had no work in flight before it. Always the
+ * read-modify-write, no barrier: its release orders the seqno before the bit for the pass that clears it. */
 static inline int switch_gpu_busy_kicked(struct switch_gpu_busy *b, uint32_t chid)
 {
 	const uint64_t bit = UINT64_C(1) << (chid % 64u);
-	uint64_t *word = NULL;
 
 	if (chid >= SWITCH_GPU_BUSY_CHIDS)
 		return 0;
-	word = &b->busy[chid / 64u];
-	__atomic_thread_fence(__ATOMIC_SEQ_CST);
-	if (__atomic_load_n(word, __ATOMIC_RELAXED) & bit)
-		return 0;
-	return !(__atomic_fetch_or(word, bit, __ATOMIC_SEQ_CST) & bit);
+	return !(__atomic_fetch_or(&b->busy[chid / 64u], bit, __ATOMIC_SEQ_CST) & bit);
 }
 
 /* The pass found the channel's fence at `completed`: its bit goes once that is its newest seqno. */

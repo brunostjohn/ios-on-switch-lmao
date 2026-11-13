@@ -376,9 +376,12 @@ void tgm_stats_waits(u64 ms)
 		"%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
 		"(%u jobs); channel wakes %llu/s; fence waits slept %llu/s: %u woken, %u at their "
 		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
-		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu %llu/%llu/%llu/%llu, "
-		"nonstall filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high kicks "
-		"read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, %u "
+		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu "
+		"%llu/%llu/%llu/%llu, "
+		"nonstall filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high "
+		"kicks "
+		"read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, "
+		"%u "
 		"events, %u semantic fence, %u scanout producer, %u no wake entries",
 		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
 		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,

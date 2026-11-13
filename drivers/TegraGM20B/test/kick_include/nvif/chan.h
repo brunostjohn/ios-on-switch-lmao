@@ -21,11 +21,12 @@ typedef uint8_t u8;
 #define wmb() ((void)++switch_gpu_test_barriers)
 #define dma_wmb() ((void)++switch_gpu_test_barriers)
 #define mb() ((void)++switch_gpu_test_barriers)
-#define switch_gpu_test_register(address, value) \
-	((void)(address), (void)++switch_gpu_test_doorbells, (void)(switch_gpu_test_doorbell = (value)))
+#define switch_gpu_test_register(address, value)             \
+	((void)(address), (void)++switch_gpu_test_doorbells, \
+	 (void)(switch_gpu_test_doorbell = (value)))
 #define writel_relaxed(value, address) switch_gpu_test_register(address, value)
-#define nvif_wr32(object, offset, value) \
-	((void)++switch_gpu_test_barriers,   \
+#define nvif_wr32(object, offset, value)   \
+	((void)++switch_gpu_test_barriers, \
 	 switch_gpu_test_register((char *)(object)->map.ptr + (offset), value))
 #define nvif_rd32(object, offset) (*(volatile u32 *)((char *)(object)->map.ptr + (offset)))
 

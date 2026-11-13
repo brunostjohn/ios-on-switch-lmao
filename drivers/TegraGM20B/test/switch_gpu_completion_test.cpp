@@ -22,8 +22,8 @@ struct tgm_chan {
 #define WRITE_ONCE(target, value) ((target) = (value))
 #define READ_ONCE(target) (target)
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
-unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, channelWakes, watchCalls,
-	callbacks, timestamps, eventPasses;
+unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, channelWakes,
+	watchCalls, callbacks, timestamps, eventPasses;
 int tgm_sc7_gate;
 bool diagnostic, suspended;
 
@@ -110,8 +110,8 @@ protected:
 
 	void SetUp() override
 	{
-		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls = channelWakes =
-			watchCalls = callbacks = timestamps = eventPasses = 0;
+		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls =
+			channelWakes = watchCalls = callbacks = timestamps = eventPasses = 0;
 		diagnostic = suspended = false;
 		channel.fenced = [](void *) {
 			++callbacks;
@@ -131,7 +131,8 @@ TEST_F(Completion, UnrelatedInterruptDoesNotWakeOrScheduleAnyChannelWork)
 	channel.high = 1;
 	interrupt();
 	interrupt();
-	EXPECT_EQ(idleCalls + highCalls + statsCalls + callbacks + wakeCalls + channelWakes + timestamps,
+	EXPECT_EQ(idleCalls + highCalls + statsCalls + callbacks + wakeCalls + channelWakes +
+			  timestamps,
 		  0u);
 }
 

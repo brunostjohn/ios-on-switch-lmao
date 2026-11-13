@@ -148,7 +148,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
 		nvxnu_panic("SwitchGpu: cannot arm channel completion");
 	WRITE_ONCE(chan->submitted, next);
-	if (switch_gpu_busy_kicked(&tgm_busy, chan->chid) && !chan->high)
+	if (switch_gpu_busy_kicked(&tgm_busy, chan->chid) && chan->app && !chan->high)
 		tgm_deadline_app_kicked();
 	idle_kicked(first, next);
 	switch_emc_gpu_submit();

@@ -156,12 +156,15 @@ TEST(QuietJobs, WhyAJobInterrupts)
 	EXPECT_EQ(switch_gpu_quiet_why(1, 1, 1, 1, 1), SWITCH_GPU_LOUD_EVENTS);
 	EXPECT_EQ(switch_gpu_quiet_why(1, 0, 1, 1, 1), SWITCH_GPU_LOUD_SEMANTIC);
 	EXPECT_EQ(switch_gpu_quiet_why(1, 0, 0, 1, 1), SWITCH_GPU_LOUD_SCANOUT);
-	EXPECT_EQ(switch_gpu_quiet_why(1, 0, 0, 1, 0), SWITCH_GPU_LOUD_NONE) << "a range's earlier job";
+	EXPECT_EQ(switch_gpu_quiet_why(1, 0, 0, 1, 0), SWITCH_GPU_LOUD_NONE)
+		<< "a range's earlier job";
 	for (int asked = 0; asked < 2; ++asked)
 		for (int semantic = 0; semantic < 2; ++semantic)
 			for (int scanout = 0; scanout < 2; ++scanout)
 				for (int closes = 0; closes < 2; ++closes)
-					EXPECT_EQ(switch_gpu_quiet_why(asked, 0, semantic, scanout, closes) ==
+					EXPECT_EQ(switch_gpu_quiet_why(asked, 0, semantic, scanout,
+								       closes) ==
 							  SWITCH_GPU_LOUD_NONE,
-						  switch_gpu_quiet_end(asked, semantic, scanout, closes) != 0);
+						  switch_gpu_quiet_end(asked, semantic, scanout,
+								       closes) != 0);
 }

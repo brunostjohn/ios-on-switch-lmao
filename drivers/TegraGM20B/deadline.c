@@ -34,7 +34,7 @@ static struct {
 
 	/* the window: the vblank it aims for (0: none), when it opened, whether the compositor kicked in it; the vblank of
 	 * one no app's work in flight opened (0: none), which an app's first kick opens (tgm_deadline_app_kicked) */
-	u64 target, opened, expire_at, dormant;
+	u64 target, opened, expire_at, dormant, dormant_since;
 	u32 gen, expire_gen;
 	int kicked, suspended, check_chid;
 	/* the frame since the last present: its GPU time, the vblank its first kick aimed for, an app on the GPU at a kick */
@@ -119,8 +119,11 @@ static u64 window_due(u64 target, u64 now)
 	    !tgm_hold_wanted(0))
 		return 0;
 	if (!tgm_hold_wanted(1)) {
-		WRITE_ONCE(dl.dormant, target);
-		return 0;
+		/* kept, then looked at again: a kick between the two either sees it or is seen */
+		dl.dormant_since = now;
+		__atomic_store_n(&dl.dormant, target, __ATOMIC_SEQ_CST);
+		if (!tgm_hold_wanted(1))
+			return 0;
 	}
 	window_open(target, now);
 	return target;
@@ -256,7 +259,7 @@ void tgm_deadline_kicked(int compositor, int app)
  * the kicking one is not yet: the resident look reads nothing. */
 void tgm_deadline_app_kicked(void)
 {
-	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_RELAXED);
+	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_SEQ_CST);
 	u64 now = 0;
 	u64 target = 0;
 	u64 next = 0;
@@ -271,7 +274,9 @@ void tgm_deadline_app_kicked(void)
 		return;
 	spin_lock_irqsave(&dl.lock, flags);
 	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
-		window_open(dl.dormant, now);
+		/* the window the frame end kept, from then: a compositor kick or present since counts */
+		window_open(dl.dormant, dl.dormant_since);
+		dl.kicked = dl.kick_last >= dl.opened;
 		target = dl.target;
 		w.now = now;
 		w.vblank = dl.target;
@@ -356,6 +361,12 @@ void tgm_deadline_presented(uint64_t queued)
 		u64 closed = dl.target;
 
 		window_close(now);
+		if (dl.next_target > closed && dl.next_target > now)
+			target = window_due(dl.next_target, now);
+	} else if (!dl.target && dl.dormant && queued >= dl.dormant_since) {
+		u64 closed = dl.dormant;
+
+		WRITE_ONCE(dl.dormant, 0);
 		if (dl.next_target > closed && dl.next_target > now)
 			target = window_due(dl.next_target, now);
 	}

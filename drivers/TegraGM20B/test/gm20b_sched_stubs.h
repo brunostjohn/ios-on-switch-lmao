@@ -46,7 +46,7 @@ static inline void list_rotate_left(struct list_head *head)
 }
 
 #define container_of(p, type, member) ((type *)((char *)(p) - offsetof(type, member)))
-#define list_for_each_entry(pos, head, member)                                 \
+#define list_for_each_entry(pos, head, member)                               \
 	for ((pos) = container_of((head)->next, __typeof__(*(pos)), member); \
 	     &(pos)->member != (head);                                       \
 	     (pos) = container_of((pos)->member.next, __typeof__(*(pos)), member))
@@ -81,14 +81,22 @@ static inline int test_bit(unsigned long nr, const unsigned long *addr)
 	return (int)((addr[nr / 64] >> (nr % 64)) & 1);
 }
 
-enum { NVKM_ENGINE_GR = 1, NVKM_ENGINE_CE = 2 };
-enum { NVKM_MEM_TARGET_INST = 1 };
+enum {
+	NVKM_ENGINE_GR = 1,
+	NVKM_ENGINE_CE = 2
+};
+
+enum {
+	NVKM_MEM_TARGET_INST = 1
+};
 
 struct nvkm_device;
 struct nvkm_fifo;
+
 struct nvkm_memory {
 	int unused;
 };
+
 struct nvkm_timer {
 	int unused;
 };
@@ -112,6 +120,7 @@ struct nvkm_chan_func {
 
 struct nvkm_fifo_func {
 	int (*runl_ctor)(struct nvkm_fifo *);
+
 	struct {
 		const struct nvkm_chan_func *func;
 	} chan;
@@ -121,6 +130,7 @@ struct nvkm_fifo {
 	const struct nvkm_fifo_func *func;
 	struct nvkm_engine engine;
 	struct list_head runls;
+
 	struct {
 		unsigned chan_msec;
 	} timeout;
@@ -189,9 +199,7 @@ struct nvkm_chan {
 
 #define nvkm_runl_foreach(runl, fifo) list_for_each_entry((runl), &(fifo)->runls, head)
 #define nvkm_runl_foreach_engn(engn, runl) list_for_each_entry((engn), &(runl)->engns, head)
-#define nvkm_runl_foreach_engn_cond(engn, runl, cond) \
-	nvkm_runl_foreach_engn(engn, runl)            \
-		if (cond)
+#define nvkm_runl_foreach_engn_cond(engn, runl, cond) nvkm_runl_foreach_engn(engn, runl) if (cond)
 #define nvkm_runl_foreach_cgrp(cgrp, runl) list_for_each_entry((cgrp), &(runl)->cgrps, head)
 #define nvkm_cgrp_foreach_chan(chan, cgrp) list_for_each_entry((chan), &(cgrp)->chans, head)
 

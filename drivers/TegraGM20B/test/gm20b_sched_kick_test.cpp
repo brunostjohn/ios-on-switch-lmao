@@ -210,7 +210,8 @@ TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 	EXPECT_EQ(tgm_sched_unread(), 1u) << "the waits line's count";
 	unsigned resident = reads;
 	EXPECT_EQ(tgm_sched_resident(&m.device), TGM_VICTIM_NONE);
-	EXPECT_EQ(reads - resident, 0u) << "the hold's resident look read registers with no app work";
+	EXPECT_EQ(reads - resident, 0u)
+		<< "the hold's resident look read registers with no app work";
 }
 
 // An app channel's job in flight: the kick reads GR's and the PBDMA's status as before, and preempts the app on GR.
