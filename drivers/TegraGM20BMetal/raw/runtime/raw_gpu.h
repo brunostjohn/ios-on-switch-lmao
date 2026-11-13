@@ -341,6 +341,9 @@ struct Texture {
     bool compressed = false;
     // Its memory is bound with a compressible kind (raw_comp.h): its passes enable colour, or Z and stencil, compression
     bool comptags = false;
+    // the command buffer (CommandBuffer::serial) that last blended into it through a rung-2 form (rule fetch.blend's
+    // accumulates), 0: none; read and written relaxed, from any encoding thread
+    mutable uint64_t ropBlendSerial = 0;
 #if SWITCH_RAW_DIAGNOSTICS
     // A pass, copy, dispatch or upload of this process wrote it (raw_glass_probe.h)
     bool probeWritten = false;
@@ -1591,7 +1594,8 @@ public:
     void use(const Texture &texture, bool write);
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
-    uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
+    uint32_t stamp = 0;   // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
+    uint64_t serial = 0;  // its begin()'s, unique in the device's life
     std::vector<DrawTiming> timings;  // its measured draws, which its commit hands the device (Device::learnCompleted)
     bool loopsLaid = false;           // a predicated loop's copies: the GPU writes the push ring
 
@@ -3149,6 +3153,7 @@ private:
     void growLoop();
     // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
     std::atomic<uint64_t> commitCount_{0};
+    std::atomic<uint64_t> begun_{0};        // CommandBuffer::serial's source
     std::atomic<uint64_t> closedCount_{0};  // command buffers committed or abandoned
 
 #if SWITCH_RAW_DIAGNOSTICS

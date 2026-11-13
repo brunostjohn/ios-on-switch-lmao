@@ -4169,6 +4169,7 @@ CommandBuffer *Device::begin()
         }
     }
     cb.stamp = stampOf(commits());
+    cb.serial = begun_.fetch_add(1, std::memory_order_relaxed) + 1;
     RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     cb.timings.clear();
     cb.loopsLaid = false;
@@ -5393,7 +5394,8 @@ uint32_t RenderEncoder::colorTargets() const
 }
 
 // The state's fetch-free form where this draw takes it (raw_fetch_free.h): the blended colour's target in the pass,
-// CPU-visible memory that is not a surface, and the rung-2 blends already over it decide rule fetch.blend
+// CPU-visible memory that is not a surface, the rung-2 blends already over it, whether every image its program samples
+// is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
 Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 {
     Pipeline *free = pl.fetchFree;
@@ -5405,7 +5407,11 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
         t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
     if (!t)
         return nullptr;
-    const FetchFreeDraw draw = {t->format, t->storage.hostVisible && !t->import, ropLayers_[f.colour]};
+    const uint64_t blended = __atomic_load_n(&t->ropBlendSerial, __ATOMIC_RELAXED);
+    FetchFreeDraw draw = {t->format, t->storage.hostVisible && !t->import, ropLayers_[f.colour]};
+    draw.eightBitSources = eightBitSamples(f.sampledSlots, textures_[1]);
+    draw.accumulates = pass_.color[f.colour].load == ColorAttachment::Load && !(covered_ >> f.colour & 1) && blended &&
+                       blended != cb_->serial;
     uint8_t forced = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
@@ -5414,6 +5420,8 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
         return nullptr;
     if (f.rung == FetchBlend && ropLayers_[f.colour] < 255)
         ropLayers_[f.colour]++;
+    if (f.rung == FetchBlend)
+        __atomic_store_n(&t->ropBlendSerial, cb_->serial, __ATOMIC_RELAXED);
     RAW_DIAGNOSTIC(dev_->stats.fetch.fetchFree[f.rung == FetchBlend ? 0 : 1]++);
     return free;
 }
