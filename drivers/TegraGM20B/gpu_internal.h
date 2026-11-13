@@ -139,6 +139,7 @@ struct wstat_state {
 	u32 quiet, asked, pushed, settled;
 	u64 lat_sum, lat_max;
 	u64 stall, nonstall; /* the interrupt passes at the window's start */
+	u64 cpus[4], filters[4], global_wakeups; /* and by CPU, the nonstall filters by CPU, global-word wakeups */
 };
 extern struct wstat_state tgm_wstat;
 extern struct tgm_gate tgm_sc7_gate;

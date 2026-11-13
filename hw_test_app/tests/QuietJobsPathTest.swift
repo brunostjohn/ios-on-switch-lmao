@@ -8,8 +8,9 @@ import Metal
 /// fourth's; the others' jobs end quiet. The interrupts a frame costs are counted as its jobs that interrupt
 /// (submit_jobs - quiet_jobs) and the wake entries waits asked for (wake_asks). Then a waiter of a quiet job with nothing
 /// submitted behind it (the next command buffer waits for a shared event) asks the kernel for its wake entry and is
-/// woken. A wake that never came is the kernel's one-line panic ("... was done but its wake never came"), not a failure
-/// here.
+/// woken. A quiet full-screen draw of over ten milliseconds runs ahead of that job, so the job is still in flight when
+/// its waiter asks: a 16x16 clear alone was done before the ask (boot 19, quiet_wait_ms=0.1), and a done job needs none.
+/// A wake that never came is the kernel's one-line panic ("... was done but its wake never came"), not a failure here.
 struct QuietJobsPathTest: GPUPathTest {
     let id = "gpu.path.quiet_jobs"
     let name = "Command buffers nobody waits for alone end without an interrupt, and their waiters still wake"
@@ -96,23 +97,43 @@ struct QuietJobsPathTest: GPUPathTest {
         return failures
     }
 
-    /// A quiet job whose follower parks on a shared event: the completion thread's wait asks for the wake entry.
+    /// gpu.sched.long_draw_bands' full-screen draw (DrawBands.metal): over ten milliseconds of fragment work.
+    func longDraw(_ gpu: GPU, _ commands: MTLCommandBuffer) throws {
+        let target = try gpu.texture(.rgba8Unorm, 1280, 720)
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].storeAction = .store
+        guard let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else {
+            throw TestFailure("no render encoder")
+        }
+        encoder.setRenderPipelineState(
+            try gpu.render(vertex: "bands_vertex", fragment: "bands_blend_fragment", format: .rgba8Unorm))
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
+    }
+
+    /// A quiet job whose follower parks on a shared event, behind a long quiet draw: the completion thread's wait asks
+    /// for the wake entry while the draw still runs.
     func waiterOfAQuietJob(
         _ gpu: GPU, before: GPUPaths, _ connection: GPUConnection?, _ metrics: inout Metrics
     ) throws
         -> [String]
     {
-        guard let event = gpu.device.makeSharedEvent(), let first = gpu.queue.makeCommandBuffer(),
-            let second = gpu.queue.makeCommandBuffer()
+        guard let event = gpu.device.makeSharedEvent(), let slow = gpu.queue.makeCommandBuffer(),
+            let first = gpu.queue.makeCommandBuffer(), let second = gpu.queue.makeCommandBuffer()
         else { throw TestFailure("no shared event or command buffer") }
+        try longDraw(gpu, slow)
         let target = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
         clear(first, target, [1, 2, 3, 255])
         second.encodeWaitForEvent(event, value: 1)
         clear(second, try gpu.texture(.rgba8Unorm, Self.size, Self.size), [4, 5, 6, 255])
+        slow.enqueue()
         first.enqueue()
         second.enqueue()
         second.commit()
         first.commit()
+        slow.commit()
         first.waitUntilScheduled()
         let start = Date()
         first.waitUntilCompleted()
@@ -121,8 +142,8 @@ struct QuietJobsPathTest: GPUPathTest {
         second.waitUntilCompleted()
         var failures: [String] = []
         metrics.set("quiet_wait_ms", String(format: "%.1f", waitedMs))
-        if first.status != .completed {
-            failures.append("the quiet job's command buffer ended \(first.status.rawValue)")
+        if first.status != .completed || slow.status != .completed {
+            failures.append("the quiet jobs' command buffers ended \(slow.status.rawValue), \(first.status.rawValue)")
         }
         if waitedMs > Self.wakeBoundMs {
             failures.append(String(format: "its waiter woke after %.0f ms (at most %.0f)", waitedMs, Self.wakeBoundMs))

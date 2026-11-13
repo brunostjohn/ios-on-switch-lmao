@@ -8,6 +8,7 @@
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#include <kern/cpu_number.h>
 #include <kern/sched_prim.h>
 #include <kern/counter.h>
 #include <kern/host_statistics.h>
@@ -201,6 +202,8 @@ volatile uint32_t gIrqRuns;
 switch_gpu_wake_word gWake;
 #if DEVELOPMENT || DEBUG
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
+uint64_t gIrqCpus[4], gFilterCpus[4];  // passes and nonstall filters by the CPU that ran them
+uint64_t gGlobalWakeups;               // threads woken on the global word
 #endif
 volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
@@ -251,6 +254,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
 #if DEVELOPMENT || DEBUG
 	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gIrqCpus[cpu_number() & 3], 1, __ATOMIC_RELAXED);
 #else
 	(void)source;
 #endif
@@ -279,6 +283,9 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
 {
+#if DEVELOPMENT || DEBUG
+	__atomic_fetch_add(&gFilterCpus[cpu_number() & 3], 1, __ATOMIC_RELAXED);
+#endif
 	tgm_present_filter();
 	return true;
 }
@@ -369,6 +376,17 @@ extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
 #endif
 }
 
+#if DEVELOPMENT || DEBUG
+extern "C" void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_u64 *global_wakeups)
+{
+	for (int cpu = 0; cpu < 4; cpu++) {
+		passes[cpu] = __atomic_load_n(&gIrqCpus[cpu], __ATOMIC_RELAXED);
+		filters[cpu] = __atomic_load_n(&gFilterCpus[cpu], __ATOMIC_RELAXED);
+	}
+	*global_wakeups = __atomic_load_n(&gGlobalWakeups, __ATOMIC_RELAXED);
+}
+#endif
+
 extern "C" nvxnu_u32 nvxnu_wake_seq(void)
 {
 	return nvxnu_word_seq(&gWake.seq);
@@ -376,8 +394,12 @@ extern "C" nvxnu_u32 nvxnu_wake_seq(void)
 
 extern "C" void nvxnu_wake(void)
 {
-	if (switch_gpu_wake_bump(&gWake))
-		thread_wakeup(reinterpret_cast<event_t>(&gWake.seq));
+	if (!switch_gpu_wake_bump(&gWake))
+		return;
+#if DEVELOPMENT || DEBUG
+	__atomic_fetch_add(&gGlobalWakeups, 1, __ATOMIC_RELAXED);
+#endif
+	thread_wakeup(reinterpret_cast<event_t>(&gWake.seq));
 }
 
 extern "C" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)

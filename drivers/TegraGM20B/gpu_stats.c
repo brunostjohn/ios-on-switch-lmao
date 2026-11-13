@@ -328,8 +328,22 @@ void tgm_stats_waits(u64 ms)
 	u32 pushed = 0;
 	u32 settled = 0;
 	u32 per = ms ? (u32)ms : 1;
-	char line[400];
+	u64 cpus[4] = {0};
+	u64 filters[4] = {0};
+	u64 global = 0;
+	u64 d[9] = {0};
+	u32 i = 0;
+	char line[520];
 
+	nvxnu_irq_cpus(cpus, filters, &global);
+	for (i = 0; i < 4; i++) {
+		d[i] = cpus[i] - tgm_wstat.cpus[i];
+		d[4 + i] = filters[i] - tgm_wstat.filters[i];
+		tgm_wstat.cpus[i] = cpus[i];
+		tgm_wstat.filters[i] = filters[i];
+	}
+	d[8] = global - tgm_wstat.global_wakeups;
+	tgm_wstat.global_wakeups = global;
 	nvxnu_irq_passes(&stall, &nonstall);
 	ds = stall - tgm_wstat.stall;
 	dn = nonstall - tgm_wstat.nonstall;
@@ -353,11 +367,12 @@ void tgm_stats_waits(u64 ms)
 		"%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
 		"(%u jobs); channel wakes %llu/s; fence waits slept %llu/s: %u woken, %u at their "
 		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
-		"jobs, %u wake asks, %u wake entries, %u idle settles",
+		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu %llu/%llu/%llu/%llu, "
+		"nonstall filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups",
 		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
 		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
 		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline, quiet,
-		asked, pushed, settled);
+		asked, pushed, settled, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]);
 	nvxnu_stats("tegra-gm20b: waits %s", line);
 }
 

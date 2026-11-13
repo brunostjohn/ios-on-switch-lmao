@@ -204,6 +204,9 @@ void nvxnu_irq_resume(void);
 void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c);
 /* The interrupt passes run so far, by line. */
 void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall);
+/* Debug kernels: the passes and the nonstall line's filters so far by the CPU that ran them, and the threads the passes
+ * woke on the global word. */
+void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_u64 *global_wakeups);
 nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);
