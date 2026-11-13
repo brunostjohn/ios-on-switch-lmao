@@ -50,6 +50,8 @@ static struct {
 	bool prepared, enabled, thermal_set;
 	int prepare_err;
 	char prepare_why[96];
+	char printed_why
+		[96]; /* the failure last printed: a retry that fails alike prints nothing */
 	struct tegra_dfll *td;
 	struct clk *dfll, *cclk_g, *pllx, *pllp;
 	unsigned int floor_index, cap_index;
@@ -158,7 +160,10 @@ static int prepare_locked(char *why, size_t len)
 	if (ret) {
 		if (ret == -ENODEV)
 			st.prepare_err = ret;
-		printk("not available: %s\n", st.prepare_why);
+		if (strcmp(st.prepare_why, st.printed_why)) {
+			printk("not available: %s\n", st.prepare_why);
+			memcpy(st.printed_why, st.prepare_why, sizeof(st.printed_why));
+		}
 		return fail(why, len, ret, "%s", st.prepare_why);
 	}
 	st.prepared = true;

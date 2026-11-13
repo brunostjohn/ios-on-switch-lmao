@@ -167,6 +167,23 @@ TEST(TegraDfllPrepare, AProbeThatRanOutOfMemoryProbesAgain)
 	});
 }
 
+TEST(TegraDfllPrepare, ARetryThatFailsAlikePrintsNothing)
+{
+	switch_ios::test::ExpectPassesInFreshProcess([] {
+		tegra_dfll_fake_console();
+		tegra_dfll_fake.pmic_answer = kLostArbitration;
+		EXPECT_EQ(prepare(), kEAGAIN);
+		EXPECT_EQ(tegra_dfll_fake.lines, 2u);
+		EXPECT_EQ(prepare(), kEAGAIN);
+		EXPECT_EQ(tegra_dfll_fake.lines, 2u);
+		tegra_dfll_fake.pmic_answer = kNack;
+		EXPECT_EQ(prepare(), kEAGAIN);
+		EXPECT_EQ(tegra_dfll_fake.lines, 4u);
+		tegra_dfll_fake.pmic_answer = 0;
+		EXPECT_EQ(prepare(), 0);
+	});
+}
+
 TEST(TegraDfllPrepare, NotAT210B01IsFinal)
 {
 	switch_ios::test::ExpectPassesInFreshProcess([] {

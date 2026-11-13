@@ -739,9 +739,13 @@ int tdfll_platform_init(char *why, size_t len)
 	int err = init_err;
 
 	if (err == 1) {
+		static char printed[sizeof(init_why)];
+
 		err = platform_init(init_why, sizeof(init_why));
-		if (err)
+		if (err && strcmp(init_why, printed)) {
 			printk("%s\n", init_why);
+			memcpy(printed, init_why, sizeof(printed));
+		}
 		init_err = err && err != -ENODEV ? 1 : err;
 	}
 	if (err)

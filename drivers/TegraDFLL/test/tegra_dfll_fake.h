@@ -15,7 +15,7 @@ struct tegra_dfll_fake {
 	int speedo_id, speedo_value, process_id;
 	int pmic_answer;   // TegraI2C's result for each MAX77812 read
 	int probe_answer;  // the L4T probe's
-	unsigned pmic_reads, probes, maps;
+	unsigned pmic_reads, probes, maps, lines;
 };
 
 extern struct tegra_dfll_fake tegra_dfll_fake;

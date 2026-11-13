@@ -116,6 +116,7 @@ void switch_linux_usleep_range(uint64_t min_us, uint64_t max_us)
 
 void switch_linux_log(const char *fmt, ...)
 {
+	tegra_dfll_fake.lines++;
 }
 
 void *switch_linux_call_alloc(void (*fn)(void *arg), void *arg)
