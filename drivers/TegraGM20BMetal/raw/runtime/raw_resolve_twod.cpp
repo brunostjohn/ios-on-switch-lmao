@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// The 2D engine's blit-encoder work outside the probes. Rules resolve.twod and resolve.exact (raw_resolve_rule.h): an
-// MSAA resolve as one 2D-engine scaled blit. The multisampled image is NIL's image of its sample grid (fx::msLayout: 2x
-// is 2x1 samples a pixel, 4x 2x2), so the grid read at 2:1 bilinear, corner origin at half a step, gives each
-// destination texel the mean of its samples. The blit encoder's opening wait orders the read after the pass that
-// rendered the samples, as for every blit.
+// The 2D engine's blit-encoder work outside the probes. Rule resolve.twod (raw_resolve_rule.h), and the probe's
+// complement: an MSAA resolve as one 2D-engine scaled blit. The multisampled image is NIL's image of its sample grid
+// (fx::msLayout: 2x is 2x1 samples a pixel, 4x 2x2), so the grid read at 2:1 bilinear, corner origin at half a step,
+// gives each destination texel the mean of its samples. The blit encoder's opening wait orders the read after the pass
+// that rendered the samples, as for every blit.
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmit2D.h"
 #include "../fx/fx_image.h"
 #include "../fx/fx_mip.h"

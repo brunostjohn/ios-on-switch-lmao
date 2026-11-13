@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Rules resolve.twod and resolve.exact (raw/runtime/raw_resolve_rule.h): where they are taken, and the arithmetic they
-// rest on, exhaustively, against the ROP's unorm store rule (x1-units UNITS.md): u = floor(v * 2^(n+4)), code =
-// (u * (2^n - 1) + 2^(n+3) - 1) >> (n+4); RGBA16F toward zero; the 8-bit blender round((S*Fs + D*Fd) / 255).
-// Each candidate for an exact 2D-engine resolve that fails is held to the counter-example it fails on.
+// Rule resolve.twod (raw/runtime/raw_resolve_rule.h): where it is taken, and the arithmetic it rests on, exhaustively,
+// against the ROP's unorm store rule (x1-units UNITS.md): u = floor(v * 2^(n+4)), code = (u * (2^n - 1) + 2^(n+3) - 1)
+// >> (n+4); RGBA16F toward zero; the 8-bit blender round((S*Fs + D*Fd) / 255); and the 2D engine's reading of a unorm8
+// code at 15 bits. Each candidate for an exact 2D-engine resolve that fails is held to the counter-example it fails on.
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
@@ -108,34 +108,29 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesThePass)
             raw::ResolveAsk a = screenBound(samples);
             a.readable = raw::resolveTargetReadable(t);
             EXPECT_FALSE(raw::twodResolveAcceptable(a));
-            EXPECT_FALSE(raw::twodResolveExact(a));
             EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass);
-            a.compressedSamples = true;
-            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass);
-        }
+                }
     for (uint8_t samples : {2, 4})
-        EXPECT_EQ(raw::resolveRoute(screenBound(samples)),
-                  raw::twodResolveComplementProven() && (samples == 2 || raw::twodResolveSingleRounding4x())
-                      ? raw::ResolveByComplement
-                      : raw::ResolveByTwod)
-            << "a screen-bound target keeps the 2D engine's one code until the complement is proven";
+        EXPECT_EQ(raw::resolveRoute(screenBound(samples)), raw::ResolveByTwod);
     raw::ResolveAsk eight = screenBound(8);
     eight.readable = true;
     EXPECT_EQ(raw::resolveRoute(eight), raw::ResolveByPass);
 }
 
-TEST(ResolveRule, TheComplementWaitsOnTheDeviceAndThen4xOnOneRounding)
+TEST(ResolveRule, TheComplementIsNoRoute)
 {
-    const bool proven = raw::twodResolveComplementProven();
-    EXPECT_EQ(raw::twodResolveExact(screenBound(2)), proven);
-    EXPECT_EQ(raw::twodResolveExact(screenBound(4)), proven && raw::twodResolveSingleRounding4x());
-    raw::ResolveAsk a = screenBound(2);
-    a.compressedSamples = true;
-    EXPECT_TRUE(raw::twodResolveAcceptable(a));
-    EXPECT_FALSE(raw::twodResolveExact(a));
-    a = screenBound(2);
-    a.readable = true;
-    EXPECT_FALSE(raw::twodResolveExact(a));
+    for (uint16_t format : {70, 80})
+        for (uint8_t samples : {2, 4, 8})
+            for (int bits = 0; bits < 16; bits++) {
+                raw::ResolveAsk a;
+                a.format = format;
+                a.samples = samples;
+                a.readable = bits & 1;
+                a.wholeTarget = bits & 2;
+                a.shadowTarget = bits & 4;
+                a.compressedSamples = bits & 8;
+                EXPECT_NE(raw::resolveRoute(a), raw::ResolveByComplement);
+            }
     EXPECT_EQ(raw::resolveSampleSlot(2), 0u);
     EXPECT_EQ(raw::resolveSampleSlot(4), 1u);
     EXPECT_EQ(raw::resolveSampleSlot(8), 2u);

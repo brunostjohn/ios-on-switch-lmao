@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
-// Rules resolve.twod and resolve.exact: where an 8-bit unorm MSAA resolve is the 2D engine's 2:1 box of the sample grid
+// Rule resolve.twod: where an 8-bit unorm MSAA resolve is the 2D engine's 2:1 box of the sample grid
 // (raw_resolve_twod.cpp) instead of the pack's resolve pass.
 //
-// The engine stores the samples' mean by the ROP's unorm rule (x1-units UNITS.md: cut to n+4 fractional bits, nearest,
-// ties down), where Metal's resolve is (sum + n/2) / n, ties up; no 902d method sets the rounding (cl902d.h). Read
-// directly (resolve.twod) a half-code mean lands one code under Metal's. Read through the complement (resolve.exact:
-// every sample c made 255 - c in place, the box read under ROP3 NOTSRCCOPY) a tie lands on the other side: 255 -
-// down((255n - s) / n) = up(s / n) for every sum s, so one rounding of the mean is Metal's rule exactly. Two rounded
-// 2:1 steps are not (pair sums 1 and 0 give 1 where Metal gives 0): 4x waits on bench resolvetie2's reading of the
-// engine, 2x has one step only. Both wait on the device's reading of the complement's steps.
+// The engine reads each unorm8 code c as round(c * 2^15 / 255) before its box and stores the mean by the ROP's unorm
+// rule (x1-units UNITS.md: cut to n+4 fractional bits, nearest, ties down), where Metal's resolve is (sum + n/2) / n,
+// ties up; no 902d method sets either (cl902d.h). That reading gives gpu.raw.resolve_twod's per-channel 2x counts on
+// boots 19 and 21 exactly (raw_resolve_rule_test.cpp). A half-code mean lands on either side of the tie by the codes'
+// rounding, so the plain box is within one code of Metal and so is its complement (resolve.exact: every sample made
+// 255 - c in place, the box read under ROP3 NOTSRCCOPY): on 896 of the 65,536 sample pairs both land one under Metal,
+// where the pair (k, k) gives the same two codes, so no ROP3 of the two readings is exact either. The complement is
+// therefore no route; it stays the probe's (RawMetalProbe.mm switchRawProbeResolveExact:) as a reading of the engine.
 #pragma once
 #include <cstdint>
 
@@ -57,42 +58,17 @@ constexpr bool twodResolveAcceptable(const ResolveAsk &a)
     return twodResolveShape(a) && !a.readable;
 }
 
-// The complement's hardware steps, none of which an open driver runs this way: a ROP3 code after a bilinear scale,
-// DSTINVERT over a multisampled image's grid, and one 2D wait between them. gpu.raw.resolve_twod's 2x_exact_differ=0
-// and kept_differ=0, and resolvetie2's rt-*-2x-sandwich cells at 0 against Metal, flip it
-constexpr bool twodResolveComplementProven()
-{
-    return false;
-}
-
-// 4x read as one rounding of the four samples' mean: resolvetie2's rt-*-4x-prod cells at 0 down-rounding misses and
-// its 4x sandwich cells at 0 against Metal (gpu.raw.resolve_twod's 4x_exact_differ=0) flip it
-constexpr bool twodResolveSingleRounding4x()
-{
-    return false;
-}
-
-// resolve.exact, the same engine through the complement, for screen-bound resolves once the device proves it. A resolve
-// a reader takes as data takes the pack's pass: on the chip it is Metal's rule byte for byte and faster than the
-// complement (gpu.raw.resolve_twod, boot 21: 2x 1.871 ms against 2.416, 4x 3.271 against 5.223, the complement 51,921
-// and 26,583 texels one code off). The complement writes the multisampled image in place: a compressed one is written
-// by the 2D engine through a multisample kind no open driver writes with it, unproven, so those take the pass
-constexpr bool twodResolveExact(const ResolveAsk &a)
-{
-    if (!twodResolveShape(a) || a.compressedSamples || a.readable)
-        return false;
-    return twodResolveComplementProven() && (a.samples == 2 || twodResolveSingleRounding4x());
-}
-
 enum ResolveRoute : uint8_t {
     ResolveByTwod,
     ResolveByComplement,
     ResolveByPass
 };
 
+// A resolve a reader takes as data takes the pack's pass: on the chip it is Metal's rule byte for byte and faster than
+// the complement (gpu.raw.resolve_twod, boot 21: 2x 1.871 ms against 2.416, 4x 3.271 against 5.223)
 constexpr ResolveRoute resolveRoute(const ResolveAsk &a)
 {
-    return twodResolveExact(a) ? ResolveByComplement : twodResolveAcceptable(a) ? ResolveByTwod : ResolveByPass;
+    return twodResolveAcceptable(a) ? ResolveByTwod : ResolveByPass;
 }
 
 constexpr uint32_t resolveSampleSlot(uint32_t samples)

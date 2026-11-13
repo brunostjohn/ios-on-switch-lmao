@@ -111,7 +111,8 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
-// Resolves resolve.twod takes go through the complement (rule resolve.exact) while set, at any sample count
+// Resolves of resolve.twod's shape, readable or not, go through the grid's complement while set: the engine's reading
+// under ROP3 NOTSRCCOPY, which raw_resolve_rule.h routes nothing through
 - (NSString *)switchRawProbeResolveExact:(NSNumber *)on
 {
     gRM->raw->probeResolveExact.store(on.boolValue, std::memory_order_release);
