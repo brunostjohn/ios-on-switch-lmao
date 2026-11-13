@@ -63,6 +63,13 @@ def parts(boot: str, process: str, name: str, label: str, key: str) -> list[dict
     ]
 
 
+def interleaved(first: list[dict], second: list[dict]) -> list[dict]:
+    out = []
+    for i in range(max(len(first), len(second))):
+        out += first[i : i + 1] + second[i : i + 1]
+    return out
+
+
 def variant(boot: str, process: str, state: str, name: str) -> dict:
     hashed = f'{logharvest.rawpack.packfile.fnv(state.encode()):016x}'
     message = (
@@ -166,6 +173,38 @@ class LogHarvestTest(unittest.TestCase):
         ]
         added, _ = self.run_tool(records)
         self.assertEqual(added, [])
+
+    def test_a_long_keys_parts_rejoin_out_of_order_and_between_another_states(self):
+        long_key = CA + ' ' + ' '.join(f'fc_g{i}:49:00' for i in range(120))
+        long_parts = parts(BOOT, 'backboardd', '000000000000000a', CA_LABEL, long_key)
+        other_parts = parts(BOOT, 'backboardd', '0000000000000005', CA_LABEL, CA)
+        self.assertGreater(len(long_parts), 3)
+        remote_made = record(
+            BOOT,
+            'backboardd',
+            'raw: a state the pack lacks made in 35 ms (UI, store) after 0 ms for a compile slot: '
+            f'000000000000000a {long_key[:400]}',
+        )
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            remote_made,
+            made(BOOT, 'backboardd', '0000000000000005', CA),
+            *interleaved(list(reversed(long_parts)), other_parts),
+        ]
+        added, _ = self.run_tool(records)
+        self.assertEqual(sorted(logharvest.rawpack.state_key(line) for line in added), sorted([CA, long_key]))
+        self.assertTrue(all(line.startswith(f'R ok=1 label={CA_LABEL} ') for line in added))
+
+    def test_a_refused_states_whole_parts_add_no_line(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'backboardd', '0000000000000005', CA, 'refused'),
+            *parts(BOOT, 'backboardd', '0000000000000005', CA_LABEL, CA),
+        ]
+        boots = logharvest.read_boots(records)
+        added, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
+        self.assertEqual(added, [])
+        self.assertEqual(report.left['backboardd', 'refused on the device'], 1)
 
     def test_a_harvested_ca_line_gives_caspec_the_fields_of_its_untagged_line(self):
         added, _ = self.run_tool(boot_records())

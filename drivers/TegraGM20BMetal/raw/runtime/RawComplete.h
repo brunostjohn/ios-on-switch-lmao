@@ -174,4 +174,11 @@ private:
     void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, uint64_t waitedUs);
 };
 
+#if SWITCH_RAW_DIAGNOSTICS
+// A state's label and whole key in parts no log line cuts (a message stops near 1 KiB), logged whatever became of the
+// state, beside its "a state the pack lacks" line, which keeps 400 characters of the key: tools/gpu/logharvest.py joins
+// them into precompile corpus lines
+void logHarvestParts(uint64_t name, NSString *label, const std::string &key);
+#endif
+
 }  // namespace raw

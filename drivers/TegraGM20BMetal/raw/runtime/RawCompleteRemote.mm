@@ -5,7 +5,6 @@
 
 #include <os/log.h>
 #include <pthread/qos.h>
-#include <algorithm>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawCompileRequest.h"
 #include "RawMetalInternal.h"
@@ -24,19 +23,6 @@ const char *classText(uint32_t qos)
            : qos == QOS_CLASS_UTILITY        ? "UT"
            : qos == QOS_CLASS_BACKGROUND     ? "BG"
                                              : "fixed";
-}
-
-// A state's label and whole key in parts no log line cuts, as tools/gpu/logharvest.py joins them into corpus lines
-void logHarvestParts(uint64_t name, NSString *label, const std::string &key)
-{
-    std::string text = std::string("label=") + (label.length ? label.UTF8String : "-");
-    std::replace(text.begin(), text.end(), ' ', '_');
-    text += " " + key;
-    constexpr size_t kPart = 700;
-    const size_t parts = (text.size() + kPart - 1) / kPart;
-    for (size_t i = 0; i < parts; i++)
-        os_log(rawLog(), "raw: harvest %016llx %zu/%zu %{public}s", (unsigned long long)name, i + 1, parts,
-               text.substr(i * kPart, kPart).c_str());
 }
 #endif
 
@@ -148,8 +134,7 @@ void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found f
            "%016llx %{public}.400s",
            made ? "made" : "refused", (unsigned long long)(waitedUs / 1000), classText(qos_class_self()), how,
            (unsigned long long)k.name(), k.key.c_str());
-    if (made)
-        logHarvestParts(k.name(), a.descriptor.label ?: a.facade.label, k.key);
+    logHarvestParts(k.name(), a.descriptor.label ?: a.facade.label, k.key);
 #else
     (void)a;
     (void)k;
