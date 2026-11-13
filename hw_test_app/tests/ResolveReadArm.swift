@@ -3,9 +3,9 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// gpu.raw.resolve_twod's read arm: a resolve whose target a blit copies out later in the same command buffer, which the
-/// rules see when the tape is encoded and send to the pack's resolve pass (raw_resolve_rule.h), against Metal's rule
-/// computed here from the samples resolve_twod_fragment shades: (sum + n/2) / n per channel.
+/// gpu.raw.resolve_twod's read arm: a resolve whose target a blit copies out later in the same command buffer, which
+/// the rules see when the tape is encoded and send to the pack's resolve pass (raw_resolve_rule.h), against Metal's
+/// rule computed here from the samples resolve_twod_fragment shades: (sum + n/2) / n per channel.
 extension ResolveTwodTest {
     static func sampleHash(_ x: Int, _ y: Int, _ sample: Int) -> UInt32 {
         var h = (UInt32(x) &* 73_856_093) ^ (UInt32(y) &* 19_349_663) ^ (UInt32(sample + 1) &* 83_492_791)

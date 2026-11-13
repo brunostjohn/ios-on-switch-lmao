@@ -8,9 +8,9 @@ import Metal
 /// through the grid's complement (switchRawProbeResolveExact:), the complement on a store-and-resolve whose samples a
 /// second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:, Metal's
 /// exact rule); then the read arm (ResolveReadArm.swift), whose target a blit copies out in the same command buffer.
-/// PASS: all on the raw path, the picked route (a target first read in a later command buffer) the 2D engine's within one
-/// code of the pass, the complement taken and within one code, the kept samples resolving as the pass's, the read arm
-/// through the pack's pass byte for byte Metal's rule computed from the samples (`<n>x_read_route=pass
+/// PASS: all on the raw path, the picked route (a target first read in a later command buffer) the 2D engine's within
+/// one code of the pass, the complement taken and within one code, the kept samples resolving as the pass's, the read
+/// arm through the pack's pass byte for byte Metal's rule computed from the samples (`<n>x_read_route=pass
 /// <n>x_read_differ=0`), and at 2x the box and its complement byte for byte the engine's reading the rule rests on
 /// (X1TwodResolveReading: `2x_twod_model_differ=0 2x_exact_model_differ=0`). The compressed-grid arm resolves a
 /// memoryless (compressed) grid the same way: `<n>x_compressed=twod:<compressed grids>:<bytes off the private grid's>`.

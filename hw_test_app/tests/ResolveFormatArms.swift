@@ -5,8 +5,8 @@ import Metal
 
 /// gpu.raw.resolve_twod's format arms (raw_resolve_rule.h twodResolveFit): per format and sample count the codes the
 /// format stores for each sample (one-sample draws of its colour, resolve_twod_sample_fragment), the resolve the rule
-/// picks for a private target only passes sample, and the pack's pass where the format has a resolve state, each held to
-/// Metal's rule computed from the stored codes (unorm nearest, sRGB averaged as linear light, floats ties to even).
+/// picks for a private target only passes sample, and the pack's pass where the format has a resolve state, each held
+/// to Metal's rule computed from the stored codes (unorm nearest, sRGB averaged as linear light, floats ties to even).
 /// `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the same of the pass (the
 /// reference's control), `<cell>_ms=<picked>/<pass>` GPU ms. FAIL: a cell off resolve.twod, a channel beyond one code,
 /// or an exact cell (RGBA16Float at 2x) off Metal, where its read arm (`rgba16f_2x_read=<route>:<off>`) must take
