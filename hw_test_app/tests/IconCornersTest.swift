@@ -9,7 +9,8 @@ import Metal
 /// a shared target, against its own CPU drawing (HWTestGPU RenderBoxCorner: `beyond`, `max_diff`, `partial` and
 /// `ref_partial`), with the command buffers that went to m2v and the fetch routes of those draws.
 /// `strip_<storage>_*` and `strip_restart_<storage>_*`: RenderBox's draw shape alone, on the raw path; `replay_scissor_*`
-/// the same draw culled and scissored, which raw leaves to m2v, scissored there (HWTestGPU FetchStrip).
+/// the same draw culled and scissored, which raw leaves to m2v, scissored there; `derivative_<storage>_*` that shape's
+/// dfdx, dfdy and fwidth in a fetching program, which RenderBox's coverage takes (HWTestGPU FetchStrip).
 /// `icon<pt>_*`: iconservicesagent draws Settings' icon at 27 and 68 points, scale 2, uncached (-[ISImageDescriptor
 /// setIgnoreCache:]); the small one's corners against the large one reduced to its size (`icon27_corner_beyond`), and
 /// the cached 27-point image the App Library shows (`icon27_cached_corner_beyond`, reported). FAIL: a RenderBox or

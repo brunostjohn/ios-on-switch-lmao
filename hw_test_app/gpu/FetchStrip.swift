@@ -20,6 +20,7 @@ public enum FetchStrip {
     static let indices: [UInt16] = [0, 1, 2, 3, 0, 1, 2, 0xffff, 1, 2, 3]
     static let want: [UInt8] = [96, 64, 128, 255]  // BGRA8 of the clear (0.25, 0.25, 0.25, 1) plus (0.25, 0, 0.125)
     static let clear: [UInt8] = [64, 64, 64, 255]
+    static let derivatives: [UInt8] = [96, 128, 128, 255]  // BGRA8 of (dfdx * 2, |dfdy|, fwidth / 2, 1)
     static let scissor = MTLScissorRect(x: 8, y: 8, width: 16, height: 16)
 
     public static func cells(_ gpu: GPU) async throws -> [Cell] {
@@ -37,12 +38,19 @@ public enum FetchStrip {
         out.append(
             try await cell(
                 gpu, "replay_scissor", state, indexBuffer, offset: 0, count: 4, storage: .private, culled: true))
+        let derivative = try gpu.render(fragment: "fetch_derivative_fragment", format: .bgra8Unorm)
+        for storage in [MTLStorageMode.private, .shared] {
+            out.append(
+                try await cell(
+                    gpu, "derivative_\(storage == .private ? "private" : "shared")", derivative, indexBuffer,
+                    offset: 0, count: 4, storage: storage, culled: false, want: derivatives))
+        }
         return out
     }
 
     static func cell(
         _ gpu: GPU, _ name: String, _ state: MTLRenderPipelineState, _ indexBuffer: MTLBuffer, offset: Int, count: Int,
-        storage: MTLStorageMode, culled: Bool
+        storage: MTLStorageMode, culled: Bool, want: [UInt8] = FetchStrip.want
     ) async throws -> Cell {
         let target = try gpu.texture(.bgra8Unorm, side, side, storage: storage)
         let before = RawFacade.counters(of: gpu.device)
