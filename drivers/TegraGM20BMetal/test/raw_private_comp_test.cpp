@@ -173,6 +173,8 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
     EXPECT_THAT(note,
                 HasSubstr("raw::storageSlotsToPlain(pl->storageBits, twin != nullptr, twinDraws) & pass.compressed"));
     EXPECT_THAT(note, HasSubstr("raw::barrierFormDraws(twin->fetchBits, twin->writeBits, twin->storageBits"));
+    EXPECT_THAT(note, HasSubstr("free->rung == raw::FetchIteratedBlend && raw::fetchFreeTaken(*free, {})"))
+        << "a proven iterated-blend form keeps the compressed target";
     EXPECT_THAT(Body(facade, "static void noteRangeDraws("), HasSubstr("false, &shape);"))
         << "a variant made late is judged by its draws' shapes";
     EXPECT_THAT(SourceText("../raw/runtime/RawMetalRenderEncoder.mm"),

@@ -142,8 +142,12 @@ static void notePipeline(RMCommandBuffer *cb, const RMPass &pass, const raw::Pip
     if (!pl || !pl->rec)
         return;
     const raw::Pipeline *twin = pl->barrierTwin;
+    // an iterated-blend form the device proved draws the state whatever its target (RenderEncoder::formFor), which
+    // then needs neither the storage form nor the barrier form
+    const raw::FetchFreeForm *free = pl->fetchFree ? &pl->fetchFree->freeForm : nullptr;
+    const bool fetchFree = free && free->rung == raw::FetchIteratedBlend && raw::fetchFreeTaken(*free, {});
     const bool twinDraws =
-        !twin || !draw ||
+        !twin || !draw || fetchFree ||
         raw::barrierFormDraws(twin->fetchBits, twin->writeBits, twin->storageBits, twin->primitiveId, *draw);
     const uint8_t slots = raw::storageSlotsToPlain(pl->storageBits, twin != nullptr, twinDraws) & pass.compressed;
     for (uint32_t slot = 0; slots >> slot; ++slot) {
