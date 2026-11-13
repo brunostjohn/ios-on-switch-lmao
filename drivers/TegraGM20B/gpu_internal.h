@@ -9,7 +9,8 @@
  *   channels      nouveau_chan.c nouveau_channel_ctor()/_init() + nvif/chan906f.c GPFIFO/pushbuf helpers
  *   submission    nouveau_exec.c (one GPFIFO entry per push) + nv84/gf100 fence semaphore release
  * Interrupts, no polled mode: from the end of M1 the GPU's stall/nonstall SPIs drive nvkm_intr from a work loop
- * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps in nvxnu_idle(); each job's fence also raises a nonstall
+ * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps on a wake word (its channel's, tgm_waiter_idle, or the
+ * global one, nvxnu_idle); each job's fence also raises a nonstall
  * interrupt (NON_STALL_INTERRUPT after the semaphore release, as nouveau's nvc0_fence_emit32) that a per-channel
  * NON_STALL_INTR event turns into a wake (a job's internal fences raise none: SwitchGpuJobFences.h). A fence found
  * complete with no wake panics (nvxnu_wake_due).

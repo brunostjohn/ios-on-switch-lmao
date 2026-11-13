@@ -189,7 +189,8 @@ int nvxnu_firmware_find(const char *name, const void **data, unsigned long *size
 /*
  * GPU interrupts, no polled mode. nvxnu_irq_start() claims the GPU's stall and nonstall GIC SPIs (157/158 = INTID
  * 189/190, Linux tegra210.dtsi:427-428) on a work loop whose action runs nvxnu_poll_irqs() (nvkm_intr reads every
- * MC leaf, so both lines share it) and then nvxnu_wake(); it panics if it cannot. Waiters take nvxnu_wake_seq(),
+ * MC leaf, so both lines share it) and then nvxnu_wake(), which wakes a thread only while one sleeps in nvxnu_idle()
+ * or nvxnu_wake_due(); it panics if it cannot. Waiters take nvxnu_wake_seq(),
  * test their condition and call nvxnu_idle(), which sleeps until the sequence moves (1) or the deadline passes (0),
  * and panics when a GPU interrupt stays pending at PMC without being taken, or when called before nvxnu_irq_start().
  * nvxnu_wake() is safe with spinlocks held. nvxnu_wake_due(): `what` (a fence, say) is done although nothing woke
