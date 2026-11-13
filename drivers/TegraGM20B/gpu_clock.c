@@ -193,8 +193,8 @@ int tgm_clk_raise(char *line, unsigned int len)
  * sharing a bit with both ends). No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at tgm_clk_raise's
  * 800 mV): a few register writes and two 2 us delays, timed on every raise and logged (raise mean/max).
  * Before first use, gov_start runs one drop and raise at stage 3 (no client yet) and logs both times. A failure (the
- * divider not reading back, the PLL not locked, the clock not at the rate) puts the run rate back and the idle clock
- * stays in use: the next drop waits twice as long for each failure in a row (SwitchGpuClockControl.h idle_fail). */
+ * divider not reading back, the PLL not locked, the clock not at the rate) logs the PLL's registers, puts the run rate
+ * back and leaves the idle clock in use for the next idle period (SwitchGpuClockControl.h idle_fail). */
 #define IDLE_DROP_NS (500ULL * 1000000ULL)
 #define GPCPLL_CFG_R 0x137000  /* 0 enable, 17 lock */
 #define GPC2CLK_OUT_R 0x137250 /* VCO divider 13:8: 0 = 1:1, 2 = 1:2 */
@@ -266,7 +266,6 @@ u64 tgm_idle_raise(void)
 			idle_fail("raise", tgm_idle.run_pl);
 		} else {
 			WRITE_ONCE(tgm_idle.low, 0);
-			idle_took();
 			if (stats_on()) {
 				dt = nvxnu_nanotime() - t0;
 				tgm_idle.raises++;
@@ -290,15 +289,13 @@ static void idle_drop(void *arg)
 	now = nvxnu_nanotime();
 	if (READ_ONCE(tgm_idle.on) && !READ_ONCE(tgm_idle.low) && !idle_in_flight() &&
 	    now >= __atomic_load_n(&tgm_idle.service_until, __ATOMIC_SEQ_CST) &&
-	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >=
-		    idle_quiet_ns(IDLE_DROP_NS) &&
-	    now - native_display_last_swap_ns() >= idle_quiet_ns(IDLE_DROP_NS)) {
+	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >= IDLE_DROP_NS &&
+	    now - native_display_last_swap_ns() >= IDLE_DROP_NS) {
 		if ((nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R) & 0xffff) != tgm_idle.vco_coeff ||
 		    pl_switch(tgm_idle.idle_pl)) {
 			idle_fail("drop", tgm_idle.idle_pl);
 		} else {
 			WRITE_ONCE(tgm_idle.low, 1);
-			idle_took();
 			if (stats_on()) {
 				tgm_idle.drops++;
 				tgm_idle.low_since = nvxnu_nanotime();

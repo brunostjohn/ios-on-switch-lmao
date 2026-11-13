@@ -538,7 +538,6 @@ struct idle_state {
 	u32 run_pl, idle_pl, run_khz, idle_khz;
 	u32 vco_coeff, vco_khz, maximum_khz, requested_khz;
 	int clock_available;
-	u32 failures;  /* divider changes in a row that did not take (under clk) */
 	u64 last_busy; /* atomic: the last kick or hint (ns) */
 	u64 service_until;
 	u64 kicked,

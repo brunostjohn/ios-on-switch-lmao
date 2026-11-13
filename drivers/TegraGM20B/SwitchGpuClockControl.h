@@ -2,41 +2,23 @@
 #pragma once
 #include "SwitchGpuClock.h"
 
-#define IDLE_BACKOFF_MAX_SHIFT 6u
-
-/* The quiet time a drop to the idle divider waits for: `base`, doubled for each divider change in a row that did not
- * take, to 64 times it */
-static u64 idle_quiet_ns(u64 base)
-{
-	const u32 shift = tgm_idle.failures < IDLE_BACKOFF_MAX_SHIFT ? tgm_idle.failures
-								     : IDLE_BACKOFF_MAX_SHIFT;
-	return base << shift;
-}
-
-/* Under tgm_idle.clk: a divider change that did not take. The run rate goes back (the divider, else nouveau's full
- * reprogram of the rate) and the idle clock stays in use, its next drop later (idle_quiet_ns). A run rate that could not
- * be put back leaves the divider marked low, so the next raise tries again. One line at the 1st, 2nd, 4th, 8th...
- * failure in a row. */
+/* Under tgm_idle.clk: a divider change that did not take, which is a defect of ours to find from the line, not a state
+ * to wait out. The run rate goes back (the divider, else nouveau's full reprogram of the rate); the idle clock stays in
+ * use, so the next idle period drops by the normal path. A run rate that could not be put back leaves the divider
+ * marked low, so the next raise runs again. */
 static void idle_fail(const char *what, u32 pl)
 {
 	int back = pl_switch(tgm_idle.run_pl);
 	if (back)
 		back = clk_prog_khz(tgm_gpu.device, tgm_idle.run_khz);
 	WRITE_ONCE(tgm_idle.low, back ? 1 : 0);
-	if (tgm_idle.failures < UINT32_MAX)
-		tgm_idle.failures++;
-	if (!(tgm_idle.failures & (tgm_idle.failures - 1)))
-		nvxnu_log("tegra-gm20b: idle clock: %s to PL %u did not take (GPCPLL COEFF %08x), "
-			  "failure %u in a row; %d kHz now (%d), the next drop waits %llu ms\n",
-			  what, pl, nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R), tgm_idle.failures,
-			  nvkm_clk_read(tgm_gpu.device->clk, nv_clk_src_gpc), back,
-			  (unsigned long long)(idle_quiet_ns(IDLE_DROP_NS) / 1000000));
-}
-
-/* Under tgm_idle.clk: a divider change that took */
-static void idle_took(void)
-{
-	tgm_idle.failures = 0;
+	nvxnu_log("tegra-gm20b: idle clock: %s to PL %u did not take (GPCPLL_CFG %08x COEFF %08x "
+		  "SEL_VCO %x "
+		  "GPC2CLK_OUT %08x); %d kHz now (%d)\n",
+		  what, pl, nvkm_rd32(tgm_gpu.device, GPCPLL_CFG_R),
+		  nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R), nvkm_rd32(tgm_gpu.device, SEL_VCO_R),
+		  nvkm_rd32(tgm_gpu.device, GPC2CLK_OUT_R),
+		  nvkm_clk_read(tgm_gpu.device->clk, nv_clk_src_gpc), back);
 }
 
 static u32 clock_ceiling_rate(u32 requested)
@@ -137,8 +119,6 @@ const char *tgm_idle_wake(void)
 		if (back)
 			back = clk_prog_khz(tgm_gpu.device, tgm_idle.run_khz);
 		WRITE_ONCE(tgm_idle.low, back ? 1 : 0);
-		if (back && tgm_idle.failures < UINT32_MAX)
-			tgm_idle.failures++;
 		clock = back ? "on, its run rate not put back (the first raise tries again)"
 			     : "on, its run rate put back";
 		nvxnu_log(
