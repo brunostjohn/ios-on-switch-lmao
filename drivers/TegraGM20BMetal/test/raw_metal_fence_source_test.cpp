@@ -33,7 +33,7 @@ TEST(RawMetalFenceSource, EveryRawEncoderOpensWithADrain)
 
 TEST(RawMetalFenceSource, TheRawEncodeEmitsNothingForAFence)
 {
-    const std::string encode = SourceText("../raw/runtime/RawMetalEncode.mm");
+    const std::string encode = SourceText("../raw/runtime/RawMetalRangeStep.mm");
     EXPECT_THAT(encode, Not(HasSubstr("case OpUpdateFence")));
     EXPECT_THAT(encode, Not(HasSubstr("case OpWaitFence")));
 }

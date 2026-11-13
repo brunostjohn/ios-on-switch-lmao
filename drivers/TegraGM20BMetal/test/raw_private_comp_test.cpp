@@ -145,7 +145,7 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
     EXPECT_THAT(move, HasSubstr("gPlainShapes.add("));
     EXPECT_THAT(move, HasSubstr("rmTexturePlain(t)"));
     EXPECT_THAT(Body(facade, "uint32_t privateCompressedKind("), HasSubstr("gPlainShapes.holds("));
-    EXPECT_THAT(SourceText("../raw/runtime/RawMetalEncode.mm"), HasSubstr("tRawEncoding = true;"));
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalRangeEncode.h"), HasSubstr("tRawEncoding = true;"));
 }
 
 }  // namespace

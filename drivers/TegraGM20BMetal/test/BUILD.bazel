@@ -2599,7 +2599,7 @@ host_test(
     name = "raw_writer_promise_source_test",
     srcs = ["raw_writer_promise_source_test.cpp"],
     data = [
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalRangeSeal.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEvents.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFinish.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSchedule.mm",
@@ -3571,7 +3571,7 @@ host_test(
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++20",
     data = [
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalRangeSeal.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFinish.mm",
     ],
     deps = [
@@ -3750,7 +3750,7 @@ host_test(
     cxx_std = "c++20",
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalCommandBuffer.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalRangeEncode.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncoder.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPrivateComp.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
@@ -4413,7 +4413,7 @@ host_test(
     name = "raw_metal_fence_source_test",
     srcs = ["raw_metal_fence_source_test.cpp"],
     data = [
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalRangeStep.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
