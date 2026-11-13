@@ -122,6 +122,13 @@ filegroup(
 )
 
 py_test(
+    name = "eq_rules_test",
+    size = "small",
+    srcs = ["eq_rules_test.py"],
+    deps = [":draw_goldens"],
+)
+
+py_test(
     name = "eq_test",
     srcs = ["eq_test.py"],
     args = [

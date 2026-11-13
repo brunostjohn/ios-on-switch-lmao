@@ -14,6 +14,10 @@ A draw that differs in any other way is refused, and no golden is written over i
   inherit    a fetch with no barrier of its own where no draw since raw's last barrier (named) writes a colour
   passstart  a pass's first draw, without the scheduler and header-cache invalidations NVK's pass start adds
   push       push words a program of only one driver reads (raw's direct-compiled programs read their own)
+  fetchfree  the state's fetch-free form (raw_fetch_free.h): raw blends a colour on the ROP that NVK's program fetches
+             and raw's does not, its blend registers raw's, and no pixel barrier (the ROP orders its own reads)
+  noread     a draw whose programs read none of the colours NVK's fetches, without NVK's pixel barrier
+             (raw_blend_reads.h: a blend whose result does not depend on the destination does not read it)
 
 Barriers only raw has are its own to add.
 """
@@ -41,6 +45,35 @@ def baseline(m: str, value: str, draw: eq_fields.Draw) -> bool:
     return BASELINE.get(at) == value and draw.registers.get(f'{0x1A00 + 4 * target:x}', '0') == '0'
 
 
+def blend_target(m: str) -> int | None:
+    """Give the colour m is a blend register of: SET_BLEND(j) or the per-target blend block j."""
+    v = int(m, 16)
+    if 0x1360 <= v < 0x1380:
+        return (v - 0x1360) // 4
+    return (v - 0x1E00) // 0x20 if per_target_blend(m) else None
+
+
+def reads_target(draw: eq_fields.Draw, j: int) -> bool:
+    """Say whether a stage of the draw reaches colour target j's texture header: its program fetches the colour."""
+    target = draw.fields.get(f'rt{j}')
+    name = target.split()[0].split('=', 1)[1] if target else None
+    return bool(name) and any(f'tic[{name} ' in c for s in draw.stages.values() for c in s.content)
+
+
+def fetched(draw: eq_fields.Draw) -> set[int]:
+    return {j for j in range(8) if reads_target(draw, j)}
+
+
+def fetch_free(nvk: eq_fields.Draw, raw: eq_fields.Draw) -> set[int]:
+    """Give the colours raw blends on the ROP where NVK's program fetches them and raw's does not."""
+    blend = [f'{0x1360 + 4 * j:x}' for j in range(8)]
+    return {
+        j
+        for j in fetched(nvk) - fetched(raw)
+        if raw.registers.get(blend[j], '0') == '1' and nvk.registers.get(blend[j], '0') == '0'
+    }
+
+
 def overlaps(a: tuple, b: tuple) -> bool:
     return a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]
 
@@ -52,6 +85,7 @@ def box_text(b: tuple) -> str:
 def registers(nvk: eq_fields.Draw, raw: eq_fields.Draw, tags: set[str]) -> list[str]:
     refused = []
     storage = raw.registers.get('1224', '0') != '0'
+    free = set() if storage else fetch_free(nvk, raw)
     for m in sorted(set(nvk.registers) | set(raw.registers)):
         want, got = nvk.registers.get(m, '-'), raw.registers.get(m, '-')
         if want == got:
@@ -62,6 +96,8 @@ def registers(nvk: eq_fields.Draw, raw: eq_fields.Draw, tags: set[str]) -> list[
             tags.add('blendkill')
         elif storage and (m in STORAGE or per_target_blend(m)):
             tags.add('storage')
+        elif blend_target(m) in free:
+            tags.add('fetchfree')
         else:
             refused.append(f'register {m} nvk={want} raw={got}')
     return refused
@@ -91,7 +127,16 @@ def inherited(draws: list[eq_fields.Draw], i: int) -> int | None:
     return None
 
 
-def barrier_class(draws: list[eq_fields.Draw], i: int, missing: set[str]) -> tuple[str | None, str | None]:
+def unfetched(raw: eq_fields.Draw, nvk: eq_fields.Draw) -> str | None:
+    """Give the class of a draw whose programs read none of the colours NVK's fetches: it needs no pixel barrier."""
+    if not fetched(nvk) or fetched(raw):
+        return None
+    return 'fetchfree' if fetch_free(nvk, raw) else 'noread'
+
+
+def barrier_class(
+    draws: list[eq_fields.Draw], i: int, nvk: eq_fields.Draw, missing: set[str]
+) -> tuple[str | None, str | None]:
     """Give the class of the barriers only NVK puts on draw i, or why none covers them."""
     raw = draws[i]
     if raw.registers.get('1224', '0') != '0' and missing <= PIXEL:
@@ -104,14 +149,15 @@ def barrier_class(draws: list[eq_fields.Draw], i: int, missing: set[str]) -> tup
         return f'inherit={last}', None
     if raw.first and missing <= PASS_START:
         return 'passstart', None
-    return None, f'barriers {sorted(missing)} only in nvk'
+    tag = unfetched(raw, nvk) if missing <= PIXEL else None
+    return (tag, None) if tag else (None, f'barriers {sorted(missing)} only in nvk')
 
 
 def barriers(draws: list[eq_fields.Draw], i: int, nvk: eq_fields.Draw, tags: set[str]) -> list[str]:
     missing = nvk.barriers - draws[i].barriers
     if not missing:
         return []
-    tag, why = barrier_class(draws, i, missing)
+    tag, why = barrier_class(draws, i, nvk, missing)
     if tag:
         tags.add(tag)
     return [why] if why else []
