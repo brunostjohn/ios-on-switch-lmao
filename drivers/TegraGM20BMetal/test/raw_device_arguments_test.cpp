@@ -7,6 +7,8 @@
 #include "../raw/runtime/raw_compute_record.h"
 #include "../raw/runtime/raw_record.h"
 
+#include <set>
+
 namespace {
 
 constexpr uint32_t kRGBA8 = 70, kTriangle = 3, kSampled2d = 0x5, kSamplerClass = 0x2;
@@ -214,14 +216,14 @@ TEST_F(DeviceArguments, APixelCoordinateSamplerSamplesThroughANormalizedTwinUnti
     EXPECT_EQ(element(1, s.tsc), twin.tsc << 20);
     EXPECT_EQ(tables().samplerEntryAt(s.tsc).element, s.tsc);
     EXPECT_EQ(tables().samplerEntryAt(s.tsc).flags, raw::kSamplerWordPixelCoordinates);
-    const uint32_t twinTsc = twin.tsc;
+    const std::set<uint32_t> twinHeaders = {twin.tsc, twin.compareTsc};
     dev.forgetSampler(s, twin);
     EXPECT_EQ(twin.tsc, 0u);
     EXPECT_EQ(element(1, s.tsc), 0u);
     EXPECT_EQ(tables().samplerEntryAt(s.tsc).element, 0u);
     raw::Sampler next;
     ASSERT_TRUE(dev.createSampler({}, next));
-    EXPECT_EQ(next.tsc, twinTsc);  // the twin's header was given back
+    EXPECT_EQ((std::set<uint32_t>{next.tsc, next.compareTsc}), twinHeaders);  // the twin's headers were given back
 }
 
 TEST_F(DeviceArguments, ANormalizedSamplerSamplesThroughItsOwnHeader)
