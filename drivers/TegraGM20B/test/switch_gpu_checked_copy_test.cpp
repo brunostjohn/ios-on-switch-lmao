@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <map>
 #include <memory>
 #include "switch_gpu_copy_stubs.h"
@@ -636,6 +638,36 @@ TEST_F(CheckedCopy, ACompletedCopyTakesNoThreadCallOfItsOwn)
 	EXPECT_GE(retirementRequests, 1u);
 	pump();
 	EXPECT_EQ(calls, 2u);
+	EXPECT_EQ(tokenRefs, 0u);
+}
+
+// The retirement work never waits for the queue's lock, which a submission holds across its wait for room: it asks the
+// holder, which brings the work back once it lets the lock go.
+TEST_F(CheckedCopy, RetirementNeverWaitsForTheQueuesLock)
+{
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	gpu.completed = gpu.submitted;
+	pass();
+	std::atomic<int> step{0};
+	std::thread holder([&] {
+		IOLockLock(queue.lock);
+		step.store(1);
+		while (step.load() != 2)
+			;
+		IOLockUnlock(queue.lock);
+		copyUnlocked();
+	});
+	while (step.load() != 1)
+		;
+	pump();
+	EXPECT_EQ(calls, 0u) << "retired under another thread's hold of the lock";
+	EXPECT_FALSE(retirementPending);
+	step.store(2);
+	holder.join();
+	EXPECT_TRUE(retirementPending) << "the holder brings the retirement back";
+	pump();
+	EXPECT_EQ(calls, 1u);
 	EXPECT_EQ(tokenRefs, 0u);
 }
 

@@ -24,12 +24,13 @@ struct Job {
 };
 
 // Its copies retire on the backings' retirement work (switch_gpu_copy_retire), one thread call for both: a copy's end
-// releases its backings' uses, which that work retires next.
+// releases its backings' uses, which that work retires next. That work never waits for the lock, which a submission
+// holds across its wait for room: it asks the holder (retireAsked) to bring it back once the lock is let go.
 struct Copier {
 	IOLock *lock;
 	SwitchGpuKqueue space;
 	bool semanticFailed, replaceChannel;
-	uint32_t waitingSources, order;
+	uint32_t waitingSources, order, retireAsked;
 	Job jobs[Jobs];
 	SwitchGpuCopyMappings mappings;
 	SwitchGpuEventChannel authority;
@@ -121,12 +122,12 @@ void logFailedPush(const Job &job, int result)
 }
 #endif
 
+// queue.lock held: let go here, before the callbacks
 void retire()
 {
 	tegra_gm20b_ce_done callbacks[Jobs];
 	int results[Jobs];
 	uint32_t count = 0;
-	IOLockLock(queue.lock);
 	__atomic_store_n(&queue.waitingSources, 1u, __ATOMIC_RELEASE);
 	bool pending = false;
 	for (auto &job : queue.jobs) {
@@ -301,10 +302,27 @@ extern "C" void switch_gpu_copy_completed(void)
 		switch_gpu_backing_schedule_retirement();
 }
 
+// After every IOLockUnlock(queue.lock) but retire's own
+static void copyUnlocked()
+{
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	if (__atomic_exchange_n(&queue.retireAsked, 0u, __ATOMIC_SEQ_CST))
+		switch_gpu_backing_schedule_retirement();
+}
+
 extern "C" void switch_gpu_copy_retire(void)
 {
-	if (__atomic_load_n(&queue.lock, __ATOMIC_ACQUIRE))
-		retire();
+	IOLock *lock = __atomic_load_n(&queue.lock, __ATOMIC_ACQUIRE);
+
+	if (!lock)
+		return;
+	if (!IOLockTryLock(lock)) {
+		__atomic_store_n(&queue.retireAsked, 1u, __ATOMIC_SEQ_CST);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+		if (!IOLockTryLock(lock))
+			return;
+	}
+	retire();
 }
 
 extern "C" int tegra_gm20b_ce_copy_plane_checked(
@@ -329,6 +347,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	int result = slot == Jobs ? -16 : channel();
 	if (result) {
 		IOLockUnlock(queue.lock);
+		copyUnlocked();
 		return result;
 	}
 	auto &job = queue.jobs[slot];
@@ -387,5 +406,6 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 		job = {};
 	}
 	IOLockUnlock(queue.lock);
+	copyUnlocked();
 	return result;
 }

@@ -16,7 +16,7 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 	if (done == chan->woken_done)
 		return;
 	chan->woken_done = done;
-	if (SWITCH_FRAME_TIMELINE)
+	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		nvxnu_kdebug(SWITCH_KDBG_GPU_DONE, chan->chid, done, chan->critical);
 	if (switch_gpu_waiter_reached(&chan->wanted, done))
 		chan_wake_all_waiters(chan);

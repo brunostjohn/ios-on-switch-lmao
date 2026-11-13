@@ -100,7 +100,8 @@ void tgm_hold_stats(char *buf, unsigned int len);
 void tgm_deadline_init(struct nvkm_device *device);
 /* gpu_exec.c: a high channel kicked (compositor: one of the compositor's, not the present's); app: it found an app on the GPU. */
 void tgm_deadline_kicked(int compositor, int app);
-/* gpu_exec.c: a channel below the high level kicked with nothing of its own in flight before. Lockless. */
+/* gpu_exec.c, before the doorbell: a channel below the high level kicked with nothing of its own in flight before.
+ * Lockless unless a window was kept for it; then it opens the window and takes the holds due (dl.lock, hold.lock). */
 void tgm_deadline_app_kicked(void);
 /* gpu_fenced.h, interrupt pass: a high channel's fence moved past `ns` of GPU time (tgm_gpu_span); `biased` when that is
  * timed from a kick that found an app on the GPU (the frame's time is then not learned). */

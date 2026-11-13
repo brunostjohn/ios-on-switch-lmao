@@ -44,24 +44,23 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 }
 
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
- * fence's nonstall interrupt (chan_fence), whose pass wakes the channel's word once its fence passes the next seqno, so
- * nvif's own wait then finds the room at once and never spins; a quiet newest job gets its wake entry first. The caller
- * owns the channel's submissions and is inside the gate. -ETIMEDOUT after 1 s. */
+ * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
+ * once and never spins. Not the channel's word: a pass between the fence's release and the GET report finds no room,
+ * and the job's own pass then sees no progress to wake it for. A quiet newest job gets its wake entry first. The caller owns the channel's submissions and is
+ * inside the gate. -ETIMEDOUT after 1 s. */
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
-	const u32 waiter = tgm_chan_waiter(chan);
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
 
 	for (;;) {
-		u32 seq = tgm_waiter_seq(waiter);
+		u32 seq = nvxnu_wake_seq();
 
-		switch_gpu_waiter_want(&chan->wanted, tgm_chan_completed(chan) + 1);
 		if (chan_room(chan, gpfifo_nr, push_nr))
 			break;
 		if (switch_gpu_quiet_need(&chan->quiet, chan->submitted))
 			tgm_chan_wake_push(chan);
-		if (!tgm_waiter_idle(waiter, seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
+		if (!nvxnu_idle(seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
 			ret = -ETIMEDOUT;
 			break;
 		}
@@ -478,6 +477,9 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		       (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
 	int quiet = (visibility & SWITCH_GPU_SUBMIT_QUIET) &&
 		    __atomic_load_n(&chan->wake, __ATOMIC_ACQUIRE);
+
+	if (stats_on() && (visibility & SWITCH_GPU_SUBMIT_QUIET) && !quiet && count)
+		tgm_stats_loud(SWITCH_GPU_LOUD_NO_WAKE);
 
 	if (chan->error)
 		return -EIO;

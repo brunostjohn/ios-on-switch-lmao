@@ -40,9 +40,11 @@ TEST(GM20BQuietSource, TheFenceInterruptsOnlyWhenItAnnounces)
 	// a semantic fence bound to the job (its own, or one a dependency passed on) resolves at a published completion, and
 	// a watched present's producer writes a backing the display scans in place
 	EXPECT_TRUE(job.Before("error = events->bind(&completion);",
-			       "switch_gpu_quiet_end(quiet, events->semanticFence(),"));
+			       "semanticBound = events->semanticFence();"));
+	EXPECT_TRUE(job.Before("semanticBound = events->semanticFence();",
+			       "switch_gpu_quiet_end(quiet, semanticBound,"));
 	EXPECT_TRUE(job.Before("scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;",
-			       "switch_gpu_quiet_end(quiet, events->semanticFence(),"));
+			       "switch_gpu_quiet_end(quiet, semanticBound,"));
 	EXPECT_TRUE(job.Has("scanoutWrites, closesGroup);"));
 	EXPECT_TRUE(job.Has("!(head.flags & TegraGM20BJobAdmission) || (head.flags & "
 			    "TegraGM20BJobAdmissionEnd);"));
@@ -68,7 +70,7 @@ TEST(GM20BQuietSource, EverySleepOnAUserChannelAsksFirst)
 	const CodeText room = Block(unit("gpu_exec.c"), "int tgm_chan_wait_ready(");
 	EXPECT_TRUE(room.Before("switch_gpu_quiet_need(&chan->quiet, chan->submitted)",
 				"tgm_chan_wake_push(chan);"));
-	EXPECT_TRUE(room.Before("tgm_chan_wake_push(chan);", "tgm_waiter_idle(waiter, seq, end)"));
+	EXPECT_TRUE(room.Before("tgm_chan_wake_push(chan);", "nvxnu_idle(seq, end)"));
 	EXPECT_TRUE(Block(unit("SwitchGpuClientRetirement.h"), "void AGXDeviceUserClient::retire(")
 			    .Has("tgm_chan_need(chans_[slot], "
 				 "uint32_t(record->snapshots[slot].value));"));

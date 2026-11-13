@@ -306,6 +306,12 @@ void tgm_stats_wait(uint32_t waiter, int woken, int done)
 }
 
 #if TGM_STATS
+void tgm_stats_loud(uint32_t reason)
+{
+	if (reason && reason < SWITCH_GPU_LOUD_REASONS)
+		__atomic_fetch_add(&tgm_wstat.loud[reason], 1, __ATOMIC_RELAXED);
+}
+
 /* The "waits" line: GPU interrupt passes by line and per job kicked, channel wakes, and how the fence waits that slept
  * woke: at their seqno, early (another seqno reached, a kill, a teardown) or at their deadline. */
 void tgm_stats_waits(u64 ms)
@@ -332,8 +338,9 @@ void tgm_stats_waits(u64 ms)
 	u64 filters[4] = {0};
 	u64 global = 0;
 	u64 d[9] = {0};
+	u32 loud[SWITCH_GPU_LOUD_REASONS] = {0};
 	u32 i = 0;
-	char line[520];
+	char line[700];
 
 	nvxnu_irq_cpus(cpus, filters, &global);
 	for (i = 0; i < 4; i++) {
@@ -344,6 +351,8 @@ void tgm_stats_waits(u64 ms)
 	}
 	d[8] = global - tgm_wstat.global_wakeups;
 	tgm_wstat.global_wakeups = global;
+	for (i = 0; i < SWITCH_GPU_LOUD_REASONS; i++)
+		loud[i] = __atomic_exchange_n(&tgm_wstat.loud[i], 0, __ATOMIC_RELAXED);
 	nvxnu_irq_passes(&stall, &nonstall);
 	ds = stall - tgm_wstat.stall;
 	dn = nonstall - tgm_wstat.nonstall;
@@ -369,12 +378,15 @@ void tgm_stats_waits(u64 ms)
 		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
 		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu %llu/%llu/%llu/%llu, "
 		"nonstall filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high kicks "
-		"read no PFIFO status",
+		"read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, %u "
+		"events, %u semantic fence, %u scanout producer, %u no wake entries",
 		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
 		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
 		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline, quiet,
 		asked, pushed, settled, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8],
-		tgm_sched_unread());
+		tgm_sched_unread(), loud[SWITCH_GPU_LOUD_UNASKED], loud[SWITCH_GPU_LOUD_EVENTS],
+		loud[SWITCH_GPU_LOUD_SEMANTIC], loud[SWITCH_GPU_LOUD_SCANOUT],
+		loud[SWITCH_GPU_LOUD_NO_WAKE]);
 	nvxnu_stats("tegra-gm20b: waits %s", line);
 }
 

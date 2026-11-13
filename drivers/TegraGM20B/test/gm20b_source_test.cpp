@@ -651,7 +651,7 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	const CodeText wait =
 		Block(gpu(),
 		      "int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)");
-	EXPECT_TRUE(wait.Has("if (!tgm_waiter_idle(waiter, seq, end)"));
+	EXPECT_TRUE(wait.Has("if (!nvxnu_idle(seq, end)"));
 	const CodeText reserve = Block(gpu(), "static inline int chan_wait_room(");
 	EXPECT_TRUE(reserve.Before("chan_wait_ready(chan, gpfifo_nr, push_nr)",
 				   "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)"));

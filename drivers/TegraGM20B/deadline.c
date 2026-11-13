@@ -9,7 +9,8 @@
  * preemption latency before the compositor's latest start (that vblank less the compositor's GPU time per frame) until the
  * frame's present completes (hold.c); with no such channel no window opens. Nor does one while none of them has work in
  * flight (tgm_busy): the vblank it would aim for is kept, and the first such channel's kick before it opens the window
- * then. The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
+ * and takes the holds due by then before its doorbell, as an open window's hold would have found it. The GPU time per
+ * frame is learned from the high channels' completions (gpu_fenced.h
  * high_fenced), summed per present. QuartzCore's own hint (tegra_gm20b_display_deadline) comes once a second
  * (hint_agx_timing::next_agx_hint), too seldom to start a window from. Every decision is made at a vsync, a kick, a
  * fence interrupt or a host-time callout; nothing waits or polls.
@@ -32,7 +33,7 @@ static struct {
 	u64 expected;                /* the compositor's GPU time per frame */
 
 	/* the window: the vblank it aims for (0: none), when it opened, whether the compositor kicked in it; the vblank of
-	 * one no app's work in flight opened (0: none), which an app's kick opens (tgm_deadline_app_kicked) */
+	 * one no app's work in flight opened (0: none), which an app's first kick opens (tgm_deadline_app_kicked) */
 	u64 target, opened, expire_at, dormant;
 	u32 gen, expire_gen;
 	int kicked, suspended, check_chid;
@@ -163,7 +164,6 @@ static int window_live(u64 now)
 static void hold_work(void *arg)
 {
 	u64 now = nvxnu_nanotime();
-	u64 opened = 0;
 	u64 next = 0;
 	int resident = 0;
 	int preempt = -1;
@@ -173,14 +173,8 @@ static void hold_work(void *arg)
 
 	(void)arg;
 	spin_lock_irqsave(&dl.lock, flags);
-	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
-		window_open(dl.dormant, now);
-		opened = dl.target;
-	}
 	live = window_live(now);
 	spin_unlock_irqrestore(&dl.lock, flags);
-	if (opened)
-		after(dl.expire_work, opened, now);
 	if (!live)
 		return;
 	resident = tgm_sched_resident(dl.device);
@@ -258,13 +252,39 @@ void tgm_deadline_kicked(int compositor, int app)
 	spin_unlock_irqrestore(&dl.lock, flags);
 }
 
-/* A window kept for an app's kick: its holds come from hold_work, which opens it. */
+/* The kicking thread, before its doorbell. No slow channel had work at the frame end, so none is on the GPU now and
+ * the kicking one is not yet: the resident look reads nothing. */
 void tgm_deadline_app_kicked(void)
 {
 	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_RELAXED);
+	u64 now = 0;
+	u64 target = 0;
+	u64 next = 0;
+	int preempt = -1;
+	struct tgm_window w;
+	unsigned long flags = 0;
 
-	if (dormant && dormant > nvxnu_nanotime() && tgm_hold_wanted(1))
-		nvxnu_work_schedule(dl.hold_work);
+	if (!dormant)
+		return;
+	now = nvxnu_nanotime();
+	if (dormant <= now || !tgm_hold_wanted(1))
+		return;
+	spin_lock_irqsave(&dl.lock, flags);
+	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
+		window_open(dl.dormant, now);
+		target = dl.target;
+		w.now = now;
+		w.vblank = dl.target;
+		w.interval = dl.interval;
+		w.expected = dl.expected;
+		next = tgm_hold_due(dl.device, &w, TGM_VICTIM_NONE, &preempt);
+	}
+	spin_unlock_irqrestore(&dl.lock, flags);
+	if (!target)
+		return;
+	if (next)
+		after(dl.hold_work, next, now);
+	after(dl.expire_work, target, now);
 }
 
 /* Interrupt pass. The anchor moves on every 2^40 ns (18 minutes), keeping the rate, so the span never overflows. */

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // deadline.c over a display period at a time: the thread calls a frame end schedules (hold_work, expire_work), the
 // resident look's register reads, and whether an app channel slow enough to be held is held, by what has work in flight.
+// Under dl.lock (a spinlock: XNU panics on a mutex, sleep or allocation there) nothing schedules, allocates or nests.
 #include <gtest/gtest.h>
 #include <vector>
 #include "drivers/TegraGM20B/test/gm20b_sched_stubs.h"
@@ -14,8 +15,9 @@ namespace
 {
 constexpr u64 kPeriod = 16666667, kStatusReads = 3;
 u64 now;
-unsigned schedules, statusReads, dues;
+unsigned schedules, statusReads, dues, spinDepth;
 u64 dueVblank;
+int lastResident;
 bool slow = true, appWork;
 
 struct Work {
@@ -47,11 +49,19 @@ void spin_lock_irqsave_stub(spinlock_t *l)
 {
 	EXPECT_EQ(l->held, 0);
 	l->held = 1;
+	++spinDepth;
 }
 
 void spin_unlock_irqrestore_stub(spinlock_t *l)
 {
 	l->held = 0;
+	--spinDepth;
+}
+
+void mayBlock(const char *what)
+{
+	if (spinDepth)
+		ADD_FAILURE() << what << " under dl.lock";
 }
 
 u64 nvxnu_nanotime(void)
@@ -71,12 +81,14 @@ void nvxnu_panic(const char *, ...)
 
 void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 {
+	mayBlock("an allocation");
 	works.push_back(new Work{fn, arg, false, 0});
 	return works.back();
 }
 
 void nvxnu_work_schedule(void *work)
 {
+	mayBlock("a thread call");
 	++schedules;
 	static_cast<Work *>(work)->pending = true;
 	static_cast<Work *>(work)->at = now;
@@ -84,6 +96,7 @@ void nvxnu_work_schedule(void *work)
 
 void nvxnu_work_schedule_after(void *work, u64 ns)
 {
+	mayBlock("a thread call");
 	++schedules;
 	static_cast<Work *>(work)->pending = true;
 	static_cast<Work *>(work)->at = now + ns;
@@ -91,11 +104,13 @@ void nvxnu_work_schedule_after(void *work, u64 ns)
 
 void nvxnu_work_cancel_wait(void *work)
 {
+	mayBlock("a wait for a thread call");
 	static_cast<Work *>(work)->pending = false;
 }
 
 int tgm_sched_resident(nvkm_device *)
 {
+	mayBlock("the resident look's register reads");
 	statusReads += kStatusReads;
 	return -1;
 }
@@ -105,8 +120,10 @@ int tgm_hold_wanted(int withWork)
 	return slow && (!withWork || appWork);
 }
 
-uint64_t tgm_hold_due(nvkm_device *, const struct tgm_window *w, int, int *preempt)
+uint64_t tgm_hold_due(nvkm_device *, const struct tgm_window *w, int resident, int *preempt)
 {
+	EXPECT_EQ(spinDepth, 1u) << "the holds are taken under dl.lock, as hold_work takes them";
+	lastResident = resident;
 	++dues;
 	dueVblank = w->vblank;
 	*preempt = -1;
@@ -205,8 +222,9 @@ TEST_F(DeadlineWindow, AppWorkAtTheFrameEndOpensTheWindow)
 	EXPECT_EQ(statusReads, kStatusReads);
 }
 
-// The app's own kick inside the frame: the window kept at the frame end opens and holds it.
-TEST_F(DeadlineWindow, AnAppKickInTheFrameOpensItsWindow)
+// The app's own first kick inside the frame, before its doorbell: the window kept at the frame end opens and the holds
+// due by then are taken on the kicking thread, with no register read, so a held channel never reaches the GPU first.
+TEST_F(DeadlineWindow, AnAppKickInTheFrameIsHeldBeforeItsDoorbell)
 {
 	const u64 vblank = now + kPeriod;
 	frameEnd();
@@ -216,11 +234,13 @@ TEST_F(DeadlineWindow, AnAppKickInTheFrameOpensItsWindow)
 	now += kPeriod / 4;
 	appWork = true;
 	tgm_deadline_app_kicked();
-	EXPECT_EQ(schedules, 1u);
-	runDue();
-	EXPECT_EQ(dues, 1u) << "the app channel's hold";
+	EXPECT_EQ(dues, 1u) << "the holds, taken before the kick returns";
 	EXPECT_EQ(dueVblank, vblank);
-	EXPECT_EQ(schedules, 2u) << "and the window's expiry";
+	EXPECT_EQ(lastResident, -1);
+	EXPECT_EQ(statusReads, 0u);
+	EXPECT_EQ(schedules, 1u) << "the window's expiry alone";
+	tgm_deadline_app_kicked();
+	EXPECT_EQ(dues, 1u) << "a second kick finds the window open";
 }
 
 // A kick once the kept window's vblank has passed: that frame is gone, and the next frame end decides again.

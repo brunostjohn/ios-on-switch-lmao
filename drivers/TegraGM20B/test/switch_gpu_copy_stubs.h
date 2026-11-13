@@ -22,6 +22,11 @@ inline void IOLockLock(IOLock *p) __attribute__((no_thread_safety_analysis))
 	p->lock();
 }
 
+inline bool IOLockTryLock(IOLock *p) __attribute__((no_thread_safety_analysis))
+{
+	return p->try_lock();
+}
+
 inline void IOLockUnlock(IOLock *p) __attribute__((no_thread_safety_analysis))
 {
 	p->unlock();

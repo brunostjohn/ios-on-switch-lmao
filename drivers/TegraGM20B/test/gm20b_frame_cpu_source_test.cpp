@@ -37,14 +37,16 @@ TEST(GM20BFrameCpuSource, ThePassWakesTheGlobalWordOnlyForASleeper)
 			    .Before("switch_gpu_wake_sleep(&gWake, 1);", "nvxnu_word_idle("));
 }
 
-// The kernel's waits on one channel's fence or room sleep on that channel's word, woken by its own pass.
+// The kernel's waits on one channel's fence sleep on that channel's word, woken by the pass that moves its fence. The
+// room wait stays on the global word: its GET report lands after the fence's release, so a pass between the two finds
+// no room and the job's own pass sees no progress to wake it for.
 TEST(GM20BFrameCpuSource, ChannelWaitsSleepOnTheirChannel)
 {
 	const CodeText room =
 		Block(unit("gpu_exec.c"),
 		      "int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)");
-	EXPECT_FALSE(room.Has("nvxnu_idle(")) << "the room wait sleeps on the global word";
-	EXPECT_TRUE(room.Has("tgm_waiter_idle("));
+	EXPECT_TRUE(room.Has("nvxnu_idle(seq, end)"));
+	EXPECT_FALSE(room.Has("tgm_waiter_idle("));
 	for (const char *wait : {"static int sync_wait(u64 id, u32 seqno, u64 end)",
 				 "static void writer_wait(u32 uid, u32 seqno,"}) {
 		const CodeText body = Block(unit("gpu_sync.c"), wait);
