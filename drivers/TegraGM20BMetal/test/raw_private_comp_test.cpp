@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "bazel/testing/source_text.h"
+#include "drivers/TegraGM20BMetal/raw/runtime/raw_fetch_order.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_private_comp.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_storage_form.h"
 
@@ -21,16 +22,23 @@ struct Target {
     bool comptags = false;
 };
 
-// What a draw of a state with `storageBits` (and a barrier form or not) takes over `t`: its storage form ("raw"), its
-// barrier form ("twin"), or the refusal that sends it to m2v ("enc.storage"), once the plain move ran before the encode
-std::string route(uint8_t storageBits, bool twin, Target &t)
+// A list of two triangles, which a barrier form draws a triangle at a time
+constexpr raw::FetchDraw kList = {3, 6, 1, false, false};
+
+// What a draw of shape `draw` of a state with `storageBits` (and a barrier form that fetches the colour it writes or not)
+// takes over `t`: its storage form ("raw"), its barrier form ("twin"), or the refusal that sends it to m2v ("enc.storage",
+// "enc.geometry"), once the plain move ran before the encode
+std::string route(uint8_t storageBits, bool twin, Target &t, const raw::FetchDraw &draw = kList)
 {
-    if (raw::storageSlotsToPlain(storageBits, twin) & 1)
+    const bool twinDraws = raw::barrierFormDraws(0x1, 0x1, 0, false, draw);
+    if (raw::storageSlotsToPlain(storageBits, twin, twinDraws) & 1)
         t.comptags = false;
     const auto reason = raw::storageViewMismatch(4, 1, t);
     if (reason == raw::StorageFallback::None)
         return "raw";
-    return twin ? "twin" : "enc.storage";
+    if (!twin)
+        return "enc.storage";
+    return twinDraws ? "twin" : "enc.geometry";
 }
 
 raw::PrivateTextureFacts target(uint32_t bpp)
@@ -84,10 +92,35 @@ TEST(RawPrivateComp, AFetchingStateWithNoBarrierFormDrawsAPlainTargetOnTheRawPat
 TEST(RawPrivateComp, AStateWithABarrierFormKeepsTheCompressedTarget)
 {
     Target t{4, 1, true};
-    EXPECT_EQ(raw::storageSlotsToPlain(0x3, true), 0);
+    EXPECT_EQ(raw::storageSlotsToPlain(0x3, true, true), 0);
     EXPECT_EQ(route(0x1, true, t), "twin");
     EXPECT_TRUE(t.comptags);
-    EXPECT_EQ(raw::storageSlotsToPlain(0x6, false), 0x6);
+    EXPECT_EQ(raw::storageSlotsToPlain(0x6, false, true), 0x6);
+}
+
+// Boot 21 iconservicesagent (RenderBox filter_color 2218a4f4d2231d46, uber 43017f3f15e41157, both drawn in the pixel
+// interlock elsewhere): a quad drawn as an indexed strip of four over a compressed private target took the barrier
+// form, which cannot order an indexed strip's triangles (restart), and the encode refused it as enc.geometry. The
+// target moves plain and the storage form draws it, whatever the shape.
+TEST(RawPrivateComp, AShapeTheBarrierFormCannotDrawTakesTheStorageFormOverAPlainTarget)
+{
+    const raw::FetchDraw indexedStrip = {4, 4, 1, false, true};
+    EXPECT_FALSE(raw::barrierFormDraws(0x1, 0x1, 0, false, indexedStrip));
+    Target t{4, 1, true};
+    EXPECT_EQ(route(0x1, true, t, indexedStrip), "raw");
+    EXPECT_FALSE(t.comptags);
+    const raw::FetchDraw shapes[] = {
+        {3, 6, 2, false, false}, {3, 0, 1, true, false}, {1, 4, 1, false, false}, {3, 3 * 97, 1, false, false}};
+    for (const raw::FetchDraw &d : shapes) {
+        Target each{4, 1, true};
+        EXPECT_EQ(route(0x1, true, each, d), "raw") << d.primitive << " " << d.count << " " << d.instances;
+    }
+    Target strip{4, 1, true};
+    EXPECT_EQ(route(0x1, true, strip, {4, 4, 1, false, false}), "twin") << "a vertex strip is drawn a triangle a time";
+    EXPECT_TRUE(strip.comptags);
+    EXPECT_TRUE(raw::barrierFormDraws(0x1, 0x2, 0, false, indexedStrip)) << "it fetches nothing it writes: drawn whole";
+    EXPECT_FALSE(raw::barrierFormDraws(0x1, 0x1, 0, true, {3, 6, 1, false, false}))
+        << "its fragments read the primitive";
 }
 
 // A compositor drawing a no-twin fetch pass over a private target every frame, keeping the target or making a new one
@@ -101,7 +134,7 @@ uint32_t movesOver(uint32_t frames, bool newTargetEachFrame)
     for (uint32_t frame = 0; frame < frames; ++frame) {
         if (!frame || newTargetEachFrame)
             target = Target{4, 1, !plain.holds(shape)};
-        if (raw::storageSlotsToPlain(0x1, false) & 1 && target.comptags) {
+        if (raw::storageSlotsToPlain(0x1, false, true) & 1 && target.comptags) {
             plain.add(shape);
             target.comptags = false;
             ++moves;
@@ -138,7 +171,16 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
     const std::string facade = SourceText("../raw/runtime/RawMetalPrivateComp.mm");
     const std::string note = Body(facade, "static void notePipeline(");
     EXPECT_THAT(note,
-                HasSubstr("raw::storageSlotsToPlain(pl->storageBits, pl->barrierTwin != nullptr) & pass.compressed"));
+                HasSubstr("raw::storageSlotsToPlain(pl->storageBits, twin != nullptr, twinDraws) & pass.compressed"));
+    EXPECT_THAT(note, HasSubstr("raw::barrierFormDraws(twin->fetchBits, twin->writeBits, twin->storageBits"));
+    EXPECT_THAT(Body(facade, "static void noteRangeDraws("), HasSubstr("false, &shape);"))
+        << "a variant made late is judged by its draws' shapes";
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalRenderEncoder.mm"),
+                HasSubstr("if (const RMPass &pass = e->_cb->_passes[e->_passAt]; pass.compressed)\n        "
+                          "rmNoteStorageDraw(e->_cb, pass, pl, e->_drawnVariant, shape);"))
+        << "each draw recorded in a compressed pass, by its shape";
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalParallel.mm"), HasSubstr("cb->_plainForStorage.insert("))
+        << "a parallel encoder's sub-encoders' targets";
     EXPECT_THAT(note, HasSubstr("cb->_scanStorageTargets = true;")) << "a variant still being made is looked at later";
     const std::string move = Body(facade, "void rmStorageTargetsPlain(");
     EXPECT_THAT(move, HasSubstr("if (cb->_scanStorageTargets)"));

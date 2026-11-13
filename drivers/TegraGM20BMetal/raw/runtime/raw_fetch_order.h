@@ -97,6 +97,14 @@ constexpr FetchRefusal fetchRefusal(bool fetchesOwn, bool primitiveId, const Fet
     return sequentialRefusal(primitiveId, d);
 }
 
+// Whether a state's barrier form, whose fetch bits these are, draws `d`: one that fetches a colour it writes keeps
+// Metal's raster order only for the shapes fetchRefusal admits, drawn a triangle at a time
+constexpr bool barrierFormDraws(uint8_t fetchBits, uint8_t writeBits, uint8_t storageBits, bool primitiveId,
+                                const FetchDraw &d)
+{
+    return fetchRefusal(fetchesOwnColor(fetchBits, writeBits, storageBits), primitiveId, d) == FetchRefusal::None;
+}
+
 constexpr const char *fetchRefusalWhy(FetchRefusal r)
 {
     return r == FetchRefusal::Indirect
