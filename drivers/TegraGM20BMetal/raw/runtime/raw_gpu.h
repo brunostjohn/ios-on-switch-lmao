@@ -2525,6 +2525,9 @@ public:
     // the pipelines made while set bind their programs' shader data at its exact size (raw_cbuf.h): HW Test's bench
     // measuring what the chip reads of a constant buffer bound off a 256-byte multiple
     std::atomic<bool> probeExactCbufs{false};
+    // backings made while set take no compressible memory, for a probe's uncompressed reference
+    // (RawMetalProbeKinds.mm switchRawProbePlainMemory:)
+    std::atomic<bool> probePlainMemory{false};
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, as the next createOwnedZeta does for a one-sample zeta, which probeCompressed holds until destroyTexture;
     // any other texture takes the flag and stays plain
@@ -3069,16 +3072,17 @@ private:
     struct BackingAsk {
         uint32_t width = 0, height = 0, format = 0, tag = 0, layers = 1;
         uint8_t samples = 0;
-        // zetaProbe: probeZetaKinds as the ask found it, which compKind reads and no epoch move covers
-        bool zeta = false, blockLinear = false, compression = false, copied = false, zetaProbe = false;
+        bool zeta = false, blockLinear = false, compression = false, copied = false;
+        // kindProbes() as the ask found them, which compKind reads and no epoch move covers
+        uint8_t probes = 0;
         Backing *backing = nullptr;
         uint64_t epoch = 0;
 
-        bool same(const Texture &m, uint32_t t, bool linear, bool compressed, bool copy, bool probe) const
+        bool same(const Texture &m, uint32_t t, bool linear, bool compressed, bool copy, uint8_t probed) const
         {
             return backing && width == m.width && height == m.height && format == m.format && tag == t &&
                    layers == std::max(m.layers, 1u) && samples == m.samples && zeta == m.zeta &&
-                   blockLinear == linear && compression == compressed && copied == copy && zetaProbe == probe;
+                   blockLinear == linear && compression == compressed && copied == copy && probes == probed;
         }
     };
 
@@ -3223,13 +3227,17 @@ private:
     raw::CondVar compWake_;
     uint32_t compKind(const Texture &m, bool blockLinear, bool copied) const;
 
-    bool zetaKindsProbed() const
+    // probeZetaKinds (bit 0) and probePlainMemory (bit 1), the debug switches compKind reads
+    uint8_t kindProbes() const
     {
+        uint8_t probes = 0;
 #if SWITCH_RAW_DIAGNOSTICS
-        return probeZetaKinds.load(std::memory_order_relaxed);
-#else
-        return false;
+        probes |= probeZetaKinds.load(std::memory_order_relaxed) ? 1 : 0;
 #endif
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        probes |= probePlainMemory.load(std::memory_order_relaxed) ? 2 : 0;
+#endif
+        return probes;
     }
 
     Backing *compBacking(const Texture &m, uint32_t tag, uint32_t kind);

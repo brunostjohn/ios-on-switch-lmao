@@ -36,6 +36,7 @@ enum : uint32_t {
     kCompKindC64 = 0xe9,   // NV_MMU_PTE_KIND_C64_2CRA
     kCompKindC128 = 0xf5,  // NV_MMU_PTE_KIND_C128_2CR
     kCompKindZeta = 0xce,  // NV_MMU_PTE_KIND_ZF32_X24S8_2CSZV
+    kCompKindZF32 = 0x86,  // NV_MMU_PTE_KIND_ZF32_2CZ
 };
 
 // Whether the copy engine reads and writes kind `kind`'s texels through that binding as plain ones. Proven for one-sample
@@ -43,14 +44,16 @@ enum : uint32_t {
 // RGBA16Float at 256x256, 320x180 and 1280x720, 24 repeats, every case exact: rendered tiles, ZBC and other full clears and
 // clear-plus-half-draw tiles read by it; its whole and half-height writes over rendered and ZBC-cleared tiles read by it and
 // the texture unit; copies both ways between a compressed and a plain target. Its rectangles started at the origin, as a
-// shadow's do. Not asked: C128, the multisampled colour kinds and every zeta kind (gpu.x1.ce_compressed_depth's cells).
+// shadow's do. One-sample ZF32_2CZ by gpu.x1.ce_compressed_depth (boot 19 and boot 21, the context as shipped: d32f_1x=0
+// over 16 compressed rounds of shader-test copies both ways). Not asked: C128, the multisampled colour kinds and the other
+// zeta kinds (the multisampled ones read exact only under anti-alias words no context row writes).
 // Rule flip pending: a stored one-sample depth/stencil texture (Device::createOwnedZeta) stays on plain zeta memory, as
 // its readback and aspect copies are the copy engine's, until HW Test gpu.raw.stored_depth reads
 // compressed_readback_wrong=0 with compressed_readback_facts comptags=1 (T-v3g's gpu.x1.ce_compressed_depth ran no
 // one-sample compressed round: d32f_1x_compressed_rounds=0).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
-    return kind == kCompKindC32 || kind == kCompKindC64;
+    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindZF32;
 }
 
 // The compressible kind of a block-linear colour target of `bpp`-byte texels at `samples` samples, or of the depth/stencil

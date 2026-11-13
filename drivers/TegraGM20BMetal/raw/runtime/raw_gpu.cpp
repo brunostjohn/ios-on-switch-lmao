@@ -3642,7 +3642,7 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 {
     const uint64_t epoch = backingEpoch_.load(std::memory_order_seq_cst);
     for (const BackingAsk &ask : asks_) {
-        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, zetaKindsProbed()))
+        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, kindProbes()))
             continue;
         Backing *b = ask.backing;
         b->lastCommit.store(commitCount_, std::memory_order_relaxed);
@@ -3656,7 +3656,7 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
     BackingAsk ask{m.width, m.height,    m.format,    tag,    std::max(m.layers, 1u), m.samples,
-                   m.zeta,  blockLinear, compression, copied, zetaKindsProbed()};
+                   m.zeta,  blockLinear, compression, copied, kindProbes()};
     blockLinear |= m.zeta;
     // a layered pass's backing: plain memory of its layers (compressed backings are one layer's)
     const uint32_t kind = compression && m.layers <= 1 ? compKind(m, blockLinear, copied) : 0;

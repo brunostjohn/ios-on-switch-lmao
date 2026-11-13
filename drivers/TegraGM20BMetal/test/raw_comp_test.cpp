@@ -114,11 +114,13 @@ TEST(RawComp, MemoryIsWholeComptagLines)
 }
 
 // What the copy engine fills or drains compresses only at the kinds gpu.x1.ce_compressed proved (one-sample C32 and C64)
+// and gpu.x1.ce_compressed_depth proved as shipped (one-sample ZF32_2CZ)
 TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
 {
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xdb));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xe9));
-    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x02u, 0x86u, 0xceu, 0xcfu, 0xd0u})
+    EXPECT_TRUE(raw::copyEngineReadsCompressed(0x86));
+    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x02u, 0x87u, 0x88u, 0xceu, 0xcfu, 0xd0u})
         EXPECT_FALSE(raw::copyEngineReadsCompressed(kind)) << std::hex << kind;
 
     // memoryless: the copy engine never reaches them
@@ -135,9 +137,10 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, true), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 0, 4, 2, true), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 0, 8, 4, true), 0u);
-    // zetas the shader's depth tests copy with the copy engine: no zeta kind is proven
-    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false), 0u);
+    // zetas the shader's depth tests copy with the copy engine: one-sample Depth32Float alone is proven
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false), 0x86u);
     EXPECT_EQ(raw::backingKind(true, true, 252, 4, 4, false), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 2, false), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, true), 0u);
 
