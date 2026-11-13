@@ -48,6 +48,8 @@ static bool gSurfaceInput;
 static int gRefuseSurfaces;  // 1: every surface (kIOReturnUnsupported); 2: every other one, for now (NotReady)
 static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
 static bool gRefuseB;       // the engine answers every B picture with an error, as NVENC would one it cannot code
+static int gRefuseP;        // and the gRefuseP-th P picture from when it is set (gPSeen counts them)
+static int gPSeen;
 static uint32_t gFailWait;  // the job whose Wait answers a failure: a producer of its input was cancelled
 static const char *gRefusal;
 static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
@@ -165,7 +167,7 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     const bool bPicture = pc->pic_type == H264ENC_B;
     if (p->pps_data.entropy_coding_mode_flag)
         return -1;  // CAVLC only (see above)
-    if (bPicture && gRefuseB) {
+    if ((bPicture && gRefuseB) || (pPicture && gRefuseP && ++gPSeen == gRefuseP)) {
         const TegraNVENCEntry *record = find(s, NVC5B7_SET_OUT_ENC_STATUS);
         nvenc_pic_stat_s *refusal = (nvenc_pic_stat_s *)(c->va[record->value] + record->offset);
         memset(refusal, 0, sizeof(*refusal));
@@ -893,6 +895,16 @@ int main(void)
     encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, failedLine, sizeof(failedLine));
     gFailWait = 0;
     printf("a frame whose input's producer failed: %s\n", failedLine);
+    // NVENC refuses one P picture (the 4th): it is coded again as an IDR, and P pictures go on from the next frame, the
+    // key interval counted from that IDR.
+    gRefuseP = 4;
+    gPSeen = 0;
+    char refusedPLine[512];
+    encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, refusedPLine, sizeof(refusedPLine));
+    gRefuseP = 0;
+    printf("one P picture refused: %s\n", refusedPLine);
+    EXPECT(strstr(refusedPLine, "30/30 frames encoded (0 errors)") && strstr(refusedPLine, "sync samples 0 4 14 15 25,"),
+           "a refused P picture is coded again as an IDR and the next picture is a P picture");
     EXPECT(strstr(failedLine, "29/30 frames encoded (1 errors)") && strstr(failedLine, "sync samples 0 6 "),
            "a failed Wait fails its frame, the next is an IDR and the session goes on");
     // AllowFrameReordering unset (true), MaxFrameDelayCount 1, AllowFrameReordering false; held frames coded later
