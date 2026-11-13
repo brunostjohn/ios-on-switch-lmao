@@ -7,7 +7,8 @@ import UIKit
 /// (drivers/NativeMobileDisplay/SwitchNativePlane.h): scanned in place through ADDR_H_OFFSET and ADDR_V_OFFSET, the
 /// route V5a and V5c proved, instead of its pitch representation (a VIC copy per frame). Only an unturned video layer
 /// reaches window B as the decoder's own picture, and on the Switch's portrait panel that takes a portrait UI, so the
-/// scene is asked for portrait first and turned back afterwards; a scene that stays landscape is a skip. Plays the H.264
+/// scene is asked for portrait first and turned back afterwards (restored: it reported its orientation back before the
+/// tests after it, which need it, ran); a scene that stays landscape is a skip. Plays the H.264
 /// 1080p clip aspect-fitted into a view twice the stage's width (both side edges off the screen) and reads
 /// kern.switch_planes_* around it (debug kernels): window B has to have taken the decoder's own picture
 /// (native_share: placements of it per set written) with no detached layer unshown.
@@ -50,7 +51,7 @@ struct PlanesCroppedTest: HWTest {
         metrics.set("portrait", portrait)
         guard portrait else {
             await context.clearStage()
-            _ = await Self.request(turnedFrom)
+            metrics.set("restored", await Self.turnBack(turnedFrom))
             return .skip("the scene stayed landscape: no unturned video layer reaches window B", metrics)
         }
         let ended = Waiter<Bool>()
@@ -63,7 +64,8 @@ struct PlanesCroppedTest: HWTest {
         NotificationCenter.default.removeObserver(observer)
         let after = PlanesTest.totals(Self.counters).values
         await context.clearStage()
-        _ = await Self.request(turnedFrom)
+        let restored = await Self.turnBack(turnedFrom)
+        metrics.set("restored", restored)
         let delta = { (name: String) in (after[name] ?? 0) - (before[name] ?? 0) }
         for name in Self.counters { metrics.set("d_" + name, delta(name)) }
         let share = delta("flips") > 0 ? Double(delta("native")) / Double(delta("flips")) : 0
@@ -74,7 +76,31 @@ struct PlanesCroppedTest: HWTest {
                 ("window B flipped (d_flips > 0)", delta("flips") > 0),
                 ("the decoder's own picture, clipped, on window B (native_share >= 0.9)", share >= 0.9),
                 ("no detached layer went unshown (d_dropped 0)", delta("dropped") == 0),
+                ("the scene turned back (restored)", restored),
             ], metrics)
+    }
+
+    /// Asks the scene for `mask` again and waits up to 3 s for it to report that orientation.
+    static func turnBack(_ mask: UIInterfaceOrientationMask) async -> Bool {
+        _ = await request(mask)
+        for _ in 0..<30 {
+            if await MainActor.run(body: { current() == mask }) { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    @MainActor static func current() -> UIInterfaceOrientationMask? {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            return nil
+        }
+        switch scene.interfaceOrientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return nil
+        }
     }
 
     /// Asks the app's scene for `mask`; the orientations it had.
@@ -82,13 +108,7 @@ struct PlanesCroppedTest: HWTest {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
             return mask
         }
-        let had: UIInterfaceOrientationMask
-        switch scene.interfaceOrientation {
-        case .portrait: had = .portrait
-        case .portraitUpsideDown: had = .portraitUpsideDown
-        case .landscapeLeft: had = .landscapeLeft
-        default: had = .landscapeRight
-        }
+        let had = current() ?? .landscapeRight
         scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
         return had
