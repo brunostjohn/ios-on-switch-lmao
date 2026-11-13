@@ -10,8 +10,11 @@
 //   libdrm tests/tegra/vic40.h (NVIDIA, MIT): BlendingSlotStruct's bits (AlphaK1 0..9, AlphaK2 16..25, the four
 //   MatchSelects at 32, 36, 40 and 44).
 //   NVIDIA open-gpu-doc classes/video/vic_ceb6_types.h and the T18x hwinc vic_enums.h (VIC 4.1): out = srcFactC src +
-//   dstFactC dst per slot, dst what the slots below composed, and the select codes below. VIC 4.0 has the same bits;
-//   that it has the same codes is what probe gpu.x1.vic_compose (SwitchVICComposeProbe.h) measures.
+//   dstFactC dst per slot, dst what the slots below composed, and the select codes below. VIC 4.0 has the same bits
+//   and honours them only under AlphaFillMode COMPOSITED, the mode NVIDIA's VIC 5.1 header ties them to: probe
+//   gpu.x1.vic_compose (SwitchVICComposeProbe.h) on boot 21 read a premultiplied slot as straight and a half global
+//   alpha as none under OPAQUE (every slot laid over by its own alpha), and the premultiplied slot exact under
+//   COMPOSITED.
 // The composite is what DC A's windows would have scanned: each slot's Y'CbCr goes to RGB through its own matrix and
 // nothing else, so no transfer or gamut step runs and the slots' transfer and primaries are not compared.
 #ifndef TEGRA_VIC_COMPOSE_H
@@ -214,7 +217,7 @@ static inline const char *tegra_vic_compose_build(const TegraVICComposeSlot *slo
     uint8_t *c = job->config;
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_HORIZ, 4);
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_VERT, 4);
-    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE, TEGRA_VIC_ALPHA_OPAQUE);
+    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE, TEGRA_VIC_ALPHA_COMPOSITED);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA, 1023);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_TARGET_LEFT, target->x);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT, target->x + target->width - 1);

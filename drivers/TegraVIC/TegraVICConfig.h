@@ -83,6 +83,7 @@ enum {
     TEGRA_VIC_ALPHA_OPAQUE = 0,
     TEGRA_VIC_ALPHA_BACKGROUND = 1,  // every pixel's alpha the background's (OUT_BACKGROUND_ALPHA)
     TEGRA_VIC_ALPHA_SOURCE_STREAM = 3,
+    TEGRA_VIC_ALPHA_COMPOSITED = 4,  // the slots' blend factors decide colour and alpha (TegraVICCompose.h)
 };
 
 // Stores `value` in bits [bit, bit + width) of the little-endian bit string at cfg + offset (a field never straddles
@@ -429,8 +430,8 @@ static const TegraVICTraits kTegraVICTraits = {
     .packedYcc = 0,       // a packed 4:2:2 row's element size and byte order: probe gpu.x1.vic_packed422
     .subRects = 0x41,
     .surfaceFlips = 1,
-    .multiSlot = 1,  // no job has run two slots yet: probe gpu.x1.vic_compose
-    .slotAlpha = 1,  // the same probe's alpha cases, apart so an alpha failure leaves opaque composites on
+    .multiSlot = 1,  // probe gpu.x1.vic_compose: two slots compose bottom first (boots 19 and 21)
+    .slotAlpha = 1,  // the same probe's alpha cases, under AlphaFillMode COMPOSITED (TegraVICCompose.h)
 };
 
 #define TEGRA_VIC_MAX_METHODS 12
