@@ -3,6 +3,7 @@
     hwtest_app(name, minimum_os_version, ...)   one iOS version's app: ad hoc signed, iPad, the shaders as its library
     ios_arm64e(name, app)                        an ios_application's .ipa built for arm64e alone, whatever
                                                  --ios_multi_cpus says (.bazelrc: arm64)
+    app_twin(name, app)                          the same .ipa built again in a configuration of its own
 
 rules_apple takes an app's architectures from --ios_multi_cpus only, so a per-app arm64e build needs ios_arm64e's
 outgoing transition.
@@ -65,4 +66,28 @@ ios_arm64e = rule(
         ),
     },
     doc = "An ios_application's .ipa, built for arm64e alone.",
+)
+
+def _twin_transition_impl(_settings, _attr):
+    return {"//hw_test_app:twin": True}
+
+_twin_transition = transition(
+    implementation = _twin_transition_impl,
+    inputs = [],
+    outputs = ["//hw_test_app:twin"],
+)
+
+def _app_twin_impl(ctx):
+    return [DefaultInfo(files = ctx.attr.app[0][DefaultInfo].files)]
+
+app_twin = rule(
+    implementation = _app_twin_impl,
+    attrs = {
+        "app": attr.label(
+            cfg = _twin_transition,
+            mandatory = True,
+            doc = "the ios_application to build a second time",
+        ),
+    },
+    doc = "An ios_application's .ipa built again under //hw_test_app:twin: every action of it runs a second time.",
 )
