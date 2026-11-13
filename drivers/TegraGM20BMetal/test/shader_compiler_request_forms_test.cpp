@@ -10,6 +10,7 @@
 #include "../compiler/compiler_request.mm"
 #include "../raw/runtime/raw_compute_key.h"
 #include "made_metallib.h"
+#include "bazel/testing/source_text.h"
 
 #include <gtest/gtest.h>
 #include <functional>
@@ -306,6 +307,36 @@ TEST(CompileRequestForms, EveryFieldGoesOverTheWire)
     raw::CompileRequest crowded = r;
     crowded.variant.written.assign(raw::kWrittenSlots + 1, {0, 23});
     EXPECT_FALSE(raw::decodeRequest(raw::encodeRequest(crowded), back));
+}
+
+// The paths no host model runs end to end (a variant's ask is answered asynchronously, a kernel's at its dispatch) fill the
+// request from the same values the client's key is made of
+TEST(CompileRequestForms, TheClientsRequestsCarryWhatItsKeysAreMadeOf)
+{
+    using switch_ios::test::Body;
+    using switch_ios::test::SourceText;
+    const std::string remote = SourceText("../raw/runtime/RawCompleteRemote.mm");
+    const std::string render = Body(remote, "bool Completion::renderRequest(const Ask &a,");
+    EXPECT_NE(render.find("r.fields = fieldsOf(d);"), std::string::npos);
+    EXPECT_NE(render.find("r.variant = a.variant;"), std::string::npos);
+    EXPECT_NE(Body(remote, "Compiler::Outcome Completion::remoteKernel(")
+                  .find("q.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);"),
+              std::string::npos);
+    const std::string cubic = Body(SourceText("../raw/runtime/RawMetalCubic.mm"), "renderVariant(RMPipeline *p,");
+    EXPECT_NE(cubic.find("const std::string suffix = forms.untested().name(), name = forms.name();"), std::string::npos);
+    EXPECT_NE(cubic.find("request.key = p->_key + name;"), std::string::npos);
+    EXPECT_NE(cubic.find("request.variant = forms;"), std::string::npos);
+    EXPECT_NE(cubic.find("fallback.key = p->_key + suffix;"), std::string::npos);
+    EXPECT_NE(cubic.find("fallback.variant = forms.untested();"), std::string::npos);
+    EXPECT_NE(SourceText("../raw/runtime/RawMetalComputeState.mm")
+                  .find("s->_constants = (f ? f->_constants : \"\") + "
+                        "raw::stageInText(raw::stageInFieldsOf(descriptor.stageInputDescriptor));"),
+              std::string::npos);
+    EXPECT_NE(Body(SourceText("../raw/runtime/RawComplete.mm"), "Compiler::Outcome Completion::make(")
+                  .find("const ProbeTextures textures = probeTexturesOf(a.variant);"),
+              std::string::npos);
+    EXPECT_NE(SourceText("../compiler/compiler_record.mm").find("raw::probeTexturesOf(p.request.variant)"),
+              std::string::npos);
 }
 
 TEST(CompileRequestForms, TheRefusalNamesTheFirstFieldTheKeysPartAt)
