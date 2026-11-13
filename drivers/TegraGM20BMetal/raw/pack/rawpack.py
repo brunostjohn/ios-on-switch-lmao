@@ -71,6 +71,8 @@ METAL = TREE / 'drivers/NativeMetal'
 ABI = TREE / 'drivers/TegraGM20B'
 CLASSES = TREE / 'third_party/mesa/src/nouveau/headers'  # NVIDIA's class headers find nvtypes.h here (nvdec.cpp)
 STAGER = RAW.parent / 'stage-tegra-gm20b-metal.py'
+# Lines the bridge's direct compile writes to stderr (NativeMetalDirect.rs translate): the build's output carries them
+DIRECT_COMPILE_SAYS = 'direct compile: '
 
 
 def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | None = None) -> str:
@@ -443,6 +445,7 @@ def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> st
     corpus = d / 'corpus.log'
     cache = d / 'cache'
     said = []
+    bridge_said = []
 
     def step(name: str, cmd: list, extra: dict[str, str], out: Path) -> None:
         shutil.rmtree(cache, ignore_errors=True)
@@ -460,13 +463,14 @@ def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> st
             sys.exit(f'rawpack: {d.name} {name} failed:\n{r.stderr[-4000:]}')
         tail = [line for line in r.stderr.splitlines() if line.startswith(name.split(maxsplit=1)[0] + ':')]
         said.append(f'{name}: {tail[-1] if tail else "?"}')
+        bridge_said.extend(line for line in r.stderr.splitlines() if line.startswith(DIRECT_COMPILE_SAYS))
 
     own = {'PROBE_OWN_LIB': str(tools / 'own.metallib')} if d.name == 'bucket0' else {}
     step('directpack', [tools / 'directpack', nvk, qc, corpus, d / 'records.bin'], own, d / 'directpack.out')
     if d.name == 'bucket0':
         shutil.copyfile(tools / 'context.log', d / 'context.log')
     shutil.rmtree(cache, ignore_errors=True)
-    return f'rawpack: {d.name}: ' + '; '.join(said)
+    return '\n'.join([f'rawpack: {d.name}: ' + '; '.join(said), *bridge_said])
 
 
 def probe_env() -> dict[str, str]:
