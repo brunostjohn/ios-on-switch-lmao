@@ -10,7 +10,8 @@
 #                                                                               the kind's goldens and sample corpus
 #                                                                               (-- --out <dir>: there instead)
 #
-# The goldens are 9da14c602's packs (pack v19), made while NVK's compile still vouched for every record. The sample pack
+# The goldens are x1-tip5's packs (pack v23, the direct generator with no Vulkan device), recorded at a31c8316a's pack
+# bytes; 9da14c602's (v19), made while NVK's compile still vouched for every record, came before them. The sample pack
 # makes only the sampled records' states (their split corpus lines, records_<kind>_sample.corpus) with the full pack's
 # probe and link (//gpu/seed:defs.bzl), a few minutes where the full pack takes an hour.
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
