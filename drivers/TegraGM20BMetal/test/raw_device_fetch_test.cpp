@@ -118,10 +118,19 @@ protected:
         });
     }
 
-    Drawn restart(raw::Pipeline *pl)
+    Drawn restart(raw::Pipeline *pl, uint8_t cull = 0)
+    {
+        return drawOnce(pl, [this, cull](raw::RenderEncoder &e, const char **why) {
+            e.setCullMode(cull);
+            return e.drawIndexed(kStrip, 9, 2, &indices, 0, 1, 0, 0, why);
+        });
+    }
+
+    // RenderBox's quad: an indexed strip of four
+    Drawn quad(raw::Pipeline *pl)
     {
         return drawOnce(pl, [this](raw::RenderEncoder &e, const char **why) {
-            return e.drawIndexed(kStrip, 9, 2, &indices, 0, 1, 0, 0, why);
+            return e.drawIndexed(kStrip, 4, 2, &indices, 0, 1, 0, 0, why);
         });
     }
 
@@ -227,11 +236,30 @@ TEST_F(DeviceFetch, APassThatDoesNotLoadItsTargetForgetsItsRung2Blends)
     }
 }
 
+// An indexed strip's runs are index ranges: the hardware's restart draws nothing in the runs holding 0xffff, as the
+// whole strip draws no triangle there
+TEST_F(DeviceFetch, TheBarrierFormDrawsAnIndexedStripATriangleAtATime)
+{
+    raw::Pipeline *pl = pipeline(false);
+    ASSERT_NE(pl, nullptr);
+    const Drawn q = quad(pl);
+    EXPECT_TRUE(q.ok) << q.why;
+    EXPECT_EQ(q.interlocked, 0u);
+    EXPECT_EQ(q.split, 1u);
+    EXPECT_EQ(q.triangles, 2u);
+    const Drawn r = restart(pl);
+    EXPECT_TRUE(r.ok) << r.why;
+    EXPECT_EQ(r.split, 1u);
+    EXPECT_EQ(r.triangles, 7u);
+}
+
 TEST_F(DeviceFetch, TheBarrierFormRefusesWhatOneTriangleADrawCannotKeep)
 {
     raw::Pipeline *pl = pipeline(false);
     ASSERT_NE(pl, nullptr);
-    EXPECT_FALSE(restart(pl).ok);
+    const Drawn culled = restart(pl, 1);
+    EXPECT_FALSE(culled.ok);
+    EXPECT_EQ(culled.why, "framebuffer-fetch ordering requires an interlocked program or available bounded geometry");
     EXPECT_FALSE(instanced(pl).ok);
     EXPECT_FALSE(indirect(pl).ok);
 }

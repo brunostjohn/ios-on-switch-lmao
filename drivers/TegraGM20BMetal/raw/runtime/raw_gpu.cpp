@@ -5362,9 +5362,12 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs,
                                                          const char **why)
 {
-    const FetchRefusal refusal = sequentialRefusal(pl.primitiveId, shape);
+    FetchDraw draw = shape;
+    const Texture *zeta = pass_.depthStencil.texture;
+    draw.facing = facingDecides(raster_.cull, dsState_->desc(), stencilRef_, zeta && zetaHasStencil(zeta->format));
+    const FetchRefusal refusal = sequentialRefusal(pl.primitiveId, draw);
     if (refusal != FetchRefusal::None ||
-        !TriangleRuns::sequential(shape.primitive, shape.count, shape.instances, shape.indexed, runs, runWinding_))
+        !TriangleRuns::sequential(shape.primitive, shape.count, shape.instances, runs, runWinding_))
         return refuseFetch(pl, refusal != FetchRefusal::None ? refusal : FetchRefusal::Geometry, shape.primitive,
                            shape.count, shape.instances, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
