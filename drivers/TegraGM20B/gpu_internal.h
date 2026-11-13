@@ -364,12 +364,8 @@ struct tgm_chan {
 	/* an engine was reset under its context load, and what it had completed then (gpu_reload.c; tgm_live_lock) */
 	int load_reset;
 	u32 load_reset_done;
-	/* a kernel channel's last step for a hang check that found it stuck (TegraGM20BKernelHang.h), and what it had
-	 * completed then (tgm_live_lock) */
-	int hang_step;
-	u32 hang_step_done;
-	u64 hang_step_ns;
-	int hang_deferred; /* checks in a row that put its step off for a preempt in flight (tgm_kernel_hang_defer) */
+	/* a kernel channel's steps for hang checks that found it stuck */
+	struct tgm_kernel_hang_state kernel_hang;
 	int iso_retried; /* tgm_iso_deadline asked nvkm for its kill again */
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
@@ -431,7 +427,7 @@ void tgm_acquire_probe_giveup(struct tgm_chan *chan, u64 parked_ns, u64 now);
  * tgm_hang_recover(), from what the GPU itself is stuck on; a stuck kernel channel has its engines reset, and kills
  * clients only once a reset of its own engines did not free it. A client's submissions never panic the system: what
  * panics is an error on a kernel channel, a kill nvkm's recovery never completes (tgm_iso_verdict), and a kernel
- * channel's stall that a reset of every engine with no client context resident did not free (tgm_kernel_hang_step). */
+ * channel's stall that a reset of every engine with no client context resident did not free (tgm_kernel_hang_next). */
 #define TGM_ISOLATE_NS (500 * NSEC_PER_MSEC)
 
 struct iso_state {
@@ -452,7 +448,7 @@ int tgm_load_recover_locked(struct tgm_chan *chan, const char *who);
 int tgm_chid_unowned(int chid);
 /* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_KERNEL for kernel channel `stuck`, which `late`'s wait
  * (who, seqno, waited_ns) found, moved_ns the last completion of a live channel: its cut work marked to be redone and
- * the step tgm_kernel_hang_step names taken. TGM_HANG_RECOVERING; the FATAL step panics as a hardware failure. */
+ * the step tgm_kernel_hang_next names taken. TGM_HANG_RECOVERING; the FATAL step panics as a hardware failure. */
 enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *late, const char *who,
 				     u32 seqno, u64 waited_ns, u64 moved_ns);
 /* tgm_live_lock held, for recover_engine.c's walk of a stuck kernel channel's engines: whether hardware channel chid is

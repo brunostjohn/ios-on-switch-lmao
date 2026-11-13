@@ -206,18 +206,24 @@ enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *la
 		[TGM_KERNEL_HANG_OWN] = "its own engines",
 		[TGM_KERNEL_HANG_ALL] = "every engine of its runlist",
 	};
+	struct tgm_kernel_hang_state *hang = &stuck->kernel_hang;
 	struct tgm_chan *clients[8];
 	char state[TGM_HANG_LINE];
 	char engines[TGM_HANG_LINE];
 	char host[TGM_HANG_LINE];
 	const u64 now = nvxnu_nanotime();
 	const u32 done = tgm_chan_completed(stuck);
-	const enum tgm_kernel_hang step = tgm_kernel_hang_step(
-		stuck->hang_step, stuck->hang_step_done, done, moved_ns > stuck->hang_step_ns);
+	int its = 0;
+	const int other = tgm_recover_preempting(tgm_gpu.device, (int)stuck->chid, &its);
+	const int pbdma = tgm_recover_pbdma_chid(tgm_gpu.device);
+	const enum tgm_kernel_hang step = tgm_kernel_hang_next(
+		hang, done, tgm_kernel_hang_moved(hang, moved_ns, its, pbdma), now);
 	u32 killed = 0;
-	int reset = 0;
+	int reset = -1;
 	int n = 0;
 
+	if (step == TGM_KERNEL_HANG_WAIT)
+		return TGM_HANG_RECOVERING;
 	tgm_chan_describe(stuck, state, sizeof(state));
 	tgm_engines_line(engines, sizeof(engines));
 	tgm_recover_host_line(tgm_gpu.device, host, sizeof(host));
@@ -225,13 +231,11 @@ enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *la
 		nvxnu_panic("tegra-gm20b: hardware failure: the engines of %s's channel %u "
 			    "did not come back after a reset with no client context resident: "
 			    "%s waited %llu ms for %s fence %u, no channel completed anything "
-			    "since: %s; engines %s; %s",
+			    "since and no preempt took it off its PBDMA: %s; engines %s; %s",
 			    stuck->owner, stuck->chid, who, waited_ns / 1000000, late->owner, seqno,
 			    state, engines, host);
 	}
-	stuck->hang_deferred =
-		tgm_kernel_hang_defer(stuck->hang_deferred, tgm_recover_preempting(tgm_gpu.device));
-	if (!stuck->hang_deferred) {
+	if (!tgm_kernel_hang_put_off(hang, step, other, done, now)) {
 		if (step == TGM_KERNEL_HANG_ALL) {
 			n = held_clients((int)stuck->chid, clients, ARRAY_SIZE(clients));
 			killed =
@@ -240,9 +244,8 @@ enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *la
 		tgm_ctxsw_redo_mark(stuck);
 		reset = tgm_recover_kernel(tgm_gpu.device, (int)stuck->chid,
 					   step == TGM_KERNEL_HANG_ALL);
-		stuck->hang_step = tgm_kernel_hang_did(step, n);
-		stuck->hang_step_done = done;
-		stuck->hang_step_ns = now;
+		tgm_kernel_hang_took(hang, step, n, pbdma,
+				     !other && pbdma == (int)stuck->chid && reset > 0, done, now);
 	}
 	scnprintf(
 		load_line, sizeof(load_line),
@@ -250,8 +253,7 @@ enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *la
 		"channel %u stuck, %s %s (%d), %u client channels killed of %d resident: %s; "
 		"engines %s; %s\n",
 		who, waited_ns / 1000000, late->owner, seqno, stuck->owner, stuck->chid,
-		steps[step],
-		stuck->hang_deferred ? "put off, a preempt in flight" : "reset, its work redone",
+		steps[step], reset < 0 ? "put off, a preempt in flight" : "reset, its work redone",
 		reset, killed, n, state, engines, host);
 	switch_linux_log_line(load_line);
 	if (stuck == tgm_present.chan)

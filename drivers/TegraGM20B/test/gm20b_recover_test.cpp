@@ -346,41 +346,123 @@ TEST(KernelHang, Tv5asScrubberStallResetsTheIdleCopyEngineAndLeavesGrsClientCont
 	EXPECT_FALSE(tgm_kernel_hang_resets(engine(1, 27, 0), 0, 1, 1))
 		<< "a copy engine busy with a live client's copy";
 	EXPECT_TRUE(tgm_kernel_hang_resets(engine(1, 0, 0), 1, 0, 1)) << "busy with the scrubber's";
-	EXPECT_EQ(tgm_kernel_hang_step(TGM_KERNEL_HANG_NONE, 0, 686, 0), TGM_KERNEL_HANG_OWN);
+	const tgm_kernel_hang_state fresh = {};
+	EXPECT_EQ(tgm_kernel_hang_next(&fresh, 686, 0, 195785 * kMs), TGM_KERNEL_HANG_OWN);
 }
 
+// One stall, checks a second apart: OWN, ALL (the clients on it killed), ALL again once they are gone, then fatal.
 TEST(KernelHang, AStepThatFreesNothingEscalatesAndOnlyACleanResetOfEveryEngineIsFatal)
 {
 	const uint32_t done = 686;
-	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_OWN, 0), done, done, 0),
-		  TGM_KERNEL_HANG_ALL);
-	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_ALL, 1), done, done, 0),
-		  TGM_KERNEL_HANG_ALL)
+	uint64_t now = 1000 * kMs;
+	tgm_kernel_hang_state s = {};
+	ASSERT_EQ(tgm_kernel_hang_next(&s, done, 0, now), TGM_KERNEL_HANG_OWN);
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_OWN, 0, -1, 0, done, now);
+	now += 1000 * kMs;
+	ASSERT_EQ(tgm_kernel_hang_next(&s, done, 0, now), TGM_KERNEL_HANG_ALL);
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_ALL, 2, -1, 0, done, now);
+	now += 1000 * kMs;
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, 0, now), TGM_KERNEL_HANG_ALL)
 		<< "clients were resident at that reset: they are gone now, reset again";
-	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_ALL, 0), done, done, 0),
-		  TGM_KERNEL_HANG_FATAL);
-	for (const int step :
-	     {TGM_KERNEL_HANG_DID_OWN, TGM_KERNEL_HANG_DID_ALL, TGM_KERNEL_HANG_DID_ALL_CLEAN}) {
-		EXPECT_EQ(tgm_kernel_hang_step(step, done, done + 1, 0), TGM_KERNEL_HANG_OWN)
-			<< "it completed work since: a new stall";
-		EXPECT_EQ(tgm_kernel_hang_step(step, done, done, 1), TGM_KERNEL_HANG_OWN)
-			<< "another channel completed work since: the reset freed the GPU, a new "
-			   "stall";
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_ALL, 0, -1, 0, done, now);
+	now += 1000 * kMs;
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, 0, now), TGM_KERNEL_HANG_FATAL);
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done + 1, 0, now), TGM_KERNEL_HANG_OWN)
+		<< "it completed work since: a new stall";
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, 1, now), TGM_KERNEL_HANG_OWN)
+		<< "another channel completed work since: the GPU came back";
+}
+
+// The clean ALL step's hold asked for the channel to leave its PBDMA: if that preempt landed and the channel is stuck
+// again, the host and the engines came back and what is stuck is the channel's own state, never a hardware failure.
+TEST(KernelHang, AChannelThatLeftItsPbdmaAndStalledAgainIsNotAHardwareFailure)
+{
+	const uint32_t done = 686;
+	const uint64_t step = 5000 * kMs, check = step + 1000 * kMs;
+	tgm_kernel_hang_state s = {};
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_OWN, 0, 0, 1, done, step - 1000 * kMs);
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_ALL, 0, 0, 1, done, step);
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, tgm_kernel_hang_moved(&s, 0, 0, 0), check),
+		  TGM_KERNEL_HANG_OWN)
+		<< "its preempt landed";
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, tgm_kernel_hang_moved(&s, 0, 1, 0), check),
+		  TGM_KERNEL_HANG_FATAL)
+		<< "its preempt still in flight a second on: the host cannot take it off";
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, tgm_kernel_hang_moved(&s, check, 1, 0), check),
+		  TGM_KERNEL_HANG_OWN)
+		<< "another channel completed work";
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, tgm_kernel_hang_moved(&s, 0, 1, 27), check),
+		  TGM_KERNEL_HANG_OWN)
+		<< "the PBDMA is on another channel: the stall now is a new one";
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_ALL, 0, -1, 0, done, step);
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, tgm_kernel_hang_moved(&s, 0, 0, -1), check),
+		  TGM_KERNEL_HANG_FATAL)
+		<< "it was on no PBDMA at the reset and nothing moved";
+}
+
+// The scrubber's and the present's deadlines, a CPU wait and a copy queue's check can all find the channel stuck within
+// milliseconds: a step's reset gets its time before the next step, whoever asks.
+TEST(KernelHang, WaitersAtTheSameMomentTakeOneStep)
+{
+	const uint32_t done = 686;
+	const uint64_t step = 5000 * kMs;
+	tgm_kernel_hang_state s = {};
+	tgm_kernel_hang_took(&s, TGM_KERNEL_HANG_OWN, 0, -1, 0, done, step);
+	for (const uint64_t after : {1 * kMs, 3 * kMs, 200 * kMs, TGM_KERNEL_HANG_GAP_NS - 1})
+		EXPECT_EQ(tgm_kernel_hang_next(&s, done, 0, step + after), TGM_KERNEL_HANG_WAIT)
+			<< after / kMs;
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done, 0, step + TGM_KERNEL_HANG_GAP_NS),
+		  TGM_KERNEL_HANG_ALL);
+	EXPECT_EQ(tgm_kernel_hang_next(&s, done + 1, 0, step + 1 * kMs), TGM_KERNEL_HANG_OWN)
+		<< "its own completion: a new stall at once";
+}
+
+// The channel stuck again after every OWN while the rest of the GPU runs: what does not come back is its own state, and
+// every few OWN steps one resets every engine. Never fatal: the GPU runs.
+TEST(KernelHang, AChannelStuckAgainAfterEveryOwnStepWhileOthersRunGetsAnAllStepAndNeverAPanic)
+{
+	const uint32_t done = 686;
+	uint64_t now = 1000 * kMs;
+	tgm_kernel_hang_state s = {};
+	int alls = 0;
+	for (int check = 0; check < 12; check++, now += 1000 * kMs) {
+		const tgm_kernel_hang step = tgm_kernel_hang_next(&s, done, check > 0, now);
+		ASSERT_NE(step, TGM_KERNEL_HANG_FATAL) << check;
+		ASSERT_NE(step, TGM_KERNEL_HANG_WAIT) << check;
+		alls += step == TGM_KERNEL_HANG_ALL;
+		tgm_kernel_hang_took(&s, step, 0, -1, 0, done, now);
 	}
+	EXPECT_EQ(alls, 3);
 }
 
 // A reset while another preempt is in flight would leave the stuck channel on its PBDMA (the hold asks for none then)
 TEST(KernelHang, AStepWaitsForAnotherPreemptInFlightAFewChecksAtMost)
 {
-	int deferred = 0;
-	for (int check = 1; check <= TGM_KERNEL_HANG_WAITS; check++) {
-		deferred = tgm_kernel_hang_defer(deferred, 1);
-		EXPECT_EQ(deferred, check);
+	const uint32_t done = 686;
+	uint64_t now = 1000 * kMs;
+	tgm_kernel_hang_state s = {};
+	for (int check = 1; check <= TGM_KERNEL_HANG_WAITS; check++, now += 1000 * kMs) {
+		ASSERT_EQ(tgm_kernel_hang_next(&s, done, 0, now), TGM_KERNEL_HANG_OWN) << check;
+		EXPECT_TRUE(tgm_kernel_hang_put_off(&s, TGM_KERNEL_HANG_OWN, 1, done, now))
+			<< check;
+		EXPECT_EQ(tgm_kernel_hang_next(&s, done, 0, now + 1 * kMs), TGM_KERNEL_HANG_WAIT)
+			<< "other waiters meanwhile: " << check;
 	}
-	EXPECT_EQ(tgm_kernel_hang_defer(deferred, 1), 0)
+	EXPECT_FALSE(tgm_kernel_hang_put_off(&s, TGM_KERNEL_HANG_OWN, 1, done, now))
 		<< "one that never finishes: the step is taken";
-	EXPECT_EQ(tgm_kernel_hang_defer(2, 0), 0);
-	EXPECT_EQ(tgm_kernel_hang_defer(0, 0), 0);
+	tgm_kernel_hang_state idle = {};
+	EXPECT_FALSE(tgm_kernel_hang_put_off(&idle, TGM_KERNEL_HANG_OWN, 0, done, now));
+}
+
+TEST(KernelHang, AChannelGroupsContextIsAClientsTheOwnStepKeeps)
+{
+	const uint32_t gr = engine(1, 3, 3) & ~kBusy;
+	EXPECT_FALSE(tgm_engine_holds_tsg(gr));
+	EXPECT_TRUE(tgm_engine_holds_tsg(gr | 0x00001000u));
+	EXPECT_TRUE(tgm_engine_holds_tsg(engine(5, 3, 4) | 0x10000000u)) << "loading a group";
+	EXPECT_FALSE(tgm_engine_holds_tsg(engine(0, 3, 4) | 0x00001000u)) << "INVALID";
+	EXPECT_FALSE(tgm_kernel_hang_resets(gr | 0x00001000u, 0,
+					    tgm_engine_holds_tsg(gr | 0x00001000u), 0));
 }
 
 TEST(KernelHang, AnEngineHoldsItsIdleValidContextAndBothSidesOfASwitch)

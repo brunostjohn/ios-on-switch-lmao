@@ -306,6 +306,9 @@ TEST(GM20BPoolScrubSource, AStuckKernelChannelHasItsEnginesResetAndItsWorkRedone
 	EXPECT_TRUE(hang.Has("did not come back after a reset with no client context resident: "));
 	EXPECT_TRUE(
 		hang.Before("if (step == TGM_KERNEL_HANG_FATAL) {", "tgm_ctxsw_redo_mark(stuck);"));
+	EXPECT_TRUE(hang.Before("if (step == TGM_KERNEL_HANG_WAIT) return TGM_HANG_RECOVERING;",
+				"tgm_recover_kernel(tgm_gpu.device,"))
+		<< "a waiter within a step's gap takes no step";
 	EXPECT_TRUE(hang.Before("if (step == TGM_KERNEL_HANG_ALL) {", "kill_clients(stuck,"));
 	EXPECT_TRUE(
 		hang.Before("tgm_ctxsw_redo_mark(stuck);", "tgm_recover_kernel(tgm_gpu.device,"));

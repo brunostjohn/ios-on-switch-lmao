@@ -22,6 +22,9 @@
 #define ERROR_SCHED_DISABLE 0x00262c
 #define PFIFO_PREEMPT 0x002634
 #define PFIFO_PREEMPT_PENDING 0x00100000
+/* the preempt's target: a channel, or a channel group (gk110_cgrp_preempt) */
+#define PFIFO_PREEMPT_TSG 0x01000000
+#define PFIFO_PREEMPT_ID(v) ((v) & 0xfff)
 #define PBDMA_STATUS(i) (0x003080 + (i) * 4)
 #define PBDMA_BUSY 0x0000e000
 #define PBDMA_CHANNEL(i) (0x040120 + (i) * 0x2000)

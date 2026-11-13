@@ -68,7 +68,7 @@ static int reset_for(struct nvkm_device *device, struct nvkm_runl *runl, int chi
 		status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
 		k = tgm_engine_contexts_held(status, held);
 		holds_chid = 0;
-		live_client = 0;
+		live_client = tgm_engine_holds_tsg(status);
 		for (i = 0; i < k; i++) {
 			holds_chid |= held[i] == chid;
 			live_client |= tgm_chid_live_client(held[i]);
@@ -88,9 +88,7 @@ int tgm_recover_residue(struct nvkm_device *device, int chid)
 {
 	struct nvkm_runl *runl = NULL;
 	struct nvkm_engn *engn = NULL;
-	struct nvkm_runq *runq = NULL;
 	int reset = 0;
-	int i = 0;
 
 	nvkm_runl_foreach(runl, device->fifo)
 	{
@@ -105,21 +103,6 @@ int tgm_recover_residue(struct nvkm_device *device, int chid)
 			}
 		}
 		mutex_unlock(&runl->mutex);
-	}
-	if (reset)
-		return reset;
-	nvkm_runl_foreach(runl, device->fifo)
-	{
-		for (i = 0; i < runl->runq_nr; i++) {
-			runq = runl->runq[i];
-			if (!runq || !(nvkm_rd32(device, PBDMA_STATUS(runq->id)) & PBDMA_BUSY) ||
-			    (int)PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))) != chid)
-				continue;
-			mutex_lock(&runl->mutex);
-			reset += reset_for(device, runl, chid, 0, "reset under a PBDMA on dead");
-			mutex_unlock(&runl->mutex);
-			break;
-		}
 	}
 	return reset;
 }
@@ -137,9 +120,27 @@ int tgm_recover_kernel(struct nvkm_device *device, int chid, int all)
 	return reset;
 }
 
-int tgm_recover_preempting(struct nvkm_device *device)
+int tgm_recover_preempting(struct nvkm_device *device, int chid, int *its)
 {
-	return (nvkm_rd32(device, PFIFO_PREEMPT) & PFIFO_PREEMPT_PENDING) != 0;
+	const u32 preempt = nvkm_rd32(device, PFIFO_PREEMPT);
+	const int pending = (preempt & PFIFO_PREEMPT_PENDING) != 0;
+	const int it =
+		pending && !(preempt & PFIFO_PREEMPT_TSG) && (int)PFIFO_PREEMPT_ID(preempt) == chid;
+
+	*its = it;
+	return pending && !it;
+}
+
+int tgm_recover_pbdma_chid(struct nvkm_device *device)
+{
+	struct nvkm_runq *runq = NULL;
+
+	nvkm_runq_foreach(runq, device->fifo)
+	{
+		if (nvkm_rd32(device, PBDMA_STATUS(runq->id)) & PBDMA_BUSY)
+			return (int)PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id)));
+	}
+	return -1;
 }
 
 int tgm_recover_held(struct nvkm_device *device, int chid, int *chids, int max)

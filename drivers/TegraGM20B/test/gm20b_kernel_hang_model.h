@@ -33,12 +33,11 @@ struct Job {
 struct Chan {
 	bool kernel = false, alive = true;
 	uint32_t submitted = 0, completed = 0;
-	uint64_t progress = 0;
+	uint64_t progress = 0,
+		 busy = 0;  // its last completion; when it last went from idle to work pending
 	uint32_t strikes = 0, seen = 0;
-	int hangStep = TGM_KERNEL_HANG_NONE;
-	uint32_t hangDone = 0;
-	uint64_t hangNs = 0;
-	int hangDeferred = 0;
+	tgm_kernel_hang_state hang = {};
+	bool sticky = false;  // its method is never taken again after a wedge (stickyWedge)
 	int lastResort = 0;
 	uint32_t lastResortDone = 0;
 	std::deque<Job> jobs;
@@ -58,7 +57,13 @@ enum class Rule {
 struct Gpu {
 	Rule rule;
 	std::mt19937 rng;
-	bool brokenEngine = false;  // no reset frees PBDMA0
+	bool brokenEngine = false;  // no reset frees PBDMA0 and no preempt of its channel lands
+	int stuckPreempt =
+		-1;  // brokenEngine: the channel a preempt that never lands is pending for
+	bool stickyWedge =
+		false;  // a wedged channel reloaded after a preempt wedges PBDMA0 again at its method
+	int waiters =
+		1;  // hang checks that find the stall at each deadline (the present's, CPU waits, ...)
 	std::map<int, Chan> chans;
 	Engine eng[2];
 	int pbdma = -1;
@@ -70,6 +75,7 @@ struct Gpu {
 	std::vector<int> rc;
 	int kills = 0, wedges = 0, dirty = 0, panics = 0;
 	std::vector<int> steps;
+	std::vector<uint64_t> stepNs;
 	bool panicState = false;  // at the panic: PBDMA0 on a method, no engine busy or switching
 
 	explicit Gpu(Rule r, unsigned seed) : rule(r), rng(seed)
@@ -89,7 +95,7 @@ struct Gpu {
 		Chan &c = chans[nextChid++];
 		c.jobs = {{kCe, false}, {kGr, true}};
 		c.submitted = 2;
-		c.progress = now;
+		c.busy = now;
 	}
 
 	bool alive(int chid)
@@ -105,7 +111,7 @@ struct Gpu {
 		s.queued.push_back(now);
 		s.submitted++;
 		if (s.jobs.size() == 1)
-			s.progress = now;
+			s.busy = now;
 		deadlineAt = now + kScrubNs;
 	}
 
@@ -140,9 +146,13 @@ struct Gpu {
 	// preempt is in flight, a killed one's method dropped at the release
 	void reset(int e)
 	{
-		if (pbdma >= 0 && (!alive(pbdma) || !inflight)) {
+		if (pbdma >= 0 && wedged && brokenEngine) {
+			stuckPreempt = alive(pbdma) && !inflight ? pbdma : stuckPreempt;
+		} else if (pbdma >= 0 && (!alive(pbdma) || !inflight)) {
+			if (wedged && stickyWedge && alive(pbdma) && chans[pbdma].kernel)
+				chans[pbdma].sticky = true;
 			pbdma = -1;
-			wedged = wedged && brokenEngine;
+			wedged = false;
 		}
 		if (pbdma >= 0 && alive(pbdma) && eng[e].switching && eng[e].next == pbdma &&
 		    !chans[pbdma].jobs.empty() && chans[pbdma].jobs.front().engine == e) {
@@ -216,6 +226,10 @@ struct Gpu {
 			pbdma = pick();
 		if (pbdma < 0)
 			return;
+		if (chans[pbdma].sticky) {
+			wedged = true;
+			return;
+		}
 		Engine &e = eng[chans[pbdma].jobs.front().engine];
 		if (e.switching) {
 			e.ctx = e.next;
@@ -288,7 +302,7 @@ struct Gpu {
 		}
 	}
 
-	// recover_held.c tgm_recover_residue: the engines still on dead chid; with none, those under a PBDMA on it (shipped)
+	// recover_held.c tgm_recover_residue: the engines still on dead chid
 	bool residue(int chid)
 	{
 		int reset = 0;
@@ -297,10 +311,6 @@ struct Gpu {
 				this->reset(e);
 				reset++;
 			}
-		if (!reset && rule == Rule::Shipped && pbdma == chid) {
-			resetFor(chid, false);
-			reset++;
-		}
 		return reset != 0;
 	}
 
@@ -312,17 +322,20 @@ struct Gpu {
 		for (auto &[chid, c] : chans)
 			if (c.alive)
 				moved = std::max(moved, c.progress);
-		const tgm_kernel_hang step =
-			tgm_kernel_hang_step(k.hangStep, k.hangDone, k.completed, moved > k.hangNs);
+		const tgm_kernel_hang step = tgm_kernel_hang_next(
+			&k.hang, k.completed,
+			tgm_kernel_hang_moved(&k.hang, moved, stuckPreempt == stuck, pbdma), now);
+		if (step == TGM_KERNEL_HANG_WAIT)
+			return;
 		if (step == TGM_KERNEL_HANG_FATAL) {
 			steps.push_back(step);
 			panics++;
 			return;
 		}
-		k.hangDeferred = tgm_kernel_hang_defer(k.hangDeferred, inflight);
-		if (k.hangDeferred)
+		if (tgm_kernel_hang_put_off(&k.hang, step, inflight, k.completed, now))
 			return;
 		steps.push_back(step);
+		stepNs.push_back(now);
 		int n = 0;
 		if (step == TGM_KERNEL_HANG_ALL) {
 			n = heldClients(stuck);
@@ -332,10 +345,10 @@ struct Gpu {
 			redo = true;
 			redoThrough = k.submitted;
 		}
+		const int on = pbdma;
 		resetFor(stuck, step == TGM_KERNEL_HANG_ALL);
-		k.hangStep = tgm_kernel_hang_did(step, n);
-		k.hangDone = k.completed;
-		k.hangNs = now;
+		tgm_kernel_hang_took(&k.hang, step, n, on, !inflight && on == stuck, k.completed,
+				     now);
 	}
 
 	// 6079249be's gpu_reload.c tgm_hang_last_resort_locked and recover_engine.c tgm_recover_engines
@@ -351,6 +364,12 @@ struct Gpu {
 		return true;
 	}
 
+	// gpu_hang.c chan_progress_ns
+	static uint64_t since(const Chan &c)
+	{
+		return std::max(c.progress, c.busy);
+	}
+
 	// gpu_scrub.c scrub_deadline with gpu_hang.c tgm_hang_recover's candidates (no acquires in this model)
 	void deadline()
 	{
@@ -362,6 +381,16 @@ struct Gpu {
 			deadlineAt = now + kScrubNs - age;
 			return;
 		}
+		for (int w = 0; w < waiters && !panics; w++)
+			check();
+		recovered = now;
+		deadlineAt = now + kScrubNs;
+	}
+
+	// gpu_hang.c tgm_hang_recover for one waiter on the scrubber, and what the scrubber's deadline does with it
+	void check()
+	{
+		Chan &s = chans[kScrub];
 		std::vector<int> chids;
 		for (int e : {kGr, kCe}) {
 			if (status(e) & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW))
@@ -375,19 +404,19 @@ struct Gpu {
 		std::map<int, uint8_t> looked;
 		bool progress = false;
 		for (auto &[chid, ch] : chans)
-			progress |= ch.alive && now - ch.progress < TGM_STUCK_NS;
+			progress |= ch.alive && now - since(ch) < TGM_STUCK_NS;
 		for (size_t i = 0; i < chids.size(); i++) {
 			Chan &ch = chans[chids[i]];
 			c[i].live = ch.alive;
 			c[i].dead = !ch.alive;
 			c[i].kernel = ch.kernel;
 			c[i].resident = int(i) < resident;
-			c[i].moving = ch.alive && now - ch.progress < TGM_STUCK_NS;
+			c[i].moving = ch.alive && now - since(ch) < TGM_STUCK_NS;
 			if (!looked.count(chids[i]))
 				looked[chids[i]] = uint8_t(tgm_hang_confirm(
 					ch.alive &&
 						tgm_stuck(0, ch.completed, ch.submitted, now,
-							  ch.progress) &&
+							  since(ch)) &&
 						!c[i].moving,
 					ch.completed, &ch.strikes, &ch.seen));
 			c[i].stuck = looked[chids[i]];
@@ -411,10 +440,7 @@ struct Gpu {
 			panicState = wedged && pbdma >= 0 &&
 				     !(status(kGr) & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)) &&
 				     !(status(kCe) & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW));
-			return;
 		}
-		recovered = now;
-		deadlineAt = now + kScrubNs;
 	}
 
 	void tick()

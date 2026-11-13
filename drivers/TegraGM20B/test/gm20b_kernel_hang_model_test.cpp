@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // T-v5a's pool-scrub panic over gm20b_kernel_hang_model.h: 6079249be's rule against the kernel channel's steps
 // (TegraGM20BKernelHang.h) under hundreds of client kills.
+#include <algorithm>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/test/gm20b_kernel_hang_model.h"
 
@@ -47,6 +48,39 @@ TEST(KernelHangModel, HundredsOfKillsWithEngineResetsUnderTheScrubberNeverPanicA
 	EXPECT_GT(wedges, 20) << "the model reaches boot 20's stall";
 }
 
+// Four waiters find each stall at the same moment (the scrubber's and the present's deadlines, a CPU wait, a copy
+// queue): one step per stall, never a race to the fatal step while the first reset frees the GPU.
+TEST(KernelHangModel, WaitersFindingTheStallAtOnceTakeOneStepAndNeverPanic)
+{
+	for (unsigned seed = 1; seed <= 10; seed++) {
+		Gpu gpu(Rule::Shipped, seed);
+		gpu.waiters = 4;
+		EXPECT_TRUE(gpu.play(kKills)) << seed;
+		EXPECT_EQ(gpu.panics, 0) << seed;
+		for (size_t i = 1; i < gpu.steps.size(); i++) {
+			if (gpu.steps[i] != TGM_KERNEL_HANG_OWN)
+				EXPECT_GE(gpu.stepNs[i] - gpu.stepNs[i - 1], TGM_KERNEL_HANG_GAP_NS)
+					<< seed;
+		}
+	}
+}
+
+// The scrubber's method never taken again once it is reloaded (NVIDIA's rule: the channel an engine reset left on the
+// PBDMA is torn down): it stalls again after every reset while the rest of the GPU runs between. Every few steps reset
+// every engine, nothing panics, and the clients keep running and being killed; the scrubber never drains.
+TEST(KernelHangModel, AChannelThatNeverTakesItsMethodAgainIsResetAgainAndNeverPanics)
+{
+	Gpu gpu(Rule::Shipped, 38);
+	gpu.stickyWedge = true;
+	EXPECT_FALSE(gpu.play(kKills));
+	EXPECT_EQ(gpu.panics, 0);
+	EXPECT_GE(gpu.kills, kKills) << "the GPU ran between the stalls";
+	EXPECT_NE(std::find(gpu.steps.begin(), gpu.steps.end(), TGM_KERNEL_HANG_ALL),
+		  gpu.steps.end());
+	EXPECT_EQ(std::find(gpu.steps.begin(), gpu.steps.end(), TGM_KERNEL_HANG_FATAL),
+		  gpu.steps.end());
+}
+
 TEST(KernelHangModel, AStallNoResetFreesIsAHardwareFailureOnlyAfterACleanResetOfEveryEngine)
 {
 	Gpu gpu(Rule::Shipped, 20);
@@ -57,7 +91,7 @@ TEST(KernelHangModel, AStallNoResetFreesIsAHardwareFailureOnlyAfterACleanResetOf
 	EXPECT_EQ(gpu.steps.front(), TGM_KERNEL_HANG_OWN);
 	EXPECT_EQ(gpu.steps[1], TGM_KERNEL_HANG_ALL);
 	EXPECT_EQ(gpu.steps.back(), TGM_KERNEL_HANG_FATAL);
-	EXPECT_EQ(gpu.chans[kScrub].hangStep, TGM_KERNEL_HANG_DID_ALL_CLEAN)
+	EXPECT_EQ(gpu.chans[kScrub].hang.did, TGM_KERNEL_HANG_DID_ALL_CLEAN)
 		<< "the last reset had no client context resident";
 }
 }  // namespace

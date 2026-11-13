@@ -267,9 +267,7 @@ void tgm_acquire_suspend(void);
  * channel an engine hangs on does not wait for that engine to drain. */
 void tgm_recover_fault(struct nvkm_device *device, int chid);
 /* Resets every engine still holding dead hardware channel chid (tgm_engine_holds); how many. The PBDMA that fed it gets
- * ENG_RESET and drops the dead channel's method (recover.c runq_intr). With no engine on it but a PBDMA still on its
- * method, the engines of that runlist tgm_kernel_hang_resets names are reset so the hold's release drops that method.
- * tgm_live_lock held. */
+ * ENG_RESET and drops the dead channel's method (recover.c runq_intr). */
 int tgm_recover_residue(struct nvkm_device *device, int chid);
 /* The name of an engine stuck loading hardware channel chid's context (tgm_engine_load_stuck), else NULL */
 const char *tgm_recover_loading(struct nvkm_device *device, int chid);
@@ -285,9 +283,11 @@ int tgm_recover_saving(struct nvkm_device *device, int chid);
  * tgm_kernel_hang_resets names (all: every one), each context they hold of a live kernel channel marked to be redone
  * first (gpu_reload.c tgm_chid_cut); how many. tgm_live_lock held. */
 int tgm_recover_kernel(struct nvkm_device *device, int chid, int all);
-/* A preempt is in flight (PFIFO_PREEMPT pending): a hold now would leave the live channel on its PBDMA through the
- * reset (hold_pbdmas asks for no second one) */
-int tgm_recover_preempting(struct nvkm_device *device);
+/* A preempt of another channel than chid is in flight (PFIFO_PREEMPT pending): a hold now would leave the live channel
+ * on its PBDMA through the reset (hold_pbdmas asks for no second one). *its: one of chid itself is. */
+int tgm_recover_preempting(struct nvkm_device *device, int chid, int *its);
+/* The hardware channel the first busy PBDMA is on; -1: none (GM20B has one) */
+int tgm_recover_pbdma_chid(struct nvkm_device *device);
 /* The channels whose contexts the engines of hardware channel chid's runlist hold, VALID or switching
  * (tgm_engine_contexts_held), and the one each busy PBDMA of it feeds unless it waits in an acquire; each once, up to
  * max */
