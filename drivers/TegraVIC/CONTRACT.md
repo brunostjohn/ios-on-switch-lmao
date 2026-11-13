@@ -114,11 +114,12 @@ camera frameworks (no camera here). ReplayKit, AVFoundation, CoreImage, CoreVide
 min 4, max 16384 (dest height 16382), up 4x, down 8x H / 4x V, filter taps 9 V / 15 H, 32 phases, coefficient bits
 4.12, rotation, identity CSC, histogram, colour manager, accessibility, many formats. TegraVIC publishes what VIC does
 [T]: min 4, max 8192, 16x up and down, Apple's filter geometry (so CA's tables keep their shape; VIC ignores custom
-coefficients), rotation iff all 8 transforms proved, IdentityCSC 1, FractionalXYOffsetsSupported 1 (16.16 source
-offsets reach SourceRectLeft/Top; probe gpu.x1.vic_fractional decides it), formats ARGB8888, RGBA8888, 2Planes420,
+coefficients), rotation iff all 8 transforms proved, IdentityCSC 1, FractionalXYOffsetsSupported 1 and
+FractionalDimensions 1 (16.16 source rectangles reach SourceRectLeft/Right/Top/Bottom; probe gpu.x1.vic_fractional
+judges both), formats ARGB8888, RGBA8888, 2Planes420,
 2Planes422, 2Planes444, LumaOnlyL008, ARGB2101010 and Interleaved422 ('2vuy', 'yuvs') in and out, and 0 for
 HDR, film grain, enhancement, directional scaling, colour manager, accessibility, histogram, tiling (Apple's GPU
-tiling), fractional dimensions, 10-bit YCbCr and compressed formats.
+tiling), 10-bit YCbCr and compressed formats.
 Core Animation reads none of the format keys. On iPadOS 27 its detached-layer copy (`IOMFBDisplay::detach_layer`,
 QuartzCore 24B119) asks for '422v'/'422f' from a '420v'/'420f' layer regardless [V].
 

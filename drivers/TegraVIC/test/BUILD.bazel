@@ -757,6 +757,12 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_capabilities_source_test",
+    srcs = ["switch_vic_capabilities_source_test.cpp"],
+    data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
+)
+
+host_test(
     name = "switch_vic_first_failure_source_test",
     srcs = ["switch_vic_first_failure_source_test.cpp"],
     data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
