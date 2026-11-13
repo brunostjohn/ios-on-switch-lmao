@@ -99,7 +99,10 @@ inline void thread_call_free(thread_call_t p)
 	delete p;
 }
 
+inline unsigned switchCopyThreadCalls;
+
 inline void thread_call_enter(thread_call_t p)
 {
+	++switchCopyThreadCalls;
 	p->pending = true;
 }

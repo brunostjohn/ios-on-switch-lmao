@@ -2049,3 +2049,113 @@ host_test(
         ":compiler_broker",
     ],
 )
+
+# sched.c and deadline.c whole, their #include lines left out for gm20b_sched_stubs.h's stand-ins.
+genrule(
+    name = "sched_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:sched.c"],
+    outs = ["sched_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^enum tgm_sched_kick tgm_sched_kicked(' $@
+""",
+)
+
+genrule(
+    name = "deadline_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:deadline.c"],
+    outs = ["deadline_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^void tegra_gm20b_compositor_vsync(' $@
+""",
+)
+
+SCHED_UNIT_HDRS = [
+    "gm20b_sched_stubs.h",
+    "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+    "//drivers/TegraGM20B:TegraGM20BCostHist.h",
+    "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    "//drivers/TegraGM20B:TegraGM20BHost.h",
+    "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+    "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    "//drivers/TegraGM20B:TegraGM20BSched.h",
+    "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+]
+
+host_library(
+    name = "sched_unit",
+    testonly = True,
+    srcs = [
+        "gm20b_sched_unit.c",
+        ":sched_source",
+    ],
+    hdrs = SCHED_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+    defines = ["DEVELOPMENT=1"],
+)
+
+host_library(
+    name = "deadline_unit",
+    testonly = True,
+    srcs = [
+        "gm20b_deadline_unit.c",
+        ":deadline_source",
+    ],
+    hdrs = SCHED_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+    defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "gm20b_sched_kick_test",
+    srcs = ["gm20b_sched_kick_test.cpp"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    deps = [":sched_unit"],
+)
+
+host_test(
+    name = "gm20b_deadline_window_test",
+    srcs = ["gm20b_deadline_window_test.cpp"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    deps = [":deadline_unit"],
+)
+
+host_library(
+    name = "switch_gpu_gpfifo_kick",
+    srcs = ["//drivers/TegraGM20B:nouveau/nvif/chan506f.c"],
+    hdrs = [
+        "gpfifo_include/nvif/chan.h",
+        "kick_include/nvif/chan.h",
+    ],
+    c_std = "gnu11",
+    copts = ["-Wno-sign-compare"],
+    includes = ["kick_include"],
+)
+
+host_test(
+    name = "switch_gpu_gpfifo_kick_test",
+    srcs = ["switch_gpu_gpfifo_kick_test.cpp"],
+    deps = [
+        ":switch_gpu_gpfifo",
+        ":switch_gpu_gpfifo_kick",
+    ],
+)
+
+host_test(
+    name = "gm20b_frame_cpu_source_test",
+    srcs = ["gm20b_frame_cpu_source_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:gpu_sources",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)

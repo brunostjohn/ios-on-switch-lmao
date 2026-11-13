@@ -70,12 +70,20 @@ void pump()
 	}
 }
 
+// An interrupt pass that sees the copy channel's fence move: its fence callback, then the pass's end
+// (switch_gpu_backing_completed).
+void pass()
+{
+	if (irq)
+		irq(irqContext);
+	switch_gpu_copy_completed();
+}
+
 void finish(int semantic = 1)
 {
 	gpu.completed = gpu.submitted;
 	semanticStatus = semantic;
-	if (irq)
-		irq(irqContext);
+	pass();
 	pump();
 }
 
@@ -604,6 +612,22 @@ TEST_F(CheckedCopy, WarmCopiesKeepPreparedDescriptorsAndMappings)
 	EXPECT_EQ(b.first->prepares, 1u);
 	EXPECT_EQ(a.first->walks, 4u);
 	EXPECT_EQ(calls, 1000u);
+}
+
+// A pass that sees copies end hands their retirement to the backings' retirement work, which that pass schedules anyway:
+// no thread call of the copy queue's own.
+TEST_F(CheckedCopy, ACompletedCopyTakesNoThreadCallOfItsOwn)
+{
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	ASSERT_EQ(copy(b, a), 0);
+	switchCopyThreadCalls = 0;
+	gpu.completed = gpu.submitted;
+	pass();
+	EXPECT_EQ(switchCopyThreadCalls, 0u) << "thread calls of the copy queue's own for one pass";
+	pump();
+	EXPECT_EQ(calls, 2u);
+	EXPECT_EQ(tokenRefs, 0u);
 }
 
 TEST_F(CheckedCopy, PhysicalCompletionWaitsForSemanticAuthority)
