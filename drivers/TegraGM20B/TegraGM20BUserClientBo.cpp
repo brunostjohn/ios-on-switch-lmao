@@ -538,6 +538,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		cost.read_only = static_cast<int>(bo->readOnly);
 		cost.owner = owner_;
 		tgm_stats_import_cost(&cost);
+		if (critical_)
+			switch_gpu_compositor_import(cost.total_ns);
 	}
 	tgm_vm_import_note(
 		vm_, bo->pas[0],

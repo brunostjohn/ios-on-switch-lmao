@@ -396,6 +396,8 @@ TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
 	EXPECT_TRUE(defer.Has("thread_call_enter(d->call);"));
 	EXPECT_FALSE(defer.Has("scanRead("));
 	EXPECT_TRUE(Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
+	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::boImport(")
+			    .Has("if (critical_) switch_gpu_compositor_import(cost.total_ns);"));
 }
 
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence

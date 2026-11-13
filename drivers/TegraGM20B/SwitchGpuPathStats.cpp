@@ -12,6 +12,7 @@ extern "C" {
 #include <sys/errno.h>
 #include <sys/sysctl.h>
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#include "SwitchGpuCompositorRound.h"
 #include "SwitchGpuCompositorSync.h"
 #include "SwitchGpuPreemptLanding.h"
 #include "SwitchGpuSpanNotes.h"
@@ -128,6 +129,8 @@ struct sysctl_oid gPromisesOid;
 switch_gpu_spans::Notes gSpans;
 uint64_t gCompositorJobMax;
 switch_gpu_comp_sync gSyncWindow, gSyncAsked;
+switch_gpu_comp_round gRound;
+constexpr uint64_t kPeriodNs = 16666667;
 }  // namespace
 
 extern "C" void switch_gpu_path_promise_direct(int what)
@@ -154,10 +157,21 @@ extern "C" void switch_gpu_span_note(const char *owner, const char *text)
 
 extern "C" void switch_gpu_compositor_job(uint64_t ns)
 {
+	switch_gpu_comp_round_job(&gRound, ns, kPeriodNs);
 	uint64_t max = __atomic_load_n(&gCompositorJobMax, __ATOMIC_RELAXED);
 	while (ns > max && !__atomic_compare_exchange_n(&gCompositorJobMax, &max, ns, false,
 							__ATOMIC_RELAXED, __ATOMIC_RELAXED))
 		;
+}
+
+extern "C" void switch_gpu_compositor_import(uint64_t ns)
+{
+	switch_gpu_comp_round_import(&gRound, ns);
+}
+
+extern "C" void switch_gpu_compositor_scanned(uint64_t passes, uint64_t draws)
+{
+	switch_gpu_comp_round_scanned(&gRound, passes, draws);
 }
 
 extern "C" void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
@@ -185,8 +199,12 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 		return;
 	switch_gpu_comp_sync sync = {};
 	switch_gpu_comp_sync_take(&gSyncAsked, &sync);
-	char head[160];
-	switch_gpu_comp_sync_format(head, sizeof(head), &sync);
+	switch_gpu_comp_round round = {};
+	switch_gpu_comp_round_take(&gRound, &round);
+	char head[320];
+	const int put = switch_gpu_comp_round_format(head, sizeof(head), &round);
+	const size_t used = put > 0 && static_cast<size_t>(put) < sizeof(head) ? static_cast<size_t>(put) : 0;
+	switch_gpu_comp_sync_format(head + used, sizeof(head) - used, &sync);
 	IOLockLock(held);
 	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED),
 			       head, line, size);

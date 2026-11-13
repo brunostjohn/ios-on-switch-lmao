@@ -16,7 +16,7 @@ struct switch_gpu_scan_words {
 template <uint32_t Records, uint32_t Pushes> struct SwitchGpuPushScanQueue {
 	struct Record {
 		char owner[17];
-		bool rawMacros;
+		bool rawMacros, compositor;
 		uint32_t count;
 		switch_gpu_scan_words push[Pushes];
 	};

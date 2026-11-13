@@ -84,7 +84,7 @@ void logWindow(const PushOwner (&window)[kPushOwners])
 // Count what a submission's pushes ask of the GPU (`push[i].words` null: not read) into `owner`'s window; every 5 s the
 // window's lines. `rawMacros`: a job's (only the raw path submits jobs), whose macro slots are the raw path's.
 void scanRead(const switch_gpu_scan_words *push, uint32_t count, tgm_prof *prof, bool rawMacros,
-	      const char *owner)
+	      const char *owner, bool compositor)
 {
 	PushCounts c = {};
 	PushParse p = {};
@@ -133,6 +133,8 @@ void scanRead(const switch_gpu_scan_words *push, uint32_t count, tgm_prof *prof,
 	}
 	c.scanned = 1;
 	c.submits = kScanEvery;  // this connection's submissions since its last one read
+	if (compositor)
+		switch_gpu_compositor_scanned(c.passes, c.draws);
 	if (!pushLockMade())
 		return;
 	const uint64_t now = nowNs();
@@ -176,7 +178,7 @@ void deferredWork(thread_call_param_t param, thread_call_param_t)
 		IOLockUnlock(d->lock);
 		if (!r)
 			return;
-		scanRead(r->push, r->count, nullptr, r->rawMacros, r->owner);
+		scanRead(r->push, r->count, nullptr, r->rawMacros, r->owner, r->compositor);
 		IOLockLock(d->lock);
 		gQueue.done();
 		IOLockUnlock(d->lock);
@@ -255,7 +257,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	for (uint32_t i = 0; i < count; i++)
 		words[i] = {pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit),
 			    pushes[i].dwords};
-	scanRead(words, count, prof, rawMacros, owner_);
+	scanRead(words, count, prof, rawMacros, owner_, critical_);
 }
 
 // Inside the submit gate (bindings stay as they are): where each push's words lie in the pool, whose kernel mapping lives
@@ -276,6 +278,7 @@ void AGXDeviceUserClient::deferScan(const tgm_push *pushes, uint32_t count, bool
 			return switch_gpu_scan_words{words && hit && hit->bo->pool_va ? words : nullptr,
 						     pushes[i].dwords};
 		});
+		r->compositor = critical_;
 		gQueue.publish();
 	}
 	IOLockUnlock(d->lock);
