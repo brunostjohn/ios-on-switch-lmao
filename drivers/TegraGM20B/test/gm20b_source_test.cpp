@@ -535,7 +535,7 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
 	const CodeText nonstall = Block(
 		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)");
-	EXPECT_TRUE(nonstall.Before("idle_fenced(chan); chan_wake_waiters(chan);",
+	EXPECT_TRUE(nonstall.Before("WRITE_ONCE(chan->progress_ns, now); chan_wake_waiters(chan);",
 				    "if (chan->kernel == CHAN_SCRUB) {"));
 	EXPECT_TRUE(nonstall.Has("} else { present_watch_fenced(chan, 0); }"));
 	EXPECT_EQ(nonstall.Count("nvxnu_wake();"),
@@ -1139,16 +1139,17 @@ TEST(GM20BShimSource, InterruptPassReportsUsePlainFormats)
 }
 
 // A channel made in a slot continues its predecessor's fence sequence, so every cursor the interrupt pass compares with
-// the completed seqno starts at that fence. From 0, the idle clock would count the predecessor's whole sequence retired,
-// its in-flight count (kicked - retired) would underflow, and the GPU would never drop its clock or rail-gate.
+// the completed seqno starts at that fence, and the idle clock's tgm_busy words for the slot start there too.
 TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 {
 	const CodeText create = Block(gpu(), "static int chan_new(");
 	EXPECT_TRUE(create.Has("chan->submitted = READ_ONCE(*fence_cpu);"));
 	for (const char *cursor :
-	     {"stat_done", "woken_done", "gov_done", "progress_done", "seen_done"})
+	     {"stat_done", "woken_done", "progress_done", "seen_done"})
 		EXPECT_TRUE(create.Has(std::string("chan->") + cursor + " = chan->submitted;"))
 			<< cursor;
+	EXPECT_TRUE(Block(gpu(), "static int chan_new(")
+			    .Has("switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);"));
 }
 
 // nvkm_chan_error preempts from the interrupt pass with interrupts off under the channel's spinlock: the wrapped preempt

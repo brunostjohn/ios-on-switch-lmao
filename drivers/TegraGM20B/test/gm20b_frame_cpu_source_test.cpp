@@ -36,7 +36,9 @@ TEST(GM20BFrameCpuSource, ThePassWakesTheGlobalWordOnlyForASleeper)
 	EXPECT_TRUE(Block(glue, "extern \"C\" void nvxnu_wake(void)")
 			    .Has("if (switch_gpu_wake_other(&gWake)) wakeGlobal();"));
 	EXPECT_TRUE(Block(glue, "extern \"C\" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)")
-			    .Before("switch_gpu_wake_sleep(&gWake, 1);", "idleOn("));
+			    .Has("return nvxnu_wword_idle(&gWake, seq, deadline_ns);"));
+	EXPECT_TRUE(Block(glue, "extern \"C\" int nvxnu_wword_idle(")
+			    .Before("switch_gpu_wake_sleep(word, 1);", "idleOn("));
 	EXPECT_TRUE(
 		Block(glue, "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
 			.Has("wakeAfterPass();"));
