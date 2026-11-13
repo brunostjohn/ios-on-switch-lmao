@@ -160,13 +160,7 @@ static inline void tegra_vic_compose_put_slot(uint8_t *c, uint32_t index, const 
     TEGRA_VIC_SET(c, surf, SURF_BLK_KIND, bl ? TEGRA_VIC_BLK_16Bx2 : TEGRA_VIC_BLK_PITCH);
     TEGRA_VIC_SET(c, surf, SURF_BLK_HEIGHT, bl ? src->blockHeightLog2 : 0);
     TEGRA_VIC_SET(c, surf, SURF_CACHE_WIDTH, bl ? TEGRA_VIC_CACHE_32Bx8 : TEGRA_VIC_CACHE_64Bx4);
-    TEGRA_VIC_SET(c, surf, SURF_WIDTH, src->width - 1);
-    TEGRA_VIC_SET(c, surf, SURF_HEIGHT, src->height - 1);
-    TEGRA_VIC_SET(c, surf, SURF_LUMA_WIDTH, src->pitch[0] / sf->bpe[0] - 1);
-    TEGRA_VIC_SET(c, surf, SURF_LUMA_HEIGHT, (bl ? src->rows[0] : src->height) - 1);
-    TEGRA_VIC_SET(c, surf, SURF_CHROMA_WIDTH, sf->planes > 1 ? src->pitch[1] / sf->bpe[1] - 1 : 16383);
-    TEGRA_VIC_SET(c, surf, SURF_CHROMA_HEIGHT,
-                  sf->planes > 1 ? (bl ? src->rows[1] : tegra_vic_plane_rows(sf, src->height, 1)) - 1 : 16383);
+    tegra_vic_slot_surface(c, surf, src);
 
     if (sf->kind != TEGRA_VIC_KIND_RGB) {
         TegraVICMatrix m;

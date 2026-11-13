@@ -374,6 +374,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_transpose422': False,
         'gpu.x1.vic_4k': False,
         'gpu.x1.vic_compose': False,
+        'gpu.x1.vic_odd_size': False,
         'gpu.x1.index_past_limit': False,
     },
 }

@@ -254,6 +254,27 @@ static inline uint32_t tegra_vic_plane_rows(const TegraVICFormat *f, uint32_t he
     return plane && f->subY ? height / 2 : height;
 }
 
+// VIC addresses whole chroma pairs, so a subsampled surface is described to it one pixel wider (4:2:0: and taller) when
+// its size is odd, the extra column and row inside its planes' padding, its rectangles left as they are.
+static inline uint32_t tegra_vic_padded_width(const TegraVICFormat *f, uint32_t width)
+{
+    return f->subX ? (width + 1) & ~1u : width;
+}
+
+static inline uint32_t tegra_vic_padded_height(const TegraVICFormat *f, uint32_t height)
+{
+    return f->subY ? (height + 1) & ~1u : height;
+}
+
+// The bytes of a row of plane p of a surface `width` pixels wide that hold pixels: an odd width's last chroma pair (of
+// a packed row, its last pixel pair) whole.
+static inline uint32_t tegra_vic_row_bytes(const TegraVICFormat *f, uint32_t width, uint32_t plane)
+{
+    const uint32_t elements = plane || f->packed ? tegra_vic_plane_width(f, tegra_vic_padded_width(f, width), plane)
+                                                 : width;
+    return elements * f->bpe[plane];
+}
+
 // IOSurfaceAccelerator's siting codes 1 Left, 2 Center, 3 TopLeft, 4 Top, 5 BottomLeft, 6 Bottom (0 unspecified: Left)
 // as VIC's ChromaLocHoriz/Vert (0 on the even sample, 1 between, 2 on the odd one), for an axis that is subsampled.
 static inline uint32_t tegra_vic_chroma_horiz(uint32_t site)

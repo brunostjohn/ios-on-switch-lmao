@@ -428,7 +428,7 @@ static void jobs(void)
         {0, "plane extends past its mapping"},
         {1, "row pitch the engine cannot address"},
         {2, "plane not 256-byte aligned"},
-        {3, "4:2:0 surface with an odd size"},
+        {3, "plane shorter than the surface"},
         {4, "destination rectangle outside the destination"},
         {5, "source rectangle outside the source"},
         {6, "transform this engine has not proven"},
@@ -466,8 +466,10 @@ static void jobs(void)
         case 2:
             d2.base[1] += 64;
             break;
-        case 3:
-            d2.width = 1279;
+        case 3:  // an odd height's chroma plane holds the padded pair's row too
+            d2.height = 719;
+            o2.dstH = 719;
+            d2.rows[1] = 359;
             break;
         case 4:
             o2.dstX = 2;

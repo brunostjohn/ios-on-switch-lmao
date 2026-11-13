@@ -146,7 +146,7 @@ TEST(Vic422, ShapesAndRefusals)
 {
     const TegraVICSurfaceDesc src = surface(k420v, 1920, 1080, 2048);
     EXPECT_EQ(build(src, surface(k422v, 300, 533, 512), detachCopy(4, 1)).why, nullptr) << "odd height";
-    EXPECT_STREQ(build(src, surface(k422v, 301, 534, 512), detachCopy(4, 1)).why, "4:2:2 surface of odd width");
+    EXPECT_EQ(build(src, surface(k422v, 301, 534, 512), detachCopy(4, 1)).why, nullptr) << "odd width, whole pairs";
     TegraVICRequest r = detachCopy(0, 1);
     r.dst_x = 1;
     r.dst_w = 200;

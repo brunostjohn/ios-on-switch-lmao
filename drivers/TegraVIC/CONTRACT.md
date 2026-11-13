@@ -158,10 +158,12 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
    pseudo-linear, fix-upscaling, fractional precision, blit clip, lock-in, read-only, unwire, power, coalescing, Comm
    records) are accepted and ignored. Refused as **kIOReturnUnsupported** (callers fall back): histogram, HDR, film
    grain, colour remap, shared events, formats other than BGRA/RGBA/420v/420f/422v/422f/2vuy/yuvs,
-   protected-to-less-protected, and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects or
-   4:2:2 columns, >16x scaling, sizes outside 2..8192, a destination sub-rectangle under a transform other than 0 and
-   6, whose placement is not in place on the unit). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform
-   bits 3-5.
+   protected-to-less-protected, and any shape the checker refuses (pitch the unit cannot address, a 4:2:0 rect or 4:2:2
+   columns starting odd or ending odd short of the surface's edge, >16x scaling, sizes outside 2..8192, a destination
+   sub-rectangle under a transform other than 0 and 6, whose placement is not in place on the unit). An odd-sized
+   4:2:0 or 4:2:2 surface is described one pixel wider (4:2:0: and taller), in whole chroma pairs, when its planes'
+   pitch and rows hold them; its rectangles stay odd (probe gpu.x1.vic_odd_size). Refused as **kIOReturnBadArgument**:
+   unknown surface IDs, Transform bits 3-5.
 3. Build and check every VIC job in the calling thread (`tegra_vic_build`, `TegraVICConfig.h`), so refusals are the
    call's own result; then queue (16 deep, FIFO) for the engine thread. Sync calls sleep until their jobs are done.
 4. Engine thread: `IOSurface::prepare`, map each surface page by page into its SMMU window (source read-only), clean
