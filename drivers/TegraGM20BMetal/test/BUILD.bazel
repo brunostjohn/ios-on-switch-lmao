@@ -5181,7 +5181,6 @@ RECORD_COST_LINKOPTS = [
 # SWITCH_DEBUG=0 as release builds do: what raw_record_cost_test times the recording thread over
 [host_library(
     name = "raw_facade_plugin_host" + suffix,
-    testonly = True,
     srcs = [":raw_facade_units"],
     additional_compiler_inputs = [
         "//drivers/TegraGM20BMetal:compiler_srcs",
@@ -5201,7 +5200,6 @@ RECORD_COST_LINKOPTS = [
 
 [host_library(
     name = "raw_runtime_plugin_host" + suffix,
-    testonly = True,
     srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
     copts = RAW_HOST_COPTS + extra,
     cxx_std = "c++17",
