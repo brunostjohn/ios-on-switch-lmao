@@ -34,6 +34,19 @@ void tgm_chan_need_uid(uint32_t uid, uint32_t seqno)
 	mutex_unlock(&tgm_live_lock);
 }
 
+/* A kernel wait's seqno on the channel's word (uid: its id's low word, which picks the same word), published before
+ * it tests the fence. A channel gone or failed wakes its word at its teardown or kill. */
+void tgm_chan_wanted(uint32_t uid, uint32_t seqno)
+{
+	struct tgm_chan *chan = NULL;
+
+	mutex_lock(&tgm_live_lock);
+	chan = live_by_uid(uid);
+	if (chan)
+		switch_gpu_waiter_want(&chan->wanted, seqno);
+	mutex_unlock(&tgm_live_lock);
+}
+
 void tgm_chan_need_tokens(const struct switch_gpu_backing_token *tokens, uint32_t count)
 {
 	struct tgm_chan *chan = NULL;

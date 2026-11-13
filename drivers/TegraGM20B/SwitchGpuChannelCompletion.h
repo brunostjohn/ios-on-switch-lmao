@@ -26,6 +26,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, now));
 	WRITE_ONCE(chan->progress_ns, now);
 	idle_fenced(chan);
+	chan_wake_waiters(chan);
 	if (chan->kernel == CHAN_SCRUB) {
 		scrub_fenced(chan);
 		/* nobody sleeps on its fence but system sleep's drain and the wake's test fence */
@@ -39,7 +40,6 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	if (chan->kernel) {
 		present_fenced(chan);
 	} else {
-		chan_wake_waiters(chan);
 		present_watch_fenced(chan, 0);
 	}
 	if (READ_ONCE(chan->fenced))

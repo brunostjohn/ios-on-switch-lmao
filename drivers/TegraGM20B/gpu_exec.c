@@ -44,22 +44,24 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 }
 
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
- * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
- * once and never spins; a quiet newest job gets its wake entry first. The caller owns the channel's submissions and is
- * inside the gate. -ETIMEDOUT after 1 s. */
+ * fence's nonstall interrupt (chan_fence), whose pass wakes the channel's word once its fence passes the next seqno, so
+ * nvif's own wait then finds the room at once and never spins; a quiet newest job gets its wake entry first. The caller
+ * owns the channel's submissions and is inside the gate. -ETIMEDOUT after 1 s. */
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
+	const u32 waiter = tgm_chan_waiter(chan);
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
 
 	for (;;) {
-		u32 seq = nvxnu_wake_seq();
+		u32 seq = tgm_waiter_seq(waiter);
 
+		switch_gpu_waiter_want(&chan->wanted, tgm_chan_completed(chan) + 1);
 		if (chan_room(chan, gpfifo_nr, push_nr))
 			break;
 		if (switch_gpu_quiet_need(&chan->quiet, chan->submitted))
 			tgm_chan_wake_push(chan);
-		if (!nvxnu_idle(seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
+		if (!tgm_waiter_idle(waiter, seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
 			ret = -ETIMEDOUT;
 			break;
 		}
@@ -128,9 +130,6 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
 		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	}
-	__asm__ volatile(
-		"dsb sy" ::
-			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
 	chan->submit_ns = nvxnu_nanotime();
 	if (stats_on())
 		for (s = first; (s32)(next - s) >= 0; s++)

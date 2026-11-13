@@ -2167,3 +2167,11 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBusy.h",
     ],
 )
+
+host_test(
+    name = "switch_gpu_wake_word_test",
+    srcs = [
+        "switch_gpu_wake_word_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
+    ],
+)

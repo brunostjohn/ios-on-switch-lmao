@@ -58,17 +58,17 @@ TEST(GM20BQuietSource, EverySleepOnAUserChannelAsksFirst)
 	EXPECT_TRUE(Block(chan, "void tgm_chan_want(")
 			    .Before("switch_gpu_waiter_want(", "tgm_chan_need(chan, seqno);"));
 	EXPECT_TRUE(Block(chan, "void tgm_chan_del(")
-			    .Before("tgm_chan_quiet_wake(chan);", "nvxnu_idle(seq, end)"));
+			    .Before("tgm_chan_quiet_wake(chan);", "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(sync, "static int sync_wait(")
-			    .Before("tgm_chan_need_id(id, seqno);", "nvxnu_idle(seq, end)"));
+			    .Before("tgm_chan_need_id(id, seqno);", "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(sync, "static void writer_wait(")
-			    .Before("tgm_chan_need_uid(uid, seqno);", "nvxnu_idle(seq, end)"));
+			    .Before("tgm_chan_need_uid(uid, seqno);", "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(power, "static void sleep_fences(")
 			    .Before("tgm_chan_wake_push(chan);", "nvxnu_idle(seq, end)"));
 	const CodeText room = Block(unit("gpu_exec.c"), "int tgm_chan_wait_ready(");
 	EXPECT_TRUE(room.Before("switch_gpu_quiet_need(&chan->quiet, chan->submitted)",
 				"tgm_chan_wake_push(chan);"));
-	EXPECT_TRUE(room.Before("tgm_chan_wake_push(chan);", "nvxnu_idle(seq, end)"));
+	EXPECT_TRUE(room.Before("tgm_chan_wake_push(chan);", "tgm_waiter_idle(waiter, seq, end)"));
 	EXPECT_TRUE(Block(unit("SwitchGpuClientRetirement.h"), "void AGXDeviceUserClient::retire(")
 			    .Has("tgm_chan_need(chans_[slot], "
 				 "uint32_t(record->snapshots[slot].value));"));
@@ -99,7 +99,7 @@ TEST(GM20BQuietSource, LostWakePanicsWaitForTheAnnouncingInterrupt)
 	const std::string chan = unit("gpu_chan.c"), sync = unit("gpu_sync.c"),
 			  power = unit("gpu_power.c");
 	EXPECT_TRUE(Block(chan, "void tgm_chan_del(")
-			    .Has("tgm_chan_announced(chan, chan->submitted)) nvxnu_wake_due("));
+			    .Has("tgm_chan_announced(chan, chan->submitted)) tgm_waiter_unwoken("));
 	EXPECT_TRUE(Block(sync, "static int sync_wait(").Has("tgm_chan_announced_id(id, seqno))"));
 	EXPECT_TRUE(
 		Block(sync, "static void writer_wait(").Has("tgm_chan_announced_uid(uid, seqno))"));
@@ -112,7 +112,8 @@ TEST(GM20BQuietSource, LostWakePanicsWaitForTheAnnouncingInterrupt)
 	for (const char *name :
 	     {"gpu_bringup.c", "gpu_chan.c", "gpu_sync.c", "gpu_power.c", "gpu_exec.c",
 	      "gpu_present.c", "gpu_scrub.c", "gpu_hang.c", "gpu_quiet.c"})
-		panics += CodeText(unit(name)).Count("nvxnu_wake_due(");
+		panics += CodeText(unit(name)).Count("nvxnu_wake_due(") +
+			  CodeText(unit(name)).Count("tgm_waiter_unwoken(waiter,");
 	EXPECT_EQ(panics, 6u) << "a new fence wait: ask for its interrupt and key its panic to it";
 	EXPECT_TRUE(Block(power, "static void wake_fence(")
 			    .Has("tgm_scrub.chan ? tgm_scrub.chan : tgm_present.chan"));

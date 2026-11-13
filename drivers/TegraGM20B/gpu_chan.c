@@ -6,9 +6,9 @@
 	0x2000 /* nvif's GET semaphore at +0; stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 
-/* The interrupt pass's own nvxnu_wake() at its end wakes the kernel's waits (channel teardown, sync_for_cpu, system
- * sleep's drain); a channel's fence waiters sleep on its word and wake only once its fence reaches the lowest seqno one
- * of them waits for. */
+/* A channel's fence and room waiters (WaitFence, sync_for_cpu, its teardown, a submission waiting for room) sleep on its
+ * word and wake only once its fence reaches the lowest seqno one of them waits for; the interrupt pass's own nvxnu_wake()
+ * at its end wakes the rest (system sleep's drain, nvkm's waits), and only while one sleeps. */
 static void chan_wake_waiters(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
@@ -408,12 +408,13 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	    switch_gpu_quiet_need(&chan->quiet, chan->submitted))
 		tgm_chan_quiet_wake(chan);
 	for (;;) {
-		u32 seq = nvxnu_wake_seq();
+		u32 seq = tgm_waiter_seq(waiter);
+		switch_gpu_waiter_want(&chan->wanted, chan->submitted);
 		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
 		    nvxnu_nanotime() >= end)
 			break;
-		if (!nvxnu_idle(seq, end) && tgm_chan_announced(chan, chan->submitted))
-			nvxnu_wake_due(seq, "fence", chan->submitted);
+		if (!tgm_waiter_idle(waiter, seq, end) && tgm_chan_announced(chan, chan->submitted))
+			tgm_waiter_unwoken(waiter, seq, chan->submitted);
 	}
 	/* tearing down a channel that still runs would free pages the GPU is using: its owner is gone, so it is killed
 	 * as a hung client's is, and the teardown waits for that */

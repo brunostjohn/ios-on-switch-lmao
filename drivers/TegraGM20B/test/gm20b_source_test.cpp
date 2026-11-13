@@ -535,8 +535,9 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
 	const CodeText nonstall = Block(
 		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)");
-	EXPECT_TRUE(
-		nonstall.Has("} else { chan_wake_waiters(chan); present_watch_fenced(chan, 0); }"));
+	EXPECT_TRUE(nonstall.Before("idle_fenced(chan); chan_wake_waiters(chan);",
+				    "if (chan->kernel == CHAN_SCRUB) {"));
+	EXPECT_TRUE(nonstall.Has("} else { present_watch_fenced(chan, 0); }"));
 	EXPECT_EQ(nonstall.Count("nvxnu_wake();"),
 		  1u);  // the scrubber's, while the sleep gate is shut
 	const CodeText wake = Block(gpu(), "static void chan_wake_waiters(struct tgm_chan *chan)");
@@ -650,7 +651,7 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	const CodeText wait =
 		Block(gpu(),
 		      "int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)");
-	EXPECT_TRUE(wait.Has("if (!nvxnu_idle(seq, end)"));
+	EXPECT_TRUE(wait.Has("if (!tgm_waiter_idle(waiter, seq, end)"));
 	const CodeText reserve = Block(gpu(), "static inline int chan_wait_room(");
 	EXPECT_TRUE(reserve.Before("chan_wait_ready(chan, gpfifo_nr, push_nr)",
 				   "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)"));

@@ -658,6 +658,7 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 			       int copy);
 #endif
 void tgm_chan_need_id(u64 id, u32 seqno);
+void tgm_chan_wanted(uint32_t uid, uint32_t seqno);
 int tgm_chan_announced_id(u64 id, u32 seqno);
 int tgm_chan_announced_uid(u32 uid, u32 seqno);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,

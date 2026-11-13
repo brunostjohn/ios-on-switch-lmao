@@ -22,7 +22,7 @@ struct tgm_chan {
 #define WRITE_ONCE(target, value) ((target) = (value))
 #define READ_ONCE(target) (target)
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
-unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, watchCalls,
+unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, channelWakes, watchCalls,
 	callbacks, timestamps, eventPasses;
 int tgm_sc7_gate;
 bool diagnostic, suspended;
@@ -85,7 +85,7 @@ void present_fenced(tgm_chan *)
 
 void chan_wake_waiters(tgm_chan *)
 {
-	++wakeCalls;
+	++channelWakes;
 }
 
 void present_watch_fenced(tgm_chan *, int)
@@ -110,7 +110,7 @@ protected:
 
 	void SetUp() override
 	{
-		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls =
+		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls = channelWakes =
 			watchCalls = callbacks = timestamps = eventPasses = 0;
 		diagnostic = suspended = false;
 		channel.fenced = [](void *) {
@@ -131,7 +131,8 @@ TEST_F(Completion, UnrelatedInterruptDoesNotWakeOrScheduleAnyChannelWork)
 	channel.high = 1;
 	interrupt();
 	interrupt();
-	EXPECT_EQ(idleCalls + highCalls + statsCalls + callbacks + wakeCalls + timestamps, 0u);
+	EXPECT_EQ(idleCalls + highCalls + statsCalls + callbacks + wakeCalls + channelWakes + timestamps,
+		  0u);
 }
 
 TEST_F(Completion, MovingFenceSchedulesAndWakesOnce)
@@ -141,7 +142,8 @@ TEST_F(Completion, MovingFenceSchedulesAndWakesOnce)
 	interrupt();
 	EXPECT_EQ(channel.progress_done, 3u);
 	EXPECT_EQ(callbacks, 1u);
-	EXPECT_EQ(wakeCalls, 1u);
+	EXPECT_EQ(channelWakes, 1u);
+	EXPECT_EQ(wakeCalls, 0u);
 	EXPECT_EQ(idleCalls, 1u);
 	EXPECT_EQ(timestamps, 1u);
 	EXPECT_EQ(channel.progress_ns, 42u);
@@ -164,7 +166,7 @@ TEST_F(Completion, SequenceWrapIsStillACompletionTransition)
 	channel.completed = 0;
 	interrupt();
 	EXPECT_EQ(callbacks, 1u);
-	EXPECT_EQ(wakeCalls, 1u);
+	EXPECT_EQ(channelWakes, 1u);
 	EXPECT_EQ(watchCalls, 1u);
 }
 
@@ -182,6 +184,7 @@ TEST_F(Completion, PresentAndHighPolicyRunOnlyForItsOwnProgress)
 	EXPECT_EQ(statsCalls, 1u);
 	EXPECT_EQ(callbacks, 1u);
 	EXPECT_EQ(wakeCalls, 0u);
+	EXPECT_EQ(channelWakes, 1u) << "its own room and teardown waits";
 	EXPECT_EQ(watchCalls, 0u);  // a kernel channel's fence is no user producer
 }
 
@@ -195,6 +198,7 @@ TEST_F(Completion, ScrubProgressWakesSuspendDrainWithoutGenericCallbacks)
 	interrupt();
 	EXPECT_EQ(scrubCalls, 1u);
 	EXPECT_EQ(wakeCalls, 1u);
+	EXPECT_EQ(channelWakes, 1u);
 	EXPECT_EQ(callbacks, 0u);
 }
 

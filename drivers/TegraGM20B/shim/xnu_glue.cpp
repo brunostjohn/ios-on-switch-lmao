@@ -19,6 +19,7 @@
 #include "include/nvxnu.h"
 #include "../SwitchGpuBacking.h"
 #include "../SwitchGpuOrdered.h"
+#include "../SwitchGpuWakeWord.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../../kits/SwitchDMA/SwitchHwPage.h"
@@ -196,7 +197,8 @@ constexpr uint32_t PMC_INTR_0 = 0x100, PMC_INTR_1 = 0x104, PMC_INTR_EN_0 = 0x140
 constexpr uint64_t kCheckNs = 1000000000;  // a quiet wait looks at PMC this often
 constexpr uint64_t kGraceNs = 50000000;    // for a wake already under way
 constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did not handle
-volatile uint32_t gWakeSeq, gIrqRuns;
+volatile uint32_t gIrqRuns;
+switch_gpu_wake_word gWake;
 #if DEVELOPMENT || DEBUG
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
 #endif
@@ -369,22 +371,28 @@ extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
 
 extern "C" nvxnu_u32 nvxnu_wake_seq(void)
 {
-	return nvxnu_word_seq(&gWakeSeq);
+	return nvxnu_word_seq(&gWake.seq);
 }
 
 extern "C" void nvxnu_wake(void)
 {
-	nvxnu_word_wake(&gWakeSeq);
+	if (switch_gpu_wake_bump(&gWake))
+		thread_wakeup(reinterpret_cast<event_t>(&gWake.seq));
 }
 
 extern "C" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 {
-	return nvxnu_word_idle(&gWakeSeq, seq, deadline_ns);
+	switch_gpu_wake_sleep(&gWake, 1);
+	const int woken = nvxnu_word_idle(&gWake.seq, seq, deadline_ns);
+	switch_gpu_wake_sleep(&gWake, 0);
+	return woken;
 }
 
 extern "C" void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value)
 {
-	nvxnu_word_wake_due(&gWakeSeq, seq, what, value);
+	switch_gpu_wake_sleep(&gWake, 1);
+	nvxnu_word_wake_due(&gWake.seq, seq, what, value);
+	switch_gpu_wake_sleep(&gWake, 0);
 }
 
 // Claims both GPU lines on a work loop (switch_interrupt_nub sleeps until the GIC is up). Called at the end of M1:
