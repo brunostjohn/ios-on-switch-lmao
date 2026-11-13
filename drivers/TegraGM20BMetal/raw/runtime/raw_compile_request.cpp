@@ -27,7 +27,7 @@ template <class T> void readWhole(Reader &r, T &v)
     r.bytes(&v, sizeof v);
 }
 
-void writeKernel(Writer &w, const KernelRequest &k)
+void writeDispatch(Writer &w, const KernelRequest &k)
 {
     w.value(k.maxThreads);
     w.value(uint8_t(k.multipleOfWidth));
@@ -36,6 +36,11 @@ void writeKernel(Writer &w, const KernelRequest &k)
     w.bytes(k.memory, sizeof k.memory);
     w.list(k.textures);
     w.list(k.samplers);
+}
+
+void writeKernel(Writer &w, const KernelRequest &k)
+{
+    writeDispatch(w, k);
     writeWhole(w, k.stageIn);
 }
 
@@ -295,8 +300,10 @@ Digest storeName(const CacheKey &k, const CompileRequest &r, const std::vector<L
     if (r.kind == RequestKind::Render) {
         hashValue(c, r.fields.rasterization);
     } else {
+        // the stage input is bound by the key already: a kernel keeps the name it was stored under before requests
+        // carried it
         Writer w;
-        writeKernel(w, r.kernel);
+        writeDispatch(w, r.kernel);
         hashText(c, w.out);
     }
     Digest out{};

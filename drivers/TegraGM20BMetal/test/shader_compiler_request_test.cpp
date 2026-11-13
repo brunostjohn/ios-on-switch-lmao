@@ -235,6 +235,36 @@ TEST(CompileRequest, AKernelIsKeyedByItsFunctionAndNamedByItsDispatch)
     EXPECT_FALSE(switch_compiler::prepare(raw::encodeRequest(other), kStack, system, p, why));
 }
 
+// A kernel's store name binds its dispatch as before requests carried a stage input (which its key binds): a store a
+// device kept from an earlier build still names each kernel it holds (the digest is the one format 02's requests made)
+TEST(CompileRequest, AKernelKeepsTheStoreNameItHadBeforeItsRequestCarriedItsStageInput)
+{
+    raw::CompileRequest r;
+    r.stack = kStack;
+    r.kind = raw::RequestKind::Kernel;
+    r.libraries.push_back(data("library bytes"));
+    r.stages = {stage("k", "kernel_fn")};
+    r.kernel.maxThreads = 1024;
+    r.kernel.threads[0] = 64;
+    r.kernel.threads[1] = r.kernel.threads[2] = 1;
+    r.kernel.memory[2] = 4096;
+    NmbDirectBoundTexture t;
+    memset(&t, 0, sizeof t);
+    t.pixelFormat = 80;
+    t.textureType = 2;
+    t.usage = 0x17;
+    t.levels = t.arrayLength = t.samples = 1;
+    r.kernel.textures.push_back(t);
+    const raw::Digest name = raw::storeName(raw::kernelCacheKey(kStack, "a compute key"), r, identities(r));
+    std::string hex;
+    for (uint8_t b : name) {
+        char two[3];
+        snprintf(two, sizeof two, "%02x", b);
+        hex += two;
+    }
+    EXPECT_EQ(hex, "ef9afce2f43ca2e100a94e8bff343b186d9d01edc8efbbb3bdc6b84a8eae1758");
+}
+
 TEST(CompileRequest, TheCompilerRefusesWhatItCannotTrust)
 {
     switch_compiler::SystemLibraries system;
