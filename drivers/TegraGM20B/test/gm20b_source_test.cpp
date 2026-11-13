@@ -127,8 +127,8 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(work.Has("switch_gpu_cached_zero(s->pas"));
 	EXPECT_FALSE(work.Has("cleanZeros(s->bmd"));
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
-	EXPECT_TRUE(completed.Before("const bool keep = !result && !memoryPressure();",
-				     "p->ready[c] = s;"));
+	EXPECT_TRUE(
+		completed.Before("const bool keep = !result && spareRoom();", "p->ready[c] = s;"));
 	const CodeText zeros = Block(client(), "void cleanZeros(void *va, uint64_t bytes)");
 	EXPECT_TRUE(zeros.Has("switch_dcache_clean_invalidate(va, bytes);"));
 	EXPECT_FALSE(zeros.Has("bzero"));
