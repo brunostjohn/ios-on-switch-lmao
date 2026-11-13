@@ -63,7 +63,13 @@ def float_of(b: int) -> float:
 
 
 def every_half() -> list[int]:
-    return [bits_of(struct.unpack('<e', struct.pack('<H', h))[0]) for h in range(1 << 16)]
+    """Give every half's f32 bits, a NaN with its sign and payload: Python 3.13's struct drops a half NaN's payload."""
+    return [
+        h >> 15 << 31 | 0x7F800000 | (h & 0x3FF) << 13
+        if h & 0x7C00 == 0x7C00
+        else bits_of(struct.unpack('<e', struct.pack('<H', h))[0])
+        for h in range(1 << 16)
+    ]
 
 
 def bases(sweep: str, top: int, every: int = 1) -> list[int]:
