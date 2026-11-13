@@ -10,6 +10,7 @@
 #include "raw_gpu.h"
 #include "raw_kit.h"
 #include "raw_resolve_rule.h"
+#include "raw_twod_fill.h"
 
 namespace raw {
 
@@ -72,9 +73,7 @@ void BlitEncoder::fillTwod(const Texture &t, uint32_t x0, uint32_t y0, uint32_t 
 {
     room(SWITCH_GM20B_2D_FILL_WORDS);
     cb_->use(t, true);
-    const uint32_t unorm =
-        t.format == 80 || t.format == 81 ? NV902D_SET_DST_FORMAT_V_A8R8G8B8 : NV902D_SET_DST_FORMAT_V_A8B8G8R8;
-    const switch_gm20b_2d_surface s = gridSurface(t, unorm, t.width, t.height);
+    const switch_gm20b_2d_surface s = gridSurface(t, twodFillFormat(t.format), t.width, t.height);
     kit(p_, switch_gm20b_2d_fill, &s, word, x0, y0, x1, y1);
 }
 

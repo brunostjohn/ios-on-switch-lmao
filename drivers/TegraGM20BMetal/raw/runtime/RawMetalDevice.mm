@@ -58,6 +58,7 @@
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
+    d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
     d[@"resolve_twod_compressed"] = @(gRM->raw->stats.resolveTwodCompressed.load());
     d[@"blur_twod_passes"] = @(gRM->raw->stats.blurTwodPasses.load());

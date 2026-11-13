@@ -192,6 +192,7 @@ bool fillTexturePass(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc)
         raw::BlitEncoder *b = rc->blit();
         b->fillTwod(t->_raw, x0, y0, x1, y1, raw::twodFillWord(t->_raw.format, rgba));
         b->end();
+        RAW_DIAGNOSTIC(gRM->raw->stats.fillTwod++);
         return true;
     }
     raw::PassDesc p;
