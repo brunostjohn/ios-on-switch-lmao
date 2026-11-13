@@ -248,6 +248,13 @@ TEST_F(DeviceAmplification, ACountReadingStateTakesEachDrawsCount)
     EXPECT_EQ(countWord, root);
 }
 
+// A mapping's offsets share one scratch word, 16 bits each
+TEST_F(DeviceAmplification, AMappingOffsetPastHalfItsScratchWordIsRefused)
+{
+    EXPECT_NE(drawWith(offsetting, 2, {3, 0x10000}).why, "");
+    EXPECT_EQ(drawWith(offsetting, 2, {3, 0xffff}).why, "");
+}
+
 TEST_F(DeviceAmplification, ACountTheStateDoesNotTakeIsRefused)
 {
     EXPECT_NE(drawWith(amplified, 3).why, "");

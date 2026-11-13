@@ -41,6 +41,9 @@ void RenderEncoder::setAmplification(uint32_t count, const uint32_t (&viewports)
     std::copy(std::begin(viewports), std::end(viewports), amplificationViewports_);
     std::copy(std::begin(layers), std::end(layers), amplificationLayers_);
     amplificationDirty_ = true;
+    amplificationMapsWide_ = false;
+    for (uint32_t a = 0; a < std::min(amplifications_, kAmplificationMaps); a++)
+        amplificationMapsWide_ |= ((layers[a] | viewports[a]) >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT) != 0;
 }
 
 const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
@@ -48,9 +51,8 @@ const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
     const uint32_t most = std::max<uint32_t>(1, r.amplificationMax);
     if (amplifications_ > most)
         return "a vertex amplification count above the state's maxVertexAmplificationCount";
-    for (uint32_t a = 0; a < std::min(amplifications_, kAmplificationMaps); a++)
-        if ((amplificationLayers_[a] | amplificationViewports_[a]) >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT)
-            return "a vertex amplification view mapping's offset past the 16 bits of its scratch word";
+    if (amplificationMapsWide_)
+        return "a vertex amplification view mapping's offset past the 16 bits of its scratch word";
     for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++)
         if (streamSlot(r.vertexStreams[k - 1]) >= 31)
             return "a vertex stream of no Metal buffer";

@@ -58,6 +58,14 @@ class GpuMilestoneTest(unittest.TestCase):
             (run / 'gpu-events.log').write_text('6 channel 0 stopped: pushbuffer fetch\n')
             self.assertEqual(gpucheck.after_run(run), ['6 channel 0 stopped: pushbuffer fetch'])
 
+    def test_a_method_the_class_lacks_fails_after_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / 'gpu-methods.raw').write_text('0 4 b0b5 0418 00008000\n0 0 b197 3794 00000001\n')
+            problems = gpucheck.after_run(run)
+            self.assertEqual(len(problems), 1)
+            self.assertIn('MAXWELL_B 0x3794 00000001 !NOT_IN_CLASS', problems[0])
+
 
 if __name__ == '__main__':
     unittest.main()

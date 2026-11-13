@@ -968,6 +968,7 @@ private:
     bool amplifying_ = false, amplificationDirty_ = true;
     // what the amplify macros' scratch words hold (raw_mme.h), written before an amplified draw where they changed
     bool amplificationScratchDirty_ = true;
+    bool amplificationMapsWide_ = false;  // a mapping's offset past the 16 bits of its scratch word
     mme::AmplificationWords heldAmplification_ = {~0u};
 
     // A draw under vertex amplification is one amplify macro call (raw_amplification.cpp), but where runs of its

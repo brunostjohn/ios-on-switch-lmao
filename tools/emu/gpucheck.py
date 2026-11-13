@@ -4,7 +4,8 @@ It is reached at the boot pool scrub's queued line once M3 and M4 have passed: b
 copy-engine fill it checks and the scrubber's channel have run on the model (patch 0030 runs a channel's work when
 its GP_PUT is written). A bring-up FAIL line, a report of nvkm's or the kext's that only a GPU error produces, or a
 fault or stopped channel in the model's own log fails it, as does a run in which the GPU executed no method or the
-scrubber no fill.
+scrubber no fill, or a channel ran a method its class lacks on GM20B (gpulog.py), which the GPU kills the channel for
+and the model does not.
 """
 
 import re
@@ -71,5 +72,9 @@ def after_run(run: Path) -> list[str]:
         problems.append('the GPU executed no method')
     elif not any(tuple(method[2:5]) == SCRUB_FILL for method in methods):
         problems.append('the scrubber ran no fill')
+    if methods:
+        classes = gpulog.load_classes()
+        named = (gpulog.decode_line(' '.join(method), classes) for method in methods)
+        problems += [line for line, flag in named if flag == 'NOT_IN_CLASS']
     problems += gpulog.fault_lines(run / 'gpu-events.log')
     return problems

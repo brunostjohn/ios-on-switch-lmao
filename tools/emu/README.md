@@ -22,9 +22,10 @@ a mount requested by a job launchd spawned. `gpu` is reached when the GPU kext's
 scrub is queued, by which time the self-test's copy-engine fill and fence and the scrubber's pool fills have run on the
 model. Some boots never print the scrub's queued line (gpucheck.py says why), so a kernel line 2 s after M3, past the
 scrub's own 1 s deadline, also reaches it. Exit 4 means a bring-up FAIL line, a GPU error report from nvkm or the kext,
-a fault or stopped channel in `gpu-events.log`, or a run in which the GPU executed no method or the scrubber no fill. It
-needs no card (`--sd none`) and takes about 10 s of wall time. If the kernel runs for 10 polls and no log line comes
-out, `check` stops with exit 3 and prints what the reader found: no msgbuf header, or one whose ring is still empty.
+a fault or stopped channel in `gpu-events.log`, a method its class lacks on GM20B (which the model runs but the GPU
+kills the channel for), or a run in which the GPU executed no method or the scrubber no fill. It needs no card
+(`--sd none`) and takes about 10 s of wall time. If the kernel runs for 10 polls and no log line comes out, `check`
+stops with exit 3 and prints what the reader found: no msgbuf header, or one whose ring is still empty.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
