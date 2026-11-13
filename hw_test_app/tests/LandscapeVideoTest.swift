@@ -87,10 +87,51 @@ struct LandscapeVideoTest: HWTest {
             return .fail("no sample of the change back")
         }
         samples.leave = leave
+        let (forcedChecks, forcedMetrics) = await forcedFailure(session, video)
         await MainActor.run { video.pause() }
 
-        let (checks, metrics) = LandscapeJudge.judge(samples, dropped: dropped)
+        var (checks, metrics) = LandscapeJudge.judge(samples, dropped: dropped)
+        metrics.merge(forcedMetrics)
+        checks += forcedChecks
         return .judged(checks, metrics)
+    }
+
+    /// The forced-failure arm, last: FAIL makes the next change into landscape fail as a reservation would, which holds
+    /// the mode off for a run of video frames (SwitchLandscapeState.h); playing past the run, the next frame's change
+    /// has to go landscape again. forced_holds and forced_retries are the kernel's counts over the arm.
+    func forcedFailure(_ session: VICKernelTest.Session, _ video: AVPlayer) async -> ([(String, Bool)], Metrics) {
+        var metrics = Metrics()
+        guard case .success(let before) = await sample(session, frames: 2) else {
+            return ([("the forced-failure arm sampled", false)], metrics)
+        }
+        _ = session.call(
+            LandscapeSample.request(op: LandscapeSample.force, value: LandscapeSample.columnScanYuv), replyBytes: 0)
+        _ = session.call(LandscapeSample.request(op: LandscapeSample.fail, value: 0), replyBytes: 0)
+        await MainActor.run { video.play() }
+        var entered = false
+        var last = before
+        for _ in 0..<6 {
+            guard case .success(let window) = await sample(session, frames: 120) else { break }
+            last = window
+            if window.retries > before.retries && window.landscapeFrames > 0 {
+                entered = true
+                break
+            }
+        }
+        _ = session.call(LandscapeSample.request(op: LandscapeSample.force, value: 0), replyBytes: 0)
+        await hold(video)
+        metrics.set("forced_holds", last.holds - before.holds)
+        metrics.set("forced_retries", last.retries - before.retries)
+        metrics.set("forced_entered", entered)
+        return (
+            [
+                ("the forced failure held landscape off (forced_holds 1)", last.holds - before.holds == 1),
+                (
+                    "landscape came back after the run (forced_retries 1, forced_entered)",
+                    last.retries - before.retries == 1 && entered
+                ),
+            ], metrics
+        )
     }
 
     /// The frames AVFoundation has dropped so far for `item`.

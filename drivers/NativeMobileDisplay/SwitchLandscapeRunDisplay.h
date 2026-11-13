@@ -10,7 +10,7 @@
 struct LandscapeRunState {
     SwitchDisplayLandscapeReply reply;
     uint32_t want, savedCrc;
-    bool holding, overlayLatched, charging;
+    bool holding, overlayLatched, charging, failNext;
     SwitchVICTurnCounters vicAt;
     uint64_t displayTicks;
 };
@@ -27,12 +27,17 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
 {
     if (!getWorkLoop())
         return kIOReturnNotReady;
-    if (request.op != SWITCH_DISPLAY_LANDSCAPE_SAMPLE && request.op != SWITCH_DISPLAY_LANDSCAPE_QUERY)
+    if (request.op != SWITCH_DISPLAY_LANDSCAPE_SAMPLE && request.op != SWITCH_DISPLAY_LANDSCAPE_QUERY &&
+        request.op != SWITCH_DISPLAY_LANDSCAPE_FAIL)
         return kIOReturnBadArgument;
     windowProbeOnLoop([&] {
+        if (request.op == SWITCH_DISPLAY_LANDSCAPE_FAIL)
+            landscapeRun.failNext = true;
         const int error = request.op == SWITCH_DISPLAY_LANDSCAPE_SAMPLE ? landscapeRunStart(request.value) : 0;
         reply = landscapeRun.reply;
         reply.error = error ? error : reply.error;
+        reply.holds = landscapeState.hold.failures;
+        reply.retries = landscapeState.hold.retries;
     });
     return kIOReturnSuccess;
 }
@@ -81,6 +86,8 @@ void landscapeRunFinish(int error)
     absolutetime_to_nanoseconds(s.displayTicks, &s.reply.displayNs);
     absolutetime_to_nanoseconds(vic.ticks - s.vicAt.ticks, &s.reply.vicNs);
     s.reply.error = error;
+    s.reply.holds = landscapeState.hold.failures;
+    s.reply.retries = landscapeState.hold.retries;
     s.reply.state = SWITCH_DISPLAY_LANDSCAPE_DONE;
     if (s.holding) {
         s.holding = false;
@@ -138,6 +145,15 @@ void landscapeRunLatched(bool overlay, bool modeChanged)
     landscapeRun.reply.switches += modeChanged ? 1 : 0;
 }
 
+// landscapeEnter's forced-failure arm: true once after a FAIL request.
+bool landscapeRunFailsEnter()
+{
+    if (!landscapeRun.failNext)
+        return false;
+    landscapeRun.failNext = false;
+    return true;
+}
+
 // The display's CPU over a sample: a kick made inside a frame end is that frame end's.
 static uint64_t landscapeRunClock()
 {
@@ -156,6 +172,11 @@ void landscapeRunCharge(uint64_t since)
         landscapeRun.displayTicks += mach_absolute_time() - since;
 }
 #else
+static bool landscapeRunFailsEnter()
+{
+    return false;
+}
+
 void landscapeRunFrameEnd()
 {}
 

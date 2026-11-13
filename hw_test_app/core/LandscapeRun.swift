@@ -7,9 +7,10 @@ public struct LandscapeSample: Sendable, Equatable {
     public static let force: UInt32 = 1
     public static let sample: UInt32 = 2
     public static let query: UInt32 = 3
+    public static let fail: UInt32 = 5
     public static let done: UInt32 = 2
     public static let maxFrames = 240
-    public static let size = 96 + 5 * maxFrames
+    public static let size = 96 + 5 * maxFrames + 8
     public static let columnScanYuv: UInt32 = 2
     static let landscapeBit: UInt8 = 1
     static let switchingBit: UInt8 = 2
@@ -33,6 +34,9 @@ public struct LandscapeSample: Sendable, Equatable {
     public var vicNs: UInt64 = 0
     public var crc: [UInt32] = []
     public var mode: [UInt8] = []
+    /// Failed changes into landscape since boot, and the runs that ended with the mode tried again.
+    public var holds = 0
+    public var retries = 0
 
     public init() {}
 
@@ -58,6 +62,8 @@ public struct LandscapeSample: Sendable, Equatable {
         vicNs = UInt64(Self.word(bytes, 88)) | UInt64(Self.word(bytes, 92)) << 32
         crc = (0..<frames).map { Self.word(bytes, 96 + 4 * $0) }
         mode = Array(bytes[(96 + 4 * Self.maxFrames)..<(96 + 4 * Self.maxFrames + frames)])
+        holds = Int(Self.word(bytes, 96 + 5 * Self.maxFrames))
+        retries = Int(Self.word(bytes, 100 + 5 * Self.maxFrames))
     }
 
     public var frames: Int { crc.count }

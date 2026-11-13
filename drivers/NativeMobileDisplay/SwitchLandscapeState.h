@@ -6,8 +6,9 @@
 struct LandscapeState {
     PlaneSet held = {};  // the composition that changes the mode, waiting for a quiet frame end (newest wins)
     bool wanted = false, switching = false;
-    bool retired =
-        false;  // the mode failed once (a reservation, no quiet frame end, an overlay recovery): off this boot
+    // A failed change of mode (a reservation, no quiet frame end, an overlay recovery) holds the mode off for a run of
+    // video frames latched on the copy route.
+    SwitchRouteBackoff<120, 3840, 1800> hold;
     uint64_t wantedAt = 0;
     int csc[2] = {-1, -1};  // window A's CSC (matrix, full range) as planeCsc keeps B's and C's
     bool filtersWritten = false;

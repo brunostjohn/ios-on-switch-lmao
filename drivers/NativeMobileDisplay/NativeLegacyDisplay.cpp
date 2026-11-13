@@ -1853,9 +1853,10 @@ private:
             planesState = "off";
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u, "
-            "composited %u, stuck %u asked %u",
+            "composited %u, stuck %u asked %u, landscape held %u retried %u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneDropped,
-            stPlaneUnderflows, stPlaneUnready, stPlaneComposited, planeRecoveriesStuck, planeRecoveryAsks);
+            stPlaneUnderflows, stPlaneUnready, stPlaneComposited, planeRecoveriesStuck, planeRecoveryAsks,
+            landscapeState.hold.failures, landscapeState.hold.retries);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,

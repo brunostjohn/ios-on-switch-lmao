@@ -22,6 +22,8 @@ final class LandscapeRunTests: XCTestCase {
         put(1, 84)
         for (i, value) in crc.enumerated() { put(value, 96 + 4 * i) }
         for (i, value) in mode.enumerated() { bytes[96 + 4 * LandscapeSample.maxFrames + i] = value }
+        put(4, 96 + 5 * LandscapeSample.maxFrames)
+        put(3, 100 + 5 * LandscapeSample.maxFrames)
         return bytes
     }
 
@@ -58,6 +60,8 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(parsed.vicEventTurns, [7, 0, 0])
         XCTAssertEqual(parsed.displayNs, 0x1_0000_0002)
         XCTAssertEqual(parsed.landscapeFrames, 2)
+        XCTAssertEqual(parsed.holds, 4)
+        XCTAssertEqual(parsed.retries, 3)
         XCTAssertNil(LandscapeSample([UInt8](repeating: 0, count: LandscapeSample.size)))
     }
 

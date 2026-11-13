@@ -691,6 +691,7 @@ host_test(
 host_test(
     name = "switch_overlay_registers_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "switch_overlay_registers_test.cpp",
@@ -716,6 +717,7 @@ host_test(
 host_test(
     name = "switch_landscape_display_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_landscape_display_test.cpp",
         "//drivers/NativeMobileDisplay:NativeColumnScan.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
@@ -835,6 +837,7 @@ host_test(
 host_test(
     name = "switch_plane_composite_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_plane_composite_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",

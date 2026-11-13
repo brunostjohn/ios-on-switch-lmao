@@ -63,8 +63,9 @@ void beginPlaneRecovery(const char *why)
     }
     if (landscape) {
         // The windows go back to portrait first; what went wrong was window A's column scan (or its reservation).
-        IOLog("SwitchDisplay: the overlay recovery leaves landscape: landscape off this boot\n");
-        landscapeState.retired = true;
+        landscapeState.hold.fail();
+        IOLog("SwitchDisplay: the overlay recovery leaves landscape: landscape held off for %u video frames\n",
+              landscapeState.hold.run);
         landscapeLeaveNow(why);
     } else {
         landscapeAbandonWant();

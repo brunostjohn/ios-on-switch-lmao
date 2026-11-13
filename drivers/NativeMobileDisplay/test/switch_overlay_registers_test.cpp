@@ -3,6 +3,7 @@
 #include <array>
 #include <stdexcept>
 #include <vector>
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchPlaneComposite.h"
 #include "../../TegraVIC/SwitchNativeVICImage.h"
