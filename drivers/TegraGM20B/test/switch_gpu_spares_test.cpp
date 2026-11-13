@@ -75,4 +75,15 @@ TEST(Spares, WithoutAReaperOnlyThePressureLevelCounts)
 	EXPECT_FALSE(switch_gpu_spares_give_back(0, 0, 0, 6144));
 }
 
+// TegraGM20BUserClientPool.cpp: spares go back below one cap above the reaper's threshold and are kept or made again
+// only above two, so the pages a give-back frees cannot by themselves start the refill
+TEST(Spares, BetweenOneAndTwoCapsNothingGoesBackAndNothingIsMade)
+{
+	constexpr uint64_t kReaper = 49000, kCap = (96ULL << 20) / 16384;
+	const uint64_t between = kReaper + kCap + kCap / 2;
+	EXPECT_FALSE(switch_gpu_spares_give_back(0, between, kReaper, kCap));
+	EXPECT_TRUE(switch_gpu_spares_give_back(0, between, kReaper, 2 * kCap));
+	EXPECT_FALSE(switch_gpu_spares_give_back(0, kReaper + 2 * kCap, kReaper, 2 * kCap));
+}
+
 }  // namespace
