@@ -94,10 +94,9 @@ fn live_profile(nmb: &NmbDevice) -> Result<Profile, String> {
     let runtime = nmb.device();
     // SAFETY: the handles are the live runtime device's, used only for this query.
     let handles = unsafe { runtime.raw() };
-    let description = unsafe {
-        DeviceDescription::query(handles.instance, handles.physical_device, handles.instance_api_version)
-    }
-    .map_err(e("device description"))?;
+    let description =
+        unsafe { DeviceDescription::query(handles.instance, handles.physical_device, handles.instance_api_version) }
+            .map_err(e("device description"))?;
     let mut enabled = description
         .with_enabled(runtime.enabled())
         .map_err(e("enabled description"))?;
@@ -285,7 +284,9 @@ pub extern "C" fn nmb_offline_function_type(function: *const NmbOfflineFunction)
 
 /// Whether the runtime's compile device compiles `descriptor`'s kernel, as its compute state creation does
 #[unsafe(no_mangle)]
-pub extern "C" fn nmb_offline_compute_pipeline_compiles(descriptor: *const NmbOfflineComputePipelineDescriptor) -> bool {
+pub extern "C" fn nmb_offline_compute_pipeline_compiles(
+    descriptor: *const NmbOfflineComputePipelineDescriptor,
+) -> bool {
     guard(false, || {
         let descriptor = compute_descriptor(descriptor)?;
         offline_devices()?
@@ -306,9 +307,7 @@ fn vertex_attributes(function: *const NmbOfflineFunction) -> Result<Option<Vec<A
 /// nmb_function_attribute_count's answer for `vertexAttributes`, of an offline function
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_offline_function_vertex_attribute_count(function: *const NmbOfflineFunction) -> i64 {
-    guard(-1, || {
-        Ok(vertex_attributes(function)?.map_or(-1, |a| a.len() as i64))
-    })
+    guard(-1, || Ok(vertex_attributes(function)?.map_or(-1, |a| a.len() as i64)))
 }
 
 /// nmb_function_attribute's answer for `vertexAttributes`, of an offline function

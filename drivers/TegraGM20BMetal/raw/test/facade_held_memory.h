@@ -17,7 +17,7 @@
 @end
 
 extern GpuMemoryRelease &gRawRelease;  // RawMetalFinish.mm: the raw device's, which memory pressure runs
-extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);           // the mock's view of GPU memory
+extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);          // the mock's view of GPU memory
 extern "C" void mock_iokit_held(uint64_t *allocated, uint64_t *imported);  // the mock's live BOs' bytes
 extern "C" void mock_iokit_pause(uint32_t channel, bool pause);            // a channel's jobs wait until unpaused
 
@@ -143,7 +143,7 @@ template <typename Encode> int idleCheck(Encode encode, unsigned idle)
            (unsigned long long)(inFlight > drained ? (inFlight - drained) >> 10 : 0));
     if (held && inFlight >= committed && drained < inFlight)
         return 0;
-    printf("FAIL: the idle check %s\n", !held                  ? "saw the command buffer complete while the GPU was held"
+    printf("FAIL: the idle check %s\n", !held ? "saw the command buffer complete while the GPU was held"
                                         : inFlight < committed ? "saw memory given back with a command buffer in flight"
                                                                : "saw nothing given back after the drain");
     return 1;
@@ -155,7 +155,11 @@ template <typename Encode> int idleCheck(Encode encode, unsigned idle)
 // waits for `event` at 1. The failures.
 template <typename EncodeAfter> int eventParkedCheck(EncodeAfter encodeAfter, id<MTLDevice> device, unsigned idle)
 {
-    settle([&] { return encodeAfter(nil); }, idle);
+    settle(
+        [&] {
+            return encodeAfter(nil);
+        },
+        idle);
     id<MTLSharedEvent> event = [device newSharedEvent];
     id<MTLCommandBuffer> cb = encodeAfter(event);
     std::vector<std::pair<uint64_t, std::vector<uint8_t>>> chunks;
@@ -176,10 +180,11 @@ template <typename EncodeAfter> int eventParkedCheck(EncodeAfter encodeAfter, id
     event.signaledValue = 1;
     [cb waitUntilCompleted];
     const bool completed = cb.status == MTLCommandBufferStatusCompleted && !cb.error;
-    printf("facadecost event-parked: waiting %d, gave back %llu KiB past the deadline, %zu of %zu chunks bound with their "
-           "bytes, completed %d\n",
-           int(waiting), (unsigned long long)(parked > released ? (parked - released) >> 10 : 0), kept, chunks.size(),
-           int(completed));
+    printf(
+        "facadecost event-parked: waiting %d, gave back %llu KiB past the deadline, %zu of %zu chunks bound with their "
+        "bytes, completed %d\n",
+        int(waiting), (unsigned long long)(parked > released ? (parked - released) >> 10 : 0), kept, chunks.size(),
+        int(completed));
     if (waiting && released < parked && !chunks.empty() && kept == chunks.size() && completed)
         return 0;
     printf("FAIL: the event-parked check %s\n",
