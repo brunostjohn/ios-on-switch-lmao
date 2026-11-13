@@ -47,13 +47,13 @@ enum : uint32_t {
 // the texture unit; copies both ways between a compressed and a plain target. Its rectangles started at the origin, as a
 // shadow's do. One-sample ZF32_2CZ by gpu.x1.ce_compressed_depth (boot 19 and boot 21, the context as shipped: d32f_1x=0
 // over 16 compressed rounds of shader-test copies both ways). One-sample Z16_2C and ZF32_X24S8_2CSZV (its depth and stencil
-// aspect copies too) ship on unread: gpu.raw.stored_depth's d16_compressed and d32fs8_compressed arms judge them. Not
-// asked: C128, the multisampled colour kinds and the multisampled zeta kinds (which read exact only under anti-alias
-// words no context row writes).
+// aspect copies too) ship on unread: gpu.raw.stored_depth's d16_compressed and d32fs8_compressed arms judge them; so does
+// one-sample C128_2CR, which gpu.x1.ce_compressed's RGBA32Float cases judge. Not asked: the multisampled colour kinds
+// and the multisampled zeta kinds (which read exact only under anti-alias words no context row writes).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
-    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindZF32 || kind == kCompKindZ16 ||
-           kind == kCompKindZeta;
+    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindC128 || kind == kCompKindZF32 ||
+           kind == kCompKindZ16 || kind == kCompKindZeta;
 }
 
 // The compressible kind of a block-linear colour target of `bpp`-byte texels at `samples` samples, or of the depth/stencil
