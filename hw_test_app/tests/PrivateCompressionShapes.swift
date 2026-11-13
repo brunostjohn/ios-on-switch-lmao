@@ -106,7 +106,10 @@ extension PrivateCompressionTest {
                 e.setRenderPipelineState(state ?? pattern)
                 var corners =
                     slant
-                    ? [SIMD4<Float>(-1, -1, 0.5, 1), SIMD4(0.3, -1, 0.5, 1), SIMD4(-1, 1, 0.5, 1), SIMD4(-0.2, 1, 0.5, 1)]
+                    ? [
+                        SIMD4<Float>(-1, -1, 0.5, 1), SIMD4(0.3, -1, 0.5, 1), SIMD4(-1, 1, 0.5, 1),
+                        SIMD4(-0.2, 1, 0.5, 1),
+                    ]
                     : half ? GPU.quad(x0: -1, y0: -1, x1: 0, y1: 1, z: 0.5) : GPU.fullScreen
                 e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -169,7 +172,8 @@ extension PrivateCompressionTest {
                     e.setComputePipelineState(kernel)
                     e.setTexture(target, index: 0)
                     e.dispatchThreads(
-                        MTLSize(width: 64, height: 128, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+                        MTLSize(width: 64, height: 128, depth: 1),
+                        threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
                     e.endEncoding()
                 }.path)
             run.bytes = try await gpu.read(target, bytesPerPixel: 4)

@@ -46,7 +46,8 @@ struct BarrierKit {
                 pixelFormat: format, width: width, height: height, mipmapped: false)
             descriptor.usage = [.renderTarget, .shaderRead]
             descriptor.storageMode = .shared
-            return try gpu.buffer(rowBytes * height).makeTexture(descriptor: descriptor, offset: 0, bytesPerRow: rowBytes)
+            return try gpu.buffer(rowBytes * height).makeTexture(
+                descriptor: descriptor, offset: 0, bytesPerRow: rowBytes)
         }
         if layout == .compressed { try RawProbe.compressNext(gpu.device) }
         let texture = try gpu.texture(format, width, height, usage: [.renderTarget, .shaderRead])
