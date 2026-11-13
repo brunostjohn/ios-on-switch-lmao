@@ -273,8 +273,8 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
         const bool vulkanBlend = blended ? (*blended >> j & 1) : c.blending && !identityBlend(c);
         const bool blends = vulkanBlend && c.writeMask && !extendedRange(c.format);
         out.push_back({kBlend + 4 * j, blends, writes[j] && !(c.blending && identityBlend(c))});
-        if (j)
-            out.push_back({kBlendPerTarget + 0x20 * j, 1, true});
+        // Metal's alpha factors are always their own; target 0's too, so no record takes it from what the pack leaves
+        out.push_back({kBlendPerTarget + 0x20 * j, 1, true});
         const uint32_t values[6] = {kOps[c.factor[2]], kFactors[c.factor[0]], kFactors[c.factor[1]],
                                     kOps[c.factor[5]], kFactors[c.factor[3]], kFactors[c.factor[4]]};
         const uint32_t off[6] = {kOpAdd, kZero, kZero, kOpAdd, kZero, kZero};
@@ -310,7 +310,7 @@ std::set<uint32_t> emittableMethods()
                               kRegisterCount[1], 0x1224,         0x0754};
     for (uint32_t j = 0; j < kTargets; j++) {
         out.insert({kCtWrite + 4 * j, kBlend + 4 * j});
-        for (uint32_t k = j ? 0 : 1; k < 7; k++)
+        for (uint32_t k = 0; k < 7; k++)
             out.insert(kBlendPerTarget + 0x20 * j + 4 * k);
     }
     for (uint32_t location = 0; location < 32; location++)

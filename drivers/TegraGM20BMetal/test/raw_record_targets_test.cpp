@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// A record's colour targets: a two-plane state's alpha targets are its 550 colours' alpha indices (raw_xr_pass.h), raw_emit
-// lays them out, and assembleRecord keeps their registers as it keeps those of the colours the key names, a target neither
-// names left out (raw_record_parts.cpp foreign)
+// A record's colour targets: raw_emit writes every target's per-target blend switch, target 0's too; a two-plane state's alpha
+// targets are its 550 colours' alpha indices (raw_xr_pass.h), raw_emit lays them out, and assembleRecord keeps their
+// registers as it keeps those of the colours the key names, a target neither names left out (raw_record_parts.cpp foreign)
 #include <gtest/gtest.h>
 #include <array>
 #include <string>
@@ -49,6 +49,22 @@ TEST(RecordTargets, EmitStateLaysOutTheAlphaTargets)
     EXPECT_NE(registerOf(regs, kCtWrite + 4), 0xffffffffu);
     ASSERT_TRUE(raw::emitState(kTwoPlaneKey, vertex, fragment, regs, why, nullptr, false, &alpha)) << why;
     EXPECT_EQ(alpha, 0u);
+}
+
+TEST(RecordTargets, EveryTargetBlendsAlphaByItsOwnFactors)
+{
+    const std::array<uint8_t, 80> header{};
+    raw::EmitProgram vertex, fragment;
+    vertex.header = header.data();
+    fragment.header = header.data();
+    std::vector<raw::EmitRegister> regs;
+    std::string why;
+    ASSERT_TRUE(raw::emitState("samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 c1=80:15:0:1:0:0:1:0:0", vertex,
+                               fragment, regs, why))
+        << why;
+    EXPECT_EQ(registerOf(regs, kBlendPerTarget), 1u);
+    EXPECT_EQ(registerOf(regs, kBlendPerTarget + 0x20), 1u);
+    EXPECT_NE(raw::emittableMethods().count(kBlendPerTarget), 0u);
 }
 
 raw::CapturedProgram program(const char *id)
