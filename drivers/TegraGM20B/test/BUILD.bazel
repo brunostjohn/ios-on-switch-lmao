@@ -948,13 +948,13 @@ host_library(
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
-        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
         "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
     ],
     deps = [
         ":backing",

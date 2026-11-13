@@ -225,6 +225,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 							nullptr};
 	}
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
+	[[maybe_unused]] uint32_t backings = 0;
 	if (admissionContinue && !admission.covers(job.uses, useTotal))
 		return kIOReturnBadArgument;
 	tgm_views_job_writes(job.written, writtenCount);
@@ -288,6 +289,7 @@ refresh:
 			error = switch_gpu_backing_begin_held(job.uses, useTotal, job.leases,
 							      leaseCount, job.guards, guardCount,
 							      &completion, &transaction);
+			backings = transaction.count;
 			ownershipBusy = error == -16;
 			if (!error)
 				error = switch_gpu_backing_write_ranges(&transaction, job.writes,
@@ -388,7 +390,8 @@ refresh:
 	}
 	job.phases.end(TGM_SUBMIT_COMMIT);
 #if TGM_STATS
-	switch_gpu_job_submitted(job.phases.ns, set != nullptr, head.shared_count, siblingCount);
+	switch_gpu_job_submitted(job.phases.ns, set != nullptr, head.shared_count, backings,
+				 siblingCount);
 #endif
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);

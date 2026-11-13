@@ -3,12 +3,13 @@
 // dependencies, commit), on the real backing registry and GM20B timeline engine among a device's worth of channels: the
 // IOLocks it takes besides its uses' own locks, and its time, per job.
 #include <gtest/gtest.h>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <vector>
 #include <IOKit/IOUserClient.h>
 #include "drivers/TegraGM20B/SwitchGpuBackingInternal.h"
-#include "drivers/TegraGM20B/SwitchGpuTimeline.h"
+#include "drivers/TegraGM20B/SwitchGpuTimelineInternal.h"
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 
 struct switch_gpu_event_waits {
@@ -108,12 +109,16 @@ int switch_gpu_bridge_wait_external(const switch_gpu_backing_token *)
 	return 1;
 }
 
+std::atomic<int> fenceHolds;
+
 void switch_gpu_fence_hold(const volatile uint32_t *)
 {
+	++fenceHolds;
 }
 
 void switch_gpu_fence_put(const volatile uint32_t *)
 {
+	--fenceHolds;
 }
 
 void tgm_writer_wait(uint32_t, uint32_t)
@@ -162,6 +167,9 @@ protected:
 	Channel &compositor = channels[0];
 	std::vector<switch_gpu_backing *> textures;
 	switch_gpu_backing *target = nullptr;
+	std::vector<switch_gpu_backing_use> uses;
+	std::vector<switch_gpu_backing_token> dependencies =
+		std::vector<switch_gpu_backing_token>(TegraGM20BMaxJobDependencies);
 	uint32_t frame = 0;
 
 	void SetUp() override
@@ -181,6 +189,7 @@ protected:
 		switch_gpu_backing_release(target);
 		for (int pass = 0; pass < 4; ++pass)
 			switch_gpu_backing_retire();
+		EXPECT_EQ(fenceHolds.load(), 0) << "a timeline reference was lost or dropped twice";
 	}
 
 	Channel &app(uint32_t i)
@@ -189,10 +198,11 @@ protected:
 	}
 
 	// Each app draws its textures once, the GPU finishes, and the compositor composites a few frames behind the GPU.
-	void scene(uint32_t uses)
+	void scene(uint32_t count)
 	{
-		target = surface(4);
-		for (uint32_t i = 0; i < uses; ++i) {
+		if (!target)
+			target = surface(4);
+		for (uint32_t i = uint32_t(textures.size()); i < count; ++i) {
 			textures.push_back(surface(16));
 			switch_gpu_backing_use use = {textures.back(), SWITCH_GPU_BACKING_WRITE, 0};
 			const switch_gpu_backing_token drawn = app(i).token(1);
@@ -209,7 +219,7 @@ protected:
 	// One compositor job as SubmitJob runs it once its uses are resolved; the previous frame is still on the GPU.
 	Cost composite()
 	{
-		std::vector<switch_gpu_backing_use> uses;
+		uses.clear();
 		for (auto *texture : textures)
 			uses.push_back(
 				{texture,
@@ -217,7 +227,6 @@ protected:
 		uses.push_back({target,
 				SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0});
 		switch_gpu_backing_write_range write = {target, 0, 0};
-		std::vector<switch_gpu_backing_token> dependencies(TegraGM20BMaxJobDependencies);
 		const switch_gpu_backing_token completion = compositor.token(++frame);
 		const uint64_t own = own_takes(), all = ioLockTakes().load();
 		switch_gpu_backing_transaction transaction = {};
@@ -258,31 +267,39 @@ protected:
 	}
 };
 
-TEST_F(SubmitCost, ScrollJobAtSixUses)
+// A scroll's 6 shared uses and a scale animation's 60 (boot 21: 55-61) cost the same global locks: the transaction's
+// one take of its timeline's references; each use costs its own backing's lock once.
+TEST_F(SubmitCost, GlobalLocksAJobDoNotGrowWithItsSharedUses)
 {
 	scene(6);
-	const Cost cost = composite();
+	const Cost scroll = composite();
 	std::printf(
 		"6 shared uses: %llu global IOLock takes, %llu of the uses' own, %.2f us a job\n",
-		static_cast<unsigned long long>(cost.global),
-		static_cast<unsigned long long>(cost.own), mean_us(200));
-	RecordProperty("global_takes_6", std::to_string(cost.global));
-	EXPECT_LE(cost.global, 2u);
-}
-
-// What resolves a scale animation's 55-61 shared uses: the same global locks as six, its uses' own locks once each.
-TEST_F(SubmitCost, ScaleJobAtSixtyUsesTakesNoGlobalLockPerUse)
-{
+		static_cast<unsigned long long>(scroll.global),
+		static_cast<unsigned long long>(scroll.own), mean_us(200));
 	scene(60);
-	const Cost cost = composite();
+	const Cost scale = composite();
 	std::printf(
 		"60 shared uses: %llu global IOLock takes, %llu of the uses' own, %.2f us a job\n",
-		static_cast<unsigned long long>(cost.global),
-		static_cast<unsigned long long>(cost.own), mean_us(200));
-	RecordProperty("global_takes_60", std::to_string(cost.global));
-	EXPECT_LE(cost.global, 2u);
-	EXPECT_EQ(cost.own, 61u);
-	EXPECT_EQ(cost.dependencies, 0u);
+		static_cast<unsigned long long>(scale.global),
+		static_cast<unsigned long long>(scale.own), mean_us(200));
+	EXPECT_EQ(scale.global, scroll.global);
+	EXPECT_LE(scale.global, 1u);
+	EXPECT_EQ(scroll.own, 7u);
+	EXPECT_EQ(scale.own, 61u);
+	EXPECT_EQ(scale.dependencies, 0u);
+}
+
+// A record a job replaces on its own timeline passes its reference on: the compositor's timeline holds one a record
+// (60 reads, the target's write) and its own, frame after frame.
+TEST_F(SubmitCost, ReplacedRecordsKeepTheTimelineReferencesLevel)
+{
+	scene(60);
+	const uint32_t held = compositor.timeline->refs;
+	for (int i = 0; i < 10; ++i)
+		composite();
+	EXPECT_EQ(compositor.timeline->refs, held);
+	EXPECT_EQ(held, 1u + 61u);
 }
 
 // An app still drawing one texture: the job waits for that app's channel, found under the texture's own lock.

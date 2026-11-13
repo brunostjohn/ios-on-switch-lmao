@@ -8,7 +8,7 @@ namespace
 constexpr uint32_t kPhases = 4;  // TGM_SUBMIT_RESOLVE, _LOCK, _EXEC, _COMMIT
 
 struct Window {
-	uint64_t jobs, sets, stale, shared, sharedMax, siblings, total, totalMax;
+	uint64_t jobs, sets, stale, shared, sharedMax, backings, siblings, total, totalMax;
 	uint64_t ns[kPhases];
 	uint64_t causes[SWITCH_GPU_SET_CAUSES];
 } window;
@@ -28,7 +28,7 @@ uint64_t take(uint64_t *counter)
 }  // namespace
 
 extern "C" void switch_gpu_job_submitted(const uint64_t *ns, int named_set, uint32_t shared_uses,
-					 uint32_t siblings)
+					 uint32_t backings, uint32_t siblings)
 {
 	uint64_t total = 0;
 	for (uint32_t p = 0; p < kPhases; ++p) {
@@ -38,6 +38,7 @@ extern "C" void switch_gpu_job_submitted(const uint64_t *ns, int named_set, uint
 	__atomic_fetch_add(&window.jobs, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&window.sets, named_set ? 1 : 0, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&window.shared, shared_uses, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&window.backings, backings, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&window.siblings, siblings, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&window.total, total, __ATOMIC_RELAXED);
 	raise(&window.sharedMax, shared_uses);
@@ -66,7 +67,8 @@ extern "C" void switch_gpu_job_window(char *line, size_t size)
 	const uint64_t jobs = take(&window.jobs), sets = take(&window.sets),
 		       stale = take(&window.stale);
 	const uint64_t shared = take(&window.shared), sharedMax = take(&window.sharedMax);
-	const uint64_t siblings = take(&window.siblings), total = take(&window.total);
+	const uint64_t backings = take(&window.backings), siblings = take(&window.siblings),
+		       total = take(&window.total);
 	const uint64_t totalMax = take(&window.totalMax);
 	if (!size)
 		return;
@@ -80,12 +82,14 @@ extern "C" void switch_gpu_job_window(char *line, size_t size)
 			   "commit %llu) max %llu us, "
 			   "set %llu hit %llu stale, shared %llu.%llu per job max %llu, siblings "
 			   "%llu, generations ended: "
-			   "free %llu layout %llu shared %llu kill %llu replace %llu cpu %llu",
+			   "free %llu layout %llu shared %llu kill %llu replace %llu cpu %llu, "
+			   "backings %llu.%llu per job",
 			   jobs, total / n / 1000, ns[0] / n / 1000, ns[1] / n / 1000,
 			   ns[2] / n / 1000, ns[3] / n / 1000, totalMax / 1000, sets, stale,
 			   shared / n, shared * 10 / n % 10, sharedMax, siblings,
 			   causes[SWITCH_GPU_SET_CAUSE_FREE], causes[SWITCH_GPU_SET_CAUSE_LAYOUT],
 			   causes[SWITCH_GPU_SET_CAUSE_SHARED], causes[SWITCH_GPU_SET_CAUSE_KILL],
-			   causes[SWITCH_GPU_SET_CAUSE_REPLACE], causes[SWITCH_GPU_SET_CAUSE_CPU]);
+			   causes[SWITCH_GPU_SET_CAUSE_REPLACE], causes[SWITCH_GPU_SET_CAUSE_CPU],
+			   backings / n, backings * 10 / n % 10);
 }
 #endif
