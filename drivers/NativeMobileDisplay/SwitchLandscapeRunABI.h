@@ -66,8 +66,8 @@ typedef struct {
     uint64_t vicNs;             // CPU in TegraVIC's requests and engine thread
     uint32_t crc[SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES];
     uint8_t mode[SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES];
-    uint32_t holds;    // failed changes into landscape since boot, each holding the mode off for a run
-    uint32_t retries;  // runs that ended, the mode tried again
+    uint32_t failures;  // failed changes of mode since boot
+    uint32_t reserved2;
 } SwitchDisplayLandscapeReply;
 
 #ifdef __cplusplus

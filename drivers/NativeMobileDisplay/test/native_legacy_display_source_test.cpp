@@ -204,14 +204,25 @@ TEST(VsyncPhaseSource, OneVsyncAFrame)
                             "if (status & kFrameEndInt) frameEnds = frameEnds + 1;"));
 }
 
-TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLineAndAHoldOff)
+// A failed change of mode, a refused completion flip or an underflow run holds no route off: whether landscape, direct
+// scanout and completion flips are tried reads no failure state.
+TEST(DisplayRoutesSource, NoFailureHoldsARouteOff)
+{
+    const CodeText selection(SourceText("../SwitchLandscapeSelection.h"));
+    EXPECT_TRUE(selection.Has("return planesReady() && directAttached && !landscapeRunHoldsPortrait();"));
+    EXPECT_TRUE(
+        CodeText(SourceText("../SwitchScanoutStart.h")).Has("bool directScanChosen() const { return directOn; }"));
+    EXPECT_FALSE(code().Has("Hold.on()"));
+}
+
+TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
 {
     const CodeText present = method("void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
     EXPECT_TRUE(present.Has("phaseProbe.flip(vpulseProgrammed, vpulseSeen)"));
-    EXPECT_TRUE(present.Has("phaseOffForRun();"));
+    EXPECT_TRUE(present.Has("phaseProbeMissed();"));
     EXPECT_FALSE(present.Has("panic(")) << "a V_PULSE2 that never fired costs one line, not the boot";
-    EXPECT_TRUE(method("void phaseOffForRun()").Has("vsync phase held off for %u flips"));
-    EXPECT_TRUE(method("void phaseOffForRun()").Has("vpulseProgrammed = false;"));
+    EXPECT_TRUE(method("void phaseProbeMissed()").Has("vsync at V_BLANK"));
+    EXPECT_TRUE(method("void phaseProbeMissed()").Has("vpulseProgrammed = false;"));
     EXPECT_TRUE(method("unsigned noteLong(uint32_t frames, const FrameMark &mark)").Has("kLongRate"));
 }
 

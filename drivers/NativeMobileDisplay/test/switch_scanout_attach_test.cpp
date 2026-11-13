@@ -12,6 +12,13 @@ constexpr uint32_t kOptions = 0;
 
 namespace {
 
+unsigned gLogs = 0;
+
+void IOLog(const char *, ...)
+{
+    ++gLogs;
+}
+
 struct Display {
     static constexpr uint32_t kWinBBase = 0xd80, kWinCBase = 0xf80, kDcStateControl = 0x41;
     static constexpr uint32_t kGeneralUpdate = 1 << 8, kWinBUpdate = 1 << 10, kWinCUpdate = 1 << 11;
@@ -69,20 +76,22 @@ TEST(ScanoutAttach, AFirmwareWindowIsTurnedOffAndTheDomainAttachesOnceItReadsOff
     EXPECT_EQ(d.attaches, 1u);
 }
 
-TEST(ScanoutAttach, AWindowThatDoesNotStopIsAskedAgainAndTheDomainWaits)
+// The readback's bound passed: one line, no request written again, frame ends no longer held for it, and the attach
+// still waits for a frame end that reads the window off.
+TEST(ScanoutAttach, AWindowThatDoesNotStopIsOneLineAndTheDomainWaitsWithoutAskingAgain)
 {
     Display d;
     d.activeC = true;
     d.scanoutAttachWaits = true;
-    d.scanoutAttachAsks = 0;
     d.stopFirmwareWindows();
     EXPECT_TRUE(d.scanoutAttachHoldsFrameEnds());
+    gLogs = 0;
     for (int i = 0; i < 12; ++i)
         d.boundary(false);
+    EXPECT_EQ(gLogs, 1u);
+    EXPECT_EQ(d.scanoutAttachAskedAt, 10u) << "no request written again";
     EXPECT_FALSE(d.scanoutAttachHoldsFrameEnds()) << "a window that does not stop keeps no frame end unmasked";
     EXPECT_EQ(d.attaches, 0u);
-    EXPECT_NE(d.dc[Display::kDcStateControl] & Display::kWinCActReq, 0u);
-    EXPECT_EQ(d.scanoutAttachAskedAt, 10u + 3 * Display::kLatchFrames);
     d.boundary();
     EXPECT_EQ(d.attaches, 1u);
 }

@@ -43,8 +43,7 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
         const int error = request.op == SWITCH_DISPLAY_LANDSCAPE_SAMPLE ? landscapeRunStart(request.value) : 0;
         reply = landscapeRun.reply;
         reply.error = error ? error : reply.error;
-        reply.holds = landscapeState.hold.failures;
-        reply.retries = landscapeState.hold.retries;
+        reply.failures = landscapeState.failures;
     });
     return kIOReturnSuccess;
 }
@@ -93,8 +92,7 @@ void landscapeRunFinish(int error)
     absolutetime_to_nanoseconds(s.displayTicks, &s.reply.displayNs);
     absolutetime_to_nanoseconds(vic.ticks - s.vicAt.ticks, &s.reply.vicNs);
     s.reply.error = error;
-    s.reply.holds = landscapeState.hold.failures;
-    s.reply.retries = landscapeState.hold.retries;
+    s.reply.failures = landscapeState.failures;
     s.reply.state = SWITCH_DISPLAY_LANDSCAPE_DONE;
     if (s.holding) {
         s.holding = false;

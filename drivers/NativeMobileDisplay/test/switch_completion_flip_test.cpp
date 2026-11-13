@@ -297,7 +297,6 @@ TEST_F(CompletionFlip, RandomOrdersNeverLoseOrDelayALatch)
     EXPECT_GT(walk.fromCompletions, 2000u) << walk.fromCompletions;
     EXPECT_GT(walk.fromFilters, 2000u) << walk.fromFilters;
     EXPECT_GT(d.shown.size(), 5000u) << d.shown.size();
-    EXPECT_FALSE(d.completionFilterOff);
     EXPECT_TRUE(gLog.empty());
 }
 

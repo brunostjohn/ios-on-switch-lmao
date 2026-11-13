@@ -190,8 +190,8 @@ TEST_F(CompletionFlipFilter, APassBetweenTheCompletionsStoresAndItsClaimEntersTh
 }
 
 // The producers' contract broken: a flip their filter wrote whose completion then failed is shown as done, logged once,
-// and no filter writes a flip for the filters' run of armed flips.
-TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownAndTurnsTheFiltersOff)
+// with one line.
+TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownWithOneLine)
 {
     ASSERT_EQ(d.offer(kSlot), 0);
     d.gpuFilter();
@@ -201,46 +201,23 @@ TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownAndTurnsTheFi
     EXPECT_NE(gLog[0].find("whose completion then failed (-5)"), std::string::npos) << gLog[0];
     d.donePass();
     EXPECT_EQ(d.ring.pending, kSlot);
+}
+
+// After the failed one, the next armed flip's filter writes it as usual: nothing is held.
+TEST_F(CompletionFlipFilter, TheNextFlipsFilterWritesAsUsual)
+{
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.gpuFilter();
+    d.complete(-5);
+    d.donePass();
     frame();
     ASSERT_EQ(d.offer(kSlot + 1), 0);
     d.model.written.clear();
     d.gpuFilter();
-    EXPECT_TRUE(d.model.written.empty());
-    d.complete(0);
     EXPECT_EQ(d.model.written, kSixStores);
-}
-
-// After the run the filters write flips again; the next failure holds them off for twice as many.
-TEST_F(CompletionFlipFilter, TheFiltersWriteAgainAfterTheirRun)
-{
-    const auto heldAfterFailure = [this](int first) {
-        ASSERT_EQ(d.offer(first), 0);
-        d.gpuFilter();
-        d.complete(-5);
-        d.donePass();
-        frame();
-    };
-    const auto armedUntilAFilterWrites = [this] {
-        unsigned held = 0;
-        for (int i = 1;; ++i) {
-            EXPECT_EQ(d.offer(kSlot + i % 3), 0);
-            d.model.written.clear();
-            d.gpuFilter();
-            const bool filtered = !d.model.written.empty();
-            d.complete(0);
-            d.donePass();
-            frame();
-            if (filtered || held >= 100)
-                return held;
-            ++held;
-        }
-    };
-    heldAfterFailure(kSlot);
-    EXPECT_EQ(armedUntilAFilterWrites(), 8u);
-    EXPECT_FALSE(d.completionFilterOff);
-    heldAfterFailure(kSlot + 1);
-    EXPECT_EQ(armedUntilAFilterWrites(), 16u);
-    EXPECT_EQ(gLog.size(), 2u);
+    d.complete(0);
+    d.donePass();
+    EXPECT_EQ(gLog.size(), 1u);
 }
 
 TEST_F(CompletionFlipFilter, NoFilterWritesAWithdrawnOrUnarmedFlip)

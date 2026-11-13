@@ -3,7 +3,6 @@
 #include <array>
 #include <stdexcept>
 #include <vector>
-#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"
@@ -603,10 +602,10 @@ TEST(OverlayRecovery, LateOlderReadyCompositionCannotReplaceNewerOne)
     EXPECT_EQ(d.planeRecoveryTarget.pendingSeq, 4u);
 }
 
-// Windows B and C that do not take their off request keep their memory and are asked again every kLatchFrames frame
-// ends; the swaps their sets carried and the ones staged meanwhile retire unshown; once a frame end reads both off, the
-// slots go back and overlays are on again.
-TEST(OverlayRecovery, WindowsThatDoNotStopAreAskedAgainAndOverlaysResumeOnceTheyReadOff)
+// Windows B and C that do not read off within the readback's bound keep their memory, with one line and no request
+// written again; the swaps their sets carried and the ones staged meanwhile retire unshown; once a frame end reads both
+// off, the slots go back and overlays are on again.
+TEST(OverlayRecovery, WindowsThatDoNotReadOffAreOneLineAndOverlaysResumeOnceTheyDo)
 {
     Display d;
     ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
@@ -631,7 +630,9 @@ TEST(OverlayRecovery, WindowsThatDoNotStopAreAskedAgainAndOverlaysResumeOnceThey
     d.frameEnds += Display::kLatchFrames;
     d.dc[Display::kWinBBase + native_planes::kOptions] = native_planes::kWinEnable;
     EXPECT_TRUE(d.planeRecoveryFrameEnd());
-    EXPECT_EQ(d.dc[Display::kWinBBase + native_planes::kOptions], 0u);
+    EXPECT_EQ(d.dc[Display::kWinBBase + native_planes::kOptions], native_planes::kWinEnable)
+        << "no off request is written again";
+    d.dc[Display::kWinBBase + native_planes::kOptions] = 0;
     d.dc[Display::kDcStateControl] = 0;
     EXPECT_TRUE(d.planeRecoveryFrameEnd());
     EXPECT_FALSE(d.planeRecovering);

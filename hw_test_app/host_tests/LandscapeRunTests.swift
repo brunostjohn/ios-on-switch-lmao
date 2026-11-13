@@ -60,8 +60,7 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(parsed.vicEventTurns, [7, 0, 0])
         XCTAssertEqual(parsed.displayNs, 0x1_0000_0002)
         XCTAssertEqual(parsed.landscapeFrames, 2)
-        XCTAssertEqual(parsed.holds, 4)
-        XCTAssertEqual(parsed.retries, 3)
+        XCTAssertEqual(parsed.failures, 4)
         XCTAssertNil(LandscapeSample([UInt8](repeating: 0, count: LandscapeSample.size)))
     }
 

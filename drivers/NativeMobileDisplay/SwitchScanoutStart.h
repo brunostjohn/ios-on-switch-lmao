@@ -25,6 +25,12 @@ void presentEntry(int i)
     }
 }
 
+// The kick may scan the frame from its slot: direct scanout set up (an underflow run is one line, never a hold).
+bool directScanChosen() const
+{
+    return directOn;
+}
+
 void startRotation(int target = kNoBuffer)
 {
     const bool entryPrepared = target != kNoBuffer;
@@ -143,7 +149,6 @@ void checkRotation()
     landscapeRunUnderflow(underflow);
     if (!underflow) {
         underflowRun = 0;
-        directHold.clean();
         return;
     }
     dc[kDcIntStatus] = underflow;
@@ -152,13 +157,11 @@ void checkRotation()
         stUnderflows++;
     if (probe.active())
         probeUnderflow = true;
-    directHold.dirty();
-    if (directOn && directHold.on() && ring.front >= kSlot0 && underflowRun + 1 >= kDirectUnderflowFrames) {
-        directHold.fail();
-        IOLog("SwitchDisplay: window A underflowed %u frames in a row scanning a surface through the SMMU: direct "
-              "scanout held off for %u frames without an underflow, frames are copied meanwhile (swaps still retire at "
-              "their latch)\n",
-              underflowRun + 1, directHold.run);
+    if (directOn && ring.front >= kSlot0 && underflowRun + 1 == kDirectUnderflowFrames) {
+        IOLog("SwitchDisplay: window A underflowed %u frames in a row scanning slot %d through the SMMU: UFLOW_STATUS "
+              "%#x OPTIONS %#x KIND %#x STRIDE %#x\n",
+              underflowRun + 1, ring.front, underflowCounts[0], uiActive(kWinOptions), uiActive(kWinbufSurfaceKind),
+              uiActive(kWinLineStride));
     }
     if (++underflowRun < kUnderflowFrames)
         return;
