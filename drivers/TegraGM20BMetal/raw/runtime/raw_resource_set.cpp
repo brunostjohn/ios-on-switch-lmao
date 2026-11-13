@@ -223,18 +223,23 @@ bool ResourceSet::registerLocked(Kernel &k, const char *when)
 bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bool always)
 {
     std::lock_guard<raw::Mutex> l(lock_);
+    std::vector<uint64_t> joining;
+    for (const Candidate &c : candidates)
+        if (std::none_of(members_.begin(), members_.end(), [&](const SetMember &m) {
+                return m.handle == c.bo->handle;
+            }))
+            joining.push_back(c.bo->handle);
     for (const Candidate &c : candidates)
         insertLocked(*c.bo, c.access, always);
     if (!registerLocked(k, "for a new member")) {
-        const size_t before = members_.size();
-        for (const Candidate &c : candidates)
-            members_.erase(std::remove_if(members_.begin(), members_.end(),
-                                          [&](const SetMember &m) {
-                                              return m.handle == c.bo->handle;
-                                          }),
-                           members_.end());
-        if (members_.size() != before)
-            version_.fetch_add(1, std::memory_order_release);
+        // Only the BOs this add brought take their members out. A candidate of a BO that was a member already (an arena's
+        // view alias) stays: the kernel's set still holds that BO, at every VA, until a free or a refusal takes it out.
+        members_.erase(std::remove_if(members_.begin(), members_.end(),
+                                      [&](const SetMember &m) {
+                                          return std::find(joining.begin(), joining.end(), m.handle) != joining.end();
+                                      }),
+                       members_.end());
+        version_.fetch_add(1, std::memory_order_release);
         return false;
     }
     for (const Candidate &c : candidates)
