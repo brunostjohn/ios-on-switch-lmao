@@ -29,6 +29,12 @@ switch_gm20b_2d_surface gridSurface(const Texture &t, uint32_t fmt2d, uint32_t w
     return s;
 }
 
+// fx::twodFormat's formats, and RGB10A2Unorm, whose resolve the pack has no state for
+uint32_t resolveFormat(uint32_t mtl)
+{
+    return mtl == 90 ? NV902D_SET_DST_FORMAT_V_A2B10G10R10 : fx::twodFormat(mtl);
+}
+
 }  // namespace
 
 // The complement's ROP writes go through the CROP and the scale reads the grid through the 2D engine's texture path, so
@@ -68,7 +74,7 @@ void BlitEncoder::fillTwod(const Texture &t, uint32_t x0, uint32_t y0, uint32_t 
 bool CommandBuffer::resolveTwod(const Texture &multisampled, const Texture &into, bool exact, bool keepSamples)
 {
     fx::MipChain grid;
-    const uint32_t fmt2d = fx::twodFormat(into.format);
+    const uint32_t fmt2d = resolveFormat(into.format);
     if (!fmt2d || into.format != multisampled.format || into.samples > 1 ||
         !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
         grid.sxLog2 > 1 || grid.syLog2 > 1 || (!grid.sxLog2 && !grid.syLog2) || multisampled.width != into.width ||
