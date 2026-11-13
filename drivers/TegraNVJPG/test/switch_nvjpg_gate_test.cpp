@@ -118,16 +118,32 @@ TEST_F(NVJPGGate, TheStreamIsTheSameWhicheverSelectorTheJobCameThrough)
     }
 }
 
-TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackRefusesTheNextJob)
+// An engine the cancellation's reset does not bring back is off until the idle gate powers it on: the next decode tries
+// at once, a decode within the back-off is refused without touching it, and the first after it that powers the engine
+// on runs.
+TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterDecode)
 {
     gEngine.stallDecodes = true;
     gEngine.deadAfterReset = true;
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
-    EXPECT_TRUE(logged("it did not come back, NVJPG refuses work"));
-    EXPECT_FALSE(tegra_nvjpg_ready());
+    EXPECT_TRUE(logged("it did not come back, the next decode powers it on again"));
+    EXPECT_TRUE(tegra_nvjpg_ready()) << "the service keeps taking decodes";
+    EXPECT_FALSE(gEngine.clockOn);
+    const int boots = gEngine.boots;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
+    EXPECT_EQ(gEngine.boots, boots + 1) << "the next decode tried a power-on";
+    EXPECT_TRUE(logged("power-on FAIL"));
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
+    EXPECT_EQ(gEngine.boots, boots + 1) << "within the back-off nothing touches the engine";
+    switch_test_now() += 2000000000ull;
+    gEngine.stallDecodes = false;
+    gEngine.deadAfterReset = false;
+    const uint32_t before = gEngine.syncpt;
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    EXPECT_EQ(gEngine.boots, boots + 2);
+    EXPECT_EQ(gEngine.syncpt, before + 3) << "the power-on's proof, then the decode";
 }
 
 // Every DCT scale ships (AppleJPEGSupportsDCTScaling answers 1): CMPhoto's quarter and eighth thumbnails of a photo plan

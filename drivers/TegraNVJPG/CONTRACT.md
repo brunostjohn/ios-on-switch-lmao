@@ -237,8 +237,9 @@ NVDEC, whose clock the MBIST pulse borrows).
 - The MobileGestalt answer "AppleJPEGDriver exists" flips to yes; its consumers are unknown.
 - Sandbox: which processes Apple's profiles let open AppleJPEGDriverUserClient is unverified; a denied process keeps
   software decoding for its life (CMPhoto's probe).
-- A resume that fails (`TegraNVJPG: resume FAIL ...`) leaves the engine refusing work: every later call returns
-  kIOReturnNotReady, so each CMPhoto decode costs one refused call before its software decode until the next boot.
+- A resume, power-on or cancellation reset that fails (`TegraNVJPG: resume FAIL ...`, `power-on FAIL ...`, `it did not
+  come back`) leaves the engine off; the idle gate powers it on at the next decode, then once per back-off (1 s
+  doubling to 64 s) while it keeps failing. Decodes between fail with kIOReturnNotReady and go to the CPU.
 
 ## 10. Next-boot checks and the user test
 
