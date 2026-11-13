@@ -645,11 +645,10 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM does for VIC and NVDEC: off 500 ms after the last
 // decode, on at the next. On is J1 and J2 again on the kept image and SMMU domain (an idle power-off does not reset the
 // MC; a resume that could not attach the domain attaches it here): partition, clock, reset and the MBIST workaround,
-// the falcon reloaded and proven with J2's stream. It also brings back an engine a cancellation's reset lost (the gate
-// retries it at a later decode). A failure there is one line and that decode goes to the CPU. Off waits for no job (a
-// decode holds the gate) and
-// powers the partition down. NVDEC's gate shares the lock (tegra_nvdec_power_lock): each one's power-up borrows the
-// other's clock for its MBIST workaround.
+// the falcon reloaded and proven with J2's stream. It also powers on an engine a cancellation's reset left off. A
+// failure there is one line and that decode goes to the CPU; the next decode runs the power-on again. Off waits for no
+// job (a decode holds the gate) and powers the partition down. NVDEC's gate shares the lock (tegra_nvdec_power_lock):
+// each one's power-up borrows the other's clock for its MBIST workaround.
 namespace {
 int gateOn(void *)
 {
@@ -671,7 +670,7 @@ int gateOn(void *)
     gWedged = !answered;
     if (!answered) {
         engineOff();
-        IOLog("TegraNVJPG: power-on FAIL %s; decodes go to the CPU until a later decode powers NVJPG on\n",
+        IOLog("TegraNVJPG: power-on FAIL %s; this decode goes to the CPU, the next one powers NVJPG on again\n",
               gLine[0] ? gLine : "J1");
     }
     gPowerOns++;

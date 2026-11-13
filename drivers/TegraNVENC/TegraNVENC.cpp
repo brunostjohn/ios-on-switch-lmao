@@ -659,9 +659,9 @@ namespace {
 // the syncpoint is at the last job's fence (BUSY), and the wait that sees the last fence reached arms the timer again
 // (a client's close waits for its last fence). On is E1 and E2 again on the kept image and address space (an idle
 // power-off does not reset the MC; a resume that could not attach it attaches it here), then the jobs are numbered
-// from the syncpoint. It also brings back an engine a stall's reset or a resume lost (the gate retries it at a later
-// encode). A failed power-on is one line and parks the engine. The MPE partition's MBIST workaround borrows no other
-// engine's clock, so the gate has its own lock.
+// from the syncpoint. It also powers on an engine a stall's reset or a resume left off. A failed power-on is one line,
+// parks the engine and fails that encode; the next encode runs the power-on again. The MPE partition's MBIST
+// workaround borrows no other engine's clock, so the gate has its own lock.
 int gateOn(void *)
 {
     IOLockLock(gEngineLock);
@@ -682,7 +682,7 @@ int gateOn(void *)
     gWedged = !answered;
     if (!answered) {
         park();
-        IOLog("TegraNVENC: power-on FAIL %s; encodes fail until a later encode powers NVENC on\n",
+        IOLog("TegraNVENC: power-on FAIL %s; this encode fails, the next one powers NVENC on again\n",
               gLine[0] ? gLine : "E1");
     }
     gBase = tegra_host1x_syncpt_read(gSyncpt);

@@ -562,10 +562,10 @@ extern "C" uint32_t tegra_vic_syncpt(void)
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
 // is SC7's resume minus the SMMU domain, which an idle power-off keeps (the MC is not reset): partition, clock, reset,
 // the falcon reloaded from the kept image and proven with V2's stream, the queue rebased on the syncpoint that stream
-// moved. It also brings back an engine a cancellation's reset or a resume lost (the gate retries it at a later job; a
-// resume that could not attach the SMMU domain attaches it here). A failure there is one line and parks the engine.
-// Off parks the queue and powers the partition down; the host1x channel is left as it is, idle at the end of its last
-// job's stream.
+// moved. It also powers on an engine a cancellation's reset or a resume left off (a resume that could not attach the
+// SMMU domain attaches it here). A failure there is one line, parks the engine and fails that job; the next job runs
+// the power-on again. Off parks the queue and powers the partition down; the host1x channel is left as it is, idle at
+// the end of its last job's stream.
 namespace {
 int gateOn(void *)
 {
@@ -575,7 +575,8 @@ int gateOn(void *)
         gAttached = smmuAttach();
     const bool answered = gAttached && powerUp(&wasOn) && switch_vic_engine_boot();
     if (!answered) {
-        IOLog("TegraVIC: power-on FAIL %s; VIC jobs fail until a later job powers VIC on\n", gLine[0] ? gLine : "V1");
+        IOLog("TegraVIC: power-on FAIL %s; this job fails, the next one powers VIC on again\n",
+              gLine[0] ? gLine : "V1");
         switch_car_reset_assert(kClock);
         IODelay(2);
         switch_car_clock_disable(kClock);

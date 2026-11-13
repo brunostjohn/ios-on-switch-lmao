@@ -238,8 +238,8 @@ fourth sleep client (after NVDEC, whose clock the MBIST pulse borrows).
 - Sandbox: which processes Apple's profiles let open AppleJPEGDriverUserClient is unverified; a denied process keeps
   software decoding for its life (CMPhoto's probe).
 - A resume, power-on or cancellation reset that fails (`TegraNVJPG: resume FAIL ...`, `power-on FAIL ...`, `it did not
-  come back`) leaves the engine off; the idle gate powers it on at the next decode, then once per back-off (1 s
-  doubling to 64 s) while it keeps failing. Decodes between fail with kIOReturnNotReady and go to the CPU.
+  come back`) leaves the engine off and fails that decode (kIOReturnNotReady, the CPU decodes it); the next decode runs
+  the normal power-on.
 
 ## 10. Next-boot checks and the user test
 
