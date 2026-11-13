@@ -15,6 +15,9 @@ struct QuietJobsPathTest: GPUPathTest {
     let name = "Command buffers nobody waits for alone end without an interrupt, and their waiters still wake"
     let counters = ["quiet_jobs", "wake_asks"]
     static let frames = 12, perFrame = 4, size = 16, interruptsBound = 2.0, wakeBoundMs = 1000.0
+    /// The waiter's quiet job: 16 clears of a 2048x2048 target (256 MiB written, several ms), so its waiter is asleep in
+    /// the kernel before it ends; a job that ends first leaves no wake entry to ask for.
+    static let longSize = 2048, longPasses = 16, sleptMs = 1.0
 
     static func colour(_ frame: Int, _ index: Int) -> [UInt8] { [UInt8(frame * 20), UInt8(index * 60), 0x40, 255] }
 
@@ -106,6 +109,8 @@ struct QuietJobsPathTest: GPUPathTest {
             let second = gpu.queue.makeCommandBuffer()
         else { throw TestFailure("no shared event or command buffer") }
         let target = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
+        let long = try gpu.texture(.rgba8Unorm, Self.longSize, Self.longSize)
+        for pass in 0..<Self.longPasses { clear(first, long, [UInt8(pass), 2, 3, 255]) }
         clear(first, target, [1, 2, 3, 255])
         second.encodeWaitForEvent(event, value: 1)
         clear(second, try gpu.texture(.rgba8Unorm, Self.size, Self.size), [4, 5, 6, 255])
@@ -123,6 +128,10 @@ struct QuietJobsPathTest: GPUPathTest {
         metrics.set("quiet_wait_ms", String(format: "%.1f", waitedMs))
         if first.status != .completed {
             failures.append("the quiet job's command buffer ended \(first.status.rawValue)")
+        }
+        if waitedMs < Self.sleptMs {
+            failures.append(
+                String(format: "the quiet job ended %.2f ms into its wait: its waiter never slept", waitedMs))
         }
         if waitedMs > Self.wakeBoundMs {
             failures.append(String(format: "its waiter woke after %.0f ms (at most %.0f)", waitedMs, Self.wakeBoundMs))
