@@ -16,7 +16,7 @@ public enum Registry {
         BlendKillTest(), WrittenTextureTest(),
         Float32FilterTest(), CompareSamplerTest(), SurfaceBufferTest(), CompressedTargetsTest(), ZcullTest(),
         MipTwodTest(), MipCandidatesTest(), MipLodTest(),
-        VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(),
+        VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(), IconCornersTest(),
         CompileSharedTest(), CompileFirstDrawTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(),
         ResolveCostTest(),
         MsaaFirstUseTest(), StoredDepthTest(),

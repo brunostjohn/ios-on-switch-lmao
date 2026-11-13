@@ -129,6 +129,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.fixed_blend_rule',
             'gpu.raw.private_compression',
             'gpu.raw.alpha_to_coverage',
+            'gpu.raw.icon_corners',
             'gpu.compile.shared',
             'gpu.compile.first_draw',
             'gpu.sched.long_draw_bands',
