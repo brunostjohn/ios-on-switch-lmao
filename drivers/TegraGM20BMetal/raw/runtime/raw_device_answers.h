@@ -4,7 +4,8 @@
 // device answers them today, but where the device has a form of a feature m2v's answers lack: counter sampling at stage
 // boundaries, as the identity's AGX driver answers it (raw_counters.h); buffers over IOSurfaces (RawMetalDevice.mm
 // newBufferWithIOSurface:); SIMD-group permute, reduction and shift-and-fill, which the translator lowers to SHFL and
-// VOTE (HW Test gpu.compute.simd_group). maxPredicatedNestingDepth is the loop depth the raw path lays down
+// VOTE (HW Test gpu.compute.simd_group); raster order groups on both kinds, through the pixel interlock the storage
+// form draws in (gpu.raw.raster_order). maxPredicatedNestingDepth is the loop depth the raw path lays down
 // (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
 // the target's: the A13's supportsVertexAmplificationCount: takes 0 to 8 (AGXA13FamilyDevice, `cmp w2,#9; cset lo`),
 // its limits table's maxVertexAmplificationCount 2 and maxVertexAmplificationFactor 8, supportsDynamicAttributeStride
@@ -121,8 +122,8 @@ inline constexpr Count kCounts21H461[] = {
     {"maxColorAttachments", 8, false},
     {"minConstantBufferAlignmentBytes", 4, false},
     {"deviceLinearReadOnlyTextureAlignmentBytes", 32, false},
-    {"areRasterOrderGroupsSupported", 0, true},
-    {"supportsRasterOrderGroups", 0, true},
+    {"areRasterOrderGroupsSupported", 1, true},
+    {"supportsRasterOrderGroups", 1, true},
     {"isDepth24Stencil8PixelFormatSupported", 0, true},
     {"areProgrammableSamplePositionsSupported", 1, true},
     {"supports32BitFloatFiltering", chipFeature(SWITCH_GM20B_FEATURE_3D_H9), true},

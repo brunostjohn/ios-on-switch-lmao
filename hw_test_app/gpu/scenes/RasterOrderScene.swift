@@ -50,6 +50,7 @@ struct RasterOrderScene: GPUScene {
             let object = gpu.device as AnyObject as! NSObject
             let answer = (object.value(forKey: "areRasterOrderGroupsSupported") as? NSNumber)?.intValue ?? -1
             result.metrics.set("answer", answer)
+            result.expect(answer == 1, "areRasterOrderGroupsSupported answers \(answer)")
         }
         let first = got.first { $0 != Self.expected } ?? 0
         result.expect(wrong == 0, "\(wrong) of \(got.count) words wrong, first \(first), want \(Self.expected)")

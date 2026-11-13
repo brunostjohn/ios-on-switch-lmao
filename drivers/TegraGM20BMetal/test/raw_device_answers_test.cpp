@@ -89,6 +89,15 @@ TEST(RawDeviceAnswers, SimdGroupRowsAreYes)
     }
 }
 
+// The pixel interlock the storage form draws in orders a raster order group's accesses (gpu.raw.raster_order)
+TEST(RawDeviceAnswers, RasterOrderGroupsAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "areRasterOrderGroupsSupported"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsRasterOrderGroups"), 1u) << k.kind;
+    }
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {
