@@ -238,7 +238,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
             return hit(_cb, PredEncColorFormats, j, f);
         }
     }
-    if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
+    if (!raw::recordedDepthStencilFits(pl.depthFormat, _zeta, _ds)) {
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
     }

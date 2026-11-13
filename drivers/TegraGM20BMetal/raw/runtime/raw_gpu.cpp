@@ -6218,7 +6218,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         // A pass that declares no attachment tests depth and stencil against its hidden one (PassDesc::hiddenZeta), which the
         // pass is given when its recorded states need it; the pipeline was made for the attachment the pass declares
         const Texture *declared = hiddenZeta_ ? nullptr : zeta;
-        if (pl->depthFormat != (declared ? declared->format : 0) || (!zeta && testsHiddenZeta(ds_))) {
+        if (!depthStencilFits(pl->depthFormat, declared ? declared->format : 0, zeta != nullptr, ds_)) {
             *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
             cb_->refusal = {RefDepthStencil, pl->depthFormat, declared ? declared->format : 0, ds_.active()};
             return false;
