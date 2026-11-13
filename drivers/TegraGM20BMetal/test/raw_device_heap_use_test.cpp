@@ -6,6 +6,7 @@
 #include "raw_device_harness.h"
 
 #include <algorithm>
+#include <array>
 #include "../raw/runtime/raw_heap_members.h"
 
 namespace {
@@ -86,18 +87,21 @@ protected:
         e->end();
         uint32_t seqno = 0;
         EXPECT_TRUE(cb->commit(seqno));
-        // The copy's own buffers are left out: after their first CPU lease they are named by ranged address, one use
-        // each, which says nothing about how the arena is named
-        const uint64_t own[2] = {kernel_model::model.resolve({from.va, TegraGM20BSurfaceGpuAddress, 0}),
-                                 kernel_model::model.resolve({to.va, TegraGM20BSurfaceGpuAddress, 0})};
-        std::vector<TegraGM20BAbiSurfaceUse> left = kernel_model::model.jobs.back().uses;
-        left.erase(std::remove_if(left.begin(), left.end(),
-                                  [&](const TegraGM20BAbiSurfaceUse &u) {
-                                      return u.handle == own[0] || u.handle == own[1];
-                                  }),
-                   left.end());
-        return left;
+        copied_ = {kernel_model::model.resolve({from.va, TegraGM20BSurfaceGpuAddress, 0}),
+                   kernel_model::model.resolve({to.va, TegraGM20BSurfaceGpuAddress, 0})};
+        return kernel_model::model.jobs.back().uses;
     }
+
+    // `uses` less the last copy's own buffers: after their first CPU lease they are named by ranged address, one use
+    // each, which says nothing about how the arena is named
+    size_t notCopied(const std::vector<TegraGM20BAbiSurfaceUse> &uses) const
+    {
+        return size_t(std::count_if(uses.begin(), uses.end(), [&](const TegraGM20BAbiSurfaceUse &u) {
+            return u.handle != copied_[0] && u.handle != copied_[1];
+        }));
+    }
+
+    std::array<uint64_t, 2> copied_{};
 
     size_t named(const std::vector<TegraGM20BAbiSurfaceUse> &uses, uint64_t handle, uint32_t *access = nullptr)
     {
@@ -166,7 +170,7 @@ void DeviceHeapUse::everyKindOnce(bool blockLinear, bool placement, const Kind &
     const auto many = submit(heap, 3);
     EXPECT_EQ(named(few, bo), 1u);
     EXPECT_EQ(named(many, bo), 1u);
-    EXPECT_EQ(few.size(), many.size());
+    EXPECT_EQ(notCopied(few), notCopied(many));
     EXPECT_EQ(heap.outside(), 0u);
     for (raw::Texture &x : made)
         dev.destroyTexture(x);

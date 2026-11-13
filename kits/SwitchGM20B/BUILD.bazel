@@ -13,7 +13,8 @@ load(":defs.bzl", "SWITCH_GM20B_CAPS_INPUTS", "SWITCH_GM20B_MESA_HEADERS", "caps
 
 package(default_visibility = ["//visibility:public"])
 
-lint_files()
+# SwitchGM20BVkFormats.h is gen_vk_formats.py's output byte for byte (vk_formats_test), not formatted text
+lint_files(exclude = ["SwitchGM20BVkFormats.h"])
 
 exports_files(glob(
     ["**"],
