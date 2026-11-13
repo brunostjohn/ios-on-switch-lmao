@@ -39,7 +39,7 @@ void retired(switch_host1x_fence *fence, int)
 // The picture's uses opened under `completion`, and the producers its read waits for: its writers, then its writers'
 // promises.
 int openUses(TegraNVENCDirect *d, const switch_gpu_backing_token &completion, switch_gpu_backing_token *producers,
-         uint32_t *needed)
+             uint32_t *needed)
 {
     d->uses[0] = {d->view.native, SWITCH_GPU_BACKING_READ, 0};
     d->uses[1] = {d->view.logical, SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0};

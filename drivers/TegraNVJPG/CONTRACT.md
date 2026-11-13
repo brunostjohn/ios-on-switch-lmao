@@ -213,9 +213,9 @@ Colour: NVJPG converts with JFIF's full-range BT.601 (T.871), programmed in its 
 
 Stages: J0 host1x + buffers, J1 SMMU (ASID 125 through TegraSMMU; VIC 127, display 126) + power + falcon, J2
 IMMEDIATE/OP_DONE by interrupt, J3 publish. Before J3 every failure is one line and the engine is parked (reset, clock
-off, swgroup in bypass); after, a job past its bound (50 ms + 1 µs per 16 grid pixels, ≤ 30 s, GP timer on; channel 3
-is NVJPG's alone) is cancelled with one line, and a lost syncpoint interrupt panics in TegraHost1x. Sleep: TegraHost1x's fourth sleep client (after
-NVDEC, whose clock the MBIST pulse borrows).
+off, swgroup in bypass); after, a job past its bound (50 ms + 1 µs per 16 grid pixels, ≤ 30 s, GP timer on; channel 3 is
+NVJPG's alone) is cancelled with one line, and a lost syncpoint interrupt panics in TegraHost1x. Sleep: TegraHost1x's
+fourth sleep client (after NVDEC, whose clock the MBIST pulse borrows).
 
 ## 9. Gaps and risks
 

@@ -355,9 +355,8 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
         "selector %u, %dx%d (MCU %dx%d) at 1/%u, stream chroma %d to chroma %d pixel format %d memory mode %d block "
         "height %d, %d bitstream bytes, %u planes, target format %u",
         job->selector, s.frame_width, s.frame_height, s.mcu_width, s.mcu_height, 1u << (s.power2_downscale & 3),
-        s.stream_chroma_mode,
-        s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.block_linear_height, s.bitstream_size,
-        job->planes, job->target);
+        s.stream_chroma_mode, s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.block_linear_height,
+        s.bitstream_size, job->planes, job->target);
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
     switch_falcon_stall(gJpg, falcon, sizeof(falcon));

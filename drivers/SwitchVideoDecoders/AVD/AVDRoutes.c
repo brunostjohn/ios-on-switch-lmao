@@ -75,15 +75,16 @@ CFDictionaryRef avd_copy_display_buffer_probe(const Decoder *d)
     HEVCDisplayProbeResult r[2];
     if (!hevc_decoder_display_probe(d->hevc, r))
         return NULL;
-    static const char *const kFields[] = {"status",       "layout",      "max",        "mean_milli",
-                                          "trunc_milli",  "round_milli", "gamma_max",  "gamma_mean_milli",
-                                          "linear_max",   "linear_mean_milli", "matrix_max", "matrix_mean_milli"};
+    static const char *const kFields[] = {
+        "status",    "layout",           "max",        "mean_milli",        "trunc_milli", "round_milli",
+        "gamma_max", "gamma_mean_milli", "linear_max", "linear_mean_milli", "matrix_max",  "matrix_mean_milli"};
+
     enum {
         kFieldCount = sizeof(kFields) / sizeof(kFields[0])
     };
-    CFMutableDictionaryRef out = CFDictionaryCreateMutable(kCFAllocatorDefault, 2 * kFieldCount,
-                                                           &kCFTypeDictionaryKeyCallBacks,
-                                                           &kCFTypeDictionaryValueCallBacks);
+
+    CFMutableDictionaryRef out = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 2 * kFieldCount, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     for (int mode = 0; out && mode < 2; mode++) {
         const HEVCDisplayProbeResult *m = &r[mode];
         const int32_t v[kFieldCount] = {m->status,
@@ -101,8 +102,8 @@ CFDictionaryRef avd_copy_display_buffer_probe(const Decoder *d)
         os_log(gAVDLog,
                "AVD: display-buffer probe mode %d: status %d layout %d, max %d mean %d.%03d, trunc %d.%d%% "
                "round %d.%d%%; against Rec.2020 -> Rec.709 gamma %d/%d.%03d linear %d/%d.%03d matrix %d/%d.%03d",
-               mode + 2, v[0], v[1], v[2], v[3] / 1000, v[3] % 1000, v[4] / 10, v[4] % 10, v[5] / 10, v[5] % 10,
-               v[6], v[7] / 1000, v[7] % 1000, v[8], v[9] / 1000, v[9] % 1000, v[10], v[11] / 1000, v[11] % 1000);
+               mode + 2, v[0], v[1], v[2], v[3] / 1000, v[3] % 1000, v[4] / 10, v[4] % 10, v[5] / 10, v[5] % 10, v[6],
+               v[7] / 1000, v[7] % 1000, v[8], v[9] / 1000, v[9] % 1000, v[10], v[11] / 1000, v[11] % 1000);
         for (int f = 0; f < kFieldCount; f++) {
             char name[40];
             snprintf(name, sizeof(name), "mode%d_%s", mode + 2, kFields[f]);

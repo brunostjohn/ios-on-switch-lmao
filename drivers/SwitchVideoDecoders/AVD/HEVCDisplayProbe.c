@@ -91,8 +91,8 @@ static void scoreModels(const uint8_t *eight, const uint16_t *ten, const uint16_
         for (uint32_t y = 0; y < height; y++)
             for (uint32_t x = 0; x < width; x++) {
                 const size_t c = (size_t)(y / 2) * width + (x & ~1u);
-                const uint32_t want = hevc_display_model_luma(m, ten[(size_t)y * width + x] >> 6, chroma[c] >> 6,
-                                                              chroma[c + 1] >> 6);
+                const uint32_t want =
+                    hevc_display_model_luma(m, ten[(size_t)y * width + x] >> 6, chroma[c] >> 6, chroma[c + 1] >> 6);
                 const uint8_t got = eight[(size_t)y * width + x];
                 const uint32_t diff = got > want ? got - want : want - got;
                 sum += diff;

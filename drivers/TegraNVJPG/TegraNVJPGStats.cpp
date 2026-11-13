@@ -18,6 +18,7 @@ struct Process {
     int pid;
     TegraNVJPGRouteCounts counts;
 };
+
 Process gByProcess[8];
 
 uint64_t activity(const TegraNVJPGRouteCounts &c)

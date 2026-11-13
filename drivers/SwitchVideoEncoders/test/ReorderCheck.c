@@ -224,8 +224,8 @@ bool reorder_refusal_check(CFDictionaryRef spec, int bPictures, int iPictures, c
         decodeBack(&e, &d);
     for (int n = 0; n < e.count; n++)
         CFRelease(e.samples[n]);
-    const bool ok = e.count == FRAMES && !e.errors && !failed && bCount == bPictures && iCount == iPictures && !unknown &&
-                    !badTiming && d.count == e.count && !d.errors && !d.inexact;
+    const bool ok = e.count == FRAMES && !e.errors && !failed && bCount == bPictures && iCount == iPictures &&
+                    !unknown && !badTiming && d.count == e.count && !d.errors && !d.inexact;
     snprintf(line, size,
              "%s %d out, %d dropped (%d failed to go in), %d B pictures, %d unreferenced I pictures, %d unreadable, %d "
              "with bad times; decoded %d (%d errors, %d inexact)",

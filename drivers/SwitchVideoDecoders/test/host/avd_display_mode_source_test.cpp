@@ -12,9 +12,9 @@ using testing::HasSubstr;
 // tags its pictures Rec.709, which is what NVDEC's Rec.2020 -> Rec.709 path writes.
 TEST(AVDDisplayMode, AnHEVCSessionPicksItsDisplayBufferByTheStreamsPrimaries)
 {
-    const std::string start =
-        Body(SourceText("../../AVD/AVDDecoder.c"),
-             "static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format)");
+    const std::string start = Body(
+        SourceText("../../AVD/AVDDecoder.c"),
+        "static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format)");
     EXPECT_THAT(start, HasSubstr("CFEqual(d->primaries, kCVImageBufferColorPrimaries_ITU_R_2020)"));
     EXPECT_THAT(start, HasSubstr("hevc_display_mode_for(sps->bit_depth, rec2020, hdr,"));
     EXPECT_THAT(start, HasSubstr("if (displayMode == 3)\n        retagRec709(d);"));
