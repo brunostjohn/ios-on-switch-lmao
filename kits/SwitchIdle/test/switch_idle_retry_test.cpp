@@ -253,8 +253,12 @@ TEST(SwitchIdleRetry, ARequestTheFirmwareTakesStartsTheCoreOver)
         EXPECT_LE(idleUntilRequests(0, 10), 20u);
         gAnswer[0] = kDenied;
         idleUntilRequests(0, SWITCH_IDLE_C7_TRIES + 3);
+        const unsigned enters = idle_test_thread_call_enters;
         resume(0);
-        EXPECT_LE(idleUntilRequests(0, 1), 2u);
+        EXPECT_EQ(idle_test_thread_call_enters, enters);
+        idle(0);
+        EXPECT_EQ(idle_test_thread_call_enters, enters + 1);
+        EXPECT_LE(idleUntilRequests(0, 1), 1u);
         EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
     });
 }
@@ -276,6 +280,8 @@ TEST(SwitchIdleRetry, TheThreadCallLogsEachDueLineAndOnlyThen)
         EXPECT_EQ(idle_test_thread_call_enters, 5u);
         gAnswer[3] = kTaken;
         idleUntilRequests(3, 1);
+        EXPECT_EQ(idle_test_thread_call_enters, 5u);
+        idle(3);
         EXPECT_EQ(idle_test_thread_call_enters, 6u);
         idleUntilRequests(3, 5);
         EXPECT_EQ(idle_test_thread_call_enters, 6u);

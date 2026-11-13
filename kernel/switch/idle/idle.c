@@ -32,6 +32,7 @@ struct idle_core {
     uint32_t report_refusals;
     uint32_t report_taken;
     int64_t report_rc;
+    bool report_due; /* a report the next idle entry hands to the thread call */
 #if DEVELOPMENT || DEBUG
     struct switch_idle_counts counts;
     bool from_c7; /* back from C7 and no idle entry since: the next frame line paid the exit */
@@ -74,12 +75,14 @@ static void idle_refused(struct idle_core *core, int64_t rc)
     }
 }
 
+/* Also on the reset path out of power-down (switch_idle_resumed), before cpu_idle_exit: the thread call is entered from
+ * the core's next idle entry instead. */
 static void idle_taken(struct idle_core *core)
 {
     const uint32_t ended = switch_idle_c7_taken(&core->retry);
     if (ended) {
         os_atomic_store(&core->report_taken, ended, relaxed);
-        thread_call_enter(idle_report_call);
+        core->report_due = true;
     }
 }
 
@@ -101,6 +104,10 @@ void switch_idle_wfi(struct cpu_data *cdp)
         return;
     }
     struct idle_core *core = &idle_cores[cpu];
+    if (__improbable(core->report_due)) {
+        core->report_due = false;
+        thread_call_enter(idle_report_call);
+    }
     const uint64_t now = mach_absolute_time();
     const uint64_t deadline = cdp->rtcPop;
 #if DEVELOPMENT || DEBUG
