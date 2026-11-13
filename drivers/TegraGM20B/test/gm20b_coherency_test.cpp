@@ -11,6 +11,7 @@
 #include <vector>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
+#include "drivers/TegraGM20B/TegraGM20BLayoutAsk.h"
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
 #include "drivers/TegraGM20B/TegraGM20BLayout.h"
 #include "drivers/TegraGM20B/TegraGM20BRelayout.h"
@@ -695,6 +696,21 @@ TEST_F(Coherency, PitchForGoodUnlessTheFirstAskerWritesItAlone)
 		EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
 	for (tgm_coh *c : {sampled, first, second, odd, small})
 		tgm_coherency_put(c);
+}
+
+// KERN-28: the first ask of a sampler of a surface nothing wrote tiles it; a sampler of a written one still decides pitch
+TEST_F(Coherency, ASamplerFirstOfAnUnwrittenSurfaceTilesIt)
+{
+	const auto p = pages(0x87300000, 5), q = pages(0x87400000, 5);
+	tgm_coh *unwritten = add(p[0], 54, p.data(), 5, 1);
+	EXPECT_EQ(tgm_coherency_layout(unwritten, kW, kH, kBpp, kRow, TGM_LAYOUT_ASK_UNWRITTEN), 1);
+	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_EQ(gMoves.size(), 1u);
+	tgm_coh *written = add(q[0], 55, q.data(), 5, 1);
+	EXPECT_EQ(tgm_coherency_layout(written, kW, kH, kBpp, kRow, 0), 0);
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(q[0]));
+	tgm_coherency_put(unwritten);
+	tgm_coherency_put(written);
 }
 
 TEST_F(Coherency, AFailedTilingMoveLeavesItPitch)

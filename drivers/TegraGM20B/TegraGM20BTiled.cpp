@@ -11,6 +11,7 @@
 #include <IOKit/IOLib.h>
 #include <stdint.h>
 #include <string.h>
+#include "TegraGM20BLayoutAsk.h"
 #include "TegraGM20BLayoutFit.h"
 #include "TegraGM20BRelayout.h"
 #include "TegraGM20BTiled.h"
@@ -133,8 +134,9 @@ int askLayout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 		t = IONew(tgm_tiled, 1);
 	if ((fresh || again) && t) {
 		bzero(t, sizeof(*t));
-		const Decision d = decide(c, *t, width, height, bpp, bytes_per_row,
-					  (writes & TGM_LAYOUT_ASK_WRITES) != 0, fit);
+		const Decision d = decide(
+			c, *t, width, height, bpp, bytes_per_row,
+			(writes & (TGM_LAYOUT_ASK_WRITES | TGM_LAYOUT_ASK_UNWRITTEN)) != 0, fit);
 		t->retry = static_cast<int>(d == PitchMoveFailed);
 		__atomic_store_n(&t->tiled, static_cast<int>(d == DecidedTiled), __ATOMIC_RELEASE);
 		if (t->tiled)

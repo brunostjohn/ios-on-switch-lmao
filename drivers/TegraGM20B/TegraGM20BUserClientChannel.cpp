@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // VM binds, surface layouts, channels, and the push scan with its hung interlocks.
 #include "TegraGM20BUserClientInternal.h"
+#include "TegraGM20BLayoutAsk.h"
+#include "TegraGM20BRecord.h"
 
 namespace
 {
@@ -124,7 +126,7 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	Bo *bo = findBo(in->handle);
 	if (!bo || !bo->wired || !bo->coh)
 		return kIOReturnBadArgument;
-	const int firstAsk = bo->layoutAsked ? 0 : TGM_LAYOUT_ASK_FIRST;
+	const bool firstAsk = !bo->layoutAsked;
 	bo->layoutAsked = true;
 	SwitchGpuSurfaceGeometry surface = {};
 	if (switch_gpu_surface_geometry(tgm_coh_surface_id(bo->coh), task_, bo->pas, bo->npages,
@@ -141,11 +143,9 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp,
 							   in->bytes_per_row);
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
-	const int writes = (exclusive && packed && !surface.client_memory && (canonical || same) &&
-					    (in->flags & TegraGM20BLayoutWrites)
-				    ? TGM_LAYOUT_ASK_WRITES
-				    : 0) |
-			   firstAsk;
+	const int writes = tgm_layout_ask_flags(
+		exclusive, packed, surface.client_memory, canonical || same,
+		(in->flags & TegraGM20BLayoutWrites) != 0, tgm_surface_unwritten(object), firstAsk);
 	const uint32_t width = uint32_t(surface.width), height = uint32_t(surface.height),
 		       pitch = uint32_t(surface.pitch);
 	const int layout =

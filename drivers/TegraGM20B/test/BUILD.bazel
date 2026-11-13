@@ -1016,6 +1016,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BFences.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BLayoutAsk.h",
         "//drivers/TegraGM20B:TegraGM20BLayoutFit.h",
         "//drivers/TegraGM20B:TegraGM20BRecord.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
@@ -1028,6 +1029,14 @@ host_library(
     deps = [
         ":coherency_kernel",
         ":copy_emit",
+    ],
+)
+
+host_test(
+    name = "gm20b_layout_flags_test",
+    srcs = [
+        "gm20b_layout_flags_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayoutAsk.h",
     ],
 )
 

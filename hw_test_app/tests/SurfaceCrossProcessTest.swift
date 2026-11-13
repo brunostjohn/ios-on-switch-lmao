@@ -9,9 +9,11 @@ import SwitchTexturePattern
 /// One process renders into an IOSurface, another reads it: the texture peer (peer/texpeer.mm) renders a pattern whose
 /// every GOB byte differs into a BGRA surface on the GPU, and the app reads it through a CPU lock and through a GPU
 /// import of its own. Every reader must see rows the way the writer wrote them, whatever layout the kernel decided
-/// (drivers/TegraGM20B/TegraGM20BTiled.cpp). Three orders: the peer makes and renders the surface and keeps its texture
+/// (drivers/TegraGM20B/TegraGM20BTiled.cpp). Four orders: the peer makes and renders the surface and keeps its texture
 /// while the app reads (block-linear, a held import); the same with the peer's texture gone first (the deferred untile);
-/// and the app samples a surface of its own first (pitch for good) before the peer renders it. Two shapes: 256x256 and
+/// the app samples a surface of its own first, while nothing has written it (block-linear), before the peer renders it;
+/// and the same sampled surface written by the app's CPU under a write lock instead, whose lock and unlock move its
+/// texels on the copy engine (`cpu<size>_write_us`; `<case>_read_us` times each read lock). Two shapes: 256x256 and
 /// the 260x260 of the home screen's large widget. A read that matches the pattern laid out in GOBs reports
 /// `<case>_gob=1`: block-linear texels seen as rows (the Maps widget's garbage on boot 21).
 struct SurfaceCrossProcessTest: HWTest {
@@ -45,9 +47,10 @@ struct SurfaceCrossProcessTest: HWTest {
         var metrics = Metrics()
         var checks: [(String, Bool)] = []
         for size in Self.sizes {
-            for order in ["held", "dropped", "sampled"] {
+            for order in ["held", "dropped", "sampled", "cpu"] {
                 let label = "\(order)\(size)"
-                guard let (surface, sampler) = try await Self.rendered(gpu, connection, order, size) else {
+                guard let (surface, sampler) = try await Self.rendered(gpu, connection, order, size, &metrics)
+                else {
                     checks.append(("\(label): the peer rendered the surface", false))
                     continue
                 }
@@ -55,7 +58,8 @@ struct SurfaceCrossProcessTest: HWTest {
                     let (kr, layout) = gpuConnection.surfaceLayout(surface)
                     metrics.set("\(label)_layout", kr == KERN_SUCCESS ? String(layout) : GPUConnection.hex(kr))
                 }
-                let cpu = Self.cpuRows(surface)
+                let (cpu, readUs) = Self.cpuRows(surface)
+                metrics.set("\(label)_read_us", readUs)
                 let (gpuRows, _) = try await Self.gpuRows(gpu, surface)
                 withExtendedLifetime(sampler) {}
                 for (reader, got) in [("cpu", cpu), ("gpu", gpuRows)] {
@@ -75,11 +79,11 @@ struct SurfaceCrossProcessTest: HWTest {
     /// The surface, rendered by the peer in `order`, with the texture through which the app sampled it first ("sampled":
     /// held until the reads, so the pitch decision stands), or nil when the peer did not answer ok
     static func rendered(
-        _ gpu: GPU, _ connection: NSXPCConnection, _ order: String, _ size: Int
+        _ gpu: GPU, _ connection: NSXPCConnection, _ order: String, _ size: Int, _ metrics: inout Metrics
     ) async throws
         -> (IOSurface, MTLTexture?)?
     {
-        if order != "sampled" {
+        if order == "held" || order == "dropped" {
             let made = HandlerValue<IOSurface?>(nil)
             let answer = await ask(connection) { peer, reply in
                 peer.makeSurfaceWidth(size, height: size, keep: order == "held") {
@@ -95,6 +99,10 @@ struct SurfaceCrossProcessTest: HWTest {
         ]
         guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface \(size) not made") }
         let (_, sampler) = try await gpuRows(gpu, surface)
+        if order == "cpu" {
+            metrics.set("cpu\(size)_write_us", cpuWrite(surface))
+            return (surface, sampler)
+        }
         let answer = await ask(connection) { $0.renderSurface(surface, keep: false, reply: $1) }
         return answer?.hasPrefix("ok ") == true ? (surface, sampler) : nil
     }
@@ -114,10 +122,10 @@ struct SurfaceCrossProcessTest: HWTest {
         return arrived ? answer.value : nil
     }
 
-    /// Its texels as rows, through a read-only CPU lock
-    static func cpuRows(_ surface: IOSurface) -> [UInt8] {
+    /// Its texels as rows, through a read-only CPU lock, and the microseconds from the lock to the unlock's return
+    static func cpuRows(_ surface: IOSurface) -> ([UInt8], Int) {
+        let start = DispatchTime.now().uptimeNanoseconds
         surface.lock(options: .readOnly, seed: nil)
-        defer { surface.unlock(options: .readOnly, seed: nil) }
         var out = [UInt8](repeating: 0, count: surface.width * surface.height * 4)
         for y in 0..<surface.height {
             out.withUnsafeMutableBytes {
@@ -125,7 +133,22 @@ struct SurfaceCrossProcessTest: HWTest {
                     from: surface.baseAddress + y * surface.bytesPerRow, byteCount: surface.width * 4)
             }
         }
-        return out
+        surface.unlock(options: .readOnly, seed: nil)
+        return (out, Int((DispatchTime.now().uptimeNanoseconds - start) / 1000))
+    }
+
+    /// The pattern into every texel through a CPU write lock; the microseconds from the lock to the unlock's return
+    static func cpuWrite(_ surface: IOSurface) -> Int {
+        let start = DispatchTime.now().uptimeNanoseconds
+        surface.lock(options: [], seed: nil)
+        for y in 0..<surface.height {
+            let row = surface.baseAddress + y * surface.bytesPerRow
+            for x in 0..<surface.width {
+                for c in 0..<4 { row.storeBytes(of: byte(x, y, c), toByteOffset: x * 4 + c, as: UInt8.self) }
+            }
+        }
+        surface.unlock(options: [], seed: nil)
+        return Int((DispatchTime.now().uptimeNanoseconds - start) / 1000)
     }
 
     /// Its texels as rows, through this process's own GPU import of it (a blit into a buffer), and that texture

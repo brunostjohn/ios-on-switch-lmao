@@ -539,12 +539,9 @@ int tgm_writers_all_done(void);
 void tgm_writers_wait_all(void);
 /* SurfaceLayout (method 16) for the import holding `c`: the surface's layout, decided at the first call with `writes` while
  * `c` is its only import (the surface's contents tiled before it says so); 1 block-linear at this shape, 0 pitch, -1
- * block-linear at another shape. Sleeps on the copy engine's fence interrupt while it tiles. `writes` holds
- * TGM_LAYOUT_ASK_WRITES, and TGM_LAYOUT_ASK_FIRST at an import's first ask: a decision whose tiling move failed is made
- * again at the first ask of an import that holds the surface alone (no import bound it under the failed decision's
- * pitch answer). */
-#define TGM_LAYOUT_ASK_WRITES 1
-#define TGM_LAYOUT_ASK_FIRST 2
+ * block-linear at another shape. Sleeps on the copy engine's fence interrupt while it tiles. `writes` holds the ask's
+ * TegraGM20BLayoutAsk.h flags: a decision whose tiling move failed is made again at the first ask of an import that
+ * holds the surface alone (no import bound it under the failed decision's pitch answer). */
 int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 			 uint32_t bytes_per_row, int writes);
 /* The same for an asker that reads the decided layout's block height (SurfaceLayoutInfo): the decision may lower the block
