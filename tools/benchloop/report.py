@@ -12,6 +12,7 @@ from pathlib import Path
 from tools.benchloop import (
     blend,
     cbufsize,
+    families,
     floatadd,
     interlock_section,
     qmdchain,
@@ -72,6 +73,8 @@ def _run(planned: list[dict], results: dict[str, dict]) -> dict:
         return {'interlock_section': interlock_section.analyse(planned, results)}
     if any((e.get('meta') or {}).get('family') == 'resolvetie2' for e in planned):
         return {'resolveties': resolve_ties.analyse(planned, results)}
+    if families.asked(planned):
+        return families.analyse(planned, results)
     return {}
 
 
@@ -122,4 +125,4 @@ def write(command: str, planned: list[dict], results: dict[str, dict], out: Path
     if 'interlock_section' in found:
         failed = sum(not row['passed'] for row in found['interlock_section']['cells'].values())
         summary += f', {failed} interlock cells failed'
-    return summary
+    return '\n'.join([summary, *found.get('summary', [])])

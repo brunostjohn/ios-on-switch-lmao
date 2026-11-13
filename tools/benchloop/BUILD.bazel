@@ -58,6 +58,7 @@ py_library(
         "fakeblend.py",
         "fakedevice.py",
         "fakegpu.py",
+        "families.py",
         "floatadd.py",
         "formula.py",
         "generators.py",
@@ -66,6 +67,7 @@ py_library(
         "interlock_section.py",
         "known.py",
         "loop.py",
+        "nakbatches.py",
         "qmdchain.py",
         "report.py",
         "resolve_ties.py",
@@ -85,6 +87,7 @@ py_library(
         ":columns",
         ":protocol",
         "//tools/benchloop/sm53:encode",
+        "//tools/benchloop/sm53:families",
         "//tools/benchloop/sm53:fit",
         "//tools/benchloop/sm53:interlock",
         "//tools/benchloop/sm53:latency",
@@ -107,6 +110,13 @@ py_binary(
 py_binary(
     name = "capture",
     srcs = ["capture.py"],
+    deps = [":lib"],
+)
+
+# bazel run //tools/benchloop:nakbatches -- "$PWD/tools/benchloop/batches" rewrites the NAK question batches
+py_binary(
+    name = "nakbatches",
+    srcs = ["nakbatches.py"],
     deps = [":lib"],
 )
 
@@ -143,9 +153,12 @@ APP_SOURCES = [
 [
     py_test(
         name = name,
-        size = "small",
+        size = "medium" if name == "families_test" else "small",
         srcs = [name + ".py"],
-        data = APP_SOURCES + glob(["testdata/*"]),
+        data = APP_SOURCES + glob([
+            "testdata/*",
+            "batches/*.json",
+        ]),
         deps = [
             ":lib",
             "//tools/gpu/maxwell:interp",
@@ -158,6 +171,7 @@ APP_SOURCES = [
         "blend_test",
         "capture_test",
         "cbufsize_test",
+        "families_test",
         "floatadd_test",
         "golden_test",
         "gr_errors_test",
