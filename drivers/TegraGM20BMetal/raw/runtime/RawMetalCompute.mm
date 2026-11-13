@@ -119,6 +119,8 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
     if (sampler && ![(id)sampler isKindOfClass:[RMSampler class]])
         [self refuse:PredCompute value:index why:@"a kernel's sampler not made by this device"];
     RMSampler *s = [(id)sampler isKindOfClass:[RMSampler class]] ? (RMSampler *)sampler : nil;
+    if (s && s->_raw.desc.border)
+        _cb->_borderSamplers = true;
     if (index < 16 && _samplers[index] != s) {
         _samplers[index] = s;
         raw::BoundSampler bound = {};

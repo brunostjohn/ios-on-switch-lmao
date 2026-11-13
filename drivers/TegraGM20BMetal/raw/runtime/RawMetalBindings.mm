@@ -194,6 +194,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         [_cb takeReason:WhyCall why:@"a cubic vertex sampler"];
         hit(_cb, PredCallVertexSampler, index);
     }
+    if ([(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.border)
+        _cb->_borderSamplers = true;
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
         _samp[index] = r;

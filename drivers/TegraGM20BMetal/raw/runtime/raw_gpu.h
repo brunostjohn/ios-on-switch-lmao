@@ -460,7 +460,22 @@ struct Sampler {
     // its headers under a planar texture's address map (Texture::addressMap 1 to 3): m2v samples those textures through the
     // sampler with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
     uint32_t mapped[4] = {};
+    // an opaque border's headers by the texel a texture reads at it (borderTexel), where that is not tsc's
+    // (Device::borderVariant makes them before the work that samples the texture through the sampler)
+    uint32_t bordered[32] = {};
 };
+
+// The border texel a draw sampling `t` through `s` reads (raw_sampler.h borderTexel), 0 for a sampler of no opaque border
+uint8_t samplerBorderTexel(const Sampler &s, const Texture &t);
+
+// The header a draw sampling `t` through `s` takes: its own, or its border's for `t` (0: not made yet)
+inline uint32_t borderedTsc(const Sampler &s, const Texture *t)
+{
+    if (!s.desc.border || !t)
+        return s.tsc;
+    const uint8_t texel = samplerBorderTexel(s, *t);
+    return texel == ownBorderTexel(s.desc.border) ? s.tsc : s.bordered[texel];
+}
 
 struct SplitState;
 struct SplitSource;
@@ -1835,6 +1850,8 @@ public:
     Pipeline *reachTwin(Pipeline &pl, const char **why);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
+    // s's header for sampling `t` at an opaque border (Sampler::bordered), made now if it is not yet
+    bool borderVariant(Sampler &s, const Texture &t);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
     // with their pitches), sampled through an RGBA8 image of the pool (Texture::planar)
     bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,

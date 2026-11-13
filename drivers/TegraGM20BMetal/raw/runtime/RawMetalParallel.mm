@@ -55,6 +55,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     const size_t chunkBase = cb->_bytes.chunks.size(), passBase = cb->_passes.size(), shadowBase = cb->_shadow.size();
     cb->_shadow.insert(cb->_shadow.end(), s->_shadow.begin(), s->_shadow.end());
     cb->_plainForStorage.insert(cb->_plainForStorage.end(), s->_plainForStorage.begin(), s->_plainForStorage.end());
+    cb->_borderSamplers |= s->_borderSamplers;
     if (!s->_bytes.chunks.empty()) {
         cb->_bytes.chunks.insert(cb->_bytes.chunks.end(), s->_bytes.chunks.begin(), s->_bytes.chunks.end());
         cb->_bytes.at = cb->_bytes.chunks.size();  // a later setBytes takes a chunk of its own: these are full

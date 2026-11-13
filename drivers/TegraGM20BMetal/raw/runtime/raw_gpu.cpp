@@ -3297,6 +3297,8 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8])
     maxLod = std::max(maxLod, minLod);
     setField(w + 2, 11, 0, lodField(minLod));
     setField(w + 2, 23, 12, lodField(maxLod));
+    if (d.border)
+        borderHeader(w, ownBorderTexel(d.border));
 }
 
 // lock_ held: a free entry of the sampler header pool
@@ -3343,6 +3345,9 @@ void Device::destroySampler(Sampler &s)
     for (uint32_t m : s.mapped)
         if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end())
             freeTsc_.push_back(m);
+    for (uint32_t b : s.bordered)
+        if (b)
+            freeTsc_.push_back(b);
     s = {};
 }
 
@@ -3371,6 +3376,30 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
         return false;
     memcpy(tsc_.cpu + 32 * tsc, w, 32);
     s.mapped[map] = tsc;
+    return true;
+}
+
+uint8_t samplerBorderTexel(const Sampler &s, const Texture &t)
+{
+    constexpr uint32_t kA8Unorm = 1;
+    const FormatInfo *f = formatInfo(t.format);
+    return f ? borderTexel(f->tic0, t.swizzle, t.format == kA8Unorm, s.desc.border) : ownBorderTexel(s.desc.border);
+}
+
+bool Device::borderVariant(Sampler &s, const Texture &t)
+{
+    const uint8_t texel = samplerBorderTexel(s, t);
+    if (!s.desc.border || texel == ownBorderTexel(s.desc.border) || s.bordered[texel])
+        return true;
+    uint32_t w[8];
+    samplerHeader(s.desc, w);
+    borderHeader(w, texel);
+    RAW_ENCODE_LOCK(l, lock_);
+    uint32_t tsc = 0;
+    if (!takeTsc(tsc))
+        return false;
+    memcpy(tsc_.cpu + 32 * tsc, w, 32);
+    s.bordered[texel] = tsc;
     return true;
 }
 
@@ -6493,11 +6522,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                     tsc = s          ? (map        ? s->mapped[map]
                                         : compares ? s->compareTsc
-                                                   : s->tsc)
+                                                   : borderedTsc(*s, mapped))
                           : compares ? d.neutralCompareTsc_
                                      : d.neutralTsc_;
-                    if (s && map && !tsc) {
-                        *why = "a planar texture's sampler without its address map";
+                    if (s && !tsc) {
+                        *why = map ? "a planar texture's sampler without its address map"
+                                   : "a sampler without its opaque border's header for the texture";
                         return false;
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
