@@ -338,6 +338,52 @@ static inline uint32_t switch_gov_rows_retry(struct switch_gov_rows *r, unsigned
     return back;
 }
 
+// A step that failed and is tried again later (the DFLL refusing a rate, or not starting at all): the next try is due
+// `unit` after the first failure, and each further failure in a row doubles the wait, up to 2^SWITCH_GOV_RETRY_LOG
+// units. The caller owns the units (governor windows, mach absolute time).
+#define SWITCH_GOV_RETRY_LOG 9u
+
+struct switch_gov_retry {
+    uint32_t failures;  // in a row
+    uint64_t due;       // the next try, in the caller's units
+};
+
+// A failure at `now`. Returns 1 for one to report: the first in a row, then each power of two.
+static inline int switch_gov_retry_failed(struct switch_gov_retry *r, uint64_t now, uint64_t unit)
+{
+    const uint32_t doubling = r->failures < SWITCH_GOV_RETRY_LOG ? r->failures : SWITCH_GOV_RETRY_LOG;
+    if (r->failures < UINT32_MAX)
+        ++r->failures;
+    r->due = now + (unit << doubling);
+    return (r->failures & (r->failures - 1u)) == 0u;
+}
+
+// Whether the step may run at `now`: no failure in a row, or its wait is over.
+static inline int switch_gov_retry_due(const struct switch_gov_retry *r, uint64_t now)
+{
+    return r->failures == 0u || now >= r->due;
+}
+
+// The step worked. Returns the failures in a row it ended (0: none).
+static inline uint32_t switch_gov_retry_cleared(struct switch_gov_retry *r)
+{
+    const uint32_t ended = r->failures;
+    r->failures = 0;
+    r->due = 0;
+    return ended;
+}
+
+// The row to ask for when `want` is decided and `applied` runs: `want`, unless the DFLL refused it and its wait is not
+// over; then the nearest row from it toward `applied` that may be asked, else `applied`.
+static inline unsigned switch_gov_askable(const struct switch_gov_retry refused[SWITCH_GOV_MAX_OPPS], unsigned want,
+                                          unsigned applied, uint64_t now)
+{
+    unsigned row = want;
+    while (row != applied && row < SWITCH_GOV_MAX_OPPS && !switch_gov_retry_due(&refused[row], now))
+        row = row > applied ? row - 1u : row + 1u;
+    return row < SWITCH_GOV_MAX_OPPS ? row : applied;
+}
+
 #ifdef __cplusplus
 }
 #endif

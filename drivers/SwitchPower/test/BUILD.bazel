@@ -12,6 +12,8 @@
 #   switch_soctherm_window_test      SwitchSocThermWindow.h: SOC_THERM's one-degree LVL0 window and the groups' registers
 #   switch_thermal_shutdown_test     software shutdown below the hardware trip, its RTC record, the reset cause decoding
 #   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
+#   switch_thermal_dfll_test         SwitchThermalDfll.h against a stand-in SwitchThermal: a DFLL failure is tried
+#                                    again after a doubling wait, only -ENODEV ends it; SwitchGovernor.h's retry rows
 # The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
 # functions as exported ones) and driven by a GoogleTest test.
 #
@@ -158,4 +160,16 @@ host_test(
         "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
     defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "switch_thermal_dfll_test",
+    srcs = [
+        "switch_thermal_dfll_test.cpp",
+        "//drivers/SwitchPower:SwitchGovernor.h",
+        "//drivers/SwitchPower:SwitchPerfGovernor.h",
+        "//drivers/SwitchPower:SwitchThermalDfll.h",
+        "//drivers/TegraDFLL:TegraDFLL.h",
+    ],
+    data = ["//drivers/SwitchPower:SwitchThermal.cpp"],
 )
