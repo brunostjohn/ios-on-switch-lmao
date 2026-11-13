@@ -218,6 +218,7 @@ TESTS: dict[str, bool] = {
     'encode.h264_bframes': False,
     'encode.nvenc_input_layouts': False,
     'encode.h264_from_nvdec': False,
+    'encode.h264_from_gpu': False,
     **{f'image.{still}': False for still in STILLS},
     'image.jpeg_after_idle': False,
     'image.heic_encode': False,
