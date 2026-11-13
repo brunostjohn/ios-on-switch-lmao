@@ -117,6 +117,25 @@ TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesThePass)
     EXPECT_EQ(raw::resolveRoute(eight), raw::ResolveByPass);
 }
 
+raw::ResolveAsk ask(uint16_t format, uint8_t samples, bool readable)
+{
+    raw::ResolveAsk a = screenBound(samples);
+    a.format = format;
+    a.readable = readable;
+    return a;
+}
+
+// gpu.raw.resolve_twod rgba16f_2x (exact, rgba16f_2x_read=twod) and rgba16f_4x (near)
+TEST(ResolveRule, RGBA16FloatTakesTheEngineEverywhereAt2xAndScreenBoundAt4x)
+{
+    EXPECT_EQ(raw::resolveRoute(ask(115, 2, false)), raw::ResolveByTwod);
+    EXPECT_EQ(raw::resolveRoute(ask(115, 2, true)), raw::ResolveByTwod);
+    EXPECT_EQ(raw::resolveRoute(ask(115, 4, false)), raw::ResolveByTwod);
+    EXPECT_EQ(raw::resolveRoute(ask(115, 4, true)), raw::ResolveByPass);
+    EXPECT_FALSE(raw::twodResolveComplementShape(ask(115, 2, false)));
+    EXPECT_TRUE(raw::twodResolveComplementShape(ask(80, 2, true)));
+}
+
 TEST(ResolveRule, TheComplementIsNoRoute)
 {
     for (uint16_t format : {70, 80})

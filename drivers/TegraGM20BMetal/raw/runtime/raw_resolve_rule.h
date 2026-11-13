@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Rule resolve.twod: where an 8-bit unorm MSAA resolve is the 2D engine's 2:1 box of the sample grid
-// (raw_resolve_twod.cpp) instead of the pack's resolve pass.
+// Rule resolve.twod: where an MSAA resolve is the 2D engine's 2:1 box of the sample grid (raw_resolve_twod.cpp) instead
+// of the pack's resolve pass.
 //
 // The engine reads each unorm8 code c as round(c * 2^15 / 255) before its box and stores the mean by the ROP's unorm
 // rule (x1-units UNITS.md: cut to n+4 fractional bits, nearest, ties down), where Metal's resolve is (sum + n/2) / n,
@@ -42,20 +42,48 @@ struct ResolveAsk {
     bool compressedSamples = false;  // the multisampled image the pass rendered has comptags
 };
 
-// The 2D engine reads the sample grid at 2:1: unorm8 at 2x or 4x over the whole target, not a shadow target
-constexpr bool twodResolveShape(const ResolveAsk &a)
+// How close the engine's box of a format's grid at 2x or 4x comes to Metal's resolve, as gpu.x1.twod_resolve read it on
+// the chip and gpu.raw.resolve_twod's format arms judge it: exact, within one code, or not read by the engine
+enum class TwodResolveFit : uint8_t {
+    None,
+    Near,
+    Exact,
+};
+
+constexpr TwodResolveFit twodResolveFit(uint16_t format, uint8_t samples)
 {
-    const bool unorm8 = a.format == 70 || a.format == 80;  // RGBA8Unorm, BGRA8Unorm
-    return unorm8 && (a.samples == 2 || a.samples == 4) && a.wholeTarget && !a.shadowTarget;
+    if (samples != 2 && samples != 4)
+        return TwodResolveFit::None;
+    switch (format) {
+    case 70:  // RGBA8Unorm
+    case 80:  // BGRA8Unorm
+        return TwodResolveFit::Near;
+    case 115:  // RGBA16Float
+        return samples == 2 ? TwodResolveFit::Exact : TwodResolveFit::Near;
+    default:
+        return TwodResolveFit::None;
+    }
 }
 
-// resolve.twod: within one code of Metal (gpu.x1.twod_resolve on the chip, T-v2: none beyond), so taken where no reader
-// takes the texels as data, as fetch.blend is: a screen-bound target (a drawable, a display-bound surface) or a private
-// intermediate only passes sample. A first readback in a later command buffer sees the one code: the owner's rule for
-// screen-bound unorm targets
+// The 2D engine reads the sample grid at 2:1 over the whole target, not a shadow target
+constexpr bool twodResolveShape(const ResolveAsk &a)
+{
+    return twodResolveFit(a.format, a.samples) != TwodResolveFit::None && a.wholeTarget && !a.shadowTarget;
+}
+
+// resolve.twod: taken for every resolve where the box is Metal's rule, and where it is within one code of it only where
+// no reader takes the texels as data, as fetch.blend is: a screen-bound target (a drawable, a display-bound surface) or a
+// private intermediate only passes sample. A first readback in a later command buffer sees the one code: the owner's
+// rule for screen-bound targets
 constexpr bool twodResolveAcceptable(const ResolveAsk &a)
 {
-    return twodResolveShape(a) && !a.readable;
+    return twodResolveShape(a) && (!a.readable || twodResolveFit(a.format, a.samples) == TwodResolveFit::Exact);
+}
+
+// The probe's complement inverts unorm8 codes in place; any other format's bits would not invert to its complement
+constexpr bool twodResolveComplementShape(const ResolveAsk &a)
+{
+    return twodResolveShape(a) && (a.format == 70 || a.format == 80);
 }
 
 enum ResolveRoute : uint8_t {

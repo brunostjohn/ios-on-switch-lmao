@@ -274,7 +274,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             if (d.probeResolveDraw.load(std::memory_order_relaxed))
                 route = raw::ResolveByPass;
-            else if (raw::twodResolveShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
+            else if (raw::twodResolveComplementShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
                 route = raw::ResolveByComplement;
 #endif
             // a turned target's resolve is its state's turned variant, which reads the frame's position
