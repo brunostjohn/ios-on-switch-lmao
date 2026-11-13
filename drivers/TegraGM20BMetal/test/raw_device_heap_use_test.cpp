@@ -4,6 +4,8 @@
 // the device makes, its memory a mapping of the arena's BO under the kind's PTE kind), plus each resource the heap made
 // outside it. A shared heap's arena is write-combined and host-written; a private heap's places buffers too.
 #include "raw_device_harness.h"
+
+#include <algorithm>
 #include "../raw/runtime/raw_heap_members.h"
 
 namespace {
@@ -84,7 +86,17 @@ protected:
         e->end();
         uint32_t seqno = 0;
         EXPECT_TRUE(cb->commit(seqno));
-        return kernel_model::model.jobs.back().uses;
+        // The copy's own buffers are left out: after their first CPU lease they are named by ranged address, one use
+        // each, which says nothing about how the arena is named
+        const uint64_t own[2] = {kernel_model::model.resolve({from.va, TegraGM20BSurfaceGpuAddress, 0}),
+                                 kernel_model::model.resolve({to.va, TegraGM20BSurfaceGpuAddress, 0})};
+        std::vector<TegraGM20BAbiSurfaceUse> uses = kernel_model::model.jobs.back().uses;
+        uses.erase(std::remove_if(uses.begin(), uses.end(),
+                                  [&](const TegraGM20BAbiSurfaceUse &u) {
+                                      return u.handle == own[0] || u.handle == own[1];
+                                  }),
+                   uses.end());
+        return uses;
     }
 
     size_t named(const std::vector<TegraGM20BAbiSurfaceUse> &uses, uint64_t handle, uint32_t *access = nullptr)
