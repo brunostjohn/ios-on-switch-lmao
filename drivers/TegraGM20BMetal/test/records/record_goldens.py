@@ -1,9 +1,11 @@
 """Rewrite an IPSW kind's record goldens and the sample pack's corpus from a full raw pack.
 
-usage: record_goldens.py <write_goldens> <pack dir> <kind> <the pack's split bucket logs>...
+usage: record_goldens.py <write_goldens> <pack dir> <kind> <the pack's split bucket logs>... [--out <dir>]
 
 write_goldens writes testdata/records_<kind>.bin, _sample.tsv and _sample_states.txt from the pack; then the sample
-pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. A bucket begins
+pack's corpus, testdata/records_<kind>_sample.corpus, is the pack's split lines of the sampled states. --out writes the
+four files to <dir> instead of the workspace's testdata (`bazel run ... -- --out <dir>`), for a run in a checkout
+other than the one that takes them. A bucket begins
 with the warm-up state (rawpack.py split_buckets), which the probe draws first, so the first bucket's first line leads.
 Then every R line whose state key, less a variant's name, hashes (packfile.fnv of rawpack.state_key) to a sampled state,
 or to no state of the pack, and every D line (the kernels' dispatch shapes, a few dozen), each once.
@@ -47,6 +49,10 @@ def pick(states: set[int], known: set[int], logs: list[Path]) -> list[str]:
 def main() -> None:
     write_goldens, pack, kind, *outputs = sys.argv[1:]
     testdata = Path(os.environ['BUILD_WORKSPACE_DIRECTORY']) / 'drivers/TegraGM20BMetal/test/records/testdata'
+    if '--out' in outputs:
+        at = outputs.index('--out')
+        testdata = Path(outputs[at + 1])
+        del outputs[at : at + 2]
     with tempfile.TemporaryDirectory() as tmp:
         known_file = Path(tmp) / 'pack_states.txt'
         subprocess.run([write_goldens, str(Path(pack) / 'pack.bin'), kind, str(testdata), str(known_file)], check=True)

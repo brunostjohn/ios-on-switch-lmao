@@ -8,6 +8,7 @@
 #                                                                               record (manual)
 #   bazel run --config=ios27 //drivers/TegraGM20BMetal/test/records:record_goldens   builds the full pack and rewrites
 #                                                                               the kind's goldens and sample corpus
+#                                                                               (-- --out <dir>: there instead)
 #
 # The goldens are 9da14c602's packs (pack v19), made while NVK's compile still vouched for every record. The sample pack
 # makes only the sampled records' states (their split corpus lines, records_<kind>_sample.corpus) with the full pack's
