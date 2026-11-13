@@ -3,16 +3,16 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// Rules resolve.twod and resolve.exact (drivers/TegraGM20BMetal/raw/runtime/raw_resolve_rule.h): a 720x1280 BGRA8 4x
-/// pass, every sample shaded apart, resolved into a private texture four ways, each three times: the route the rules
-/// pick, the complement route forced (switchRawProbeResolveExact:), the complement route on a store-and-resolve whose
-/// samples a second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:,
-/// Metal's exact rule); then the read arm (ResolveReadArm.swift), whose target a blit copies out in the same command buffer.
+/// Rule resolve.twod (drivers/TegraGM20BMetal/raw/runtime/raw_resolve_rule.h): a 720x1280 BGRA8 4x pass, every sample
+/// shaded apart, resolved into a private texture four ways, each three times: the route the rule picks, the 2D engine
+/// through the grid's complement (switchRawProbeResolveExact:), the complement on a store-and-resolve whose samples a
+/// second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:, Metal's
+/// exact rule); then the read arm (ResolveReadArm.swift), whose target a blit copies out in the same command buffer.
 /// PASS: all on the raw path, the picked route (a target first read in a later command buffer) the 2D engine's within one
-/// code of the pass, the complement route taken and within one code, exact at 2x, the kept samples resolving as the
-/// pass's, and the read arm through the pack's pass byte for byte Metal's rule computed from the samples
-/// (`<n>x_read_route=pass <n>x_read_differ=0`). `2x_exact_differ=0` with
-/// `2x_kept_differ=0` flips twodResolveComplementProven, `4x_exact_differ=0` twodResolveSingleRounding4x.
+/// code of the pass, the complement taken and within one code, the kept samples resolving as the pass's, the read arm
+/// through the pack's pass byte for byte Metal's rule computed from the samples (`<n>x_read_route=pass
+/// <n>x_read_differ=0`), and at 2x the box and its complement byte for byte the engine's reading the rule rests on
+/// (X1TwodResolveReading: `2x_twod_model_differ=0 2x_exact_model_differ=0`).
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
     let name = "MSAA resolves by the 2D engine, directly and through the complement, against the resolve pass"
@@ -83,7 +83,15 @@ struct ResolveTwodTest: HWTest {
             if picked.twod == 0 { wrong.append("\(tag)_not_taken") }
             if exact.exact == 0 { wrong.append("\(tag)_exact_not_taken") }
             if exactBeyond > 0 { wrong.append("\(tag)_exact_beyond_one") }
-            if samples == 2 && exactDiffer > 0 { wrong.append("2x_exact_differ") }
+            if samples == 2 {
+                let model = Self.engineReading()
+                let twodModel = zip(picked.bytes, model.box).filter { $0 != $1 }.count
+                let exactModel = zip(exact.bytes, model.complement).filter { $0 != $1 }.count
+                metrics.set("2x_twod_model_differ", twodModel)
+                metrics.set("2x_exact_model_differ", exactModel)
+                if twodModel > 0 { wrong.append("2x_twod_model_differ") }
+                if exactModel > 0 { wrong.append("2x_exact_model_differ") }
+            }
             if keptDiffer > 0 { wrong.append("\(tag)_kept_differ") }
             if [picked.path, exact.path, pass.path].contains(where: { $0 != "raw" }) { wrong.append("\(tag)_paths") }
         }

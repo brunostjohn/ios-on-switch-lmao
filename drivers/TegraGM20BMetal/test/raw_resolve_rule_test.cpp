@@ -231,4 +231,77 @@ TEST(ResolveCandidates, NoEightBitIntermediateOfTwoSamplesIsExactAt4x)
         }
 }
 
+// The 2D engine's 2x box as the chip reads it: each code at 15 bits, nearest, then the store rule of the exact mean
+uint32_t code15(uint32_t c)
+{
+    return (257 * c + 1) >> 1;
+}
+
+uint32_t engineBox(uint32_t a, uint32_t b)
+{
+    const uint32_t u = (code15(a) + code15(b)) >> 4;
+    return (u * 255 + 2047) >> 12;
+}
+
+uint32_t engineComplement(uint32_t a, uint32_t b)
+{
+    return 255 - engineBox(255 - a, 255 - b);
+}
+
+// hw_test_app/shaders/ResolveTwod.metal's sample of pixel (x, y)
+uint32_t sampleHash(uint32_t x, uint32_t y, uint32_t sample)
+{
+    uint32_t h = (x * 73856093u) ^ (y * 19349663u) ^ ((sample + 1) * 83492791u);
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    return h ^ (h >> 15);
+}
+
+TEST(ResolveEngine, CodesAtFifteenBitsGiveTheDevicesCounts)
+{
+    for (uint32_t c = 0; c < 256; c++)
+        ASSERT_EQ(code15(c), uint32_t(std::lround(c * 32768.0 / 255.0))) << c;
+    // gpu.raw.resolve_twod's 720x1280 BGRA8 pass at 2x, boots 19 and 21: 2x_one_off_bgra and 2x_exact_one_off_bgra
+    const uint32_t shift[4] = {16, 8, 0, 24};
+    const uint32_t box[4] = {447364, 448690, 447877, 452349}, complement[4] = {13130, 12545, 13530, 12716};
+    uint32_t boxOff[4] = {}, complementOff[4] = {};
+    for (uint32_t y = 0; y < 1280; y++)
+        for (uint32_t x = 0; x < 720; x++) {
+            const uint32_t h0 = sampleHash(x, y, 0), h1 = sampleHash(x, y, 1);
+            for (int c = 0; c < 4; c++) {
+                const uint32_t a = h0 >> shift[c] & 255, b = h1 >> shift[c] & 255, m = metal(a + b, 2);
+                boxOff[c] += engineBox(a, b) != m;
+                complementOff[c] += engineComplement(a, b) != m;
+            }
+        }
+    for (int c = 0; c < 4; c++) {
+        EXPECT_EQ(boxOff[c], box[c]) << "channel " << c;
+        EXPECT_EQ(complementOff[c], complement[c]) << "channel " << c;
+    }
+}
+
+// Where the box and its complement both land one under Metal, the pair (k, k) gives the same two codes and Metal's k,
+// so no function of the two readings, a ROP3 among them, is Metal's rule
+TEST(ResolveEngine, NoReadingOfTheBoxAndItsComplementIsExact)
+{
+    uint32_t both = 0, complementOff = 0;
+    for (uint32_t a = 0; a < 256; a++)
+        for (uint32_t b = 0; b < 256; b++) {
+            const uint32_t m = metal(a + b, 2), box = engineBox(a, b), complement = engineComplement(a, b);
+            ASSERT_LE(m - box, 1u);
+            ASSERT_LE(m - complement, 1u);
+            complementOff += complement != m;
+            if (box == m || complement == m)
+                continue;
+            both++;
+            const uint32_t k = box;
+            ASSERT_EQ(complement, k);
+            ASSERT_EQ(engineBox(k, k), k);
+            ASSERT_EQ(engineComplement(k, k), k);
+            ASSERT_EQ(metal(2 * k, 2), k);
+        }
+    EXPECT_EQ(both, 896u);
+    EXPECT_EQ(complementOff, 896u) << "every complement miss is a box miss too";
+}
+
 }  // namespace

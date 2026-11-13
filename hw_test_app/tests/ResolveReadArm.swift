@@ -41,6 +41,23 @@ extension ResolveTwodTest {
         return out
     }
 
+    /// The 2D engine's 2x box of the pattern and its complement as raw_resolve_rule.h reads the chip, BGRA8 rows
+    static func engineReading() -> (box: [UInt8], complement: [UInt8]) {
+        var box = [UInt8](repeating: 0, count: width * height * 4), complement = box
+        let shift: [UInt32] = [16, 8, 0, 24]
+        for y in 0..<height {
+            for x in 0..<width {
+                let h0 = sampleHash(x, y, 0), h1 = sampleHash(x, y, 1)
+                for c in 0..<4 {
+                    let a = (h0 >> shift[c]) & 255, b = (h1 >> shift[c]) & 255
+                    box[(y * width + x) * 4 + c] = UInt8(X1TwodResolveReading.box(a, b))
+                    complement[(y * width + x) * 4 + c] = UInt8(X1TwodResolveReading.complement(a, b))
+                }
+            }
+        }
+        return (box, complement)
+    }
+
     /// The pass and its resolve, then a blit of the resolve target into a buffer, in one command buffer
     func readInCommandBuffer(_ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int) async throws -> Resolved {
         let ms = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], samples: samples)
