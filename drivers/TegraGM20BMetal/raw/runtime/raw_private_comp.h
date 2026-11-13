@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Private render targets on compressed memory (rule comp.private). A private 2D texture of one level and one sample that
-// only the 3D engine renders and the texture unit samples is bound with C32_2CRA or C64_2CRA when compressed memory of
-// its size is ready (Device::comp_, made off the render thread), so its full clears to a ZBC value write tags only and
-// its draws move compressed tiles. Those kinds are the ones the copy engine and the texture unit read and write as plain
-// texels on the chip (HW Test gpu.x1.ce_compressed, boot 6 stack-F-v1: BGRA8 and RGBA16Float, 0 bad of 24 repeats);
-// passes that view it as a storage image do so in place (raw_storage_form.h rule storage.compressed).
+// only the 3D engine renders and the texture unit samples is bound with its texel size's compressible kind when
+// compressed memory of its size is ready (Device::comp_, made off the render thread), so its full clears to a ZBC value
+// write tags only and its draws move compressed tiles. The kind must be one the copy engine reads and writes as plain
+// texels (raw_comp.h copyEngineReadsCompressed: the move below is its copy); passes that view it as a storage image do so
+// in place (raw_storage_form.h rule storage.compressed).
 //
 // Nothing else may name its pages: an m2v twin aliases them through NVK's plain binding and would read compressed bytes.
 // So before a twin, a view (which copies the memory's address) or a gpuResourceID (which names the header) is taken, the
@@ -30,12 +30,13 @@ struct PrivateTextureFacts {
 };
 
 // The compressed kind such a texture binds, or 0
-constexpr uint32_t privateCompressedKind(const PrivateTextureFacts &f)
+inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
 {
     if (!f.compression || !f.privateStorage || !f.oneLevel || !f.oneSample || !f.twoD || !f.renderedAndSampledOnly ||
         !f.plainColour)
         return 0;
-    return f.bpp == 4 ? kCompKindC32 : f.bpp == 8 ? kCompKindC64 : 0;
+    const uint32_t kind = compressedKind(f.bpp, 0);
+    return copyEngineReadsCompressed(kind) ? kind : 0;
 }
 
 // The colour slots a draw binds as storage images where its state has no barrier form to take instead: a compressed

@@ -43,11 +43,11 @@ raw::PrivateTextureFacts target(uint32_t bpp)
     return f;
 }
 
-TEST(RawPrivateComp, FourAndEightByteTargetsTakeTheProvenColourKinds)
+TEST(RawPrivateComp, TargetsTakeTheColourKindsTheCopyEngineReads)
 {
     EXPECT_EQ(raw::privateCompressedKind(target(4)), uint32_t(raw::kCompKindC32));
     EXPECT_EQ(raw::privateCompressedKind(target(8)), uint32_t(raw::kCompKindC64));
-    EXPECT_EQ(raw::privateCompressedKind(target(16)), 0u) << "C128: the copy engine was not asked";
+    EXPECT_EQ(raw::privateCompressedKind(target(16)), uint32_t(raw::kCompKindC128)) << "RGBA32Float";
     EXPECT_EQ(raw::privateCompressedKind(target(2)), 0u);
 }
 
