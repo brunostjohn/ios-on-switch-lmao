@@ -12,7 +12,9 @@ import Metal
 /// barrier inside a job drops what job 0 left in the caches (job 1's passes write separate targets: none between
 /// them, as the planner places none where nothing depends). A trial that
 /// reads a line job 0 left copies the last seed. Writers: the ROP, the copy engine, the SMs' stores, the CPU, the copy
-/// channel's replaceRegion (a second GPU channel). Readers: the texture unit, the SMs' data cache, the constant cache.
+/// channel's replaceRegion (a second GPU channel). Readers: the texture unit, the SMs' data cache, the constant cache, and
+/// the copy engine reading what the SMs stored (sto_ce: what the planner's entry drops against today's, the flush of the
+/// SMs' data, shows only where something outside the SMs reads their stores).
 /// entry_none, the positive control at a job's entry, opens each job with no invalidate at all (not even the header
 /// and sampler caches bare keeps) and no barrier before its first encoder: where a cache holds job 0's lines across the
 /// job boundary, job 2 reads them there, so a cell judges the relaxed entries only once entry_none differed in it, CPU
@@ -41,11 +43,12 @@ enum X1JobBoundaryProbe {
     }
 
     enum Reader: String {
-        case tex, sto, const
+        case tex, sto, const, ce
     }
 
     static let cells: [(Writer, Reader)] = [
-        (.rop, .tex), (.ce, .tex), (.sto, .sto), (.sto, .const), (.cpu, .sto), (.cpu, .const), (.chan, .tex),
+        (.rop, .tex), (.ce, .tex), (.sto, .sto), (.sto, .const), (.sto, .ce), (.cpu, .sto), (.cpu, .const),
+        (.chan, .tex),
     ]
 
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
@@ -181,6 +184,16 @@ enum X1JobBoundaryProbe {
                 if results { kit.readback(commands, atlas, into: out) }
                 return
             }
+            if reader == .ce {
+                let blit = commands.makeBlitCommandEncoder()!
+                for (k, b) in buffers.enumerated() {
+                    blit.copy(
+                        from: b, sourceOffset: 0, to: results ? out : primeOut,
+                        destinationOffset: k * X1JobBoundaryProbe.words * 4, size: X1JobBoundaryProbe.words * 4)
+                }
+                blit.endEncoding()
+                return
+            }
             let encoder = concurrent ?? commands.makeComputeCommandEncoder(dispatchType: .concurrent)!
             encoder.setComputePipelineState(pipelines[reader == .sto ? "copy" : "const"]!)
             for (k, b) in buffers.enumerated() {
@@ -265,7 +278,7 @@ enum X1JobBoundaryProbe {
         func inJob(forms: String, seeds: [Int]) async throws -> ArmBatch {
             writeFromCPU(seeds)
             return try await kit.gpu.run(forms: forms) { commands in
-                if reader == .tex {
+                if reader == .tex || reader == .ce {
                     read(commands, results: false)
                     write(commands, seeds)
                     read(commands, results: true)
