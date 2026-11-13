@@ -35,7 +35,7 @@ TEST(RawFetchRungs, ComputedColourTakesItTwoLayersDeep)
 
 TEST(RawFetchRungs, EachFormatTheFormatArmsJudgeTakesTheRop)
 {
-    for (uint16_t format : {uint16_t(115)}) {
+    for (uint16_t format : {uint16_t(115), uint16_t(81)}) {
         raw::FixedBlendAsk a = screenLayer();
         a.format = format;
         EXPECT_EQ(raw::fixedBlendAcceptable(a), raw::fixedBlendProven()) << format;
