@@ -372,3 +372,18 @@ TEST(DisplayResumeSource, RestoreRunsOnTheFamilyGateBeforeCompletionCallbacks)
     EXPECT_TRUE(resume.Before("planesResume();", "presentCopied()"));
     EXPECT_TRUE(resume.Before("planesResume();", "presentGpuCopy()"));
 }
+
+// Core Animation never arms the vsync (its frame clock is its own), so the frame end stands in for the frame timeline as it
+// does for the GPU deadline: each swap's timeline then carries the vsync before it, the slow-frame line its phase, and
+// render.c a frame begin for SwitchFrameRender (boot 21 had none, and every SwitchFrame line read "origin swap").
+TEST(FrameTimelineSource, TheFrameEndStandsInForAnUnarmedVsync)
+{
+    const CodeText tick = method("void vblankTick()");
+    EXPECT_TRUE(tick.Before("tegra_gm20b_compositor_vsync(frameEnd, 0, refreshTicks());",
+                            "noteTimelineVsync(frameEnd, refreshTicks());"));
+    EXPECT_TRUE(method("void deliverVsync(").Has("noteTimelineVsync(stamp, interval);"));
+    const CodeText note = method("void noteTimelineVsync(");
+    EXPECT_TRUE(note.Has("if (!SWITCH_FRAME_TIMELINE) return;"));
+    EXPECT_TRUE(note.Has("switch_sched_render_vsync(stamp, interval);"));
+    EXPECT_TRUE(method("void noteSwapTimeline(").Has("tl.vsyncUs = timelineVsyncUs(validatedAt[i]);"));
+}
