@@ -11,7 +11,7 @@ load("@rules_swift//swift:swift_test.bzl", "swift_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 load("//kernel/rules:package.bzl", "ios_binary")
-load(":apps.bzl", "app_twin", "hwtest_app", "ios_arm64e")
+load(":apps.bzl", "hwtest_app", "ios_arm64e", "reproducible_apps")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -743,23 +743,19 @@ bool_flag(
     build_setting_default = False,
 )
 
-app_twin(
-    name = "SwitchHWTest27_twin",
-    app = ":SwitchHWTest27",
+reproducible_apps(
+    name = "reproducible_apps",
+    apps = [
+        ":SwitchHWTest17",
+        ":SwitchHWTest27",
+        ":SwitchHWTest27e",
+    ],
+    twin = ":SwitchHWTest27",
 )
 
 py_test(
     name = "reproducible_test",
     srcs = ["reproducible_test.py"],
-    data = [
-        ":SwitchHWTest17",
-        ":SwitchHWTest27",
-        ":SwitchHWTest27_twin",
-        ":SwitchHWTest27e",
-    ],
-    env = {
-        "APP": "$(rootpath :SwitchHWTest27)",
-        "APPS": "$(rootpath :SwitchHWTest17) $(rootpath :SwitchHWTest27) $(rootpath :SwitchHWTest27e)",
-        "TWIN": "$(rootpath :SwitchHWTest27_twin)",
-    },
+    data = [":reproducible_apps"],
+    env = {"APPS": "$(rootpaths :reproducible_apps)"},
 )
