@@ -354,8 +354,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     // the planar textures its draws sample: their images from their planes first, once (m2v converts at each encoder that uses
     // one; nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's
     // full barrier orders the copies before their reads. A texture bound where no draw's state reads it is not converted: the
-    // image is made when a draw samples it. A sampler that clamps to zero or to the border reads a 4:4:4 code texture as clamp to
-    // edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
+    // image is made when a draw samples it. Its samplers read it under its address map (Texture::addressMap): a sampler state
+    // through its header made here, a constexpr sampler through the one placed with it (Device::constexprMapped_).
     struct Conversion {
         __unsafe_unretained RMTexture *t;
         uint32_t seed;

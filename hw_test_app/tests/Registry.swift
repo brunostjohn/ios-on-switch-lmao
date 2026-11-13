@@ -22,7 +22,7 @@ public enum Registry {
         MsaaFirstUseTest(), StoredDepthTest(),
         ResolveTwodTest(), FillTextureTest(), StorageCompressedTest(), PredicationTest(), MPSControlFlowTest(),
         EventReleaseTest(), CoherenceRewriteTest(),
-        FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(), ZetaColourTest(),
+        FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(), ZetaColourTest(), PlanarConstexprTest(),
     ]
 
     static let video: [any HWTest] =

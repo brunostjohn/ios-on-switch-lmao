@@ -2834,7 +2834,11 @@ private:
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.
     static constexpr uint32_t kConstexprSamplers = 256;  // PackEntry::sampler is a byte
     uint32_t constexprTsc_[kConstexprSamplers] = {};
+    // and each one's headers under a planar texture's address maps 1 to 3 (mapSamplerAddresses), placed with it
+    uint32_t constexprMapped_[kConstexprSamplers][4] = {};
     uint32_t constexprCount_ = 0;
+    // constexprMapped_[index] from its header `words` (lock_ held, or the device not yet open); false: no room
+    bool placeConstexprMaps(uint32_t index, const uint32_t words[8]);
 
     // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
     struct Completed {

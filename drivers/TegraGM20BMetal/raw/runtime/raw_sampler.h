@@ -84,6 +84,23 @@ inline void compareHeader(uint32_t w[8], uint8_t function)
     w[0] = (w[0] & ~0x1E00u) | 1u << 9 | uint32_t(function & 7) << 10;
 }
 
+// TEXSAMP0 ADDRESS_U, ADDRESS_V and ADDRESS_P values (bits 2:0, 5:3, 8:6) samplerHeader and NVK write
+constexpr uint32_t kTscWrap = 0, kTscMirror = 1, kTscClampToEdge = 2, kTscBorder = 3, kTscMirrorOnceClampToEdge = 5;
+
+// Sampler header `w` under a planar texture's address map `map` (Texture::addressMap): 1 sends the wrapping modes to the
+// edge, 2 the clamps to zero and to the border, 3 both. On the header's own fields, so a constexpr sampler's header,
+// which has no descriptor, takes the map as a sampler state's does (Device::samplerVariant).
+inline void mapSamplerAddresses(uint32_t w[8], uint8_t map)
+{
+    const bool wrapped = map == 1 || map == 3, clamps = map == 2 || map == 3;
+    for (uint32_t shift : {0u, 3u, 6u}) {
+        const uint32_t mode = w[0] >> shift & 7;
+        const bool wraps = mode == kTscWrap || mode == kTscMirror || mode == kTscMirrorOnceClampToEdge;
+        if ((wrapped && wraps) || (clamps && mode == kTscBorder))
+            w[0] = (w[0] & ~(7u << shift)) | kTscClampToEdge << shift;
+    }
+}
+
 inline bool takeSampler(const MetalSamplerFields &m, SamplerDesc &s)
 {
     if (m.compareFunction > 7 || std::isnan(m.lodMin) || std::isnan(m.lodMax))

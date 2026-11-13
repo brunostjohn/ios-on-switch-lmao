@@ -54,7 +54,7 @@ mipmaps	record	layer	L3	a mipmapped texture made with no chain: every mipmapped 
 mipmaps.fmt	record	rule	mip.twod,mip.twod_probed,mip.draw	formats with neither engine nor a pack mip state stay gap mip_format
 event	record	rule	recorded	MTLEvent waits and signals: Wait and Signal nodes (GPU semaphore acquire, release)
 enc.planarcopy	record	gap	-	copies to or from a planar texture move its planes' bytes: copy.ce per plane, not built
-enc.planarclamp	encode	gap	sampler_address_mode	a sampler header under a planar texture's address map
+enc.planarclamp	encode	layer	L3	a sampler state's header under a planar texture's address map with no header entry left (a constexpr sampler's are placed with it, Device::constexprMapped_)
 enc.planarrt	encode	rule	planar.standin_load,planar.standin_store	a planar target through its stand-in; sampled and rendered in one command buffer: its codes converted again after the store (edges order it)
 enc.pass	encode	rule	resolve.draw,ycbcr.image,xr.standin	a pass raw could not begin: resolve, YCbCr and extended-range targets are nodes with their rule decided before emission
 enc.kernel	encode	cb-error	-	the kernel refused the submission: a commit-time outcome, the command buffer's error (MTLCommandBufferErrorInternal)
