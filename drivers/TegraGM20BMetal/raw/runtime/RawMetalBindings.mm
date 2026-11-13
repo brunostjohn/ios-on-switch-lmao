@@ -172,13 +172,13 @@ void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLText
 - (void)setFragmentTextures:(const id<MTLTexture> __unsafe_unretained[])t withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self texture:2 object:t[k] index:r.location + k];
+        rmBindTexture(self, 2, t[k], r.location + k);
 }
 
 - (void)setVertexTextures:(const id<MTLTexture> __unsafe_unretained[])t withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self texture:1 object:t[k] index:r.location + k];
+        rmBindTexture(self, 1, t[k], r.location + k);
 }
 
 void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index)
@@ -215,13 +215,13 @@ void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamp
 - (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self sampler:2 object:s[k] index:r.location + k];
+        rmBindSampler(self, 2, s[k], r.location + k);
 }
 
 - (void)setVertexSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self sampler:1 object:s[k] index:r.location + k];
+        rmBindSampler(self, 1, s[k], r.location + k);
 }
 
 // A bind's LOD clamps replace the state's (Metal's rule): the state of its descriptor with those clamps, made once per state and
