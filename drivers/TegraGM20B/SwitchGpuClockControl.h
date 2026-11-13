@@ -8,8 +8,8 @@
  * take, to 64 times it */
 static u64 idle_quiet_ns(u64 base)
 {
-	const u32 shift =
-		tgm_idle.failures < IDLE_BACKOFF_MAX_SHIFT ? tgm_idle.failures : IDLE_BACKOFF_MAX_SHIFT;
+	const u32 shift = tgm_idle.failures < IDLE_BACKOFF_MAX_SHIFT ? tgm_idle.failures
+								     : IDLE_BACKOFF_MAX_SHIFT;
 	return base << shift;
 }
 
@@ -90,9 +90,10 @@ int switch_gpu_clock_ceiling(uint32_t requested_khz, uint32_t *applied_khz)
 		if ((nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R) & 0xffff) != tgm_idle.vco_coeff) {
 			result = -EIO;
 			*applied_khz = (u32)nvkm_clk_read(tgm_gpu.device->clk, nv_clk_src_gpc);
-			nvxnu_log("tegra-gm20b: GPU ceiling change refused: the GPCPLL is not on the "
-				  "idle clock's VCO; current %u kHz\n",
-				  *applied_khz);
+			nvxnu_log(
+				"tegra-gm20b: GPU ceiling change refused: the GPCPLL is not on the "
+				"idle clock's VCO; current %u kHz\n",
+				*applied_khz);
 		} else if (pl_switch(target_pl)) {
 			idle_fail("ceiling", target_pl);
 			result = -EIO;

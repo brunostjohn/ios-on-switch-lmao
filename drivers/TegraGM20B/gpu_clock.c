@@ -290,7 +290,8 @@ static void idle_drop(void *arg)
 	now = nvxnu_nanotime();
 	if (READ_ONCE(tgm_idle.on) && !READ_ONCE(tgm_idle.low) && !idle_in_flight() &&
 	    now >= __atomic_load_n(&tgm_idle.service_until, __ATOMIC_SEQ_CST) &&
-	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >= idle_quiet_ns(IDLE_DROP_NS) &&
+	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >=
+		    idle_quiet_ns(IDLE_DROP_NS) &&
 	    now - native_display_last_swap_ns() >= idle_quiet_ns(IDLE_DROP_NS)) {
 		if ((nvkm_rd32(tgm_gpu.device, GPCPLL_COEFF_R) & 0xffff) != tgm_idle.vco_coeff ||
 		    pl_switch(tgm_idle.idle_pl)) {
@@ -442,8 +443,7 @@ void tgm_idle_start(void)
 		at_idle = gpc_counted_khz();
 		t0 = nvxnu_nanotime();
 #endif
-		if (pl_switch(tgm_idle.run_pl) ||
-		    nvkm_clk_read(device->clk, nv_clk_src_gpc) != run)
+		if (pl_switch(tgm_idle.run_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != run)
 			idle_fail("test raise", tgm_idle.run_pl);
 #if DEVELOPMENT || DEBUG
 		up = nvxnu_nanotime() - t0;
