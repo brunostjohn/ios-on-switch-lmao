@@ -6,6 +6,7 @@
 // usage: directrun <nvk dylib> <cache dir> <exec.metallib> <out.json>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include "NativeBridgeMetalFrontend.h"
@@ -117,6 +118,37 @@ NSDictionary *kernelJson(const raw::ComputeRecord &r)
     };
 }
 
+// A field as [byte offset, bytes]
+#define SWITCH_FIELD(type, field) @[ @(offsetof(type, field)), @(sizeof(type::field)) ]
+
+// The counter resolve kernel's buffers as raw_counter_kernel.h and TegraGM20BClockABI.h lay them out: its records, its
+// parameters and the kernel's clock anchor table
+NSDictionary *counterLayout()
+{
+    using raw::counters::Record;
+    using raw::counters::ResolveParams;
+    return @{
+        @"record" : @{
+            @"bytes" : @(sizeof(Record)),
+            @"payload" : SWITCH_FIELD(Record, payload),
+            @"units" : SWITCH_FIELD(Record, units)
+        },
+        @"sample_bytes" : @(raw::counters::kSampleBytes),
+        @"params" : @{@"bytes" : @(sizeof(ResolveParams)), @"count" : SWITCH_FIELD(ResolveParams, count)},
+        @"anchors" : @{
+            @"bytes" : @(sizeof(TegraGM20BAbiClockAnchors)),
+            @"published" : SWITCH_FIELD(TegraGM20BAbiClockAnchors, published),
+            @"slot" : @(offsetof(TegraGM20BAbiClockAnchors, slot)),
+            @"slots" : @(TegraGM20BClockAnchorSlots),
+        },
+        @"anchor" : @{
+            @"bytes" : @(sizeof(TegraGM20BAbiClockAnchor)),
+            @"units" : SWITCH_FIELD(TegraGM20BAbiClockAnchor, units),
+            @"ns" : SWITCH_FIELD(TegraGM20BAbiClockAnchor, ns)
+        },
+    };
+}
+
 class Runner {
 public:
     Runner(id<MTLLibrary> library, raw::Direct &direct) : library_(library), direct_(direct)
@@ -165,7 +197,12 @@ public:
 
     NSDictionary *results() const
     {
-        return @{@"states" : states_, @"kernels" : kernels_, @"refused" : refused_};
+        return @{
+            @"states" : states_,
+            @"kernels" : kernels_,
+            @"refused" : refused_,
+            @"layouts" : @{@"counter" : counterLayout()}
+        };
     }
 
 private:

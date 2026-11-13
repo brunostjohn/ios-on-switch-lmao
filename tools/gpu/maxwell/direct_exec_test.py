@@ -364,6 +364,11 @@ class WideStride(Records):
 
 
 class Kernels(Records):
+    MASK = 0xFFFF_FFFF_FFFF_FFFF
+    ERROR = MASK  # raw_counters.h kErrorValue
+    # nanoseconds a PTIMER unit: 32 units a 19.2 MHz tick
+    NUM, DEN = 625, 384
+
     @staticmethod
     def dispatch(record: dict, binding: dr.Binding, groups: int, local: int, stage_in: list[int] | None = None) -> None:
         """Run every thread of a dispatchThreadgroups: of `groups` threadgroups of `local` threads on x.
@@ -404,33 +409,57 @@ class Kernels(Records):
         expected = [values[origin + g][0] * 2.0 + values[origin + g][1] for g in range(size)]
         self.assertEqual(list(written), expected)
 
-    def test_the_counter_resolve_kernel_gives_nanoseconds(self):
+    def resolve(self, records: list[tuple[int, int]], published: int, slots: dict[int, tuple[int, int]]) -> list[int]:
+        """Give the counter resolve kernel's samples of `records`, each (payload, units).
+
+        The kernel runs beside a clock anchor table of `published` anchors, `slots` its (units, ns) by slot, bound as
+        RawMetalCounterEncode.mm binds them.
+        """
+        layout = RECORDS['layouts']['counter']
+        self.assertEqual(layout['sample_bytes'], 8, 'a sample is a 64-bit time')
         record = self.kernel('counter_resolve')
-        num, den = 625, 384
-        anchor_units, anchor_ns = 0x0000_0012_FFFF_FF00, 0x0000_0003_FFFF_FFF0
+        count = len(records)
+        binding = dr.Binding()
+        binding.bind((3, 0), dr.counter_records(layout, records))
+        out = binding.bind((3, 1), bytes(8 * count))
+        binding.bind((3, 2), dr.resolve_params(layout, count))
+        binding.bind((3, 3), dr.clock_anchors(layout, published, slots))
+        self.dispatch(record, binding, (count + 63) // 64, 64)
+        return list(struct.unpack(f'<{count}Q', binding.memory.read(out, 8 * count)))
+
+    def test_the_counter_resolve_kernel_gives_nanoseconds(self):
+        """A sample at or past the table's one anchor resolves with it, and one before it to the error value."""
+        anchor_units, anchor_ns = 0x0000_0312_FFFF_FF00, 0x0000_0003_FFFF_FFF0
         edges = [0, 5, 383, 384, 0x1_0000_0005, 0xFFFF_FFFF, -1, -384, -0x2_0000_0001, 0x7FFF_0000_0000]
         spans = edges + [(k * 0x1_3579_BDF1 * (-1) ** k) % (1 << 40) - (1 << 39) for k in range(70)]
-        records = [(1, 0, (anchor_units + s) & 0xFFFF_FFFF_FFFF_FFFF) for s in spans] + [(0, 0, 0x1234)]
-        count = len(records)
-        self.assertGreater(count, 64)
-        binding = dr.Binding()
-        binding.bind((3, 0), b''.join(struct.pack('<IIQ', *r) for r in records))
-        out = binding.bind((3, 1), bytes(8 * count))
-        anchor = [anchor_units & 0xFFFFFFFF, anchor_units >> 32, anchor_ns & 0xFFFFFFFF, anchor_ns >> 32]
-        binding.bind((3, 2), struct.pack('<6I', *anchor, count, 1))
-        self.dispatch(record, binding, (count + 63) // 64, 64)
-        got = struct.unpack(f'<{count}Q', binding.memory.read(out, 8 * count))
-        expected = [(anchor_ns + (s * num) // den) & 0xFFFF_FFFF_FFFF_FFFF for s in spans] + [0]
-        self.assertEqual(list(got), expected)
+        self.assertTrue(all(anchor_units + s >= 0 for s in spans), 'no span wraps below 0')
+        records = [(1, anchor_units + s) for s in spans] + [(0, 0x1234)]
+        self.assertGreater(len(records), 64)
+        got = self.resolve(records, 1, {0: (anchor_units, anchor_ns)})
+        expected = [(anchor_ns + s * self.NUM // self.DEN) & self.MASK if s >= 0 else self.ERROR for s in spans]
+        self.assertEqual(got, [*expected, 0])
 
     def test_the_counter_resolve_kernel_of_no_anchor_gives_the_error_value(self):
-        record = self.kernel('counter_resolve')
-        binding = dr.Binding()
-        binding.bind((3, 0), struct.pack('<IIQ', 1, 0, 77) + struct.pack('<IIQ', 0, 0, 77))
-        out = binding.bind((3, 1), bytes(16))
-        binding.bind((3, 2), struct.pack('<6I', 0, 0, 0, 0, 2, 0))
-        self.dispatch(record, binding, 1, 64)
-        self.assertEqual(list(struct.unpack('<2Q', binding.memory.read(out, 16))), [0xFFFF_FFFF_FFFF_FFFF, 0])
+        self.assertEqual(self.resolve([(1, 77), (0, 77)], 0, {}), [self.ERROR, 0])
+
+    def test_the_counter_resolve_kernel_takes_each_samples_newest_kept_anchor(self):
+        """A table of 65 anchors past its ring's slots: anchor n at slot n % slots, the newest slots - 1 kept (3 to 64).
+
+        A sample past anchor n and below anchor n + 1 resolves with anchor n; one of anchor 2's, whose slot the next
+        power-up writes, or before it, to the error value.
+        """
+        slots = RECORDS['layouts']['counter']['anchors']['slots']
+        published, step = 65, 0x3_0000_0007
+        units = {n: 0xFFFF_FF00 + n * step for n in range(published)}
+        ns = {n: 0x3_FFFF_FFF0 + n * 0x2_8000_0011 for n in range(published)}
+        table = {n % slots: (units[n], ns[n]) for n in range(published - slots, published)}
+        kept = range(published - (slots - 1), published)
+        samples = [(n, n * 0x9E37_79B9 % step) for n in kept] + [(kept[0], 0), (kept[-1], 0), (40, step - 1), (63, 384)]
+        records = [(1, units[n] + offset) for n, offset in samples]
+        records += [(1, units[2] + 5), (1, units[3] - 1), (1, units[2] - 1), (0, units[10])]
+        self.assertGreater(len(records), 64)
+        expected = [(ns[n] + offset * self.NUM // self.DEN) & self.MASK for n, offset in samples]
+        self.assertEqual(self.resolve(records, published, table), [*expected, self.ERROR, self.ERROR, self.ERROR, 0])
 
 
 if __name__ == '__main__':

@@ -121,6 +121,40 @@ def root_table(push: dict[int, int], set_bytes: int, words: dict[int, int] | Non
     return bytes(root)
 
 
+def put(data: bytearray, field: list[int], value: int, base: int = 0) -> None:
+    """Write `value` into `field` ([byte offset, bytes] of a directrun layout) of the structure at `base`."""
+    offset, size = field
+    struct.pack_into({4: '<I', 8: '<Q'}[size], data, base + offset, value & ((1 << 8 * size) - 1))
+
+
+def counter_records(layout: dict, records: list[tuple[int, int]]) -> bytes:
+    """Give the counter samples' records, each (payload, PTIMER units), laid out as raw_counters.h Record."""
+    shape = layout['record']
+    data = bytearray(shape['bytes'] * len(records))
+    for i, (payload, units) in enumerate(records):
+        put(data, shape['payload'], payload, i * shape['bytes'])
+        put(data, shape['units'], units, i * shape['bytes'])
+    return bytes(data)
+
+
+def resolve_params(layout: dict, count: int) -> bytes:
+    data = bytearray(layout['params']['bytes'])
+    put(data, layout['params']['count'], count)
+    return bytes(data)
+
+
+def clock_anchors(layout: dict, published: int, slots: dict[int, tuple[int, int]]) -> bytes:
+    """Give the kernel's clock anchor table of `published` anchors: each slot's (units, ns) by its index."""
+    table, anchor = layout['anchors'], layout['anchor']
+    data = bytearray(table['bytes'])
+    put(data, table['published'], published)
+    for slot, (units, ns) in slots.items():
+        base = table['slot'] + slot * anchor['bytes']
+        put(data, anchor['units'], units, base)
+        put(data, anchor['ns'], ns, base)
+    return bytes(data)
+
+
 def record_push(record: dict) -> dict[int, int]:
     """Give the record's constant push words, by word."""
     return {i: record['push_words'][i] for i in range(32) if record['push_mask'] >> i & 1}
