@@ -53,7 +53,7 @@ inline uint32_t twodChainFormat(uint32_t mtl)
 {
     if (const uint32_t f = twodFormat(mtl))
         return f;
-    return mtl == 43 ? 0 : twodCandidateFormat(mtl);
+    return twodCandidateFormat(mtl);
 }
 
 }  // namespace fx
