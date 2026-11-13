@@ -103,9 +103,9 @@ TEST(CompileRequest, RoundTripsWhole)
 {
     raw::CompileRequest r = renderRequest();
     r.stages.push_back(stage("fl", "fragment_fn", 0));
-    r.cubic.samplers.push_back({2, 1, 1, 0, 3, true});
-    r.cubic.textures.push_back({2, 80});
-    r.fragmentTests = 3;
+    r.variant.cubic.samplers.push_back({2, 1, 1, 0, 3, true});
+    r.variant.cubic.textures.push_back({2, 80});
+    r.variant.fragmentTests = 3;
     r.key = "a key";
     raw::CompileRequest back;
     ASSERT_TRUE(raw::decodeRequest(raw::encodeRequest(r), back));
@@ -149,10 +149,10 @@ TEST(CompileRequest, ItsPackKeyIsTheFacadesForFrameworkAndOwnLibraries)
     const raw::StageKey v{"vertex_fn", ""}, f{"fragment_fn", "#0:33:05000000"};
     EXPECT_EQ(raw::requestPackKey(r, own), raw::pipelineKey(descriptor(), &v, &f, "", "RenderBox"));
     EXPECT_FALSE(own);
-    r.cubic.samplers.push_back({0, 2, 2, 2, 0, true});
-    r.fragmentTests = 2;
+    r.variant.cubic.samplers.push_back({0, 2, 2, 2, 0, true});
+    r.variant.fragmentTests = 2;
     EXPECT_EQ(raw::requestPackKey(r, own),
-              raw::pipelineKey(descriptor(), &v, &f, "", "RenderBox") + r.cubic.key() + " | tests=2");
+              raw::pipelineKey(descriptor(), &v, &f, "", "RenderBox") + r.variant.cubic.key() + " | tests=2");
     raw::CompileRequest data = renderRequest();
     EXPECT_EQ(raw::requestPackKey(data, own), raw::pipelineKey(descriptor(), &v, &f, "", ""));
     EXPECT_TRUE(own);

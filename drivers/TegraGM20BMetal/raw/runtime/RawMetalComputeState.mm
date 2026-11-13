@@ -3,6 +3,7 @@
 #import "RawMetalBinaryArchive.h"
 #import "RawMetalComputeState.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "RawCompileRequest.h"
 #include "raw_compute_key.h"
 #include "raw_metallib.h"
 
@@ -101,29 +102,6 @@ static bool airOf(id<MTLFunction> function, raw::AirHash &out, NSString *__stron
     return true;
 }
 
-// A stage input descriptor's set attributes and their layouts, as a key names them (a dynamic stride as UINT32_MAX, as
-// RawPipelineKey.h's vertex layouts): "" for none, so a kernel without one keys as before
-static std::string stageInText(MTLStageInputOutputDescriptor *in)
-{
-    std::string text;
-    char b[96];
-    for (NSUInteger i = 0; in && i < 31; i++) {
-        MTLAttributeDescriptor *a = in.attributes[i];
-        if (a.format == MTLAttributeFormatInvalid)
-            continue;
-        MTLBufferLayoutDescriptor *l = in.layouts[a.bufferIndex < 31 ? a.bufferIndex : 0];
-        const unsigned long stride = l.stride == MTLBufferLayoutStrideDynamic ? UINT32_MAX : l.stride;
-        snprintf(b, sizeof b, " a%lu=%lu:%lu:%lu:%lu:%lu:%lu", (unsigned long)i, (unsigned long)a.format,
-                 (unsigned long)a.offset, (unsigned long)a.bufferIndex, stride, (unsigned long)l.stepFunction,
-                 (unsigned long)l.stepRate);
-        text += b;
-    }
-    if (text.empty())
-        return text;
-    snprintf(b, sizeof b, " i=%lu:%lu", (unsigned long)in.indexType, (unsigned long)in.indexBufferIndex);
-    return " | in" + text + b;
-}
-
 // The creations under MTLPipelineOptionFailOnBinaryArchiveMiss lists (this device's, RawMetalBinaryArchive.mm), as
 // Metal's answer: false (and Metal's error) where none holds the state and the pack holds no kernel of it, never compiled.
 // m2v's state goes without the archives or the option either way: it reads none of this device's archives.
@@ -195,7 +173,7 @@ id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipeli
     s->_keyed = f && !descriptor.linkedFunctions.functions.count &&
                 !descriptor.linkedFunctions.privateFunctions.count && airOf(function, s->_air, libraryName);
     s->_libraryName = libraryName;
-    s->_constants = (f ? f->_constants : "") + stageInText(descriptor.stageInputDescriptor);
+    s->_constants = (f ? f->_constants : "") + raw::stageInText(raw::stageInFieldsOf(descriptor.stageInputDescriptor));
     s->_m2vMissing = rmM2vMissingKernel(descriptor);
     s->_maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;

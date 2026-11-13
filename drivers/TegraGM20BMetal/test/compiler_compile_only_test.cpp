@@ -225,8 +225,8 @@ TEST(CompilerCompileOnly, ItsRecordsAreTheDevicesByteForByte)
         covered["render"]++;
         covered["constexpr samplers"] += !record.samplers.empty();
         covered["storage form"] += (record.pipeline.flags & raw::PipelineStorageMetadata) != 0;
-        covered["cubic"] += !r.cubic.empty();
-        covered["test class"] += r.fragmentTests != 0;
+        covered["cubic"] += !r.variant.cubic.empty();
+        covered["test class"] += r.variant.fragmentTests != 0;
         covered["multisampled"] += r.fields.samples > 1;
         covered["specialized"] += std::any_of(r.stages.begin(), r.stages.end(), [](const raw::RequestStage &s) {
             return !s.constants.empty();

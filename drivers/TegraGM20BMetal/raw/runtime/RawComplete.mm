@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
+#include "RawCompileRequest.h"
 #include "RawDirect.h"
 #include "RawMetalInternal.h"
 #include "RawRenderKey.h"
@@ -347,12 +348,7 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
         }
         a = it->second;
     }
-    ProbeTextures textures;
-    textures.cubic = a.cubic;
-    textures.fragmentTests = a.fragmentTests;
-    textures.twoPlane = a.twoPlane;
-    textures.xrSlots = a.xrSlots;
-    textures.written = a.written;
+    const ProbeTextures textures = probeTexturesOf(a.variant);
 #if SWITCH_RAW_DIAGNOSTICS
     const CompileCost cost;
 #endif

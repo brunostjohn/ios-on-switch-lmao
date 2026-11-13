@@ -4486,9 +4486,10 @@ host_test(
 # The system shader compiler (compiler/, raw/runtime/raw_compile_request.h, raw_remote.h): one compile per record at its
 # most urgent waiter's class (shader_compiler_pool_test); a request keyed by the compiler as the runtime keys it, refused
 # when its claimed key differs, its store name binding a library's bytes and a kernel's dispatch
-# (shader_compiler_request_test); the store per stack and pack rules, whole to readers in other threads and processes and
-# after a killed writer, its request log (shader_compiler_store_test); a client's store reads and requests over a model
-# of the kernel (raw_remote_test)
+# (shader_compiler_request_test); each form boot 21's compiler refused keyed alike on both sides, every request field sent,
+# and the compile's descriptor and probe carrying the client's (shader_compiler_request_forms_test); the store per stack
+# and pack rules, whole to readers in other threads and processes and after a killed writer, its request log
+# (shader_compiler_store_test); a client's store reads and requests over a model of the kernel (raw_remote_test)
 host_test(
     name = "shader_compiler_pool_test",
     srcs = [
@@ -4504,7 +4505,77 @@ host_test(
     srcs = [
         "made_metallib.h",
         "shader_compiler_request_test.cpp",
+        "//drivers/TegraGM20BMetal:compiler/compiler_key_difference.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawDirect.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_variant.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_written_textures.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawCompileRequest.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_key.h",
+        "//drivers/NativeMetal:MetallibSlice.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
+        "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cache_io.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_capture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compile_request.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compile_request.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cubic.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_cache.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pipeline_fields.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_stats.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
+        "//kits/SwitchSeedPack:SwitchSeedStore.h",
+    ],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler/compiler_request.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawCompileRequest.mm",
+    ],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Idrivers/NativeMetal",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+    ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+host_test(
+    name = "shader_compiler_request_forms_test",
+    srcs = [
+        "made_metallib.h",
+        "shader_compiler_request_forms_test.cpp",
+        "//drivers/TegraGM20BMetal:compiler/compiler_key_difference.h",
+        "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawDirect.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_variant.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_written_textures.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawCompileRequest.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_key.h",

@@ -93,8 +93,7 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     r.stack = stack_;
     r.key = k.key;
     r.fields = fieldsOf(d);
-    r.cubic = a.cubic;
-    r.fragmentTests = a.fragmentTests;
+    r.variant = a.variant;
     std::vector<LibraryIdentity> ids;
     std::map<const LibrarySource *, uint32_t> seen;
     @autoreleasepool {
@@ -274,6 +273,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
         memcpy(q.memory, dispatch.memory, sizeof q.memory);
         q.textures.assign(dispatch.textures, dispatch.textures + dispatch.textureCount);
         q.samplers.assign(dispatch.samplers, dispatch.samplers + dispatch.samplerCount);
+        q.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);
         std::vector<LibraryIdentity> ids;
         std::map<const LibrarySource *, uint32_t> seen;
         if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
