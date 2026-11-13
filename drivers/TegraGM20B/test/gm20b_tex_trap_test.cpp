@@ -243,9 +243,10 @@ TEST(Gm20bGrFault, EngResetIsAcknowledgedOnlyOnceTheEngineIsBack)
 		<< "every engine reset of recover.c goes through tgm_engine_reset_locked";
 }
 
-// A hold that found another channel's preempt in flight left the PBDMA's live channel on it through the reset: that
-// channel is owed a preempt, asked at the release once ENG_RESET is acknowledged (a stalled PBDMA swaps nothing out), or
-// at the end of a context-switch timeout's work, or before a hang check blames anyone.
+// A hold that found another channel's preempt in flight left the PBDMA's live channel on it through the reset: if the
+// reset raised ENG_RESET, that channel is owed a preempt, asked at the release once ENG_RESET is acknowledged (a
+// stalled PBDMA swaps nothing out), or at the end of a context-switch timeout's work, or before a hang check blames
+// anyone.
 TEST(Gm20bGrFault, ALiveChannelLeftOnThePbdmaThroughAResetIsPreemptedNotKilled)
 {
 	const auto before = [](const std::string &body, const char *first, const char *then) {
@@ -261,6 +262,8 @@ TEST(Gm20bGrFault, ALiveChannelLeftOnThePbdmaThroughAResetIsPreemptedNotKilled)
 	const std::string release =
 		Body(engine, "void tgm_recover_reset_release(struct nvkm_engine *engine)\n{");
 	before(release, "eng_reset_ack(device, runq, ", "owed = owed_preempt(device);");
+	before(release, "if (note.owed != TGM_OWED_NONE && !raised)",
+	       "owed = owed_preempt(device);");
 	before(release, "owed = owed_preempt(device);",
 	       "spin_unlock_irqrestore(&device->intr.lock, flags);");
 	before(Body(Text(RECOVER_C), "static void ctxsw_work(void *arg)\n{"),

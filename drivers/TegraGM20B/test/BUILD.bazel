@@ -55,9 +55,9 @@
 #   gm20b_bystander_test     one client's kill with other clients' work on runlist 0 (gm20b_bystander_model.h): boot 21's
 #                            reset, a bystander mid-copy, one on PBDMA0 with a method pending while another preempt is in
 #                            flight, two bystanders and every such state: no other channel killed or its work lost
-#   gm20b_owed_preempt_test  recover_engine.c's owed preempt as the kernel builds it, run with interrupts off: asked once
-#                            no preempt is in flight and while its channel is on the PBDMA, never during a hold, and no
-#                            lock, sleep or allocation
+#   gm20b_owed_preempt_test  recover_engine.c's owed preempt as the kernel builds it: asked once no preempt is in flight
+#                            and while its channel is on the PBDMA, never during a hold, under the runlist's mutex, and
+#                            its step with interrupts off takes no lock, sleep or allocation
 #   gm20b_view_merge_test    TegraGM20BViewMerge.h: a CPU write lock's unlock keeps the bytes a GPU write left where the
 #                            CPU wrote none, byte by byte
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
@@ -605,9 +605,10 @@ genrule(
     outs = ["owed_preempt_source.h"],
     cmd = """
 set -e
-awk '/^static enum tgm_owed owed_preempt\\(/ || /^int tgm_recover_owed\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
+awk '/^static enum tgm_owed owed_preempt\\(/ || /^static int owed_ask\\(/ || /^int tgm_recover_owed\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
 grep -q 'nvkm_wr32(device, PFIFO_PREEMPT' $@
 grep -q spin_lock_irqsave $@
+grep -q 'mutex_lock(&runl->mutex)' $@
 """,
 )
 

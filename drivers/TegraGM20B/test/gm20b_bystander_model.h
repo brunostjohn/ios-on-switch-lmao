@@ -5,16 +5,18 @@
 // recover_engine.c, recovery.c and gpu_hang.c take it.
 //
 // Hardware rules:
-//  - NVIDIA's dev_pbdma.ref (NV_PPBDMA_INTR_0_ENG_RESET): an engine reset while the PBDMA processes a channel of its
-//    runlist raises ENG_RESET, which stalls the PBDMA on that channel until it is cleared; a halted PBDMA raises none.
-//    A preempt asked for the PBDMA's channel halts it. Boot 21's 48 resets (a live channel preempted, a killed one or
-//    none on PBDMA0) raised none.
-//  - A preempt lands once no engine runs or still saves its channel's context: work in flight finishes first, and a
-//    context an engine cannot save (a faulted channel's) holds it until that engine is reset. It takes the channel off
-//    the PBDMA with its method kept, and its context off the engines.
+//  - NVIDIA's gv100 dev_pbdma.ref (NV_PPBDMA_INTR_0_ENG_RESET), taken to hold for GM20B: an engine reset while the PBDMA
+//    processes a channel of its runlist raises ENG_RESET, which stalls the PBDMA on that channel until it is cleared; a
+//    halted PBDMA raises none. dev_fifo.ref's channel teardown: a preempt completes once the PBDMA's interrupts are
+//    handled. Boot 21's 48 resets each found METHOD0 empty at the hold and raised none.
+//  - Inferred: a preempt asked for the PBDMA's channel halts it. A preempt lands once no engine runs or still saves its
+//    channel's context: work in flight finishes first, and a context an engine cannot save (a faulted channel's) holds
+//    it until that engine is reset. It takes the channel off the PBDMA with its method kept, and its context off the
+//    engines.
 //  - Inferred, as gm20b_kernel_hang_model.h infers it from boot 20: an ENG_RESET acknowledged after a reset of the engine
 //    that was switching to the PBDMA's channel leaves the PBDMA on that channel's method with no engine switching to
 //    take it, until a preempt of the channel lands.
+// nvkm_runl_rc's wait for the preempt in flight is a 2 s BUG_ON: a preempt still pending at its end is a panic.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -69,7 +71,12 @@ struct Gpu {
 	uint32_t holds = 0;
 	int owed = -1;
 	uint64_t now = 0, presentChecked = 0;
-	int raised = 0, engineResets[2] = {0, 0};
+	int raised = 0, engineResets[2] = {0, 0}, panics = 0;
+	bool raisedNow = false,
+	     holdOwed = false;  // this hold's reset raised ENG_RESET; this hold owed a preempt
+	// against dev_fifo.ref's teardown: a preempt of a channel ENG_RESET was raised on never lands
+	bool engResetStuck = false;
+	std::vector<int> tookEngReset;
 	std::vector<int> killed;
 	// a live channel an engine reset found on a PBDMA no preempt halted, and whether by the end of nvkm_runl_rc a preempt
 	// was asked for it or it had left the PBDMA by itself
@@ -135,6 +142,9 @@ struct Gpu {
 		const int chid = int(PFIFO_PREEMPT_ID(preempt));
 		if (stalled && pbdma == chid)
 			return;
+		if (engResetStuck &&
+		    std::find(tookEngReset.begin(), tookEngReset.end(), chid) != tookEngReset.end())
+			return;
 		for (const Engine &x : eng)
 			if (x.ctx == chid && (x.busy || x.stuck))
 				return;
@@ -170,11 +180,13 @@ struct Gpu {
 	{
 		if (!tgm_reset_hold_enter(&holds))
 			return;
+		raisedNow = false;
 		const enum tgm_reset_pbdma was = tgm_reset_pbdma(pbdmaStatus(), alive(pbdma));
 		const int due = tgm_reset_owed(was, preempt, pbdma);
 		if (was == TGM_RESET_PBDMA_LIVE && !(preempt & PFIFO_PREEMPT_PENDING))
 			ask(pbdma);
-		if (rule == Rule::Shipped && due >= 0)
+		holdOwed = rule == Rule::Shipped && due >= 0;
+		if (holdOwed)
 			owed = due;
 	}
 
@@ -199,6 +211,8 @@ struct Gpu {
 			chans[pbdma]
 				.jobs.clear();  // the killed channel's method replaced with a NOP
 		stalled = false;
+		if (holdOwed && !raisedNow)
+			owed = -1;
 		if (rule == Rule::Shipped)
 			owedStep();
 	}
@@ -210,6 +224,8 @@ struct Gpu {
 		if (pbdma >= 0 && !halted && !chans[pbdma].jobs.empty()) {
 			stalled = true;
 			raised++;
+			raisedNow = true;
+			tookEngReset.push_back(pbdma);
 			rodeThrough = pbdma;
 			rodeThroughSettled = (preempt & PFIFO_PREEMPT_PENDING) &&
 					     int(PFIFO_PREEMPT_ID(preempt)) == pbdma;
@@ -243,6 +259,8 @@ struct Gpu {
 				reset(e);
 		for (int i = 0; i < 2000 && (preempt & PFIFO_PREEMPT_PENDING); i++)
 			step();
+		if (preempt & PFIFO_PREEMPT_PENDING)
+			panics++;
 		if (rule == Rule::Shipped)
 			owedStep();
 	}
@@ -347,9 +365,11 @@ struct Gpu {
 		const enum tgm_hang verdict =
 			tgm_hang_blame(c.data(), int(c.size()), 0, 1, progress, &b);
 		if (verdict == TGM_HANG_RECOVERING && b >= 0 && !chans[chids[b]].kernel) {
-			kill(chids[b]);
-			chans[chids[b]].reopens++;
-			if (pbdma == chids[b]) {
+			const int blamed = chids[b];
+			recover(blamed);
+			chans[blamed].reopens++;
+			// a later reset's release replaces the dead channel's method with a NOP
+			if (pbdma == blamed) {
 				pbdma = -1;
 				wedged = halted = false;
 			}
@@ -359,7 +379,7 @@ struct Gpu {
 	// steps until every live channel's work is done or `ms` passed; the present's late fence is checked each second
 	void run(int ms)
 	{
-		for (int i = 0; i < ms; i++) {
+		for (int i = 0; i < ms && !panics; i++) {
 			const int faulted = step();
 			if (faulted >= 0)
 				recover(faulted);

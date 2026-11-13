@@ -141,14 +141,14 @@ static enum tgm_owed owed_preempt(struct nvkm_device *device)
 	return step;
 }
 
-int tgm_recover_owed(struct nvkm_device *device)
+/* runl->mutex held: every PFIFO_PREEMPT writer holds it (nvkm's, sched.c's kick, hold.c's early preempt), so the
+ * pending check and the write are one step */
+static int owed_ask(struct nvkm_device *device)
 {
 	unsigned long flags = 0;
 	enum tgm_owed step = TGM_OWED_NONE;
 	int chid = -1;
 
-	if (!device->fifo)
-		return -1;
 	spin_lock_irqsave(&device->intr.lock, flags);
 	chid = rst.owed;
 	if (!rst.holds)
@@ -157,9 +157,30 @@ int tgm_recover_owed(struct nvkm_device *device)
 	return step == TGM_OWED_ASK ? chid : -1;
 }
 
+/* The owed channel's runlist is GM20B's only one with engines (GR and the copy engine on runlist 0, behind PBDMA0):
+ * every runlist's mutex is held across the ask, taken in list order */
+int tgm_recover_owed(struct nvkm_device *device)
+{
+	struct nvkm_runl *runl = NULL;
+	int chid = -1;
+
+	if (!device->fifo)
+		return -1;
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		mutex_lock(&runl->mutex);
+	}
+	chid = owed_ask(device);
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		mutex_unlock(&runl->mutex);
+	}
+	return chid;
+}
+
 void tgm_recover_owed_preempt(struct nvkm_runl *runl)
 {
-	const int chid = tgm_recover_owed(runl->fifo->engine.subdev.device);
+	const int chid = owed_ask(runl->fifo->engine.subdev.device);
 
 	if (TGM_STATS && chid >= 0)
 		nvxnu_log(
@@ -191,7 +212,7 @@ static const char *const pbdma_was_name[] = {
 static const char *const owed_name[] = {
 	[TGM_OWED_WAITS] = "still in flight at the release: its preempt owed",
 	[TGM_OWED_ASK] = "landed: preempted at the release",
-	[TGM_OWED_SETTLED] = "landed: it left the PBDMA by itself",
+	[TGM_OWED_SETTLED] = "no ENG_RESET on its method, or it left the PBDMA: nothing owed",
 };
 
 static void release_line(const struct hold_note *note, u32 at_release, u32 after_ack, u32 pgraph,
@@ -218,7 +239,9 @@ static void release_line(const struct hold_note *note, u32 at_release, u32 after
 #endif
 
 /* The outermost release, once the engine is back: ENG_RESET acknowledged and unmasked on every PBDMA, then an owed
- * preempt asked for (the PBDMA no longer stalls its channel). */
+ * preempt asked for: a PBDMA stalls its channel until its ENG_RESET is cleared (dev_fifo.ref's teardown handles the
+ * interrupt before the preempt can complete). Raised on no PBDMA, the reset met no method of the live channel, and it
+ * is owed nothing. */
 void tgm_recover_reset_release(struct nvkm_engine *engine)
 {
 	struct nvkm_device *device = engine->subdev.device;
@@ -248,9 +271,11 @@ void tgm_recover_reset_release(struct nvkm_engine *engine)
 				  TGM_PBDMA_ENG_RESET);
 		}
 		after_ack = note.engine >= 0 ? nvkm_rd32(device, PFIFO_ENG_STATUS(note.engine)) : 0;
+		if (note.owed != TGM_OWED_NONE && !raised)
+			rst.owed = -1;
 		owed = owed_preempt(device);
 		if (note.owed != TGM_OWED_NONE)
-			note.owed = owed;
+			note.owed = raised ? owed : TGM_OWED_SETTLED;
 	}
 	spin_unlock_irqrestore(&device->intr.lock, flags);
 #if TGM_STATS

@@ -66,6 +66,7 @@ TEST(Bystander, Boot21sResetUnderAChannelPreemptedMidJobOnGrLosesNothing)
 		EXPECT_TRUE(gpu.done(kBystander));
 		EXPECT_TRUE(gpu.done(kPresent));
 		EXPECT_EQ(gpu.killed, std::vector<int>{kKilled});
+		EXPECT_EQ(gpu.panics, 0);
 	}
 }
 
@@ -109,6 +110,29 @@ TEST(Bystander, Before3006711cbAPreemptInFlightAtTheHoldGetsTheBystanderKilled)
 	EXPECT_GT(gpu.chans[kBystander].failed, 0u);
 	EXPECT_EQ(gpu.chans[kBystander].reopens, 1);
 	EXPECT_FALSE(gpu.done(kBystander));
+	EXPECT_EQ(gpu.panics, 0);
+}
+
+// The owed preempt rests on dev_fifo.ref's teardown rule (a preempt completes once the PBDMA's interrupts are handled),
+// as the hold's own preempt and the kernel channel's steps do. Were a preempt of a channel ENG_RESET was raised on never
+// to land, nvkm_runl_rc's wait would panic ("BUG ... recovery.c" after a release line reading "landed: preempted at the
+// release") where 3006711cb killed the bystander.
+TEST(Bystander, TheOwedPreemptRestsOnAPreemptLandingOnceEngResetIsCleared)
+{
+	for (Rule rule : {Rule::Before, Rule::Shipped}) {
+		Gpu gpu(rule);
+		gpu.engResetStuck = true;
+		switchingToTheBystander(gpu);
+		presentQueued(gpu);
+		gpu.recover(kKilled);
+		gpu.run(5000);
+		if (rule == Rule::Before) {
+			EXPECT_EQ(gpu.panics, 0);
+			EXPECT_EQ(gpu.killed, (std::vector<int>{kKilled, kBystander}));
+		} else {
+			EXPECT_EQ(gpu.panics, 1);
+		}
+	}
 }
 
 TEST(Bystander, ABystanderOnThePbdmaWithAPendingMethodIsPreemptedAtTheReleaseAndCompletes)
@@ -125,6 +149,7 @@ TEST(Bystander, ABystanderOnThePbdmaWithAPendingMethodIsPreemptedAtTheReleaseAnd
 	EXPECT_TRUE(gpu.done(kBystander));
 	EXPECT_TRUE(gpu.done(kPresent));
 	EXPECT_EQ(gpu.killed, std::vector<int>{kKilled});
+	EXPECT_EQ(gpu.panics, 0);
 	EXPECT_LT(gpu.now, 100 * bystander::kMs) << "no hang check needed";
 }
 
@@ -141,6 +166,7 @@ TEST(Bystander, AnOwedPreemptWaitsForThePreemptInFlightAndGoesOutBeforeTheRecove
 	EXPECT_TRUE(gpu.done(kBystander));
 	EXPECT_TRUE(gpu.done(kPresent));
 	EXPECT_EQ(gpu.killed, std::vector<int>{kKilled});
+	EXPECT_EQ(gpu.panics, 0);
 }
 
 // Its own preempt in flight (a kick of the bystander itself): nothing is owed, and that preempt takes it off
@@ -246,12 +272,14 @@ TEST(Bystander, NoStateAtTheKillCostsAnotherChannelItsWork)
 								       " " + std::to_string(ce) +
 								       " " + std::to_string(land);
 						if (rule == Rule::Before) {
+							EXPECT_EQ(gpu.panics, 0) << at;
 							before += lost;
 							continue;
 						}
 						EXPECT_FALSE(lost) << at;
 						EXPECT_TRUE(settled) << at;
 						EXPECT_TRUE(gpu.done(kPresent)) << at;
+						EXPECT_EQ(gpu.panics, 0) << at;
 					}
 				}
 			}
