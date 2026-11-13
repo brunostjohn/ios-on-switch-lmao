@@ -80,6 +80,7 @@ bool CommandBuffer::resolveTwod(const Texture &multisampled, const Texture &into
     b->resolveTwod(multisampled, grid.sxLog2, grid.syLog2, into, fmt2d, exact, keepSamples);
     b->end();
     RAW_DIAGNOSTIC(dev_->stats.resolveTwod++; dev_->stats.resolveExact += exact;
+                   dev_->stats.resolveTwodCompressed += multisampled.comptags;
                    dev_->stats.resolveRoute[exact ? ResolveByComplement : ResolveByTwod]
                                            [resolveSampleSlot(multisampled.samples)]++);
     return true;

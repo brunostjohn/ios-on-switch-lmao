@@ -2454,6 +2454,7 @@ public:
         std::atomic<uint64_t> blurTwodPasses{0};  // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
         std::atomic<uint64_t> resolveTwod{0};     // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
         std::atomic<uint64_t> resolveExact{0};    // those through the grid's complement (the probe's)
+        std::atomic<uint64_t> resolveTwodCompressed{0};  // those whose sample grid has comptags
         // MSAA resolves by route, 2x and 4x: resolve.twod, the probe's complement, the pack's pass (index 2: other
         // sample counts)
         std::atomic<uint64_t> resolveRoute[3][3] = {};

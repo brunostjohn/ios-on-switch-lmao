@@ -12,12 +12,14 @@ import Metal
 /// code of the pass, the complement taken and within one code, the kept samples resolving as the pass's, the read arm
 /// through the pack's pass byte for byte Metal's rule computed from the samples (`<n>x_read_route=pass
 /// <n>x_read_differ=0`), and at 2x the box and its complement byte for byte the engine's reading the rule rests on
-/// (X1TwodResolveReading: `2x_twod_model_differ=0 2x_exact_model_differ=0`).
+/// (X1TwodResolveReading: `2x_twod_model_differ=0 2x_exact_model_differ=0`). The compressed-grid arm resolves a
+/// memoryless (compressed) grid the same way: `<n>x_compressed=twod:<compressed grids>:<bytes off the private grid's>`.
+/// Then the format arms (ResolveFormatArms.swift).
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
     let name = "MSAA resolves by the 2D engine, directly and through the complement, against the resolve pass"
     let subsystem = Subsystem.metal
-    var timeout: TimeInterval { 120 }
+    var timeout: TimeInterval { 300 }
 
     static let drawSelector = NSSelectorFromString("switchRawProbeResolveDraw:")
     static let exactSelector = NSSelectorFromString("switchRawProbeResolveExact:")
@@ -27,7 +29,7 @@ struct ResolveTwodTest: HWTest {
         var bytes: [UInt8] = []
         var gpuMs = Double.infinity
         var path = ""
-        var twod = 0, exact = 0
+        var twod = 0, exact = 0, compressedGrids = 0
     }
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -44,6 +46,7 @@ struct ResolveTwodTest: HWTest {
         for samples in [4, 2] where gpu.device.supportsTextureSampleCount(samples) {
             let state = try gpu.render(fragment: "resolve_twod_fragment", format: .bgra8Unorm, samples: samples)
             let picked = try await resolved(gpu, state, samples: samples)
+            let compressed = try await resolved(gpu, state, samples: samples, grid: .memoryless)
             let exact = try await switched(facade, Self.exactSelector) {
                 try await resolved(gpu, state, samples: samples)
             }
@@ -94,7 +97,14 @@ struct ResolveTwodTest: HWTest {
             }
             if keptDiffer > 0 { wrong.append("\(tag)_kept_differ") }
             if [picked.path, exact.path, pass.path].contains(where: { $0 != "raw" }) { wrong.append("\(tag)_paths") }
+            let compressedDiffer = zip(compressed.bytes, picked.bytes).filter { $0 != $1 }.count
+            let compressedRoute = compressed.twod > 0 ? "twod" : "pass"
+            metrics.set("\(tag)_compressed", "\(compressedRoute):\(compressed.compressedGrids):\(compressedDiffer)")
+            if compressed.compressedGrids == 0 { wrong.append("\(tag)_compressed_grid_plain") }
+            if compressedRoute != "twod" { wrong.append("\(tag)_compressed_not_twod") }
+            if compressedDiffer > 0 { wrong.append("\(tag)_compressed_differ") }
         }
+        try await formatArms(gpu, facade, &metrics, &wrong)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
@@ -133,9 +143,13 @@ struct ResolveTwodTest: HWTest {
 
     /// The resolve texture's bytes, the fastest of three GPU times of the pass and its resolve, the path, and the 2D
     /// engine's resolve counters moved over the three
-    func resolved(_ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int) async throws -> Resolved {
-        let ms = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], samples: samples)
-        let into = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
+    func resolved(
+        _ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int, format: MTLPixelFormat = .bgra8Unorm,
+        bytesPerTexel: Int = 4, grid: MTLStorageMode = .private
+    ) async throws -> Resolved {
+        let ms = try gpu.texture(
+            format, Self.width, Self.height, usage: [.renderTarget], samples: samples, storage: grid)
+        let into = try gpu.texture(format, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
         let before = RawFacade.counters(of: gpu.device)
         var out = Resolved()
         for _ in 0..<3 {
@@ -148,7 +162,8 @@ struct ResolveTwodTest: HWTest {
         let after = RawFacade.counters(of: gpu.device)
         out.twod = (after["resolve_twod"] ?? 0) - (before["resolve_twod"] ?? 0)
         out.exact = (after["resolve_exact"] ?? 0) - (before["resolve_exact"] ?? 0)
-        out.bytes = try await gpu.read(into, bytesPerPixel: 4)
+        out.compressedGrids = (after["resolve_twod_compressed"] ?? 0) - (before["resolve_twod_compressed"] ?? 0)
+        out.bytes = try await gpu.read(into, bytesPerPixel: bytesPerTexel)
         return out
     }
 

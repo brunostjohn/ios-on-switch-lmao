@@ -59,10 +59,13 @@ extension ResolveTwodTest {
     }
 
     /// The pass and its resolve, then a blit of the resolve target into a buffer, in one command buffer
-    func readInCommandBuffer(_ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int) async throws -> Resolved {
-        let ms = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], samples: samples)
-        let into = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
-        let row = Self.width * 4
+    func readInCommandBuffer(
+        _ gpu: GPU, _ state: MTLRenderPipelineState, samples: Int, format: MTLPixelFormat = .bgra8Unorm,
+        bytesPerTexel: Int = 4
+    ) async throws -> Resolved {
+        let ms = try gpu.texture(format, Self.width, Self.height, usage: [.renderTarget], samples: samples)
+        let into = try gpu.texture(format, Self.width, Self.height, usage: [.renderTarget, .shaderRead])
+        let row = Self.width * bytesPerTexel
         let out = try gpu.buffer(row * Self.height)
         let before = RawFacade.counters(of: gpu.device)
         let timing = try await gpu.run { commands in
