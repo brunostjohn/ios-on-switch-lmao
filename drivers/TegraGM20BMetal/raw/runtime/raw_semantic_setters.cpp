@@ -31,7 +31,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 if (value.source == raw::BufferBinding::Source::Buffer)
                     value.chunk = 0;
                 else
-                    value.shadow = uint32_t(c.x);
+                    value.shadow = c.shadow;
                 const auto resource = [](const auto &binding) {
                     return binding.source == raw::BufferBinding::Source::Buffer ? binding.object : nullptr;
                 };
