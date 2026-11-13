@@ -32,7 +32,7 @@ public enum MipFormats {
         MipFormat(name: "r16", pixel: .r16Unorm, layout: .unorm([16])),
         MipFormat(name: "r16f", pixel: .r16Float, layout: .floats([16])),
         MipFormat(name: "b5g6r5", pixel: .b5g6r5Unorm, layout: .unorm([5, 6, 5])),
-        MipFormat(name: "bgr5a1", pixel: .bgr5A1Unorm, layout: .unorm([1, 5, 5, 5])),
+        MipFormat(name: "bgr5a1", pixel: .bgr5A1Unorm, layout: .unorm([5, 5, 5, 1])),
         MipFormat(name: "r32f", pixel: .r32Float, layout: .floats([32])),
         MipFormat(name: "rg16", pixel: .rg16Unorm, layout: .unorm([16, 16])),
         MipFormat(name: "rg16f", pixel: .rg16Float, layout: .floats([16, 16])),
