@@ -612,7 +612,7 @@ void engineResume()
         IOLog("TegraVIC: resume FAIL %s; the next job tries again\n", gLine);
         switch_vic_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 

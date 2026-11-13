@@ -6,11 +6,11 @@
 // leaving, or the engine's queue draining, arms a one-shot timer; if it fires with no user and nothing queued, the
 // engine parks its queue and powers off (its `off`). Those two events are the only arms, so nothing polls.
 //
-// A power-on that fails (`on` logs why), or an engine its driver lost (lost(): a reset that did not bring it back, a
-// resume that could not restore it), is powered on again by a later use: the first use after it tries at once, then
-// one use per kRetryMs, doubling to kRetryMaxMs while the power-on keeps failing; the uses between are refused (-19).
-// A power-off the hardware refuses is one line and leaves the engine parked and unpowered; the next use powers it on
-// and the next idle period powers it off as usual, with nothing counted for having been refused.
+// A power-on that fails fails that use (`on` logs which step and register); the engine stays off and the next use runs
+// the normal power-on. An engine its driver found off outside the gate (lost(): a reset that did not bring it back) is
+// off to the gate too, so its next use powers it on. A power-off the hardware refuses is one line and leaves the engine
+// parked and unpowered; the next use powers it on and the next idle period powers it off as usual. No failure is held
+// for later: nothing is counted, delayed or refused for having failed before.
 // Sleep (SC7) goes through the gate too: suspend parks the engine once its queue drains and powers it off, holding new
 // users until resume, which powers it on only for a user already waiting.
 //
@@ -39,7 +39,7 @@ enum {
 struct SwitchEngineGateOps {
     const char *name;  // the engine's log prefix
     void *engine;
-    int (*on)(void *engine);               // 0, or a negative errno: the engine stays off until a later use retries
+    int (*on)(void *engine);               // 0, or a negative errno (one line saying why): the engine stays off
     int (*off)(void *engine, bool drain);  // SWITCH_ENGINE_GATE_*, or < 0: the hardware refused (parked, unpowered)
 };
 
@@ -49,7 +49,7 @@ struct SwitchEngineGateStats {
 
 template <class Platform> class SwitchEngineGate {
 public:
-    static constexpr uint32_t kIdleMs = 500, kRetryMs = 1000, kRetryDoublings = 6;  // kRetryMaxMs: 64 s
+    static constexpr uint32_t kIdleMs = 500;
 
     // The engine is up, idle and powered. False: no lock or timer, and the engine must not publish.
     template <class... Args> bool start(const SwitchEngineGateOps &ops, Args... args)
@@ -65,19 +65,13 @@ public:
     // Before a job is built for the engine: 0 with the engine powered and held until done(), or why it cannot run.
     int use()
     {
-        char line[160];
-        line[0] = 0;
         platform_.lock();
         while (asleep_)
             platform_.sleep(&asleep_);
-        if (__atomic_exchange_n(&lost_, false, __ATOMIC_ACQ_REL))
-            retryNow();
-        const int error = powerOn(line, sizeof(line));
+        const int error = powerOn();
         if (!error)
             users_++;
         platform_.unlock();
-        if (line[0])
-            platform_.log(line);
         return error;
     }
 
@@ -86,7 +80,6 @@ public:
     void lost()
     {
         setPowered(false);
-        __atomic_store_n(&lost_, true, __ATOMIC_RELEASE);
     }
 
     void done()
@@ -136,21 +129,15 @@ public:
         platform_.unlock();
     }
 
-    // `usable`: the engine's own resume (its address space) came back.
-    void resume(bool usable)
+    // The engine's `on` restores what its own resume could not (its address space).
+    void resume()
     {
-        char line[160];
-        line[0] = 0;
         platform_.lock();
         asleep_ = false;
-        if (!usable)
-            retryNow();
         if (users_)
-            (void)powerOn(line, sizeof(line));
+            (void)powerOn();
         platform_.wake(&asleep_);
         platform_.unlock();
-        if (line[0])
-            platform_.log(line);
     }
 
     // For lines that read the engine's registers: they must not while it is off.
@@ -180,32 +167,15 @@ private:
         __atomic_store_n(&powered_, on, __ATOMIC_RELAXED);
     }
 
-    void retryNow()
-    {
-        failed_ = true;
-        retryAtUs_ = 0;
-    }
-
-    // `line`: the one a power-on that works again after failing leaves for the caller to log outside the lock.
-    int powerOn(char *line, size_t size)
+    int powerOn()
     {
         if (powered_)
             return 0;
+#if SWITCH_ENGINE_GATE_STATS
         const uint64_t began = platform_.nowUs();
-        if (failed_ && began < retryAtUs_)
-            return -19;
-        const int error = ops_.on(ops_.engine);
-        if (error) {
-            failed_ = true;
-            const uint32_t doublings = failures_ < kRetryDoublings ? failures_ : kRetryDoublings;
-            failures_++;
-            retryAtUs_ = platform_.nowUs() + (static_cast<uint64_t>(kRetryMs) << doublings) * 1000;
+#endif
+        if (const int error = ops_.on(ops_.engine))
             return error;
-        }
-        if (failures_)
-            snprintf(line, size, "%s: power-on works again after %u failed tries", ops_.name, failures_);
-        failed_ = false;
-        failures_ = 0;
         setPowered(true);
 #if SWITCH_ENGINE_GATE_STATS
         const uint64_t us = platform_.nowUs() - began;
@@ -233,7 +203,6 @@ private:
     Platform platform_;
     SwitchEngineGateOps ops_ = {};
     SwitchEngineGateStats stats_ = {};
-    uint32_t users_ = 0, failures_ = 0;
-    uint64_t retryAtUs_ = 0;
-    bool powered_ = false, asleep_ = false, failed_ = false, lost_ = false;
+    uint32_t users_ = 0;
+    bool powered_ = false, asleep_ = false;
 };

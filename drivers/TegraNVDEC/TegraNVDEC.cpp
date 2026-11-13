@@ -515,7 +515,7 @@ void engineResume()
         IOLog("TegraNVDEC: resume FAIL %s; the next decode tries again\n", gLine);
         switch_nvdec_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 

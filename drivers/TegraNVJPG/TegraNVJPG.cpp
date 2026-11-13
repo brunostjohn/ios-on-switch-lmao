@@ -717,7 +717,7 @@ void engineResume()
         IOLockUnlock(gStateLock);
         IOLog("TegraNVJPG: resume FAIL %s; the next decode tries again\n", gLine);
     }
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 

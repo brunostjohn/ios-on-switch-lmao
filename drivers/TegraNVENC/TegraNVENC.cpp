@@ -735,7 +735,7 @@ void engineResume()
     IOLockUnlock(gEngineLock);
     if (!attached)
         IOLog("TegraNVENC: resume FAIL %s; the next encode tries again\n", gLine);
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 
