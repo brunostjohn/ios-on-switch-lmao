@@ -24,7 +24,8 @@ struct tgm_cpu_view {
 #define TGM_VIEWS 8
 
 struct tgm_tiled {
-	int tiled; /* else pitch, for good */
+	int tiled; /* else pitch, for good unless retry */
+	int retry; /* pitch because the tiling move failed: decided again (TGM_LAYOUT_ASK_FIRST) */
 	struct tgm_layout layout;
 	uint32_t bytes_per_row;
 	/* CPU locks (TegraGM20BViews.cpp; entry lock): the scratch holding the texels as rows while any is held, the locks,

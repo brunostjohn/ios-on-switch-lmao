@@ -292,6 +292,7 @@ class AGXDeviceUserClient : public IOUserClient
 		tgm_mem *mem;
 		bool backingMemory;
 		tgm_coh *coh;  // imports: the surface's coherency entry, held (TegraGM20BCoherency)
+		bool layoutAsked;  // imports: this BO asked the surface's layout before (TGM_LAYOUT_ASK_FIRST)
 		switch_gpu_backing *backing;
 		switch_gpu_native_surface_view *nativeView;
 		SharedWiring *

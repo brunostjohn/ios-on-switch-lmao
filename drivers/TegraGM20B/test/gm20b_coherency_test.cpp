@@ -712,6 +712,30 @@ TEST_F(Coherency, AFailedTilingMoveLeavesItPitch)
 	tgm_coherency_put(c);
 }
 
+// KERN-29: a failed tiling move is decided again at the first ask of a later import that holds the surface alone (the
+// import that was answered pitch is gone, so nothing binds it pitch); while that import lives, the answer stays pitch
+TEST_F(Coherency, AFailedTilingMoveIsDecidedAgainByALaterImportAlone)
+{
+	constexpr int kFirstWrite = TGM_LAYOUT_ASK_WRITES | TGM_LAYOUT_ASK_FIRST;
+	const auto p = pages(0x87200000, 5);
+	tgm_coh *first = add(p[0], 53, p.data(), 5, 1);
+	gMoveFails = true;
+	EXPECT_EQ(tgm_coherency_layout(first, kW, kH, kBpp, kRow, kFirstWrite), 0);
+	gMoveFails = false;
+	tgm_coh *second = add(p[0], 53, p.data(), 5, 1);
+	EXPECT_EQ(second, first);
+	EXPECT_EQ(tgm_coherency_layout(second, kW, kH, kBpp, kRow, kFirstWrite), 0);
+	EXPECT_EQ(gMoves.size(), 1u);
+	tgm_coherency_put(first);
+	tgm_coh *third = add(p[0], 53, p.data(), 5, 1);
+	tgm_coherency_put(second);
+	EXPECT_EQ(tgm_coherency_layout(third, kW, kH, kBpp, kRow, TGM_LAYOUT_ASK_WRITES), 0);
+	EXPECT_EQ(tgm_coherency_layout(third, kW, kH, kBpp, kRow, kFirstWrite), 1);
+	EXPECT_EQ(gMoves.size(), 2u);
+	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+	tgm_coherency_put(third);
+}
+
 // No scratch: no move is tried, the refusal names why, and the surface is pitch for good
 TEST_F(Coherency, NoScratchForTheTilingMoveLeavesItPitch)
 {

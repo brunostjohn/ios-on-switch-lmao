@@ -44,7 +44,7 @@ void note(Decision d, uint32_t surfaceId, uint32_t width, uint32_t height, uint3
 	static const char *const why[Decisions] = {
 		"block-linear", "pitch: its first GPU import only samples it",
 		"pitch: imported before it asked", "pitch: a shape that does not tile",
-		"pitch: the tiling move failed"};
+		"pitch: the tiling move failed (decided again at a later import's ask)"};
 	__atomic_fetch_add(&gDecisions[d], 1, __ATOMIC_RELAXED);
 	char name[32];
 	proc_selfname(name, sizeof(name));
@@ -99,14 +99,14 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 	if (!scratched) {
 		switch_refusal(
 			"iosurface-layout", "tile-no-scratch",
-			"IOSurface %u %ux%u x%u bytes: no scratch for its tiling move: it stays "
-			"pitch-linear",
+			"IOSurface %u %ux%u x%u bytes: no scratch for its tiling move: pitch "
+			"until an import that holds it alone asks again",
 			tgm_coh_surface_id(c), width, height, bpp);
 	} else if (ret) {
 		switch_refusal(
 			"iosurface-layout", "tile-move-failed",
-			"IOSurface %u %ux%u x%u bytes: its tiling move failed (%d): it stays "
-			"pitch-linear",
+			"IOSurface %u %ux%u x%u bytes: its tiling move failed (%d): pitch until "
+			"an import that holds it alone asks again",
 			tgm_coh_surface_id(c), width, height, bpp, ret);
 	} else {
 		tgm_tiled_count(TGM_RELAYOUT_MOVED);
@@ -127,13 +127,16 @@ int askLayout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 	tgm_tiled **slot = tgm_coh_tiled(c);
 	tgm_tiled *t = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
 	const bool fresh = t == nullptr;
+	const bool again = t && t->retry && !t->tiled && (writes & TGM_LAYOUT_ASK_FIRST) &&
+			   tgm_coh_unshared(c);
 	if (fresh)
 		t = IONew(tgm_tiled, 1);
-	if (fresh && t) {
+	if ((fresh || again) && t) {
 		bzero(t, sizeof(*t));
-		const Decision d =
-			decide(c, *t, width, height, bpp, bytes_per_row, writes != 0, fit);
-		t->tiled = static_cast<int>(d == DecidedTiled);
+		const Decision d = decide(c, *t, width, height, bpp, bytes_per_row,
+					  (writes & TGM_LAYOUT_ASK_WRITES) != 0, fit);
+		t->retry = static_cast<int>(d == PitchMoveFailed);
+		__atomic_store_n(&t->tiled, static_cast<int>(d == DecidedTiled), __ATOMIC_RELEASE);
 		if (t->tiled)
 			__atomic_add_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
 		note(d, tgm_coh_surface_id(c), width, height, bpp, 8u << t->layout.y_log2);
