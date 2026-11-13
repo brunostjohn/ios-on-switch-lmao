@@ -2,6 +2,7 @@
 #include "raw_device_harness.h"
 #include "../raw/runtime/raw_heap_members.h"
 
+#include <algorithm>
 #include <atomic>
 
 namespace {
@@ -52,6 +53,28 @@ protected:
             for (const TegraGM20BAbiSurfaceUse &m : set.members)
                 n += set.live && m.handle == handle;
         return n;
+    }
+
+    // Their accesses
+    static uint32_t listedAccess(uint64_t handle)
+    {
+        uint32_t access = 0;
+        for (const kernel_model::SetState &set : model.sets)
+            for (const TegraGM20BAbiSurfaceUse &m : set.members)
+                access |= set.live && m.handle == handle ? m.access : 0u;
+        return access;
+    }
+
+    // A sampled depth texture's ask: in a private heap, its arena's view of the depth kind
+    static raw::TextureAsk depthAsk()
+    {
+        raw::TextureAsk depth;
+        depth.kind = raw::TextureAsk::Zeta;
+        depth.width = 64;
+        depth.height = 48;
+        depth.format = kDepth32;
+        depth.sampled = true;
+        return depth;
     }
 
     // A member of a live set whose BO the connection no longer holds, 0: none
@@ -180,14 +203,8 @@ TEST_F(DeviceSet, AnArenaFreedWithAViewAliasInTheSetLeavesNeitherItsBoNorTheAlia
 {
     uint32_t arena = 0;
     ASSERT_TRUE(dev.createArena(kArenaBytes, true, arena));
-    raw::TextureAsk depth;
-    depth.kind = raw::TextureAsk::Zeta;
-    depth.width = 64;
-    depth.height = 48;
-    depth.format = kDepth32;
-    depth.sampled = true;
     raw::Texture t;
-    ASSERT_TRUE(dev.arenaTexture({arena, std::nullopt}, depth, t));
+    ASSERT_TRUE(dev.arenaTexture({arena, std::nullopt}, depthAsk(), t));
     ASSERT_GE(raw::DeviceHarness::arenaViews(dev, arena), 2u) << "no view of the depth kind";
     const uint64_t bo = raw::DeviceHarness::arena(dev, arena).handle;
     const uint64_t alias = t.span.va - t.span.offset;
@@ -218,6 +235,91 @@ TEST_F(DeviceSet, AnArenaFreedWithAViewAliasInTheSetLeavesNeitherItsBoNorTheAlia
     EXPECT_TRUE(dev.wait(seqno));
     EXPECT_EQ(model.setRefusals, 0u) << refusal();
     EXPECT_EQ(dev.setCounts().refusals, 0u) << dev.setLastRefusal();
+}
+
+// The depth view joins after a copy wrote the arena's pitch view: a read member under the handle of written ones. The set is
+// registered with the BO once, written. The texture's free leaves the arena a member at all three VAs, and a command
+// buffer after it runs on the set naming the BO once; the arena's free takes all of them.
+TEST_F(DeviceSet, AnArenasViewAliasesAreOneWrittenMemberUntilTheArenasFreeTakesThemAll)
+{
+    uint32_t arena = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, arena));
+    raw::Buffer a, b;
+    ASSERT_TRUE(dev.arenaBuffer(arena, 4096, a));
+    ASSERT_TRUE(dev.arenaBuffer(arena, 4096, b));
+    ASSERT_NE(copy(a, b, 4096), 0u) << refusal();
+    raw::Texture t;
+    ASSERT_TRUE(dev.arenaTexture({arena, std::nullopt}, depthAsk(), t));
+    const uint64_t bo = raw::DeviceHarness::arena(dev, arena).handle;
+    const uint64_t blockLinear = raw::DeviceHarness::arena(dev, arena).vaBase, pitch = a.va - a.span.offset,
+                   alias = t.span.va - t.span.offset;
+    ASSERT_GE(raw::DeviceHarness::arenaViews(dev, arena), 2u) << "no view of the depth kind";
+    for (const uint64_t va : {blockLinear, pitch, alias}) {
+        ASSERT_EQ(model.resolve({va, TegraGM20BSurfaceGpuAddress, 0}), bo) << std::hex << va;
+        ASSERT_TRUE(raw::DeviceHarness::setHolds(dev, va)) << std::hex << va;
+    }
+    EXPECT_EQ(listed(bo), 1u);
+    EXPECT_EQ(model.setRepeats, 0u) << "a registration named the arena's BO in more than one record";
+    EXPECT_TRUE(listedAccess(bo) & TegraGM20BSurfaceWrite) << "the depth view's read member dropped the written ones";
+
+    dev.destroyTexture(t);
+    EXPECT_FALSE(freed(bo));
+    EXPECT_EQ(listed(bo), 1u) << "the texture's free took the arena out of the set";
+    for (const uint64_t va : {blockLinear, pitch, alias})
+        EXPECT_TRUE(raw::DeviceHarness::setHolds(dev, va)) << std::hex << va;
+    const unsigned jobs = model.setJobs;
+    const uint32_t seqno = copy(b, a, 4096);
+    ASSERT_NE(seqno, 0u) << refusal();
+    EXPECT_EQ(model.setJobs, jobs + 1) << "the command buffer left the set";
+    const auto &uses = model.jobs.back().uses;
+    EXPECT_EQ(std::count_if(uses.begin(), uses.end(),
+                            [&](const TegraGM20BAbiSurfaceUse &u) {
+                                return u.handle == bo;
+                            }),
+              1);
+    EXPECT_TRUE(dev.wait(seqno));
+
+    dev.arenaRelease(a);
+    dev.arenaRelease(b);
+    dev.destroyArena(arena);
+    ASSERT_TRUE(freed(bo));
+    EXPECT_EQ(listed(bo), 0u);
+    EXPECT_EQ(goneMember(), 0u);
+    for (const uint64_t va : {blockLinear, pitch, alias})
+        EXPECT_FALSE(raw::DeviceHarness::setHolds(dev, va)) << std::hex << va;
+    EXPECT_EQ(model.setRefusals, 0u) << refusal();
+    EXPECT_EQ(dev.setCounts().refusals, 0u) << dev.setLastRefusal();
+}
+
+// The set could not be made again for a depth view of a private heap's arena (the kernel had no set left to make). The
+// arena's BO stays the member the kernel's set holds, at every VA, the view's too, so a copy through its pitch view runs on
+// the set and names no member as a use.
+TEST_F(DeviceSet, AViewAliasTheSetCouldNotTakeLeavesItsArenaAMemberAtEveryVa)
+{
+    uint32_t arena = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, arena));
+    raw::Buffer a, b;
+    ASSERT_TRUE(dev.arenaBuffer(arena, 4096, a));
+    ASSERT_TRUE(dev.arenaBuffer(arena, 4096, b));
+    ASSERT_NE(copy(a, b, 4096), 0u) << refusal();
+    const uint64_t bo = raw::DeviceHarness::arena(dev, arena).handle;
+    const uint64_t blockLinear = raw::DeviceHarness::arena(dev, arena).vaBase, pitch = a.va - a.span.offset;
+
+    model.refuseSets = 1;
+    raw::Texture t;
+    ASSERT_TRUE(dev.arenaTexture({arena, std::nullopt}, depthAsk(), t));
+    ASSERT_EQ(model.refuseSets, 0u) << "the depth view's registration was not the one refused";
+    const uint64_t alias = t.span.va - t.span.offset;
+    for (const uint64_t va : {blockLinear, pitch, alias})
+        EXPECT_TRUE(raw::DeviceHarness::setHolds(dev, va)) << std::hex << va;
+    EXPECT_EQ(listed(bo), 1u);
+
+    const unsigned jobs = model.setJobs;
+    const uint32_t seqno = copy(b, a, 4096);
+    ASSERT_NE(seqno, 0u) << "the copy named the arena, a member of the kernel's set, as a use";
+    EXPECT_EQ(model.setJobs, jobs + 1) << "the command buffer left the set";
+    EXPECT_TRUE(dev.wait(seqno));
+    EXPECT_EQ(goneMember(), 0u);
 }
 
 // The give-back trims no arena while a command buffer that used its heap is in flight; once it completed, the arena is
