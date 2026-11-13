@@ -55,6 +55,8 @@ void armCompletionFlipWaiter(const switch_gpu_backing_token &producer)
 // log, nothing but this lock.
 void writeEarlyCompletionFlip(uint32_t armed, uint8_t by)
 {
+    if (SWITCH_FRAME_TIMELINE)
+        noteFlipTotal(8, 1);
     IOSimpleLock *lock = __atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE);
     if (!lock || __atomic_load_n(&completionFilterOff, __ATOMIC_RELAXED))
         return;
@@ -71,8 +73,8 @@ void writeEarlyCompletionFlip(uint32_t armed, uint8_t by)
 }
 
 // gpuComplete's first step: a flip its producer's filter already wrote is on screen, so its completion is a success
-// (the filter wrote only for a job certain to end so). A failure here breaks that: one line, and no filter writes
-// from then on.
+// (the filter wrote only for a job certain to end so). A failure here breaks that: one line, and the filters write no
+// flips for filterHold's run of armed flips.
 int completionFlipVerdict(int status)
 {
     status = mediaFlipVerdict(status);
@@ -81,12 +83,16 @@ int completionFlipVerdict(int status)
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     const bool early = completionFlip.early();
     const int entry = completionFlip.entry;
+    if (early) {
+        filterHold.fail();
+        __atomic_store_n(&completionFilterOff, true, __ATOMIC_RELAXED);
+    }
+    const uint32_t run = filterHold.run;
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (!early)
         return status;
-    if (!__atomic_exchange_n(&completionFilterOff, true, __ATOMIC_RELAXED))
-        IOLog("SwitchDisplay: window A was flipped to entry %d from its producer's interrupt filter, whose completion "
-              "then failed (%d): shown as done; producers' filters write no flips from here\n",
-              entry, status);
+    IOLog("SwitchDisplay: window A was flipped to entry %d from its producer's interrupt filter, whose completion then "
+          "failed (%d): shown as done; producers' filters write no flips for the next %u\n",
+          entry, status, run);
     return 0;
 }

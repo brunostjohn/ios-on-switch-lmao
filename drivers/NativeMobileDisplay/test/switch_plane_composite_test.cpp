@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchPlaneComposite.h"
 #include "../../TegraVIC/SwitchNativeVICImage.h"
@@ -272,6 +273,9 @@ struct NativeLegacyDisplay : OSObject {
     {
         return sets[id >= 0 ? id : Commits::kSlots];
     }
+
+    void retireUnshown(uint64_t)
+    {}
 
     void armFlipDeadline()
     {

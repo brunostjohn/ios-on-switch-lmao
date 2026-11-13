@@ -23,12 +23,12 @@
 // gate as before. Included in the class body; writeCompletionFlip runs on the completion's thread,
 // writeEarlyCompletionFlip in an interrupt filter, the rest under the gate.
 //
-// Window A's WINBUF aperture (0xbc0..) is unproven on this unit (its DC_WIN words at 0xb80.. and windows B and C are),
-// so every completion flip is checked where the gate already reads the latch: one whose request was taken while window
-// A kept scanning another surface turns completion flips off for the boot, and that frame flips from the gate. Until one
-// has been seen latched as written, a completion flip keeps window A's layout (LINE_STRIDE at 0xb8a would land without
-// SURFACE_KIND and START_ADDR), and a settle that takes the last request as shown with no frame end to check it (SC7, the
-// scanout stopped) writes it again from the gate. A refusal turns the filters' writes off with the rest.
+// Every completion flip is checked where the gate already reads the latch: one whose request was taken while window A
+// kept scanning another surface is refused, that frame flips from the gate, and the next completionHold run of eligible
+// frames flips from the gate too before completion flips are tried again (the run doubles for a refusal before 600 have
+// latched as written). Boot 19 latched 306 of them as written. Until one has been seen latched as written, a completion
+// flip keeps window A's layout (LINE_STRIDE at 0xb8a would land without SURFACE_KIND and START_ADDR), and a settle that
+// takes the last request as shown with no frame end to check it (SC7, the scanout stopped) writes it again from the gate.
 
 // Static, as the landscape and window probe state: the instance is at the 16 KiB a kalloc_type class may have.
 // completionFlipLock is taken with interrupts off, and inside the producers' primary filters: under it only plain loads
@@ -47,11 +47,15 @@ struct CompletionUnverified {
 };
 
 static inline CompletionUnverified completionUnverified = {kNoBuffer, 0};  // in the ring, no latch read has judged it
-static inline bool completionFlipsProven = false, completionFlipsRefused = false;
-static inline bool completionFilterOff = false;  // the producers' filters write no flips: read in interrupt context
+static inline bool completionFlipsProven = false;
+static inline SwitchRouteBackoff<8, 1024, 600> completionHold;  // in eligible frames, under the gate
+// The producers' filters write no flips while filterHold runs (a filter-written flip's completion failed): kept under
+// completionFlipLock, completionFilterOff read in interrupt context.
+static inline SwitchRouteBackoff<8, 1024, 600> filterHold;  // in armed flips
+static inline bool completionFilterOff = false;
 #if SWITCH_FRAME_TIMELINE
-static constexpr unsigned kFlipTotals = 8;
-// completion, gate, lead us, withdrawn, refused, filter, filter lead us, filter waiters declined
+static constexpr unsigned kFlipTotals = 9;
+// completion, gate, lead us, withdrawn, refused, filter, filter lead us, filter waiters declined, filter calls
 static inline uint32_t flipTotals[kFlipTotals] = {};
 static inline struct sysctl_oid flipTotalOids[kFlipTotals] = {};
 #endif
@@ -81,16 +85,20 @@ bool completionFlipOut() const
 // riding on it, nothing else owning window A. A recovery between here and the completion withdraws it (flipFromGate).
 bool completionFlipMay(int entry)
 {
-    if (completionFlipsRefused || !rotated || !rotationLatched || !doubleBuffer ||
-        (entry >= kSlot0 && !directAttached) || hwSuspended || gPanicRestore.panicking || planeNextSet ||
-        probeRequest || probe.active() || columnScanBusy() || windowProbeBusy() || landscapeOn() ||
-        landscapeHoldsKicks() || !mediaFlipIdle())
+    if (!rotated || !rotationLatched || !doubleBuffer || (entry >= kSlot0 && !directAttached) || hwSuspended ||
+        gPanicRestore.panicking || planeNextSet || probeRequest || probe.active() || columnScanBusy() ||
+        windowProbeBusy() || landscapeOn() || landscapeHoldsKicks() || !mediaFlipIdle())
         return false;
     if (ring.held != kNoBuffer || ring.superseded != kNoBuffer)
         return false;
-    if (ring.pending != kNoBuffer)
-        return ring.replace && sameLayout(entry, ring.pending);
-    return completionFlipsProven || sameLayout(entry, ring.front);
+    const bool eligible = ring.pending != kNoBuffer ? ring.replace && sameLayout(entry, ring.pending)
+                                                    : completionFlipsProven || sameLayout(entry, ring.front);
+    if (!eligible)
+        return false;
+    if (completionHold.on())
+        return true;
+    completionHold.clean();
+    return false;
 }
 
 // Before the offer: its completion may run on another CPU before the offer returns. True when armed.
@@ -109,6 +117,9 @@ bool armCompletionFlip(int entry)
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     completionFlip.arm(entry, start);
     completionFlip.armLayout(kind, stride, hOffset);
+    __atomic_store_n(&completionFilterOff, !filterHold.on(), __ATOMIC_RELAXED);
+    if (!filterHold.on())
+        filterHold.clean();
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     return true;
 }
@@ -294,16 +305,15 @@ bool completionFlipRefused(const LatchState &seen)
     if (seen.start == flip.start) {
         completionUnverified.entry = kNoBuffer;
         completionFlipsProven = true;
+        completionHold.clean();
         return false;
     }
     if (seen.control & (kGeneralActReq | kWinAActReq))
         return false;
-    if (!completionFlipsRefused)
-        IOLog("SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A "
-              "flips from the display's work loop from here on\n",
-              flip.start, seen.start);
-    completionFlipsRefused = true;
-    __atomic_store_n(&completionFilterOff, true, __ATOMIC_RELAXED);
+    completionHold.fail();
+    IOLog("SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A flips "
+          "from the display's work loop for the next %u frames\n",
+          flip.start, seen.start, completionHold.run);
     if (SWITCH_FRAME_TIMELINE)
         noteFlipTotal(4, 1);
     drainCompletionFlip();
@@ -438,7 +448,8 @@ static void flipTotalsRegister()
     static const char *const names[kFlipTotals] = {"switch_flips_completion",     "switch_flips_gate",
                                                    "switch_flips_lead_us",        "switch_flips_withdrawn",
                                                    "switch_flips_refused",        "switch_flips_filter",
-                                                   "switch_flips_filter_lead_us", "switch_flips_filter_declined"};
+                                                   "switch_flips_filter_lead_us", "switch_flips_filter_declined",
+                                                   "switch_flips_filter_calls"};
     for (unsigned i = 0; i < kFlipTotals; ++i) {
         switch_sysctl_oid(&flipTotalOids[i], &sysctl__kern_children, names[i],
                           static_cast<int>(CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED), flipTotalSysctl, "I",
@@ -446,7 +457,8 @@ static void flipTotalsRegister()
                           "wrote, microseconds the completions' writes came before the gate took them, completion "
                           "flips withdrawn, completion flips window A did not latch as written, flips their "
                           "producers' interrupt filters wrote, microseconds those came before their completions, VIC "
-                          "copies whose job was done or whose waiter host1x refused at the arm");
+                          "copies whose job was done or whose waiter host1x refused at the arm, calls from the "
+                          "producers' filters whatever they found");
         flipTotalOids[i].oid_arg2 = static_cast<int>(i);
         sysctl_register_oid(&flipTotalOids[i]);
     }

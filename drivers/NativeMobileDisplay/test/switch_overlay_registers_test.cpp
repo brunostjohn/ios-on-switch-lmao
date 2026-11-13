@@ -2,6 +2,8 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <stdexcept>
+#include <vector>
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"
@@ -72,6 +74,13 @@ struct Display {
     void planeReleaseIdle()
     {
         ++releases;
+    }
+
+    std::vector<uint64_t> unshown;
+
+    void retireUnshown(uint64_t seq)
+    {
+        unshown.push_back(seq);
     }
 
     Display()
@@ -594,22 +603,42 @@ TEST(OverlayRecovery, LateOlderReadyCompositionCannotReplaceNewerOne)
     EXPECT_EQ(d.planeRecoveryTarget.pendingSeq, 4u);
 }
 
-TEST(OverlayRecovery, NeverDisabledHardwareTurnsOverlaysOffForTheBootAndKeepsTheirMemory)
+// Windows B and C that do not take their off request keep their memory and are asked again every kLatchFrames frame
+// ends; the swaps their sets carried and the ones staged meanwhile retire unshown; once a frame end reads both off, the
+// slots go back and overlays are on again.
+TEST(OverlayRecovery, WindowsThatDoNotStopAreAskedAgainAndOverlaysResumeOnceTheyReadOff)
 {
     Display d;
     ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
     d.latch();
+    auto held = video(native_planes::kBt709, 2);
+    held.seq = 5;
+    ASSERT_TRUE(d.stage(held));
     d.beginPlaneRecovery("test");
     d.frameEnds += Display::kLatchFrames;
-    EXPECT_NO_THROW(d.planeRecoveryFrameEnd());
-    EXPECT_TRUE(d.planesAbandoned);
+    EXPECT_TRUE(d.planeRecoveryFrameEnd());
     EXPECT_FALSE(d.planesOn);
-    EXPECT_FALSE(d.planeRecovering);
+    EXPECT_TRUE(d.planeRecovering);
     EXPECT_TRUE(d.planeLatch.uses(1));
     EXPECT_EQ(d.releases, 0u);
+    EXPECT_EQ(d.unshown, (std::vector<uint64_t>{5}));
+    auto staged = video(native_planes::kBt709, 3);
+    staged.seq = 6;
     const auto before = d.registers;
-    EXPECT_FALSE(d.stage(video(native_planes::kBt709, 2)));
+    EXPECT_FALSE(d.stage(staged));
     EXPECT_EQ(d.registers, before);
+    EXPECT_EQ(d.unshown, (std::vector<uint64_t>{5, 6}));
+    d.frameEnds += Display::kLatchFrames;
+    d.dc[Display::kWinBBase + native_planes::kOptions] = native_planes::kWinEnable;
+    EXPECT_TRUE(d.planeRecoveryFrameEnd());
+    EXPECT_EQ(d.dc[Display::kWinBBase + native_planes::kOptions], 0u);
+    d.dc[Display::kDcStateControl] = 0;
+    EXPECT_TRUE(d.planeRecoveryFrameEnd());
+    EXPECT_FALSE(d.planeRecovering);
+    EXPECT_TRUE(d.planesOn);
+    EXPECT_FALSE(d.planeLatch.uses(1));
+    EXPECT_EQ(d.releases, 1u);
+    EXPECT_TRUE(d.stage(video(native_planes::kBt601, 4)));
 }
 
 TEST(OverlayRecovery, UnderflowOnTheFirstOverlayRecoversItAndKeepsOverlaysOn)

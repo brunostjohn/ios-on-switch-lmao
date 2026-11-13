@@ -30,6 +30,9 @@
 		<string>kern.switch_planes_latched</string>
 		<string>kern.switch_planes_maps</string>
 		<string>kern.switch_planes_dropped</string>
+		<string>kern.switch_planes_native</string>
+		<string>kern.switch_frame_info_shown</string>
+		<string>kern.switch_frame_info_unsent</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_gpu_paths</string>
 		<string>kern.switch_gpu_promises</string>
@@ -49,6 +52,7 @@
 		<string>kern.switch_flips_filter</string>
 		<string>kern.switch_flips_filter_lead_us</string>
 		<string>kern.switch_flips_filter_declined</string>
+		<string>kern.switch_flips_filter_calls</string>
 		<string>kern.switch_media_flips_completion</string>
 		<string>kern.switch_media_flips_withdrawn</string>
 		<string>kern.switch_media_flips_refused</string>
@@ -56,6 +60,9 @@
 		<string>kern.switch_media_flips_armed</string>
 		<string>kern.switch_media_flips_filter</string>
 		<string>kern.switch_media_flips_filter_declined</string>
+		<string>kern.switch_media_flips_done_at_swap</string>
+		<string>kern.switch_media_flips_fenced</string>
+		<string>kern.switch_media_flips_declined</string>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_joycon_probe</string>
 		<string>kern.switch_scanout_cpu</string>

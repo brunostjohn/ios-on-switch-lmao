@@ -204,12 +204,14 @@ TEST(VsyncPhaseSource, OneVsyncAFrame)
                             "if (status & kFrameEndInt) frameEnds = frameEnds + 1;"));
 }
 
-TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
+TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLineAndAHoldOff)
 {
     const CodeText present = method("void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
-    EXPECT_TRUE(present.Has("phaseFailed = true;"));
+    EXPECT_TRUE(present.Has("phaseProbe.flip(vpulseProgrammed, vpulseSeen)"));
+    EXPECT_TRUE(present.Has("phaseOffForRun();"));
     EXPECT_FALSE(present.Has("panic(")) << "a V_PULSE2 that never fired costs one line, not the boot";
-    EXPECT_TRUE(present.Has("IOLog(\"SwitchDisplay: vsync phase off for this boot"));
+    EXPECT_TRUE(method("void phaseOffForRun()").Has("vsync phase held off for %u flips"));
+    EXPECT_TRUE(method("void phaseOffForRun()").Has("vpulseProgrammed = false;"));
     EXPECT_TRUE(method("unsigned noteLong(uint32_t frames, const FrameMark &mark)").Has("kLongRate"));
 }
 

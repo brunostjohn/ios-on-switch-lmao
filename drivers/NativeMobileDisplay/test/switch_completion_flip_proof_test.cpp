@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchCompletionFlipDisplay.h on a unit whose window A WINBUF aperture refuses the completion's stores (lost, or
-// kept where WIN_A_UPDATE does not take them): the first frame end that shows such a flip's request taken with window A
-// elsewhere logs one line, turns completion flips off for the boot and flips that frame from the gate; the ring never
-// reads a latch it cannot explain, and nothing a settle takes as shown is lost. Until one completion flip latched as
-// written, none changes window A's layout.
+// kept where WIN_A_UPDATE does not take them): a frame end that shows such a flip's request taken with window A
+// elsewhere logs one line, flips that frame from the gate and holds completion flips off for a run of eligible frames
+// that doubles with each refusal; the ring never reads a latch it cannot explain, and nothing a settle takes as shown
+// is lost. Until one completion flip latched as written, none changes window A's layout.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -18,13 +18,14 @@ namespace {
 constexpr int kSlot = Display::kSlot0;
 constexpr uint32_t kApertureFirst = 0xb80, kApertureLast = 0xbf9;
 
-std::string refusal(uint32_t wrote, uint32_t active)
+std::string refusal(uint32_t wrote, uint32_t active, unsigned run = 8)
 {
     char line[256];
-    snprintf(line, sizeof(line),
-             "SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A "
-             "flips from the display's work loop from here on\n",
-             wrote, active);
+    snprintf(
+        line, sizeof(line),
+        "SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A flips "
+        "from the display's work loop for the next %u frames\n",
+        wrote, active, run);
     return line;
 }
 
@@ -72,7 +73,7 @@ TEST_P(Refusing, TheFirstFrameEndLogsOnceAndTheGateFlipsTheFrame)
     frame();
     ASSERT_EQ(gLog.size(), 1u);
     EXPECT_EQ(gLog[0], refusal(d.surfaceAddress(target), d.surfaceAddress(0)));
-    EXPECT_TRUE(d.completionFlipsRefused);
+    EXPECT_FALSE(d.completionHold.on());
     EXPECT_FALSE(d.completionFlipsProven);
     EXPECT_EQ(d.model.assembly[Display::kWinbufStartAddr], d.surfaceAddress(target));
     EXPECT_EQ(d.model.requested, Display::kGeneralActReq | Display::kWinAActReq);
@@ -196,16 +197,48 @@ TEST_P(Refusing, SuspendWritesAnUnjudgedFlipFromTheGate)
     EXPECT_TRUE(gLog.empty());
 }
 
-TEST_P(Refusing, RandomOrdersRefuseOnceAndNeverMisreadALatch)
+// Each retry after its run is refused again with one line (a completion-written flip replaced before a frame end judged
+// it is not), and the runs double to their cap: completion-written flips stay under 1% of the frames shown.
+TEST_P(Refusing, RandomOrdersRetryAfterEachRunAndNeverMisreadALatch)
 {
     Walk walk;
     randomWalk(d, 200000, walk);
-    EXPECT_EQ(gLog.size(), 1u);
-    EXPECT_TRUE(d.completionFlipsRefused);
-    EXPECT_LT(walk.fromCompletions + walk.fromFilters, 10u) << walk.fromCompletions << " " << walk.fromFilters;
-    EXPECT_TRUE(d.completionFilterOff);
+    EXPECT_GE(d.completionHold.failures, 3u);
+    EXPECT_EQ(gLog.size(), d.completionHold.failures);
+    EXPECT_EQ(d.completionHold.retries + 1, d.completionHold.failures);
+    EXPECT_LT((walk.fromCompletions + walk.fromFilters) * 100, d.shown.size())
+        << walk.fromCompletions << " " << walk.fromFilters;
+    EXPECT_FALSE(d.completionFlipsProven);
     EXPECT_GT(walk.completed, 5000u) << walk.completed;
     EXPECT_GT(d.shown.size(), 5000u) << d.shown.size();
+}
+
+// The same unit in steady frames: the gate flips the run's frames, the frame after it is armed again and refused,
+// and the next run is twice as long.
+TEST_P(Refusing, ARefusedUnitIsRetriedAfterItsRunAndHeldOffForTwiceAsLong)
+{
+    copied();
+    frame();
+    frame();
+    const auto heldUntilArmed = [this] {
+        unsigned held = 0;
+        for (;;) {
+            EXPECT_EQ(d.offerCopy(), 0);
+            const bool armed = d.completionFlip.state == SwitchCompletionFlip::kArmed;
+            d.complete(0);
+            d.donePass();
+            frame();
+            frame();
+            if (armed || held >= 100)
+                return held;
+            ++held;
+        }
+    };
+    EXPECT_EQ(heldUntilArmed(), 8u);
+    EXPECT_EQ(d.completionHold.retries, 1u);
+    ASSERT_EQ(gLog.size(), 2u);
+    EXPECT_NE(gLog[1].find("for the next 16 frames"), std::string::npos) << gLog[1];
+    EXPECT_EQ(heldUntilArmed(), 16u);
 }
 
 INSTANTIATE_TEST_SUITE_P(Aperture, Refusing, testing::Values(DcModel::kDropsWinbuf, DcModel::kParksWinbuf));
@@ -276,7 +309,7 @@ TEST_F(Unproven, RandomOrdersProveTheApertureAndNeverRefuse)
     Walk walk;
     randomWalk(d, 200000, walk);
     EXPECT_TRUE(d.completionFlipsProven);
-    EXPECT_FALSE(d.completionFlipsRefused);
+    EXPECT_EQ(d.completionHold.failures, 0u);
     EXPECT_TRUE(gLog.empty());
     EXPECT_GT(walk.fromCompletions + walk.fromFilters, 5000u) << walk.fromCompletions << " " << walk.fromFilters;
     EXPECT_GT(walk.fromFilters, 1000u) << walk.fromFilters;

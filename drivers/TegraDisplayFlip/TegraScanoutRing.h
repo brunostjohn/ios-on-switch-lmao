@@ -17,10 +17,13 @@
 // copy is writing it), held (complete, waiting for a flip; double buffering only). A frame goes only into a buffer in none of them.
 //
 // Replacing a flip still out is the one thing double buffering never does to DC A. Should the controller not take a replaced
-// START_ADDR as modelled (latch() says kInconsistent), recover() turns replacement off for good: from then on a frame finished
-// while a flip is out is held and flipped at that flip's latch, and no frame is written while a flip is out, which is double
-// buffering (with two buffers, when no third could be had, it is that from the start).
+// START_ADDR as modelled (latch() says kInconsistent), recover() turns replacement off: from then on a frame finished while a
+// flip is out is held and flipped at that flip's latch, and no frame is written while a flip is out, which is double
+// buffering (with two buffers, when no third could be had, it is that from the start). Replacement comes back after a run of
+// plain latches (replaceBackoff), at the first one that leaves nothing asked for, replaced or held; another mismatch before
+// it is forgiven doubles the run. A mismatch while double-buffered is the caller's to treat as fatal.
 #pragma once
+#include "SwitchRouteBackoff.h"
 
 // Direct scanout: entries kMaxBuffers..kMaxEntries-1 are the compositor's own surfaces, mapped into SMMU slots.
 // They take the same roles (front, pending, superseded, held) but are never a copy target: target() hands out scan buffers
@@ -31,7 +34,9 @@ struct TegraScanoutRing {
     static constexpr unsigned kMaxBuffers = 3, kMaxEntries = 8;
     unsigned buffers = 0;
     int front = 0, pending = kNone, superseded = kNone, drawing = kNone, held = kNone;
-    bool replace = true;  // latest frame wins; false after recover(): double buffering
+    bool replace = true;                                 // latest frame wins; false after recover(): double buffering
+    SwitchRouteBackoff<600, 9600, 3600> replaceBackoff;  // in plain latches
+    bool rearmWanted = false;
 
     // count buffers (2 or 3), window A scanning buffer 0, nothing asked for, replacement on.
     void reset(unsigned count)
@@ -40,6 +45,7 @@ struct TegraScanoutRing {
         front = 0;
         pending = superseded = drawing = held = kNone;
         replace = true;
+        rearmWanted = false;
     }
 
     bool busy(int i) const
@@ -134,11 +140,18 @@ struct TegraScanoutRing {
                 return kInconsistent;
             front = pending;
             pending = superseded = kNone;
+            if (replaceBackoff.clean())
+                rearmWanted = true;
+            if (rearmWanted && held == kNone) {
+                replace = true;
+                rearmWanted = false;
+            }
             return kTaken;
         }
         if (active == pending) {
             front = pending;
             pending = superseded = kNone;
+            replaceBackoff.clean();
             return kTaken;
         }
         if (!requested)
@@ -151,14 +164,16 @@ struct TegraScanoutRing {
         return active == front ? kWaiting : kInconsistent;
     }
 
-    // After kInconsistent with replacement on: DC A scans active (kNone: none of these buffers). Replacement is off from here. The
-    // buffer to ask for again is returned (the newest complete frame or, when window A scans none of these, the one believed
-    // scanned); the caller points window A at it. A replaced buffer it does not scan stays busy until a frame end shows a plain
-    // latch, and a copy in flight finishes into its own buffer and is held until then: nothing is written into a buffer DC A may
-    // still take.
+    // After kInconsistent with replacement on: DC A scans active (kNone: none of these buffers). Replacement is off from here
+    // until replaceBackoff's run of plain latches has passed. The buffer to ask for again is returned (the newest complete
+    // frame or, when window A scans none of these, the one believed scanned); the caller points window A at it. A replaced
+    // buffer it does not scan stays busy until a frame end shows a plain latch, and a copy in flight finishes into its own
+    // buffer and is held until then: nothing is written into a buffer DC A may still take.
     int recover(int active)
     {
         replace = false;
+        rearmWanted = false;
+        replaceBackoff.fail();
         if (active != kNone)
             front = active;
         if (superseded == active)

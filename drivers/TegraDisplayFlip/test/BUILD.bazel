@@ -7,6 +7,8 @@
 #                        and their recycling on swap completion; retire-at-offer is caught as the hazard
 #   switch_deferred_scale_test   SwitchDeferredScale.h against surfaces, a decoder pool, a scaler and a display: every
 #                        read of a deferred destination and every scanned frame shows the copy's bytes, holds balance
+#   switch_route_backoff_test   SwitchRouteBackoff.h: a failed route back on after its clean run of events, the run
+#                        doubled up to its cap by repeated failures and forgiven after a clean stretch
 # NativeLegacyDisplay's use of both is guarded in drivers/NativeMobileDisplay/test.
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
@@ -15,11 +17,14 @@ lint_files()
 
 RING = "//drivers/TegraDisplayFlip:TegraScanoutRing.h"
 
+BACKOFF = "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h"
+
 host_test(
     name = "scanout_ring_test",
     srcs = [
         "scanout_ring_test.cpp",
         RING,
+        BACKOFF,
     ],
     copts = ["-Wno-unused-parameter"],
 )
@@ -29,6 +34,7 @@ host_test(
     srcs = [
         "direct_policy_test.cpp",
         RING,
+        BACKOFF,
     ],
     copts = ["-Wno-unused-parameter"],
 )
@@ -46,5 +52,13 @@ host_test(
     srcs = [
         "switch_display_priority_test.cpp",
         "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
+    ],
+)
+
+host_test(
+    name = "switch_route_backoff_test",
+    srcs = [
+        "switch_route_backoff_test.cpp",
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
     ],
 )

@@ -143,6 +143,7 @@ void checkRotation()
     landscapeRunUnderflow(underflow);
     if (!underflow) {
         underflowRun = 0;
+        directHold.clean();
         return;
     }
     dc[kDcIntStatus] = underflow;
@@ -151,11 +152,13 @@ void checkRotation()
         stUnderflows++;
     if (probe.active())
         probeUnderflow = true;
-    if (directOn && ring.front >= kSlot0 && underflowRun + 1 >= kDirectUnderflowFrames) {
-        directOn = false;
+    directHold.dirty();
+    if (directOn && directHold.on() && ring.front >= kSlot0 && underflowRun + 1 >= kDirectUnderflowFrames) {
+        directHold.fail();
         IOLog("SwitchDisplay: window A underflowed %u frames in a row scanning a surface through the SMMU: direct "
-              "scanout off, frames are copied again (swaps still retire at their latch)\n",
-              underflowRun + 1);
+              "scanout held off for %u frames without an underflow, frames are copied meanwhile (swaps still retire at "
+              "their latch)\n",
+              underflowRun + 1, directHold.run);
     }
     if (++underflowRun < kUnderflowFrames)
         return;

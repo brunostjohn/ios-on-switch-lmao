@@ -173,3 +173,34 @@ TEST(VsyncPhase, SlowCompositor)
     const Result on = run(slow, true, 60, 5);
     check(on.finalLead == 0 && on.misses == 0, "slow: the phase stays off");
 }
+
+// V_PULSE2 programmed and never seen: the phase is held off for 600 flips with a vsync client, then probed again; a
+// second failure doubles the run; a V_PULSE2 seen keeps it running.
+TEST(VsyncPhaseProbe, ANeverSeenVpulse2HoldsThePhaseOffForARunThenProbesAgain)
+{
+    VsyncPhaseProbe probe;
+    for (unsigned i = 1; i < VsyncPhaseProbe::kFlips; ++i)
+        EXPECT_EQ(probe.flip(true, false), VsyncPhaseProbe::kRun);
+    EXPECT_EQ(probe.flip(true, false), VsyncPhaseProbe::kFailed);
+    EXPECT_FALSE(probe.on());
+    for (unsigned i = 1; i < 600; ++i)
+        ASSERT_EQ(probe.flip(false, false), VsyncPhaseProbe::kHeld);
+    EXPECT_EQ(probe.flip(false, false), VsyncPhaseProbe::kRetry);
+    EXPECT_TRUE(probe.on());
+    probe.programmed();
+    for (unsigned i = 1; i < VsyncPhaseProbe::kFlips; ++i)
+        EXPECT_EQ(probe.flip(true, false), VsyncPhaseProbe::kRun);
+    EXPECT_EQ(probe.flip(true, false), VsyncPhaseProbe::kFailed);
+    EXPECT_EQ(probe.hold.run, 1200u);
+    VsyncPhaseProbe seen;
+    for (unsigned i = 0; i < 100; ++i)
+        EXPECT_EQ(seen.flip(true, true), VsyncPhaseProbe::kRun);
+}
+
+TEST(VsyncPhaseProbe, AnUnusableTimingHoldsThePhaseOffAsAMissedProbeDoes)
+{
+    VsyncPhaseProbe probe;
+    probe.timingUnusable();
+    EXPECT_FALSE(probe.on());
+    EXPECT_EQ(probe.hold.run, 600u);
+}

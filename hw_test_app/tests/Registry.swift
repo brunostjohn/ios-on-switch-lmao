@@ -49,6 +49,7 @@ public enum Registry {
             DisplayModeTest(), DisplayPacingTest(), CompletionFlipTest(), MediaCompletionFlipTest(), BrightnessTest(),
             ColourPipelineTest(), PlanesTest(), SmallDrawableTest(), PresentAtTimeTest(), PlaneInUseTest(),
             ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
+            PlanesCroppedTest(),
         ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
 
     static let sensorsAndInput: [any HWTest] = [

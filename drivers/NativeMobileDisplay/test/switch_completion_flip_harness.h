@@ -17,6 +17,7 @@
 
 #include "../../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 #include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
@@ -310,6 +311,7 @@ struct Display {
     Plane planeNext, planeTarget;
     bool planeNextSet = false, rotated = true, rotationLatched = true, rotationAnnounced = true, doubleBuffer = true;
     bool directAttached = true, directOn = true, stats = false, probeUnderflow = false, probeRequest = false;
+    SwitchRouteBackoff<600, 9600, 3600> directHold;
     bool hwSuspended = false, gpuDonePending = false, gpuScanout = false, transferred = false, deferred = false;
     bool copying = false, deferredCopy = false;
     int gpuStatus = 0, gpuDirect = kNoBuffer;
@@ -337,7 +339,9 @@ struct Display {
             completionFlipLock->held = false;
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
-        completionFlipsProven = completionFlipsRefused = completionFilterOff = false;
+        completionFlipsProven = completionFilterOff = false;
+        completionHold = {};
+        filterHold = {};
         ring.reset(3);
         model.general[DcModel::kHeader] = kWindowASelect;
         model.assembly[kWinbufStartAddr] = surfaceAddress(0);

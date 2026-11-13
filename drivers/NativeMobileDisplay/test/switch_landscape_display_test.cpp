@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <stdexcept>
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"
@@ -157,6 +158,15 @@ struct Display {
     void mediaFlipFromGate()
     {
         ++mediaFromGate;
+    }
+
+    bool failEnter = false;
+
+    bool landscapeRunFailsEnter()
+    {
+        const bool fail = failEnter;
+        failEnter = false;
+        return fail;
     }
 
     static bool mediaFlipIdle()
@@ -455,7 +465,7 @@ TEST(LandscapeDisplay, TheUiWindowMustShowTheFrontFrameAtTheLatch)
     EXPECT_THROW(d.boundary(), std::runtime_error);
 }
 
-TEST(LandscapeDisplay, NoQuietFrameEndAbandonsTheChangeForTheBoot)
+TEST(LandscapeDisplay, NoQuietFrameEndAbandonsTheChangeAndHoldsTheModeOff)
 {
     Display d;
     portrait(d);
@@ -466,7 +476,7 @@ TEST(LandscapeDisplay, NoQuietFrameEndAbandonsTheChangeForTheBoot)
         d.landscapeFrameEnd();
     }
     EXPECT_FALSE(d.landscapeState.wanted);
-    EXPECT_TRUE(d.landscapeState.retired);
+    EXPECT_FALSE(d.landscapeState.hold.on());
     EXPECT_EQ(d.retiredUnshown, 2u);
     EXPECT_FALSE(d.landscapeHoldsKicks());
     EXPECT_FALSE(d.landscapeOn());
@@ -479,7 +489,7 @@ TEST(LandscapeDisplay, AFailedRotatedReservationStaysPortrait)
     ASSERT_FALSE(d.stage(landscapeVideo(2)));
     reserveError = -1;
     d.landscapeFrameEnd();
-    EXPECT_TRUE(d.landscapeState.retired);
+    EXPECT_FALSE(d.landscapeState.hold.on());
     EXPECT_FALSE(d.landscapeState.switching);
     EXPECT_FALSE(d.planeLatch.requested());
     EXPECT_EQ(d.dc[Display::kWinABase + kOptions], Display::kWinEnable);
@@ -543,7 +553,7 @@ TEST(LandscapeDisplay, AHeldEnterIsDroppedWhenTheScanoutStops)
     d.scanoutStopped = true;
     d.landscapeScanoutStopped();
     EXPECT_FALSE(d.landscapeState.wanted);
-    EXPECT_FALSE(d.landscapeState.retired);
+    EXPECT_TRUE(d.landscapeState.hold.on());
     EXPECT_EQ(d.retiredUnshown, 2u);
     EXPECT_FALSE(d.landscapeHoldsKicks());
 }
@@ -555,19 +565,47 @@ TEST(LandscapeDisplay, APortraitRecoveryDropsAHeldChangeAndKeepsLandscapeOn)
     ASSERT_FALSE(d.stage(landscapeVideo(2)));
     d.beginPlaneRecovery("test");
     EXPECT_FALSE(d.landscapeState.wanted);
-    EXPECT_FALSE(d.landscapeState.retired);
+    EXPECT_TRUE(d.landscapeState.hold.on());
 }
 
-TEST(LandscapeDisplay, AnOverlayRecoveryLeavesLandscapeFirstAndForGood)
+TEST(LandscapeDisplay, AnOverlayRecoveryLeavesLandscapeFirstAndHoldsItOff)
 {
     Display d;
     landscape(d);
     d.beginPlaneRecovery("test");
-    EXPECT_TRUE(d.landscapeState.retired);
+    EXPECT_FALSE(d.landscapeState.hold.on());
     EXPECT_FALSE(d.landscapeOn());
     EXPECT_FALSE(d.planeRecoveryTarget.landscape);
     EXPECT_FALSE(d.planeRecoveryTarget.on());
     EXPECT_EQ(d.dc[Display::kWinABase + kOptions], Display::kWinEnable);
     EXPECT_EQ(d.dc[Display::kWinBBase + kOptions], 0u);
+}
+
+// A change into landscape that fails (FAIL's forced arm: the reservation) holds the mode off for 120 video frames
+// latched on the copy route; the next change after them goes landscape; a second failure holds it off for 240.
+TEST(LandscapeDisplay, AFailedChangeIsTriedAgainAfterARunOfVideoFrames)
+{
+    Display d;
+    portrait(d);
+    d.failEnter = true;
+    ASSERT_FALSE(d.stage(landscapeVideo(2)));
+    d.landscapeFrameEnd();
+    EXPECT_FALSE(d.landscapeOn());
+    EXPECT_FALSE(d.landscapeState.switching);
+    const auto videoFrames = [&d](unsigned n) {
+        for (unsigned i = 0; i < n; ++i)
+            d.landscapeHoldLatched(portraitVideo(3));
+    };
+    videoFrames(119);
+    EXPECT_FALSE(d.landscapeState.hold.on());
+    videoFrames(1);
+    EXPECT_TRUE(d.landscapeState.hold.on());
+    EXPECT_EQ(d.landscapeState.hold.retries, 1u);
+    ASSERT_FALSE(d.stage(landscapeVideo(4)));
+    d.landscapeFrameEnd();
+    EXPECT_TRUE(d.landscapeState.switching);
+    ASSERT_TRUE(d.boundary());
+    EXPECT_TRUE(d.landscapeOn());
+    EXPECT_EQ(d.landscapeState.hold.failures, 1u);
 }
 }  // namespace

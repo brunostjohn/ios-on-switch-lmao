@@ -176,8 +176,6 @@ void planeDropOverlays(PlaneSet &p, unsigned windows)
 bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
 {
     mediaFlipFromGate();
-    if (planesAbandoned)
-        return false;
     if (planeRecovering) {
         holdPlaneRecovery(p);
         return false;

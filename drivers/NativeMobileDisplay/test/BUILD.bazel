@@ -61,6 +61,8 @@
 #                                       the order
 #   switch_media_completion_flip_filter_test  host1x's filter writes the set first: the completion writes nothing, a
 #                                       frame end, gate writer or SC7 between adopts it, a stale waiter claims nothing
+#   switch_scanout_attach_test          SwitchScanoutAttach.h: a window firmware left on is turned off and the scanout
+#                                       domain attaches at the first frame end that reads it off, never before
 #   switch_completion_flip_filter_test  the producers' interrupt filters write the flip first: their completion writes
 #                                       nothing, a frame end or SC7 between adopts it, a stale waiter claims nothing
 #   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
@@ -78,6 +80,7 @@ host_test(
     srcs = [
         "vsync_phase_test.cpp",
         "//drivers/NativeMobileDisplay:VsyncPhase.h",
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
     ],
 )
 
@@ -400,6 +403,7 @@ host_test(
 host_test(
     name = "switch_scanout_start_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_scanout_start_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
@@ -410,6 +414,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_harness.h",
         "switch_completion_flip_test.cpp",
         "switch_completion_flip_walk.h",
@@ -440,6 +445,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_filter_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_filter_test.cpp",
         "switch_completion_flip_harness.h",
         "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
@@ -462,6 +468,7 @@ host_test(
 host_test(
     name = "switch_completion_flip_proof_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_completion_flip_harness.h",
         "switch_completion_flip_proof_test.cpp",
         "switch_completion_flip_walk.h",
@@ -548,6 +555,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
     ],
     deps = [":native_scanout_kernel"],
 )
@@ -684,6 +692,7 @@ host_test(
 host_test(
     name = "switch_overlay_registers_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "switch_overlay_registers_test.cpp",
@@ -709,6 +718,7 @@ host_test(
 host_test(
     name = "switch_landscape_display_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_landscape_display_test.cpp",
         "//drivers/NativeMobileDisplay:NativeColumnScan.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
@@ -750,6 +760,7 @@ host_test(
 host_test(
     name = "switch_media_completion_flip_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_media_completion_flip_harness.h",
         "switch_media_completion_flip_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
@@ -794,6 +805,7 @@ host_test(
 host_test(
     name = "switch_media_completion_flip_filter_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_media_completion_flip_harness.h",
@@ -826,6 +838,7 @@ host_test(
 host_test(
     name = "switch_plane_composite_test",
     srcs = [
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
         "switch_plane_composite_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
@@ -1048,4 +1061,12 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
     ],
     deps = [":native_scanout_kernel"],
+)
+
+host_test(
+    name = "switch_scanout_attach_test",
+    srcs = [
+        "switch_scanout_attach_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutAttach.h",
+    ],
 )

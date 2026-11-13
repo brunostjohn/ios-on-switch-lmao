@@ -32,6 +32,7 @@
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraDisplayFlip/SwitchDisplayPriority.h"
+#include "../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
@@ -873,9 +874,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
     // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
-    // frame. Never booted: V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after
-    // kPhaseProbeFlips latched flips with it programmed, one line and the phase is off for the boot. Once it has, a silent one
-    // panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the stats are debug only).
+    // frame. V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after VsyncPhaseProbe::kFlips
+    // latched flips with it programmed, one line and the phase is held off for the probe's run, then probed again. Once it
+    // has, a silent one panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the
+    // stats are debug only). Core Animation registers no vsync client on a J120 or a J181 (watchVsync).
     VsyncPhase phase;
     uint64_t vpulseTime = 0, vpulseContinuous = 0, deliveredFrame = ~0ULL;
     uint64_t vsyncSentAt = 0;  // the frame timeline: the last vsync sent (its stamp), and the CPU clock then
@@ -884,11 +886,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int32_t phaseCorrection = 0;  // lines, from the measured lead against the asked-for one
     uint32_t vblankLine = 0, totalLines = 0, phaseLine = 0, phaseAsked = 0, measuredLeadUs = 0;
     uint32_t deliveredSource = 0;  // the last vsync's: 0 at V_BLANK, else V_PULSE2's line
-    unsigned phaseProbe = 0, vpulseSilent = 0;
+    unsigned vpulseSilent = 0;
+    static inline VsyncPhaseProbe phaseProbe;  // static: the instance is at the 16 KiB a kalloc_type class may have
     unsigned phaseSettle =
         0;  // latched flips to wait after a new line before measuring it (it latches with the next flip)
-    bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false, phaseFailed = false;
-    static constexpr unsigned kPhaseProbeFlips = 5;
+    bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false;
     // Hardware rotation (NativeScanout.h). The CPU stops rotating: each client frame is
     // swizzled, unrotated, into the block-linear extent of the boot framebuffer and window A column-scans it. The first such
     // frame switches window A (four registers, latched at a frame boundary); the frame ends after it confirm the latch, read the
@@ -947,8 +949,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // ("swap %u completed, recycling surface 0x%x from swap %u"), so from then on every swap, direct or copied, retires when its
     // frame is seen on screen, with every older one (latchRetire); a frame replaced before it showed retires with the one that
     // replaced it. A slot keeps its surface's descriptor retained and prepared until another surface needs the slot and it is
-    // neither scanned nor asked for. Window A underflowing kDirectUnderflowFrames in a row from a slot turns direct off (one
-    // line); swaps keep retiring at their latch.
+    // neither scanned nor asked for. Window A underflowing kDirectUnderflowFrames in a row from a slot holds direct off (one
+    // line) for a run of frame ends with no window A underflow (directHold); swaps keep retiring at their latch.
     static constexpr int kSlot0 = static_cast<int>(TegraScanoutRing::kMaxBuffers);
     static constexpr unsigned kSlots = TegraScanoutRing::kMaxEntries - TegraScanoutRing::kMaxBuffers,
                               kDirectUnderflowFrames = 3;
@@ -970,6 +972,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     DirectSlot slots[kSlots] = {};
     uint64_t slotUses = 0, takeSeq = 0;
     bool directOn = false, directAttached = false, latchRetire = false;
+    // Static: the instance is at the 16 KiB a kalloc_type class may have. 10 s of clean frames after the first hold, at
+    // most 160 s, forgiven after a minute with direct on.
+    static inline SwitchRouteBackoff<600, 9600, 3600> directHold;
     int gpuDirect = kNoBuffer, gpuPresentedEntry = kNoBuffer;  // the slot entry a fence-only present is for
 
     struct Taken {
@@ -1181,7 +1186,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     Span stTouchSwap = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
-    uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
+    uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled
     bool idleSincePresent = false;
     bool statsQuiet = false;  // the last window logged had nothing on the screen change (noteStatsWindow)
 
@@ -1463,7 +1468,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecovering || landscapeState.wanted || completionFlipOut();
+               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
+               completionFlipOut() || scanoutAttachHoldsFrameEnds();
     }
 
     void maskIdleFrameEnd()
@@ -1510,7 +1516,7 @@ private:
             // Powered down for SC7: the resume's scanout restart unmasks V_BLANK for an armed tick. V_PULSE2 (r17-touch's
             // vsync phase) likewise, once programmed: a latched one from before is stale.
             if (!hwSuspended) {
-                const uint32_t bits = kVblankInt | (vpulseProgrammed && !phaseFailed ? kVpulse2Int : 0);
+                const uint32_t bits = kVblankInt | (vpulseProgrammed && phaseProbe.on() ? kVpulse2Int : 0);
                 dc[kDcIntStatus] = bits;
                 writeIntMask(0, bits);
             }
@@ -1676,8 +1682,10 @@ private:
         }
         if ((status & kFrameEndInt) && tapeSettle)
             checkTapeSettled();
-        if (status & kFrameEndInt)
+        if (status & kFrameEndInt) {
             probeFrameEnd();
+            scanoutAttachFrameEnd();
+        }
         if (status & kFrameEndInt) {
             planeFrameEnd();
             landscapeFrameEnd();
@@ -1826,13 +1834,17 @@ private:
             static_cast<unsigned long long>(stPWait.maxUs()), static_cast<unsigned long long>(stPCopy.meanUs()),
             static_cast<unsigned long long>(stPCopy.maxUs()), static_cast<unsigned long long>(stPLatch.meanUs()),
             static_cast<unsigned long long>(stPLatch.maxUs()));
-        add("; direct %u%s", stDirect, !directOn && latchRetire ? " (off)" : "");
+        add("; direct %u%s held %u retried %u", stDirect,
+            !directOn && latchRetire ? " (off)"
+            : !directHold.on()       ? " (held off)"
+                                     : "",
+            directHold.failures, directHold.retries);
         stDirect = 0;
         const char *buffering = "";
         if (doubleBuffer && !ring.replace)
             buffering = stFallbacks ? " (fell back to double buffering now)" : " (double-buffered)";
-        add("; %u buffers%s, replaced %u, collapsed %u", doubleBuffer ? ring.buffers : 1u, buffering, stReplaced,
-            stCollapsed);
+        add("; %u buffers%s, replaced %u, collapsed %u, fallbacks %u re-armed %u", doubleBuffer ? ring.buffers : 1u,
+            buffering, stReplaced, stCollapsed, ring.replaceBackoff.failures, ring.replaceBackoff.retries);
         // r18-planes: window B sets written (of them by swaps that changed only window B: video frames with no UI composite),
         // seen latched, new slot mappings, detached layers not shown, window B underflow frames, ready-mask mismatches.
         const char *planesState = "-";
@@ -1842,16 +1854,17 @@ private:
             planesState = "off";
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u, "
-            "composited %u",
+            "composited %u, stuck %u asked %u, landscape held %u retried %u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneDropped,
-            stPlaneUnderflows, stPlaneUnready, stPlaneComposited);
+            stPlaneUnderflows, stPlaneUnready, stPlaneComposited, planeRecoveriesStuck, planeRecoveryAsks,
+            landscapeState.hold.failures, landscapeState.hold.retries);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
             static_cast<unsigned long long>(counted[2].counted), counted[2].frames,
             counted[0].overflowed || counted[1].overflowed || counted[2].overflowed ? " overflowed" : "");
-        stPlaneNative = 0;
         planeTotalsClose();
+        stPlaneNative = 0;
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneComposited =
             stPlaneUnderflows = stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
@@ -1872,15 +1885,16 @@ private:
         // r17-touch: the vsync phase: the lead in effect (0: at V_BLANK), the line, the lead V_PULSE2 gave, the last window's
         // response p99, margin and miss floor, and its misses this boot.
         const char *phaseState = "at V_BLANK";
-        if (phaseFailed) {
-            phaseState = "off";
+        if (!phaseProbe.on()) {
+            phaseState = "held off";
         } else if (phaseDelivering()) {
             phaseState = "on";
         }
-        add("; phase %s lead %u us (line %u, measured %llu/%llu us), p99 %u margin %u floor %u, misses %u", phaseState,
-            phase.lead(), phaseLine, static_cast<unsigned long long>(stPhaseLead.meanUs()),
+        add("; phase %s lead %u us (line %u, measured %llu/%llu us), p99 %u margin %u floor %u, misses %u, held %u "
+            "retried %u",
+            phaseState, phase.lead(), phaseLine, static_cast<unsigned long long>(stPhaseLead.meanUs()),
             static_cast<unsigned long long>(stPhaseLead.maxUs()), phase.lastP99(), phase.marginUs(), phase.floorUs(),
-            phase.missCount());
+            phase.missCount(), phaseProbe.hold.failures, phaseProbe.hold.retries);
         stPhaseLead = Span{};
         if (quiet)
             add("%s", "; quiet (the next quiet windows are not logged)");
@@ -1939,7 +1953,7 @@ private:
     // while a lead is in effect and nothing turned the phase off.
     bool phaseDelivering() const
     {
-        return vpulseSeen && !phaseFailed && (phase.lead() != 0u);
+        return vpulseSeen && phaseProbe.on() && (phase.lead() != 0u);
     }
 
     void vpulseNotify()
@@ -2052,7 +2066,7 @@ private:
 
     void programPhase(uint32_t leadUs)
     {
-        if (!dc || hwSuspended || phaseFailed || !totalLines || !lineNs())
+        if (!dc || hwSuspended || !phaseProbe.on() || !totalLines || !lineNs())
             return;
         const int64_t back = (static_cast<int64_t>(leadUs) * 1000 - feAfterVblankNs) / static_cast<int64_t>(lineNs());
         int64_t line = static_cast<int64_t>(vblankLine) - back - phaseCorrection;
@@ -2072,7 +2086,7 @@ private:
             if (vsyncArmed)
                 writeIntMask(0, kVpulse2Int);  // else armVsync unmasks it
             vpulseProgrammed = true;
-            phaseProbe = 0;
+            phaseProbe.programmed();
         }
     }
 
@@ -2080,8 +2094,17 @@ private:
     // never-booted check (V_PULSE2 programmed, flips latched, not one V_PULSE2).
     void notePhasePresent(uint64_t stamp, const FrameMark &mark)
     {
-        if (phaseFailed || !mark.submit || !mark.ready || !vsyncOf(mark))
+        if (!mark.submit || !mark.ready || !vsyncOf(mark))
             return;
+        const VsyncPhaseProbe::Step step = phaseProbe.flip(vpulseProgrammed, vpulseSeen);
+        if (step == VsyncPhaseProbe::kHeld)
+            return;
+        if (step == VsyncPhaseProbe::kRetry && !readPhaseTiming())
+            return;
+        if (step == VsyncPhaseProbe::kFailed) {
+            phaseOffForRun();
+            return;
+        }
         if (vsyncInterval)
             phase.setPeriod(static_cast<uint32_t>(Span::ticksToUs(vsyncInterval)));
         if (phaseSettle)
@@ -2089,19 +2112,42 @@ private:
         phase.present(Span::ticksToUs(mark.submit), Span::ticksToUs(mark.ready), Span::ticksToUs(stamp));
         if (phase.lead())
             programPhase(phase.lead());
-        if (!vpulseProgrammed || vpulseSeen || ++phaseProbe < kPhaseProbeFlips)
-            return;
-        phaseFailed = true;
+    }
+
+    // V_PULSE2 programmed and not seen in VsyncPhaseProbe::kFlips flips: unprogrammed, the vsync at V_BLANK for the
+    // probe's run; the next lead programs it again.
+    void phaseOffForRun()
+    {
         writeIntMask(kVpulse2Int, 0);
         dc[kDcIntEnable] = dc[kDcIntEnable] & ~kVpulse2Int;
+        vpulseProgrammed = false;
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
-        IOLog("SwitchDisplay: vsync phase off for this boot: V_PULSE2 never reached the CPU in %u flips (line %u; "
-              "SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s); vsync stays at V_BLANK\n",
-              phaseProbe, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+        IOLog("SwitchDisplay: V_PULSE2 never reached the CPU in %u flips (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 "
+              "%#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s): vsync phase held off for %u flips, vsync at V_BLANK\n",
+              VsyncPhaseProbe::kFlips, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
               static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
               static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
-              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic, phaseProbe.hold.run);
+    }
+
+    // The frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment). False, with one line, when DC A's
+    // timing places no V_BLANK line: the phase is held off for the probe's run and read again after it.
+    bool readPhaseTiming()
+    {
+        const auto vertical = [this](uint32_t reg) {
+            return dc[reg] >> 16 & 0x1fff;
+        };
+        vblankLine = vertical(kDcDispRefToSync) + vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) +
+                     vertical(kDcDispActive);
+        totalLines = vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) + vertical(kDcDispActive) +
+                     vertical(kDcDispFrontPorch);
+        if (vblankLine >= 64 && totalLines >= vblankLine - vertical(kDcDispRefToSync))
+            return true;
+        phaseProbe.timingUnusable();
+        IOLog("SwitchDisplay: DC A timing reads V_BLANK line %u of %u lines: vsync phase held off for %u flips\n",
+              vblankLine, totalLines, phaseProbe.hold.run);
+        return false;
     }
 
     // The compositor has no vsync client any more: it has nothing to draw until it registers again.
@@ -2165,19 +2211,7 @@ private:
         dc[kDcIntEnable] = dcEnable | kVblankInt | kFrameEndInt;
         writeIntMask(~0u, (dcMask & ~kVblankInt) | kFrameEndInt);
         intMaskLive = true;
-        // r17-touch: the frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment).
-        const auto vertical = [this](uint32_t reg) {
-            return dc[reg] >> 16 & 0x1fff;
-        };
-        vblankLine = vertical(kDcDispRefToSync) + vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) +
-                     vertical(kDcDispActive);
-        totalLines = vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) + vertical(kDcDispActive) +
-                     vertical(kDcDispFrontPorch);
-        if (vblankLine < 64 || totalLines < vblankLine - vertical(kDcDispRefToSync)) {
-            IOLog("SwitchDisplay: vsync phase off for this boot: DC A timing reads V_BLANK line %u of %u lines\n",
-                  vblankLine, totalLines);
-            phaseFailed = true;
-        }
+        readPhaseTiming();
         vblankSource->enable();
         vsyncTimer->setTimeoutMS(250);
         IOLog("SwitchDisplay: vsync from the DC A vblank interrupt (INTID %u)\n", kDisplayAInterrupt);
@@ -2535,14 +2569,15 @@ private:
             }
             return;
         }
-        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) && !planeRecovering) ||
+        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) &&
+             !planeRecoveryWaits()) ||
             hwSuspended || scanoutStopped || gPanicRestore.panicking)
             return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             return;
         }
-        if (planeRecovering)
+        if (planeRecoveryWaits())
             panic("SwitchDisplay: overlay recovery has no completed stop after %u ms", kFlipDeadlineMS);
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
@@ -2717,18 +2752,18 @@ private:
     }
 
     // Under the gate, at the first frame end whose window A START_ADDR none of the asked-for flips explains while flips are being
-    // replaced: DC A does not take a replaced START_ADDR as TegraScanoutRing.h models it. One line, then double buffering for the
-    // rest of the boot, as before r14: the buffer DC A scans becomes the front, the newest complete frame is asked for again (no
-    // request is out now, so it is a plain flip), a replaced buffer it does not scan stays untouched until a frame end shows a plain
-    // latch, and a copy in flight finishes into its own buffer and waits for that latch. A mismatch after this panics as it did.
+    // replaced: DC A does not take a replaced START_ADDR as TegraScanoutRing.h models it. One line, then double buffering, as
+    // before r14, until the ring's run of plain latches re-arms replacement: the buffer DC A scans becomes the front, the newest
+    // complete frame is asked for again (no request is out now, so it is a plain flip), a replaced buffer it does not scan stays
+    // untouched until a frame end shows a plain latch, and a copy in flight finishes into its own buffer and waits for that
+    // latch. A mismatch while double-buffered panics as it did.
     void recoverFlip(uint32_t start, uint32_t control, int asked, int replaced, int scanned)
     {
-        IOLog("SwitchDisplay: window A scans %#x after flips to %#x (replaced %#x, front %#x; STATE_CONTROL %#x), "
-              "not as "
-              "modelled: double-buffered from here (the r7q path)\n",
-              start, surfaceAddress(asked), replaced == kNoBuffer ? 0u : surfaceAddress(replaced),
-              surfaceAddress(scanned), control);
         const int again = ring.recover(surfaceIndex(start));
+        IOLog("SwitchDisplay: window A scans %#x after flips to %#x (replaced %#x, front %#x; STATE_CONTROL %#x), "
+              "not as modelled: double-buffered for %u plain latches (the r7q path)\n",
+              start, surfaceAddress(asked), replaced == kNoBuffer ? 0u : surfaceAddress(replaced),
+              surfaceAddress(scanned), control, ring.replaceBackoff.run);
         if (again != kNoBuffer)
             writeFlip(again);
         if (stats)
@@ -2974,7 +3009,7 @@ private:
             // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
             // the last flip of every burst. The next writeFlip arms it again.
         } else if (ring.pending == kNoBuffer && !probeRequest && !planeLatch.requested() && !planeHeldSet &&
-                   !planeRecovering && flipTimer) {
+                   !planeRecoveryWaits() && flipTimer) {
             flipTimer->cancelTimeout();
             settleArmed = false;
         }
@@ -3432,6 +3467,7 @@ public:
             columnScanRegister();
             dcClassRegister();
             planeTotalsRegister();
+            frameInfoTimedRegister();
         }
         return true;
     }
@@ -3591,7 +3627,7 @@ public:
         planeNext = pd.set;
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
-        const bool direct = directOn && !gpuBypass && directCandidate(pd.ui);
+        const bool direct = directOn && directHold.on() && !gpuBypass && directCandidate(pd.ui);
         const bool noSurface = doubleBuffer && (direct ? ring.held != kNoBuffer || ring.superseded != kNoBuffer
                                                        : ring.target() == kNoBuffer);
         if (noSurface || hwSuspended) {
@@ -4605,7 +4641,10 @@ public:
         uint64_t requested = 0;
         memcpy(&id, bytes + swapId, sizeof(id));
         memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
-        frameInfo->pending.take(seqOf(request), id, requested);
+        const bool timed = request == timedHeldRequest;
+        if (timed)
+            timedHeldRequest = nullptr;
+        frameInfo->pending.take(seqOf(request), id, requested, timed);
         frameInfo->tickets.take(request, seqOf(request));
     }
 
@@ -4789,6 +4828,7 @@ public:
 #include "SwitchLandscapeSelection.h"
 #include "SwitchPlaneConversionDisplay.h"
 #include "SwitchPlaneCompositeDisplay.h"
+#include "SwitchScanoutAttach.h"
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
