@@ -31,6 +31,36 @@ const char *refusedWhy(uint32_t reason)
         return "no reason given";
     }
 }
+
+bool byHandle(const TegraGM20BAbiSurfaceUse &a, const TegraGM20BAbiSurfaceUse &b)
+{
+    return a.handle < b.handle;
+}
+
+// One record per BO, by handle, with the accesses of every member of it OR'd: an arena's view aliases are members of its
+// handle at other VAs
+void registration(const std::vector<SetMember> &members, std::vector<TegraGM20BAbiSurfaceUse> &uses)
+{
+    uses.clear();
+    for (const SetMember &m : members)
+        uses.push_back({m.handle, m.access, 0});
+    std::sort(uses.begin(), uses.end(), byHandle);
+    size_t unique = 0;
+    for (size_t i = 0; i < uses.size(); ++i) {
+        if (unique && uses[unique - 1].handle == uses[i].handle)
+            uses[unique - 1].access |= uses[i].access;
+        else
+            uses[unique++] = uses[i];
+    }
+    uses.resize(unique);
+}
+
+// What the kernel answered for `handle`'s record in a registration: 0 when it kept the BO out
+uint32_t registered(const std::vector<TegraGM20BAbiSurfaceUse> &uses, uint64_t handle)
+{
+    const auto at = std::lower_bound(uses.begin(), uses.end(), TegraGM20BAbiSurfaceUse{handle, 0, 0}, byHandle);
+    return at != uses.end() && at->handle == handle ? at->access : 0;
+}
 }  // namespace
 
 const SetMember *SetView::find(uint64_t va, uint64_t bytes) const
@@ -79,13 +109,11 @@ bool ResourceSet::eraseLocked(uint64_t handle)
     return members_.size() + outside_.size() != before;
 }
 
-// One ResourceSetCreate of every member. What the kernel refused comes back with access 0 and leaves members_ for good
-// (always ones for outside_).
+// One ResourceSetCreate of every member's BO, once. What the kernel refused comes back with access 0, and every member of
+// that BO leaves members_ for good (always ones for outside_).
 bool ResourceSet::attempt(Kernel &k, std::vector<TegraGM20BAbiSurfaceUse> &uses, int &kr)
 {
-    uses.clear();
-    for (const SetMember &m : members_)
-        uses.push_back({m.handle, m.access, 0});
+    registration(members_, uses);
     uint32_t set = set_, generation = 0;
     const volatile uint32_t *mirror = nullptr;
     kr = k.resourceSet(uses, set, generation, mirror);
@@ -93,7 +121,7 @@ bool ResourceSet::attempt(Kernel &k, std::vector<TegraGM20BAbiSurfaceUse> &uses,
         return false;
     size_t kept = 0;
     for (size_t i = 0; i < members_.size(); ++i) {
-        if (uses[i].access)
+        if (registered(uses, members_[i].handle))
             members_[kept++] = members_[i];
         else if (members_[i].always)
             outside_.push_back(members_[i]);
