@@ -59,7 +59,7 @@ Built by `_prepareTransformBuffersAndOptions`; layout in `TegraVICRequest.h` (`T
 | 0x028..0x047 | source rect x, y, w, h: u64 16.16 (TransferSurface: `(x << 16) \| (xfrac << 14)`); w or h 0 → whole source |
 | 0x060..0x06f | destination rect x, y, w, h: u32 pixels; w or h 0 → whole destination |
 | 0x078..0x0a7 | shared events: src port name, wait, signal; dst port name, wait, signal |
-| 0x0a8 | AlphaOverride value |
+| 0x0a8 | AlphaOverride value (the framework's getNumber into a u32 [V]; taken as 8-bit like BorderFill's alpha [I]) |
 | 0x0ac..0x0c8 | BorderFill rect, alpha, R/Y G/Cb B/Cr |
 | 0x0cc..0x0d3 | WriteOnlyMode A, R/Y, G/Cb, B/Cr (u16) |
 | 0x0dc..0x10f | histogram mode, rect, 8 programmable bins |
@@ -152,14 +152,15 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
    function pinned by its words). `IOCoreSurfaceRoot` is the root.
 2. Translate (`tegra_vic_plan`, `TegraVICRequest.h`): empty rects → whole surfaces; ZeroFill and BorderFill become fills
    before the transform; WriteOnlyMode becomes a fill of the destination rect (4:2:0 fills widened to even coordinates);
-   Transform, NearestFilter and the destination's chroma siting are used; quality hints (dither, enhance, noise
-   estimation, directional scaling, pixel averaging, edge mirroring, pseudo-linear, fix-upscaling, fractional precision,
-   blit clip, lock-in, read-only, unwire, power, coalescing, Comm records) are accepted and ignored. Refused as
-   **kIOReturnUnsupported** (callers fall back): histogram, HDR, film grain, colour remap, shared events, alpha override
-   into a surface with alpha, formats other than BGRA/RGBA/420v/420f/422v/422f, protected-to-less-protected, and any
-   shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects or 4:2:2 columns, >16x scaling, sizes
-   outside 2..8192, a destination sub-rectangle under a transform other than 0 and 6, whose placement is not in place on
-   the unit). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
+   Transform, NearestFilter, AlphaOverride (AlphaFillMode BACKGROUND: every pixel written into a surface with alpha
+   takes the override [T: probe gpu.x1.vic_fractional, alpha_background_wrong=0]) and the destination's chroma siting
+   are used; quality hints (dither, enhance, noise estimation, directional scaling, pixel averaging, edge mirroring,
+   pseudo-linear, fix-upscaling, fractional precision, blit clip, lock-in, read-only, unwire, power, coalescing, Comm
+   records) are accepted and ignored. Refused as **kIOReturnUnsupported** (callers fall back): histogram, HDR, film
+   grain, colour remap, shared events, formats other than BGRA/RGBA/420v/420f/422v/422f, protected-to-less-protected,
+   and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects or 4:2:2 columns, >16x scaling,
+   sizes outside 2..8192, a destination sub-rectangle under a transform other than 0 and 6, whose placement is not in
+   place on the unit). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
 3. Build and check every VIC job in the calling thread (`tegra_vic_build`, `TegraVICConfig.h`), so refusals are the
    call's own result; then queue (16 deep, FIFO) for the engine thread. Sync calls sleep until their jobs are done.
 4. Engine thread: `IOSurface::prepare`, map each surface page by page into its SMMU window (source read-only), clean

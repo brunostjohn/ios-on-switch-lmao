@@ -2,9 +2,21 @@
 #include <gtest/gtest.h>
 #include <vector>
 #include "../SwitchVICFractionProbe.h"
+#include "vic_model.h"
 
 namespace {
 using namespace switch_vic_fraction_probe;
+
+constexpr uint64_t kSrcIova = 0x40000000, kDstIova = 0x40100000;
+
+TegraVICJob built(const Case &c)
+{
+    const TegraVICImage in = image(kSrcIova, false), out = image(kDstIova, true);
+    const TegraVICOp op = operation(c);
+    TegraVICJob job = {};
+    EXPECT_EQ(tegra_vic_build(&in, &out, &op, &kTegraVICTraits, 0x1000, 0x2000, &job), nullptr);
+    return job;
+}
 
 enum class Offsets {
     Interpolated,
@@ -32,9 +44,7 @@ std::vector<uint8_t> engine(const Case &c, Offsets offsets, Alpha alpha)
     std::vector<uint8_t> source(kBufferBytes), destination(kBufferBytes, kPoison);
     fillSource(source.data(), c);
     const TegraVICOp op = operation(c);
-    TegraVICJob job = {};
-    if (c.mode == kBackgroundAlpha)
-        overrideAlpha(&job, kOverride);
+    const TegraVICJob job = built(c);
     const auto at = [offsets](uint64_t fixed) {
         if (offsets == Offsets::Truncated)
             return fixed & ~0xffffull;
@@ -79,19 +89,39 @@ SwitchVICFractionResult judge(const Case &c, const std::vector<uint8_t> &destina
 TEST(SwitchVICFractionProbe, EveryCaseBuildsWithTheShippedTraitsAndKeepsItsFraction)
 {
     for (const Case &c : kCases) {
-        const TegraVICImage in = image(0x40000000, false), out = image(0x40100000, true);
         const TegraVICOp op = operation(c);
-        TegraVICJob job;
-        ASSERT_EQ(tegra_vic_build(&in, &out, &op, &kTegraVICTraits, 0x1000, 0x2000, &job), nullptr);
+        const TegraVICJob job = built(c);
         EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT), op.srcX);
         EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_TOP), op.srcY);
         EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS, SLOT_FILTER_X),
                   c.mode == kFraction ? uint64_t(TEGRA_VIC_FILTER_2TAP) : uint64_t(TEGRA_VIC_FILTER_1TAP));
+        const bool overridden = c.mode == kBackgroundAlpha;
         EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE),
-                  uint64_t(TEGRA_VIC_ALPHA_SOURCE_STREAM));
-        overrideAlpha(&job, kOverride);
-        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE), 1u);
-        EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA) >> 2, kOverride);
+                  uint64_t(overridden ? TEGRA_VIC_ALPHA_BACKGROUND : TEGRA_VIC_ALPHA_SOURCE_STREAM));
+        if (overridden)
+            EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA), kOverride << 2 | kOverride >> 6);
+    }
+}
+
+// The alpha cases through tegra_vic_build on vic_model.h (1-tap, 1:1): the override reaches every pixel's alpha and
+// SOURCE_STREAM keeps the source's.
+TEST(SwitchVICFractionProbe, TheAlphaCasesAreCleanOnTheModel)
+{
+    for (const Case &c : kCases) {
+        if (c.mode == kFraction)
+            continue;
+        std::vector<uint8_t> source(kBufferBytes), destination(kBufferBytes, kPoison);
+        fillSource(source.data(), c);
+        VicModel model = {};
+        model.region[0] = {kSrcIova, source.data(), source.size()};
+        model.region[1] = {kDstIova, destination.data(), destination.size()};
+        model.regions = 2;
+        model.flips = VIC_MODEL_FLIP_SURFACE;
+        const TegraVICJob job = built(c);
+        vic_model_run(&model, &job);
+        EXPECT_EQ(model.faults + model.clipped, 0u) << c.mode;
+        const SwitchVICFractionResult r = judge(c, destination);
+        EXPECT_TRUE(clean(r)) << c.mode << ": " << r.wrong[SWITCH_VIC_FRACTION_INTERPOLATED] << " wrong";
     }
 }
 

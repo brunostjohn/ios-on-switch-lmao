@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The fractional source offset and alpha override probe, debug kernels only (selector 6, SwitchVICKernelTest.h).
 // IOSurfaceAccelerator's request carries the source rectangle in 16.16 (TransferSurface sends quarter pixels:
-// CONTRACT.md section 4) and VIC's SourceRectLeft/Top are 16.16, which tegra_vic_build hands through, yet the capability
-// says FractionalXYOffsetsSupported 0. VIC copies a gradient card 1:1 with the 2-tap filter, its source rectangle a
+// CONTRACT.md section 4) and VIC's SourceRectLeft/Top are 16.16, which tegra_vic_build hands through
+// (FractionalXYOffsetsSupported 1). VIC copies a gradient card 1:1 with the 2-tap filter, its source rectangle a
 // quarter, half and three quarters of a pixel across, down and both, and every output pixel is scored against three
 // answers: the linear interpolation at the offset (the claim), the offset truncated and the offset rounded. B steps 8
 // codes a column and G 8 a row, so a quarter pixel is 2 codes and the answers are further apart than the tolerance (1
 // code a channel, for the 10-bit pipeline's truncation). The last column and row are edges (VIC may clamp its second
-// tap at the source rectangle) and are counted apart. Then AlphaFillMode BACKGROUND (NVB0B6_DXVAHD_ALPHA_FILL_MODE_
-// BACKGROUND 1, averne's clb0b6.h), which AlphaOverride needs and TegraVICRequest.h refuses today: a BGRA copy whose
-// source alpha varies must come out with every alpha the background's, after the same copy in SOURCE_STREAM, which
-// keeps the source's. The integer-offset copy and the SOURCE_STREAM copy are the controls. Plain logic, no IOKit:
-// SwitchVICFractionProbe.cpp runs it, test/switch_vic_fraction_probe_test.cpp checks it.
+// tap at the source rectangle) and are counted apart. Then AlphaOverride as tegra_vic_build programs it (AlphaFillMode
+// BACKGROUND, NVB0B6_DXVAHD_ALPHA_FILL_MODE_BACKGROUND 1, averne's clb0b6.h): a BGRA copy whose source alpha varies must
+// come out with every alpha the override's, after the same copy in SOURCE_STREAM, which keeps the source's. The
+// integer-offset copy and the SOURCE_STREAM copy are the controls. Plain logic, no IOKit: SwitchVICFractionProbe.cpp
+// runs it, test/switch_vic_fraction_probe_test.cpp checks it.
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -138,14 +138,9 @@ inline TegraVICOp operation(const Case &c)
     op.srcH = uint64_t(kSize) << 16;
     op.dstW = op.dstH = kSize;
     op.nearest = c.mode != kFraction;
+    op.alphaOverride = c.mode == kBackgroundAlpha;
+    op.alphaOverride8 = kOverride;
     return op;
-}
-
-// What AlphaOverride would program: every pixel's alpha the background's.
-inline void overrideAlpha(TegraVICJob *job, uint32_t alpha8)
-{
-    TEGRA_VIC_SET(job->config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE, TEGRA_VIC_ALPHA_BACKGROUND);
-    TEGRA_VIC_SET(job->config, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA, alpha8 << 2 | alpha8 >> 6);
 }
 
 inline void compare(const uint8_t *bytes, const Case &c, SwitchVICFractionResult *r)

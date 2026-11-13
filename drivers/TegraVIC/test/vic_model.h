@@ -168,7 +168,7 @@ static inline uint32_t vic_model_sample(uint64_t lo, uint64_t hi, uint32_t lo2, 
 
 typedef struct {
     uint32_t L, R, T, B, sw, sh, fx, fy, inSurface;
-    int slot, sourceAlpha, outMatrixOn;
+    int slot, alphaFill, outMatrixOn;
     uint64_t SL, SR, ST, SB;
     uint32_t DL, DR, DT, DB;
     VicModelPixel background;
@@ -185,7 +185,9 @@ static inline int vic_model_pixel(VicModel *m, const VicModelJob *j, uint32_t x,
         const uint32_t sy = vic_model_sample(j->ST, j->SB, j->DT, j->DB, y);
         if (!vic_model_read(m, &j->in, sx, sy, p))
             return 0;
-        if (!j->sourceAlpha)
+        if (j->alphaFill == TEGRA_VIC_ALPHA_BACKGROUND)
+            p->a = j->background.a;
+        else if (j->alphaFill != TEGRA_VIC_ALPHA_SOURCE_STREAM)
             p->a = 1023;
     }
     if (j->outMatrixOn) {
@@ -261,7 +263,7 @@ static inline void vic_model_run(VicModel *m, const TegraVICJob *job)
     j.DR = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_SLOTS, SLOT_DEST_RIGHT);
     j.DT = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_SLOTS, SLOT_DEST_TOP);
     j.DB = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_SLOTS, SLOT_DEST_BOTTOM);
-    j.sourceAlpha = TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE) == TEGRA_VIC_ALPHA_SOURCE_STREAM;
+    j.alphaFill = (int)TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE);
     j.background.c[0] = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_R);
     j.background.c[1] = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_G);
     j.background.c[2] = (uint32_t)TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_B);

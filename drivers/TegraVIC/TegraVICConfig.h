@@ -375,6 +375,8 @@ typedef struct {
     uint32_t fill;                    // no source: write the colour below over the rectangle
     uint32_t fill10[3];               // the fill's R, G, B (10-bit; converted for a Y'CbCr destination)
     uint32_t fillAlpha10;             // and its alpha (10-bit)
+    uint32_t alphaOverride;           // 1: every alpha written is alphaOverride8 (IOSurfaceAccelerator's AlphaOverride)
+    uint32_t alphaOverride8;
 } TegraVICOp;
 
 // What this engine does with the configurations tegra_vic_build makes.
@@ -451,6 +453,15 @@ enum {
 static inline uint32_t tegra_vic_pitch_align(const TegraVICTraits *t, bool source)
 {
     return source ? t->sourcePitchAlign : t->destinationPitchAlign;
+}
+
+// AlphaOverride: AlphaFillMode BACKGROUND writes the background's alpha on every pixel (probe gpu.x1.vic_fractional,
+// alpha_background_wrong=0 on four boots), the 8-bit value widened as the pipeline widens a sample.
+static inline void tegra_vic_override_alpha(uint8_t *cfg, uint32_t alpha8)
+{
+    const uint32_t a = alpha8 > 255 ? 255 : alpha8;
+    TEGRA_VIC_SET(cfg, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE, TEGRA_VIC_ALPHA_BACKGROUND);
+    TEGRA_VIC_SET(cfg, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA, a << 2 | a >> 6);
 }
 
 // Validates an image: geometry the engine can address and every plane's extent inside its mapping.
@@ -606,6 +617,8 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE,
                   alpha ? TEGRA_VIC_ALPHA_SOURCE_STREAM : TEGRA_VIC_ALPHA_OPAQUE);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA, op->fill ? op->fillAlpha10 & 1023 : 1023);
+    if (op->alphaOverride && !op->fill && dst->format->alpha)
+        tegra_vic_override_alpha(c, op->alphaOverride8);
     if (op->fill) {
         // A Y'CbCr destination: the background goes through the output matrix if the engine does that (a trait the
         // unit measured), else it is converted here, through the same arithmetic, into the output channels.
