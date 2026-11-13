@@ -128,8 +128,10 @@ py_test(
     deps = [":draw_goldens"],
 )
 
+# rawframe over 2,000 draws of the kernel model's capture took 249 s of a moderate timeout's 300 on the laptop
 py_test(
     name = "eq_test",
+    timeout = "long",
     srcs = ["eq_test.py"],
     args = [
         "$(rootpath :rawframe)",
