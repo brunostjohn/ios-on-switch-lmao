@@ -203,7 +203,8 @@ TEST_F(DeadlineWindow, NoAppWorkSchedulesNothing)
 		<< "hold_work and expire_work scheduled with no app work in flight";
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(dues, 0u);
-	EXPECT_EQ(spinLocks, 4u * 2) << "dl.lock: each frame end's and each compositor kick's, nothing else";
+	EXPECT_EQ(spinLocks, 4u * 2)
+		<< "dl.lock: each frame end's and each compositor kick's, nothing else";
 }
 
 // No app channel slow enough to be held: no window, before and after.

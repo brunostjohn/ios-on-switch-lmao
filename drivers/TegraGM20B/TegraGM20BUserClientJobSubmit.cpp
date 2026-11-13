@@ -402,7 +402,8 @@ refresh:
 			      (jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0);
 #if TGM_STATS
 	if (count)
-		tgm_stats_loud(chan, switch_gpu_quiet_why((head.flags & TegraGM20BJobQuiet) != 0,
+		tgm_stats_loud(chan,
+			       switch_gpu_quiet_why((head.flags & TegraGM20BJobQuiet) != 0,
 						    (head.flags & TegraGM20BJobHasEvents) != 0,
 						    semanticBound, scanoutWrites, closesGroup));
 #endif

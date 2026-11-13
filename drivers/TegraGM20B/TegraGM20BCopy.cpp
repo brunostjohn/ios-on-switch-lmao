@@ -31,7 +31,8 @@ struct Copier {
 	SwitchGpuKqueue space;
 	bool semanticFailed, replaceChannel;
 	uint32_t waitingSources, order, retireAsked;
-	uint32_t busyJobs;  // written under lock, read without it: a retirement run with none takes no lock
+	// written under lock, read without it: a retirement run with none takes no lock
+	uint32_t busyJobs;
 	Job jobs[Jobs];
 	SwitchGpuCopyMappings mappings;
 	SwitchGpuEventChannel authority;
