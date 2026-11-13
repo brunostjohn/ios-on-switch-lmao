@@ -12,7 +12,8 @@
 //   - the channel is restarted, the falcon booted and proven as at power-on;
 //   - once the cancelled jobs have ended, the queue renumbers from the syncpoint and the next frame's job runs.
 // All under the idle gate's lock. An engine sleep has already powered off is not touched; its next power-on boots it.
-// An engine the reset does not bring back is parked and VIC refuses work. One line per cancellation.
+// An engine the reset does not bring back is parked, and the idle gate powers it on at a later job. One line per
+// cancellation.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/thread_call.h>
@@ -56,7 +57,7 @@ void cancel(thread_call_param_t, thread_call_param_t)
           "cancelled through fence %u, memory client %s, engine reset: %s%s\n",
           gStall.fence, gStall.elapsedUs / 1000, gStall.error, gStall.producers, syncpt, reached, engine, host, through,
           drained ? "drained" : "did not drain in 10 ms",
-          back ? "running again" : "it did not come back, VIC refuses work: ", why);
+          back ? "running again" : "it did not come back, the next job powers it on again: ", why);
     switch_vic_jobs_recovered(back);
 }
 }  // namespace

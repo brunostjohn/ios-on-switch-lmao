@@ -146,7 +146,7 @@ uint64_t gTailPages[kTailPages];
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 IOLock *gPowerLock;  // the gate's, which the cancellation of a stalled job holds too
 uint32_t gSyncpt;
-bool gUp, gWedged;
+bool gUp, gAttached = true;
 TegraVICBuffer gConfig, gFilter;
 
 const char *falconState()
@@ -483,7 +483,7 @@ extern "C" void tegra_vic_describe(char *buffer, size_t size)
 
 extern "C" bool tegra_vic_ready(void)
 {
-    return gUp && !gWedged;
+    return gUp;
 }
 
 extern "C" const TegraVICTraits *tegra_vic_traits(void)
@@ -562,17 +562,20 @@ extern "C" uint32_t tegra_vic_syncpt(void)
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
 // is SC7's resume minus the SMMU domain, which an idle power-off keeps (the MC is not reset): partition, clock, reset,
 // the falcon reloaded from the kept image and proven with V2's stream, the queue rebased on the syncpoint that stream
-// moved. A failure there is one line and VIC refuses work from then on. Off parks the queue and powers the partition
-// down; the host1x channel is left as it is, idle at the end of its last job's stream.
+// moved. It also brings back an engine a cancellation's reset or a resume lost (the gate retries it at a later job; a
+// resume that could not attach the SMMU domain attaches it here). A failure there is one line and parks the engine.
+// Off parks the queue and powers the partition down; the host1x channel is left as it is, idle at the end of its last
+// job's stream.
 namespace {
 int gateOn(void *)
 {
     bool wasOn = false;
     gLine[0] = 0;
-    const bool answered = powerUp(&wasOn) && switch_vic_engine_boot();
+    if (!gAttached)
+        gAttached = smmuAttach();
+    const bool answered = gAttached && powerUp(&wasOn) && switch_vic_engine_boot();
     if (!answered) {
-        gWedged = true;
-        IOLog("TegraVIC: power-on FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
+        IOLog("TegraVIC: power-on FAIL %s; VIC jobs fail until a later job powers VIC on\n", gLine[0] ? gLine : "V1");
         switch_car_reset_assert(kClock);
         IODelay(2);
         switch_car_clock_disable(kClock);
@@ -597,15 +600,16 @@ void engineSuspend()
     gGate.suspend();
     switch_vic_jobs_settle();
     smmuDetach();
+    gAttached = false;
 }
 
 void engineResume()
 {
     gLine[0] = 0;
     const bool attached = smmuAttach();
+    gAttached = attached;
     if (!attached) {
-        gWedged = true;
-        IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine);
+        IOLog("TegraVIC: resume FAIL %s; the next job tries again\n", gLine);
         switch_vic_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
     gGate.resume(attached);
@@ -649,7 +653,6 @@ bool switch_vic_engine_boot()
 
 const char *switch_vic_engine_wedge()
 {
-    gWedged = true;
     switch_car_reset_assert(kClock);
     IODelay(2);
     switch_car_clock_disable(kClock);
@@ -669,6 +672,11 @@ extern "C" void switch_vic_power_done(void)
 extern "C" void switch_vic_power_idle(void)
 {
     gGate.idle();
+}
+
+extern "C" void switch_vic_power_lost(void)
+{
+    gGate.lost();
 }
 
 // On by default (no boot-arg): VIC is the scaler Core Animation needs to clone the display (Screen Recording).

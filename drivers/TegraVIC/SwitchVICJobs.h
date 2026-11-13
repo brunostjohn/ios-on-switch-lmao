@@ -20,8 +20,8 @@ void switch_vic_job_stalled(uint64_t fence, int error, uint64_t elapsedUs, int p
 // completion (a display frame's conversion) gets the failure. Returns the last job's fence, through which the caller
 // then releases the syncpoint.
 uint32_t switch_vic_jobs_cancel(uint32_t reached);
-// The engine runs again (or does not: VIC then refuses work). Once the cancelled jobs have ended, the queue is
-// renumbered from the syncpoint and new jobs go on.
+// The engine runs again, or does not. Once the cancelled jobs have ended, the queue is renumbered from the syncpoint
+// and new jobs go on; an engine that did not come back is then handed to the idle gate, whose next use powers it on.
 void switch_vic_jobs_recovered(bool ready);
 // Sleep: returns once no cancellation is under way.
 void switch_vic_jobs_settle();

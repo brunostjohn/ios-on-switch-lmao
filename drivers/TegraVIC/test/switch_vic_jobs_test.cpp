@@ -43,6 +43,7 @@ uint32_t hardware;
 std::vector<std::string> engineSteps;
 bool engineBoots = true;
 IOLock *powerLock;
+uint64_t gateNowUs;
 
 struct TestGatePlatform {
     bool start(void (*)(void *), void *)
@@ -73,7 +74,7 @@ struct TestGatePlatform {
 
     uint64_t nowUs()
     {
-        return 0;
+        return gateNowUs;
     }
 
     void log(const char *line)
@@ -361,6 +362,13 @@ void switch_vic_power_idle()
         testGate->idle();
 }
 
+void switch_vic_power_lost()
+{
+    engineSteps.emplace_back("lost");
+    if (testGate)
+        testGate->lost();
+}
+
 void tegra_host1x_describe_channel(uint32_t, char *buffer, size_t size)
 {
     if (size)
@@ -557,6 +565,7 @@ protected:
         switch_test_log().clear();
         engineBoots = true;
         testGate = nullptr;
+        gateNowUs = 0;
         powerLock = IOLockAlloc();
         ASSERT_TRUE(switch_vic_cancel_start(161));
         for (auto &stage : Stages::stages)
@@ -1116,18 +1125,101 @@ TEST_F(SwitchVICJobsTest, AStalledFrameIsCancelledAndTheNextFrameRuns)
     EXPECT_EQ(gQueue.count, 0u);
 }
 
-TEST_F(SwitchVICJobsTest, AnEngineTheResetDoesNotBringBackRefusesTheNextJob)
+// The idle gate of TegraVIC.cpp on this queue: its power-on boots the engine (the proof moves the syncpoint by two)
+// and rebases the queue, or fails when the engine does not boot.
+const SwitchEngineGateOps kGateOps = {
+    "TegraVIC",
+    nullptr,
+    [](void *) -> int {
+        engineSteps.emplace_back("power on");
+        if (engineBoots)
+            hardware += 2;
+        switch_vic_jobs_resume(engineBoots, hardware);
+        return engineBoots ? 0 : -19;
+    },
+    [](void *, bool drain) -> int {
+        return switch_vic_jobs_park(drain) ? SWITCH_ENGINE_GATE_OFF : SWITCH_ENGINE_GATE_BUSY;
+    },
+};
+
+static void heardStatus(void *context, int status)
 {
+    *static_cast<int *>(context) = status;
+}
+
+// An engine the cancellation's reset does not bring back is parked, and handed to the idle gate once the cancelled job
+// has ended (switch_vic_power_lost): the next job tries a power-on at once, jobs within the back-off are refused, and
+// the first after it whose power-on boots the engine runs on the rebased queue.
+TEST_F(SwitchVICJobsTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterJob)
+{
+    SwitchEngineGate<TestGatePlatform> gate;
+    ASSERT_TRUE(gate.start(kGateOps));
+    testGate = &gate;
+    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     engineBoots = false;
     outlived(0);
     EXPECT_FALSE(switch_vic_jobs_park(false)) << "the idle gate leaves a cancelling engine powered";
     runCancellation();
-    EXPECT_EQ(engineSteps.back(), "wedge");
+    EXPECT_EQ(engineSteps.back(), "lost");
     ASSERT_EQ(switch_test_log().size(), 1u);
-    EXPECT_NE(switch_test_log()[0].find("it did not come back, VIC refuses work: falcon did not answer"),
+    EXPECT_NE(switch_test_log()[0].find("it did not come back, the next job powers it on again: falcon did not answer"),
               std::string::npos);
+    EXPECT_FALSE(gate.powered());
     EXPECT_EQ(submit(), -19);
+    EXPECT_EQ(engineSteps.back(), "power on") << "the next job tried the engine";
+    engineSteps.clear();
+    EXPECT_EQ(submit(), -19);
+    EXPECT_TRUE(engineSteps.empty()) << "within the back-off nothing touches it";
+    gateNowUs += 2000000;
+    engineBoots = true;
+    const uint32_t proven = hardware + 2;
+    int frame = 1;
+    ASSERT_EQ(submit(1, nullptr, heardStatus, &frame), 0);
+    EXPECT_EQ(engineSteps.back(), "power on");
+    EXPECT_TRUE(gate.powered());
+    EXPECT_EQ(static_cast<uint32_t>(gQueue.submitted), proven + 1) << "the queue rebased on the power-on's proof";
+    testGate = nullptr;
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    EXPECT_EQ(frame, 0);
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+// A job that arrives while a cancelled job has not ended finds the gate still holding the parked engine: no power-on
+// rebases a queue that still holds jobs. Once the last cancelled job ends, the gate is told and the next job powers the
+// engine on.
+TEST_F(SwitchVICJobsTest, AWedgedEngineIsHandedToTheGateOnlyOnceItsCancelledJobsHaveEnded)
+{
+    SwitchEngineGate<TestGatePlatform> gate;
+    ASSERT_TRUE(gate.start(kGateOps));
+    testGate = &gate;
+    gateNowUs = 5000000;
+    ASSERT_EQ(submit(), 0);
+    ASSERT_EQ(submit(), 0);
+    engineBoots = false;
+    outlived(0);
+    runCancellation();
+    ASSERT_GT(gQueue.count, 0u) << "the second job has not ended";
+    EXPECT_TRUE(gate.powered()) << "the gate does not hear of the wedge yet";
+    engineSteps.clear();
+    ASSERT_EQ(gate.use(), 0);
+    gate.done();
+    EXPECT_TRUE(engineSteps.empty()) << "no power-on while the queue holds a job";
+    reachedInterrupts();
+    EXPECT_EQ(gQueue.count, 0u);
+    ASSERT_FALSE(engineSteps.empty());
+    EXPECT_EQ(engineSteps.back(), "lost");
+    EXPECT_FALSE(gate.powered());
+    engineBoots = true;
+    int frame = 1;
+    ASSERT_EQ(submit(1, nullptr, heardStatus, &frame), 0);
+    EXPECT_EQ(engineSteps.back(), "power on");
+    testGate = nullptr;
+    hardware = static_cast<uint32_t>(gQueue.submitted);
+    reachedInterrupts();
+    EXPECT_EQ(frame, 0);
+    EXPECT_EQ(gQueue.count, 0u);
 }
 
 // After an idle power-off (SwitchEngineGate expire), the next job powers VIC on: the power-on's proof moves the
