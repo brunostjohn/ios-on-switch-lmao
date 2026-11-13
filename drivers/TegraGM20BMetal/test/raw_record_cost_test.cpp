@@ -109,13 +109,18 @@ Bench &bench()
     return b;
 }
 
-id<MTLRenderCommandEncoder> begin(id<MTLCommandBuffer> cb, id<MTLTexture> target, bool load)
+// The frame's pass descriptors, made before the recording is timed: Core Animation makes its own
+std::vector<MTLRenderPassDescriptor *> passes(const Bench &b, int count)
 {
-    MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
-    d.colorAttachments[0].texture = target;
-    d.colorAttachments[0].loadAction = load ? MTLLoadActionLoad : MTLLoadActionClear;
-    d.colorAttachments[0].storeAction = MTLStoreActionStore;
-    return [cb renderCommandEncoderWithDescriptor:d];
+    std::vector<MTLRenderPassDescriptor *> made;
+    for (int p = 0; p < count; p++) {
+        MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+        d.colorAttachments[0].texture = b.targets[size_t(p) % b.targets.size()];
+        d.colorAttachments[0].loadAction = p >= kTargets ? MTLLoadActionLoad : MTLLoadActionClear;
+        d.colorAttachments[0].storeAction = MTLStoreActionStore;
+        made.push_back(d);
+    }
+    return made;
 }
 
 void compositorDraw(id<MTLRenderCommandEncoder> e, const Bench &b, int draw, uint32_t frame)
@@ -135,11 +140,12 @@ void compositorDraw(id<MTLRenderCommandEncoder> e, const Bench &b, int draw, uin
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 }
 
-void compositorFrame(id<MTLCommandBuffer> cb, const Bench &b, int draws, uint32_t frame)
+void compositorFrame(id<MTLCommandBuffer> cb, const Bench &b, const std::vector<MTLRenderPassDescriptor *> &into,
+                     int draws, uint32_t frame)
 {
     int drawn = 0;
     for (int p = 0; p < kEncoders; p++) {
-        id<MTLRenderCommandEncoder> e = begin(cb, b.targets[size_t(p) % b.targets.size()], p >= kTargets);
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[size_t(p)]];
         [e setRenderPipelineState:b.state];
         const int mine = draws / kEncoders + (p < draws % kEncoders ? 1 : 0);
         for (int i = 0; i < mine; i++)
@@ -148,18 +154,19 @@ void compositorFrame(id<MTLCommandBuffer> cb, const Bench &b, int draws, uint32_
     }
 }
 
-void emptyEncoders(id<MTLCommandBuffer> cb, const Bench &b)
+void emptyEncoders(id<MTLCommandBuffer> cb, const Bench &b, const std::vector<MTLRenderPassDescriptor *> &into)
 {
     for (int p = 0; p < kEncoders; p++) {
-        id<MTLRenderCommandEncoder> e = begin(cb, b.targets[size_t(p) % b.targets.size()], p >= kTargets);
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[size_t(p)]];
         [e setRenderPipelineState:b.state];
         [e endEncoding];
     }
 }
 
-void repeatedDraws(id<MTLCommandBuffer> cb, const Bench &b, int repeats)
+void repeatedDraws(id<MTLCommandBuffer> cb, const Bench &b, const std::vector<MTLRenderPassDescriptor *> &into,
+                   int repeats)
 {
-    id<MTLRenderCommandEncoder> e = begin(cb, b.targets[0], false);
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[0]];
     [e setRenderPipelineState:b.state];
     compositorDraw(e, b, 0, 0);
     for (int i = 0; i < repeats; i++)
@@ -184,19 +191,23 @@ double ticksToUs(uint64_t ticks)
     return double(ticks) * perTick;
 }
 
-// The median round of `record` (each into a command buffer of its own, committed and completed outside the window)
-Sample measure(const std::function<void(id<MTLCommandBuffer>, uint32_t)> &record)
+using Record = std::function<void(id<MTLCommandBuffer>, const std::vector<MTLRenderPassDescriptor *> &, uint32_t)>;
+
+// The median round of `record` (each into a command buffer of its own, committed and completed outside the window, and
+// its pass descriptors made before it)
+Sample measure(const Record &record)
 {
     Bench &b = bench();
     std::vector<Sample> samples;
     for (int round = 0; round < kWarm + kRounds; round++)
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+            const std::vector<MTLRenderPassDescriptor *> into = passes(b, kEncoders);
             Sample s;
             const rusage_info_v4 before = usage();
             record_count_start();
             const uint64_t t = mach_absolute_time();
-            record(cb, uint32_t(round));
+            record(cb, into, uint32_t(round));
             const uint64_t ticks = mach_absolute_time() - t;
             record_count_stop(&s.counts);
             const rusage_info_v4 after = usage();
@@ -240,20 +251,21 @@ TEST(RawRecordCost, CompositorScaleFrame)
 {
     Bench &b = bench();
     ASSERT_TRUE(b.device != nil && b.state != nil);
-    const Sample frame = measure([&](id<MTLCommandBuffer> cb, uint32_t f) {
-        compositorFrame(cb, b, kDraws, f);
+    using Passes = const std::vector<MTLRenderPassDescriptor *>;
+    const Sample frame = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t f) {
+        compositorFrame(cb, b, into, kDraws, f);
     });
-    const Sample doubled = measure([&](id<MTLCommandBuffer> cb, uint32_t f) {
-        compositorFrame(cb, b, 2 * kDraws, f);
+    const Sample doubled = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t f) {
+        compositorFrame(cb, b, into, 2 * kDraws, f);
     });
-    const Sample encoders = measure([&](id<MTLCommandBuffer> cb, uint32_t) {
-        emptyEncoders(cb, b);
+    const Sample encoders = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
+        emptyEncoders(cb, b, into);
     });
-    const Sample one = measure([&](id<MTLCommandBuffer> cb, uint32_t) {
-        repeatedDraws(cb, b, 0);
+    const Sample one = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
+        repeatedDraws(cb, b, into, 0);
     });
-    const Sample repeated = measure([&](id<MTLCommandBuffer> cb, uint32_t) {
-        repeatedDraws(cb, b, 300);
+    const Sample repeated = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
+        repeatedDraws(cb, b, into, 300);
     });
     print("frame 30 enc 90 draws", frame, 1, "frame");
     print("changed-state draw", difference(doubled, frame), kDraws, "draw");
