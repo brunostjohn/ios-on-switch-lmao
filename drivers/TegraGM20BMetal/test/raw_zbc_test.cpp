@@ -74,4 +74,17 @@ TEST(RawZbc, Rgba16UnormEntriesPackTwoChannelsAWord)
     EXPECT_FALSE(raw::zbcColorEntry(110, ds, e)) << "32767.5: the ROP's tie";
 }
 
+// gpu.raw.compressed_targets zbc_rgba32f
+TEST(RawZbc, Rgba32FloatEntriesHoldTheWords)
+{
+    TegraGM20BAbiZbc e;
+    const float values[4] = {0.3f, -1.5f, 7.25f, 0.5f};
+    ASSERT_TRUE(entry(125, values, e));
+    EXPECT_EQ(e.format, raw::kZbcRf32x4);
+    EXPECT_EQ(memcmp(e.l2, e.ds, sizeof e.l2), 0);
+    EXPECT_EQ(e.l2[1], raw::clear_detail::bitsOf(-1.5f));
+    const float nan[4] = {NAN, 0, 0, 1};
+    EXPECT_FALSE(entry(125, nan, e));
+}
+
 }  // namespace
