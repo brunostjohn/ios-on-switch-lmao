@@ -13,9 +13,9 @@ from tools.gpu.maxwell.isa import field as bits
 SLOT_FIELDS = (8, 20, 39)
 READS_A = {'FADD', 'FMUL', 'FFMA', 'FMNMX', 'FSETP', 'HADD2', 'HMUL2', 'HFMA2', 'MUFU', 'IADD', 'IADD32I', 'IMUL'}
 READS_A |= {'LOP', 'LOP32I', 'SHL', 'SHR', 'IMNMX', 'BFE', 'SEL', 'PRMT', 'ISETP', 'IPA'}
-READS_A |= {'XMAD', 'LOP3', 'IADD3', 'ISCADD', 'ATOM', 'RED', 'LDG', 'STG'}
+READS_A |= {'XMAD', 'LOP3', 'IADD3', 'ISCADD', 'ATOM', 'RED', 'LDG', 'STG', 'HSETP2'}
 READS_C = {'FFMA', 'HFMA2', 'PRMT', 'IPA', 'XMAD', 'LOP3', 'IADD3'}
-WRITES_PRED = {'FSETP', 'ISETP'}
+WRITES_PRED = {'FSETP', 'ISETP', 'HSETP2'}
 NO_DESTINATION = {'NOP', 'EXIT', 'RED', 'STG'}
 # ir.rs has_fixed_latency for SM5x: these finish whenever they finish and use a scoreboard; the rest do not
 VARIABLE = {'MUFU', 'RRO', 'F2F', 'F2I', 'I2F', 'I2I', 'IMUL', 'FLO', 'POPC', 'BREV', 'IPA', 'LDC', 'S2R'}

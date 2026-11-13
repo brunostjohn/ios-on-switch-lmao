@@ -12,6 +12,7 @@ py_library(
     name = "encode",
     srcs = [
         "encode.py",
+        "halfops.py",
         "intops.py",
         "memops.py",
         "operands.py",
@@ -88,6 +89,7 @@ py_library(
     name = "families",
     srcs = [
         "affinity.py",
+        "hsetp2.py",
         "icache.py",
         "int3.py",
         "overlap.py",
@@ -106,7 +108,7 @@ py_library(
 [
     py_test(
         name = name,
-        size = "small",
+        size = "medium" if name == "hsetp2_test" else "small",
         srcs = [name + ".py"],
         deps = [
             ":encode",
@@ -121,6 +123,7 @@ py_library(
     )
     for name in [
         "affinity_test",
+        "hsetp2_test",
         "icache_test",
         "int3_test",
         "intops_test",

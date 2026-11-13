@@ -1,7 +1,7 @@
 """The analyses of a `run` of batches/*.json, chosen by the families their experiments name, and one line per answer."""
 
 from tools.benchloop import store2fma
-from tools.benchloop.sm53 import affinity, fit, icache, int3, measure, overlap
+from tools.benchloop.sm53 import affinity, fit, hsetp2, icache, int3, measure, overlap
 
 # The clock the ladder measured (loop1, 11 Nov), for a run without a ladder of its own
 MEASURED_CLOCK_HZ = 769.1e6
@@ -24,6 +24,7 @@ STEPS = {
     'overlap': ('overlap', overlap.analyse),
     'affinity': ('affinity', lambda planned, results, _: affinity.analyse(planned, results)),
     'store2fma': ('store2fma', lambda planned, results, _: store2fma.analyse(planned, results)),
+    'hsetp2': ('hsetp2', lambda planned, results, _: hsetp2.analyse(planned, results)),
 }
 
 
@@ -99,6 +100,19 @@ def _store(found: dict) -> list[str]:
     ]
 
 
+def _hsetp2(found: dict) -> list[str]:
+    lines = []
+    for eid, v in found.items():
+        if v['status'] != 'ok':
+            lines.append(f'{eid} {v["status"]} {v["why"]}')
+            continue
+        off = {name: r for name, r in v['forms'].items() if r['p_off'] or r['q_off']}
+        total = sum(r['p_off'] + r['q_off'] for r in off.values())
+        lines.append(f'{eid} {len(v["forms"])} forms x {v["columns"]} pairs, {total} predicates off the interpreter')
+        lines += [f'  {name}: P off {r["p_off"]}, Q off {r["q_off"]}, first {r["first"]}' for name, r in off.items()]
+    return lines
+
+
 LINES = {
     'stall_wide': _wide,
     'xmad_mul': _mul,
@@ -106,6 +120,7 @@ LINES = {
     'overlap': _overlap,
     'affinity': _affinity,
     'store2fma': _store,
+    'hsetp2': _hsetp2,
 }
 
 
