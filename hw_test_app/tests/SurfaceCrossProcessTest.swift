@@ -1,8 +1,10 @@
+import CoreGraphics
 import Darwin
 import Foundation
 import HWTestCore
 import HWTestGPU
 import IOSurface
+import ImageIO
 import Metal
 import SwitchTexturePattern
 
@@ -15,9 +17,13 @@ import SwitchTexturePattern
 /// and the same sampled surface written by the app's CPU under a write lock instead, whose lock and unlock move its
 /// texels on the copy engine (`cpu<size>_write_us`; `<case>_read_us` times each read lock); and a surface the app's CPU
 /// wrote with no lock (its seed still 0) before it sampled it first, whose rows must survive its tiling. The app-made
-/// surfaces must read block-linear (`<case>_layout=1`). Two shapes: 256x256 and
-/// the 260x260 of the home screen's large widget. A read that matches the pattern laid out in GOBs reports
-/// `<case>_gob=1`: block-linear texels seen as rows (the Maps widget's garbage on boot 21).
+/// surfaces must read block-linear (`<case>_layout=1`). A surface the app makes and hands to the peer to render
+/// (`handoff`, the peer keeping its texture) is mapped by two processes when the peer first writes it, and must stay
+/// pitch (`handoff<size>_layout=0`), so the app reads it as rows with a lock and without one (`bare`). Every case also
+/// goes through a CGImage made from the surface under a read lock, PNG-encoded and decoded by ImageIO, as a widget
+/// snapshot is saved and loaded (`image`, its colour bytes). Two shapes: 256x256 and the 260x260 of the home screen's
+/// large widget. A read that matches the pattern laid out in GOBs reports `<case>_<reader>_gob=1`: block-linear texels
+/// seen as rows (the Maps widget's garbage on boot 21).
 struct SurfaceCrossProcessTest: HWTest {
     let id = "gpu.iosurface.cross_process"
     let name = "An IOSurface one process renders reads as rows in another, by CPU lock and by GPU import"
@@ -49,7 +55,7 @@ struct SurfaceCrossProcessTest: HWTest {
         var metrics = Metrics()
         var checks: [(String, Bool)] = []
         for size in Self.sizes {
-            for order in ["held", "dropped", "sampled", "cpu", "unlocked"] {
+            for order in ["held", "dropped", "sampled", "cpu", "unlocked", "handoff"] {
                 let label = "\(order)\(size)"
                 guard let (surface, sampler) = try await Self.rendered(gpu, connection, order, size, &metrics)
                 else {
@@ -59,7 +65,9 @@ struct SurfaceCrossProcessTest: HWTest {
                 if let gpuConnection = GPUConnection() {
                     let (kr, layout) = gpuConnection.surfaceLayout(surface)
                     metrics.set("\(label)_layout", kr == KERN_SUCCESS ? String(layout) : GPUConnection.hex(kr))
-                    if order != "dropped" {
+                    if order == "handoff" {
+                        checks.append(("\(label): pitch", kr == KERN_SUCCESS && layout == 0))
+                    } else if order != "dropped" {
                         checks.append(("\(label): block-linear", kr == KERN_SUCCESS && layout == 1))
                     }
                 }
@@ -67,15 +75,18 @@ struct SurfaceCrossProcessTest: HWTest {
                 metrics.set("\(label)_read_us", readUs)
                 let (gpuRows, _) = try await Self.gpuRows(gpu, surface)
                 withExtendedLifetime(sampler) {}
-                for (reader, got) in [("cpu", cpu), ("gpu", gpuRows)] {
-                    let (wrong, first) = Self.wrong(got, surface)
+                var reads = [("cpu", cpu, 4), ("gpu", gpuRows, 4)]
+                if order == "handoff" { reads.append(("bare", Self.bareRows(surface), 4)) }
+                reads.append(("image", Self.imageRows(surface), 3))
+                for (reader, got, channels) in reads {
+                    let (wrong, first) = Self.wrong(got, surface, channels: channels)
                     metrics.set("\(label)_\(reader)_wrong", wrong)
                     metrics.set("\(label)_\(reader)_first", first)
-                    metrics.set("\(label)_\(reader)_gob", Self.readAsGobs(got, surface) ? 1 : 0)
+                    metrics.set("\(label)_\(reader)_gob", Self.readAsGobs(got, surface, channels: channels) ? 1 : 0)
                     checks.append(
                         ("\(label): the \(reader) read is the peer's rows (\(wrong) bytes differ)", wrong == 0))
                 }
-                if order == "held" { _ = await Self.ask(connection) { $0.dropSurfaces($1) } }
+                if order == "held" || order == "handoff" { _ = await Self.ask(connection) { $0.dropSurfaces($1) } }
             }
         }
         return .judged(checks, metrics, proof: gpu.proof)
@@ -104,13 +115,18 @@ struct SurfaceCrossProcessTest: HWTest {
         ]
         guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface \(size) not made") }
         if order == "unlocked" { write(surface) }
+        if order == "handoff" {
+            let answer = await ask(connection) { $0.renderSurface(surface, keep: true, reply: $1) }
+            return answer?.hasPrefix("ok ") == true ? (surface, nil) : nil
+        }
         let (_, sampler) = try await gpuRows(gpu, surface)
         if order == "unlocked" { return (surface, sampler) }
         if order == "cpu" {
             metrics.set("cpu\(size)_write_us", cpuWrite(surface))
             return (surface, sampler)
         }
-        let answer = await ask(connection) { $0.renderSurface(surface, keep: false, reply: $1) }
+        let keep = order == "handoff"
+        let answer = await ask(connection) { $0.renderSurface(surface, keep: keep, reply: $1) }
         return answer?.hasPrefix("ok ") == true ? (surface, sampler) : nil
     }
 
@@ -142,6 +158,53 @@ struct SurfaceCrossProcessTest: HWTest {
         }
         surface.unlock(options: .readOnly, seed: nil)
         return (out, Int((DispatchTime.now().uptimeNanoseconds - start) / 1000))
+    }
+
+    /// Its texels as rows read through the surface's own mapping with no lock, as a reader that skips IOSurfaceLock
+    /// does
+    static func bareRows(_ surface: IOSurface) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: surface.width * surface.height * 4)
+        for y in 0..<surface.height {
+            out.withUnsafeMutableBytes {
+                $0.baseAddress!.advanced(by: y * surface.width * 4).copyMemory(
+                    from: surface.baseAddress + y * surface.bytesPerRow, byteCount: surface.width * 4)
+            }
+        }
+        return out
+    }
+
+    /// A CGImage over the surface's bytes under a read lock, PNG-encoded, then decoded by ImageIO and drawn into BGRA
+    /// rows (opaque: the colour bytes survive the round trip exactly, its alpha byte is 255)
+    static func imageRows(_ surface: IOSurface) -> [UInt8] {
+        let width = surface.width, height = surface.height
+        let bgra = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let png = NSMutableData()
+        surface.lock(options: .readOnly, seed: nil)
+        if let provider = CGDataProvider(
+            dataInfo: nil, data: surface.baseAddress, size: surface.bytesPerRow * height, releaseData: { _, _, _ in }),
+            let image = CGImage(
+                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: surface.bytesPerRow,
+                space: space, bitmapInfo: CGBitmapInfo(rawValue: bgra), provider: provider, decode: nil,
+                shouldInterpolate: false, intent: .defaultIntent),
+            let destination = CGImageDestinationCreateWithData(png as CFMutableData, "public.png" as CFString, 1, nil)
+        {
+            CGImageDestinationAddImage(destination, image, nil)
+            CGImageDestinationFinalize(destination)
+        }
+        surface.unlock(options: .readOnly, seed: nil)
+        var out = [UInt8](repeating: 0, count: width * height * 4)
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+            let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return out }
+        out.withUnsafeMutableBytes {
+            let context = CGContext(
+                data: $0.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: space, bitmapInfo: bgra)
+            context?.setBlendMode(.copy)
+            context?.draw(decoded, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return out
     }
 
     /// The pattern into every texel through a CPU write lock; the microseconds from the lock to the unlock's return
@@ -186,12 +249,13 @@ struct SurfaceCrossProcessTest: HWTest {
         return ([UInt8](UnsafeRawBufferPointer(start: out.contents(), count: row * surface.height)), t)
     }
 
-    /// Bytes that differ from the pattern, and the first one's offset in the rows (-1: none)
-    static func wrong(_ got: [UInt8], _ surface: IOSurface) -> (Int, Int) {
+    /// Bytes of each texel's first `channels` that differ from the pattern, and the first one's offset in the rows
+    /// (-1: none)
+    static func wrong(_ got: [UInt8], _ surface: IOSurface, channels: Int = 4) -> (Int, Int) {
         var wrong = 0, first = -1
         for y in 0..<surface.height {
             for x in 0..<surface.width {
-                for c in 0..<4 where got[(y * surface.width + x) * 4 + c] != byte(x, y, c) {
+                for c in 0..<channels where got[(y * surface.width + x) * 4 + c] != byte(x, y, c) {
                     wrong += 1
                     if first < 0 { first = (y * surface.width + x) * 4 + c }
                 }
@@ -206,7 +270,7 @@ struct SurfaceCrossProcessTest: HWTest {
 
     /// Whether the first rows read are the pattern laid out block-linear (drivers/TegraGM20B/TegraGM20BLayout.h at
     /// NIL's block height) and read back as rows of the surface's pitch
-    static func readAsGobs(_ got: [UInt8], _ surface: IOSurface) -> Bool {
+    static func readAsGobs(_ got: [UInt8], _ surface: IOSurface, channels: Int = 4) -> Bool {
         let rowBytes = (surface.width * 4 + 63) & ~63
         let yLog2 = blockHeightLog2(surface.height)
         let pitch = surface.bytesPerRow
@@ -219,7 +283,8 @@ struct SurfaceCrossProcessTest: HWTest {
         }
         let rows = min(8, surface.height)
         for y in 0..<rows {
-            for xB in 0..<(surface.width * 4) where got[y * surface.width * 4 + xB] != tiled[y * pitch + xB] {
+            for xB in 0..<(surface.width * 4)
+            where xB % 4 < channels && got[y * surface.width * 4 + xB] != tiled[y * pitch + xB] {
                 return false
             }
         }
