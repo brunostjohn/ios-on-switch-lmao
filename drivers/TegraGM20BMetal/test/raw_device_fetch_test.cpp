@@ -209,6 +209,24 @@ TEST_F(DeviceFetch, TheTwinRuleTakesTheTwinOnlyWhereItsDrawKeepsEveryShape)
     EXPECT_EQ(taken - before, 1u);
 }
 
+// Rule fetch.blend's accumulates: a pass that clears its target, or does not care, drops the mark of the command buffer
+// whose rung-2 forms last blended into it; one that loads it keeps the mark
+TEST_F(DeviceFetch, APassThatDoesNotLoadItsTargetForgetsItsRung2Blends)
+{
+    for (const auto load : {raw::ColorAttachment::Clear, raw::ColorAttachment::DontCare, raw::ColorAttachment::Load}) {
+        target.ropBlendSerial = 5;
+        raw::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        raw::PassDesc pass;
+        pass.color[0].texture = &target;
+        pass.color[0].load = load;
+        pass.count = 1;
+        cb->render(pass)->end();
+        cb->abandon();
+        EXPECT_EQ(target.ropBlendSerial, load == raw::ColorAttachment::Load ? 5u : 0u) << int(load);
+    }
+}
+
 TEST_F(DeviceFetch, TheBarrierFormRefusesWhatOneTriangleADrawCannotKeep)
 {
     raw::Pipeline *pl = pipeline(false);

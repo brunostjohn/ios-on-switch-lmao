@@ -4448,6 +4448,12 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         heldSegment_.passBoundary();
     }
     extrasLive_ = nullptr;
+    // a target the pass does not load starts over: no earlier rung-2 blend is under what it draws (rule fetch.blend)
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (pass.color[j].texture && pass.color[j].load != ColorAttachment::Load)
+            for (const Texture *t : {static_cast<const Texture *>(pass.color[j].texture), e.shadowOf_[j]})
+                if (t)
+                    __atomic_store_n(&t->ropBlendSerial, uint64_t(0), __ATOMIC_RELAXED);
     passes++;
     return &e;
 }
