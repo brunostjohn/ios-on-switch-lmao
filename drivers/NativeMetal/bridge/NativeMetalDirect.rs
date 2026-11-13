@@ -27,8 +27,8 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{
     BindingSource, GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, RuntimeFact,
-    SampledType, SlotClass, SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, SyntheticBinding,
-    TextureSlot, VertexStride,
+    SampledType, SlotClass, SlotInterface, SlotRef, Stage, StageSource, StandInView, StorageAttachmentView,
+    SyntheticBinding, TextureSlot, VertexStride,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -518,6 +518,18 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     } else {
         16 * (1 + slot / 3) + 4 * (1 + slot % 3)
     }
+}
+
+fn state_name(descriptor: &RenderPipelineDescriptor) -> String {
+    let name = |stage: &StageSource| match stage {
+        StageSource::Function(f) => f.function.info().name.to_owned(),
+        StageSource::Compiled(_) => "a compiled stage".to_owned(),
+    };
+    let fragment = descriptor
+        .fragment
+        .as_ref()
+        .map_or_else(|| "no fragment function".to_owned(), name);
+    format!("{} + {fragment}", name(&descriptor.vertex))
 }
 
 fn chooses_layer(pipeline: &RenderPipeline) -> bool {
@@ -1668,7 +1680,11 @@ fn translate(
     } else if chooses {
         match probe(&mut variants, 2) {
             Ok(runs) => (runs, false),
-            Err(_) => {
+            Err(why) => {
+                eprintln!(
+                    "direct compile: {} has no layered form, made for one layer: {why}",
+                    state_name(descriptor)
+                );
                 variants.truncate(1);
                 (probe(&mut variants, 0)?, true)
             }
