@@ -453,6 +453,8 @@ ios_binary(
         "-framework",
         "Foundation",
         "-framework",
+        "IOSurface",
+        "-framework",
         "Metal",
     ] + select({
         "//ipsw:24B119": ["-DSWITCH_TEXPEER_LAUNCHD=1"],

@@ -9,7 +9,8 @@ public enum Registry {
     static let metal: [any HWTest] = [
         MetalDeviceTest(), MetalComputeTest(), MetalColorPassTest(), MetalDepthStencilTest(), MetalMSAATest(),
         MetalPixelFormatTest(), MetalHalfRoundingTest(), MetalCompressedTest(), MetalBlitTest(), MetalTextureViewTest(),
-        MetalIOSurfaceTest(), SurfaceTiledDefaultTest(), YcbcrTargetTest(), YcbcrPackedTargetTest(),
+        MetalIOSurfaceTest(), SurfaceTiledDefaultTest(), SurfaceCrossProcessTest(), YcbcrTargetTest(),
+        YcbcrPackedTargetTest(),
         PackedPlaneTargetTest(), PackedSpareBitsTest(), XRTwoPlaneTest(),
         MPSBlurTest(), MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), IntegerTargetTest(),
