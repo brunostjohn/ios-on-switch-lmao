@@ -4736,7 +4736,6 @@ host_test(
         "raw_facade_standins.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -4778,7 +4777,6 @@ host_test(
         "raw_kernel_model.h",
         "empty_pack.h",
         "raw_facade_standins.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     additional_compiler_inputs = [
         "//drivers/TegraGM20BMetal:compiler_srcs",
@@ -4826,7 +4824,6 @@ host_test(
         "raw_kernel_model.h",
         "empty_pack.h",
         "raw_facade_standins.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     additional_compiler_inputs = [
         "//drivers/TegraGM20BMetal:compiler_srcs",
@@ -4874,7 +4871,6 @@ host_test(
         "raw_facade_creation_test.cpp",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -4920,7 +4916,6 @@ host_test(
         "raw_kernel_model.h",
         "empty_pack.h",
         "raw_facade_standins.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -4966,7 +4961,6 @@ host_test(
         "raw_kernel_model.h",
         "raw_real_pack_needs_test.cpp",
         "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -5087,7 +5081,6 @@ host_test(
         "raw_frontend_absent.cpp",
         "raw_host_written_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -5125,7 +5118,6 @@ host_test(
         "empty_pack.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -5164,7 +5156,6 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
         "//kits/SwitchSeedPack:SwitchSeedPack.h",
         "//kits/SwitchSeedPack:SwitchSeedPackWriter.h",
-        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
