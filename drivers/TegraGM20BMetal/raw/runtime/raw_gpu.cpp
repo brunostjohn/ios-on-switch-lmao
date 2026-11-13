@@ -4169,7 +4169,7 @@ CommandBuffer *Device::begin()
         }
     }
     cb.stamp = stampOf(commits());
-    cb.serial = begun_.fetch_add(1, std::memory_order_relaxed) + 1;
+    cb.serial = ++begun_;
     RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     cb.timings.clear();
     cb.loopsLaid = false;

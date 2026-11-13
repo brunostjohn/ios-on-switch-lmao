@@ -3153,7 +3153,7 @@ private:
     void growLoop();
     // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
     std::atomic<uint64_t> commitCount_{0};
-    std::atomic<uint64_t> begun_{0};        // CommandBuffer::serial's source
+    uint64_t begun_ = 0;  // CommandBuffer::serial's source: Device::begin's, on the submit worker or under its gate
     std::atomic<uint64_t> closedCount_{0};  // command buffers committed or abandoned
 
 #if SWITCH_RAW_DIAGNOSTICS
