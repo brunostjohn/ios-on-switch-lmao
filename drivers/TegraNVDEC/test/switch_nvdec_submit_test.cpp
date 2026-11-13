@@ -46,6 +46,8 @@ std::vector<std::string> engineSteps;
 bool enginePowered = true, engineBoots = true;
 IOLock *powerLock;
 
+uint64_t gateNowUs;
+
 struct TestGatePlatform {
     void (*fire)(void *) = nullptr;
     void *context = nullptr;
@@ -83,7 +85,7 @@ struct TestGatePlatform {
 
     uint64_t nowUs()
     {
-        return 0;
+        return gateNowUs;
     }
 
     void log(const char *line)
@@ -424,9 +426,12 @@ bool switch_nvdec_engine_boot()
     return engineBoots;
 }
 
+// TegraNVDEC.cpp's: the engine parked and handed back to the idle gate.
 const char *switch_nvdec_engine_wedge()
 {
     engineSteps.emplace_back("wedge");
+    if (testGate)
+        testGate->lost();
     return "falcon did not answer";
 }
 
@@ -954,8 +959,29 @@ TEST_F(SwitchNVDECSubmitTest, EveryFenceOfOneStallJoinsOneCancellation)
     EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence) + 5);
 }
 
-TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackRefusesTheNextDecode)
+// An engine the cancellation's reset does not bring back is parked and handed to the idle gate (TegraNVDEC.cpp
+// switch_nvdec_engine_wedge): the next decode tries a power-on at once, decodes within the back-off are refused, and
+// the first after it whose power-on boots the engine runs on the rebased queue.
+TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterDecode)
 {
+    SwitchEngineGate<TestGatePlatform> gate;
+    const SwitchEngineGateOps ops = {
+        "TegraNVDEC",
+        nullptr,
+        [](void *) -> int {
+            engineSteps.emplace_back("power on");
+            if (engineBoots)
+                hardware += 2;
+            switch_nvdec_jobs_resume(engineBoots, hardware);
+            return engineBoots ? 0 : -19;
+        },
+        [](void *, bool drain) -> int {
+            return switch_nvdec_jobs_park(drain) ? SWITCH_ENGINE_GATE_OFF : SWITCH_ENGINE_GATE_BUSY;
+        },
+    };
+    ASSERT_TRUE(gate.start(ops));
+    testGate = &gate;
+    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     semantic(gQueue.submitted);
     engineBoots = false;
@@ -963,9 +989,33 @@ TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackRefusesTheNextDeco
     runCancellation();
     EXPECT_EQ(engineSteps.back(), "wedge");
     ASSERT_EQ(switch_test_log().size(), 1u);
-    EXPECT_NE(switch_test_log()[0].find("it did not come back, NVDEC refuses work: falcon did not answer"),
+    EXPECT_NE(switch_test_log()[0].find("it did not come back, the next decode powers it on again: falcon did not "
+                                        "answer"),
               std::string::npos);
-    EXPECT_EQ(submit(), -19);
+    EXPECT_FALSE(gate.powered());
+    const TegraNVDECResolve resolve = [](void *, uint32_t, TegraNVDECBlock *) {
+        return false;
+    };
+    const Check check = [](const TegraNVDECSubmit *, const uint64_t *) -> const char * {
+        return nullptr;
+    };
+    const char *why = nullptr;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), -19);
+    EXPECT_EQ(engineSteps.back(), "power on") << "the next decode tried the engine";
+    engineSteps.clear();
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), -19);
+    EXPECT_TRUE(engineSteps.empty()) << "within the back-off nothing touches it";
+    gateNowUs += 2000000;
+    engineBoots = true;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
+    EXPECT_EQ(engineSteps.back(), "power on");
+    EXPECT_TRUE(gate.powered());
+    EXPECT_EQ(fence, hardware + 1) << "the queue rebased on the power-on's proof";
+    testGate = nullptr;
+    semantic(gQueue.submitted);
+    hardware = fence;
+    reachedInterrupts();
+    EXPECT_EQ(waitSequence(gQueue.submitted), 0);
 }
 
 // After an idle power-off (SwitchEngineGate expire), the next decode powers NVDEC on: the power-on's proof moves the
