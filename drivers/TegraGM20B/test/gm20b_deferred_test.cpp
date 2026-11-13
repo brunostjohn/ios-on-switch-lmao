@@ -296,6 +296,7 @@ TEST_F(Deferred, ALockWhileTheDisplayHoldsTheSurfaceReadsItThroughAView)
 	void *hold = tegra_gm20b_surface_hold(p[0], &tiled);
 	ASSERT_EQ(tiled, 1);
 	void *client = reinterpret_cast<void *>(0x20);
+	gViews.mappings[{client, 307}] = {client, client, 0x40000, kPages * 4096, 0, 0};
 	EXPECT_EQ(tgm_views_trap(client, kLock, 307, kReadOnly), 0);
 	EXPECT_EQ(movesOf(TGM_RELAYOUT_UNTILE_IN_PLACE), 0);
 	EXPECT_EQ(movesOf(TGM_RELAYOUT_TO_ROWS), 1);
@@ -341,7 +342,9 @@ TEST_F(Deferred, AnAvoidSyncLockBehindRunningWritersIsRefusedAndMovesNothing)
 	gGpu.completed[11] = 4;
 	tgm_coherency_put(c);
 	ASSERT_EQ(record.deferred, c);
-	EXPECT_NE(tgm_views_trap(reinterpret_cast<void *>(0x30), kLock, 309, kReadOnly | 2), 0);
+	void *client = reinterpret_cast<void *>(0x30);
+	gViews.mappings[{client, 309}] = {client, client, 0x50000, kPages * 4096, 0, 0};
+	EXPECT_NE(tgm_views_trap(client, kLock, 309, kReadOnly | 2), 0);
 	EXPECT_TRUE(gMoves.empty());
 	EXPECT_EQ(record.deferred, c);
 	gGpu.completed[11] = 5;
