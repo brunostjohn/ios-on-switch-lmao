@@ -18,6 +18,10 @@ A draw that differs in any other way is refused, and no golden is written over i
              and raw's does not, its blend registers raw's, and no pixel barrier (the ROP orders its own reads)
   noread     a draw whose programs read none of the colours NVK's fetches, without NVK's pixel barrier
              (raw_blend_reads.h: a blend whose result does not depend on the destination does not read it)
+  unread     uniform contents NVK's program reads that raw's draw does not reach, where raw binds none of them and keeps
+             the set-0 upload of the draw before: raw uploads set 0 again only where an entry its programs read from it
+             moved (raw_descriptors.h), so none of its programs reads them (unread_uniforms_test.py: a storage form's
+             in-program blend that drops the colour they feed)
 
 Barriers only raw has are its own to add.
 """
@@ -163,14 +167,22 @@ def barriers(draws: list[eq_fields.Draw], i: int, nvk: eq_fields.Draw, tags: set
     return [why] if why else []
 
 
-def data(nvk: eq_fields.Draw, raw: eq_fields.Draw, tags: set[str]) -> list[str]:
+def kept_set(raw: eq_fields.Draw, before: eq_fields.Draw | None, stage: str) -> bool:
+    """Say whether raw's draw binds the same set-0 upload at `stage` as its draw before."""
+    upload = raw.stages.get(stage, eq_fields.Stage()).set
+    return bool(upload) and before is not None and before.stages.get(stage, eq_fields.Stage()).set == upload
+
+
+def data(nvk: eq_fields.Draw, raw: eq_fields.Draw, tags: set[str], before: eq_fields.Draw | None = None) -> list[str]:
     keys = sorted(set(nvk.fields) | set(raw.fields))
     refused = [
         f'{k} nvk={nvk.fields.get(k)} raw={raw.fields.get(k)}' for k in keys if nvk.fields.get(k) != raw.fields.get(k)
     ]
     for name, want in nvk.stages.items():
         got = raw.stages.get(name, eq_fields.Stage())
-        if want.app - got.content:
+        if want.app - got.content and kept_set(raw, before, name):
+            tags.add('unread')
+        elif want.app - got.content:
             refused.append(f'{name} uniform contents only nvk binds: {sorted(want.app - got.content)}')
         if want.draw != got.draw:
             refused.append(f'{name} root draw parameters nvk={want.draw} raw={got.draw}')
@@ -189,7 +201,7 @@ def compare(nvk: eq_fields.Frame, raw: eq_fields.Frame) -> tuple[list[set], list
     tags, refused = [], []
     for i, (n, r) in enumerate(zip(nvk.draws, raw.draws, strict=True)):
         t: set[str] = set()
-        why = registers(n, r, t) + barriers(raw.draws, i, n, t) + data(n, r, t)
+        why = registers(n, r, t) + barriers(raw.draws, i, n, t) + data(n, r, t, raw.draws[i - 1] if i else None)
         tags.append(t)
         refused += [f'draw {i}: {w}' for w in why]
     # m2v initialises a frame's new textures with clears of its own before the first draw

@@ -29,6 +29,7 @@ HANDLE = re.compile(r'handle\{[^}]*\}')
 class Stage:
     content: set[str] = field(default_factory=set)
     app: set[str] = field(default_factory=set)  # its uniform buffers' (nvk_cbuf_type 5) contents
+    set: str = ''  # the set-0 upload its constant buffer of nvk_cbuf_type 3 binds: its words' hash
     draw: str = ''
     push: list[str] = field(default_factory=list)
 
@@ -81,6 +82,8 @@ def stages(lines: list[str]) -> dict[str, Stage]:
             current.content.update(HANDLE.findall(line))
             if ' type=5 ' in line:
                 current.app.update(re.findall(r'data=(\S+)', line))
+            if ' type=3 ' in line and (words := re.search(r'data=(\S+)', line)):
+                current.set = words.group(1)
             if m := re.search(r'root draw=(\S+)', line):
                 current.draw = m.group(1)
         elif line.startswith('rootwords'):

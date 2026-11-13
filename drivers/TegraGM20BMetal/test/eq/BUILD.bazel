@@ -128,6 +128,18 @@ py_test(
     deps = [":draw_goldens"],
 )
 
+# eq_rules.py's unread class on the states it was ruled for: their barrier programs on the Maxwell interpreter
+py_test(
+    name = "unread_uniforms_test",
+    size = "small",
+    srcs = ["unread_uniforms_test.py"],
+    data = glob(["testdata/unread/*"]),
+    deps = [
+        "//tools/gpu/maxwell:interp",
+        "//tools/gpu/maxwell:isa",
+    ],
+)
+
 # rawframe over 2,000 draws of the kernel model's capture took 249 s of a moderate timeout's 300 on the laptop
 py_test(
     name = "eq_test",
