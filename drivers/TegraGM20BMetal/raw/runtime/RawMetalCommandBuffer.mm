@@ -388,7 +388,7 @@ void rmPoolCommandBuffers()
                                       static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
-            _recordedPass = cmd.x;
+            _recordedPass = uint32_t(cmd.x);
             const RMPass &pass = _passes[cmd.x];
             for (const RMPass::Color &a : pass.color)
                 if (a.texture)

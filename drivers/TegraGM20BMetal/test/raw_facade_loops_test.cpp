@@ -37,6 +37,7 @@ namespace {
 
 using namespace harness;
 using namespace loop_tape;
+using loop_tape::Op;  // the facade's headers declare raw's own Op (RawMetalArguments.h) at global scope
 using Encoder = id<MTLComputeCommandEncoder, HarnessPredicatedEncoder>;
 
 // QMDV01_07's HW_ONLY_* words (clb1c0qmd.h, bits 1536-1663): the scheduler writes them as it runs a launch

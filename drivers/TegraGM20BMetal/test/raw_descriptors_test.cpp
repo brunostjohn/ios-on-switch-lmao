@@ -260,25 +260,4 @@ TEST(RawDescriptors, ADrawOfTheSamePipelineRebindsOnlyTheUniformBuffersThatMoved
     EXPECT_TRUE(binding.uboMoved(0, second));
 }
 
-TEST(RawDescriptors, ADrawOfTheSamePipelineRebindsOnlyTheUniformBuffersThatMoved)
-{
-    raw::DescriptorBinding binding;
-    int a = 0, b = 0;
-    const uint32_t first[3] = {0x1000, 0, 256}, second[3] = {0x1100, 0, 256}, other[3] = {0x2000, 0, 64};
-    EXPECT_TRUE(binding.changed(&a, 0x9000));
-    EXPECT_TRUE(binding.uboMoved(0, first));
-    EXPECT_TRUE(binding.uboMoved(1, other));
-    EXPECT_FALSE(binding.changed(&a, 0x9000));
-    EXPECT_FALSE(binding.uboMoved(0, first));
-    EXPECT_FALSE(binding.uboMoved(1, other));
-    EXPECT_TRUE(binding.changed(&a, 0x9100));
-    EXPECT_TRUE(binding.uboMoved(0, second));
-    EXPECT_FALSE(binding.uboMoved(1, other));
-    EXPECT_TRUE(binding.changed(&b, 0x9100));
-    EXPECT_TRUE(binding.uboMoved(0, second));
-    EXPECT_TRUE(binding.uboMoved(1, other));
-    EXPECT_TRUE(binding.changed(&a, 0x9100));
-    EXPECT_TRUE(binding.uboMoved(0, second));
-}
-
 }  // namespace

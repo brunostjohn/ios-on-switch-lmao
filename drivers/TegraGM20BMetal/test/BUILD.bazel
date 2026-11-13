@@ -776,6 +776,7 @@ host_test(
     linkopts = [
         "-framework",
         "IOKit",
+        "-framework",
         "CoreFoundation",
     ],
     deps = [
@@ -924,6 +925,7 @@ host_test(
     linkopts = [
         "-framework",
         "IOKit",
+        "-framework",
         "CoreFoundation",
     ],
     deps = [
@@ -1294,6 +1296,7 @@ host_test(
     linkopts = [
         "-framework",
         "IOKit",
+        "-framework",
         "CoreFoundation",
     ],
     deps = [
@@ -1435,6 +1438,7 @@ host_test(
     linkopts = [
         "-framework",
         "IOKit",
+        "-framework",
         "CoreFoundation",
     ],
     deps = [
@@ -3734,6 +3738,7 @@ host_test(
     linkopts = [
         "-framework",
         "IOKit",
+        "-framework",
         "CoreFoundation",
     ],
     deps = [
@@ -4871,6 +4876,8 @@ host_test(
         "raw_facade_creation_test.cpp",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
+        "empty_pack.h",
+        "raw_facade_standins.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",
@@ -4895,8 +4902,9 @@ host_test(
     ],
     sanitize = False,
     deps = [
-        ":raw_facade_host",
-        ":raw_runtime_host",
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+        "//kits/SwitchGM20B:classes",
         "//kits/SwitchRefusal:switch_refusal",
     ] + RAW_HOST_DEPS,
 )

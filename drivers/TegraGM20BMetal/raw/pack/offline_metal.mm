@@ -8,6 +8,7 @@
 #include <vector>
 #include "../runtime/RawPipelineKey.h"
 #include "../runtime/RawRenderKey.h"
+#include "MetallibEntries.h"
 #include "MetallibSlice.h"
 #include "bridge/NativeMetalDirect.h"
 
@@ -78,6 +79,25 @@ NSError *refusal(NSString *why)
 {
     *length = _library.length;
     return _library.bytes;
+}
+
+// The library's function list entry's TESS tag, as NBFunction answers it
+- (switch_metal::FunctionTess)tess
+{
+    switch_metal::FunctionTess tess;
+    switch_metal::metallibFunctionTess(_library.bytes, _library.length,
+                                       (_libraryFunctionName ?: _name).UTF8String ?: "", tess);
+    return tess;
+}
+
+- (MTLPatchType)patchType
+{
+    return MTLPatchType([self tess].patchType);
+}
+
+- (NSInteger)patchControlPointCount
+{
+    return [self tess].controlPoints;
 }
 
 - (NSArray *)vertexAttributes
