@@ -185,7 +185,6 @@ TEST(RawComp, ZbcEntriesHoldTheTexelTheRopWrites)
     EXPECT_EQ(e.type, uint32_t(TegraGM20BZbcDepth));
     EXPECT_EQ(e.ds[0], bits(0.5f));
     EXPECT_EQ(e.l2[0], bits(0.5f));
-    EXPECT_FALSE(raw::zbcDepthEntry(250, 0.5f, e));  // Depth16Unorm: the table holds 32-bit float depths
 }
 
 TEST(RawComp, ZbcValuesAreAskedForOnceRepeated)

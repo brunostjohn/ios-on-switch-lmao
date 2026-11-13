@@ -158,11 +158,12 @@ inline bool zbcColorEntry(uint32_t mtl, const uint32_t ds[4], TegraGM20BAbiZbc &
     }
 }
 
-// The entry for a depth clear of a 32-bit float depth format (Depth32Float, Depth32Float_Stencil8) to `depth`
+// The entry for a depth clear to `depth`: the table holds 32-bit float depths, which a Depth16Unorm tile cleared to one
+// reads as the ZROP converts its clear (gpu.raw.compressed_targets zbc_depth16)
 inline bool zbcDepthEntry(uint32_t mtl, float depth, TegraGM20BAbiZbc &out)
 {
     out = {};
-    if (mtl != 252 && mtl != 260)
+    if (mtl != 250 && mtl != 252 && mtl != 260)
         return false;
     out.type = TegraGM20BZbcDepth;
     out.format = kZbcDepthFp32;

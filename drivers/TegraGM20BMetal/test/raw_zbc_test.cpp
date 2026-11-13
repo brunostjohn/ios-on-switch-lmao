@@ -87,4 +87,16 @@ TEST(RawZbc, Rgba32FloatEntriesHoldTheWords)
     EXPECT_FALSE(entry(125, nan, e));
 }
 
+// gpu.raw.compressed_targets zbc_depth16
+TEST(RawZbc, Depth16ClearsTakeTheFloatDepthEntry)
+{
+    TegraGM20BAbiZbc d16, d32;
+    const float depth = 39321 / 65535.0f;
+    ASSERT_TRUE(raw::zbcDepthEntry(250, depth, d16));
+    ASSERT_TRUE(raw::zbcDepthEntry(252, depth, d32));
+    EXPECT_EQ(memcmp(&d16, &d32, sizeof d16), 0) << "one entry for both: the GPU matches a depth by its float";
+    EXPECT_EQ(d16.format, uint32_t(raw::kZbcDepthFp32));
+    EXPECT_FALSE(raw::zbcDepthEntry(253, depth, d16)) << "Stencil8";
+}
+
 }  // namespace
