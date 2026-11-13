@@ -166,6 +166,8 @@ cc_test(
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.h",
         GM20B_METAL + ":raw/runtime/raw_sample_shading.h",
+        GM20B_METAL + ":raw/runtime/raw_xr.h",
+        GM20B_METAL + ":raw/runtime/raw_xr_pass.h",
         GM20B_METAL + ":raw/test/emitcheck.cpp",
     ],
     args = ["$(rootpath :sample_pack)/pack.bin"],
@@ -196,6 +198,9 @@ cc_test(
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.h",
         GM20B_METAL + ":raw/runtime/raw_sample_shading.h",
+        GM20B_METAL + ":raw/runtime/raw_written_textures.h",
+        GM20B_METAL + ":raw/runtime/raw_xr.h",
+        GM20B_METAL + ":raw/runtime/raw_xr_pass.h",
     ],
     args = select({
         "//ipsw:" + kind: [

@@ -146,9 +146,24 @@ uint32_t traits(const Pack &pack, const PackPipeline &pp)
         t |= TraitStorage;
     if (pp.storageMask && pp.storageTests >= 2 && !pp.shaderTests.flags)
         t |= TraitStorageTests;
+    if (pp.spillWords[0] || pp.spillWords[1])
+        t |= TraitSpill;
+    if (pp.heapArrays)
+        t |= TraitHeap;
+    for (uint16_t format : pp.writtenFormat)
+        if (format)
+            t |= TraitWritten;
+    if ((pp.flags & PipelineTwoPlane) || pp.xrSlots)
+        t |= TraitTwoPlane;
     for (uint8_t r : pp.fetchRung)
         rung = std::max<uint32_t>(rung, r & kFetchRungMask);
     return t | rung << TraitRungShift;
+}
+
+void spills(std::vector<uint8_t> &out, const uint32_t *words, uint32_t count)
+{
+    if (words)
+        put(out, words, size_t(count) * 4);
 }
 
 Record pipeline(const Pack &pack, const Context &c, const PackPipeline &pp)
@@ -171,7 +186,8 @@ Record pipeline(const Pack &pack, const Context &c, const PackPipeline &pp)
     r.sections.push_back({"key", key});
 
     PackPipeline flat = pp;
-    flat.keyString = flat.vs = flat.fs = flat.blob = flat.blobDwords = flat.variants = flat.variantName = 0;
+    flat.keyString = flat.vs = flat.fs = flat.blob = flat.blobDwords = flat.variants = flat.variantName = flat.spillAt =
+        0;
     flat.iterated = pp.iterated ? 1 : 0;
     std::vector<uint8_t> samplers;
     for (uint32_t e = 0; e < pp.entries && e < kPackEntries; e++)
@@ -183,6 +199,9 @@ Record pipeline(const Pack &pack, const Context &c, const PackPipeline &pp)
     put(record, flat);
     r.sections.push_back({"record", record});
     r.sections.push_back({"samplers", samplers});
+    std::vector<uint8_t> spilled;
+    spills(spilled, pack.spills(pp), uint32_t(pp.spillWords[0]) + pp.spillWords[1]);
+    r.sections.push_back({"spills", spilled});
 
     for (const auto &[name, index] : {std::pair{"vs", pp.vs}, std::pair{"fs", pp.fs}}) {
         std::vector<uint8_t> bytes;
@@ -232,15 +251,16 @@ Record kernel(const Pack &pack, const PackKernel &k)
     r.label = pack.string(k.keyString);
     r.key = r.state = k.keyHash;
     r.kind = Kind::Kernel;
+    r.traits = (k.spillWords ? TraitSpill : 0) | (k.heapArrays ? TraitHeap : 0);
     std::vector<uint8_t> key;
     put(key, r.label);
     r.sections.push_back({"key", key});
     PackKernel flat = k;
-    flat.keyString = flat.program = 0;
+    flat.keyString = flat.program = flat.spillAt = 0;
     clearDispatchWords(flat.qmd);
     constexpr uint8_t kConstexprSampler = 0x80;
     std::vector<uint8_t> samplers;
-    for (uint32_t e = 0; e < k.entries && e < 16; e++)
+    for (uint32_t e = 0; e < k.entries && e < kKernelEntries; e++)
         if (k.entry[e].kind == KernelSampler && (k.entry[e].slot & kConstexprSampler)) {
             sampler(samplers, pack, k.entry[e].slot & ~kConstexprSampler);
             flat.entry[e].slot = kConstexprSampler;
@@ -249,9 +269,18 @@ Record kernel(const Pack &pack, const PackKernel &k)
     put(record, flat);
     r.sections.push_back({"record", record});
     r.sections.push_back({"samplers", samplers});
+    std::vector<uint8_t> spilled;
+    spills(spilled, pack.spills(k), k.spillWords);
+    r.sections.push_back({"spills", spilled});
     std::vector<uint8_t> code;
     program(code, pack, k.program);
     r.sections.push_back({"program", code});
+    // its compute state's facts (PackComputeStates), filed under the state's key: the kernel's up to its shape
+    std::vector<uint8_t> facts;
+    const std::string state = r.label.substr(0, r.label.find(" | tg="));
+    if (const PackComputeFacts *f = pack.computeFacts(Pack::fnv(state.data(), state.size())))
+        put(facts, *f);
+    r.sections.push_back({"facts", facts});
     return r;
 }
 
@@ -293,6 +322,7 @@ std::vector<Record> records(const Pack &pack)
     out.push_back(whole(pack, kInitRecord, "init", PackInit));
     out.push_back(whole(pack, kSamplersRecord, "samplers", PackSamplers));
     out.push_back(whole(pack, kArchivesRecord, "archives", PackArchives));
+    out.push_back(whole(pack, kComputeStatesRecord, "compute_states", PackComputeStates));
     std::stable_sort(out.begin(), out.end(), [](const Record &a, const Record &b) {
         return a.key != b.key ? a.key < b.key : a.kind < b.kind;
     });

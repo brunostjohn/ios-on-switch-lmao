@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // A raw pack's records as content: every record (a state's form, a variant record, a compute kernel, and the pack's own
-// baseline, context init, samplers and archives) as named sections of canonical bytes, and one digest of them. Canonical
-// bytes leave out where the pack builder laid things out (program heap offsets and indices, string offsets, constexpr
-// sampler indices) and take in what those pointed at, and a kernel's QMD loses its dispatch words as the runtime clears
-// them (clearDispatchWords), so two packs digest the same exactly where each record carries the same bytes.
+// baseline, context init, samplers, archives and compute states) as named sections of canonical bytes, and one digest of
+// them. Canonical bytes leave out where the pack builder laid things out (program heap offsets and indices, string
+// offsets, constexpr sampler indices, argument table offsets in the blob section) and take in what those pointed at, and
+// a kernel's QMD loses its dispatch words as the runtime clears them (clearDispatchWords), so two packs digest the same
+// exactly where each record carries the same bytes.
 // A state's blob and the pack's baseline also depend on the pack's other states (a register every state sets alike is
 // baseline); its registers section is the two together, the same in a pack of any of its states (golden_files.h).
 #pragma once
@@ -25,7 +26,8 @@ enum class Kind : uint8_t {
     Pack = 5  // the pack's own sections, keyed by the k*Record below
 };
 
-constexpr uint64_t kBaselineRecord = 0, kInitRecord = 1, kSamplersRecord = 2, kArchivesRecord = 3;
+constexpr uint64_t kBaselineRecord = 0, kInitRecord = 1, kSamplersRecord = 2, kArchivesRecord = 3,
+                   kComputeStatesRecord = 4;
 
 struct Section {
     std::string name;
@@ -49,7 +51,11 @@ enum Trait : uint32_t {
     TraitVariants = 16,
     TraitStorage = 32,
     TraitStorageTests = 64,  // a storage record with depth or stencil tests and none in its shader (form_contracts.cpp)
-    TraitRungShift = 8       // bits 8-11: the highest fetch rung of its colour attachments
+    TraitSpill = 128,        // an argument table's words (raw_spill_table.h)
+    TraitHeap = 256,         // set-1 heap arrays (raw_heap_tables.h)
+    TraitWritten = 512,      // a storage texture's written format (raw_written_textures.h)
+    TraitTwoPlane = 1024,    // two-plane XR colours or texture reads (raw_xr_pass.h)
+    TraitRungShift = 16      // bits 16-19: the highest fetch rung of its colour attachments
 };
 
 using Digest = std::array<uint8_t, 16>;

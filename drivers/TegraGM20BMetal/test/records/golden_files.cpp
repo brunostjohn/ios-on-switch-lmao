@@ -21,7 +21,7 @@ uint64_t mix(uint64_t key, Kind kind)
 std::vector<uint32_t> classes(const Record &r)
 {
     std::vector<uint32_t> out = {uint32_t(r.kind)};
-    for (uint32_t bit = 0; bit < 8; bit++)
+    for (uint32_t bit = 0; bit < TraitRungShift; bit++)
         if (r.traits & (1u << bit))
             out.push_back(0x100 + bit);
     out.push_back(0x200 + (r.traits >> TraitRungShift & 15));
