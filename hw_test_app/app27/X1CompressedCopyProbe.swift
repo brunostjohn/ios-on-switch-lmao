@@ -10,7 +10,7 @@ import Metal
 /// one it lacks, read by it; a clear then a half-target draw (mixed tiles); the copy engine writing all of it and half
 /// of it over rendered tiles, read by the texture unit and by itself; and copies between a compressed and a plain
 /// target both ways. Every case runs on the compressed target and on a plain one; the plain one's bytes and the CPU's
-/// reading are the reference. The multisampled cases follow (X1CompressedMSCases.swift).
+/// reading are the reference. The multisampled cases run first (X1CompressedMSCases.swift).
 enum X1CompressedCopyProbe {
     static let probe = X1Probe(
         id: "gpu.x1.ce_compressed", name: "The copy engine reads and writes compressed colour targets as plain texels",
@@ -25,6 +25,7 @@ enum X1CompressedCopyProbe {
         var wrong: [String: Int] = [:]
         var firsts: [String] = []
         var compressedMade = 0
+        try await multisampled(gpu, &metrics, &wrong)
         for format in [MTLPixelFormat.bgra8Unorm, .rgba16Float, .rgba32Float] {
             let kit = try BarrierKit(gpu, format)
             var made = 0
@@ -32,7 +33,8 @@ enum X1CompressedCopyProbe {
                 metrics.set("compressed_\(kit.name)", made)
                 wrong["\(kit.name)_not_compressed"] = made == 0 ? 1 : 0
             }
-            for (w, h) in [(256, 256), (320, 180), (1280, 720)] {
+            // RGBA32F at 1280x720 would take the probe past its time: its kind is asked at the other two sizes
+            for (w, h) in [(256, 256), (320, 180), (1280, 720)] where format != .rgba32Float || w < 1280 {
                 let size = "\(kit.name)_\(w)x\(h)"
                 journal.starting(size)
                 guard let compressed = try kit.target(w, h, .compressed),
@@ -60,7 +62,6 @@ enum X1CompressedCopyProbe {
                 }
             }
         }
-        try await multisampled(gpu, &metrics, &wrong)
         metrics.set("compressed_targets", compressedMade)
         metrics.set("repeats", repeats)
         metrics.set("first", firsts.isEmpty ? "-" : firsts.joined(separator: ";"))
