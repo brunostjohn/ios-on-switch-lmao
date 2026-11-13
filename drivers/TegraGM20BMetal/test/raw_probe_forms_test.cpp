@@ -86,9 +86,10 @@ TEST(ProbeForms, ParsesEveryFormAndNothingElse)
     EXPECT_FALSE(f.keepsTiledFlush());
     ASSERT_TRUE(raw::parseProbeForms("", f));
     EXPECT_FALSE(f.any());
-    ASSERT_TRUE(raw::parseProbeForms("pass=pixel_nowfi  entry=bare switch=none", f));
-    EXPECT_EQ(f.pass, PassForm::PixelNoWfi);
+    ASSERT_TRUE(raw::parseProbeForms("pass=none  entry=bare switch=none", f));
+    EXPECT_EQ(f.pass, PassForm::None);
     EXPECT_EQ(f.entry, EntryForm::Bare);
+    EXPECT_FALSE(raw::parseProbeForms("pass=pixel_nowfi", f)) << "0x1288 after the pixel barrier failed on the chip";
     EXPECT_EQ(f.switchForm, SwitchForm::None);
     EXPECT_FALSE(raw::parseProbeForms("pass=wfi", f));
     EXPECT_FALSE(raw::parseProbeForms("pass", f));
@@ -145,13 +146,29 @@ TEST(ProbeForms, RelaxedPassBarriersAreThePlannersAndNeverIdle)
         return m;
     };
     EXPECT_EQ(pass(PassForm::PixelOrdered), (std::vector<Method>{{0, kPixelBarrier, 0}, {0, kPixelOrdered, 0}}));
-    EXPECT_EQ(pass(PassForm::PixelNoWfi), (std::vector<Method>{{0, kPixelBarrier, 0}, {0, kTextureDataNoWfi, 0}}));
     EXPECT_TRUE(pass(PassForm::None).empty());
     ProbeTaken taken;
     const ProbeForms pixel = forms(PassForm::PixelOrdered, EntryForm::Today, SwitchForm::Today);
     EXPECT_TRUE(idles(words([&](raw::Push &p) {
         raw::probePassPrologue(p, pixel, ProbeEngine::Copy, taken);
     })));
+}
+
+// The pixel-ordered invalidate (0x0f74) follows the barrier in every form; 0x1288 there failed on the chip
+TEST(ProbeForms, NoFormFollowsThePixelBarrierWithTheNoWfiInvalidate)
+{
+    for (PassForm pass : {PassForm::Today, PassForm::PixelOrdered, PassForm::None})
+        for (SwitchForm s : {SwitchForm::Today, SwitchForm::NoWfi, SwitchForm::NoWfiNoFlush, SwitchForm::None})
+            for (EntryForm e : {EntryForm::Today, EntryForm::Planner, EntryForm::Bare})
+                for (ProbeEngine before :
+                     {ProbeEngine::None, ProbeEngine::ThreeD, ProbeEngine::Copy, ProbeEngine::Compute}) {
+                    ProbeTaken taken;
+                    const auto m = words([&](raw::Push &p) {
+                        raw::probePassPrologue(p, forms(pass, e, s), before, taken);
+                    });
+                    for (size_t i = 0; i + 1 < m.size(); i++)
+                        EXPECT_FALSE(std::get<1>(m[i]) == kPixelBarrier && std::get<1>(m[i + 1]) == kTextureDataNoWfi);
+                }
 }
 
 TEST(ProbeForms, RelaxedEngineChangesKeepTheInvalidatesAndNeverIdle)

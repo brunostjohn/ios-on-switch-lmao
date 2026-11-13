@@ -6904,8 +6904,6 @@ const char *Device::fetchBarrierName(FetchBarrier b)
         return "wfi";
     case FetchBarrier::PixelShaderOnly:
         return "psonly";
-    case FetchBarrier::PixelShaderNoWfiInvalidate:
-        return "psnowfi";
     case FetchBarrier::None:
         return "none";
     }
@@ -6925,10 +6923,6 @@ void RenderEncoder::fetchBarrier(Push &p)
         return;
     case Device::FetchBarrier::PixelShaderOnly:
         p.m(PIXEL_SHADER_BARRIER, 0);
-        return;
-    case Device::FetchBarrier::PixelShaderNoWfiInvalidate:
-        p.m(PIXEL_SHADER_BARRIER, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
         return;
     case Device::FetchBarrier::PixelShader:
         break;

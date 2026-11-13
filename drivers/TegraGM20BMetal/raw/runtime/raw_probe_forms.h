@@ -6,8 +6,9 @@
 // colour written to fragments sampling it, the tiled flush (the earlier pass's body keeps it) and switch_gm20b_pixel_shader
 // _barrier (plan_hazard.cpp CrossPassPixel); at a job's entry, no flush or wait, only the invalidates of what the job reads
 // (plan_barriers.cpp entry with barrier.entry_no_drain); at an engine change, the change itself in place of the wait
-// (barrier.switch_drain). PixelNoWfi and Bare are the readings of the probe brief (0x1288 after PIXEL_SHADER_BARRIER; an
-// entry with no data invalidates at all); None removes the barrier, the arm that shows a probe can see a hazard at all.
+// (barrier.switch_drain). Bare is the probe brief's reading of an entry with no data invalidates at all; None removes the
+// barrier, the arm that shows a probe can see a hazard at all. PIXEL_SHADER_BARRIER is never followed by 0x1288: that
+// reading failed on the chip (stack-F-v1), and the method checks of every host test refuse it.
 #pragma once
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <cstdint>
@@ -36,7 +37,6 @@ template <typename Emit, typename... Args> void barrier(Push &p, Emit emit, Args
 enum class PassForm : uint8_t {
     Today,
     PixelOrdered,  // PIXEL_SHADER_BARRIER, then the texture invalidate it orders (0x0f74)
-    PixelNoWfi,    // PIXEL_SHADER_BARRIER, then INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI (0x1288)
     None
 };
 
@@ -102,7 +102,7 @@ struct ProbeTaken {
     }
 };
 
-// "pass=<today|pixel|pixel_nowfi|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
+// "pass=<today|pixel|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
 // resolve=<draw|twod> index=<bytes> fetch=<today|barrier>", any subset in any order; false on anything else
 inline bool parseProbeForms(const char *text, ProbeForms &out)
 {
@@ -123,8 +123,6 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
             f.pass = PassForm::Today;
         else if (key == "pass" && value == "pixel")
             f.pass = PassForm::PixelOrdered;
-        else if (key == "pass" && value == "pixel_nowfi")
-            f.pass = PassForm::PixelNoWfi;
         else if (key == "pass" && value == "none")
             f.pass = PassForm::None;
         else if (key == "entry" && value == "today")
@@ -168,10 +166,6 @@ inline void probePassPrologue(Push &p, const ProbeForms &f, ProbeEngine before, 
         switch (f.pass) {
         case PassForm::PixelOrdered:
             probe_forms_detail::barrier(p, switch_gm20b_pixel_shader_barrier);
-            return;
-        case PassForm::PixelNoWfi:
-            p.m(NVB197_PIXEL_SHADER_BARRIER, 0);
-            probe_forms_detail::barrier(p, switch_gm20b_invalidate_texture_data);
             return;
         default:
             return;
