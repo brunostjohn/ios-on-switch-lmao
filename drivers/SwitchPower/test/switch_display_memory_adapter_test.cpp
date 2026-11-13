@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "../../NativeMobileDisplay/SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchDisplayBandwidth.h"
 #include "../SwitchDisplayMemoryState.h"
 #include "../SwitchEMCGovernor.h"
@@ -80,8 +81,8 @@ public:
     Loop object;
     Loop *loop = &object;
     Registers mcRegs;
-    switch_display::MemoryState memoryState;
-    bool memoryQualified = true, memoryDirty = false, fixed = false;
+    switch_display::MemoryState memoryState, memoryParked;
+    bool memoryQualified = true, memoryDirty = false, fixed = false, memoryUncovered = false;
     uint32_t memoryAppliedKhz = 0;
     unsigned carRate = 0;
     uint32_t khz[3] = {204000, 1331200, 1600000};
@@ -92,10 +93,11 @@ public:
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned) const;
     void replanDisplayMemory(uint32_t, const char *);
+    void unparkDisplayMemory(uint32_t);
 
     bool displayMemoryReady() const
     {
-        return memoryQualified;
+        return memoryQualified && !memoryUncovered;
     }
 
     bool programMemory(uint32_t, uint32_t, bool = false);
@@ -303,23 +305,22 @@ TEST_F(MemoryAdapter, ARateOutsideTheTablePlansAgainWhereTheClockRuns)
     EXPECT_EQ(switch_emc_display_memory_ready(), 1);
 }
 
-TEST_F(MemoryAdapter, ResumeWhoseBpmpRefusesTheTopRateReleasesWhatTheRateCannotCarry)
+TEST_F(MemoryAdapter, ResumeWhoseBpmpRefusesTheTopRateParksTheHeadUntilTheGovernorClimbsForIt)
 {
     ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
     EXPECT_EQ(switch_emc_display_memory_ready(), 1);
     getRate = 204000;
     setResults.push_back({-5, 204000});
     EXPECT_NO_THROW(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr));
-    EXPECT_TRUE(emc.displayMemoryReady());
-    EXPECT_FALSE(emc.memoryState.owned[0]);
-    ASSERT_EQ(gErrors.size(), 1u);
+    ASSERT_EQ(gErrors.size(), 2u);
     EXPECT_EQ(gErrors[0],
               "SwitchEMC: display memory planned again at 204000 kHz, as the BPMP did not restore a rate in "
-              "the table: head 0 released");
-    requestedRates.clear();
-    EXPECT_EQ(emc.reserveMemory(request(2000000000)), 0);
+              "the table: head 0 parked");
+    EXPECT_EQ(gErrors[1], "SwitchEMC: display memory head 0 planned again at 1331200 kHz");
+    EXPECT_TRUE(emc.displayMemoryReady());
     EXPECT_TRUE(emc.memoryState.owned[0]);
-    EXPECT_GE(emc.khz[emc.cur], 1331200u);
+    EXPECT_FALSE(emc.memoryParked.owned[0]);
+    EXPECT_EQ(emc.memoryAppliedKhz, 1331200u);
 }
 
 TEST_F(MemoryAdapter, FailedResumeReadDoesNotUsePreviousRow)
@@ -379,18 +380,55 @@ TEST_F(MemoryAdapter, T210ReplansAtTheRateWarmbootRestores)
     EXPECT_EQ(emc.khz[0], 204000u);
     EXPECT_EQ(emc.count, 1u);
     EXPECT_TRUE(requestedRates.empty());
-    EXPECT_TRUE(emc.displayMemoryReady());
+    EXPECT_FALSE(emc.displayMemoryReady());
     EXPECT_FALSE(emc.memoryState.owned[0]);
+    EXPECT_TRUE(emc.memoryParked.owned[0]);
     ASSERT_EQ(gErrors.size(), 1u);
     EXPECT_EQ(gErrors[0], "SwitchEMC: display memory planned again at 204000 kHz, as its plan does not cover the rate "
-                          "the boot chain left: head 0 released");
+                          "the boot chain left: head 0 parked");
     EXPECT_EQ(emc.reserveMemory(request(2000000000)), -28);
+    EXPECT_FALSE(emc.displayMemoryReady());
     const unsigned writes = emc.mcRegs.writes;
     EXPECT_EQ(emc.reserveMemory(request()), 0);
+    EXPECT_TRUE(emc.displayMemoryReady());
     EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_FALSE(emc.memoryParked.owned[0]);
     EXPECT_GT(emc.mcRegs.writes, writes);
     EXPECT_EQ(emc.memoryAppliedKhz, 204000u);
     EXPECT_TRUE(requestedRates.empty());
+}
+
+// The display's own envelope (NativeMobileDisplay), which sends no request it already holds: a parked head keeps
+// admission not ready through an identical arm, and the envelope the display captures again after SC7 is planned at
+// the restored rate, where the overlay is then refused as one request.
+TEST_F(MemoryAdapter, T210ParkedHeadOutlastsTheDisplaysHeldArmUntilItsNextRequest)
+{
+    emc.carRate = 1600000;
+    ASSERT_TRUE(emc.useFixedRate(emc.carRate));
+    const auto timing = request();
+    switch_display::MemoryEnvelope display;
+    const auto reserve = [this](const switch_display_memory_head *head) {
+        return emc.reserveMemory(*head);
+    };
+    ASSERT_TRUE(display.configure(timing, 720, 1280, false));
+    ASSERT_TRUE(display.applyUiAlone(reserve));
+    switch_display_memory_window windows[3] = {display.uiWindow(), {}, {}};
+    ASSERT_TRUE(switch_display::memoryWindow(windows[1], 2000000000, 720, 1280, 720, 1280, false, false, false));
+    ASSERT_TRUE(display.armWindows(windows, 2000000000, reserve));
+    ASSERT_TRUE(emc.displayMemoryReady());
+    emc.carRate = 204000;
+    ASSERT_EQ(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr), 0);
+    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_TRUE(display.armWindows(windows, 2000000000, reserve));
+    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_TRUE(emc.memoryParked.owned[0]);
+    ASSERT_TRUE(display.configure(timing, 720, 1280, false));
+    ASSERT_TRUE(display.applyUiAlone(reserve));
+    EXPECT_TRUE(emc.displayMemoryReady());
+    EXPECT_TRUE(emc.memoryState.owned[0]);
+    EXPECT_EQ(emc.memoryAppliedKhz, 204000u);
+    EXPECT_FALSE(display.armWindows(windows, 2000000000, reserve));
+    EXPECT_TRUE(emc.displayMemoryReady());
 }
 
 TEST_F(MemoryAdapter, T210KeepsTheHeadsTheRestoredRateStillCarries)

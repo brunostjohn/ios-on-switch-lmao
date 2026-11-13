@@ -149,6 +149,7 @@ host_test(
     name = "switch_display_memory_adapter_test",
     srcs = [
         "switch_display_memory_adapter_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/SwitchPower:SwitchDisplayMemoryMath.h",
