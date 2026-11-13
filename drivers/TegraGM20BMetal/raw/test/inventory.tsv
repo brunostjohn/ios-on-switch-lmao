@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
 # m2v's items: base 3 m2v 3 none 32 raw 341 read 354 refused 163 unread 139 zero 22
-# sent selectors: base 78 m2v 10 none 7 raw 556 refused 56 zero 108
+# sent selectors: base 77 m2v 10 none 7 raw 557 refused 56 zero 108
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -541,7 +541,7 @@ MTLDevice	-	supportsNativeHardwareFP16	-	21H461,24B119	raw
 MTLDevice	-	supportsNonUniformThreadgroupSize	-	21H461,24B119	base
 MTLDevice	-	supportsNorm16BCubicFiltering	-	21H461,24B119	base
 MTLDevice	-	supportsPackUnpackSmallInteger	-	24B119	base
-MTLDevice	-	supportsProgrammableBlending	-	21H461,24B119	base
+MTLDevice	-	supportsProgrammableBlending	-	21H461,24B119	raw
 MTLDevice	-	supportsPullModelInterpolation	-	21H461,24B119	base
 MTLDevice	-	supportsQuadShufflesAndBroadcast	-	21H461,24B119	base
 MTLDevice	-	supportsRasterOrderGroups	-	21H461,24B119	raw

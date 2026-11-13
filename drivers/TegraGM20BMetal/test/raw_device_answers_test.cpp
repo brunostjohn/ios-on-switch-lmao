@@ -105,6 +105,16 @@ TEST(RawDeviceAnswers, HalfArithmeticIsNative)
         EXPECT_EQ(count(k, "supportsNativeHardwareFP16"), 1u) << k.kind;
 }
 
+// Every Apple family reads its colour attachments in the shader; the raw path does it inside the pixel interlock
+// (gpu.raw.framebuffer_fetch)
+TEST(RawDeviceAnswers, FramebufferReadsAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "isFramebufferReadSupported"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsProgrammableBlending"), 1u) << k.kind;
+    }
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {
