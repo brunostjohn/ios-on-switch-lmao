@@ -142,6 +142,28 @@ TEST(Zcull, UntrackableStatesInvalidateOnce)
     EXPECT_FALSE(invalidates(zfail, false, false, false));  // no stencil aspect: never tested
 }
 
+raw::ZcullAsk clearedDepth()
+{
+    raw::ZcullAsk a;
+    a.on = a.depth = a.cleared = true;
+    return a;
+}
+
+// gpu.raw.zcull msaa4x_passes: the rule reads no sample count
+TEST(Zcull, AClearedDepthTakesARegion)
+{
+    EXPECT_TRUE(raw::zcullCandidate(clearedDepth()));
+    raw::ZcullAsk a = clearedDepth();
+    a.on = false;
+    EXPECT_FALSE(raw::zcullCandidate(a));
+    a = clearedDepth();
+    a.depth = false;
+    EXPECT_FALSE(raw::zcullCandidate(a));
+    a = clearedDepth();
+    a.atStorageBase = false;
+    EXPECT_FALSE(raw::zcullCandidate(a));
+}
+
 TEST(Zcull, NothingWithoutARegion)
 {
     raw::ZcullPass z;

@@ -4398,9 +4398,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
     // (raw_zcull.h's region is one plane's: an array's zeta, or a layer of one, keeps zcull off)
-    e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth && layers == 1 && zeta->layers <= 1 &&
-                         (!zeta->storage.va || zeta->va == zeta->storage.va);
+    ZcullAsk zask;
+    zask.on = dev_->zcullOn_;
+    zask.depth = zeta && zetaHasDepth(zeta->format);
+    zask.cleared = pass.depthStencil.clearDepth;
+    zask.layers = layers;
+    zask.zetaLayers = zeta ? zeta->layers : 1;
+    zask.atStorageBase = zeta && (!zeta->storage.va || zeta->va == zeta->storage.va);
+    e.zcull_.candidate = zcullCandidate(zask);
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)

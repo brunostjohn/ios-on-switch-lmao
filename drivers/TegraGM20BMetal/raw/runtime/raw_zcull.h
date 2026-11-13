@@ -5,8 +5,8 @@
 //
 // Zcull, the GPU's coarse depth rejection, for the raw path's passes. The kernel reports its layout (TegraGM20BZcullABI.h)
 // and gives every channel a zcull image of its own, so a region holds across context switches. A pass gets one when it
-// has a one-sample depth target it clears at its start, as NVK does without a zcull plane: the clear sets the region,
-// which a loaded depth's would not match. Its direction is the pass's first depth-testing state's (LESS and LEQUAL less,
+// has a depth target it clears at its start, as NVK does without a zcull plane: the clear sets the region, which a
+// loaded depth's would not match. Its direction is the pass's first depth-testing state's (LESS and LEQUAL less,
 // GREATER and GEQUAL greater; NVK, which has no such state at its begin, keeps LESS), set in the pass's prologue, which
 // is written once its draws are known.
 //
@@ -123,6 +123,22 @@ inline void zcullOffWords(Push &p)
 }
 
 constexpr uint32_t kInvalidateZcull = 0x1958;
+
+// What zcull's region rule reads of a pass and its depth target
+struct ZcullAsk {
+    bool on = false;       // the kernel reported zcull's layout
+    bool depth = false;    // the pass has a zeta with a depth aspect
+    bool cleared = false;  // its depth is cleared at the pass start
+    uint32_t layers = 1, zetaLayers = 1;
+    bool atStorageBase = true;  // the zeta starts at its memory's base (not a layer view of an array)
+};
+
+// A pass takes a region when its depth target is cleared at its start, as NVK's begin does; NVK's region is the render
+// area's pixels at any sample count
+constexpr bool zcullCandidate(const ZcullAsk &a)
+{
+    return a.on && a.depth && a.cleared && a.layers == 1 && a.zetaLayers <= 1 && a.atStorageBase;
+}
 
 // A pass's zcull: whether it takes a region, the direction its depth tests go, and whether a draw already invalidated it
 struct ZcullPass {
