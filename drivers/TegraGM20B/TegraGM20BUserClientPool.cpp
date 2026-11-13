@@ -90,7 +90,7 @@ void scheduleOrphanRelease()
 
 namespace
 {
-constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 16ULL << 20;
+constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 32ULL << 20;
 
 struct WarmClass {
 	uint64_t bytes;
@@ -299,16 +299,35 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			}
 			return;
 		}
+		Spare *evicted = nullptr;
 		uint32_t c = 0;
-		while (c < kClasses && (p->count[c] + p->zeroing[c] >= p->target[c] ||
-					p->clean + classBytes(c) > kSpareCapBytes))
-			c++;
-		if (c == kClasses) {
-			IOLockUnlock(p->lock);
-			return;
+		for (; c < kClasses; c++) {
+			if (p->count[c] + p->zeroing[c] >= p->target[c])
+				continue;
+			while (p->clean + classBytes(c) > kSpareCapBytes) {
+				const uint32_t d = switch_gpu_spare_over_depth(p->count, p->target, kClasses);
+				if (d == kClasses || !p->ready[d])
+					break;
+				Spare *s = p->ready[d];
+				p->ready[d] = s->next;
+				p->count[d]--;
+				p->clean -= s->bytes;
+				s->next = evicted;
+				evicted = s;
+			}
+			if (p->clean + classBytes(c) <= kSpareCapBytes)
+				break;
 		}
-		p->clean += classBytes(c);
+		if (c < kClasses)
+			p->clean += classBytes(c);
 		IOLockUnlock(p->lock);
+		while (evicted) {
+			Spare *next = evicted->next;
+			spareFree(evicted);
+			evicted = next;
+		}
+		if (c == kClasses)
+			return;
 		Spare *s = spareMake(classBytes(c));
 		IOLockLock(p->lock);
 		if (!s) {  // the VM could not give it: try again at the next event, not now
@@ -385,8 +404,10 @@ Spare *spareTake(uint64_t bytes)
 	if (!s) {
 		const switch_gpu_spare_miss why =
 			switch_gpu_spare_miss_of(p->target[c], p->zeroing[c], memoryPressure());
-		p->target[c] = switch_gpu_spare_depth_after_miss(
+		const uint16_t learnt = switch_gpu_spare_depth_after_miss(
 			p->target[c], classBytes(c) <= kLearnMaxBytes, why);
+		const uint16_t most = switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes);
+		p->target[c] = learnt < most ? learnt : most;
 #if TGM_STATS
 		++p->misses[why];
 #endif

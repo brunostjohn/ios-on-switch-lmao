@@ -54,4 +54,26 @@ TEST(Spares, ARepeatedBurstIsServedFromSpares)
 	EXPECT_EQ(missed[1], 0u);
 }
 
+// Boot 21: 94 of 96 MiB of spares in classes no one asked for and no depth above 16 MiB. A class up to 32 MiB learns a
+// depth, each class's spares hold a quarter of the cap at most, and a class below its depth takes its room from the
+// largest class kept past its own.
+TEST(Spares, AClassOfADedicatedChunkLearnsADepthUnderAQuarterOfTheCap)
+{
+	constexpr uint64_t kCap = 96ULL << 20;
+	EXPECT_EQ(switch_gpu_spare_depth_cap(24ULL << 20, kCap), 1);
+	EXPECT_EQ(switch_gpu_spare_depth_cap(8ULL << 20, kCap), 3);
+	EXPECT_EQ(switch_gpu_spare_depth_cap(3600ULL << 10, kCap), 6);
+	EXPECT_EQ(switch_gpu_spare_depth_cap(64ULL << 10, kCap), SWITCH_GPU_SPARE_DEPTH_MAX);
+}
+
+TEST(Spares, RoomComesFromTheLargestClassKeptPastItsDepth)
+{
+	const uint16_t count[4] = {8, 3, 0, 2}, target[4] = {8, 1, 2, 0};
+	EXPECT_EQ(switch_gpu_spare_over_depth(count, target, 4), 3u);
+	const uint16_t settled[4] = {8, 1, 0, 0};
+	EXPECT_EQ(switch_gpu_spare_over_depth(settled, target, 4), 4u);
+	const uint16_t smaller[4] = {8, 3, 0, 0};
+	EXPECT_EQ(switch_gpu_spare_over_depth(smaller, target, 4), 1u);
+}
+
 }  // namespace
