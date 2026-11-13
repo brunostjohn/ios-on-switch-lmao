@@ -3680,6 +3680,22 @@ host_test(
 )
 
 host_test(
+    name = "raw_zbc_test",
+    srcs = [
+        "raw_zbc_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_clear.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_lock.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zbc.h",
+    ],
+    copts = [
+        "-iquote",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_resolve_rule_test",
     srcs = [
         "raw_resolve_rule_test.cpp",

@@ -173,7 +173,6 @@ TEST(RawComp, ZbcEntriesHoldTheTexelTheRopWrites)
     EXPECT_EQ(memcmp(e.ds, quarter, sizeof e.ds), 0);
     const uint32_t tie[4] = {bits(0.5f), 0, 0, bits(1.0f)};  // 127.5: the ROP's tie, not Apple's
     EXPECT_FALSE(raw::zbcColorEntry(80, tie, e));
-    EXPECT_FALSE(raw::zbcColorEntry(81, quarter, e));  // sRGB
     EXPECT_FALSE(raw::zbcColorEntry(55, quarter, e));  // R32Float: no ZBC format
     const uint32_t halves[4] = {bits(0.5f), bits(-2.0f), bits(65504.0f), bits(1.0f / 3)};
     ASSERT_TRUE(raw::zbcColorEntry(115, halves, e));
