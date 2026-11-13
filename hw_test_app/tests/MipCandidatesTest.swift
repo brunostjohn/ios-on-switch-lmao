@@ -4,9 +4,10 @@ import HWTestGPU
 import Metal
 
 /// The probe cells of rule mip.twod (drivers/TegraGM20BMetal/raw/fx/fx_mip_probe.h), debug builds: the formats the pack's
-/// mip states make, recorded on the 2D engine (switchRawProbeMipCandidates:), each step against MipReference and level 1
-/// against the same chain by the format's 3D passes. `candidates=<fmt>:<proven steps>/<odd steps>/<level 1 against 3D>`,
-/// each exact, near (within one code) or wrong: a format near or exact at the proven steps can join fx::twodFormat. It
+/// mip states make, every step recorded on the 2D engine (switchRawProbeMipCandidates:) against MipReference, and level 1
+/// against the same chain by the shipping route (the 2D engine at the proven steps of fx::twodChainFormat's formats, the
+/// format's 3D passes at the others). `candidates=<fmt>:<proven steps>/<odd steps>/<level 1 against the route>`, each
+/// exact, near (within one code) or wrong: a format near or exact at the proven steps chains on the 2D engine there. It
 /// reports; it fails only when the work left the raw path.
 struct MipCandidatesTest: HWTest {
     let id = "gpu.raw.mip_twod_candidates"

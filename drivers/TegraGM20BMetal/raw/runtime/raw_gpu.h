@@ -347,7 +347,7 @@ struct Texture {
     struct Chain {
         fx::MipChain layout;
         uint64_t va = 0;
-        uint32_t fmt2d = 0;  // the 2D engine's surface format (fx::twodFormat); 0: it does not filter this one
+        uint32_t fmt2d = 0;  // the 2D engine's surface format (fx::twodChainFormat); 0: it makes none of its steps
         uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
@@ -2498,7 +2498,8 @@ public:
     };
 
     std::atomic<bool> probeArmed{false};
-    // generateMipmaps of a format no probe covered on the 2D engine as fx_mip_probe.h's surface format, recorded from now
+    // generateMipmaps of a format the pack's mip state makes, every step on the 2D engine as fx_mip_probe.h's surface
+    // format, recorded from now
     std::atomic<bool> probeMipCandidates{false};
     // memoryless zetas the copy engine fills and drains for the shader's depth tests take their compressible kind (raw_comp.h)
     std::atomic<bool> probeZetaKinds{false};

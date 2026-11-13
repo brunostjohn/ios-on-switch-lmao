@@ -2543,6 +2543,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip_probe.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip_route.h",
         "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.h",

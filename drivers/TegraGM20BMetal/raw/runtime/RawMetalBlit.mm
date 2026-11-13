@@ -459,8 +459,7 @@ static bool threeDSteps(const raw::Texture &t)
     }
     uint64_t probe2d = 0;
 #if SWITCH_RAW_DIAGNOSTICS
-    if (x && x->_rawOk && x->_raw.chain && !x->_raw.chain->fmt2d &&
-        gRM->raw->probeMipCandidates.load(std::memory_order_acquire))
+    if (x && x->_rawOk && x->_raw.chain && gRM->raw->probeMipCandidates.load(std::memory_order_acquire))
         probe2d = raw::fx::twodCandidateFormat(x->_raw.format);
 #endif
     setBinding(_cb, OpMipmaps, 0, 0, t, probe2d);

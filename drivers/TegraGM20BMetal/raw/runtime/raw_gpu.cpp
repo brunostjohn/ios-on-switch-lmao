@@ -29,6 +29,7 @@
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitRaster.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
+#include "../fx/fx_mip_probe.h"
 #include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
 #include "raw_cbuf.h"
@@ -2180,7 +2181,7 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     if (chain) {
         const FormatInfo *f = formatInfo(ask.format);
         chain->va = t.va;
-        chain->fmt2d = fx::twodFormat(ask.format);
+        chain->fmt2d = fx::twodChainFormat(ask.format);
         uint32_t w[8];
         fx::mipChainTic(chain->layout, chain->va, f->tic0, f->srgb, 0, ask.levels, w);
         // the texture's header: the chain's (visible at the next header invalidate)
@@ -2251,7 +2252,7 @@ void Device::layImage(const fx::MipChain &c, const FormatInfo *f, uint8_t type, 
     t.chain = new Texture::Chain;
     t.chain->layout = c;
     t.chain->va = t.va;
-    t.chain->fmt2d = volume ? 0 : fx::twodFormat(t.format);
+    t.chain->fmt2d = volume ? 0 : fx::twodChainFormat(t.format);
     uint32_t w[8];
     fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, c.levels, w, type);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
