@@ -437,6 +437,8 @@ void tgm_stats_tick(void)
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
 		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
+	if (tgm_owner_memory(line, sizeof(line)))
+		nvxnu_stats("tegra-gm20b: memory by process: %s", line);
 	{
 		const u64 small = __atomic_exchange_n(&tgm_stats.map_small, 0, __ATOMIC_RELAXED);
 		const u64 big = __atomic_exchange_n(&tgm_stats.map_big, 0, __ATOMIC_RELAXED);
@@ -479,7 +481,8 @@ void tgm_stats_tick(void)
 		if (t[0] || t[1] || t[2] || t[3] || t[4] || t[5] || t[6] || t[8]) {
 			nvxnu_log("tegra-gm20b: layouts %llu block-linear, pitch %llu sampled "
 				  "first, %llu shared, "
-				  "%llu by shape, %llu failed tiling, %llu mapped by another process; "
+				  "%llu by shape, %llu failed tiling, %llu mapped by another "
+				  "process; "
 				  "%llu block-linear live (%llu KiB), CPU views' "
 				  "scratch %llu KiB (peak %llu KiB)\n",
 				  t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7] >> 10, t[8] >> 10,

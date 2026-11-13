@@ -7,6 +7,8 @@ void AGXDeviceUserClient::accountRelease(Bo *bo)
 		pool_bytes_ -= bo->bytes;
 	if (bo->handle && bo->pool_va && (bo->flags & TegraGM20BBoControl))
 		control_bytes_ -= bo->controlCharge;
+	if (TGM_STATS && bo->handle)
+		ownerMemory_.change(bo->ownerKind, bo->bytes, false);
 }
 
 void AGXDeviceUserClient::readyBo(Bo *bo)

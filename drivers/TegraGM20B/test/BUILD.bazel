@@ -38,6 +38,7 @@
 #   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
 #   gm20b_compositor_sync_test SwitchGpuCompositorSync.h: the compositor's sync pushes, kicks behind an app apart
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
+#   switch_gpu_owner_memory_test SwitchGpuOwnerMemory.h: a connection's BO counts, the debug line summing them by process
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
 #                            late wait kills (the context GR cannot switch, a self-hung channel, never slow work)
@@ -271,6 +272,15 @@ host_test(
         "gm20b_hang_detail_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BHangDecode.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_owner_memory_test",
+    srcs = [
+        "switch_gpu_owner_memory_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuOwnerMemory.h",
     ],
     cxx_std = "c++17",
 )
