@@ -5317,6 +5317,24 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# A device build's pack (SWITCH_REAL_PACK, passed with --test_env) against the client's variant names: each variant record is
+# filed under the name RenderVariant::name() gives its forms. Manual: it needs the pack.
+host_test(
+    name = "raw_real_pack_variants_test",
+    srcs = [
+        "raw_real_pack_variants_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cubic.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_variant.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_written_textures.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr_pass.h",
+    ],
+    cxx_std = "c++17",
+    tags = ["manual"],
+)
+
 # hostsim's mock GM20B (mock_iokit.c), which interposes IOKit's calls for every image of a process that links it: NVK's too
 cc_binary(
     name = "libmock_iokit.dylib",
