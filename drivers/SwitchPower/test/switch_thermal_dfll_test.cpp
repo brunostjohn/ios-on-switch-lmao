@@ -100,14 +100,15 @@ Cpu readCpu(volatile uint8_t *)
 class SwitchThermal {
 public:
     volatile uint8_t *car = nullptr;
-    bool dfllWanted = true, dfllMode = true, dfllPrepared = false, governed = true, dfllResume = false;
+    bool dfllWanted = true, dfllMode = true, dfllPrepared = false, governed = true, dfllResume = false,
+         dfllQuiet = false;
     switch_gov_retry dfllRetry = {};
     uint64_t dfllRetryUnit = kSecond;
     bool perfRaised = false, perfSettled = false;
     unsigned perfRaises = 0, dfllFloor = 0, dfllCap = 0;
     unsigned long dfllTopHz = 0;
     bool governorStarts = true, ladderLowers = true;
-    unsigned governorStartsAsked = 0, restores = 0, lowered = 0, ladderRaises = 0, thermalUpdates = 0;
+    unsigned governorStartsAsked = 0, restores = 0, lowered = 0, ladderRaises = 0, ladderLines = 0, thermalUpdates = 0;
 
     void dfllFailed(const char *what, const char *why);
     bool dfllAgain();
@@ -116,14 +117,17 @@ public:
     void dfllRefused(unsigned index, unsigned long hz, int err);
     bool raiseDfll(int soc);
 
-    // raiseCpu's DFLL half as SwitchThermal.cpp runs it, then the PLL ladder as one step.
+    // raiseCpu's DFLL half as SwitchThermal.cpp runs it, then the PLL ladder as one step and its line.
     bool raiseCpu(int soc)
     {
+        dfllQuiet = false;
         (void)dfllAgain();
         if (dfllMode && raiseDfll(soc))
             return true;
         perfRaised = true;
         ++ladderRaises;
+        if (!dfllQuiet)
+            ++ladderLines;
         return true;
     }
 
@@ -259,6 +263,8 @@ TEST_F(ThermalDfll, WaitsDoubleToTheirCapAndOnlyPowersOfTwoAreLogged)
     EXPECT_EQ(waits, want);
     EXPECT_EQ(gPrepares, 14u);
     EXPECT_EQ(gLines.size(), 4u);  // failures 1, 2, 4, 8
+    EXPECT_EQ(thermal.ladderRaises, 14u);
+    EXPECT_EQ(thermal.ladderLines, 4u);
     EXPECT_TRUE(has("8 failed in a row"));
 }
 

@@ -13,7 +13,8 @@
 void SwitchThermal::dfllFailed(const char *what, const char *why)
 {
     dfllMode = governed = false;
-    if (switch_gov_retry_failed(&dfllRetry, mach_absolute_time(), dfllRetryUnit)) {
+    dfllQuiet = !switch_gov_retry_failed(&dfllRetry, mach_absolute_time(), dfllRetryUnit);
+    if (!dfllQuiet) {
         IOLog("SwitchPerf: %s (%s); the PLL ladder until the DFLL is tried again, %u failed in a row\n", what, why,
               dfllRetry.failures);
     }

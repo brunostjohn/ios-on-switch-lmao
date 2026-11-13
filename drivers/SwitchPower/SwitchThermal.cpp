@@ -441,10 +441,11 @@ class SwitchThermal : public IOService {
     bool dfllMode = false, dfllPrepared = false;     // the CPU goes on the DFLL now (SwitchThermalDfll.h)
     bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
     bool dfllResume = false;                         // SC7 lost the DFLL's registers and their restore failed
-    switch_gov_retry dfllRetry = {};                 // DFLL failures in a row and when it is tried again
-    uint64_t dfllRetryUnit = 0;                      // the first wait after a DFLL failure, 1 s
-    unsigned long dfllTopHz = kDfllRateHz;           // the top this boot measured at or under 1785 MHz
-    IOInterruptEventSource *governor = nullptr;      // switchperf's signal: a software interrupt of this work loop
+    bool dfllQuiet = false;           // this raise's DFLL try failed unreported: its ladder raise logs nothing either
+    switch_gov_retry dfllRetry = {};  // DFLL failures in a row and when it is tried again
+    uint64_t dfllRetryUnit = 0;       // the first wait after a DFLL failure, 1 s
+    unsigned long dfllTopHz = kDfllRateHz;       // the top this boot measured at or under 1785 MHz
+    IOInterruptEventSource *governor = nullptr;  // switchperf's signal: a software interrupt of this work loop
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
@@ -964,6 +965,7 @@ bool SwitchThermal::raiseCpu(int soc)
     using namespace switchclk;
     if (!perfKept && !preparePerf())
         return false;
+    dfllQuiet = false;
     (void)dfllAgain();
     if (pllxLost) {
         const unsigned found = readCpu(car).kHz;
@@ -1069,6 +1071,8 @@ bool SwitchThermal::raiseCpu(int soc)
         snprintf(next, sizeof(next), "; %u MHz would need %u mV", kRungs[perfTop].rowMHz,
                  cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct));
     }
+    if (dfllQuiet)
+        return true;
     IOLog("SwitchPerf: CPU %u -> %u MHz at %u mV (step %u of %u, raise %u; CPU speedo %d id %d process %d, top %u MHz: "
           "L4T CVB %u mV + %u %%%s; MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us); SoC %d.%d C, "
           "down at %d C\n",
