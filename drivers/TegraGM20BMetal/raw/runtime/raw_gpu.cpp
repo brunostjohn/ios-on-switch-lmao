@@ -660,6 +660,7 @@ bool Device::init(std::string &err)
             return false;
         }
     }
+    constexprMappedCount_ = constexprCount_;
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
@@ -3400,6 +3401,19 @@ bool Device::borderVariant(Sampler &s, const Texture &t)
         return false;
     memcpy(tsc_.cpu + 32 * tsc, w, 32);
     s.bordered[texel] = tsc;
+    return true;
+}
+
+bool Device::constexprMapsPlaced()
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    for (; constexprMappedCount_ < constexprCount_; constexprMappedCount_++) {
+        const auto placed = std::find_if(completedSamplers_.begin(), completedSamplers_.end(), [&](const auto &s) {
+            return s.second == constexprMappedCount_;
+        });
+        if (placed == completedSamplers_.end() || !placeConstexprMaps(constexprMappedCount_, placed->first.data()))
+            return false;
+    }
     return true;
 }
 
@@ -6532,6 +6546,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
                     tsc = map ? d.constexprMapped_[e.sampler][map] : d.constexprTsc_[e.sampler];
+                    if (!tsc) {
+                        *why = "a planar texture's constexpr sampler without its address map";
+                        return false;
+                    }
                 }
                 at[0] = tic | tsc << 20;
             }
