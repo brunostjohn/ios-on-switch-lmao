@@ -33,7 +33,7 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
         return kIOReturnBadArgument;
     windowProbeOnLoop([&] {
         if (request.op == SWITCH_DISPLAY_LANDSCAPE_FAIL)
-            landscapeRun.failNext = true;
+            landscapeRun.failNext = request.value != 0;
         if (request.op == SWITCH_DISPLAY_LANDSCAPE_PORTRAIT) {
             const uint32_t frames = request.value < SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES
                                         ? request.value

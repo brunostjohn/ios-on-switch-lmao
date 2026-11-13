@@ -28,7 +28,7 @@ enum {
     SWITCH_DISPLAY_LANDSCAPE_SAMPLE = 2,  // value: frame ends to record, at most SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES
     SWITCH_DISPLAY_LANDSCAPE_QUERY = 3,
     SWITCH_DISPLAY_LANDSCAPE_PORTRAIT = 4,  // value: frame ends, at most SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES
-    SWITCH_DISPLAY_LANDSCAPE_FAIL = 5,
+    SWITCH_DISPLAY_LANDSCAPE_FAIL = 5,      // value: 1 arms it, 0 disarms it
 };
 
 enum {

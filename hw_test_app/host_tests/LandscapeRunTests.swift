@@ -127,24 +127,24 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(metrics["stray_enter"], .integer(0))
     }
 
-    /// Boot 21's run: the change into landscape came after its sample (all 90 readings the copy route's), and after
-    /// leaving the copy route showed another frame. The landscape CRC is the held landscape frame's, so only the frames
-    /// after the leave are stray, and the change that missed its sample says so.
+    /// Boot 21's run: the change into landscape came after its sample (all 90 readings the copy route's), and the change
+    /// back came 3 frames into its sample, after which the copy route never showed crc_vic. The landscape CRC is the held
+    /// landscape frame's, so only the frames after the leave are stray, and the change that missed its sample says so.
     func testAChangeAfterItsSampleIsTimingAndTheLeaveIsJudgedOnItsOwnFrames() {
         var s = samples()
         s.vicHeld = sample(Array(repeating: 0x8a0c_21db, count: 30), Array(repeating: 0, count: 30))
         s.enter = sample(Array(repeating: 0x8a0c_21db, count: 90), Array(repeating: 0, count: 90))
         s.landscapeHeld = sample(Array(repeating: 0xcccc, count: 30), Array(repeating: 1, count: 30))
         s.leave = sample(
-            Array(repeating: 0xcccc, count: 70) + Array(repeating: 0xdddd, count: 20),
-            Array(repeating: 1, count: 70) + Array(repeating: 0, count: 20), switches: 1)
+            Array(repeating: 0xcccc, count: 3) + Array(repeating: 0xdddd, count: 87),
+            Array(repeating: 1, count: 3) + Array(repeating: 0, count: 87), switches: 1)
         let (checks, metrics) = LandscapeJudge.judge(s, dropped: 0)
         XCTAssertEqual(metrics["crc_landscape"], .text("0000cccc"))
         XCTAssertEqual(metrics["crc_back"], .text("0000dddd"))
         XCTAssertEqual(metrics["enter_switched"], .flag(false))
         XCTAssertEqual(metrics["leave_switched"], .flag(true))
         XCTAssertEqual(metrics["stray_enter"], .integer(0))
-        XCTAssertEqual(metrics["stray_leave"], .integer(20))
+        XCTAssertEqual(metrics["stray_leave"], .integer(87))
         XCTAssertEqual(
             checks.filter { !$0.1 }.map(\.0),
             [

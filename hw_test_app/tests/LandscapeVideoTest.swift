@@ -9,10 +9,12 @@ import UIKit
 /// PORTRAIT whatever the shipped traits, then on the landscape route (V3's trait shipped, and FORCEd for this run's own
 /// TegraVIC connection on kernels without it): TegraVIC records each turn and window A column-scans the decoder's picture
 /// behind the UI on window B. DC A's CRC is read at every frame end of five samples: a held frame on the copy, the
-/// change to landscape on that same frame, the clip playing, the held frame again, the change back. A change takes a
-/// new turn, so the held frame is decoded again from the clip's next copy in the composition, and a change sample is
-/// taken again until it shows the change (enter_samples, leave_samples): a change that never lands is the route's fault,
-/// one that lands late only the sampling's. Pass: no VIC job from Core Animation's display server for the landscape
+/// change to landscape on that same frame, the clip playing, the held frame again, the change back. A change into
+/// landscape takes a new turn, so the held frame is decoded again from the clip's next copy in the composition; the
+/// change back is asked on the frame already shown, as boots 19 and 21 did (decoded again from the third sample), so the
+/// copy route has to show a frame whose turn TegraVIC only recorded: crc_back has to be crc_vic. A change sample is
+/// taken again until it shows the change (enter_samples, leave_samples): a change that never lands is the route's
+/// fault, one that lands late only the sampling's. Pass: no VIC job from Core Animation's display server for the landscape
 /// video (other processes' jobs are reported, not judged), no frame of either change showing anything but one route's
 /// CRC or the other's (the landscape route's CRC is the held landscape frame's), the copy's very CRC back afterwards,
 /// no underflow, no frame dropped while playing. The two routes filter differently (VIC scales the turn, window A's
@@ -58,6 +60,7 @@ struct LandscapeVideoTest: HWTest {
         defer {
             _ = session.call(LandscapeSample.request(op: LandscapeSample.force, value: 0), replyBytes: 0)
             _ = session.call(LandscapeSample.request(op: LandscapeSample.portrait, value: 0), replyBytes: 0)
+            _ = session.call(LandscapeSample.request(op: LandscapeSample.fail, value: 0), replyBytes: 0)
         }
         let held = Held(frame: Self.heldFrame, clip: duration)
         await MainActor.run { video.play() }
@@ -90,7 +93,7 @@ struct LandscapeVideoTest: HWTest {
         samples.landscapeHeld = landscapeHeld
         _ = session.call(
             LandscapeSample.request(op: LandscapeSample.portrait, value: LandscapeSample.portraitFrames), replyBytes: 0)
-        guard case .success(let (leave, leaveSamples)) = await change(session, video, held) else {
+        guard case .success(let (leave, leaveSamples)) = await change(session, video, held, fresh: false) else {
             return .fail("no sample of the change back")
         }
         _ = session.call(LandscapeSample.request(op: LandscapeSample.portrait, value: 0), replyBytes: 0)
@@ -120,7 +123,7 @@ struct LandscapeVideoTest: HWTest {
         }
         _ = session.call(
             LandscapeSample.request(op: LandscapeSample.force, value: LandscapeSample.columnScanYuv), replyBytes: 0)
-        _ = session.call(LandscapeSample.request(op: LandscapeSample.fail, value: 0), replyBytes: 0)
+        _ = session.call(LandscapeSample.request(op: LandscapeSample.fail, value: 1), replyBytes: 0)
         await MainActor.run { video.play() }
         var entered = false
         var last = before
@@ -156,9 +159,10 @@ struct LandscapeVideoTest: HWTest {
         (item.accessLog()?.events ?? []).reduce(0) { $0 + max(0, $1.numberOfDroppedVideoFrames) }
     }
 
-    /// The held frame: the same picture in each of the composition's ten copies of the clip. Each show seeks to the
+    /// The held frame: the same picture in each of the composition's ten copies of the clip. A fresh show seeks to the
     /// copy it is not at, so the frame is decoded and turned again and the next swap carries a new turn of it (a seek to
-    /// the time already shown leaves the screen as it is, and a change of mode waits for a swap).
+    /// the time already shown decodes nothing, and a change into landscape waits for a swap with a recorded turn); a
+    /// show that is not fresh seeks to the time already shown, as boots 19 and 21 did.
     final class Held: @unchecked Sendable {
         let frame: CMTime
         let clip: CMTime
@@ -168,15 +172,15 @@ struct LandscapeVideoTest: HWTest {
             self.clip = clip
         }
 
-        func show(_ video: AVPlayer, settle: Bool = true) async {
+        func show(_ video: AVPlayer, settle: Bool = true, fresh: Bool = true) async {
             let sought = Waiter<Bool>()
             let first = frame, second = CMTimeAdd(frame, clip)
             await MainActor.run {
                 video.pause()
                 let now = video.currentTime()
-                let to =
+                let atFirst =
                     CMTimeCompare(CMTimeAbsoluteValue(CMTimeSubtract(now, first)), CMTime(value: 1, timescale: 60)) < 0
-                    ? second : first
+                let to = atFirst == fresh ? second : first
                 video.seek(to: to, toleranceBefore: .zero, toleranceAfter: .zero) { sought.resume($0) }
             }
             _ = await sought.wait(timeout: 5)
@@ -184,20 +188,21 @@ struct LandscapeVideoTest: HWTest {
         }
     }
 
-    /// A change of mode on the held frame: a sample started, the frame shown again, and more samples until one shows the
-    /// change latched (switches) or Self.changeSamples are spent; the sample the change landed in (or the last), and how
-    /// many it took.
+    /// A change of mode on the held frame: a sample started, the frame shown again (fresh, or first at the time already
+    /// shown and fresh from the third sample), and more samples until one shows the change latched (switches) or
+    /// Self.changeSamples are spent; the sample the change landed in (or the last), and how many it took.
     static let changeSamples = 4
 
     func change(
-        _ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held
+        _ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held, fresh: Bool = true
     ) async
         -> Result<(LandscapeSample, Int), TestFailure>
     {
         var last = LandscapeSample()
         for attempt in 1...Self.changeSamples {
             if let failure = start(session, frames: 90) { return .failure(failure) }
-            if attempt == 1 { await held.show(video, settle: false) }
+            if attempt == 1 { await held.show(video, settle: false, fresh: fresh) }
+            if attempt == 3 && !fresh { await held.show(video, settle: false) }
             switch await finish(session, frames: 90) {
             case .failure(let failure): return .failure(failure)
             case .success(let window):
