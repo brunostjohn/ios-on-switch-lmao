@@ -9,7 +9,11 @@
 // the 32-bit RGB orders). N422 halves chroma across a memory row even when VIC writes the output transposed: probe
 // gpu.x1.vic_transpose422 (L998) turned a '422v' exactly as N422 sited by ChromaLocHoriz, and as N422R misplaced every
 // CbCr pair (boots 19 and 21). A row counts elements: one per pixel in every packed format (averne: OutLumaWidth =
-// linesize / step - 1), one CbCr pair in a semi-planar chroma plane.
+// linesize / step - 1; probe gpu.x1.vic_packed422 (L1000) copied '2vuy' and 'yuvs' onto themselves exactly that way and
+// not as one a pixel pair), one CbCr pair in a semi-planar chroma plane. A packed format's U and V name the other
+// chroma byte than a semi-planar one's on this unit: the same probe read '2vuy' (Cb Y0 Cr Y1) through U8_Y8__V8_Y8 and
+// 'yuvs' (Y0 Cb Y1 Cr) through Y8_U8__Y8_V8 with Cb and Cr exchanged, both ways and against NV12 and BGRA, luma in
+// place, so each is described by the code that names its chroma bytes the other way round.
 #ifndef TEGRA_VIC_FORMATS_H
 #define TEGRA_VIC_FORMATS_H
 #include <stddef.h>
@@ -213,7 +217,7 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
          TEGRA_VIC_T_Y8___U8___V8_N420,
          0},
         {TEGRA_VIC_FOURCC('2', 'v', 'u', 'y'),
-         TEGRA_VIC_T_U8_Y8__V8_Y8,
+         TEGRA_VIC_T_V8_Y8__U8_Y8,
          1,
          TEGRA_VIC_KIND_YCC_VIDEO,
          0,
@@ -223,7 +227,7 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
          0,
          1},
         {TEGRA_VIC_FOURCC('y', 'u', 'v', 's'),
-         TEGRA_VIC_T_Y8_U8__Y8_V8,
+         TEGRA_VIC_T_Y8_V8__Y8_U8,
          1,
          TEGRA_VIC_KIND_YCC_VIDEO,
          0,

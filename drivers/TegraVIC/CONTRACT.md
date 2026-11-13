@@ -116,7 +116,7 @@ min 4, max 16384 (dest height 16382), up 4x, down 8x H / 4x V, filter taps 9 V /
 [T]: min 4, max 8192, 16x up and down, Apple's filter geometry (so CA's tables keep their shape; VIC ignores custom
 coefficients), rotation iff all 8 transforms proved, IdentityCSC 1, FractionalXYOffsetsSupported 1 (16.16 source
 offsets reach SourceRectLeft/Top; probe gpu.x1.vic_fractional decides it), formats ARGB8888, RGBA8888, 2Planes420,
-2Planes422, 2Planes444, LumaOnlyL008 and ARGB2101010 in and out, Interleaved422 once its trait is proven, and 0 for
+2Planes422, 2Planes444, LumaOnlyL008, ARGB2101010 and Interleaved422 ('2vuy', 'yuvs') in and out, and 0 for
 HDR, film grain, enhancement, directional scaling, colour manager, accessibility, histogram, tiling (Apple's GPU
 tiling), fractional dimensions, 10-bit YCbCr and compressed formats.
 Core Animation reads none of the format keys. On iPadOS 27 its detached-layer copy (`IOMFBDisplay::detach_layer`,
@@ -157,10 +157,11 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
    are used; quality hints (dither, enhance, noise estimation, directional scaling, pixel averaging, edge mirroring,
    pseudo-linear, fix-upscaling, fractional precision, blit clip, lock-in, read-only, unwire, power, coalescing, Comm
    records) are accepted and ignored. Refused as **kIOReturnUnsupported** (callers fall back): histogram, HDR, film
-   grain, colour remap, shared events, formats other than BGRA/RGBA/420v/420f/422v/422f, protected-to-less-protected,
-   and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects or 4:2:2 columns, >16x scaling,
-   sizes outside 2..8192, a destination sub-rectangle under a transform other than 0 and 6, whose placement is not in
-   place on the unit). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
+   grain, colour remap, shared events, formats other than BGRA/RGBA/420v/420f/422v/422f/2vuy/yuvs,
+   protected-to-less-protected, and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects or
+   4:2:2 columns, >16x scaling, sizes outside 2..8192, a destination sub-rectangle under a transform other than 0 and
+   6, whose placement is not in place on the unit). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform
+   bits 3-5.
 3. Build and check every VIC job in the calling thread (`tegra_vic_build`, `TegraVICConfig.h`), so refusals are the
    call's own result; then queue (16 deep, FIFO) for the engine thread. Sync calls sleep until their jobs are done.
 4. Engine thread: `IOSurface::prepare`, map each surface page by page into its SMMU window (source read-only), clean
@@ -182,7 +183,9 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
   caller falls back"). Supporting them needs the IOSurface kext's IOSurfaceSharedEvent lookup/listener/signal
   (0x5b974d8, 0x5b97400, 0x5b97718, 0x5b96c88 [V], semantics [I]).
 - Colour standard by size, not by the surfaces' YCbCrMatrix attachment.
-- Packed 4:2:2 (until `packedYcc` is proven), RGhA, 10-bit YCbCr: refused (VideoToolbox falls back per call). L008,
+- RGhA, 10-bit YCbCr: refused (VideoToolbox falls back per call). Packed 4:2:2 runs one element a pixel, '2vuy' as
+  `V8_Y8__U8_Y8` (60) and 'yuvs' as `Y8_V8__Y8_U8` (58): probe gpu.x1.vic_packed422 read the U-first codes (59, 57) with
+  Cb and Cr exchanged [T], and that the V-first codes are their exact mirror is NVIDIA's naming [I]. L008,
   L565, l10r, NV24 and three-plane 4:2:0 are table rows that have not run on the unit.
 - 4:2:2 biplanar (`Y8___U8V8_N422`, NVB0B6 code 63): a transposed 4:2:2 output is described as `Y8___U8V8_N422`
   too, its siting as its memory lies (`ChromaLocHoriz` across memory rows) [T: probe gpu.x1.vic_transpose422 on boots
