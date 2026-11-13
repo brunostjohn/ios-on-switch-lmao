@@ -4893,6 +4893,17 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
 }
 
 #if SWITCH_RAW_DIAGNOSTICS
+bool Device::gpuStartUnits(uint32_t stamp, uint64_t &units) const
+{
+    if (!stamp || !stamps_.cpu)
+        return false;
+    const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + stampOffset(stamp));
+    if (slot->start.payload != stamp || slot->end.payload != stamp)
+        return false;
+    units = slot->start.ptimer;
+    return true;
+}
+
 std::vector<StateSpan> Device::longSpans(uint32_t stamp)
 {
     if (!spans_.on() || !stamp)

@@ -7,6 +7,8 @@
 #include "raw_scheduled_wait.h"
 #include "raw_take_pool.h"
 #import "RawMetalPipeline.h"
+#import "RawMetalCounters.h"
+#include "raw_counter_kernel.h"
 
 // ---- the device's submission machinery ----
 
@@ -664,6 +666,9 @@ void rmPoolCommandBuffers()
         return;
     _status = MTLCommandBufferStatusCommitted;
     _kernelStart = hostSeconds();
+#if SWITCH_RAW_DIAGNOSTICS
+    _committedTicks = mach_absolute_time();
+#endif
 #if SWITCH_FRAME_TIMELINE
     static thread_local switch_frame::Since since;
     const raw::Device::Stats &k = gRM->raw->stats;
@@ -774,20 +779,34 @@ void rmPoolCommandBuffers()
     return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
 }
 
-// raw_facade_commit_test's, final once it completed: of its raw ranges' encoders, those the worker encoded ahead of its
-// commit; the encodes ahead of it the worker gave back and why (given_back), the reasons the recording gave (veto, both
-// RMPipelineVeto)
+// hw_test_app's gpu.path.commit_latency, final once it completed: of its raw ranges' encoders, those the worker encoded
+// ahead of its commit; the encodes ahead of it the worker gave back and why (given_back), the reasons the recording gave
+// (veto, both RMPipelineVeto); and, while its stamps' slot still holds them (kStampSlots command buffers on), the time
+// from its commit to its submission's start on the GPU (its start stamp's PTIMER on the CPU's clock through the
+// kernel's anchors)
 - (NSDictionary<NSString *, NSNumber *> *)switchRawPipelined
 {
     if (!_completedSent)
         return nil;
-    return @{
+    NSMutableDictionary *out = [@{
         @"encoders" : @(_pipelineEncoders),
         @"pipelined" : @(_pipelinedEncoders),
         @"abandons" : @(_pipelineAbandons),
         @"veto" : @(_pipelineVeto.load(std::memory_order_relaxed)),
         @"given_back" : @(_pipelineGivenBack),
-    };
+    } mutableCopy];
+#if SWITCH_RAW_DIAGNOSTICS
+    uint64_t units = 0;
+    const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
+    if (gRM->raw->gpuStartUnits(_stamp, units))
+        if (const raw::counters::Anchor a = raw::counters::anchorOf(anchors, units); a.valid) {
+            mach_timebase_info_data_t tb;
+            mach_timebase_info(&tb);
+            const double committedNs = double(_committedTicks) * tb.numer / tb.denom;
+            out[@"commit_to_gpu_start_us"] = @((double(raw::counters::nanoseconds(a, units)) - committedNs) / 1000.0);
+        }
+#endif
+    return out;
 }
 
 // facadecost's held-chunk check: the GPU addresses of its setBytes chunks, read while its job is held in flight (they go

@@ -2217,6 +2217,10 @@ public:
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
+#if SWITCH_RAW_DIAGNOSTICS
+    // The PTIMER value its submission started at, while its slot still holds its stamps
+    bool gpuStartUnits(uint32_t stamp, uint64_t &units) const;
+#endif
     // a committed command buffer's measured draws, kept until the GPU has run them (raw_band_rates.h)
     void noteCommittedTimings(std::vector<DrawTiming> &timings);
     // the measured draws the GPU has run, each teaching its state's rate: every command buffer's completer calls it

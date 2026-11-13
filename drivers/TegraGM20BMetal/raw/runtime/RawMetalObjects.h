@@ -475,6 +475,9 @@ struct RMSharedEventWait {
     // the worker's: it gave up encoding this one ahead, and how many of its encoders it encoded so (of how many)
     bool _pipelineDeclined;
     uint32_t _pipelinedEncoders, _pipelineEncoders, _pipelineAbandons, _pipelineGivenBack;
+#if SWITCH_RAW_DIAGNOSTICS
+    uint64_t _committedTicks;  // mach_absolute_time as its commit began
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
 #endif

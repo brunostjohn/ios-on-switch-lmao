@@ -118,6 +118,12 @@ public enum RawFacade {
         ask(device, "switchCompilerStore") as? String
     }
 
+    /// What the submit worker encoded of a completed buffer ahead of its commit (debug builds; empty elsewhere):
+    /// "encoders", "pipelined", "abandons", "veto" (RMPipelineVeto bits) and "commit_to_gpu_start_us".
+    public static func pipelined(_ buffer: MTLCommandBuffer) -> [String: NSNumber] {
+        ask(buffer, "switchRawPipelined") as? [String: NSNumber] ?? [:]
+    }
+
     /// The buffer binds every state as the inline copy it was before state segments (debug builds, before its commit).
     public static func inlineStates(in buffer: MTLCommandBuffer) -> Bool {
         (ask(buffer, "switchRawInlineStates") as? NSNumber)?.boolValue ?? false
