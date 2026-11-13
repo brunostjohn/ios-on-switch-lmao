@@ -120,22 +120,43 @@ size_t attachmentRoom(const Layout &l)
     return most;
 }
 
+// Two independent lanes of 8 bytes, so the multiplies of one word do not wait on the other's
 uint64_t hashBytes(const uint8_t *p, size_t n)
 {
-    uint64_t h = 0x9e3779b97f4a7c15ull ^ n;
-    for (size_t at = 0; at + 8 <= n; at += 8) {
-        uint64_t w;
-        memcpy(&w, p + at, sizeof w);
-        h = (h ^ w) * 0xff51afd7ed558ccdull;
-        h ^= h >> 32;
+    uint64_t a = 0x9e3779b97f4a7c15ull ^ n, b = 0xc2b2ae3d27d4eb4full;
+    size_t at = 0;
+    for (; at + 16 <= n; at += 16) {
+        uint64_t x, y;
+        memcpy(&x, p + at, sizeof x);
+        memcpy(&y, p + at + 8, sizeof y);
+        a = (a ^ x) * 0xff51afd7ed558ccdull;
+        b = (b ^ y) * 0xc4ceb9fe1a85ec53ull;
+        a ^= a >> 32;
+        b ^= b >> 29;
     }
-    return h;
+    for (; at + 8 <= n; at += 8) {
+        uint64_t x;
+        memcpy(&x, p + at, sizeof x);
+        a = (a ^ x) * 0xff51afd7ed558ccdull;
+        a ^= a >> 32;
+    }
+    return a ^ (b * 0x9e3779b97f4a7c15ull);
 }
 
+// The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry
 struct Cache {
     std::array<RMPassEntry, kEntries> entries;
+    std::array<uint64_t, kEntries> hashes{}, used{};
     uint64_t clock = 0;
 };
+
+// Every kEntries lookups, the entries no pass took for kIdleLookups are let go
+void dropIdle(Cache &c)
+{
+    for (size_t i = 0; i < kEntries; i++)
+        if (c.entries[i].pass && c.clock - c.used[i] > kIdleLookups)
+            c.entries[i].pass = nil;
+}
 
 thread_local Cache tCache;
 
@@ -168,30 +189,38 @@ bool rmPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &
                 return false;
         }
     }
+    // the mask of the attachments that have a texture, the descriptor's bytes, then each of those attachments' bytes:
+    // an attachment with no texture is none, whatever else it was given
     const size_t head = l.descriptorBytes - sizeof(void *), room = attachmentRoom(l);
-    key.resize((head + kAttachments * (room + 8) + 7) & ~size_t(7));
-    uint8_t *out = key.data();
+    key.resize(sizeof(uint64_t) + ((head + 7) & ~size_t(7)) + kAttachments * ((room + 7) & ~size_t(7)));
+    uint8_t *out = key.data() + sizeof(uint64_t);
     memcpy(out, base + sizeof(void *), head);
     // the arrays' own addresses are no content
     memset(out + l.attachmentsAt - sizeof(void *), 0, sizeof(void *));
     memset(out + l.sampleBuffersAt - sizeof(void *), 0, sizeof(void *));
-    out += head;
-    for (size_t slot = 0; slot < kAttachments; slot++, out += room + 8) {
+    memset(out + head, 0, ((head + 7) & ~size_t(7)) - head);
+    out += (head + 7) & ~size_t(7);
+    uint64_t present = 0;
+    for (size_t slot = 0; slot < kAttachments; slot++) {
         const size_t kind = slot < 8 ? 0 : slot - 7;
         void *object = nullptr, *texture = nullptr;
         memcpy(&object, static_cast<const uint8_t *>(array) + l.slotAt[slot], sizeof object);
         const auto *a = static_cast<const uint8_t *>(object);
-        if (a && object_getClass((__bridge id)object) != l.attachment[kind])
+        if (!a)
+            continue;
+        if (object_getClass((__bridge id)object) != l.attachment[kind])
             return false;
-        if (a)
-            memcpy(&texture, a + l.textureAt[kind], sizeof texture);
-        // an attachment with no texture is none, whatever else it was given
-        memset(out, 0, room + 8);
-        if (texture) {
-            out[0] = 1;
-            memcpy(out + 8, a + sizeof(void *), l.attachmentBytes[kind] - sizeof(void *));
-        }
+        memcpy(&texture, a + l.textureAt[kind], sizeof texture);
+        if (!texture)
+            continue;
+        present |= uint64_t(1) << slot;
+        const size_t bytes = l.attachmentBytes[kind] - sizeof(void *), padded = (bytes + 7) & ~size_t(7);
+        memcpy(out, a + sizeof(void *), bytes);
+        memset(out + bytes, 0, padded - bytes);
+        out += padded;
     }
+    memcpy(key.data(), &present, sizeof present);
+    key.resize(size_t(out - key.data()));
     hash = hashBytes(key.data(), key.size());
     return true;
 }
@@ -199,34 +228,30 @@ bool rmPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &
 RMPassEntry *rmPassFind(const std::vector<uint8_t> &key, uint64_t hash)
 {
     Cache &c = tCache;
-    c.clock++;
-    RMPassEntry *found = nullptr;
-    for (RMPassEntry &e : c.entries) {
-        if (!e.pass)
-            continue;
-        if (!found && e.hash == hash && e.key == key) {
-            e.used = c.clock;
-            found = &e;
-        } else if (c.clock - e.used > kIdleLookups) {
-            e.pass = nil;
+    if (++c.clock % kEntries == 0)
+        dropIdle(c);
+    for (size_t i = 0; i < kEntries; i++)
+        if (c.hashes[i] == hash && c.entries[i].pass && c.entries[i].key == key) {
+            c.used[i] = c.clock;
+            return &c.entries[i];
         }
-    }
-    return found;
+    return nullptr;
 }
 
 void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDescriptor *copy, const RMPass &facts,
                 const RMRenderEncoder *e)
 {
     Cache &c = tCache;
-    RMPassEntry *slot = &c.entries[0];
-    for (RMPassEntry &entry : c.entries) {
-        if (!entry.pass) {
-            slot = &entry;
+    size_t at = 0;
+    for (size_t i = 0; i < kEntries; i++) {
+        if (!c.entries[i].pass) {
+            at = i;
             break;
         }
-        if (entry.used < slot->used)
-            slot = &entry;
+        if (c.used[i] < c.used[at])
+            at = i;
     }
+    RMPassEntry *slot = &c.entries[at];
     slot->pass = copy;
     slot->facts = facts;
     std::copy(std::begin(e->_formats), std::end(e->_formats), slot->formats.begin());
@@ -235,7 +260,7 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
     slot->samples = e->_samples;
     slot->turn = e->_turn;
     slot->visibility = copy.visibilityResultBuffer;
-    slot->hash = hash;
-    slot->used = c.clock;
     slot->key = key;
+    c.hashes[at] = hash;
+    c.used[at] = c.clock;
 }
