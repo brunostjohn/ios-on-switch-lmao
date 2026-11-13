@@ -1,5 +1,6 @@
-// kernel/switch/idle/idle.c's C7 requests on the host: a refusal from the firmware is tried again at later idles of
-// that core alone, backing off, and the idle path never locks, sleeps, allocates or logs while it runs masked.
+// kernel/switch/idle/idle.c's C7 requests on the host: a request the firmware refuses fails that idle alone, with a
+// line from the thread call, and the core's next idle that chooses C7 asks again as always; the idle path never locks,
+// sleeps, allocates or logs while it runs masked.
 #include "kits/SwitchIdle/switch_idle_governor.h"
 #include "kits/SwitchIdle/test/switch_idle_kernel_stubs.h"
 
@@ -195,19 +196,27 @@ void start()
 }
 }  // namespace
 
-TEST(SwitchIdleRetry, ARefusedRequestIsMadeAgainAtALaterIdle)
+// Every idle that chooses C7 asks for it, however many were refused before: after each refusal the core idles once in
+// WFI (the refused request taught the prediction a short idle) and the idle after that asks again.
+TEST(SwitchIdleC7, EveryIdleThatChoosesC7AsksAgainAfterARefusal)
 {
     switch_ios::test::ExpectPassesInFreshProcess([] {
         start();
-        gAnswer[0] = kDenied;
-        ASSERT_LT(idleUntilRequests(0, 1), 10u);
-        gAnswer[0] = kTaken;
-        EXPECT_LT(idleUntilRequests(0, 1, 50), 50u);
+        gAnswer[2] = kDenied;
+        for (unsigned i = 0; i != 2000; ++i)
+            idle(2);
+        EXPECT_GE(gRequests[2], 990u);
+        const unsigned refused = gRequests[2];
+        for (unsigned i = 0; i != 2; ++i)
+            idle(2);
+        EXPECT_EQ(gRequests[2], refused + 1);
+        gAnswer[2] = kTaken;
+        EXPECT_LE(idleUntilRequests(2, 1), 2u);
         EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
     });
 }
 
-TEST(SwitchIdleRetry, OneCoresRefusalsLeaveTheOtherCoresC7)
+TEST(SwitchIdleC7, OneCoresRefusalsLeaveTheOtherCoresC7)
 {
     switch_ios::test::ExpectPassesInFreshProcess([] {
         start();
@@ -217,53 +226,14 @@ TEST(SwitchIdleRetry, OneCoresRefusalsLeaveTheOtherCoresC7)
             idle(0);
             idle(1);
         }
-        EXPECT_GE(gRequests[0], SWITCH_IDLE_C7_TRIES);
-        EXPECT_GE(gRequests[1], 50u);
+        EXPECT_GE(gRequests[0], 99u);
+        EXPECT_GE(gRequests[1], 99u);
         EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
     });
 }
 
-TEST(SwitchIdleRetry, ACoreTheFirmwareAlwaysRefusesBacksOffAndKeepsTrying)
-{
-    switch_ios::test::ExpectPassesInFreshProcess([] {
-        start();
-        gAnswer[2] = kDenied;
-        for (unsigned i = 0; i != 40'000; ++i)
-            idle(2);
-        const unsigned early = gRequests[2];
-        EXPECT_GT(early, SWITCH_IDLE_C7_TRIES + SWITCH_IDLE_C7_WAIT_LOG);
-        EXPECT_LT(early, 64u);
-        for (unsigned i = 0; i != 3 * SWITCH_IDLE_C7_WAIT_MAX; ++i)
-            idle(2);
-        EXPECT_GE(gRequests[2], early + 1);
-        EXPECT_LE(gRequests[2], early + 3);
-        EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
-    });
-}
-
-TEST(SwitchIdleRetry, ARequestTheFirmwareTakesStartsTheCoreOver)
-{
-    switch_ios::test::ExpectPassesInFreshProcess([] {
-        start();
-        gAnswer[0] = kDenied;
-        idleUntilRequests(0, SWITCH_IDLE_C7_TRIES + 3);
-        gAnswer[0] = kTaken;
-        EXPECT_GT(idleUntilRequests(0, 1), 8u);
-        EXPECT_LE(idleUntilRequests(0, 1), 2u);
-        EXPECT_LE(idleUntilRequests(0, 10), 20u);
-        gAnswer[0] = kDenied;
-        idleUntilRequests(0, SWITCH_IDLE_C7_TRIES + 3);
-        const unsigned enters = idle_test_thread_call_enters;
-        resume(0);
-        EXPECT_EQ(idle_test_thread_call_enters, enters);
-        idle(0);
-        EXPECT_EQ(idle_test_thread_call_enters, enters + 1);
-        EXPECT_LE(idleUntilRequests(0, 1), 1u);
-        EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
-    });
-}
-
-TEST(SwitchIdleRetry, TheThreadCallLogsEachDueLineAndOnlyThen)
+// Each refusal enters the thread call; it logs one line per core with what was refused since its last line.
+TEST(SwitchIdleC7, EachRefusalIsReportedByTheThreadCall)
 {
     switch_ios::test::ExpectPassesInFreshProcess([] {
         start();
@@ -271,36 +241,27 @@ TEST(SwitchIdleRetry, TheThreadCallLogsEachDueLineAndOnlyThen)
         idleUntilRequests(3, 1);
         EXPECT_EQ(idle_test_thread_call_enters, 1u);
         runReport();
-        idleUntilRequests(3, 2);
-        EXPECT_EQ(idle_test_thread_call_enters, 2u);
-        idleUntilRequests(3, 2);
-        EXPECT_EQ(idle_test_thread_call_enters, 3u);
+        idleUntilRequests(3, 3);
+        EXPECT_EQ(idle_test_thread_call_enters, 4u);
         runReport();
-        idleUntilRequests(3, 11);
-        EXPECT_EQ(idle_test_thread_call_enters, 5u);
+        runReport();
         gAnswer[3] = kTaken;
-        idleUntilRequests(3, 1);
-        EXPECT_EQ(idle_test_thread_call_enters, 5u);
-        idle(3);
-        EXPECT_EQ(idle_test_thread_call_enters, 6u);
         idleUntilRequests(3, 5);
-        EXPECT_EQ(idle_test_thread_call_enters, 6u);
-        runReport();
+        resume(3);
+        idle(3);
+        EXPECT_EQ(idle_test_thread_call_enters, 4u);
         const std::vector<std::string> want = {
-            "SwitchIdle: cpu3: PSCI CPU_SUSPEND refused C7, 1 in a row (last returned -3); C7 is requested again at "
-            "later idles",
-            "SwitchIdle: cpu3: PSCI CPU_SUSPEND refused C7, 4 in a row (last returned -3); C7 is requested again at "
-            "later idles",
-            "SwitchIdle: cpu3: PSCI CPU_SUSPEND refused C7, 16 in a row (last returned -3); C7 is requested again at "
-            "later idles",
-            "SwitchIdle: cpu3: C7 taken again; refusals in a row before it: 16",
+            "SwitchIdle: cpu3: PSCI CPU_SUSPEND to C7 returned -3, so that idle ran without C7 (1 refused since the "
+            "last line); the next idle that chooses C7 asks again",
+            "SwitchIdle: cpu3: PSCI CPU_SUSPEND to C7 returned -3, so that idle ran without C7 (3 refused since the "
+            "last line); the next idle that chooses C7 asks again",
         };
         EXPECT_EQ(gLines, want);
         EXPECT_EQ(idle_test_violations, 0u) << idle_test_violation;
     });
 }
 
-TEST(SwitchIdleRetry, WhatMayNotRunMaskedIsCaughtOnlyMasked)
+TEST(SwitchIdleC7, WhatMayNotRunMaskedIsCaughtOnlyMasked)
 {
     switch_ios::test::ExpectPassesInFreshProcess([] {
         lck_mtx_lock(nullptr);

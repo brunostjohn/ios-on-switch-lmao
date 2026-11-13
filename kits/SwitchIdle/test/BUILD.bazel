@@ -1,5 +1,5 @@
 # kits/SwitchIdle's state choice over a 19.2 MHz model clock, and its hooks in both XNU trees; kernel/switch/idle/idle.c
-# itself (switch_idle_retry_test) over stand-ins for its XNU surroundings that catch a lock, sleep, allocation or log
+# itself (switch_idle_c7_refusal_test) over stand-ins for its XNU surroundings that catch a lock, sleep, allocation or log
 # while the idle path runs masked.
 #
 #   bazel test //kits/SwitchIdle/test:all
@@ -57,8 +57,8 @@ host_library(
 )
 
 host_test(
-    name = "switch_idle_retry_test",
-    srcs = ["switch_idle_retry_test.cpp"] + IDLE_HEADERS,
+    name = "switch_idle_c7_refusal_test",
+    srcs = ["switch_idle_c7_refusal_test.cpp"] + IDLE_HEADERS,
     copts = ["-Ikernel/switch/include"],
     deps = [
         ":idle",
