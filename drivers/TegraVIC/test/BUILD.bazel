@@ -763,6 +763,15 @@ host_test(
 )
 
 host_test(
+    name = "tegra_vic_recover_source_test",
+    srcs = ["tegra_vic_recover_source_test.cpp"],
+    data = [
+        "//drivers/TegraVIC:SwitchVICJobs.cpp",
+        "//drivers/TegraVIC:TegraVIC.cpp",
+    ],
+)
+
+host_test(
     name = "switch_vic_first_failure_source_test",
     srcs = ["switch_vic_first_failure_source_test.cpp"],
     data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
