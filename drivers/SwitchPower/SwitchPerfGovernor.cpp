@@ -93,10 +93,8 @@ uint64_t gWindow, gBootUntil, gLogStart, gLogDue;
 uint32_t gFloorMv, gCapMv;  // the DFLL's thermal floor and cap last given to limits() (0: none)
 uint32_t gCltm = 0x10000u;  // thermalmonitord's CPU ceiling, a 16.16 share of the top clock (atomic loads)
 switch_gov_rows gRows;      // rows held down: ceilings the DFLL ran high at (hold, retryHeld)
-switch_gov_retry gRefused[SWITCH_GOV_MAX_OPPS];  // rows the DFLL refused, each waiting gTicks windows (refused)
-uint64_t gTicks;                                 // windows since boot
-unsigned gLimitHi;                               // the ceiling the thermal limits allow, before held rows
-bool gBootDone;  // System Boot Complete came or the fallback passed: no boot window again this boot (atomic)
+unsigned gLimitHi;          // the ceiling the thermal limits allow, before held rows
+bool gBootDone;             // System Boot Complete came or the fallback passed: no boot window again this boot (atomic)
 // A thermal limit clipped the boot window: noted under the lock, logged once after it (noteClip).
 uint32_t gClipNote;  // atomic
 bool gClipNoted;
@@ -176,7 +174,7 @@ uint32_t windowBusy(uint64_t now)
 // Under gLock: whether the owner must be woken (the clock moves, or the log line is due), claiming the signal.
 bool claimSignal(uint64_t now)
 {
-    if (switch_gov_askable(gRefused, gGov.cur, gApplied, gTicks) == gApplied && now < gLogDue)
+    if (gGov.cur == gApplied && now < gLogDue)
         return false;
     return __atomic_exchange_n(&gPending, 1u, __ATOMIC_ACQ_REL) == 0;
 }
@@ -232,7 +230,6 @@ void deadlinePassed(uint64_t)
     bool wake = false;
     bool boot = false;
     if (gRunning) {
-        ++gTicks;
         uint32_t busy = windowBusy(now);
         ++gWindows;
         gBusySum += busy;
@@ -304,8 +301,6 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     gFloorMv = gCapMv = 0;
     gApplied = gGov.cur;
     switch_gov_rows_init(&gRows, held);
-    for (switch_gov_retry &row : gRefused)
-        row = {};
     __atomic_store_n(&gAppliedKhz, gGov.khz[gGov.cur], __ATOMIC_RELEASE);
     gSignal = signal;
     gCtx = ctx;
@@ -386,7 +381,7 @@ unsigned switchperf::take(char *line, size_t len)
         gBootUntil = 0;
         fellBack = !__atomic_exchange_n(&gBootDone, true, __ATOMIC_ACQ_REL);
     }
-    const unsigned index = switch_gov_askable(gRefused, gGov.cur, gApplied, gTicks);
+    const unsigned index = gGov.cur;
     if (gRunning && now >= gLogDue) {
         logDue = true;
         switch_gov_rows_tick(&gRows);  // a line: held rows' waits count it (retryHeld after its measurement)
@@ -483,20 +478,8 @@ void switchperf::applied(unsigned index)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     gApplied = index;
-    (void)switch_gov_retry_cleared(&gRefused[index]);
     __atomic_store_n(&gAppliedKhz, gGov.khz[index], __ATOMIC_RELEASE);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-}
-
-unsigned switchperf::refused(unsigned index)
-{
-    if (!gLock || index >= SWITCH_GOV_MAX_OPPS)
-        return 0;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    (void)switch_gov_retry_failed(&gRefused[index], gTicks, 1);
-    const unsigned failures = gRefused[index].failures;
-    IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    return failures;
 }
 
 void switchperf::limits(unsigned floorMv, unsigned capMv)
