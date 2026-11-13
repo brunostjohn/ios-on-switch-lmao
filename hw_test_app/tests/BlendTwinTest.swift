@@ -14,9 +14,9 @@ import Metal
 /// quads, every forced draw counted; the folded quad's twinw difference is the measurement's proof that it sees a
 /// draw's own triangles out of order (folded_seen). The rule arm forces nothing, so rule fetch.twin (raw_twin_rule.h)
 /// picks the form: the scenes again over 64x64 against the storage form there (worst_rule_<scene>), us_rule_* beside
-/// us_storage_*, rule_twins= the draws the facade counted on the twin by that rule (every rule arm draw is a shape and
-/// area it takes), and verdict=PASS also needs those within the bound, all counted and none slower than the storage
-/// form. Debug builds only (the probe channel).
+/// us_storage_*, rule_twins= the draws the facade counted on the twin by that rule and rule_free= those a fetch-free
+/// rung took first (every rule arm draw is a shape and area the twin rule takes), and verdict=PASS also needs those
+/// within the bound, all counted and none slower than the storage form. Debug builds only (the probe channel).
 struct BlendTwinTest: HWTest {
     let id = "gpu.raw.blend_twin"
     let name = "Storage form against barrier twin: codes, ordering and GPU time of Core Animation's fetching states"
@@ -56,7 +56,8 @@ struct BlendTwinTest: HWTest {
         var failures: [String] = []
         var unseen: [String] = []
         let before = RawFacade.counters(of: gpu.device)["fetch_blend_twin"] ?? 0
-        let ruleBefore = RawFacade.counters(of: gpu.device)["fetch_twin_rule"] ?? 0
+        let ruleKeys = ["fetch_twin_rule", "fetch_rung2", "fetch_rung3"]
+        let ruleBefore = ruleKeys.map { RawFacade.counters(of: gpu.device)[$0] ?? 0 }
         var forcedDraws = 0
         var ruleDraws = 0
         var slower: [String] = []
@@ -130,14 +131,16 @@ struct BlendTwinTest: HWTest {
         }
         let counters = RawFacade.counters(of: gpu.device)
         let twins = (counters["fetch_blend_twin"] ?? 0) - before
-        let ruleTwins = (counters["fetch_twin_rule"] ?? 0) - ruleBefore
+        let ruleTaken = zip(ruleKeys, ruleBefore).map { (counters[$0.0] ?? 0) - $0.1 }
+        let ruleTwins = ruleTaken[0], ruleFree = ruleTaken[1] + ruleTaken[2]
         metrics.set("twins", twins)
         metrics.set("forced_draws", forcedDraws)
         metrics.set("rule_twins", ruleTwins)
+        metrics.set("rule_free", ruleFree)
         metrics.set("rule_draws", ruleDraws)
         metrics.set("states", lines.count)
         metrics.set("folded_seen", unseen.isEmpty ? "all" : "not:" + unseen.joined(separator: ","))
-        let counted = twins >= forcedDraws && ruleTwins >= ruleDraws
+        let counted = twins >= forcedDraws && ruleTwins + ruleFree >= ruleDraws
         let verdict = failures.isEmpty && unseen.isEmpty && counted && slower.isEmpty ? "PASS" : "FAIL"
         metrics.set("verdict", verdict)
         if !failures.isEmpty { metrics.set("beyond", failures.joined(separator: ",")) }
