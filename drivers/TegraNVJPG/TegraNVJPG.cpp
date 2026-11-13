@@ -21,7 +21,8 @@
 // libjpeg-turbo's JPEGs through the SMMU windows with their pages out of order: NV12, I420, BGRA, RGBA, ARGB and grey
 // within a few steps of libjpeg-turbo, 4:2:0, 4:2:2, 4:4:4 and grey input, grey to BGRA, 1/2 scaling, whole MCUs
 // written past the picture. 1/4 and 1/8 scaling missed libjpeg-turbo's BGRA by up to 7 and 15 steps on every one of
-// those boots and stay off. '422f', '444f' and 'yuvf' are the 4:2:0 path's other chroma and memory modes.
+// those boots and stay off. 'yuvf' is the 4:2:0 path's packed memory mode; '422f' and '444f' are not written
+// (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never completed on this unit).
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
@@ -152,7 +153,7 @@ bool gUp, gWedged, gSuspended;
 TegraNVJPGBuffer gSetup, gStatus;
 const TegraNVJPGTraits kTraits = {
     .clipped = false,
-    .formats = (1u << TEGRA_NVJPG_OUT_COUNT) - 1,
+    .formats = ((1u << TEGRA_NVJPG_OUT_COUNT) - 1) & ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24),
     .chroma = 1u << TEGRA_NVJPG_CHROMA_MONO | 1u << TEGRA_NVJPG_CHROMA_420 | 1u << TEGRA_NVJPG_CHROMA_422H |
               1u << TEGRA_NVJPG_CHROMA_444,
     .scales = 0x3,
@@ -345,9 +346,10 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     const nvjpg_dec_drv_pic_setup_s &s = job->setup;
     snprintf(
         what, sizeof(what),
-        "selector %u, %dx%d (MCU %dx%d), stream chroma %d to chroma %d pixel format %d memory mode %d block height "
-        "%d, %d bitstream bytes, %u planes, target format %u",
-        job->selector, s.frame_width, s.frame_height, s.mcu_width, s.mcu_height, s.stream_chroma_mode,
+        "selector %u, %dx%d (MCU %dx%d) at 1/%u, stream chroma %d to chroma %d pixel format %d memory mode %d block "
+        "height %d, %d bitstream bytes, %u planes, target format %u",
+        job->selector, s.frame_width, s.frame_height, s.mcu_width, s.mcu_height, 1u << (s.power2_downscale & 3),
+        s.stream_chroma_mode,
         s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.block_linear_height, s.bitstream_size,
         job->planes, job->target);
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));

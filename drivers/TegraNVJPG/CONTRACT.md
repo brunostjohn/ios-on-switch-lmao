@@ -224,8 +224,11 @@ NVDEC, whose clock the MBIST pulse borrows).
 - Whole-MCU writes: '420f' destinations from CoreVideo leave 16 KiB-aligned room after the luma,
   under 8 padded rows at 1080p, so non-MCU-aligned heights into '420f' are refused (CPU). BGRA uses the sink.
 - CMPhoto's native destinations under the interchange formats (CMPhoto fjds_createPixelBufferFromJPEGData: '444f' for
-  4:4:4 files, 'yuvf' for 4:2:2, '420f' otherwise [V]) are written by NVJPG itself: '422f' and '444f' semi-planar
-  (output_chroma_mode 4:2:2 or 4:4:4, memory_mode 0), 'yuvf' packed (memory_mode 2, YUY2's Y0 Cb Y1 Cr order) [T].
+  4:4:4 files, 'yuvf' or '422f' for 4:2:2, '420f' otherwise [V]): 'yuvf' is written packed (memory_mode 2, YUY2's
+  Y0 Cb Y1 Cr order) [T]. '422f' and '444f' are refused (CMPhoto decodes those images on the CPU): every NVJPG job
+  with memory_mode 0 at output_chroma_mode 4:2:2 or 4:4:4 hung until cancelled (25 of 25, boots of 10-13 Nov,
+  SpringBoard's 205x83 4:4:4 file at 1/1 among them), and no reference driver submits that pair. Writing them on
+  hardware needs NVJPG's planar output (oss-nvjpg's 4:2:2/4:4:4 route) and a VIC pass that interleaves CbCr.
 - Encode refused (§6): one wasted call per CMPhoto JPEG encode.
 - CPU work per decode: headers + the scan copy (compressed bytes) + cache maintenance of the destination (two passes,
   ~80 µs per MiB measured for VIC) + page-table writes. For the smallest pictures CMPhoto sends (16384 pixels) this is
@@ -252,8 +255,8 @@ also in the boot console).
 2. **The service**: no `JPEGH1`-registered hardware JPEG encoder (VideoToolbox lists only software 'jpeg' encoders),
    and `ioreg`-style property dumps (if available) show AppleJPEGNumCores 1 on the TegraNVJPG entry.
 3. **Use**: `TegraNVJPG: first hardware decode done: WxH to wxh (format F, 1/n) in E us engine (C cycles), P us CPU`
-   once per output format (F: TEGRA_NVJPG_OUT_*; 6 '422f', 7 '444f' and 8 'yuvf' have no device evidence yet: their
-   first lines, and the picture next to the same file decoded on a Mac, are the check); then (debug kernels) every 5 s
+   once per output format (F: TEGRA_NVJPG_OUT_*; 8 'yuvf' has no device evidence yet: its first line, and the
+   picture next to the same file decoded on a Mac, are the check); then (debug kernels) every 5 s
    with work an os_log line
    `TegraNVJPG: 5s decodes=N refused=R failed=X engine=..us/decode cpu=..us/decode pixels=..K/decode scan=..KB/decode`.
    Each kind of refusal is one error line per process (kits/SwitchRefusal, subsystem com.brunostjohn.switch.refusal,

@@ -101,29 +101,31 @@ struct ImageDecodeTest: HWTest {
             ("matches the pattern", result.matches(frame: 0, tolerance: image.tolerance)),
         ]
         if jpeg {
-            checks += Self.againstSoftware(data, full: decoded, before: before, after: after, metrics: &metrics)
+            checks += Self.againstSoftware(
+                data, still: image, full: decoded, before: before, after: after, metrics: &metrics)
         }
         return .judged(checks, metrics, proof: CGImageSourceGetType(source).map { $0 as String } ?? "")
     }
 
     static let hardwareKey = "kCGImageSourceUseHardwareAcceleration" as CFString
 
-    /// The route of the full decode, then a half-size thumbnail (CMPhoto's scaled decode writes a 4:4:4 file as '444f'
-    /// and a 4:2:2 one as 'yuvf' under the interchange formats), each against ImageIO's software decode of the same
-    /// request: NVJPG's formats the unit has not run before ('422f', '444f', 'yuvf') are proven or failed here.
+    /// The route of the full decode, then a thumbnail (CMPhoto's scaled decode asks for '444f' for a 4:4:4 file and
+    /// '422f' or 'yuvf' for a 4:2:2 one under the interchange formats), each against ImageIO's software decode of the
+    /// same request. A request NVJPG refuses costs the caller one call; a job that fails cost it the job's bound.
     static func againstSoftware(
-        _ data: Data, full: CGImage, before: Result<JPEGRoute.Counts, TestFailure>?,
+        _ data: Data, still: StillImage, full: CGImage, before: Result<JPEGRoute.Counts, TestFailure>?,
         after: Result<JPEGRoute.Counts, TestFailure>?, metrics: inout Metrics
     ) -> [(String, Bool)] {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
             let software = CGImageSourceCreateWithData(data as CFData, nil)
         else { return [("ImageIO opens it twice", false)] }
-        let side = max(full.width, full.height) / 2
         let thumb: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: side,
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: still.thumbnailSide,
             kCGImageSourceShouldCacheImmediately: true,
         ]
+        let thumbStart = CFAbsoluteTimeGetCurrent()
         let half = CGImageSourceCreateThumbnailAtIndex(source, 0, thumb as CFDictionary)
+        metrics.set("thumb_ms", (CFAbsoluteTimeGetCurrent() - thumbStart) * 1000, digits: 1)
         let afterThumb = JPEGRoute.decodes()
         var off = thumb
         off[hardwareKey] = false
@@ -138,9 +140,13 @@ struct ImageDecodeTest: HWTest {
             metrics.set("nvjpg_decodes", Int(last.decodes - first.decodes))
             metrics.set("thumb_route", last.decodes > mid.decodes ? "hardware" : "software")
             metrics.set("formats", JPEGRoute.names(last.formats))
+            metrics.set("asked", JPEGRoute.asked(from: first, to: last))
+            metrics.set("nvjpg_refused", Int(truncatingIfNeeded: last.refused &- first.refused))
+            metrics.set("nvjpg_failed", Int(truncatingIfNeeded: last.failed &- first.failed))
             metrics.set("software_on_nvjpg", Int(soft.decodes - last.decodes))
             checks.append(("decoded on NVJPG", mid.decodes > first.decodes))
             checks.append(("thumbnail decoded on NVJPG", last.decodes > mid.decodes))
+            checks.append(("no NVJPG job failed", last.failed == first.failed))
         case (.failure(let why)?, _, _, _), (_, .failure(let why)?, _, _), (_, _, .failure(let why), _),
             (_, _, _, .failure(let why)):
             metrics.set("route", "unknown")
