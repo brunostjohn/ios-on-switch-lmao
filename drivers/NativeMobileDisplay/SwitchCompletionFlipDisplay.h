@@ -24,9 +24,8 @@
 // writeEarlyCompletionFlip in an interrupt filter, the rest under the gate.
 //
 // Every completion flip is checked where the gate already reads the latch: one whose request was taken while window A
-// kept scanning another surface is refused, that frame flips from the gate, and the next completionHold run of eligible
-// frames flips from the gate too before completion flips are tried again (the run doubles for a refusal before 600 have
-// latched as written). Boot 19 latched 306 of them as written. Until one has been seen latched as written, a completion
+// kept scanning another surface is refused with one error line and that frame flips from the gate; the next frame's
+// completion flip is armed as usual. Boot 19 latched 306 of them as written. Until one has been seen latched as written, a completion
 // flip keeps window A's layout (LINE_STRIDE at 0xb8a would land without SURFACE_KIND and START_ADDR), and a settle that
 // takes the last request as shown with no frame end to check it (SC7, the scanout stopped) writes it again from the gate.
 
@@ -48,11 +47,6 @@ struct CompletionUnverified {
 
 static inline CompletionUnverified completionUnverified = {kNoBuffer, 0};  // in the ring, no latch read has judged it
 static inline bool completionFlipsProven = false;
-static inline SwitchRouteBackoff<8, 1024, 600> completionHold;  // in eligible frames, under the gate
-// The producers' filters write no flips while filterHold runs (a filter-written flip's completion failed): kept under
-// completionFlipLock, completionFilterOff read in interrupt context.
-static inline SwitchRouteBackoff<8, 1024, 600> filterHold;  // in armed flips
-static inline bool completionFilterOff = false;
 #if SWITCH_FRAME_TIMELINE
 static constexpr unsigned kFlipTotals = 9;
 // completion, gate, lead us, withdrawn, refused, filter, filter lead us, filter waiters declined, filter calls
@@ -93,12 +87,7 @@ bool completionFlipMay(int entry)
         return false;
     const bool eligible = ring.pending != kNoBuffer ? ring.replace && sameLayout(entry, ring.pending)
                                                     : completionFlipsProven || sameLayout(entry, ring.front);
-    if (!eligible)
-        return false;
-    if (completionHold.on())
-        return true;
-    completionHold.clean();
-    return false;
+    return eligible;
 }
 
 // Before the offer: its completion may run on another CPU before the offer returns. True when armed.
@@ -117,9 +106,6 @@ bool armCompletionFlip(int entry)
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     completionFlip.arm(entry, start);
     completionFlip.armLayout(kind, stride, hOffset);
-    __atomic_store_n(&completionFilterOff, !filterHold.on(), __ATOMIC_RELAXED);
-    if (!filterHold.on())
-        filterHold.clean();
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     return true;
 }
@@ -305,15 +291,13 @@ bool completionFlipRefused(const LatchState &seen)
     if (seen.start == flip.start) {
         completionUnverified.entry = kNoBuffer;
         completionFlipsProven = true;
-        completionHold.clean();
         return false;
     }
     if (seen.control & (kGeneralActReq | kWinAActReq))
         return false;
-    completionHold.fail();
-    IOLog("SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A flips "
-          "from the display's work loop for the next %u frames\n",
-          flip.start, seen.start, completionHold.run);
+    IOLog("SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x, STATE_CONTROL "
+          "%#x): this frame flips from the display's work loop\n",
+          flip.start, seen.start, seen.control);
     if (SWITCH_FRAME_TIMELINE)
         noteFlipTotal(4, 1);
     drainCompletionFlip();

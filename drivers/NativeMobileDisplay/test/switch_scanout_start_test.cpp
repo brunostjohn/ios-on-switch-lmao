@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
-#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 
 namespace {
 
@@ -20,8 +19,12 @@ struct PanicRestore {
     throw std::runtime_error("display panic");
 }
 
+unsigned gLogs = 0;
+
 void IOLog(const char *, ...)
-{}
+{
+    ++gLogs;
+}
 
 struct Display {
     static constexpr const char *kBlockScanName = "portrait";
@@ -105,7 +108,6 @@ struct Display {
     std::array<Plane, TegraScanoutRing::kMaxEntries> entryPlane{};
     Plane planeNext{}, planeTarget{}, stagedPlane{};
     bool doubleBuffer = true, directAttached = true, directOn = true;
-    SwitchRouteBackoff<600, 9600, 3600> directHold;
     bool rotated = false, rotationLatched = false, rotationAnnounced = false;
     bool planeNextSet = false, stats = false, probeUnderflow = false;
     uint32_t pitchActControl = kWinAActHcntrSel | 0x40, pitchOptions = 0x40000000;
@@ -561,39 +563,23 @@ TEST(ScanoutStart, LatchedUnderflowAfterTheRotationIsNotedForTheFrame)
     EXPECT_EQ(d.underflowRun, 1u);
 }
 
-// Window A underflowing from a slot holds direct scanout off, not for the boot: after a run of frame ends with no
-// underflow it is chosen again, and a second storm holds it off for twice as long.
-TEST(ScanoutStart, DirectScanoutHeldOffByUnderflowsComesBackAfterACleanRun)
+// Window A underflowing from a slot is one error line at the third frame in a row, and nothing is held: the next frame
+// may scan a slot again. The panic at kUnderflowFrames in a row stays the backstop.
+TEST(ScanoutStart, AnUnderflowRunFromASlotIsOneLineAndHoldsNothing)
 {
     Display d;
     d.presentEntry(Display::kSlot0);
     d.frameEnd(true);
-    const auto underflowFrames = [&d](unsigned n) {
-        for (unsigned i = 0; i < n; ++i) {
-            d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
-            d.frameEnd(false);
-        }
-    };
-    const auto directChosen = [&d] {
-        return d.directOn && d.directHold.on();
-    };
-    underflowFrames(Display::kDirectUnderflowFrames);
-    EXPECT_FALSE(directChosen());
-    EXPECT_TRUE(d.directOn);
-    EXPECT_EQ(d.directHold.failures, 1u);
-    for (unsigned i = 0; i < 599; ++i)
+    gLogs = 0;
+    for (unsigned i = 0; i < Display::kDirectUnderflowFrames + 2; ++i) {
+        d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
         d.frameEnd(false);
-    EXPECT_FALSE(directChosen());
-    underflowFrames(1);
-    for (unsigned i = 0; i < 599; ++i)
-        d.frameEnd(false);
-    EXPECT_FALSE(directChosen());
+    }
+    EXPECT_EQ(gLogs, 1u);
+    EXPECT_TRUE(d.directScanChosen());
     d.frameEnd(false);
-    EXPECT_TRUE(directChosen());
-    EXPECT_EQ(d.directHold.retries, 1u);
-    underflowFrames(Display::kDirectUnderflowFrames);
-    EXPECT_FALSE(directChosen());
-    EXPECT_EQ(d.directHold.run, 1200u);
+    EXPECT_EQ(d.underflowRun, 0u);
+    EXPECT_TRUE(d.directScanChosen());
 }
 
 }  // namespace

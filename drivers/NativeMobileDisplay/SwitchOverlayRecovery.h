@@ -2,9 +2,6 @@
 bool planeRecovering = false, planeRecoveryStuck = false;
 uint64_t planeRecoveryAt = 0;
 PlaneSet planeRecoveryTarget = {};
-// Since boot: off requests written again, stuck recoveries. Static: the instance is at the 16 KiB a kalloc_type class
-// may have.
-static inline uint32_t planeRecoveryAsks = 0, planeRecoveriesStuck = 0;
 
 // A recovery still inside its off request's latch window: frame ends stay unmasked for it and the flip deadline watches it.
 // A stuck one is checked at the frame ends other work brings, and holds no swap's retirement.
@@ -63,9 +60,8 @@ void beginPlaneRecovery(const char *why)
     }
     if (landscape) {
         // The windows go back to portrait first; what went wrong was window A's column scan (or its reservation).
-        landscapeState.hold.fail();
-        IOLog("SwitchDisplay: the overlay recovery leaves landscape: landscape held off for %u video frames\n",
-              landscapeState.hold.run);
+        ++landscapeState.failures;
+        IOLog("SwitchDisplay: the overlay recovery leaves landscape\n");
         landscapeLeaveNow(why);
     } else {
         landscapeAbandonWant();
@@ -78,28 +74,33 @@ void beginPlaneRecovery(const char *why)
     writePlaneRecoveryOff();
 }
 
-// Windows B and C did not take their off request in kLatchFrames: they may still scan every slot their sets name, so the
-// recovery holds those slots and asks for the windows off again every kLatchFrames frame ends until a frame end reads them
-// off. Meanwhile no overlay is asked for and the swaps the held sets carried retire without them.
+// Windows B and C did not read off within kLatchFrames of their off request, the readback's bound: one error line. They
+// may still scan every slot their sets name, so those slots stay mapped until a frame end reads both windows off (no
+// request is written again); meanwhile no overlay is asked for and the swaps the held sets carried retire without them.
 void planeRecoveryNotStopped()
 {
-    if (!planeRecoveryStuck) {
-        IOLog(
-            "SwitchDisplay: overlay windows did not stop in %u frames: overlays off until they read off, their memory "
-            "kept\n",
-            kLatchFrames);
-        planeRecoveryStuck = true;
-        ++planeRecoveriesStuck;
-        __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
-        const uint64_t seq = planeRecoveryTarget.seq;
-        planeRecoveryTarget = {};
-        planeTarget = {};
-        planeHeldSet = false;
-        if (seq)
-            retireUnshown(seq);
-    }
-    ++planeRecoveryAsks;
-    writePlaneRecoveryOff();
+    IOLog(
+        "SwitchDisplay: overlay windows did not read off in %u frames: B OPTIONS %#x C OPTIONS %#x STATE_CONTROL %#x; "
+        "their slots stay mapped until they do\n",
+        kLatchFrames, planeRecoveryOptions(kWinBBase), planeRecoveryOptions(kWinCBase),
+        static_cast<uint32_t>(dc[kDcStateControl]));
+    planeRecoveryStuck = true;
+    __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
+    const uint64_t seq = planeRecoveryTarget.seq;
+    planeRecoveryTarget = {};
+    planeTarget = {};
+    planeHeldSet = false;
+    if (seq)
+        retireUnshown(seq);
+}
+
+uint32_t planeRecoveryOptions(uint32_t window)
+{
+    const uint32_t access = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
+    dc[kDcStateAccess] = access | kReadMuxActive;
+    const uint32_t options = dc[window + native_planes::kOptions];
+    dc[kDcStateAccess] = access;
+    return options;
 }
 
 bool planeRecoveryFrameEnd()
@@ -112,7 +113,7 @@ bool planeRecoveryFrameEnd()
                           !(dc[kWinCBase + native_planes::kOptions] & native_planes::kWinEnable);
     dc[kDcStateAccess] = access;
     if (!disabled || (dc[kDcStateControl] & (kWinBActReq | kWinCActReq))) {
-        if (frameEnds - planeRecoveryAt >= kLatchFrames)
+        if (!planeRecoveryStuck && frameEnds - planeRecoveryAt >= kLatchFrames)
             planeRecoveryNotStopped();
         return true;
     }

@@ -112,10 +112,10 @@ void landscapeFrameEnd()
     if (const char *busy = landscapeBusy()) {
         if (frameEnds - landscapeState.wantedAt < kLandscapeQuietFrames)
             return;
-        landscapeState.hold.fail();
-        IOLog("SwitchDisplay: no quiet frame end for a landscape change in %u frames (%s): landscape held off for %u "
-              "video frames\n",
-              kLandscapeQuietFrames, busy, landscapeState.hold.run);
+        ++landscapeState.failures;
+        IOLog("SwitchDisplay: no quiet frame end for a landscape change in %u frames (%s; STATE_CONTROL %#x): that "
+              "change is dropped\n",
+              kLandscapeQuietFrames, busy, static_cast<uint32_t>(dc[kDcStateControl]));
         const bool leave = landscapeOn();
         landscapeAbandonWant();
         if (leave)
@@ -193,10 +193,9 @@ void landscapeEnter(PlaneSet p)
 {
     mediaFlipFromGate();
     if (landscapeRunFailsEnter() || !planeReserveBandwidth(p)) {
-        landscapeState.hold.fail();
-        IOLog("SwitchDisplay: window A's rotated reservation could not be armed: landscape held off for %u video "
-              "frames\n",
-              landscapeState.hold.run);
+        ++landscapeState.failures;
+        IOLog("SwitchDisplay: window A's rotated reservation could not be armed: that change into landscape is "
+              "dropped\n");
         planeTarget = planeSetOf(planeLatch.active);
         retireUnshown(p.seq);
         if (kickDeferred) {
@@ -307,13 +306,6 @@ void landscapeLeaveNow(const char *why)
         dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate | kWinBUpdate | kWinCUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq | kWinBActReq | kWinCActReq;
     }
-}
-
-// planeFrameEnd, at each overlay set latched: a video frame shown, which runs a held-off mode down.
-void landscapeHoldLatched(const PlaneSet &now)
-{
-    if (now.on())
-        landscapeState.hold.clean();
 }
 
 // The display's planes go (stopPlanes): nothing of the mode survives.

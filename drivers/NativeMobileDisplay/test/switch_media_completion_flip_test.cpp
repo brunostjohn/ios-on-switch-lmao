@@ -239,8 +239,8 @@ TEST_F(MediaFlip, NotArmedForANewLayout)
     shownByGate(off);
 }
 
-// A completion whose address stores never reach the assembly copy: one line, these flips held off, the set from the
-// gate.
+// A completion whose address stores never reach the assembly copy: one line, that set from the gate, and the next set
+// armed as usual.
 TEST_F(MediaFlip, ACompletionThatDoesNotLatchIsWrittenFromTheGate)
 {
     shownByGate(video(1));
@@ -251,42 +251,13 @@ TEST_F(MediaFlip, ACompletionThatDoesNotLatchIsWrittenFromTheGate)
     ASSERT_NO_THROW(frame());
     ASSERT_EQ(gLog.size(), 1u);
     EXPECT_NE(gLog[0].find("SwitchDisplay: windows B and C's completion flip did not latch"), std::string::npos);
-    EXPECT_NE(gLog[0].find("they flip from the display's work loop for the next 8 sets"), std::string::npos);
-    EXPECT_FALSE(d.mediaHold.on());
+    EXPECT_NE(gLog[0].find("that set flips from the display's work loop"), std::string::npos);
     EXPECT_EQ(d.model.assembly[kStartB], address(2));
     ASSERT_NO_THROW(frame());
     EXPECT_EQ(d.shown.back(), seq);
     EXPECT_EQ(d.model.active[kStartB], address(2));
-    EXPECT_FALSE(armed(3));
-    EXPECT_EQ(gLog.size(), 1u);
-}
-
-// After the refusal the gate writes the next 8 eligible sets, the one after is armed again; refused again, the run is
-// 16.
-TEST_F(MediaFlip, ARefusedSetIsRetriedAfterItsRunAndHeldOffForTwiceAsLong)
-{
-    shownByGate(video(1));
-    ASSERT_TRUE(armed(2));
-    d.model.completionDropsAddresses = true;
-    d.complete(0);
-    d.donePass();
-    frame();
-    frame();
     d.model.completionDropsAddresses = false;
-    const auto heldUntilArmed = [this] {
-        unsigned held = 0;
-        for (int slot = 3;; slot = slot == 3 ? 2 : 3) {
-            const bool armedNow = armed(slot);
-            d.complete(0);
-            d.donePass();
-            frame();
-            frame();
-            if (armedNow || held >= 100)
-                return held;
-            ++held;
-        }
-    };
-    EXPECT_EQ(heldUntilArmed(), 8u);
+    EXPECT_TRUE(armed(3)) << "nothing is held after a refused set";
     EXPECT_EQ(gLog.size(), 1u);
 }
 
