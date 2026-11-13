@@ -232,7 +232,7 @@ struct Model {
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags, std::move(words)};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), flags, std::move(words), {}, false};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
