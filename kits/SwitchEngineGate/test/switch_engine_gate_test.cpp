@@ -222,20 +222,29 @@ TEST(SwitchEngineGate, AnEngineItsDriverLostIsPoweredOnByTheNextUse)
     EXPECT_TRUE(f.gate.powered());
 }
 
-TEST(SwitchEngineGate, APowerOffTheHardwareRefusesTurnsGatingOff)
+TEST(SwitchEngineGate, ARefusedPowerOffIsTriedAgainAtTheNextIdlePeriod)
 {
     Fixture f;
     f.engine.offResult = -5;
     f.model().fire();
     EXPECT_FALSE(f.gate.powered());
     ASSERT_EQ(f.model().lines.size(), 1u);
-    EXPECT_EQ(f.model().lines[0], "TegraTest: idle power-off refused by the hardware (-5); powered from here on");
+    EXPECT_EQ(f.model().lines[0], "TegraTest: idle power-off refused by the hardware (-5), 1 times in a row; the next "
+                                  "idle period tries again");
+    for (uint32_t i = 2; i <= 3; i++) {
+        ASSERT_EQ(f.gate.use(), 0);
+        EXPECT_EQ(f.engine.ons, i - 1);
+        f.gate.done();
+        f.model().fire();
+        EXPECT_EQ(f.engine.offs, i) << "each idle period tries the power-off again";
+    }
+    EXPECT_EQ(f.model().lines.size(), 2u) << "lines at the 1st and 2nd refusal, not the 3rd";
+    f.engine.offResult = SWITCH_ENGINE_GATE_OFF;
     ASSERT_EQ(f.gate.use(), 0);
-    EXPECT_EQ(f.engine.ons, 1u);
     f.gate.done();
     f.model().fire();
-    EXPECT_EQ(f.engine.offs, 1u);
-    EXPECT_TRUE(f.gate.powered());
+    EXPECT_FALSE(f.gate.powered());
+    EXPECT_EQ(f.model().lines.back(), "TegraTest: idle power-off works again after 3 refusals");
 }
 
 TEST(SwitchEngineGate, SleepDrainsAndPowersOffAndResumeLeavesItOffWithoutAUser)
