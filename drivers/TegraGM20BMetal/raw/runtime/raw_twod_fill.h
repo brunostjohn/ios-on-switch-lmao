@@ -17,17 +17,17 @@ namespace raw {
 constexpr uint32_t twodFillFormat(uint32_t format)
 {
     switch (format) {
-    case 10:  // R8Unorm
+    case 10:          // R8Unorm
         return 0xf3;  // Y8
-    case 20:  // R16Unorm
+    case 20:          // R16Unorm
         return 0xee;  // Y16
-    case 70:  // RGBA8Unorm
-    case 71:  // RGBA8Unorm_sRGB
+    case 70:          // RGBA8Unorm
+    case 71:          // RGBA8Unorm_sRGB
         return 0xd5;  // A8B8G8R8
-    case 80:  // BGRA8Unorm
-    case 81:  // BGRA8Unorm_sRGB
+    case 80:          // BGRA8Unorm
+    case 81:          // BGRA8Unorm_sRGB
         return 0xcf;  // A8R8G8B8
-    case 90:  // RGB10A2Unorm
+    case 90:          // RGB10A2Unorm
         return 0xd1;  // A2B10G10R10
     default:
         return 0;

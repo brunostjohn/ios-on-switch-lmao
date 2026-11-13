@@ -20,7 +20,7 @@ id<MTLTexture> target()
 NSString *engine(id<MTLCommandBuffer> cb, NSDictionary *op)
 {
     return ((NSString * (*)(id, SEL, NSDictionary *)) objc_msgSend)(cb, NSSelectorFromString(@"switchRawProbeEngine:"),
-                                                                     op);
+                                                                    op);
 }
 
 uint8_t access(RMCommandPlan &plan, id<MTLTexture> t)
@@ -43,16 +43,17 @@ TEST(FacadeProbe, AScaleNamesItsTexturesInItsBlitEncoder)
         id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         const uint64_t step = 1ull << 32;
-        EXPECT_EQ(engine(cb, @{
-                      @"kind" : @"scale",
-                      @"read" : read,
-                      @"written" : written,
-                      @"du" : @(step),
-                      @"dv" : @(step),
-                      @"sx" : @(step / 2),
-                      @"sy" : @(step / 2),
-                      @"corner" : @1,
-                  }),
+        EXPECT_EQ(engine(
+                      cb, @{
+                          @"kind" : @"scale",
+                          @"read" : read,
+                          @"written" : written,
+                          @"du" : @(step),
+                          @"dv" : @(step),
+                          @"sx" : @(step / 2),
+                          @"sy" : @(step / 2),
+                          @"corner" : @1,
+                      }),
                   nil);
         [blit endEncoding];
         RMCommandPlan &plan = ((RMCommandBuffer *)cb)->_plan;
@@ -69,16 +70,17 @@ TEST(FacadeProbe, AFillNamesItsTarget)
         ASSERT_NE(written, nil);
         id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        EXPECT_EQ(engine(cb, @{
-                      @"kind" : @"fill",
-                      @"written" : written,
-                      @"dx" : @1,
-                      @"dy" : @1,
-                      @"dw" : @14,
-                      @"dh" : @14,
-                      @"colorFormat" : @0xcf,
-                      @"color0" : @0xff336699u,
-                  }),
+        EXPECT_EQ(engine(
+                      cb, @{
+                          @"kind" : @"fill",
+                          @"written" : written,
+                          @"dx" : @1,
+                          @"dy" : @1,
+                          @"dw" : @14,
+                          @"dh" : @14,
+                          @"colorFormat" : @0xcf,
+                          @"color0" : @0xff336699u,
+                      }),
                   nil);
         [blit endEncoding];
         EXPECT_TRUE(access(((RMCommandBuffer *)cb)->_plan, written) & raw::ResourceUse::Write);
