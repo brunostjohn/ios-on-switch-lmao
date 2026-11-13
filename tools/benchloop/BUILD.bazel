@@ -143,6 +143,7 @@ APP_SOURCES = [
         "known_test",
         "loop_test",
         "pack_test",
+        "protocol_test",
         "qmdchain_test",
         "rop_test",
         "sampling_test",

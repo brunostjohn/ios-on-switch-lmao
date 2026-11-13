@@ -101,6 +101,7 @@ final class BenchRunner {
             x.twod.clear_first = t.clearFirst ? 1 : 0
             x.twod.tiled = t.tiled ? 1 : 0
             x.twod.resolve_by_scale = t.byScale ? 1 : 0
+            (x.twod.rop, x.twod.invert_grid) = (t.rop, t.invertGrid ? 1 : 0)
         }
         if let s = e.source {
             x.source = switch_bench_source(
@@ -175,6 +176,7 @@ final class BenchRunner {
                 "comptags": Int(r.form.comptags), "block_linear": Int(r.form.block_linear),
                 "bracketed": Int(r.form.bracketed), "reference": Int(r.form.reference), "samples": Int(r.form.samples),
                 "clipped": Int(r.form.clipped), "clear_first": Int(r.form.clear_first),
+                "rop": Int(r.form.rop), "invert_grid": Int(r.form.invert_grid),
             ]
         }
         (outcome.lostError, outcome.faultVA, outcome.templateKey) = (r.lost_error, r.fault_va, r.template_key)

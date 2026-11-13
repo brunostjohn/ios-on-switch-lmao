@@ -170,6 +170,34 @@ final class BenchProtocolTests: XCTestCase {
         guard case .invalid = decoded.entries[2] else { return XCTFail("a twod experiment without its operation ran") }
     }
 
+    func testCompeteIsAFlagOfDrawsAndCodeRunsTo128KiB() throws {
+        let program = { (bytes: Int) -> [String: Any] in
+            [
+                "sph": Data(count: 80).base64EncodedString(), "code": Data(count: bytes).base64EncodedString(),
+                "gprs": 4,
+            ]
+        }
+        let target: [String: Any] = ["format": "rgba32float", "width": 4, "height": 4]
+        let batch: [String: Any] = [
+            "protocol": BenchProtocol.version, "batch": "compete",
+            "experiments": [
+                ["id": "draw", "kind": "fragment", "target": target, "program": program(32), "compete": true],
+                ["id": "one", "kind": "fragment", "target": target, "program": program(32), "compete": 1],
+                ["id": "noop", "kind": "noop", "target": target, "compete": true],
+                ["id": "k128", "kind": "fragment", "target": target, "program": program(128 * 1024)],
+                ["id": "past", "kind": "fragment", "target": target, "program": program(128 * 1024 + 32)],
+            ],
+        ]
+        let decoded = try BenchBatch.decode(try JSONSerialization.data(withJSONObject: batch))
+        guard case .experiment(let e) = decoded.entries[0] else { return XCTFail("\(decoded.entries[0])") }
+        XCTAssertTrue(e.compete)
+        guard case .invalid = decoded.entries[1] else { return XCTFail("compete 1 accepted") }
+        guard case .invalid = decoded.entries[2] else { return XCTFail("a noop that competes accepted") }
+        guard case .experiment(let big) = decoded.entries[3] else { return XCTFail("128 KiB of code refused") }
+        XCTAssertFalse(big.compete)
+        guard case .invalid = decoded.entries[4] else { return XCTFail("code past 128 KiB accepted") }
+    }
+
     func testResultFileCarriesRunsAndTexels() throws {
         let batch = try BenchBatch.decode(try golden())
         var outcome = BenchOutcome()

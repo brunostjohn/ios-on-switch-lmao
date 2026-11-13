@@ -20,10 +20,10 @@ def result_for(cell: dict, value: int | None = None, ns_per_draw: int = 5000) ->
 
 
 class InterlockSectionTest(unittest.TestCase):
-    def test_matrix_round_trips_through_benchloop5(self) -> None:
+    def test_matrix_round_trips_through_benchloop6(self) -> None:
         cells = section.generate()
         batch = json.loads(protocol.encode_batch(protocol.batch('section', cells)))
-        self.assertEqual(batch['protocol'], 'benchloop/5')
+        self.assertEqual(batch['protocol'], 'benchloop/6')
         self.assertEqual(len(cells), 60)
         self.assertEqual(len({c['id'] for c in cells}), 60)
         for cell in batch['experiments']:
