@@ -618,6 +618,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_set_reads.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_spill_table.h",
     ],
     cxx_std = "c++17",

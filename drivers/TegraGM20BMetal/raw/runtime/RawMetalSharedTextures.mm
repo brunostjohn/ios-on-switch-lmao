@@ -129,11 +129,13 @@ bool laidOutSurface(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, r
 
 void installSharedTextureMethods(Class cls)
 {
-    if (!kKind.resourceIndexOpen)
-        return;
-    const SEL sel = @selector(newSharedTextureWithHandle:withResourceIndex:);
-    Method m = class_getInstanceMethod([RMSharedTextureAtIndex class], sel);
-    class_addMethod(cls, sel, method_getImplementation(m), method_getTypeEncoding(m));
+    if constexpr (kKind.resourceIndexOpen) {
+        const SEL sel = @selector(newSharedTextureWithHandle:withResourceIndex:);
+        Method m = class_getInstanceMethod([RMSharedTextureAtIndex class], sel);
+        class_addMethod(cls, sel, method_getImplementation(m), method_getTypeEncoding(m));
+    } else {
+        (void)cls;
+    }
 }
 
 @interface RMDevice (SharedTextures)

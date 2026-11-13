@@ -140,7 +140,7 @@ raw::ProbeOp gridScale(const switch_bench_experiment &x, const raw::Texture &ms,
 // The pack's resolve state drawn from `ms` into `into`, as RawMetalEncode.mm's resolve does it
 bool resolve3d(raw::CommandBuffer &cb, raw::Device &d, const raw::Texture &ms, const raw::Texture &into, Submission &s)
 {
-    raw::Pipeline *resolve = d.resolvePipeline(into.format);
+    raw::Pipeline *resolve = d.resolvePipeline(into.format, ms.samples);
     if (!resolve)
         return s.refused("the pack has no resolve state for the format");
     raw::Texture target = into;
