@@ -182,7 +182,7 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 			    .Before("lower_32_bits(chan->fence_gpu)", "releases[s].value"));
 	// A GPU reader parks on a pending promise once its acquires are kicked, never while they can still be rolled back:
 	// a give-up armed for a push that was not submitted would drop a later frame whose writes did arrive.
-	const CodeText acquire = Block(exec, "int tgm_backing_dependencies(");
+	const CodeText acquire = Block(exec, "static int backing_dependency(");
 	EXPECT_TRUE(acquire.Has("token->engine == SWITCH_GPU_ENGINE_PROMISE"));
 	EXPECT_FALSE(acquire.Has("tgm_chan_note_promise("));
 	const CodeText kick =

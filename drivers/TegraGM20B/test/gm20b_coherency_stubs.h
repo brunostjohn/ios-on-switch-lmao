@@ -39,11 +39,47 @@ struct IOLock {
 	std::mutex m;
 	std::condition_variable condition;
 	std::atomic<std::thread::id> owner{};
+	uint64_t takes = 0;  // under m
 };
+
+// Every IOLockLock of the process
+inline std::atomic<uint64_t> &ioLockTakes()
+{
+	static std::atomic<uint64_t> takes;
+	return takes;
+}
 
 inline IOLock *IOLockAlloc()
 {
 	return new IOLock;
+}
+
+// The CPU a thread runs on (a test may move it), and its preemption level, which no IOLock may be taken under
+inline int &hostCpu()
+{
+	static thread_local int cpu;
+	return cpu;
+}
+
+inline int &preemptionOff()
+{
+	static thread_local int level;
+	return level;
+}
+
+extern "C" inline int cpu_number(void)
+{
+	return hostCpu();
+}
+
+extern "C" inline void _disable_preemption(void)
+{
+	++preemptionOff();
+}
+
+extern "C" inline void _enable_preemption(void)
+{
+	--preemptionOff();
 }
 
 inline void IOLockFree(IOLock *lock)
@@ -58,8 +94,14 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 		std::fputs("IOLockLock: the thread already holds this lock\n", stderr);
 		std::abort();
 	}
+	if (preemptionOff()) {
+		std::fputs("IOLockLock: preemption is off\n", stderr);
+		std::abort();
+	}
 	lock->m.lock();
 	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+	++lock->takes;
+	ioLockTakes().fetch_add(1, std::memory_order_relaxed);
 }
 
 inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))
@@ -126,7 +168,7 @@ inline int &ioLogLines()
 
 inline void IOLog(const char *, ...)
 {
-	ioLogLines()++;
+	__atomic_fetch_add(&ioLogLines(), 1, __ATOMIC_RELAXED);
 }
 
 // Every tgm_cpu_clean_pages call: its page list.

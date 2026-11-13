@@ -239,70 +239,85 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
 
+/* One unsettled dependency's acquire; tgm_live_lock held when it names a GM20B channel. */
+static int backing_dependency(struct tgm_chan *chan, const struct switch_gpu_backing_token *token,
+			      int emit)
+{
+	if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
+		struct tgm_chan *source = live_by_uid(token->queue);
+		u64 va;
+
+		if (!source || token->reset_generation != (source->id >> 32) + 1 ||
+		    !chan->vm->fences_va || token->value > UINT32_MAX)
+			return -ENODEV;
+		va = chan->vm->fences_va +
+		     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
+		if (emit) {
+			PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
+				  SEMAPHOREB, lower_32_bits(va), SEMAPHOREC, (u32)token->value,
+				  SEMAPHORED,
+				  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+					  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+			if (chan->high)
+				tgm_hold_need(tgm_gpu.device, source->chid);
+		}
+	} else if (token->engine == SWITCH_GPU_ENGINE_PROMISE) {
+		const u64 va = chan->vm->fences_va + token->queue;
+
+		if (!chan->vm->fences_va || token->queue >= TGM_FENCE_BYTES ||
+		    token->value > UINT32_MAX)
+			return -ENODEV;
+		if (emit)
+			PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
+				  SEMAPHOREB, lower_32_bits(va), SEMAPHOREC, (u32)token->value,
+				  SEMAPHORED,
+				  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+					  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+	} else if (token->engine == SWITCH_GPU_ENGINE_VIC ||
+		   token->engine == SWITCH_GPU_ENGINE_NVDEC ||
+		   token->engine == SWITCH_GPU_ENGINE_DISPLAY ||
+		   token->engine == SWITCH_GPU_ENGINE_NVENC) {
+		u32 words[TGM_SYNCPT_WAIT_DWORDS];
+		u32 n;
+		if (token->queue > 255)
+			return -EINVAL;
+		if (emit) {
+			tgm_syncpt_wait(words, token->queue, (u32)token->value);
+			for (n = 0; n < TGM_SYNCPT_WAIT_DWORDS; ++n)
+				PUSH_DATA(&chan->chan.push, words[n]);
+		}
+	} else {
+		return -EOPNOTSUPP;
+	}
+	return 0;
+}
+
+/* Every status first, outside tgm_live_lock (a timeline's status may take its engine's state), then one hold of it for
+ * all the producer channels: a job over many producers takes it once. A producer that failed after the ownership layer
+ * collected it leaves nothing to wait for; that layer logs it, and its readers go on. */
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit)
 {
+	u32 unsettled[(TegraGM20BMaxJobDependencies + 31) / 32] = {0};
+	u32 channels = 0;
 	u32 i;
-	for (i = 0; i < count; ++i) {
-		const struct switch_gpu_backing_token *token = &tokens[i];
-		/* A producer that failed after the ownership layer collected it leaves nothing to wait for; that layer logs it,
-		 * and its readers go on. */
-		if (switch_gpu_backing_token_status(token))
-			continue;
-		if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
-			struct tgm_chan *source;
-			u64 va;
-			mutex_lock(&tgm_live_lock);
-			source = live_by_uid(token->queue);
-			if (!source || token->reset_generation != (source->id >> 32) + 1 ||
-			    !chan->vm->fences_va || token->value > UINT32_MAX) {
-				mutex_unlock(&tgm_live_lock);
-				return -ENODEV;
-			}
-			va = chan->vm->fences_va +
-			     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
-			if (emit) {
-				PUSH_MTHD(
-					&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
-					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
-					(u32)token->value, SEMAPHORED,
-					NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-						NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-				if (chan->high)
-					tgm_hold_need(tgm_gpu.device, source->chid);
-			}
-			mutex_unlock(&tgm_live_lock);
-		} else if (token->engine == SWITCH_GPU_ENGINE_PROMISE) {
-			const u64 va = chan->vm->fences_va + token->queue;
+	int ret = 0;
 
-			if (!chan->vm->fences_va || token->queue >= TGM_FENCE_BYTES ||
-			    token->value > UINT32_MAX)
-				return -ENODEV;
-			if (emit)
-				PUSH_MTHD(
-					&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
-					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
-					(u32)token->value, SEMAPHORED,
-					NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-						NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-		} else if (token->engine == SWITCH_GPU_ENGINE_VIC ||
-			   token->engine == SWITCH_GPU_ENGINE_NVDEC ||
-			   token->engine == SWITCH_GPU_ENGINE_DISPLAY ||
-			   token->engine == SWITCH_GPU_ENGINE_NVENC) {
-			u32 words[TGM_SYNCPT_WAIT_DWORDS];
-			u32 n;
-			if (token->queue > 255)
-				return -EINVAL;
-			if (emit) {
-				tgm_syncpt_wait(words, token->queue, (u32)token->value);
-				for (n = 0; n < TGM_SYNCPT_WAIT_DWORDS; ++n)
-					PUSH_DATA(&chan->chan.push, words[n]);
-			}
-		} else {
-			return -EOPNOTSUPP;
+	if (count > TegraGM20BMaxJobDependencies)
+		return -E2BIG;
+	for (i = 0; i < count; ++i)
+		if (!switch_gpu_backing_token_status(&tokens[i])) {
+			unsettled[i / 32] |= 1u << (i % 32);
+			channels += tokens[i].engine == SWITCH_GPU_ENGINE_GM20B;
 		}
-	}
-	return 0;
+	if (channels)
+		mutex_lock(&tgm_live_lock);
+	for (i = 0; !ret && i < count; ++i)
+		if (unsettled[i / 32] & (1u << (i % 32)))
+			ret = backing_dependency(chan, &tokens[i], emit);
+	if (channels)
+		mutex_unlock(&tgm_live_lock);
+	return ret;
 }
 
 /* A job's user entries and internal fences (SwitchGpuJobFences.h), in chan_exec's reserved room. */

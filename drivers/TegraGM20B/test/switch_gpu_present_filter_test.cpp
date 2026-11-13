@@ -48,6 +48,12 @@ extern "C" int switch_gpu_backing_register_semantics(uint32_t, const switch_gpu_
 	return 0;
 }
 
+extern "C" int switch_gpu_backing_register_timeline_refs(uint32_t,
+							 const switch_gpu_backing_timeline_refs *)
+{
+	return 0;
+}
+
 extern "C" void switch_gpu_event_waits_retain(switch_gpu_event_waits *batch)
 {
 	++batch->refs;
