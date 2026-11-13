@@ -2861,7 +2861,11 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
-    data = ["//drivers/TegraGM20B:nouveau/nvkm/subdev/mmu/gm200.c"],
+    data = [
+        "//drivers/TegraGM20B:nouveau/nvkm/subdev/mmu/gm200.c",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
+    ],
     defines = ['GM200_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/subdev/mmu/gm200.c)\\"'],
 )
 

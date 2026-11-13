@@ -153,24 +153,12 @@ inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, u
     return (copied || shaderTestCopied) && !copyEngineReadsCompressed(kind) ? 0 : kind;
 }
 
-// A refusal of compressed memory (the BoAlloc's or the VmBind's kern_return_t, kIOReturnNoSpace for no VA) that memory
-// coming back does not answer: anything but the pool, the comptags or the VA running short. Such a want is asked again
-// at the refusals' backoff, kCompLastingRefusals times in all, then never for the process.
-inline bool compLasting(int kr)
+// A refusal of compressed memory (the BoAlloc's or the VmBind's kern_return_t, kIOReturnNoSpace for no VA) for want of
+// memory: the kernel's pool (its floor, or this client's share), the comptags or the VA. Only memory given back changes
+// that answer. Any other refusal is the request's own fault and has never fired (boot 19 and 21 logged none).
+inline bool compShortage(int kr)
 {
-    return kr != kIOReturnNoMemory && kr != kIOReturnNoResources && kr != kIOReturnNoSpace;
-}
-
-constexpr uint32_t kCompLastingRefusals = 3;
-constexpr uint64_t kCompRetryCommits = 30, kCompRetryMaxCommits = 600;
-
-// Command buffers from the `refusals`-th refusal of a want to its next ask: half a second of frames, doubling to ten
-inline uint64_t compRetryAfter(uint32_t refusals)
-{
-    uint64_t after = kCompRetryCommits;
-    for (uint32_t i = 1; i < refusals && after < kCompRetryMaxCommits; i++)
-        after *= 2;
-    return std::min(after, kCompRetryMaxCommits);
+    return kr == kIOReturnNoMemory || kr == kIOReturnNoResources || kr == kIOReturnNoSpace;
 }
 
 // A colour clear's SET_COLOR_CLEAR_VALUE words (clearWords) for a target of Metal format `mtl`: one of the boot ZBC table's
@@ -274,37 +262,29 @@ struct CompMem {
     uint32_t views = 0;
 };
 
-struct CompRefusal {
-    CompWant want;
-    uint64_t retryAt = 0;  // the commit count from which it is asked again
-    uint32_t refusals = 0;
-    uint32_t lasting = 0;  // of them, the compLasting ones
-};
-
-// Times are Device::commitCount_
 struct CompQueue {
-    std::vector<CompWant> wanted;      // asked for, not made yet
-    std::vector<CompBo> ready;         // made and bound, no backing took it yet
-    std::vector<CompRefusal> refused;  // the kernel's last answer to it was no
+    std::vector<CompWant> wanted;  // asked for, not made yet
+    std::vector<CompBo> ready;     // made and bound, no backing took it yet
+    // refused for a shortage since this process last gave compressed memory back, which alone may change the answer
+    std::vector<CompWant> refused;
     std::vector<std::unique_ptr<CompMem>> mems;
     bool loggedOn = false;
 
-    // Not to be asked for at `now`: asked already or made at least as large, or refused and not due again
-    bool asked(const CompWant &w, uint64_t now) const
+    // Not to be asked for: asked already or made at least as large, or refused for a shortage nothing has eased since
+    bool asked(const CompWant &w) const
     {
         const auto covers = [&](uint64_t bytes, uint32_t kind) {
             return kind == w.kind && bytes >= w.bytes;
         };
-        if (std::any_of(wanted.begin(), wanted.end(),
-                        [&](const CompWant &x) {
-                            return covers(x.bytes, x.kind);
-                        }) ||
-            std::any_of(ready.begin(), ready.end(), [&](const CompBo &b) {
-                return covers(b.bo.bytes, b.kind);
-            }))
-            return true;
-        auto r = find(w);
-        return r != refused.end() && (r->lasting >= kCompLastingRefusals || now < r->retryAt);
+        return std::any_of(wanted.begin(), wanted.end(),
+                           [&](const CompWant &x) {
+                               return covers(x.bytes, x.kind);
+                           }) ||
+               std::any_of(ready.begin(), ready.end(),
+                           [&](const CompBo &b) {
+                               return covers(b.bo.bytes, b.kind);
+                           }) ||
+               std::find(refused.begin(), refused.end(), w) != refused.end();
     }
 
     // The memory new backings of `tag` and `kind` go on: the largest of them; null with none
@@ -327,53 +307,22 @@ struct CompQueue {
         return best;
     }
 
-    // The kernel refused `w` at `now`: true at its first refusal since it was last made
-    bool refuse(const CompWant &w, uint64_t now, bool lasting)
+    // The kernel refused `w`: a shortage's want waits for memory given back; any other is forgotten, its backing plain
+    // and the next want of it a new ask. True: the refusal to log (a shortage's first since memory came back)
+    bool refuse(const CompWant &w, bool shortage)
     {
-        auto r = find(w);
-        const bool first = r == refused.end();
-        if (first)
-            r = refused.insert(refused.end(), CompRefusal{w});
-        r->refusals++;
-        r->retryAt = now + compRetryAfter(r->refusals);
-        r->lasting += lasting;
-        return first;
+        if (!shortage)
+            return true;
+        if (std::find(refused.begin(), refused.end(), w) != refused.end())
+            return false;
+        refused.push_back(w);
+        return true;
     }
 
-    // Whether `w`'s last refusal was the lasting one after which it is never asked again
-    bool givenUp(const CompWant &w) const
+    // This process gave compressed memory back: the wants refused for a shortage may be asked again
+    void freed()
     {
-        auto r = find(w);
-        return r != refused.end() && r->lasting == kCompLastingRefusals;
-    }
-
-    void made(const CompWant &w)
-    {
-        if (auto r = find(w); r != refused.end())
-            refused.erase(r);
-    }
-
-    // Compressed memory went back to the kernel at `now`: every refusal of a shortage is due
-    void freed(uint64_t now)
-    {
-        for (CompRefusal &r : refused)
-            if (!r.lasting)
-                r.retryAt = std::min(r.retryAt, now);
-    }
-
-private:
-    std::vector<CompRefusal>::iterator find(const CompWant &w)
-    {
-        return std::find_if(refused.begin(), refused.end(), [&](const CompRefusal &r) {
-            return r.want == w;
-        });
-    }
-
-    std::vector<CompRefusal>::const_iterator find(const CompWant &w) const
-    {
-        return std::find_if(refused.begin(), refused.end(), [&](const CompRefusal &r) {
-            return r.want == w;
-        });
+        refused.clear();
     }
 };
 

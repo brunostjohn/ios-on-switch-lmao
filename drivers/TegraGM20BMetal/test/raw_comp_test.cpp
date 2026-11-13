@@ -6,6 +6,8 @@
 // allows.
 #include <gtest/gtest.h>
 
+#include "bazel/testing/source_text.h"
+
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -239,74 +241,56 @@ TEST(RawComp, ZbcValuesAreAskedForOnceRepeated)
     EXPECT_TRUE(table.lookup(e, wanted));
 }
 
-TEST(RawComp, ShortagesPassAndContractRefusalsDoNot)
+// The kernel's answers for want of memory: boot 19 and boot 21 logged only NoMemory (its pool's floor or the client's
+// share, "compressible BoAlloc of ... refused"), never another
+TEST(RawComp, ShortagesAreTheKernelsMemoryAnswers)
 {
-    EXPECT_FALSE(raw::compLasting(kIOReturnNoMemory));     // the pool's tiers or no free chunk
-    EXPECT_FALSE(raw::compLasting(kIOReturnNoResources));  // no comptags left
-    EXPECT_FALSE(raw::compLasting(kIOReturnNoSpace));      // no GPU VA
-    EXPECT_TRUE(raw::compLasting(kIOReturnBadArgument));
-    EXPECT_TRUE(raw::compLasting(kIOReturnUnsupported));
+    EXPECT_TRUE(raw::compShortage(kIOReturnNoMemory));     // the pool's floor or the client's share
+    EXPECT_TRUE(raw::compShortage(kIOReturnNoResources));  // no comptags left
+    EXPECT_TRUE(raw::compShortage(kIOReturnNoSpace));      // no GPU VA
+    EXPECT_FALSE(raw::compShortage(kIOReturnBadArgument));
+    EXPECT_FALSE(raw::compShortage(kIOReturnUnsupported));
 }
 
-TEST(RawComp, RetriesBackOffToTenSecondsOfFrames)
-{
-    EXPECT_EQ(raw::compRetryAfter(1), 30u);
-    EXPECT_EQ(raw::compRetryAfter(2), 60u);
-    EXPECT_EQ(raw::compRetryAfter(5), 480u);
-    EXPECT_EQ(raw::compRetryAfter(6), 600u);
-    EXPECT_EQ(raw::compRetryAfter(1000), 600u);
-}
-
-TEST(RawComp, ARefusedWantIsAskedAgainOnceDue)
+// A want refused for a shortage is not asked again however many command buffers or seconds pass: only this process
+// giving compressed memory back may change the kernel's answer, and the next want after that asks
+TEST(RawComp, AShortageWaitsForMemoryGivenBackNotForTime)
 {
     raw::CompQueue q;
-    const raw::CompWant w{0x720000, 0xe9}, other{0x20000, 0xce};
-    EXPECT_FALSE(q.asked(w, 0));
+    const raw::CompWant w{0x2800000, 0xdb}, other{0x20000, 0xce};
+    EXPECT_FALSE(q.asked(w));
     q.wanted.push_back(w);
-    EXPECT_TRUE(q.asked(w, 0));
+    EXPECT_TRUE(q.asked(w));
     q.wanted.clear();
-    EXPECT_TRUE(q.refuse(w, 100, false));  // its first refusal is the one logged
-    EXPECT_TRUE(q.asked(w, 129));
-    EXPECT_FALSE(q.asked(w, 130));
-    EXPECT_FALSE(q.asked(other, 100));
-    EXPECT_FALSE(q.refuse(w, 130, false));
-    EXPECT_TRUE(q.asked(w, 189));
-    EXPECT_FALSE(q.asked(w, 190));
-    q.made(w);
-    EXPECT_FALSE(q.asked(w, 0));
-    EXPECT_TRUE(q.refuse(w, 200, false));  // a refusal after it was made is a first one again
+    EXPECT_TRUE(q.refuse(w, true)) << "its first refusal is logged";
+    for (int ask = 0; ask < 100000; ask++)
+        ASSERT_TRUE(q.asked(w)) << "no back-off brings it back";
+    EXPECT_FALSE(q.asked(other));
+    EXPECT_FALSE(q.refuse(w, true)) << "refused again before anything came back: not logged again";
+    q.freed();
+    EXPECT_FALSE(q.asked(w));
+    EXPECT_TRUE(q.refuse(w, true)) << "refused after memory came back: logged";
 }
 
-TEST(RawComp, FreedMemoryMakesShortagesDueAndNothingElse)
-{
-    raw::CompQueue q;
-    const raw::CompWant shortOf{0x720000, 0xe9}, refused{0x20000, 0xdb};
-    for (uint64_t at = 0; at < 10; at++)
-        q.refuse(shortOf, at, false);
-    q.refuse(refused, 0, true);
-    EXPECT_TRUE(q.asked(shortOf, 100));
-    q.freed(10);
-    EXPECT_FALSE(q.asked(shortOf, 100));
-    EXPECT_TRUE(q.asked(refused, 10)) << "freed memory does not answer a lasting refusal";
-    EXPECT_FALSE(q.asked(refused, 30)) << "it is asked again at the backoff";
-}
-
-// A want the kernel refused for a reason memory coming back does not answer is asked again at the backoff a few times,
-// at the next ask after each is due, then never for the process
-TEST(RawComp, ALastingRefusalIsAskedAgainAFewTimes)
+// Any other refusal has never fired: it is logged each time, fails that one ask (its backing plain) and is not
+// remembered, so the next want of it is a new ask
+TEST(RawComp, AnyOtherRefusalFailsThatAskAlone)
 {
     raw::CompQueue q;
     const raw::CompWant w{0x20000, 0xdb};
-    uint64_t now = 0;
-    uint32_t asks = 0;
-    for (; now < 100000; now++) {
-        if (q.asked(w, now))
-            continue;
-        asks++;
-        q.refuse(w, now, true);
-        EXPECT_EQ(q.givenUp(w), asks == raw::kCompLastingRefusals) << "at ask " << asks;
+    for (int ask = 0; ask < 3; ask++) {
+        EXPECT_FALSE(q.asked(w));
+        EXPECT_TRUE(q.refuse(w, false));
     }
-    EXPECT_EQ(asks, raw::kCompLastingRefusals);
+    EXPECT_TRUE(q.refused.empty());
+}
+
+TEST(RawComp, NoRetryBackOffIsLeft)
+{
+    const std::string comp = switch_ios::test::SourceText("../raw/runtime/raw_comp.h") +
+                             switch_ios::test::SourceText("../raw/runtime/raw_comp.cpp");
+    for (const char *gone : {"compRetryAfter", "kCompRetry", "retryAt", "kCompLastingRefusals"})
+        EXPECT_EQ(comp.find(gone), std::string::npos) << gone;
 }
 
 TEST(RawComp, AReadyBufferAnswersItsWant)
@@ -316,8 +300,8 @@ TEST(RawComp, AReadyBufferAnswersItsWant)
     b.bo.bytes = 0x20000;
     b.kind = 0xce;
     q.ready.push_back(b);
-    EXPECT_TRUE(q.asked({0x20000, 0xce}, 0));
-    EXPECT_FALSE(q.asked({0x20000, 0xe9}, 0));
+    EXPECT_TRUE(q.asked({0x20000, 0xce}));
+    EXPECT_FALSE(q.asked({0x20000, 0xe9}));
 }
 
 TEST(RawComp, ClassesAreQuarterStepsOfWholeLines)
@@ -364,11 +348,11 @@ TEST(RawComp, AMadeBufferServesEveryNeedItHolds)
     EXPECT_EQ(q.fit(5 << 20, 0xe9)->bo.bytes, 8u << 20);
     EXPECT_EQ(q.fit(17 << 20, 0xe9), q.ready.end());
     EXPECT_EQ(q.fit(1 << 20, 0xdb), q.ready.end());
-    EXPECT_TRUE(q.asked({12 << 20, 0xe9}, 0));  // 16 MiB holds it: no second buffer
-    EXPECT_FALSE(q.asked({24 << 20, 0xe9}, 0));
+    EXPECT_TRUE(q.asked({12 << 20, 0xe9}));  // 16 MiB holds it: no second buffer
+    EXPECT_FALSE(q.asked({24 << 20, 0xe9}));
     q.wanted.push_back({32 << 20, 0xe9});
-    EXPECT_TRUE(q.asked({24 << 20, 0xe9}, 0));  // a larger ask in flight covers it
-    EXPECT_FALSE(q.asked({24 << 20, 0xce}, 0));
+    EXPECT_TRUE(q.asked({24 << 20, 0xe9}));  // a larger ask in flight covers it
+    EXPECT_FALSE(q.asked({24 << 20, 0xce}));
 }
 
 TEST(RawComp, StaleByCommitsOrTimeAndNeverInTheOpenCommandBuffer)

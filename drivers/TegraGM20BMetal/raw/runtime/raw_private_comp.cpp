@@ -122,7 +122,7 @@ void Device::freeCompressedZeta(uint64_t va)
     RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.bytes);
     k_.free(it->second);
     compZeta_.erase(it);
-    comp_.freed(commitCount_);
+    comp_.freed();
 }
 
 bool Device::privateCompressed(const Texture &t)
@@ -262,7 +262,7 @@ void Device::releasePrivateCompressed(const Texture &t)
     RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.comp.bo.bytes);
     k_.free(it->second.comp.bo);
     privateComp_.erase(it);
-    comp_.freed(commitCount_);
+    comp_.freed();
 }
 
 }  // namespace raw
