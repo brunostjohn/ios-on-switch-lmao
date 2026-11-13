@@ -86,6 +86,20 @@ TEST(RawPrivateComp, AOneLevelArrayTakesItsKind)
     EXPECT_EQ(raw::privateCompressedKind(f), 0u) << "an array's levels are no chain the move copies";
 }
 
+// A stored multisampled target takes its sample count's kind where the copy engine reads that kind (the move to plain
+// memory is its copy of the sample grid)
+TEST(RawPrivateComp, AStoredMultisampledTargetTakesItsKindWhereTheCopyEngineReadsIt)
+{
+    raw::PrivateTextureFacts f = target(4);
+    f.shape = raw::PrivateShape2D::Multisample;
+    f.samples = 4;
+    const uint32_t kind = raw::compressedKind(4, 0, 4);
+    EXPECT_EQ(raw::privateCompressedKind(f), raw::copyEngineReadsCompressed(kind) ? kind : 0u);
+    EXPECT_TRUE(raw::privateShapeCompresses(f)) << "gpu.raw.private_compression ms4";
+    f.samples = 8;
+    EXPECT_FALSE(raw::privateShapeCompresses(f));
+}
+
 // The copy engine moves a multisampled texture as fx::msLayout's grid of its samples
 TEST(RawPrivateComp, AMultisampledTextureMovesAsItsSampleGrid)
 {

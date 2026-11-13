@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Private render targets on compressed memory (rule comp.private). A private 2D texture of one sample (its mip chain too)
-// or 2D array of one level that only the 3D engine renders and the texture unit samples is bound with its texel size's compressible kind when
+// or 2D array of one level, or a stored multisampled one, that only the 3D engine renders and the texture unit samples is
+// bound with its texel size's compressible kind when
 // compressed memory of its size is ready (Device::comp_, made off the render thread), so its full clears to a ZBC value
 // write tags only and its draws move compressed tiles. The kind must be one the copy engine reads and writes as plain
 // texels (raw_comp.h copyEngineReadsCompressed: the move below is its copy); passes that view it as a storage image do so
@@ -46,6 +47,8 @@ constexpr bool privateShapeCompresses(const PrivateTextureFacts &f)
         return f.samples <= 1;
     case PrivateShape2D::Array:
         return f.levels == 1 && f.samples <= 1;
+    case PrivateShape2D::Multisample:  // createStoredMultisample's: its kind is the sample count's
+        return f.levels == 1 && (f.samples == 2 || f.samples == 4);
     default:
         return false;
     }
