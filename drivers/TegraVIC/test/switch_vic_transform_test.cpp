@@ -396,9 +396,9 @@ TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)
     EXPECT_EQ(pending, nullptr);
 }
 
-TEST_F(TurnDefer, BeforeV3PassesEveryTurnIsCopied)
+TEST_F(TurnDefer, WithoutTheColumnScanTraitEveryTurnIsCopied)
 {
-    EXPECT_EQ(defer(nullptr, kSwitchDisplayTraits), 0);
+    EXPECT_EQ(defer(nullptr, SwitchDisplayTraits{}), 0);
     EXPECT_EQ(publishedTurns, 0u);
 }
 
