@@ -67,11 +67,16 @@ bool Device::bindArena(Arena &a)
         k_.free(a.bo);
         return false;
     }
-    Bo alias = a.bo;
-    alias.va = alias.vaBase = a.bufferVa;
-    set_.add(k_, {{&a.bo, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
-    for (const Arena::View &v : a.views)
-        addAlias(set_, k_, a.bo, v.va);
+    // Only a private heap's arena joins the set. A job that uses a shared heap names its arena host-written, since the CPU
+    // writes its write-combined pages (CommandBuffer::nameHeaps), and a resource of it used alone names its own range: the
+    // kernel refuses either use of a set member.
+    if (!a.wc) {
+        Bo alias = a.bo;
+        alias.va = alias.vaBase = a.bufferVa;
+        set_.add(k_, {{&a.bo, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
+        for (const Arena::View &v : a.views)
+            addAlias(set_, k_, a.bo, v.va);
+    }
     RAW_DIAGNOSTIC(stats.poolBytes += a.bytes);
     return true;
 }
@@ -88,11 +93,13 @@ bool Device::bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes)
         k_.free(part);
         return false;
     }
-    Bo alias = part;
-    alias.va = alias.vaBase = a.bufferVa + offset;
-    set_.add(k_, {{&part, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
-    for (const Arena::View &v : a.views)
-        addAlias(set_, k_, part, v.va + offset);
+    if (!a.wc) {
+        Bo alias = part;
+        alias.va = alias.vaBase = a.bufferVa + offset;
+        set_.add(k_, {{&part, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
+        for (const Arena::View &v : a.views)
+            addAlias(set_, k_, part, v.va + offset);
+    }
     a.parts.emplace_back(offset, part);
     RAW_DIAGNOSTIC(stats.poolBytes += bytes);
     return true;
@@ -236,10 +243,12 @@ uint64_t Device::arenaView(Arena &a, uint32_t kind)
         bound = bound && k_.bindAlias(part, va + offset, kind);
     if (!bound)
         return 0;
-    if (a.bo.handle)
-        addAlias(set_, k_, a.bo, va);
-    for (const auto &[offset, part] : a.parts)
-        addAlias(set_, k_, part, va + offset);
+    if (!a.wc) {
+        if (a.bo.handle)
+            addAlias(set_, k_, a.bo, va);
+        for (const auto &[offset, part] : a.parts)
+            addAlias(set_, k_, part, va + offset);
+    }
     a.views.push_back({va, kind});
     return va;
 }

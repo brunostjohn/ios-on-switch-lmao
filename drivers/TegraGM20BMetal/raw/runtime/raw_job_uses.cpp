@@ -24,19 +24,27 @@ bool CommandBuffer::useMember(uint64_t va, uint64_t bytes, bool write, bool host
     return true;
 }
 
-// lock_ held. A heap's arena is one BO, named whole for reading (useHeap's resources are read-only), host-written for a heap
-// the CPU writes: its write-combined pages leave no CPU line behind, the GPU's L2 may hold stale ones. Each resource the heap
-// made outside its arena is a use of its own.
+// lock_ held. A heap's arena is one BO (its parts, once trimmed), named whole for reading (useHeap's resources are
+// read-only), host-written for a heap the CPU writes: its write-combined pages leave no CPU line behind, the GPU's L2 may
+// hold stale ones. A private heap's arena goes with the set instead. Each resource the heap made outside its arena is a use
+// of its own.
 void CommandBuffer::nameHeaps()
 {
     Device &d = *dev_;
     for (const HeapMembers *heap : heaps_) {
         const uint32_t written = heap->hostVisible() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u;
+        const auto name = [&](const Bo &bo) {
+            if (bo.handle && !d.member(bo)) {
+                RAW_ENCODE_COUNT(UseAdds);
+                surfaces_.addAccess(bo.handle, TegraGM20BSurfaceRead | written);
+            }
+        };
         if (heap->arena() < d.arenas_.size()) {
             const Device::Arena &a = d.arenas_[heap->arena()];
-            if (a.used && !a.purged && a.bo.handle && !d.member(a.bo)) {
-                RAW_ENCODE_COUNT(UseAdds);
-                surfaces_.addAccess(a.bo.handle, TegraGM20BSurfaceRead | written);
+            if (a.used && !a.purged) {
+                name(a.bo);
+                for (const auto &[offset, part] : a.parts)
+                    name(part);
             }
         }
         heap->each([&](const HeapMember &m) {
