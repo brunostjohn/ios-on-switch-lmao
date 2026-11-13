@@ -30,8 +30,8 @@
 // and the thread sleeps on the syncpoint interrupt; then NVENC's Annex B slice becomes a length-prefixed sample with
 // the format description of this plug-in's own SPS/PPS, and goes out at once unless the session reorders
 // (AVEReorder.h). A P picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is
-// an IDR. A P picture NVENC refuses (its status says why, one error line) leaves the session intra only, so the stream
-// goes on.
+// an IDR. A P picture NVENC refuses (its status says why, one error line) is coded again as an IDR and the next
+// picture is a P picture again; refusals in a row back off (AVEBackoff.h), with a line for each run of IDRs.
 //
 // Tile sessions (HEIC grids through VTTileCompressionSession): AVETiles.c, on the same stream setup.
 //
@@ -45,6 +45,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "AVEEncoder.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 #pragma clang diagnostic push
@@ -312,7 +313,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
 
 bool ave_wants_key(const Encoder *e, CMTime pts, CFDictionaryRef options, uint32_t since)
 {
-    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames)
+    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames || ave_backoff_holds(&e->pBackoff))
         return true;
     if (options) {
         CFTypeRef force = CFDictionaryGetValue(options, kVTEncodeFrameOptionKey_ForceKeyFrame);
@@ -433,15 +434,17 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
                                     : "P",
                          stat->error_status, stat->ucode_error_status, stat->total_bit_count,
                          key        ? ""
-                         : bPicture ? "; this session drops it and codes no more B pictures"
-                                    : "; this session encodes intra only");
+                         : bPicture ? "; coded again as an I picture, B pictures again from the next group"
+                                    : "; coded again as an IDR, P pictures again from the next picture");
         e->errors++;
         if (!bPicture)
             e->keyPending = true;
         if (key)
             return kVTVideoEncoderMalfunctionErr;
-        if (!bPicture)
-            e->info.p_frames = 0;
+        const uint32_t run = bPicture ? 0 : ave_backoff_refused(&e->pBackoff);
+        if (run)
+            os_log_error(gLog, "AVE: NVENC refused %u P pictures in a row; the next %u pictures are IDRs",
+                         e->pBackoff.refusals, run);
         if (plan) {
             plan->refused = true;
             return kVTVideoEncoderMalfunctionErr;
@@ -470,6 +473,10 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     }
     e->haveRef = true;
     e->keyPending = false;
+    if (key)
+        ave_backoff_spend(&e->pBackoff);
+    else if (picture.type == H264ENC_P)
+        ave_backoff_coded(&e->pBackoff);
     if (key) {
         e->idrPicId = (e->idrPicId + 1) & 0xffff;
         e->sinceKey = 0;
@@ -883,7 +890,18 @@ __attribute__((visibility("default"))) void H264H7EncoderRegister(void);
 void H264H7EncoderRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
-    if (!nvenc_service_present())
+    // The registry is filled once per process: one filled before TegraNVENC publishes waits for it.
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
+    const bool published = nvenc_service_wait();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t waitedMs = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000;
+    if (waitedMs)
+        os_log(gLog, "AVE: %{public}s waited %llu ms for TegraNVENC: %{public}s", getprogname(), waitedMs,
+               published ? "published" : "absent");
+#endif
+    if (!published)
         return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
     OSStatus status = registerEncoder(kCMVideoCodecType_H264, CFSTR(AVE_ENCODER_ID), CFSTR("Apple H.264 (HW)"));
     if (status)

@@ -458,10 +458,16 @@ static inline void tegra_nvjpg_setup_image(const TegraNVJPGImage *img, uint32_t 
 }
 
 // Targets NVJPG writes (output_pixel_format, output_chroma_mode, memory_mode): semi-planar YUV (a luma plane and an
-// interleaved CbCr plane) at 4:2:0, 4:2:2 or 4:4:4 whatever the file's sampling, planar YUV 4:2:0 (three planes),
-// packed 4:2:2 (YUY2: Y0 Cb Y1 Cr, CoreVideo's 'yuvf' order), and 32-bit RGB in its byte orders (planar memory mode,
-// as oss-nvjpg drives RGB surfaces), each optionally downscaled by 2, 4 or 8 (DCT scaling, power2_downscale). Pitch linear only (the T210's NVJPG has no tiled output, averne's FFmpeg note). Strides are
-// 64-byte multiples and plane addresses 256-byte multiples (the methods take address >> 8).
+// interleaved CbCr plane) at 4:2:0 whatever the file's sampling, planar YUV 4:2:0 (three planes), packed 4:2:2 (YUY2:
+// Y0 Cb Y1 Cr, CoreVideo's 'yuvf' order), and 32-bit RGB in its byte orders (planar memory mode, as oss-nvjpg drives
+// RGB surfaces), each optionally downscaled by 2, 4 or 8 (DCT scaling, power2_downscale). Pitch linear only (the
+// T210's NVJPG has no tiled output, averne's FFmpeg note). Strides are 64-byte multiples and plane addresses 256-byte
+// multiples (the methods take address >> 8).
+//
+// Semi-planar at output chroma 4:2:2 or 4:4:4 ('422f', '444f') is never set up: no NVJPG job with memory_mode 0 and
+// output_chroma_mode 2 or 4 ever completed on this unit (25 of 25 hung until cancelled, boots of 10-13 Nov, at 1/1
+// and 1/2, whole and partial MCU grids), and neither reference driver submits that pair (averne's FFmpeg decodes
+// every sampling to semi-planar 4:2:0; oss-nvjpg writes 4:2:2 and 4:4:4 YUV planar only).
 enum {
     TEGRA_NVJPG_OUT_NV12 = 0,  // '420f': Y plane, CbCr plane (Cb first)
     TEGRA_NVJPG_OUT_I420 = 1,  // 'y420': Y, Cb, Cr planes
@@ -469,8 +475,8 @@ enum {
     TEGRA_NVJPG_OUT_RGBA = 3,  // bytes R, G, B, A ('RGBA')
     TEGRA_NVJPG_OUT_ARGB = 4,  // bytes A, R, G, B ('ARGB')
     TEGRA_NVJPG_OUT_GREY = 5,  // Y plane only ('L008'), grey files only
-    TEGRA_NVJPG_OUT_NV16 = 6,  // '422f': Y plane, CbCr plane at half width, full height
-    TEGRA_NVJPG_OUT_NV24 = 7,  // '444f': Y plane, CbCr plane at full width and height
+    TEGRA_NVJPG_OUT_NV16 = 6,  // '422f': Y plane, CbCr plane at half width, full height (never set up)
+    TEGRA_NVJPG_OUT_NV24 = 7,  // '444f': Y plane, CbCr plane at full width and height (never set up)
     TEGRA_NVJPG_OUT_YUY2 = 8,  // 'yuvf': one plane, Y0 Cb Y1 Cr
     TEGRA_NVJPG_OUT_COUNT = 9,
 };
@@ -544,6 +550,8 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         return "output format";
     if (t->scale > 3)
         return "scale";
+    if (t->format == TEGRA_NVJPG_OUT_NV16 || t->format == TEGRA_NVJPG_OUT_NV24)
+        return "semi-planar 4:2:2 or 4:4:4 output ('422f', '444f') never completed on this unit";
     if (t->format == TEGRA_NVJPG_OUT_GREY && img->components != 1)
         return "grey output from a colour file";
     if (img->components == 1 && tegra_nvjpg_is_yuv(t->format))
@@ -566,14 +574,6 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         e->rows[0] = h, e->rowBytes[0] = w;
         e->rows[1] = e->rows[2] = ch;
         e->rowBytes[1] = e->rowBytes[2] = cw;
-        break;
-    case TEGRA_NVJPG_OUT_NV16:
-        e->rows[0] = e->rows[1] = h;
-        e->rowBytes[0] = w, e->rowBytes[1] = 2 * cw;
-        break;
-    case TEGRA_NVJPG_OUT_NV24:
-        e->rows[0] = e->rows[1] = h;
-        e->rowBytes[0] = w, e->rowBytes[1] = 2 * w;
         break;
     case TEGRA_NVJPG_OUT_YUY2:
         e->rows[0] = h, e->rowBytes[0] = 4 * cw;
@@ -607,16 +607,10 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         s->output_chroma_mode = TEGRA_NVJPG_CHROMA_420;
         s->memory_mode = t->format == TEGRA_NVJPG_OUT_NV12 ? TEGRA_NVJPG_MEMORY_NV12 : TEGRA_NVJPG_MEMORY_PLANAR;
         break;
-    case TEGRA_NVJPG_OUT_NV16:
     case TEGRA_NVJPG_OUT_YUY2:
         s->output_pixel_format = TEGRA_NVJPG_PIXEL_YUV;
         s->output_chroma_mode = TEGRA_NVJPG_CHROMA_422H;
-        s->memory_mode = t->format == TEGRA_NVJPG_OUT_NV16 ? TEGRA_NVJPG_MEMORY_NV12 : TEGRA_NVJPG_MEMORY_YUY2;
-        break;
-    case TEGRA_NVJPG_OUT_NV24:
-        s->output_pixel_format = TEGRA_NVJPG_PIXEL_YUV;
-        s->output_chroma_mode = TEGRA_NVJPG_CHROMA_444;
-        s->memory_mode = TEGRA_NVJPG_MEMORY_NV12;
+        s->memory_mode = TEGRA_NVJPG_MEMORY_YUY2;
         break;
     case TEGRA_NVJPG_OUT_GREY:
         s->output_pixel_format = TEGRA_NVJPG_PIXEL_YUV;

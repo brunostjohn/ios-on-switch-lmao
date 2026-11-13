@@ -214,3 +214,15 @@ host_test(
     ],
     deps = ["//drivers/TegraGM20B/test:event_kernel"],
 )
+
+# A wedged engine goes back to the idle gate, which powers it on at a later decode (TegraNVDEC.cpp builds in no host
+# test; switch_nvdec_submit_test drives the queue through it).
+host_test(
+    name = "tegra_nvdec_recover_source_test",
+    srcs = ["tegra_nvdec_recover_source_test.cpp"],
+    data = [
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraNVDEC:TegraNVDEC.cpp",
+        "//drivers/TegraNVDEC:TegraNVDECUserClient.cpp",
+    ],
+)

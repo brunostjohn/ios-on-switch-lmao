@@ -159,6 +159,33 @@ static inline uint32_t tegra_nvjpg_sub_of(const TegraNVJPGImage *img)
     }
 }
 
+// The TEGRA_NVJPG_OUT_* a destination pixel format asks for and its plane count, or TEGRA_NVJPG_OUT_COUNT.
+static inline uint32_t tegra_nvjpg_format_of(uint32_t fourcc, bool grey, uint32_t *planes)
+{
+    *planes = 1;
+    switch (fourcc) {
+    case TEGRA_NVJPG_FOURCC('4', '2', '0', 'f'):
+        *planes = 2;
+        return grey ? TEGRA_NVJPG_OUT_GREY : TEGRA_NVJPG_OUT_NV12;
+    case TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'):
+        return TEGRA_NVJPG_OUT_BGRA;
+    case TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A'):
+        return TEGRA_NVJPG_OUT_RGBA;
+    case 0x20:  // kCVPixelFormatType_32ARGB
+        return TEGRA_NVJPG_OUT_ARGB;
+    case TEGRA_NVJPG_FOURCC('4', '2', '2', 'f'):
+        *planes = 2;
+        return TEGRA_NVJPG_OUT_NV16;
+    case TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'):
+        *planes = 2;
+        return TEGRA_NVJPG_OUT_NV24;
+    case TEGRA_NVJPG_FOURCC('y', 'u', 'v', 'f'):
+        return TEGRA_NVJPG_OUT_YUY2;
+    default:
+        return TEGRA_NVJPG_OUT_COUNT;
+    }
+}
+
 // The plan for request `r` (its JPEG parsed into `img`) into destination `d`, with what the engine proved. NULL and
 // *kind OK, or the reason and *kind UNSUPPORTED (a file or shape NVJPG, or this unit, does not do: the caller decodes
 // on the CPU) or BAD (the request contradicts itself or the surfaces). `sink`: bytes the output window can map past the
@@ -189,36 +216,12 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     if (!(a->scales >> scale & 1))
         return "scale not proven on this unit";
     const bool grey = img->components == 1;
-    uint32_t format = 0;
     uint32_t planes = 0;
-    switch (d->fourcc) {
-    case TEGRA_NVJPG_FOURCC('4', '2', '0', 'f'):
-        format = grey ? TEGRA_NVJPG_OUT_GREY : TEGRA_NVJPG_OUT_NV12;
-        planes = 2;
-        break;
-    case TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'):
-        format = TEGRA_NVJPG_OUT_BGRA, planes = 1;
-        break;
-    case TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A'):
-        format = TEGRA_NVJPG_OUT_RGBA, planes = 1;
-        break;
-    case 0x20:
-        format = TEGRA_NVJPG_OUT_ARGB, planes = 1;
-        break;  // kCVPixelFormatType_32ARGB
-    case TEGRA_NVJPG_FOURCC('4', '2', '2', 'f'):
-        format = TEGRA_NVJPG_OUT_NV16, planes = 2;
-        break;
-    case TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'):
-        format = TEGRA_NVJPG_OUT_NV24, planes = 2;
-        break;
-    case TEGRA_NVJPG_FOURCC('y', 'u', 'v', 'f'):
-        format = TEGRA_NVJPG_OUT_YUY2, planes = 1;
-        break;
-    default:
-        return "destination pixel format (NVJPG writes 420f, 422f, 444f, yuvf, BGRA, RGBA, ARGB)";
-    }
+    const uint32_t format = tegra_nvjpg_format_of(d->fourcc, grey, &planes);
+    if (format == TEGRA_NVJPG_OUT_COUNT)
+        return "destination pixel format (NVJPG writes 420f, yuvf, BGRA, RGBA, ARGB)";
     if (!(a->formats >> format & 1))
-        return "output format not proven on this unit";
+        return "output format NVJPG does not write on this unit";
     if (grey && format != TEGRA_NVJPG_OUT_GREY && !a->greyRgb)
         return "grey to RGB not proven on this unit";
     if (grey && format != TEGRA_NVJPG_OUT_GREY && tegra_nvjpg_is_yuv(format))
@@ -254,17 +257,12 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     }
     if (format == TEGRA_NVJPG_OUT_NV12 && ((r->x_offset | r->y_offset) & 1))
         return "odd offset into 4:2:0";
-    if ((format == TEGRA_NVJPG_OUT_NV16 || format == TEGRA_NVJPG_OUT_YUY2) && (r->x_offset & 1))
+    if (format == TEGRA_NVJPG_OUT_YUY2 && (r->x_offset & 1))
         return "odd offset into 4:2:2";
     p->planes = p->extent.planes;
     p->planeStart[0] = d->planeOffset[0] + (uint64_t)r->y_offset * t->pitch[0] + (uint64_t)r->x_offset * bpp;
-    if (format == TEGRA_NVJPG_OUT_NV12) {
+    if (format == TEGRA_NVJPG_OUT_NV12)
         p->planeStart[1] = d->planeOffset[1] + (uint64_t)(r->y_offset / 2) * t->pitch[1] + r->x_offset;
-    } else if (format == TEGRA_NVJPG_OUT_NV16) {
-        p->planeStart[1] = d->planeOffset[1] + (uint64_t)r->y_offset * t->pitch[1] + r->x_offset;
-    } else if (format == TEGRA_NVJPG_OUT_NV24) {
-        p->planeStart[1] = d->planeOffset[1] + (uint64_t)r->y_offset * t->pitch[1] + 2ULL * r->x_offset;
-    }
     for (uint32_t i = 0; i < p->planes; i++) {
         if (p->planeStart[i] & 0xff)
             return "a plane does not start on 256 bytes (NVJPG takes address >> 8)";
@@ -290,9 +288,7 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
         uint64_t bytes = (uint64_t)r->out_width * bpp;
         if (format == TEGRA_NVJPG_OUT_YUY2) {
             bytes = 2 * pairs;
-        } else if (i && format == TEGRA_NVJPG_OUT_NV24) {
-            bytes = 2ULL * r->out_width;
-        } else if (i && (format == TEGRA_NVJPG_OUT_NV12 || format == TEGRA_NVJPG_OUT_NV16)) {
+        } else if (i && format == TEGRA_NVJPG_OUT_NV12) {
             bytes = pairs;
         }
         if (p->planeStart[i] + (rows - 1) * t->pitch[i] + bytes > d->length) {

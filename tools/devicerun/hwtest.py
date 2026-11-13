@@ -31,7 +31,7 @@ CLIPS = (
     'h264_paff_256p',
     'h264_mbaff_1080p',
 )
-STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
+STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'jpeg_444_small', 'png', 'heic', 'heic_grid')
 
 # The app's test IDs in its run order; True marks the interactive ones (a person plugs, presses or picks something).
 TESTS: dict[str, bool] = {
@@ -219,6 +219,7 @@ TESTS: dict[str, bool] = {
     'encode.h264_bframes': False,
     'encode.nvenc_input_layouts': False,
     'encode.h264_from_nvdec': False,
+    'encode.h264_from_gpu': False,
     **{f'image.{still}': False for still in STILLS},
     'image.jpeg_after_idle': False,
     'image.heic_encode': False,

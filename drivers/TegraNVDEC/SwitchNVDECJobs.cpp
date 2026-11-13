@@ -73,11 +73,13 @@ struct Retirement;
 using Stages = SwitchHost1xStages<Retirement, SwitchNVDECQueue::kSlots>;
 
 // The cancelled jobs have all ended: the queue goes on from the syncpoint the engine's restart left, or refuses work
-// when the engine did not come back.
+// until the gate powers the engine that did not come back on again.
 void renumberLocked()
 {
     const bool resumed = gRecoveredReady && gQueue.rebase(tegra_host1x_syncpt_read(gSyncpt));
     __atomic_store_n(&gFailed, !resumed, __ATOMIC_RELEASE);
+    if (!resumed)
+        switch_nvdec_power_lost();
     __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
     gRecovered = false;
     __atomic_store_n(&gCancelling, false, __ATOMIC_RELEASE);

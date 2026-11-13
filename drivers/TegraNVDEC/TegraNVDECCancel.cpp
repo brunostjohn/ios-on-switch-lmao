@@ -12,7 +12,7 @@
 //   - once the cancelled jobs have ended, the queue renumbers from the syncpoint and the next job runs.
 // All under the power lock, as at power-on: NVJPG's power path writes MC_HOTRESET_CTRL_1 too. An engine sleep has
 // already powered off is not touched; its next power-on boots it. An engine the reset does not bring back is parked and
-// NVDEC refuses work. One line per cancellation.
+// the idle gate powers it on at a later decode. One line per cancellation.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/thread_call.h>
@@ -57,7 +57,7 @@ void cancel(thread_call_param_t, thread_call_param_t)
           "%u, memory client %s, engine reset: %s%s\n",
           gStall.fence, gStall.elapsedUs / 1000, gStall.error, syncpt, reached, engine, host, through,
           drained ? "drained" : "did not drain in 10 ms",
-          back ? "running again" : "it did not come back, NVDEC refuses work: ", why);
+          back ? "running again" : "it did not come back, the next decode powers it on again: ", why);
     switch_nvdec_jobs_recovered(back);
 }
 }  // namespace

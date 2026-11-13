@@ -51,6 +51,7 @@
 // interrupt (TegraHost1x), and a lost one panics there.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOService.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <string.h>
@@ -117,7 +118,7 @@ char gLine[256];
 constexpr uint32_t kSetupSlots = 16, kSetupSlotBytes = 1024;
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt;
-bool gUp, gWedged, gPublished;
+bool gUp, gWedged, gPublished, gAttached = true;
 constexpr uint32_t kCodecs = (1u << TEGRA_NVDEC_CODEC_H264) | (1u << TEGRA_NVDEC_CODEC_VP9) |
                              (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10 |
                              (1u << TEGRA_NVDEC_CODEC_MPEG4) | (1u << TEGRA_NVDEC_CODEC_MPEG12);
@@ -279,8 +280,9 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool drain);
 
-// Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot. The engine is in
-// reset before its swgroups go back to bypass, where an IOVA would reach the physical address of the same number.
+// Back to reset with the clock off: after a failed bring-up for the boot, after a failed reset or power-on until the gate
+// powers it on again. The engine is in reset before its swgroups go back to bypass, where an IOVA would reach the
+// physical address of the same number.
 void park()
 {
     switch_car_reset_assert(kClock);
@@ -310,6 +312,8 @@ void settle(int how)
     gSettled = how;
     IOLockWakeup(lock, &gSettled, false);
     IOLockUnlock(lock);
+    if (how != 1)
+        IOService::publishResource(TEGRA_NVDEC_ABSENT_RESOURCE);
 }
 
 void bringUpStages()
@@ -373,9 +377,8 @@ void bringUpStages()
     }
     __atomic_store_n(&gUp, true, __ATOMIC_RELEASE);
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
-    gPublished = true;
     tegra_host1x_set_strict();
-    tegra_nvdec_publish();
+    gPublished = !tegra_nvdec_publish();
 }
 
 void bringUp(void *, wait_result_t)  // NOLINT(misc-const-correctness): thread_continue_t's signature
@@ -405,7 +408,12 @@ extern "C" int tegra_nvdec_await(uint32_t timeoutMs)
 
 extern "C" bool tegra_nvdec_ready(void)
 {
-    return __atomic_load_n(&gUp, __ATOMIC_ACQUIRE) && !__atomic_load_n(&gWedged, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&gUp, __ATOMIC_ACQUIRE);
+}
+
+extern "C" bool tegra_nvdec_wedged(void)
+{
+    return __atomic_load_n(&gWedged, __ATOMIC_ACQUIRE);
 }
 
 [[noreturn]] void switch_nvdec_job_fault(uint32_t fence, int error, uint64_t elapsedUs)
@@ -455,19 +463,24 @@ const char *switch_nvdec_engine_wedge()
 
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
 // is N1 and N2 again on the kept image and address space: partition, clock, reset and the MBIST workaround, the falcon
-// reloaded and proven with an IMMEDIATE and an OP_DONE increment, the job queue rebased on the syncpoint. A failure
-// there is one line and NVDEC refuses work from then on. Off parks the queue and powers the partition down. NVJPG's
-// gate shares the lock (tegra_nvdec_power_lock), so neither engine's power-up borrows a clock the other is switching.
+// reloaded and proven with an IMMEDIATE and an OP_DONE increment, the job queue rebased on the syncpoint. It also
+// brings back an engine a cancellation's reset or a resume lost (the gate retries it at a later decode; a resume that
+// could not attach the address space attaches it here). A failure there is one line and parks the engine. Off parks
+// the queue and powers the partition down. NVJPG's gate shares the lock (tegra_nvdec_power_lock), so neither engine's
+// power-up borrows a clock the other is switching.
 namespace {
 int gateOn(void *)
 {
     bool wasOn = false;
     gLine[0] = 0;
-    const bool answered = powerUp(&wasOn) && switch_nvdec_engine_boot();
+    if (!gAttached)
+        gAttached = !tegra_nvdec_memory_attach(gLine, sizeof(gLine));
+    const bool answered = gAttached && powerUp(&wasOn) && switch_nvdec_engine_boot();
+    __atomic_store_n(&gWedged, !answered, __ATOMIC_RELEASE);
     if (!answered) {
-        __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
         park();
-        IOLog("TegraNVDEC: power-on FAIL %s; NVDEC refuses work\n", gLine[0] ? gLine : "N1");
+        IOLog("TegraNVDEC: power-on FAIL %s; decodes fail until a later decode powers NVDEC on\n",
+              gLine[0] ? gLine : "N1");
     }
     switch_nvdec_jobs_resume(answered, tegra_host1x_syncpt_read(gSyncpt));
     return answered ? 0 : -19;
@@ -489,15 +502,17 @@ void engineSuspend()
     gGate.suspend();
     switch_nvdec_jobs_settle();
     tegra_nvdec_memory_detach();
+    gAttached = false;
 }
 
 void engineResume()
 {
     gLine[0] = 0;
     const bool attached = !tegra_nvdec_memory_attach(gLine, sizeof(gLine));
+    gAttached = attached;
     if (!attached) {
         __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
-        IOLog("TegraNVDEC: resume FAIL %s; NVDEC refuses work\n", gLine);
+        IOLog("TegraNVDEC: resume FAIL %s; the next decode tries again\n", gLine);
         switch_nvdec_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
     gGate.resume(attached);
@@ -517,6 +532,11 @@ void switch_nvdec_power_done()
 void switch_nvdec_power_idle()
 {
     gGate.idle();
+}
+
+void switch_nvdec_power_lost()
+{
+    gGate.lost();
 }
 
 extern "C" IOLock *tegra_nvdec_power_lock(void)

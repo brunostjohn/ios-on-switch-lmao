@@ -314,28 +314,44 @@ static void targets(void)
     t = (TegraNVJPGTarget){TEGRA_NVJPG_OUT_I420, 0, {128, 64, 128}, 0};
     CHECK(tegra_nvjpg_setup_output(&img, &t, 1, &s, &e) != NULL, "I420 with different chroma strides accepted");
     // CMPhoto's interchange-format destinations ('422f', '444f', 'yuvf': 24B119 and 21H461 alike since the client's
-    // format filter went): NVJPG writes them itself, semi-planar or packed, at 4:2:2 or 4:4:4.
+    // format filter went): 'yuvf' packed at 4:2:2; '422f' and '444f' are refused (semi-planar above 4:2:0 hung NVJPG
+    // on every job that asked for it).
     {
         TegraNVJPGImage four22 = img, four44 = img;
         four22.chroma = TEGRA_NVJPG_CHROMA_422H, four22.mcuW = 16, four22.mcuH = 8, four22.mcusY = 10;
         four44.chroma = TEGRA_NVJPG_CHROMA_444, four44.mcuW = four44.mcuH = 8, four44.mcusX = 13, four44.mcusY = 10;
         TegraNVJPGTarget n16 = {TEGRA_NVJPG_OUT_NV16, 0, {128, 128, 0}, 0};
-        CHECK(!tegra_nvjpg_setup_output(&four22, &n16, 1, &s, &e), "422 to 422f refused");
-        CHECK(s.output_chroma_mode == TEGRA_NVJPG_CHROMA_422H && s.memory_mode == TEGRA_NVJPG_MEMORY_NV12 &&
-                  e.planes == 2 && e.rows[0] == 80 && e.rows[1] == 80 && e.rowBytes[1] == 128,
-              "422f setup: chroma rows at full height");
+        CHECK(tegra_nvjpg_setup_output(&four22, &n16, 1, &s, &e) != NULL, "422 to 422f set up");
         TegraNVJPGTarget yuy2 = {TEGRA_NVJPG_OUT_YUY2, 0, {256, 0, 0}, 0};
         CHECK(!tegra_nvjpg_setup_output(&four22, &yuy2, 1, &s, &e), "422 to yuvf refused");
         CHECK(s.output_chroma_mode == TEGRA_NVJPG_CHROMA_422H && s.memory_mode == TEGRA_NVJPG_MEMORY_YUY2 &&
                   e.planes == 1 && e.rowBytes[0] == 256,
               "yuvf setup: one packed plane, two bytes a sample");
         TegraNVJPGTarget n24 = {TEGRA_NVJPG_OUT_NV24, 0, {128, 256, 0}, 0};
-        CHECK(!tegra_nvjpg_setup_output(&four44, &n24, 1, &s, &e), "444 to 444f refused");
-        CHECK(s.output_chroma_mode == TEGRA_NVJPG_CHROMA_444 && s.memory_mode == TEGRA_NVJPG_MEMORY_NV12 &&
-                  e.planes == 2 && e.rows[1] == 80 && e.rowBytes[1] == 256,
-              "444f setup: chroma rows twice the luma's bytes");
-        n24.pitch[1] = 128;
-        CHECK(tegra_nvjpg_setup_output(&four44, &n24, 1, &s, &e) != NULL, "444f chroma stride below its row accepted");
+        CHECK(tegra_nvjpg_setup_output(&four44, &n24, 1, &s, &e) != NULL, "444 to 444f set up");
+    }
+    // No target, sampling or scale sets up semi-planar output at a chroma other than 4:2:0: that pair never completed
+    // on this unit (SpringBoard's 205x83 4:4:4 file into '444f' at 1/1 hung it five times a boot).
+    {
+        const uint32_t samplings[] = {TEGRA_NVJPG_CHROMA_420, TEGRA_NVJPG_CHROMA_422H, TEGRA_NVJPG_CHROMA_444};
+        for (uint32_t i = 0; i < 3; i++) {
+            TegraNVJPGImage file = img;
+            file.width = 205, file.height = 83, file.chroma = samplings[i];
+            file.mcuW = samplings[i] == TEGRA_NVJPG_CHROMA_444 ? 8 : 16;
+            file.mcuH = samplings[i] == TEGRA_NVJPG_CHROMA_420 ? 16 : 8;
+            file.mcusX = (205 + file.mcuW - 1) / file.mcuW, file.mcusY = (83 + file.mcuH - 1) / file.mcuH;
+            for (uint32_t format = 0; format < TEGRA_NVJPG_OUT_COUNT; format++) {
+                for (uint32_t scale = 0; scale < 4; scale++) {
+                    TegraNVJPGTarget any = {format, scale, {1024, 1024, 1024}, 0xff};
+                    memset(&s, 0, sizeof(s));
+                    if (tegra_nvjpg_setup_output(&file, &any, 1, &s, &e))
+                        continue;
+                    CHECK(s.memory_mode != TEGRA_NVJPG_MEMORY_NV12 || s.output_chroma_mode == TEGRA_NVJPG_CHROMA_420,
+                          "sampling %u format %u 1/%u: semi-planar at output chroma %d", samplings[i], format,
+                          1u << scale, s.output_chroma_mode);
+                }
+            }
+        }
     }
     // The JFIF matrix in 16.16 against the float formula over the whole cube (corners and a lattice).
     int worst = 0;

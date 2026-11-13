@@ -144,7 +144,7 @@ int main(void)
     expect("ARGB", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
     TegraNVJPGAbility noArgb = kAll;
     noArgb.formats &= ~(1u << TEGRA_NVJPG_OUT_ARGB);
-    expect("ARGB unproven", &r, &img, &d, &noArgb, TEGRA_NVJPG_PLAN_UNSUPPORTED, "format not proven", &p);
+    expect("ARGB unproven", &r, &img, &d, &noArgb, TEGRA_NVJPG_PLAN_UNSUPPORTED, "does not write", &p);
 
     img = image(1600, 1200, TEGRA_NVJPG_CHROMA_422H);
     r = request(1600, 1200, TEGRA_NVJPG_SUB_422, 0);
@@ -167,23 +167,30 @@ int main(void)
     CHECK(p.target.format == TEGRA_NVJPG_OUT_YUY2 && p.planes == 1 && p.extent.rowBytes[0] == 3200 &&
               p.extent.rows[0] == 1200 && p.target.pitch[0] == 3200,
           "422 to yuvf: plan");
+    // '422f' and '444f' are refused before any engine work, whatever the ability says: semi-planar output above 4:2:0
+    // never completed on this unit. The jobs that hung (boots 19 and 21) are among them: SpringBoard's 205x83 4:4:4
+    // file at 1/1 and image.jpeg_422/444's 1/2 thumbnails.
     d = surface(TEGRA_NVJPG_FOURCC('4', '2', '2', 'f'), 1600, 1200);
-    expect("422 to 422f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
-    CHECK(p.target.format == TEGRA_NVJPG_OUT_NV16 && p.planes == 2 && p.extent.rows[1] == 1200 &&
-              p.extent.rowBytes[1] == 1600 && p.planeStart[1] == d.planeOffset[1],
-          "422 to 422f: plan");
-    img = image(1600, 1200, TEGRA_NVJPG_CHROMA_444);
-    r = request(1600, 1200, TEGRA_NVJPG_SUB_444, 0);
-    d = surface(TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'), 1600, 1200);
-    expect("444 to 444f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
-    CHECK(p.target.format == TEGRA_NVJPG_OUT_NV24 && p.planes == 2 && p.extent.rows[1] == 1200 &&
-              p.extent.rowBytes[1] == 3200 && p.target.pitch[1] == 3200,
-          "444 to 444f: plan");
-    r.x_offset = 256, r.y_offset = 2;
-    d = surface(TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'), 2048, 1600);
-    expect("444f offset", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
-    CHECK(p.planeStart[0] == 2 * 2048 + 256 && p.planeStart[1] == d.planeOffset[1] + 2 * 4096 + 512,
-          "444f offset: starts");
+    expect("422 to 422f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "never completed", &p);
+    img = image(2048, 1536, TEGRA_NVJPG_CHROMA_422H);
+    r = request(2048, 1536, TEGRA_NVJPG_SUB_422, 1);
+    d = surface(TEGRA_NVJPG_FOURCC('4', '2', '2', 'f'), 1024, 768);
+    expect("422 thumbnail to 422f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "never completed", &p);
+    img = image(2048, 1536, TEGRA_NVJPG_CHROMA_444);
+    r = request(2048, 1536, TEGRA_NVJPG_SUB_444, 1);
+    d = surface(TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'), 1024, 768);
+    expect("444 thumbnail to 444f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "never completed", &p);
+    img = image(205, 83, TEGRA_NVJPG_CHROMA_444);
+    r = request(205, 83, TEGRA_NVJPG_SUB_444, 0);
+    d = surface(TEGRA_NVJPG_FOURCC('4', '4', '4', 'f'), 205, 83);
+    expect("SpringBoard's 205x83 444 to 444f", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "never completed",
+           &p);
+    TegraNVJPGAbility shipped = kAll;
+    shipped.formats &= ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24);
+    expect("SpringBoard's 205x83 444 to 444f, shipped formats", &r, &img, &d, &shipped, TEGRA_NVJPG_PLAN_UNSUPPORTED,
+           "does not write", &p);
+    d = surface(TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'), 205, 83);
+    expect("SpringBoard's 205x83 444 to BGRA", &r, &img, &d, &shipped, TEGRA_NVJPG_PLAN_OK, NULL, &p);
     img = image(1600, 1200, TEGRA_NVJPG_CHROMA_422H);
     r = request(1600, 1200, TEGRA_NVJPG_SUB_422, 0);
     r.x_offset = 1;
