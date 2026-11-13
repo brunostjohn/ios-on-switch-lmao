@@ -499,6 +499,36 @@ TEST_F(DeviceLayers, ALayeredPassTakesNoOneLayerBackingOfItsShape)
     EXPECT_EQ(address(again), address(one));
 }
 
+// The reverse, for the color and the hidden zeta alike: a one-layer pass of a shape a layered pass was backed for takes
+// memory of its own, and the passes after them each their own backing again. At 256 x 256 four layers outgrow the
+// one-layer size class; at 32 x 32 they fit in it.
+TEST_F(DeviceLayers, AOneLayerPassTakesNoLayeredBackingOfItsShape)
+{
+    for (uint32_t size : {32u, 256u}) {
+        SCOPED_TRACE(size);
+        raw::Texture color;
+        ASSERT_TRUE(dev.createMemoryless(size, size, kRGBA8, color, 1, 6));
+        const auto hidden = [&](uint32_t layers) {
+            raw::PassDesc p = onto(color, layers);
+            p.hiddenZeta = true;
+            return last(pass(p, none));
+        };
+        const auto four = hidden(4), one = hidden(1), fourAgain = hidden(4), oneAgain = hidden(1);
+        ASSERT_FALSE(four.empty() || one.empty() || fourAgain.empty() || oneAgain.empty());
+        EXPECT_EQ(four.at(NVB197_SET_ZT_SIZE_C), 4u);
+        const auto ownBackings = [&](uint32_t methodA, uint32_t methodB, const char *what) {
+            const auto address = [&](const std::map<uint32_t, uint32_t> &at) {
+                return uint64_t(at.at(methodA)) << 32 | at.at(methodB);
+            };
+            EXPECT_NE(address(one), address(four)) << what << ": a one-layer pass's backing is no layered one";
+            EXPECT_EQ(address(fourAgain), address(four)) << what;
+            EXPECT_EQ(address(oneAgain), address(one)) << what;
+        };
+        ownBackings(NVB197_SET_COLOR_TARGET_A(0), NVB197_SET_COLOR_TARGET_B(0), "color");
+        ownBackings(NVB197_SET_ZT_A, NVB197_SET_ZT_B, "hidden zeta");
+    }
+}
+
 // viewTic answers from a cache with no lock: a storage view of a multisampled texture spans its sample grid, so it and a
 // sampling view of the same word 0 are two headers, each answered again as itself
 TEST_F(DeviceLayers, AStorageAndASamplingViewOfAMultisampledTextureAreTwoHeaders)
