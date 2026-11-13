@@ -26,13 +26,10 @@ struct idle_core {
     uint64_t wake_at;
     uint64_t lead;
     uint32_t state;
-    struct switch_idle_c7_retry retry;
-    /* For idle_report, from the idle thread: a refusal count to report and its PSCI error, and the refusals in a row a
-     * request the firmware took ended. 0: nothing to report. */
-    uint32_t report_refusals;
-    uint32_t report_taken;
-    int64_t report_rc;
-    bool report_due; /* a report the next idle entry hands to the thread call */
+    /* C7 requests the firmware refused and the last one's PSCI error. Only this core's idle path writes them (the count
+     * last, release); idle_report reads them and keeps its own count of those it has logged (idle_logged). */
+    uint64_t refused;
+    int64_t refused_rc;
 #if DEVELOPMENT || DEBUG
     struct switch_idle_counts counts;
     bool from_c7; /* back from C7 and no idle entry since: the next frame line paid the exit */
@@ -45,45 +42,29 @@ static bool idle_c7;
 static uint64_t idle_frame_at;
 static void (*idle_frames_started)(void);
 static thread_call_t idle_report_call;
+static uint64_t idle_logged[SWITCH_SMP_CORE_COUNT];
 
 static void idle_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
     for (uint32_t cpu = 0; cpu < SWITCH_SMP_CORE_COUNT; cpu++) {
-        struct idle_core *core = &idle_cores[cpu];
-        const uint32_t refusals = os_atomic_xchg(&core->report_refusals, 0, acquire);
-        if (refusals) {
+        const struct idle_core *core = &idle_cores[cpu];
+        const uint64_t refused = os_atomic_load(&core->refused, acquire);
+        if (refused != idle_logged[cpu]) {
             os_log_error(OS_LOG_DEFAULT,
-                         "SwitchIdle: cpu%u: PSCI CPU_SUSPEND refused C7, %u in a row (last returned %lld); C7 is "
-                         "requested again at later idles",
-                         cpu, refusals, os_atomic_load(&core->report_rc, relaxed));
-        }
-        const uint32_t taken = os_atomic_xchg(&core->report_taken, 0, relaxed);
-        if (taken) {
-            os_log_error(OS_LOG_DEFAULT, "SwitchIdle: cpu%u: C7 taken again; refusals in a row before it: %u", cpu,
-                         taken);
+                         "SwitchIdle: cpu%u: PSCI CPU_SUSPEND to C7 returned %lld, so that idle ran without C7 (%llu "
+                         "refused since the last line); the next idle that chooses C7 asks again",
+                         cpu, os_atomic_load(&core->refused_rc, relaxed), refused - idle_logged[cpu]);
+            idle_logged[cpu] = refused;
         }
     }
 }
 
-/* The idle thread, interrupts masked: the lines are logged from a thread call. */
+/* The idle thread, interrupts masked: the line is logged from a thread call. */
 static void idle_refused(struct idle_core *core, int64_t rc)
 {
-    if (switch_idle_c7_refused(&core->retry)) {
-        os_atomic_store(&core->report_rc, rc, relaxed);
-        os_atomic_store(&core->report_refusals, core->retry.refusals, release);
-        thread_call_enter(idle_report_call);
-    }
-}
-
-/* Also on the reset path out of power-down (switch_idle_resumed), before cpu_idle_exit: the thread call is entered from
- * the core's next idle entry instead. */
-static void idle_taken(struct idle_core *core)
-{
-    const uint32_t ended = switch_idle_c7_taken(&core->retry);
-    if (ended) {
-        os_atomic_store(&core->report_taken, ended, relaxed);
-        core->report_due = true;
-    }
+    os_atomic_store(&core->refused_rc, rc, relaxed);
+    os_atomic_store(&core->refused, core->refused + 1, release);
+    thread_call_enter(idle_report_call);
 }
 
 static void idle_exit(struct idle_core *core, uint64_t now)
@@ -104,10 +85,6 @@ void switch_idle_wfi(struct cpu_data *cdp)
         return;
     }
     struct idle_core *core = &idle_cores[cpu];
-    if (__improbable(core->report_due)) {
-        core->report_due = false;
-        thread_call_enter(idle_report_call);
-    }
     const uint64_t now = mach_absolute_time();
     const uint64_t deadline = cdp->rtcPop;
 #if DEVELOPMENT || DEBUG
@@ -117,21 +94,18 @@ void switch_idle_wfi(struct cpu_data *cdp)
     core->state = os_atomic_load(&idle_c7, acquire)
                       ? switch_idle_choose(core->predicted, now, deadline, os_atomic_load(&idle_frame_at, relaxed))
                       : SWITCH_IDLE_WFI;
-    if (core->state == SWITCH_IDLE_C7 && !switch_idle_c7_try(&core->retry)) {
-        core->state = SWITCH_IDLE_WFI;
-    }
     if (core->state == SWITCH_IDLE_C7) {
         core->wake_at = switch_idle_c7_wake_at(deadline, core->lead);
         const int64_t rc =
             idle_platform->power_down(cpu, switch_idle_timer_ticks(now, core->wake_at, idle_platform->wake_ticks_max));
         if (rc != 0) {
             idle_refused(core, rc);
-        } else {
-            idle_taken(core);
-#if DEVELOPMENT || DEBUG
-            core->counts.skipped++;
-#endif
         }
+#if DEVELOPMENT || DEBUG
+        else {
+            core->counts.skipped++;
+        }
+#endif
     } else {
         core->wake_at = deadline;
         __builtin_arm_wfi();
@@ -162,7 +136,6 @@ void switch_idle_resumed(struct cpu_data *cdp)
     core->from_c7 = true;
 #endif
     core->lead = switch_idle_c7_lead(core->lead, exit_latency);
-    idle_taken(core);
     idle_exit(core, now);
 }
 

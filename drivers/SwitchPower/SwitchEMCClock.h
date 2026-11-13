@@ -7,16 +7,18 @@ unsigned SwitchEMC::reconcileRate(uint32_t observed, bool quiesced)
         return row;
     memoryDirty = true;
     if (!programMemory(quiesced ? khz[count - 1] : observed, khz[count - 1], true))
-        replanDisplayMemory(observed, "its plan cannot cover the move to the top rate");
+        uncoveredDisplayMemory(observed, "the move to the top rate");
     unsigned restored = observed;
     const int refused = row != count - 1 ? tegra_bpmp_emc_set(khz[count - 1], &restored) : 0;
     const unsigned now = switch_emc_row(khz, count, restored);
     if (refused || now >= count) {
-        replanDisplayMemory(refused ? observed : restored, "the BPMP did not restore a rate in the table");
+        const uint32_t running = refused ? observed : restored;
+        if (!programMemory(running, running, true))
+            uncoveredDisplayMemory(running, "the BPMP did not restore a rate in the table");
         return row < count ? row : cur;
     }
     if (!programMemory(restored, restored, true))
-        replanDisplayMemory(restored, "its plan does not cover the restored rate");
+        uncoveredDisplayMemory(restored, "the restored rate");
     return now;
 }
 
@@ -54,7 +56,7 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 #endif
     cur = actual;
     if (!programMemory(khz[cur], khz[cur], true))
-        replanDisplayMemory(khz[cur], "its plan does not cover the rate the BPMP set");
+        uncoveredDisplayMemory(khz[cur], "the rate the BPMP set");
     return cur >= index;
 }
 

@@ -15,8 +15,8 @@ namespace
 {
 // Linux's errno values, as TegraDFLL returns them (macOS's EAGAIN is 35)
 constexpr int kEAGAIN = -11, kENOMEM = -12, kEBUSY = -16, kENODEV = -19, kEINVAL = -22;
-constexpr int kNack = -4;  // TEGRA_I2C_ENACK
-constexpr int kLostArbitration = -6;
+constexpr int kNack = -4;             // TEGRA_I2C_ENACK
+constexpr int kLostArbitration = -5;  // TEGRA_I2C_EARB
 
 std::string gWhy;
 
@@ -70,13 +70,25 @@ TEST(TegraDfllPrepare, APmicThatLostTheBusIsTriedAgain)
 {
 	switch_ios::test::ExpectPassesInFreshProcess([] {
 		triedAgain(
-			kEAGAIN, "MAX77812 at I2C5 0x31 does not answer (TegraI2C -6)",
+			kEAGAIN, "MAX77812 at I2C5 0x31 does not answer (TegraI2C -5)",
 			[] {
 				tegra_dfll_fake.pmic_answer = kLostArbitration;
 			},
 			[] {
 				tegra_dfll_fake.pmic_answer = 0;
 			});
+	});
+}
+
+// One transfer per read: a lost arbitration is that read's failure, not a reason to read again (TegraI2C already
+// repeats a transfer that lost arbitration on its own bus).
+TEST(TegraDfllPrepare, ALostArbitrationFailsThatReadAlone)
+{
+	switch_ios::test::ExpectPassesInFreshProcess([] {
+		tegra_dfll_fake_console();
+		tegra_dfll_fake.pmic_answer = kLostArbitration;
+		EXPECT_EQ(prepare(), kEAGAIN);
+		EXPECT_EQ(tegra_dfll_fake.pmic_reads, 1u);
 	});
 }
 
