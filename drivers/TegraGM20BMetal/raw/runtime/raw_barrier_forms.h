@@ -7,6 +7,10 @@
 //    and the NO_WFI invalidates stay. gpu.x1.subchannel_switch_drain held in all 13 cells on boots 8, 14, 15, 19 and 21
 //    (hazard arm differing in every cell, 30,646 switches on boot 21). Nothing compute wrote was read after a switch
 //    there, and no copy fed compute: those changes keep the drain.
+//  - rule barrier.entry_no_drain: a job opens with the planner's invalidates (what it reads: headers, samplers,
+//    constants, shader and texture data) and no flush or wait, and its first encoder with nothing, after the job before
+//    it ended with its fence's RELEASE_WFI on the same channel (raw_event_release.h). Judged by gpu.x1.job_boundary_idle
+//    against entry_none, the first arm there that can see a hazard at a job's entry.
 //  - rule barrier.pass_pixel: between two passes, PIXEL_SHADER_BARRIER and the texture invalidate it orders (0x0f74),
 //    where raw_pass_hazard.h finds every dependency on the passes since the last drain in a cell gpu.x1.pass_pixel_barrier
 //    held in.
@@ -88,7 +92,7 @@ constexpr bool relaxed(EntryForm f)
 
 constexpr EntryForm entryFormFor(EntryForm asked)
 {
-    return asked != EntryForm::Rule ? asked : EntryForm::Today;
+    return asked != EntryForm::Rule ? asked : EntryForm::Planner;
 }
 
 constexpr bool keepsTiledFlush(SwitchForm f)

@@ -7,7 +7,8 @@
 namespace {
 
 constexpr uint32_t kBgra8 = 80;
-constexpr uint32_t kPixelShaderBarrier = 0x0de0, kWaitForIdle = 0x0110;
+constexpr uint32_t kPixelShaderBarrier = 0x0de0, kWaitForIdle = 0x0110, kShaderCaches = 0x021c,
+                   kTextureDataNoWfi = 0x1288;
 
 // The 3D subchannel's methods of a job's words (IMMD, INC, NON_INC and ONE_INC), in order
 std::vector<uint32_t> methods(const std::vector<uint32_t> &words)
@@ -88,6 +89,20 @@ TEST_F(DevicePassBarrier, ASmallTargetSampledByTheNextPassTakesThePixelBarrier)
     EXPECT_EQ(drained.first, 0u);
     EXPECT_EQ(relaxed.first, 1u);
     EXPECT_EQ(relaxed.second + 1, drained.second) << "the drain between the passes is gone";
+}
+
+// Rule barrier.entry_no_drain: a job opens with the planner's invalidates, its first pass with nothing, no drain at all
+TEST_F(DevicePassBarrier, AJobOpensWithThePlannersInvalidatesAndNoDrain)
+{
+    raw::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    cb->render(cleared(atlas))->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const std::vector<uint32_t> m = methods(kernel_model::model.jobs.back().words);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kWaitForIdle), 0);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kShaderCaches), 0) << "the waiting shader-cache flush";
+    EXPECT_GE(std::count(m.begin(), m.end(), kTextureDataNoWfi), 1);
 }
 
 // A blit encoder that sends nothing changes no engine: the pass after it is ordered after the pass before it as if it were

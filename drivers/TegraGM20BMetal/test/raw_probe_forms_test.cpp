@@ -182,7 +182,8 @@ TEST(BarrierForms, TheSwitchRuleRelaxesOnlyTheProbedEngineChanges)
     }
     EXPECT_EQ(raw::switchFormFor(SwitchForm::Today, BarrierEngine::Copy, BarrierEngine::ThreeD), SwitchForm::Today)
         << "a probe's forced drain";
-    EXPECT_EQ(raw::entryFormFor(EntryForm::Rule), EntryForm::Today);
+    EXPECT_EQ(raw::entryFormFor(EntryForm::Rule), EntryForm::Planner);
+    EXPECT_EQ(raw::entryFormFor(EntryForm::Today), EntryForm::Today) << "a probe's forced drain";
     EXPECT_EQ(raw::entryFormFor(EntryForm::None), EntryForm::None);
     EXPECT_TRUE(raw::keepsTiledFlush(SwitchForm::Rule));
     EXPECT_TRUE(raw::keepsTiledFlush(SwitchForm::NoWfi));

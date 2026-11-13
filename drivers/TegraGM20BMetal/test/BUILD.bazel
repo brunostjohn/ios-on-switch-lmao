@@ -4632,6 +4632,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_opening.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_event_release.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_predication.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",

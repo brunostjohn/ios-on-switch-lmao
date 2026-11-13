@@ -4,7 +4,8 @@
 // switch_gm20b_pass_barrier, a blit or compute encoder with WAIT_FOR_IDLE and its cache invalidates) or a change of engine,
 // which waits for the engine left behind (raw_barrier_forms.h): a wait is behind its update on the GPU with nothing of its
 // own. A pass opens with the pixel barrier alone only where its recording names everything it reads, and one that waits
-// for a fence is not one (RawMetalPassUses.h). m2v work between them is ordered by the kernel's Order (RawMetalSubmit.mm).
+// for a fence is not one (RawMetalPassUses.h). A command buffer's first encoder opens with nothing: the one before it on
+// the channel ended with its fence's RELEASE_WFI (raw_event_release.h), and its entry invalidates what it reads. m2v work between them is ordered by the kernel's Order (RawMetalSubmit.mm).
 // Barriers made from a pass's dependencies instead of at every encoder must take each update -> wait pair as one.
 #import "RawMetalInternal.h"
 

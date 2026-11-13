@@ -40,6 +40,10 @@ TEST(RawMetalFenceSource, EveryRawEncoderOpensWithADrainOrAnEngineChange)
                      "constexpr bool pixelBarrierHolds(const PassChain &chain, const PassUses &next)"),
                 HasSubstr("!next.known"));
     EXPECT_THAT(SourceText("../raw/runtime/RawMetalPassUses.h"), HasSubstr("op == OpWaitFence"));
+    // a job's first encoder opens with nothing behind the job before's end, which waits for idle as it releases
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_event_release.h"),
+                     "inline void emitEventRelease(Push &p, uint64_t va, uint32_t payload, bool publish)"),
+                HasSubstr("NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN)"));
 }
 
 TEST(RawMetalFenceSource, TheRawEncodeEmitsNothingForAFence)
