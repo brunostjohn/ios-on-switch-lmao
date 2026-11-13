@@ -63,6 +63,14 @@ struct DeviceHarness {
         return (a.bufferVa != a.va) + a.views.size();
     }
 
+    // Whether [va, va + bytes) lies in a member of the device's resource set, as a submitting thread sees it now
+    static bool setHolds(const Device &d, uint64_t va, uint64_t bytes = 1)
+    {
+        SetView v;
+        d.set_.view(v);
+        return v.holds(va, bytes);
+    }
+
     // An m2v view's hold on an arena (raw_alias.cpp's lease), which the harness's own connection never makes
     static void holdArena(Device &d, uint32_t arena, bool hold)
     {

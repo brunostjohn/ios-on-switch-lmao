@@ -1,12 +1,80 @@
 // SPDX-License-Identifier: MIT
 #include "raw_device_harness.h"
+#include "../raw/runtime/raw_heap_members.h"
+
+#include <atomic>
 
 namespace {
 
 using kernel_model::model;
 
+constexpr uint64_t kQuarter = 0x40000, kArenaBytes = 4 * kQuarter;
+constexpr uint32_t kDepth32 = 252;
+
 class DeviceSet : public harness::DeviceTest {
 protected:
+    // One command buffer that used `heap` and copied a page of `from` to `to`: its seqno, 0 when it was not submitted
+    uint32_t copyInHeap(const raw::HeapMembers &heap, const raw::Buffer &from, const raw::Buffer &to)
+    {
+        raw::CommandBuffer *cb = dev.begin();
+        raw::BlitEncoder *e = cb ? cb->blit() : nullptr;
+        if (!e)
+            return 0;
+        cb->useHeap(heap);
+        e->copyBytes(from.va, to.va, 4096);
+        e->end();
+        uint32_t seqno = 0;
+        return cb->commit(seqno) ? seqno : 0;
+    }
+
+    // The facade's idle give-back (RawMetal.mm) with no command buffer committed
+    void giveBack()
+    {
+        const std::atomic<uint32_t> idle{0};
+        dev.trim();
+        dev.purgeArenas(idle);
+        dev.trimArenas(idle);
+    }
+
+    void completeEverything()
+    {
+        kernel_model::Slot *s = liveSlot();
+        ASSERT_NE(s, nullptr);
+        model.fence(liveChannel() - 1).completed = s->submitted;
+        model.inFlight = false;
+    }
+
+    // The members the model's live sets list under `handle`
+    static size_t listed(uint64_t handle)
+    {
+        size_t n = 0;
+        for (const kernel_model::SetState &set : model.sets)
+            for (const TegraGM20BAbiSurfaceUse &m : set.members)
+                n += set.live && m.handle == handle;
+        return n;
+    }
+
+    // A member of a live set whose BO the connection no longer holds, 0: none
+    static uint64_t goneMember()
+    {
+        for (const kernel_model::SetState &set : model.sets)
+            for (const TegraGM20BAbiSurfaceUse &m : set.members)
+                if (set.live && !model.bos.count(m.handle))
+                    return m.handle;
+        return 0;
+    }
+
+    // A BO the jobs from `first` on name (the set's members among their uses) that the connection no longer holds, 0:
+    // none. The kernel refuses such a job (TegraGM20BUserClientJobSubmit.cpp); the model runs it.
+    static uint64_t goneUse(size_t first)
+    {
+        for (size_t j = first; j < model.jobs.size(); ++j)
+            for (const TegraGM20BAbiSurfaceUse &u : model.jobs[j].uses)
+                if (!model.bos.count(u.handle))
+                    return u.handle;
+        return 0;
+    }
+
     // A write-combined buffer in a chunk made for it, freed again: the chunk is the device's empty spare, a member the
     // CPU lease of the buffer's creation took out of the kernel's set while the device's list still names it
     uint64_t spareWcChunk()
@@ -104,6 +172,104 @@ TEST_F(DeviceSet, ABenchOnItsOwnConnectionLeavesTheSetAlone)
     EXPECT_NE(copy(b, a, 4096), 0u) << refusal();
     EXPECT_EQ(model.staleSets, stale);
     EXPECT_EQ(model.setRefusals, 0u) << refusal();
+}
+
+// A private heap's depth texture makes its arena a view of the depth kind, whose VA is one more member under the arena's
+// handle. The arena's free takes the BO out at every VA, and the next registration and command buffer name none of them.
+TEST_F(DeviceSet, AnArenaFreedWithAViewAliasInTheSetLeavesNeitherItsBoNorTheAliasInTheNextRegistration)
+{
+    uint32_t arena = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, arena));
+    raw::TextureAsk depth;
+    depth.kind = raw::TextureAsk::Zeta;
+    depth.width = 64;
+    depth.height = 48;
+    depth.format = kDepth32;
+    depth.sampled = true;
+    raw::Texture t;
+    ASSERT_TRUE(dev.arenaTexture({arena, std::nullopt}, depth, t));
+    ASSERT_GE(raw::DeviceHarness::arenaViews(dev, arena), 2u) << "no view of the depth kind";
+    const uint64_t bo = raw::DeviceHarness::arena(dev, arena).handle;
+    const uint64_t alias = t.span.va - t.span.offset;
+    ASSERT_EQ(model.resolve({alias, TegraGM20BSurfaceGpuAddress, 0}), bo);
+    ASSERT_TRUE(raw::DeviceHarness::setHolds(dev, alias)) << "the depth view is not a member";
+    ASSERT_NE(listed(bo), 0u);
+
+    dev.destroyTexture(t);
+    dev.destroyArena(arena);
+    ASSERT_TRUE(freed(bo));
+    EXPECT_EQ(listed(bo), 0u) << "the registration after the free names the freed BO";
+    EXPECT_EQ(goneMember(), 0u);
+    EXPECT_FALSE(raw::DeviceHarness::setHolds(dev, alias)) << "the device's set still holds the freed view's VA";
+    EXPECT_EQ(model.setRefusals, 0u) << refusal();
+    EXPECT_EQ(model.refusedHandle, 0u) << refusal();
+
+    uint32_t next = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, next));
+    raw::Buffer a, b;
+    ASSERT_TRUE(dev.arenaBuffer(next, 4096, a));
+    ASSERT_TRUE(dev.arenaBuffer(next, 4096, b));
+    const unsigned jobs = model.setJobs;
+    const size_t first = model.jobs.size();
+    const uint32_t seqno = copy(a, b, 4096);
+    ASSERT_NE(seqno, 0u) << refusal();
+    EXPECT_EQ(model.setJobs, jobs + 1) << "the command buffer left the set";
+    EXPECT_EQ(goneUse(first), 0u);
+    EXPECT_TRUE(dev.wait(seqno));
+    EXPECT_EQ(model.setRefusals, 0u) << refusal();
+    EXPECT_EQ(dev.setCounts().refusals, 0u) << dev.setLastRefusal();
+}
+
+// The give-back trims no arena while a command buffer that used its heap is in flight; once it completed, the arena is
+// trimmed into parts and holes, its whole BO freed. The set lists no freed BO, and the command buffers that use the heap
+// next, one of them placing into a hole, run raw on the set naming none.
+TEST_F(DeviceSet, AHeapsArenaTrimmedOnceTheCommandBufferNamingItCompletedLeavesNoFreedBoInTheSetOrTheNextJobs)
+{
+    uint32_t arena = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, arena));
+    raw::Buffer a, b, c;
+    ASSERT_TRUE(dev.arenaBuffer(arena, kQuarter, a));
+    ASSERT_TRUE(dev.arenaBuffer(arena, kQuarter, b));
+    ASSERT_TRUE(dev.arenaBuffer(arena, kQuarter, c));
+    dev.arenaRelease(b);
+    const raw::HeapMembers heap(arena, false);
+    const uint64_t whole = raw::DeviceHarness::arena(dev, arena).handle;
+
+    model.inFlight = true;
+    uint32_t seqno = copyInHeap(heap, a, c);
+    ASSERT_NE(seqno, 0u) << refusal();
+    giveBack();
+    EXPECT_FALSE(freed(whole)) << "the arena was trimmed under a command buffer in flight";
+    completeEverything();
+    ASSERT_TRUE(dev.wait(seqno));
+
+    giveBack();
+    ASSERT_TRUE(freed(whole)) << "the give-back kept the arena whole";
+    EXPECT_EQ(listed(whole), 0u);
+    EXPECT_EQ(goneMember(), 0u);
+    EXPECT_EQ(model.setRefusals, 0u) << refusal();
+
+    const unsigned jobs = model.setJobs;
+    size_t first = model.jobs.size();
+    seqno = copyInHeap(heap, a, c);
+    ASSERT_NE(seqno, 0u) << refusal();
+    EXPECT_EQ(model.setJobs, jobs + 1) << "the command buffer left the set";
+    EXPECT_EQ(goneUse(first), 0u);
+    EXPECT_TRUE(dev.wait(seqno));
+
+    raw::Buffer d;
+    ASSERT_TRUE(dev.arenaBuffer(arena, kQuarter, d));
+    ASSERT_EQ(d.span.offset, kQuarter) << "the placement is not in the hole";
+    first = model.jobs.size();
+    seqno = copyInHeap(heap, d, a);
+    ASSERT_NE(seqno, 0u) << refusal();
+    EXPECT_EQ(model.setJobs, jobs + 2) << "the command buffer left the set";
+    EXPECT_EQ(goneUse(first), 0u);
+    EXPECT_EQ(goneMember(), 0u);
+    EXPECT_TRUE(dev.wait(seqno));
+    EXPECT_EQ(model.setRefusals, 0u) << refusal();
+    EXPECT_EQ(model.refusedHandle, 0u) << refusal();
+    EXPECT_EQ(dev.setCounts().refusals, 0u) << dev.setLastRefusal();
 }
 
 }  // namespace
