@@ -3,14 +3,12 @@
 // (boot 21: 15 passes, 30 render target switches, 90 draws, 55 textures of other processes) and its parts, each draw
 // setting its vertices, transform and colour by setBytes, a texture and sampler by Core Animation's call and a scissor
 // of its own; the same frame at twice the draws; encoders with no draws; draws with no state set between them. Per
-// scenario: time, instructions and cycles of the process, and the recording thread's Objective-C messages, locks and
-// allocations (record_count.c). The counts are the test; times are printed.
+// scenario: the recording thread's time, instructions and cycles, and its Objective-C messages, locks and allocations
+// (record_count.c). The counts are the test; times are printed.
 #include "raw_facade_harness.h"
 
 #include <gtest/gtest.h>
-#include <libproc.h>
 #include <mach/mach_time.h>
-#include <sys/resource.h>
 #include <algorithm>
 #include <cstdio>
 #include <functional>
@@ -21,6 +19,7 @@ struct record_count {
 };
 void record_count_start(void);
 void record_count_stop(struct record_count *out);
+int thread_selfcounts(int type, void *buf, size_t nbytes);
 }
 
 @protocol RecordCostCoreAnimationSPI
@@ -174,11 +173,18 @@ void repeatedDraws(id<MTLCommandBuffer> cb, const Bench &b, const std::vector<MT
     [e endEncoding];
 }
 
-rusage_info_v4 usage()
+// The calling thread's instructions and cycles retired
+struct Counts {
+    uint64_t instructions = 0, cycles = 0;
+};
+
+Counts counts()
 {
-    rusage_info_v4 u = {};
-    proc_pid_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t *>(&u));
-    return u;
+    Counts c;
+    uint64_t words[2] = {};
+    if (!thread_selfcounts(1, words, sizeof words))
+        c = {words[0], words[1]};
+    return c;
 }
 
 double ticksToUs(uint64_t ticks)
@@ -204,16 +210,16 @@ Sample measure(const Record &record)
             id<MTLCommandBuffer> cb = [b.queue commandBuffer];
             const std::vector<MTLRenderPassDescriptor *> into = passes(b, kEncoders);
             Sample s;
-            const rusage_info_v4 before = usage();
+            const Counts before = counts();
             record_count_start();
             const uint64_t t = mach_absolute_time();
             record(cb, into, uint32_t(round));
             const uint64_t ticks = mach_absolute_time() - t;
             record_count_stop(&s.counts);
-            const rusage_info_v4 after = usage();
+            const Counts after = counts();
             s.us = ticksToUs(ticks);
-            s.instructions = double(after.ri_instructions - before.ri_instructions);
-            s.cycles = double(after.ri_cycles - before.ri_cycles);
+            s.instructions = double(after.instructions - before.instructions);
+            s.cycles = double(after.cycles - before.cycles);
             [cb commit];
             [cb waitUntilCompleted];
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
