@@ -100,6 +100,7 @@ TESTS: dict[str, bool] = {
             'metal.iosurface',
             'gpu.surface.tiled_default',
             'gpu.iosurface.cross_process',
+            'gpu.raw.readback_routes',
             'gpu.ycbcr_target',
             'gpu.ycbcr_packed_target',
             'gpu.packed_plane_target',
