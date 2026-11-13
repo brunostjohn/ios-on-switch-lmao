@@ -20,9 +20,11 @@
 // What the engine does (kTraits) is what the unit measured on every boot of 11-05 and 11-06 (23 boots), decoding
 // libjpeg-turbo's JPEGs through the SMMU windows with their pages out of order: NV12, I420, BGRA, RGBA, ARGB and grey
 // within a few steps of libjpeg-turbo, 4:2:0, 4:2:2, 4:4:4 and grey input, grey to BGRA, 1/2 scaling, whole MCUs
-// written past the picture. 1/4 and 1/8 scaling missed libjpeg-turbo's BGRA by up to 7 and 15 steps on every one of
-// those boots and stay off. 'yuvf' is the 4:2:0 path's packed memory mode; '422f' and '444f' are not written
-// (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never completed on this unit).
+// written past the picture. 1/4 and 1/8 scaling decode too, up to 7 and 15 steps off libjpeg-turbo's BGRA at their
+// worst sample (its scaled IDCT and chroma upsampling are not NVJPG's), so they are judged as CMPhoto's thumbnails
+// are used, by their mean against ImageIO's software decode (image.jpeg_420). 'yuvf' is the 4:2:0 path's packed memory
+// mode; '422f' and '444f' are not written (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never completed on this
+// unit).
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
@@ -157,7 +159,7 @@ const TegraNVJPGTraits kTraits = {
     .formats = ((1u << TEGRA_NVJPG_OUT_COUNT) - 1) & ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24),
     .chroma = 1u << TEGRA_NVJPG_CHROMA_MONO | 1u << TEGRA_NVJPG_CHROMA_420 | 1u << TEGRA_NVJPG_CHROMA_422H |
               1u << TEGRA_NVJPG_CHROMA_444,
-    .scales = 0x3,
+    .scales = 0xf,
     .greyRgb = true,
 };
 

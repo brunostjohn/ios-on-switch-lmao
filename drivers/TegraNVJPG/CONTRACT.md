@@ -130,7 +130,7 @@ Accepted [code; hardware facts T]: Huffman sequential 8-bit (SOF0/SOF1), one int
 1 or 2 × chroma 1x1 (4:2:0, 4:2:2, 4:4:4; 4:4:0 parsed but has no request code) or grey 1x1, up to 4 quantisation and
 4+4 Huffman tables, restart intervals, Annex K tables when DHT is absent (Motion JPEG), a truncated scan (EOI
 appended), any size up to 16384; into '420f' (NV12; grey files: luma by NVJPG, chroma 0x80 by the CPU), BGRA, RGBA,
-32ARGB, at 1 and 1/2 (1/4 and 1/8 missed libjpeg-turbo's BGRA on the unit); at any x/y offset that keeps
+32ARGB, at 1, 1/2, 1/4 and 1/8; at any x/y offset that keeps
 the plane starts on 256 bytes.
 
 Refused as **kIOReturnUnsupported** (CMPhoto falls back for that image, `__prepare` mode 1, 0x1aaee020c; JPEGH1 decodes
@@ -138,7 +138,7 @@ the frame with its software session, 0x201120568; ImageIO's read plugin decodes 
 progressive, lossless, hierarchical, arithmetic, JPEG-LS, 12-bit, 16-bit tables, quantisation value 0, CMYK/YCCK, Adobe
 RGB, 4:1:1, chroma above 1x1, grey above 1x1, non-interleaved or multiple scans, DNL, sizes above 16384, undefined or
 corrupt tables; destination formats other than the four (420v, 422f, 444f, yuvf, ...); a decode size that is not the
-file's / 2^n; 1/4 and 1/8; strides not a multiple of 64; plane starts not on 256 bytes; MCU padding that
+file's / 2^n; strides not a multiple of 64; plane starts not on 256 bytes; MCU padding that
 would run into another plane or past the destination's 1 MiB sink (§7). The destination's pixel format is checked before
 anything is copied (under the interchange formats CMPhoto also asks for 422f, 444f and yuvf).; a destination above 255
 MiB or a scan above 64 MiB (the SMMU windows); sel 5 crop rectangles. Refused as **kIOReturnBadArgument**: unknown
@@ -219,8 +219,9 @@ NVDEC, whose clock the MBIST pulse borrows).
 
 ## 9. Gaps and risks
 
-- 1/4 and 1/8 DCT scaling: NVJPG's BGRA missed libjpeg-turbo's scaled decode by up to 7 and 15 steps (J3A) on every
-  boot that measured it; off until someone finds whether the setup or the tolerance is wrong.
+- 1/4 and 1/8 DCT scaling: NVJPG's BGRA was up to 7 and 15 steps off libjpeg-turbo's scaled decode at its worst
+  sample (J3A, every boot that measured it). They ship on, judged by the mean and PSNR of image.jpeg_420's quarter and
+  eighth thumbnails against ImageIO's software decode, as its half one is.
 - Whole-MCU writes: '420f' destinations from CoreVideo leave 16 KiB-aligned room after the luma,
   under 8 padded rows at 1080p, so non-MCU-aligned heights into '420f' are refused (CPU). BGRA uses the sink.
 - CMPhoto's native destinations under the interchange formats (CMPhoto fjds_createPixelBufferFromJPEGData: '444f' for

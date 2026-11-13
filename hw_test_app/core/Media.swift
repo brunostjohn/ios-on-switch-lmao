@@ -119,6 +119,8 @@ public struct StillImage: Equatable, Sendable {
     /// The thumbnail ImageDecodeTest asks ImageIO for: half size, or the whole picture for the small 4:4:4 file
     /// (SpringBoard's 205x83 decode into '444f' at 1/1).
     public var thumbnailSide: Int { format == .jpeg444Small ? max(width, height) : max(width, height) / 2 }
+    /// The thumbnails below half size ImageDecodeTest also asks for, by name and divisor (CMPhoto's 1/4 and 1/8).
+    public var scaledThumbnails: [(String, Int)] { format == .jpeg420 ? [("quarter", 4), ("eighth", 8)] : [] }
 
     public static let all: [StillImage] = [
         StillImage(format: .jpeg420, width: 4032, height: 3024),

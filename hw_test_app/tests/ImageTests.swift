@@ -27,8 +27,8 @@ enum Pixels {
         }
     }
 
-    /// Mean and largest per-channel difference of two images of one size, drawn into sRGB RGBX.
-    static func difference(_ a: CGImage, _ b: CGImage) -> (mean: Double, max: Int)? {
+    /// Mean and largest per-channel difference of two images of one size, drawn into sRGB RGBX, and their PSNR in dB.
+    static func difference(_ a: CGImage, _ b: CGImage) -> (mean: Double, max: Int, psnr: Double)? {
         guard a.width == b.width, a.height == b.height else { return nil }
         let rows = [a, b].map { image -> [UInt8] in
             var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
@@ -42,15 +42,19 @@ enum Pixels {
             return bytes
         }
         var sum = 0
+        var squares = 0
         var largest = 0
         for i in stride(from: 0, to: rows[0].count, by: 4) {
             for c in 0..<3 {
                 let d = abs(Int(rows[0][i + c]) - Int(rows[1][i + c]))
                 sum += d
+                squares += d * d
                 largest = max(largest, d)
             }
         }
-        return (Double(sum) / Double(a.width * a.height * 3), largest)
+        let samples = Double(a.width * a.height * 3)
+        let psnr = squares == 0 ? 99 : 10 * log10(255 * 255 / (Double(squares) / samples))
+        return (Double(sum) / samples, largest, psnr)
     }
 
     static func patternImage(_ pattern: Pattern) -> CGImage {
@@ -120,8 +124,8 @@ struct ImageDecodeTest: HWTest {
             let software = CGImageSourceCreateWithData(data as CFData, nil)
         else { return [("ImageIO opens it twice", false)] }
         let thumb: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: still.thumbnailSide,
-            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: still.thumbnailSide, kCGImageSourceShouldCacheImmediately: true,
         ]
         let thumbStart = CFAbsoluteTimeGetCurrent()
         let half = CGImageSourceCreateThumbnailAtIndex(source, 0, thumb as CFDictionary)
@@ -163,6 +167,45 @@ struct ImageDecodeTest: HWTest {
             metrics.set("\(label)_vs_software_max", d.max)
             checks.append(("\(label) within 1.5 mean of the software decode", d.mean <= 1.5))
         }
+        for (label, divisor) in still.scaledThumbnails {
+            let side = max(full.width, full.height) / divisor
+            checks += scaledThumbnail(data, label: label, side: side, metrics: &metrics)
+        }
+        return checks
+    }
+
+    /// A thumbnail CMPhoto decodes at a DCT scale below 1/2 (AppleJPEGSupportsDCTScaling), on NVJPG, against ImageIO's
+    /// software decode of the same request: by its mean, as the half-size one, and its PSNR.
+    static func scaledThumbnail(_ data: Data, label: String, side: Int, metrics: inout Metrics) -> [(String, Bool)] {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let software = CGImageSourceCreateWithData(data as CFData, nil)
+        else { return [("\(label): ImageIO opens it twice", false)] }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: side,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        let before = JPEGRoute.decodes()
+        let hardware = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        let after = JPEGRoute.decodes()
+        var off = options
+        off[hardwareKey] = false
+        let reference = CGImageSourceCreateThumbnailAtIndex(software, 0, off as CFDictionary)
+        var checks: [(String, Bool)] = []
+        if case .success(let first) = before, case .success(let last) = after {
+            metrics.set("\(label)_route", last.decodes > first.decodes ? "hardware" : "software")
+            checks.append(("\(label) thumbnail decoded on NVJPG", last.decodes > first.decodes))
+        } else {
+            metrics.set("\(label)_route", "unknown")
+            checks.append(("\(label) thumbnail route readable", false))
+        }
+        guard let hardware, let reference, let d = Pixels.difference(hardware, reference) else {
+            return checks + [("\(label) decodes both ways at one size", false)]
+        }
+        metrics.set("\(label)_size", "\(hardware.width)x\(hardware.height)")
+        metrics.set("\(label)_vs_software_mean", d.mean, digits: 2)
+        metrics.set("\(label)_vs_software_max", d.max)
+        metrics.set("\(label)_psnr", d.psnr, digits: 1)
+        checks.append(("\(label) within 1.5 mean of the software decode", d.mean <= 1.5))
         return checks
     }
 

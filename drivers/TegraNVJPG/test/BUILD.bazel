@@ -87,6 +87,7 @@ host_test(
         "//drivers/TegraHost1x:TegraHost1x.h",
         "//drivers/TegraNVJPG:TegraNVJPG.h",
         "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
+        "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
         "//drivers/TegraNVJPG:nvidia/cle7d0.h",
         "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
         "//drivers/TegraSMMU:TegraSMMU.h",

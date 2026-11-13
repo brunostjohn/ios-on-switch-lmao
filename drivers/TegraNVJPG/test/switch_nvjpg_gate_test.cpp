@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // TegraNVJPG.cpp's idle gate and stall cancellation against the engine model (switch_nvjpg_engine_model.h).
 #include "switch_nvjpg_engine_model.h"
+#include "../TegraNVJPGRequest.h"
 
 TEST_F(NVJPGGate, AJobAfterTheIdlePowerOffPowersThePartitionOnBootsTheFalconAndRuns)
 {
@@ -127,4 +128,29 @@ TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackRefusesTheNextJob)
     EXPECT_TRUE(logged("it did not come back, NVJPG refuses work"));
     EXPECT_FALSE(tegra_nvjpg_ready());
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
+}
+
+// Every DCT scale ships (AppleJPEGSupportsDCTScaling answers 1): CMPhoto's quarter and eighth thumbnails of a photo plan
+// on NVJPG with the published traits.
+TEST_F(NVJPGGate, ThePublishedTraitsTakeEveryDCTScale)
+{
+    const TegraNVJPGTraits *t = tegra_nvjpg_traits();
+    ASSERT_EQ(t->scales, 0xfu);
+    const TegraNVJPGAbility shipped = {t->formats, t->chroma, t->scales, t->clipped ? 1u : 0u, t->greyRgb ? 1u : 0u};
+    TegraNVJPGImage photo = {};
+    photo.width = 4032, photo.height = 3024, photo.components = 3, photo.chroma = TEGRA_NVJPG_CHROMA_420;
+    photo.mcuW = photo.mcuH = 16, photo.mcusX = 252, photo.mcusY = 189;
+    for (uint32_t scale = 0; scale < 4; scale++) {
+        TegraNVJPGDecodeRequest r = {};
+        r.dst_size = 1u << 24, r.width = 4032, r.height = 3024, r.subsampling = TEGRA_NVJPG_SUB_420;
+        r.out_width = 4032 >> scale, r.out_height = 3024 >> scale;
+        TegraNVJPGSurface d = {};
+        d.fourcc = TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'), d.width = r.out_width, d.height = r.out_height;
+        d.planeBytesPerRow[0] = (4ull * r.out_width + 63) & ~63ull, d.planeHeight[0] = r.out_height;
+        d.length = d.planeBytesPerRow[0] * r.out_height;
+        TegraNVJPGPlan plan;
+        uint32_t kind = 99;
+        EXPECT_EQ(tegra_nvjpg_plan(&r, &photo, &d, &shipped, 1u << 20, &plan, &kind), nullptr) << "1/" << (1u << scale);
+        EXPECT_EQ(plan.target.scale, scale);
+    }
 }
