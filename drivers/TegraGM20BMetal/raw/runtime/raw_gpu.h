@@ -180,7 +180,7 @@ const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
 // A texture of this size and format the raw path can lay out: `t` reset to it, with no memory yet
 bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t);
 
-constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
+constexpr uint64_t kBlAlign = 16384;         // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
 constexpr uint64_t kChunkVaAlign = 0x10000;  // the GMMU big page, a multiple of kBlAlign
 
 // An import of this task's pages into the GPU VM, shared by everything over them.
@@ -2616,7 +2616,8 @@ private:
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
         bool dedicated = false;
-        uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
+        bool hostPages = false;  // memory is this task's anonymous pages, imported (chunkMemory)
+        uint64_t pitchVa = 0;    // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
     };
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a

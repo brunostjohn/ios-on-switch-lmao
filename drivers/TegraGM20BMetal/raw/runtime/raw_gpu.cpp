@@ -1462,21 +1462,33 @@ uint64_t Device::chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint6
     return (size + align - 1) & ~(align - 1);
 }
 
-// A chunk's memory is a cached BoAlloc, which the kernel serves from its spares: pages wired, zeroed by the copy engine
-// and cleaned ahead of time, so a chunk costs a BO and a bind, not a wiring of fresh anonymous pages that the CPU zero-fills
-// (r7l, boot 21: ~9 ms for 16 MiB, on the render thread when a burst outran the grower). A chunk given back returns to
-// those spares, so the next burst's chunk is as cheap.
+// The render server's chunks are cached BoAllocs, which the kernel serves from its spares: pages wired, zeroed by the
+// copy engine and cleaned ahead of time, so a chunk costs a BO and a bind, not a wiring of fresh anonymous pages that the
+// CPU zero-fills (r7l, boot 21: ~9 ms for 16 MiB, on the render thread when a burst outran the grower). A chunk given back
+// returns to those spares. A client's stay imports of its own anonymous pages: m2v twins a client's raw memory by importing
+// its CPU range, and a kernel BO's view must not be freed under another import of its mapping (TegraGM20BUserClientPool.cpp).
 bool Device::chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<raw::Mutex> *unlocked, Chunk &ch)
 {
+    vm_address_t host = 0;
+    const bool kernelMemory = role_ == Role::RenderServer;
+    if (!kernelMemory && vm_allocate(mach_task_self(), &host, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
     if (unlocked)
         unlocked->unlock();
-    const bool made = k_.alloc(size, false, ch.bo, kind, kChunkVaAlign);
+    const bool made = kernelMemory ? k_.alloc(size, false, ch.bo, kind, kChunkVaAlign)
+                                   : k_.importPages(reinterpret_cast<void *>(host), size, ch.bo);
     if (unlocked)
         unlocked->lock();
-    if (!made)
+    if (!made || (!kernelMemory && !k_.bindImport(reinterpret_cast<void *>(host), ch.bo, kind))) {
+        if (ch.bo.handle)
+            k_.free(ch.bo);
+        if (host)
+            vm_deallocate(mach_task_self(), host, size);
         return false;
-    ch.memory = ch.bo.cpu;
+    }
+    ch.memory = kernelMemory ? ch.bo.cpu : reinterpret_cast<void *>(host);
     ch.bytes = size;
+    ch.hostPages = !kernelMemory;
     return true;
 }
 
@@ -1662,9 +1674,12 @@ void Device::freeChunk(Chunk &ch)
     RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     RAW_DIAGNOSTIC(stats.poolChunks--);
     RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
+    const bool host = ch.hostPages;
     k_.free(ch.bo);
     if (ch.pitchVa)
         k_.releaseVa(ch.pitchVa, ch.bytes);
+    if (host)
+        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
 
@@ -2640,6 +2655,8 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
         return false;
     if (ch.bo.va & (kBlAlign - 1)) {
         k_.free(ch.bo);
+        if (ch.hostPages)
+            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
         return false;
     }
     uint32_t c = 0;

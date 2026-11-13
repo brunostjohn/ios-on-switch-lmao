@@ -57,4 +57,18 @@ TEST_F(ChunkMemory, AChunkGivenBackIsFreedNotLeftMapped)
     EXPECT_LT(model.bos.size(), live);
 }
 
+// A client's chunks stay imports of its own pages: m2v twins a client's raw memory by importing its CPU range
+TEST(ClientChunkMemory, AClientsChunkIsAnImportOfItsOwnPages)
+{
+    kernel_model::model = {};
+    raw::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, raw::Device::Role::Client)) << err;
+    const size_t before = model.imports.size();
+    raw::Texture t;
+    ASSERT_TRUE(dev.createTexture(1280, 720, kBgra8, t, false, true));
+    EXPECT_GT(model.imports.size(), before);
+    dev.destroyTexture(t);
+}
+
 }  // namespace
