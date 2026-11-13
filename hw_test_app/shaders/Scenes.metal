@@ -290,3 +290,24 @@ kernel void simd_group(device const uint *in [[buffer(0)]], device uint *out [[b
     o[22] = simd_shuffle_and_fill_down(x, fill, ushort(3), ushort(8));
     o[23] = id;
 }
+
+struct OrderedVertex {
+    float4 position [[position]];
+    uint instance [[flat]];
+};
+
+/// gpu.raw.raster_order: instance iid's full-target quad (a four-vertex strip)
+vertex OrderedVertex raster_order_vertex(uint vid [[vertex_id]], uint iid [[instance_id]])
+{
+    return OrderedVertex{float4((vid & 1) ? 1.0 : -1.0, (vid & 2) ? -1.0 : 1.0, 0.5, 1), iid};
+}
+
+/// Each covered pixel's word folded with its instance in a step that does not commute: only raster order gives the
+/// CPU's word
+fragment float4 raster_order_fragment(OrderedVertex in [[stage_in]],
+                                      texture2d<uint, access::read_write> words [[texture(0), raster_order_group(0)]])
+{
+    const uint2 p = uint2(in.position.xy);
+    words.write(uint4(words.read(p).x * 3u + in.instance + 1u), p);
+    return float4(0);
+}

@@ -88,6 +88,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.stored_msaa',
             'gpu.texture.fresh',
             'gpu.compute.simd_group',
+            'gpu.raw.raster_order',
             'metal.device',
             'metal.compute',
             'metal.render.color',
