@@ -53,7 +53,9 @@ class SwitchEMC : public OSObject {
     volatile uint8_t *regs = nullptr;
     SwitchMMIOWords mcRegs;
     switch_display::MemoryState memoryState;
+    switch_display::MemoryState memoryParked;  // heads a rate change left uncovered, until a rate carries them again
     bool memoryQualified = false, memoryDirty = false, fixed = false;
+    bool memoryUncovered = false;  // a head is parked (atomic loads)
     uint32_t memoryAppliedKhz = 0;
     volatile uint8_t *car = nullptr;
     uint32_t khz[SWITCH_EMC_MAX_RATES] = {};
@@ -87,7 +89,8 @@ class SwitchEMC : public OSObject {
 
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned first) const;
-    void dropDisplayMemory(const char *why);
+    void replanDisplayMemory(uint32_t runningKhz, const char *why);
+    void unparkDisplayMemory(uint32_t runningKhz);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
     static IOReturn memoryAction(OSObject *owner, void *request, void *result, void *, void *);
     static IOReturn displayAction(OSObject *owner, void *bytes, void *result, void *, void *);
@@ -110,7 +113,8 @@ public:
 
     bool displayMemoryReady() const
     {
-        return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE);
+        return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE) &&
+               !__atomic_load_n(&memoryUncovered, __ATOMIC_ACQUIRE);
     }
 #if DEVELOPMENT || DEBUG
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);

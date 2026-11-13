@@ -106,7 +106,7 @@
 #define MAX77812_M4_VOUT 0x26
 
 static volatile u8 *car, *fuse, *apbmisc, *i2c5, *dfll;
-static int init_err = 1; /* 1: not tried yet */
+static int init_err = 1; /* 1: not done yet, the next call runs it */
 static char init_why[96];
 static u32 hidrev;
 
@@ -431,11 +431,9 @@ struct cl_dvfs_clk {
 
 static unsigned int cl_dvfs_gate_refcnt;
 
-static int cl_dvfs_enable(struct clk_hw *hw)
+/* L4T clk-periph-gate.c clk_periph_enable (64-99): gate on, then release the reset if it is held */
+static void cl_dvfs_gate_on(void)
 {
-	/* L4T clk-periph-gate.c clk_periph_enable (64-99): gate on, then release the reset if it is held */
-	if (cl_dvfs_gate_refcnt++)
-		return 0;
 	switch_mmio_write32_flush(car, CLK_ENB_W_SET, W_DVFS);
 	udelay(2);
 	if (switch_mmio_read32(car, RST_DEVICES_W) & W_DVFS) {
@@ -443,6 +441,12 @@ static int cl_dvfs_enable(struct clk_hw *hw)
 		switch_mmio_write32_flush(car, RST_DEV_W_CLR, W_DVFS);
 		udelay(2);
 	}
+}
+
+static int cl_dvfs_enable(struct clk_hw *hw)
+{
+	if (!cl_dvfs_gate_refcnt++)
+		cl_dvfs_gate_on();
 	return 0;
 }
 
@@ -600,22 +604,60 @@ u32 tdfll_platform_dfll_readl(u32 offset)
 	return switch_mmio_read32(dfll, offset);
 }
 
-/* bring-up: no CPU clock or VDD_CPU change */
-static int platform_init(char *why, size_t len)
+static int map_blocks(char *why, size_t len)
+{
+	if (!car)
+		car = (volatile u8 *)switch_linux_ioremap(CAR_PA, 0x1000, 0);
+	if (!fuse)
+		fuse = (volatile u8 *)switch_linux_ioremap(FUSE_PA, 0x400, 0);
+	if (!apbmisc)
+		apbmisc = (volatile u8 *)switch_linux_ioremap(APBMISC_PA, 0x100, 0);
+	if (!i2c5)
+		i2c5 = (volatile u8 *)switch_linux_ioremap(I2C5_PA, 0x100, 0);
+	if (!dfll)
+		dfll = (volatile u8 *)switch_linux_ioremap(DFLL_PA, 0x400, 0);
+	if (!car || !fuse || !apbmisc || !i2c5 || !dfll)
+		return fail(why, len, -ENOMEM, "cannot map CAR/FUSE/APB_MISC/I2C5/DFLL");
+	return 0;
+}
+
+/* L4T's clock init table, once: the clock tree registered, dfll_soc/dfll_ref and cclk_g held for good. */
+static int register_clocks(char *why, size_t len)
 {
 	struct clk_hw *hws[] = {&pllp_hw,         &pllx_hw, &dfll_soc_clk.hw,
 				&dfll_ref_clk.hw, &i2c5_hw, &cclk_g_hw};
+	static bool held;
 	unsigned int i = 0;
-	u8 vout = 0;
-	int err = 0;
 
-	car = (volatile u8 *)switch_linux_ioremap(CAR_PA, 0x1000, 0);
-	fuse = (volatile u8 *)switch_linux_ioremap(FUSE_PA, 0x400, 0);
-	apbmisc = (volatile u8 *)switch_linux_ioremap(APBMISC_PA, 0x100, 0);
-	i2c5 = (volatile u8 *)switch_linux_ioremap(I2C5_PA, 0x100, 0);
-	dfll = (volatile u8 *)switch_linux_ioremap(DFLL_PA, 0x400, 0);
-	if (!car || !fuse || !apbmisc || !i2c5 || !dfll)
-		return fail(why, len, -ENOMEM, "cannot map CAR/FUSE/APB_MISC/I2C5/DFLL");
+	for (i = 0; i < ARRAY_SIZE(hws); i++) {
+		if (!hws[i]->clk && IS_ERR(clk_register(NULL, hws[i]))) {
+			return fail(why, len, -ENOMEM, "cannot register clock %s",
+				    hws[i]->init->name);
+		}
+	}
+	if (held)
+		return 0;
+	/* the init-table references: cl_dvfs's taken in platform_init (counted once more for dfll_ref), cclk_g running */
+	if (clk_prepare_enable(cclk_g_hw.clk)) {
+		return fail(why, len, -EAGAIN,
+			    "cclk_g could not be enabled (CCLKG_BURST_POLICY %#x)",
+			    switch_mmio_read32(car, CCLKG_BURST_POLICY));
+	}
+	cl_dvfs_gate_refcnt++;
+	held = true;
+	return 0;
+}
+
+/* Bring-up: no CPU clock or VDD_CPU change. -ENODEV only for what no retry changes: this chip's revision and its CPU
+ * speedo fuses. Every other failure leaves what it did in place for the next call to go on from. */
+static int platform_init(char *why, size_t len)
+{
+	static bool gate_held;
+	u8 vout = 0;
+	int err = map_blocks(why, len);
+
+	if (err)
+		return err;
 
 	/* fuses: identity, speedo (vendored speedo-tegra210.c, as fuse-tegra30.c tegra30_fuse_init runs it) */
 	switch_mmio_write32_flush(car, CLK_ENB_H_SET, H_FUSE);
@@ -633,24 +675,27 @@ static int platform_init(char *why, size_t len)
 									     : MAX77812_PHASE31;
 
 	/* VDD_CPU's PMIC must answer where the fuse says it is: the DFLL will address it blindly. Nothing above has
-	 * changed any state, so a transient failure (lost arbitration, timeout) is -EAGAIN and the next init retries. */
+	 * changed any state the next call does not set again. */
 	err = tdfll_platform_vout_read(&vout);
 	if (err) {
-		return fail(why, len, err == TEGRA_I2C_ENACK ? -ENODEV : -EAGAIN,
-			    "MAX77812 at I2C5 %#x does not answer (TegraI2C %d)",
+		return fail(why, len, -EAGAIN, "MAX77812 at I2C5 %#x does not answer (TegraI2C %d)",
 			    vdd_cpu.client.addr, err);
 	}
 
 	/* the DFLL's I2C master divides I2C5's clock: dfll_init_i2c_if BUG()s on a zero divisor */
 	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0)) {
-		return fail(why, len, -ENODEV,
+		return fail(why, len, -EAGAIN,
 			    "I2C5 clock is off or unreadable (CLK_SOURCE_I2C5 %#x)",
 			    switch_mmio_read32(car, CLK_SOURCE_I2C5));
 	}
 
 	/* L4T init table: dfll_soc and dfll_ref from PLL_P at 51 MHz, enabled for good. Only change the dividers of an
-	 * idle DFLL (CTRL mode 0 = disabled), and read it only once its clock runs. */
-	cl_dvfs_enable(&dfll_soc_clk.hw);
+	 * idle DFLL (CTRL mode 0 = disabled), and read it only once its clock runs. The table's reference is taken once;
+	 * the gate is set on every call, as an SC7 since the last one reset it. */
+	if (!gate_held)
+		cl_dvfs_enable(&dfll_soc_clk.hw);
+	gate_held = true;
+	cl_dvfs_gate_on();
 	if (switch_mmio_read32(dfll, 0x00) & 3) {
 		return fail(why, len, -EBUSY, "the DFLL is already running (DFLL_CTRL %#x)",
 			    switch_mmio_read32(dfll, 0x00));
@@ -666,20 +711,7 @@ static int platform_init(char *why, size_t len)
 			    "CCLKG_BURST_POLICY %#x is in neither RUN nor IDLE state",
 			    switch_mmio_read32(car, CCLKG_BURST_POLICY));
 	}
-	for (i = 0; i < ARRAY_SIZE(hws); i++) {
-		if (IS_ERR(clk_register(NULL, hws[i]))) {
-			return fail(why, len, -ENOMEM, "cannot register clock %s",
-				    hws[i]->init->name);
-		}
-	}
-	/* the init-table references: cl_dvfs's taken above (counted once more for dfll_ref), cclk_g running */
-	cl_dvfs_gate_refcnt++;
-	if (clk_prepare_enable(cclk_g_hw.clk)) {
-		return fail(why, len, -ENODEV,
-			    "cclk_g could not be enabled (CCLKG_BURST_POLICY %#x)",
-			    switch_mmio_read32(car, CCLKG_BURST_POLICY));
-	}
-	return 0;
+	return register_clocks(why, len);
 }
 
 /* SC7 reset the CAR: the DFLL's gate, its reset and its two 51 MHz sources come back at their reset values while the
@@ -688,13 +720,7 @@ int tdfll_platform_resume(char *why, size_t len)
 {
 	if (init_err)
 		return 0;
-	switch_mmio_write32_flush(car, CLK_ENB_W_SET, W_DVFS);
-	udelay(2);
-	if (switch_mmio_read32(car, RST_DEVICES_W) & W_DVFS) {
-		udelay(5);
-		switch_mmio_write32_flush(car, RST_DEV_W_CLR, W_DVFS);
-		udelay(2);
-	}
+	cl_dvfs_gate_on();
 	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	udelay(2);
@@ -713,12 +739,14 @@ int tdfll_platform_init(char *why, size_t len)
 	int err = init_err;
 
 	if (err == 1) {
+		static char printed[sizeof(init_why)];
+
 		err = platform_init(init_why, sizeof(init_why));
-		if (err)
+		if (err && strcmp(init_why, printed)) {
 			printk("%s\n", init_why);
-		init_err = err == -EAGAIN
-				   ? 1
-				   : err; /* only a transient PMIC probe failure is retried */
+			memcpy(printed, init_why, sizeof(printed));
+		}
+		init_err = err && err != -ENODEV ? 1 : err;
 	}
 	if (err)
 		fail(why, len, err, "%s", init_why);

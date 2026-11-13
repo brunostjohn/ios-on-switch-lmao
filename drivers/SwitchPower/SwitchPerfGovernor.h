@@ -38,6 +38,11 @@ unsigned take(char *line, size_t len);
 // What the DFLL now runs (kHz of that index), for hints, kprof and the next decision's raise test.
 void applied(unsigned index);
 
+// The DFLL refused the rate of `index`: that row is not asked again for 1 window, then 2, 4 ... up to 512 while it keeps
+// refusing (SwitchGovernor.h switch_gov_retry); take() meanwhile answers the nearest row toward the one applied. A
+// row applied starts over. Returns the refusals of that row in a row. Work loop only.
+unsigned refused(unsigned index);
+
 // Thermal limits in mV (the DFLL's floor and cap now in force): the lowest point is the highest row at or below the
 // floor, the highest the highest row at or below the cap. Applied at once; signals if the clock must move.
 void limits(unsigned floorMv, unsigned capMv);

@@ -106,4 +106,49 @@ static inline uint64_t switch_idle_learn(uint64_t predicted, uint64_t idle, bool
     return predicted + (idle - predicted) / 8u;
 }
 
+/* One core's C7 requests the firmware refused (PSCI CPU_SUSPEND returned an error). The first SWITCH_IDLE_C7_TRIES
+ * refusals in a row are each tried again at the core's next idle that chooses C7; from then on the core spends 1, 2,
+ * 4, ... up to SWITCH_IDLE_C7_WAIT_MAX such idles in WFI before the next request. A request the firmware takes (the
+ * core powered down, or CPU_SUSPEND returned 0 for an interrupt already pending) starts it over. */
+#define SWITCH_IDLE_C7_TRIES    3u
+#define SWITCH_IDLE_C7_WAIT_LOG 10u
+#define SWITCH_IDLE_C7_WAIT_MAX (1u << SWITCH_IDLE_C7_WAIT_LOG)
+
+struct switch_idle_c7_retry {
+    uint32_t refusals; /* in a row */
+    uint32_t wait;     /* idles that chose C7 still to spend in WFI */
+};
+
+/* An idle that chose C7: whether to request it, or spend this one in WFI. */
+static inline bool switch_idle_c7_try(struct switch_idle_c7_retry *r)
+{
+    if (r->wait == 0u) {
+        return true;
+    }
+    r->wait--;
+    return false;
+}
+
+/* A refusal. Returns whether it is one to report: the first in a row, then each power of two. */
+static inline bool switch_idle_c7_refused(struct switch_idle_c7_retry *r)
+{
+    if (r->refusals < UINT32_MAX) {
+        r->refusals++;
+    }
+    if (r->refusals >= SWITCH_IDLE_C7_TRIES) {
+        const uint32_t doubling = r->refusals - SWITCH_IDLE_C7_TRIES;
+        r->wait = doubling < SWITCH_IDLE_C7_WAIT_LOG ? 1u << doubling : SWITCH_IDLE_C7_WAIT_MAX;
+    }
+    return (r->refusals & (r->refusals - 1u)) == 0u;
+}
+
+/* The firmware took a request. Returns how many refusals in a row it ended (0: none). */
+static inline uint32_t switch_idle_c7_taken(struct switch_idle_c7_retry *r)
+{
+    const uint32_t ended = r->refusals;
+    r->refusals = 0u;
+    r->wait = 0u;
+    return ended;
+}
+
 #endif /* SWITCH_IDLE_GOVERNOR_H */

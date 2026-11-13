@@ -7,16 +7,16 @@ unsigned SwitchEMC::reconcileRate(uint32_t observed, bool quiesced)
         return row;
     memoryDirty = true;
     if (!programMemory(quiesced ? khz[count - 1] : observed, khz[count - 1], true))
-        dropDisplayMemory("its plan cannot cover the move to the top rate");
+        replanDisplayMemory(observed, "its plan cannot cover the move to the top rate");
     unsigned restored = observed;
     const int refused = row != count - 1 ? tegra_bpmp_emc_set(khz[count - 1], &restored) : 0;
     const unsigned now = switch_emc_row(khz, count, restored);
     if (refused || now >= count) {
-        dropDisplayMemory("the BPMP did not restore a rate in the table");
+        replanDisplayMemory(refused ? observed : restored, "the BPMP did not restore a rate in the table");
         return row < count ? row : cur;
     }
     if (!programMemory(restored, restored, true))
-        dropDisplayMemory("its plan does not cover the restored rate");
+        replanDisplayMemory(restored, "its plan does not cover the restored rate");
     return now;
 }
 
@@ -54,7 +54,7 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 #endif
     cur = actual;
     if (!programMemory(khz[cur], khz[cur], true))
-        dropDisplayMemory("its plan does not cover the rate the BPMP set");
+        replanDisplayMemory(khz[cur], "its plan does not cover the rate the BPMP set");
     return cur >= index;
 }
 
