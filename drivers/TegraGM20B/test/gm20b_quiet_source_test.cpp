@@ -155,8 +155,9 @@ TEST(GM20BQuietSource, TheIdleClockSettlesQuietEnds)
 			    .Before("if (idle_in_flight()) {",
 				    "nvxnu_work_schedule(tgm_idle.settle_w);"));
 	const CodeText settle = Block(unit("gpu_quiet.c"), "void tgm_idle_settle(void *arg)");
-	EXPECT_TRUE(settle.Before("switch_gpu_busy_settle(&tgm_busy, chan->chid, tgm_chan_completed(chan));",
-				  "tgm_chan_need(chan, READ_ONCE(chan->submitted));"));
+	EXPECT_TRUE(settle.Before(
+		"switch_gpu_busy_settle(&tgm_busy, chan->chid, tgm_chan_completed(chan));",
+		"tgm_chan_need(chan, READ_ONCE(chan->submitted));"));
 	EXPECT_FALSE(settle.Has("nvxnu_idle("));
 }
 

@@ -145,7 +145,8 @@ TEST_F(Completion, MovingFenceSchedulesAndWakesOnce)
 	EXPECT_EQ(callbacks, 1u);
 	EXPECT_EQ(channelWakes, 1u);
 	EXPECT_EQ(wakeCalls, 0u);
-	EXPECT_EQ(idleCalls, 0u) << "the idle clock reads tgm_busy: the pass adds to no counter of its own";
+	EXPECT_EQ(idleCalls, 0u)
+		<< "the idle clock reads tgm_busy: the pass adds to no counter of its own";
 	EXPECT_EQ(timestamps, 1u);
 	EXPECT_EQ(channel.progress_ns, 42u);
 }

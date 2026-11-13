@@ -152,7 +152,8 @@ TEST_F(GpuDeadline, WorkInFlightOrARecentSwapKeepsTheRunClock)
 	EXPECT_EQ(scheduled, 1u);
 	EXPECT_EQ(tgm_idle.settling, 1);
 	EXPECT_EQ(tgm_idle.dropping, 0);
-	switch_gpu_busy_settle(&tgm_busy, kChid, 3);  // the settle read the quiet job's end from its fence
+	switch_gpu_busy_settle(&tgm_busy, kChid,
+			       3);  // the settle read the quiet job's end from its fence
 	last_swap = now - IDLE_DROP_NS / 2;
 	tegra_gm20b_idle_tick();
 	EXPECT_EQ(scheduled, 1u);

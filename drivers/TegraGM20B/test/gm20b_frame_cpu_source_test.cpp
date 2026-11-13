@@ -90,10 +90,12 @@ TEST(GM20BFrameCpuSource, AnAppsFirstKickIsHeldBeforeItsDoorbell)
 TEST(GM20BFrameCpuSource, TheKickAndThePassKeepNoSharedCounters)
 {
 	EXPECT_FALSE(Block(unit("gpu_exec.c"), "static u32 chan_fence_job(").Has("idle_kicked("));
-	const CodeText pass = Block(unit("SwitchGpuChannelCompletion.h"), "static int chan_nonstall(");
+	const CodeText pass =
+		Block(unit("SwitchGpuChannelCompletion.h"), "static int chan_nonstall(");
 	EXPECT_FALSE(pass.Has("idle_fenced("));
-	EXPECT_TRUE(Block(unit("gpu_chan.c"), "static void chan_wake_waiters(struct tgm_chan *chan)")
-			    .Has("chan_wake_all_waiters(chan, 1);"));
+	EXPECT_TRUE(
+		Block(unit("gpu_chan.c"), "static void chan_wake_waiters(struct tgm_chan *chan)")
+			.Has("chan_wake_all_waiters(chan, 1);"));
 	EXPECT_TRUE(Block(unit("gpu_inline.h"), "static inline void chan_wake_all_waiters(")
 			    .Has("nvxnu_wword_wake(&tgm_waiter_words[waiter], pass);"));
 }

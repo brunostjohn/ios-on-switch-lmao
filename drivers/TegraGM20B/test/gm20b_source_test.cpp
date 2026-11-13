@@ -547,9 +547,9 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	EXPECT_TRUE(Block(gpu(), "int tgm_chan_killed(struct nvif_event *event, void "
 				 "*repv, u32 repc)")
 			    .Has("chan_wake_all_waiters(chan, 0);"));
-	EXPECT_TRUE(
-		Block(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")
-			.Before("*pchan = NULL;", "nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")
+			    .Before("*pchan = NULL;",
+				    "nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);"));
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
 			    .Has("wakeAfterPass();"));
@@ -1144,8 +1144,7 @@ TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 {
 	const CodeText create = Block(gpu(), "static int chan_new(");
 	EXPECT_TRUE(create.Has("chan->submitted = READ_ONCE(*fence_cpu);"));
-	for (const char *cursor :
-	     {"stat_done", "woken_done", "progress_done", "seen_done"})
+	for (const char *cursor : {"stat_done", "woken_done", "progress_done", "seen_done"})
 		EXPECT_TRUE(create.Has(std::string("chan->") + cursor + " = chan->submitted;"))
 			<< cursor;
 	EXPECT_TRUE(Block(gpu(), "static int chan_new(")

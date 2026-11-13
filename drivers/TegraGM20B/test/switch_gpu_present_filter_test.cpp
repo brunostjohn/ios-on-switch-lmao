@@ -138,7 +138,8 @@ TEST_F(PresentFilter, NothingWatchedTakesNoLock)
 	tgm_present_filter_attach(&watched);
 	const unsigned watching = switchSimpleLocks;
 	filter();
-	EXPECT_EQ(switchSimpleLocks, watching + 1) << "a watched present's callout is ordered by the lock";
+	EXPECT_EQ(switchSimpleLocks, watching + 1)
+		<< "a watched present's callout is ordered by the lock";
 }
 
 TEST_F(PresentFilter, TheCalloutRunsOnceThePassedFenceIsVisibleAndOnlyOnce)

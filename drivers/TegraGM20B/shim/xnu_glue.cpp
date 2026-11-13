@@ -466,7 +466,10 @@ extern "C" int nvxnu_wword_idle(struct switch_gpu_wake_word *word, nvxnu_u32 seq
 {
 	switch_gpu_wake_sleep(word, 1);
 	const int woken = idleOn(
-		reinterpret_cast<event_t>(&word->pass), [word] { return switch_gpu_wake_seq(word); },
+		reinterpret_cast<event_t>(&word->pass),
+		[word] {
+			return switch_gpu_wake_seq(word);
+		},
 		seq, deadline_ns);
 	switch_gpu_wake_sleep(word, 0);
 	return woken;
@@ -477,7 +480,10 @@ extern "C" void nvxnu_wword_wake_due(struct switch_gpu_wake_word *word, nvxnu_u3
 {
 	switch_gpu_wake_sleep(word, 1);
 	wakeDueOn(
-		reinterpret_cast<event_t>(&word->pass), [word] { return switch_gpu_wake_seq(word); },
+		reinterpret_cast<event_t>(&word->pass),
+		[word] {
+			return switch_gpu_wake_seq(word);
+		},
 		seq, what, value);
 	switch_gpu_wake_sleep(word, 0);
 }
@@ -503,9 +509,10 @@ extern "C" void nvxnu_irq_start(void)
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
 		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);
-		gIrqSources[i] = gIrqLoop ? IOFilterInterruptEventSource::filterInterruptEventSource(
-						    gIrqLoop, gpuInterrupt, gpuFilter, nub, 0)
-					  : nullptr;
+		gIrqSources[i] = gIrqLoop
+					 ? IOFilterInterruptEventSource::filterInterruptEventSource(
+						   gIrqLoop, gpuInterrupt, gpuFilter, nub, 0)
+					 : nullptr;
 		if (!gPmc || !gIrqSources[i] ||
 		    gIrqLoop->addEventSource(gIrqSources[i]) != kIOReturnSuccess) {
 			panic("tegra-gm20b: cannot attach the GPU %s interrupt (INTID %u)",
