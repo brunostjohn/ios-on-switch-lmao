@@ -94,10 +94,12 @@ extern malloc_logger_t *malloc_logger;
 static void countAllocations(uint32_t type, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uint32_t skip)
 {
     (void)a, (void)b, (void)c, (void)d, (void)skip;
+
     enum {
         kAllocate = 2,
         kDeallocate = 4
     };
+
     if (!counting())
         return;
     mallocs += (type & kAllocate) != 0;

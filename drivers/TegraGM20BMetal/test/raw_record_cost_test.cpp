@@ -17,6 +17,7 @@ extern "C" {
 struct record_count {
     uint64_t sends, locks, mallocs, frees;
 };
+
 void record_count_start(void);
 void record_count_stop(struct record_count *out);
 int thread_selfcounts(int type, void *buf, size_t nbytes);
@@ -92,8 +93,8 @@ Bench &bench()
         if (!made.device)
             return made;
         NSError *error = nil;
-        id<MTLLibrary> library = [made.device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())]
-                                                          error:&error];
+        id<MTLLibrary> library =
+            [made.device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
         made.state = [made.device newRenderPipelineStateWithDescriptor:descriptor(library, MTLPixelFormatBGRA8Unorm)
                                                                  error:&error];
         made.queue = [made.device newCommandQueue];
@@ -234,12 +235,13 @@ Sample measure(const Record &record)
 
 void print(const char *name, const Sample &s, double per, const char *unit)
 {
-    printf("record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu | "
-           "per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
-           name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends,
-           (unsigned long long)s.counts.locks, (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees,
-           unit, s.us / per, s.instructions / per, double(s.counts.sends) / per, double(s.counts.locks) / per,
-           double(s.counts.mallocs) / per);
+    printf(
+        "record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu | "
+        "per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
+        name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends, (unsigned long long)s.counts.locks,
+        (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees, unit, s.us / per,
+        s.instructions / per, double(s.counts.sends) / per, double(s.counts.locks) / per,
+        double(s.counts.mallocs) / per);
 }
 
 Sample difference(const Sample &a, const Sample &b)
@@ -285,9 +287,19 @@ TEST(RawRecordCost, ChangedStateDrawByCall)
 {
     Bench &b = bench();
     ASSERT_TRUE(b.device != nil && b.state != nil);
-    enum Call { VertexBytes, TransformBytes, ColourBytes, TextureSampler, Scissor, Draw, Calls };
+
+    enum Call {
+        VertexBytes,
+        TransformBytes,
+        ColourBytes,
+        TextureSampler,
+        Scissor,
+        Draw,
+        Calls
+    };
+
     const char *names[Calls] = {"setVertexBytes vertices", "setVertexBytes transform", "setFragmentBytes colour",
-                                "texture and sampler", "setScissorRect", "drawPrimitives"};
+                                "texture and sampler",     "setScissorRect",           "drawPrimitives"};
     double sums[Calls] = {};
     double calibration = 1e30;
     for (int i = 0; i < 64; i++) {

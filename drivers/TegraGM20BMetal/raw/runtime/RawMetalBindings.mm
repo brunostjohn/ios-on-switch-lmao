@@ -197,7 +197,8 @@ void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamp
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
         e->_samp[index] = r;
-        e->_cubicMask = uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | 1u << index : e->_cubicMask & ~(1u << index));
+        e->_cubicMask =
+            uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | 1u << index : e->_cubicMask & ~(1u << index));
     }
     setBinding(e->_cb, OpSampler, stage, index, s, 0);
 }

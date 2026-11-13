@@ -124,7 +124,7 @@ TEST_F(RawPassCache, AFrameOfFortyPassesIsKeptForTheNext)
     for (size_t i = 0; i < passes.size(); i++) {
         ASSERT_TRUE(rmPassKey(passes[i], keys[i].bytes, keys[i].hash));
         if (!rmPassFind(keys[i].bytes, keys[i].hash))
-            rmPassKeep(keys[i].bytes, keys[i].hash, [passes[i] copy], RMPass{}, e);
+            rmPassKeep(keys[i].bytes, keys[i].hash, [passes[i] copy], RMPass {}, e);
     }
     size_t found = 0;
     for (const Key &k : keys)

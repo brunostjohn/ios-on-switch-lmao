@@ -23,16 +23,22 @@ struct SurfaceNote {
 
 inline SurfaceNote surfaceNote(IOSurfaceRef s, const void *frame)
 {
-    return {IOSurfaceGetID(s),          uint32_t(IOSurfaceGetWidth(s)), uint32_t(IOSurfaceGetHeight(s)),
-            IOSurfaceGetPixelFormat(s), IOSurfaceGetSeed(s),            switch_frame::callers(frame)};
+    return {IOSurfaceGetID(s),
+            uint32_t(IOSurfaceGetWidth(s)),
+            uint32_t(IOSurfaceGetHeight(s)),
+            IOSurfaceGetPixelFormat(s),
+            IOSurfaceGetSeed(s),
+            switch_frame::callers(frame)};
 }
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 inline IOSurfaceRef lookUpSurface(uint32_t id)
 {
     return IOSurfaceLookup(id);
 }
+
 #pragma clang diagnostic pop
 
 // The surface's line as it is now: "not found" once no process holds it
@@ -86,8 +92,8 @@ inline void describeTargetNote(const TargetNote &n, char *out, size_t size)
 {
     char site[switch_frame::kSiteFrames * 48];
     switch_frame::describe(n.site, site, sizeof site);
-    snprintf(out, size, "raw: compositor target %ux%u format %u usage 0x%x storage %u samples %u type %u at %s", n.width,
-             n.height, n.format, n.usage, n.storage, n.samples, n.type, site);
+    snprintf(out, size, "raw: compositor target %ux%u format %u usage 0x%x storage %u samples %u type %u at %s",
+             n.width, n.height, n.format, n.usage, n.storage, n.samples, n.type, site);
 }
 
 inline void logTargetNote(void *context)

@@ -17,8 +17,8 @@ IOSurfaceRef makeSurface(int width, int height)
     const void *keys[] = {kIOSurfaceWidth, kIOSurfaceHeight, kIOSurfaceBytesPerElement, kIOSurfacePixelFormat,
                           kIOSurfaceName};
     const void *values[] = {w, h, b, f, CFSTR("CA layer")};
-    CFDictionaryRef d = CFDictionaryCreate(nullptr, keys, values, 5, &kCFTypeDictionaryKeyCallBacks,
-                                           &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef d =
+        CFDictionaryCreate(nullptr, keys, values, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     IOSurfaceRef s = IOSurfaceCreate(d);
     CFRelease(d);
     for (CFNumberRef n : {w, h, b, f})

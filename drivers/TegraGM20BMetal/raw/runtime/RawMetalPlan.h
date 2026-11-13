@@ -235,7 +235,8 @@ public:
     template <typename Build> void resolveRenderUses(uint32_t state, const void *nativePipeline, Build build)
     {
         const ResourceKey key{renderStates[state].resourceRevision, reinterpret_cast<uintptr_t>(nativePipeline)};
-        for (uint32_t i = 0, at = recentRenderAt_; i < kRecentRenderUses; ++i, at = (at + kRecentRenderUses - 1) % kRecentRenderUses)
+        for (uint32_t i = 0, at = recentRenderAt_; i < kRecentRenderUses;
+             ++i, at = (at + kRecentRenderUses - 1) % kRecentRenderUses)
             if (recentRenderKeys_[at] == key)
                 return applyRenderUses(state, recentRenderUses_[at]);
         buildUses_.clear();

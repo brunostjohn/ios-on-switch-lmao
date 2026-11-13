@@ -20,6 +20,7 @@ protected:
         CFTypeRef owner = nullptr;
         uint32_t id = 0;
     };
+
     std::vector<Surface> surfaces;
 
     void SetUp() override
@@ -47,7 +48,8 @@ protected:
     uint64_t frame(const Surface &s)
     {
         raw::Texture t;
-        EXPECT_TRUE(dev.createSurfaceTexture(s.id, s.pages, kBytes, s.owner, 0, kWidth, kHeight, kPitch, kRGBA8, t, true));
+        EXPECT_TRUE(
+            dev.createSurfaceTexture(s.id, s.pages, kBytes, s.owner, 0, kWidth, kHeight, kPitch, kRGBA8, t, true));
         const uint64_t handle = t.import ? t.import->bo.handle : 0;
         dev.destroyTexture(t);
         return handle;

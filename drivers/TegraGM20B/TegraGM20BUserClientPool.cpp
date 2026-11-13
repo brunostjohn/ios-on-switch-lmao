@@ -305,7 +305,8 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			if (p->count[c] + p->zeroing[c] >= p->target[c])
 				continue;
 			while (p->clean + classBytes(c) > kSpareCapBytes) {
-				const uint32_t d = switch_gpu_spare_over_depth(p->count, p->target, kClasses);
+				const uint32_t d =
+					switch_gpu_spare_over_depth(p->count, p->target, kClasses);
 				if (d == kClasses || !p->ready[d])
 					break;
 				Spare *s = p->ready[d];
