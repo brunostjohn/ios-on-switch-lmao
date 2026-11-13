@@ -184,14 +184,19 @@ class RMCommandPlan {
     size_t rangeStorageBytes() const;
     raw::StampMap<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t, raw::WordsHash> drawUseSpans_;
     using ResourceKey = std::pair<uint64_t, uintptr_t>;
-    raw::StampMap<ResourceKey, uint32_t, raw::WordsHash> renderUseSpans_, kernelUseSpans_;
+    raw::StampMap<ResourceKey, uint32_t, raw::WordsHash> kernelUseSpans_;
     // the use lists merged or built before saveUses takes them, and the recording's own (recordUses), kept from one
     // command buffer to the next
     std::vector<raw::ResourceUse> mergeUses_, buildUses_, recordUses_;
-    ResourceKey lastRenderUseKey_{UINT64_MAX, 0};
-    uint32_t lastRenderUses_ = 0;
+    // The render use lists resolved last, by resource revision and pipeline: a revision moves with every bind of
+    // another resource, so only draws close together share one (a state switched back to over the same resources)
+    static constexpr uint32_t kRecentRenderUses = 4;
+    std::array<ResourceKey, kRecentRenderUses> recentRenderKeys_{};
+    std::array<uint32_t, kRecentRenderUses> recentRenderUses_{};
+    uint32_t recentRenderAt_ = 0;
     uint32_t drawUses(uint32_t base, void *indices, void *arguments);
-    uint32_t captureRender();
+    uint32_t captureRender(bool bindingUses = true);
+    void forgetRecentRenderUses();
     uint32_t captureKernel();
     uint32_t saveUses(const std::vector<raw::ResourceUse> &uses);
     void applyRenderUses(uint32_t state, uint32_t span);
@@ -207,7 +212,9 @@ public:
     std::vector<raw::KernelStateRef> kernelStates;
     std::vector<uint64_t> viewArrays;  // raw::RasterState's viewport and scissor arrays
 
-    bool record(const Cmd &c, const std::vector<uint64_t> &extra);
+    // `resolvesUses`: a draw's caller resolves its uses (resolveRenderUses) right after, so its state's uses of every
+    // bound resource are not listed
+    bool record(const Cmd &c, const std::vector<uint64_t> &extra, bool resolvesUses = false);
 
     // `build` fills the list it is handed with the dispatch's uses, where the kernel and resource revision are new
     template <typename Build> void setKernelUses(size_t at, const void *nativeKernel, Build build)
@@ -228,17 +235,16 @@ public:
     template <typename Build> void resolveRenderUses(uint32_t state, const void *nativePipeline, Build build)
     {
         const ResourceKey key{renderStates[state].resourceRevision, reinterpret_cast<uintptr_t>(nativePipeline)};
-        if (key != lastRenderUseKey_) {
-            auto [found, inserted] = renderUseSpans_.insert(key, 0);
-            if (inserted) {
-                buildUses_.clear();
-                build(buildUses_);
-                *found = saveUses(buildUses_);
-            }
-            lastRenderUseKey_ = key;
-            lastRenderUses_ = *found;
-        }
-        applyRenderUses(state, lastRenderUses_);
+        for (uint32_t i = 0; i < kRecentRenderUses; ++i)
+            if (recentRenderKeys_[i] == key)
+                return applyRenderUses(state, recentRenderUses_[i]);
+        buildUses_.clear();
+        build(buildUses_);
+        const uint32_t uses = saveUses(buildUses_);
+        recentRenderAt_ = (recentRenderAt_ + 1) % kRecentRenderUses;
+        recentRenderKeys_[recentRenderAt_] = key;
+        recentRenderUses_[recentRenderAt_] = uses;
+        applyRenderUses(state, uses);
     }
 
     // An empty list for the recording's uses of one command, its capacity the largest one's so far

@@ -310,6 +310,15 @@ void rmPoolCommandBuffers()
     _plan.registerResource((__bridge void *)object, facts);
 }
 
+// The raw state a draw of this raster state runs
+static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
+{
+    if (const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline))
+        return native;
+    RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
+    return [(id)pipeline isKindOfClass:[RMPipeline class]] ? pipeline->_raw : nullptr;
+}
+
 - (void)record:(const Cmd &)cmd
 {
     if (_commandLog) {
@@ -324,17 +333,13 @@ void rmPoolCommandBuffers()
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
-    if (_plan.record(cmd, _extra)) {
+    const raw::Pipeline *native = isPlanDraw(cmd.op) ? recordedPipeline(_plan.raster.current()) : nullptr;
+    if (_plan.record(cmd, _extra, native && native->rec)) {
         std::vector<raw::ResourceUse> &uses = _plan.recordUses();
         if (isPlanDraw(cmd.op)) {
             const uint32_t index = _plan.draw(_plan.size() - 1).state;
             const auto &state = _plan.renderStates[index];
             if (!state.usesFinal) {
-                const auto &raster = _plan.raster[state.raster];
-                RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
-                const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline);
-                if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
-                    native = pipeline->_raw;
                 if (native && native->rec) {
                     _plan.resolveRenderUses(index, native, [&](std::vector<raw::ResourceUse> &bound) {
                         const auto &record = *native->rec;
