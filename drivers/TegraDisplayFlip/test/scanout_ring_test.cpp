@@ -9,8 +9,9 @@
 //  - latch() reads every hardware state right (never inconsistent; taken means scanned);
 //  - with two buffers it is plain double buffering: nothing is replaced and frames wait for the latch;
 //  - against a controller that ignores a START_ADDR store while a request is out (one way DC A could differ from the model),
-//    the first replacement reads as inconsistent, recover() falls back to double buffering once, and every check above but
-//    the latest-frame one keeps holding, with presents going on.
+//    the first replacement reads as inconsistent, recover() falls back to double buffering, replacement comes back after the
+//    ring's run of plain latches and falls back again, and every check above but the latest-frame one keeps holding, with
+//    presents going on.
 #include <gtest/gtest.h>
 
 #include <cstdarg>
@@ -81,7 +82,7 @@ struct Sim {
     unsigned boundariesPending = 0;  // boundaries the frame-end action has not handled yet
     uint64_t shown = 0, replaced = 0, collapsed = 0, waited = 0, boundaries = 0, latePresents = 0, holds = 0;
     unsigned recoveries = 0;
-    uint64_t shownAtRecovery = 0, replacedAtRecovery = 0;
+    uint64_t shownAtRecovery = 0, replacedAtRecovery = 0, fewestBetweenRecoveries = UINT64_MAX;
 
     explicit Sim(unsigned n, bool deviant = false) : buffers(n)
     {
@@ -229,6 +230,8 @@ struct Sim {
                   "inconsistent: active %d request %d assembly %d, ring front %d pending %d superseded %d", dc.active,
                   dc.request, dc.assembly, front, pending, superseded);
             if (ring.replace) {  // NativeLegacyDisplay::recoverFlip: one line, then double buffering
+                if (recoveries && shown - shownAtRecovery < fewestBetweenRecoveries)
+                    fewestBetweenRecoveries = shown - shownAtRecovery;
                 ++recoveries;
                 shownAtRecovery = shown;
                 replacedAtRecovery = replaced;
@@ -322,26 +325,33 @@ TEST(ScanoutRing, TwoAndThreeBuffers)
     }
 }
 
-// A controller that ignores a START_ADDR store while a request is out: one fallback to double buffering per run, in
-// every run, and presents going on after it.
-TEST(ScanoutRing, DeviantControllerFallsBackOnce)
+// A controller that ignores a START_ADDR store while a request is out: a fallback to double buffering in every run with
+// presents going on after it, no replacement while double-buffered, and replacement back after the ring's run of plain
+// latches (600), so a long run falls back again, never sooner than that run after the last.
+TEST(ScanoutRing, DeviantControllerFallsBackThenReArmsAfterACleanRun)
 {
-    unsigned recovered = 0;
-    for (unsigned seed = 1; seed <= 200; ++seed) {
+    unsigned recovered = 0, rearmed = 0;
+    for (unsigned seed = 1; seed <= 60; ++seed) {
         state = 0x51ed27f1u * seed;
         Sim s(3, true);
         s.run(4000);
-        CHECK(s.recoveries <= 1, "seed %u: %u fallbacks", seed, s.recoveries);
         if (s.recoveries) {
             ++recovered;
-            CHECK(s.replaced == s.replacedAtRecovery, "seed %u: replaced after the fallback", seed);
+            CHECK(s.replaced == s.replacedAtRecovery || s.shown >= s.shownAtRecovery + 600,
+                  "seed %u: replaced %llu presents after the fallback", seed,
+                  (unsigned long long)(s.shown - s.shownAtRecovery));
             CHECK(s.shown > s.shownAtRecovery + 50, "seed %u: only %llu presents after the fallback", seed,
                   (unsigned long long)(s.shown - s.shownAtRecovery));
         }
+        s.run(40000);
+        if (s.recoveries >= 2)
+            ++rearmed;
+        CHECK(s.recoveries < 2 || s.fewestBetweenRecoveries >= 600, "seed %u: fell back again after %llu presents",
+              seed, (unsigned long long)s.fewestBetweenRecoveries);
     }
-    std::printf("deviant controller: fell back to double buffering in %u of 200 runs\n", recovered);
-    CHECK(recovered > 150, "the deviant controller should force the fallback (%u)", recovered);
-    EXPECT_EQ(recovered, 200u) << "fell back to double buffering in 200 of 200 runs";
+    std::printf("deviant controller: fell back in %u of 60 runs, again after re-arming in %u\n", recovered, rearmed);
+    EXPECT_EQ(recovered, 60u);
+    EXPECT_EQ(rearmed, 60u);
 }
 
 // One late frame: three buffers recover at the next boundary, two stay a frame behind.

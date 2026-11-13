@@ -552,6 +552,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
     ],
     deps = [":native_scanout_kernel"],
 )

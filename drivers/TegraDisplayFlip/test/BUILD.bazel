@@ -17,11 +17,14 @@ lint_files()
 
 RING = "//drivers/TegraDisplayFlip:TegraScanoutRing.h"
 
+BACKOFF = "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h"
+
 host_test(
     name = "scanout_ring_test",
     srcs = [
         "scanout_ring_test.cpp",
         RING,
+        BACKOFF,
     ],
     copts = ["-Wno-unused-parameter"],
 )
@@ -31,6 +34,7 @@ host_test(
     srcs = [
         "direct_policy_test.cpp",
         RING,
+        BACKOFF,
     ],
     copts = ["-Wno-unused-parameter"],
 )

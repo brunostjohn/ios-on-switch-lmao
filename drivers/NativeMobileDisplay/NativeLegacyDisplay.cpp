@@ -1185,7 +1185,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     Span stTouchSwap = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
-    uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
+    uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled
     bool idleSincePresent = false;
     bool statsQuiet = false;  // the last window logged had nothing on the screen change (noteStatsWindow)
 
@@ -1839,8 +1839,8 @@ private:
         const char *buffering = "";
         if (doubleBuffer && !ring.replace)
             buffering = stFallbacks ? " (fell back to double buffering now)" : " (double-buffered)";
-        add("; %u buffers%s, replaced %u, collapsed %u", doubleBuffer ? ring.buffers : 1u, buffering, stReplaced,
-            stCollapsed);
+        add("; %u buffers%s, replaced %u, collapsed %u, fallbacks %u re-armed %u", doubleBuffer ? ring.buffers : 1u,
+            buffering, stReplaced, stCollapsed, ring.replaceBackoff.failures, ring.replaceBackoff.retries);
         // r18-planes: window B sets written (of them by swaps that changed only window B: video frames with no UI composite),
         // seen latched, new slot mappings, detached layers not shown, window B underflow frames, ready-mask mismatches.
         const char *planesState = "-";
@@ -2725,18 +2725,18 @@ private:
     }
 
     // Under the gate, at the first frame end whose window A START_ADDR none of the asked-for flips explains while flips are being
-    // replaced: DC A does not take a replaced START_ADDR as TegraScanoutRing.h models it. One line, then double buffering for the
-    // rest of the boot, as before r14: the buffer DC A scans becomes the front, the newest complete frame is asked for again (no
-    // request is out now, so it is a plain flip), a replaced buffer it does not scan stays untouched until a frame end shows a plain
-    // latch, and a copy in flight finishes into its own buffer and waits for that latch. A mismatch after this panics as it did.
+    // replaced: DC A does not take a replaced START_ADDR as TegraScanoutRing.h models it. One line, then double buffering, as
+    // before r14, until the ring's run of plain latches re-arms replacement: the buffer DC A scans becomes the front, the newest
+    // complete frame is asked for again (no request is out now, so it is a plain flip), a replaced buffer it does not scan stays
+    // untouched until a frame end shows a plain latch, and a copy in flight finishes into its own buffer and waits for that
+    // latch. A mismatch while double-buffered panics as it did.
     void recoverFlip(uint32_t start, uint32_t control, int asked, int replaced, int scanned)
     {
-        IOLog("SwitchDisplay: window A scans %#x after flips to %#x (replaced %#x, front %#x; STATE_CONTROL %#x), "
-              "not as "
-              "modelled: double-buffered from here (the r7q path)\n",
-              start, surfaceAddress(asked), replaced == kNoBuffer ? 0u : surfaceAddress(replaced),
-              surfaceAddress(scanned), control);
         const int again = ring.recover(surfaceIndex(start));
+        IOLog("SwitchDisplay: window A scans %#x after flips to %#x (replaced %#x, front %#x; STATE_CONTROL %#x), "
+              "not as modelled: double-buffered for %u plain latches (the r7q path)\n",
+              start, surfaceAddress(asked), replaced == kNoBuffer ? 0u : surfaceAddress(replaced),
+              surfaceAddress(scanned), control, ring.replaceBackoff.run);
         if (again != kNoBuffer)
             writeFlip(again);
         if (stats)
