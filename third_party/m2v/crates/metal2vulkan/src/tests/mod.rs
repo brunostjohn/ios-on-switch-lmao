@@ -64,6 +64,7 @@ mod engine_index_words;
 mod engine_indirect_commands;
 mod engine_kernel_lod;
 mod engine_kernel_stage_in;
+mod engine_layered_storage_link;
 mod engine_lazy_operands;
 mod engine_linear_cube;
 mod engine_linear_half;

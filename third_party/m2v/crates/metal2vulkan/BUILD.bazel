@@ -148,6 +148,18 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# A slice-choosing vertex function links with the layered storage form, and a slice-reading fragment function compiled
+# for another vertex function stays refused (pipeline/link/varyings.rs)
+rust_test(
+    name = "layered_storage_link_test",
+    args = ["tests::engine_layered_storage_link::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = ["@gpu_llvm_as//:bin/llvm-as"],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 # RGB10A8_2P_XR10 in its two planes (pipeline/two_plane.rs): the output split, the input attachments and storage views
 # of a fetch, the alpha index
 rust_test(
