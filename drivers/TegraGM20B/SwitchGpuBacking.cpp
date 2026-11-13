@@ -366,6 +366,7 @@ extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 extern "C" void switch_gpu_bridge_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_events_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_completed(void) __attribute__((weak));
+extern "C" void switch_gpu_copy_retire(void) __attribute__((weak));
 
 extern "C" void switch_gpu_backing_completed(void)
 {
@@ -383,6 +384,8 @@ extern "C" void switch_gpu_backing_completed(void)
 
 extern "C" void switch_gpu_backing_retire(void)
 {
+	if (switch_gpu_copy_retire)
+		switch_gpu_copy_retire();
 	if (!registry)
 		return;
 	switch_gpu_backing *ready = nullptr;

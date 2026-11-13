@@ -62,11 +62,15 @@ uint8_t *poolBytes;
 switch_gpu_mapping pushWindow;
 std::vector<CopyEngine::Syncpt> syncpts;
 
+// The backings' retirement work, which retires the queue's ended copies first (switch_gpu_backing_retire)
+bool retirementPending;
+unsigned retirementRequests;
+
 void pump()
 {
-	if (queue.retirement && queue.retirement->pending) {
-		queue.retirement->pending = false;
-		queue.retirement->fn(nullptr, nullptr);
+	if (retirementPending) {
+		retirementPending = false;
+		switch_gpu_copy_retire();
 	}
 }
 
@@ -100,6 +104,12 @@ const tgm_chan &channelOf(const switch_gpu_backing_token &token)
 {
 	return token.queue == channelId ? gpu : replaced.at(token.queue);
 }
+}
+
+extern "C" void switch_gpu_backing_schedule_retirement(void)
+{
+	++retirementRequests;
+	retirementPending = true;
 }
 
 extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
@@ -537,8 +547,6 @@ protected:
 		tgm_mem_del(&queue.space.fence);
 		free(queue.space.words);
 		free(queue.dependencies);
-		if (queue.retirement)
-			thread_call_free(queue.retirement);
 		if (queue.lock)
 			IOLockFree(queue.lock);
 		queue.~Copier();
@@ -621,10 +629,11 @@ TEST_F(CheckedCopy, ACompletedCopyTakesNoThreadCallOfItsOwn)
 	auto a = allocation(), b = allocation();
 	ASSERT_EQ(copy(a, b), 0);
 	ASSERT_EQ(copy(b, a), 0);
-	switchCopyThreadCalls = 0;
+	switchCopyThreadCalls = retirementRequests = 0;
 	gpu.completed = gpu.submitted;
 	pass();
 	EXPECT_EQ(switchCopyThreadCalls, 0u) << "thread calls of the copy queue's own for one pass";
+	EXPECT_GE(retirementRequests, 1u);
 	pump();
 	EXPECT_EQ(calls, 2u);
 	EXPECT_EQ(tokenRefs, 0u);

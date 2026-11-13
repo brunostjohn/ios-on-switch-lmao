@@ -2,7 +2,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOMemoryDescriptor.h>
-#include <kern/thread_call.h>
 #include "TegraGM20BCopyPush.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BTiled.h"
@@ -24,10 +23,11 @@ struct Job {
 	tegra_gm20b_ce_done done;
 };
 
+// Its copies retire on the backings' retirement work (switch_gpu_copy_retire), one thread call for both: a copy's end
+// releases its backings' uses, which that work retires next.
 struct Copier {
 	IOLock *lock;
 	SwitchGpuKqueue space;
-	thread_call_t retirement;
 	bool semanticFailed, replaceChannel;
 	uint32_t waitingSources, order;
 	Job jobs[Jobs];
@@ -39,7 +39,7 @@ struct Copier {
 
 void fenced(void *)
 {
-	thread_call_enter(queue.retirement);
+	switch_gpu_backing_schedule_retirement();
 }
 
 void discardSpace()
@@ -121,7 +121,7 @@ void logFailedPush(const Job &job, int result)
 }
 #endif
 
-void retire(thread_call_param_t, thread_call_param_t)
+void retire()
 {
 	tegra_gm20b_ce_done callbacks[Jobs];
 	int results[Jobs];
@@ -162,18 +162,9 @@ bool initialize()
 {
 	if (__atomic_load_n(&queue.lock, __ATOMIC_ACQUIRE))
 		return true;
-	auto retirement = thread_call_allocate_with_options(
-		retire, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-	IOLock *lock = retirement ? IOLockAlloc() : nullptr;
-	if (!lock) {
-		if (retirement)
-			thread_call_free(retirement);
+	IOLock *lock = IOLockAlloc();
+	if (!lock)
 		return false;
-	}
-	thread_call_t noCall = nullptr;
-	if (!__atomic_compare_exchange_n(&queue.retirement, &noCall, retirement, false,
-					 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-		thread_call_free(retirement);
 	IOLock *noLock = nullptr;
 	if (!__atomic_compare_exchange_n(&queue.lock, &noLock, lock, false, __ATOMIC_RELEASE,
 					 __ATOMIC_ACQUIRE))
@@ -307,7 +298,13 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 extern "C" void switch_gpu_copy_completed(void)
 {
 	if (__atomic_load_n(&queue.waitingSources, __ATOMIC_ACQUIRE))
-		thread_call_enter(queue.retirement);
+		switch_gpu_backing_schedule_retirement();
+}
+
+extern "C" void switch_gpu_copy_retire(void)
+{
+	if (__atomic_load_n(&queue.lock, __ATOMIC_ACQUIRE))
+		retire();
 }
 
 extern "C" int tegra_gm20b_ce_copy_plane_checked(

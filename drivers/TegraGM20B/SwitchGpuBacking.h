@@ -141,6 +141,9 @@ int switch_gpu_backing_token_external_status(const struct switch_gpu_backing_tok
 int switch_gpu_backing_token_external_wait(const struct switch_gpu_backing_token *token);
 /* Call after publishing an engine completion or failure, outside its timeline lock. */
 void switch_gpu_backing_completed(void);
+/* The retirement work, which also retires the kernel copy queue's ended copies (switch_gpu_copy_retire) before the
+ * backings they release. */
+void switch_gpu_backing_schedule_retirement(void);
 
 struct switch_gpu_backing_use {
 	struct switch_gpu_backing *backing;
