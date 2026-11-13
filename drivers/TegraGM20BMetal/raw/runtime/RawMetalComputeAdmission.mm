@@ -84,11 +84,7 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
                 f ? raw::slotView(x.window, f->tic0, raw::swizzledWord0(f->tic0, viewed->_raw.swizzle), f->bpp,
                                   raw::blockCompressed(f))
                   : raw::SlotView::Own;
-            bool viewRefused = false;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            viewRefused = view == raw::SlotView::View && rmHalfViewRefused();
-#endif
-            if (view == raw::SlotView::None || viewRefused) {
+            if (view == raw::SlotView::None) {
                 return refuse(PredComputeView, x.slot,
                               "a kernel m2v binds a view of another texel size at a texture slot");
             }

@@ -14,7 +14,7 @@ bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t f
         return false;
     std::lock_guard<raw::Mutex> l(lock_);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probePlainPrivate.load(std::memory_order_relaxed) || probePlainMemory.load(std::memory_order_relaxed))
+    if (probePlainPrivate.load(std::memory_order_relaxed))
         return false;
 #endif
     const uint64_t need = compClassBytes(compBytes(bl.bytes));

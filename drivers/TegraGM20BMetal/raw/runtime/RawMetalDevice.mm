@@ -245,13 +245,6 @@
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (rmZeroNewBuffers() && b->_raw.cpu) {
-        memset(b->_raw.cpu, 0, b->_raw.length);
-        if (!b->_raw.wc)
-            cacheLines(b->_raw.cpu, b->_raw.length, false);
-    }
-#endif
     return (id<MTLBuffer>)b;
 }
 

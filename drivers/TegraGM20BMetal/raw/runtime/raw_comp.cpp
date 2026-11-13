@@ -89,10 +89,6 @@ uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
 #if SWITCH_RAW_DIAGNOSTICS
     zetaProbe = probeZetaKinds.load(std::memory_order_relaxed);
 #endif
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probePlainMemory.load(std::memory_order_relaxed))
-        return 0;
-#endif
     return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
                        std::max<uint32_t>(m.samples, 1), copied, zetaProbe);
 }

@@ -52,7 +52,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     rc->internalCompletion();
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
+    rc->forceWholePrograms(cb->_forceWholePrograms);
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
