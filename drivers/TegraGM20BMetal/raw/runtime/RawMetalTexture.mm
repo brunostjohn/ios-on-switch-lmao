@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalFresh.h"
 #import "RawMetalMultisample.h"
 #include "raw_texture_cpu_range.h"
 
@@ -421,6 +422,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 #endif
     if (_surfaceWrites)
         noteSurfaceWrite(_surfaceWrites);
+    freshBeforeTransfer(self);
     if (transferTexture(self, r, level, slice, const_cast<void *>(bytes), row, image, true))
         return;
     if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
@@ -481,6 +483,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 {
     if (!r.size.width || !r.size.height || !r.size.depth)
         return;
+    freshBeforeTransfer(self);
     if (transferTexture(self, r, level, slice, bytes, row, image, false))
         return;
     if (_rawOk && _raw.blockW * _raw.blockH > 1 && _raw.blockLinear) {
