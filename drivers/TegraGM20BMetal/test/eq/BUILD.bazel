@@ -128,6 +128,13 @@ py_test(
     deps = [":draw_goldens"],
 )
 
+py_test(
+    name = "eq_fields_test",
+    size = "small",
+    srcs = ["eq_fields_test.py"],
+    deps = [":draw_goldens"],
+)
+
 # eq_rules.py's unread class on the states it was ruled for: their barrier programs on the Maxwell interpreter
 py_test(
     name = "unread_uniforms_test",
