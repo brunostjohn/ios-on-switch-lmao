@@ -51,7 +51,7 @@ int tdfll_platform_cpu_on_pllx(char *why, size_t len);
 bool tdfll_platform_pllx_locked(void);
 /* I2C5 is clocked, out of reset and in multi-master mode, so the DFLL's own I2C master may share PWR_I2C with it. */
 int tdfll_platform_i2c5_shareable(char *why, size_t len);
-/* VDD_CPU's MAX77812 M4_VOUT code over TegraI2C (one retry on arbitration loss); write reads back. 0 or TEGRA_I2C_E* */
+/* VDD_CPU's MAX77812 M4_VOUT code over TegraI2C; write reads back. 0 or TEGRA_I2C_E* */
 int tdfll_platform_vout_read(u8 *code);
 int tdfll_platform_vout_write(u8 code);
 u8 tdfll_platform_pmic_address(void);

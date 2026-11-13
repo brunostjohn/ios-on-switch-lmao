@@ -236,14 +236,11 @@ u8 tdfll_platform_pmic_address(void)
 	return (u8)vdd_cpu.client.addr;
 }
 
-/* I2C5 is shared with the DFLL's own master: an arbitration loss is expected now and then, so one retry */
 int tdfll_platform_vout_read(u8 *code)
 {
 	int err = tegra_i2c_init(PMIC_BUS);
 
 	if (!err)
-		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, code, 1);
-	if (err == TEGRA_I2C_EARB)
 		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, code, 1);
 	return err;
 }
@@ -253,10 +250,6 @@ int tdfll_platform_vout_write(u8 code)
 	u8 check = 0;
 	int err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code, 1);
 
-	if (err == TEGRA_I2C_EARB) {
-		err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code,
-				      1);
-	}
 	if (!err)
 		err = tdfll_platform_vout_read(&check);
 	if (!err && check != code)
