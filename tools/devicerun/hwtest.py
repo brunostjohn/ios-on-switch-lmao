@@ -87,6 +87,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.archive_miss',
             'gpu.raw.stored_msaa',
             'gpu.texture.fresh',
+            'gpu.compute.simd_group',
             'metal.device',
             'metal.compute',
             'metal.render.color',
