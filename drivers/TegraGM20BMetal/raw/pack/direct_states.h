@@ -38,6 +38,16 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
     return {};
 }
 
+// Whether a state's key names an RGB10A8_2P_XR10 colour ("c<j>=550:"): a state with a two-plane form (raw_xr_pass.h)
+inline bool twoPlaneColors(const std::string &key)
+{
+    const std::string head = key.substr(0, key.find(" | "));
+    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2))
+        if (head.compare(at + 4, 4, "550:") == 0)
+            return true;
+    return false;
+}
+
 // Each state of `lines` (corpusLines') once, made with its functions' library: Core Animation's `qc`, another framework's
 // default.metallib or a bundle's library under PROBE_LIB_ROOT, the raw path's own `own` (`standIn` for the two-plane moves).
 // `each(line, ours, state)` gets the line without its mark and the state keyed as the raw path keys it: a bundle's under its

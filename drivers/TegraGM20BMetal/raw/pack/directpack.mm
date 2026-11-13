@@ -217,16 +217,6 @@ void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std:
            form.rung == 3 ? form.program : "");
 }
 
-// Whether a state's key names an RGB10A8_2P_XR10 colour ("c<j>=550:")
-bool twoPlaneColors(const std::string &key)
-{
-    const std::string head = key.substr(0, key.find(" | "));
-    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2))
-        if (head.compare(at + 4, 4, "550:") == 0)
-            return true;
-    return false;
-}
-
 // A state's records: its own, its barrier form where its own is the storage form (one that computes the pipeline's blend
 // has its twin only for a debug build's probe: raw_gpu.cpp Device::pipeline), its fetch-free form, and one per test class
 // its draws can ask for (named " | tests=<class>" after its key, as the runtime names them); then, for a state of
@@ -279,7 +269,7 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
     (outcome == raw::CompileOutcome::Made ? n.made : outcome == raw::CompileOutcome::Refused ? n.refused : n.failed)++;
     n.sampled += s.xrSlots && outcome == raw::CompileOutcome::Made;
     n.written += !s.written.empty() && outcome == raw::CompileOutcome::Made;
-    if (outcome != raw::CompileOutcome::Made || !twoPlaneColors(s.key))
+    if (outcome != raw::CompileOutcome::Made || !probe::twoPlaneColors(s.key))
         return;
     raw::ProbeTextures planes = textures;
     planes.twoPlane = true;

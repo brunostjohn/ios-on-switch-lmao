@@ -121,16 +121,6 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     fclose(f);
 }
 
-// Whether a state's key names an RGB10A8_2P_XR10 colour ("c<j>=550:"), as directpack.mm asks before its two-plane form
-bool twoPlaneColors(const std::string &key)
-{
-    const std::string head = key.substr(0, key.find(" | "));
-    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2))
-        if (head.compare(at + 4, 4, "550:") == 0)
-            return true;
-    return false;
-}
-
 // The state's fetch-free form, made as directpack.mm makes it (fetch_free_make.h)
 void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &line, const std::string &key,
                    raw::ProbeTextures textures, const char *dir)
@@ -260,7 +250,7 @@ int main(int argc, char **argv)
                                  (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string()) +
                                  raw::writtenVariant(s.written);
                              if (check(line, s, s.key + tests + sampled, textures) != raw::CompileOutcome::Made ||
-                                 !twoPlaneColors(s.key))
+                                 !probe::twoPlaneColors(s.key))
                                  return;
                              textures.twoPlane = true;
                              check(line, s, s.key + tests + raw::kXrPlanesVariant + sampled, textures);
