@@ -120,7 +120,7 @@
 //     prepared or enabled or its governor started (one log line saying why; it refuses while I2C5 is not in
 //     multi-master mode) that raise fails: the CPU stays at the inherited clock and the next raise runs the same path
 //     again. Only a chip the DFLL does not fit (-ENODEV) keeps the PLL mode for the boot. Losing the sensor returns
-//     the CPU to PLLX for good.
+//     the CPU to PLLX until it reads again.
 //     switch_thermal_cpu_quiesce() hands the CPU back to PLLX before SwitchPMIC's shut-down and restart
 //     traffic on I2C5, where the DFLL would be a second master.
 //   * Thermal trip: L4T caps VDD_CPU at 1060 mV from TEGRA210B01_DFLL_THERMAL_CAP_0 = 64 C
@@ -133,8 +133,8 @@
 //     limit is capped at the trip; while waiting to go up again, its low limit is raised to the
 //     re-raise temperature: both edges come by interrupt (the hold-off expiry is a one-shot of the
 //     timer). (L4T reads that trip on SOC_THERM's PLL sensor; this is the TMP451's remote diode with
-//     hekate's -12.5 C offset: close, not identical.) Losing the sensor, or a raise that is refused,
-//     drops the CPU for the rest of the boot.
+//     hekate's -12.5 C offset: close, not identical.) Losing the sensor drops the CPU until it reads again; a
+//     step that fails fails that raise (one line), and the next raise runs from the start.
 #include <stdarg.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -431,9 +431,9 @@ class SwitchThermal : public IOService {
     bool alertArmed = false, sensorReady = false, announced = false, reportedFailure = false;
     bool asleep = false;  // from suspend to resume: SOC_THERM's events start no evaluation
     bool reportedCritical = false;
-    // CPU operating point: wanted, raised now (VDD_CPU above the boot value), or settled for this boot (sensor
-    // lost, a raise refused or stopped by perfSteps: never raised again). A
-    // thermal trip only holds it down until perfHoldUntil.
+    // CPU operating point: wanted, raised now (VDD_CPU above the boot value), or settled for this boot (shutting down,
+    // a chip whose CVB rules the raise out, or stopped by perfSteps: never raised again). A thermal trip only holds it
+    // down until perfHoldUntil.
     bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
     bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
     bool pllxLost = false;                           // SC7 left PLLX as the warm boot set it
@@ -614,7 +614,7 @@ void SwitchThermal::failSafe(const char *what, int err)
     publish("FanDrive", kFullDrive);
     sensorReady = false;
     storeReading(false, 0, 0);
-    restoreCpu(what, CpuDown::ForGood);  // no raised clocks without a working sensor, for the rest of the boot
+    restoreCpu(what, CpuDown::Again);  // no raised clocks without a working sensor: up again once it reads
     if (!reportedFailure)
         IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
     reportedFailure = true;
@@ -829,6 +829,7 @@ bool SwitchThermal::preparePerf()
     const uint32_t outb = switch_mmio_read32(car, PLLP_OUTB);
     const uint32_t enbY = switch_mmio_read32(car, CLK_OUT_ENB_Y);
     const char *refusal = nullptr;
+    bool fact = false;  // this chip or board rules the raise out; anything else is the clock state now
     int err = 0;
     snprintf(clockState, sizeof(clockState),
              "CCLKG %#x (state %u, run source %u), SUPER_CCLKG_DIVIDER %#x, PLLP_BASE "
@@ -866,12 +867,15 @@ bool SwitchThermal::preparePerf()
             refusal = "the CCLK divider is in use";
         } else if (refKHz(car) != 38400) {
             refusal = "pll_ref is not 38.4 MHz";
+            fact = true;
         } else if ((outb & kOut4Running) != kOut4Running) {
             refusal = "PLLP_OUT4, the cluster's backup clock, is off";
         } else if (((hidrev >> 8) & 0xff) != 0x21 || ((hidrev >> 4) & 0xf) != 2) {
             refusal = "not a T210B01 (HIDREV)";
+            fact = true;
         } else if (cpuSpeedo <= 0 || cpuSpeedo > 4000) {
             refusal = "the CPU speedo is not fused";
+            fact = true;
         } else if ((err = readCpuRail(&cpuRail, &keptVout))) {
             refusal = "VDD_CPU (MAX77812) does not answer on I2C5";
         } else if (voutMilliVolts(keptVout) > kPerfMilliVolts) {
@@ -882,13 +886,15 @@ bool SwitchThermal::preparePerf()
             refusal = "MAX77812 configuration read failed on I2C5";
         } else if ((pmicVersion & 7) == kVersionEs2) {
             refusal = "the MAX77812 is ES2 silicon, which L4T trims first";
+            fact = true;
         }
         // NOLINTEND(bugprone-assignment-in-if-condition,bugprone-assignment-in-selection-statement)
     }
     if (refusal) {
-        perfSettled = true;
-        IOLog("SwitchPerf: CPU raise not applied for this boot: %s (CCLK %#x, PLLX %#x, CPU speedo %d, I2C5 %d; %s)\n",
-              refusal, cpu.policy, cpu.pllx, cpuSpeedo, err, clockState);
+        perfSettled = fact;
+        IOLog("SwitchPerf: CPU raise not applied%s: %s (CCLK %#x, PLLX %#x, CPU speedo %d, I2C5 %d; %s)\n",
+              fact ? " for this boot" : ", the next raise checks again", refusal, cpu.policy, cpu.pllx, cpuSpeedo, err,
+              clockState);
         return false;
     }
     if (!m4CfgKept) {
@@ -973,9 +979,9 @@ bool SwitchThermal::raiseCpu(int soc)
             IODelay(2);
         }
         if ((switch_mmio_read32(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
-            IOLog("SwitchPerf: after sleep, PLLP_OUT4 is off (PLLP_OUTB %#x); the CPU stays at %u kHz for this boot\n",
-                  switch_mmio_read32(car, PLLP_OUTB), found);
-            perfSettled = true;
+            IOLog("SwitchPerf: after sleep, PLLP_OUT4 is off (PLLP_OUTB %#x, kept %#x); this raise fails at %u kHz\n",
+                  switch_mmio_read32(car, PLLP_OUTB), keptOutb, found);
+            pllxLost = true;
             return false;
         }
         // The DFLL enable starts from PLLX at the boot rate (the PLL ladder relocks in its own first step).
@@ -1043,7 +1049,7 @@ bool SwitchThermal::raiseCpu(int soc)
         }
     }
     if (failed) {
-        restoreCpu("raise stopped", CpuDown::ForGood);
+        restoreCpu("raise stopped", CpuDown::Again);
         return false;
     }
     if (!perfRaised) {
@@ -1515,11 +1521,11 @@ void SwitchThermal::restoreCpu(const char *why, CpuDown down)
     if (down == CpuDown::Hold)
         clock_interval_to_deadline(kPerfHoldMS, kMillisecondScale, &perfHoldUntil);
     if (perfRung && !runCpuFromPllx(keptPllx, 0)) {
-        perfSettled = true;
-        IOLog(
-            "SwitchPerf: %s: the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left at %u MHz and %u mV "
-            "for this boot\n",
-            why, readCpu(car).kHz / 1000, kPerfMilliVolts);
+        perfRaised = true;  // still on the rung: the next evaluation that wants it lower asks again
+        IOLog("SwitchPerf: %s: the PLLP_OUT_CPU gate or the cluster mux did not read back (CCLKG %#x, CLK_OUT_ENB_Y "
+              "%#x); CPU still at %u MHz and %u mV\n",
+              why, switch_mmio_read32(car, CCLKG_BURST_POLICY), switch_mmio_read32(car, CLK_OUT_ENB_Y),
+              readCpu(car).kHz / 1000, kPerfMilliVolts);
         return;
     }
     perfRung = 0;

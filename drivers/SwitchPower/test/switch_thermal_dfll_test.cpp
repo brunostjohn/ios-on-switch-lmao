@@ -2,13 +2,14 @@
 // SwitchThermalDfll.h, SwitchThermal's DFLL mode, run against a stand-in SwitchThermal and a DFLL whose answers the
 // test sets: a failure is one line and fails that raise, and the next raise runs the same path at once (no wait, no PLL
 // ladder in between); only a chip the DFLL does not fit (-ENODEV from prepare) ends the DFLL mode; a refused rate
-// fails that request alone. A source guard holds SwitchThermal.cpp's DFLL sites to the same rule.
+// fails that request alone. A source guard holds SwitchThermal.cpp to the same rule for its own steps.
 #include <gtest/gtest.h>
 
 #include <cerrno>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -270,20 +271,28 @@ TEST_F(ThermalDfll, ARefusedRateFailsThatRequestAloneWithOneLine)
     EXPECT_EQ(gLines, want);
 }
 
-// SwitchThermal.cpp's DFLL steps: no DFLL failure leaves the DFLL mode or waits.
-TEST(ThermalDfllSource, SwitchThermalFailsOneDfllStepAndNeverLatchesIt)
+// SwitchThermal.cpp's own steps: nothing settles the CPU for the boot but shutting down, a CVB that rules every rung
+// out, and the perfSteps test stop; no DFLL failure leaves the DFLL mode or waits.
+TEST(ThermalDfllSource, SwitchThermalFailsOneStepAndNeverLatches)
 {
     const std::string source = switch_ios::test::SourceText("../SwitchThermal.cpp");
+    const std::regex settled(R"(perfSettled = true;)");
+    EXPECT_EQ(std::distance(std::sregex_iterator(source.begin(), source.end(), settled), std::sregex_iterator()), 3);
     const std::string down = switch_ios::test::Body(source, "void SwitchThermal::restoreCpu(");
     EXPECT_NE(down.find("if (down == CpuDown::ForGood)\n        perfSettled = true;"), std::string::npos);
     EXPECT_EQ(down.find("dfllMode ="), std::string::npos);
     const std::string raise = switch_ios::test::Body(source, "bool SwitchThermal::raiseCpu(");
+    EXPECT_NE(raise.find("if (!perfTop) {\n        perfSettled = true;"), std::string::npos);
     EXPECT_NE(raise.find("if (dfllMode)\n            return false;"), std::string::npos);
     EXPECT_EQ(raise.find("dfllMode = "), std::string::npos);
     const std::string fired = switch_ios::test::Body(source, "void SwitchThermal::governorFired(");
     EXPECT_NE(fired.find("dfllRefused(hz, err)"), std::string::npos);
     EXPECT_EQ(fired.find("setTimeoutMS"), std::string::npos);
     EXPECT_NE(switch_ios::test::Body(source, "void SwitchThermal::resume(").find("resumeDfll()"), std::string::npos);
+    EXPECT_NE(switch_ios::test::Body(source, "void SwitchThermal::failSafe(").find("CpuDown::Again"),
+              std::string::npos);
+    EXPECT_NE(switch_ios::test::Body(source, "bool SwitchThermal::preparePerf(").find("perfSettled = fact;"),
+              std::string::npos);
     EXPECT_EQ(source.find("PLL mode for this boot"), std::string::npos);
 }
 }  // namespace
