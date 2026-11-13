@@ -1989,7 +1989,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     std::lock_guard<raw::Mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * t.height;
     tgm_layout bl;
-    const bool laid = !wc && plainTiled(t, tiled, bl);
+    const bool laid = plainTiled(t, tiled, bl);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, 0))
         return probeCompressible(bl, t);

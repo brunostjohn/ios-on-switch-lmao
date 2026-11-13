@@ -338,11 +338,16 @@
     return (id<MTLTexture>)t;
 }
 
-// A private texture the CPU never touches is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and m2v's
-// view of it is (texture_tiled_in_place).
+// A private or shared texture of its own memory is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and
+// m2v's view of it is (texture_tiled_in_place). The CPU reaches a shared one only through replaceRegion and getBytes,
+// which go through the copy engine (transferTexture) or swizzle (cpuTiled); textures over buffers, IOSurfaces and
+// caller pages stay pitch, as another binding names those bytes.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-    return swizzled([self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate], d.swizzle);
+    return swizzled(
+        [self rmNewTexture:d
+                     tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
+        d.swizzle);
 }
 
 #if SWITCH_RAW_DIAGNOSTICS
@@ -454,7 +459,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             t->_rawOk = gRM->raw->createXrMemoryless(t->_raw);
     } else {
         t->_kind = RMTexturePool;
-        // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
+        // a shared texture of a shape that does not tile (the CPU writes it: replaceRegion) in write-combined memory: its
+        // rows need no clean after
         const uint32_t kind = tiled ? privateCompressedKind(d) : 0;
         t->_rawOk = (kind && gRM->raw->createCompressedTexture(uint32_t(d.width), uint32_t(d.height),
                                                                uint32_t(d.pixelFormat), kind, t->_raw)) ||

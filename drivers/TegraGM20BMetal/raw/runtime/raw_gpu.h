@@ -1759,8 +1759,8 @@ public:
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
     // no clean after), else (or full) pool memory
-    // `tiled`: block-linear (TegraGM20BLayout.h) where its shape tiles and its format is a colour target's, for a texture the
-    // CPU never touches
+    // `tiled`: block-linear (TegraGM20BLayout.h) where its shape tiles and its format is a colour target's, whatever `wc`
+    // says (the CPU reaches it through replaceRegion and getBytes alone)
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
                        bool tiled = false, const ArenaAt *at = nullptr);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

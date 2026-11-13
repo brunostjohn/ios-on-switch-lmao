@@ -35,3 +35,9 @@ fragment float4 stored_depth_read_fragment(float4 position [[position]], depth2d
 {
     return float4(depth.read(uint2(position.xy)), 0, 0, 1);
 }
+
+// tests/SharedLayoutTest.swift: the texel under the fragment, as read
+fragment float4 shared_read_fragment(float4 position [[position]], texture2d<float, access::read> source [[texture(0)]])
+{
+    return source.read(uint2(position.xy));
+}

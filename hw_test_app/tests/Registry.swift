@@ -20,7 +20,8 @@ public enum Registry {
         CompileSharedTest(), CompileFirstDrawTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(),
         ResolveCostTest(),
         MsaaFirstUseTest(), StoredDepthTest(),
-        ResolveTwodTest(), FillTextureTest(), StorageCompressedTest(), PredicationTest(), MPSControlFlowTest(),
+        ResolveTwodTest(), FillTextureTest(), StorageCompressedTest(), SharedLayoutTest(), PredicationTest(),
+        MPSControlFlowTest(),
         EventReleaseTest(), CoherenceRewriteTest(),
         FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(), ZetaColourTest(),
     ]

@@ -37,12 +37,19 @@ struct BarrierKit {
         case compressed = "comp"
     }
 
-    /// A render target the facade lays out as `layout`; compressed answers nil where the device made it plain.
+    /// A render target the facade lays out as `layout` (pitch: over a shared buffer's 256-byte rows, as a shared texture
+    /// of its own memory is block-linear); compressed answers nil where the device made it plain.
     func target(_ width: Int, _ height: Int, _ layout: Layout) throws -> MTLTexture? {
+        if layout == .pitch {
+            let rowBytes = (width * bytesPerTexel + 255) / 256 * 256
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: format, width: width, height: height, mipmapped: false)
+            descriptor.usage = [.renderTarget, .shaderRead]
+            descriptor.storageMode = .shared
+            return try gpu.buffer(rowBytes * height).makeTexture(descriptor: descriptor, offset: 0, bytesPerRow: rowBytes)
+        }
         if layout == .compressed { try RawProbe.compressNext(gpu.device) }
-        let texture = try gpu.texture(
-            format, width, height, usage: [.renderTarget, .shaderRead],
-            storage: layout == .pitch ? .shared : .private)
+        let texture = try gpu.texture(format, width, height, usage: [.renderTarget, .shaderRead])
         if layout == .compressed, try RawProbe.facts(gpu.device, texture)["comptags"] != 1 { return nil }
         return texture
     }

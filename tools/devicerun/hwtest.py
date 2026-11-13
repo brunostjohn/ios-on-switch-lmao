@@ -140,6 +140,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.resolve_twod',
             'gpu.raw.fill_texture',
             'gpu.raw.storage_compressed',
+            'gpu.raw.shared_layout',
             'gpu.raw.predication',
             'gpu.raw.mps_control_flow',
             'gpu.raw.event_release',
