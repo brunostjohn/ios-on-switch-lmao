@@ -707,7 +707,7 @@ TEST_F(Coherency, ASamplerFirstOfAnUnwrittenSurfaceTilesIt)
 	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
 	EXPECT_EQ(gMoves.size(), 1u);
 	tgm_coh *written = add(q[0], 55, q.data(), 5, 1);
-	EXPECT_EQ(tgm_coherency_layout(written, kW, kH, kBpp, kRow, 0), 0);
+	EXPECT_EQ(tgm_coherency_layout(written, kW, kH, kBpp, kRow, TGM_LAYOUT_ASK_FIRST), 0);
 	EXPECT_FALSE(tegra_gm20b_surface_tiled(q[0]));
 	tgm_coherency_put(unwritten);
 	tgm_coherency_put(written);
