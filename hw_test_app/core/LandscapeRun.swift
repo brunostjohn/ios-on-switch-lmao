@@ -7,7 +7,10 @@ public struct LandscapeSample: Sendable, Equatable {
     public static let force: UInt32 = 1
     public static let sample: UInt32 = 2
     public static let query: UInt32 = 3
+    public static let portrait: UInt32 = 4
     public static let fail: UInt32 = 5
+    /// PORTRAIT's bound, in frame ends (SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES).
+    public static let portraitFrames: UInt32 = 3600
     public static let done: UInt32 = 2
     public static let maxFrames = 240
     public static let size = 96 + 5 * maxFrames + 8
@@ -106,13 +109,20 @@ public enum LandscapeJudge {
         public init() {}
     }
 
+    /// The landscape route's CRC comes from the held frame sampled in landscape, never from the change's own sample: a
+    /// change that came after its sample ended leaves that sample on the copy route (boots 19 and 21). enter_switched and
+    /// leave_switched say whether each change landed inside its sample; crc_back is what the copy route showed after.
     public static func judge(_ s: Samples, dropped: Int) -> ([(String, Bool)], Metrics) {
         var metrics = Metrics()
         let vic = s.vicHeld.settled()
-        let column = s.enter.settled()
+        let column = s.landscapeHeld.allLandscape ? s.landscapeHeld.settled() : nil
         let back = s.leave.settled()
-        metrics.set("crc_vic", vic.map { String(format: "%08x", $0) } ?? "unsettled")
-        metrics.set("crc_landscape", column.map { String(format: "%08x", $0) } ?? "unsettled")
+        let hex = { (crc: UInt32?) in crc.map { String(format: "%08x", $0) } ?? "unsettled" }
+        metrics.set("crc_vic", hex(vic))
+        metrics.set("crc_landscape", hex(column))
+        metrics.set("crc_back", hex(back))
+        metrics.set("enter_switched", s.enter.switches >= 1)
+        metrics.set("leave_switched", s.leave.switches >= 1)
         if let vic, let column { metrics.set("crc_same", vic == column) }
         let enterStray = vic.flatMap { v in column.map { s.enter.strayFrames(between: v, and: $0) } } ?? -1
         let leaveStray = vic.flatMap { v in column.map { s.leave.strayFrames(between: $0, and: v) } } ?? -1

@@ -11,6 +11,7 @@ struct LandscapeRunState {
     SwitchDisplayLandscapeReply reply;
     uint32_t want, savedCrc;
     bool holding, overlayLatched, charging, failNext;
+    uint32_t portraitFrames;  // read in any context (landscapeReady)
     SwitchVICTurnCounters vicAt;
     uint64_t displayTicks;
 };
@@ -28,11 +29,17 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
     if (!getWorkLoop())
         return kIOReturnNotReady;
     if (request.op != SWITCH_DISPLAY_LANDSCAPE_SAMPLE && request.op != SWITCH_DISPLAY_LANDSCAPE_QUERY &&
-        request.op != SWITCH_DISPLAY_LANDSCAPE_FAIL)
+        request.op != SWITCH_DISPLAY_LANDSCAPE_FAIL && request.op != SWITCH_DISPLAY_LANDSCAPE_PORTRAIT)
         return kIOReturnBadArgument;
     windowProbeOnLoop([&] {
         if (request.op == SWITCH_DISPLAY_LANDSCAPE_FAIL)
             landscapeRun.failNext = true;
+        if (request.op == SWITCH_DISPLAY_LANDSCAPE_PORTRAIT) {
+            const uint32_t frames = request.value < SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES
+                                        ? request.value
+                                        : SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES;
+            __atomic_store_n(&landscapeRun.portraitFrames, frames, __ATOMIC_RELAXED);
+        }
         const int error = request.op == SWITCH_DISPLAY_LANDSCAPE_SAMPLE ? landscapeRunStart(request.value) : 0;
         reply = landscapeRun.reply;
         reply.error = error ? error : reply.error;
@@ -95,10 +102,17 @@ void landscapeRunFinish(int error)
     }
 }
 
+static bool landscapeRunHoldsPortrait()
+{
+    return __atomic_load_n(&landscapeRun.portraitFrames, __ATOMIC_RELAXED) != 0;
+}
+
 // Every DC A frame end, last.
 void landscapeRunFrameEnd()
 {
     LandscapeRunState &s = landscapeRun;
+    if (const uint32_t portrait = __atomic_load_n(&s.portraitFrames, __ATOMIC_RELAXED))
+        __atomic_store_n(&s.portraitFrames, portrait - 1, __ATOMIC_RELAXED);
     if (!landscapeRunSampling())
         return;
     SwitchDisplayLandscapeReply &r = s.reply;
@@ -173,6 +187,11 @@ void landscapeRunCharge(uint64_t since)
 }
 #else
 static bool landscapeRunFailsEnter()
+{
+    return false;
+}
+
+static bool landscapeRunHoldsPortrait()
 {
     return false;
 }
