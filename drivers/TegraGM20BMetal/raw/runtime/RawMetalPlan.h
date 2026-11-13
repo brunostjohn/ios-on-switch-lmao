@@ -254,6 +254,12 @@ public:
         return recordUses_;
     }
 
+    // whether a draw recorded now captures a new render state (a binding or the raster state moved since the last)
+    bool capturesRender() const
+    {
+        return savedRender_ != renderGeneration_;
+    }
+
     size_t size() const
     {
         return operations_.size();

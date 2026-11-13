@@ -636,10 +636,10 @@ id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lo
 // RawMetalEncoder.mm: the encoder's own copy of its pass, where it shares the thread's, before it changes it
 void rmOwnPass(RMRenderEncoder *e);
 
-@interface RMRenderEncoder (Bindings)
-- (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;
-- (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index;
-@end
+// A texture or sampler bound at slot `index` of stage `stage` (1 vertex, 2 fragment), as its setter binds it
+// (RawMetalBindings.mm)
+void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t, NSUInteger index);
+void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index);
 
 @interface RMRenderEncoder (Cubic)
 - (const raw::Pipeline *)drawnRecord __attribute__((objc_direct));  // (RawMetalCubic.mm)

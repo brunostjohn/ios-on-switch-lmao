@@ -333,13 +333,16 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
-    const raw::Pipeline *native = isPlanDraw(cmd.op) ? recordedPipeline(_plan.raster.current()) : nullptr;
+    const bool draws = isPlanDraw(cmd.op), captures = draws && _plan.capturesRender();
+    const raw::Pipeline *native = captures ? recordedPipeline(_plan.raster.current()) : nullptr;
     if (_plan.record(cmd, _extra, native && native->rec)) {
         std::vector<raw::ResourceUse> &uses = _plan.recordUses();
-        if (isPlanDraw(cmd.op)) {
+        if (draws) {
             const uint32_t index = _plan.draw(_plan.size() - 1).state;
             const auto &state = _plan.renderStates[index];
             if (!state.usesFinal) {
+                if (!captures)
+                    native = recordedPipeline(_plan.raster[state.raster]);
                 if (native && native->rec) {
                     _plan.resolveRenderUses(index, native, [&](std::vector<raw::ResourceUse> &bound) {
                         const auto &record = *native->rec;
