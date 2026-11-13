@@ -164,6 +164,35 @@ TEST(Zcull, AClearedDepthTakesARegion)
     EXPECT_FALSE(raw::zcullCandidate(a));
 }
 
+// gpu.raw.zcull layered_passes: the region as deep as the pass's layers, each layer its share of the zcull RAM
+TEST(Zcull, ALayeredPassTakesARegionAsDeepAsItsLayers)
+{
+    raw::ZcullAsk a = clearedDepth();
+    a.layers = a.zetaLayers = 2;
+    EXPECT_TRUE(raw::zcullCandidate(a));
+    a.zetaLayers = 6;
+    EXPECT_TRUE(raw::zcullCandidate(a));
+    a.zetaLayers = 1;
+    EXPECT_FALSE(raw::zcullCandidate(a));
+    const TegraGM20BAbiZcullInfo x1 = {32, 32, 1024, 2048, 32, 32, 192, 16, 32, 64, 0x1500, 0x1000};
+    raw::ZcullRegion two;
+    ASSERT_TRUE(raw::zcullRegion(x1, 0, 0, 1280, 720, two, 2));
+    EXPECT_EQ(two.layers, 2u);
+    EXPECT_LE(two.aliquotCount * 2, x1.aliquot_total);
+    std::vector<uint32_t> words(raw::kZcullRegionWords + 8);
+    raw::Push p{words.data(), words.data() + words.size()};
+    raw::zcullRegionWords(p, two, 252, raw::kZcullLess);
+    bool location = false, size = false;
+    for (uint32_t *w = words.data(); w + 2 < p.at; w++) {
+        location |= w[1] == two.aliquotCount * 2 << 16 && w[2] == two.aliquotCount;
+        size |= w[1] == two.width && w[2] == two.height && w[3] == 2;
+    }
+    EXPECT_TRUE(location) << "SET_ZCULL_REGION_LOCATION's count is every layer's, _ALIQUOTS one layer's";
+    EXPECT_TRUE(size) << "SET_ZCULL_REGION_SIZE_C: the layers";
+    raw::ZcullRegion many;
+    EXPECT_FALSE(raw::zcullRegion(x1, 0, 0, 1280, 720, many, 4096)) << "no layer's share of the RAM holds a subregion";
+}
+
 TEST(Zcull, NothingWithoutARegion)
 {
     raw::ZcullPass z;
