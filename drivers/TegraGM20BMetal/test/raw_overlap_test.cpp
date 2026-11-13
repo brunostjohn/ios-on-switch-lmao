@@ -91,16 +91,21 @@ TEST(RawOverlap, FacesDecidePixelsOnlyUnderCullingOrDifferingStencilFaces)
     EXPECT_FALSE(raw::facingDecides(0, s, same, true));
     EXPECT_TRUE(raw::facingDecides(1, s, same, true));
     EXPECT_TRUE(raw::facingDecides(2, s, same, false));
-    EXPECT_TRUE(raw::facingDecides(0, s, apart, true));
-    EXPECT_FALSE(raw::facingDecides(0, s, apart, false));
-    EXPECT_FALSE(raw::facingDecides(0, s, saturated, true));
+    EXPECT_FALSE(raw::facingDecides(0, s, apart, true));
     s.back.pass = 6;  // MTLStencilOperationIncrementWrap on the back face alone, as a winding fill writes
     EXPECT_TRUE(raw::facingDecides(0, s, same, true));
     EXPECT_FALSE(raw::facingDecides(0, s, same, false));
     s.front.pass = 6;
     EXPECT_FALSE(raw::facingDecides(0, s, same, true));
+    EXPECT_TRUE(raw::facingDecides(0, s, apart, true));
+    EXPECT_FALSE(raw::facingDecides(0, s, apart, false));
+    EXPECT_FALSE(raw::facingDecides(0, s, saturated, true));
     s.front.readMask = 0x7f;
     EXPECT_TRUE(raw::facingDecides(0, s, same, true));
+    Stencil untouched;
+    untouched.back.readMask = 0x0f;
+    untouched.front.fail = 3;
+    EXPECT_FALSE(raw::facingDecides(0, untouched, apart, true));
 }
 
 }  // namespace

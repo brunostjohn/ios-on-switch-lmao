@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "raw_device_harness.h"
+#include "../raw/runtime/raw_depth_stencil_state.h"
 #include "../raw/runtime/raw_record.h"
 
 namespace {
@@ -72,7 +73,7 @@ protected:
         std::string why;
     };
 
-    template <class Draw> Drawn drawOnce(raw::Pipeline *pl, Draw draw)
+    template <class Draw> Drawn drawOnce(raw::Pipeline *pl, Draw draw, const raw::DepthStencilState *state = nullptr)
     {
         Drawn d;
         const raw::FetchCounts &k = dev.stats.fetch;
@@ -85,6 +86,7 @@ protected:
         pass.color[0].load = raw::ColorAttachment::Load;
         pass.count = 1;
         pass.storageMask = pl->storageBits;
+        pass.hiddenZeta = state != nullptr;
         raw::RenderEncoder *e = cb->render(pass);
         if (!e) {
             d.why = "no pass";
@@ -92,6 +94,8 @@ protected:
             return d;
         }
         e->setPipeline(pl);
+        if (state)
+            e->setDepthStencil(state);
         const char *why = nullptr;
         d.ok = draw(*e, &why);
         d.why = why ? why : "";
@@ -126,12 +130,15 @@ protected:
         });
     }
 
-    // RenderBox's quad: an indexed strip of four
-    Drawn quad(raw::Pipeline *pl)
+    // RenderBox's quad: an indexed strip of four, under `state` over a Depth32Float_Stencil8 attachment where given
+    Drawn quad(raw::Pipeline *pl, const raw::DepthStencilState *state = nullptr)
     {
-        return drawOnce(pl, [this](raw::RenderEncoder &e, const char **why) {
-            return e.drawIndexed(kStrip, 4, 2, &indices, 0, 1, 0, 0, why);
-        });
+        return drawOnce(
+            pl,
+            [this](raw::RenderEncoder &e, const char **why) {
+                return e.drawIndexed(kStrip, 4, 2, &indices, 0, 1, 0, 0, why);
+            },
+            state);
     }
 
     Drawn instanced(raw::Pipeline *pl)
@@ -251,6 +258,25 @@ TEST_F(DeviceFetch, TheBarrierFormDrawsAnIndexedStripATriangleAtATime)
     EXPECT_TRUE(r.ok) << r.why;
     EXPECT_EQ(r.split, 1u);
     EXPECT_EQ(r.triangles, 7u);
+}
+
+// RenderBox's icon draw binds depth GreaterEqual with writes and an untouched stencil (traced on a Mac): its faces decide
+// nothing; a stencil whose back face alone increments would make them decide
+TEST_F(DeviceFetch, AnIndexedStripOverAStencilAttachmentIsRefusedOnlyWhereItsFacesDiffer)
+{
+    raw::Pipeline *pl = pipeline(false);
+    ASSERT_NE(pl, nullptr);
+    raw::DepthStencilDesc renderBox;
+    renderBox.depthCompare = 6;
+    renderBox.depthWrite = true;
+    const raw::DepthStencilState untouched(renderBox);
+    const Drawn q = quad(pl, &untouched);
+    EXPECT_TRUE(q.ok) << q.why;
+    EXPECT_EQ(q.triangles, 2u);
+    raw::DepthStencilDesc winding = renderBox;
+    winding.back.pass = 6;
+    const raw::DepthStencilState twoSided(winding);
+    EXPECT_FALSE(quad(pl, &twoSided).ok);
 }
 
 TEST_F(DeviceFetch, TheBarrierFormRefusesWhatOneTriangleADrawCannotKeep)

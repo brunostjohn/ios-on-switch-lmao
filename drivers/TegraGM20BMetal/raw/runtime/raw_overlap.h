@@ -46,7 +46,8 @@ public:
 };
 
 // Whether the face a triangle shows decides its pixels: culling (MTLCullMode), or a stencil test on an attachment with
-// stencil whose front and back faces differ in their state or reference
+// stencil whose front and back faces differ in their state or reference. Both faces passing always and keeping their
+// value test nothing (RenderBox's icon draws: Depth32Float_Stencil8 attached, depth tested, stencil untouched).
 template <typename DepthStencilDesc>
 bool facingDecides(uint8_t cull, const DepthStencilDesc &ds, const uint32_t references[2], bool stencilAttached)
 {
@@ -55,6 +56,11 @@ bool facingDecides(uint8_t cull, const DepthStencilDesc &ds, const uint32_t refe
     if (!stencilAttached)
         return false;
     const auto &f = ds.front, &b = ds.back;
+    const auto untouched = [](const auto &face) {
+        return face.compare == 7 && face.depthFail == 0 && face.pass == 0;
+    };
+    if (untouched(f) && untouched(b))
+        return false;
     const bool sameFaces = f.compare == b.compare && f.fail == b.fail && f.depthFail == b.depthFail &&
                            f.pass == b.pass && f.readMask == b.readMask && f.writeMask == b.writeMask &&
                            std::min(references[0], 0xffu) == std::min(references[1], 0xffu);
