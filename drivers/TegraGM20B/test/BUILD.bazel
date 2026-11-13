@@ -2090,7 +2090,6 @@ SCHED_UNIT_HDRS = [
 
 host_library(
     name = "sched_unit",
-    testonly = True,
     srcs = [
         "gm20b_sched_unit.c",
         ":sched_source",
@@ -2103,7 +2102,6 @@ host_library(
 
 host_library(
     name = "deadline_unit",
-    testonly = True,
     srcs = [
         "gm20b_deadline_unit.c",
         ":deadline_source",
