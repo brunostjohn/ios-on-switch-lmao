@@ -57,6 +57,8 @@ constexpr TwodResolveFit twodResolveFit(uint16_t format, uint8_t samples)
     switch (format) {
     case 70:  // RGBA8Unorm
     case 80:  // BGRA8Unorm
+    case 71:  // RGBA8Unorm_sRGB: the engine decodes before its box and encodes after (fx::twodFormat)
+    case 81:  // BGRA8Unorm_sRGB
         return TwodResolveFit::Near;
     case 115:  // RGBA16Float
         return samples == 2 ? TwodResolveFit::Exact : TwodResolveFit::Near;

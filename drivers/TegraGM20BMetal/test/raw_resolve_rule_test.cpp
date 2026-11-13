@@ -76,7 +76,7 @@ TEST(ResolveRule, TakenForScreenBoundUnorm8Only)
     EXPECT_TRUE(raw::twodResolveAcceptable(a));
     a.samples = 2;
     EXPECT_TRUE(raw::twodResolveAcceptable(a));
-    a.format = 81;
+    a.format = 91;
     EXPECT_FALSE(raw::twodResolveAcceptable(a));
     a.format = 70;
     a.readable = true;
@@ -134,6 +134,17 @@ TEST(ResolveRule, RGBA16FloatTakesTheEngineEverywhereAt2xAndScreenBoundAt4x)
     EXPECT_EQ(raw::resolveRoute(ask(115, 4, true)), raw::ResolveByPass);
     EXPECT_FALSE(raw::twodResolveComplementShape(ask(115, 2, false)));
     EXPECT_TRUE(raw::twodResolveComplementShape(ask(80, 2, true)));
+}
+
+// gpu.raw.resolve_twod bgra8srgb_<n>x and rgba8srgb_<n>x (near)
+TEST(ResolveRule, SRGBResolvesTakeTheEngineScreenBound)
+{
+    for (uint16_t format : {71, 81})
+        for (uint8_t samples : {2, 4}) {
+            EXPECT_EQ(raw::resolveRoute(ask(format, samples, false)), raw::ResolveByTwod);
+            EXPECT_EQ(raw::resolveRoute(ask(format, samples, true)), raw::ResolveByPass);
+            EXPECT_FALSE(raw::twodResolveComplementShape(ask(format, samples, false)));
+        }
 }
 
 TEST(ResolveRule, TheComplementIsNoRoute)
