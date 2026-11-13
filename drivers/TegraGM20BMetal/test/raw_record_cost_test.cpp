@@ -280,4 +280,68 @@ TEST(RawRecordCost, CompositorScaleFrame)
     EXPECT_GT(frame.counts.sends, 0u);
 }
 
+// Each call of a compositor draw, its instructions apart (less what two counter reads cost), over a frame's 90 draws
+TEST(RawRecordCost, ChangedStateDrawByCall)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    enum Call { VertexBytes, TransformBytes, ColourBytes, TextureSampler, Scissor, Draw, Calls };
+    const char *names[Calls] = {"setVertexBytes vertices", "setVertexBytes transform", "setFragmentBytes colour",
+                                "texture and sampler", "setScissorRect", "drawPrimitives"};
+    double sums[Calls] = {};
+    double calibration = 1e30;
+    for (int i = 0; i < 64; i++) {
+        const Counts a = counts(), c = counts();
+        calibration = std::min(calibration, double(c.instructions - a.instructions));
+    }
+    uint32_t draws = 0;
+    for (int round = 0; round < kWarm + kRounds; round++)
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+            const std::vector<MTLRenderPassDescriptor *> into = passes(b, kEncoders);
+            int drawn = 0;
+            for (int p = 0; p < kEncoders; p++) {
+                id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[size_t(p)]];
+                [e setRenderPipelineState:b.state];
+                for (int d = 0; d < kDraws / kEncoders; d++, drawn++) {
+                    const float x = float(drawn % 97) / 97.0f, vertices[16] = {x, 0, 0, 1, x, 1, 0, 1};
+                    const float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, float(round % 7), 0, 0, 1};
+                    const float colour[4] = {float(drawn % 5) / 5, 0.5f, 0.5f, 1};
+                    Counts at[Calls + 1];
+                    at[0] = counts();
+                    [e setVertexBytes:vertices length:sizeof vertices atIndex:0];
+                    at[1] = counts();
+                    [e setVertexBytes:transform length:sizeof transform atIndex:2];
+                    at[2] = counts();
+                    [e setFragmentBytes:colour length:sizeof colour atIndex:0];
+                    at[3] = counts();
+                    [(id<RecordCostCoreAnimationSPI>)e setFragmentTexture:b.textures[size_t(drawn) % b.textures.size()]
+                                                           atTextureIndex:0
+                                                             samplerState:b.sampler
+                                                           atSamplerIndex:0];
+                    at[4] = counts();
+                    [e setScissorRect:MTLScissorRect{NSUInteger(drawn * 17 % 120), 0, 200, 120}];
+                    at[5] = counts();
+                    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                    at[6] = counts();
+                    if (round >= kWarm) {
+                        for (int k = 0; k < Calls; k++)
+                            sums[k] += double(at[k + 1].instructions - at[k].instructions) - calibration;
+                        draws += 1;
+                    }
+                }
+                [e endEncoding];
+            }
+            [cb commit];
+            [cb waitUntilCompleted];
+        }
+    double total = 0;
+    for (int k = 0; k < Calls; k++) {
+        printf("record cost by call %-26s %8.0f instr a draw\n", names[k], sums[k] / draws);
+        total += sums[k] / draws;
+    }
+    printf("record cost by call %-26s %8.0f instr a draw\n", "all", total);
+    EXPECT_GT(draws, 0u);
+}
+
 }  // namespace
