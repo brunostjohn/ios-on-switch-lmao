@@ -74,9 +74,12 @@ TEST(ScanoutAttach, AWindowThatDoesNotStopIsAskedAgainAndTheDomainWaits)
     Display d;
     d.activeC = true;
     d.scanoutAttachWaits = true;
+    d.scanoutAttachAsks = 0;
     d.stopFirmwareWindows();
+    EXPECT_TRUE(d.scanoutAttachHoldsFrameEnds());
     for (int i = 0; i < 12; ++i)
         d.boundary(false);
+    EXPECT_FALSE(d.scanoutAttachHoldsFrameEnds()) << "a window that does not stop keeps no frame end unmasked";
     EXPECT_EQ(d.attaches, 0u);
     EXPECT_NE(d.dc[Display::kDcStateControl] & Display::kWinCActReq, 0u);
     EXPECT_EQ(d.scanoutAttachAskedAt, 10u + 3 * Display::kLatchFrames);

@@ -1469,7 +1469,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
                planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
-               completionFlipOut() || scanoutAttachWaits;
+               completionFlipOut() || scanoutAttachHoldsFrameEnds();
     }
 
     void maskIdleFrameEnd()
