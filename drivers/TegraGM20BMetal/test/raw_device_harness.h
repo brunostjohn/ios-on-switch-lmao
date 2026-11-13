@@ -86,6 +86,12 @@ struct DeviceHarness {
         return w;
     }
 
+    // The GPU address of texture header `tic`
+    static uint64_t ticVa(const Device &d, uint32_t tic)
+    {
+        return d.tic_.va + 32ull * tic;
+    }
+
     // Compressed buffers made off the render thread that no texture or backing took yet
     static size_t compReady(Device &d)
     {

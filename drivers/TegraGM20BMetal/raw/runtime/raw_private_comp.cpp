@@ -3,6 +3,7 @@
 #include "raw_private_comp.h"
 #include <os/log.h>
 #include <algorithm>
+#include <cstring>
 #include "raw_gpu.h"
 
 namespace raw {
@@ -153,25 +154,58 @@ bool Device::plainTiledTwin(const Texture &t, Texture &plain)
     return true;
 }
 
+void Device::noteView(const Texture &of, Texture &view)
+{
+    if (!of.comptags)
+        return;
+    for (auto &[texture, p] : privateComp_)
+        if (texture->comptags && of.va >= p.comp.bo.va && of.va - p.comp.bo.va < p.comp.bo.bytes) {
+            p.views.push_back(&view);
+            return;
+        }
+}
+
+void Device::forgetView(const Texture &view)
+{
+    for (auto &[texture, p] : privateComp_)
+        p.views.erase(std::remove(p.views.begin(), p.views.end(), &view), p.views.end());
+}
+
 bool Device::plainFromCompressed(Texture &t)
 {
     TextureAsk ask;
+    std::vector<Texture *> views;
     {
         std::lock_guard<raw::Mutex> l(lock_);
         auto it = privateComp_.find(&t);
         if (it == privateComp_.end() || !t.comptags)
             return false;
         ask = it->second.ask;
+        views = it->second.views;
     }
     Texture plain;
     if (ask.kind == TextureAsk::Plain ? !plainTiledTwin(t, plain) : !createLaidOut(ask, plain, nullptr))
         return false;
+    Buffer headers;
+    if (!views.empty() && !createBuffer(32 * views.size(), headers, true)) {
+        destroyTexture(plain);
+        return false;
+    }
+    for (size_t i = 0; i < views.size(); i++) {
+        uint32_t w[8];
+        memcpy(w, tic_.cpu + 32 * views[i]->tic, 32);
+        ticAt(w, ticAddress(w) - t.va + plain.va);
+        memcpy(headers.cpu + 32 * i, w, 32);
+    }
     uint32_t seq = 0;
     CommandBuffer *rc = begin();
     bool copied = rc != nullptr;
     if (copied) {
         BlitEncoder *b = rc->blit();
         copyImages(*b, t, plain);
+        b->copyBytes(tic_.va + 32ull * plain.tic, tic_.va + 32ull * t.tic, 32);
+        for (size_t i = 0; i < views.size(); i++)
+            b->copyBytes(headers.va + 32 * i, tic_.va + 32ull * views[i]->tic, 32);
         b->end();
         copied = rc->commit(seq);
         if (!copied)
@@ -179,15 +213,28 @@ bool Device::plainFromCompressed(Texture &t)
     }
     if (!copied) {
         destroyTexture(plain);
+        if (headers.va)
+            destroyBuffer(headers);
         os_log_error(OS_LOG_DEFAULT, "raw: a compressed %ux%u texture of format %u could not move to plain memory",
                      t.width, t.height, t.format);
         return false;
     }
     std::lock_guard<raw::Mutex> l(lock_);
     PrivateCompTexture &p = privateComp_[&t];
-    p.comp.staleTic = t.tic;
+    p.comp.staleTic = plain.tic;
     p.staleChain = t.chain;
+    p.headers = headers;
+    const uint32_t tic = t.tic;
+    const uint64_t from = t.va;
     t = plain;
+    t.tic = tic;
+    for (Texture *v : p.views) {
+        v->va = v->va - from + plain.va;
+        v->cpu = plain.cpu ? plain.cpu + (v->va - plain.va) : nullptr;
+        v->storage = t.storageRange();
+        v->comptags = false;
+    }
+    p.views.clear();
     privateTransitions_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
@@ -199,6 +246,8 @@ void Device::releasePrivateCompressed(const Texture &t)
         return;
     if (it->second.comp.staleTic)
         freeTic(it->second.comp.staleTic);
+    if (Buffer &headers = it->second.headers; headers.va)
+        freeSpan(headers.span, headers.wc ? Memory::Wc : Memory::Pool, headers.lease);
     if (Texture::Chain *stale = it->second.staleChain) {
         for (const uint32_t level : stale->levelTic)
             if (level)

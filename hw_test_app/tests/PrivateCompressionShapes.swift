@@ -12,9 +12,12 @@ extension PrivateCompressionTest {
         var bytes: [UInt8] = []
         var made = 0, compressed = 0
         var paths: [String] = []
+        var musts: [(String, Int)] = []  // facts of the compressed run that must read 1
     }
 
-    static let shapeArms = ["mips", "array", "ms4", "shader_write"]
+    static let moveSelector = NSSelectorFromString("switchRawProbeMovePlain:")
+
+    static let shapeArms = ["mips", "array", "ms4", "shader_write", "view_id"]
     /// Clear colours the boot ZBC table holds (black, white, zero), one a slice
     static let sliceClears = [
         MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1), MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1),
@@ -40,6 +43,10 @@ extension PrivateCompressionTest {
             if run.made != 1 || run.compressed != 1 { wrong.append("\(arm)_not_compressed") }
             if reference.made == 1 { wrong.append("\(arm)_reference_compressed") }
             if run.paths.contains(where: { $0 != "raw" }) { wrong.append("\(arm)_path") }
+            for (name, value) in run.musts {
+                metrics.set("\(arm)_\(name)", value)
+                if value != 1 { wrong.append("\(arm)_\(name)") }
+            }
         }
     }
 
@@ -80,18 +87,18 @@ extension PrivateCompressionTest {
     func shapeArm(_ arm: String, _ gpu: GPU, _ facade: NSObject, plain: Bool) async throws -> ShapeRun {
         var run = ShapeRun()
         let pattern = try gpu.render(fragment: "comp_pattern_fragment", format: .bgra8Unorm)
-        /// The pattern over all of `target` (`half`: its left half, the slice's own clear colour beside it; `slant`: a
-        /// left part whose right edge crosses pixels, so their samples differ)
+        /// The pattern over all of `target` (`half`: its left half, the slice's own clear colour, or `clear`'s, beside it;
+        /// `slant`: a left part whose right edge crosses pixels, so their samples differ)
         func draw(
             _ target: MTLTexture, slice: Int = 0, half: Bool = false, slant: Bool = false,
-            state: MTLRenderPipelineState? = nil
+            state: MTLRenderPipelineState? = nil, clear: Int? = nil
         ) -> (MTLCommandBuffer) -> Void {
             { commands in
                 let p = MTLRenderPassDescriptor()
                 p.colorAttachments[0].texture = target
                 p.colorAttachments[0].slice = slice
                 p.colorAttachments[0].loadAction = .clear
-                p.colorAttachments[0].clearColor = Self.sliceClears[slice % Self.sliceClears.count]
+                p.colorAttachments[0].clearColor = Self.sliceClears[(clear ?? slice) % Self.sliceClears.count]
                 p.colorAttachments[0].storeAction = .store
                 let e = commands.makeRenderCommandEncoder(descriptor: p)!
                 e.setRenderPipelineState(state ?? pattern)
@@ -164,6 +171,26 @@ extension PrivateCompressionTest {
                 }.path)
             run.bytes = try await gpu.read(target, bytesPerPixel: 4)
             run.compressed = comptags(facade, target)
+        case "view_id":
+            // a view and a gpuResourceID taken while compressed keep it compressed; after the move an m2v twin takes,
+            // work through the view lands in the plain memory and the ID is the same
+            let target = try await made(facade, plain: plain) { try gpu.texture(.bgra8Unorm, 128, 128) }
+            run.made = comptags(facade, target)
+            guard let view = target.makeTextureView(pixelFormat: .bgra8Unorm) else {
+                throw TestFailure("no view made")
+            }
+            let id = target.gpuResourceID._impl
+            run.compressed = comptags(facade, target)
+            run.paths.append(try await gpu.run(draw(view, half: true)).path)
+            run.bytes += try await gpu.read(target, bytesPerPixel: 4)
+            if !plain {
+                let moved = facade.perform(Self.moveSelector, with: target)?.takeUnretainedValue() as? NSNumber
+                run.musts.append(("moved", moved?.boolValue == true ? 1 : 0))
+                run.musts.append(("id_kept", target.gpuResourceID._impl == id ? 1 : 0))
+            }
+            run.paths.append(try await gpu.run(draw(view, half: true, clear: 1)).path)
+            run.bytes += try await gpu.read(target, bytesPerPixel: 4)
+            run.bytes += try await gpu.read(view, bytesPerPixel: 4)
         default:
             throw TestFailure("no shape arm \(arm)")
         }

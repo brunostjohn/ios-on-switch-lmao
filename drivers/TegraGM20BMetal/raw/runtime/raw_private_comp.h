@@ -7,11 +7,12 @@
 // texels (raw_comp.h copyEngineReadsCompressed: the move below is its copy); passes that view it as a storage image do so
 // in place (raw_storage_form.h rule storage.compressed).
 //
-// Nothing else may name its pages: an m2v twin aliases them through NVK's plain binding and would read compressed bytes.
-// So before a twin, a view (which copies the memory's address) or a gpuResourceID (which names the header) is taken, the
-// texture moves to plain block-linear memory: the copy engine copies it there in a raw job, ordered before every later
-// raw job by the channel and before NVK's next submission by Order, and later work binds a new header over the plain
-// memory. Work already submitted keeps the old header and memory, which stay until the texture goes.
+// Raw views and gpuResourceIDs name the compressed memory through headers of their own over the same binding. An m2v twin
+// may not: it aliases the pages through NVK's plain binding and would read compressed bytes. So before a twin is taken
+// the texture moves to plain block-linear memory: the copy engine copies it there in a raw job, ordered before every later
+// raw job by the channel and before NVK's next submission by Order, and the same job then rewrites the texture's header
+// and each raw view's in place to name the plain memory (ticAt), so a gpuResourceID or view handed out before keeps its
+// index and reads what later work writes. Work already submitted reads the old memory, which stays until the texture goes.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -64,6 +65,20 @@ inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
         return 0;
     const uint32_t kind = compressedKind(f.bpp, 0, std::max(f.samples, 1u));
     return copyEngineReadsCompressed(kind) ? kind : 0;
+}
+
+// The address a block-linear texture header (fx::mipChainTic's) names: ADDRESS_BITS31TO9 (word 1 bits 31:9) and
+// ADDRESS_BITS47TO32 (word 2 bits 15:0)
+constexpr uint64_t ticAddress(const uint32_t w[8])
+{
+    return uint64_t(w[1] >> 9) << 9 | uint64_t(w[2] & 0xffff) << 32;
+}
+
+// The same header naming `va` (512-byte aligned, as every block-linear image is)
+constexpr void ticAt(uint32_t w[8], uint64_t va)
+{
+    w[1] = (w[1] & 0x1ffu) | uint32_t(va & 0xfffffe00u);
+    w[2] = (w[2] & ~0xffffu) | uint32_t(va >> 32 & 0xffff);
 }
 
 // fx::msLayout's grid of `samples` samples as log2 columns and rows: the image the copy engine moves a multisampled

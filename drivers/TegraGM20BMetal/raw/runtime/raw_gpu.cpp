@@ -2481,6 +2481,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
     if (!(t.tic = allocTic()))
         return false;
+    noteView(of, t);
     if (of.chain) {
         uint32_t w[8];
         fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w, of.type);
@@ -2543,6 +2544,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     t.wc = false;
     if (!(t.tic = allocTic()))
         return false;
+    noteView(of, t);
     uint32_t w[8];
     fx::mipChainTic(c, va, f->tic0, f->srgb, baseLevel, levels, w, type);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -2908,6 +2910,7 @@ void Device::destroyTexture(Texture &t)
 #endif
     if (t.view) {
         std::lock_guard<raw::Mutex> l(lock_);
+        forgetView(t);
         if (t.tic) {
             freeTic(t.tic);
         }

@@ -78,6 +78,15 @@ TEST(RawPrivateComp, ShaderWriteUsageIsTakenWithStorageReadingCompressed)
     EXPECT_TRUE(raw::storageReadsCompressed());
 }
 
+TEST(RawPrivateComp, OnlyAnM2vTwinMovesACompressedTextureToPlainMemory)
+{
+    EXPECT_THAT(Body(SourceText("../raw/runtime/RawMetalResourceIds.mm"), "- (MTLResourceID)gpuResourceID"),
+                Not(HasSubstr("rmTexturePlain")));
+    const std::string texture = SourceText("../raw/runtime/RawMetalTexture.mm");
+    EXPECT_EQ(texture.find("rmTexturePlain(self);"), texture.rfind("rmTexturePlain(self);")) << "rmTwin's alone";
+    EXPECT_THAT(Body(texture, "- (id)rmTwin"), HasSubstr("rmTexturePlain(self);"));
+}
+
 TEST(RawPrivateComp, AMipChainTakesItsKind)
 {
     raw::PrivateTextureFacts f = target(4);

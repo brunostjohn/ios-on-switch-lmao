@@ -3271,7 +3271,12 @@ private:
         PrivateComp comp;
         TextureAsk ask;                        // its layout's, which its plain memory takes (plainFromCompressed)
         Texture::Chain *staleChain = nullptr;  // the chain work submitted before the move reads; freed with the texture
+        std::vector<Texture *> views;          // raw views of its compressed memory (createView, createPartView)
+        Buffer headers;                        // the views' moved headers the move's job copies in place
     };
+    // `view` of memory `of` names: a view of a private texture on compressed memory follows it to plain memory, lock_ held
+    void noteView(const Texture &of, Texture &view);
+    void forgetView(const Texture &view);  // lock_ held
     std::unordered_map<const Texture *, PrivateCompTexture> privateComp_;
     // Compressed memory of `kind` holding `bytes`, taken from what comp_ made; false (and asked for) where none is
     // ready or a debug probe holds private textures plain, lock_ held

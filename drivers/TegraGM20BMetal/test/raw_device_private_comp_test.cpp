@@ -4,6 +4,7 @@
 // before an m2v twin, every level, layer and sample copied by the copy engine.
 #include "raw_device_harness.h"
 #include <chrono>
+#include <cstring>
 #include <mutex>
 #include <thread>
 
@@ -114,7 +115,7 @@ TEST_F(DevicePrivateComp, AChainTakesCompressedMemoryAndMovesEveryLevelToPlain)
     ASSERT_TRUE(dev.plainFromCompressed(chain));
     EXPECT_FALSE(chain.comptags);
     EXPECT_FALSE(dev.privateCompressed(chain));
-    EXPECT_NE(chain.tic, tic);
+    EXPECT_EQ(chain.tic, tic) << "rewritten in place by the move's job";
     ASSERT_TRUE(chain.chain);
     EXPECT_EQ(chain.chain->va, chain.va);
     EXPECT_NE(chain.va, compressed);
@@ -180,6 +181,55 @@ TEST_F(DevicePrivateComp, AMovedTexturesCompressedMemoryGoesBackWithIt)
     const size_t freedBefore = kernel_model::model.freed.size();
     dev.destroyTexture(t);
     EXPECT_GT(kernel_model::model.freed.size(), freedBefore) << "the compressed buffer went back to the kernel";
+    dev.destroyTexture(first);
+}
+
+// A block-linear header moved to another address names it, as fx::mipChainTic's of that address does
+TEST(PrivateCompHeaders, AMovedHeaderIsTheHeaderOfItsNewAddress)
+{
+    raw::fx::MipChain c;
+    ASSERT_TRUE(raw::fx::mipChainLayout(256, 128, 4, 4, c));
+    for (const auto &[from, to] : {std::pair<uint64_t, uint64_t>{0xc100520000, 0xc100580000},
+                                   {0x1000000200, 0xffff0003fe00}, {0xc100520000 + 0x40000, 0xc1005c0000}}) {
+        uint32_t moved[8], made[8];
+        raw::fx::mipChainTic(c, from, 0x12345678, true, 1, 3, moved, raw::fx::kTexTwoD);
+        EXPECT_EQ(raw::ticAddress(moved), from);
+        raw::ticAt(moved, to);
+        raw::fx::mipChainTic(c, to, 0x12345678, true, 1, 3, made, raw::fx::kTexTwoD);
+        EXPECT_EQ(memcmp(moved, made, 32), 0) << std::hex << from << " to " << to;
+    }
+}
+
+// RAWRT-61: a view of a compressed private texture names its compressed memory; the move before an m2v twin rewrites
+// the texture's header and the view's in place on the GPU (the same indices, so a gpuResourceID handed out stays good)
+// and moves the view's address with it
+TEST_F(DevicePrivateComp, AViewKeepsCompressedMemoryAndFollowsTheMove)
+{
+    raw::Texture first, t, view;
+    compressedSecond(first, t, [&](raw::Texture &x) {
+        return dev.createCompressedTexture(128, 128, kBGRA8, raw::kCompKindC32, x) ||
+               dev.createTexture(128, 128, kBGRA8, x, false, true);
+    });
+    ASSERT_TRUE(dev.createView(t, 81, view));  // BGRA8Unorm_sRGB
+    EXPECT_TRUE(view.comptags) << "a raw view names the compressed memory";
+    EXPECT_EQ(view.va, t.va);
+    const uint32_t tic = t.tic, viewTic = view.tic;
+    const size_t jobs = kernel_model::model.jobs.size();
+    ASSERT_TRUE(dev.plainFromCompressed(t));
+    EXPECT_EQ(t.tic, tic) << "the texture's header index is kept";
+    EXPECT_FALSE(view.comptags);
+    EXPECT_EQ(view.va, t.va) << "the view names the plain memory";
+    EXPECT_EQ(view.tic, viewTic);
+    const auto launched = copies(jobs);
+    const auto into = [&](uint64_t va) {
+        return std::find_if(launched.begin(), launched.end(), [&](const auto &l) {
+                   return l.second == va;
+               }) != launched.end();
+    };
+    EXPECT_TRUE(into(raw::DeviceHarness::ticVa(dev, tic))) << "the texture's header rewritten by the move's job";
+    EXPECT_TRUE(into(raw::DeviceHarness::ticVa(dev, viewTic))) << "the view's header rewritten by the move's job";
+    dev.destroyTexture(view);
+    dev.destroyTexture(t);
     dev.destroyTexture(first);
 }
 
