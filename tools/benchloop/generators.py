@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from tools.benchloop import cbufsize, qmdchain, rop, sweeps, twod, units
+from tools.benchloop import cbufsize, interlock_section, qmdchain, rop, sweeps, twod, units
 
 GENERATORS: dict[str, Callable[[], list[dict]]] = {
     'precision': sweeps.precision,
@@ -13,4 +13,5 @@ GENERATORS: dict[str, Callable[[], list[dict]]] = {
     'cstall': units.cstall,
     'qmdchain': qmdchain.generate,
     'cbufsize': cbufsize.generate,
+    'interlock_section': interlock_section.generate,
 }

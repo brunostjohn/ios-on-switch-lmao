@@ -34,6 +34,18 @@ py_library(
 )
 
 py_library(
+    name = "interlock",
+    srcs = [
+        "interlock.py",
+        "memops.py",
+    ],
+    deps = [
+        ":encode",
+        ":program",
+    ],
+)
+
+py_library(
     name = "timing_sim",
     srcs = ["timing_sim.py"],
     deps = [
