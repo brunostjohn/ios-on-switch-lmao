@@ -578,6 +578,7 @@ uint64_t packKeyHash(const std::string &key)
                               "xr_vert | f xr_bgr10_frag",
                               "xr_vert | f xr_bgra10_frag",
                               "xr_vert | f xr_planes_frag",
+                              "xr_vert | f xr_two_planes_frag",
                               "two_plane_cover | f two_plane_load",
                               "two_plane_cover | f two_plane_store",
                               "resolve_vert | f resolve_rgba8_frag",
