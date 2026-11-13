@@ -239,7 +239,7 @@ struct StoredDepthTest: HWTest {
 
     /// The formats besides Depth32Float whose stored one-sample textures bind compressed memory (raw_comp.h
     /// storedZetaKind)
-    static let compressedCases = ["d16"]
+    static let compressedCases = ["d16", "d32fs8"]
 
     /// A case on a compressed target: drawn, each aspect read back by the copy engine and its depth sampled, exact
     func compressedCase(_ gpu: GPU, _ c: Case, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {

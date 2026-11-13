@@ -46,12 +46,14 @@ enum : uint32_t {
 // clear-plus-half-draw tiles read by it; its whole and half-height writes over rendered and ZBC-cleared tiles read by it and
 // the texture unit; copies both ways between a compressed and a plain target. Its rectangles started at the origin, as a
 // shadow's do. One-sample ZF32_2CZ by gpu.x1.ce_compressed_depth (boot 19 and boot 21, the context as shipped: d32f_1x=0
-// over 16 compressed rounds of shader-test copies both ways). One-sample Z16_2C ships on unread: gpu.raw.stored_depth's
-// d16_compressed arm judges it. Not asked: C128, the multisampled colour kinds and the other zeta kinds (the multisampled
-// ones read exact only under anti-alias words no context row writes).
+// over 16 compressed rounds of shader-test copies both ways). One-sample Z16_2C and ZF32_X24S8_2CSZV (its depth and stencil
+// aspect copies too) ship on unread: gpu.raw.stored_depth's d16_compressed and d32fs8_compressed arms judge them. Not
+// asked: C128, the multisampled colour kinds and the multisampled zeta kinds (which read exact only under anti-alias
+// words no context row writes).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
-    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindZF32 || kind == kCompKindZ16;
+    return kind == kCompKindC32 || kind == kCompKindC64 || kind == kCompKindZF32 || kind == kCompKindZ16 ||
+           kind == kCompKindZeta;
 }
 
 // The compressible kind of a block-linear colour target of `bpp`-byte texels at `samples` samples, or of the depth/stencil
@@ -93,7 +95,7 @@ inline uint32_t compressedKind(uint32_t bpp, uint32_t zeta, uint32_t samples = 1
 // The compressible kind a stored depth/stencil texture of Metal format `zeta` binds (Device::createOwnedZeta), or 0: one
 // sample and one layer, where the copy engine reads that kind as plain texels, as its readback and aspect copies are the
 // copy engine's. Depth32Float: gpu.raw.stored_depth read compressed_readback_wrong=0 with comptags=1 on boot 19 and 21;
-// Depth16Unorm: its d16_compressed arm.
+// Depth16Unorm and Depth32Float_Stencil8: its d16_compressed and d32fs8_compressed arms.
 inline uint32_t storedZetaKind(bool compression, uint32_t zeta, uint32_t samples, uint32_t layers)
 {
     const uint32_t kind = compression && samples == 1 && layers == 1 ? compressedKind(0, zeta) : 0;

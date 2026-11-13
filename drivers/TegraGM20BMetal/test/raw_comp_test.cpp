@@ -114,15 +114,16 @@ TEST(RawComp, MemoryIsWholeComptagLines)
 }
 
 // What the copy engine fills or drains compresses only at the kinds gpu.x1.ce_compressed proved (one-sample C32 and C64)
-// and gpu.x1.ce_compressed_depth proved as shipped (one-sample ZF32_2CZ), and one-sample Z16_2C, which
-// gpu.raw.stored_depth's d16_compressed arm judges
+// and gpu.x1.ce_compressed_depth proved as shipped (one-sample ZF32_2CZ), and one-sample Z16_2C and ZF32_X24S8_2CSZV,
+// which gpu.raw.stored_depth's d16_compressed and d32fs8_compressed arms judge
 TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
 {
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xdb));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0xe9));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0x86));
     EXPECT_TRUE(raw::copyEngineReadsCompressed(0x02));
-    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x03u, 0x04u, 0x87u, 0x88u, 0xceu, 0xcfu, 0xd0u})
+    EXPECT_TRUE(raw::copyEngineReadsCompressed(0xce));
+    for (uint32_t kind : {0xf5u, 0xccu, 0xe2u, 0xcdu, 0xf0u, 0xf7u, 0xf9u, 0x03u, 0x04u, 0x87u, 0x88u, 0xcfu, 0xd0u})
         EXPECT_FALSE(raw::copyEngineReadsCompressed(kind)) << std::hex << kind;
 
     // memoryless: the copy engine never reaches them
@@ -144,7 +145,7 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(raw::backingKind(true, true, 252, 4, 4, false), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 252, 4, 2, false), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false), 0u);
-    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, true), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, true), 0xceu);
 
     // a debug build's gpu.x1.ce_compressed_depth probe gives those zetas their kinds, and nothing else
     EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false, true), 0x86u);
@@ -164,6 +165,8 @@ TEST(RawComp, StoredOneSampleDepthBindsItsCompressibleKind)
 {
     EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 1), 0x86u);
     EXPECT_EQ(raw::storedZetaKind(true, 250, 1, 1), 0x02u) << "Depth16Unorm: Z16_2C";
+    EXPECT_EQ(raw::storedZetaKind(true, 260, 1, 1), 0xceu) << "Depth32Float_Stencil8: ZF32_X24S8_2CSZV";
+    EXPECT_EQ(raw::storedZetaKind(true, 260, 1, 6), 0u) << "a cube";
     EXPECT_EQ(raw::storedZetaKind(false, 252, 1, 1), 0u);
     EXPECT_EQ(raw::storedZetaKind(true, 252, 1, 2), 0u) << "an array or cube";
     EXPECT_EQ(raw::storedZetaKind(true, 252, 4, 1), 0u);
