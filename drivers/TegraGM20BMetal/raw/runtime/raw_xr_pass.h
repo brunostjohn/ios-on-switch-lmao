@@ -49,6 +49,17 @@ inline std::array<int8_t, 8> xrAlphaSlots(const uint32_t formats[8])
     return alpha;
 }
 
+// The alpha indices of `formats`'s 550 colours (xrAlphaSlots), bit j index j: in a state of the two-plane form, targets whose
+// registers are the state's own as its colours' are (pack/mkpack.py and directlink.py hold its records to the same rule)
+inline uint32_t xrAlphaTargets(const uint32_t formats[8])
+{
+    uint32_t targets = 0;
+    for (const int8_t slot : xrAlphaSlots(formats))
+        if (slot >= 0)
+            targets |= 1u << slot;
+    return targets;
+}
+
 // `formats` as a state of the two-plane form takes them: each 550 colour with a free index its word's R32Uint, the index
 // its alpha byte's R8Uint
 inline void xrPlaneFormats(uint32_t formats[8])

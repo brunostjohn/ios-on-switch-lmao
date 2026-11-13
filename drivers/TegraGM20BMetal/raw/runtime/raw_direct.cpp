@@ -393,10 +393,10 @@ bool vertexStreams(const std::vector<EmitStream> &streams, RecordParts &parts, s
 
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
 // unless the pack varies it, so it never costs an extra. Fixed-function input fetches the attributes the translation does not
-// pull, at the locations m2v gives them (dense in attribute order).
+// pull, at the locations m2v gives them (dense in attribute order). `alphaTargets`: a two-plane state's (emitState's).
 bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t pulled,
              uint32_t blended, bool twoPlane, const PackRules &rules, std::map<uint32_t, uint32_t> &regs,
-             std::vector<EmitStream> &streams, std::string &why)
+             uint32_t &alphaTargets, std::vector<EmitStream> &streams, std::string &why)
 {
     std::string fields = key.substr(0, key.find(" | "));
     while (!fields.empty() && fields.back() == ' ')
@@ -407,7 +407,7 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
             return index >= 32 || !(pulled >> index & 1);
         });
     std::vector<EmitRegister> made;
-    if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended, twoPlane) ||
+    if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended, twoPlane, &alphaTargets) ||
         !emitVertexInput(fields, fetched, made, streams, why))
         return false;
     regs = rules.context;
@@ -714,7 +714,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         return CompileOutcome::Refused;
     std::vector<EmitStream> streams;
     if (!emitted(key, stages, attributes, draw.pulledAttributes, state.blended, state.twoPlane, rules, parts.regs,
-                 streams, why) ||
+                 parts.alphaTargets, streams, why) ||
         !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     const uint32_t addresses = addressPushWords(draw);

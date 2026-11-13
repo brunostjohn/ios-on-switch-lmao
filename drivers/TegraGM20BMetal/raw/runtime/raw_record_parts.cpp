@@ -355,7 +355,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.amplificationCountWord = parts.amplificationCountWord;
     p.arrayLengthWord = parts.arrayLengthWord;
     p.viewportCountWord = parts.viewportCountWord;
-    const uint32_t colors = targets(key);
+    const uint32_t colors = targets(key) | parts.alphaTargets;
     std::map<uint32_t, uint32_t> regs;
     for (const auto &[m, v] : parts.regs)
         if (!foreign(m, colors))

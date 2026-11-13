@@ -146,8 +146,8 @@ VertexFormat vertexFormat(unsigned format)
 }
 
 // Each RGB10A8_2P_XR10 colour's alpha byte as the R8Uint target at its alpha index (raw_xr_pass.h), written where Metal's mask
-// writes alpha (MTLColorWriteMaskAlpha, bit 0) and never blended
-void addAlphaPlanes(std::map<unsigned, Color> &colors)
+// writes alpha (MTLColorWriteMaskAlpha, bit 0) and never blended; returns those targets (xrAlphaTargets)
+uint32_t addAlphaPlanes(std::map<unsigned, Color> &colors)
 {
     uint32_t formats[8] = {};
     for (const auto &[j, c] : colors)
@@ -157,6 +157,7 @@ void addAlphaPlanes(std::map<unsigned, Color> &colors)
     for (uint32_t j = 0; j < 8; j++)
         if (alpha[j] >= 0)
             colors[unsigned(alpha[j])] = {kXrAlphaFormat, colors[j].writeMask & 1 ? 8u : 0u, 0, {1, 0, 0, 1, 0, 0}};
+    return xrAlphaTargets(formats);
 }
 
 // "a<i>=format:offset:buffer:stride:stepFunction:stepRate"
@@ -244,14 +245,16 @@ bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &
 }
 
 bool emitState(const std::string &keyFields, const EmitProgram &vertex, const EmitProgram &fragment,
-               std::vector<EmitRegister> &out, std::string &why, const uint32_t *blended, bool twoPlane)
+               std::vector<EmitRegister> &out, std::string &why, const uint32_t *blended, bool twoPlane,
+               uint32_t *alphaTargets)
 {
     std::map<unsigned, Color> colors;
     unsigned depthFormat = 0;
     if (!parse(keyFields, colors, depthFormat, why))
         return false;
-    if (twoPlane)
-        addAlphaPlanes(colors);
+    const uint32_t alpha = twoPlane ? addAlphaPlanes(colors) : 0;
+    if (alphaTargets)
+        *alphaTargets = alpha;
     // the fragment program's output map: 4 components per target, from bit 576 of its header (NAK sph.rs omap_target)
     const uint32_t outputs = fragment.header ? bits(fragment.header, 576, 32) : 0;
     out.clear();
