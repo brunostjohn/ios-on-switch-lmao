@@ -73,8 +73,10 @@ enum {
 
 // Reads the fuses (CPU speedo/process, L4T speedo-tegra210.c), builds the CVB OPP table and the DFLL LUT, finds
 // VDD_CPU's MAX77812 and initializes the DFLL block in its disabled state with its I2C output off (L4T's probe).
-// Never touches the CPU clock or VDD_CPU. Idempotent; a failure is final for the boot, except -EAGAIN (the MAX77812
-// did not answer on I2C5, e.g. a lost arbitration), which the next call retries.
+// Never touches the CPU clock or VDD_CPU. Idempotent. -ENODEV is final for the boot: the chip is not a T210B01 A01,
+// its CPU speedo is not fused, or no CVB row, table or DT node of the DFLL fits it. Any other failure (the MAX77812
+// not answering on I2C5, I2C5 not clocked yet, the CPU clock or the DFLL in another state, an allocation) the next
+// call tries again from where this one stopped.
 int tegra_dfll_cpu_prepare(char *why, size_t len);
 
 // Prepares if needed, then moves the A57 cluster from PLLX to the DFLL in closed loop, as L4T does

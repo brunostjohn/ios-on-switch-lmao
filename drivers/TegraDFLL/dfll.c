@@ -88,10 +88,57 @@ static int apply_thermal(void)
 	return a ? a : b;
 }
 
+/* cvb.c tegra_cvb_add_opp_table's choice, repeated for the description (the driver keeps it in td->soc) */
+static const struct cvb_table *chosen_cvb(void)
+{
+	unsigned int i = 0;
+
+	for (i = 0; i < ARRAY_SIZE(tegra210b01_cpu_cvb_tables); i++) {
+		const struct cvb_table *t = &tegra210b01_cpu_cvb_tables[i];
+
+		if ((t->speedo_id == -1 || t->speedo_id == tegra_sku_info.cpu_speedo_id) &&
+		    (t->process_id == -1 || t->process_id == tegra_sku_info.cpu_process_id))
+			return t;
+	}
+	return NULL;
+}
+
+/* What the driver core does for a DT platform device: bind it, then the driver's probe (tegra124_dfll_fcpu_probe ->
+ * tegra_cvb_add_opp_table, tegra_dfll_register). Its inputs are this chip's CVB row and the tables and DT node built
+ * for it, none of which changes during a boot, so only an allocation it could not make is worth a second probe. */
+static int probe_locked(void)
+{
+	struct platform_device *pdev = tdfll_platform_dfll_device();
+	struct platform_driver *drv = tdfll_builtin_platform_driver();
+	int ret = 0;
+
+	if (!chosen_cvb()) {
+		return fail(st.prepare_why, sizeof(st.prepare_why), -ENODEV,
+			    "no T210B01 CVB row for CPU speedo id %d, process %d",
+			    tegra_sku_info.cpu_speedo_id, tegra_sku_info.cpu_process_id);
+	}
+	pdev->dev.driver = &drv->driver;
+	ret = drv->probe(pdev);
+	if (ret) {
+		return fail(st.prepare_why, sizeof(st.prepare_why), ret == -ENOMEM ? ret : -ENODEV,
+			    "the L4T DFLL probe failed (%d), see above", ret);
+	}
+	st.td = platform_get_drvdata(pdev);
+	st.dfll = clk_get(NULL, "dfllCPU_out");
+	st.cclk_g = clk_get(NULL, "cclk_g");
+	st.pllx = clk_get(NULL, "pll_x");
+	st.pllp = clk_get(NULL, "pll_p");
+	if (!st.td || IS_ERR(st.dfll) || IS_ERR(st.cclk_g) || IS_ERR(st.pllx) || IS_ERR(st.pllp)) {
+		return fail(st.prepare_why, sizeof(st.prepare_why), -ENODEV,
+			    "the DFLL probe left no clock");
+	}
+	return 0;
+}
+
+/* -ENODEV (this chip's revision, speedo fuses or CVB row rule the DFLL out) is final for the boot. Any other failure
+ * keeps what was done, and the next call goes on from there. */
 static int prepare_locked(char *why, size_t len)
 {
-	struct platform_device *pdev = NULL;
-	struct platform_driver *drv = NULL;
 	int ret = 0;
 
 	if (st.prepared)
@@ -99,30 +146,8 @@ static int prepare_locked(char *why, size_t len)
 	if (st.prepare_err)
 		return fail(why, len, st.prepare_err, "%s", st.prepare_why);
 	ret = tdfll_platform_init(st.prepare_why, sizeof(st.prepare_why));
-	if (!ret) {
-		/* what the driver core does for a DT platform device: bind it, then the driver's probe (tegra124_dfll_fcpu_
-		 * probe -> tegra_cvb_add_opp_table, tegra_dfll_register) */
-		pdev = tdfll_platform_dfll_device();
-		drv = tdfll_builtin_platform_driver();
-		pdev->dev.driver = &drv->driver;
-		ret = drv->probe(pdev);
-		if (ret) {
-			fail(st.prepare_why, sizeof(st.prepare_why), ret,
-			     "the L4T DFLL probe failed (%d), see above", ret);
-		}
-	}
-	if (!ret) {
-		st.td = platform_get_drvdata(pdev);
-		st.dfll = clk_get(NULL, "dfllCPU_out");
-		st.cclk_g = clk_get(NULL, "cclk_g");
-		st.pllx = clk_get(NULL, "pll_x");
-		st.pllp = clk_get(NULL, "pll_p");
-		if (!st.td || IS_ERR(st.dfll) || IS_ERR(st.cclk_g) || IS_ERR(st.pllx) ||
-		    IS_ERR(st.pllp)) {
-			ret = fail(st.prepare_why, sizeof(st.prepare_why), -ENODEV,
-				   "the DFLL probe left no clock");
-		}
-	}
+	if (!ret && !st.td)
+		ret = probe_locked();
 	if (!ret && st.thermal_set) {
 		ret = apply_thermal();
 		if (ret) {
@@ -131,8 +156,7 @@ static int prepare_locked(char *why, size_t len)
 		}
 	}
 	if (ret) {
-		if (ret !=
-		    -EAGAIN) /* see tdfll_platform_init: a transient PMIC probe failure is retried */
+		if (ret == -ENODEV)
 			st.prepare_err = ret;
 		printk("not available: %s\n", st.prepare_why);
 		return fail(why, len, ret, "%s", st.prepare_why);
@@ -394,21 +418,6 @@ void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured, un
 			MAX77812_UV(dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS))) / 1000;
 	}
 	unlock();
-}
-
-/* cvb.c tegra_cvb_add_opp_table's choice, repeated for the description (the driver keeps it in td->soc) */
-static const struct cvb_table *chosen_cvb(void)
-{
-	unsigned int i = 0;
-
-	for (i = 0; i < ARRAY_SIZE(tegra210b01_cpu_cvb_tables); i++) {
-		const struct cvb_table *t = &tegra210b01_cpu_cvb_tables[i];
-
-		if ((t->speedo_id == -1 || t->speedo_id == tegra_sku_info.cpu_speedo_id) &&
-		    (t->process_id == -1 || t->process_id == tegra_sku_info.cpu_process_id))
-			return t;
-	}
-	return NULL;
 }
 
 void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)

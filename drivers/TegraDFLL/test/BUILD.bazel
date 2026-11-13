@@ -1,0 +1,58 @@
+# drivers/TegraDFLL on the host: tegra_dfll_cpu_prepare() as the kernel builds it (dfll.c, platform.c, the shim's
+# clock tree, with the driver's own Linux prelude) against a console in memory with TegraI2C and kits/SwitchLinux
+# (tegra_dfll_console.c) and stand-ins for the vendored L4T code (tegra_dfll_fakes.c). SwitchMMIO's accessors are arm64
+# assembly.
+#
+#   bazel test //drivers/TegraDFLL/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load("//kernel/rules:driver_flags.bzl", "LINUX_RELAXATIONS")
+
+lint_files()
+
+DFLL_HEADERS = [
+    "tegra_dfll_fake.h",
+    "//drivers/TegraDFLL:headers",
+    "//drivers/TegraI2C:headers",
+    "//kits/SwitchLinux:headers",
+    "//kits/SwitchMMIO:headers",
+]
+
+host_library(
+    name = "console",
+    srcs = ["tegra_dfll_console.c"] + DFLL_HEADERS,
+    copts = ["-Wno-unused-parameter"],
+    defines = ["SWITCH_LINUX_HOST_MODEL=1"],
+    target_compatible_with = ["@platforms//cpu:arm64"],
+)
+
+host_library(
+    name = "dfll",
+    srcs = [
+        "tegra_dfll_fakes.c",
+        "//drivers/TegraDFLL:dfll.c",
+        "//drivers/TegraDFLL:platform.c",
+        "//drivers/TegraDFLL:shim/linux.c",
+    ] + DFLL_HEADERS,
+    c_std = "gnu11",
+    copts = LINUX_RELAXATIONS + [
+        "-Wno-unused-parameter",
+        "-Wno-macro-redefined",
+        "-Idrivers/TegraDFLL/shim/include",
+        "-Idrivers/TegraDFLL/linux/include",
+        "-include",
+        "drivers/TegraDFLL/shim/include/tdfll_prelude.h",
+    ],
+    defines = ["SWITCH_LINUX_HOST_MODEL=1"],
+    target_compatible_with = ["@platforms//cpu:arm64"],
+)
+
+host_test(
+    name = "tegra_dfll_prepare_test",
+    srcs = ["tegra_dfll_prepare_test.cpp"] + DFLL_HEADERS,
+    target_compatible_with = ["@platforms//cpu:arm64"],
+    deps = [
+        ":console",
+        ":dfll",
+    ],
+)
