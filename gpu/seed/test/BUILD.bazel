@@ -11,6 +11,7 @@ lint_files()
 
 RAW = [
     "archives.py",
+    "draw_context.txt",
     "rawpack.py",
     "directlink.py",
     "mkpack.py",
