@@ -24,7 +24,8 @@ constexpr uint8_t kProbeBlendTwinTriangles = 5, kProbeBlendTwinWhole = 6;
 // quantised to 8-bit codes by the store rule, divided by 255 and rounded once (x1-units UNITS.md, fitted to every device
 // count of gpu.x1.blend_exact; bench blendff 81,920 of 81,920): within one code of Metal for 8-bit content at any depth,
 // up to 2 codes for shader-computed colour stacked twice, 4 codes deeper. It is taken only where that error cannot be seen
-// as data: an 8-bit unorm target the client never reads back, not re-blended across frames, of standard factors.
+// as data: a target the client never reads back, not re-blended across frames, of standard factors, of a format whose
+// ROP blend gpu.raw.fixed_blend_rule reads against Metal's (fixedBlendFormat).
 struct FixedBlendAsk {
     uint16_t format = 0;           // MTLPixelFormat
     bool readable = false;         // CPU-visible storage, a blit or compute pass reads it as data, or a HW Test golden
@@ -34,10 +35,15 @@ struct FixedBlendAsk {
     uint8_t computedLayers = 0;    // shader-computed colours stacked over one pixel, where the sources are not 8-bit
 };
 
+// RGBA8Unorm and BGRA8Unorm (the fit's); RGBA16Float, judged by gpu.raw.fixed_blend_rule rop_rgba16f_*_worst
+constexpr bool fixedBlendFormat(uint16_t format)
+{
+    return format == 70 || format == 80 || format == 115;
+}
+
 constexpr bool fixedBlendAcceptable(const FixedBlendAsk &a)
 {
-    const bool unorm8 = a.format == 70 || a.format == 80;  // RGBA8Unorm, BGRA8Unorm
-    return fixedBlendProven() && unorm8 && !a.readable && !a.accumulates && a.standardFactors &&
+    return fixedBlendProven() && fixedBlendFormat(a.format) && !a.readable && !a.accumulates && a.standardFactors &&
            (a.eightBitSources || a.computedLayers <= 2);
 }
 

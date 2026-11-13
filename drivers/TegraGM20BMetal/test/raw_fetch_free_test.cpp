@@ -100,7 +100,7 @@ TEST(RawFetchFree, Rung2TakesAnEightBitScreenTargetTwoLayersDeep)
     EXPECT_EQ(raw::fetchFreeTaken(f, {80, false, 1}), raw::fixedBlendProven());
     EXPECT_FALSE(raw::fetchFreeTaken(f, {80, false, 2}));
     EXPECT_FALSE(raw::fetchFreeTaken(f, {80, true, 0}));
-    EXPECT_FALSE(raw::fetchFreeTaken(f, {115, false, 0}));
+    EXPECT_FALSE(raw::fetchFreeTaken(f, {90, false, 0}));
     EXPECT_FALSE(raw::fetchFreeTaken(f, {80, false, 0}, 4));
 }
 
