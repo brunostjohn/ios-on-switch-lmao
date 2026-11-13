@@ -47,6 +47,7 @@
 #include "raw_storage.h"
 #include "raw_surface_view.h"
 #include "raw_native_surface.h"
+#include "raw_pass_uses.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
@@ -4178,6 +4179,7 @@ CommandBuffer *Device::begin()
     Push p{start, start + 64};
     emitStartStamp(p, stamps_.va, cb.stamp);
     cb.lastEngine_ = BarrierEngine::None;
+    cb.chain_ = {};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forms_ = nextForms;
     nextForms = {};
@@ -7773,9 +7775,11 @@ void RenderEncoder::end()
     p.raw(restore.data(), uint32_t(restore.size()));
     const BarrierEngine before = cb_->lastEngine_;
     const BarrierForms forms = cb_->barrierForms();
-    const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : PassForm::Today;
-    [[maybe_unused]] const Opened opened =
+    const PassUses uses = passUses();
+    const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
+    const Opened opened =
         passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD), forms.entry, before);
+    advanceChain(cb_->chain_, uses, opened != Opened::Pass);
     cb_->lastEngine_ = BarrierEngine::ThreeD;
     RAW_DIAGNOSTIC(cb_->taken_.count(opened));
     for (uint8_t i = 0; i < startStampCount_; i++)

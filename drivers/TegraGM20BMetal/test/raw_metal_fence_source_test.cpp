@@ -35,6 +35,11 @@ TEST(RawMetalFenceSource, EveryRawEncoderOpensWithADrainOrAnEngineChange)
     const std::string forms = SourceText("../raw/runtime/raw_barrier_forms.h");
     EXPECT_THAT(Body(forms, "constexpr bool switchDrainProven(BarrierEngine before, BarrierEngine next)"),
                 Not(HasSubstr("BarrierEngine::None")));
+    // a pass opens with the pixel barrier alone only where its uses are known, and a fence wait makes them unknown
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_pass_hazard.h"),
+                     "constexpr bool pixelBarrierHolds(const PassChain &chain, const PassUses &next)"),
+                HasSubstr("!next.known"));
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalPassUses.h"), HasSubstr("op == OpWaitFence"));
 }
 
 TEST(RawMetalFenceSource, TheRawEncodeEmitsNothingForAFence)

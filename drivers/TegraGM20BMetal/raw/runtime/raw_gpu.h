@@ -33,6 +33,7 @@
 #include "raw_attachment_order.h"
 #include "raw_attachment_view.h"
 #include "raw_barrier_forms.h"
+#include "raw_pass_hazard.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
@@ -730,6 +731,12 @@ public:
     // stage 1 vertex, 2 fragment; the one-argument forms bind the fragment stage
     void setTexture(int stage, uint32_t slot, const Texture *t);
 
+    // what RawMetalEncode found this pass reads in its recording, before end()
+    void plan(const PassUses &uses)
+    {
+        planned_ = uses;
+    }
+
     void setTexture(uint32_t slot, const Texture *t)
     {
         setTexture(2, slot, t);
@@ -1090,6 +1097,7 @@ private:
     {
         ++bindingRevision_;
         moved_.textures[at] |= 1u << slot;
+        vertexSamples_ |= at == 0 && textures_[at][slot];
     }
 
     uint32_t movedEntries(const PackPipeline &rec) const;
@@ -1232,6 +1240,12 @@ public:
     void clearRegion(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const float rgba[4]);
 
 private:
+    // what the pass reads and writes (raw_pass_hazard.h) as RawMetalEncode found it in its recording; never set: unknown
+    PassUses planned_;
+    bool vertexSamples_ = false;  // a texture bound to the vertex stage
+    PassUses passUses() const;
+    PassForm passRule(BarrierEngine before, const PassUses &uses) const;
+
     // `pl`, its fetch-free form where its rung's rule holds, else its barrier twin where an attachment of this pass cannot
     // be viewed as one of its storage images or rule fetch.twin (raw_twin_rule.h) takes the draw's shape
     Pipeline *formFor(Pipeline *pl, const FetchDraw &shape);
@@ -1609,6 +1623,7 @@ private:
     bool externalWrites_ = false;
     EventPublication publication_;
     BarrierEngine lastEngine_ = BarrierEngine::None;  // the engine of the work encoded last (raw_barrier_forms.h)
+    PassChain chain_;                                 // the passes since the last drain (raw_pass_hazard.h)
 
     // the forms a probe forced (raw_probe_forms.h), else the rules'
     BarrierForms barrierForms() const

@@ -3,6 +3,7 @@
 #import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
+#import "RawMetalPassUses.h"
 #import "RawMetalReach.h"
 #import "RawMetalResolveAsk.h"
 #import "RawMetalSplitPlan.h"
@@ -118,6 +119,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
+    raw::PassUses planned;
     RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
@@ -609,6 +611,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                         stores |= uint8_t(1u << i);
                 re->continuePass(stores);
                 planSplitPrograms(cb, at, *re);
+                planPassUses(cb, at, planned);
                 break;
             }
             raw::PassDesc p;
@@ -727,6 +730,9 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
             counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
+            planned = raw::PassUses{};
+            planned.known = !cb->_sampledShadows && !cb->_standIns;
+            planPassUses(cb, at, planned);
             break;
         }
         case OpBlit:
@@ -760,8 +766,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     }
                 }
             }
-            if (re)
+            if (re) {
+                re->plan(planned);
                 re->end();
+            }
             standInBackings();
             if (re && !resolvePasses())
                 return false;

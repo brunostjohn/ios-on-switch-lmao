@@ -9,7 +9,10 @@ import Metal
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
 /// switch_gm20b_pass_barrier), pixel (the planner's form), none (no barrier: the arm that shows a cell can see the
-/// hazard). Cells: format x layout x read shape x size. 0x1288 in place of 0x0f74 after the barrier is never sent: F-v1
+/// hazard), each with today's engine changes; rule forces nothing, so production's rules pick every barrier
+/// (raw_pass_hazard.h: the pixel barrier only where every dependency is a cell this line held), rule_passes= the passes
+/// it opened with the pixel barrier, and a cell where rule read other texels than control fails the line. Cells: format x
+/// layout x read shape x size. 0x1288 in place of 0x0f74 after the barrier is never sent: F-v1
 /// read it wrong in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials). The 64 x 64 cells run four times as long
 /// as T-v2's (the F-v1 count).
 enum X1PassBarrierProbe {
@@ -19,7 +22,8 @@ enum X1PassBarrierProbe {
         probe: "barrier.pass_pixel", timeout: 420, body: run)
 
     static let arms = [
-        ("control", "pass=today"), ("pixel", "pass=pixel"), ("none", "pass=none"),
+        ("control", "pass=today switch=today"), ("pixel", "pass=pixel switch=today"),
+        ("none", "pass=none switch=today"), ("rule", ""),
     ]
     static let batch = 8
     static let seeds = 16
@@ -138,8 +142,12 @@ enum X1PassBarrierProbe {
             }
         }
         var finding = ledger.finding(
-            relaxed: ["pixel"], none: "none", control: "control",
+            relaxed: ["pixel", "rule"], none: "none", control: "control",
             takenKey: "passes", rule: "barrier.pass_pixel")
+        if ledger.failed("rule", none: "none") > 0 {
+            finding.verdict = .fail
+            finding.note = "production's pass barriers read other texels than today's"
+        }
         finding.metrics.set("control_vs_cpu", controlVsCpu)
         finding.metrics.set("skipped", skipped.isEmpty ? "-" : skipped.joined(separator: ","))
         if controlVsCpu > 0 {
