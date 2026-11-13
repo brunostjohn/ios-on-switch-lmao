@@ -46,9 +46,12 @@ PipelineFields fieldsOf(MTLRenderPipelineDescriptor *d)
     f.rasterization = d.rasterizationEnabled ? 1 : 0;
     f.amplification = d.maxVertexAmplificationCount;
     f.patchType = d.vertexFunction.patchType;
-    f.tessellation = {d.tessellationPartitionMode,      d.tessellationFactorFormat,
-                      d.tessellationFactorStepFunction, d.tessellationOutputWindingOrder,
-                      d.tessellationControlPointIndexType, d.maxTessellationFactor,
+    f.tessellation = {d.tessellationPartitionMode,
+                      d.tessellationFactorFormat,
+                      d.tessellationFactorStepFunction,
+                      d.tessellationOutputWindingOrder,
+                      d.tessellationControlPointIndexType,
+                      d.maxTessellationFactor,
                       d.tessellationFactorScaleEnabled ? 1u : 0u};
     for (unsigned i = 0; i < 8; i++) {
         MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];

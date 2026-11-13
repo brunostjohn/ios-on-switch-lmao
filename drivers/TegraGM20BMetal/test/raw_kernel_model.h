@@ -143,7 +143,7 @@ struct Model {
     std::vector<int32_t> compileResults = {TegraGM20BCompileUnavailable};
     unsigned compiles = 0;
     std::vector<std::string> compileRequests;  // each compile's request bytes, as the client sent them
-    unsigned refuse = 0;  // submissions refused from now, with `refusal`
+    unsigned refuse = 0;                       // submissions refused from now, with `refusal`
     // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
     uint64_t vaEnd = uint64_t(1) << 40;
     uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)

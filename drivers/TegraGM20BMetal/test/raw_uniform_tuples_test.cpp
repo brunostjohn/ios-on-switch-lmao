@@ -76,10 +76,18 @@ TEST(RawUniformTuples, ATupleIsTheBytesTheRecordsRangesRead)
         bool m = false;
         return tupleOf(c, m) != base;
     };
-    EXPECT_TRUE(differs([](Buffers &c) { c.arena[255] ^= 1; }));
-    EXPECT_TRUE(differs([](Buffers &c) { c.whole[39] ^= 1; }));
-    EXPECT_TRUE(differs([](Buffers &c) { c.fragment[32] ^= 1; }));
-    EXPECT_TRUE(differs([](Buffers &c) { c.fragment[63] ^= 1; }));
+    EXPECT_TRUE(differs([](Buffers &c) {
+        c.arena[255] ^= 1;
+    }));
+    EXPECT_TRUE(differs([](Buffers &c) {
+        c.whole[39] ^= 1;
+    }));
+    EXPECT_TRUE(differs([](Buffers &c) {
+        c.fragment[32] ^= 1;
+    }));
+    EXPECT_TRUE(differs([](Buffers &c) {
+        c.fragment[63] ^= 1;
+    }));
     Buffers unmapped = b;
     unmapped.mapped = false;
     tupleOf(unmapped, mapped);
@@ -133,7 +141,9 @@ TEST(RawUniformTuples, ItsMemoryIsBounded)
         tuples.note(100 + s, true, 0, 10 + many, closed);
     tuples.note(7, true, 0, 10 + many + raw::UniformTuples::kWindowUs, closed);
     ASSERT_EQ(closed.size(), raw::UniformTuples::kStates);
-    const auto first = std::find_if(closed.begin(), closed.end(), [](const auto &w) { return w.keyHash == 7; });
+    const auto first = std::find_if(closed.begin(), closed.end(), [](const auto &w) {
+        return w.keyHash == 7;
+    });
     ASSERT_NE(first, closed.end());
     EXPECT_EQ(first->tuples, raw::UniformTuples::kTuplesPerState);
     EXPECT_EQ(first->beyond, 500u);

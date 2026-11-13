@@ -118,8 +118,9 @@ bool sane(const CompileRequest &r)
 {
     const bool kernel = r.kind == RequestKind::Kernel;
     if ((kernel ? r.stages.size() != 1 : r.stages.size() < 2) || r.stages.size() > kRequestStageLimit ||
-        r.libraries.empty() || r.libraries.size() > kRequestLibraryLimit || r.kernel.textures.size() > kRequestBindLimit ||
-        r.kernel.samplers.size() > kRequestBindLimit || r.key.empty() || (kernel && r.form != RequestForm::Primary))
+        r.libraries.empty() || r.libraries.size() > kRequestLibraryLimit ||
+        r.kernel.textures.size() > kRequestBindLimit || r.kernel.samplers.size() > kRequestBindLimit || r.key.empty() ||
+        (kernel && r.form != RequestForm::Primary))
         return false;
     for (size_t i = 0; i < r.stages.size(); ++i)
         if (!knownTag(r, i) || r.stages[i].library >= r.libraries.size() || r.stages[i].function.empty())

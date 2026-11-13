@@ -208,9 +208,13 @@ TEST(CompileRequestForms, TheCompilersDescriptorCarriesEveryFieldTheClientRead)
     f.stencilFormat = MTLPixelFormatStencil8;
     f.rasterization = 0;
     f.amplification = 2;
-    f.tessellation = {MTLTessellationPartitionModeFractionalOdd, MTLTessellationFactorFormatHalf,
-                      MTLTessellationFactorStepFunctionPerPatch, MTLWindingCounterClockwise,
-                      MTLTessellationControlPointIndexTypeUInt32, 32, 1};
+    f.tessellation = {MTLTessellationPartitionModeFractionalOdd,
+                      MTLTessellationFactorFormatHalf,
+                      MTLTessellationFactorStepFunctionPerPatch,
+                      MTLWindingCounterClockwise,
+                      MTLTessellationControlPointIndexTypeUInt32,
+                      32,
+                      1};
     const uint64_t formats[8] = {70, 71, 80, 81, 90, 94, 115, 125};
     for (uint64_t i = 0; i < 8; i++)
         f.color[i] = {formats[i], 15 - i, i & 1, 4, 5, 1, 6, 7, 2};
@@ -277,24 +281,78 @@ TEST(CompileRequestForms, EveryFieldGoesOverTheWire)
     EXPECT_EQ(raw::encodeRequest(back), bytes);
 
     const std::vector<std::pair<const char *, std::function<void(raw::CompileRequest &)>>> changes = {
-        {"form", [](auto &q) { q.form = raw::RequestForm::Primary; }},
-        {"samples", [](auto &q) { q.fields.samples = 4; }},
-        {"rasterization", [](auto &q) { q.fields.rasterization = 0; }},
-        {"amplification", [](auto &q) { q.fields.amplification = 3; }},
-        {"patch type", [](auto &q) { q.fields.patchType = 1; }},
-        {"tessellation", [](auto &q) { q.fields.tessellation.factorScale = 0; }},
-        {"colour", [](auto &q) { q.fields.color[7].operationAlpha = 4; }},
-        {"attribute", [](auto &q) { q.fields.attributes[30].rate = 9; }},
-        {"constants", [](auto &q) { q.stages[1].constants = "#0:53:00"; }},
-        {"name", [](auto &q) { q.stages[1].name = "fragment_fn"; }},
-        {"linked library", [](auto &q) { q.stages[2].library = 0; }},
-        {"cubic", [](auto &q) { q.variant.cubic.textures[0].format = 81; }},
-        {"tests", [](auto &q) { q.variant.fragmentTests = 1; }},
-        {"two planes", [](auto &q) { q.variant.twoPlane = false; }},
-        {"sampled two-plane slots", [](auto &q) { q.variant.xrSlots = 1; }},
-        {"written", [](auto &q) { q.variant.written[0].format = 63; }},
-        {"stage input", [](auto &q) { q.kernel.stageIn.indexBuffer = 4; }},
-        {"kernel textures", [](auto &q) { q.kernel.textures.push_back({1, 80, 2, 3, 1, 1, 1}); }},
+        {"form",
+         [](auto &q) {
+             q.form = raw::RequestForm::Primary;
+         }},
+        {"samples",
+         [](auto &q) {
+             q.fields.samples = 4;
+         }},
+        {"rasterization",
+         [](auto &q) {
+             q.fields.rasterization = 0;
+         }},
+        {"amplification",
+         [](auto &q) {
+             q.fields.amplification = 3;
+         }},
+        {"patch type",
+         [](auto &q) {
+             q.fields.patchType = 1;
+         }},
+        {"tessellation",
+         [](auto &q) {
+             q.fields.tessellation.factorScale = 0;
+         }},
+        {"colour",
+         [](auto &q) {
+             q.fields.color[7].operationAlpha = 4;
+         }},
+        {"attribute",
+         [](auto &q) {
+             q.fields.attributes[30].rate = 9;
+         }},
+        {"constants",
+         [](auto &q) {
+             q.stages[1].constants = "#0:53:00";
+         }},
+        {"name",
+         [](auto &q) {
+             q.stages[1].name = "fragment_fn";
+         }},
+        {"linked library",
+         [](auto &q) {
+             q.stages[2].library = 0;
+         }},
+        {"cubic",
+         [](auto &q) {
+             q.variant.cubic.textures[0].format = 81;
+         }},
+        {"tests",
+         [](auto &q) {
+             q.variant.fragmentTests = 1;
+         }},
+        {"two planes",
+         [](auto &q) {
+             q.variant.twoPlane = false;
+         }},
+        {"sampled two-plane slots",
+         [](auto &q) {
+             q.variant.xrSlots = 1;
+         }},
+        {"written",
+         [](auto &q) {
+             q.variant.written[0].format = 63;
+         }},
+        {"stage input",
+         [](auto &q) {
+             q.kernel.stageIn.indexBuffer = 4;
+         }},
+        {"kernel textures",
+         [](auto &q) {
+             q.kernel.textures.push_back({1, 80, 2, 3, 1, 1, 1});
+         }},
     };
     for (const auto &[what, change] : changes) {
         raw::CompileRequest changed = r;
@@ -323,7 +381,8 @@ TEST(CompileRequestForms, TheClientsRequestsCarryWhatItsKeysAreMadeOf)
                   .find("q.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);"),
               std::string::npos);
     const std::string cubic = Body(SourceText("../raw/runtime/RawMetalCubic.mm"), "renderVariant(RMPipeline *p,");
-    EXPECT_NE(cubic.find("const std::string suffix = forms.untested().name(), name = forms.name();"), std::string::npos);
+    EXPECT_NE(cubic.find("const std::string suffix = forms.untested().name(), name = forms.name();"),
+              std::string::npos);
     EXPECT_NE(cubic.find("request.key = p->_key + name;"), std::string::npos);
     EXPECT_NE(cubic.find("request.variant = forms;"), std::string::npos);
     EXPECT_NE(cubic.find("fallback.key = p->_key + suffix;"), std::string::npos);

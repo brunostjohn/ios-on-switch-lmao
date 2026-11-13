@@ -247,9 +247,9 @@ TEST(CompilerCompileOnly, ItsRecordsAreTheDevicesByteForByte)
             return s.tag == "fp" || s.tag == "vp";
         });
     }
-    for (const char *kind : {"render", "constexpr samplers", "storage form", "cubic", "test class", "two planes",
-                             "written", "multisampled", "specialized", "kernel", "kernel with textures and samplers",
-                             "region kernel"})
+    for (const char *kind :
+         {"render", "constexpr samplers", "storage form", "cubic", "test class", "two planes", "written",
+          "multisampled", "specialized", "kernel", "kernel with textures and samplers", "region kernel"})
         EXPECT_GT(covered[kind], 0u) << "the sample made no " << kind << " record";
 #if SWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS
     EXPECT_GT(covered["private linked"], 0u) << "the sample made no private linked record";

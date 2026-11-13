@@ -143,10 +143,13 @@ void RenderEncoder::logUniformTuple(const Pipeline &pl) const
         return;
     const PackPipeline &r = *pl.rec;
     uint64_t tuple = 0;
-    const bool mapped = uniformTuple(r, [&](uint8_t stage, uint8_t slot) {
-        const Bound &b = bufs_[stage][slot];
-        return BoundBytes{b.cpu, b.size};
-    }, tuple);
+    const bool mapped = uniformTuple(
+        r,
+        [&](uint8_t stage, uint8_t slot) {
+            const Bound &b = bufs_[stage][slot];
+            return BoundBytes{b.cpu, b.size};
+        },
+        tuple);
     static std::mutex lock;
     static UniformTuples tuples;
     std::vector<UniformTuples::Window> closed;
@@ -161,9 +164,9 @@ void RenderEncoder::logUniformTuple(const Pipeline &pl) const
                "10-99 times %llu, 100 or more %llu; the most %llu draws, tuple %016llx), %llu draws of tuples past "
                "the first %zu, %llu draws of a range the CPU does not map",
                (unsigned long long)w.keyHash, (unsigned long long)w.draws, w.tuples, (unsigned long long)w.drawnOnce,
-               (unsigned long long)w.drawnUnder10, (unsigned long long)w.drawnUnder100,
-               (unsigned long long)w.drawnMore, (unsigned long long)w.most, (unsigned long long)w.mostTuple,
-               (unsigned long long)w.beyond, UniformTuples::kTuplesPerState, (unsigned long long)w.unmapped);
+               (unsigned long long)w.drawnUnder10, (unsigned long long)w.drawnUnder100, (unsigned long long)w.drawnMore,
+               (unsigned long long)w.most, (unsigned long long)w.mostTuple, (unsigned long long)w.beyond,
+               UniformTuples::kTuplesPerState, (unsigned long long)w.unmapped);
 }
 #endif
 
