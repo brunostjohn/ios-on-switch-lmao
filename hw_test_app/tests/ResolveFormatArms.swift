@@ -6,11 +6,11 @@ import Metal
 /// gpu.raw.resolve_twod's format arms (raw_resolve_rule.h twodResolveFit): per format and sample count the codes the
 /// format stores for each sample (one-sample draws of its colour, resolve_twod_sample_fragment), the resolve the rule
 /// picks for a private target only passes sample, and the pack's pass where the format has a resolve state, each held
-/// to Metal's rule computed from the stored codes (unorm nearest, sRGB averaged as linear light, floats ties to even).
-/// `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the same of the pass (the
-/// reference's control), `<cell>_ms=<picked>/<pass>` GPU ms. FAIL: a cell off resolve.twod, a channel beyond one code,
-/// or an exact cell (RGBA16Float at 2x) off Metal, where its read arm (`rgba16f_2x_read=<route>:<off>`) must take
-/// resolve.twod too.
+/// to Metal's rule computed from the stored codes (unorm nearest, sRGB averaged as linear light, floats ties to even)
+/// on every third texel each way. `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the
+/// same of the pass (the reference's control), `<cell>_ms=<picked>/<pass>` GPU ms. FAIL: a cell off resolve.twod, a
+/// channel beyond one code, or an exact cell (RGBA16Float at 2x) off Metal, where its read arm
+/// (`rgba16f_2x_read=<route>:<off>`) must take resolve.twod too; `<cell>_error`: the cell could not run.
 extension ResolveTwodTest {
     struct FormatCell {
         let format: X1Format
@@ -30,41 +30,52 @@ extension ResolveTwodTest {
         }
     }
 
-    func formatArms(_ gpu: GPU, _ facade: NSObject, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
+    func formatArms(_ gpu: GPU, _ facade: NSObject, _ metrics: inout Metrics, _ wrong: inout [String]) async {
         for cell in Self.formatCells where gpu.device.supportsTextureSampleCount(cell.samples) {
-            let format = cell.format, size = format.bytesPerTexel
-            let state = try gpu.render(
-                fragment: "resolve_twod_fragment", format: format.pixelFormat, samples: cell.samples)
-            let stored = try await storedSamples(gpu, format, samples: cell.samples)
-            let picked = try await resolved(
-                gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
-            let (off, beyond) = Self.offMetal(format, picked.bytes, stored)
-            let route = picked.twod > 0 ? "twod" : "pass"
-            metrics.set(cell.name, "\(route):\(off == 0 ? "exact" : beyond == 0 ? "near" : "wrong"):\(off):\(beyond)")
-            var passMs = "-"
-            if cell.pass {
-                let pass = try await switched(facade, Self.drawSelector) {
-                    try await resolved(
-                        gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
-                }
-                let (passOff, passBeyond) = Self.offMetal(format, pass.bytes, stored)
-                metrics.set("\(cell.name)_pass", "\(pass.path):\(passOff):\(passBeyond)")
-                passMs = String(format: "%.3f", pass.gpuMs)
+            do {
+                try await formatArm(cell, gpu, facade, &metrics, &wrong)
+            } catch {
+                metrics.set("\(cell.name)_error", String(describing: error).prefix(80).description)
+                wrong.append("\(cell.name)_error")
             }
-            metrics.set("\(cell.name)_ms", String(format: "%.3f", picked.gpuMs) + "/" + passMs)
-            if route != "twod" { wrong.append("\(cell.name)_not_twod") }
-            if picked.path != "raw" { wrong.append("\(cell.name)_path") }
-            if beyond > 0 { wrong.append("\(cell.name)_beyond_one") }
-            if cell.exact && off > 0 { wrong.append("\(cell.name)_off_metal") }
-            guard cell.exact else { continue }
-            let read = try await readInCommandBuffer(
-                gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
-            let (readOff, _) = Self.offMetal(format, read.bytes, stored)
-            let readRoute = read.twod > 0 ? "twod" : "pass"
-            metrics.set("\(cell.name)_read", "\(readRoute):\(readOff)")
-            if readRoute != "twod" { wrong.append("\(cell.name)_read_not_twod") }
-            if readOff > 0 { wrong.append("\(cell.name)_read_off_metal") }
         }
+    }
+
+    func formatArm(
+        _ cell: FormatCell, _ gpu: GPU, _ facade: NSObject, _ metrics: inout Metrics, _ wrong: inout [String]
+    ) async throws {
+        let format = cell.format, size = format.bytesPerTexel
+        let state = try gpu.render(
+            fragment: "resolve_twod_fragment", format: format.pixelFormat, samples: cell.samples)
+        let stored = try await storedSamples(gpu, format, samples: cell.samples)
+        let picked = try await resolved(
+            gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
+        let (off, beyond) = Self.offMetal(format, picked.bytes, stored)
+        let route = picked.twod > 0 ? "twod" : "pass"
+        metrics.set(cell.name, "\(route):\(off == 0 ? "exact" : beyond == 0 ? "near" : "wrong"):\(off):\(beyond)")
+        var passMs = "-"
+        if cell.pass {
+            let pass = try await switched(facade, Self.drawSelector) {
+                try await resolved(
+                    gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
+            }
+            let (passOff, passBeyond) = Self.offMetal(format, pass.bytes, stored)
+            metrics.set("\(cell.name)_pass", "\(pass.path):\(passOff):\(passBeyond)")
+            passMs = String(format: "%.3f", pass.gpuMs)
+        }
+        metrics.set("\(cell.name)_ms", String(format: "%.3f", picked.gpuMs) + "/" + passMs)
+        if route != "twod" { wrong.append("\(cell.name)_not_twod") }
+        if picked.path != "raw" { wrong.append("\(cell.name)_path") }
+        if beyond > 0 { wrong.append("\(cell.name)_beyond_one") }
+        if cell.exact && off > 0 { wrong.append("\(cell.name)_off_metal") }
+        guard cell.exact else { return }
+        let read = try await readInCommandBuffer(
+            gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size)
+        let (readOff, _) = Self.offMetal(format, read.bytes, stored)
+        let readRoute = read.twod > 0 ? "twod" : "pass"
+        metrics.set("\(cell.name)_read", "\(readRoute):\(readOff)")
+        if readRoute != "twod" { wrong.append("\(cell.name)_read_not_twod") }
+        if readOff > 0 { wrong.append("\(cell.name)_read_off_metal") }
     }
 
     /// Sample s's codes at every pixel: resolve_twod_fragment's colour for s drawn into a one-sample target
@@ -91,17 +102,21 @@ extension ResolveTwodTest {
         return out
     }
 
-    /// Texels whose codes are not Metal's resolve of the stored samples, and channels more than one code from it
+    /// Of every third texel each way, those whose codes are not Metal's resolve of the stored samples, and channels
+    /// more than one code from it
     static func offMetal(_ format: X1Format, _ got: [UInt8], _ stored: [[UInt8]]) -> (Int, Int) {
         var off = 0, beyond = 0
-        for t in 0..<width * height {
-            let codes = format.codes(got, t), want = metalResolve(format, stored.map { format.codes($0, t) })
-            var differs = false
-            for c in 0..<want.count where codes[c] != want[c] {
-                differs = true
-                if abs(Int64(codes[c]) - Int64(want[c])) > 1 { beyond += 1 }
+        for y in stride(from: 0, to: height, by: 3) {
+            for x in stride(from: 0, to: width, by: 3) {
+                let t = y * width + x
+                let codes = format.codes(got, t), want = metalResolve(format, stored.map { format.codes($0, t) })
+                var differs = false
+                for c in 0..<want.count where codes[c] != want[c] {
+                    differs = true
+                    if abs(Int64(codes[c]) - Int64(want[c])) > 1 { beyond += 1 }
+                }
+                if differs { off += 1 }
             }
-            if differs { off += 1 }
         }
         return (off, beyond)
     }

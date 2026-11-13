@@ -46,7 +46,7 @@ struct ResolveTwodTest: HWTest {
         for samples in [4, 2] where gpu.device.supportsTextureSampleCount(samples) {
             let state = try gpu.render(fragment: "resolve_twod_fragment", format: .bgra8Unorm, samples: samples)
             let picked = try await resolved(gpu, state, samples: samples)
-            let compressed = try await resolved(gpu, state, samples: samples, grid: .memoryless)
+            let compressed = try? await resolved(gpu, state, samples: samples, grid: .memoryless)
             let exact = try await switched(facade, Self.exactSelector) {
                 try await resolved(gpu, state, samples: samples)
             }
@@ -97,14 +97,19 @@ struct ResolveTwodTest: HWTest {
             }
             if keptDiffer > 0 { wrong.append("\(tag)_kept_differ") }
             if [picked.path, exact.path, pass.path].contains(where: { $0 != "raw" }) { wrong.append("\(tag)_paths") }
-            let compressedDiffer = zip(compressed.bytes, picked.bytes).filter { $0 != $1 }.count
-            let compressedRoute = compressed.twod > 0 ? "twod" : "pass"
-            metrics.set("\(tag)_compressed", "\(compressedRoute):\(compressed.compressedGrids):\(compressedDiffer)")
-            if compressed.compressedGrids == 0 { wrong.append("\(tag)_compressed_grid_plain") }
-            if compressedRoute != "twod" { wrong.append("\(tag)_compressed_not_twod") }
-            if compressedDiffer > 0 { wrong.append("\(tag)_compressed_differ") }
+            if let compressed {
+                let compressedDiffer = zip(compressed.bytes, picked.bytes).filter { $0 != $1 }.count
+                let compressedRoute = compressed.twod > 0 ? "twod" : "pass"
+                metrics.set(
+                    "\(tag)_compressed", "\(compressedRoute):\(compressed.compressedGrids):\(compressedDiffer)")
+                if compressed.compressedGrids == 0 { wrong.append("\(tag)_compressed_grid_plain") }
+                if compressedRoute != "twod" { wrong.append("\(tag)_compressed_not_twod") }
+                if compressedDiffer > 0 { wrong.append("\(tag)_compressed_differ") }
+            } else {
+                wrong.append("\(tag)_compressed_error")
+            }
         }
-        try await formatArms(gpu, facade, &metrics, &wrong)
+        await formatArms(gpu, facade, &metrics, &wrong)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 

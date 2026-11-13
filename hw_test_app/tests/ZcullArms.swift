@@ -7,7 +7,8 @@ import Metal
 /// the far quads over everything again, on a 4x multisampled depth resolved into the target (`msaa4x`), on a two-layer
 /// array whose layers each take the quads (`layered`), and on a depth one pass clears and stores and the next pass of
 /// the same command buffer loads (`loaded`, the second pass drawing only the far quads). `<arm>_wrong`: channels off
-/// the expected colours; `<arm>_passes`: regions the facade programmed for the arm (at least one, two for `loaded`).
+/// the expected colours; `<arm>_passes`: regions the facade programmed for the arm (at least one, two for `loaded`);
+/// `<arm>_error`: the arm could not run.
 extension ZcullTest {
     struct ArmContext {
         let gpu: GPU
@@ -16,14 +17,20 @@ extension ZcullTest {
         let state: (MTLCompareFunction) -> MTLDepthStencilState
     }
 
-    func arms(_ c: ArmContext, _ metrics: inout Metrics, _ wrong: inout [String], _ paths: inout Set<String>)
-        async throws
-    {
+    func arms(_ c: ArmContext, _ metrics: inout Metrics, _ wrong: inout [String], _ paths: inout Set<String>) async {
         for (name, regions, run) in [
             ("msaa4x", 1, msaa4x), ("layered", 1, layered), ("loaded", 2, loaded),
         ] as [(String, Int, (ArmContext) async throws -> (Int, String))] {
             let before = RawFacade.counters(of: c.gpu.device)
-            let (bad, path) = try await run(c)
+            let ran: (Int, String)
+            do {
+                ran = try await run(c)
+            } catch {
+                metrics.set("\(name)_error", String(describing: error).prefix(80).description)
+                wrong.append("\(name)_error")
+                continue
+            }
+            let (bad, path) = ran
             let after = RawFacade.counters(of: c.gpu.device)
             let passes = (after["zcull_passes"] ?? 0) - (before["zcull_passes"] ?? 0)
             metrics.set("\(name)_wrong", bad)
