@@ -21,12 +21,18 @@
 // Earlier still, host1x's syncpoint filter writes the set (writeEarlyMediaFlip) once every producer's job is certainly
 // done (switch_gpu_backing_token_filter_status), from a filter waiter on each producer. A frame end or a gate writer
 // that comes before the completion adopts it: the latch requests it then, and the completion's pass leaves it be.
-// The judging and the hold above cover these sets as well.
+// The judging and the hold above cover these sets as well. A filter-written set whose completion then fails counts; a
+// second before 600 armed sets have passed holds the filter off for mediaFilterHold's run of armed sets.
 
 // Static, as window A's completion flip: the instance is at the 16 KiB a kalloc_type class may have.
 static inline SwitchPlaneCompletionFlip mediaFlip;
 static inline SwitchRouteBackoff mediaHold{8, 1024, 600};  // in eligible sets, under the gate
-static inline bool mediaFilterOff = false;  // host1x's filter writes no set: read in its interrupt context
+// Under completionFlipLock: host1x's filter writes no set while mediaFilterHold runs (mediaFilterOff mirrors it for
+// its interrupt context); mediaFilterStrike is a failed filter set not yet forgiven by kMediaFilterForgive armed sets.
+static inline SwitchRouteBackoff mediaFilterHold{8, 1024, 600};
+static inline bool mediaFilterOff = false, mediaFilterStrike = false;
+static inline uint32_t mediaFilterFailures = 0, mediaFilterArmedSinceStrike = 0;
+static constexpr uint32_t kMediaFilterForgive = 600;
 static inline int mediaFlipUnverified = PlaneCommits::kNone;  // the latch entry the completion requested, unjudged
 static inline uint64_t mediaFlipRequestedSeq = 0;  // the set finishPlaneFence requested: planeOut writes nothing for it
 // A set's host1x filter waiters (one on each producer), one per arm parity: a waiter outlives its offer only by the
@@ -145,6 +151,7 @@ bool armMediaFlip(const PlaneSet &p)
         }
     }
     mediaFlip.arm(update, request);
+    mediaFilterArmed();
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (SWITCH_FRAME_TIMELINE)
         noteMediaFlipTotal(4, 1);
@@ -221,21 +228,47 @@ void writeEarlyMediaFlip(uint32_t generation)
         noteMediaFlipTotal(5, 1);
 }
 
+// Under completionFlipLock, at each armed set: the filter's hold runs down, and a strike is forgiven after
+// kMediaFilterForgive armed sets.
+void mediaFilterArmed()
+{
+    __atomic_store_n(&mediaFilterOff, !mediaFilterHold.on(), __ATOMIC_RELAXED);
+    mediaFilterHold.clean();
+    if (mediaFilterStrike && ++mediaFilterArmedSinceStrike >= kMediaFilterForgive)
+        mediaFilterStrike = false;
+}
+
+// Under completionFlipLock: a filter-written set whose completion failed. The first is counted; a second before it is
+// forgiven holds the filter off.
+void mediaFilterFailed()
+{
+    ++mediaFilterFailures;
+    if (!mediaFilterStrike) {
+        mediaFilterStrike = true;
+        mediaFilterArmedSinceStrike = 0;
+        return;
+    }
+    mediaFilterHold.fail();
+    __atomic_store_n(&mediaFilterOff, true, __ATOMIC_RELAXED);
+}
+
 // completionFlipVerdict's: a set host1x's filter wrote is on screen, so its completion is a success. A failure breaks
-// the producers' contract: one line, and that filter writes no set from then on.
+// the producers' contract: one line, counted, and a repeat holds the filter off (mediaFilterFailed).
 int mediaFlipVerdict(int status)
 {
     if (!status || !__atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE))
         return status;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     const bool early = mediaFlip.early();
+    if (early)
+        mediaFilterFailed();
+    const uint32_t failures = mediaFilterFailures, run = mediaFilterHold.on() ? 0 : mediaFilterHold.run;
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (!early)
         return status;
-    if (!__atomic_exchange_n(&mediaFilterOff, true, __ATOMIC_RELAXED))
-        IOLog("SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then "
-              "failed (%d): shown as done; the filter writes no sets from here\n",
-              status);
+    IOLog("SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then failed "
+          "(%d): shown as done (%u such since boot); the filter writes no sets for the next %u\n",
+          status, failures, run);
     return 0;
 }
 

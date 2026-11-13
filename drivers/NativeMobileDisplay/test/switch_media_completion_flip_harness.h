@@ -283,8 +283,10 @@ struct Display {
         gPreemptionOff = 0;
         landscapeState = {};
         mediaFlip = {};
-        mediaFilterOff = false;
+        mediaFilterOff = mediaFilterStrike = false;
+        mediaFilterFailures = mediaFilterArmedSinceStrike = 0;
         mediaHold = {8, 1024, 600};
+        mediaFilterHold = {8, 1024, 600};
         mediaFlipUnverified = PlaneCommits::kNone;
         mediaFlipRequestedSeq = 0;
         planeLatch.values = sets;

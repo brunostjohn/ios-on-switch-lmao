@@ -177,24 +177,40 @@ TEST_F(MediaFlipFilter, AStaleWaiterClaimsNothingOfTheNextOffer)
     EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
 }
 
-// The producers' contract broken: a set the filter wrote whose completion then failed is shown as done, logged once,
-// and the filter writes no set after it.
-TEST_F(MediaFlipFilter, AFilterSetWhoseCompletionFailsIsShownAndTurnsTheFilterOff)
+// The producers' contract broken: a set the filter wrote whose completion then failed is shown as done and logged, and
+// counted: the filter keeps writing. A second failure before 600 armed sets forgive the first holds the filter off for
+// its run of armed sets.
+TEST_F(MediaFlipFilter, AFilterSetWhoseCompletionFailsIsCountedAndARepeatHoldsTheFilterOff)
 {
-    ASSERT_TRUE(armed(2));
-    d.filter();
-    d.complete(-5);
-    EXPECT_EQ(d.gpuStatus, 0);
+    const auto failedByFilter = [this](int slot) {
+        ASSERT_TRUE(armed(slot));
+        d.filter();
+        d.complete(-5);
+        EXPECT_EQ(d.gpuStatus, 0);
+        d.donePass();
+        frame();
+        EXPECT_EQ(d.shown.back(), seq);
+    };
+    const auto filterWrites = [this](int slot) {
+        EXPECT_TRUE(armed(slot));
+        d.model.written.clear();
+        d.filter();
+        const bool wrote = !d.model.written.empty();
+        d.complete(0);
+        d.donePass();
+        frame();
+        return wrote;
+    };
+    failedByFilter(2);
     ASSERT_EQ(gLog.size(), 1u);
     EXPECT_NE(gLog[0].find("whose completion then failed (-5)"), std::string::npos) << gLog[0];
-    d.donePass();
-    frame();
-    EXPECT_EQ(d.shown.back(), seq);
-    ASSERT_TRUE(armed(3));
-    d.model.written.clear();
-    d.filter();
-    EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_TRUE(filterWrites(3));
+    failedByFilter(2);
+    EXPECT_EQ(d.mediaFilterFailures, 2u);
+    unsigned held = 0;
+    while (!filterWrites(held % 2 ? 2 : 3) && held < 100)
+        ++held;
+    EXPECT_EQ(held, 8u);
 }
 
 // A filter's stores that never reach the assembly copy are judged as the completion's: one line, these flips held
