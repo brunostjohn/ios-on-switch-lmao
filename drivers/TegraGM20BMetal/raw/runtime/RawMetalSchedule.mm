@@ -273,7 +273,8 @@ void submitLoop()
                     break;
                 }
                 closePromise();
-                if (r.orphanCheck.exchange(false, std::memory_order_acquire))
+                if (r.orphanCheck.load(std::memory_order_relaxed) &&
+                    r.orphanCheck.exchange(false, std::memory_order_acquire))
                     rmPipelineOrphans();
                 // nothing to submit: what the command buffer being recorded has published, encoded ahead of its commit
                 if (rmPipelineStep())
