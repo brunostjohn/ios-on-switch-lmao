@@ -86,7 +86,7 @@ RenderEncoder::Shortcut RenderEncoder::shortcut(const Pipeline &pl, uint32_t pri
     FillDraw d;
     d.fillState = true;
     d.samplesTexture = bindsTexture(*pl.rec);
-    d.shapesCoverage = pl.dropsPixels;
+    d.shapesCoverage = pl.dropsPixels || (alphaWanted_ & kAlphaToCoverage);
     d.oneTarget = pass_.count == 1 && pl.writeBits == 1;
     d.oneColour = uniformColour(s, quadList ? list : nullptr, quadList ? 6 : count, out.rgba);
     out.constant = constantColourFill(d);

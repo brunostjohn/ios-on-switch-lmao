@@ -304,6 +304,7 @@ RMPipeline *rmPipelineShell(RMDevice *device, MTLRenderPipelineDescriptor *d, MT
     p->_device = device;
     p.label = d.label;
     p->_m2vMissing = rmM2vMissingState(d);
+    p->_alphaControl = raw::alphaControl(d.alphaToCoverageEnabled, d.alphaToOneEnabled);
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     // a state linking functions is packed under them too (its key names each), where they are framework libraries' as well

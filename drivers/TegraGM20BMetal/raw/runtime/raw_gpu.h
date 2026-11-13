@@ -92,6 +92,7 @@
 #include "raw_sampler.h"
 #include "raw_depth_stencil_state.h"
 #include "raw_sample_positions.h"
+#include "raw_alpha_control.h"
 #include "raw_zcull.h"
 #include "raw_zcull_planes.h"
 #include "raw_xr.h"
@@ -550,6 +551,9 @@ struct Pipeline {
     uint8_t samples = 1;       // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
+    // its registers set SET_ANTI_ALIAS_ALPHA_CONTROL; owned: for its own draws, whatever its Metal state asks
+    // (raw_alpha_control.h)
+    bool namesAlphaControl = false, ownsAlphaControl = false;
     mutable BandRate bandRate;  // what its draws cost the GPU, learned from its measured ones (raw_band_rates.h)
     uint8_t readBits = 0;       // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;      // colors it reads by framebuffer fetch
@@ -714,6 +718,13 @@ public:
     void setPipeline(Pipeline *p)
     {
         pipeline_ = p;
+        alphaWanted_ = 0;
+    }
+
+    // The bound Metal state's alpha to coverage and alpha to one (raw_alpha_control.h alphaControl), after setPipeline
+    void setAlphaControl(uint32_t control)
+    {
+        alphaWanted_ = control;
     }
 
     void setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length);  // stage 1 vertex, 2 fragment
@@ -1188,6 +1199,7 @@ private:
     uint32_t blendWords_[8] = {};
     bool blendWordsDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u;
+    uint32_t alphaWanted_ = 0;  // the bound Metal state's alpha to coverage and alpha to one (raw_alpha_control.h)
     uint32_t samplePasses_ = 1;
     AttachmentWrites attachmentWrites_;
     bool memoryless_[8] = {};
@@ -1688,6 +1700,7 @@ private:
     uint32_t rootPush_[32] = {};
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
     uint32_t rtLayer_ = ~0u;                // and SET_RT_LAYER (~0: not known)
+    uint32_t alphaHeld_ = ~0u;              // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     HeldSegment heldSegment_;               // and the state segment its registers hold
@@ -2920,6 +2933,7 @@ private:
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index
     uint32_t rtLayer_ = ~0u;      // and SET_RT_LAYER (~0: not known)
+    uint32_t alphaHeld_ = ~0u;    // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;

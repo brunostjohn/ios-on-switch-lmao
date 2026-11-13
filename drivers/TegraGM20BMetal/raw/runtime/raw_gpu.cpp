@@ -1407,6 +1407,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+        pl.namesAlphaControl |= m == ANTI_ALIAS_ALPHA_CONTROL;
         if (m == HYBRID_ANTI_ALIAS_CONTROL)
             pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
     }
@@ -4022,6 +4023,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
     rtLayer_ = ~0u;
+    alphaHeld_ = kAlphaControlUnknown;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
@@ -4154,6 +4156,7 @@ CommandBuffer *Device::begin()
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
     cb.rtLayer_ = rtLayer_;
+    cb.alphaHeld_ = alphaHeld_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
     cb.heldSegment_ = heldSegment_;
@@ -4882,6 +4885,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
     d.rtLayer_ = rtLayer_;
+    d.alphaHeld_ = alphaHeld_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
@@ -5787,6 +5791,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (patches)
         icbPatchesDone();
     topology_ = restart_ = ~0u;
+    cb_->alphaHeld_ = kAlphaControlUnknown;
     ibVa_ = ibEnd_ = ~uint64_t(0);
     ibSize_ = 0;
     params_.unknown = true;
@@ -6566,6 +6571,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                    pl->amplificationViewportWord) &&
                                   amplificationDirty_) ||
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
+    const bool rebinds = pl != emitted_;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || slotRoots || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {
@@ -6632,6 +6638,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         emitted_ = pl;
         residualsPushed_ = residualMask != 0;
     }
+    writeAlphaControl(p, cb_->alphaHeld_, alphaWanted_, rebinds, pl->namesAlphaControl, pl->ownsAlphaControl,
+                      pl->blendKill);
     RAW_ENCODE_END(bindSpan);
     if (!writeClipControl(p, *pl, why))
         return false;
@@ -6734,7 +6742,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_BEGIN(barrierSpan, Barriers);
     const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
                                   pl->storageBits};
-    if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
+    if (firstDraw && !indirectGeometry_ && !pl->dropsPixels && !(alphaWanted_ & kAlphaToCoverage)) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
         if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
             covered_ = opaque;
