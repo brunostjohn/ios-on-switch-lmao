@@ -163,14 +163,63 @@ TEST(SwitchEngineGate, QueuedWorkKeepsItOnUntilTheQueueDrains)
     EXPECT_FALSE(f.gate.powered());
 }
 
-TEST(SwitchEngineGate, AFailedPowerOnWedgesTheEngineForTheBoot)
+TEST(SwitchEngineGate, AFailedPowerOnIsRetriedByALaterUseBackingOffWhileItFails)
 {
     Fixture f;
     f.model().fire();
     f.engine.onResult = -19;
     EXPECT_EQ(f.gate.use(), -19);
     EXPECT_EQ(f.gate.use(), -19);
-    EXPECT_EQ(f.engine.ons, 1u) << "a wedged engine is not tried again";
+    EXPECT_EQ(f.engine.ons, 1u) << "a use within kRetryMs of the failure is refused without a try";
+    f.model().now += 1000000;
+    EXPECT_EQ(f.gate.use(), -19);
+    EXPECT_EQ(f.engine.ons, 2u) << "the first use after kRetryMs tries again";
+    f.model().now += 1000000;
+    EXPECT_EQ(f.gate.use(), -19);
+    EXPECT_EQ(f.engine.ons, 2u) << "the second failure doubles the wait";
+    f.model().now += 1000000;
+    f.engine.onResult = 0;
+    ASSERT_EQ(f.gate.use(), 0);
+    EXPECT_EQ(f.engine.ons, 3u);
+    EXPECT_TRUE(f.gate.powered());
+    EXPECT_EQ(f.model().lines.back(), "TegraTest: power-on works again after 2 failed tries");
+    f.gate.done();
+    f.model().fire();
+    EXPECT_FALSE(f.gate.powered()) << "gating goes on as before";
+    ASSERT_EQ(f.gate.use(), 0);
+    EXPECT_EQ(f.engine.ons, 4u);
+}
+
+TEST(SwitchEngineGate, TheRetryWaitStopsDoublingAt64Seconds)
+{
+    Fixture f;
+    f.model().fire();
+    f.engine.onResult = -19;
+    for (uint32_t i = 0; i < 12; i++) {
+        f.model().now += 64000000;
+        EXPECT_EQ(f.gate.use(), -19);
+    }
+    EXPECT_EQ(f.engine.ons, 12u);
+    f.model().now += 63000000;
+    EXPECT_EQ(f.gate.use(), -19);
+    EXPECT_EQ(f.engine.ons, 12u);
+    f.model().now += 1000000;
+    EXPECT_EQ(f.gate.use(), -19);
+    EXPECT_EQ(f.engine.ons, 13u);
+}
+
+TEST(SwitchEngineGate, AnEngineItsDriverLostIsPoweredOnByTheNextUse)
+{
+    Fixture f;
+    ASSERT_EQ(f.gate.use(), 0);
+    f.gate.lost();
+    EXPECT_FALSE(f.gate.powered());
+    f.gate.done();
+    f.model().fire();
+    EXPECT_EQ(f.engine.offs, 0u) << "a lost engine is already off";
+    ASSERT_EQ(f.gate.use(), 0);
+    EXPECT_EQ(f.engine.ons, 1u);
+    EXPECT_TRUE(f.gate.powered());
 }
 
 TEST(SwitchEngineGate, APowerOffTheHardwareRefusesTurnsGatingOff)
@@ -228,5 +277,11 @@ TEST(SwitchEngineGate, AUseDuringSleepWaitsForResume)
         f.gate.resume(false);
     };
     f.gate.done();
+    f.engine.onResult = -19;
     EXPECT_EQ(f.gate.use(), -19) << "an engine that did not come back from sleep";
+    EXPECT_EQ(f.engine.ons, 2u) << "the first use after it tries a power-on at once";
+    f.model().now += 1000000;
+    f.engine.onResult = 0;
+    ASSERT_EQ(f.gate.use(), 0);
+    EXPECT_EQ(f.engine.ons, 3u);
 }
