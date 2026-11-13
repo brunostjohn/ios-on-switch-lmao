@@ -8339,8 +8339,16 @@ static ProbeSurface probeSurface(const Texture &t, uint32_t fmt2d, uint32_t widt
     return s;
 }
 
-void BlitEncoder::probe(const ProbeOp &op, const Texture *read, const Texture &written)
+// The op's surfaces from the textures' memory at encode, which a private texture's move to plain memory may have changed
+// since the op was recorded; its formats and sizes as recorded
+void BlitEncoder::probe(const ProbeOp &recorded, const Texture *read, const Texture &written)
 {
+    ProbeOp op = recorded;
+    if (op.kind != ProbeOpKind::Method) {
+        op.dst = probeSurface(written, op.dst.fmt2d, op.dst.width, op.dst.height);
+        if (read)
+            op.src = probeSurface(*read, op.src.fmt2d, op.src.width, op.src.height);
+    }
     room(uint32_t(probeOpWords(op)) + kProbeBracketWords);
     if (read)
         cb_->use(*read, false);

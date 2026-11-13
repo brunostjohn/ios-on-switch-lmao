@@ -87,4 +87,39 @@ TEST(FacadeProbe, AFillNamesItsTarget)
     }
 }
 
+std::vector<uint32_t> gWords;
+
+void keepWords(const uint32_t *words, const TegraGM20BAbiPush *pushes, uint32_t count)
+{
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < count; i++)
+        total += pushes[i].dwords;
+    gWords.insert(gWords.end(), words, words + total);
+}
+
+// A private texture may move to plain memory between the op's record and its encode (raw_private_comp.h): the op writes
+// where the texture is at encode
+TEST(FacadeProbe, AScaleWritesWhereItsTextureIsAtEncode)
+{
+    @autoreleasepool {
+        id<MTLTexture> read = target(), written = target(), moved = target();
+        ASSERT_NE(moved, nil);
+        id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        EXPECT_EQ(engine(cb, @{@"kind" : @"scale", @"read" : read, @"written" : written}), nil);
+        [blit endEncoding];
+        RMTexture *w = (RMTexture *)written;
+        const uint64_t before = w->_raw.va, after = ((RMTexture *)moved)->_raw.va;
+        w->_raw.va = after;
+        gWords.clear();
+        kernel_model::checkJob = keepWords;
+        [cb commit];
+        [cb waitUntilCompleted];
+        kernel_model::checkJob = kernel_model::checkJobMethods;
+        w->_raw.va = before;
+        EXPECT_NE(std::find(gWords.begin(), gWords.end(), uint32_t(after)), gWords.end());
+        EXPECT_EQ(std::find(gWords.begin(), gWords.end(), uint32_t(before)), gWords.end());
+    }
+}
+
 }  // namespace
