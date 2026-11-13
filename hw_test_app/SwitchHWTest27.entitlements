@@ -30,6 +30,7 @@
 		<string>kern.switch_planes_latched</string>
 		<string>kern.switch_planes_maps</string>
 		<string>kern.switch_planes_dropped</string>
+		<string>kern.switch_planes_native</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_gpu_paths</string>
 		<string>kern.switch_gpu_promises</string>

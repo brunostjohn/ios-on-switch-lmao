@@ -12,7 +12,8 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         return error;
     }
     const bool native = !error && switch_native_plane_image(layer, width, height, scanout.view.layout,
-                                                            scanout.view.crop.x, scanout.view.crop.y, image);
+                                                            scanout.view.crop.x, scanout.view.crop.y, image,
+                                                            switch_display_traits());
     if (!native) {
         switch_native_scanout_release(&scanout);
         error = switch_native_scanout_pitch(surface, &scanout);

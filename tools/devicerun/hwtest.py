@@ -245,6 +245,7 @@ TESTS: dict[str, bool] = {
     'display.plain_surfaces': False,
     'display.snapshot': False,
     'display.wake_gpu': True,
+    'display.planes_cropped': False,
     'display.x1.overlay_block_yuv': False,
     'display.x1.column_scan_yuv': False,
     'display.x1.offset_crop': False,
