@@ -69,6 +69,21 @@ TEST(VicOddProbe, ALostLastPairOrRowIsCountedAsTheLast)
     EXPECT_FALSE(clean(r));
 }
 
+// A flip of an odd picture mirrors around the padded surface: the target starts on column 1 so the picture lands on
+// columns 0..32.
+TEST(VicOddProbe, AFlippedOddPictureIsTargetedOneColumnIn)
+{
+    TegraVICJob job;
+    ASSERT_EQ(build(kCases[7], kSrcIova, kDstIova, kConfig, kFilter, &job), nullptr);
+    EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_FLIP_X), 1u);
+    EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_LEFT), 1u);
+    EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT), 33u);
+    EXPECT_EQ(expected(kCases[7], 0, 0, 0), sourceByte(0, 32, 0));
+    EXPECT_EQ(expected(kCases[7], 1, 0, 0), sourceByte(1, 32, 0)) << "pair 0 from source pair 16";
+    EXPECT_EQ(expected(kCases[7], 1, 33, 0), sourceByte(1, 1, 0)) << "pair 16 from source pair 0";
+    EXPECT_EQ(expected(kCases[6], 1, 0, 0), sourceByte(1, 30, 0)) << "even width: pair 0 from source pair 15";
+}
+
 TEST(VicOddProbe, OddSizesAreDescribedInWholeChromaPairs)
 {
     TegraVICJob job;
@@ -82,7 +97,7 @@ TEST(VicOddProbe, OddSizesAreDescribedInWholeChromaPairs)
 
 TEST(VicOddProbe, ReplyLayout)
 {
-    EXPECT_EQ(sizeof(SwitchVICOddResult), 44u);
-    EXPECT_EQ(sizeof(SwitchVICOddProbeReply), 16u + 44u * SWITCH_VIC_ODD_PROBE_CASES);
+    EXPECT_EQ(sizeof(SwitchVICOddResult), 48u);
+    EXPECT_EQ(sizeof(SwitchVICOddProbeReply), 16u + 48u * SWITCH_VIC_ODD_PROBE_CASES);
 }
 }  // namespace

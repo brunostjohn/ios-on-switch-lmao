@@ -3,8 +3,9 @@
 // 4:2:0 or 4:2:2 surface to VIC one pixel wider (4:2:0: and taller), in whole chroma pairs, and leaves its rectangles
 // odd (TegraVICFormats.h, tegra_vic_padded_width), which no job had run. VIC copies '420v' and '422v' pictures onto
 // themselves 1:1 (the same range and matrix pass the channels through), even-sized as the controls, then odd across,
-// down and both. Every luma byte and CbCr pair holds its own value, so the copy must give every byte back, those of
-// the last column, row and pair (lastWrong) too, and change nothing past the pictures. Plain logic, no IOKit:
+// down and both, and mirrored across (a flip mirrors around the padded surface: the target starts on column 1). Every
+// luma byte and CbCr pair holds its own value, so the copy must put every byte where it belongs, those of the last
+// column, row and pair (lastWrong) too, and change nothing past the pictures. Plain logic, no IOKit:
 // SwitchVICOddProbe.cpp runs it, test/switch_vic_odd_probe_test.cpp runs it on test/vic_model.h.
 #pragma once
 #include <stdint.h>
@@ -12,10 +13,10 @@
 #include "TegraVICConfig.h"
 
 #define SWITCH_VIC_ODD_PROBE_MAGIC 0x564f4444u  // 'VODD'
-#define SWITCH_VIC_ODD_PROBE_CASES 6u
+#define SWITCH_VIC_ODD_PROBE_CASES 8u
 
 typedef struct {
-    uint32_t fourcc, width, height;
+    uint32_t fourcc, width, height, transform;
     int32_t status;                                 // 0, -95 refused by tegra_vic_build, else the job's error
     uint32_t wrong;                                 // picture bytes that are not the source's
     uint32_t lastWrong;                             // of them, in the last column, row or chroma pair
@@ -38,11 +39,18 @@ constexpr uint64_t kChromaOffset = 4096, kBufferBytes = 16 * 1024;
 constexpr uint8_t kPoison = 0xab, kSourcePad = 0x5a;
 
 struct Case {
-    uint32_t fourcc, width, height;
+    uint32_t fourcc, width, height, transform;
 };
 
 constexpr Case kCases[SWITCH_VIC_ODD_PROBE_CASES] = {
-    {k420v, 32, 8}, {k422v, 32, 8}, {k420v, 33, 8}, {k420v, 32, 9}, {k420v, 33, 9}, {k422v, 33, 8},
+    {k420v, 32, 8, 0},
+    {k422v, 32, 8, 0},
+    {k420v, 33, 8, 0},
+    {k420v, 32, 9, 0},
+    {k420v, 33, 9, 0},
+    {k422v, 33, 8, 0},
+    {k420v, 32, 8, TEGRA_VIC_FLIP_H},
+    {k420v, 33, 9, TEGRA_VIC_FLIP_H},
 };
 
 inline const TegraVICFormat *formatOf(const Case &c)
@@ -106,7 +114,19 @@ inline const char *build(const Case &c, uint64_t source, uint64_t destination, u
     op.dstW = c.width;
     op.dstH = c.height;
     op.nearest = 1;
+    op.transform = c.transform;
     return tegra_vic_build(&in, &out, &op, &kTegraVICTraits, config, filter, job);
+}
+
+// The byte at (x, y) of plane p of the output: luma from the source column the flip mirrors to, a CbCr pair from the
+// source pair under its first (even) pixel.
+inline uint8_t expected(const Case &c, uint32_t p, uint32_t x, uint32_t y)
+{
+    if (!(c.transform & TEGRA_VIC_FLIP_H))
+        return sourceByte(p, x, y);
+    if (!p)
+        return sourceByte(0, c.width - 1 - x, y);
+    return sourceByte(1, 2 * ((c.width - 1 - (x & ~1u)) / 2) + (x & 1), y);
 }
 
 inline bool last(const Case &c, uint32_t p, uint32_t x, uint32_t y)
@@ -121,7 +141,7 @@ inline void compare(const uint8_t *bytes, const Case &c, SwitchVICOddResult *r)
         for (uint32_t y = 0; y < planeRows(c, p); y++) {
             for (uint32_t x = 0; x < rowBytes(c, p); x++) {
                 const uint8_t got = plane[uint64_t(y) * kDestinationPitch + x];
-                if (got == sourceByte(p, x, y))
+                if (got == expected(c, p, x, y))
                     continue;
                 r->lastWrong += last(c, p, x, y);
                 if (!r->wrong++) {
