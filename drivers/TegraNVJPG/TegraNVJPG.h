@@ -65,9 +65,9 @@ void tegra_nvjpg_unlock(void);
 // if they do not fit. `writable` false maps them read-only for the engine. Job lock held.
 uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable);
 void tegra_nvjpg_window_clear(uint32_t window);
-// Copies the setup to the kernel's slot, queues the job's methods on host1x channel 0 behind an OP_DONE increment of
-// NVJPG's syncpoint and sleeps until that increment's interrupt (bounded: past the bound a one-line panic). Fills the
-// firmware's status. Job lock held.
+// Copies the setup to the kernel's slot, queues the job's methods on host1x channel 3 behind an OP_DONE increment of
+// NVJPG's syncpoint and sleeps until that increment's interrupt (bounded: past the bound the job is cancelled, -5).
+// Fills the firmware's status. Job lock held.
 int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs);
 
 // Service (TegraNVJPGUserClient.cpp): J3.

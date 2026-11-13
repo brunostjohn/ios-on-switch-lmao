@@ -7,7 +7,7 @@
 //   J1  NVJPG's SMMU domain (ASID 125 for the "nvjpg" swgroup, through TegraSMMU: the kernel buffers 1:1, two empty
 //       windows), power partition 26, clock (PLLC2 at 422.4 MHz on this unit, or PLLP's 408 MHz), reset, the MBIST
 //       workaround, falcon firmware loaded and started
-//   J2  proof of life through host1x channel 0 in NVJPG's class: an IMMEDIATE syncpoint increment (the engine's host
+//   J2  proof of life through host1x channel 3 in NVJPG's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface) then an OP_DONE one (the falcon firmware), each completed by interrupt
 //   J3  the AppleJPEGDriver service and its AppleJPEGDriverUserClient published (TegraNVJPGUserClient.cpp)
 // One line per stage ("TegraNVJPG: J1 ok ..."), or the failing stage's FAIL line and nothing after it. Until J3
@@ -131,15 +131,16 @@ constexpr uint32_t kTables = 1 + kWindowTables[0] + kWindowTables[1] + kIdentity
 TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
 uint32_t gWindowMapped[TEGRA_NVJPG_WINDOWS];  // pages mapped from each window's start
 
-// The job engine. A job's wait is bounded by kQueueUs (NVJPG shares host1x channel 0 with NVDEC, NVENC and VIC, whose
-// queued jobs may run first: up to 2 s by their own bounds) plus one microsecond per 16 pixels of the MCU grid (NVJPG
-// does several pixels per clock at 408 MHz or more; the firmware's GP timer, on for every job, ends a picture it cannot finish
-// with an error status), at most kMaxBoundUs: only a hung engine gets there.
-constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
+// The job engine. NVJPG has host1x channel 3 to itself and runs one job at a time (gJobLock), so nothing queues ahead
+// of a job: its wait is bounded by kMarginUs (the falcon switching to its decoder app, the completion interrupt) plus
+// one microsecond per 16 pixels of the MCU grid (16 Mpixel/s; healthy decodes run at 175 to 500), at most kMaxBoundUs.
+// Only a hung engine gets there; the firmware's GP timer, on for every job, ends a picture it cannot finish with an
+// error status.
+constexpr uint64_t kMarginUs = 50000, kMaxBoundUs = 30000000;
 
 inline uint32_t jobBoundUs(uint64_t pixels)
 {
-    const uint64_t us = kQueueUs + pixels / 16;
+    const uint64_t us = kMarginUs + pixels / 16;
     return static_cast<uint32_t>(us < kMaxBoundUs ? us : kMaxBoundUs);
 }
 
