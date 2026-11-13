@@ -78,6 +78,7 @@
 #                                    one was lost a third time); kern.switch_shader_compiler's line of the broker
 #
 #   bazel test //drivers/TegraGM20B/test:all
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
@@ -532,6 +533,17 @@ host_test(
     name = "switch_gpu_promise_giveup_power_test",
     srcs = PROMISE_GIVEUP_SRCS + ["switch_gpu_promise_giveup_power_test.cpp"],
     cxx_std = "c++17",
+)
+
+# tgm_promise_pass as the kernel build compiled it: with no give-up armed, one acquire load and a branch.
+py_test(
+    name = "gm20b_promise_pass_object_test",
+    srcs = ["gm20b_promise_pass_object_test.py"],
+    data = [
+        "//drivers/TegraGM20B",
+        "@llvm//:bin/llvm-objdump",
+    ],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 host_test(

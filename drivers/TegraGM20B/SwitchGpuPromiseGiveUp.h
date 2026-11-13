@@ -485,6 +485,13 @@ enum {
 	SWITCH_GPU_GIVEUP_PASS_CANCEL = 2, /* every word waited on moved: the call is cancelled */
 };
 
+/* Whether the call is armed: what the end of every GPU interrupt pass looks at first, and all it does while nothing is
+ * waited on */
+static inline int switch_gpu_giveup_armed(const struct switch_gpu_giveups *g)
+{
+	return __atomic_load_n(&g->armed_ns, __ATOMIC_ACQUIRE) != 0;
+}
+
 /* The end of a GPU interrupt pass: plain loads, no lock, and one load while the call is not armed (nothing waited on,
  * or the call running, which looks at every entry itself). An entry being filled or dropped meanwhile is read again under
  * the call's lock before a cancel, and its writer arms the call under that lock after it. */

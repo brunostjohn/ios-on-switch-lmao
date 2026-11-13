@@ -329,9 +329,9 @@ void tgm_promise_kept(uint32_t offset, uint32_t value, struct tgm_chan *chan,
 	mutex_unlock(&tgm_live_lock);
 }
 
-/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released: plain loads, and the
- * call scheduled or cancelled under its simple lock. Nothing here may sleep. */
-void tgm_promise_pass(void)
+/* The interrupt pass with the call armed: plain loads, and the call scheduled or cancelled under its simple lock. Out of
+ * line, so the pass's look at an unarmed call takes no stack frame. */
+static noinline void giveup_pass_armed(void)
 {
 	unsigned long flags;
 	const int look = switch_gpu_giveup_pass(&giveups, &tgm_promise_fence);
@@ -346,4 +346,13 @@ void tgm_promise_pass(void)
 	if (switch_gpu_giveup_pass(&giveups, &tgm_promise_fence) == SWITCH_GPU_GIVEUP_PASS_CANCEL)
 		switch_gpu_giveup_arm_locked(&giveups, &giveup_arming, 0, 0);
 	spin_unlock_irqrestore(&giveup_lock, flags);
+}
+
+/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released; nothing here may sleep.
+ * While nothing is waited on, one acquire load and a branch (gm20b_promise_pass_object_test holds the built object to
+ * that). */
+void tgm_promise_pass(void)
+{
+	if (switch_gpu_giveup_armed(&giveups))
+		giveup_pass_armed();
 }

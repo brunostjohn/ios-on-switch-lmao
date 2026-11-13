@@ -24,6 +24,7 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int32_t s32;
 #define READ_ONCE(x) (*(const volatile __typeof__(x) *)&(x))
+#define noinline __attribute__((noinline))
 #define _Static_assert static_assert
 #define TGM_FENCE_SLOT (16 * 1024)
 #define TGM_FENCE_USER_PAGES 64
