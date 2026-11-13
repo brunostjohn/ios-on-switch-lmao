@@ -158,8 +158,9 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     p_ = Push{start_, start_ + kEncoderWords};
     cb_.loops_.openSegment(stream());
     const BarrierForms forms = cb.barrierForms();
-    [[maybe_unused]] const Opened opened = computeEncoderOpening(
-        p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute), forms.entry, cb.lastEngine_);
+    [[maybe_unused]] const Opened opened =
+        computeEncoderOpening(p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute),
+                              entryFormFor(forms.entry), cb.lastEngine_);
     cb.lastEngine_ = BarrierEngine::Compute;
     RAW_DIAGNOSTIC(cb.taken_.count(opened));
 }

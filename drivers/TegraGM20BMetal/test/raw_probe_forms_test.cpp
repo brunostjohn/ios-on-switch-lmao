@@ -123,6 +123,8 @@ TEST(ProbeForms, ParsesEveryFormAndNothingElse)
     ASSERT_TRUE(raw::parseProbeForms("pass=today switch=today entry=today", f));
     EXPECT_TRUE(f.any()) << "today's drain forced";
     EXPECT_EQ(f.switchForm, SwitchForm::Today);
+    ASSERT_TRUE(raw::parseProbeForms("entry=none", f));
+    EXPECT_EQ(f.entry, EntryForm::None);
     ASSERT_TRUE(raw::parseProbeForms("pass=none  entry=bare switch=none", f));
     EXPECT_EQ(f.pass, PassForm::None);
     EXPECT_EQ(f.entry, EntryForm::Bare);
@@ -180,6 +182,8 @@ TEST(BarrierForms, TheSwitchRuleRelaxesOnlyTheProbedEngineChanges)
     }
     EXPECT_EQ(raw::switchFormFor(SwitchForm::Today, BarrierEngine::Copy, BarrierEngine::ThreeD), SwitchForm::Today)
         << "a probe's forced drain";
+    EXPECT_EQ(raw::entryFormFor(EntryForm::Rule), EntryForm::Today);
+    EXPECT_EQ(raw::entryFormFor(EntryForm::None), EntryForm::None);
     EXPECT_TRUE(raw::keepsTiledFlush(SwitchForm::Rule));
     EXPECT_TRUE(raw::keepsTiledFlush(SwitchForm::NoWfi));
 }
@@ -203,7 +207,8 @@ TEST(ProbeForms, NoFormFollowsThePixelBarrierWithTheNoWfiInvalidate)
     for (PassForm pass : {PassForm::Rule, PassForm::Today, PassForm::PixelOrdered, PassForm::None})
         for (SwitchForm s :
              {SwitchForm::Rule, SwitchForm::Today, SwitchForm::NoWfi, SwitchForm::NoWfiNoFlush, SwitchForm::None})
-            for (EntryForm e : {EntryForm::Rule, EntryForm::Today, EntryForm::Planner, EntryForm::Bare})
+            for (EntryForm e :
+                 {EntryForm::Rule, EntryForm::Today, EntryForm::Planner, EntryForm::Bare, EntryForm::None})
                 for (BarrierEngine before : kEngines) {
                     const auto m = passWords(pass, s, e, before);
                     for (size_t i = 0; i + 1 < m.size(); i++)
@@ -239,20 +244,22 @@ TEST(ProbeForms, RelaxedEngineChangesKeepTheInvalidatesAndNeverIdle)
 
 TEST(ProbeForms, RelaxedEntriesInvalidateWhatTheJobReadsAndNeverIdle)
 {
-    for (EntryForm f : {EntryForm::Planner, EntryForm::Bare}) {
+    for (EntryForm f : {EntryForm::Planner, EntryForm::Bare, EntryForm::None}) {
         uint32_t buffer[64];
         raw::Push p{buffer, buffer + 64};
         ProbeTaken taken;
-        uint32_t *word = raw::probeEntry(p, f, taken);
+        uint32_t *word = raw::entryOpening(p, f);
         const auto m = decode(buffer, p.at);
         EXPECT_FALSE(idles(m));
-        EXPECT_EQ(taken.entries, 1u);
         const uint32_t expect = f == EntryForm::Planner
                                     ? NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE) |
                                           NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE)
                                     : 0u;
-        EXPECT_EQ(*word, expect);
-        EXPECT_EQ(m.size(), f == EntryForm::Planner ? 4u : 3u);
+        EXPECT_EQ(*word, expect) << "the word commit gives the INSTRUCTION bit where the heap grew";
+        EXPECT_EQ(m.size(), f == EntryForm::Planner ? 4u : f == EntryForm::Bare ? 3u : 1u);
+        const bool headers =
+            std::find(m.begin(), m.end(), Method{0, NVB197_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0}) != m.end();
+        EXPECT_EQ(headers, f != EntryForm::None) << "entry_none: every cache but the instructions keeps job 0's lines";
         const bool texture = std::find(m.begin(), m.end(), Method{0, kTextureDataNoWfi, 0}) != m.end();
         EXPECT_EQ(texture, f == EntryForm::Planner);
         // the first encoder of a relaxed job opens with nothing

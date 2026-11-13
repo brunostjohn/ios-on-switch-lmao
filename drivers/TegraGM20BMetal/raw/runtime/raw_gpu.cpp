@@ -4184,11 +4184,11 @@ CommandBuffer *Device::begin()
     cb.forms_ = nextForms;
     nextForms = {};
     cb.taken_ = {};
-    if (relaxed(cb.forms_.entry)) {
-        cb.shaderInvalidate_ = probeEntry(p, cb.forms_.entry, cb.taken_);
-    } else
 #endif
-    {
+    if (const EntryForm entry = entryFormFor(cb.barrierForms().entry); relaxed(entry)) {
+        cb.shaderInvalidate_ = entryOpening(p, entry);
+        RAW_DIAGNOSTIC(cb.taken_.entries++);
+    } else {
         p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
         p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
         p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
@@ -4481,7 +4481,8 @@ BlitEncoder *CommandBuffer::blit()
     // switch to the copy subchannel then waits for the 3D engine anyway)
     const BarrierForms forms = barrierForms();
     [[maybe_unused]] const Opened opened =
-        blitOpening(e.p_, switchFormFor(forms.switchForm, lastEngine_, BarrierEngine::Copy), forms.entry, lastEngine_);
+        blitOpening(e.p_, switchFormFor(forms.switchForm, lastEngine_, BarrierEngine::Copy), entryFormFor(forms.entry),
+                    lastEngine_);
     e.before_ = lastEngine_;
     e.opened_ = e.p_.at;
     lastEngine_ = BarrierEngine::Copy;
@@ -7777,8 +7778,8 @@ void RenderEncoder::end()
     const BarrierForms forms = cb_->barrierForms();
     const PassUses uses = passUses();
     const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
-    const Opened opened =
-        passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD), forms.entry, before);
+    const Opened opened = passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD),
+                                      entryFormFor(forms.entry), before);
     advanceChain(cb_->chain_, uses, opened != Opened::Pass);
     cb_->lastEngine_ = BarrierEngine::ThreeD;
     RAW_DIAGNOSTIC(cb_->taken_.count(opened));

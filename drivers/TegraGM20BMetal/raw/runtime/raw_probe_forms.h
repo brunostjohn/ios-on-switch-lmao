@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // hw_test_app's barrier probes (app27/X1BarrierProbes.swift), debug builds only: the forms one command buffer's barriers
 // take instead of the rules' (raw_barrier_forms.h), so a probe compares a form's pixels and GPU time with today's drain on
-// the same work. Bare is the probe brief's reading of an entry with no data invalidates at all; None removes the barrier,
-// the arm that shows a probe can see a hazard at all. PIXEL_SHADER_BARRIER is never followed by 0x1288: that reading
+// the same work. Bare is the probe brief's reading of an entry with no data invalidates at all; None removes the barrier
+// (at a job's entry every invalidate but the instructions'), the arm that shows a probe can see a hazard at all. PIXEL_SHADER_BARRIER is never followed by 0x1288: that reading
 // failed on the chip (stack-F-v1), and the method checks of every host test refuse it.
 #pragma once
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -59,7 +59,7 @@ struct ProbeTaken {
     }
 };
 
-// "pass=<today|pixel|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
+// "pass=<today|pixel|none> entry=<today|planner|bare|none> switch=<today|nowfi|nowfi_noflush|none>
 // resolve=<draw|twod> index=<bytes> fetch=<today|barrier>", any subset in any order; false on anything else
 inline bool parseProbeForms(const char *text, ProbeForms &out)
 {
@@ -88,6 +88,8 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
             f.entry = EntryForm::Planner;
         else if (key == "entry" && value == "bare")
             f.entry = EntryForm::Bare;
+        else if (key == "entry" && value == "none")
+            f.entry = EntryForm::None;
         else if (key == "switch" && value == "today")
             f.switchForm = SwitchForm::Today;
         else if (key == "switch" && value == "nowfi")
@@ -108,22 +110,6 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
     }
     out = f;
     return true;
-}
-
-// A submission's prologue after its stamp, for an entry form other than today's; answers the
-// INVALIDATE_SHADER_CACHES_NO_WFI data word commit gives the INSTRUCTION bit where the heap grew
-inline uint32_t *probeEntry(Push &p, EntryForm f, ProbeTaken &taken)
-{
-    taken.entries++;
-    p.m(NVB197_INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
-    p.m(NVB197_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
-    constexpr uint32_t data = NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
-                       constant = NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE);
-    p.inc(NVB197_INVALIDATE_SHADER_CACHES_NO_WFI, {f == EntryForm::Planner ? data | constant : 0u});
-    uint32_t *word = p.at - 1;
-    if (f == EntryForm::Planner)
-        barrier_forms_detail::barrier(p, switch_gm20b_invalidate_texture_data);
-    return word;
 }
 
 }  // namespace raw

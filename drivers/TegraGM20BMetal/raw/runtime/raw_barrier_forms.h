@@ -37,7 +37,8 @@ enum class EntryForm : uint8_t {
     Rule,
     Today,
     Planner,  // headers, samplers, constants, shader and texture data invalidated, nothing flushed or waited for
-    Bare      // headers and samplers only (and the instructions where the heap grew, as today)
+    Bare,     // headers and samplers only (and the instructions where the heap grew, as today)
+    None      // the instructions where the heap grew alone: what job 0 left in every other cache stays
 };
 
 enum class SwitchForm : uint8_t {
@@ -85,6 +86,11 @@ constexpr bool relaxed(EntryForm f)
     return f != EntryForm::Rule && f != EntryForm::Today;
 }
 
+constexpr EntryForm entryFormFor(EntryForm asked)
+{
+    return asked != EntryForm::Rule ? asked : EntryForm::Today;
+}
+
 constexpr bool keepsTiledFlush(SwitchForm f)
 {
     return f != SwitchForm::NoWfiNoFlush && f != SwitchForm::None;
@@ -102,6 +108,24 @@ template <typename Emit, typename... Args> void barrier(Push &p, Emit emit, Args
 }
 
 }  // namespace barrier_forms_detail
+
+// A submission's prologue after its stamp, for an entry form other than today's: what the job reads invalidated by the
+// form, nothing flushed or waited for (the job before ended with its fence's RELEASE_WFI). Answers the
+// INVALIDATE_SHADER_CACHES_NO_WFI data word commit gives the INSTRUCTION bit where the heap grew
+inline uint32_t *entryOpening(Push &p, EntryForm f)
+{
+    if (f != EntryForm::None) {
+        p.m(NVB197_INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
+        p.m(NVB197_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
+    }
+    constexpr uint32_t data = NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE),
+                       constant = NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE);
+    p.inc(NVB197_INVALIDATE_SHADER_CACHES_NO_WFI, {f == EntryForm::Planner ? data | constant : 0u});
+    uint32_t *word = p.at - 1;
+    if (f == EntryForm::Planner)
+        barrier_forms_detail::barrier(p, switch_gm20b_invalidate_texture_data);
+    return word;
+}
 
 // A pass's opening (today switch_gm20b_pass_barrier without the tiled flush, which the pass before ends with)
 inline Opened passOpening(Push &p, PassForm pass, SwitchForm switchForm, EntryForm entry, BarrierEngine before)
