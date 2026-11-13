@@ -47,9 +47,11 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
                          (unsigned long)length, gRM->raw->kernel().error().c_str());
         failCommandBuffer(cb, @"no GPU memory for setBytes", MTLCommandBufferErrorOutOfMemory);
     }
+    // zeros to the bound size's 16-byte unit, which a constant buffer read reaches; the rest of the 256-byte slot only
+    // aligns the next one
     uint8_t *to = cb->_bytes.chunks[chunk].cpu + offset;
     memcpy(to, bytes, length);
-    memset(to + length, 0, padded - length);
+    memset(to + length, 0, ((length + 15) & ~NSUInteger(15)) - length);
     m.a = offset;
     m.b = uint32_t(length);
     m.c = chunk;
@@ -62,6 +64,7 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
     if (stage >= 1 && stage <= 2 && index < 31) {
         e->_bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
         e->_buf[stage][index] = nil;
+        e->_movedBuffers[stage] |= 1u << index;
     }
     recordBytes(e->_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length, stage == 1 && !e->_drew);
 }
@@ -87,6 +90,7 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
         RMBuffer *x = [(id)b isKindOfClass:[RMBuffer class]] ? (RMBuffer *)b : nil;
         _buf[stage][index] = x;
         _bufVa[stage][index] = x ? x->_raw.va + offset : 0;
+        _movedBuffers[stage] |= 1u << index;
     }
     setBinding(_cb, OpBuffer, stage, index, b, offset);
 }
@@ -106,6 +110,8 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
     SWITCH_API(ApiBind);
     if (index < 31 && _buf[stage][index])
         _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
+    if (index < 31)
+        _movedBuffers[stage] |= 1u << index;
     setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
 }
 
@@ -152,11 +158,12 @@ void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLText
     }
     if ((stage == 1 || stage == 2) && index < raw::kStageTextures)
         e->_tex[stage - 1][index] = x;
+    e->_movedTextures = true;
     if (x && x->_raw.sampled)
         e->_cb->_sampledShadows = true;
     if (x && x->_raw.standIn)
         e->_cb->_standIns = true;
-    setBinding(e->_cb, OpTexture, stage, index, t, 0);
+    setBinding(e->_cb, OpTexture, stage, index, t, 0, x);
 }
 
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)index
@@ -184,22 +191,24 @@ void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLText
 void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
+    RMSampler *own = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
+    if (s && !own) {
         [e->_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(e->_cb, PredCallSamplerForeign, index);
     }
     // m2v filters through a cubic sampler in the shader, which only the fragment stage's records have variants of
     // (RawMetalCubic.mm)
-    if (stage == 1 && [(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.cubic) {
+    if (stage == 1 && own && own->_raw.desc.cubic) {
         [e->_cb takeReason:WhyCall why:@"a cubic vertex sampler"];
         hit(e->_cb, PredCallVertexSampler, index);
     }
+    e->_movedTextures = true;
     if (stage == 2 && index < 16) {
-        RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
-        e->_samp[index] = r;
-        e->_cubicMask = uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | 1u << index : e->_cubicMask & ~(1u << index));
+        e->_samp[index] = own;
+        e->_cubicMask =
+            uint16_t(own && own->_raw.desc.cubic ? e->_cubicMask | 1u << index : e->_cubicMask & ~(1u << index));
     }
-    setBinding(e->_cb, OpSampler, stage, index, s, 0);
+    setBinding(e->_cb, OpSampler, stage, index, s, 0, own);
 }
 
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)index

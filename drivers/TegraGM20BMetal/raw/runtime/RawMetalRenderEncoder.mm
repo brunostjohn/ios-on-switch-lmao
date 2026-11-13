@@ -217,10 +217,12 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     _drawn = _pipe ? _pipe->_raw : nullptr;
     _drawnVariant = nullptr;
-    setBinding(_cb, OpPipeline, 0, 0, state, 0);
+    setBinding(_cb, OpPipeline, 0, 0, state, 0, _pipe);
 }
 
-// What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
+// What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests): the
+// state's and pass's tests when the state, its depth/stencil state or an opaque call moved (the plan's eligibility
+// generation), else only the entries over the slots bound since the last draw
 - (void)checkDraw
 {
     _drew = true;
@@ -228,55 +230,64 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)
         return;
-    if (_checkedGeneration == _cb->_plan.eligibilityGeneration() && _checkedPipeline == _pipe->_raw)
-        return;
     const raw::Pipeline &pl = *_pipe->_raw;
-    for (uint32_t j = 0; j < 8; j++) {
-        const uint32_t f = j < _count ? _formats[j] : 0;
-        if (f != pl.colorFormats[j] && !(f && pl.colorFormats[j] == 0)) {
-            [_cb takeReason:WhyEncode why:@"a state whose color formats differ from the pass's"];
-            return hit(_cb, PredEncColorFormats, j, f);
+    const bool whole = _checkedGeneration != _cb->_plan.eligibilityGeneration() || _checkedPipeline != &pl;
+    if (!whole && !_movedTextures && !_movedBuffers[1] && !_movedBuffers[2])
+        return;
+    const uint32_t movedBuffers[3] = {0, whole ? ~0u : _movedBuffers[1], whole ? ~0u : _movedBuffers[2]};
+    const bool movedTextures = whole || _movedTextures;
+    _movedBuffers[1] = _movedBuffers[2] = 0;
+    _movedTextures = false;
+    if (whole) {
+        for (uint32_t j = 0; j < 8; j++) {
+            const uint32_t f = j < _count ? _formats[j] : 0;
+            if (f != pl.colorFormats[j] && !(f && pl.colorFormats[j] == 0)) {
+                [_cb takeReason:WhyEncode why:@"a state whose color formats differ from the pass's"];
+                return hit(_cb, PredEncColorFormats, j, f);
+            }
         }
-    }
-    if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
-        [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
-        return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
-    }
-    if (_turn && pl.turnRefused) {
-        [_cb takeReason:WhyEncode why:@(raw::rotatedRefusalText(raw::RotatedRefusal::Variant))];
-        return hit(_cb, PredPassRotated, uint64_t(raw::RotatedRefusal::Variant), _turn);
-    }
-    uint32_t sampleMasks[4];
-    if (pl.samples != _samples || !raw::sampleShadingMasks(_samples, pl.samplePasses, sampleMasks)) {
-        [_cb takeReason:WhyEncode why:@"a state whose samples a pixel or per-sample shading the pass does not take"];
-        return hit(_cb, PredEncSamples, pl.samples, _samples | uint64_t(pl.samplePasses) << 32);
+        if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
+            [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
+            return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
+        }
+        if (_turn && pl.turnRefused) {
+            [_cb takeReason:WhyEncode why:@(raw::rotatedRefusalText(raw::RotatedRefusal::Variant))];
+            return hit(_cb, PredPassRotated, uint64_t(raw::RotatedRefusal::Variant), _turn);
+        }
+        uint32_t sampleMasks[4];
+        if (pl.samples != _samples || !raw::sampleShadingMasks(_samples, pl.samplePasses, sampleMasks)) {
+            [_cb takeReason:WhyEncode why:@"a state whose samples a pixel or per-sample shading the pass does not take"];
+            return hit(_cb, PredEncSamples, pl.samples, _samples | uint64_t(pl.samplePasses) << 32);
+        }
     }
     const raw::PackPipeline &r = *pl.rec;
     for (uint32_t i = 0; i < r.entries; i++) {
         const raw::PackEntry &e = r.entry[i];
         if (e.kind == raw::EntryUbo) {
+            if (e.stage >= 3 || e.slot >= 31 || !(movedBuffers[e.stage] >> e.slot & 1))
+                continue;
             // an offset off m2v's descriptor base alignment needs the push word of its SlotBindOffset residual, which a
             // record made without the probe's offset run lacks, or a storage slot whose code another shares
             // (raw::bufferDescriptor)
             const bool storage = raw::bufferStorage(e);
-            const uint64_t residual =
-                e.stage < 3 && e.slot < 31 ? _bufVa[e.stage][e.slot] & (raw::bufferBaseAlignment(storage) - 1) : 0;
+            const uint64_t residual = _bufVa[e.stage][e.slot] & (raw::bufferBaseAlignment(storage) - 1);
             if (raw::bufferResidualWord(e) < 0 && residual) {
                 [_cb takeReason:WhyEncode
                             why:storage ? @"a storage buffer bound at an offset that is not a multiple of 16"
                                         : @"a uniform buffer bound at an offset that is not a multiple of 256"];
                 return hit(_cb, PredEncUboOffset, uint64_t(e.stage) << 8 | e.slot, residual);
             }
-        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr &&
+        } else if (movedTextures && e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr &&
                    e.slot < raw::kStageTextures && _tex[raw::handleStage(e)][e.slot] &&
                    _tex[raw::handleStage(e)][e.slot]->_raw.addressMap) {
             [_cb takeReason:WhyEncode why:@"a planar texture sampled through a constexpr sampler"];
             return hit(_cb, PredEncPlanarClamp, e.slot, _tex[raw::handleStage(e)][e.slot]->_raw.addressMap);
         }
     }
-    [self drawnRecord];
+    if (movedTextures)
+        [self drawnRecord];
     _checkedGeneration = _cb->_plan.eligibilityGeneration();
-    _checkedPipeline = _pipe->_raw;
+    _checkedPipeline = &pl;
 }
 
 - (void)setScissorRect:(MTLScissorRect)r

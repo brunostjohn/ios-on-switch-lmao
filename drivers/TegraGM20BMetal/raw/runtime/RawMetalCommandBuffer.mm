@@ -285,6 +285,24 @@ void rmPoolCommandBuffers()
 
 @implementation RMCommandBuffer
 
+// A stamp no other recording of the process takes: the thread's own index and its count of recordings made
+static uint64_t nextOwnStamp()
+{
+    static std::atomic<uint32_t> threads{0};
+    thread_local const uint64_t thread = threads.fetch_add(1, std::memory_order_relaxed) + 1;
+    thread_local uint64_t made = 0;
+    return thread << 40 | ++made;
+}
+
+- (void)retainOwn:(RMObject *)object
+{
+    if (_ownStamp && object->_retainedBy.load(std::memory_order_relaxed) == _ownStamp)
+        return;
+    [self retain:object];
+    if (_ownStamp)
+        object->_retainedBy.store(_ownStamp, std::memory_order_relaxed);
+}
+
 - (void)retain:(id)object
 {
     if (!object || !_ownerKeys.insert((__bridge void *)object, true).second)
@@ -886,6 +904,7 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
 {
     SWITCH_API(ApiObject);
     RMCommandBuffer *b = [RMCommandBuffer new];
+    b->_ownStamp = nextOwnStamp();
     b->_device = _device;
     b->_queue = self;
     b->_status = MTLCommandBufferStatusNotEnqueued;
