@@ -35,10 +35,10 @@ struct FixedBlendAsk {
     uint8_t computedLayers = 0;    // shader-computed colours stacked over one pixel, where the sources are not 8-bit
 };
 
-// RGBA8Unorm and BGRA8Unorm (the fit's); RGBA16Float, judged by gpu.raw.fixed_blend_rule rop_rgba16f_*_worst; BGRA8Unorm_sRGB, rop_bgra8_srgb_*_worst
+// RGBA8Unorm and BGRA8Unorm (the fit's); RGBA16Float, judged by gpu.raw.fixed_blend_rule rop_rgba16f_*_worst; BGRA8Unorm_sRGB, rop_bgra8_srgb_*_worst; RGBA8Unorm_sRGB, rop_rgba8_srgb_*_worst
 constexpr bool fixedBlendFormat(uint16_t format)
 {
-    return format == 70 || format == 80 || format == 115 || format == 81;
+    return format == 70 || format == 80 || format == 115 || format == 81 || format == 71;
 }
 
 constexpr bool fixedBlendAcceptable(const FixedBlendAsk &a)
