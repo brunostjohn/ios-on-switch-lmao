@@ -248,7 +248,8 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 				    "memset(tgm_fence_pages.made[i], 0, "
 				    "sizeof(tgm_fence_pages.made[i]));"));
 	// the call's look at the end of every GPU interrupt pass, after the present's
-	EXPECT_TRUE(CodeText(unit("shim/xnu_glue.cpp"))
+	EXPECT_TRUE(Block(unit("shim/xnu_glue.cpp"),
+			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
 			    .Before("tgm_present_pass(); tgm_promise_pass();", "wakeAfterPass();"));
 	// The give-up is the promise's one cadence: a present's deadline and a wait's hang checks keep their own period
 	// whatever the waited channel acquires, and nothing in the hang rule reads a promise.
