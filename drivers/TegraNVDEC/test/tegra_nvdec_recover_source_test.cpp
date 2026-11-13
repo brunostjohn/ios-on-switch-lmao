@@ -10,12 +10,14 @@ using testing::HasSubstr;
 using testing::Not;
 
 // TegraNVDEC.cpp builds in no host test: these guard the wiring the queue and gate scenarios of
-// switch_nvdec_submit_test rely on. A wedged engine goes back to the idle gate, which powers it on at a later decode;
-// nothing keeps refusing work for the boot.
+// switch_nvdec_submit_test rely on. A wedged engine goes back to the idle gate once its cancelled jobs have ended, and
+// the gate powers it on at a later decode; nothing keeps refusing work for the boot.
 TEST(NVDECRecoverWiring, AWedgedEngineIsHandedBackToTheIdleGate)
 {
     const std::string source = SourceText("../TegraNVDEC.cpp");
-    EXPECT_THAT(Body(source, "const char *switch_nvdec_engine_wedge()"), HasSubstr("gGate.lost();"));
+    EXPECT_THAT(Body(source, "void switch_nvdec_power_lost()"), HasSubstr("gGate.lost();"));
+    EXPECT_THAT(Body(SourceText("../SwitchNVDECJobs.cpp"), "void renumberLocked()"),
+                HasSubstr("if (!resumed)\n        switch_nvdec_power_lost();"));
     EXPECT_THAT(Body(source, "extern \"C\" bool tegra_nvdec_ready(void)"), Not(HasSubstr("gWedged")));
 }
 

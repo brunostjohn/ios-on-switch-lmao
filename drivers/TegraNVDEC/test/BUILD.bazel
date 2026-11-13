@@ -221,6 +221,7 @@ host_test(
     name = "tegra_nvdec_recover_source_test",
     srcs = ["tegra_nvdec_recover_source_test.cpp"],
     data = [
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
         "//drivers/TegraNVDEC:TegraNVDEC.cpp",
         "//drivers/TegraNVDEC:TegraNVDECUserClient.cpp",
     ],

@@ -458,7 +458,6 @@ const char *switch_nvdec_engine_wedge()
 {
     __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
     park();
-    gGate.lost();
     return gLine[0] ? gLine : "falcon";
 }
 
@@ -533,6 +532,11 @@ void switch_nvdec_power_done()
 void switch_nvdec_power_idle()
 {
     gGate.idle();
+}
+
+void switch_nvdec_power_lost()
+{
+    gGate.lost();
 }
 
 extern "C" IOLock *tegra_nvdec_power_lock(void)
