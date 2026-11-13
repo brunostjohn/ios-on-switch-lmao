@@ -2,8 +2,8 @@
 // Rule fill.constant: a solid fill drawn by the ROP's constant colour (SET_CONSTANT_COLOR_RENDERING,
 // kits/SwitchGM20BEmit/SwitchGM20BEmitRaster.h) with the pixel program's output unused. Core Animation's fill states take
 // their colour from the vertex stream, so a draw qualifies only when every vertex it reads carries one colour, which the
-// CPU reads from the stream at the draw. The unit is undocumented: false until HW Test gpu.x1.constant_colour's float arm
-// reads the constant exactly (its covered texels at the constant, the rest at the clear) and its timing shows the saving.
+// CPU reads from the stream at the draw. The unit is undocumented; the kit turns the pixel stage off for the draw, and HW
+// Test gpu.x1.constant_colour judges that form (float_nops_covered_wrong=0, constant_gpu_ms under shader_gpu_ms).
 #pragma once
 #include <cstdint>
 
@@ -11,7 +11,7 @@ namespace raw {
 
 constexpr bool ropConstantColour()
 {
-    return false;
+    return true;
 }
 
 struct FillDraw {

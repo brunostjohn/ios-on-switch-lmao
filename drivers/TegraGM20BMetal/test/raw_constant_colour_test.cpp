@@ -35,9 +35,10 @@ TEST(RawConstantColour, OnlyAPlainOneColourFillQualifies)
     EXPECT_FALSE(raw::constantColourFill(d));
 }
 
-TEST(RawConstantColour, TheRuleWaitsForTheDevice)
+TEST(RawConstantColour, ShipsOn)
 {
-    EXPECT_FALSE(raw::ropConstantColour()) << "gpu.x1.constant_colour has not run on the chip";
+    EXPECT_TRUE(raw::ropConstantColour()) << "gpu.x1.constant_colour float_nops judges it on the chip";
+    EXPECT_TRUE(raw::constantColourFill(plainFill()));
 }
 
 }  // namespace
