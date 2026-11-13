@@ -974,7 +974,8 @@ host_test(
 
 # Fetching draws on raw::Device (raw_device_harness.h), a state made from a record as the runtime makes one: in its storage
 # form a strip, an indexed strip with restarts, an instanced list and indirect draws are each one draw, never split or
-# refused; in its barrier form a strip is drawn a triangle at a time and the shapes that cannot be are refused
+# refused; in its barrier form a strip and an indexed strip are drawn a triangle at a time and the shapes that cannot be
+# are refused
 host_test(
     name = "raw_device_fetch_test",
     srcs = [
