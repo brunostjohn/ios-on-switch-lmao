@@ -1,7 +1,8 @@
 """SR_AFFINITY in every pixel of a full-screen draw: the GPC index NAK's pixel interlock takes from its low byte.
 
 NAK's lowering puts a warp's ticket word at (affinity & 0xff) * 256 + ticket id, and the raw path's ticket buffer is
-4 KiB, room for affinities 0..3. Each pixel writes the whole register; the summary's distinct texels are the histogram.
+4 KiB, room for affinities 0..3. The tile shapes keep the whole register in RGBA32F; the full-screen ones keep its low
+16 bits in R32F, a quarter of the bytes for the app to summarise. The summary's distinct texels are the histogram.
 """
 
 import struct
@@ -12,12 +13,12 @@ from tools.benchloop.sm53.memops import SR_AFFINITY, SR_VIRTID, s2r
 
 TICKET_BUFFER_KIB = 4
 VALUE, OTHER = 4, 5
-# id: (target width, height, readback, second register's special register)
+# id: (target format, width, height, readback, second register's special register)
 SHAPES = {
-    'affinity.screen': (1280, 720, 'summary', SR_AFFINITY),
-    'affinity.tile': (256, 128, 'full', SR_AFFINITY),
-    'affinity.screen4': (1280, 720, 'summary', SR_AFFINITY),
-    'affinity.virtid': (256, 128, 'full', SR_VIRTID),
+    'affinity.screen': ('r32float', 1280, 720, 'summary', SR_AFFINITY),
+    'affinity.tile': ('rgba32float', 256, 128, 'full', SR_AFFINITY),
+    'affinity.screen4': ('r32float', 1280, 720, 'summary', SR_AFFINITY),
+    'affinity.virtid': ('rgba32float', 256, 128, 'full', SR_VIRTID),
 }
 
 
@@ -31,15 +32,16 @@ def code(other: int) -> bytes:
 
 
 def experiment(eid: str) -> dict:
-    width, height, readback, other = SHAPES[eid]
+    fmt, width, height, readback, other = SHAPES[eid]
     c = code(other)
+    p = {'sph': protocol.b64(sph.pixel()), 'code': protocol.b64(c), 'data': protocol.b64(bytes(16)), 'gprs': OTHER + 1}
     x = {
         'id': eid,
         'kind': 'fragment',
-        'target': {'format': 'rgba32float', 'width': width, 'height': height},
+        'target': {'format': fmt, 'width': width, 'height': height},
         'draws': [4] if eid.endswith('4') else [1],
         'readback': readback,
-        'program': {'sph': protocol.b64(sph.pixel()), 'code': protocol.b64(c), 'data': '', 'gprs': OTHER + 1},
+        'program': p,
         'meta': {'family': 'affinity', 'second': 'virtid' if other == SR_VIRTID else 'affinity'},
     }
     protocol.validate_experiment(x)
@@ -50,18 +52,25 @@ def generate() -> list[dict]:
     return [latency.warm_up('affinity.warm'), *(experiment(eid) for eid in SHAPES)]
 
 
-def _counts(result: dict) -> tuple[dict[tuple[int, int], int], int]:
+def _key(texel: bytes) -> tuple[int, int]:
+    """Give (affinity, second register) from an RGBA32F texel, or (its low 16 bits, 0) from an R32F one."""
+    if len(texel) == 4:
+        return int.from_bytes(texel, 'little') & 0xFFFF, 0
+    return program.unpack(list(struct.unpack('<4I', texel)))
+
+
+def _counts(result: dict, size: int) -> tuple[dict[tuple[int, int], int], int]:
     """Give (affinity, second register) -> pixels, and the pixels that came back."""
     texels = result.get('texels') or {}
     data = protocol.unb64(texels.get('data') or '')
     out: dict[tuple[int, int], int] = {}
     if data:
-        for k in range(0, len(data), 16):
-            key = program.unpack(list(struct.unpack_from('<4I', data, k)))
+        for k in range(0, len(data), size):
+            key = _key(data[k : k + size])
             out[key] = out.get(key, 0) + 1
     else:
         for d in texels.get('distinct') or []:
-            key = program.unpack(program.texel_words(d['value']))
+            key = _key(bytes.fromhex(d['value']))
             out[key] = out.get(key, 0) + d['count']
     return out, sum(out.values())
 
@@ -76,7 +85,7 @@ def analyse(experiments: list[dict], results: dict[str, dict]) -> dict:
         if r.get('status') != 'ok':
             out[x['id']] = {'status': r.get('status', 'missing'), 'why': r.get('why', '')}
             continue
-        counts, seen = _counts(r)
+        counts, seen = _counts(r, protocol.FORMATS[x['target']['format']][1])
         by_byte: dict[int, int] = {}
         for (value, _), n in counts.items():
             by_byte[value & 0xFF] = by_byte.get(value & 0xFF, 0) + n

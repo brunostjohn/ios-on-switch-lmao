@@ -66,17 +66,20 @@ def every_half() -> list[int]:
     return [bits_of(struct.unpack('<e', struct.pack('<H', h))[0]) for h in range(1 << 16)]
 
 
-def bases(sweep: str, top: int) -> list[int]:
-    """Give the f32 bits a sweep starts from for a lane whose top code is `top` (0: a half lane)."""
+def bases(sweep: str, top: int, every: int = 1) -> list[int]:
+    """Give the f32 bits a sweep starts from for a lane whose top code is `top` (0: a half lane).
+
+    `every` thins the ties, codes and halves; the specials always stay.
+    """
     if sweep == 'ties':
-        return [bits_of(texels.f32((2 * k + 1) / (2 * top))) for k in range(top)]
+        return [bits_of(texels.f32((2 * k + 1) / (2 * top))) for k in range(top)][::every]
     if sweep == 'codes':
-        return [bits_of(texels.f32(k / top)) for k in range(1, top)]
+        return [bits_of(texels.f32(k / top)) for k in range(1, top)][::every]
     if sweep == 'mids':
         pairs = (struct.unpack('<2e', struct.pack('<2H', h, h + 1)) for h in range(0, 0x7BFF, 4))
         mids = [bits_of((a + b) / 2) for a, b in pairs]
         return mids + [m | 0x80000000 for m in mids]
-    return every_half() + list(SPECIAL_BITS)
+    return every_half()[::every] + list(SPECIAL_BITS)
 
 
 def sweeps_of(fmt: str) -> tuple[str, ...]:
@@ -86,11 +89,10 @@ def sweeps_of(fmt: str) -> tuple[str, ...]:
 def texel_bases(fmt: str, sweep: str) -> list[tuple[int, int, int, int]]:
     """Give the four base words of each data texel: the stored lanes' sweeps, each lane its own top's, cycled."""
     tops, lanes, every = FORMATS[fmt]
-    per_lane = [bases(sweep, top)[::every] for top in tops[:lanes]]
-    longest = max(len(b) for b in per_lane)
+    per_lane = [bases(sweep, top, every) for top in tops[:lanes]]
     if lanes == 1:
         return [(b, 0, 0, 0) for b in per_lane[0]]
-    if len({tops[:lanes]}) == 1 or all(len(b) == longest for b in per_lane):
+    if all(b == per_lane[0] for b in per_lane):
         flat = per_lane[0] + [0] * (-len(per_lane[0]) % 4)
         return [tuple(flat[i : i + 4]) for i in range(0, len(flat), 4)]
     n = -(-len(per_lane[0]) // 3)

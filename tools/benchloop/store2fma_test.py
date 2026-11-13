@@ -46,6 +46,22 @@ class Store2FmaTest(unittest.TestCase):
             for ulps in range(-6, 7):
                 self.assertIn(store2fma.bits_of(rop.nudged(tie, ulps)) & 0xFFFFFFFF, lane0 | _other_lanes(x))
 
+    def test_rgb10a2_alpha_takes_its_own_ties_and_codes(self):
+        for sweep, steps, values in (
+            ('ties', range(-6, 7), (1 / 6, 1 / 2, 5 / 6)),
+            ('codes', range(-2, 3), (1 / 3, 2 / 3)),
+        ):
+            x = next(x for x in self.experiments if x['id'] == f'store2fma.rgb10a2unorm.{sweep}.0')
+            alpha = {words[3] for words in store2fma.inputs(x)}
+            for v in values:
+                for ulps in steps:
+                    self.assertIn(store2fma.bits_of(rop.nudged(texels.f32(v), ulps)), alpha, (sweep, v, ulps))
+
+    def test_thinned_formats_keep_every_special(self):
+        xs = [x for x in self.experiments if x['id'].startswith('store2fma.r16unorm.list')]
+        seen = {words[0] for x in xs for words in store2fma.inputs(x)}
+        self.assertTrue(set(store2fma.SPECIAL_BITS) <= seen)
+
     def test_every_half_and_special_is_an_input(self):
         xs = [x for x in self.experiments if x['id'].startswith('store2fma.rgba16unorm.list')]
         seen = {w for x in xs for words in store2fma.inputs(x) for w in words}

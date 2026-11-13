@@ -59,7 +59,7 @@
       "id": "affinity.screen",
       "kind": "fragment",
       "target": {
-        "format": "rgba32float",
+        "format": "r32float",
         "width": 1280,
         "height": 720
       },
@@ -70,7 +70,7 @@
       "program": {
         "sph": "YlQCAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAA=",
         "code": "AQdA5AC8/wcEAMcBAADI8AUAxwEAAMjwAA8HAAAAsFDhByD8AIQfAAAE9/8PAAAEAQQHAQAAKDgCBff/DwAABO8HIPwAhB8AAwUHAQAAKDgAAAcAAPgjBAEBBwAA+CME4Qfg/QC0/wcCAgcAAPgjBAMDBwAA+CMEDwAHAAAAAOPiByD8AIQfAAAPBwAAALBQAA8HAAAAsFAADwcAAACwUA==",
-        "data": "",
+        "data": "AAAAAAAAAAAAAAAAAAAAAA==",
         "gprs": 6
       },
       "meta": {
@@ -93,7 +93,7 @@
       "program": {
         "sph": "YlQCAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAA=",
         "code": "AQdA5AC8/wcEAMcBAADI8AUAxwEAAMjwAA8HAAAAsFDhByD8AIQfAAAE9/8PAAAEAQQHAQAAKDgCBff/DwAABO8HIPwAhB8AAwUHAQAAKDgAAAcAAPgjBAEBBwAA+CME4Qfg/QC0/wcCAgcAAPgjBAMDBwAA+CMEDwAHAAAAAOPiByD8AIQfAAAPBwAAALBQAA8HAAAAsFAADwcAAACwUA==",
-        "data": "",
+        "data": "AAAAAAAAAAAAAAAAAAAAAA==",
         "gprs": 6
       },
       "meta": {
@@ -105,7 +105,7 @@
       "id": "affinity.screen4",
       "kind": "fragment",
       "target": {
-        "format": "rgba32float",
+        "format": "r32float",
         "width": 1280,
         "height": 720
       },
@@ -116,7 +116,7 @@
       "program": {
         "sph": "YlQCAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAA=",
         "code": "AQdA5AC8/wcEAMcBAADI8AUAxwEAAMjwAA8HAAAAsFDhByD8AIQfAAAE9/8PAAAEAQQHAQAAKDgCBff/DwAABO8HIPwAhB8AAwUHAQAAKDgAAAcAAPgjBAEBBwAA+CME4Qfg/QC0/wcCAgcAAPgjBAMDBwAA+CMEDwAHAAAAAOPiByD8AIQfAAAPBwAAALBQAA8HAAAAsFAADwcAAACwUA==",
-        "data": "",
+        "data": "AAAAAAAAAAAAAAAAAAAAAA==",
         "gprs": 6
       },
       "meta": {
@@ -139,7 +139,7 @@
       "program": {
         "sph": "YlQCAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAA=",
         "code": "AQdA5AC8/wcEAMcBAADI8AUANwAAAMjwAA8HAAAAsFDhByD8AIQfAAAE9/8PAAAEAQQHAQAAKDgCBff/DwAABO8HIPwAhB8AAwUHAQAAKDgAAAcAAPgjBAEBBwAA+CME4Qfg/QC0/wcCAgcAAPgjBAMDBwAA+CMEDwAHAAAAAOPiByD8AIQfAAAPBwAAALBQAA8HAAAAsFAADwcAAACwUA==",
-        "data": "",
+        "data": "AAAAAAAAAAAAAAAAAAAAAA==",
         "gprs": 6
       },
       "meta": {

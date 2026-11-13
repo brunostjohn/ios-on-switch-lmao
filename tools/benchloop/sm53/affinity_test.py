@@ -9,6 +9,11 @@ def summary(pairs: dict[tuple[int, int], int]) -> dict:
     return {'distinct': [{'value': program.texel_hex(program.pack(*k)), 'count': n} for k, n in pairs.items()]}
 
 
+def summary_r32(values: dict[int, int]) -> dict:
+    words = {struct.pack('<I', program.ONE | v).hex(): n for v, n in values.items()}
+    return {'distinct': [{'value': w, 'count': n} for w, n in words.items()]}
+
+
 class AffinityTest(unittest.TestCase):
     def test_one_valid_batch_virtid_last(self):
         experiments = affinity.generate()
@@ -27,7 +32,7 @@ class AffinityTest(unittest.TestCase):
         tile = 256 * 128
         full = b''.join(struct.pack('<4I', *program.pack(0x0100 * (i % 2), 0)) for i in range(tile))
         results = {
-            'affinity.screen': {'status': 'ok', 'texels': summary({(0x00, 0x00): pixels - 64, (0x0102, 0): 64})},
+            'affinity.screen': {'status': 'ok', 'texels': summary_r32({0x00: pixels - 64, 0x0102: 64})},
             'affinity.tile': {'status': 'ok', 'texels': {'data': protocol.b64(full)}},
             'affinity.screen4': {'status': 'killed', 'why': 'trap'},
         }
@@ -41,8 +46,8 @@ class AffinityTest(unittest.TestCase):
 
     def test_buffer_needed_past_four_gpcs(self):
         experiments = affinity.generate()
-        results = {'affinity.screen': {'status': 'ok', 'texels': summary({(5, 5): 10})}}
-        found = affinity.analyse(experiments, results)['affinity.screen']
+        results = {'affinity.tile': {'status': 'ok', 'texels': summary({(5, 5): 10})}}
+        found = affinity.analyse(experiments, results)['affinity.tile']
         self.assertEqual((found['max'], found['ticket_buffer_kib'], found['fits']), (5, 6, False))
 
 

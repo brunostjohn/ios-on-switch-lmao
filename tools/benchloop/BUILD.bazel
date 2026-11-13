@@ -153,7 +153,7 @@ APP_SOURCES = [
 [
     py_test(
         name = name,
-        size = "medium" if name == "families_test" else "small",
+        size = "medium" if name in ("families_test", "store2fma_test") else "small",
         srcs = [name + ".py"],
         data = APP_SOURCES + glob([
             "testdata/*",
