@@ -4,7 +4,9 @@
 #include <cerrno>
 #include <vector>
 using u32 = uint32_t;
+using u64 = uint64_t;
 constexpr u32 GPCPLL_COEFF_R = 0x137004, nv_clk_src_gpc = 0;
+constexpr u64 IDLE_DROP_NS = 500ULL * 1000000ULL;
 #define READ_ONCE(x) (x)
 #define WRITE_ONCE(x, value) ((x) = (value))
 
@@ -23,11 +25,12 @@ struct {
 	u32 maximum_khz, idle_khz, run_khz, requested_khz, vco_khz, vco_coeff;
 	u32 run_pl, idle_pl;
 	int on, low, clock_available;
+	u32 failures;
 } tgm_idle;
 
 u32 coefficient;
-unsigned inside, locked, reads;
-bool fail_switch;
+unsigned inside, locked, reads, reprograms, logs;
+bool fail_switch, fail_reprogram;
 std::vector<u32> switches;
 
 u32 tegra_gm20b_dvfs_khz(u32 i)
@@ -76,6 +79,16 @@ int nvkm_clk_read(void *, u32)
 		   ((coefficient & 255) * 2 * ((coefficient >> 16) & 63)));
 }
 
+int clk_prog_khz(Device *, u32 khz)
+{
+	EXPECT_EQ(locked, 1u);
+	++reprograms;
+	if (fail_reprogram)
+		return -EIO;
+	coefficient = (coefficient & 0xffff) | ((1536000 / (2 * khz)) << 16);
+	return 0;
+}
+
 int pl_switch(u32 pl)
 {
 	EXPECT_EQ(locked, 1u);
@@ -88,6 +101,7 @@ int pl_switch(u32 pl)
 
 void nvxnu_log(const char *, ...)
 {
+	++logs;
 }
 }
 
@@ -100,10 +114,10 @@ class GpuClock : public testing::Test
 	void SetUp() override
 	{
 		tgm_gpu.device = &device;
-		tgm_idle = {&device, 768000, 76800, 768000, 0, 1536000, 0x2801, 1, 10, 1, 0, 1};
+		tgm_idle = {&device, 768000, 76800, 768000, 0, 1536000, 0x2801, 1, 10, 1, 0, 1, 0};
 		coefficient = 0x12801;
-		inside = locked = reads = 0;
-		fail_switch = false;
+		inside = locked = reads = reprograms = logs = 0;
+		fail_switch = fail_reprogram = false;
 		switches.clear();
 	}
 
@@ -180,15 +194,60 @@ TEST_F(GpuClock, RestoreRejectsADifferentPllBasis)
 	EXPECT_TRUE(switches.empty());
 }
 
-TEST_F(GpuClock, FailedHardwareChangeDisablesFurtherBoostsAndReportsActual)
+TEST_F(GpuClock, FailedHardwareChangeFailsThatRequestAndTheNextOneTriesAgain)
 {
 	fail_switch = true;
 	u32 applied = 0;
 	EXPECT_EQ(switch_gpu_clock_ceiling(400000, &applied), -EIO);
-	EXPECT_EQ(applied, 768000u);
-	EXPECT_EQ(tgm_idle.on, 0);
-	EXPECT_EQ(tgm_idle.clock_available, 0);
-	EXPECT_EQ(switch_gpu_clock_ceiling(200000, &applied), -ENODEV);
+	EXPECT_EQ(tgm_idle.on, 1);
+	EXPECT_EQ(tgm_idle.clock_available, 1);
+	EXPECT_EQ(tgm_idle.failures, 1u);
+	EXPECT_EQ(tgm_idle.run_pl, 1u);
+	EXPECT_EQ(reprograms, 1u);
+	EXPECT_EQ(coefficient >> 16, 1u);
+	fail_switch = false;
+	EXPECT_EQ(switch_gpu_clock_ceiling(200000, &applied), 0);
+	EXPECT_EQ(applied, 153600u);
+	EXPECT_EQ(coefficient >> 16, 5u);
+}
+
+TEST_F(GpuClock, ADifferentVcoRefusesTheRequestAndKeepsTheIdleClock)
+{
+	coefficient = 0x13001;
+	u32 applied = 0;
+	EXPECT_EQ(switch_gpu_clock_ceiling(400000, &applied), -EIO);
+	EXPECT_TRUE(switches.empty());
+	EXPECT_EQ(tgm_idle.on, 1);
+	EXPECT_EQ(tgm_idle.clock_available, 1);
+}
+
+TEST_F(GpuClock, EachFailureInARowDoublesTheQuietTimeToSixtyFourTimes)
+{
+	EXPECT_EQ(idle_quiet_ns(IDLE_DROP_NS), IDLE_DROP_NS);
+	locked = 1;
+	fail_switch = true;
+	for (u32 i = 1; i <= 9; ++i) {
+		idle_fail("drop", 10);
+		EXPECT_EQ(idle_quiet_ns(IDLE_DROP_NS), IDLE_DROP_NS << (i < 6 ? i : 6));
+	}
+	EXPECT_EQ(logs, 4u);
+	idle_took();
+	locked = 0;
+	EXPECT_EQ(idle_quiet_ns(IDLE_DROP_NS), IDLE_DROP_NS);
+	EXPECT_EQ(tgm_idle.on, 1);
+}
+
+TEST_F(GpuClock, ARunRateThatCouldNotBePutBackLeavesTheNextRaiseToTryAgain)
+{
+	locked = 1;
+	fail_switch = fail_reprogram = true;
+	tgm_idle.low = 0;
+	idle_fail("raise", 1);
+	EXPECT_EQ(tgm_idle.low, 1);
+	fail_switch = false;
+	idle_fail("drop", 10);
+	EXPECT_EQ(tgm_idle.low, 0);
+	locked = 0;
 }
 
 TEST_F(GpuClock, StateQueryDoesNotWakeTheGpuOrTouchRegisters)
