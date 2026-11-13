@@ -105,7 +105,7 @@ struct Display {
     std::array<Plane, TegraScanoutRing::kMaxEntries> entryPlane{};
     Plane planeNext{}, planeTarget{}, stagedPlane{};
     bool doubleBuffer = true, directAttached = true, directOn = true;
-    SwitchRouteBackoff directHold{600, 9600, 3600};
+    SwitchRouteBackoff<600, 9600, 3600> directHold;
     bool rotated = false, rotationLatched = false, rotationAnnounced = false;
     bool planeNextSet = false, stats = false, probeUnderflow = false;
     uint32_t pitchActControl = kWinAActHcntrSel | 0x40, pitchOptions = 0x40000000;

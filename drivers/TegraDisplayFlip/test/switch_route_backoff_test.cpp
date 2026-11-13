@@ -6,7 +6,7 @@ namespace {
 
 TEST(SwitchRouteBackoff, AFailureHoldsTheRouteOffForItsCleanRunThenRetriesIt)
 {
-    SwitchRouteBackoff b(4, 32, 100);
+    SwitchRouteBackoff<4, 32, 100> b;
     EXPECT_TRUE(b.on());
     b.fail();
     for (int i = 0; i < 3; ++i) {
@@ -21,7 +21,7 @@ TEST(SwitchRouteBackoff, AFailureHoldsTheRouteOffForItsCleanRunThenRetriesIt)
 
 TEST(SwitchRouteBackoff, ADirtyEventWhileOffStartsTheRunOver)
 {
-    SwitchRouteBackoff b(4, 32, 100);
+    SwitchRouteBackoff<4, 32, 100> b;
     b.fail();
     b.clean();
     b.clean();
@@ -33,7 +33,7 @@ TEST(SwitchRouteBackoff, ADirtyEventWhileOffStartsTheRunOver)
 
 TEST(SwitchRouteBackoff, RepeatedFailuresDoubleTheRunUpToItsCap)
 {
-    SwitchRouteBackoff b(4, 32, 100);
+    SwitchRouteBackoff<4, 32, 100> b;
     const uint32_t runs[] = {4, 8, 16, 32, 32, 32};
     for (uint32_t want : runs) {
         b.fail();
@@ -46,7 +46,7 @@ TEST(SwitchRouteBackoff, RepeatedFailuresDoubleTheRunUpToItsCap)
 
 TEST(SwitchRouteBackoff, ARouteUpForItsForgiveRunStartsFromTheFirstRunAgain)
 {
-    SwitchRouteBackoff b(4, 32, 10);
+    SwitchRouteBackoff<4, 32, 10> b;
     b.fail();
     while (!b.clean()) {
     }
@@ -62,7 +62,7 @@ TEST(SwitchRouteBackoff, ARouteUpForItsForgiveRunStartsFromTheFirstRunAgain)
 
 TEST(SwitchRouteBackoff, CleanEventsWhileOnDoNothingUntilAFailure)
 {
-    SwitchRouteBackoff b(4, 32, 10);
+    SwitchRouteBackoff<4, 32, 10> b;
     for (int i = 0; i < 100; ++i)
         EXPECT_FALSE(b.clean());
     EXPECT_EQ(b.retries, 0u);

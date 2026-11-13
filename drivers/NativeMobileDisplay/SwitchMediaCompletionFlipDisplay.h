@@ -26,10 +26,10 @@
 
 // Static, as window A's completion flip: the instance is at the 16 KiB a kalloc_type class may have.
 static inline SwitchPlaneCompletionFlip mediaFlip;
-static inline SwitchRouteBackoff mediaHold{8, 1024, 600};  // in eligible sets, under the gate
+static inline SwitchRouteBackoff<8, 1024, 600> mediaHold;  // in eligible sets, under the gate
 // Under completionFlipLock: host1x's filter writes no set while mediaFilterHold runs (mediaFilterOff mirrors it for
 // its interrupt context); mediaFilterStrike is a failed filter set not yet forgiven by kMediaFilterForgive armed sets.
-static inline SwitchRouteBackoff mediaFilterHold{8, 1024, 600};
+static inline SwitchRouteBackoff<8, 1024, 600> mediaFilterHold;
 static inline bool mediaFilterOff = false, mediaFilterStrike = false;
 static inline uint32_t mediaFilterFailures = 0, mediaFilterArmedSinceStrike = 0;
 static constexpr uint32_t kMediaFilterForgive = 600;

@@ -973,7 +973,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool directOn = false, directAttached = false, latchRetire = false;
     // Static: the instance is at the 16 KiB a kalloc_type class may have. 10 s of clean frames after the first hold, at
     // most 160 s, forgiven after a minute with direct on.
-    static inline SwitchRouteBackoff directHold{600, 9600, 3600};
+    static inline SwitchRouteBackoff<600, 9600, 3600> directHold;
     int gpuDirect = kNoBuffer, gpuPresentedEntry = kNoBuffer;  // the slot entry a fence-only present is for
 
     struct Taken {

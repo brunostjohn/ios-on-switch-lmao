@@ -48,10 +48,10 @@ struct CompletionUnverified {
 
 static inline CompletionUnverified completionUnverified = {kNoBuffer, 0};  // in the ring, no latch read has judged it
 static inline bool completionFlipsProven = false;
-static inline SwitchRouteBackoff completionHold{8, 1024, 600};  // in eligible frames, under the gate
+static inline SwitchRouteBackoff<8, 1024, 600> completionHold;  // in eligible frames, under the gate
 // The producers' filters write no flips while filterHold runs (a filter-written flip's completion failed): kept under
 // completionFlipLock, completionFilterOff read in interrupt context.
-static inline SwitchRouteBackoff filterHold{8, 1024, 600};  // in armed flips
+static inline SwitchRouteBackoff<8, 1024, 600> filterHold;  // in armed flips
 static inline bool completionFilterOff = false;
 #if SWITCH_FRAME_TIMELINE
 static constexpr unsigned kFlipTotals = 9;

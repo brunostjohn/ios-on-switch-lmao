@@ -2,7 +2,9 @@
 bool planeRecovering = false, planeRecoveryStuck = false;
 uint64_t planeRecoveryAt = 0;
 PlaneSet planeRecoveryTarget = {};
-uint32_t planeRecoveryAsks = 0, planeRecoveriesStuck = 0;  // since boot: off requests written again, stuck recoveries
+// Since boot: off requests written again, stuck recoveries. Static: the instance is at the 16 KiB a kalloc_type class
+// may have.
+static inline uint32_t planeRecoveryAsks = 0, planeRecoveriesStuck = 0;
 
 // A recovery still inside its off request's latch window: frame ends stay unmasked for it and the flip deadline watches it.
 // A stuck one is checked at the frame ends other work brings, and holds no swap's retirement.

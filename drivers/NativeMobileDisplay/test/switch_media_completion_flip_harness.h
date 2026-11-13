@@ -285,8 +285,8 @@ struct Display {
         mediaFlip = {};
         mediaFilterOff = mediaFilterStrike = false;
         mediaFilterFailures = mediaFilterArmedSinceStrike = 0;
-        mediaHold = {8, 1024, 600};
-        mediaFilterHold = {8, 1024, 600};
+        mediaHold = {};
+        mediaFilterHold = {};
         mediaFlipUnverified = PlaneCommits::kNone;
         mediaFlipRequestedSeq = 0;
         planeLatch.values = sets;

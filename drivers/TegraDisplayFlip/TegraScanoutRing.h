@@ -35,7 +35,7 @@ struct TegraScanoutRing {
     unsigned buffers = 0;
     int front = 0, pending = kNone, superseded = kNone, drawing = kNone, held = kNone;
     bool replace = true;  // latest frame wins; false after recover(): double buffering
-    SwitchRouteBackoff replaceBackoff{600, 9600, 3600};  // in plain latches
+    SwitchRouteBackoff<600, 9600, 3600> replaceBackoff;  // in plain latches
     bool rearmWanted = false;
 
     // count buffers (2 or 3), window A scanning buffer 0, nothing asked for, replacement on.

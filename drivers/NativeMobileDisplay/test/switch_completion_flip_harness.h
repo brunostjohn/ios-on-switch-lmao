@@ -311,7 +311,7 @@ struct Display {
     Plane planeNext, planeTarget;
     bool planeNextSet = false, rotated = true, rotationLatched = true, rotationAnnounced = true, doubleBuffer = true;
     bool directAttached = true, directOn = true, stats = false, probeUnderflow = false, probeRequest = false;
-    SwitchRouteBackoff directHold{600, 9600, 3600};
+    SwitchRouteBackoff<600, 9600, 3600> directHold;
     bool hwSuspended = false, gpuDonePending = false, gpuScanout = false, transferred = false, deferred = false;
     bool copying = false, deferredCopy = false;
     int gpuStatus = 0, gpuDirect = kNoBuffer;
@@ -340,8 +340,8 @@ struct Display {
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
         completionFlipsProven = completionFilterOff = false;
-        completionHold = {8, 1024, 600};
-        filterHold = {8, 1024, 600};
+        completionHold = {};
+        filterHold = {};
         ring.reset(3);
         model.general[DcModel::kHeader] = kWindowASelect;
         model.assembly[kWinbufStartAddr] = surfaceAddress(0);
