@@ -80,10 +80,8 @@ arm_none_eabi(name = "arm_none_eabi")
 
 bazel_dep(name = "rules_rust", version = "0.75.0")
 
-# Two changes to rules_rust (bazel/rust/rules_rust.patch): a crate whose rustc_flags carry its own -Cmetadata keeps that
-# value alone, as its output hash too, so m2v's crates keep cargo's symbol names and NAK's meson's; and a crate given
-# -Cincremental=<base> (bazel/rust/defs.bzl, the debug profile) compiles incrementally, unsandboxed, one session per
-# configuration.
+# One change to rules_rust (bazel/rust/rules_rust.patch): a crate whose rustc_flags carry its own -Cmetadata keeps that
+# value alone, as its output hash too, so m2v's crates keep cargo's symbol names and NAK's meson's.
 single_version_override(
     module_name = "rules_rust",
     patch_strip = 1,

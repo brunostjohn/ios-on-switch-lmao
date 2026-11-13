@@ -36,12 +36,7 @@ common --incompatible_strict_action_env
 # Every action runs sandboxed (darwin-sandbox: read-only declared inputs, declared outputs only). No action needs an
 # unsandboxed fallback, so there is none: a new one that tries to read undeclared inputs fails instead of passing.
 build --spawn_strategy=sandboxed
-# One exception, debug only and off by default (--//bazel/rust:incremental): crates compiled incrementally
-# (bazel/rust/defs.bzl, INCREMENTAL_CRATES) keep rustc's sessions below the output base, so their two Rust actions are
-# tagged no-sandbox and run here unsandboxed; every other Rust action (and every action of release) stays sandboxed.
-build:debug --strategy=Rustc=sandboxed,local
-build:debug --strategy=RustcMetadata=sandboxed,local
-# The other exception: iOS 27's translation attaches and mounts disk images (hdiutil, diskutil), which no sandbox
+# One exception: iOS 27's translation attaches and mounts disk images (hdiutil, diskutil), which no sandbox
 # allows, so its two actions (install/translated.bzl) run here.
 build --strategy=Pretranslate=local
 build --strategy=TranslatedCryptex=local
@@ -134,8 +129,6 @@ build:remote --config=rbe
 # The per-user file names the executor (`build:rbe --remote_executor=grpc://host:port`); without one the remote
 # strategy is skipped and actions build here.
 build:rbe --spawn_strategy=remote,sandboxed
-build:rbe --strategy=Rustc=remote,sandboxed,local
-build:rbe --strategy=RustcMetadata=remote,sandboxed,local
 # A worker that is gone, or a scheduler with none left, costs one failed request per action, then it builds here.
 # Bazel runs that fallback unsandboxed and has no flag to sandbox it; tools/remote/README.md keeps its results out of
 # the shared cache on the Macs that name an executor (every cache user expands rbe through remote, executor or not).
