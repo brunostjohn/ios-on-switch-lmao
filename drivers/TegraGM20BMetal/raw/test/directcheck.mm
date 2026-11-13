@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
-// directcheck: the direct compile (runtime/raw_direct.h) of every state of a corpus, dumped. Each state's record is made
-// from m2v's translation and plans and NVK's stage compile, with no pipeline, command buffer or capture (its barrier form
-// made as on a device without the pixel interlock), with the pack it is given for the compile's rules. The states are
-// pack/probe.mm's: Core Animation's lines, another framework's (lib=, under PROBE_LIB_ROOT) and, with PROBE_OWN_LIB, the
-// raw path's own. The record goldens (test/records) hold the pack's records; this only dumps.
-// usage: DIRECTCHECK_DUMP=<dir> directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
-//   writes each record made to <dir>/<key hash>.json (its key, programs and blob), what tools/gpu/maxwell/gate.py and
-//   nakstat.py --dump read, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json with its
-//   rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
-// A state the direct compile refuses is listed with its reason (REFUSED lines), and one made in the barrier form because
-// its storage form was refused with that reason (BARRIER FORM lines).
+// directcheck: the direct compile (runtime/raw_direct.h) of every state of a corpus against the pack. Each state's record is made
+// from m2v's translation and plans and NVK's stage compile, with no pipeline, command buffer or capture: every state the pack holds
+// a record for must come out byte for byte the same (its barrier form made as on a device without the pixel interlock), with the
+// pack's split of its fragment program, every one it set aside refused. A state of RGB10A8_2P_XR10 colours is held to the pack in
+// its two-plane form too (" | xr2p", raw_xr_pass.h), as directpack.mm makes it. The states are pack/probe.mm's: Core Animation's
+// lines, another framework's (lib=, under PROBE_LIB_ROOT) and, with PROBE_OWN_LIB, the raw path's own.
+// usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
+//   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
+//   that it met every record of the pack)
+//   DIRECTCHECK_DUMP=<dir>: writes each record made to <dir>/<key hash>.json (its key, programs and blob), what
+//   tools/gpu/maxwell/nakstat.py --dump reads, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json
+//   with its rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
+// Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
+// device's harvest against the pack it booted with, they are the states its runtime refused. A state made in the barrier
+// form because its storage form was refused is listed with that reason (BARRIER FORM lines).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -22,6 +26,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
+#include "record_compare.h"
 
 namespace {
 
@@ -116,6 +121,16 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     fclose(f);
 }
 
+// Whether a state's key names an RGB10A8_2P_XR10 colour ("c<j>=550:"), as directpack.mm asks before its two-plane form
+bool twoPlaneColors(const std::string &key)
+{
+    const std::string head = key.substr(0, key.find(" | "));
+    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2))
+        if (head.compare(at + 4, 4, "550:") == 0)
+            return true;
+    return false;
+}
+
 // The state's fetch-free form, made as directpack.mm makes it (fetch_free_make.h)
 void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &line, const std::string &key,
                    raw::ProbeTextures textures, const char *dir)
@@ -133,10 +148,8 @@ void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &li
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        const char *dir = getenv("DIRECTCHECK_DUMP");
-        if (argc != 6 || !dir || !*dir) {
-            fprintf(stderr, "usage: DIRECTCHECK_DUMP=<dir> directcheck <nvk dylib> <cache dir> <default.metallib> "
-                            "<corpus.log> <pack.bin>\n");
+        if (argc != 6) {
+            fprintf(stderr, "usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>\n");
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
@@ -167,54 +180,102 @@ int main(int argc, char **argv)
         }
         raw::Direct direct(pack);
         direct.makeVariants(true);
-        uint32_t states = 0, made = 0, refused = 0, failed = 0;
+        FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
+        uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0, splits = 0, planes = 0;
         double ms = 0;
-        std::map<std::string, uint32_t> reasons;
-        probe::eachState(
-            dev, qc, own, standIn, probe::corpusLines(text, own != nil),
-            [&](const std::string &line, bool ours, probe::State &s) {
-                states++;
-                raw::ProbeTextures textures = probe::probeTextures(line, ours);
-                textures.cubic = s.cubic;
-                // DIRECTCHECK_TESTS=<n>: each state's variant beside depth or stencil tests of class n
-                // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes
-                std::string key = s.key;
-                if (const char *tests = getenv("DIRECTCHECK_TESTS"); tests && *tests) {
-                    textures.fragmentTests = uint8_t(atoi(tests));
-                    key += " | tests=" + std::to_string(textures.fragmentTests);
-                }
-                textures.written = s.written;
-                key += raw::writtenVariant(s.written);
-                // DIRECTCHECK_BARRIER=1: each state's barrier form
-                const bool barrierForm = getenv("DIRECTCHECK_BARRIER") && *getenv("DIRECTCHECK_BARRIER") == '1';
-                raw::RuntimeRecord rec;
-                std::string why;
-                const auto began = std::chrono::steady_clock::now();
-                const raw::CompileOutcome outcome =
-                    direct.make(s.d, key, rec, why, textures, nullptr, true,
-                                barrierForm ? raw::PackForm::Barrier : raw::PackForm::Default);
-                ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
-                if (outcome == raw::CompileOutcome::Failed) {
-                    failed++;
-                    printf("FAILED (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
-                    return;
-                }
-                if (outcome == raw::CompileOutcome::Refused) {
-                    refused++;
-                    reasons[why.substr(0, 90)]++;
-                    printf("REFUSED (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
-                    return;
-                }
-                made++;
-                if (!direct.storageRefusal().empty())
-                    printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
+        std::map<std::string, uint32_t> differences, reasons;
+        // DIRECTCHECK_BARRIER=1: each state's barrier form against the pack's
+        const bool barrierForm = getenv("DIRECTCHECK_BARRIER") && *getenv("DIRECTCHECK_BARRIER") == '1';
+        // One record of a state, `key` its pack key with the variant names directpack.mm gives it
+        const auto check = [&](const std::string &line, const probe::State &s, const std::string &key,
+                               const raw::ProbeTextures &textures) {
+            states++;
+            planes += textures.twoPlane;
+            const size_t named = raw::variantNameAt(key);
+            const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
+            const raw::PackPipeline *pp = named < key.size() ? pack.variantRecord(keyHash, key.substr(named))
+                                          : barrierForm      ? pack.find(keyHash, raw::PackForm::Barrier)
+                                                             : pack.find(keyHash);
+            const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
+            raw::RuntimeRecord rec;
+            std::string why;
+            const auto began = std::chrono::steady_clock::now();
+            const raw::CompileOutcome outcome =
+                direct.make(s.d, key, rec, why, textures, nullptr, true,
+                            barrierForm ? raw::PackForm::Barrier : raw::PackForm::Default);
+            if (pp && named < key.size()) {
+                rec.pipeline.keyHash = keyHash;
+                rec.pipeline.flags |= raw::PipelineVariantRecord;
+            }
+            ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+            if (outcome == raw::CompileOutcome::Made && !direct.storageRefusal().empty())
+                printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
+            if (const char *dir = getenv("DIRECTCHECK_DUMP");
+                dir && *dir && outcome == raw::CompileOutcome::Made && !textures.twoPlane) {
                 dumpRecord(dir, key, rec);
                 dumpFetchFree(direct, qc, line, key, textures, dir);
-            });
+            }
+            std::string verdict;
+            if (outcome == raw::CompileOutcome::Failed) {
+                verdict = " failed (" + why + ")";
+            } else if (pp) {
+                verdict = outcome == raw::CompileOutcome::Made ? recordcompare::differences(pack, *pp, rec) +
+                                                                     recordcompare::splitDifferences(pack, *pp, rec)
+                                                               : " refused (" + why + ")";
+                splits += verdict.empty() && rec.split;
+                (barrier ? barriers : same) += verdict.empty();
+                if (met && verdict.empty())
+                    fprintf(met, "%016llx %u\n", (unsigned long long)pp->keyHash, pp->flags & raw::PipelineBarrierForm);
+            } else {
+                verdict = outcome == raw::CompileOutcome::Made ? " made, and the pack set it aside" : "";
+                refused += verdict.empty();
+                if (verdict.empty()) {
+                    reasons[why.substr(0, 90)]++;
+                    printf("REFUSED (%s): %s\n", why.c_str(), s.key.substr(0, 160).c_str());
+                }
+            }
+            if (!verdict.empty()) {
+                bad++;
+                differences[verdict.substr(0, verdict.find('['))]++;
+                printf("DIFFERS%s%s%s: %s\n", barrier ? " (barrier)" : "", textures.twoPlane ? " (two-plane)" : "",
+                       verdict.c_str(), s.key.substr(0, 160).c_str());
+            }
+            return outcome;
+        };
+        probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
+                         [&](const std::string &line, bool ours, probe::State &s) {
+                             raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                             textures.cubic = s.cubic;
+                             // DIRECTCHECK_TESTS=<n>: each state's variant beside depth or stencil tests of class n
+                             // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes,
+                             // against the pack's record of it (PipelineVariantRecord)
+                             std::string tests;
+                             if (const char *n = getenv("DIRECTCHECK_TESTS"); n && *n) {
+                                 textures.fragmentTests = uint8_t(atoi(n));
+                                 tests = " | tests=" + std::to_string(textures.fragmentTests);
+                             }
+                             textures.xrSlots = s.xrSlots;
+                             textures.written = s.written;
+                             const std::string sampled =
+                                 (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string()) +
+                                 raw::writtenVariant(s.written);
+                             if (check(line, s, s.key + tests + sampled, textures) != raw::CompileOutcome::Made ||
+                                 !twoPlaneColors(s.key))
+                                 return;
+                             textures.twoPlane = true;
+                             check(line, s, s.key + tests + raw::kXrPlanesVariant + sampled, textures);
+                         });
+        if (met)
+            fclose(met);
+        for (const auto &[what, n] : differences)
+            printf("  %u x%s\n", n, what.c_str());
         for (const auto &[why, n] : reasons)
             printf("  %u x refused: %s\n", n, why.c_str());
-        printf("directcheck: %u states, %u made and dumped to %s, %u refused, %u failed; %.1f ms a state\n", states,
-               made, dir, refused, failed, states ? ms / states : 0.0);
-        return failed || !states ? 1 : 0;
+        printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier "
+               "forms, "
+               "%u set aside and refused, %u differ; %u with the pack's split; %.1f ms a state; %u of them two-plane "
+               "forms\n",
+               states, same, barriers, refused, bad, splits, states ? ms / states : 0.0, planes);
+        return bad || !states ? 1 : 0;
     }
 }

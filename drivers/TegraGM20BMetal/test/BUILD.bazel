@@ -266,6 +266,7 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "SANITIZERS", "WARNINGS", "host_library", "host_test")
 load(":defs.bzl", "objcxx_units")
+load(":directcheck.bzl", "raw_directcheck")
 
 lint_files()
 
@@ -2794,6 +2795,45 @@ py_test(
     srcs = ["rawpack_records_test.py"],
     data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],  # mkpack.py reads it at import
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_binary(
+    name = "directcheck_build",
+    srcs = ["directcheck_build.py"],
+)
+
+raw_directcheck(
+    name = "directcheck",
+    testonly = True,
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20BMetal:raw/test/directcheck.mm",
+        "//drivers/TegraGM20BMetal:raw/test/record_compare.h",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//drivers/TegraGM20BMetal:raw_stack_sources",
+        "//kits/SwitchGM20B:class_headers",
+    ],
+    crawl = "//gpu/seed:crawl",
+    host_bridge = "//gpu:bridge_host",
+    metal_abi = "//drivers/NativeMetal/abi:MetalABI.h",
+    pack = "//gpu/seed:raw_pack",
+    tools = "//gpu/seed:tools",
+)
+
+# The runtime's direct compile against the raw pack on a fixed sample of its states (directcheck_test.py); builds the
+# configured IPSW kind's full pack. m2v: directcheck makes its states through the m2v frontend.
+py_test(
+    name = "directcheck_test",
+    size = "medium",
+    srcs = ["directcheck_test.py"],
+    args = ["$(rootpath :directcheck)"],
+    data = [":directcheck"],
+    tags = [
+        "m2v",
+        "no-remote-exec",
+        "pack",
+        "requires-darwin",
+    ],
 )
 
 py_test(
