@@ -8,7 +8,6 @@
 #include "H264NVENC.h"
 #include "HEVCNVENC.h"
 #include "NVENCClient.h"
-#include "AVEBackoff.h"
 #include "AVEReorder.h"
 #include "RateControl.h"
 #include "VTEncoderSPI.h"
@@ -38,7 +37,6 @@ typedef struct {
     int32_t maxFrameDelay;  // MaxFrameDelayCount: frames held at most, -1 unlimited
     CFStringRef profileLevel, entropy, primaries, transfer, matrix;
     bool haveRef, keyPending;
-    AVEBackoff pBackoff;  // P pictures NVENC refused (AVEBackoff.h): the session codes IDRs through a run
     uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
     CMTime lastKeyTime;
     RateControl rc;
