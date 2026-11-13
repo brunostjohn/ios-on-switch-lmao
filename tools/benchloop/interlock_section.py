@@ -14,7 +14,6 @@ from tools.benchloop.sm53 import interlock, operands, sph
 FORMS = ('whole', 'tail', 'none')
 BODY_SIZES = (64, 256, 1024)
 SIZES = ((64, 64), (256, 256), (1280, 720))
-INTERLOCK_CONTROL = 0x1224
 
 
 def experiment(form: str, body: int, width: int, height: int, timed: bool) -> dict:
@@ -38,8 +37,8 @@ def experiment(form: str, body: int, width: int, height: int, timed: bool) -> di
         'repeats': repeats,
         'warmup': warmup,
         'readback': 'none',
-        'methods': [[INTERLOCK_CONTROL, 0 if form == 'none' else interlock.CONFLICT_DETECT_PIXEL]],
-        'restore': [[INTERLOCK_CONTROL, 0]],
+        'methods': [[interlock.INTERLOCK_CONTROL, 0 if form == 'none' else interlock.CONFLICT_DETECT_PIXEL]],
+        'restore': [[interlock.INTERLOCK_CONTROL, 0]],
         'storage': {'bytes': (height << log_stride) * 4, 'va_at': 0, 'readback': 'summary'},
         'meta': {
             'family': 'interlock_section',

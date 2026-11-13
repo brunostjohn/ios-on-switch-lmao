@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from tools.benchloop import protocol, store2fma
-from tools.benchloop.sm53 import affinity, hsetp2, icache, int3, overlap
+from tools.benchloop.sm53 import affinity, hsetp2, icache, int3, interlock_spin, overlap
 
 FOLDER = Path(__file__).with_name('batches')
 # file: (batch name, generator), in the order a sitting runs them
@@ -19,6 +19,7 @@ BATCHES = {
     'icache': ('icache', icache.generate),
     'store2fma': ('store2fma', store2fma.generate),
     'hsetp2': ('hsetp2', hsetp2.generate),
+    'interlock_spin': ('interlock-spin', interlock_spin.generate),
     'icache_128k': ('icache-128k', icache.generate_large),
 }
 

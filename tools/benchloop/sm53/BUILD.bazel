@@ -92,11 +92,13 @@ py_library(
         "hsetp2.py",
         "icache.py",
         "int3.py",
+        "interlock_spin.py",
         "overlap.py",
     ],
     deps = [
         ":encode",
         ":fit",
+        ":interlock",
         ":latency",
         ":program",
         ":sph",
@@ -113,6 +115,7 @@ py_library(
         deps = [
             ":encode",
             ":families",
+            ":interlock",
             ":latency",
             ":program",
             ":timing_sim",
@@ -126,6 +129,7 @@ py_library(
         "hsetp2_test",
         "icache_test",
         "int3_test",
+        "interlock_spin_test",
         "intops_test",
         "overlap_test",
     ]

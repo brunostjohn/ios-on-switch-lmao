@@ -1,7 +1,7 @@
 """The analyses of a `run` of batches/*.json, chosen by the families their experiments name, and one line per answer."""
 
 from tools.benchloop import store2fma
-from tools.benchloop.sm53 import affinity, fit, hsetp2, icache, int3, measure, overlap
+from tools.benchloop.sm53 import affinity, fit, hsetp2, icache, int3, interlock_spin, measure, overlap
 
 # The clock the ladder measured (loop1, 11 Nov), for a run without a ladder of its own
 MEASURED_CLOCK_HZ = 769.1e6
@@ -25,6 +25,7 @@ STEPS = {
     'affinity': ('affinity', lambda planned, results, _: affinity.analyse(planned, results)),
     'store2fma': ('store2fma', lambda planned, results, _: store2fma.analyse(planned, results)),
     'hsetp2': ('hsetp2', lambda planned, results, _: hsetp2.analyse(planned, results)),
+    'interlock': ('interlock', lambda planned, results, _: interlock_spin.analyse(planned, results)),
 }
 
 
@@ -100,6 +101,14 @@ def _store(found: dict) -> list[str]:
     ]
 
 
+def _interlock(found: dict) -> list[str]:
+    def line(eid: str, r: dict) -> str:
+        head = f'{eid} {r["status"]} lost {r.get("lost", "-")} ns/draw {_f(r.get("ns_per_draw"), 0)}'
+        return head + (f' competitor {r["competitor_buffers"]} buffers' if 'competitor_buffers' in r else '')
+
+    return [line(eid, r) for eid, r in found.items()]
+
+
 def _hsetp2(found: dict) -> list[str]:
     lines = []
     for eid, v in found.items():
@@ -120,6 +129,7 @@ LINES = {
     'overlap': _overlap,
     'affinity': _affinity,
     'store2fma': _store,
+    'interlock': _interlock,
     'hsetp2': _hsetp2,
 }
 

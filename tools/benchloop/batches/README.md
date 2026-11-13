@@ -1,19 +1,20 @@
 # NAK question batches
 
-These batches put six questions NAK's SM50 backend has about GM20B to the Switch. The generators live in
+These batches put seven questions NAK's SM50 backend has about GM20B to the Switch. The generators live in
 `tools/benchloop` (`sm53/affinity.py`, `sm53/int3.py`, `sm53/overlap.py`, `sm53/icache.py`, `store2fma.py`,
-`sm53/hsetp2.py`). After changing one, rewrite the files with `python3 -m tools.benchloop.nakbatches` from the repo
-root. `families_test` fails while a file and its generator disagree.
+`sm53/hsetp2.py`, `sm53/interlock_spin.py`). After changing one, rewrite the files with
+`python3 -m tools.benchloop.nakbatches` from the repo root. `families_test` fails while a file and its generator
+disagree.
 
 ## Running them
 
 Install a HW Test at benchloop/6, open its Bench screen, then from the repo root run all of them in order:
 
 ```sh
-bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,icache_128k}.json
+bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,interlock_spin,icache_128k}.json
 ```
 
-That is 380 experiments, sent as two batches. One batch alone is
+That is 429 experiments, sent as two batches. One batch alone is
 `bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/<name>.json`. Each file opens with a warm-up draw
 that lifts the GPU off its 76.8 MHz idle clock. After the usual status line the run prints one line per answer, and
 `report.json` in the result folder keeps the detail under each family's key.
@@ -118,6 +119,35 @@ store2fma rgba16float 129044 values, 0 off Metal, 0 missing
 `report.json` also counts the values that differ from the host's prediction (`off_predicted`). A value off Metal but
 on the prediction means Metal's rule was misread; a value off both points at the chip.
 
+### interlock_spin
+
+49 experiments, 90 KB. Every pixel adds one to its own counter word inside the interlock, with the steps
+`nak_nir_lower_fs_interlock_intrin` emits. The leader election, ticket and release words match a shipped pack's, but
+the loop around the spin doesn't: NAK's leader loops alone under SSY/PBK/BRK while the rest of the warp waits at SYNC,
+and here the whole warp loops with the read guarded to the leader and the exit decided by a vote. Form A's time is
+therefore close to the shipping sequence's without being equal to it; the comparison between spins is like for like.
+The leader spins on `ATOM.E.ADD [ticket], 0` (form A, NAK's default), on `LD.E.CG [ticket]`, which skips L1 (form B),
+or on `LD.E.CV [ticket]` (`ldcv`, cache op 3), the load NAK's load-spin lowering emits. A fourth form drops the
+interlock as a control, to show the test can lose updates. Each target size (64x64, 256x256, 1280x720) gets a
+check run of 64 overlapping full-target draws and a timed run of 16, 32 and 64 draws, 3 repeats after 1 warm-up, which
+brings every counter to 448. Each of those runs once alone and once (`-compete`) while a second bench device, on its
+own GPU channel, draws a constant colour over 1280x720 in a loop (`kit/BenchCompetition.swift`). Expected:
+
+```text
+interlock.atom.<size>.check ok lost 0 ns/draw -
+interlock.ldcg.<size>.check ok lost 0 ns/draw -
+interlock.ldcv.<size>.check ok lost 0 ns/draw -
+interlock.none.<size>.check ok lost <more than 0> ns/draw -
+interlock.atom.<size>.timed ok lost 0 ns/draw <a>
+interlock.ldcg.<size>.timed ok lost 0 ns/draw <b, below a if the atomic spin gets in the release's way>
+interlock.ldcv.<size>.timed ok lost 0 ns/draw <c, near b>
+interlock.<form>.<size>.<check|timed>-compete ok lost <as alone> ns/draw <above alone> competitor <more than 0> buffers
+```
+
+If the load spins lose nothing, alone and beside the other channel, and run faster than the atomic one, NAK can spin on
+the load it emits (`ldcv`). A `-compete` line with `competitor 0 buffers` ran alone after all. Sizes run smallest first,
+so 720p comes last. If a 720p run is killed (500 ms with no fence), skip the rest of 720p; its result records the kill.
+
 ### hsetp2
 
 59 experiments, 440 KB. HSETP2's predicate latency, from chains in one warp at delays 1 to 15 beside FSETP and ISETP
@@ -145,3 +175,15 @@ operands. The F32 swizzle isn't covered, since the interpreter has no model of i
 
 2 experiments: the icache program at 127 distinct segments, past the 64 KiB of code a program had before benchloop/6.
 Expected: `icache 127.3 KiB <c> cycles/warp-instr`, above the 62.3 KiB line if the trend holds.
+
+## What the app does for interlock_spin
+
+- Storage: before the first command buffer the bench allocates `storage.bytes` of zeroed write-combined GPU memory,
+  writes its address into the shader data at `storage.va_at`, names it in every command buffer (the addressed job ABI
+  resolves only the addresses a command buffer names), and after the last returns every distinct word with its count.
+- The interlock control: 0x1224 is on the allow-lists, and only the bench's own copy of the raw runtime, in debug
+  builds, takes a record that sets it without a storage form (`hw_test_app/bench/bench_completed.cpp`). The ticket
+  buffer needs nothing new: the root table holds it at `c[0][0x260]`.
+- `compete`: `kit/BenchCompetition.swift` runs the app's known program on a second bench device. Each bench device opens
+  its own kernel connection, GPU VM and channel (`raw_gpu.cpp` `Device::open`, `Device::openChannel`), so the two
+  channels time-slice the GPU as two apps' would.

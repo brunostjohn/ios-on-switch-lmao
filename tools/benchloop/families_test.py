@@ -1,6 +1,7 @@
 import unittest
 
 from tools.benchloop import families, nakbatches, protocol, texels
+from tools.benchloop.sm53 import interlock_spin
 
 
 class FamiliesTest(unittest.TestCase):
@@ -13,6 +14,13 @@ class FamiliesTest(unittest.TestCase):
         for head in ('clock', 'stall', 'stall-wide', 'xmad-mul', 'icache', 'store2fma'):
             self.assertIn(head, heads)
         self.assertTrue(all(v['missing'] for v in found['store2fma'].values()))
+
+    def test_interlock_lines(self):
+        found = families.analyse(interlock_spin.generate(), {})
+        self.assertIn('interlock.atom.64x64.check missing lost - ns/draw -', found['summary'])
+        self.assertIn(
+            'interlock.atom.64x64.check-compete missing lost - ns/draw - competitor None buffers', found['summary']
+        )
 
     def test_a_run_of_other_batches_is_not_theirs(self):
         planned = [{'id': 'plain', 'kind': 'noop'}, {'id': 'other', 'kind': 'noop', 'meta': {'family': 'twod'}}]
