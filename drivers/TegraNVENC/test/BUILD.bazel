@@ -33,6 +33,16 @@ host_test(
     ],
 )
 
+# An engine a stall's reset, a power-on or a resume lost goes back to the idle gate, which powers it on at a later encode.
+host_test(
+    name = "tegra_nvenc_recover_source_test",
+    srcs = ["tegra_nvenc_recover_source_test.cpp"],
+    data = [
+        "//drivers/TegraNVENC:TegraNVENC.cpp",
+        "//drivers/TegraNVENC:TegraNVENCUserClient.cpp",
+    ],
+)
+
 host_shims(
     name = "direct_kernel",
     headers = [
