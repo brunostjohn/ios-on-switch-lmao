@@ -58,6 +58,9 @@
 		<string>kern.switch_media_flips_armed</string>
 		<string>kern.switch_media_flips_filter</string>
 		<string>kern.switch_media_flips_filter_declined</string>
+		<string>kern.switch_media_flips_done_at_swap</string>
+		<string>kern.switch_media_flips_fenced</string>
+		<string>kern.switch_media_flips_declined</string>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_joycon_probe</string>
 		<string>kern.switch_scanout_cpu</string>

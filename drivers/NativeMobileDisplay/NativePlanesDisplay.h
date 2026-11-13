@@ -229,6 +229,8 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
         PlaneSet p = d.set;
         p.seq = seq;
         if (native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow) {
+            if (SWITCH_FRAME_TIMELINE && p.on())
+                noteMediaFlipTotal(7, 1);
             planeOut(p);
         } else if (planeFence(p)) {
             transferred = true;  // the next swap waits for the fence's completion

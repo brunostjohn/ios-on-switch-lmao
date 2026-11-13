@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "../../TegraDisplayFlip/SwitchRouteBackoff.h"
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 #include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
@@ -282,7 +283,8 @@ struct Display {
         gPreemptionOff = 0;
         landscapeState = {};
         mediaFlip = {};
-        mediaFlipsRefused = mediaFilterOff = false;
+        mediaFilterOff = false;
+        mediaHold = {8, 1024, 600};
         mediaFlipUnverified = PlaneCommits::kNone;
         mediaFlipRequestedSeq = 0;
         planeLatch.values = sets;
