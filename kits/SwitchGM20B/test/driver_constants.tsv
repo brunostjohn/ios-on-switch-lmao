@@ -74,15 +74,15 @@ raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
 raw_mme.h	kIcbGate	policy	raw macro slot
 raw_mme.h	kIcbBind	policy	raw macro slot
 raw_mme.h	kClearLayers	policy	raw macro slot
-raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
-raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, past FECS's mailbox
+raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, past FECS's mailbox
 raw_mme.h	kIcbPatches	policy	raw macro slot
 raw_mme.h	kScratchSetHi	policy	MME shadow scratch words of a patch execute's layout, after the range's
 raw_mme.h	kNoEntry	policy	a patch execute's layout word for a control-stage buffer its state names no entry of
 raw_mme.h	kIcbSetBytes	policy	NVK's descriptor set slot, as the patch macro selects it
 raw_mme.h	kIcbRootBytes	policy	NVK's root descriptor table size (raw_gpu.cpp kRootBytes), as the patch macro selects it
 raw_mme.h	kIcbPatchesArguments	policy	the patch macro's call data words
-raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, above NVK's
+raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, the top 93 of 128
 raw_mme.h	kAmplify	policy	raw macro slot
 raw_mme.h	kAmplifyIndexed	policy	raw macro slot
 raw_mme.h	kAmplifyCallWords	policy	push words of an amplify call: its header and an indexed draw's five words

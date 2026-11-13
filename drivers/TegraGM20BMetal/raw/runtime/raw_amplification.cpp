@@ -48,6 +48,9 @@ const char *RenderEncoder::drawnWordsRefusal(const PackPipeline &r) const
     const uint32_t most = std::max<uint32_t>(1, r.amplificationMax);
     if (amplifications_ > most)
         return "a vertex amplification count above the state's maxVertexAmplificationCount";
+    for (uint32_t a = 0; a < std::min(amplifications_, kAmplificationMaps); a++)
+        if ((amplificationLayers_[a] | amplificationViewports_[a]) >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT)
+            return "a vertex amplification view mapping's offset past the 16 bits of its scratch word";
     for (uint32_t k = 1; k < kPackVertexStreams && r.vertexStreams[k - 1]; k++)
         if (streamSlot(r.vertexStreams[k - 1]) >= 31)
             return "a vertex stream of no Metal buffer";

@@ -176,6 +176,14 @@ TEST(MethodRanges, TheContextInitWritesOnlyItsClassesMethods)
         switch_gm20b_test::expectMethod(switch_gm20b_test::subchannelClass(m.subc, m.mthd), m.mthd);
 }
 
+TEST(MethodRanges, TheContextInitLeavesTheInheritedBuffersZero)
+{
+    for (const switch_gm20b_context_method &m : switch_gm20b_context)
+        if (m.subc == 0 && m.mthd >= NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS) &&
+            m.mthd < NVB197_CALL_MME_MACRO(0))
+            EXPECT_TRUE(m.data == 0 && m.reloc == SWITCH_GM20B_CONTEXT_FIXED) << std::hex << m.mthd;
+}
+
 TEST(MethodRanges, EveryMacroNamesOnlyMaxwellBsMethods)
 {
     for (const Macro &m : kMacros) {

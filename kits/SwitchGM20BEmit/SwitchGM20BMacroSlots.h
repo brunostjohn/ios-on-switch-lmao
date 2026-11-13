@@ -74,10 +74,11 @@ enum {
     SWITCH_GM20B_SCRATCH_AMP_MAPS,
     SWITCH_GM20B_SCRATCH_AMP_END = SWITCH_GM20B_SCRATCH_AMP_MAPS + 8,
     // a command's bound buffers: ICB_BUFFERS + 3 x index (address low, address high, size), index < 31; the address-high
-    // word holds the buffer's bind stride above its address's bits (SWITCH_GM20B_ICB_STRIDE_SHIFT)
-    SWITCH_GM20B_SCRATCH_ICB_BUFFERS = SWITCH_GM20B_SCRATCH_ROOT_HI + 2,
+    // word holds the buffer's bind stride above its address's bits (SWITCH_GM20B_ICB_STRIDE_SHIFT). They take the top of
+    // the scratch, where the context init writes only zeros, so a slot no execute has written yet reads as no buffer.
     SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS = 31,
-    SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END = SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 3 * SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS,
+    SWITCH_GM20B_SCRATCH_ICB_BUFFERS = SWITCH_GM20B_SCRATCH_WORDS - 3 * SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS,
+    SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END = SWITCH_GM20B_SCRATCH_WORDS,
 };
 
 // What the patch macro's words name: a layout entry of no buffer, the constant buffer sizes it selects (NVK's
@@ -127,8 +128,8 @@ SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_MACRO_RAW_END <= SWITCH_GM20B_MACRO_SLOTS
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_LOCATION >= SWITCH_GM20B_SCRATCH_FECS_END &&
                               SWITCH_GM20B_SCRATCH_AMP_END <= SWITCH_GM20B_SCRATCH_ROOT_HI,
                           "the raw path's words below the root table's address leave FECS's mailbox alone");
-SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END <= SWITCH_GM20B_SCRATCH_WORDS,
-                          "every scratch word is a SET_MME_SHADOW_SCRATCH the Fermi MME has");
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_BUFFERS >= SWITCH_GM20B_SCRATCH_ROOT_HI + 2,
+                          "the inherited buffers lie past the root table's address");
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_ICB_SET_BYTES % 256 == 0 && SWITCH_GM20B_ICB_ROOT_BYTES % 256 == 0,
                           "the patch macro binds whole 256-byte constant buffers, as NVK does before Turing");
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_END - SWITCH_GM20B_SCRATCH_AMP_MAPS == SWITCH_GM20B_AMP_MAX,
