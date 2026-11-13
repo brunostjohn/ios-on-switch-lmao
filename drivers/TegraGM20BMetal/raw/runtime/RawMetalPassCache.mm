@@ -112,14 +112,6 @@ const Layout &layout()
     return l;
 }
 
-size_t attachmentRoom(const Layout &l)
-{
-    size_t most = 0;
-    for (size_t bytes : l.attachmentBytes)
-        most = bytes > most ? bytes : most;
-    return most;
-}
-
 // Two independent lanes of 8 bytes, so the multiplies of one word do not wait on the other's
 uint64_t hashBytes(const uint8_t *p, size_t n)
 {
@@ -190,37 +182,46 @@ bool rmPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &
         }
     }
     // the mask of the attachments that have a texture, the descriptor's bytes, then each of those attachments' bytes:
-    // an attachment with no texture is none, whatever else it was given
-    const size_t head = l.descriptorBytes - sizeof(void *), room = attachmentRoom(l);
-    key.resize(sizeof(uint64_t) + ((head + 7) & ~size_t(7)) + kAttachments * ((room + 7) & ~size_t(7)));
-    uint8_t *out = key.data() + sizeof(uint64_t);
-    memcpy(out, base + sizeof(void *), head);
-    // the arrays' own addresses are no content
-    memset(out + l.attachmentsAt - sizeof(void *), 0, sizeof(void *));
-    memset(out + l.sampleBuffersAt - sizeof(void *), 0, sizeof(void *));
-    memset(out + head, 0, ((head + 7) & ~size_t(7)) - head);
-    out += (head + 7) & ~size_t(7);
+    // an attachment with no texture is none, whatever else it was given. Sized before it is written, so a key of the
+    // last one's length is written in place.
+    const size_t head = l.descriptorBytes - sizeof(void *), headPadded = (head + 7) & ~size_t(7);
+    const uint8_t *attachments[kAttachments] = {};
+    size_t bytes = sizeof(uint64_t) + headPadded;
     uint64_t present = 0;
     for (size_t slot = 0; slot < kAttachments; slot++) {
         const size_t kind = slot < 8 ? 0 : slot - 7;
         void *object = nullptr, *texture = nullptr;
         memcpy(&object, static_cast<const uint8_t *>(array) + l.slotAt[slot], sizeof object);
-        const auto *a = static_cast<const uint8_t *>(object);
-        if (!a)
+        if (!object)
             continue;
         if (object_getClass((__bridge id)object) != l.attachment[kind])
             return false;
-        memcpy(&texture, a + l.textureAt[kind], sizeof texture);
+        memcpy(&texture, static_cast<const uint8_t *>(object) + l.textureAt[kind], sizeof texture);
         if (!texture)
             continue;
         present |= uint64_t(1) << slot;
-        const size_t bytes = l.attachmentBytes[kind] - sizeof(void *), padded = (bytes + 7) & ~size_t(7);
-        memcpy(out, a + sizeof(void *), bytes);
-        memset(out + bytes, 0, padded - bytes);
+        attachments[slot] = static_cast<const uint8_t *>(object);
+        bytes += (l.attachmentBytes[kind] - sizeof(void *) + 7) & ~size_t(7);
+    }
+    key.resize(bytes);
+    uint8_t *out = key.data();
+    memcpy(out, &present, sizeof present);
+    out += sizeof present;
+    memcpy(out, base + sizeof(void *), head);
+    // the arrays' own addresses are no content
+    memset(out + l.attachmentsAt - sizeof(void *), 0, sizeof(void *));
+    memset(out + l.sampleBuffersAt - sizeof(void *), 0, sizeof(void *));
+    memset(out + head, 0, headPadded - head);
+    out += headPadded;
+    for (size_t slot = 0; slot < kAttachments; slot++) {
+        if (!attachments[slot])
+            continue;
+        const size_t kind = slot < 8 ? 0 : slot - 7;
+        const size_t taken = l.attachmentBytes[kind] - sizeof(void *), padded = (taken + 7) & ~size_t(7);
+        memcpy(out, attachments[slot] + sizeof(void *), taken);
+        memset(out + taken, 0, padded - taken);
         out += padded;
     }
-    memcpy(key.data(), &present, sizeof present);
-    key.resize(size_t(out - key.data()));
     hash = hashBytes(key.data(), key.size());
     return true;
 }
