@@ -548,6 +548,45 @@ static bool producesTexture(MTLTextureDescriptor *d)
     return d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
 }
 
+#if SWITCH_FRAME_TIMELINE
+// Debug builds, the render server: a texture it will draw into over an IOSurface of half a screen or more, with what
+// Core Animation's pools decide reuse by (use count, purgeable state, name) and the caller, so a new surface every frame
+// of an animation names its maker (boot 21: a new 1280x720 one on every app-close frame). At most 20 a second.
+static void noteCompositorSurface(MTLTextureDescriptor *d, IOSurfaceRef s, const void *frame)
+{
+    constexpr size_t kHalfScreen = 1280 * 720 / 2;
+    if (!producesTexture(d) || IOSurfaceGetWidth(s) * IOSurfaceGetHeight(s) < kHalfScreen || !gRM || !gRM->raw ||
+        gRM->raw->role() != raw::Device::Role::RenderServer)
+        return;
+    static std::atomic<uint64_t> second{0};
+    static std::atomic<uint32_t> inSecond{0};
+    const uint64_t now = mach_absolute_time() / (1000 * switch_frame::ticksPerMs());
+    uint64_t was = second.load(std::memory_order_relaxed);
+    if (now != was && second.compare_exchange_strong(was, now, std::memory_order_relaxed))
+        inSecond.store(0, std::memory_order_relaxed);
+    if (inSecond.fetch_add(1, std::memory_order_relaxed) >= 20)
+        return;
+    uint32_t purgeable = 0;
+    IOSurfaceSetPurgeable(s, kIOSurfacePurgeableKeepCurrent, &purgeable);
+    char name[64] = "-";
+    if (CFTypeRef value = IOSurfaceCopyValue(s, kIOSurfaceName)) {
+        if (CFGetTypeID(value) == CFStringGetTypeID())
+            CFStringGetCString(static_cast<CFStringRef>(value), name, sizeof name, kCFStringEncodingUTF8);
+        CFRelease(value);
+    }
+    char site[5 * 48];
+    switch_frame::describe(switch_frame::callers(frame), site, sizeof site);
+    const OSType format = IOSurfaceGetPixelFormat(s);
+    static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "frame");
+    os_log(log,
+           "raw: compositor target over IOSurface %u %zux%zu '%c%c%c%c' seed %u use count %d in use %d purgeable %u "
+           "name %{public}s at %{public}s",
+           IOSurfaceGetID(s), IOSurfaceGetWidth(s), IOSurfaceGetHeight(s), char(format >> 24), char(format >> 16),
+           char(format >> 8), char(format), IOSurfaceGetSeed(s), IOSurfaceGetUseCount(s), IOSurfaceIsInUse(s),
+           purgeable, name, site);
+}
+#endif
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     return swizzled([self rmSurfaceTexture:d iosurface:s plane:plane], d.swizzle);
@@ -560,6 +599,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
         return nil;
 #if SWITCH_FRAME_TIMELINE
     gSurfaceTextures.fetch_add(1, std::memory_order_relaxed);
+    noteCompositorSurface(d, s, __builtin_frame_address(0));
 #endif
     RMTexture *t = [RMTexture new];
     t->_device = self;
