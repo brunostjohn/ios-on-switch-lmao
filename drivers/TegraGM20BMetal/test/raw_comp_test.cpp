@@ -283,9 +283,28 @@ TEST(RawComp, FreedMemoryMakesShortagesDueAndNothingElse)
         q.refuse(shortOf, at, false);
     q.refuse(refused, 0, true);
     EXPECT_TRUE(q.asked(shortOf, 100));
-    q.freed(100);
+    q.freed(10);
     EXPECT_FALSE(q.asked(shortOf, 100));
-    EXPECT_TRUE(q.asked(refused, 1000000));  // a lasting refusal is never asked again
+    EXPECT_TRUE(q.asked(refused, 10)) << "freed memory does not answer a lasting refusal";
+    EXPECT_FALSE(q.asked(refused, 30)) << "it is asked again at the backoff";
+}
+
+// A want the kernel refused for a reason memory coming back does not answer is asked again at the backoff a few times,
+// at the next ask after each is due, then never for the process
+TEST(RawComp, ALastingRefusalIsAskedAgainAFewTimes)
+{
+    raw::CompQueue q;
+    const raw::CompWant w{0x20000, 0xdb};
+    uint64_t now = 0;
+    uint32_t asks = 0;
+    for (; now < 100000; now++) {
+        if (q.asked(w, now))
+            continue;
+        asks++;
+        q.refuse(w, now, true);
+        EXPECT_EQ(q.givenUp(w), asks == raw::kCompLastingRefusals) << "at ask " << asks;
+    }
+    EXPECT_EQ(asks, raw::kCompLastingRefusals);
 }
 
 TEST(RawComp, AReadyBufferAnswersItsWant)

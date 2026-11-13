@@ -232,7 +232,8 @@ void Device::compMake(std::unique_lock<raw::Mutex> &l)
             k_.free(bo);
         RAW_DIAGNOSTIC(stats.compFailed++);
         const bool lasting = compLasting(kr);
-        if (comp_.refuse(w, commits(), lasting))
+        const bool first = comp_.refuse(w, commits(), lasting), givenUp = comp_.givenUp(w);
+        if (first || givenUp)
             os_log_error(compLog(),
                          "raw: compressed memory %llu KiB kind 0x%x not made (%{public}s, 0x%x): those backings stay "
                          "uncompressed%{public}s",
@@ -241,7 +242,10 @@ void Device::compMake(std::unique_lock<raw::Mutex> &l)
                          : kr == kIOReturnNoResources ? "no comptags left"
                          : kr == kIOReturnNoSpace     ? "no GPU VA"
                                                       : "compressed VmBind",
-                         unsigned(kr), lasting ? "" : " until it is made (asked again later)");
+                         unsigned(kr),
+                         givenUp   ? " (refused alike too often: not asked again)"
+                         : lasting ? " (asked again a few times)"
+                                   : " until it is made (asked again later)");
     }
 }
 

@@ -137,13 +137,15 @@ inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, u
     return (copied || shaderTestCopied) && !copyEngineReadsCompressed(kind) ? 0 : kind;
 }
 
-// A refusal of compressed memory (the BoAlloc's or the VmBind's kern_return_t, kIOReturnNoSpace for no VA) that asking
-// again cannot pass: anything but the pool, the comptags or the VA running short, all of which come back as memory is freed.
+// A refusal of compressed memory (the BoAlloc's or the VmBind's kern_return_t, kIOReturnNoSpace for no VA) that memory
+// coming back does not answer: anything but the pool, the comptags or the VA running short. Such a want is asked again
+// at the refusals' backoff, kCompLastingRefusals times in all, then never for the process.
 inline bool compLasting(int kr)
 {
     return kr != kIOReturnNoMemory && kr != kIOReturnNoResources && kr != kIOReturnNoSpace;
 }
 
+constexpr uint32_t kCompLastingRefusals = 3;
 constexpr uint64_t kCompRetryCommits = 30, kCompRetryMaxCommits = 600;
 
 // Command buffers from the `refusals`-th refusal of a want to its next ask: half a second of frames, doubling to ten
@@ -260,7 +262,7 @@ struct CompRefusal {
     CompWant want;
     uint64_t retryAt = 0;  // the commit count from which it is asked again
     uint32_t refusals = 0;
-    bool lasting = false;  // never asked again
+    uint32_t lasting = 0;  // of them, the compLasting ones
 };
 
 // Times are Device::commitCount_
@@ -286,7 +288,7 @@ struct CompQueue {
             }))
             return true;
         auto r = find(w);
-        return r != refused.end() && (r->lasting || now < r->retryAt);
+        return r != refused.end() && (r->lasting >= kCompLastingRefusals || now < r->retryAt);
     }
 
     // The memory new backings of `tag` and `kind` go on: the largest of them; null with none
@@ -318,8 +320,15 @@ struct CompQueue {
             r = refused.insert(refused.end(), CompRefusal{w});
         r->refusals++;
         r->retryAt = now + compRetryAfter(r->refusals);
-        r->lasting = r->lasting || lasting;
+        r->lasting += lasting;
         return first;
+    }
+
+    // Whether `w`'s last refusal was the lasting one after which it is never asked again
+    bool givenUp(const CompWant &w) const
+    {
+        auto r = find(w);
+        return r != refused.end() && r->lasting == kCompLastingRefusals;
     }
 
     void made(const CompWant &w)
@@ -328,11 +337,12 @@ struct CompQueue {
             refused.erase(r);
     }
 
-    // Compressed memory went back to the kernel at `now`: every refusal that asking again can pass is due
+    // Compressed memory went back to the kernel at `now`: every refusal of a shortage is due
     void freed(uint64_t now)
     {
         for (CompRefusal &r : refused)
-            r.retryAt = std::min(r.retryAt, now);
+            if (!r.lasting)
+                r.retryAt = std::min(r.retryAt, now);
     }
 
 private:
