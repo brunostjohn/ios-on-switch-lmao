@@ -290,7 +290,8 @@ bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
 {
 #if DEVELOPMENT || DEBUG
 	const unsigned cpu = static_cast<unsigned>(cpu_number()) % 4;
-	__atomic_store_n(&gFilterCpus[cpu], __atomic_load_n(&gFilterCpus[cpu], __ATOMIC_RELAXED) + 1,
+	__atomic_store_n(&gFilterCpus[cpu],
+			 __atomic_load_n(&gFilterCpus[cpu], __ATOMIC_RELAXED) + 1,
 			 __ATOMIC_RELAXED);
 #endif
 	tgm_present_filter();
