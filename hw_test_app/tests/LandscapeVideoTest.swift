@@ -63,12 +63,12 @@ struct LandscapeVideoTest: HWTest {
             _ = session.call(LandscapeSample.request(op: LandscapeSample.fail, value: 0), replyBytes: 0)
         }
         let held = Held(frame: Self.heldFrame, clip: duration)
+        _ = session.call(
+            LandscapeSample.request(op: LandscapeSample.portrait, value: LandscapeSample.portraitFrames), replyBytes: 0)
         await MainActor.run { video.play() }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
 
         var samples = LandscapeJudge.Samples()
-        _ = session.call(
-            LandscapeSample.request(op: LandscapeSample.portrait, value: LandscapeSample.portraitFrames), replyBytes: 0)
         await held.show(video)
         guard case .success(let vicHeld) = await sample(session, frames: 30) else { return .fail("no VIC sample") }
         samples.vicHeld = vicHeld

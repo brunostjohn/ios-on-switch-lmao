@@ -135,6 +135,8 @@ public enum LandscapeJudge {
         metrics.set("vic_event_turns", s.playing.vicEventTurns[server] + s.enter.vicEventTurns[server])
         metrics.set("vic_jobs_test", s.playing.vicJobs[LandscapeSample.test])
         metrics.set("vic_jobs_other", s.playing.vicJobs[LandscapeSample.other])
+        metrics.set("leave_vic_jobs", s.leave.vicJobs[server])
+        metrics.set("leave_vic_turns", s.leave.vicTurns[server])
         metrics.set("video_frames", s.playing.overlayLatches)
         metrics.set("switches", s.enter.switches + s.leave.switches)
         let all = [s.vicHeld, s.enter, s.playing, s.landscapeHeld, s.leave]

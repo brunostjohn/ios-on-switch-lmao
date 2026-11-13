@@ -145,6 +145,8 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(metrics["leave_switched"], .flag(true))
         XCTAssertEqual(metrics["stray_enter"], .integer(0))
         XCTAssertEqual(metrics["stray_leave"], .integer(87))
+        XCTAssertEqual(metrics["leave_vic_jobs"], .integer(0))
+        XCTAssertEqual(metrics["leave_vic_turns"], .integer(0))
         XCTAssertEqual(
             checks.filter { !$0.1 }.map(\.0),
             [
