@@ -92,12 +92,24 @@ FirstUse firstUse(RMCommandBuffer *cb, size_t from, size_t to, RMTexture *t)
             return FirstUse::Other;
         const RMPass &pass = cb->_passes[cb->_plan.legacy(at).x];
         const raw::Texture &x = t->_raw;
+        uint32_t smallestWidth = UINT32_MAX, smallestHeight = UINT32_MAX;
+        const auto attachment = [&](__unsafe_unretained id object, NSUInteger level) {
+            if (__unsafe_unretained RMTexture *a = (RMTexture *)object) {
+                smallestWidth = std::min(smallestWidth, std::max(a->_raw.width >> level, 1u));
+                smallestHeight = std::min(smallestHeight, std::max(a->_raw.height >> level, 1u));
+            }
+        };
+        for (const RMPass::Color &c : pass.color)
+            attachment(c.texture, c.level);
+        attachment(pass.depth, 0);
+        const uint32_t areaWidth = raw::renderAreaSide(uint32_t(pass.width), smallestWidth),
+                       areaHeight = raw::renderAreaSide(uint32_t(pass.height), smallestHeight);
         for (const RMPass::Color &c : pass.color)
             if (c.texture == t && c.level == 0 &&
                 raw::firstPassWritesAll(x.width, x.height, x.chain ? x.chain->layout.levels : 1,
                                         x.type == raw::fx::kTexThreeD ? x.depth : x.layers,
                                         c.load == MTLLoadActionClear, c.store == MTLStoreActionStore,
-                                        access & raw::ResourceUse::Sample, uint32_t(pass.width), uint32_t(pass.height)))
+                                        access & raw::ResourceUse::Sample, areaWidth, areaHeight))
                 return FirstUse::ClearsAll;
         return FirstUse::Other;
     }

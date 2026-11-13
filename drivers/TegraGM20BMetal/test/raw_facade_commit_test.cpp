@@ -16,18 +16,22 @@ struct Opened {
     id<MTLRenderPipelineState> state;
 };
 
-Opened openScale()
+// One device a process (raw_facade_harness.h)
+const Opened &openScale()
 {
-    const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
-    const std::string metallib = writeMetallib();
-    id<MTLDevice> device = open(pack);
-    if (!device)
-        return {};
-    NSError *error = nil;
-    id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
-    id<MTLRenderPipelineState> state =
-        [device newRenderPipelineStateWithDescriptor:descriptor(library, MTLPixelFormatBGRA8Unorm) error:&error];
-    return {device, state};
+    static const Opened made = [] {
+        const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
+        const std::string metallib = writeMetallib();
+        id<MTLDevice> device = open(pack);
+        if (!device)
+            return Opened{};
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
+        id<MTLRenderPipelineState> state =
+            [device newRenderPipelineStateWithDescriptor:descriptor(library, MTLPixelFormatBGRA8Unorm) error:&error];
+        return Opened{device, state};
+    }();
+    return made;
 }
 
 uint64_t fnv(const std::string &text)
@@ -69,6 +73,49 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
     std::ofstream(outputs() + "/words.txt") << words;
     printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)fnv(words));
     EXPECT_FALSE(words.empty());
+}
+
+// Copy-engine launches in the model's jobs from `first` on: a fresh texture's fill is one (RawMetalFresh.mm writeFresh)
+size_t copyLaunches(size_t first)
+{
+    constexpr uint32_t kCopy = 4, kLaunchDma = 0x300;
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    size_t launches = 0;
+    for (size_t j = first; j < kernel_model::model.jobs.size(); j++) {
+        const auto &w = kernel_model::model.jobs[j].words;
+        for (size_t i = 0; i < w.size();) {
+            const uint32_t h = w[i++], op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                           method = (h & 0x1fff) * 4;
+            if (op == 4) {
+                launches += subc == kCopy && method == kLaunchDma;
+                continue;
+            }
+            for (uint32_t k = 0; k < count && i < w.size(); k++, i++)
+                launches += subc == kCopy && (op == 1        ? method + 4 * k
+                                              : op == 5 && k ? method + 4
+                                                             : method) == kLaunchDma;
+        }
+    }
+    return launches;
+}
+
+// A new target its first pass clears and stores whole, with no renderTargetWidth set: Metal renders over the attachment
+// whole, so nothing writes its contents first
+TEST(RawFacadeCommit, ANewTargetClearedWholeTakesNoFill)
+{
+    const Opened opened = openScale();
+    ASSERT_TRUE(opened.device != nil && opened.state != nil);
+    id<MTLCommandQueue> queue = [opened.device newCommandQueue];
+    const size_t first = [] {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        return kernel_model::model.jobs.size();
+    }();
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    scale_frames::pass(cb, opened.state, scale_frames::targets(opened.device, {1, 1, 1}), {1, 6, 1}, 0, 0);
+    [cb commit];
+    [cb waitUntilCompleted];
+    ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(copyLaunches(first), 0u);
 }
 
 }  // namespace
