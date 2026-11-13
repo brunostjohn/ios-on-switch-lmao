@@ -86,6 +86,25 @@ struct DeviceHarness {
         return w;
     }
 
+    static std::array<uint32_t, 8> tscHeader(const Device &d, uint32_t tsc)
+    {
+        std::array<uint32_t, 8> w;
+        memcpy(w.data(), d.tsc_.cpu + 32 * tsc, sizeof w);
+        return w;
+    }
+
+    // The header constexpr sampler `index` samples a texture of address map `map` with (0: none)
+    static uint32_t constexprTsc(const Device &d, uint32_t index, uint8_t map)
+    {
+        return map ? d.constexprMapped_[index][map] : d.constexprTsc_[index];
+    }
+
+    // Where the encoder's last draw's set 0 lies
+    static uint64_t preparedSet(const RenderEncoder &e)
+    {
+        return e.preparedSet_;
+    }
+
     // What the root table holds at push word `word` after the command buffer's work encoded so far
     static uint32_t rootPush(const CommandBuffer &cb, uint32_t word)
     {

@@ -654,7 +654,11 @@ bool Device::init(std::string &err)
     }
     for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
         memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_[constexprCount_++] = nextTsc_++;
+        constexprTsc_[constexprCount_] = nextTsc_++;
+        if (!placeConstexprMaps(constexprCount_++, cs + 8 * i)) {
+            err = "no sampler header left for the pack's constexpr samplers under planar address maps";
+            return false;
+        }
     }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
@@ -3353,23 +3357,45 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
         return false;
     if (s.mapped[map])
         return true;
-    SamplerDesc d = s.desc;
-    const bool wrapped = map == 1 || map == 3, clamps = map == 2 || map == 3;
-    for (uint8_t *m : {&d.sAddress, &d.tAddress, &d.rAddress})
-        if ((wrapped && *m >= 1 && *m <= 3) || (clamps && (*m == 4 || *m == 5)))
-            *m = 0;
-    if (d.sAddress == s.desc.sAddress && d.tAddress == s.desc.tAddress && d.rAddress == s.desc.rAddress) {
+    uint32_t own[8], w[8];
+    samplerHeader(s.desc, own);
+    memcpy(w, own, sizeof w);
+    mapSamplerAddresses(w, map);
+    if (!memcmp(w, own, sizeof w)) {
         s.mapped[map] = s.tsc;
         return true;
     }
-    uint32_t w[8];
-    samplerHeader(d, w);
     RAW_ENCODE_LOCK(l, lock_);
     uint32_t tsc = 0;
     if (!takeTsc(tsc))
         return false;
     memcpy(tsc_.cpu + 32 * tsc, w, 32);
     s.mapped[map] = tsc;
+    return true;
+}
+
+bool Device::placeConstexprMaps(uint32_t index, const uint32_t words[8])
+{
+    const uint32_t own = constexprTsc_[index];
+    uint32_t taken[4] = {};
+    for (uint8_t map = 1; map < 4; map++) {
+        uint32_t w[8];
+        memcpy(w, words, sizeof w);
+        mapSamplerAddresses(w, map);
+        if (!memcmp(w, words, sizeof w)) {
+            constexprMapped_[index][map] = own;
+            continue;
+        }
+        if (!takeTsc(taken[map])) {
+            for (uint32_t tsc : taken)
+                if (tsc)
+                    freeTsc_.push_back(tsc);
+            return false;
+        }
+        memcpy(tsc_.cpu + 32 * taken[map], w, sizeof w);
+        constexprMapped_[index][map] = taken[map];
+    }
+    constexprMapped_[index][0] = own;
     return true;
 }
 
@@ -6475,11 +6501,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         return false;
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
-                    if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
-                        *why = "a planar texture sampled through a constexpr sampler";
-                        return false;
-                    }
-                    tsc = d.constexprTsc_[e.sampler];
+                    tsc = map ? d.constexprMapped_[e.sampler][map] : d.constexprTsc_[e.sampler];
                 }
                 at[0] = tic | tsc << 20;
             }

@@ -53,6 +53,10 @@ bool Device::constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &in
             return false;
         memcpy(tsc_.cpu + 32 * tsc, words.data(), 32);
         constexprTsc_[constexprCount_] = tsc;
+        if (!placeConstexprMaps(constexprCount_, words.data())) {
+            freeTsc_.push_back(tsc);
+            return false;
+        }
         known = completedSamplers_.emplace(words, uint8_t(constexprCount_++)).first;
     }
     index = known->second;
