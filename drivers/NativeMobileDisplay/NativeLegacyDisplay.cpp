@@ -4641,7 +4641,10 @@ public:
         uint64_t requested = 0;
         memcpy(&id, bytes + swapId, sizeof(id));
         memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
-        frameInfo->pending.take(seqOf(request), id, requested);
+        const bool timed = request == timedHeldRequest;
+        if (timed)
+            timedHeldRequest = nullptr;
+        frameInfo->pending.take(seqOf(request), id, requested, timed);
         frameInfo->tickets.take(request, seqOf(request));
     }
 

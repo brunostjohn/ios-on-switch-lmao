@@ -7,7 +7,7 @@ import UIKit
 /// full-screen CAMetalLayer: each drawable has to be on screen no earlier than half a period before its target
 /// (presentedTime). early= counts those shown sooner, timed= those with a presentedTime at all, handled= the presented
 /// handlers Metal called (with a time or 0); offset_* is presentedTime minus the target. d_frame_info_shown and
-/// d_frame_info_unsent (debug kernels) count the swaps with a requested presentation time whose frame info the display
+/// d_frame_info_unsent (debug kernels) count the swaps the display held for their presentation time whose frame info it
 /// sent to Core Animation, and those replaced before any frame showed them: where a presentedTime is lost.
 @MainActor
 final class PresentAtTimeRun: NSObject {
