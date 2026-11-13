@@ -321,6 +321,18 @@ TEST_F(Views, LocksThatCouldShowTexelsAreRefused)
 	tgm_coherency_put(s.coh);
 }
 
+// The Maps widget (boot 21): a block-linear surface read as rows shows the GOB pattern. A lock from a task that maps none
+// of the surface leaves nothing pointed at rows; it goes on, and the error line names the task and surface
+TEST_F(Views, ALockFromATaskWithNoMappingIsNamed)
+{
+	Tiled s(0xa0a00000, 90);
+	EXPECT_EQ(tegra_gm20b_iosurface_view(client(4), kLock, s.id, kReadOnly), 0);
+	EXPECT_TRUE(gViews.mapped.empty());
+	EXPECT_EQ(gRefusals, decltype(gRefusals)({{"iosurface-layout", "lock-unmapped"}}));
+	EXPECT_EQ(tegra_gm20b_iosurface_view(client(4), kUnlock, s.id, kReadOnly), 0);
+	tgm_coherency_put(s.coh);
+}
+
 // A mapping that cannot be given its surface back keeps the scratch, so that scratch is never handed to another surface
 TEST_F(Views, AScratchATaskStillMapsIsNeverReused)
 {

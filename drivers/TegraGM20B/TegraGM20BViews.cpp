@@ -282,8 +282,14 @@ int lock(tgm_coh *c, tgm_tiled &t, void *client, uint32_t id, uint32_t options, 
 	if ((options & kLockReadOnly) == 0)
 		t.wrote = 1;
 	noteBusy(t, id);
-	if (!mapped)
+	if (!mapped) {
+		switch_refusal(
+			"iosurface-layout", "lock-unmapped",
+			"IOSurface %u is block-linear and the locking task maps none of it: no "
+			"view shows it rows, so a mapping it makes under this lock reads texels",
+			id);
 		return 0;
+	}
 	if (i < 0) {
 		i = static_cast<int>(t.nviews++);
 		t.views[i].view = v;
