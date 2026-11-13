@@ -3247,6 +3247,28 @@ host_test(
     deps = ["//kits/SwitchGM20B:classes"],
 )
 
+# raw/runtime/raw_surface_note.h: the render server's note of a big IOSurface it draws into takes the surface's scalars
+# and caller frames and no reference; its name, use count and purgeable state are read by id when the note is logged
+host_test(
+    name = "raw_surface_note_test",
+    srcs = [
+        "raw_surface_note_test.cpp",
+        "//drivers/NativeMetal:SwitchFrameTimeline.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_note.h",
+    ],
+    copts = [
+        "-Idrivers/NativeMetal",
+        "-Idrivers/TegraGM20BMetal/raw/runtime",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
 host_test(
     name = "raw_span_marks_test",
     srcs = [
