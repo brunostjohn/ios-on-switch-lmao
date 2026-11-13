@@ -7,10 +7,11 @@
 // a test's GPU (model_gpu.h) complete as it runs them, a WaitFence waiting for that. Each job keeps the words of its
 // pushes that lie in memory the model bound (VmBind), for a test to read the methods back. Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
-// (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
-// a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
-// fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed killed, or the set is
-// made again. A ResourceSetCreate naming a handle the connection does not hold is refused kIOReturnBadArgument, as the
+// (staleReads). A SubmitJob naming a set uses every member as registered, the records of one BO one member with their
+// accesses OR'd, as the kernel's sorted_members merges them (SwitchGpuResourceSet.cpp). Sets leave out what the kernel
+// leaves out (a BO a CPU lease named, a BO of another set: access 0 in each of its records) and end their generation,
+// mirrored in the fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed
+// killed, or the set is made again. A ResourceSetCreate naming a handle the connection does not hold is refused kIOReturnBadArgument, as the
 // kernel's attachSet refuses it, with the reason in that record's reserved word. The first IOServiceOpen of a model is
 // `model`; each later one is a connection of its own (its BOs, sets, channels and GPU VM), closed with
 // IOServiceClose, as HW Test's bench is beside the app's Metal device. Its IOKit calls replace the framework's:
@@ -102,6 +103,7 @@ struct Model {
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
     unsigned setRefusals = 0;    // ResourceSetCreates refused for a member
     uint64_t refusedHandle = 0;  // the last one's member
+    unsigned setRepeats = 0;     // ResourceSetCreate records naming a BO an earlier record of the same call named
     bool opened = false;         // the first IOServiceOpen took this model
     io_connect_t nextConnection = 43;
     std::map<io_connect_t, std::unique_ptr<Model>> others;                    // the later IOServiceOpens' connections
@@ -379,13 +381,19 @@ struct Model {
         for (const auto &member : sets[index].members)
             if (const auto it = bos.find(member.handle); it != bos.end())
                 it->second.set = 0;
-        sets[index].members.clear();
+        auto &members = sets[index].members;
+        members.clear();
+        std::map<uint64_t, size_t> listed;  // handle: its member
         for (uint32_t i = 0; i < in.count; ++i) {
             const BoState &bo = bos.at(handles[i]);
+            const auto [at, first] = listed.emplace(handles[i], members.size());
+            setRepeats += !first;
             if (bo.cpuReached || (bo.set && bo.set != index + 1))
                 uses[i].access = 0;
+            else if (first)
+                members.push_back({handles[i], uses[i].access & kAccess, 0});
             else
-                sets[index].members.push_back({handles[i], uses[i].access & kAccess, 0});
+                members[at->second].access |= uses[i].access & kAccess;
         }
         for (const auto &member : sets[index].members)
             bos[member.handle].set = index + 1;
@@ -414,11 +422,11 @@ struct Model {
             return;
         if (const uint32_t set = it->second.set) {
             auto &members = sets[set - 1].members;
-            for (auto at = members.begin(); at != members.end(); ++at)
-                if (at->handle == handle) {
-                    members.erase(at);
-                    break;
-                }
+            members.erase(std::remove_if(members.begin(), members.end(),
+                                         [&](const TegraGM20BAbiSurfaceUse &m) {
+                                             return m.handle == handle;
+                                         }),
+                          members.end());
             endGeneration(set - 1);
         }
         bos.erase(it);
