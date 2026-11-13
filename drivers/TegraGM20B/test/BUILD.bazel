@@ -109,6 +109,7 @@ host_test(
         "switch_gpu_client_retirement_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
+        "//drivers/TegraGM20B:SwitchGpuOwnerMemory.h",
         "//drivers/TegraGM20B:SwitchGpuBindings.h",
         "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",

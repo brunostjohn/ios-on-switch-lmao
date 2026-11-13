@@ -18,6 +18,7 @@
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
 #include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
+#include "drivers/TegraGM20B/SwitchGpuOwnerMemory.h"
 #include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
 #include "gm20b_gpu_memory.h"
 
@@ -332,6 +333,7 @@ public:
 		uint32_t bindings = 0, flags = 0;
 		Bo **zombieLink = nullptr;
 		switch_gpu_backing *backing = nullptr;
+		SwitchGpuOwnerKind ownerKind = SWITCH_GPU_OWNER_IMPORTED;
 	};
 
 	struct RetiredBinding {
@@ -438,6 +440,7 @@ public:
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 		 retirementStopped_ = 0;
 	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0;
+	SwitchGpuOwnerMemory ownerMemory_ = {};
 	Binding binds_[256] = {};
 	uint32_t nbinds_ = 0;
 	thread_t hangHolder_ = nullptr;
@@ -551,6 +554,7 @@ public:
 	}
 };
 
+#define TGM_STATS 1  // the debug kernel's release accounting (SwitchGpuOwnerMemory.h)
 #include "drivers/TegraGM20B/SwitchGpuClientRetirement.h"
 
 class ClientRetirement : public testing::Test
@@ -839,6 +843,27 @@ TEST(ClientControlRetirement, ControlQuotaRetiresWithActualPoolOwnership)
 	client.accountRelease(&bo);
 	EXPECT_EQ(client.pool_bytes_, 0u);
 	EXPECT_EQ(client.control_bytes_, 0u);
+}
+
+// The debug "memory by process" line's counts (SwitchGpuOwnerMemory.h): a BO leaves its kind's count when it is ready to
+// release, and one that never got a handle never entered it
+TEST(ClientControlRetirement, AReadyBoLeavesItsOwnersCount)
+{
+	AGXDeviceUserClient client;
+	AGXDeviceUserClient::Bo pool, import, unmade;
+	pool.pool_va = reinterpret_cast<void *>(1);
+	pool.ownerKind = SWITCH_GPU_OWNER_POOL;
+	client.pool_bytes_ = pool.bytes;
+	client.ownerMemory_.change(SWITCH_GPU_OWNER_POOL, pool.bytes, true);
+	client.ownerMemory_.change(SWITCH_GPU_OWNER_IMPORTED, import.bytes, true);
+	unmade.handle = 0;
+	client.accountRelease(&unmade);
+	EXPECT_EQ(client.ownerMemory_.total(), pool.bytes + import.bytes);
+	client.accountRelease(&pool);
+	client.accountRelease(&import);
+	EXPECT_EQ(client.ownerMemory_.total(), 0u);
+	EXPECT_EQ(client.ownerMemory_.count[SWITCH_GPU_OWNER_POOL], 0u);
+	EXPECT_EQ(client.ownerMemory_.count[SWITCH_GPU_OWNER_IMPORTED], 0u);
 }
 
 namespace
