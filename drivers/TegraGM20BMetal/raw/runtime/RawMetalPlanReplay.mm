@@ -2,6 +2,7 @@
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalCounters.h"
 #include "TegraGM20BClockABI.h"
+#include "raw_m2v_views.h"
 
 namespace {
 
@@ -154,7 +155,10 @@ struct ReplayPlanSink {
                 const uint64_t *at = cb->_plan.viewArrays.data() + next.scissorsAt + 4 * j;
                 rects[j] = (MTLScissorRect){at[0], at[1], at[2], at[3]};
             }
-            [encoder setScissorRects:rects count:count];
+            if (raw::m2vSingleView(count))
+                [encoder setScissorRect:rects[0]];
+            else
+                [encoder setScissorRects:rects count:count];
         }
         if (rasterChanged(next, previous, R::Viewport, &R::viewport) ||
             rasterChanged(next, previous, R::Viewport, &R::viewports) ||
@@ -166,7 +170,10 @@ struct ReplayPlanSink {
                 viewports[j] = (MTLViewport){raw::stateDouble(v[0]), raw::stateDouble(v[1]), raw::stateDouble(v[2]),
                                              raw::stateDouble(v[3]), raw::stateDouble(v[4]), raw::stateDouble(v[5])};
             }
-            [encoder setViewports:viewports count:count];
+            if (raw::m2vSingleView(count))
+                [encoder setViewport:viewports[0]];
+            else
+                [encoder setViewports:viewports count:count];
         }
         if (rasterChanged(next, previous, R::Cull, &R::cull))
             [encoder setCullMode:MTLCullMode(next.cull)];
