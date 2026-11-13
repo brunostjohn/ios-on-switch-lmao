@@ -115,6 +115,16 @@ TEST(RawDeviceAnswers, FramebufferReadsAreYes)
     }
 }
 
+// A linear texture's rows and a texture buffer's start take the pitch texture header's 32 bytes (RawMetalDevice.mm,
+// RawMetalDeviceAnswers.mm answer both from this row)
+TEST(RawDeviceAnswers, LinearAlignmentIsThePitchHeaders)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        for (uint64_t format : {10, 70, 80, 115, 125})
+            EXPECT_EQ(argument(k, "minimumLinearTextureAlignmentForPixelFormat:", format), 32u)
+                << k.kind << " format " << format;
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {

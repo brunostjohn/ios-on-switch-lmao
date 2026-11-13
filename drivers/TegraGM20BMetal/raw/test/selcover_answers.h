@@ -55,6 +55,7 @@ inline unsigned differ(id raw, id m2v, unsigned &compared)
     static const std::set<std::string> rawOwn = {"minConstantBufferAlignmentBytes",
                                                  "deviceLinearReadOnlyTextureAlignmentBytes",
                                                  "minimumLinearTextureAlignmentForPixelFormat:",
+                                                 "minimumTextureBufferAlignmentForPixelFormat:",
                                                  "supports32BitFloatFiltering",
                                                  "maxVertexAmplificationCount",
                                                  "maxVertexAmplificationFactor",
