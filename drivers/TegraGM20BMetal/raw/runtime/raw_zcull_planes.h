@@ -31,7 +31,8 @@ inline bool sameZcullRegion(const ZcullRegion &a, const ZcullRegion &b)
 }
 
 struct ZcullStored {
-    uint64_t zetaVa = 0, zetaBytes = 0;  // the depth's memory
+    uint64_t zetaVa = 0;                    // the depth texture's address, which passes find it by
+    uint64_t memoryVa = 0, memoryBytes = 0;  // the depth's memory, which writes to it are matched against
     uint64_t va = 0, bytes = 0;          // the region's storage
     ZcullRegion region;
     uint8_t dir = kZcullLess;  // the direction the region was built in
@@ -55,9 +56,12 @@ public:
         return {};
     }
 
-    // A pass stored the region `s` describes: the depth's earlier storage gives way to it
+    // A pass stored the region `s` describes: the depth's earlier storage gives way to it. A depth whose memory is not
+    // known (no bytes) keeps none, as no write to it could be seen
     void stored(const ZcullStored &s)
     {
+        if (!s.memoryBytes)
+            return;
         for (ZcullStored &x : stored_)
             if (x.zetaVa == s.zetaVa) {
                 x = s;
@@ -70,7 +74,7 @@ public:
     void wrote(uint64_t va, uint64_t bytes)
     {
         for (ZcullStored &s : stored_)
-            if (va < s.zetaVa + s.zetaBytes && s.zetaVa < va + bytes)
+            if (va < s.memoryVa + s.memoryBytes && s.memoryVa < va + bytes)
                 s.valid = false;
     }
 
@@ -112,11 +116,12 @@ inline void zcullBegin(ZcullPass &z, ZcullAsk ask, const TegraGM20BAbiZcullInfo 
 
 // What a pass that stored its region leaves for later passes: the direction its region was built in (no depth test:
 // SET_ZCULL_DIR_FORMAT's LESS)
-inline ZcullStored zcullStoredBy(const ZcullPass &z, uint64_t zetaVa, uint64_t zetaBytes)
+inline ZcullStored zcullStoredBy(const ZcullPass &z, uint64_t zetaVa, uint64_t memoryVa, uint64_t memoryBytes)
 {
     ZcullStored s;
     s.zetaVa = zetaVa;
-    s.zetaBytes = zetaBytes;
+    s.memoryVa = memoryVa;
+    s.memoryBytes = memoryBytes;
     s.va = z.storage;
     s.bytes = z.storageBytes;
     s.region = z.region;

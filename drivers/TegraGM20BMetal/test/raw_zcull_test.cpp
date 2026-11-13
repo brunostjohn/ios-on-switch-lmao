@@ -214,7 +214,7 @@ TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
     EXPECT_EQ(first.storage, kStorage);
     EXPECT_EQ(asked, uint64_t(first.region.aliquotCount) * 32 + 32 + 192);
     planes.wrote(kZeta, kZetaBytes);  // the first pass's own write, at its begin
-    planes.stored(raw::zcullStoredBy(first, kZeta, kZetaBytes));
+    planes.stored(raw::zcullStoredBy(first, kZeta, kZeta, kZetaBytes));
 
     raw::ZcullAsk loaded = clearedDepth();
     loaded.cleared = false;
@@ -235,7 +235,7 @@ TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
     EXPECT_FALSE(none.candidate) << "nothing stored";
     planes.wrote(kZeta + kZetaBytes - 4, 4);
     EXPECT_EQ(planes.held(kZeta).zetaVa, 0u) << "a write to the depth's memory";
-    planes.stored(raw::zcullStoredBy(first, kZeta, kZetaBytes));
+    planes.stored(raw::zcullStoredBy(first, kZeta, kZeta, kZetaBytes));
     planes.wrote(kZeta + kZetaBytes, 64);
     EXPECT_EQ(planes.held(kZeta).zetaVa, kZeta) << "a write past it";
     planes.clear();
@@ -254,7 +254,9 @@ TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
 
     raw::ZcullPass reversed = first;
     reversed.dir = raw::kZcullGreater;
-    EXPECT_EQ(raw::zcullStoredBy(reversed, kZeta, kZetaBytes).dir, raw::kZcullGreater);
+    EXPECT_EQ(raw::zcullStoredBy(reversed, kZeta, kZeta, kZetaBytes).dir, raw::kZcullGreater);
+    planes.stored(raw::zcullStoredBy(first, kZeta, 0, 0));
+    EXPECT_EQ(planes.held(kZeta).zetaVa, 0u) << "a depth whose memory no write could be matched against";
     std::vector<uint32_t> words(raw::kZcullRegionWords + 8);
     raw::Push p{words.data(), words.data() + words.size()};
     raw::zcullRegionWords(p, second.region, 252, second.dir, second.storage, second.storageBytes);

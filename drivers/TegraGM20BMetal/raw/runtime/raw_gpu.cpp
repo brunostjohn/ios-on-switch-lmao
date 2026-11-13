@@ -7692,7 +7692,8 @@ void RenderEncoder::end()
     if (zcull_.store && !zcull_.invalidated) {
         p_.m(kStoreZcull, 0);
         const Texture &zeta = *pass_.depthStencil.texture;
-        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, zeta.storageRange().bytes));
+        const auto memory = zeta.storageRange();
+        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes));
     }
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
