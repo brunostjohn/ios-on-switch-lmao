@@ -9,8 +9,8 @@
 // A power-on that fails (`on` logs why), or an engine its driver lost (lost(): a reset that did not bring it back, a
 // resume that could not restore it), is powered on again by a later use: the first use after it tries at once, then
 // one use per kRetryMs, doubling to kRetryMaxMs while the power-on keeps failing; the uses between are refused (-19).
-// A power-off the hardware refuses leaves the engine parked and unpowered, and the next idle period tries again, with a
-// line on the 1st, 2nd, 4th, ... refusal in a row and one when it works again.
+// A power-off the hardware refuses is one line and leaves the engine parked and unpowered; the next use powers it on
+// and the next idle period powers it off as usual, with nothing counted for having been refused.
 // Sleep (SC7) goes through the gate too: suspend parks the engine once its queue drains and powers it off, holding new
 // users until resume, which powers it on only for a user already waiting.
 //
@@ -114,18 +114,11 @@ public:
             if (result == SWITCH_ENGINE_GATE_OFF) {
                 setPowered(false);
                 count(line, sizeof(line));
-                if (refusals_)
-                    snprintf(line, sizeof(line), "%s: idle power-off works again after %u refusals", ops_.name,
-                             refusals_);
-                refusals_ = 0;
             } else if (result < 0) {
                 setPowered(false);
-                refusals_++;
-                if (!(refusals_ & (refusals_ - 1)))
-                    snprintf(line, sizeof(line),
-                             "%s: idle power-off refused by the hardware (%d), %u times in a row; the next idle "
-                             "period tries again",
-                             ops_.name, result, refusals_);
+                snprintf(line, sizeof(line),
+                         "%s: idle power-off refused by the hardware (%d); parked unpowered, the next use powers it on",
+                         ops_.name, result);
             }
         }
         platform_.unlock();
@@ -240,7 +233,7 @@ private:
     Platform platform_;
     SwitchEngineGateOps ops_ = {};
     SwitchEngineGateStats stats_ = {};
-    uint32_t users_ = 0, failures_ = 0, refusals_ = 0;
+    uint32_t users_ = 0, failures_ = 0;
     uint64_t retryAtUs_ = 0;
     bool powered_ = false, asleep_ = false, failed_ = false, lost_ = false;
 };

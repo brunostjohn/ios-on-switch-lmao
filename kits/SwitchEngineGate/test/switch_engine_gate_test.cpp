@@ -222,29 +222,31 @@ TEST(SwitchEngineGate, AnEngineItsDriverLostIsPoweredOnByTheNextUse)
     EXPECT_TRUE(f.gate.powered());
 }
 
-TEST(SwitchEngineGate, ARefusedPowerOffIsTriedAgainAtTheNextIdlePeriod)
+// Each refused power-off is its own line; the engine is parked unpowered, the next use powers it on and the next idle
+// period powers it off as usual. Nothing counts the refusals.
+TEST(SwitchEngineGate, ARefusedPowerOffIsOneLineAndTheNextIdlePeriodPowersOffAsUsual)
 {
     Fixture f;
     f.engine.offResult = -5;
     f.model().fire();
     EXPECT_FALSE(f.gate.powered());
     ASSERT_EQ(f.model().lines.size(), 1u);
-    EXPECT_EQ(f.model().lines[0], "TegraTest: idle power-off refused by the hardware (-5), 1 times in a row; the next "
-                                  "idle period tries again");
+    EXPECT_EQ(f.model().lines[0],
+              "TegraTest: idle power-off refused by the hardware (-5); parked unpowered, the next use powers it on");
     for (uint32_t i = 2; i <= 3; i++) {
         ASSERT_EQ(f.gate.use(), 0);
         EXPECT_EQ(f.engine.ons, i - 1);
         f.gate.done();
         f.model().fire();
-        EXPECT_EQ(f.engine.offs, i) << "each idle period tries the power-off again";
+        EXPECT_EQ(f.engine.offs, i) << "each idle period powers off as usual";
     }
-    EXPECT_EQ(f.model().lines.size(), 2u) << "lines at the 1st and 2nd refusal, not the 3rd";
+    EXPECT_EQ(f.model().lines.size(), 3u) << "one line for each refusal";
     f.engine.offResult = SWITCH_ENGINE_GATE_OFF;
     ASSERT_EQ(f.gate.use(), 0);
     f.gate.done();
     f.model().fire();
     EXPECT_FALSE(f.gate.powered());
-    EXPECT_EQ(f.model().lines.back(), "TegraTest: idle power-off works again after 3 refusals");
+    EXPECT_EQ(f.model().lines.back().find("again"), std::string::npos);
 }
 
 TEST(SwitchEngineGate, SleepDrainsAndPowersOffAndResumeLeavesItOffWithoutAUser)
