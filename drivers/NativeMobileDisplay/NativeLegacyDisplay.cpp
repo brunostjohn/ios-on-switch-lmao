@@ -3444,6 +3444,7 @@ public:
             columnScanRegister();
             dcClassRegister();
             planeTotalsRegister();
+            frameInfoTimedRegister();
         }
         return true;
     }
