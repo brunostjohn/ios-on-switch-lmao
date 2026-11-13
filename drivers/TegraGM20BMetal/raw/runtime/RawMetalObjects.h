@@ -472,8 +472,10 @@ struct RMSharedEventWait {
     std::atomic<uint32_t> _pipelineVeto;
     size_t _endedAt;
     uint32_t _handedCommands;
-    // the worker's: it gave up encoding this one ahead, and how many of its encoders it encoded so (of how many)
-    bool _pipelineDeclined;
+    bool _handedOnce;  // the worker was handed it (its one RMScheduleChange::Encoded)
+    // the worker's (the caller reads it): it gave up encoding this one ahead; and how many of its encoders it encoded so
+    // (of how many)
+    std::atomic<bool> _pipelineDeclined;
     uint32_t _pipelinedEncoders, _pipelineEncoders, _pipelineAbandons, _pipelineGivenBack;
 #if SWITCH_RAW_DIAGNOSTICS
     uint64_t _committedTicks;  // mach_absolute_time as its commit began

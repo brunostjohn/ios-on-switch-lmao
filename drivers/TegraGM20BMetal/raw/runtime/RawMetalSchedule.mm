@@ -287,9 +287,13 @@ void submitLoop()
                         DISPATCH_TIME_NOW,
                         std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(left).count()));
                 }
-                RAW_DIAGNOSTIC(r.submitAsleep.store(true, std::memory_order_relaxed));
+                r.submitAsleep.store(true, std::memory_order_seq_cst);
+                if (rmPipelinePublished()) {
+                    r.submitAsleep.store(false, std::memory_order_relaxed);
+                    continue;
+                }
                 r.schedule.sleep(until);
-                RAW_DIAGNOSTIC(r.submitAsleep.store(false, std::memory_order_relaxed));
+                r.submitAsleep.store(false, std::memory_order_relaxed);
             }
             const uint64_t judged = r.progress.visit();
             RMCommandBuffer *cb = ticket.value;

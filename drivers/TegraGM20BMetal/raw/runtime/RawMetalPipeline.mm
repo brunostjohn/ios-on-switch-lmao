@@ -46,7 +46,7 @@ void giveBack(uint32_t veto)
         a.cb->_pipelineGivenBack |= veto;
         RAW_DIAGNOSTIC(gRM->stats.pipelineAbandons[__builtin_ctz(veto ? veto : uint32_t(VetoFailed))]++);
     }
-    a.cb->_pipelineDeclined = true;
+    a.cb->_pipelineDeclined.store(true, std::memory_order_relaxed);
     a.cb = nil;
     a.open = false;
 }
@@ -56,24 +56,46 @@ void giveBack(uint32_t veto)
 void rmPublishEncoder(RMCommandBuffer *cb)
 {
     const size_t length = cb->_plan.size();
-    cb->_published.store(uint64_t(cb->_endedAt) << 32 | length, std::memory_order_release);
+    cb->_published.store(uint64_t(cb->_endedAt) << 32 | length, std::memory_order_seq_cst);
     cb->_endedAt = cb->_encAt;
     cb->_handedCommands += uint32_t(length - cb->_encAt);
     if (cb->_handedCommands < kHandOff || cb->_pipelineVeto.load(std::memory_order_relaxed))
         return;
     cb->_handedCommands = 0;
     RAW_DIAGNOSTIC(gRM->stats.handoffs++);
-    RAW_DIAGNOSTIC(gRM->stats.handoffWakes += gRM->submitAsleep.load(std::memory_order_relaxed));
-    gRM->schedule.push({RMScheduleChange::Encoded, cb});
+    if (!cb->_handedOnce) {
+        cb->_handedOnce = true;
+        RAW_DIAGNOSTIC(gRM->stats.handoffWakes += gRM->submitAsleep.load(std::memory_order_relaxed));
+        gRM->schedule.push({RMScheduleChange::Encoded, cb});
+        return;
+    }
+    // the worker holds it already and reads _published before it sleeps: a wake only for a worker asleep
+    if (!cb->_pipelineDeclined.load(std::memory_order_relaxed) && gRM->submitAsleep.load(std::memory_order_seq_cst)) {
+        RAW_DIAGNOSTIC(gRM->stats.handoffWakes++);
+        gRM->schedule.wake();
+    }
 }
 
 void rmPipelineHanded(RMCommandBuffer *cb)
 {
     Ahead &a = ahead();
-    if (a.cb || cb->_pipelineDeclined || cb->_committed.load(std::memory_order_acquire))
+    if (cb->_pipelineDeclined.load(std::memory_order_relaxed) || cb->_committed.load(std::memory_order_acquire))
         return;
+    if (a.cb) {
+        cb->_pipelineDeclined.store(true, std::memory_order_relaxed);
+        return;
+    }
     a.cb = cb;
     a.open = false;
+}
+
+bool rmPipelinePublished()
+{
+    const Ahead &a = ahead();
+    if (!a.cb)
+        return false;
+    const size_t until = size_t(a.cb->_published.load(std::memory_order_seq_cst) >> 32);
+    return until > (a.open ? rmRangeEncode().position() : 0);
 }
 
 bool rmPipelineStep()

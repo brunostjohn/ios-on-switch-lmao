@@ -24,7 +24,7 @@
 // the kernel refused, and those it took once made again without what it refused), gpu_order (1: the drivers order on
 // the GPU now), cpu_ordered (the Orders the kernel refused, each a CPU-ordered line), pipelined_encoders and
 // sealed_encoders (encoders the worker encoded ahead of their commit, of all it sealed), pipeline_handoffs and
-// pipeline_handoff_wakes (command buffers handed to the worker as encoders ended, and those that found it asleep),
+// pipeline_handoff_wakes (hand-offs to the worker as encoders ended, and those that found it asleep: a wake each),
 // pipeline_abandons.<reason>,
 // m2v.<reason>, pred.<predicate> (nonzero only).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCounters

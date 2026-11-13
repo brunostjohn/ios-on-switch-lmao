@@ -15,6 +15,9 @@ void rmPublishEncoder(RMCommandBuffer *cb);
 void rmPipelineHanded(RMCommandBuffer *cb);
 // The worker's, with nothing to submit: the encoders published since it last looked, encoded. False: nothing to do.
 bool rmPipelineStep();
+// The worker's, as it is about to sleep (RawState::submitAsleep stored): whether the command buffer it encodes ahead
+// published more since its last step
+bool rmPipelinePublished();
 // The worker's, before it submits a range of `cb` (null: before other work): the encode ahead of another command buffer,
 // or of this one where the range is not the one it began, given back
 void rmPipelineYield(RMCommandBuffer *cb, size_t from, bool nativeRange);

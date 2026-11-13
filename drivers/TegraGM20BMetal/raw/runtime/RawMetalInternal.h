@@ -248,9 +248,9 @@ struct RawState {
     std::atomic<uint64_t> moves{0};      // texture memory moves other threads made (rmExcludingSubmissions)
     std::atomic<bool> orphanCheck{
         false};  // the device idled: an encode ahead no one can commit goes (rmPipelineOrphans)
-#if SWITCH_RAW_DIAGNOSTICS
-    std::atomic<bool> submitAsleep{false};  // the submit worker waits for a change (the hand-off counts' read)
-#endif
+    // the submit worker is about to wait or waits for a change: a command buffer's hand-offs after its first wake it only
+    // then (rmPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
+    std::atomic<bool> submitAsleep{false};
     // ranges handed to the kernel or m2v and not completed (rmRangeHandedOff): gRawRelease's drain and its idle rule's
     // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
     std::atomic<uint32_t> rangesInFlight{0};
