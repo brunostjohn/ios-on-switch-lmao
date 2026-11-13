@@ -7,10 +7,11 @@
 namespace {
 
 constexpr size_t kAttachments = 10;  // 8 colour, depth, stencil
-constexpr size_t kEntries = 16;
+// a compositor frame's passes, each its own shape (boot 21: 29-40 render targets a command buffer), kept to the next
+constexpr size_t kEntries = 64;
 // A shape no pass took for this many lookups is let go, with the textures its copy holds: a frame's passes take theirs
 // within a few
-constexpr uint64_t kIdleLookups = 64;
+constexpr uint64_t kIdleLookups = 4 * kEntries;
 
 // Where Metal's descriptor classes keep what a pass reads, from their ivars' names and encodings
 struct Layout {

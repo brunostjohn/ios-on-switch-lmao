@@ -5157,9 +5157,11 @@ RECORD_COST_SRCS = [
 
 RECORD_COST_BUILDS = [
     ("_o2", ["-O2"]),
+    # release builds are not compiled yet (their unused debug-only names are not errors here)
     ("_o2_release", [
         "-O2",
         "-DSWITCH_DEBUG=0",
+        "-Wno-error",
     ]),
 ]
 
