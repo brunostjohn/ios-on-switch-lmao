@@ -66,7 +66,10 @@ struct StoredDepthTest: HWTest {
             metrics.set(c.name + "_facts", ran.facts)
             metrics.set(c.name + "_wrong_depth", ran.wrongDepth)
             metrics.set(c.name + "_wrong_stencil", ran.wrongStencil)
-            if let sampled = ran.sampledWrong { metrics.set(c.name + "_sampled_wrong", sampled) }
+            if let sampled = ran.sampledWrong {
+                metrics.set(c.name + "_sampled_wrong", sampled)
+                metrics.set(c.name + "_sampled_paths", ran.sampledPaths.joined(separator: "/"))
+            }
             if (ran.sampledWrong ?? 0) > 0 { wrong.append(c.name + "_sampled") }
             if ran.paths.contains(where: { $0 != "raw" }) { wrong.append(c.name + "_path") }
             if !ran.facts.contains("raw=1") || !ran.facts.contains("twin=0") { wrong.append(c.name + "_facts") }
@@ -86,6 +89,7 @@ struct StoredDepthTest: HWTest {
         var facts = "-"
         var wrongDepth = 0, wrongStencil = 0
         var sampledWrong: Int?
+        var sampledPaths: [String] = []
     }
 
     /// Cleared to 1 and stencil 0, the left half drawn at 0.25 with stencil 7, then each aspect read back
@@ -185,7 +189,11 @@ struct StoredDepthTest: HWTest {
         }
         var ran = Ran()
         try await drawAndRead(gpu, c, texture, &ran)
-        if c.format == .depth32Float { ran.sampledWrong = try await sampledWrong(gpu, c, texture, &ran) }
+        if c.format == .depth32Float {
+            var sampling = Ran()
+            ran.sampledWrong = try await sampledWrong(gpu, c, texture, &sampling)
+            ran.sampledPaths = sampling.paths
+        }
         ran.facts = facts(gpu, texture)
         return ran
     }
