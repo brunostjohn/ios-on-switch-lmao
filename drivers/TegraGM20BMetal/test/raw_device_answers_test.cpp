@@ -98,6 +98,13 @@ TEST(RawDeviceAnswers, RasterOrderGroupsAreYes)
     }
 }
 
+// GM20B (SM53) has HADD2, HMUL2 and HFMA2 (gpu.compute.half_alu)
+TEST(RawDeviceAnswers, HalfArithmeticIsNative)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsNativeHardwareFP16"), 1u) << k.kind;
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {

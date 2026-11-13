@@ -70,7 +70,8 @@ inline unsigned differ(id raw, id m2v, unsigned &compared)
                                                  "supportsSIMDShuffleAndFill",
                                                  "supportsSIMDGroup",
                                                  "areRasterOrderGroupsSupported",
-                                                 "supportsRasterOrderGroups"};
+                                                 "supportsRasterOrderGroups",
+                                                 "supportsNativeHardwareFP16"};
     unsigned bad = 0;
     auto check = [&](const char *name, NSUInteger a, uint64_t r, uint64_t m) {
         compared++;
