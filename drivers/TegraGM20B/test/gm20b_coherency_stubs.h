@@ -168,7 +168,7 @@ inline int &ioLogLines()
 
 inline void IOLog(const char *, ...)
 {
-	ioLogLines()++;
+	__atomic_fetch_add(&ioLogLines(), 1, __ATOMIC_RELAXED);
 }
 
 // Every tgm_cpu_clean_pages call: its page list.

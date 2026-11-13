@@ -868,48 +868,52 @@ host_test(
     ],
 )
 
+# The backing registry and what records on it: :backing's units, which the ThreadSanitizer build compiles again.
+BACKING_SRCS = [
+    "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
+    "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
+    "//drivers/TegraGM20B:SwitchGpuBackingMemory.cpp",
+    "//drivers/TegraGM20B:SwitchGpuAdmission.cpp",
+    "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
+    "//drivers/TegraGM20B:SwitchGpuPromiseSleepers.cpp",
+    "//drivers/TegraGM20B:SwitchGpuCpuComplete.cpp",
+    "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
+    "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
+    "//drivers/TegraGM20B:SwitchGpuOwnershipInternal.h",
+    "//drivers/TegraGM20B:SwitchGpuOwnershipRecord.cpp",
+    "//drivers/TegraGM20B:SwitchGpuBackingRefs.cpp",
+    "//drivers/TegraGM20B:SwitchGpuResourceSet.cpp",
+    "//drivers/TegraGM20B:SwitchGpuJobStats.cpp",
+    "//drivers/TegraGM20B:SwitchGpuWriters.cpp",
+    "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
+]
+
+BACKING_HDRS = [
+    "//drivers/TegraGM20B:SwitchGpuResourceSet.h",
+    "//drivers/TegraGM20B:SwitchGpuJobStats.h",
+    "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
+    "//drivers/TegraGM20B:SwitchGpuNativeUse.h",
+    "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+    "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    "//drivers/TegraGM20B:SwitchGpuBackingInternal.h",
+    "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+    "//drivers/TegraGM20B:SwitchGpuWriterRanges.h",
+    "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+    "//drivers/TegraGM20B:SwitchGpuCpuComplete.h",
+    "//drivers/TegraGM20B:SwitchGpuBackingMemory.h",
+    "//drivers/TegraGM20B:SwitchGpuAdmission.h",
+    "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    "//drivers/TegraGM20B:TegraGM20BViews.h",
+    "//drivers/TegraGM20B:TegraGM20BTiled.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+]
+
 host_library(
     name = "backing",
-    srcs = [
-        "switch_gpu_backing_completion_stub.cpp",
-        "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
-        "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
-        "//drivers/TegraGM20B:SwitchGpuBackingMemory.cpp",
-        "//drivers/TegraGM20B:SwitchGpuAdmission.cpp",
-        "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
-        "//drivers/TegraGM20B:SwitchGpuPromiseSleepers.cpp",
-        "//drivers/TegraGM20B:SwitchGpuCpuComplete.cpp",
-        "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
-        "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
-        "//drivers/TegraGM20B:SwitchGpuOwnershipInternal.h",
-        "//drivers/TegraGM20B:SwitchGpuOwnershipRecord.cpp",
-        "//drivers/TegraGM20B:SwitchGpuBackingRefs.cpp",
-        "//drivers/TegraGM20B:SwitchGpuResourceSet.cpp",
-        "//drivers/TegraGM20B:SwitchGpuJobStats.cpp",
-        "//drivers/TegraGM20B:SwitchGpuWriters.cpp",
-        "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
-    ],
-    hdrs = [
-        "//drivers/TegraGM20B:SwitchGpuResourceSet.h",
-        "//drivers/TegraGM20B:SwitchGpuJobStats.h",
-        "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
-        "//drivers/TegraGM20B:SwitchGpuNativeUse.h",
-        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
-        "//drivers/TegraGM20B:SwitchGpuBacking.h",
-        "//drivers/TegraGM20B:SwitchGpuBackingInternal.h",
-        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
-        "//drivers/TegraGM20B:SwitchGpuWriterRanges.h",
-        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
-        "//drivers/TegraGM20B:SwitchGpuCpuComplete.h",
-        "//drivers/TegraGM20B:SwitchGpuBackingMemory.h",
-        "//drivers/TegraGM20B:SwitchGpuAdmission.h",
-        "//drivers/TegraGM20B:TegraGM20BGpu.h",
-        "//drivers/TegraGM20B:TegraGM20BViews.h",
-        "//drivers/TegraGM20B:TegraGM20BTiled.h",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
-        "//drivers/TegraGM20B:TegraGM20BABI.h",
-    ],
+    srcs = ["switch_gpu_backing_completion_stub.cpp"] + BACKING_SRCS,
+    hdrs = BACKING_HDRS,
     visibility = ["//drivers/TegraNVENC/test:__pkg__"],
     deps = [
         ":dependency_trace",
@@ -967,7 +971,10 @@ host_library(
 # takes besides its uses' own, and its time.
 host_test(
     name = "switch_gpu_submit_cost_test",
-    srcs = ["switch_gpu_submit_cost_test.cpp"],
+    srcs = [
+        "switch_gpu_submit_cost_test.cpp",
+        "switch_gpu_submit_stubs.h",
+    ],
     deps = [
         ":backing",
         ":coherency_kernel",
@@ -1014,6 +1021,40 @@ host_test(
     defines = ["DEVELOPMENT=1"],
     deps = [
         ":path_stats",
+        ":path_stats_kernel",
+    ],
+)
+
+# The same work on several threads under ThreadSanitizer: compositor jobs read their producers through record handles while
+# the apps draw, fail semantic waits and close channels, and every thread counts into its CPU's cells. Built without
+# AddressSanitizer, which does not link with it.
+host_test(
+    name = "switch_gpu_submit_race_test",
+    srcs = [
+        "switch_gpu_backing_completion_stub.cpp",
+        "switch_gpu_dependency_stub.cpp",
+        "switch_gpu_submit_race_test.cpp",
+        "switch_gpu_submit_stubs.h",
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuCompositorRound.h",
+        "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuSpanNotes.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
+        "//drivers/TegraGM20B:TegraGM20BSched.h",
+        "//kits/SwitchSysctl:SwitchSysctl.h",
+    ] + BACKING_SRCS + BACKING_HDRS,
+    copts = ["-fsanitize=thread"],
+    defines = ["DEVELOPMENT=1"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [
+        ":coherency_kernel",
         ":path_stats_kernel",
     ],
 )
