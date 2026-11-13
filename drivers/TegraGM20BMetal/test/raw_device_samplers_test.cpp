@@ -110,6 +110,9 @@ TEST_F(DeviceSamplers, APlanarTextureSampledThroughAConstexprSamplerTakesItsMapp
     planar.addressMap = 2;
     uint32_t handle = 0;
     std::string why;
+    EXPECT_FALSE(drawnHandle(state, planar, handle, why)) << "a runtime record's maps are placed before the work";
+    EXPECT_EQ(why, "a planar texture's constexpr sampler without its address map");
+    ASSERT_TRUE(dev.constexprMapsPlaced());
     ASSERT_TRUE(drawnHandle(state, planar, handle, why)) << why;
     const uint32_t index = state->rec->entry[0].sampler;
     const uint32_t mapped = raw::DeviceHarness::constexprTsc(dev, index, 2);
@@ -160,6 +163,7 @@ TEST_F(DeviceSamplers, AConstexprSamplerTheMapLeavesAloneSharesItsHeader)
 {
     raw::Pipeline *state = constexprState(kLinearClamp, 0x52);
     ASSERT_NE(state, nullptr);
+    ASSERT_TRUE(dev.constexprMapsPlaced());
     const uint32_t index = state->rec->entry[0].sampler;
     for (uint8_t map = 1; map < 4; map++)
         EXPECT_EQ(raw::DeviceHarness::constexprTsc(dev, index, map), raw::DeviceHarness::constexprTsc(dev, index, 0));

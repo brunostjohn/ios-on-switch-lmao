@@ -392,6 +392,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             });
         if (!planar.empty()) {
             // the samplers' headers under the planar textures' address maps (m2v's), which the draws' handles take
+            if (!d.constexprMapsPlaced())
+                return fail(PredEncPlanarClamp, "no constexpr sampler header for an address map");
             for (__unsafe_unretained RMTexture *t : planar)
                 for (__unsafe_unretained RMSampler *sm : samplers)
                     if (t->_raw.addressMap && !d.samplerVariant(sm->_raw, t->_raw.addressMap))
