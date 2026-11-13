@@ -552,8 +552,9 @@ int tgm_coherency_layout_fitted(struct tgm_coh *c, uint32_t width, uint32_t heig
 
 /* TegraGM20BTiled.cpp's stats, this window's (debug kernels): layouts decided block-linear, then pitch because the first
  * import only samples, because another import or a CPU lock existed, because the shape does not tile, because the
- * tiling move failed; the live block-linear surfaces and their bytes; the CPU views' scratch bytes held now and at most */
-void tgm_tiled_take_stats(uint64_t out[9]);
+ * tiling move failed, because another process maps it for the CPU; the live block-linear surfaces and their bytes; the
+ * CPU views' scratch bytes held now and at most */
+void tgm_tiled_take_stats(uint64_t out[10]);
 /* The same window's relayouts (TegraGM20BTiled.h tgm_relayout_count): tiling moves skipped because nothing had written
  * the surface, untiles deferred to a CPU lock, deferred untiles a lock made, deferred surfaces gone block-linear, and the
  * moves made */

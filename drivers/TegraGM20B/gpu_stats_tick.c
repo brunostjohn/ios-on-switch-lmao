@@ -474,16 +474,16 @@ void tgm_stats_tick(void)
 	/* IOSurface layouts decided this window (TegraGM20BTiled.cpp), the block-linear ones live, and the CPU views'
 	 * scratch: what tiling costs in memory */
 	{
-		uint64_t t[9];
+		uint64_t t[10];
 		tgm_tiled_take_stats(t);
-		if (t[0] || t[1] || t[2] || t[3] || t[4] || t[5] || t[7]) {
+		if (t[0] || t[1] || t[2] || t[3] || t[4] || t[5] || t[6] || t[8]) {
 			nvxnu_log("tegra-gm20b: layouts %llu block-linear, pitch %llu sampled "
 				  "first, %llu shared, "
-				  "%llu by shape, %llu failed tiling; %llu block-linear live (%llu "
-				  "KiB), CPU views' "
+				  "%llu by shape, %llu failed tiling, %llu mapped by another process; "
+				  "%llu block-linear live (%llu KiB), CPU views' "
 				  "scratch %llu KiB (peak %llu KiB)\n",
-				  t[0], t[1], t[2], t[3], t[4], t[5], t[6] >> 10, t[7] >> 10,
-				  t[8] >> 10);
+				  t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7] >> 10, t[8] >> 10,
+				  t[9] >> 10);
 		}
 		uint64_t r[5];
 		tgm_tiled_take_relayouts(r);
