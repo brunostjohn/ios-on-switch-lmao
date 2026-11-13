@@ -156,6 +156,15 @@ TEST(ResolveRule, ScreenBoundRGB10A2TakesTheEngine)
     }
 }
 
+// gpu.raw.resolve_twod rg11b10f_<n>x (near)
+TEST(ResolveRule, ScreenBoundRG11B10FloatTakesTheEngine)
+{
+    for (uint8_t samples : {2, 4}) {
+        EXPECT_EQ(raw::resolveRoute(ask(92, samples, false)), raw::ResolveByTwod);
+        EXPECT_EQ(raw::resolveRoute(ask(92, samples, true)), raw::ResolveByPass);
+    }
+}
+
 TEST(ResolveRule, TheComplementIsNoRoute)
 {
     for (uint16_t format : {70, 80})

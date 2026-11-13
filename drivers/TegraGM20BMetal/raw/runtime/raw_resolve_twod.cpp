@@ -29,10 +29,17 @@ switch_gm20b_2d_surface gridSurface(const Texture &t, uint32_t fmt2d, uint32_t w
     return s;
 }
 
-// fx::twodFormat's formats, and RGB10A2Unorm, whose resolve the pack has no state for
+// fx::twodFormat's formats, RGB10A2Unorm, whose resolve the pack has no state for, and RG11B10Float
 uint32_t resolveFormat(uint32_t mtl)
 {
-    return mtl == 90 ? NV902D_SET_DST_FORMAT_V_A2B10G10R10 : fx::twodFormat(mtl);
+    switch (mtl) {
+    case 90:
+        return NV902D_SET_DST_FORMAT_V_A2B10G10R10;
+    case 92:
+        return NV902D_SET_DST_FORMAT_V_BF10GF11RF11;
+    default:
+        return fx::twodFormat(mtl);
+    }
 }
 
 }  // namespace
