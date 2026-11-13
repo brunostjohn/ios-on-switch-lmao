@@ -71,6 +71,13 @@ TEST(RawDeviceAnswers, PredicationNestsAsDeepAsTheLoopsLaidDown)
         EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 8u) << k.kind;
 }
 
+// RawMetalDevice.mm newBufferWithIOSurface: makes the buffer over the surface's pages (gpu.raw.surface_buffer)
+TEST(RawDeviceAnswers, BuffersOverIOSurfacesAreMade)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsBufferWithIOSurface"), k.kind == "24B119" ? 1u : 0u) << k.kind;
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {

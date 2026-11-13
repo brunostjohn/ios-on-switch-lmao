@@ -126,9 +126,10 @@
 #                     cubes and volumes are chains of fx's layouts, as the methods raw::Device submitted
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
-#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: YES for shared texture handles, the
-#                     target's tessellation, amplification and dynamic attribute stride, predication nested as
-#                     deep as the raw path lays its loops, and counter sampling at stage boundaries alone
+#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: YES for shared texture handles and
+#                     buffers over IOSurfaces, the target's tessellation, amplification and dynamic attribute stride,
+#                     predication nested as deep as the raw path lays its loops, and counter sampling at stage
+#                     boundaries alone
 #   raw_shared_texture_test  raw/runtime/raw_shared_texture.h, raw_surface_image.h and RawMetalSharedTexture.h, every kind:
 #                     a shared texture's IOSurface creation properties from its descriptor (Metal's keys; a one-level 2D
 #                     one's rows and room for the kernel's block-linear layout, any other's image as the raw path lays

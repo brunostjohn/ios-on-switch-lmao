@@ -232,7 +232,7 @@ inline constexpr Count kCounts24B119[] = {
     {"isLargeMRTSupported", 0, true},
     {"isRGB10A2GammaSupported", 0, true},
     {"supportsBufferWithAddressRanges", 0, true},
-    {"supportsBufferWithIOSurface", 0, true},
+    {"supportsBufferWithIOSurface", 1, true},
     {"supportsCommandBufferJump", 1, true},
     {"supportsComputeCompressedTextureWrite", 0, true},
     {"supportsConditionalLoadStore", 0, true},
