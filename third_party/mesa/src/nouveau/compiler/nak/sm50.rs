@@ -10,9 +10,15 @@ use mesa_util::bitview::*;
 use rustc_hash::FxHashMap;
 use std::ops::Range;
 
+#[cfg(test)]
+mod alu_tests;
+mod hsetp2;
+mod int3;
 mod texs;
 pub use texs::bound_texture_cbuf;
+pub mod xmad;
 
+// Measured on GM20B by the bench loop; the doubles, HSET2, HSETP2 and HMNMX2 were not timed and keep NAK's guess.
 pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     let file = match &op.dsts_as_slice()[dst_idx] {
         Dst::None => return 0,
@@ -21,25 +27,17 @@ pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     };
 
     let (gpr_latency, pred_latency) = match op {
-            // Double-precision float ALU
-            Op::DAdd(_)
-            | Op::DFma(_)
-            | Op::DMnMx(_)
-            | Op::DMul(_)
-            | Op::DSetP(_)
-            // Half-precision float ALU
-            | Op::HAdd2(_)
-            | Op::HFma2(_)
-            | Op::HMul2(_)
-            | Op::HSet2(_)
-            | Op::HSetP2(_)
-            | Op::HMnMx2(_) => {
-                (13, 14)
-            }
-            _ => (6, 13)
+        Op::DAdd(_)
+        | Op::DFma(_)
+        | Op::DMnMx(_)
+        | Op::DMul(_)
+        | Op::DSetP(_)
+        | Op::HSet2(_)
+        | Op::HSetP2(_)
+        | Op::HMnMx2(_) => (13, 14),
+        _ => (6, 13),
     };
 
-    // This is BS and we know it
     match file {
         RegFile::GPR => gpr_latency,
         RegFile::Pred => pred_latency,
@@ -47,6 +45,18 @@ pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
         RegFile::Bar => 0, // Barriers have a HW scoreboard
         RegFile::Carry => 6,
         RegFile::Mem => panic!("Not a register"),
+    }
+}
+
+// Cycles from issue to a dependent instruction's issue through a scoreboard barrier, measured on GM20B by the bench loop.
+pub fn measured_variable_latency(op: &Op) -> Option<u32> {
+    match op {
+        Op::MuFu(_) | Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::Flo(_) => {
+            Some(13)
+        }
+        Op::Ldc(_) => Some(24),
+        Op::IMul(_) => Some(128),
+        _ => None,
     }
 }
 
@@ -489,9 +499,9 @@ impl SM50Op for OpFAdd {
         b.copy_alu_src_if_not_reg(src0, GPR, SrcType::F32);
 
         if src1.as_imm_not_f20().is_some()
-            && self.rnd_mode != FRndMode::NearestEven
+            && (self.rnd_mode != FRndMode::NearestEven || self.saturate)
         {
-            // Hardware cannot encode long-immediate + rounding mode
+            // FADD32I has neither a rounding mode nor saturation
             b.copy_alu_src(src1, GPR, SrcType::F32);
         }
     }
@@ -503,6 +513,7 @@ impl SM50Op for OpFAdd {
             e.set_reg_fmod_src(8..16, 54, 56, &self.srcs[0]);
             e.set_src_imm32(20..52, imm32);
             assert!(self.rnd_mode == FRndMode::NearestEven);
+            assert!(!self.saturate);
             e.set_bit(55, self.ftz);
         } else {
             match &self.srcs[1].src_ref {
@@ -1885,7 +1896,7 @@ impl SM50Op for OpF2F {
             }
             SrcRef::Imm32(imm32) => {
                 e.set_opcode(0x38a8);
-                e.set_src_imm_i20(20..39, 56, *imm32);
+                e.set_src_imm_f20(20..39, 56, *imm32);
                 assert!(src.is_unmodified());
             }
             SrcRef::CBuf(_) => {
@@ -3441,6 +3452,11 @@ macro_rules! sm50_op_match {
             Op::I2I($x) => $y,
             Op::IMad($x) => $y,
             Op::IMul($x) => $y,
+            Op::Xmad($x) => $y,
+            Op::Lop3($x) => $y,
+            Op::HSetP2($x) => $y,
+            Op::IAdd3($x) => $y,
+            Op::Lea($x) => $y,
             Op::IMnMx($x) => $y,
             Op::ISetP($x) => $y,
             Op::Tex($x) => $y,

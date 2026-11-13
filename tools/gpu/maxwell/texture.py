@@ -42,7 +42,7 @@ RGBA_LUT = (R | G | B, R | G | A, R | B | A, G | B | A, R | G | B | A)
 
 
 # TLDS's targets (bits 53-56): dimension, level mode (1 zero, 3 level), where each coordinate is (an array's index
-# first), then where its level, offsets and sample are
+# first, alone in register A: nak_nir_lower_tex_sm50.c), then where its level, offsets and sample are
 TLDS_TARGETS = {
     0x0: (DIM_1D, 1, ('a',), None, None, None),
     0x1: (DIM_1D, 3, ('a',), 'b', None, None),
@@ -51,7 +51,7 @@ TLDS_TARGETS = {
     0x5: (DIM_2D, 3, ('a', 'a1'), 'b', None, None),
     0x6: (DIM_2D, 1, ('a', 'a1'), None, None, 'b'),
     0x7: (DIM_3D, 1, ('a', 'a1', 'b'), None, None, None),
-    0x8: (DIM_A2D, 1, ('a', 'a1', 'b'), None, None, None),
+    0x8: (DIM_A2D, 1, ('a', 'b', 'b1'), None, None, None),
     0xC: (DIM_2D, 3, ('a', 'a1'), 'b', 'b1', None),
 }
 

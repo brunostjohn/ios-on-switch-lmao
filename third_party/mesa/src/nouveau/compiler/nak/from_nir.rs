@@ -384,6 +384,15 @@ enum SyncType {
     Cont,
 }
 
+/// A multiply's operand as SM50's XMAD lowering takes it: a constant as an
+/// immediate (sm50/xmad.rs picks its sequence by the constant's halves).
+fn mul_operand(sm: u8, nir_src: &nir_alu_src, src: Src) -> Src {
+    match nir_src.comp_as_uint(0) {
+        Some(k) if sm < 70 => (k as u32).into(),
+        _ => src,
+    }
+}
+
 struct ShaderFromNir<'a> {
     nir: &'a nir_shader,
     sm: &'a ShaderModelInfo,
@@ -1604,15 +1613,24 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_op_imul => {
                 assert!(alu.def.bit_size() == 32);
-                b.imul(srcs(0), srcs(1)).into()
+                let sm = b.sm();
+                let [x, y] =
+                    [0, 1].map(|i| mul_operand(sm, &nir_srcs[i], srcs(i)));
+                b.imul(x, y).into()
             }
             nir_op_imul_2x32_64 | nir_op_umul_2x32_64 => {
                 let signed = alu.op == nir_op_imul_2x32_64;
-                b.imul_2x32_64(srcs(0), srcs(1), signed)
+                let sm = b.sm();
+                let [x, y] =
+                    [0, 1].map(|i| mul_operand(sm, &nir_srcs[i], srcs(i)));
+                b.imul_2x32_64(x, y, signed)
             }
             nir_op_imul_high | nir_op_umul_high => {
                 let signed = alu.op == nir_op_imul_high;
-                let dst64 = b.imul_2x32_64(srcs(0), srcs(1), signed);
+                let sm = b.sm();
+                let [x, y] =
+                    [0, 1].map(|i| mul_operand(sm, &nir_srcs[i], srcs(i)));
+                let dst64 = b.imul_2x32_64(x, y, signed);
                 dst64[1].into()
             }
             nir_op_ine => {

@@ -5911,6 +5911,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         pl = pl->turnedTwin;
     else if (!pl->splitOf)
         pl = dev_->variant(*pl, bindingFacts(*pl) | (rot_.turned() ? AssumeTurned : 0u));
+    RAW_DIAGNOSTIC(logUniformTuple(*pl));
     RAW_ENCODE_END(variantSpan);
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {

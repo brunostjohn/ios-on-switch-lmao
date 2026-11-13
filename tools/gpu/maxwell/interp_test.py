@@ -6,7 +6,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from tools.gpu.maxwell import floats, gate, isa, texture
+from tools.gpu.maxwell import execute, floats, gate, isa, texture
 from tools.gpu.maxwell.execute import alu, run
 from tools.gpu.maxwell.interp import Lane, UnsupportedError
 
@@ -64,6 +64,48 @@ class FloatsTest(unittest.TestCase):
     def test_half_fma_rounds_once(self):
         a, b, c = 0x3C01, 0x3C01, 0x8000 | 0x3C02  # (1+u)^2 - (1+2u) = u^2: lost by two roundings
         self.assertNotEqual(floats.arith('fma', [a, b, c], floats.F16), 0)
+
+
+class ImmediateTest(unittest.TestCase):
+    def test_f2f_immediate_is_a_floats_top_bits(self):
+        # F2F.F16.F32 r2, 1.0 and -2.0 (nv50_ir emitF2F: imm20 is the f32's top 20 bits, its sign at bit 56)
+        for value, half in ((0x3F800000, 0x3C00), (0xC0000000, 0xC000)):
+            w = 0x38A8 << 48 | (value >> 31) << 56 | (value >> 12 & 0x7FFFF) << 20 | 2 << 10 | 1 << 8 | 2
+            lane = Lane()
+            execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+            self.assertEqual(lane.r(2), half)
+
+    def test_fadd_saturates_where_32i_cannot(self):
+        # FADD.SAT r2, r1, 2.0 (imm20) clamps to 1.0; FADD32I has no SAT bit, so NAK must not choose it
+        w = 0x3858 << 48 | 1 << 50 | (0x40000000 >> 12 & 0x7FFFF) << 20 | 1 << 8 | 2
+        lane = Lane()
+        lane.w(1, 0x3F000000)
+        execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+        self.assertEqual(lane.r(2), 0x3F800000)
+
+
+class ThreeSourceTest(unittest.TestCase):
+    def run_one(self, w: int, regs: dict) -> int:
+        lane = Lane()
+        for r, v in regs.items():
+            lane.w(r, v)
+        execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+        return lane.r(4)
+
+    def test_lop3_iadd3_iscadd(self):
+        regs = {1: 0x12345678, 2: 0x0F0F0F0F, 3: 0xFF00FF00}
+        # LOP3.LUT r4, r1, r2, r3, 0x96 (a ^ b ^ c); with a 20-bit immediate b, 0xE8 (majority)
+        lop3 = 0x5BE7 << 48 | 3 << 39 | 0x96 << 28 | 2 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(lop3, regs), 0x12345678 ^ 0x0F0F0F0F ^ 0xFF00FF00)
+        lop3i = 0x3C00 << 48 | 0xE8 << 48 | 3 << 39 | 0x7FFF << 20 | 1 << 8 | 4
+        a, b, c = 0x12345678, 0x7FFF, 0xFF00FF00
+        self.assertEqual(self.run_one(lop3i, regs), (a & b) | (a & c) | (b & c))
+        # IADD3 r4, r1, -r2, r3
+        iadd3 = 0x5CC0 << 48 | 1 << 50 | 3 << 39 | 2 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(iadd3, regs), (0x12345678 - 0x0F0F0F0F + 0xFF00FF00) & 0xFFFFFFFF)
+        # ISCADD r4, r1, 0x40, 3: (r1 << 3) + 0x40
+        iscadd = 0x3818 << 48 | 3 << 39 | 0x40 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(iscadd, regs), (0x12345678 << 3) + 0x40 & 0xFFFFFFFF)
 
 
 class GateTest(unittest.TestCase):
@@ -177,6 +219,22 @@ class TextureTest(unittest.TestCase):
         texture.tld('TLD_b', self.TLD_B, lane, inputs, 4)
         texture.tex('TEX_b', self.TEX_B, lane, inputs, 12)
         self.assertNotEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (12, 13, 14, 15)])
+
+    # TLDS r8:r10, r4:r5 (x, y), r6 (level) .2d.ll rgba at bound index 17 (NAK's sm50/texs.rs tlds_and_tld4s)
+    TLDS_LL = 0xDA00_0000_0000_0000 | 1 << 59 | 5 << 53 | 4 << 50 | 17 << 36 | 10 << 28 | 6 << 20 | 4 << 8 | 8
+
+    def test_tlds_reads_the_words_its_target_names(self):
+        inputs, lane = self.lanes()
+        for r, v in ((4, 7), (5, 9), (6, 1)):
+            lane.w(r, v)
+        texture.tlds(self.TLDS_LL, lane, inputs)
+        first = [lane.r(r) for r in (8, 9, 10, 11)]
+        lane.w(7, 123)
+        texture.tlds(self.TLDS_LL, lane, inputs)
+        self.assertEqual([lane.r(r) for r in (8, 9, 10, 11)], first)
+        lane.w(6, 2)
+        texture.tlds(self.TLDS_LL, lane, inputs)
+        self.assertNotEqual([lane.r(r) for r in (8, 9, 10, 11)], first)
 
 
 class AttributeTest(unittest.TestCase):

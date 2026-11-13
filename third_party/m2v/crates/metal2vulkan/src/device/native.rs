@@ -46,6 +46,25 @@ impl NativeShaderTarget {
             )
     }
 
+    /// Whether the device's color store makes Metal's code of an `n`-bit unorm channel from the
+    /// value `color_write::Lane::StoreCode` writes. GM20B's ROP truncates the value to `n + 4`
+    /// fractional bits and rounds the product with the channel's maximum to nearest, ties down
+    /// (254,892 of 254,892 device readings of 8- and 10-bit channels and RGB10A2's alpha, the
+    /// top two bits of its 10-bit code; the rule matched an independent 16-bit sweep), so a code's
+    /// `f32` nearest value stores that code.
+    pub(crate) fn stores_unorm_code(self, bits: u8) -> bool {
+        self == Self::Sm53 && matches!(bits, 2 | 8 | 10 | 16)
+    }
+
+    /// Whether the device's color store makes Metal's half of a `float` output to a half-float
+    /// channel rounding toward zero: GM20B's ROP converts to a half toward zero, a finite value
+    /// past the largest to the largest, an infinity kept, -0 kept, and stores the NaN it is given
+    /// as `0x7e00`, Metal's NaN of a `float` output (54,467 of 54,468 device readings of every
+    /// half in [0, 1], the values beside them and the specials; the other one the NaN).
+    pub(crate) fn stores_half_toward_zero(self) -> bool {
+        self == Self::Sm53
+    }
+
     pub(crate) fn half(self, operation: HalfOperation) -> bool {
         self.half_rules(operation).is_some()
     }

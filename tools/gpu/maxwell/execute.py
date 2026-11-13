@@ -17,6 +17,7 @@ from tools.gpu.maxwell.interp import (
     fmod,
     from_f32,
     half_op,
+    halves,
     i20,
     int_cmp,
     mufu,
@@ -41,7 +42,7 @@ def width_format(code: int) -> object:
 
 def f2f(w: int, lane: Lane, name: str, inputs: Inputs) -> int:
     dst, src = width_format(bits(w, 8, 2)), width_format(bits(w, 10, 2))
-    v = operand_b(lane, w, name, inputs, i20)
+    v = operand_b(lane, w, name, inputs, f20)
     if src is F16:
         v = (v >> 16) if bits(w, 41, 1) else v & 0xFFFF
     v = fmod(v, bits(w, 49, 1), bits(w, 45, 1), 16 if src is F16 else 32)
@@ -178,6 +179,12 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         y = b - (1 << 32) if sb and b & 0x80000000 else b
         p = x * y
         lane.w(d, (p >> 32) if high else p)
+    elif name == 'HSETP2_reg':
+        hsetp2(w, lane)
+    elif base in ('LOP3', 'IADD3', 'ISCADD'):
+        lane.w(d, three_source(name, w, lane, inputs, a))
+    elif name in ('XMAD_reg', 'XMAD_imm'):
+        lane.w(d, xmad(name, w, lane, a))
     elif base == 'BFE':
         r = operand_b(lane, w, name, inputs, i20)
         lane.w(d, bfe(a, r & 0xFF, (r >> 8) & 0xFF, bool(bits(w, 48, 1)), bool(bits(w, 40, 1))))
@@ -300,6 +307,80 @@ def shf(name: str, w: int, low: int, high: int, shift: int) -> int:
     else:
         shifted = (x << shift) & 0xFFFFFFFFFFFFFFFF if shift < 64 else 0
     return shifted >> 32 if dst_high else shifted & 0xFFFFFFFF
+
+
+def hsetp2(w: int, lane: Lane) -> None:
+    """Run HSETP2's register form (Ryujinx InstHsetp2R's layout and semantics)."""
+    a = halves(lane.r(bits(w, 8, 8)), bits(w, 47, 2))
+    b = halves(lane.r(bits(w, 20, 8)), bits(w, 28, 2))
+    results = []
+    for k in range(2):
+        x = fmod(a[k], bits(w, 44, 1), bits(w, 43, 1), 16)
+        y = fmod(b[k], bits(w, 30, 1), bits(w, 31, 1), 16)
+        if bits(w, 6, 1):
+            x, y = flush(x, F16), flush(y, F16)
+        results.append(float_cmp(bits(w, 35, 4), convert(x, F16, F32, 0, False), convert(y, F16, F32, 0, False)))
+    if bits(w, 49, 1):
+        both = results[0] and results[1]
+        results = [both, not both]
+    accum = lane.p(bits(w, 39, 3), bits(w, 42, 1))
+    lane.setp(bits(w, 3, 3), combine(bits(w, 45, 2), results[0], accum))
+    lane.setp(bits(w, 0, 3), combine(bits(w, 45, 2), results[1], accum))
+
+
+def three_source(name: str, w: int, lane: Lane, inputs: Inputs, a: int) -> int:
+    """Run LOP3.LUT, IADD3 and ISCADD (Ryujinx InstDecoders' layouts); not .X, .CC, predicates or IADD3's parts."""
+    base, form = name.split('_', 1)
+    b = operand_b(lane, w, name, inputs, i20)
+    if base == 'ISCADD':
+        mode = bits(w, 48, 2)
+        if mode == 3 or bits(w, 47, 1):
+            raise UnsupportedError('ISCADD .PO or .CC')
+        x = -a if mode == 2 else a
+        y = -b if mode == 1 else b
+        return ((x << bits(w, 39, 5)) + y) & 0xFFFFFFFF
+    c = lane.r(bits(w, 39, 8))
+    if base == 'IADD3':
+        if bits(w, 47, 2) or (form == 'reg' and bits(w, 31, 8)):
+            raise UnsupportedError('IADD3 .X, .CC, part or shift')
+        terms = [(-v if bits(w, 51 - k, 1) else v) for k, v in enumerate((a, b, c))]
+        return sum(terms) & 0xFFFFFFFF
+    lut = bits(w, 28, 8) if form == 'reg' else bits(w, 48, 8)
+    flags = bits(w, 36, 3) if form == 'reg' else bits(w, 57 if form == 'imm' else 56, 1)
+    if bits(w, 47, 1) or flags:
+        raise UnsupportedError('LOP3 .X, .CC or predicate')
+    out = 0
+    for i in range(8):
+        if lut >> i & 1:
+            term = 0xFFFFFFFF
+            for k, v in enumerate((a, b, c)):
+                term &= v if i >> (2 - k) & 1 else ~v & 0xFFFFFFFF
+            out |= term
+    return out
+
+
+def xmad(name: str, w: int, lane: Lane, a: int) -> int:
+    """Run XMAD's register and immediate forms (nv50_ir emitXMAD's layout, yuzu's semantics); not .X, .CC or CSFU."""
+    if bits(w, 38, 1) or bits(w, 47, 1) or bits(w, 50, 3) == 3:
+        raise UnsupportedError('XMAD .X, .CC or CSFU')
+    b = bits(w, 20, 16) if name == 'XMAD_imm' else lane.r(bits(w, 20, 8))
+    b_hi = 0 if name == 'XMAD_imm' else bits(w, 35, 1)
+    c = lane.r(bits(w, 39, 8))
+
+    def half(v: int, hi: int, signed: int) -> int:
+        h = (v >> 16 if hi else v) & 0xFFFF
+        return h - 0x10000 if signed and h & 0x8000 else h
+
+    product = half(a, bits(w, 53, 1), bits(w, 48, 1)) * half(b, b_hi, bits(w, 49, 1))
+    if bits(w, 36, 1):
+        product <<= 16
+    c = {0: c, 1: c & 0xFFFF, 2: c >> 16, 4: (b << 16) + c}.get(bits(w, 50, 3))
+    if c is None:
+        raise UnsupportedError('XMAD mode')
+    out = (product + c) & 0xFFFFFFFF
+    if bits(w, 37, 1):
+        out = (out & 0xFFFF) | (b & 0xFFFF) << 16
+    return out
 
 
 def bfe(v: int, pos: int, length: int, signed: bool, reverse: bool) -> int:

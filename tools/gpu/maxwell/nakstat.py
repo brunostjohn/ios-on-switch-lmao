@@ -4,9 +4,12 @@
 usage: nakstat.py (--pack pack.bin | --dump <directcheck DIRECTCHECK_DUMP dir>) [--corpus <R lines>]... [--json]
 
 A pack (raw/runtime/raw_pack.h) or a directcheck dump gives each state's programs and the register count its pipeline
-sets. Each state the corpora name gets a row: instructions by class, GPRs, warps per SM, and the time a 1280x720 draw
-takes if the program is instruction-bound (the hot-state scenes measure 8-22% above that). A program of at most
-STUB_INSTRUCTIONS writes constants; the corpus totals leave those out.
+sets. Each state the corpora name gets a row: instructions by class, GPRs, warps per SM, the time a 1280x720 draw
+takes if the program is instruction-bound (the hot-state scenes measure 8-22% above that), and the same from GM20B's
+measured issue cycles (cost.py: `cyc`/`ms_c` adding them, `cyc_o`/`ms_o` overlapping them, `unm` instructions of
+untimed classes, `bank` same-bank extra reads of distinct registers, `bankr` of every read, `bytes` of code, `stall`
+the stall counts it encodes). A program of at most STUB_INSTRUCTIONS writes constants; the corpus totals leave those
+out.
 """
 
 import argparse
@@ -20,7 +23,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from tools.gpu.maxwell import isa
+from tools.gpu.maxwell import cost, isa
 
 PIXELS_1280x720 = 1280 * 720
 LANES = 256
@@ -72,6 +75,7 @@ CLASSES = {
     ),
 }
 ORDER = ['tex', 'conv', 'guard', 'ldc', 'half', 'fp32', 'mufu', 'move', 'ctrl', 'mem', 'int']
+COST_COLUMNS = ('cycles', 'cycles_overlap', 'unmeasured', 'bank', 'bank_reads', 'bytes', 'stalls')
 
 
 def mnemonic_class(name: str) -> str:
@@ -107,12 +111,22 @@ def predicted_ms(instructions: int) -> float:
 def row(label: str, code: bytes, gprs: int) -> dict:
     c = classify(code)
     n = sum(v for k, v in c.items() if k != 'guard')
+    p = cost.program(code)
     return {
         'label': label,
         'instructions': n,
         'gprs': gprs,
         'warps': warps_per_sm(gprs),
         'ms_1280x720': round(predicted_ms(n), 3),
+        'cycles': p['cycles'],
+        'ms_cycles': round(cost.predicted_ms(p['cycles'], PIXELS_1280x720), 3),
+        'cycles_overlap': p['cycles_overlap'],
+        'ms_overlap': round(cost.predicted_ms(p['cycles_overlap'], PIXELS_1280x720), 3),
+        'unmeasured': p['unmeasured'],
+        'bank': p['bank'],
+        'bank_reads': p['bank_reads'],
+        'bytes': p['bytes'],
+        'stalls': p['stalls'],
         **{k: c.get(k, 0) for k in ORDER},
     }
 
@@ -282,22 +296,33 @@ def main() -> None:
         'states': len(rows),
         'stubs': len(rows) - len(real),
         'missing': len(missing),
-        'instructions': sum(r['instructions'] for r in real),
+        **{k: sum(r[k] for r in real) for k in ('instructions', *COST_COLUMNS)},
         **{k: sum(r[k] for r in real) for k in ORDER},
     }
+    summary['cycles'] = round(summary['cycles'], 2)
+    summary['cycles_overlap'] = round(summary['cycles_overlap'], 2)
     if a.json:
         print(json.dumps({'rows': rows, 'summary': summary, 'missing': missing}, indent=1))
         return
-    head = f'{"state":42} {"instr":>6} {"gpr":>4} {"wrp":>4} {"ms":>7} ' + ' '.join(f'{k:>5}' for k in ORDER)
+    head = (
+        f'{"state":42} {"instr":>6} {"gpr":>4} {"wrp":>4} {"ms":>7} {"cyc":>8} {"ms_c":>7} {"cyc_o":>8} {"ms_o":>7} '
+        f'{"unm":>5} {"bank":>5} '
+        f'{"bankr":>5} {"bytes":>7} {"stall":>7} ' + ' '.join(f'{k:>5}' for k in ORDER)
+    )
     print(head)
     for r in rows:
         print(
             f'{r["label"][:42]:42} {r["instructions"]:6} {r["gprs"]:4} {r["warps"]:4} {r["ms_1280x720"]:7.3f} '
-            + ' '.join(f'{r[k]:5}' for k in ORDER)
+            f'{r["cycles"]:8.1f} {r["ms_cycles"]:7.3f} {r["cycles_overlap"]:8.1f} {r["ms_overlap"]:7.3f} '
+            f'{r["unmeasured"]:5} {r["bank"]:5} {r["bank_reads"]:5} '
+            f'{r["bytes"]:7} {r["stalls"]:7} ' + ' '.join(f'{r[k]:5}' for k in ORDER)
         )
     print(
         f'corpus: {summary["states"]} states, {summary["stubs"]} stubs left out, {summary["missing"]} not found; '
-        f'{summary["instructions"]} instructions: ' + ', '.join(f'{k} {summary[k]}' for k in ORDER)
+        f'{summary["instructions"]} instructions, {summary["cycles"]} cycles / {summary["cycles_overlap"]} overlapped '
+        f'({summary["unmeasured"]} untimed), '
+        f'{summary["bank"]} same-bank reads ({summary["bank_reads"]} counting repeats), {summary["bytes"]} bytes, '
+        f'{summary["stalls"]} stall cycles: ' + ', '.join(f'{k} {summary[k]}' for k in ORDER)
     )
 
 
