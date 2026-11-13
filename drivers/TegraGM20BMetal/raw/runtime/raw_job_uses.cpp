@@ -93,8 +93,10 @@ void CommandBuffer::use(const Texture &texture, bool write)
 {
     RAW_ENCODE_COUNT(Uses);
     const auto range = texture.storageRange();
-    if (write)
+    if (write) {
         publication_.wrote(range.hostVisible || (texture.import && !texture.import->id) || texture.callerPages);
+        zcullPlanes_.wrote(range.va ? range.va : texture.va, range.bytes ? range.bytes : 1);
+    }
     if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
         return;
     RAW_ENCODE_SPAN(Use);

@@ -452,6 +452,9 @@ void rmPoolEncoders()
     facts.depth = zetaAttachment(pass);
     facts.depthSlice = pass.depthAttachment.texture ? pass.depthAttachment.slice : pass.stencilAttachment.slice;
     facts.depthLoad = pass.depthAttachment.loadAction;
+    if (id loaded = pass.depthAttachment.texture;
+        pass.depthAttachment.loadAction == MTLLoadActionLoad && [loaded isKindOfClass:[RMTexture class]])
+        ((RMTexture *)loaded)->_depthLoaded.store(true, std::memory_order_relaxed);
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;
     MTLRenderPassStencilAttachmentDescriptor *stencil = pass.stencilAttachment;

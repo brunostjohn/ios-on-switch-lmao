@@ -4105,6 +4105,7 @@ CommandBuffer *Device::begin()
     cb.backings_.clear();
     cb.heaps_.clear();
     cb.surfaces_.clear();
+    cb.zcullPlanes_.clear();
     set_.view(setView_);
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
@@ -4376,6 +4377,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     }
     if (backingLock.owns_lock())
         backingLock.unlock();
+    // the depth's stored region (raw_zcull_planes.h), taken before this pass's own write leaves it stale
+    const ZcullStored zcullHeld = zeta ? zcullPlanes_.held(zeta->va) : ZcullStored();
     for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
@@ -4404,7 +4407,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     zask.layers = layers;
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
     zask.atStorageBase = zeta && (!zeta->storage.va || zeta->va == zeta->storage.va);
-    e.zcull_.candidate = zcullCandidate(zask);
+    const Rect zcullArea = e.planeArea();
+    const bool zcullKeep = zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored &&
+                           pass.depthStencil.loadedSomewhere;
+    zcullBegin(e.zcull_, zask, dev_->zcullInfo_, zcullArea.x0, zcullArea.y0, zcullArea.x1 - zcullArea.x0,
+               zcullArea.y1 - zcullArea.y0, layers, zcullHeld, zcullKeep, [this](uint64_t bytes) {
+                   uint64_t va = 0;
+                   dev_->alloc(dev_->upload_, uint32_t(bytes), kZcullStorageAlign, va);
+                   return va;
+               });
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -7678,6 +7689,11 @@ void RenderEncoder::end()
     endShaderTests();
     if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports + kDrawStampWords)
         reserve();
+    if (zcull_.store && !zcull_.invalidated) {
+        p_.m(kStoreZcull, 0);
+        const Texture &zeta = *pass_.depthStencil.texture;
+        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, zeta.storageRange().bytes));
+    }
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
     if (rot_.turned()) {
@@ -7816,12 +7832,13 @@ void RenderEncoder::end()
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture, layers);
-    // ahead of the depth clear, which sets the region; over the plane the pass renders (a turned drawable's own axes)
-    const Rect plane = planeArea();
-    if (ZcullRegion region; zcull_.candidate && zcullRegion(d.zcullInfo_, plane.x0, plane.y0, plane.x1 - plane.x0,
-                                                            plane.y1 - plane.y0, region, layers)) {
-        zcullRegionWords(p, region, zs.texture->format, zcull_.dir);
-        RAW_DIAGNOSTIC(d.stats.zcullPasses++);
+    // ahead of the depth clear, which sets the region, or the load of a stored one; over the plane the pass renders (a
+    // turned drawable's own axes, zcullBegin)
+    if (zcull_.candidate) {
+        zcullRegionWords(p, zcull_.region, zs.texture->format, zcull_.dir, zcull_.storage, zcull_.storageBytes);
+        if (zcull_.load)
+            p.m(kLoadZcull, 0);
+        RAW_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);
     } else if (d.zcullOn_) {
         zcullOffWords(p);
     }

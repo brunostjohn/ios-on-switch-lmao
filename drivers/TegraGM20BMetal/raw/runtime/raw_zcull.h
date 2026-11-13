@@ -102,12 +102,15 @@ inline uint32_t zcullZFormat(uint32_t metal)
     return metal == 250 ? 1u : 3u;  // Depth16Unorm: FP; Depth32Float and _Stencil8: ZF32_1
 }
 
-// nvk_CmdBeginRendering's zcull region (no storage: a cleared depth), its direction `dir`
-inline void zcullRegionWords(Push &p, const ZcullRegion &r, uint32_t zetaFormat, uint8_t dir)
+// nvk_CmdBeginRendering's zcull region, its direction `dir`, the region's storage [storage, storage + storageBytes)
+// where a pass stores or loads it (raw_zcull_planes.h), else none
+inline void zcullRegionWords(Push &p, const ZcullRegion &r, uint32_t zetaFormat, uint8_t dir, uint64_t storage = 0,
+                             uint64_t storageBytes = 0)
 {
+    const uint64_t end = storage ? storage + storageBytes : 0;
     p.m(0x1590, 0);                                           // SET_ACTIVE_ZCULL_REGION
     p.inc(0x07e0, {r.aliquotCount * r.layers << 16, r.aliquotCount});  // SET_ZCULL_REGION_LOCATION, _ALIQUOTS
-    p.inc(0x07e8, {0, 0, 0, 0});                                       // SET_ZCULL_STORAGE_A..D
+    p.inc(0x07e8, {uint32_t(storage >> 32), uint32_t(storage), uint32_t(end >> 32), uint32_t(end)});  // _STORAGE_A..D
     p.m(0x15c8, 0);                                                    // SET_ZCULL_REGION_FORMAT Z_4X4
     p.inc(0x07c0, {r.width, r.height, r.layers, 0});  // SET_ZCULL_REGION_SIZE_A..C, _PIXEL_OFFSET_C
     p.inc(0x15fc, {r.x, r.y});                                // SET_ZCULL_REGION_PIXEL_OFFSET_A, _B
@@ -134,13 +137,18 @@ struct ZcullAsk {
     uint32_t layers = 1;      // the pass renders layers [0, layers)
     uint32_t zetaLayers = 1;  // the zeta's
     bool atStorageBase = true;  // the zeta starts at its memory's base (not a layer view of an array)
+    // its depth is loaded, and an earlier pass of the command buffer stored its region over this pass's
+    // (raw_zcull_planes.h)
+    bool loadedRegion = false;
 };
 
-// A pass takes a region when its depth target is cleared at its start, as NVK's begin does; NVK's region is the render
-// area's pixels at any sample count. A layered pass's region is as deep as its layers, from the zeta's first
+// A pass takes a region when its depth target is cleared at its start, as NVK's begin does, or loaded with the region an
+// earlier pass stored, as NVK's begin loads its plane; NVK's region is the render area's pixels at any sample count. A
+// layered pass's region is as deep as its layers, from the zeta's first
 constexpr bool zcullCandidate(const ZcullAsk &a)
 {
-    return a.on && a.depth && a.cleared && a.layers <= a.zetaLayers && a.atStorageBase;
+    return a.on && a.depth && (a.cleared || (a.loadedRegion && a.layers == 1)) && a.layers <= a.zetaLayers &&
+           a.atStorageBase;
 }
 
 // A pass's zcull: whether it takes a region, the direction its depth tests go, and whether a draw already invalidated it
@@ -148,6 +156,10 @@ struct ZcullPass {
     bool candidate = false;
     uint8_t dir = 0;
     bool invalidated = false;
+    ZcullRegion region;  // the region's layout, from the pass's begin
+    bool load = false;   // LOAD_ZCULL from `storage` in the prologue, in place of the depth clear's region
+    bool store = false;  // STORE_ZCULL into `storage` at the end
+    uint64_t storage = 0, storageBytes = 0;
 };
 
 inline uint8_t zcullDirection(uint8_t compare)

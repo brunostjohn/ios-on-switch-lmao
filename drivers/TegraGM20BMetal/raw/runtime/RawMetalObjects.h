@@ -152,6 +152,7 @@ enum class RMShareable : uint8_t {
     RMTextureKind _kind;
     std::atomic<bool> _gpuWrites;   // its surface was declared GPU-written (surfaceGpuWrites)
     std::atomic<bool> _readAsData;  // a blit copied out of it or a kernel took it, as recorded (raw_resolve_rule.h)
+    std::atomic<bool> _depthLoaded;  // a pass loaded it as its depth, as recorded (raw_zcull_planes.h)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
     SurfaceWriteCount *_surfaceWrites;  // its surface's writes (RawMetalSurfaceWrites.mm), held while it lives

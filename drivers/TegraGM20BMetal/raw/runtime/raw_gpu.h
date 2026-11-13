@@ -91,6 +91,7 @@
 #include "raw_depth_stencil_state.h"
 #include "raw_sample_positions.h"
 #include "raw_zcull.h"
+#include "raw_zcull_planes.h"
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
@@ -665,6 +666,7 @@ struct DepthStencilAttachment {
     float depth = 1;
     uint32_t stencil = 0;
     bool loaded = true, stored = true;  // an aspect is loaded, or stored: its contents outside the pass matter
+    bool loadedSomewhere = false;       // a recorded pass loads this depth (RMTexture::_depthLoaded)
 };
 
 struct PassDesc {
@@ -1588,6 +1590,7 @@ private:
     std::vector<const HeapMembers *> heaps_;  // useHeap's, each kept alive by the facade's command buffer
     void nameHeaps();                         // lock_ held
     SurfaceList surfaces_;
+    ZcullPlanes zcullPlanes_;  // the depths' regions this command buffer's passes stored (raw_zcull_planes.h)
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
     bool memberHostWritten_ = false;
@@ -2459,7 +2462,7 @@ public:
         // sample counts)
         std::atomic<uint64_t> resolveRoute[3][3] = {};
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
-        std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
+        std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0}, zcullLoads{0};
         // stencil plane draws encoded: the eight-draw route's (raw_stencil_bits.h) and the one-draw route's
         // (raw_zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../raw/runtime/raw_zcull.h"
+#include "../raw/runtime/raw_zcull_planes.h"
 
 namespace {
 
@@ -191,6 +192,77 @@ TEST(Zcull, ALayeredPassTakesARegionAsDeepAsItsLayers)
     EXPECT_TRUE(size) << "SET_ZCULL_REGION_SIZE_C: the layers";
     raw::ZcullRegion many;
     EXPECT_FALSE(raw::zcullRegion(x1, 0, 0, 1280, 720, many, 4096)) << "no layer's share of the RAM holds a subregion";
+}
+
+// gpu.raw.zcull loaded_passes=2: a pass that clears and stores a depth a recorded pass loads stores its region; the
+// next pass that loads the depth over the same region loads it, unless something wrote the depth in between
+TEST(Zcull, ALoadedDepthLoadsTheRegionAnEarlierPassStored)
+{
+    const TegraGM20BAbiZcullInfo x1 = {32, 32, 1024, 2048, 32, 32, 192, 16, 32, 64, 0x1500, 0x1000};
+    constexpr uint64_t kZeta = 0x100000, kZetaBytes = 0x400000, kStorage = 0x2000000;
+    uint64_t asked = 0;
+    const auto storage = [&](uint64_t bytes) {
+        asked = bytes;
+        return kStorage;
+    };
+    raw::ZcullPlanes planes;
+    raw::ZcullPass first;
+    raw::zcullBegin(first, clearedDepth(), x1, 0, 0, 1280, 720, 1, planes.held(kZeta), true, storage);
+    ASSERT_TRUE(first.candidate);
+    EXPECT_FALSE(first.load);
+    ASSERT_TRUE(first.store);
+    EXPECT_EQ(first.storage, kStorage);
+    EXPECT_EQ(asked, uint64_t(first.region.aliquotCount) * 32 + 32 + 192);
+    planes.wrote(kZeta, kZetaBytes);  // the first pass's own write, at its begin
+    planes.stored(raw::zcullStoredBy(first, kZeta, kZetaBytes));
+
+    raw::ZcullAsk loaded = clearedDepth();
+    loaded.cleared = false;
+    raw::ZcullPass second;
+    const raw::ZcullStored held = planes.held(kZeta);
+    raw::zcullBegin(second, loaded, x1, 0, 0, 1280, 720, 1, held, true, storage);
+    ASSERT_TRUE(second.candidate);
+    EXPECT_TRUE(second.load);
+    EXPECT_TRUE(second.store) << "into the storage it loaded";
+    EXPECT_EQ(second.storage, kStorage);
+    EXPECT_EQ(second.dir, raw::kZcullLess);
+
+    raw::ZcullPass smaller;
+    raw::zcullBegin(smaller, loaded, x1, 0, 0, 640, 720, 1, held, false, storage);
+    EXPECT_FALSE(smaller.candidate) << "another region";
+    raw::ZcullPass none;
+    raw::zcullBegin(none, loaded, x1, 0, 0, 1280, 720, 1, raw::ZcullStored(), false, storage);
+    EXPECT_FALSE(none.candidate) << "nothing stored";
+    planes.wrote(kZeta + kZetaBytes - 4, 4);
+    EXPECT_EQ(planes.held(kZeta).zetaVa, 0u) << "a write to the depth's memory";
+    planes.stored(raw::zcullStoredBy(first, kZeta, kZetaBytes));
+    planes.wrote(kZeta + kZetaBytes, 64);
+    EXPECT_EQ(planes.held(kZeta).zetaVa, kZeta) << "a write past it";
+    planes.clear();
+    EXPECT_EQ(planes.held(kZeta).zetaVa, 0u) << "the next command buffer";
+
+    raw::ZcullPass unkept;
+    raw::zcullBegin(unkept, clearedDepth(), x1, 0, 0, 1280, 720, 1, raw::ZcullStored(), false, storage);
+    EXPECT_TRUE(unkept.candidate);
+    EXPECT_FALSE(unkept.store) << "no recorded pass loads the depth";
+    EXPECT_EQ(unkept.storage, 0u);
+    raw::ZcullPass full;
+    raw::zcullBegin(full, clearedDepth(), x1, 0, 0, 1280, 720, 1, raw::ZcullStored(), true,
+                    [](uint64_t) { return uint64_t(0); });
+    EXPECT_TRUE(full.candidate);
+    EXPECT_FALSE(full.store) << "no storage to be had";
+
+    raw::ZcullPass reversed = first;
+    reversed.dir = raw::kZcullGreater;
+    EXPECT_EQ(raw::zcullStoredBy(reversed, kZeta, kZetaBytes).dir, raw::kZcullGreater);
+    std::vector<uint32_t> words(raw::kZcullRegionWords + 8);
+    raw::Push p{words.data(), words.data() + words.size()};
+    raw::zcullRegionWords(p, second.region, 252, second.dir, second.storage, second.storageBytes);
+    bool storageWords = false;
+    for (uint32_t *w = words.data(); w + 4 < p.at; w++)
+        storageWords |= w[1] == 0 && w[2] == uint32_t(kStorage) && w[3] == 0 &&
+                        w[4] == uint32_t(kStorage + second.storageBytes);
+    EXPECT_TRUE(storageWords) << "SET_ZCULL_STORAGE_A..D: the storage and its end";
 }
 
 TEST(Zcull, NothingWithoutARegion)

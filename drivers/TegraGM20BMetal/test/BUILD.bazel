@@ -211,7 +211,10 @@
 #   raw_kernel_texture_test  raw/runtime/raw_kernel_texture.h: the textures a raw kernel samples in place (a mipmapped
 #                     one among them)
 #   raw_zcull_test    raw/runtime/raw_zcull.h: zcull regions laid out as Mesa's nil_zcull_new (its reference table),
-#                     their words, and the draws' states that invalidate a pass's region
+#                     their words, and the draws' states that invalidate a pass's region; raw_zcull_planes.h: a region
+#                     one pass stores and a later pass of the command buffer loads
+#   raw_zbc_test      raw/runtime/raw_zbc.h: the ZBC entries of the sRGB, 10-bit, 16-bit unorm, RGBA32Float and Depth16
+#                     clears raw_clear.h hands
 #   raw_blend_kill_test  raw/runtime/raw_blend_kill.h: the zero-source pixel kill only for single-target ROP blends that
 #                     leave every destination value as it was under a zero source
 #   raw_storage_form_test  raw/runtime/raw_storage_form.h, raw_key_tally.h: which attachments a storage form's views
@@ -3489,6 +3492,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zcull.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zcull_planes.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
     ],
     copts = [
