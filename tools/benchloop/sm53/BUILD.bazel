@@ -86,9 +86,13 @@ py_library(
 # The NAK question batches (tools/benchloop/batches/README.md)
 py_library(
     name = "families",
-    srcs = ["int3.py"],
+    srcs = [
+        "icache.py",
+        "int3.py",
+    ],
     deps = [
         ":encode",
+        ":fit",
         ":latency",
         ":program",
         ":sph",
@@ -114,6 +118,7 @@ py_library(
         ],
     )
     for name in [
+        "icache_test",
         "int3_test",
         "intops_test",
     ]
