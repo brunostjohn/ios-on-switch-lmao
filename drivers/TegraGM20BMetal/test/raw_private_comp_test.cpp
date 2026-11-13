@@ -37,7 +37,7 @@ std::string route(uint8_t storageBits, bool twin, Target &t)
 raw::PrivateTextureFacts target(uint32_t bpp)
 {
     raw::PrivateTextureFacts f;
-    f.privateStorage = f.renderedAndSampledOnly = f.plainColour = true;
+    f.privateStorage = f.compressibleUsage = f.plainColour = true;
     f.shape = raw::PrivateShape2D::Plain;
     f.compression = true;
     f.bpp = bpp;
@@ -56,7 +56,7 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
 {
     bool raw::PrivateTextureFacts::*fields[] = {
         &raw::PrivateTextureFacts::privateStorage,
-        &raw::PrivateTextureFacts::renderedAndSampledOnly,
+        &raw::PrivateTextureFacts::compressibleUsage,
         &raw::PrivateTextureFacts::plainColour,
         &raw::PrivateTextureFacts::compression,
     };
@@ -68,6 +68,14 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
     raw::PrivateTextureFacts other = target(4);
     other.shape = raw::PrivateShape2D::Other;
     EXPECT_EQ(raw::privateCompressedKind(other), 0u) << "a cube, a 3D or a 1D texture";
+}
+
+TEST(RawPrivateComp, ShaderWriteUsageIsTakenWithStorageReadingCompressed)
+{
+    const std::string facade = Body(SourceText("../raw/runtime/RawMetalPrivateComp.mm"), "uint32_t privateCompressedKind(");
+    EXPECT_THAT(facade, HasSubstr("MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite"))
+        << "gpu.raw.private_compression shader_write";
+    EXPECT_TRUE(raw::storageReadsCompressed());
 }
 
 TEST(RawPrivateComp, AMipChainTakesItsKind)

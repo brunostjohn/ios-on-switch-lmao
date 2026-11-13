@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Private render targets on compressed memory (rule comp.private). A private 2D texture of one sample (its mip chain too)
-// or 2D array of one level, or a stored multisampled one, that only the 3D engine renders and the texture unit samples is
-// bound with its texel size's compressible kind when
+// or 2D array of one level, or a stored multisampled one, that only the 3D engine renders, shaders store to and the texture
+// unit samples is bound with its texel size's compressible kind when
 // compressed memory of its size is ready (Device::comp_, made off the render thread), so its full clears to a ZBC value
 // write tags only and its draws move compressed tiles. The kind must be one the copy engine reads and writes as plain
 // texels (raw_comp.h copyEngineReadsCompressed: the move below is its copy); passes that view it as a storage image do so
@@ -33,7 +33,9 @@ struct PrivateTextureFacts {
     bool privateStorage = false;
     PrivateShape2D shape = PrivateShape2D::Other;
     uint32_t levels = 1, samples = 1;
-    bool renderedAndSampledOnly = false;  // usage is RenderTarget and/or ShaderRead, nothing else (not Unknown)
+    // usage is RenderTarget, ShaderRead and/or ShaderWrite (the surface unit's stores go through the binding's kind, rule
+    // storage.compressed), nothing else (not Unknown)
+    bool compressibleUsage = false;
     bool plainColour = false;             // a colour format the 3D engine renders, no extended-range or planar form
     uint32_t bpp = 0;
     bool compression = false;  // the kernel compresses (TegraGM20BInfoCompression)
@@ -57,7 +59,7 @@ constexpr bool privateShapeCompresses(const PrivateTextureFacts &f)
 // The compressed kind such a texture binds, or 0
 inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
 {
-    if (!f.compression || !f.privateStorage || !privateShapeCompresses(f) || !f.renderedAndSampledOnly ||
+    if (!f.compression || !f.privateStorage || !privateShapeCompresses(f) || !f.compressibleUsage ||
         !f.plainColour)
         return 0;
     const uint32_t kind = compressedKind(f.bpp, 0, std::max(f.samples, 1u));

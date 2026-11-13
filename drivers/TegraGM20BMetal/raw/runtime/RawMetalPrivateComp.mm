@@ -50,8 +50,9 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
                   : d.textureType == MTLTextureType2DArray       ? raw::PrivateShape2D::Array
                   : d.textureType == MTLTextureType2DMultisample ? raw::PrivateShape2D::Multisample
                                                                  : raw::PrivateShape2D::Other;
-    facts.renderedAndSampledOnly = d.usage != MTLTextureUsageUnknown &&
-                                   !(d.usage & ~NSUInteger(MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead));
+    facts.compressibleUsage =
+        d.usage != MTLTextureUsageUnknown &&
+        !(d.usage & ~NSUInteger(MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite));
     facts.plainColour =
         f && f->rt && !raw::blockCompressed(f) && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None;
     facts.bpp = f ? f->bpp : 0;

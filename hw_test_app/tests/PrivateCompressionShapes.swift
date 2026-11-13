@@ -14,7 +14,7 @@ extension PrivateCompressionTest {
         var paths: [String] = []
     }
 
-    static let shapeArms = ["mips", "array", "ms4"]
+    static let shapeArms = ["mips", "array", "ms4", "shader_write"]
     /// Clear colours the boot ZBC table holds (black, white, zero), one a slice
     static let sliceClears = [
         MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1), MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1),
@@ -140,6 +140,29 @@ extension PrivateCompressionTest {
             let state = try gpu.render(fragment: "comp_pattern_fragment", format: .bgra8Unorm, samples: 4)
             run.paths.append(try await gpu.run(draw(target, slant: true, state: state)).path)
             run.bytes = try await sampleGrid(gpu, target, &run)
+            run.compressed = comptags(facade, target)
+        case "shader_write":
+            let target = try await made(facade, plain: plain) {
+                try gpu.texture(.bgra8Unorm, 128, 128, usage: [.renderTarget, .shaderRead, .shaderWrite])
+            }
+            run.made = comptags(facade, target)
+            let kernel = try gpu.compute("comp_pattern_kernel")
+            run.paths.append(
+                try await gpu.run { commands in
+                    let p = MTLRenderPassDescriptor()
+                    p.colorAttachments[0].texture = target
+                    p.colorAttachments[0].loadAction = .clear
+                    p.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+                    p.colorAttachments[0].storeAction = .store
+                    commands.makeRenderCommandEncoder(descriptor: p)!.endEncoding()
+                    let e = commands.makeComputeCommandEncoder()!
+                    e.setComputePipelineState(kernel)
+                    e.setTexture(target, index: 0)
+                    e.dispatchThreads(
+                        MTLSize(width: 64, height: 128, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+                    e.endEncoding()
+                }.path)
+            run.bytes = try await gpu.read(target, bytesPerPixel: 4)
             run.compressed = comptags(facade, target)
         default:
             throw TestFailure("no shape arm \(arm)")
