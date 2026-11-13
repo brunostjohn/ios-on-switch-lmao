@@ -149,7 +149,7 @@ static inline void tegra_vic_compose_put_slot(uint8_t *c, uint32_t index, const 
     const uint32_t surf = slot + TEGRA_VIC_SLOT_SURFACE;
     uint32_t inH = 0;
     uint32_t inV = 0;
-    tegra_vic_chroma_loc(sf, src->chromaSite, 0, &inH, &inV);
+    tegra_vic_chroma_loc(sf, src->chromaSite, &inH, &inV);
     const bool bl = src->blockLinear != 0;
     TEGRA_VIC_SET(c, surf, SURF_FORMAT, sf->vic);
     TEGRA_VIC_SET(c, surf, SURF_CHROMA_LOC_HORIZ, inH);

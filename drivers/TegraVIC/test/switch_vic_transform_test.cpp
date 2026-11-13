@@ -344,7 +344,7 @@ TEST_F(SwitchVICTransformTest, DetachedVideoCopyInto422vRunsDirect)
     ASSERT_EQ(submit(), 1);
     EXPECT_EQ(notifications, 1);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_FORMAT),
-              uint64_t(TEGRA_VIC_T_Y8___U8V8_N422R));
+              uint64_t(TEGRA_VIC_T_Y8___U8V8_N422));
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH), 533u);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT, OUT_TRANSPOSE), 1u);
 }

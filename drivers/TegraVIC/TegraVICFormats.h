@@ -6,9 +6,9 @@
 // engine_headers/vic04.h (NVIDIA, MIT) for A8R8G8B8 32 and Y8___U8V8_N420 67; averne's FFmpeg nvtegra
 // libavutil/clb0b6.h for the rest of the table (the values NVIDIA's open-gpu-doc vic_ceb6_types.h also gives VIC 5.1),
 // and its hwcontext_nvtegra.c av_nvtegra_pixfmt_to_vic for the formats it runs on T210 (L8, NV12, YUV420P, R5G6B5 and
-// the 32-bit RGB orders). N422 halves chroma across. That N422R ("rotated") halves it down is inferred from the name,
-// weakly backed by L4T's T21x display bandwidth code (t21x/bandwidth.c), which gives a rotated 422R window the line
-// count of an unrotated 422 one. A row counts elements: one per pixel in every packed format (averne: OutLumaWidth =
+// the 32-bit RGB orders). N422 halves chroma across a memory row even when VIC writes the output transposed: probe
+// gpu.x1.vic_transpose422 (L998) turned a '422v' exactly as N422 sited by ChromaLocHoriz, and as N422R misplaced every
+// CbCr pair (boots 19 and 21). A row counts elements: one per pixel in every packed format (averne: OutLumaWidth =
 // linesize / step - 1), one CbCr pair in a semi-planar chroma plane.
 #ifndef TEGRA_VIC_FORMATS_H
 #define TEGRA_VIC_FORMATS_H
@@ -160,7 +160,7 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
          {1, 2, 0},
          1,
          0,
-         TEGRA_VIC_T_Y8___U8V8_N422R,
+         TEGRA_VIC_T_Y8___U8V8_N422,
          0},
         {TEGRA_VIC_FOURCC('4', '2', '2', 'f'),
          TEGRA_VIC_T_Y8___U8V8_N422,
@@ -170,7 +170,7 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
          {1, 2, 0},
          1,
          0,
-         TEGRA_VIC_T_Y8___U8V8_N422R,
+         TEGRA_VIC_T_Y8___U8V8_N422,
          0},
         {TEGRA_VIC_FOURCC('4', '4', '4', 'v'),
          TEGRA_VIC_T_Y8___U8V8_N444,
@@ -266,17 +266,12 @@ static inline uint32_t tegra_vic_chroma_vert(uint32_t site)
     return 1;
 }
 
-// ChromaLocHoriz and ChromaLocVert of a surface of format `f` sited `site` (0 on an axis it does not subsample). A
-// transposed 4:2:2 output's are its memory's exchanged, like the rest of its description; transposed 4:2:0 keeps the
-// siting its jobs ran with on the unit.
-static inline void tegra_vic_chroma_loc(const TegraVICFormat *f, uint32_t site, int transposed, uint32_t *horiz,
-                                        uint32_t *vert)
+// ChromaLocHoriz and ChromaLocVert of a surface of format `f` sited `site` (0 on an axis it does not subsample): the
+// siting of its memory, transposed output too (a turned 4:2:2's pairs sit across memory rows by ChromaLocHoriz).
+static inline void tegra_vic_chroma_loc(const TegraVICFormat *f, uint32_t site, uint32_t *horiz, uint32_t *vert)
 {
-    const uint32_t across = f->subX ? tegra_vic_chroma_horiz(site) : 0;
-    const uint32_t down = f->subY ? tegra_vic_chroma_vert(site) : 0;
-    const int exchange = transposed && f->subX != f->subY;
-    *horiz = exchange ? down : across;
-    *vert = exchange ? across : down;
+    *horiz = f->subX ? tegra_vic_chroma_horiz(site) : 0;
+    *vert = f->subY ? tegra_vic_chroma_vert(site) : 0;
 }
 
 #ifdef __cplusplus

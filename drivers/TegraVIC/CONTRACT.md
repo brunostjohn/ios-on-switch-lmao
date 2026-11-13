@@ -183,10 +183,10 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
 - Colour standard by size, not by the surfaces' YCbCrMatrix attachment.
 - Packed 4:2:2 (until `packedYcc` is proven), RGhA, 10-bit YCbCr: refused (VideoToolbox falls back per call). L008,
   L565, l10r, NV24 and three-plane 4:2:0 are table rows that have not run on the unit.
-- 4:2:2 biplanar (`Y8___U8V8_N422`, NVB0B6 code 63) has not run on the unit. Like every transposed output, a
-  transposed 4:2:2 one is described before the transpose, where chroma halved across memory rows is halved down:
-  `Y8___U8V8_N422R` (65), with the siting exchanged (`TegraVICFormats.h`). This rests on the law measured for 4:2:0,
-  which cannot tell the two apart. If it is wrong, a turned 4:2:2 picture shows correct luma and misplaced colour.
+- 4:2:2 biplanar (`Y8___U8V8_N422`, NVB0B6 code 63): a transposed 4:2:2 output is described as `Y8___U8V8_N422`
+  too, its siting as its memory lies (`ChromaLocHoriz` across memory rows) [T: probe gpu.x1.vic_transpose422 on boots
+  19 and 21 turned a '422v' exactly that way, and as `Y8___U8V8_N422R` (65) with the siting exchanged misplaced every
+  CbCr pair].
 - GetHistogram, GetTransformEstimation, CaptureSurface: unsupported.
 - Rotation direction: TegraVIC takes bit 2 as a clockwise quarter turn applied after the flips (Android's HAL order)
   [I]; which VIC flip/transpose bits implement each IOSA transform was measured on the unit (`vicFlips` [T]), so only

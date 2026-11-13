@@ -632,12 +632,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_TARGET_TOP, ty);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_TARGET_BOTTOM, ty + th - 1);
 
-    // Chroma halved across memory rows is, before the transpose, chroma halved down: a transposed 4:2:2 output is
-    // described as N422R, its siting exchanged too.
     const TegraVICFormat *df = dst->format;
     uint32_t locH = 0;
     uint32_t locV = 0;
-    tegra_vic_chroma_loc(df, dst->chromaSite, swapSurface, &locH, &locV);
+    tegra_vic_chroma_loc(df, dst->chromaSite, &locH, &locV);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_FORMAT, swapSurface ? df->vicTransposed : df->vic);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_LOC_HORIZ, locH);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_LOC_VERT, locV);
@@ -686,7 +684,7 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
         const uint32_t surf = slot + TEGRA_VIC_SLOT_SURFACE;
         uint32_t inH = 0;
         uint32_t inV = 0;
-        tegra_vic_chroma_loc(sf, src->chromaSite, 0, &inH, &inV);
+        tegra_vic_chroma_loc(sf, src->chromaSite, &inH, &inV);
         TEGRA_VIC_SET(s, surf, SURF_FORMAT, sf->vic);
         TEGRA_VIC_SET(s, surf, SURF_CHROMA_LOC_HORIZ, inH);
         TEGRA_VIC_SET(s, surf, SURF_CHROMA_LOC_VERT, inV);
