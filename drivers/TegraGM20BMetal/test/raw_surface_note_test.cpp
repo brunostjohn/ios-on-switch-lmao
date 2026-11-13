@@ -48,4 +48,32 @@ TEST(RawSurfaceNote, TakesScalarsAndCallersAndHoldsNoReference)
     EXPECT_NE(strstr(line, "not found"), nullptr) << line;
 }
 
+TEST(RawSurfaceNote, ATargetNoteNamesItsDescriptorAndCallers)
+{
+    raw::TargetNote n;
+    n.width = 1792;
+    n.height = 1472;
+    n.format = 80;
+    n.usage = 5;
+    n.storage = 2;
+    n.samples = 1;
+    n.type = 2;
+    n.site = switch_frame::callers(__builtin_frame_address(0));
+    char line[384];
+    raw::describeTargetNote(n, line, sizeof line);
+    EXPECT_NE(strstr(line, "raw: compositor target 1792x1472 format 80 usage 0x5 storage 2 samples 1 type 2 at "),
+              nullptr)
+        << line;
+    EXPECT_NE(strstr(line, "raw_surface_note_test+0x"), nullptr) << line;
+}
+
+TEST(RawSurfaceNote, TwentyNotesASecondAThread)
+{
+    int allowed = 0;
+    for (int i = 0; i < 100; i++)
+        allowed += raw::noteAllowed();
+    EXPECT_GE(allowed, 20);
+    EXPECT_LE(allowed, 40);
+}
+
 }  // namespace

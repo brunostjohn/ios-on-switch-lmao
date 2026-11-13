@@ -347,6 +347,9 @@
 // view of it is (texture_tiled_in_place).
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
+#if SWITCH_FRAME_TIMELINE
+    noteCompositorTarget(d, __builtin_frame_address(0));
+#endif
     return swizzled([self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate], d.swizzle);
 }
 
@@ -554,17 +557,20 @@ static void noteCompositorSurface(MTLTextureDescriptor *d, IOSurfaceRef s, const
 {
     constexpr size_t kHalfScreen = 1280 * 720 / 2;
     if (!producesTexture(d) || IOSurfaceGetWidth(s) * IOSurfaceGetHeight(s) < kHalfScreen || !gRM || !gRM->raw ||
-        gRM->raw->role() != raw::Device::Role::RenderServer)
-        return;
-    static std::atomic<uint64_t> second{0};
-    static std::atomic<uint32_t> inSecond{0};
-    const uint64_t now = mach_absolute_time() / (1000 * switch_frame::ticksPerMs());
-    uint64_t was = second.load(std::memory_order_relaxed);
-    if (now != was && second.compare_exchange_strong(was, now, std::memory_order_relaxed))
-        inSecond.store(0, std::memory_order_relaxed);
-    if (inSecond.fetch_add(1, std::memory_order_relaxed) >= 20)
+        gRM->raw->role() != raw::Device::Role::RenderServer || !raw::noteAllowed())
         return;
     raw::postSurfaceNote(s, frame);
+}
+
+static void noteCompositorTarget(MTLTextureDescriptor *d, const void *frame)
+{
+    constexpr NSUInteger kPanel = 1280 * 720;
+    if (!(d.usage & MTLTextureUsageRenderTarget) || d.width * d.height <= kPanel || !gRM || !gRM->raw ||
+        gRM->raw->role() != raw::Device::Role::RenderServer || !raw::noteAllowed())
+        return;
+    raw::postTargetNote({uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), uint32_t(d.usage),
+                         uint32_t(d.storageMode), uint32_t(d.sampleCount), uint32_t(d.textureType),
+                         switch_frame::callers(frame)});
 }
 #endif
 

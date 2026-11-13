@@ -75,5 +75,48 @@ inline void postSurfaceNote(IOSurfaceRef s, const void *frame)
                      logSurfaceNote);
 }
 
+// A render target of the render server's own memory larger than the panel (boot 21: a 1792x1472 one on every app open),
+// by its descriptor and Core Animation's call site
+struct TargetNote {
+    uint32_t width = 0, height = 0, format = 0, usage = 0, storage = 0, samples = 0, type = 0;
+    switch_frame::Site site;
+};
+
+inline void describeTargetNote(const TargetNote &n, char *out, size_t size)
+{
+    char site[switch_frame::kSiteFrames * 48];
+    switch_frame::describe(n.site, site, sizeof site);
+    snprintf(out, size, "raw: compositor target %ux%u format %u usage 0x%x storage %u samples %u type %u at %s", n.width,
+             n.height, n.format, n.usage, n.storage, n.samples, n.type, site);
+}
+
+inline void logTargetNote(void *context)
+{
+    const TargetNote *note = static_cast<const TargetNote *>(context);
+    char line[384];
+    describeTargetNote(*note, line, sizeof line);
+    static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "frame");
+    os_log(log, "%{public}s", line);
+    delete note;
+}
+
+inline void postTargetNote(const TargetNote &n)
+{
+    dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), new TargetNote(n), logTargetNote);
+}
+
+// At most 20 notes a second a thread, both kinds together
+inline bool noteAllowed()
+{
+    thread_local uint64_t second = 0;
+    thread_local uint32_t inSecond = 0;
+    const uint64_t now = mach_absolute_time() / (1000 * switch_frame::ticksPerMs());
+    if (now != second) {
+        second = now;
+        inSecond = 0;
+    }
+    return inSecond++ < 20;
+}
+
 }  // namespace raw
 #endif
