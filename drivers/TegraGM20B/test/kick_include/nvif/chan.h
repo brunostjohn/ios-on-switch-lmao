@@ -13,6 +13,7 @@ extern u32 switch_gpu_test_doorbell;
 }
 #endif
 
+typedef uint8_t u8;
 #define __iomem
 #define BIT(n) (1u << (n))
 #define lower_32_bits(v) ((u32)(v))

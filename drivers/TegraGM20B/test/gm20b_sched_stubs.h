@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -84,6 +85,7 @@ enum { NVKM_ENGINE_GR = 1, NVKM_ENGINE_CE = 2 };
 enum { NVKM_MEM_TARGET_INST = 1 };
 
 struct nvkm_device;
+struct nvkm_fifo;
 struct nvkm_memory {
 	int unused;
 };

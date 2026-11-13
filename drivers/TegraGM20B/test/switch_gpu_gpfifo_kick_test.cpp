@@ -4,7 +4,7 @@
 // client's own writes before the doorbell.
 #include <array>
 #include <gtest/gtest.h>
-#include <nvif/chan.h>
+#include "drivers/TegraGM20B/test/kick_include/nvif/chan.h"
 
 unsigned switch_gpu_test_delays, switch_gpu_test_warnings, switch_gpu_test_barriers,
 	switch_gpu_test_doorbells;
