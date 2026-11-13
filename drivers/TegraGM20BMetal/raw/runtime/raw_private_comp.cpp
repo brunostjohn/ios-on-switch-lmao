@@ -2,45 +2,40 @@
 #include "raw_lock.h"
 #include "raw_private_comp.h"
 #include <os/log.h>
+#include <algorithm>
 #include "raw_gpu.h"
 
 namespace raw {
+namespace {
 
-bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t kind, Texture &t)
+// `from`'s texels into `to`, the same layout on other memory, by the copy engine: each level of a chain (level 0 the
+// texture itself: chainLevelImage names the others), each layer, and a multisampled image as the grid of its samples
+void copyImages(BlitEncoder &b, const Texture &from, const Texture &to)
 {
-    tgm_layout bl;
-    if (!shape(width, height, format, t) || !t.renderable || !tgm_layout_tiled(t.width, t.height, t.bpp, &bl) ||
-        compressedKind(t.bpp, 0) != kind)
-        return false;
-    std::lock_guard<raw::Mutex> l(lock_);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probePlainPrivate.load(std::memory_order_relaxed))
-        return false;
-#endif
-    const uint64_t need = compClassBytes(compBytes(bl.bytes));
-    auto it = comp_.fit(need, kind);
-    if (it == comp_.ready.end()) {
-        compAsk({need, kind});
-        return false;
+    if (from.chain && to.chain) {
+        b.copyTexels(from, 0, 0, 0, to, 0, 0, 0, from.width, from.height);
+        for (uint32_t level = 1; level < from.chain->layout.levels; level++) {
+            Texture a, c;
+            if (chainLevelImage(from, level, a) && chainLevelImage(to, level, c))
+                b.copyTexels(a, 0, 0, 0, c, 0, 0, 0, a.width, a.height);
+        }
+        return;
     }
-    if (!(t.tic = allocTic()))
-        return false;
-    const Bo bo = it->bo;
-    comp_.ready.erase(it);
-    t.va = bo.va;
-    t.pitch = bl.row_bytes;
-    t.blockLinear = true;
-    t.blockHeight = bl.y_log2;
-    t.layerBytes = bl.bytes;
-    t.storage = {t.va, bl.bytes, false};
-    t.comptags = true;
-    writeTic(t);
-    privateComp_[&t] = {bo, 0};
-    privateMade_.fetch_add(1, std::memory_order_relaxed);
-    return true;
+    Texture a = from, c = to;
+    uint32_t sx, sy;
+    sampleGrid(from.samples, sx, sy);
+    for (Texture *grid : {&a, &c}) {
+        grid->width <<= sx;
+        grid->height <<= sy;
+        grid->samples = 1;
+    }
+    for (uint32_t layer = 0; layer < std::max(from.layers, 1u); layer++)
+        b.copyTexels(a, 0, 0, layer, c, 0, 0, layer, a.width, a.height);
 }
 
-bool Device::createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t)
+}  // namespace
+
+bool Device::takeCompressed(uint64_t bytes, uint32_t kind, Bo &bo)
 {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (probePlainPrivate.load(std::memory_order_relaxed) || probePlainMemory.load(std::memory_order_relaxed))
@@ -52,10 +47,61 @@ bool Device::createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, T
         compAsk({need, kind});
         return false;
     }
-    if (sampled && !(t.tic = allocTic()))
-        return false;
-    const Bo bo = it->bo;
+    bo = it->bo;
     comp_.ready.erase(it);
+    return true;
+}
+
+void Device::noteCompressed(const TextureAsk &ask, const Bo &bo, uint64_t bytes, Texture &t)
+{
+    t.va = bo.va;
+    t.cpu = nullptr;
+    t.storage = {t.va, bytes, false};
+    t.comptags = true;
+    PrivateCompTexture &p = privateComp_[&t];
+    p.comp = {bo, 0};
+    p.ask = ask;
+    p.ask.compressKind = 0;
+    privateMade_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t kind, Texture &t)
+{
+    tgm_layout bl;
+    if (!shape(width, height, format, t) || !t.renderable || !tgm_layout_tiled(t.width, t.height, t.bpp, &bl) ||
+        compressedKind(t.bpp, 0) != kind)
+        return false;
+    std::lock_guard<raw::Mutex> l(lock_);
+    Bo bo;
+    if (!takeCompressed(bl.bytes, kind, bo))
+        return false;
+    if (!(t.tic = allocTic())) {
+        comp_.ready.push_back({bo, kind, commits(), compClock()});
+        return false;
+    }
+    t.pitch = bl.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = bl.y_log2;
+    t.layerBytes = bl.bytes;
+    TextureAsk ask;
+    ask.width = width;
+    ask.height = height;
+    ask.format = format;
+    ask.tiled = true;
+    noteCompressed(ask, bo, bl.bytes, t);
+    writeTic(t);
+    return true;
+}
+
+bool Device::createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t)
+{
+    Bo bo;
+    if (!takeCompressed(bytes, kind, bo))
+        return false;
+    if (sampled && !(t.tic = allocTic())) {
+        comp_.ready.push_back({bo, kind, commits(), compClock()});
+        return false;
+    }
     t.va = bo.va;
     t.storage = {bo.va, bytes, false};
     t.comptags = true;
@@ -85,48 +131,62 @@ bool Device::privateCompressed(const Texture &t)
     return it != privateComp_.end() && t.comptags;
 }
 
-bool Device::plainFromCompressed(Texture &t)
+bool Device::plainTiledTwin(const Texture &t, Texture &plain)
 {
     tgm_layout bl;
-    if (!privateCompressed(t) || !tgm_layout_tiled(t.width, t.height, t.bpp, &bl))
+    if (!tgm_layout_tiled(t.width, t.height, t.bpp, &bl))
         return false;
-    Texture plain = t;
-    {
-        std::lock_guard<raw::Mutex> l(lock_);
-        if (!blAlloc(bl.bytes, bl.align, plain.span))
-            return false;
-        if (!(plain.tic = allocTic())) {
-            Lease *none = nullptr;
-            freeSpan(plain.span, Memory::Bl, none);
-            return false;
-        }
+    plain = t;
+    std::lock_guard<raw::Mutex> l(lock_);
+    if (!blAlloc(bl.bytes, bl.align, plain.span))
+        return false;
+    if (!(plain.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(plain.span, Memory::Bl, none);
+        return false;
     }
     plain.va = plain.span.va;
     plain.cpu = plain.span.cpu;
     plain.storage = {};
     plain.comptags = false;
+    writeTic(plain);
+    return true;
+}
+
+bool Device::plainFromCompressed(Texture &t)
+{
+    TextureAsk ask;
+    {
+        std::lock_guard<raw::Mutex> l(lock_);
+        auto it = privateComp_.find(&t);
+        if (it == privateComp_.end() || !t.comptags)
+            return false;
+        ask = it->second.ask;
+    }
+    Texture plain;
+    if (ask.kind == TextureAsk::Plain ? !plainTiledTwin(t, plain) : !createLaidOut(ask, plain, nullptr))
+        return false;
     uint32_t seq = 0;
     CommandBuffer *rc = begin();
     bool copied = rc != nullptr;
     if (copied) {
         BlitEncoder *b = rc->blit();
-        b->copyTexels(t, 0, 0, 0, plain, 0, 0, 0, t.width, t.height);
+        copyImages(*b, t, plain);
         b->end();
         copied = rc->commit(seq);
         if (!copied)
             rc->abandon();
     }
-    std::lock_guard<raw::Mutex> l(lock_);
     if (!copied) {
-        freeTic(plain.tic);
-        Lease *none = nullptr;
-        freeSpan(plain.span, Memory::Bl, none);
+        destroyTexture(plain);
         os_log_error(OS_LOG_DEFAULT, "raw: a compressed %ux%u texture of format %u could not move to plain memory",
                      t.width, t.height, t.format);
         return false;
     }
-    writeTic(plain);
-    privateComp_[&t].staleTic = t.tic;
+    std::lock_guard<raw::Mutex> l(lock_);
+    PrivateCompTexture &p = privateComp_[&t];
+    p.comp.staleTic = t.tic;
+    p.staleChain = t.chain;
     t = plain;
     privateTransitions_.fetch_add(1, std::memory_order_relaxed);
     return true;
@@ -137,11 +197,17 @@ void Device::releasePrivateCompressed(const Texture &t)
     auto it = privateComp_.find(&t);
     if (it == privateComp_.end())
         return;
-    if (it->second.staleTic)
-        freeTic(it->second.staleTic);
+    if (it->second.comp.staleTic)
+        freeTic(it->second.comp.staleTic);
+    if (Texture::Chain *stale = it->second.staleChain) {
+        for (const uint32_t level : stale->levelTic)
+            if (level)
+                freeTic(level);
+        delete stale;
+    }
     RAW_DIAGNOSTIC(stats.compHeld--);
-    RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.bo.bytes);
-    k_.free(it->second.bo);
+    RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.comp.bo.bytes);
+    k_.free(it->second.comp.bo);
     privateComp_.erase(it);
     comp_.freed(commitCount_);
 }

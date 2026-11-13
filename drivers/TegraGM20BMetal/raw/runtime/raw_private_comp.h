@@ -12,6 +12,7 @@
 // raw job by the channel and before NVK's next submission by Order, and later work binds a new header over the plain
 // memory. Work already submitted keeps the old header and memory, which stay until the texture goes.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <tuple>
@@ -20,23 +21,50 @@
 
 namespace raw {
 
+enum class PrivateShape2D : uint8_t {
+    Plain,        // a 2D texture
+    Array,        // a 2D array
+    Multisample,  // a 2D multisampled texture
+    Other,
+};
+
 struct PrivateTextureFacts {
     bool privateStorage = false;
-    bool oneLevel = false, oneSample = false, twoD = false;
+    PrivateShape2D shape = PrivateShape2D::Other;
+    uint32_t levels = 1, samples = 1;
     bool renderedAndSampledOnly = false;  // usage is RenderTarget and/or ShaderRead, nothing else (not Unknown)
     bool plainColour = false;             // a colour format the 3D engine renders, no extended-range or planar form
     uint32_t bpp = 0;
     bool compression = false;  // the kernel compresses (TegraGM20BInfoCompression)
 };
 
+// Whether a private texture of this shape is laid out on compressed memory where its kind allows
+constexpr bool privateShapeCompresses(const PrivateTextureFacts &f)
+{
+    switch (f.shape) {
+    case PrivateShape2D::Plain:
+        return f.levels == 1 && f.samples <= 1;
+    default:
+        return false;
+    }
+}
+
 // The compressed kind such a texture binds, or 0
 inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
 {
-    if (!f.compression || !f.privateStorage || !f.oneLevel || !f.oneSample || !f.twoD || !f.renderedAndSampledOnly ||
+    if (!f.compression || !f.privateStorage || !privateShapeCompresses(f) || !f.renderedAndSampledOnly ||
         !f.plainColour)
         return 0;
-    const uint32_t kind = compressedKind(f.bpp, 0);
+    const uint32_t kind = compressedKind(f.bpp, 0, std::max(f.samples, 1u));
     return copyEngineReadsCompressed(kind) ? kind : 0;
+}
+
+// fx::msLayout's grid of `samples` samples as log2 columns and rows: the image the copy engine moves a multisampled
+// texture as, one sample a texel
+constexpr void sampleGrid(uint32_t samples, uint32_t &sxLog2, uint32_t &syLog2)
+{
+    sxLog2 = samples >= 2 ? 1 : 0;
+    syLog2 = samples >= 4 ? 1 : 0;
 }
 
 // The colour slots a draw binds as storage images where its state has no barrier form to take instead: a compressed

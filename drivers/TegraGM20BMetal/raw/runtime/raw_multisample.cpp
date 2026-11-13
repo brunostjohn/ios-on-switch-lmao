@@ -8,10 +8,11 @@
 namespace raw {
 
 bool Device::createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t,
-                                     const ArenaAt *at)
+                                     const ArenaAt *at, uint32_t compressKind)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Multisample;
+    ask.compressKind = compressKind;
     ask.width = width;
     ask.height = height;
     ask.samples = samples;

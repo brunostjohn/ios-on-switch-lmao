@@ -244,6 +244,9 @@ struct TextureAsk {
     uint8_t type = 0;
     bool tiled = false, view2d = false, sampled = false;
     bool standIn = false;  // an extended-range Plain one's stand-in (createStandIn) beside it
+    // Mips, Array or Multisample with no arena: compressed memory of this kind where some of its size is ready
+    // (raw_private_comp.h), else plain
+    uint32_t compressKind = 0;
 };
 
 struct Texture {
@@ -1889,8 +1892,9 @@ public:
                         const char **why, uint32_t layers = 1);
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
+    // `compressKind`: compressed memory of that kind where some is ready (TextureAsk::compressKind)
     bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t,
-                                 const ArenaAt *at = nullptr);
+                                 const ArenaAt *at = nullptr, uint32_t compressKind = 0);
     // A stored depth/stencil texture of `samples` samples in zeta memory of its own (raw_multisample.cpp), with a header
     // where `sampled`; a one-sample 2D array or cube of `layers` layers, layerBytes apart, has none (as createZetaOver's).
     // NVK views no zeta memory it did not make: a multisampled one never has an m2v twin, a one-sample one only once a
@@ -1917,11 +1921,11 @@ public:
     // A 2D array, cube or cube array of `levels` levels: NIL's image of `layers` layers (fx_image.h) under a header of `type`
     // (fx::kTexTwoDArray, kTexCube, kTexCubeArray)
     bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
-                     uint32_t levels = 1, const ArenaAt *at = nullptr);
+                     uint32_t levels = 1, const ArenaAt *at = nullptr, uint32_t compressKind = 0);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
-                          const ArenaAt *at = nullptr);
+                          const ArenaAt *at = nullptr, uint32_t compressKind = 0);
     // A block-compressed 2D texture (or 2D array, `type`) of `levels` levels and `layers` layers in block-linear memory of its
     // own: NIL's image (fx::blockChainLayout), which the copy engine and the CPU (in its view of kind-0xFE memory) address
     bool createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
@@ -1995,6 +1999,8 @@ public:
     bool createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, Texture &t);
     bool privateCompressed(const Texture &t);
     bool plainFromCompressed(Texture &t);
+    // The plain twin of a one-level 2D texture on compressed memory: block-linear memory and a header of its own
+    bool plainTiledTwin(const Texture &t, Texture &plain);
 
     uint64_t privateMade() const
     {
@@ -3261,7 +3267,17 @@ private:
     // none held
     uint64_t compDeadline() const;
     // private textures on compressed memory and their memory (raw_private_comp.h), lock_
-    std::unordered_map<const Texture *, PrivateComp> privateComp_;
+    struct PrivateCompTexture {
+        PrivateComp comp;
+        TextureAsk ask;                        // its layout's, which its plain memory takes (plainFromCompressed)
+        Texture::Chain *staleChain = nullptr;  // the chain work submitted before the move reads; freed with the texture
+    };
+    std::unordered_map<const Texture *, PrivateCompTexture> privateComp_;
+    // Compressed memory of `kind` holding `bytes`, taken from what comp_ made; false (and asked for) where none is
+    // ready or a debug probe holds private textures plain, lock_ held
+    bool takeCompressed(uint64_t bytes, uint32_t kind, Bo &bo);
+    // `t` laid out as `ask` on memory `bo` takes (createLaidOut), recorded as a private compressed texture, lock_ held
+    void noteCompressed(const TextureAsk &ask, const Bo &bo, uint64_t bytes, Texture &t);
     std::atomic<uint64_t> privateMade_{0}, privateTransitions_{0};
     void releasePrivateCompressed(const Texture &t);  // lock_ held
     // A clear of target t to SET_COLOR_CLEAR_VALUE words `v` (or depth `depth`), `full` it covers t whole: on a compressed

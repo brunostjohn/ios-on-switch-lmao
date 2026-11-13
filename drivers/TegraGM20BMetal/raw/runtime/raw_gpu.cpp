@@ -2153,9 +2153,11 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     const uint32_t z = zetaFormatIndex(ask.format);
     std::lock_guard<raw::Mutex> l(lock_);
     Span owned;
-    const bool placed = at     ? arenaSpan(*at, bytes, align, kind, t)
-                        : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
-                               : blAlloc(bytes, align, t.span);
+    Bo comp;
+    const bool compressed = ask.compressKind && !at && !zeta && takeCompressed(bytes, ask.compressKind, comp);
+    const bool placed = compressed || (at     ? arenaSpan(*at, bytes, align, kind, t)
+                                       : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
+                                              : blAlloc(bytes, align, t.span));
     if (!placed) {
         delete chain;
         return false;
@@ -2163,7 +2165,9 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     const Span &span = zeta && !at ? owned : t.span;
     if ((!zeta || ask.sampled || ask.samples > 1) && !(t.tic = allocTic())) {
         Lease *none = nullptr;
-        if (zeta && !at)
+        if (compressed)
+            comp_.ready.push_back({comp, ask.compressKind, commits(), compClock()});
+        else if (zeta && !at)
             tiledFree(zChunks_[z], owned);
         else
             freeSpan(t.span, memoryOf(t), none);
@@ -2171,7 +2175,9 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
         return false;
     }
     t.va = span.va;
-    if (zeta) {
+    if (compressed) {
+        noteCompressed(ask, comp, bytes, t);
+    } else if (zeta) {
         t.storage = {span.va, bytes, false};
         if (!at)
             ownedZeta_[span.va] = {z, owned};
@@ -2221,10 +2227,11 @@ bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint3
 }
 
 bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
-                         uint32_t levels, const ArenaAt *at)
+                         uint32_t levels, const ArenaAt *at, uint32_t compressKind)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Array;
+    ask.compressKind = compressKind;
     ask.width = width;
     ask.height = height;
     ask.layers = layers;
@@ -2787,10 +2794,11 @@ uint64_t Device::blPitchVa(const Span &s)
 }
 
 bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
-                              const ArenaAt *at)
+                              const ArenaAt *at, uint32_t compressKind)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Mips;
+    ask.compressKind = compressKind;
     ask.width = width;
     ask.height = height;
     ask.levels = levels;

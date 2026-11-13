@@ -44,9 +44,12 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     raw::PrivateTextureFacts facts;
     facts.privateStorage = d.storageMode == MTLStorageModePrivate;
-    facts.oneLevel = d.mipmapLevelCount == 1;
-    facts.oneSample = d.sampleCount <= 1;
-    facts.twoD = d.textureType == MTLTextureType2D;
+    facts.levels = uint32_t(d.mipmapLevelCount);
+    facts.samples = uint32_t(std::max<NSUInteger>(d.sampleCount, 1));
+    facts.shape = d.textureType == MTLTextureType2D              ? raw::PrivateShape2D::Plain
+                  : d.textureType == MTLTextureType2DArray       ? raw::PrivateShape2D::Array
+                  : d.textureType == MTLTextureType2DMultisample ? raw::PrivateShape2D::Multisample
+                                                                 : raw::PrivateShape2D::Other;
     facts.renderedAndSampledOnly = d.usage != MTLTextureUsageUnknown &&
                                    !(d.usage & ~NSUInteger(MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead));
     facts.plainColour =

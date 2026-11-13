@@ -378,7 +378,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_descriptor = [d copy];
         t->_kind = RMTexturePool;
         t->_rawOk = gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                               uint32_t(d.mipmapLevelCount), t->_raw);
+                                               uint32_t(d.mipmapLevelCount), t->_raw, nullptr,
+                                               privateCompressedKind(d));
         if (t->_rawOk) {
 #if SWITCH_RAW_DIAGNOSTICS
             reportNonFiniteStart(t, d);
@@ -439,7 +440,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk = gRM->raw->createArray(
             uint32_t(d.width), uint32_t(d.height),
             raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))),
-            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
+            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)), nullptr,
+            privateCompressedKind(d));
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         t->_kind = RMTexturePool;
         t->_rawOk = makeStoredZeta(d, t->_raw);

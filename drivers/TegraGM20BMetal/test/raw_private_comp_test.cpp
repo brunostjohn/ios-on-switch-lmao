@@ -37,7 +37,8 @@ std::string route(uint8_t storageBits, bool twin, Target &t)
 raw::PrivateTextureFacts target(uint32_t bpp)
 {
     raw::PrivateTextureFacts f;
-    f.privateStorage = f.oneLevel = f.oneSample = f.twoD = f.renderedAndSampledOnly = f.plainColour = true;
+    f.privateStorage = f.renderedAndSampledOnly = f.plainColour = true;
+    f.shape = raw::PrivateShape2D::Plain;
     f.compression = true;
     f.bpp = bpp;
     return f;
@@ -55,9 +56,6 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
 {
     bool raw::PrivateTextureFacts::*fields[] = {
         &raw::PrivateTextureFacts::privateStorage,
-        &raw::PrivateTextureFacts::oneLevel,
-        &raw::PrivateTextureFacts::oneSample,
-        &raw::PrivateTextureFacts::twoD,
         &raw::PrivateTextureFacts::renderedAndSampledOnly,
         &raw::PrivateTextureFacts::plainColour,
         &raw::PrivateTextureFacts::compression,
@@ -67,6 +65,42 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
         f.*field = false;
         EXPECT_EQ(raw::privateCompressedKind(f), 0u);
     }
+    raw::PrivateTextureFacts other = target(4);
+    other.shape = raw::PrivateShape2D::Other;
+    EXPECT_EQ(raw::privateCompressedKind(other), 0u) << "a cube, a 3D or a 1D texture";
+}
+
+// The copy engine moves a multisampled texture as fx::msLayout's grid of its samples
+TEST(RawPrivateComp, AMultisampledTextureMovesAsItsSampleGrid)
+{
+    uint32_t sx = 9, sy = 9;
+    raw::sampleGrid(1, sx, sy);
+    EXPECT_EQ(sx, 0u);
+    EXPECT_EQ(sy, 0u);
+    raw::sampleGrid(2, sx, sy);
+    EXPECT_EQ(sx, 1u);
+    EXPECT_EQ(sy, 0u);
+    raw::sampleGrid(4, sx, sy);
+    EXPECT_EQ(sx, 1u);
+    EXPECT_EQ(sy, 1u);
+}
+
+TEST(RawPrivateComp, EveryLaidOutShapeMovesWholeAndKeepsWhatWorkSubmittedReads)
+{
+    const std::string source = SourceText("../raw/runtime/raw_private_comp.cpp");
+    const std::string move = Body(source, "bool Device::plainFromCompressed(");
+    EXPECT_THAT(move, HasSubstr("createLaidOut(ask, plain, nullptr)")) << "a chain, array or multisampled texture";
+    EXPECT_THAT(move, HasSubstr("copyImages(*b, t, plain);"));
+    EXPECT_THAT(move, HasSubstr("p.staleChain = t.chain;"));
+    const std::string copy = Body(source, "void copyImages(");
+    EXPECT_THAT(copy, HasSubstr("b.copyTexels(from, 0, 0, 0, to, 0, 0, 0, from.width, from.height);")) << "level 0";
+    EXPECT_THAT(copy, HasSubstr("chainLevelImage(from, level, a)")) << "every later level";
+    EXPECT_THAT(copy, HasSubstr("layer < std::max(from.layers, 1u)")) << "every layer";
+    EXPECT_THAT(copy, HasSubstr("sampleGrid(from.samples, sx, sy)")) << "every sample";
+    EXPECT_THAT(Body(source, "void Device::releasePrivateCompressed("), HasSubstr("delete stale;"));
+    const std::string laid = Body(SourceText("../raw/runtime/raw_gpu.cpp"), "bool Device::createLaidOut(");
+    EXPECT_THAT(laid, HasSubstr("ask.compressKind && !at && !zeta && takeCompressed(bytes, ask.compressKind, comp)"));
+    EXPECT_THAT(laid, HasSubstr("noteCompressed(ask, comp, bytes, t);"));
 }
 
 TEST(RawPrivateComp, AFetchingStateWithNoBarrierFormDrawsItsCompressedTargetOnTheRawPath)
@@ -169,7 +203,9 @@ TEST(RawPrivateComp, AStoredZetaTakesCompressedMemoryInEveryBuildAndKeepsItsTwin
     EXPECT_THAT(move, HasSubstr("compZeta_.count(t.va)")) << "a compressed zeta still moves into its m2v twin's image";
     const std::string made =
         Body(SourceText("../raw/runtime/raw_private_comp.cpp"), "bool Device::createCompressedZeta(");
-    EXPECT_THAT(made, HasSubstr("comp_.fit(need, kind)")) << "memory made off the render thread, as colour's";
+    EXPECT_THAT(made, HasSubstr("takeCompressed(bytes, kind, bo)")) << "memory made off the render thread, as colour's";
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_private_comp.cpp"), "bool Device::takeCompressed("),
+                HasSubstr("comp_.fit(need, kind)"));
     EXPECT_THAT(made, Not(HasSubstr("allocCompressible")));
     EXPECT_THAT(Body(SourceText("../raw/runtime/raw_gpu.h"), "    void freeOwnedZeta(uint64_t va)"),
                 HasSubstr("freeCompressedZeta(va);"));

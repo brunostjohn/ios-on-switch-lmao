@@ -86,6 +86,13 @@ struct DeviceHarness {
         return w;
     }
 
+    // Compressed buffers made off the render thread that no texture or backing took yet
+    static size_t compReady(Device &d)
+    {
+        std::lock_guard<raw::Mutex> l(d.lock_);
+        return d.comp_.ready.size();
+    }
+
     // What the root table holds at push word `word` after the command buffer's work encoded so far
     static uint32_t rootPush(const CommandBuffer &cb, uint32_t word)
     {
