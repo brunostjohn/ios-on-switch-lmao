@@ -70,6 +70,13 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
     EXPECT_EQ(raw::privateCompressedKind(other), 0u) << "a cube, a 3D or a 1D texture";
 }
 
+TEST(RawPrivateComp, AMipChainTakesItsKind)
+{
+    raw::PrivateTextureFacts f = target(4);
+    f.levels = 5;
+    EXPECT_EQ(raw::privateCompressedKind(f), uint32_t(raw::kCompKindC32)) << "gpu.raw.private_compression mips";
+}
+
 // The copy engine moves a multisampled texture as fx::msLayout's grid of its samples
 TEST(RawPrivateComp, AMultisampledTextureMovesAsItsSampleGrid)
 {

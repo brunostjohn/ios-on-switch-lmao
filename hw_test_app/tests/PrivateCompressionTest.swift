@@ -8,7 +8,8 @@ import Metal
 /// RGBA32Float pattern (C128), each pass cleared to a ZBC value first, drawn on compressed memory and again with
 /// compression held off (switchRawProbePlainPrivate:): every byte the same, every target compressed. Mid-chain one command buffer that samples the first target also writes a Boolean visibility result,
 /// and stays raw (moves counts the targets that left compressed memory meanwhile). Then 16 clear-only passes of the
-/// 512x512 target, compressed and plain, give the GPU time a ZBC clear saves.
+/// 512x512 target, compressed and plain, give the GPU time a ZBC clear saves. The shape arms follow
+/// (PrivateCompressionShapes.swift).
 struct PrivateCompressionTest: HWTest {
     let id = "gpu.raw.private_compression"
     let name = "Private targets on compressed memory: same bytes, ZBC clears, a Boolean visibility pass kept raw"
@@ -58,6 +59,7 @@ struct PrivateCompressionTest: HWTest {
         if compressed.compressed.last != 1 { wrong.append("wide_not_compressed") }
         if plain.compressed.contains(1) { wrong.append("reference_compressed") }
         if compressed.booleanPath != "raw" { wrong.append("boolean_path") }
+        try await shapeArms(gpu, facade, &metrics, &wrong)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 
