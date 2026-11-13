@@ -384,7 +384,16 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             at[0] |= dev_.constexprTsc_[index] << 20;
         } else {
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
-            at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
+            const Texture *sampled = nullptr;
+            for (uint32_t j = 0; s && s->desc.border && j < r.entries; j++)
+                if (r.entry[j].kind == KernelTexture && r.entry[j].offset == e.offset && r.entry[j].slot < 31)
+                    sampled = textures_[r.entry[j].slot];
+            const uint32_t tsc = s ? borderedTsc(*s, sampled) : dev_.neutralTsc_;
+            if (!tsc) {
+                *why = "a kernel's sampler without its opaque border's header for the texture";
+                return false;
+            }
+            at[0] |= tsc << 20;
         }
     }
     if (r.spillEntry && r.spillEntry <= r.entries) {

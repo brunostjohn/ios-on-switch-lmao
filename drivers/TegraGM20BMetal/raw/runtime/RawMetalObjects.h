@@ -423,7 +423,9 @@ struct RMSharedEventWait {
     uint32_t _recordedPass;       // the OpRender the draws being recorded belong to
     // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
     std::vector<RMTexture *> _plainForStorage;
-    bool _scanStorageTargets;                  // a pipeline bound in such a pass was a variant still being made
+    bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
+    bool
+        _borderSamplers;  // a sampler of an opaque border was bound: its headers for the range's textures before the encode
     std::vector<RMCounterMark> _counterMarks;  // in tape order
     RMBytes _bytes;                            // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     // each submitted range's written resources, for its completion (captureWrittenRange): the first _retired of them

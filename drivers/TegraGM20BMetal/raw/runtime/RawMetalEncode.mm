@@ -363,6 +363,22 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     };
 
     std::vector<Conversion> converted;  // planar images converted here, at their surfaces' seeds and write counts
+    if (cb->_borderSamplers) {
+        // opaque borders' headers for the textures the range samples (Sampler::bordered), which the draws' handles take
+        std::vector<__unsafe_unretained RMSampler *> bordered;
+        cb->_plan.forEachResource(from, to, RMResourceKind::Sampler, [&](const RMRangeResource &use) {
+            if (RMSampler *s = (__bridge RMSampler *)use.object; s->_raw.desc.border)
+                bordered.push_back(s);
+        });
+        bool made = true;
+        textures([&](const RMRangeResource &use) {
+            if (use.access & raw::ResourceUse::Sample)
+                for (__unsafe_unretained RMSampler *s : bordered)
+                    made &= d.borderVariant(s->_raw, ((__bridge RMTexture *)use.object)->_raw);
+        });
+        if (!made)
+            return fail(PredCallSamplerForeign, "no sampler header for an opaque border");
+    }
     {
         std::vector<__unsafe_unretained RMTexture *> planar;
         std::vector<__unsafe_unretained RMSampler *> samplers;
