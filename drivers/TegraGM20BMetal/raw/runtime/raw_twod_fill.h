@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Rule clear.twod: a fill outside a pass (fillTexture:level:slice:region:color:) by the 2D engine's solid rectangle
 // (kits/SwitchGM20BEmit/SwitchGM20BEmit2D.h, the EXA form; an sRGB target through its UNORM view with the colour encoded),
-// per format, where gpu.x1.twod_clear's cells of that format read exact on the chip (RGBA8, BGRA8 and their sRGB forms).
-// Those cells filled plain memory only, so a target with comptags keeps the 3D engine's CLEAR_SURFACE over the region in a
-// pass of its own (RenderEncoder::clearRegion), with the ZBC table's value; so does every other format.
+// per format, where gpu.x1.twod_clear's cells of that format read exact on the chip (RGBA8, BGRA8, their sRGB forms).
+// Those cells filled plain memory only, so a target with comptags keeps the 3D engine's CLEAR_SURFACE over the region
+// in a pass of its own (RenderEncoder::clearRegion), with the ZBC table's value; so does every other format.
 #pragma once
 #include <cmath>
 #include <cstdint>

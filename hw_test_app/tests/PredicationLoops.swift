@@ -4,10 +4,10 @@ import HWTestGPU
 import Metal
 
 /// gpu.raw.predication's loops (drivers/TegraGM20BMetal/raw/runtime/raw_loop_copies.h): Whiles that count down a
-/// GPU-written word from 0, 1, a data-dependent 37, the copies' bound less one and the bound; a DoWhile that runs once; a
-/// While inside a While; then a While one past the bound, which the raw path lays down again from its completion and so
-/// must run to its end, and the GPU time a copy after the loop's end costs (one fetch where the fetcher sees the heads the
-/// copies write).
+/// GPU-written word from 0, 1, a data-dependent 37, the copies' bound less one and the bound; a DoWhile that runs
+/// once; a While inside a While; then a While one past the bound, which the raw path lays down again from its
+/// completion and so must run to its end, and the GPU time a copy after the loop's end costs (one fetch where the
+/// fetcher sees the heads the copies write).
 struct PredicationLoops {
     typealias StartWhile = @convention(c) (AnyObject, Selector, MTLBuffer, Int, Int, UInt32) -> Void
     typealias EndDoWhile = @convention(c) (AnyObject, Selector, MTLBuffer, Int, Int, UInt32) -> Bool
