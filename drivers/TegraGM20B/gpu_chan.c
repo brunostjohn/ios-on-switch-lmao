@@ -426,6 +426,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 		present_watch_fenced(chan, 1);
 	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
 	idle_retire(chan, chan->submitted);
+	switch_gpu_busy_gone(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
 	order_forget(chan);

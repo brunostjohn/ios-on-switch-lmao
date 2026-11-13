@@ -142,12 +142,11 @@ uint64_t tgm_hold_asked(unsigned int, uint64_t asked_pt)
 class SchedKick : public ::testing::Test
 {
 protected:
-	Model m;
+	static Model m;
 
-	void SetUp() override
+	static void SetUpTestSuite()
 	{
 		model = &m;
-		regs.clear();
 		m.device.fifo = &m.fifo;
 		m.device.timer = &m.timer;
 		m.chanFunc.preempt = preempt;
@@ -177,6 +176,14 @@ protected:
 		list_add_tail(&m.runl.head, &m.fifo.runls);
 		tgm_sched_init(&m.device);
 		tgm_sched_level(&m.device, kCompositor, TGM_LEVEL_HIGH);
+	}
+
+	void SetUp() override
+	{
+		regs.clear();
+		for (auto &word : tgm_busy.busy)
+			word = 0;
+		tgm_sched_level(&m.device, kApp, TGM_LEVEL_FOREGROUND);
 		reads = preempts = 0;
 	}
 
@@ -190,6 +197,8 @@ protected:
 	}
 };
 
+Model SchedKick::m;
+
 // The compositor's kick while no app channel has work: GR and the PBDMA can only be idle or on a high channel.
 TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 {
@@ -200,4 +209,67 @@ TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 	unsigned resident = reads;
 	EXPECT_EQ(tgm_sched_resident(&m.device), TGM_VICTIM_NONE);
 	EXPECT_EQ(reads - resident, 0u) << "the hold's resident look read registers with no app work";
+}
+
+// An app channel's job in flight: the kick reads GR's and the PBDMA's status as before, and preempts the app on GR.
+TEST_F(SchedKick, AppWorkInFlightReadsStatusAndPreempts)
+{
+	u32 submitted = 1;
+	unsigned read = 0;
+	switch_gpu_busy_kicked(&tgm_busy, kApp);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 3u);
+	regs[PFIFO_ENG_STATUS(0)] = PFIFO_ENG_BUSY | (PFIFO_ENG_CTX_VALID << 13) | kApp;
+	EXPECT_EQ(kick(&read), TGM_KICK_PREEMPTED);
+	EXPECT_EQ(read, 4u) << "GR, the PBDMA's status and channel, PFIFO_PREEMPT's pending bit";
+	EXPECT_EQ(preempts, 1u);
+	EXPECT_EQ(regs[PFIFO_PREEMPT], kApp);
+	switch_gpu_busy_settled(&tgm_busy, kApp, submitted, &submitted);
+	regs.clear();
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 0u) << "the app's job ended and its pass settled it";
+}
+
+// A quiet app job no pass has seen end keeps its bit: the kick reads status, at the cost of the reads alone.
+TEST_F(SchedKick, AQuietJobNotSeenEndKeepsTheReads)
+{
+	u32 submitted = 2;
+	unsigned read = 0;
+	switch_gpu_busy_kicked(&tgm_busy, kApp);
+	switch_gpu_busy_settled(&tgm_busy, kApp, 1, &submitted);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 3u);
+	switch_gpu_busy_settled(&tgm_busy, kApp, 2, &submitted);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 0u);
+}
+
+// A channel with work in flight whose level changes: high, it is no app the kick preempts; back below, it is again.
+TEST_F(SchedKick, ALevelChangeWithWorkInFlight)
+{
+	unsigned read = 0;
+	switch_gpu_busy_kicked(&tgm_busy, kApp);
+	tgm_sched_level(&m.device, kApp, TGM_LEVEL_HIGH);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 0u);
+	tgm_sched_level(&m.device, kApp, TGM_LEVEL_FOREGROUND);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 3u);
+	tgm_sched_forget(&m.device, kApp);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 3u) << "forgotten but still running: still an app the kick may find";
+	switch_gpu_busy_gone(&tgm_busy, kApp);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 0u) << "torn down";
+}
+
+// The compositor's own work in flight is no app work.
+TEST_F(SchedKick, HighWorkInFlightReadsNothing)
+{
+	unsigned read = 0;
+	switch_gpu_busy_kicked(&tgm_busy, kCompositor);
+	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
+	EXPECT_EQ(read, 0u);
+	u32 submitted = 1;
+	switch_gpu_busy_settled(&tgm_busy, kCompositor, 1, &submitted);
 }

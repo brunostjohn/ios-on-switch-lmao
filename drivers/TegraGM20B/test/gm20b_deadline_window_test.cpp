@@ -16,7 +16,7 @@ constexpr u64 kPeriod = 16666667, kStatusReads = 3;
 u64 now;
 unsigned schedules, statusReads, dues;
 u64 dueVblank;
-bool slow = true;
+bool slow = true, appWork;
 
 struct Work {
 	void (*fn)(void *);
@@ -100,9 +100,9 @@ int tgm_sched_resident(nvkm_device *)
 	return -1;
 }
 
-int tgm_hold_wanted(void)
+int tgm_hold_wanted(int withWork)
 {
-	return slow;
+	return slow && (!withWork || appWork);
 }
 
 uint64_t tgm_hold_due(nvkm_device *, const struct tgm_window *w, int, int *preempt)
@@ -154,6 +154,7 @@ protected:
 			w->pending = false;
 		schedules = statusReads = dues = 0;
 		slow = true;
+		appWork = false;
 	}
 
 	// A frame end at `now`: the display's stamp for it and the period
@@ -186,6 +187,49 @@ TEST_F(DeadlineWindow, NoSlowChannelNoWindow)
 	slow = false;
 	frameEnd();
 	now += kPeriod;
+	runDue();
+	EXPECT_EQ(schedules, 0u);
+	EXPECT_EQ(dues, 0u);
+}
+
+// A slow app channel with work in flight at the frame end: the window opens there, as before.
+TEST_F(DeadlineWindow, AppWorkAtTheFrameEndOpensTheWindow)
+{
+	appWork = true;
+	const u64 vblank = now + kPeriod;
+	frameEnd();
+	EXPECT_EQ(schedules, 2u) << "hold_work now, expire_work at the vblank";
+	runDue();
+	EXPECT_EQ(dues, 1u);
+	EXPECT_EQ(dueVblank, vblank);
+	EXPECT_EQ(statusReads, kStatusReads);
+}
+
+// The app's own kick inside the frame: the window kept at the frame end opens and holds it.
+TEST_F(DeadlineWindow, AnAppKickInTheFrameOpensItsWindow)
+{
+	const u64 vblank = now + kPeriod;
+	frameEnd();
+	tgm_deadline_kicked(1, 0);
+	runDue();
+	EXPECT_EQ(schedules, 0u);
+	now += kPeriod / 4;
+	appWork = true;
+	tgm_deadline_app_kicked();
+	EXPECT_EQ(schedules, 1u);
+	runDue();
+	EXPECT_EQ(dues, 1u) << "the app channel's hold";
+	EXPECT_EQ(dueVblank, vblank);
+	EXPECT_EQ(schedules, 2u) << "and the window's expiry";
+}
+
+// A kick once the kept window's vblank has passed: that frame is gone, and the next frame end decides again.
+TEST_F(DeadlineWindow, AnAppKickPastTheVblankOpensNothing)
+{
+	frameEnd();
+	now += kPeriod + 1;
+	appWork = true;
+	tgm_deadline_app_kicked();
 	runDue();
 	EXPECT_EQ(schedules, 0u);
 	EXPECT_EQ(dues, 0u);

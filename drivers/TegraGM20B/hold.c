@@ -421,9 +421,10 @@ void tgm_hold_check(struct nvkm_device *device, unsigned int chid)
 	spin_unlock_irqrestore(&hold.lock, flags);
 }
 
-int tgm_hold_wanted(void)
+int tgm_hold_wanted(int pending)
 {
-	return !bitmap_empty(hold.slow, HOLD_CHIDS);
+	return pending ? switch_gpu_busy_among(&tgm_busy, (const uint64_t *)hold.slow)
+		       : !bitmap_empty(hold.slow, HOLD_CHIDS);
 }
 
 uint64_t tgm_hold_latency(unsigned int chid)

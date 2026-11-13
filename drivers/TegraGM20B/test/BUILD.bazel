@@ -1484,6 +1484,7 @@ host_test(
         "switch_gpu_completion_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
     ],
 )
 
@@ -2077,6 +2078,7 @@ grep -q '^void tegra_gm20b_compositor_vsync(' $@
 
 SCHED_UNIT_HDRS = [
     "gm20b_sched_stubs.h",
+    "//drivers/TegraGM20B:SwitchGpuBusy.h",
     "//drivers/TegraGM20B:TegraGM20BAcquire.h",
     "//drivers/TegraGM20B:TegraGM20BCostHist.h",
     "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2155,5 +2157,13 @@ host_test(
     data = [
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_busy_test",
+    srcs = [
+        "switch_gpu_busy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
     ],
 )

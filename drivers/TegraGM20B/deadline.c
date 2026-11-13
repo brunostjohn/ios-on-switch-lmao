@@ -7,7 +7,9 @@
  * cleared at construction and nothing sets it; its frame clock is a CADisplayTimer), so there the display passes each
  * frame end on instead. A window then holds each app channel slow enough to be worth it (tgm_hold_worth) from its own
  * preemption latency before the compositor's latest start (that vblank less the compositor's GPU time per frame) until the
- * frame's present completes (hold.c); with no such channel no window opens. The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
+ * frame's present completes (hold.c); with no such channel no window opens. Nor does one while none of them has work in
+ * flight (tgm_busy): the vblank it would aim for is kept, and the first such channel's kick before it opens the window
+ * then. The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
  * high_fenced), summed per present. QuartzCore's own hint (tegra_gm20b_display_deadline) comes once a second
  * (hint_agx_timing::next_agx_hint), too seldom to start a window from. Every decision is made at a vsync, a kick, a
  * fence interrupt or a host-time callout; nothing waits or polls.
@@ -29,8 +31,9 @@ static struct {
 	u64 kick_last;               /* the compositor's last kick */
 	u64 expected;                /* the compositor's GPU time per frame */
 
-	/* the window: the vblank it aims for (0: none), when it opened, whether the compositor kicked in it */
-	u64 target, opened, expire_at;
+	/* the window: the vblank it aims for (0: none), when it opened, whether the compositor kicked in it; the vblank of
+	 * one no app's work in flight opened (0: none), which an app's kick opens (tgm_deadline_app_kicked) */
+	u64 target, opened, expire_at, dormant;
 	u32 gen, expire_gen;
 	int kicked, suspended, check_chid;
 	/* the frame since the last present: its GPU time, the vblank its first kick aimed for, an app on the GPU at a kick */
@@ -89,6 +92,7 @@ static void after(void *work, u64 at, u64 now)
 /* dl.lock held: a window for the frame aiming at `target`; the holds come from hold_work, now and at each one's time */
 static void window_open(u64 target, u64 now)
 {
+	WRITE_ONCE(dl.dormant, 0);
 	dl.target = target;
 	dl.opened = now;
 	dl.kicked = 0;
@@ -103,6 +107,22 @@ static void window_close(u64 now)
 {
 	tgm_hold_release(dl.device, now);
 	dl.target = 0;
+}
+
+/* dl.lock held, no window open: the window for the frame aiming at `target` opens now if a slow app channel has work in
+ * flight; with only slow ones that have none it waits for the first one's kick (dormant). Returns the window's vblank. */
+static u64 window_due(u64 target, u64 now)
+{
+	WRITE_ONCE(dl.dormant, 0);
+	if (dl.suspended || !dl.interval || dl.interval > TGM_INTERVAL_MAX_NS || !drawing(now) ||
+	    !tgm_hold_wanted(0))
+		return 0;
+	if (!tgm_hold_wanted(1)) {
+		WRITE_ONCE(dl.dormant, target);
+		return 0;
+	}
+	window_open(target, now);
+	return target;
 }
 
 void tegra_gm20b_compositor_vsync(uint64_t stamp, uint32_t lead_us, uint64_t interval)
@@ -124,11 +144,8 @@ void tegra_gm20b_compositor_vsync(uint64_t stamp, uint32_t lead_us, uint64_t int
 	dl.vsync_last = now;
 	dl.interval = step;
 	dl.next_target = vblank + step;
-	if (!dl.target && !dl.suspended && step && step <= TGM_INTERVAL_MAX_NS && drawing(now) &&
-	    tgm_hold_wanted()) {
-		window_open(dl.next_target, now);
-		target = dl.target;
-	}
+	if (!dl.target)
+		target = window_due(dl.next_target, now);
 	spin_unlock_irqrestore(&dl.lock, flags);
 	if (target) {
 		nvxnu_work_schedule(dl.hold_work);
@@ -146,6 +163,7 @@ static int window_live(u64 now)
 static void hold_work(void *arg)
 {
 	u64 now = nvxnu_nanotime();
+	u64 opened = 0;
 	u64 next = 0;
 	int resident = 0;
 	int preempt = -1;
@@ -155,8 +173,14 @@ static void hold_work(void *arg)
 
 	(void)arg;
 	spin_lock_irqsave(&dl.lock, flags);
+	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
+		window_open(dl.dormant, now);
+		opened = dl.target;
+	}
 	live = window_live(now);
 	spin_unlock_irqrestore(&dl.lock, flags);
+	if (opened)
+		after(dl.expire_work, opened, now);
 	if (!live)
 		return;
 	resident = tgm_sched_resident(dl.device);
@@ -234,6 +258,15 @@ void tgm_deadline_kicked(int compositor, int app)
 	spin_unlock_irqrestore(&dl.lock, flags);
 }
 
+/* A window kept for an app's kick: its holds come from hold_work, which opens it. */
+void tgm_deadline_app_kicked(void)
+{
+	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_RELAXED);
+
+	if (dormant && dormant > nvxnu_nanotime() && tgm_hold_wanted(1))
+		nvxnu_work_schedule(dl.hold_work);
+}
+
 /* Interrupt pass. The anchor moves on every 2^40 ns (18 minutes), keeping the rate, so the span never overflows. */
 void tgm_deadline_clock(uint64_t ns, uint64_t pt)
 {
@@ -303,11 +336,8 @@ void tgm_deadline_presented(uint64_t queued)
 		u64 closed = dl.target;
 
 		window_close(now);
-		if (!dl.suspended && dl.next_target > closed && dl.next_target > now &&
-		    drawing(now) && tgm_hold_wanted()) {
-			window_open(dl.next_target, now);
-			target = dl.target;
-		}
+		if (dl.next_target > closed && dl.next_target > now)
+			target = window_due(dl.next_target, now);
 	}
 	spin_unlock_irqrestore(&dl.lock, flags);
 	if (target) {
@@ -324,6 +354,7 @@ void tgm_deadline_suspend(void)
 		return;
 	spin_lock_irqsave(&dl.lock, flags);
 	dl.suspended = 1;
+	WRITE_ONCE(dl.dormant, 0);
 	if (dl.target)
 		window_close(nvxnu_nanotime());
 	spin_unlock_irqrestore(&dl.lock, flags);

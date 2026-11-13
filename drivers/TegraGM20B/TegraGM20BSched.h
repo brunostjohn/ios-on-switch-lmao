@@ -4,6 +4,7 @@
  * them after every other entry, and their kicks preempt the app channel the GPU is on. */
 #pragma once
 #include <stdint.h>
+#include "SwitchGpuBusy.h"
 
 struct nvkm_device;
 
@@ -19,6 +20,9 @@ void tgm_sched_forget(struct nvkm_device *device, unsigned int chid);
 int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid);
 /* What the GPU runs: the app channel on GR, else on the PBDMA; TGM_VICTIM_SWITCHING or TGM_VICTIM_NONE. */
 int tgm_sched_resident(struct nvkm_device *device);
+/* Which channels have work in flight, and which are high (SwitchGpuBusy.h): kept by gpu_exec.c's kick, the interrupt
+ * pass and the levels set here. */
+extern struct switch_gpu_busy tgm_busy;
 
 enum tgm_sched_kick {
 	TGM_KICK_CLEAR,     /* the GPU was idle or on a high channel */
@@ -79,8 +83,9 @@ void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last);
 /* Half its preemption latency after a preempt: if `chid` has left the GPU, the latency comes down. */
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid);
 uint64_t tgm_hold_latency(unsigned int chid);
-/* Whether any tracked app channel is slow enough to be held (tgm_hold_worth); lockless, for opening a window. */
-int tgm_hold_wanted(void);
+/* Whether any tracked app channel is slow enough to be held (tgm_hold_worth), and with `pending` one that has work in
+ * flight (tgm_busy); lockless, for opening a window. */
+int tgm_hold_wanted(int pending);
 /* The window ends (the present completed, or it expired): every held channel is released. */
 void tgm_hold_release(struct nvkm_device *device, uint64_t now);
 /* The channel's cumulative time held, for the stuck timers (tgm_unheld_ns). */
@@ -93,6 +98,8 @@ void tgm_hold_stats(char *buf, unsigned int len);
 void tgm_deadline_init(struct nvkm_device *device);
 /* gpu_exec.c: a high channel kicked (compositor: one of the compositor's, not the present's); app: it found an app on the GPU. */
 void tgm_deadline_kicked(int compositor, int app);
+/* gpu_exec.c: a channel below the high level kicked with nothing of its own in flight before. Lockless. */
+void tgm_deadline_app_kicked(void);
 /* gpu_fenced.h, interrupt pass: a high channel's fence moved past `ns` of GPU time (tgm_gpu_span); `biased` when that is
  * timed from a kick that found an app on the GPU (the frame's time is then not learned). */
 void tgm_deadline_progress(uint64_t ns, int biased);

@@ -21,6 +21,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	if (__atomic_load_n(&chan->high, __ATOMIC_ACQUIRE))
 		high_fenced(chan, chan->progress_done, done);
 	chan->progress_done = done;
+	switch_gpu_busy_settled(&tgm_busy, chan->chid, done, &chan->submitted);
 	now = nvxnu_nanotime();
 	WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, now));
 	WRITE_ONCE(chan->progress_ns, now);

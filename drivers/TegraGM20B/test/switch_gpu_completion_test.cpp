@@ -10,7 +10,7 @@ struct nvif_event {};
 
 struct tgm_chan {
 	nvif_event nonstall;
-	uint32_t completed = 0, progress_done = 0, high = 0, chid = 1, kernel = 0,
+	uint32_t completed = 0, submitted = 0, progress_done = 0, high = 0, chid = 1, kernel = 0,
 		 event_through = 0;
 	uint64_t progress_held = 0, progress_ns = 0, irq_state = 0;
 	void (*fenced)(void *) = nullptr;
@@ -94,6 +94,8 @@ void present_watch_fenced(tgm_chan *, int)
 }
 
 #include "drivers/TegraGM20B/SwitchGpuActiveIrq.h"
+#include "drivers/TegraGM20B/SwitchGpuBusy.h"
+switch_gpu_busy tgm_busy;
 #include "drivers/TegraGM20B/SwitchGpuChannelCompletion.h"
 
 void switch_gpu_events_completed()
@@ -210,4 +212,20 @@ TEST_F(Completion, MidJobEventReleaseRunsEventRetirementWithoutFenceProgress)
 	EXPECT_EQ(callbacks, 2u);
 	interrupt();
 	EXPECT_EQ(eventPasses, 1u);
+}
+
+// The pass that sees a channel's fence reach its newest seqno clears its bit of tgm_busy; one short of it keeps it.
+TEST_F(Completion, ThePassSettlesTheChannelsBusyBit)
+{
+	tgm_busy = {};
+	channel.submitted = 5;
+	switch_gpu_busy_kicked(&tgm_busy, channel.chid);
+	channel.completed = 4;
+	interrupt();
+	EXPECT_TRUE(switch_gpu_busy_chan(&tgm_busy, channel.chid));
+	EXPECT_TRUE(switch_gpu_busy_low(&tgm_busy));
+	channel.completed = 5;
+	interrupt();
+	EXPECT_FALSE(switch_gpu_busy_chan(&tgm_busy, channel.chid));
+	EXPECT_FALSE(switch_gpu_busy_low(&tgm_busy));
 }
