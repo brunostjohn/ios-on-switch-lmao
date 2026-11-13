@@ -16,6 +16,7 @@
 #include "../raw/runtime/raw_stage_in.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include "kits/SwitchGM20BEmit/test/method_checks.h"
 #include <map>
 #include <random>
 #include <utility>
@@ -33,7 +34,7 @@ struct Channel {
     std::vector<Method> methods;
     std::vector<uint32_t> arguments, launched;  // the QMD addresses (>> 8) launched while enabled
     size_t consumed = 0;
-    uint32_t scratch[256] = {};
+    switch_gm20b_test::Scratch scratch;
     uint32_t enable = NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_TRUE, pendingQmd = 0, flushes = 0;
     // the 3D class's inline-to-memory: its destination and length, then each LOAD_INLINE_DATA word into memory
     std::map<uint64_t, uint32_t> memory;
@@ -55,9 +56,7 @@ struct Channel {
     static uint32_t state(void *opaque, uint16_t method)
     {
         EXPECT_TRUE(isScratch(method)) << "the gate reads no state but its scratch";
-        return isScratch(method)
-                   ? static_cast<Channel *>(opaque)->scratch[(method - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4]
-                   : 0;
+        return isScratch(method) ? static_cast<Channel *>(opaque)->scratch.method(method) : 0;
     }
 
     static void emit(void *opaque, uint16_t m, uint32_t value)
@@ -75,8 +74,9 @@ struct Channel {
 
     void method(uint32_t subc, uint16_t m, uint32_t value)
     {
+        switch_gm20b_test::expectMethod(switch_gm20b_test::subchannelClass(subc, m), m);
         if (subc == raw::SUBC_3D && isScratch(m)) {
-            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = value;
+            scratch.method(m) = value;
             return;
         }
         methods.push_back({subc, m, value});

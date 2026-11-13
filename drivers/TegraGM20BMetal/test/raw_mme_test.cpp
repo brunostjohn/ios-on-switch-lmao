@@ -3,6 +3,7 @@
 #include "../raw/runtime/raw_mme.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include "kits/SwitchGM20BEmit/test/method_checks.h"
 #include <map>
 #include <utility>
 #include <vector>
@@ -33,6 +34,7 @@ struct Simulation {
 
     static void emit(void *opaque, uint16_t method, uint32_t value)
     {
+        switch_gm20b_test::expectMaxwellB(method);
         static_cast<Simulation *>(opaque)->methods.emplace_back(method, value);
     }
 
@@ -176,13 +178,55 @@ TEST(RawMme, ContextReservationCoversEveryProgram)
 {
     std::array<uint32_t, raw::mme::kContextWords> words{};
     raw::Push push{words.data(), words.data() + words.size()};
-    raw::mme::install(push);
+    raw::mme::install(push, 0x1234500000ull);
     EXPECT_EQ(push.at, push.end);
     EXPECT_EQ(words[1], raw::mme::kDraw);
     EXPECT_EQ(words[2], 0u);
     const size_t second = 5 + raw::mme::kDrawProgram.size;
     EXPECT_EQ(words[second + 1], raw::mme::kDrawIndexed);
     EXPECT_EQ(words[second + 2], raw::mme::kDrawProgram.size);
+    EXPECT_EQ(words[words.size() - 3],
+              raw::Push::hdr(1, raw::SUBC_3D, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ROOT_HI), 2));
+    EXPECT_EQ(words[words.size() - 2], 0x12u);
+    EXPECT_EQ(words[words.size() - 1], 0x34500000u);
+}
+
+// What the channel's context and the encoders write of the macros' scratch, at the largest each writes: only methods
+// MAXWELL_B takes, so every word below the Fermi MME's 128
+TEST(RawMme, TheContextAndTheScratchWritersWriteOnlyMaxwellBsMethods)
+{
+    std::vector<uint32_t> words(raw::mme::kContextWords + raw::mme::kAmplificationScratchWords + 32);
+    raw::Push push{words.data(), words.data() + words.size()};
+    raw::mme::install(push, 0x1234500000ull);
+    uint32_t layers[SWITCH_GM20B_AMP_MAX], viewports[SWITCH_GM20B_AMP_MAX];
+    for (uint32_t a = 0; a < SWITCH_GM20B_AMP_MAX; a++) {
+        layers[a] = 2047 - a;
+        viewports[a] = 15 - a;
+    }
+    raw::mme::amplification(push, SWITCH_GM20B_AMP_MAX, layers, viewports);
+    raw::mme::amplificationWords(push, {0x770, 0x77c, 0x778, 0x774, 1});
+    raw::mme::icbRange(push, 7, 9);
+    raw::mme::icbPatchLayout(push, 0x1100000000ull, {0x40, raw::mme::kNoEntry, 0x80}, 0x77c);
+    ASSERT_LE(push.at, push.end);
+    EXPECT_TRUE(switch_gm20b_test::expectPushMethods(words.data(), size_t(push.at - words.data())));
+}
+
+TEST(RawMme, AnAmplificationsMappingWordHoldsItsLayerAndViewportOffsets)
+{
+    uint32_t words[2 + SWITCH_GM20B_AMP_MAX];
+    raw::Push push{words, words + 2 + SWITCH_GM20B_AMP_MAX};
+    const uint32_t layers[SWITCH_GM20B_AMP_MAX] = {0, 1, 2, 3, 4, 5, 6, 2047};
+    const uint32_t viewports[SWITCH_GM20B_AMP_MAX] = {15, 14, 13, 12, 11, 10, 9, 0};
+    raw::mme::amplification(push, 8, layers, viewports);
+    EXPECT_EQ(push.at, push.end);
+    EXPECT_EQ(words[0], raw::Push::hdr(1, raw::SUBC_3D, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT),
+                                       1 + SWITCH_GM20B_AMP_MAX));
+    EXPECT_EQ(words[1], 8u);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_MAPS, SWITCH_GM20B_SCRATCH_AMP_COUNT + 1);
+    for (uint32_t a = 0; a < SWITCH_GM20B_AMP_MAX; a++) {
+        EXPECT_EQ(words[2 + a] & 0xffff, layers[a]) << a;
+        EXPECT_EQ(words[2 + a] >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT, viewports[a]) << a;
+    }
 }
 
 // The words the encoder wrote per draw before the macros took every draw: the draw parameters where they changed

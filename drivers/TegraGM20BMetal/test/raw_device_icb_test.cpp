@@ -11,6 +11,7 @@
 #undef MAX2
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include "kits/SwitchGM20BEmit/test/method_checks.h"
 #include "../raw/runtime/raw_icb.h"
 #include "../raw/runtime/raw_record.h"
 #include "../raw/runtime/raw_residual.h"
@@ -32,7 +33,8 @@ struct Channel {
 
     std::map<uint64_t, uint32_t> memory;
     uint64_t selected = 0, root = 0;
-    uint32_t selector[3] = {}, offset = 0, scratch[256] = {};
+    uint32_t selector[3] = {}, offset = 0;
+    switch_gm20b_test::Scratch scratch;
     std::vector<uint32_t> arguments;
     size_t consumed = 0;
     std::vector<Draw> draws;
@@ -44,8 +46,8 @@ struct Channel {
         std::string out = std::to_string(words) + " words; macro calls";
         for (const auto &[slot, n] : calls)
             out += " " + std::to_string(slot) + "x" + std::to_string(n);
-        return out + "; range " + std::to_string(scratch[raw::mme::kScratchLocation]) + "+" +
-               std::to_string(scratch[raw::mme::kScratchLength]);
+        return out + "; range " + std::to_string(scratch.words[raw::mme::kScratchLocation]) + "+" +
+               std::to_string(scratch.words[raw::mme::kScratchLength]);
     }
 
     // The word the GPU reads at `at`: the last constant buffer load there, else what the CPU wrote (the model's memory)
@@ -72,8 +74,9 @@ struct Channel {
 
     void method(uint32_t m, uint32_t v)
     {
+        switch_gm20b_test::expectMethod(switch_gm20b_test::subchannelClass(raw::SUBC_3D, m), m);
         if (isScratch(m))
-            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = v;
+            scratch.method(m) = v;
         else if (m >= NVB197_SET_CONSTANT_BUFFER_SELECTOR_A && m <= NVB197_SET_CONSTANT_BUFFER_SELECTOR_C) {
             selector[(m - NVB197_SET_CONSTANT_BUFFER_SELECTOR_A) / 4] = v;
             selected = uint64_t(selector[1]) << 32 | selector[2];
@@ -111,7 +114,7 @@ struct Channel {
     static uint32_t state(void *opaque, uint16_t m)
     {
         EXPECT_TRUE(isScratch(m));
-        return isScratch(m) ? static_cast<Channel *>(opaque)->scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] : 0;
+        return isScratch(m) ? static_cast<Channel *>(opaque)->scratch.method(m) : 0;
     }
 
     static void emit(void *opaque, uint16_t m, uint32_t v)

@@ -398,6 +398,7 @@ host_test(
     name = "raw_device_arguments_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_arguments_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -462,6 +463,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -471,6 +473,7 @@ host_test(
     name = "raw_device_spill_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_spill_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -535,6 +538,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -544,6 +548,7 @@ host_test(
     name = "raw_device_drawn_form_uniforms_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_drawn_form_uniforms_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -608,6 +613,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -617,6 +623,7 @@ host_test(
     name = "raw_device_heap_use_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_heap_use_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -681,6 +688,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -690,6 +698,7 @@ host_test(
     name = "raw_device_heap_purge_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_heap_purge_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -754,6 +763,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -803,6 +813,7 @@ host_test(
     name = "raw_device_recovery_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_recovery_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -867,6 +878,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -877,6 +889,7 @@ host_test(
     name = "raw_device_set_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_set_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -942,6 +955,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -953,6 +967,7 @@ host_test(
     srcs = [
         "raw_device_fetch_test.cpp",
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
@@ -1016,6 +1031,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1028,6 +1044,7 @@ host_test(
     name = "raw_device_layered_fetch_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_layered_fetch_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1092,6 +1109,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1102,6 +1120,7 @@ host_test(
     srcs = [
         "raw_device_measure_test.cpp",
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
@@ -1166,6 +1185,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1176,6 +1196,7 @@ host_test(
     srcs = [
         "raw_split_record_test.cpp",
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
@@ -1239,6 +1260,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1249,6 +1271,7 @@ host_test(
     srcs = [
         "predication_model.h",
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_loops_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1313,6 +1336,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1324,6 +1348,7 @@ host_test(
     srcs = [
         "raw_device_depth_test.cpp",
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
@@ -1387,6 +1412,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1394,6 +1420,7 @@ host_test(
     name = "raw_device_amplification_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_amplification_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1458,6 +1485,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1465,6 +1493,7 @@ host_test(
     name = "raw_device_layers_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_layers_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1529,6 +1558,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1536,6 +1566,7 @@ host_test(
     name = "raw_device_streams_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_streams_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1600,6 +1631,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1607,6 +1639,7 @@ host_test(
     name = "raw_device_tessellation_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_tessellation_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1671,6 +1704,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1678,6 +1712,7 @@ host_test(
     name = "raw_device_stage_in_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_stage_in_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1744,6 +1779,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1751,6 +1787,7 @@ host_test(
     name = "raw_device_icb_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_device_icb_test.cpp",
         "raw_kernel_model.h",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -1816,6 +1853,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1918,6 +1956,7 @@ host_test(
         ":raw_mme_simulator",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1934,6 +1973,7 @@ host_test(
         ":raw_mme_simulator",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -1956,6 +1996,7 @@ host_test(
         ":raw_mme_simulator",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -3819,6 +3860,7 @@ host_test(
     name = "raw_surface_image_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
         "raw_surface_image_test.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
@@ -3884,6 +3926,7 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ],
 )
 
@@ -4815,12 +4858,14 @@ objc_library(
         "raw_device_harness.h",
         "raw_facade_harness.h",
         "raw_facade_standins.h",
+        "raw_job_methods.h",
         "raw_kernel_model.h",
     ],
     copts = FACADE_OBJC_COPTS,
     features = FACADE_OBJC_FEATURES,
     deps = FACADE_HOST_DEPS + [
         ":raw_facade_host",
+        "//kits/SwitchGM20BEmit/test:method_checks",
         "@googletest//:gtest",
     ],
     alwayslink = True,
@@ -4858,11 +4903,17 @@ objc_library(
 
 host_test(
     name = "raw_pass_cache_test",
-    srcs = ["raw_facade_harness.h"],
+    srcs = [
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+    ],
     linkopts = [
         "-lobjc",
     ],
-    deps = [":raw_pass_cache_test_unit"],
+    deps = [
+        ":raw_pass_cache_test_unit",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ],
 )
 
 host_library(
@@ -4899,6 +4950,7 @@ host_test(
         "empty_pack.h",
         "made_metallib.h",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_facade_lazy_test.cpp",
         "raw_facade_standins.h",
         "raw_frontend_absent.cpp",
@@ -4930,6 +4982,7 @@ host_test(
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -4940,6 +4993,7 @@ host_test(
         "made_metallib.h",
         "raw_facade_copies_test.cpp",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
         "empty_pack.h",
@@ -4977,6 +5031,7 @@ host_test(
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -4987,6 +5042,7 @@ host_test(
         "made_metallib.h",
         "raw_facade_zeta_test.cpp",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
         "empty_pack.h",
@@ -5024,6 +5080,7 @@ host_test(
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -5034,6 +5091,7 @@ host_test(
     srcs = [
         "made_metallib.h",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_facade_compute.h",
         "raw_facade_creation_test.cpp",
         "raw_frontend_absent.cpp",
@@ -5068,6 +5126,7 @@ host_test(
         ":raw_runtime_plugin_host",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -5081,6 +5140,7 @@ host_test(
         "predication_model.h",
         "raw_facade_compute.h",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_facade_loops_test.cpp",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
@@ -5114,6 +5174,7 @@ host_test(
         ":raw_runtime_plugin_host",
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -5126,6 +5187,7 @@ host_test(
         "empty_pack.h",
         "made_metallib.h",
         "raw_facade_harness.h",
+        "raw_job_methods.h",
         "raw_facade_standins.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
@@ -5162,6 +5224,7 @@ host_test(
         ":raw_facade_plugin_host",
         ":raw_runtime_plugin_host",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 
@@ -5248,6 +5311,7 @@ host_test(
     name = "raw_host_written_test",
     srcs = [
         "raw_device_harness.h",
+        "raw_job_methods.h",
         "raw_frontend_absent.cpp",
         "raw_host_written_test.cpp",
         "raw_kernel_model.h",
@@ -5275,6 +5339,7 @@ host_test(
     deps = [
         ":raw_runtime_marked",
         "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
 

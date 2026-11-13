@@ -206,7 +206,7 @@ bool RenderEncoder::icbPatchLayout(const char **why)
     cb_->useAddress(dev_->zero_.va, uint32_t(dev_->zero_.bytes), false);
     if (p_.room() < 16)
         reserve();
-    mme::icbPatchLayout(p_, preparedSet_, dev_->root_.va, entries, 0x700 + 4 * (r.controlWord - 1u));
+    mme::icbPatchLayout(p_, preparedSet_, entries, 0x700 + 4 * (r.controlWord - 1u));
     return true;
 }
 

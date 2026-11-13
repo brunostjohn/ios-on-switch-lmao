@@ -4,13 +4,13 @@
 // call's data is SWITCH_GM20B_ICB_BIND_WORDS words, the slot holds exactly those before its no-ops, and the macro reads
 // every one and none past them. On the GPU a call one word short leaves the MME waiting for it.
 #include <cstdint>
-#include <map>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_icb_compute.h"
+#include "method_checks.h"
 #include "mme_fermi.h"
 #include "mme_fermi_sim.h"
 
@@ -19,7 +19,7 @@ namespace {
 struct Simulation {
     std::vector<uint32_t> arguments;
     size_t consumed = 0;
-    std::map<uint32_t, uint32_t> scratch;
+    switch_gm20b_test::Scratch scratch;
     uint32_t launches = 0;
 
     static uint32_t load(void *opaque)
@@ -34,11 +34,12 @@ struct Simulation {
         const uint32_t word = (method - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4;
         EXPECT_GE(word, uint32_t(SWITCH_GM20B_SCRATCH_ICB_BUFFERS));
         EXPECT_LT(word, uint32_t(SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END));
-        return static_cast<Simulation *>(opaque)->scratch[word];
+        return static_cast<Simulation *>(opaque)->scratch.method(method);
     }
 
     static void emit(void *opaque, uint16_t method, uint32_t)
     {
+        switch_gm20b_test::expectMaxwellB(method);
         static_cast<Simulation *>(opaque)->launches += method == NVB197_LAUNCH_DMA;
     }
 

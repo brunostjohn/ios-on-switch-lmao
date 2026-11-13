@@ -29,7 +29,7 @@ kit with the kernel toolchain and is never linked.
   on the host.
 - `mesa/nouveau_copy_rect.c` is NVK's `nouveau_copy_rect` on GM20B's copy class only, writing into the caller's push.
   Its origin methods continue the block-size method run, which saves one header word per block-linear side.
-- `mme/switch_gm20b_macros.c` builds the raw path's macro ABI v5 with Mesa's MME builder around NVK's pre-Pascal draw
+- `mme/switch_gm20b_macros.c` builds the raw path's macro ABI v6 with Mesa's MME builder around NVK's pre-Pascal draw
   loops. A zero instance count skips the loop, because Fermi's MME tests a loop's condition at its end. The indirect
   macros free their base registers before the loop, because the builder reuses a live register once all seven are
   taken.
@@ -56,3 +56,7 @@ a test that compares its words with whatever the drivers emit for the same input
 the header forms agree, and method-for-method (`SwitchGM20BPushDecode.h`) where they don't. When a driver moves onto
 the emitter, its old sequence stays in the test as the reference (the words it wrote, or a replay through `raw::Push`
 with `raw_gpu.cpp`'s constants), and the test checks that the driver's source now calls the kit.
+
+Every push a test decodes and every macro it runs is checked against what GM20B takes (`test/method_checks.h`): a
+method its class lacks, or a shadow scratch word past the Fermi MME's 128, fails the test. On the GPU either is an
+ILLEGAL_MTHD that kills the channel. `method_ranges_test` holds the macro table to the Fermi MME's limits.

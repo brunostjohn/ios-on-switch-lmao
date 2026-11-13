@@ -26,7 +26,7 @@ threads_per_threadgroup	1024	max	b1c0qmd CTA_THREAD_DIMENSION0	source	third_part
 streaming_multiprocessors	2	max	hw: GM20B one GPC with two SMMs	chip	drivers/TegraGM20B/nouveau/nvkm/engine/gr/gm20b.c:134; ext:NVIDIA Tegra X1 whitepaper p.10	metal.device	gpuCoreCount
 mme_code_words	2048	max	b197 LOAD_MME_INSTRUCTION_RAM_POINTER, LOAD_MME_INSTRUCTION_RAM	host	third_party/mesa/src/nouveau/headers/nvidia/classes/clb197.h:55; ext:envytools rnndb macro.c	gpu.draw.instanced	-
 mme_macros	128	max	b197 CALL_MME_MACRO, LOAD_MME_START_ADDRESS_RAM	source	third_party/mesa/src/nouveau/headers/nvidia/classes/clb197.h:4159	gpu.draw.instanced	-
-mme_shadow_scratch	128	max	b197 SET_MME_SHADOW_SCRATCH	source	third_party/mesa/src/nouveau/headers/nvidia/classes/clb197.h:4156	planned:gpu.x1.mme_scratch	-
+mme_shadow_scratch	128	max	b197 SET_MME_SHADOW_SCRATCH	source	third_party/mesa/src/nouveau/mme/mme_fermi.h:20; third_party/mesa/src/nouveau/headers/nvidia/classes/clb197.h:4156	planned:gpu.x1.mme_scratch	-
 mme_registers	8	max	hw: Fermi MME register file R0-R7	host	third_party/mesa/src/nouveau/mme/mme_fermi.h:19	gpu.draw.instanced	-
 zbc_color_entries	15	max	hw: LTC dstg_zbc colour table, index 0 reserved	source	drivers/TegraGM20B/nouveau/nvkm/subdev/ltc/gm20b.c:117	gpu.clear.formats	-
 zbc_depth_entries	15	max	hw: LTC dstg_zbc depth table, index 0 reserved	source	drivers/TegraGM20B/nouveau/nvkm/subdev/ltc/gm20b.c:117	gpu.clear.formats	-

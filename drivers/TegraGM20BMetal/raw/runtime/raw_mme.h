@@ -8,7 +8,7 @@
 
 namespace raw::mme {
 
-// Native GM20B macro ABI v5, at the slots kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h names (11..16 NVK's draw macros'
+// Native GM20B macro ABI v6, at the slots kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h names (11..16 NVK's draw macros'
 // slots, which the kernel's push profile counts as draws), and their contiguous instruction words from zero. Arguments:
 // instance count (preloaded R1), first vertex/index, element count, then for the parameter macros the base instance (a
 // draw of vertices) or the base vertex and base instance (an indexed one). The caller owns topology, restart and index
@@ -16,7 +16,7 @@ namespace raw::mme {
 // root table's draw parameters and the base registers as the direct path wrote them. Past them the colour matrix
 // constants, the indirect command buffers', the amplified draws' and a layered pass's clear. They are NVK's pre-Pascal
 // draw loops, built with Mesa's MME builder (kits/SwitchGM20BEmit: gen/SwitchGM20BMacros.h).
-constexpr uint32_t kAbi = 5, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWITCH_GM20B_MACRO_DRAW_INDEXED,
+constexpr uint32_t kAbi = 6, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWITCH_GM20B_MACRO_DRAW_INDEXED,
                    kIndirect = SWITCH_GM20B_MACRO_INDIRECT, kIndexedIndirect = SWITCH_GM20B_MACRO_INDEXED_INDIRECT,
                    kDrawParams = SWITCH_GM20B_MACRO_DRAW_PARAMS,
                    kIndexedParams = SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS, kMatrix = SWITCH_GM20B_MACRO_VCM_CONSTANTS,
@@ -88,8 +88,8 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kAmplifyProgram = program(switch_gm20b_macro_amplify),
                   kAmplifyIndexedProgram = program(switch_gm20b_macro_amplify_indexed),
                   kClearLayersProgram = program(switch_gm20b_macro_clear_layers);
-constexpr size_t kContextWords =
-    16 * 5 + 1 + std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
+constexpr size_t kProgramWords =
+    std::size(switch_gm20b_macro_draw) + std::size(switch_gm20b_macro_draw_indexed) +
     std::size(switch_gm20b_macro_indirect) + std::size(switch_gm20b_macro_indexed_indirect) +
     std::size(switch_gm20b_macro_draw_params) + std::size(switch_gm20b_macro_draw_indexed_params) +
     std::size(switch_gm20b_macro_vcm_constants) + std::size(switch_gm20b_macro_icb_range) +
@@ -97,9 +97,13 @@ constexpr size_t kContextWords =
     std::size(switch_gm20b_macro_icb_gate) + std::size(switch_gm20b_macro_icb_bind) +
     std::size(switch_gm20b_macro_icb_patches) + std::size(switch_gm20b_macro_amplify) +
     std::size(switch_gm20b_macro_amplify_indexed) + std::size(switch_gm20b_macro_clear_layers);
+static_assert(kProgramWords <= SWITCH_GM20B_MACRO_CODE_WORDS, "install() loads every program from code word 0");
+constexpr size_t kContextWords = 16 * 5 + kProgramWords + 3;  // each program's 5 load words, the root address's 3
 constexpr size_t kCallWords = 4, kParamsCallWords = 6;
 
-inline void install(Push &push)
+// Every program from code word 0, over NVK's, then the root table's address into the scratch words the patch macro
+// selects it by (NVK's SELECT_CB0 reads the same words, which the context init wrote with the same address)
+inline void install(Push &push, uint64_t root)
 {
     uint32_t offset = 0;
     auto load = [&](uint32_t slot, const uint32_t *words, uint32_t count) {
@@ -124,7 +128,7 @@ inline void install(Push &push)
     load(kAmplify, kAmplifyProgram.words, kAmplifyProgram.size);
     load(kAmplifyIndexed, kAmplifyIndexedProgram.words, kAmplifyIndexedProgram.size);
     load(kClearLayers, kClearLayersProgram.words, kClearLayersProgram.size);
-    push.m(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT), 1);
+    push.inc(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ROOT_HI), {uint32_t(root >> 32), uint32_t(root)});
 }
 
 // The colour matrix macro's call: its arguments are the next GPFIFO entry's words (the uniform's)
@@ -153,14 +157,13 @@ inline void icbPatchesHeader(Push &push)
     *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * kIcbPatches, kIcbPatchesArguments);
 }
 
-// An execute's layout of the inherited tessellation state for its patch commands, as scratch words: set 0's address, the
-// root table's, each control-stage buffer's set-0 byte offset (kNoEntry: none) and the root byte offset of the control
-// stage's first push word
-inline void icbPatchLayout(Push &push, uint64_t set, uint64_t root, const uint32_t (&entries)[3], uint32_t control)
+// An execute's layout of the inherited tessellation state for its patch commands, as scratch words: set 0's address, each
+// control-stage buffer's set-0 byte offset (kNoEntry: none) and the root byte offset of the control stage's first push
+// word. The root table's address is install()'s.
+inline void icbPatchLayout(Push &push, uint64_t set, const uint32_t (&entries)[3], uint32_t control)
 {
     push.inc(NVB197_SET_MME_SHADOW_SCRATCH(kScratchSetHi),
-             {uint32_t(set >> 32), uint32_t(set), uint32_t(root >> 32), uint32_t(root), entries[0], entries[1],
-              entries[2], control});
+             {uint32_t(set >> 32), uint32_t(set), entries[0], entries[1], entries[2], control});
 }
 
 // A dispatch command's gate: its index is the call's one data word
@@ -239,7 +242,7 @@ inline void draw(Push &push, DrawParams &held, bool indexed, uint32_t first, uin
 // AmplificationId word at the last amplification's id and the layer and viewport offset words at its offsets.
 constexpr uint32_t kAmplifyCallWords = 6;
 // a count and its mappings, and a state's words
-constexpr uint32_t kAmplificationScratchWords = 2 + 2 * (1 + SWITCH_GM20B_AMP_MAX) + 6;
+constexpr uint32_t kAmplificationScratchWords = 2 + SWITCH_GM20B_AMP_MAX + 6;
 
 inline void amplifyHeader(Push &push, bool indexed)
 {
@@ -259,15 +262,16 @@ inline void amplify(Push &push, DrawParams &held, bool indexed, uint32_t first, 
     held = {root, baseInstance, indexed ? root : 0, false};
 }
 
-// The amplify macros' scratch words: the count and each amplification's render target and viewport offsets, and the
-// bound state's words (root byte offsets, 0: none), its layer (SWITCH_GM20B_AMP_LAYER_* or its word's offset) and
-// whether two amplifications need a pixel barrier between them
+// The amplify macros' scratch words: the count and each amplification's mapping word (its render target and viewport
+// offsets), and the bound state's words (root byte offsets, 0: none), its layer (SWITCH_GM20B_AMP_LAYER_* or its word's
+// offset) and whether two amplifications need a pixel barrier between them
 inline void amplification(Push &push, uint32_t count, const uint32_t (&layers)[SWITCH_GM20B_AMP_MAX],
                           const uint32_t (&viewports)[SWITCH_GM20B_AMP_MAX])
 {
-    push.m(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT), count);
-    push.incArray(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_LAYERS), layers, SWITCH_GM20B_AMP_MAX);
-    push.incArray(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS), viewports, SWITCH_GM20B_AMP_MAX);
+    uint32_t words[1 + SWITCH_GM20B_AMP_MAX] = {count};
+    for (uint32_t a = 0; a < SWITCH_GM20B_AMP_MAX; a++)
+        words[1 + a] = (layers[a] & 0xffff) | viewports[a] << SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT;
+    push.incArray(NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT), words, 1 + SWITCH_GM20B_AMP_MAX);
 }
 
 struct AmplificationWords {

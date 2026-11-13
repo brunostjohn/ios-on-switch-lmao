@@ -4,7 +4,7 @@
  */
 
 /*
- * The raw path's macros (ABI v5, at the slots and shadow scratch words kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h
+ * The raw path's macros (ABI v6, at the slots and shadow scratch words kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h
  * names: R1 the first argument, constant buffer 0 left selected), built with Mesa's MME builder. The draw macros take
  * the slots NVK's draw macros take, so a push profile that counts NVK's draw calls counts the raw path's too. The
  * instance loops are NVK's pre-Pascal nvk_mme_build_draw_loop and
@@ -164,6 +164,15 @@ static void amplification_word(struct mme_builder *b, struct mme_value offset, s
     }
 }
 
+/* Amplification `a`'s render target offset (shift 0) or viewport offset (SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT), from
+ * its mapping word */
+static struct mme_value amplification_map(struct mme_builder *b, struct mme_value a, uint16_t shift)
+{
+    struct mme_value map = mme_state_arr(b, AMP_SCRATCH(MAPS), a);
+    mme_merge_to(b, map, mme_zero(), map, 0, 16, shift);
+    return map;
+}
+
 /* Amplification `a`'s words: a pixel barrier after the one before where the state's fetches need it, its id, its
  * viewport offset, and its render target offset as the state's layer word or as SET_RT_LAYER's layer */
 static void amplification_words(struct mme_builder *b, struct mme_value a)
@@ -184,7 +193,7 @@ static void amplification_words(struct mme_builder *b, struct mme_value a)
     mme_state_to(b, word, AMP_SCRATCH(VIEWPORT_WORD));
     mme_if(b, ine, word, mme_zero())
     {
-        struct mme_value offset = mme_state_arr(b, AMP_SCRATCH(VIEWPORTS), a);
+        struct mme_value offset = amplification_map(b, a, SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT);
         mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
         mme_emit(b, word);
         mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
@@ -194,7 +203,7 @@ static void amplification_words(struct mme_builder *b, struct mme_value a)
     mme_state_to(b, word, AMP_SCRATCH(LAYER));
     mme_if(b, ieq, word, mme_imm(SWITCH_GM20B_AMP_LAYER_RT))
     {
-        struct mme_value layer = mme_state_arr(b, AMP_SCRATCH(LAYERS), a);
+        struct mme_value layer = amplification_map(b, a, 0);
         mme_mthd(b, NVB197_SET_RT_LAYER);
         mme_emit(b, layer);
         mme_free_reg(b, layer);
@@ -203,7 +212,7 @@ static void amplification_words(struct mme_builder *b, struct mme_value a)
     {
         mme_if(b, ine, word, mme_zero())
         {
-            struct mme_value offset = mme_state_arr(b, AMP_SCRATCH(LAYERS), a);
+            struct mme_value offset = amplification_map(b, a, 0);
             mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
             mme_emit(b, word);
             mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER(0));
@@ -502,7 +511,7 @@ static void build_icb_patches(struct mme_builder *b, bool unused)
         mme_free_reg(b, hi);
         mme_free_reg(b, range);
     }
-    select_scratch_cbuf(b, SWITCH_GM20B_SCRATCH_ICB_ROOT_HI, SWITCH_GM20B_ICB_ROOT_BYTES);
+    select_scratch_cbuf(b, SWITCH_GM20B_SCRATCH_ROOT_HI, SWITCH_GM20B_ICB_ROOT_BYTES);
     struct mme_value control = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_CONTROL));
     mme_mthd(b, NVB197_LOAD_CONSTANT_BUFFER_OFFSET);
     mme_emit(b, control);

@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: MIT
 // The 3D engine's macro slots (CALL_MME_MACRO(j)) and MME shadow scratch words as the GM20B's two drivers use them: the
-// one table of the raw path's macro ABI v5. NVK's context loads its macros at slots 0..NVK_MME_COUNT-1 in nvk_mme.h's
+// one table of the raw path's macro ABI v6. NVK's context loads its macros at slots 0..NVK_MME_COUNT-1 in nvk_mme.h's
 // order, and the raw path's context replays that load before it loads its own, so the kernel's push profile reads NVK's
 // clear and anti-alias macros by NVK's numbers. The raw path's draw macros take NVK's draw macros' slots, so the
 // profile counts both drivers' draws as one, and every other raw macro takes a slot past them, where NVK's streams call
 // macros that draw nothing: the profile reads those slots as the raw path's only in a raw job's stream, its indirect
-// command buffer, patch and amplified draws as draws and its layered clear as a clear. NVK's macros keep their shadow
-// scratch words below SWITCH_GM20B_SCRATCH_NVK_END (nvk_mme.h NVK_MME_NUM_SCRATCH); the raw path's ranges lie past it.
-// kits/SwitchGM20BEmit/test/macro_slots_test.py checks the NVK numbers against nvk_mme.h.
+// command buffer, patch and amplified draws as draws and its layered clear as a clear.
+// GM20B's 3D class runs the Fermi MME (mme_fermi.h, kits/SwitchGM20B/caps/limits.tsv): 128 macros, 2048 words of code
+// and 128 shadow scratch words. SET_MME_SHADOW_SCRATCH(128) and up are illegal methods, which kill the channel.
+// The raw path loads its programs from code word 0, over all of NVK's, so no NVK macro runs in a raw channel after its
+// context init, and the raw path's scratch words take NVK's. Two of NVK's keep their meaning: FECS's mailbox, which NVK's
+// SET_PRIV_REG shares with the firmware, and the root table's address, which the context init writes for NVK's
+// SELECT_CB0 and raw_mme.h's install() writes again for the patch macro. kits/SwitchGM20BEmit/test/macro_slots_test.py
+// checks the NVK numbers against nvk_mme.h and context.tsv.
 #ifndef SWITCH_GM20B_MACRO_SLOTS_H
 #define SWITCH_GM20B_MACRO_SLOTS_H
 
@@ -17,6 +22,7 @@ enum {
     SWITCH_GM20B_MACRO_DRAWS_FIRST = 11,         // NVK_MME_DRAW
     SWITCH_GM20B_MACRO_DRAWS_LAST = 16,          // NVK_MME_DRAW_INDEXED_INDIRECT_COUNT
     SWITCH_GM20B_MACRO_SLOTS = 128,              // CALL_MME_MACRO(j), LOAD_MME_START_ADDRESS_RAM's entries
+    SWITCH_GM20B_MACRO_CODE_WORDS = 2048,        // LOAD_MME_INSTRUCTION_RAM's words
 
     SWITCH_GM20B_MACRO_DRAW = SWITCH_GM20B_MACRO_DRAWS_FIRST,
     SWITCH_GM20B_MACRO_DRAW_INDEXED,
@@ -42,38 +48,36 @@ enum {
 };
 
 enum {
-    SWITCH_GM20B_SCRATCH_WORDS = 256,  // SET_MME_SHADOW_SCRATCH(i)
-    SWITCH_GM20B_SCRATCH_NVK_END = 100,
+    SWITCH_GM20B_SCRATCH_WORDS = 128,   // SET_MME_SHADOW_SCRATCH(i): MME_FERMI_SCRATCH_COUNT
+    SWITCH_GM20B_SCRATCH_FECS_END = 3,  // NVK_MME_SCRATCH_FALCON_2 + 1
+    SWITCH_GM20B_SCRATCH_ROOT_HI = 26,  // NVK_MME_SCRATCH_CB0_ADDR_HI: the root table's address, high then low
 
     // an indirect command buffer execute's range: location, length
-    SWITCH_GM20B_SCRATCH_ICB_LOCATION = 120,
-    SWITCH_GM20B_SCRATCH_ICB_LENGTH = 121,
-    // a command's bound buffers: 128 + 3 x index (address low, address high, size), index < 31; the address-high word
-    // holds the buffer's bind stride above its address's bits (SWITCH_GM20B_ICB_STRIDE_SHIFT)
-    SWITCH_GM20B_SCRATCH_ICB_BUFFERS = 128,
-    SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS = 31,
-    SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END = SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 3 * SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS,
-    // a patch execute's layout of its inherited state: set 0's address and the root table's (high, low), each
-    // control-stage buffer's set-0 byte offset, the root byte offset of the control stage's first push word
-    SWITCH_GM20B_SCRATCH_ICB_SET_HI = SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END,
-    SWITCH_GM20B_SCRATCH_ICB_ROOT_HI = SWITCH_GM20B_SCRATCH_ICB_SET_HI + 2,
-    SWITCH_GM20B_SCRATCH_ICB_ENTRY = SWITCH_GM20B_SCRATCH_ICB_ROOT_HI + 2,
+    SWITCH_GM20B_SCRATCH_ICB_LOCATION = SWITCH_GM20B_SCRATCH_FECS_END,
+    SWITCH_GM20B_SCRATCH_ICB_LENGTH,
+    // a patch execute's layout of its inherited state: set 0's address (high, low), each control-stage buffer's set-0
+    // byte offset, the root byte offset of the control stage's first push word
+    SWITCH_GM20B_SCRATCH_ICB_SET_HI,
+    SWITCH_GM20B_SCRATCH_ICB_ENTRY = SWITCH_GM20B_SCRATCH_ICB_SET_HI + 2,
     SWITCH_GM20B_SCRATCH_ICB_CONTROL = SWITCH_GM20B_SCRATCH_ICB_ENTRY + 3,
-    SWITCH_GM20B_SCRATCH_ICB_PATCHES_END = SWITCH_GM20B_SCRATCH_ICB_CONTROL + 1,
-    // vertex amplification's, which the amplify macros read (the raw path's RenderEncoder writes them where the count, the
-    // mapping or the bound state changes): the count, the state's root byte offsets of its AmplificationCount,
-    // AmplificationId and AmplificationViewportOffset words (0: none), its layer (SWITCH_GM20B_AMP_LAYER_*, else the root
-    // byte offset of its AmplificationLayerOffset word), whether its fetches need a pixel barrier between two
-    // amplifications (its barrier form's), then each amplification's render target and viewport offsets
-    SWITCH_GM20B_SCRATCH_AMP_COUNT = SWITCH_GM20B_SCRATCH_ICB_PATCHES_END,
+    // vertex amplification's, which the amplify macros read (the raw path's RenderEncoder writes them where the bound
+    // state, the count or the mapping changes): the state's root byte offsets of its AmplificationCount, AmplificationId
+    // and AmplificationViewportOffset words (0: none), its layer (SWITCH_GM20B_AMP_LAYER_*, else the root byte offset of
+    // its AmplificationLayerOffset word), whether its fetches need a pixel barrier between two amplifications (its
+    // barrier form's), then the count and each amplification's mapping word (SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT)
     SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD,
     SWITCH_GM20B_SCRATCH_AMP_ID_WORD,
     SWITCH_GM20B_SCRATCH_AMP_VIEWPORT_WORD,
     SWITCH_GM20B_SCRATCH_AMP_LAYER,
     SWITCH_GM20B_SCRATCH_AMP_BARRIER,
-    SWITCH_GM20B_SCRATCH_AMP_LAYERS,
-    SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS = SWITCH_GM20B_SCRATCH_AMP_LAYERS + 8,
-    SWITCH_GM20B_SCRATCH_AMP_END = SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS + 8,
+    SWITCH_GM20B_SCRATCH_AMP_COUNT,
+    SWITCH_GM20B_SCRATCH_AMP_MAPS,
+    SWITCH_GM20B_SCRATCH_AMP_END = SWITCH_GM20B_SCRATCH_AMP_MAPS + 8,
+    // a command's bound buffers: ICB_BUFFERS + 3 x index (address low, address high, size), index < 31; the address-high
+    // word holds the buffer's bind stride above its address's bits (SWITCH_GM20B_ICB_STRIDE_SHIFT)
+    SWITCH_GM20B_SCRATCH_ICB_BUFFERS = SWITCH_GM20B_SCRATCH_ROOT_HI + 2,
+    SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS = 31,
+    SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END = SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 3 * SWITCH_GM20B_SCRATCH_ICB_BUFFER_SLOTS,
 };
 
 // What the patch macro's words name: a layout entry of no buffer, the constant buffer sizes it selects (NVK's
@@ -101,11 +105,14 @@ enum {
     (2 + SWITCH_GM20B_ICB_BIND_DESCRIPTOR_WORDS * (descriptors) + SWITCH_GM20B_ICB_BIND_STRIDE_WORDS * (strides))
 
 // SWITCH_GM20B_SCRATCH_AMP_LAYER's modes besides a word: the draws render the pass's first layer, or SET_RT_LAYER takes
-// each amplification's render target offset (V_SELECTS_LAYER). No root word lies at either byte offset.
+// each amplification's render target offset (V_SELECTS_LAYER). No root word lies at either byte offset. A mapping word
+// holds an amplification's render target offset in its low half and its viewport offset in its high half: Metal bounds
+// them by the render target's 2048 layers and the 16 viewports.
 enum {
     SWITCH_GM20B_AMP_LAYER_FIRST = 0,
     SWITCH_GM20B_AMP_LAYER_RT = 1,
     SWITCH_GM20B_AMP_MAX = 8,  // Metal's largest amplification count
+    SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT = 16,
 };
 
 #ifdef __cplusplus
@@ -117,17 +124,14 @@ enum {
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_MACRO_VCM_CONSTANTS > SWITCH_GM20B_MACRO_DRAWS_LAST,
                           "every raw macro but NVK's draw slots' takes a slot past them");
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_MACRO_RAW_END <= SWITCH_GM20B_MACRO_SLOTS, "every raw slot is a CALL_MME_MACRO");
-SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_LOCATION >= SWITCH_GM20B_SCRATCH_NVK_END &&
-                              SWITCH_GM20B_SCRATCH_ICB_LENGTH < SWITCH_GM20B_SCRATCH_ICB_BUFFERS &&
-                              SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END <= SWITCH_GM20B_SCRATCH_ICB_SET_HI,
-                          "no two scratch ranges overlap, nor one NVK's");
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_LOCATION >= SWITCH_GM20B_SCRATCH_FECS_END &&
+                              SWITCH_GM20B_SCRATCH_AMP_END <= SWITCH_GM20B_SCRATCH_ROOT_HI,
+                          "the raw path's words below the root table's address leave FECS's mailbox alone");
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END <= SWITCH_GM20B_SCRATCH_WORDS,
+                          "every scratch word is a SET_MME_SHADOW_SCRATCH the Fermi MME has");
 SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_ICB_SET_BYTES % 256 == 0 && SWITCH_GM20B_ICB_ROOT_BYTES % 256 == 0,
                           "the patch macro binds whole 256-byte constant buffers, as NVK does before Turing");
-SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_END <= SWITCH_GM20B_SCRATCH_WORDS,
-                          "every scratch word is a SET_MME_SHADOW_SCRATCH");
-SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS - SWITCH_GM20B_SCRATCH_AMP_LAYERS ==
-                                  SWITCH_GM20B_AMP_MAX &&
-                              SWITCH_GM20B_SCRATCH_AMP_END - SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS == SWITCH_GM20B_AMP_MAX,
+SWITCH_GM20B_SLOTS_ASSERT(SWITCH_GM20B_SCRATCH_AMP_END - SWITCH_GM20B_SCRATCH_AMP_MAPS == SWITCH_GM20B_AMP_MAX,
                           "a mapping word for each amplification");
 
 #undef SWITCH_GM20B_SLOTS_ASSERT

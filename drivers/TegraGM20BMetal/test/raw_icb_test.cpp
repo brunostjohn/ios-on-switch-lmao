@@ -10,6 +10,7 @@
 #include "../raw/runtime/raw_icb.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include "kits/SwitchGM20BEmit/test/method_checks.h"
 #include <utility>
 #include <vector>
 
@@ -20,7 +21,7 @@ struct Fifo {
     std::vector<Method> methods;
     std::vector<uint32_t> arguments;
     size_t consumed = 0, nops = 0;
-    uint32_t scratch[256] = {};
+    switch_gm20b_test::Scratch scratch;
 
     static uint32_t load(void *opaque)
     {
@@ -36,14 +37,14 @@ struct Fifo {
     static uint32_t state(void *opaque, uint16_t method)
     {
         EXPECT_TRUE(isScratch(method)) << "a draw macro reads no state but its scratch";
-        return isScratch(method) ? static_cast<Fifo *>(opaque)->scratch[(method - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4]
-                                 : 0;
+        return isScratch(method) ? static_cast<Fifo *>(opaque)->scratch.method(method) : 0;
     }
 
     void method(uint16_t m, uint32_t value)
     {
+        switch_gm20b_test::expectMethod(switch_gm20b_test::subchannelClass(raw::SUBC_3D, m), m);
         if (isScratch(m))
-            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = value;
+            scratch.method(m) = value;
         else
             methods.emplace_back(m, value);
     }
@@ -273,12 +274,15 @@ constexpr uint64_t kSet = 0x1122334400ull, kRoot = 0x5566778800ull;
 constexpr uint32_t kControl = 0x700 + 4 * 4;
 
 // An execute's layout of a state whose factor and control-point index buffers are at set-0 bytes 0x40 and 0x80 and which
-// reads no patch index buffer
+// reads no patch index buffer, in a channel whose install() wrote the root table's address
 void patchLayout(Fifo &f)
 {
-    uint32_t words[10];
-    raw::Push p{words, words + 10};
-    raw::mme::icbPatchLayout(p, kSet, kRoot, {0x40, raw::mme::kNoEntry, 0x80}, kControl);
+    f.scratch[SWITCH_GM20B_SCRATCH_ROOT_HI] = uint32_t(kRoot >> 32);
+    f.scratch[SWITCH_GM20B_SCRATCH_ROOT_HI + 1] = uint32_t(kRoot);
+    uint32_t words[7];
+    raw::Push p{words, words + 7};
+    raw::mme::icbPatchLayout(p, kSet, {0x40, raw::mme::kNoEntry, 0x80}, kControl);
+    EXPECT_EQ(p.at, p.end);
     f.run(words, size_t(p.at - words));
 }
 

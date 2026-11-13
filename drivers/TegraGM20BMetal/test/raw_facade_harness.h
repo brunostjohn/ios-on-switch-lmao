@@ -12,6 +12,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include "raw_kernel_model.h"
+#include "raw_job_methods.h"
 #include "made_metallib.h"
 #include "empty_pack.h"
 #include "raw_facade_standins.h"

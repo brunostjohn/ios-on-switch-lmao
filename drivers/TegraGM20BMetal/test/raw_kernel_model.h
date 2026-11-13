@@ -5,7 +5,8 @@
 // whose fence is behind the old one. Jobs (SubmitAddress, SubmitJob) complete as they are submitted, or stay in flight
 // until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does, or with
 // a test's GPU (model_gpu.h) complete as it runs them, a WaitFence waiting for that. Each job keeps the words of its
-// pushes that lie in memory the model bound (VmBind), for a test to read the methods back. Memory a
+// pushes that lie in memory the model bound (VmBind), for a test to read the methods back, and checkJob sees the words of
+// each job whose pushes all lie there (raw_job_methods.h checks their methods). Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
 // (staleReads). A SubmitJob naming a set uses every member as registered, the records of one BO one member with their
 // accesses OR'd, as the kernel's sorted_members merges them (SwitchGpuResourceSet.cpp). Sets leave out what the kernel
@@ -22,6 +23,7 @@
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -34,6 +36,8 @@
 namespace kernel_model {
 
 constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFencePageBytes = 4096;
+
+inline void (*checkJob)(const uint32_t *words, const TegraGM20BAbiPush *pushes, uint32_t count) = nullptr;
 
 struct BoState {
     bool import = false, cached = false, cpuReached = false;
@@ -220,13 +224,18 @@ struct Model {
     std::vector<uint32_t> pushWords(const TegraGM20BAbiPush *pushes, uint32_t count)
     {
         std::vector<uint32_t> words;
+        bool whole = true;
         for (uint32_t i = 0; i < count; i++) {
             const uint8_t *first = host(pushes[i].va), *last = host(pushes[i].va + uint64_t(pushes[i].dwords) * 4 - 1);
             if (first && last == first + uint64_t(pushes[i].dwords) * 4 - 1) {
                 const auto *w = reinterpret_cast<const uint32_t *>(first);
                 words.insert(words.end(), w, w + pushes[i].dwords);
+            } else {
+                whole = false;
             }
         }
+        if (whole && checkJob)
+            checkJob(words.data(), pushes, count);
         return words;
     }
 

@@ -11,6 +11,7 @@
 #undef MAX2
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include "kits/SwitchGM20BEmit/test/method_checks.h"
 #include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_icb_compute.h"
 #include <algorithm>
@@ -189,7 +190,8 @@ TEST_F(DeviceStageIn, AnIndirectDispatchCommandOfASpilledBindOffsetIsRefused)
 // Fermi simulator, and the 3D class's inline-to-memory writes into `memory`
 struct BindChannel {
     std::map<uint64_t, uint32_t> memory;
-    uint32_t scratch[256] = {}, inlineLeft = 0;
+    switch_gm20b_test::Scratch scratch;
+    uint32_t inlineLeft = 0;
     uint64_t out = 0;
     std::vector<uint32_t> arguments;
     size_t consumed = 0;
@@ -201,8 +203,9 @@ struct BindChannel {
 
     void method(uint32_t m, uint32_t v)
     {
+        switch_gm20b_test::expectMethod(switch_gm20b_test::subchannelClass(raw::SUBC_3D, m), m);
         if (isScratch(m))
-            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = v;
+            scratch.method(m) = v;
         else if (m == NVB197_OFFSET_OUT_UPPER)
             out = (out & 0xffffffffull) | uint64_t(v & 0xff) << 32;
         else if (m == NVB197_OFFSET_OUT)
@@ -224,8 +227,7 @@ struct BindChannel {
 
     static uint32_t state(void *opaque, uint16_t m)
     {
-        return isScratch(m) ? static_cast<BindChannel *>(opaque)->scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4]
-                            : 0;
+        return isScratch(m) ? static_cast<BindChannel *>(opaque)->scratch.method(m) : 0;
     }
 
     static void emit(void *opaque, uint16_t m, uint32_t v)

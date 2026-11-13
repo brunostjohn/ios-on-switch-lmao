@@ -40,6 +40,10 @@ reaches them. `planned:gpu.x1.<row>` stands in until a probe has a real id.
 NIL's `nil_formats.csv`, read through NIL's own generator. `methods.tsv` files every class method and QMD field under a
 `features.tsv` row. `limits.tsv` says whether a device answer above (`max`) or below (`min`) the value over-claims.
 
+`:methods` is `SwitchGM20BMethods.h`, every method each class takes on this chip, for host tests to check pushes
+against. NVIDIA's headers don't give array lengths, so `caps/gen_methods.py` takes Mesa's, except the MME arrays: the 3D
+class runs the Fermi MME, with 128 shadow scratch words and 128 macros (`limits.tsv`), where Mesa generates Turing's 256.
+
 ## Tests
 
 `driver_constants_test` reads the hand-written method numbers and fields out of the drivers' sources at build time and

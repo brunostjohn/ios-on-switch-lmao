@@ -4,6 +4,7 @@
 // submitted, or holds them until a kill, and the test reads what the device submitted.
 #pragma once
 #include "raw_kernel_model.h"
+#include "raw_job_methods.h"
 #include "../raw/runtime/raw_compute.h"
 #include "../raw/runtime/raw_gpu.h"
 #include <gtest/gtest.h>

@@ -164,7 +164,8 @@ TEST_F(DeviceAmplification, AnAmplifiedDrawIsOneMacroCallOverTheScratchWords)
             calls.push_back(v);
         else if (m == call + 4)
             data.push_back(v);
-        else if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT && m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
+        else if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD &&
+                 m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
             words[(m - scratch) / 4] = v;
     }
     EXPECT_EQ(calls, std::vector<uint32_t>{3});  // its vertex count, then instances, first, the first instance
@@ -202,7 +203,7 @@ TEST_F(DeviceAmplification, TheIdWordIsTheMacrosAlone)
     for (size_t j = jobs; j < kernel_model::model.jobs.size(); j++)
         words.insert(words.end(), kernel_model::model.jobs[j].words.begin(), kernel_model::model.jobs[j].words.end());
     const uint32_t call = NVB197_CALL_MME_MACRO(SWITCH_GM20B_MACRO_AMPLIFY);
-    const uint32_t first = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT);
+    const uint32_t first = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD);
     const uint32_t end = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_END);
     uint32_t offset = 0, idWrites = 0, calls = 0, scratchAfterFirst = 0;
     for (const auto &[m, v] : methods(words)) {
@@ -263,11 +264,11 @@ TEST_F(DeviceAmplification, EachAmplificationsViewportOffsetIsTheStatesWord)
     const uint32_t scratch = NVB197_SET_MME_SHADOW_SCRATCH(0);
     std::map<uint32_t, uint32_t> words;
     for (const auto &[m, v] : methods(drawWith(offsetting, 2, {3, 6}).words))
-        if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT && m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
+        if (m >= scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD && m < scratch + 4 * SWITCH_GM20B_SCRATCH_AMP_END)
             words[(m - scratch) / 4] = v;
     EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORT_WORD], 0x700u + 4 * 5);
-    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS], 3u);
-    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS + 1], 6u);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_MAPS] >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT, 3u);
+    EXPECT_EQ(words[SWITCH_GM20B_SCRATCH_AMP_MAPS + 1] >> SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT, 6u);
     uint32_t offset = 0, word = ~0u;
     for (const auto &[m, v] : methods(drawWith(offsetting, 1, {4}).words)) {
         if (m == NVB197_LOAD_CONSTANT_BUFFER_OFFSET) {

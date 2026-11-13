@@ -14,6 +14,7 @@
 #include "../../SwitchGM20B/SwitchGM20B3D.h"
 #include "../SwitchGM20BMacroSlots.h"
 #include "SwitchGM20BMacros.h"
+#include "method_checks.h"
 #include "mme_fermi.h"
 #include "mme_fermi_sim.h"
 
@@ -58,6 +59,7 @@ struct Simulation {
 
     static void emit(void *opaque, uint16_t method, uint32_t value)
     {
+        switch_gm20b_test::expectMaxwellB(method);
         const uint32_t load = 0x2390;  // LOAD_CONSTANT_BUFFER(0): (0..15) all load the next word
         static_cast<Simulation *>(opaque)->methods.emplace_back(method >= load && method < load + 64 ? load : method,
                                                                 value);
@@ -247,14 +249,17 @@ TEST(EmitMme, TheMacrosTakeNvksDrawSlots)
 
 TEST(EmitMme, TheScratchRangesAreTheTables)
 {
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_LOCATION, 120);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_LENGTH, 121);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_BUFFERS, 128);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_SET_HI, 221);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_CONTROL, 228);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_COUNT, 229);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_LAYERS, 235);
-    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_END, 251);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_LOCATION, 3);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_LENGTH, 4);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_SET_HI, 5);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_CONTROL, 10);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD, 11);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_COUNT, 16);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_MAPS, 17);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_AMP_END, 25);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ROOT_HI, 26);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_BUFFERS, 28);
+    EXPECT_EQ(SWITCH_GM20B_SCRATCH_ICB_BUFFERS_END, 121);
 }
 
 TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
@@ -268,7 +273,7 @@ TEST(EmitMme, TheMacrosFitTheRawPathsCodeSpace)
                          count(switch_gm20b_macro_icb_patches) + count(switch_gm20b_macro_amplify) +
                          count(switch_gm20b_macro_amplify_indexed) + count(switch_gm20b_macro_clear_layers);
     RecordProperty("words", int(words));
-    EXPECT_LE(words, 2048u);
+    EXPECT_LE(words, uint32_t(SWITCH_GM20B_MACRO_CODE_WORDS));
 }
 
 }  // namespace

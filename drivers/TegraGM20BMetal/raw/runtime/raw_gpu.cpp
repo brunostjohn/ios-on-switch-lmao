@@ -529,7 +529,7 @@ void Device::emitContext(Push &p)
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (!ownedMethod(base[2 * i]))
             p.m(base[2 * i], base[2 * i + 1]);
-    mme::install(p);
+    mme::install(p, root_.va);
     tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {

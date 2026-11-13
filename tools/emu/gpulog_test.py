@@ -15,6 +15,7 @@ RAW = """\
 3 5 0000 0200 00000001 NO_CLASS_BOUND
 3 0 0000 0410 20030001 INVALID_OPCODE
 3 0 b06f 001c 00000002
+3 0 b197 3794 00000001
 """
 
 EVENTS = """\
@@ -43,6 +44,7 @@ class GpuLogTest(unittest.TestCase):
         self.assertEqual(flags[6], 'NOT_IN_CLASS')
         self.assertEqual(flags[7], 'NO_CLASS_BOUND')
         self.assertEqual(flags[8], 'INVALID_OPCODE')
+        self.assertEqual(flags[10], 'NOT_IN_CLASS', "the Fermi MME's 128 scratch words end at 0x35fc")
         self.assertEqual(flags.count(None), 7)
 
     def test_run_summary(self):
@@ -52,8 +54,8 @@ class GpuLogTest(unittest.TestCase):
             (run / 'gpu-events.log').write_text(EVENTS)
             summary = gpulog.summarize(run)
             self.assertTrue((run / 'gpu-methods.log').exists())
-        self.assertIn('10 methods', summary)
-        self.assertIn('NOT_IN_CLASS 1', summary)
+        self.assertIn('11 methods', summary)
+        self.assertIn('NOT_IN_CLASS 2', summary)
         self.assertIn('2 faults or stopped channels; first: fault unit 0x07', summary)
 
 

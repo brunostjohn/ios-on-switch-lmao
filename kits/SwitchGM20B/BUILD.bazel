@@ -131,3 +131,37 @@ py_test(
     main = "caps/gen_vk_formats.py",
     deps = [":caps_lib"],
 )
+
+# Every method each class takes on GM20B (caps/gen_methods.py): SwitchGM20BMethods.h, which host tests check pushes and
+# macros against, and the emulator's method log names methods with.
+py_library(
+    name = "methods_lib",
+    srcs = ["caps/gen_methods.py"],
+    imports = ["caps"],
+)
+
+py_binary(
+    name = "gen_methods",
+    srcs = ["caps/gen_methods.py"],
+    main = "caps/gen_methods.py",
+)
+
+genrule(
+    name = "methods_gen",
+    srcs = [
+        "caps/limits.tsv",
+        "SwitchGM20BTegra.h",
+        "//third_party/mesa/src/nouveau/headers:class_parser.py",
+    ] + SWITCH_GM20B_MESA_HEADERS,
+    outs = ["SwitchGM20BMethods.h"],
+    cmd = "$(execpath :gen_methods) --classes $$(dirname $(execpath //third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h)) " +
+          "--class-parser $(execpath //third_party/mesa/src/nouveau/headers:class_parser.py) " +
+          "--tegra $(execpath SwitchGM20BTegra.h) --limits $(execpath caps/limits.tsv) --out $@",
+    tools = [":gen_methods"],
+)
+
+# #include "kits/SwitchGM20B/SwitchGM20BMethods.h"
+cc_library(
+    name = "methods",
+    hdrs = [":SwitchGM20BMethods.h"],
+)

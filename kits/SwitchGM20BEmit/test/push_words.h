@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Pushes compared word for word (Words) or as the methods they write (Methods), printed in hex when they differ.
+// Pushes compared word for word (Words) or as the methods they write (Methods), printed in hex when they differ. Either
+// fails the test on a method its class lacks.
 #pragma once
 
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "kits/SwitchGM20BEmit/SwitchGM20BPushDecode.h"
+#include "method_checks.h"
 
 namespace switch_gm20b_test {
 
@@ -24,6 +26,7 @@ inline void PrintTo(const Hex &h, std::ostream *os)
 
 inline Hex Words(const std::vector<uint32_t> &words)
 {
+    expectPushMethods(words.data(), words.size());
     return {words};
 }
 
@@ -41,6 +44,7 @@ inline std::vector<Method> Methods(const std::vector<uint32_t> &words)
 {
     std::vector<switch_gm20b_method> decoded(words.size() * 2 + 1);
     const long n = switch_gm20b_push_decode(words.data(), words.size(), decoded.data(), decoded.size());
+    expectPushMethods(words.data(), words.size());
     std::vector<Method> out;
     for (long i = 0; i < n; i++)
         out.push_back({decoded[size_t(i)].subchannel, decoded[size_t(i)].method, decoded[size_t(i)].value});

@@ -13,6 +13,7 @@
 #include "../../SwitchGM20B/SwitchGM20BTegra.h"
 #include "../SwitchGM20BMacroSlots.h"
 #include "SwitchGM20BMacros.h"
+#include "method_checks.h"
 #include "mme_fermi.h"
 #include "mme_fermi_sim.h"
 
@@ -32,7 +33,7 @@ struct Scratch {
 struct Simulation {
     std::vector<uint32_t> arguments;
     size_t consumed = 0;
-    std::map<uint32_t, uint32_t> scratch;
+    switch_gm20b_test::Scratch scratch;
     std::vector<Method> methods;
 
     static uint32_t load(void *opaque)
@@ -48,13 +49,14 @@ struct Simulation {
         const uint32_t first = NVB197_SET_MME_SHADOW_SCRATCH(0);
         EXPECT_GE(method, first) << "a scratch word";
         const uint32_t word = (method - first) / 4;
-        EXPECT_GE(word, uint32_t(SWITCH_GM20B_SCRATCH_AMP_COUNT));
+        EXPECT_GE(word, uint32_t(SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD));
         EXPECT_LT(word, uint32_t(SWITCH_GM20B_SCRATCH_AMP_END));
-        return s.scratch[word];
+        return s.scratch.method(method);
     }
 
     static void emit(void *opaque, uint16_t method, uint32_t value)
     {
+        switch_gm20b_test::expectMaxwellB(method);
         static_cast<Simulation *>(opaque)->methods.emplace_back(method >= kLoad && method < kLoad + 64 ? kLoad : method,
                                                                 value);
     }
@@ -76,15 +78,15 @@ std::vector<Method> run(const uint32_t (&words)[N], const Scratch &scratch, cons
 {
     Simulation s;
     s.arguments = arguments;
-    const uint32_t base = SWITCH_GM20B_SCRATCH_AMP_COUNT;
-    const uint32_t head[] = {scratch.count,    scratch.countWord, scratch.id,
-                             scratch.viewport, scratch.layer,     scratch.barrier};
-    for (uint32_t i = 0; i < 6; i++)
-        s.scratch[base + i] = head[i];
-    for (uint32_t a = 0; a < SWITCH_GM20B_AMP_MAX; a++) {
-        s.scratch[SWITCH_GM20B_SCRATCH_AMP_LAYERS + a] = scratch.layers[a];
-        s.scratch[SWITCH_GM20B_SCRATCH_AMP_VIEWPORTS + a] = scratch.viewports[a];
-    }
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_COUNT] = scratch.count;
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_COUNT_WORD] = scratch.countWord;
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_ID_WORD] = scratch.id;
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_VIEWPORT_WORD] = scratch.viewport;
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_LAYER] = scratch.layer;
+    s.scratch[SWITCH_GM20B_SCRATCH_AMP_BARRIER] = scratch.barrier;
+    for (uint32_t a = 0; a < SWITCH_GM20B_AMP_MAX; a++)
+        s.scratch[SWITCH_GM20B_SCRATCH_AMP_MAPS + a] = scratch.layers[a] | scratch.viewports[a]
+                                                                               << SWITCH_GM20B_AMP_MAP_VIEWPORT_SHIFT;
     std::vector<mme_fermi_inst> decoded(N);
     mme_fermi_decode(decoded.data(), words, uint32_t(N));
     const mme_sim_state_ops ops = {Simulation::load, Simulation::state, Simulation::emit, Simulation::barrier,
