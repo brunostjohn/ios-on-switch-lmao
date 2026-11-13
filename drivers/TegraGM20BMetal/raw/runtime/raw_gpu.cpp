@@ -3493,11 +3493,11 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 // A memoryless attachment's memory: one per size, format, tag and layout, kept while passes use it (m2v 0105 gives a memoryless
 // attachment linear memory in a pass that renders to linear memory; NVK renders a pass with a block-linear colour target or a
 // depth/stencil attachment into block-linear colour). Called with the device lock held.
-Device::PlainMem *Device::largestPlain(uint32_t tag, uint32_t memory) const
+Device::PlainMem *Device::largestPlain(uint32_t tag, uint32_t memory, bool layered) const
 {
     PlainMem *best = nullptr;
     for (const auto &m : plainMems_)
-        if (m->tag == tag && m->memory == memory && (!best || m->span.bytes > best->span.bytes))
+        if (m->holds(tag, memory, layered) && (!best || m->span.bytes > best->span.bytes))
             best = m.get();
     return best;
 }
@@ -3536,13 +3536,15 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
     }
     // a layered pass's: its layers one layer's whole tiles apart (NIL's array stride of a one-level image)
     t.layers = std::max(m.layers, 1u);
-    if (t.layers > 1)
+    const bool layered = t.layers > 1;
+    if (layered)
         bytes = (t.layerBytes * t.layers + align - 1) / align * align;
-    PlainMem *mem = largestPlain(tag, memory);
+    PlainMem *mem = largestPlain(tag, memory, layered);
     if (!mem || mem->span.bytes < bytes || (mem->span.va & (align - 1))) {
         auto made = std::make_unique<PlainMem>();
         made->tag = tag;
         made->memory = memory;
+        made->layered = layered;
         made->align = align;
         const uint64_t want = sizeClassBytes(bytes, kBlAlign);
         const bool ok = memory == kPlainPool ? poolAlloc(want, made->span)
@@ -3562,7 +3564,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
         // goes back once their last uses complete rather than 10 s on
         for (Backing *b : backings_)
-            if (b->plain && b->plain != mem && b->plain->tag == tag && b->plain->memory == memory)
+            if (b->plain && b->plain != mem && b->plain->holds(tag, memory, layered))
                 b->retired = true;
         backingsChanged();
         compRearm_ = true;  // an idle process gives it back when it turns stale
@@ -3680,7 +3682,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
         return asked(last);
     for (Backing *b : backings_)
         if (matches(b)) {
-            if (b->plain && b->plain != largestPlain(tag, b->plain->memory)) {
+            if (b->plain && b->plain != largestPlain(tag, b->plain->memory, b->plain->layered)) {
                 b->retired = true;  // larger plain memory of its tag took its place: a view of that replaces it
                 backingsChanged();
                 continue;

@@ -2981,12 +2981,20 @@ private:
 
     // Plain memory under the memoryless backings of one tag and memory (the pool, block-linear chunks or a zeta format's),
     // each its own view (texture header, layout) of the same bytes, as compressed memory is (raw_comp.h CompMem): taken in
-    // size classes (sizeClassBytes of kBlAlign), the largest one new backings go on, given back with its last view
+    // size classes (sizeClassBytes of kBlAlign), the largest one new backings go on, given back with its last view.
+    // Layered passes' backings have memory of their own: a layered pass neither grows the one-layer passes' memory of its
+    // tag nor retires their backings, and a one-layer backing is never a layered pass's.
     struct PlainMem {
         Span span;
         uint64_t align = 0;
         uint32_t tag = 0, memory = 0;  // kPlainPool, kPlainBl, or kPlainZeta + the zeta format's index
         uint32_t views = 0;
+        bool layered = false;
+
+        bool holds(uint32_t t, uint32_t m, bool l) const
+        {
+            return tag == t && memory == m && layered == l;
+        }
     };
 
     struct Backing {
@@ -3013,7 +3021,7 @@ private:
 
     static constexpr uint32_t kPlainPool = 0, kPlainBl = 1, kPlainZeta = 2;
     std::vector<std::unique_ptr<PlainMem>> plainMems_;
-    PlainMem *largestPlain(uint32_t tag, uint32_t memory) const;
+    PlainMem *largestPlain(uint32_t tag, uint32_t memory, bool layered) const;
     // A memoryless backing of `m`'s shape on the largest plain memory of its tag and memory, made where none holds it;
     // nullptr when no memory or header is had
     Backing *plainBacking(const Texture &m, uint32_t tag, bool blockLinear);
