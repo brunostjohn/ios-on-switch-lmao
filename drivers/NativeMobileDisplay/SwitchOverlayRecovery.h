@@ -84,9 +84,10 @@ void beginPlaneRecovery(const char *why)
 void planeRecoveryNotStopped()
 {
     if (!planeRecoveryStuck) {
-        IOLog("SwitchDisplay: overlay windows did not stop in %u frames: overlays off until they read off, their memory "
-              "kept\n",
-              kLatchFrames);
+        IOLog(
+            "SwitchDisplay: overlay windows did not stop in %u frames: overlays off until they read off, their memory "
+            "kept\n",
+            kLatchFrames);
         planeRecoveryStuck = true;
         ++planeRecoveriesStuck;
         __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);

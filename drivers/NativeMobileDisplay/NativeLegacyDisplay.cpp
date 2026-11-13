@@ -1468,8 +1468,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted || completionFlipOut() ||
-               scanoutAttachWaits;
+               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
+               completionFlipOut() || scanoutAttachWaits;
     }
 
     void maskIdleFrameEnd()
@@ -2569,7 +2569,8 @@ private:
             }
             return;
         }
-        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) && !planeRecoveryWaits()) ||
+        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) &&
+             !planeRecoveryWaits()) ||
             hwSuspended || scanoutStopped || gPanicRestore.panicking)
             return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {

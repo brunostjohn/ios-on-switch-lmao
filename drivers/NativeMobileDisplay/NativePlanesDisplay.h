@@ -294,8 +294,7 @@ void retireUnshown(uint64_t seq)
 // Every DC A frame end, under the gate.
 void planeFrameEnd()
 {
-    if (planeProbeTick() || !planesAttached || hwSuspended || scanoutStopped ||
-        gPanicRestore.panicking)
+    if (planeProbeTick() || !planesAttached || hwSuspended || scanoutStopped || gPanicRestore.panicking)
         return;
     if (planeRecoveryFrameEnd())
         return;

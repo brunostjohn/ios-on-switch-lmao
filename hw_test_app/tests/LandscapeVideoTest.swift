@@ -109,7 +109,9 @@ struct LandscapeVideoTest: HWTest {
     /// The forced-failure arm, last: FAIL makes the next change into landscape fail as a reservation would, which holds
     /// the mode off for a run of video frames (SwitchLandscapeState.h); playing past the run, the next frame's change
     /// has to go landscape again. forced_holds and forced_retries are the kernel's counts over the arm.
-    func forcedFailure(_ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held) async
+    func forcedFailure(
+        _ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held
+    ) async
         -> ([(String, Bool)], Metrics)
     {
         var metrics = Metrics()
@@ -172,7 +174,8 @@ struct LandscapeVideoTest: HWTest {
             await MainActor.run {
                 video.pause()
                 let now = video.currentTime()
-                let to = CMTimeCompare(CMTimeAbsoluteValue(CMTimeSubtract(now, first)), CMTime(value: 1, timescale: 60)) < 0
+                let to =
+                    CMTimeCompare(CMTimeAbsoluteValue(CMTimeSubtract(now, first)), CMTime(value: 1, timescale: 60)) < 0
                     ? second : first
                 video.seek(to: to, toleranceBefore: .zero, toleranceAfter: .zero) { sought.resume($0) }
             }
@@ -186,7 +189,9 @@ struct LandscapeVideoTest: HWTest {
     /// many it took.
     static let changeSamples = 4
 
-    func change(_ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held) async
+    func change(
+        _ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held
+    ) async
         -> Result<(LandscapeSample, Int), TestFailure>
     {
         var last = LandscapeSample()

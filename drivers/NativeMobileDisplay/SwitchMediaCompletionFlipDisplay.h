@@ -88,10 +88,10 @@ const PlaneSet &newestRequestedSet() const
 // planeStage would write p at once, whatever latches before the completion: assigned is p as it would place it.
 bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
 {
-    if (!planesOn || !planesAttached || planeRecovering || planeHeldSet ||
-        planeProbe.active() || copyPlaneJoined || hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer ||
-        !planeLatch.mayWrite() || !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() ||
-        !mediaFlipIdle() || p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy())
+    if (!planesOn || !planesAttached || planeRecovering || planeHeldSet || planeProbe.active() || copyPlaneJoined ||
+        hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer || !planeLatch.mayWrite() ||
+        !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() || !mediaFlipIdle() ||
+        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy())
         return false;
     const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
                                                     planeWindowState(switch_landscape::kC)};
@@ -266,9 +266,10 @@ int mediaFlipVerdict(int status)
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (!early)
         return status;
-    IOLog("SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then failed "
-          "(%d): shown as done (%u such since boot); the filter writes no sets for the next %u\n",
-          status, failures, run);
+    IOLog(
+        "SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then failed "
+        "(%d): shown as done (%u such since boot); the filter writes no sets for the next %u\n",
+        status, failures, run);
     return 0;
 }
 
@@ -467,8 +468,8 @@ static int mediaFlipTotalSysctl(struct sysctl_oid *, void *, int which, struct s
 static void mediaFlipTotalsRegister()
 {
     static const char *const names[kMediaFlipTotals] = {
-        "switch_media_flips_completion",     "switch_media_flips_withdrawn",     "switch_media_flips_refused",
-        "switch_media_flips_lead_us",        "switch_media_flips_armed",         "switch_media_flips_filter",
+        "switch_media_flips_completion",      "switch_media_flips_withdrawn",    "switch_media_flips_refused",
+        "switch_media_flips_lead_us",         "switch_media_flips_armed",        "switch_media_flips_filter",
         "switch_media_flips_filter_declined", "switch_media_flips_done_at_swap", "switch_media_flips_fenced",
         "switch_media_flips_declined"};
     for (unsigned i = 0; i < kMediaFlipTotals; ++i) {

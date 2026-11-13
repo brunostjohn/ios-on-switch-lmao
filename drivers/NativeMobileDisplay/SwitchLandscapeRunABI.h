@@ -9,8 +9,8 @@
 #pragma once
 #include <stdint.h>
 
-#define SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC  0x444c5356u  // 'DLSV'
-#define SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES 240
+#define SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC       0x444c5356u  // 'DLSV'
+#define SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES      240
 #define SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES 3600
 
 // Who asked TegraVIC for a job: Core Animation's display server (backboardd: the route under test), the HW Test process

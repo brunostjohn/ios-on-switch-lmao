@@ -21,10 +21,11 @@ constexpr uint32_t kApertureFirst = 0xb80, kApertureLast = 0xbf9;
 std::string refusal(uint32_t wrote, uint32_t active, unsigned run = 8)
 {
     char line[256];
-    snprintf(line, sizeof(line),
-             "SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A flips "
-             "from the display's work loop for the next %u frames\n",
-             wrote, active, run);
+    snprintf(
+        line, sizeof(line),
+        "SwitchDisplay: window A's completion flip did not latch (wrote START_ADDR %#x, active %#x): window A flips "
+        "from the display's work loop for the next %u frames\n",
+        wrote, active, run);
     return line;
 }
 

@@ -79,6 +79,7 @@ struct Display {
     {
         return planeRecovering && !planeRecoveryStuck;
     }
+
     PlaneSet planeRecoveryTarget = {};
 
     struct Probe {
