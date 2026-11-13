@@ -136,13 +136,14 @@ static void giveup_report(uint32_t offset, uint32_t value, const struct switch_g
 /* tgm_live_lock held: the ACQUIRE probe's look at the GPU readers still parked at a give-up */
 static void giveup_probe(const struct switch_gpu_giveup *e)
 {
+	const struct switch_gpu_giveup_readers *r = switch_gpu_giveup_readers_of(&giveups, e);
 	const u64 now = nvxnu_nanotime();
 	u32 i;
 
-	if (giveup_down)
+	if (giveup_down || !r)
 		return;
-	for (i = 0; i < e->readers; i++) {
-		struct tgm_chan *chan = live_by_uid(e->reader[i].uid);
+	for (i = 0; i < r->count; i++) {
+		struct tgm_chan *chan = live_by_uid(r->job[i].uid);
 
 		if (chan)
 			tgm_acquire_probe_giveup(chan, e->parked_ns, now);

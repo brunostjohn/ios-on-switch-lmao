@@ -8,6 +8,14 @@ namespace
 {
 using namespace promise_giveup;
 
+unsigned readerSetsTaken()
+{
+	unsigned taken = 0;
+	for (const uint64_t word : giveups.reader_sets_taken)
+		taken += unsigned(__builtin_popcountll(word));
+	return taken;
+}
+
 class Call : public GiveUp
 {
 };
@@ -78,10 +86,13 @@ TEST_P(Call, EveryPromiseSlotWaitedOnAtOnceIsGivenUpAtOneSecond)
 		tgm_chan_park_promises(&reader, &promise, 1);
 	}
 	reader.submitted += 1;
+	EXPECT_EQ(readerSetsTaken(), unsigned(SWITCH_GPU_GIVEUP_READER_SETS))
+		<< "the promises past the last reader set count their readers as parked";
 	until(fake::now + 999 * kMs);
 	EXPECT_TRUE(lines.empty());
 	until(fake::now + 1 * kMs);
 	EXPECT_EQ(lines.size(), size_t(SWITCH_GPU_GIVEUPS));
+	EXPECT_EQ(readerSetsTaken(), 0u);
 	for (const uint32_t offset : offsets)
 		EXPECT_EQ(fake::pool[offset / 4], kValue) << offset;
 	ASSERT_GE(lines.size(), 64u);
@@ -228,6 +239,60 @@ TEST_P(Call, ReadersBeyondTheRecordThatAllDiedAreGivenUpAtTheSecond)
 	until(fake::now + 1 * kMs);
 	EXPECT_EQ(lines.size(), 1u);
 	EXPECT_FALSE(fake::call.pending);
+}
+
+// Every way a record ends gives its reader set back. Twice as many promises as there are sets go through each, one
+// after another: the word moved, the give-up, the readers gone, the slot made again, the last waiter leaving.
+TEST_P(Call, EveryWayARecordEndsGivesItsReaderSetBack)
+{
+	constexpr int kRounds = 2 * SWITCH_GPU_GIVEUP_READER_SETS;
+	uint32_t value = kValue;
+	auto park = [&](uint32_t v) {
+		fake::pool[kOffset / 4] = v - 1;
+		tgm_fence_pages.made[0][kOffset / 4 - TGM_FENCE_PROMISE_WORD] = v;
+		const switch_gpu_backing_token promise = {v, 0, SWITCH_GPU_ENGINE_PROMISE, kOffset};
+		tgm_chan_park_promises(&reader, &promise, 1);
+		reader.submitted += 1;
+	};
+	for (int i = 0; i < kRounds; ++i, ++value) {
+		park(value);
+		fake::pool[kOffset / 4] = value;
+		reader.fence = reader.submitted;
+		until(fake::now + 1000 * kMs);
+	}
+	EXPECT_EQ(readerSetsTaken(), 0u) << "the word moved";
+	for (int i = 0; i < kRounds; ++i, ++value) {
+		park(value);
+		until(fake::now + 1000 * kMs);
+		reader.fence = reader.submitted;
+	}
+	EXPECT_EQ(lines.size(), size_t(kRounds));
+	EXPECT_EQ(readerSetsTaken(), 0u) << "the give-up";
+	for (int i = 0; i < kRounds; ++i, ++value) {
+		park(value);
+		reader.error = 1;
+		until(fake::now + 1000 * kMs);
+		reader.error = 0;
+		reader.fence = reader.submitted;
+	}
+	EXPECT_EQ(readerSetsTaken(), 0u) << "the readers gone";
+	for (int i = 0; i < kRounds; ++i, ++value) {
+		park(value);
+		fake::pool[kOffset / 4] = value;
+		reader.fence = reader.submitted;
+		EXPECT_EQ(readerSetsTaken(), 1u) << "the slot made again";
+	}
+	until(fake::now + 1000 * kMs);
+	EXPECT_EQ(readerSetsTaken(), 0u);
+	for (int i = 0; i < kRounds; ++i, ++value) {
+		park(value);
+		ASSERT_EQ(tgm_promise_park(kOffset, value, "SpringBoard", "a CPU lock", nullptr, 0),
+			  1);
+		reader.fence = reader.submitted;
+		tgm_promise_leave(kOffset, value, 0);
+	}
+	EXPECT_EQ(readerSetsTaken(), 0u) << "the last waiter leaving";
+	EXPECT_EQ(lines.size(), size_t(kRounds)) << "only the give-ups were told";
 }
 
 // A promise kept before its reader parks is never waited on.
