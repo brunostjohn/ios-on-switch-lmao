@@ -47,8 +47,8 @@ constexpr uint8_t kPoison = 0xab;
 constexpr uint32_t kSiteLeft = 1, kSiteCenter = 2;
 
 enum Variant : uint32_t {
-    kCopy420Turned,  // control: '420v' turned, the transposed copy the unit has run
-    kCopy422,        // control: '422v' untransposed
+    kCopy420Turned,    // control: '420v' turned, the transposed copy the unit has run
+    kCopy422,          // control: '422v' untransposed
     kShipped,          // '422v' turned as tegra_vic_build makes it, sited Center
     kShippedLeft,      // the same sited Left
     kSitingExchanged,  // as built, Center's siting exchanged onto ChromaLocVert

@@ -136,8 +136,8 @@ inline void compare(const uint8_t *bytes, const Case &c, SwitchVICOddResult *r)
     for (uint64_t at = 0; at < kBufferBytes; at++) {
         const uint32_t p = at >= kChromaOffset;
         const uint64_t within = at - (p ? kChromaOffset : 0);
-        const bool inside = within < uint64_t(kDestinationPitch) * planeRows(c, p) &&
-                            within % kDestinationPitch < rowBytes(c, p);
+        const bool inside =
+            within < uint64_t(kDestinationPitch) * planeRows(c, p) && within % kDestinationPitch < rowBytes(c, p);
         r->outsideWritten += !inside && bytes[at] != kPoison;
     }
 }

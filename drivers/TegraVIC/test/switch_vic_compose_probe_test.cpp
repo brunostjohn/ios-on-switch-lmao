@@ -55,7 +55,8 @@ std::vector<uint8_t> boot21Engine(const Case &c, const TegraVICJob &job)
             Rgba out = {{0, 0, 0, 255}};
             for (uint32_t i = 0; i < count; i++) {
                 const uint32_t slot = TEGRA_VIC_SLOTS + i * TEGRA_VIC_SLOT_BYTES, blend = slot + TEGRA_VIC_SLOT_BLEND;
-                const uint64_t left = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_LEFT), top = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_TOP);
+                const uint64_t left = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_LEFT),
+                               top = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_TOP);
                 const uint64_t right = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_RIGHT);
                 const uint64_t bottom = TEGRA_VIC_GET(cfg, slot, SLOT_DEST_BOTTOM);
                 if (!TEGRA_VIC_GET(cfg, slot, SLOT_ENABLE) || x < left || x > right || y < top || y > bottom)
@@ -121,7 +122,8 @@ TEST(VICComposeProbe, TheTweakedCasesChangeOnlyTheBlendWordsOrTheFillMode)
     EXPECT_EQ(memcmp(plain.config, zero.config, TEGRA_VIC_CONFIG_BYTES), 0);
     EXPECT_EQ(TEGRA_VIC_GET(plain.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE), uint64_t(TEGRA_VIC_ALPHA_COMPOSITED));
     ASSERT_EQ(build(kCases[11], 0x10000000, 0x20000000, 0x1000, 0x2000, &opaqueFill), nullptr);
-    EXPECT_EQ(TEGRA_VIC_GET(opaqueFill.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE), uint64_t(TEGRA_VIC_ALPHA_OPAQUE));
+    EXPECT_EQ(TEGRA_VIC_GET(opaqueFill.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE),
+              uint64_t(TEGRA_VIC_ALPHA_OPAQUE));
 }
 
 // Boot 21's readings come back on its engine: the OPAQUE-fill case reads as straight (premultiplied_models=10 there)

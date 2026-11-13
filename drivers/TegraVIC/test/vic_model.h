@@ -207,7 +207,8 @@ static inline uint32_t vic_model_mirror(const VicModelJob *j, uint32_t flip, uin
 }
 
 // The chroma a pair written at memory (row, col) and (row, col + 1) carries under OutChromaLocHoriz `site`: the even
-// sample's (0), the mean of both (1) or the odd one's (2). A partner outside the target rectangle leaves the even one's.
+// sample's (0), the mean of both (1) or the odd one's (2). A partner outside the target rectangle leaves the even
+// one's.
 static inline void vic_model_site(VicModel *m, const VicModelJob *j, uint32_t tr, uint32_t site, uint32_t row,
                                   uint32_t col, VicModelPixel *p)
 {

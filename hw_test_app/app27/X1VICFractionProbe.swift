@@ -4,11 +4,12 @@ import HWTestGPU
 
 /// L996: whether VIC honours a 16.16 source offset (IOSurfaceAcceleratorCapabilitiesFractionalXYOffsetsSupported),
 /// AlphaFillMode BACKGROUND (AlphaOverride) and a 16.16 source width and height (FractionalDimensions), from
-/// drivers/TegraVIC/SwitchVICFractionProbe.h: 1:1 2-tap copies a quarter, half and three quarters of a pixel across, down
-/// and both, each scored in the kernel against the interpolation, the truncated and the rounded offset; a varying-alpha
-/// copy with every alpha overridden; then sources 24.75 pixels across (w3_0), down (w0_3) and 24.5 both ways (w2_2)
-/// scaled onto 24, against the interpolation at that scale and the width truncated or rounded. <case>_answer names the
-/// answer the engine gave. fractional= judges the offsets, dimensions= the widths, alpha_override= the request flag.
+/// drivers/TegraVIC/SwitchVICFractionProbe.h: 1:1 2-tap copies a quarter, half and three quarters of a pixel across,
+/// down and both, each scored in the kernel against the interpolation, the truncated and the rounded offset; a
+/// varying-alpha copy with every alpha overridden; then sources 24.75 pixels across (w3_0), down (w0_3) and 24.5 both
+/// ways (w2_2) scaled onto 24, against the interpolation at that scale and the width truncated or rounded.
+/// <case>_answer names the answer the engine gave. fractional= judges the offsets, dimensions= the widths,
+/// alpha_override= the request flag.
 enum X1VICFractionProbe {
     static let magic: UInt32 = 0x5646_5241  // 'VFRA'
     static let cases = 13

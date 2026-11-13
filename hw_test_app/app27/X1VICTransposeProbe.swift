@@ -5,8 +5,8 @@ import HWTestGPU
 /// L998: a transposed '422v' output described as N422 sited as its memory lies
 /// (drivers/TegraVIC/SwitchVICTransposeProbe.h). A 16x16 '422v' turned as built, sited Center and Left and by transform
 /// 4, as built with Center's siting exchanged, and as N422R (the earlier description) both ways, beside the transposed
-/// '420v' and untransposed '422v' copies. <case>_offset is where each output CbCr pair was sampled, in half columns past
-/// the pair's first (0, 1, 2; 15 mixed); <case>_expected what the case's description predicts. reading= names the
+/// '420v' and untransposed '422v' copies. <case>_offset is where each output CbCr pair was sampled, in half columns
+/// past the pair's first (0, 1, 2; 15 mixed); <case>_expected what the case's description predicts. reading= names the
 /// description whose cases came out clean.
 enum X1VICTransposeProbe {
     static let magic: UInt32 = 0x5654_3432  // 'VT42'

@@ -8,13 +8,13 @@
 // codes a column and G 8 a row, so a quarter pixel is 2 codes and the answers are further apart than the tolerance (1
 // code a channel, for the 10-bit pipeline's truncation). The last column and row are edges (VIC may clamp its second
 // tap at the source rectangle) and are counted apart. Then AlphaOverride as tegra_vic_build programs it (AlphaFillMode
-// BACKGROUND, NVB0B6_DXVAHD_ALPHA_FILL_MODE_BACKGROUND 1, averne's clb0b6.h): a BGRA copy whose source alpha varies must
-// come out with every alpha the override's, after the same copy in SOURCE_STREAM, which keeps the source's. Last, a
-// source rectangle 24 and three quarters of a pixel across, down, and 24 and a half both ways scaled onto 24
+// BACKGROUND, NVB0B6_DXVAHD_ALPHA_FILL_MODE_BACKGROUND 1, averne's clb0b6.h): a BGRA copy whose source alpha varies
+// must come out with every alpha the override's, after the same copy in SOURCE_STREAM, which keeps the source's. Last,
+// a source rectangle 24 and three quarters of a pixel across, down, and 24 and a half both ways scaled onto 24
 // (FractionalDimensions: tegra_vic_build hands 16.16 widths through as it does offsets), scored against the
-// interpolation at that scale, the width truncated and the width rounded. The integer-offset copy and the
-// SOURCE_STREAM copy are the controls. Plain logic, no IOKit: SwitchVICFractionProbe.cpp
-// runs it, test/switch_vic_fraction_probe_test.cpp checks it.
+// interpolation at that scale, the width truncated and the width rounded. The integer-offset copy and the SOURCE_STREAM
+// copy are the controls. Plain logic, no IOKit: SwitchVICFractionProbe.cpp runs it,
+// test/switch_vic_fraction_probe_test.cpp checks it.
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -63,9 +63,18 @@ struct Case {
 };
 
 constexpr Case kCases[SWITCH_VIC_FRACTION_PROBE_CASES] = {
-    {0, 0, kFraction},      {0x4000, 0, kFraction},   {0x8000, 0, kFraction}, {0xc000, 0, kFraction},
-    {0, 0x4000, kFraction}, {0, 0x8000, kFraction},   {0, 0xc000, kFraction}, {0x8000, 0x8000, kFraction},
-    {0, 0, kSourceAlpha},   {0, 0, kBackgroundAlpha}, {0xc000, 0, kDimension}, {0, 0xc000, kDimension},
+    {0, 0, kFraction},
+    {0x4000, 0, kFraction},
+    {0x8000, 0, kFraction},
+    {0xc000, 0, kFraction},
+    {0, 0x4000, kFraction},
+    {0, 0x8000, kFraction},
+    {0, 0xc000, kFraction},
+    {0x8000, 0x8000, kFraction},
+    {0, 0, kSourceAlpha},
+    {0, 0, kBackgroundAlpha},
+    {0xc000, 0, kDimension},
+    {0, 0xc000, kDimension},
     {0x8000, 0x8000, kDimension},
 };
 constexpr uint32_t kControlMask = (1u << 0) | (1u << 8);

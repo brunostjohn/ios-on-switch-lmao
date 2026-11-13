@@ -152,9 +152,12 @@ TEST(SwitchVICPackedProbe, TheCodeEngineReadsAsBoot21UnderTheCodesItRan)
         const uint32_t fourcc = packed(c.source) ? c.source : c.destination;
         return judge(c, {2, false, fourcc == k2vuy ? uint32_t(TEGRA_VIC_T_U8_Y8__V8_Y8) : TEGRA_VIC_T_Y8_U8__Y8_V8});
     };
+
     const struct {
         uint32_t index, roles, wrong;
-    } boot21[] = {{1, 0x1203, 512}, {3, 0x2130, 512}, {5, 0x1203, 1024}, {7, 0x2130, 1024}, {9, 0x3210, 0}, {11, 0x3210, 0}};
+    } boot21[] = {{1, 0x1203, 512},  {3, 0x2130, 512}, {5, 0x1203, 1024},
+                  {7, 0x2130, 1024}, {9, 0x3210, 0},   {11, 0x3210, 0}};
+
     for (const auto &b : boot21) {
         const SwitchVICPackedResult r = under(b.index);
         EXPECT_EQ(r.roleMap, b.roles) << b.index;
@@ -173,7 +176,8 @@ TEST(SwitchVICPackedProbe, TheShippedRowsAreCleanOnTheCodeEngine)
         if (!packed(c.source) && !packed(c.destination))
             continue;
         const SwitchVICPackedResult r = judge(c, {2, false, packedCode(c)});
-        EXPECT_EQ(clean(r), c.elementBytes == 2) << i << ": " << r.mismatches << " wrong, roles " << std::hex << r.roleMap;
+        EXPECT_EQ(clean(r), c.elementBytes == 2)
+            << i << ": " << r.mismatches << " wrong, roles " << std::hex << r.roleMap;
         if (c.elementBytes == 2)
             EXPECT_EQ(r.roleMap, expectedRoles(c)) << i;
     }

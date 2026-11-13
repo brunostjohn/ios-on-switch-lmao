@@ -110,7 +110,8 @@ TEST(SwitchVICFractionProbe, EveryCaseBuildsWithTheShippedTraitsAndKeepsItsFract
         EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE),
                   uint64_t(overridden ? TEGRA_VIC_ALPHA_BACKGROUND : TEGRA_VIC_ALPHA_SOURCE_STREAM));
         if (overridden)
-            EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA), kOverride << 2 | kOverride >> 6);
+            EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_BACKGROUND_ALPHA),
+                      kOverride << 2 | kOverride >> 6);
     }
 }
 

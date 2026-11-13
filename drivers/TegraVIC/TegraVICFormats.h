@@ -270,8 +270,8 @@ static inline uint32_t tegra_vic_padded_height(const TegraVICFormat *f, uint32_t
 // a packed row, its last pixel pair) whole.
 static inline uint32_t tegra_vic_row_bytes(const TegraVICFormat *f, uint32_t width, uint32_t plane)
 {
-    const uint32_t elements = plane || f->packed ? tegra_vic_plane_width(f, tegra_vic_padded_width(f, width), plane)
-                                                 : width;
+    const uint32_t elements =
+        plane || f->packed ? tegra_vic_plane_width(f, tegra_vic_padded_width(f, width), plane) : width;
     return elements * f->bpe[plane];
 }
 

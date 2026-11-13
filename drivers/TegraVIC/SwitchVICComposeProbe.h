@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The slot composition probe, debug kernels only (selector 6, SwitchVICKernelTest.h). kTegraVICTraits.multiSlot and
 // slotAlpha are 1, and VIC 4.0's blend select codes are VIC 4.1's by inference, applied under AlphaFillMode COMPOSITED
-// (TegraVICCompose.h). Small BGRA cards and a flat NV12 picture, all in probe buffer 0, are composed into a 64 x 32 BGRA
-// destination: one slot through tegra_vic_build (the control) and through tegra_vic_compose_build, two disjoint slots,
-// overlapping opaque slots in both orders, a premultiplied and a straight per-pixel alpha slot, a half global alpha, a
-// slot scaled down 2:1 from a flat card, and the premultiplied case into GENERIC_16Bx2 blocks of 16 GOBs. Two more
-// change one thing after the build and are reported, not judged: overlapping opaque slots with BlendingSlotStruct all
-// zero (as every single-slot job has run, and hekate's), and the premultiplied case with alpha fill OPAQUE, under which
-// boot 21 read every slot laid over by its own alpha whatever its blend words. Each result is read back
-// against several readings of what the engine did (Model): the blend as programmed, the top slot replacing what lies
-// under it, the top slot missing, the colour read premultiplied or straight whatever was asked, and nothing drawn, so
-// a wrong reading says which one the engine follows. Pictures are 1:1 or flat, so no filter tap changes a pixel. Plain
-// logic, no IOKit: SwitchVICComposeProbe.cpp runs it, test/switch_vic_compose_probe_test.cpp checks it.
+// (TegraVICCompose.h). Small BGRA cards and a flat NV12 picture, all in probe buffer 0, are composed into a 64 x 32
+// BGRA destination: one slot through tegra_vic_build (the control) and through tegra_vic_compose_build, two disjoint
+// slots, overlapping opaque slots in both orders, a premultiplied and a straight per-pixel alpha slot, a half global
+// alpha, a slot scaled down 2:1 from a flat card, and the premultiplied case into GENERIC_16Bx2 blocks of 16 GOBs. Two
+// more change one thing after the build and are reported, not judged: overlapping opaque slots with BlendingSlotStruct
+// all zero (as every single-slot job has run, and hekate's), and the premultiplied case with alpha fill OPAQUE, under
+// which boot 21 read every slot laid over by its own alpha whatever its blend words. Each result is read back against
+// several readings of what the engine did (Model): the blend as programmed, the top slot replacing what lies under it,
+// the top slot missing, the colour read premultiplied or straight whatever was asked, and nothing drawn, so a wrong
+// reading says which one the engine follows. Pictures are 1:1 or flat, so no filter tap changes a pixel. Plain logic,
+// no IOKit: SwitchVICComposeProbe.cpp runs it, test/switch_vic_compose_probe_test.cpp checks it.
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -107,10 +107,7 @@ constexpr Case kCases[SWITCH_VIC_COMPOSE_PROBE_CASES] = {
     {2, {{kOpaqueA, 0, 0, 32, 16, kOpaque, 1023}, {kFlat, 16, 8, 32, 16, kOpaque, 1023}}, false, kAsBuilt},
     {2, {{kOpaqueA, 0, 0, 32, 16, kOpaque, 1023}, {kAlphaB, 16, 8, 32, 16, kPremultiplied, 1023}}, true, kAsBuilt},
     {2, {{kOpaqueA, 0, 0, 32, 16, kOpaque, 1023}, {kOpaqueC, 16, 8, 32, 16, kOpaque, 1023}}, false, kZeroBlend},
-    {2,
-     {{kOpaqueA, 0, 0, 32, 16, kOpaque, 1023}, {kAlphaB, 16, 8, 32, 16, kPremultiplied, 1023}},
-     false,
-     kOpaqueFill},
+    {2, {{kOpaqueA, 0, 0, 32, 16, kOpaque, 1023}, {kAlphaB, 16, 8, 32, 16, kPremultiplied, 1023}}, false, kOpaqueFill},
 };
 
 struct Rgba {

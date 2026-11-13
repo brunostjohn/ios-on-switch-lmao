@@ -77,7 +77,8 @@ TEST(VicOdd, AssetsdsOddWidth422fScalesIntoAnEvenOne)
     ASSERT_STREQ(built(src, dst, copy(333, 74, 332, 74), &job), nullptr);
     EXPECT_EQ(SLOT_FIELD(job, SURF_WIDTH), 333u) << "one pixel wider: 167 whole pairs";
     EXPECT_EQ(SLOT_FIELD(job, SURF_HEIGHT), 73u);
-    EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_RIGHT), uint64_t(332) << 16) << "the rectangle odd";
+    EXPECT_EQ(TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_RIGHT), uint64_t(332) << 16)
+        << "the rectangle odd";
     EXPECT_EQ(OUT_FIELD(job, SURF_WIDTH), 331u);
 }
 
