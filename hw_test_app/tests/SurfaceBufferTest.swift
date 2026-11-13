@@ -71,10 +71,7 @@ struct SurfaceBufferTest: HWTest {
         if astcRow != 0 { wrong.append("astc_row") }
         if path != "raw" { wrong.append("path") }
         if !asked.isEmpty { wrong.append("m2v") }
-        if answer != Self.answered(gpu.device) { wrong.append("answer") }
+        if answer != 1 { wrong.append("answer") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
-
-    /// supportsBufferWithIOSurface as the raw device answers it (raw_device_answers.h)
-    static func answered(_ device: MTLDevice) -> Int { device.name.contains("A13") ? 1 : 0 }
 }
