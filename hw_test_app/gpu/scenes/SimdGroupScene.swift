@@ -107,7 +107,7 @@ struct SimdGroupScene: GPUScene {
             for entry in Self.rows {
                 let answer = (object.value(forKey: entry.answer) as? NSNumber)?.intValue ?? -1
                 result.metrics.set(entry.name + "_answer", answer)
-                if entry.name != "permute" { result.expect(answer == 1, "\(entry.answer) answers \(answer)") }
+                result.expect(answer == 1, "\(entry.answer) answers \(answer)")
             }
         }
         result.expect(layoutWrong == 0, "\(layoutWrong) threads not at the lane and width the dispatch lays out")

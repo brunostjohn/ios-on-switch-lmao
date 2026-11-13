@@ -3,9 +3,9 @@
 // 21H461, iPad12,1's A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's
 // device answers them today, but where the device has a form of a feature m2v's answers lack: counter sampling at stage
 // boundaries, as the identity's AGX driver answers it (raw_counters.h); buffers over IOSurfaces (RawMetalDevice.mm
-// newBufferWithIOSurface:); SIMD-group reduction and shift-and-fill, which the translator lowers to SHFL and VOTE
-// (HW Test gpu.compute.simd_group). maxPredicatedNestingDepth is the loop depth the
-// raw path lays down (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
+// newBufferWithIOSurface:); SIMD-group permute, reduction and shift-and-fill, which the translator lowers to SHFL and
+// VOTE (HW Test gpu.compute.simd_group). maxPredicatedNestingDepth is the loop depth the raw path lays down
+// (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
 // the target's: the A13's supportsVertexAmplificationCount: takes 0 to 8 (AGXA13FamilyDevice, `cmp w2,#9; cset lo`),
 // its limits table's maxVertexAmplificationCount 2 and maxVertexAmplificationFactor 8, supportsDynamicAttributeStride
 // supportsFamily:Apple4; the A10X takes a count of 0 or 1 (`tst x2,#~1`) and no dynamic stride. Tessellation is the
@@ -130,7 +130,7 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsSamplerReductionMode", 0, true},
     {"supportsYCBCRFormats12", 0, true},
     {"supportsYCBCRPackedFormats12", 0, true},
-    {"supportsSIMDGroup", 0, true},
+    {"supportsSIMDGroup", 1, true},
     {"maxFramebufferStorageBits", 256, false},
     {"maxVertexAttributes", 31, false},
     {"maxVertexInlineDataSize", 4096, false},

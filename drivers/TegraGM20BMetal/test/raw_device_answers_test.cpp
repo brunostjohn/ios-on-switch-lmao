@@ -78,12 +78,14 @@ TEST(RawDeviceAnswers, BuffersOverIOSurfacesAreMade)
         EXPECT_EQ(count(k, "supportsBufferWithIOSurface"), 1u) << k.kind;
 }
 
-// The translator lowers simd_sum, the prefix sums and shuffle-and-fill to SHFL and VOTE (gpu.compute.simd_group)
-TEST(RawDeviceAnswers, SimdReductionAndShiftAndFillAreYes)
+// The translator lowers SIMD-group permutes, votes, reductions, prefix sums and shuffle-and-fill to SHFL and VOTE
+// (gpu.compute.simd_group)
+TEST(RawDeviceAnswers, SimdGroupRowsAreYes)
 {
     for (const raw::answers::Kind &k : raw::answers::kKinds) {
         EXPECT_EQ(count(k, "supportsSIMDReduction"), 1u) << k.kind;
         EXPECT_EQ(count(k, "supportsSIMDShuffleAndFill"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsSIMDGroup"), 1u) << k.kind;
     }
 }
 
