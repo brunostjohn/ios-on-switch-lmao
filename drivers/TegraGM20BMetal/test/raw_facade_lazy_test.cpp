@@ -249,7 +249,6 @@ void ownDevice()
                                               "maxLineWidth",
                                               "maxPointSize",
                                               "padmaxBufferLength",
-                                              "maxTessellationFactor",
                                               "maxIOCommandsInFlight",
                                               "maxAccelerationStructureLevels"};
     for (const LimitField &field : kLimitFields) {
