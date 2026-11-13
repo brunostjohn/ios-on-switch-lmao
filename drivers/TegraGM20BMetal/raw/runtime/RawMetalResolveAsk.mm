@@ -54,6 +54,5 @@ raw::ResolveAsk resolveAsk(RMTexture *into, const raw::Texture &target, const ra
 #endif
     a.wholeTarget = width == target.width && height == target.height;
     a.shadowTarget = target.shadowTarget;
-    a.compressedSamples = rendered.comptags;
     return a;
 }

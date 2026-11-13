@@ -34,12 +34,11 @@ constexpr bool resolveTargetReadable(const ResolveTarget &t)
 }
 
 struct ResolveAsk {
-    uint16_t format = 0;             // MTLPixelFormat of the resolve texture
-    uint8_t samples = 0;             // the attachment's
-    bool readable = false;           // resolveTargetReadable
-    bool wholeTarget = false;        // the pass's render area is the resolve texture's whole level 0, slice 0
-    bool shadowTarget = false;       // a pitch target the render hardware does not take (Texture::shadowTarget)
-    bool compressedSamples = false;  // the multisampled image the pass rendered has comptags
+    uint16_t format = 0;        // MTLPixelFormat of the resolve texture
+    uint8_t samples = 0;        // the attachment's
+    bool readable = false;      // resolveTargetReadable
+    bool wholeTarget = false;   // the pass's render area is the resolve texture's whole level 0, slice 0
+    bool shadowTarget = false;  // a pitch target the render hardware does not take (Texture::shadowTarget)
 };
 
 // How close the engine's box of a format's grid at 2x or 4x comes to Metal's resolve, as gpu.x1.twod_resolve read it on

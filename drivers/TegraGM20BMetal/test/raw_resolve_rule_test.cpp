@@ -169,14 +169,13 @@ TEST(ResolveRule, TheComplementIsNoRoute)
 {
     for (uint16_t format : {70, 80})
         for (uint8_t samples : {2, 4, 8})
-            for (int bits = 0; bits < 16; bits++) {
+            for (int bits = 0; bits < 8; bits++) {
                 raw::ResolveAsk a;
                 a.format = format;
                 a.samples = samples;
                 a.readable = bits & 1;
                 a.wholeTarget = bits & 2;
                 a.shadowTarget = bits & 4;
-                a.compressedSamples = bits & 8;
                 EXPECT_NE(raw::resolveRoute(a), raw::ResolveByComplement);
             }
     EXPECT_EQ(raw::resolveSampleSlot(2), 0u);
