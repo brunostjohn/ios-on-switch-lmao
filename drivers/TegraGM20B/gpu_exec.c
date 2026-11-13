@@ -172,6 +172,8 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		enum tgm_sched_kick kick = tgm_sched_kicked(tgm_gpu.device, chan->chid, &queued);
 
 		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
+		if (stats_on() && queued.unread)
+			WRITE_ONCE(chan->stat_unread, chan->stat_unread + 1);
 		if (stats_on())
 			for (s = next; (s32)(s - first) >= 0; s--)
 				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
@@ -492,7 +494,7 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		    __atomic_load_n(&chan->wake, __ATOMIC_ACQUIRE);
 
 	if (stats_on() && (visibility & SWITCH_GPU_SUBMIT_QUIET) && !quiet && count)
-		tgm_stats_loud(SWITCH_GPU_LOUD_NO_WAKE);
+		tgm_stats_loud(chan, SWITCH_GPU_LOUD_NO_WAKE);
 
 	if (chan->error)
 		return -EIO;

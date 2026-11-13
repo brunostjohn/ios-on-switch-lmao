@@ -14,7 +14,7 @@ extern "C" {
 namespace
 {
 std::map<u32, u32> regs;
-unsigned reads, preempts;
+unsigned reads, preempts, locks;
 
 struct Model {
 	nvkm_device device{};
@@ -49,6 +49,7 @@ constexpr unsigned kCompositor = 3, kApp = 7;
 extern "C" {
 void mutex_lock(struct mutex *m)
 {
+	++locks;
 	m->held = 1;
 }
 
@@ -59,6 +60,7 @@ void mutex_unlock(struct mutex *m)
 
 int mutex_trylock(struct mutex *m)
 {
+	++locks;
 	if (m->held)
 		return 0;
 	m->held = 1;
@@ -190,10 +192,16 @@ protected:
 	{
 		tgm_sched_queued queued{};
 		const unsigned before = reads;
+		const unsigned lockedBefore = locks;
 		const tgm_sched_kick result = tgm_sched_kicked(&m.device, kCompositor, &queued);
 		*read = reads - before;
+		unread = queued.unread;
+		lockTaken = locks - lockedBefore;
 		return result;
 	}
+
+	int unread = 0;
+	unsigned lockTaken = 0;
 };
 
 Model SchedKick::m;
@@ -202,11 +210,11 @@ Model SchedKick::m;
 TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 {
 	unsigned read = 0;
-	tgm_sched_unread();
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u) << "PFIFO and PBDMA status read with no app channel's work in flight";
 	EXPECT_EQ(preempts, 0u);
-	EXPECT_EQ(tgm_sched_unread(), 1u) << "the waits line's count";
+	EXPECT_EQ(unread, 1) << "the waits line's count";
+	EXPECT_EQ(lockTaken, 0u);
 	unsigned resident = reads;
 	EXPECT_EQ(tgm_sched_resident(&m.device), TGM_VICTIM_NONE);
 	EXPECT_EQ(reads - resident, 0u)
@@ -223,6 +231,7 @@ TEST_F(SchedKick, AppWorkInFlightReadsStatusAndPreempts)
 	regs[PFIFO_ENG_STATUS(0)] = PFIFO_ENG_BUSY | (PFIFO_ENG_CTX_VALID << 13) | kApp;
 	EXPECT_EQ(kick(&read), TGM_KICK_PREEMPTED);
 	EXPECT_EQ(read, 4u) << "GR, the PBDMA's status and channel, PFIFO_PREEMPT's pending bit";
+	EXPECT_EQ(lockTaken, 1u) << "the runlist's, tried for the preempt";
 	EXPECT_EQ(preempts, 1u);
 	EXPECT_EQ(regs[PFIFO_PREEMPT], kApp);
 	switch_gpu_busy_done(&tgm_busy, kApp, 1);

@@ -2175,3 +2175,26 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
     ],
 )
+
+# The busy words and the wake word between threads, under ThreadSanitizer
+host_test(
+    name = "switch_gpu_busy_tsan_test",
+    srcs = [
+        "switch_gpu_busy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
+    name = "switch_gpu_wake_word_tsan_test",
+    srcs = [
+        "switch_gpu_wake_word_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)

@@ -142,7 +142,6 @@ struct wstat_state {
 	u64 stall, nonstall;     /* the interrupt passes at the window's start */
 	u64 cpus[4], filters[4]; /* the passes and the nonstall filters by CPU at its start */
 	u64 global_wakeups;      /* the global word's wakeups at its start */
-	u32 loud[SWITCH_GPU_LOUD_REASONS]; /* jobs with pushes that interrupt, by why */
 };
 extern struct wstat_state tgm_wstat;
 extern struct tgm_gate tgm_sc7_gate;
@@ -324,6 +323,10 @@ struct tgm_chan {
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
+	/* stats, written by the channel's submission owner alone and summed by the waits line (`seen`: its last sum): high
+	 * kicks that read no PFIFO register, and jobs with pushes that end with their own interrupt by why */
+	u32 stat_unread, stat_unread_seen;
+	u32 stat_loud[SWITCH_GPU_LOUD_REASONS], stat_loud_seen[SWITCH_GPU_LOUD_REASONS];
 
 	/* stats: each job's seqnos by its first, the job being timed, and this window's jobs (SwitchGpuJobTiming.h) */
 	struct {

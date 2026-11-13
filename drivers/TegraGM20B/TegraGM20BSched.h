@@ -37,15 +37,14 @@ enum tgm_sched_kick {
 struct tgm_sched_queued {
 	int behind;
 	uint64_t asked_pt;
+	int unread; /* the kick read no PFIFO register: no app work in flight */
 };
 
 /* A high channel kicked work: preempt the app channel holding GR or the PBDMA, if one does. Never waits. */
 enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int chid,
 				     struct tgm_sched_queued *queued);
-/* Debug kernels: this window's kicks by what they found, for the stats line, and those that read no PFIFO register
- * (no app work in flight), for the waits line. */
+/* Debug kernels: this window's kicks by what they found, for the stats line. */
 void tgm_sched_stats(char *buf, unsigned int len);
-uint32_t tgm_sched_unread(void);
 
 /* The hold (hold.c). Only channels gpu_chan.c registered (an app's) are held, never one errored, isolated or in recovery. */
 struct tgm_window {

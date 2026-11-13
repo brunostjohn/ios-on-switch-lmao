@@ -15,7 +15,7 @@ namespace
 {
 constexpr u64 kPeriod = 16666667, kStatusReads = 3;
 u64 now;
-unsigned schedules, statusReads, dues, spinDepth, releases;
+unsigned schedules, statusReads, dues, spinDepth, releases, spinLocks;
 int workAsksUntilKick = -1;  // tgm_hold_wanted(1) calls before an app's kick lands (-1: none lands)
 u64 dueVblank;
 int lastResident;
@@ -51,6 +51,7 @@ void spin_lock_irqsave_stub(spinlock_t *l)
 	EXPECT_EQ(l->held, 0);
 	l->held = 1;
 	++spinDepth;
+	++spinLocks;
 }
 
 void spin_unlock_irqrestore_stub(spinlock_t *l)
@@ -173,7 +174,7 @@ protected:
 		runDue();
 		for (Work *w : works)
 			w->pending = false;
-		schedules = statusReads = dues = releases = 0;
+		schedules = statusReads = dues = releases = spinLocks = 0;
 		slow = true;
 		appWork = false;
 		workAsksUntilKick = -1;
@@ -202,6 +203,7 @@ TEST_F(DeadlineWindow, NoAppWorkSchedulesNothing)
 		<< "hold_work and expire_work scheduled with no app work in flight";
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(dues, 0u);
+	EXPECT_EQ(spinLocks, 4u * 2) << "dl.lock: each frame end's and each compositor kick's, nothing else";
 }
 
 // No app channel slow enough to be held: no window, before and after.
