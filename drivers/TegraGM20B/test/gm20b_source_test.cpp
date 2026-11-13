@@ -703,7 +703,7 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 	const CodeText job = Block(client(), "IOReturn AGXDeviceUserClient::runJobUses(");
 	EXPECT_FALSE(job.Has("IOLockLock(lock_)"));
 	EXPECT_TRUE(job.Before("switch_gpu_chan_submit_enter(chan);",
-			       "switch_gpu_backing_begin_checked("));
+			       "switch_gpu_backing_begin_held("));
 	EXPECT_TRUE(job.Before("switch_gpu_backing_abort(&transaction);",
 			       "switch_gpu_chan_wait_submission_room("));
 	EXPECT_TRUE(job.Before("switch_gpu_backing_commit(&transaction);",

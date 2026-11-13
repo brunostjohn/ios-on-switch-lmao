@@ -33,12 +33,14 @@ const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
 };
 
 // Every path is taken in the syscall or trap of the process it is for, so each process counts its own: a reader of
-// kern.switch_gpu_paths sees what its own work took, which the compositor's frames do not move. The least recently
-// counting process gives up its slot.
+// kern.switch_gpu_paths sees what its own work took, which the compositor's frames do not move. A process with a slot
+// counts into it with atomics and no lock; the lock only hands slots out. The least recently counting process gives up
+// its slot, so a count can land in the slot's next owner only when it races a reuse of a process that had stopped
+// counting.
 constexpr uint32_t kProcesses = 16;
 
 struct Process {
-	int pid;
+	int pid;  // atomic: published once the slot's counts are zeroed
 	uint64_t last;
 	uint64_t counts[SWITCH_GPU_PATH_COUNT];
 };
@@ -61,19 +63,28 @@ IOLock *processLock()
 	return made;
 }
 
-// processLock held
-Process *slot(int pid, bool claim)
+Process *find(int pid)
 {
-	Process *oldest = &processes[0];
-	for (Process &p : processes) {
-		if (p.pid == pid)
+	for (Process &p : processes)
+		if (__atomic_load_n(&p.pid, __ATOMIC_ACQUIRE) == pid)
 			return &p;
-		if (p.last < oldest->last)
+	return nullptr;
+}
+
+// processLock held
+Process *claim(int pid)
+{
+	if (Process *p = find(pid))
+		return p;
+	Process *oldest = &processes[0];
+	for (Process &p : processes)
+		if (__atomic_load_n(&p.last, __ATOMIC_RELAXED) <
+		    __atomic_load_n(&oldest->last, __ATOMIC_RELAXED))
 			oldest = &p;
-	}
-	if (!claim)
-		return nullptr;
-	*oldest = {pid, 0, {}};
+	for (uint64_t &count : oldest->counts)
+		__atomic_store_n(&count, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&oldest->last, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&oldest->pid, pid, __ATOMIC_RELEASE);
 	return oldest;
 }
 
@@ -222,14 +233,18 @@ extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
 	if (!count)
 		return;
 	__atomic_fetch_add(&window[path], count, __ATOMIC_RELAXED);
-	IOLock *held = processLock();
-	if (!held)
-		return;
-	IOLockLock(held);
-	Process *p = slot(proc_selfpid(), true);
-	p->last = mach_absolute_time();
-	p->counts[path] += count;
-	IOLockUnlock(held);
+	const int pid = proc_selfpid();
+	Process *p = find(pid);
+	if (!p) {
+		IOLock *held = processLock();
+		if (!held)
+			return;
+		IOLockLock(held);
+		p = claim(pid);
+		IOLockUnlock(held);
+	}
+	__atomic_fetch_add(&p->counts[path], count, __ATOMIC_RELAXED);
+	__atomic_store_n(&p->last, mach_absolute_time(), __ATOMIC_RELAXED);
 }
 
 extern "C" void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, int lean_copy,
@@ -263,12 +278,9 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 		return;
 	const int pid = proc_selfpid();
 	uint64_t counts[SWITCH_GPU_PATH_COUNT] = {};
-	if (IOLock *held = processLock()) {
-		IOLockLock(held);
-		if (const Process *p = slot(pid, false))
-			memcpy(counts, p->counts, sizeof(counts));
-		IOLockUnlock(held);
-	}
+	if (const Process *p = find(pid))
+		for (uint32_t i = 0; i < SWITCH_GPU_PATH_COUNT; ++i)
+			counts[i] = __atomic_load_n(&p->counts[i], __ATOMIC_RELAXED);
 	const int head = snprintf(line, size, "flags=%#x pid=%d", switch_gpu_info_flags(), pid);
 	format(line, size, head > 0 ? static_cast<size_t>(head) : 0, counts);
 	uint32_t preempts = 0;

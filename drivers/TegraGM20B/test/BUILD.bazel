@@ -880,6 +880,9 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuCpuComplete.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
+        "//drivers/TegraGM20B:SwitchGpuOwnershipInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuOwnershipRecord.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBackingRefs.cpp",
         "//drivers/TegraGM20B:SwitchGpuResourceSet.cpp",
         "//drivers/TegraGM20B:SwitchGpuJobStats.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriters.cpp",
@@ -936,6 +939,89 @@ host_test(
     deps = [
         ":backing",
         ":coherency_kernel",
+    ],
+)
+
+# The GM20B timeline engine on the backings' IOLock stand-in, so one count sees both of their locks.
+host_library(
+    name = "timeline_on_backing",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
+# A compositor job's ownership work at 6 and 60 shared uses on the real registry and timeline engine: the IOLocks it
+# takes besides its uses' own, and its time.
+host_test(
+    name = "switch_gpu_submit_cost_test",
+    srcs = ["switch_gpu_submit_cost_test.cpp"],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+        ":timeline_on_backing",
+    ],
+)
+
+host_shims(
+    name = "path_stats_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/clock.h",
+        "sys/sysctl.h",
+    ],
+    stubs = "switch_gpu_path_stats_stubs.h",
+    deps = [":coherency_kernel"],
+)
+
+host_library(
+    name = "path_stats",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuCompositorRound.h",
+        "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
+        "//drivers/TegraGM20B:SwitchGpuSpanNotes.h",
+        "//kits/SwitchSysctl:SwitchSysctl.h",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BSched.h",
+    ],
+    defines = ["DEVELOPMENT=1"],
+    deps = [":path_stats_kernel"],
+)
+
+# A debug kernel's path counts per process: no lock for a process that has its slot.
+host_test(
+    name = "switch_gpu_path_stats_test",
+    srcs = ["switch_gpu_path_stats_test.cpp"],
+    defines = ["DEVELOPMENT=1"],
+    deps = [
+        ":path_stats",
+        ":path_stats_kernel",
+    ],
+)
+
+host_test(
+    name = "gm20b_submit_locks_source_test",
+    srcs = ["gm20b_submit_locks_source_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
+        "//drivers/TegraGM20B:gpu_sources",
     ],
 )
 
@@ -1228,6 +1314,8 @@ host_library(
     name = "timeline",
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
         "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
     ],
     hdrs = [

@@ -18,6 +18,8 @@ struct switch_gpu_backing_access {
 	uint64_t content;
 	uint32_t access;
 	bool noted;  // its failure was already logged, or needs no log
+	// the token's timeline (switch_gpu_backing_timeline_refs), held by the record's reference; null: the engine's status
+	const void *handle;
 };
 
 struct switch_gpu_backing {
@@ -71,6 +73,9 @@ struct switch_gpu_cpu_lease {
 };
 
 const switch_gpu_backing_engine *switch_gpu_backing_engine_ops(uint32_t engine);
+const switch_gpu_backing_timeline_refs *switch_gpu_backing_timeline_ops(uint32_t engine);
+// The record's token status, through its timeline's handle where it has one
+int switch_gpu_backing_access_status(const switch_gpu_backing_access &access);
 bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
 				      const switch_gpu_backing_token &b);
 bool switch_gpu_backing_later(const switch_gpu_backing_token &a, const switch_gpu_backing_token &b);

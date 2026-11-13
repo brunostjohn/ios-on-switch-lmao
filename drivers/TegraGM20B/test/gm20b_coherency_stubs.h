@@ -39,7 +39,15 @@ struct IOLock {
 	std::mutex m;
 	std::condition_variable condition;
 	std::atomic<std::thread::id> owner{};
+	uint64_t takes = 0;  // under m
 };
+
+// Every IOLockLock of the process
+inline std::atomic<uint64_t> &ioLockTakes()
+{
+	static std::atomic<uint64_t> takes;
+	return takes;
+}
 
 inline IOLock *IOLockAlloc()
 {
@@ -60,6 +68,8 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 	}
 	lock->m.lock();
 	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+	++lock->takes;
+	ioLockTakes().fetch_add(1, std::memory_order_relaxed);
 }
 
 inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))

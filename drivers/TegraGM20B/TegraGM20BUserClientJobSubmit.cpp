@@ -285,13 +285,9 @@ refresh:
 		if (runs)
 			switch_gpu_chan_job_token(chan, fences, &completion);
 		if (count) {
-			error = leaseCount
-					? switch_gpu_backing_begin_conversion_checked(
-						  job.uses, useTotal, job.leases, leaseCount,
-						  job.guards, guardCount, &completion, &transaction)
-					: switch_gpu_backing_begin_checked(
-						  job.uses, useTotal, job.guards, guardCount,
-						  &completion, &transaction);
+			error = switch_gpu_backing_begin_held(job.uses, useTotal, job.leases,
+							      leaseCount, job.guards, guardCount,
+							      &completion, &transaction);
 			ownershipBusy = error == -16;
 			if (!error)
 				error = switch_gpu_backing_write_ranges(&transaction, job.writes,
