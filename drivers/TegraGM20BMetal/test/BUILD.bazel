@@ -4599,6 +4599,19 @@ host_library(
     deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
 )
 
+# The plugin's flags for the facade (gpu/defs.bzl _PLUGIN_CFLAGS: ARC, objc_library's default, and warnings as errors) and
+# the host tests' sanitizers, with host_library's toolchain features (asan drops apple_support's -D_FORTIFY_SOURCE=1)
+FACADE_OBJC_COPTS = FACADE_HOST_COPTS + WARNINGS + SANITIZERS + [
+    "-std=c++17",
+    "-g",
+]
+
+FACADE_OBJC_FEATURES = [
+    "asan",
+    "ubsan",
+    "external_include_paths",
+]
+
 objc_library(
     name = "raw_facade_host",
     testonly = True,
@@ -4692,19 +4705,6 @@ host_library(
     cxx_std = "c++17",
     deps = FACADE_HOST_DEPS,
 )
-
-# The plugin's flags for the facade (gpu/defs.bzl _PLUGIN_CFLAGS: ARC, objc_library's default, and warnings as errors) and
-# the host tests' sanitizers, with host_library's toolchain features (asan drops apple_support's -D_FORTIFY_SOURCE=1)
-FACADE_OBJC_COPTS = FACADE_HOST_COPTS + WARNINGS + SANITIZERS + [
-    "-std=c++17",
-    "-g",
-]
-
-FACADE_OBJC_FEATURES = [
-    "asan",
-    "ubsan",
-    "external_include_paths",
-]
 
 # eq's raw side: raw_gpu.cpp marks each fetch barrier it leaves out and each draw it splits, for eqcheck
 host_library(
