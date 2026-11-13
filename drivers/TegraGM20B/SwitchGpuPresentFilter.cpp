@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The present watch's producer, read in the GPU nonstall interrupt's primary filter (shim/xnu_glue.cpp): when its
+// The present watch's producer, read in the GPU interrupts' primary filter (shim/xnu_glue.cpp): when its
 // writes are complete and visible the display's callout (TegraScanoutCopy.h tgm_present_filter_callout) runs there,
 // ahead of the work loop's interrupt pass, whose tgm_present_pass delivers the present as before. The view is attached
 // just before the watch is armed and detached at its claim (gpu_present.c), before its tokens drop and done runs; the
@@ -14,6 +14,8 @@
 namespace
 {
 IOSimpleLock *gLock;
+// set under the lock with the view: an interrupt with no present watched takes no lock
+bool gWatching;
 switch_gpu_timeline_view gView;
 bool gCalled;
 void (*gCallout)(void *, int);
@@ -40,6 +42,7 @@ void setView(const switch_gpu_timeline_view &view)
 	const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(held);
 	gView = view;
 	gCalled = false;
+	__atomic_store_n(&gWatching, view.timeline != nullptr, __ATOMIC_RELEASE);
 	IOSimpleLockUnlockEnableInterrupt(held, interrupts);
 }
 }  // namespace
@@ -75,7 +78,7 @@ extern "C" void tgm_present_filter_detach(void)
 extern "C" void tgm_present_filter(void)
 {
 	IOSimpleLock *held = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);
-	if (!held)
+	if (!held || !__atomic_load_n(&gWatching, __ATOMIC_ACQUIRE))
 		return;
 	IOSimpleLockLock(held);
 	if (gView.timeline && gCallout && !gCalled &&

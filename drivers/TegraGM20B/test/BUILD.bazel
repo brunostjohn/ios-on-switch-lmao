@@ -1513,6 +1513,7 @@ host_test(
     name = "switch_gpu_deadline_test",
     srcs = [
         "switch_gpu_deadline_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
         "//drivers/TegraGM20B:SwitchGpuIdleCount.h",
         "//drivers/TegraGM20B:SwitchGpuIdleDeadline.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
@@ -2155,6 +2156,7 @@ host_test(
     name = "gm20b_frame_cpu_source_test",
     srcs = ["gm20b_frame_cpu_source_test.cpp"],
     data = [
+        "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],

@@ -68,7 +68,7 @@ int tgm_clkgate_switch(int on)
 	return ret;
 }
 #endif
-volatile u32 tgm_waiter_words[TGM_WAITERS];
+struct switch_gpu_wake_word tgm_waiter_words[TGM_WAITERS];
 #if TGM_STATS
 /* stats: when each word was last woken (ns), and this window's wakes and fence waits (the "waits" line) */
 u64 tgm_waiter_woken_ns[TGM_WAITERS];
@@ -77,17 +77,17 @@ struct wstat_state tgm_wstat;
 #endif
 uint32_t tgm_waiter_seq(uint32_t waiter)
 {
-	return nvxnu_word_seq(&tgm_waiter_words[waiter % TGM_WAITERS]);
+	return switch_gpu_wake_seq(&tgm_waiter_words[waiter % TGM_WAITERS]);
 }
 
 int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns)
 {
-	return nvxnu_word_idle(&tgm_waiter_words[waiter % TGM_WAITERS], seq, deadline_ns);
+	return nvxnu_wword_idle(&tgm_waiter_words[waiter % TGM_WAITERS], seq, deadline_ns);
 }
 
 void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno)
 {
-	nvxnu_word_wake_due(&tgm_waiter_words[waiter % TGM_WAITERS], seq, "fence", seqno);
+	nvxnu_wword_wake_due(&tgm_waiter_words[waiter % TGM_WAITERS], seq, "fence", seqno);
 }
 
 /* System sleep's gate (TegraGM20BSleepGate.h, "system sleep" below): what touches the GPU outside tgm_gpu.lock goes through it. */

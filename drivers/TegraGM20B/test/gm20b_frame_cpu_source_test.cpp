@@ -82,3 +82,16 @@ TEST(GM20BFrameCpuSource, AnAppsFirstKickIsHeldBeforeItsDoorbell)
 	EXPECT_EQ(doorbell.Count("wmb();"), 2u)
 		<< "the kick's one, and one after a hold's register writes";
 }
+
+// No atomic read-modify-write or lock of the kernel's on a job's kick or its interrupt pass for the idle clock or the
+// channel words: the idle clock reads tgm_busy, and the pass moves the words' own sequence (SwitchGpuWakeWord.h).
+TEST(GM20BFrameCpuSource, TheKickAndThePassKeepNoSharedCounters)
+{
+	EXPECT_FALSE(Block(unit("gpu_exec.c"), "static u32 chan_fence_job(").Has("idle_kicked("));
+	const CodeText pass = Block(unit("SwitchGpuChannelCompletion.h"), "static int chan_nonstall(");
+	EXPECT_FALSE(pass.Has("idle_fenced("));
+	EXPECT_TRUE(Block(unit("gpu_chan.c"), "static void chan_wake_waiters(struct tgm_chan *chan)")
+			    .Has("chan_wake_all_waiters(chan, 1);"));
+	EXPECT_TRUE(Block(unit("gpu_inline.h"), "static inline void chan_wake_all_waiters(")
+			    .Has("nvxnu_wword_wake(&tgm_waiter_words[waiter], pass);"));
+}

@@ -25,7 +25,6 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	now = nvxnu_nanotime();
 	WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, now));
 	WRITE_ONCE(chan->progress_ns, now);
-	idle_fenced(chan);
 	chan_wake_waiters(chan);
 	if (chan->kernel == CHAN_SCRUB) {
 		scrub_fenced(chan);

@@ -56,8 +56,11 @@ inline void IOSimpleLockFree(IOSimpleLock *lock)
 	delete lock;
 }
 
+inline unsigned switchSimpleLocks;
+
 inline void IOSimpleLockLock(IOSimpleLock *lock) __attribute__((no_thread_safety_analysis))
 {
+	++switchSimpleLocks;
 	lock->mutex.lock();
 	switchTimelineAtomicContext = true;
 }

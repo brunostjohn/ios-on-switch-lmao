@@ -99,8 +99,8 @@ void tgm_chan_quiet_wake(struct tgm_chan *chan)
 	gate_leave();
 }
 
-/* The idle clock's tick found seqnos in flight and no kick for its drop time: what completed is retired from the fence
- * words, and each channel whose newest job is still running asks for its interrupt, as a waiter would. */
+/* The idle clock's tick found work in flight and no kick for its drop time: what completed is settled from the fence
+ * words (tgm_busy), and each channel whose newest job is still running asks for its interrupt, as a waiter would. */
 void tgm_idle_settle(void *arg)
 {
 	struct tgm_chan *chan = NULL;
@@ -109,7 +109,7 @@ void tgm_idle_settle(void *arg)
 	mutex_lock(&tgm_live_lock);
 	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
-		idle_retire(chan, tgm_chan_completed(chan));
+		switch_gpu_busy_settle(&tgm_busy, chan->chid, tgm_chan_completed(chan));
 		tgm_chan_need(chan, READ_ONCE(chan->submitted));
 	}
 	mutex_unlock(&tgm_live_lock);

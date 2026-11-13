@@ -203,8 +203,8 @@ switch_gpu_wake_word gWake;
 void wakeAfterPass();
 #if DEVELOPMENT || DEBUG
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
-// passes and nonstall filters by the CPU that ran them: each written by the pass's work loop thread, or by the line's
-// filter, alone
+// passes and filters by the CPU that ran them: each written by the pass's work loop thread, or by the filter on the
+// frame CPU the lines are routed to, alone
 uint64_t gIrqCpus[4], gFilterCpus[4];
 uint64_t gGlobalWakeups;  // threads woken on the global word
 #endif
@@ -282,11 +282,13 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	switch_gpu_backing_completed();
 }
 
-// The nonstall line's primary filter: the present watch's producer, read from memory alone (the GPU may be powered
-// down); true, as the plain event source on a level line does, masks the line until the work loop's pass has run nvkm,
-// which alone quiets it.
+// Both lines' primary filter: the present watch's producer, read from memory alone (the GPU may be powered down); true,
+// as the plain event source on a level line does, masks the line until the work loop's pass has run nvkm, which alone
+// quiets it. nvkm routes every FIFO interrupt, the jobs' NON_STALL_INTERRUPT included, to the stall tree: its
+// gf100_fifo_nonstall_allow unmasks PFIFO_INTR_0's channel bit in PFIFO_INTR_EN_0 and its MC table lists PFIFO on leaf 0
+// alone, so the job interrupts come on the stall line and the filter has to be there.
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
-bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
+bool gpuFilter(OSObject *, IOFilterInterruptEventSource *)
 {
 #if DEVELOPMENT || DEBUG
 	const unsigned cpu = static_cast<unsigned>(cpu_number()) % 4;
@@ -453,20 +455,41 @@ extern "C" void nvxnu_wake(void)
 		wakeGlobal();
 }
 
+extern "C" void nvxnu_wword_wake(struct switch_gpu_wake_word *word, int pass)
+{
+	if (pass ? switch_gpu_wake_pass(word) : switch_gpu_wake_other(word))
+		thread_wakeup(reinterpret_cast<event_t>(&word->pass));
+}
+
+extern "C" int nvxnu_wword_idle(struct switch_gpu_wake_word *word, nvxnu_u32 seq,
+				nvxnu_u64 deadline_ns)
+{
+	switch_gpu_wake_sleep(word, 1);
+	const int woken = idleOn(
+		reinterpret_cast<event_t>(&word->pass), [word] { return switch_gpu_wake_seq(word); },
+		seq, deadline_ns);
+	switch_gpu_wake_sleep(word, 0);
+	return woken;
+}
+
+extern "C" void nvxnu_wword_wake_due(struct switch_gpu_wake_word *word, nvxnu_u32 seq,
+				     const char *what, nvxnu_u32 value)
+{
+	switch_gpu_wake_sleep(word, 1);
+	wakeDueOn(
+		reinterpret_cast<event_t>(&word->pass), [word] { return switch_gpu_wake_seq(word); },
+		seq, what, value);
+	switch_gpu_wake_sleep(word, 0);
+}
+
 extern "C" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 {
-	switch_gpu_wake_sleep(&gWake, 1);
-	const int woken =
-		idleOn(reinterpret_cast<event_t>(&gWake.pass), globalSeq, seq, deadline_ns);
-	switch_gpu_wake_sleep(&gWake, 0);
-	return woken;
+	return nvxnu_wword_idle(&gWake, seq, deadline_ns);
 }
 
 extern "C" void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value)
 {
-	switch_gpu_wake_sleep(&gWake, 1);
-	wakeDueOn(reinterpret_cast<event_t>(&gWake.pass), globalSeq, seq, what, value);
-	switch_gpu_wake_sleep(&gWake, 0);
+	nvxnu_wword_wake_due(&gWake, seq, what, value);
 }
 
 // Claims both GPU lines on a work loop (switch_interrupt_nub sleeps until the GIC is up). Called at the end of M1:
@@ -480,14 +503,9 @@ extern "C" void nvxnu_irq_start(void)
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
 		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);
-		if (!gIrqLoop)
-			gIrqSources[i] = nullptr;
-		else if (i)
-			gIrqSources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(
-				gIrqLoop, gpuInterrupt, gpuNonstallFilter, nub, 0);
-		else
-			gIrqSources[i] = IOInterruptEventSource::interruptEventSource(
-				gIrqLoop, gpuInterrupt, nub, 0);
+		gIrqSources[i] = gIrqLoop ? IOFilterInterruptEventSource::filterInterruptEventSource(
+						    gIrqLoop, gpuInterrupt, gpuFilter, nub, 0)
+					  : nullptr;
 		if (!gPmc || !gIrqSources[i] ||
 		    gIrqLoop->addEventSource(gIrqSources[i]) != kIOReturnSuccess) {
 			panic("tegra-gm20b: cannot attach the GPU %s interrupt (INTID %u)",

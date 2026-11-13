@@ -203,8 +203,7 @@ TEST_F(DeadlineWindow, NoAppWorkSchedulesNothing)
 		<< "hold_work and expire_work scheduled with no app work in flight";
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(dues, 0u);
-	EXPECT_EQ(spinLocks, 4u * 2)
-		<< "dl.lock: each frame end's and each compositor kick's, nothing else";
+	EXPECT_EQ(spinLocks, 4u) << "dl.lock: each frame end's, nothing else";
 }
 
 // No app channel slow enough to be held: no window, before and after.
@@ -308,4 +307,16 @@ TEST_F(DeadlineWindow, AKickBetweenTheLookAndTheKeepIsSeen)
 	EXPECT_EQ(schedules, 2u) << "hold_work and expire_work, as for app work at the frame end";
 	runDue();
 	EXPECT_EQ(dues, 1u);
+}
+
+// The compositor's kick and the interrupt pass's frame time and clock take no lock: each word has one writer.
+TEST_F(DeadlineWindow, TheKickAndThePassTakeNoLock)
+{
+	frameEnd();
+	const unsigned before = spinLocks;
+	tgm_deadline_kicked(1, 1);
+	tgm_deadline_progress(1000, 0);
+	tgm_deadline_clock(now, 12345);
+	tgm_deadline_clock(now + 1000000, 13345);
+	EXPECT_EQ(spinLocks, before);
 }

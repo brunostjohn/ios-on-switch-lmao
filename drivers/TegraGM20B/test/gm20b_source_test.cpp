@@ -543,13 +543,13 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	const CodeText wake = Block(gpu(), "static void chan_wake_waiters(struct tgm_chan *chan)");
 	EXPECT_TRUE(wake.Has("if (done == chan->woken_done) return;"));
 	EXPECT_TRUE(wake.Has("if (switch_gpu_waiter_reached(&chan->wanted, done)) "
-			     "chan_wake_all_waiters(chan);"));
+			     "chan_wake_all_waiters(chan, 1);"));
 	EXPECT_TRUE(Block(gpu(), "int tgm_chan_killed(struct nvif_event *event, void "
 				 "*repv, u32 repc)")
-			    .Has("chan_wake_all_waiters(chan);"));
+			    .Has("chan_wake_all_waiters(chan, 0);"));
 	EXPECT_TRUE(
 		Block(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")
-			.Before("*pchan = NULL;", "nvxnu_word_wake(&tgm_waiter_words[waiter]);"));
+			.Before("*pchan = NULL;", "nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);"));
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
 			    .Has("wakeAfterPass();"));

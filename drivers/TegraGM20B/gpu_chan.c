@@ -19,7 +19,7 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		nvxnu_kdebug(SWITCH_KDBG_GPU_DONE, chan->chid, done, chan->critical);
 	if (switch_gpu_waiter_reached(&chan->wanted, done))
-		chan_wake_all_waiters(chan);
+		chan_wake_all_waiters(chan, 1);
 }
 
 void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno)
@@ -200,7 +200,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
 	chan->stat_done = chan->submitted;
 	chan->woken_done = chan->submitted;
-	chan->gov_done = chan->submitted;
 	chan->progress_done = chan->submitted;
 	chan->seen_done = chan->submitted;
 	chan->ring = dma_alloc_attrs(&tgm_gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
@@ -429,9 +428,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	 * pass of this channel after the teardown: the teardown hands the watch to its work item, as a kill does. */
 	if (!chan->kernel)
 		present_watch_fenced(chan, 1);
-	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
-	idle_retire(chan, chan->submitted);
-	switch_gpu_busy_level(&tgm_busy, chan->chid, 0);
+	switch_gpu_busy_close(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
 	order_forget(chan);
@@ -446,7 +443,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	}
 	mutex_unlock(&tgm_gpu.lock);
 	*pchan = NULL;
-	nvxnu_word_wake(&tgm_waiter_words[waiter]);
+	nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);
 }
 struct fences_state tgm_fence_pages;
 u64 tgm_fences_pas

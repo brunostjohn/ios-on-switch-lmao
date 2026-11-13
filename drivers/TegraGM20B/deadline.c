@@ -29,20 +29,26 @@ static struct {
 	u64 interval;    /* the frame interval */
 	u64 next_target; /* the vblank the frame CA started at the last vsync aims for */
 	u64 vsync_last, vsync_since; /* the last vsync to CA, and the start of its unbroken run */
-	u64 kick_last;               /* the compositor's last kick */
 	u64 expected;                /* the compositor's GPU time per frame */
+	/* the high kicks' own, plain stores and no lock (a kick's time is a hint a racing kick may set a few us back): the
+	 * compositor's last kick, the last kick that found an app on the GPU, the vblank the frame's first kick aimed for */
+	u64 kick_last, kick_app_last, frame_target;
+	/* the interrupt pass's own: the compositor's GPU time since the present that moved frame_epoch to pass_epoch, and
+	 * whether an app biased it; the PTIMER anchor and rate, anchored again when resume moves recal */
+	u64 pass_ns, cal_ns, cal_pt, pt_rate;
+	u32 pass_epoch, recal_seen;
+	int pass_biased;
+	/* a present's (dl.lock): when the last one completed, and the frame epoch it closed */
+	u64 presented_at;
+	u32 frame_epoch, recal;
 
-	/* the window: the vblank it aims for (0: none), when it opened, whether the compositor kicked in it; the vblank of
-	 * one no app's work in flight opened (0: none), which an app's first kick opens (tgm_deadline_app_kicked) */
+	/* the window: the vblank it aims for (0: none), when it opened (the compositor kicked in it when kick_last is
+	 * later); the vblank of one no app's work in flight opened (0: none), which an app's first kick opens
+	 * (tgm_deadline_app_kicked) */
 	u64 target, opened, expire_at, dormant, dormant_since;
 	u32 gen, expire_gen;
-	int kicked, suspended, check_chid;
-	/* the frame since the last present: its GPU time, the vblank its first kick aimed for, an app on the GPU at a kick */
-	u64 frame_ns, frame_target;
-	int frame_open, frame_biased, frame_app;
+	int suspended, check_chid;
 	u32 frames, missed_app, missed_clear, windows, empty, expired;
-	/* PTIMER against the kernel clock: an anchor of both (taken again after each GPU power-up), the rate (16.16) */
-	u64 cal_ns, cal_pt, pt_rate;
 } dl;
 
 #if TGM_STATS
@@ -82,7 +88,7 @@ void tgm_deadline_init(struct nvkm_device *device)
 static int drawing(u64 now)
 {
 	return tgm_compositor_drawing(now, dl.interval, dl.vsync_last, dl.vsync_since,
-				      dl.kick_last);
+				      READ_ONCE(dl.kick_last));
 }
 
 static void after(void *work, u64 at, u64 now)
@@ -96,7 +102,6 @@ static void window_open(u64 target, u64 now)
 	WRITE_ONCE(dl.dormant, 0);
 	dl.target = target;
 	dl.opened = now;
-	dl.kicked = 0;
 	dl.expire_at = target;
 	dl.expire_gen = ++dl.gen;
 	if (TGM_STATS)
@@ -217,11 +222,13 @@ static void expire_work(void *arg)
 	(void)arg;
 	spin_lock_irqsave(&dl.lock, flags);
 	if (dl.target && dl.expire_gen == dl.gen) {
-		if (dl.kicked && dl.expire_at == dl.target) {
+		const int kicked = READ_ONCE(dl.kick_last) >= dl.opened;
+
+		if (kicked && dl.expire_at == dl.target) {
 			dl.expire_at = dl.target + dl.interval;
 			again = 1;
 		} else {
-			if (TGM_STATS && dl.kicked) {
+			if (TGM_STATS && kicked) {
 				dl.expired++;
 			} else if (TGM_STATS) {
 				dl.empty++;
@@ -236,24 +243,17 @@ static void expire_work(void *arg)
 
 void tgm_deadline_kicked(int compositor, int app)
 {
-	u64 now = nvxnu_nanotime();
-	unsigned long flags = 0;
+	const u64 now = nvxnu_nanotime();
 
 	if (!READ_ONCE(dl.device))
 		return;
-	spin_lock_irqsave(&dl.lock, flags);
 	if (compositor) {
-		dl.kick_last = now;
-		if (dl.target)
-			dl.kicked = 1;
-		if (!dl.frame_open) {
-			dl.frame_open = 1;
-			dl.frame_target = dl.next_target;
-		}
+		if (READ_ONCE(dl.kick_last) <= READ_ONCE(dl.presented_at))
+			WRITE_ONCE(dl.frame_target, READ_ONCE(dl.next_target));
+		WRITE_ONCE(dl.kick_last, now);
 	}
 	if (app)
-		dl.frame_app = 1;
-	spin_unlock_irqrestore(&dl.lock, flags);
+		WRITE_ONCE(dl.kick_app_last, now);
 }
 
 /* The kicking thread, before its doorbell. No slow channel had work at the frame end, so none is on the GPU now and
@@ -277,7 +277,6 @@ int tgm_deadline_app_kicked(void)
 	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
 		/* the window the frame end kept, from then: a compositor kick or present since counts */
 		window_open(dl.dormant, dl.dormant_since);
-		dl.kicked = dl.kick_last >= dl.opened;
 		target = dl.target;
 		w.now = now;
 		w.vblank = dl.target;
@@ -297,19 +296,19 @@ int tgm_deadline_app_kicked(void)
 /* Interrupt pass. The anchor moves on every 2^40 ns (18 minutes), keeping the rate, so the span never overflows. */
 void tgm_deadline_clock(uint64_t ns, uint64_t pt)
 {
-	unsigned long flags = 0;
+	const u32 recal = READ_ONCE(dl.recal);
 	u64 rate = 0;
 
-	spin_lock_irqsave(&dl.lock, flags);
-	if (!dl.cal_ns || pt < dl.cal_pt || ns - dl.cal_ns >= 1ULL << 40) {
+	if (recal != dl.recal_seen || !dl.cal_ns || pt < dl.cal_pt ||
+	    ns - dl.cal_ns >= 1ULL << 40) {
+		dl.recal_seen = recal;
 		dl.cal_ns = ns;
 		dl.cal_pt = pt;
-	} else {
-		rate = tgm_pt_rate(ns - dl.cal_ns, pt - dl.cal_pt);
-		if (rate)
-			WRITE_ONCE(dl.pt_rate, rate);
+		return;
 	}
-	spin_unlock_irqrestore(&dl.lock, flags);
+	rate = tgm_pt_rate(ns - dl.cal_ns, pt - dl.cal_pt);
+	if (rate)
+		WRITE_ONCE(dl.pt_rate, rate);
 }
 
 uint64_t tgm_deadline_pt_ns(uint64_t pt_span)
@@ -319,13 +318,16 @@ uint64_t tgm_deadline_pt_ns(uint64_t pt_span)
 
 void tgm_deadline_progress(uint64_t ns, int biased)
 {
-	unsigned long flags = 0;
+	const u32 epoch = READ_ONCE(dl.frame_epoch);
 
-	spin_lock_irqsave(&dl.lock, flags);
-	dl.frame_ns += ns;
+	if (dl.pass_epoch != epoch) {
+		WRITE_ONCE(dl.pass_ns, 0);
+		WRITE_ONCE(dl.pass_biased, 0);
+		WRITE_ONCE(dl.pass_epoch, epoch);
+	}
+	WRITE_ONCE(dl.pass_ns, dl.pass_ns + ns);
 	if (biased)
-		dl.frame_biased = 1;
-	spin_unlock_irqrestore(&dl.lock, flags);
+		WRITE_ONCE(dl.pass_biased, 1);
 }
 
 /* The present completed: the frame's GPU time is learned (unless an app held the GPU at one of its kicks), and the window
@@ -340,24 +342,31 @@ void tgm_deadline_presented(uint64_t queued)
 	if (!READ_ONCE(dl.device))
 		return;
 	spin_lock_irqsave(&dl.lock, flags);
-	if (dl.frame_open) {
+	/* a compositor kick since the last present: a frame; the pass's time is this frame's while its epoch is ours (a
+	 * present a kill hands to the work item may miss a pass's last addition) */
+	if (READ_ONCE(dl.kick_last) > dl.presented_at) {
+		const u64 frame_target = READ_ONCE(dl.frame_target);
+		const u64 frame_ns = READ_ONCE(dl.pass_ns);
+		const int ours = READ_ONCE(dl.pass_epoch) == dl.frame_epoch;
+
 		if (TGM_STATS) {
 			dl.frames++;
-			if (dl.frame_target && now > dl.frame_target && dl.frame_app) {
+			if (frame_target && now > frame_target &&
+			    READ_ONCE(dl.kick_app_last) > dl.presented_at) {
 				dl.missed_app++;
-			} else if (dl.frame_target && now > dl.frame_target) {
+			} else if (frame_target && now > frame_target) {
 				dl.missed_clear++;
 			}
 		}
-		if (!dl.frame_biased && dl.frame_ns) {
-			dl.expected = tgm_expect(dl.expected, dl.frame_ns);
+		if (ours && !READ_ONCE(dl.pass_biased) && frame_ns) {
+			dl.expected = tgm_expect(dl.expected, frame_ns);
 #if TGM_STATS
-			frame_cost_add(dl.frame_ns);
+			frame_cost_add(frame_ns);
 #endif
 		}
 	}
-	dl.frame_open = dl.frame_biased = dl.frame_app = 0;
-	dl.frame_ns = 0;
+	WRITE_ONCE(dl.frame_epoch, dl.frame_epoch + 1);
+	WRITE_ONCE(dl.presented_at, now);
 	tgm_hold_unneed(queued);
 	if (dl.target && queued >= dl.opened) {
 		u64 closed = dl.target;
@@ -404,7 +413,7 @@ void tgm_deadline_resume(void)
 		return;
 	spin_lock_irqsave(&dl.lock, flags);
 	dl.suspended = 0;
-	dl.cal_ns = 0;
+	WRITE_ONCE(dl.recal, dl.recal + 1);
 	spin_unlock_irqrestore(&dl.lock, flags);
 }
 

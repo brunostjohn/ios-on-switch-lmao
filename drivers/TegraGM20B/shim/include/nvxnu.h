@@ -208,6 +208,12 @@ void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall);
 /* Debug kernels: the passes and the nonstall line's filters so far by the CPU that ran them, and the threads the passes
  * woke on the global word. */
 void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_u64 *global_wakeups);
+/* A wake word with the interrupt pass's own sequence (SwitchGpuWakeWord.h): pass 1 only on the pass's thread. */
+struct switch_gpu_wake_word;
+void nvxnu_wword_wake(struct switch_gpu_wake_word *word, int pass);
+int nvxnu_wword_idle(struct switch_gpu_wake_word *word, nvxnu_u32 seq, nvxnu_u64 deadline_ns);
+void nvxnu_wword_wake_due(struct switch_gpu_wake_word *word, nvxnu_u32 seq, const char *what,
+			  nvxnu_u32 value);
 nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);

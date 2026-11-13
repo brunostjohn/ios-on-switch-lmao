@@ -128,6 +128,19 @@ protected:
 	}
 };
 
+// An interrupt with no present watched takes no lock: the filter runs on every job's interrupt.
+TEST_F(PresentFilter, NothingWatchedTakesNoLock)
+{
+	const unsigned before = switchSimpleLocks;
+	filter();
+	filter();
+	EXPECT_EQ(switchSimpleLocks, before);
+	tgm_present_filter_attach(&watched);
+	const unsigned watching = switchSimpleLocks;
+	filter();
+	EXPECT_EQ(switchSimpleLocks, watching + 1) << "a watched present's callout is ordered by the lock";
+}
+
 TEST_F(PresentFilter, TheCalloutRunsOnceThePassedFenceIsVisibleAndOnlyOnce)
 {
 	tgm_present_filter_attach(&watched);
@@ -339,10 +352,13 @@ TEST(PresentFilterSource, TheWatchAttachesBeforeItsArmAndEachClaimDetachesFirst)
 		  kept.find("switch_gpu_present_watch_rearm("));
 	EXPECT_NE(kept.find("tgm_present_filter_attach(producer);"), std::string::npos);
 	const std::string glue = SourceText("../shim/xnu_glue.cpp");
-	const std::string filterBody = Between(glue, "bool gpuNonstallFilter(", "\n}\n");
+	const std::string filterBody = Between(glue, "bool gpuFilter(", "\n}\n");
 	EXPECT_NE(filterBody.find("tgm_present_filter();"), std::string::npos);
 	EXPECT_NE(filterBody.find("return true;"), std::string::npos);
-	EXPECT_NE(glue.find("gIrqLoop, gpuInterrupt, gpuNonstallFilter, nub, 0)"),
-		  std::string::npos);
+	// both lines: nvkm routes the jobs' interrupts to the stall line, where the filter must run
+	const std::string start = Between(glue, "extern \"C\" void nvxnu_irq_start(void)", "\n}\n");
+	EXPECT_NE(start.find("gIrqLoop, gpuInterrupt, gpuFilter, nub, 0)"), std::string::npos);
+	EXPECT_EQ(start.find("IOInterruptEventSource::interruptEventSource("), std::string::npos)
+		<< "a line with no filter";
 }
 }  // namespace

@@ -72,6 +72,7 @@
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuQuiet.h"
+#include "SwitchGpuWakeWord.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -130,7 +131,7 @@ noinline void tgm_gpu_lock(void);
  * by id; a waiter of another channel on the same word wakes, finds its fence unchanged and sleeps again. Static: a
  * waiter may still sleep on its channel's word while the channel is destroyed. */
 #define TGM_WAITERS 128
-extern volatile u32 tgm_waiter_words[];
+extern struct switch_gpu_wake_word tgm_waiter_words[];
 extern u64 tgm_waiter_woken_ns[];
 
 struct wstat_state {
@@ -307,7 +308,6 @@ struct tgm_chan {
 	 * leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
 	struct switch_gpu_jobs jobs;
 
-	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
 	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
 	struct switch_gpu_quiet quiet;
@@ -547,8 +547,6 @@ struct idle_state {
 	int clock_available;
 	u64 last_busy; /* atomic: the last kick or hint (ns) */
 	u64 service_until;
-	u64 kicked,
-		retired; /* atomic: seqnos kicked / retired since boot (SwitchGpuIdleDeadline.h) */
 	/* the periodic line (under clk) */
 	u64 log_start, low_since, low_ns, raise_sum, raise_max;
 	u32 drops, raises, hinted;

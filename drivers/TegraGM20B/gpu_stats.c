@@ -402,7 +402,7 @@ void tgm_stats_waits(u64 ms)
 		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
 		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu "
 		"%llu/%llu/%llu/%llu, "
-		"nonstall filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high "
+		"filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high "
 		"kicks "
 		"read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, "
 		"%u "
