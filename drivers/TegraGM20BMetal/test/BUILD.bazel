@@ -90,6 +90,9 @@
 #                     over the host harness, writes them from the raw device's objects)
 #   rawpack_records_test  what the pack generator keeps of a probe: texture3d entries, 32 set-0 entries and m2v's
 #                     own buffer beside an 8-bit sRGB target
+#   rawpack_targets_test  the built pack (//gpu/seed:raw_pack, so the full pack build): each record holds every varying
+#                     register of the colour targets it draws, a two-plane record's alpha targets included, and no
+#                     other target's; no record holds a target's separate alpha, target 0's is the baseline's
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
 #   raw_ycbcr_store_test  raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment (an M4
@@ -2788,6 +2791,22 @@ py_test(
     name = "rawpack_records_test",
     srcs = ["rawpack_records_test.py"],
     data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],  # mkpack.py reads it at import
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
+    name = "rawpack_targets_test",
+    srcs = ["rawpack_targets_test.py"],
+    args = ["$(rootpath //gpu/seed:raw_pack)/pack.bin"],
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",  # mkpack.py reads it at import
+        "//gpu/seed:raw_pack",
+    ],
+    # m2v: //gpu/seed:raw_pack's probe runs NVK until the pack generator stops needing it
+    tags = [
+        "m2v",
+        "pack",
+    ],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 
