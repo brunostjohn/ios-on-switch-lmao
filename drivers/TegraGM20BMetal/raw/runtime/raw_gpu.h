@@ -3321,6 +3321,7 @@ private:
     bool takeCompressed(uint64_t bytes, uint32_t kind, Bo &bo);
     // `t` laid out as `ask` on memory `bo` takes (createLaidOut), recorded as a private compressed texture, lock_ held
     void noteCompressed(const TextureAsk &ask, const Bo &bo, uint64_t bytes, Texture &t);
+    // written under lock_, read without it by the counters
     std::atomic<uint64_t> privateMade_{0}, privateTransitions_{0};
     void releasePrivateCompressed(const Texture &t);  // lock_ held
     // A clear of target t to SET_COLOR_CLEAR_VALUE words `v` (or depth `depth`), `full` it covers t whole: on a compressed

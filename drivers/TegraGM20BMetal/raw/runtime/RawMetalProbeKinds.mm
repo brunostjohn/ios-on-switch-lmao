@@ -19,7 +19,9 @@
 
 - (NSNumber *)switchRawProbePlainMemory:(NSNumber *)on
 {
-    return @(gRM->raw->probePlainMemory.exchange(on.boolValue));
+    const bool was = gRM->raw->probePlainMemory.load(std::memory_order_relaxed);
+    gRM->raw->probePlainMemory.store(on.boolValue, std::memory_order_relaxed);
+    return @(was);
 }
 
 - (NSNumber *)switchRawProbeZetaColour:(NSNumber *)on

@@ -64,7 +64,7 @@ void Device::noteCompressed(const TextureAsk &ask, const Bo &bo, uint64_t bytes,
     p.comp = {bo};
     p.ask = ask;
     p.ask.compressKind = 0;
-    privateMade_.fetch_add(1, std::memory_order_relaxed);
+    privateMade_.store(privateMade_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 }
 
 bool Device::createCompressedTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t kind, Texture &t)
@@ -110,7 +110,7 @@ bool Device::createCompressedZeta(uint64_t bytes, uint32_t kind, bool sampled, T
     compZeta_[bo.va] = bo;
     if (t.tic)
         writeTic(t);
-    privateMade_.fetch_add(1, std::memory_order_relaxed);
+    privateMade_.store(privateMade_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     return true;
 }
 
@@ -119,8 +119,9 @@ void Device::freeCompressedZeta(uint64_t va)
     const auto it = compZeta_.find(va);
     if (it == compZeta_.end())
         return;
-    RAW_DIAGNOSTIC(stats.compHeld--);
-    RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.bytes);
+    RAW_DIAGNOSTIC(stats.compHeld.store(stats.compHeld.load(std::memory_order_relaxed) - 1, std::memory_order_relaxed));
+    RAW_DIAGNOSTIC(stats.compHeldBytes.store(stats.compHeldBytes.load(std::memory_order_relaxed) - it->second.bytes,
+                                             std::memory_order_relaxed));
     k_.free(it->second);
     compZeta_.erase(it);
     comp_.freed();
@@ -242,7 +243,7 @@ bool Device::plainFromCompressed(Texture &t)
         v->comptags = false;
     }
     p.views.clear();
-    privateTransitions_.fetch_add(1, std::memory_order_relaxed);
+    privateTransitions_.store(privateTransitions_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     return true;
 }
 
