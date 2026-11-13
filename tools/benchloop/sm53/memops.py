@@ -8,6 +8,7 @@ from dataclasses import replace
 from tools.benchloop.sm53.encode import Instr, Pred, _Word
 
 SR_LANE_ID = 0x00
+SR_VIRTID = 0x03
 SR_ORDERING_TICKET = 0x0F
 SR_THREAD_KILL = 0x13
 SR_AFFINITY = 0x1C
