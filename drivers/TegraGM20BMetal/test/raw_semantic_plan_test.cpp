@@ -785,9 +785,7 @@ TEST(SemanticPlan, RecycledStorageDropsAllSemanticState)
     EXPECT_EQ(plan.renderStates.size(), 1u);
 }
 
-// A binding's slot is revalidated alone by its encoder: only a state, a depth/stencil state or an opaque call moves the
-// generation that revalidates a draw whole
-TEST(SemanticPlan, EligibilityTracksStatesAndOpaqueCallsNotRasterOrBindings)
+TEST(SemanticPlan, EligibilityIgnoresRasterChangesButTracksBindingsAndOpaqueCalls)
 {
     RMCommandPlan plan;
     plan.record(cmd(OpRender), {});
@@ -797,16 +795,14 @@ TEST(SemanticPlan, EligibilityTracksStatesAndOpaqueCallsNotRasterOrBindings)
     scissor.b = 8;
     plan.record(scissor, {});
     plan.record(cmd(OpBlendColor), {0, 0, 0, 0});
-    plan.record(binding(OpTexture, 2, 0, 7), {});
-    plan.record(binding(OpSampler, 2, 0, 9), {});
     EXPECT_EQ(plan.eligibilityGeneration(), initial);
-    plan.record(binding(OpPipeline, 0, 0, 11), {});
-    const auto stated = plan.eligibilityGeneration();
-    EXPECT_GT(stated, initial);
-    plan.record(binding(OpPipeline, 0, 0, 11), {});
-    EXPECT_EQ(plan.eligibilityGeneration(), stated);
+    plan.record(binding(OpTexture, 2, 0, 7), {});
+    const auto bound = plan.eligibilityGeneration();
+    EXPECT_GT(bound, initial);
+    plan.record(binding(OpTexture, 2, 0, 7), {});
+    EXPECT_EQ(plan.eligibilityGeneration(), bound);
     plan.record(cmd(OpInvocation), {});
-    EXPECT_GT(plan.eligibilityGeneration(), stated);
+    EXPECT_GT(plan.eligibilityGeneration(), bound);
 }
 
 TEST(SemanticPlan, PreparedRangeCachesDistinctPipelinesAcrossEncoderSummaries)

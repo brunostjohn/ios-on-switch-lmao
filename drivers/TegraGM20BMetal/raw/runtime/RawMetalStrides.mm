@@ -39,7 +39,6 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
     if (index < 31) {
         _buf[1][index] = x;
         _bufVa[1][index] = x ? x->_raw.va + offset : 0;
-        _movedBuffers[1] |= 1u << index;
     }
     stridedBinding(_cb, OpBuffer, 1, index, b, offset, stride);
 }
@@ -49,8 +48,6 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
     SWITCH_API(ApiBind);
     if (index < 31 && _buf[1][index])
         _bufVa[1][index] = _buf[1][index]->_raw.va + offset;
-    if (index < 31)
-        _movedBuffers[1] |= 1u << index;
     stridedBinding(_cb, OpBufferOffset, 1, index, nil, offset, stride);
 }
 
@@ -71,7 +68,6 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
     SWITCH_API(ApiBind);
     if (index < 31) {
         _bufVa[1][index] = 0;
-        _movedBuffers[1] |= 1u << index;
         _buf[1][index] = nil;
     }
     Cmd m = cmd(OpBytes, 1, uint16_t(index));

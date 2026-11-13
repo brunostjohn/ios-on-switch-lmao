@@ -57,9 +57,6 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 @public
     __weak id _device;
     id _twin;  // the m2v object over the same memory (made on first need)
-    // the recording (RMCommandBuffer _ownStamp) it was retained by last: a bind of it into the same recording takes no
-    // owner lookup. Stored by each recording's own thread; a recording reads only whether it holds its own stamp.
-    std::atomic<uint64_t> _retainedBy;
 }
 @property (nonatomic, copy) NSString *label;
 - (id)rmTwin;  // made now if needed; nil if it cannot be
@@ -361,7 +358,6 @@ struct RMSharedEventWait {
 
 @interface RMCommandBuffer : RMObject {
 @public
-    uint64_t _ownStamp;  // this recording's, unique in the process (0: its owners are found by their map alone)
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
     NSMutableDictionary *_userDictionary;
     uint64_t _traceId;
@@ -510,7 +506,6 @@ struct RMSharedEventWait {
 // direct (no message): every recorded command and every object a command names goes through them
 - (void)record:(const Cmd &)cmd __attribute__((objc_direct));
 - (void)retain:(id)object __attribute__((objc_direct));
-- (void)retainOwn:(RMObject *)object __attribute__((objc_direct));
 @end
 
 // A refusal predicate hit while recording (or encoding) `cb`: into its mask; the first one's values kept; the process's first hit
@@ -558,10 +553,6 @@ uint64_t nextTraceId();
     uint16_t _cubicMask;
     uint64_t _checkedGeneration;
     const raw::Pipeline *_checkedPipeline;
-    // the buffer slots of stages 1 and 2 and whether any texture or sampler was bound since the last draw's check: a draw
-    // revalidates only those (checkDraw)
-    uint32_t _movedBuffers[3];
-    bool _movedTextures;
     raw::Pipeline *_drawn;
     raw::Variant<raw::Pipeline> *_drawnVariant;
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
@@ -613,12 +604,9 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, size_t at,
                   const char **why);
 
-static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c,
-                              RMObject *own = nil)
+static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
 {
-    if (own)
-        [cb retainOwn:own];
-    else if (object)
+    if (object)
         [cb retain:object];
     Cmd m = cmd(op, uint8_t(stage), uint16_t(index));
     m.obj = (__bridge void *)object;

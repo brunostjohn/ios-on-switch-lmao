@@ -219,8 +219,8 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
         if (resourcesChanged)
             ++resourceRevision_[compute ? 1 : 0];
         ++(compute ? kernelGeneration_ : renderGeneration_);
-        // a binding's slot is revalidated alone by its encoder (RMRenderEncoder _movedBuffers, _movedTextures)
-        if (!compute && (c.op == OpPipeline || c.op == OpDepthStencil))
+        if (!compute && (c.op == OpPipeline || c.op == OpDepthStencil || c.op == OpBuffer || c.op == OpBufferOffset ||
+                         c.op == OpBytes || c.op == OpTexture || c.op == OpSampler))
             ++eligibilityGeneration_;
     }
     return true;
