@@ -45,6 +45,10 @@
 #                            which engine whose switch timed out is waited for, killed off or reset (a killed channel's
 #                            context), which engines hold a channel at its unbind, that a PBDMA ENG_RESET or ACQUIRE never
 #                            reaches nvkm as the channel's error; F-v1's twod_clear save timeout and its engine line
+#   gm20b_kernel_hang_model_test  T-v5a's pool-scrub panic over a model of runlist 0 under hundreds of client
+#                            kills: the rule before ends in it, the kernel channel's steps (TegraGM20BKernelHang.h)
+#                            never do while a reset frees the GPU, and panic only once a clean reset of every engine
+#                            did not
 #   gm20b_eng_reset_order_test  recover_engine.c's hold of the PBDMA's ENG_RESET over a model of an engine reset and
 #                            the interrupt pass: at every point the pass can run, the PBDMA goes on only once the engine is
 #                            back, its live channel preempted, a killed one's method dropped
@@ -423,8 +427,22 @@ host_test(
         "gm20b_sched_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BAcquire.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
         "//drivers/TegraGM20B:TegraGM20BRecover.h",
         "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_kernel_hang_model_test",
+    srcs = [
+        "gm20b_kernel_hang_model.h",
+        "gm20b_kernel_hang_model_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
     ],
     cxx_std = "c++17",
 )
@@ -437,6 +455,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BHangDecode.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
         "//drivers/TegraGM20B:TegraGM20BRecover.h",
     ],
     cxx_std = "c++17",
@@ -552,6 +571,7 @@ host_test(
         "gm20b_eng_reset_order_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BAcquire.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
         "//drivers/TegraGM20B:TegraGM20BRecover.h",
     ],
     cxx_std = "c++17",
@@ -727,6 +747,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
         "//drivers/TegraGM20B:recover.c",
         "//drivers/TegraGM20B:recover_engine.c",
+        "//drivers/TegraGM20B:recover_held.c",
         "//drivers/TegraGM20B:nouveau/nvkm/subdev/ltc/base.c",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c",
         "//drivers/TegraGM20B:sched.c",

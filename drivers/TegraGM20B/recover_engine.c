@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-/* Engine resets (TegraGM20BRecover.h): the PBDMA's ENG_RESET held across each one, and the resets gpu_hang.c asks for. */
+/* Engine resets (TegraGM20BRecover.h): the PBDMA's ENG_RESET held across each one, and the resets under a context an
+ * engine cannot load or save. */
 #include <core/device.h>
 #include <core/engine.h>
 #include <engine/fifo.h>
@@ -205,29 +206,6 @@ u32 tgm_engine_resets_take(void)
 	return __atomic_exchange_n(&rst.resets, 0, __ATOMIC_RELAXED);
 }
 
-int tgm_recover_residue(struct nvkm_device *device, int chid)
-{
-	struct nvkm_runl *runl = NULL;
-	struct nvkm_engn *engn = NULL;
-	int reset = 0;
-
-	nvkm_runl_foreach(runl, device->fifo)
-	{
-		mutex_lock(&runl->mutex);
-		/* nouveau's runlist walk takes each engine by container_of. */
-		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
-		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
-		{
-			if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), chid)) {
-				tgm_engine_reset_locked(runl, engn, chid, "still on dead");
-				reset++;
-			}
-		}
-		mutex_unlock(&runl->mutex);
-	}
-	return reset;
-}
-
 static int loads(u32 status, int chid)
 {
 	return tgm_engine_load_stuck(status) && !(status & PFIFO_ENG_NEXT_ID_TSG) &&
@@ -322,78 +300,4 @@ int tgm_recover_saving(struct nvkm_device *device, int chid)
 		}
 	}
 	return 0;
-}
-
-int tgm_recover_engines(struct nvkm_device *device)
-{
-	struct nvkm_runl *runl = NULL;
-	struct nvkm_engn *engn = NULL;
-	bool cgid = false;
-	u32 status = 0;
-	int reset = 0;
-
-	nvkm_runl_foreach(runl, device->fifo)
-	{
-		mutex_lock(&runl->mutex);
-		/* nouveau's runlist walk takes each engine by container_of. */
-		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
-		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
-		{
-			status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
-			if (!(status & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW)))
-				continue;
-			tgm_engine_reset_locked(runl, engn, engn->func->cxid(engn, &cgid),
-						"busy with nothing to blame on");
-			reset++;
-		}
-		mutex_unlock(&runl->mutex);
-	}
-	return reset;
-}
-
-static int add_once(int *chids, int n, int max, int chid)
-{
-	int i = 0;
-
-	for (i = 0; i < n; i++) {
-		if (chids[i] == chid)
-			return n;
-	}
-	if (n < max)
-		chids[n++] = chid;
-	return n;
-}
-
-int tgm_recover_resident(struct nvkm_device *device, int *chids, int max)
-{
-	struct nvkm_runl *runl = NULL;
-	struct nvkm_engn *engn = NULL;
-	struct nvkm_runq *runq = NULL;
-	int held[2];
-	int n = 0;
-	int i = 0;
-	int k = 0;
-
-	nvkm_runl_foreach(runl, device->fifo)
-	{
-		/* nouveau's runlist walk takes each engine by container_of. */
-		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
-		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
-		{
-			k = tgm_engine_contexts(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)),
-						held);
-			for (i = 0; i < k; i++)
-				n = add_once(chids, n, max, held[i]);
-		}
-		for (i = 0; i < runl->runq_nr; i++) {
-			runq = runl->runq[i];
-			if (runq && (nvkm_rd32(device, PBDMA_STATUS(runq->id)) & PBDMA_BUSY) &&
-			    !tgm_pbdma_acquiring(nvkm_rd32(device, PBDMA_METHOD0(runq->id)),
-						 nvkm_rd32(device, PBDMA_DATA0(runq->id))))
-				n = add_once(
-					chids, n, max,
-					PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runq->id))));
-		}
-	}
-	return n;
 }

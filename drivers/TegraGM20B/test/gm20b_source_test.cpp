@@ -6,7 +6,7 @@
 //    the pool's holders;
 //  - the CPU does not clear the reserved pool at boot; every page an allocation hands out is zero whether the CPU or
 //    the copy engine zeroed it; the scrubber gives a range back clean only from its fence's interrupt pass, never waits
-//    on the CPU, and panics with one line on a range not back in time;
+//    on the CPU, and a range not back in time has the hang rule reset its engines and give the range back dirty;
 //  - the user client reads pushes only through TegraGM20BPushScan.h and profiles only what it read;
 //  - a fence-only present (direct scanout) copies nothing, and the debug read-back rides the frame's own present.
 #include <gtest/gtest.h>
@@ -287,6 +287,37 @@ TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 		Block(gpu(),
 		      "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)")
 			.Has("chan->kernel == CHAN_SCRUB"));
+}
+
+// T-v5a: the scrubber stuck on PBDMA0 with every engine idle went to a last resort that reset only busy or switching
+// engines, and the next check panicked. A hang check that finds a kernel channel stuck marks its cut work to be redone
+// (the scrubber's ranges go back dirty) before any reset, resets its own engines, then every engine with the client
+// channels on them killed; only a reset of every engine with no client context resident that did not free it panics.
+TEST(GM20BPoolScrubSource, AStuckKernelChannelHasItsEnginesResetAndItsWorkRedone)
+{
+	EXPECT_TRUE(Block(gpu(), "enum tgm_hang tgm_hang_recover(")
+			    .Has("if (verdict == TGM_HANG_KERNEL) return "
+				 "tgm_kernel_hang_locked(chans[b], late, who, seqno, waited_ns, "
+				 "moved_ns);"));
+	EXPECT_FALSE(gpuCode().Has("tgm_hang_last_resort"));
+	const CodeText hang = Block(gpu(), "enum tgm_hang tgm_kernel_hang_locked(");
+	EXPECT_EQ(hang.Count("nvxnu_panic("), 1u);
+	EXPECT_TRUE(hang.Has("hardware failure: the engines of %s's channel %u "));
+	EXPECT_TRUE(hang.Has("did not come back after a reset with no client context resident: "));
+	EXPECT_TRUE(
+		hang.Before("if (step == TGM_KERNEL_HANG_FATAL) {", "tgm_ctxsw_redo_mark(stuck);"));
+	EXPECT_TRUE(hang.Before("if (step == TGM_KERNEL_HANG_ALL) {", "kill_clients(stuck,"));
+	EXPECT_TRUE(
+		hang.Before("tgm_ctxsw_redo_mark(stuck);", "tgm_recover_kernel(tgm_gpu.device,"));
+	EXPECT_TRUE(
+		Block(gpu(), "void tgm_ctxsw_redo_mark(").Has("tgm_scrub_redo(chan->submitted)"));
+	const CodeText resets = Block(SourceText("../recover_held.c"),
+				      "static int reset_for(struct nvkm_device *device,");
+	EXPECT_TRUE(resets.Before("tgm_chid_cut(held[i]);",
+				  "tgm_engine_reset_locked(runl, engn, chid, why);"))
+		<< "another kernel channel's context on a reset engine is redone too";
+	EXPECT_TRUE(resets.Has("if (!all && !tgm_kernel_hang_resets("));
+	EXPECT_FALSE(resets.Has("PFIFO_ENG_BUSY")) << "an idle engine is reset as a busy one is";
 }
 
 TEST(GM20BPoolScrubSource, FreedPoolBosGoToTheGpuFirst)

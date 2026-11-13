@@ -319,12 +319,82 @@ TEST(StuckSave, ACopyEngineSwitchIsDecidedAtTheFirstTickAndGrsLongJobsAreWaitedO
 	EXPECT_GT(TGM_STUCK_NS, 428 * kMs);
 }
 
-TEST(LastResort, AHangWithNothingToBlameResetsTheEnginesOnceAStall)
+// T-v5a 195.8 s: "scrub ch 0 err 0 fence 686/750 ... ENG0 001b201b (ch 27 -> ch 27, ctxsw valid), PBDMA0 00002000 ch 0
+// mthd 80040300 data 00000786": the scrubber's LAUNCH_DMA (subchannel 4, 0x300) held on PBDMA0, GR idle on client 27's
+// context, no switch pending anywhere. The last resort reset only busy or switching engines (none) and the next check
+// panicked. Its own step resets the copy engine whatever it holds while idle, and not GR, whose idle context is 27's.
+TEST(KernelHang, Tv5asScrubberStallResetsTheIdleCopyEngineAndLeavesGrsClientContext)
 {
-	EXPECT_TRUE(tgm_hang_last_resort(0, 0, 39009));
-	EXPECT_FALSE(tgm_hang_last_resort(1, 39009, 39009)) << "the reset freed nothing: fatal";
-	EXPECT_TRUE(tgm_hang_last_resort(1, 39009, 39010))
-		<< "it completed work since: a new stall";
+	constexpr uint32_t eng0 = 0x001b201bu, pbdma = 0x00002000u;
+	EXPECT_FALSE(eng0 & (PFIFO_ENG_BUSY | PFIFO_ENG_CHSW));
+	EXPECT_EQ(PBDMA_CHID(pbdma), 0u);
+	EXPECT_NE(pbdma & PBDMA_BUSY, 0u);
+	EXPECT_EQ(PBDMA_METHOD_ADDR(0x80040300u), 0x300u);
+	EXPECT_EQ((0x80040300u >> 16) & 7, 4u) << "the copy subchannel";
+	int held[2] = {-1, -1};
+	int none[2];
+	EXPECT_EQ(tgm_engine_contexts(eng0, none), 0)
+		<< "what the stall rules saw: nothing resident";
+	ASSERT_EQ(tgm_engine_contexts_held(eng0, held), 1);
+	EXPECT_EQ(held[0], 27);
+	EXPECT_FALSE(tgm_kernel_hang_resets(eng0, 0, 1, 0)) << "GR keeps client 27's context";
+	EXPECT_TRUE(tgm_kernel_hang_resets(eng0, 0, 0, 0))
+		<< "a killed client's is nothing to keep";
+	for (const uint32_t ce : {0x00000000u, 0x00002000u, 0x001b201bu})
+		EXPECT_TRUE(tgm_kernel_hang_resets(ce, ce == 0x00002000u, ce == 0x001b201bu, 1))
+			<< std::hex << ce;
+	EXPECT_FALSE(tgm_kernel_hang_resets(engine(1, 27, 0), 0, 1, 1))
+		<< "a copy engine busy with a live client's copy";
+	EXPECT_TRUE(tgm_kernel_hang_resets(engine(1, 0, 0), 1, 0, 1)) << "busy with the scrubber's";
+	EXPECT_EQ(tgm_kernel_hang_step(TGM_KERNEL_HANG_NONE, 0, 686, 0), TGM_KERNEL_HANG_OWN);
+}
+
+TEST(KernelHang, AStepThatFreesNothingEscalatesAndOnlyACleanResetOfEveryEngineIsFatal)
+{
+	const uint32_t done = 686;
+	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_OWN, 0), done, done, 0),
+		  TGM_KERNEL_HANG_ALL);
+	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_ALL, 1), done, done, 0),
+		  TGM_KERNEL_HANG_ALL)
+		<< "clients were resident at that reset: they are gone now, reset again";
+	EXPECT_EQ(tgm_kernel_hang_step(tgm_kernel_hang_did(TGM_KERNEL_HANG_ALL, 0), done, done, 0),
+		  TGM_KERNEL_HANG_FATAL);
+	for (const int step :
+	     {TGM_KERNEL_HANG_DID_OWN, TGM_KERNEL_HANG_DID_ALL, TGM_KERNEL_HANG_DID_ALL_CLEAN}) {
+		EXPECT_EQ(tgm_kernel_hang_step(step, done, done + 1, 0), TGM_KERNEL_HANG_OWN)
+			<< "it completed work since: a new stall";
+		EXPECT_EQ(tgm_kernel_hang_step(step, done, done, 1), TGM_KERNEL_HANG_OWN)
+			<< "another channel completed work since: the reset freed the GPU, a new "
+			   "stall";
+	}
+}
+
+// A reset while another preempt is in flight would leave the stuck channel on its PBDMA (the hold asks for none then)
+TEST(KernelHang, AStepWaitsForAnotherPreemptInFlightAFewChecksAtMost)
+{
+	int deferred = 0;
+	for (int check = 1; check <= TGM_KERNEL_HANG_WAITS; check++) {
+		deferred = tgm_kernel_hang_defer(deferred, 1);
+		EXPECT_EQ(deferred, check);
+	}
+	EXPECT_EQ(tgm_kernel_hang_defer(deferred, 1), 0)
+		<< "one that never finishes: the step is taken";
+	EXPECT_EQ(tgm_kernel_hang_defer(2, 0), 0);
+	EXPECT_EQ(tgm_kernel_hang_defer(0, 0), 0);
+}
+
+TEST(KernelHang, AnEngineHoldsItsIdleValidContextAndBothSidesOfASwitch)
+{
+	int held[2] = {-1, -1};
+	EXPECT_EQ(tgm_engine_contexts_held(engine(1, 17, 0) & ~kBusy, held), 1);
+	EXPECT_EQ(held[0], 17);
+	EXPECT_EQ(tgm_engine_contexts_held(engine(7, 17, 4) & ~kBusy, held), 2);
+	EXPECT_EQ(held[0], 17);
+	EXPECT_EQ(held[1], 4);
+	EXPECT_EQ(tgm_engine_contexts_held(engine(5, 17, 4), held), 1);
+	EXPECT_EQ(held[0], 4);
+	EXPECT_EQ(tgm_engine_contexts_held(engine(0, 17, 4), held), 0) << "INVALID";
+	EXPECT_EQ(tgm_engine_contexts_held(engine(1, 17, 0) | 0x00001000u, held), 0) << "a TSG";
 }
 
 // nvkm's recovery holds runl->mutex through its runlist update and preempt waits (2 s each, recovery.c): a kill still

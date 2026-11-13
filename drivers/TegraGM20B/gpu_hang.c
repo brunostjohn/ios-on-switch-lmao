@@ -345,8 +345,8 @@ static int chan_moving(struct tgm_chan *chan, u64 now)
 /* A wait on `late` (the present's or the scrubber's channel when its own work is late) ran out with no GPU error
  * reported. The channel to blame (TegraGM20BRecover.h tgm_hang_blame) is the first stuck one of what the engines and
  * PBDMAs are on (a context switch that does not finish blames the context nvkm's own recovery would), the channel of its
- * task `late` still waits on (tgm_chan_order), and `late`. A client's is killed as a faulting client's is, and the waits
- * it held up go on. tgm_live_lock held. */
+ * task `late` still waits on (tgm_chan_order), and `late`. A client's is killed as a faulting client's is, a kernel
+ * channel's engines are reset (tgm_kernel_hang_locked), and the waits it held up go on. tgm_live_lock held. */
 #if TGM_STATS
 /* tgm_live_lock held: the blamed channel's own order wait and the late one's progress, as a line of its
  * own (TegraGM20BHangDecode.h tgm_hang_detail) */
@@ -424,6 +424,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	char state[TGM_HANG_LINE];
 	enum tgm_hang verdict = TGM_HANG_STUCK;
 	u64 now = nvxnu_nanotime();
+	u64 moved_ns = 0;
 	int suspects[4];
 	int resident = 0;
 	int n = 0;
@@ -484,6 +485,8 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	{
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
+		if (!READ_ONCE(chan->error))
+			moved_ns = max(moved_ns, READ_ONCE(chan->progress_ns));
 	}
 	/* each candidate's engine reset is tried at most once a check */
 	for (;;) {
@@ -507,8 +510,8 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 			break;
 		}
 	}
-	if (verdict == TGM_HANG_STUCK)
-		return tgm_hang_last_resort_locked(late, who, seqno, waited_ns);
+	if (verdict == TGM_HANG_KERNEL)
+		return tgm_kernel_hang_locked(chans[b], late, who, seqno, waited_ns, moved_ns);
 	if (b < 0 || chans[b]->isolating)
 		return verdict;
 	blame = chans[b];

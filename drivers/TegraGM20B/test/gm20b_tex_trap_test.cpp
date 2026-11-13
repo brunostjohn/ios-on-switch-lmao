@@ -257,8 +257,8 @@ TEST(Gm20bGrFault, AStuckLoadIsResetNeverKilled)
 }
 
 // A client's submissions never panic the system (T-v3g): the context-switch timeout decides a save of a channel with
-// nothing pending at its first tick, a hang check with nothing to blame resets the engines before it may be fatal, and
-// a kill nvkm is still doing is waited for.
+// nothing pending at its first tick, a hang check that finds a kernel channel stuck resets its engines (T-v5a), and a
+// kill nvkm is still doing is waited for.
 TEST(Gm20bGrFault, AClientsStallEndsInItsKillOrAnEngineResetNeverAPanic)
 {
 	const std::string hang = Text(GPU_HANG_C);
@@ -269,9 +269,11 @@ TEST(Gm20bGrFault, AClientsStallEndsInItsKillOrAnEngineResetNeverAPanic)
 		  std::string::npos);
 	EXPECT_NE(decide.find("chan_unowned(chan)"), std::string::npos);
 	const std::string recover = Body(hang, "enum tgm_hang tgm_hang_recover(");
-	EXPECT_LT(recover.find("if (verdict == TGM_HANG_STUCK)\n\t\treturn "
-			       "tgm_hang_last_resort_locked(late, who, seqno, waited_ns);"),
-		  recover.find("if (b < 0 || chans[b]->isolating)"));
+	EXPECT_LT(
+		recover.find(
+			"if (verdict == TGM_HANG_KERNEL)\n\t\treturn "
+			"tgm_kernel_hang_locked(chans[b], late, who, seqno, waited_ns, moved_ns);"),
+		recover.find("if (b < 0 || chans[b]->isolating)"));
 	EXPECT_NE(recover.find("c[i].saving = chans[i] && tgm_recover_saving("), std::string::npos);
 	const std::string iso = Body(hang, "void tgm_iso_deadline(void *arg)\n{");
 	EXPECT_NE(iso.find("tgm_iso_verdict(chan_marked(chan->chid)"), std::string::npos);

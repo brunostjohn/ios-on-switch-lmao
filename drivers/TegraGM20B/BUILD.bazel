@@ -105,6 +105,7 @@ kernel_driver(
         "clkgate.c",
         "recover.c",
         "recover_engine.c",
+        "recover_held.c",
         "sched.c",
         "hold.c",
         "deadline.c",

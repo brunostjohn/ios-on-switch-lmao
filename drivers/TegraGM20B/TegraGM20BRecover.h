@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "TegraGM20BAcquire.h"
 #include "TegraGM20BHost.h"
+#include "TegraGM20BKernelHang.h"
 
 struct nvkm_device;
 struct nvkm_engine;
@@ -266,7 +267,9 @@ void tgm_acquire_suspend(void);
  * channel an engine hangs on does not wait for that engine to drain. */
 void tgm_recover_fault(struct nvkm_device *device, int chid);
 /* Resets every engine still holding dead hardware channel chid (tgm_engine_holds); how many. The PBDMA that fed it gets
- * ENG_RESET and drops the dead channel's method (recover.c runq_intr). */
+ * ENG_RESET and drops the dead channel's method (recover.c runq_intr). With no engine on it but a PBDMA still on its
+ * method, the engines of that runlist tgm_kernel_hang_resets names are reset so the hold's release drops that method.
+ * tgm_live_lock held. */
 int tgm_recover_residue(struct nvkm_device *device, int chid);
 /* The name of an engine stuck loading hardware channel chid's context (tgm_engine_load_stuck), else NULL */
 const char *tgm_recover_loading(struct nvkm_device *device, int chid);
@@ -278,8 +281,21 @@ int tgm_recover_reload(struct nvkm_device *device, int chid);
 void tgm_recover_preempt_unblock(struct nvkm_runl *runl);
 /* Whether a BUSY engine is switching away from hardware channel chid's context (tgm_engine_saving) */
 int tgm_recover_saving(struct nvkm_device *device, int chid);
-/* Resets every engine that is busy or switching, under the hold; how many */
-int tgm_recover_engines(struct nvkm_device *device);
+/* For kernel channel chid, stuck at a hang check: resets, under the hold, the engines of its runlist that
+ * tgm_kernel_hang_resets names (all: every one), each context they hold of a live kernel channel marked to be redone
+ * first (gpu_reload.c tgm_chid_cut); how many. tgm_live_lock held. */
+int tgm_recover_kernel(struct nvkm_device *device, int chid, int all);
+/* A preempt is in flight (PFIFO_PREEMPT pending): a hold now would leave the live channel on its PBDMA through the
+ * reset (hold_pbdmas asks for no second one) */
+int tgm_recover_preempting(struct nvkm_device *device);
+/* The channels whose contexts the engines of hardware channel chid's runlist hold, VALID or switching
+ * (tgm_engine_contexts_held), and the one each busy PBDMA of it feeds unless it waits in an acquire; each once, up to
+ * max */
+int tgm_recover_held(struct nvkm_device *device, int chid, int *chids, int max);
+/* The host's scheduling state beside the engines' (gpu_describe.c tgm_engines_line): the runlists software and a
+ * scheduler error stopped, the preempt register, each runlist's nvkm block and recovery counts, each PBDMA's interrupts
+ * and their enables */
+void tgm_recover_host_line(struct nvkm_device *device, char *buf, unsigned int len);
 /* nvkm's FIFO functions as a writable copy put in place of its const table, once: recover.c and sched.c replace entries
  * of it, and vendored nouveau stays as it is. */
 struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo);
@@ -408,14 +424,6 @@ static inline uint32_t tgm_kill_first(int faulted, uint32_t fault_seqno, uint32_
 	return faulted ? fault_seqno : completed + 1;
 }
 
-/* A hang check that finds nothing to recover (TGM_HANG_STUCK) resets every engine that is busy or switching, kills no
- * one and waits on (reset: done before for the late channel, completed_at_reset: what it had completed then). Only the
- * same stall again with nothing completed since is fatal: a reset that did not free the GPU. */
-static inline int tgm_hang_last_resort(int reset, uint32_t completed_at_reset, uint32_t completed)
-{
-	return !reset || completed != completed_at_reset;
-}
-
 /* tgm_iso_deadline for a channel being killed past TGM_ISOLATE_NS: nvkm's recovery of its group still under way
  * (marked) is waited for up to nvkm's own bounded waits (its runlist update and preempt waits, 2 s each); a recovery
  * never scheduled is asked for once more; past that the kill is lost. */
@@ -438,11 +446,12 @@ static inline enum tgm_iso tgm_iso_verdict(int marked, uint64_t since_ns, int re
 
 /* What a wait that ran out with no GPU error reported found (gpu_hang.c tgm_hang_recover). */
 enum tgm_hang {
-	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
+	TGM_HANG_STUCK, /* nothing could be recovered (no hang rule before M3): the caller panics */
 	TGM_HANG_RECOVERING, /* a client's channel the GPU is stuck on is being killed (or the late one died already) */
 	TGM_HANG_PROGRESSING, /* no channel is stuck: the late work is slow, not hung */
 	TGM_HANG_RESIDUE, /* an engine or PBDMA is still on a dead channel (*blame): reset it, kill no one */
-	TGM_HANG_RELOAD /* an engine is stuck loading a live channel's context (*blame): reset under it, kill no one */
+	TGM_HANG_RELOAD, /* an engine is stuck loading a live channel's context (*blame): reset under it, kill no one */
+	TGM_HANG_KERNEL /* a kernel channel is stuck (*blame): its engines are reset (TegraGM20BKernelHang.h) */
 };
 
 struct tgm_hang_candidate {
@@ -482,11 +491,12 @@ static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t
  * one (last). An engine or PBDMA on a dead channel comes first: what it holds up is no channel's fault. So does an
  * engine stuck loading a live channel's context, with the PBDMA waiting behind it on that channel: neither is that
  * channel's work. Then a channel an engine is on that is stuck and does not move is to blame (*blame, its index;
- * else -1): a client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is
- * busy, not hung, and nothing is killed, whatever waits behind it. With no engine on any of them, the blame follows the
- * late one's acquires to the channel at the end of that chain, and only a stuck one that does not move is killed; a
- * chain through a source that moves is slow work, and a chain that ends on a victim kills nothing and is never fatal. A
- * dead late channel is recovered already, and other late kernel work with nothing progressing anywhere is fatal. */
+ * else -1): a client's is killed, a kernel channel's engines are reset. While an engine is on a channel that moves the
+ * GPU is busy, not hung, and nothing is killed, whatever waits behind it. With no engine on any of them, the blame
+ * follows the late one's acquires to the channel at the end of that chain, and only a stuck one that does not move is
+ * recovered; a chain through a source that moves is slow work, and a chain that ends on a victim kills nothing. A dead
+ * late channel is recovered already, and late kernel work with nothing progressing anywhere has its own engines
+ * reset. */
 static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
 					   int late_kernel, int any_progress, int *blame)
 {
@@ -510,18 +520,14 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 			continue;
 		if (!c[i].stuck)
 			return TGM_HANG_PROGRESSING;
-		if (c[i].kernel)
-			return TGM_HANG_STUCK;
 		*blame = i;
-		return TGM_HANG_RECOVERING;
+		return c[i].kernel ? TGM_HANG_KERNEL : TGM_HANG_RECOVERING;
 	}
 	for (i = 0; i < n; i++) {
 		if (!c[i].live || !c[i].resident || !c[i].stuck || c[i].moving)
 			continue;
-		if (c[i].kernel)
-			return TGM_HANG_STUCK;
 		*blame = i;
-		return TGM_HANG_RECOVERING;
+		return c[i].kernel ? TGM_HANG_KERNEL : TGM_HANG_RECOVERING;
 	}
 	for (i = 0; i < n; i++)
 		if (c[i].live && c[i].resident && c[i].moving)
@@ -532,15 +538,15 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 			return late_dead ? TGM_HANG_RECOVERING : TGM_HANG_PROGRESSING;
 	}
 	if (n && c[at].live && c[at].stuck && !c[at].moving && !c[at].victim) {
-		if (c[at].kernel)
-			return TGM_HANG_STUCK;
 		*blame = at;
-		return TGM_HANG_RECOVERING;
+		return c[at].kernel ? TGM_HANG_KERNEL : TGM_HANG_RECOVERING;
 	}
 	if (late_dead)
 		return TGM_HANG_RECOVERING;
-	if (late_kernel && !any_progress && !(n && c[at].victim))
-		return TGM_HANG_STUCK;
+	if (n && late_kernel && !any_progress && !c[at].victim) {
+		*blame = n - 1;
+		return TGM_HANG_KERNEL;
+	}
 	return TGM_HANG_PROGRESSING;
 }
 

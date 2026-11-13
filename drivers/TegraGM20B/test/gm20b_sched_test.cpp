@@ -515,8 +515,8 @@ TEST(HangBlame, AKernelChannelAnEngineCannotSaveIsNoClientsToKill)
 	present.saving = 1;
 	Candidates k{{present, kStuckResident}};
 	int blame;
-	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK)
-		<< "tgm_hang_recover's last resort: every busy engine reset";
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_KERNEL) << "the present's engines are reset";
+	EXPECT_EQ(blame, 0);
 }
 
 // With NVIDIA's decode the suspects are channel 4 alone (GR loading it, PBDMA0 on it): no channel is killed.
@@ -627,7 +627,8 @@ TEST(HangBlame, ALateKernelVictimIsNeverFatal)
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(blame, -1);
 	k.c[1].victim = 0;
-	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK);
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_KERNEL);
+	EXPECT_EQ(blame, 1) << "the late kernel channel's own engines";
 }
 
 // iconservicesagent's channel 20 on slice B's boot: GR and PBDMA0 on another process's long 3D work that keeps going,
@@ -673,19 +674,37 @@ TEST(HangBlame, SlowWorkIsNotKilled)
 	EXPECT_EQ(blame, -1);
 }
 
-TEST(HangBlame, AStuckKernelChannelIsFatal)
+TEST(HangBlame, AStuckKernelChannelHasItsEnginesReset)
 {
 	Candidates k{{kStuckKernel, kNone, kStuckClient}};
 	int blame;
-	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK);
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_KERNEL);
+	EXPECT_EQ(blame, 0);
 }
 
-TEST(HangBlame, LateKernelWorkPanicsOnlyWhenNothingProgresses)
+// T-v5a 195.8 s: "scrub ch 0 ... fence 686/750 ... ENG0 001b201b (ch 27 -> ch 27, ctxsw valid), PBDMA0 00002000 ch 0
+// mthd 80040300": the scrubber on PBDMA0 alone (GR idle, not a suspect), the scrubber also the late channel
+TEST(HangBlame, Tv5asScrubberStuckOnThePbdmaWithEveryEngineIdleIsTheKernelsToRecover)
+{
+	tgm_hang_candidate late = kStuckKernel;
+	late.resident = 0;
+	Candidates k{{kStuckKernel, late}};
+	k.late_kernel = 1;
+	k.progress = 1;
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_KERNEL);
+	EXPECT_EQ(blame, 0);
+	k.c[0].stuck = k.c[1].stuck = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING) << "the first look: one strike";
+}
+
+TEST(HangBlame, LateKernelWorkWithNothingProgressingHasItsEnginesReset)
 {
 	Candidates k{{kNone, kBusyKernel}};
 	k.late_kernel = 1;
 	int blame;
-	EXPECT_EQ(k.verdict(blame), TGM_HANG_STUCK);
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_KERNEL);
+	EXPECT_EQ(blame, 1);
 	k.progress = 1;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
 }
@@ -784,5 +803,6 @@ TEST(HangBlame, SliceVBoot2ThePresentOnItsAcquireLeavesTheBlameToItsProducer)
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
 	EXPECT_EQ(blame, 0);
 	Candidates before{{kStuckKernel, kStuckClient}};
-	EXPECT_EQ(before.verdict(blame), TGM_HANG_STUCK);
+	EXPECT_EQ(before.verdict(blame), TGM_HANG_KERNEL);
+	EXPECT_EQ(blame, 0);
 }

@@ -25,8 +25,6 @@
 #define ENG_TIMEOUT_DETECTION 0x80000000
 #define CTXSW_TIMEOUT_US 100000
 #define PTIMER_US(us) ((us) * 1920u / 3125u)
-/* written 1 to clear (gk104_runl_fault_clear); a runlist's bit stops its scheduling */
-#define ERROR_SCHED_DISABLE 0x00262c
 #define PFIFO_INTR_0 0x002100
 #define PFIFO_INTR_0_BIND_ERROR 0x00000001
 #define PFIFO_INTR_0_SCHED_ERROR 0x00000100

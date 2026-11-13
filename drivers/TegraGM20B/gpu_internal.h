@@ -364,9 +364,12 @@ struct tgm_chan {
 	/* an engine was reset under its context load, and what it had completed then (gpu_reload.c; tgm_live_lock) */
 	int load_reset;
 	u32 load_reset_done;
-	/* a hang check found nothing to blame and reset every engine, and what it had completed then (tgm_live_lock) */
-	int last_resort;
-	u32 last_resort_done;
+	/* a kernel channel's last step for a hang check that found it stuck (TegraGM20BKernelHang.h), and what it had
+	 * completed then (tgm_live_lock) */
+	int hang_step;
+	u32 hang_step_done;
+	u64 hang_step_ns;
+	int hang_deferred; /* checks in a row that put its step off for a preempt in flight (tgm_kernel_hang_defer) */
 	int iso_retried; /* tgm_iso_deadline asked nvkm for its kill again */
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
@@ -425,9 +428,10 @@ void tgm_acquire_probe_giveup(struct tgm_chan *chan, u64 parked_ns, u64 now);
  * engine still on it reset; nvkm starts it itself for MMU faults, tgm_errors_contained() for the rest, which nvkm only
  * reports) kills each one, tgm_chan_killed() marks it dead and releases its fence word so no acquire or CPU wait stays on
  * it, and the GPU goes on. A hang with no error report (a wait that ran out) is recovered the same way by
- * tgm_hang_recover(), from what the GPU itself is stuck on; one with nothing to blame resets every busy engine and kills no
- * one. A client's submissions never panic the system: what panics is an error on a kernel channel, a kill nvkm's recovery
- * never completes (tgm_iso_verdict), and a hang that the engine resets did not free (tgm_hang_last_resort). */
+ * tgm_hang_recover(), from what the GPU itself is stuck on; a stuck kernel channel has its engines reset, and kills
+ * clients only once a reset of its own engines did not free it. A client's submissions never panic the system: what
+ * panics is an error on a kernel channel, a kill nvkm's recovery never completes (tgm_iso_verdict), and a kernel
+ * channel's stall that a reset of every engine with no client context resident did not free (tgm_kernel_hang_step). */
 #define TGM_ISOLATE_NS (500 * NSEC_PER_MSEC)
 
 struct iso_state {
@@ -446,10 +450,16 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
  * load; a second stuck load with nothing completed since panics. */
 int tgm_load_recover_locked(struct tgm_chan *chan, const char *who);
 int tgm_chid_unowned(int chid);
-/* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_STUCK. Resets every busy engine and returns
- * TGM_HANG_RECOVERING, unless that was done for this late channel and it completed nothing since (TGM_HANG_STUCK). */
-enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno,
-					  u64 waited_ns);
+/* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_KERNEL for kernel channel `stuck`, which `late`'s wait
+ * (who, seqno, waited_ns) found, moved_ns the last completion of a live channel: its cut work marked to be redone and
+ * the step tgm_kernel_hang_step names taken. TGM_HANG_RECOVERING; the FATAL step panics as a hardware failure. */
+enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *late, const char *who,
+				     u32 seqno, u64 waited_ns, u64 moved_ns);
+/* tgm_live_lock held, for recover_engine.c's walk of a stuck kernel channel's engines: whether hardware channel chid is
+ * a live client's, and a context about to be reset under kernel work (tgm_ctxsw_redo_mark for a live kernel
+ * channel's) */
+int tgm_chid_live_client(int chid);
+void tgm_chid_cut(int chid);
 
 struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
@@ -771,7 +781,8 @@ enum tgm_ctxsw tgm_kernel_stall_locked(struct tgm_chan *chan, const char *engine
  *    never holds more than that of the pool from an allocation.
  *  - A freed pool BO (TegraGM20BUserClient.cpp poolZeroLater): tgm_pool_scrub queues its range.
  * The CPU has no cacheable view of the pool, so the zeros need no cache maintenance. A range not back SCRUB_NS after it
- * was queued panics with one line, as a present does: its nonstall interrupt never came, or the copy never ran. */
+ * was queued goes to the hang rule, as a present does: a copy that never ran has the scrubber's engines reset and its
+ * ranges go back dirty (tgm_kernel_hang_locked); a fence that completed with no nonstall interrupt panics. */
 #define SCRUB_JOBS 64
 
 struct scrub_state {

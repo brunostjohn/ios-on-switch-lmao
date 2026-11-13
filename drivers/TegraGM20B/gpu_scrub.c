@@ -97,8 +97,9 @@ static void scrub_work(void *arg)
 	gate_leave();
 }
 
-/* A range not back SCRUB_NS after it was queued: the client channel the GPU is stuck on is killed and the range gets
- * SCRUB_NS more; with none, one line and a panic. */
+/* A range not back SCRUB_NS after it was queued: the hang rule recovers what the GPU is stuck on (a client channel
+ * killed, or the scrubber's engines reset with its ranges back dirty) and the range gets SCRUB_NS more. Its fence
+ * complete with no nonstall interrupt is a lost interrupt: one line and a panic. */
 static void scrub_deadline(void *arg)
 {
 	/* the last time a recovery or progress restarted the wait (one work item: no race) */

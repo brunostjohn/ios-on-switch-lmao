@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Engine resets that kill no one: under a live channel's stuck context load (TegraGM20BRecover.h tgm_load_verdict), under
-// a kernel channel's stall (tgm_kernel_stall_verdict), and a hang check's last resort when it finds nothing to blame
-// (tgm_hang_last_resort).
+// Engine resets for stalls no client is to blame for: a live channel's stuck context load (TegraGM20BRecover.h
+// tgm_load_verdict), and a kernel channel's stall at a context-switch timeout tick (tgm_kernel_stall_verdict) or at a
+// hang check (TegraGM20BKernelHang.h).
 #include "gpu_internal.h"
 #include "../../kits/SwitchLinux/SwitchLinux.h"
 
@@ -168,24 +168,93 @@ int tgm_load_recover_locked(struct tgm_chan *chan, const char *who)
 	return tgm_recover_reload(tgm_gpu.device, (int)chan->chid) > 0;
 }
 
-enum tgm_hang tgm_hang_last_resort_locked(struct tgm_chan *late, const char *who, u32 seqno,
-					  u64 waited_ns)
+int tgm_chid_live_client(int chid)
 {
+	const struct tgm_chan *chan = live_by(0, chid);
+
+	return chan && !chan->kernel && !READ_ONCE(chan->error);
+}
+
+void tgm_chid_cut(int chid)
+{
+	struct tgm_chan *chan = live_by(0, chid);
+
+	if (chan && chan->kernel && !READ_ONCE(chan->error))
+		tgm_ctxsw_redo_mark(chan);
+}
+
+/* tgm_live_lock held: the live client channels whose contexts the engines of hardware channel chid's runlist hold,
+ * VALID or switching, or whose methods its PBDMAs are on */
+static int held_clients(int chid, struct tgm_chan **out, int max)
+{
+	int chids[8];
+	const int held = tgm_recover_held(tgm_gpu.device, chid, chids, ARRAY_SIZE(chids));
+	int n = 0;
+	int i = 0;
+
+	for (i = 0; i < held && n < max; i++) {
+		if (tgm_chid_live_client(chids[i]))
+			out[n++] = live_by(0, chids[i]);
+	}
+	return n;
+}
+
+enum tgm_hang tgm_kernel_hang_locked(struct tgm_chan *stuck, struct tgm_chan *late, const char *who,
+				     u32 seqno, u64 waited_ns, u64 moved_ns)
+{
+	static const char *const steps[] = {
+		[TGM_KERNEL_HANG_OWN] = "its own engines",
+		[TGM_KERNEL_HANG_ALL] = "every engine of its runlist",
+	};
+	struct tgm_chan *clients[8];
 	char state[TGM_HANG_LINE];
 	char engines[TGM_HANG_LINE];
-	const u32 done = tgm_chan_completed(late);
+	char host[TGM_HANG_LINE];
+	const u64 now = nvxnu_nanotime();
+	const u32 done = tgm_chan_completed(stuck);
+	const enum tgm_kernel_hang step = tgm_kernel_hang_step(
+		stuck->hang_step, stuck->hang_step_done, done, moved_ns > stuck->hang_step_ns);
+	u32 killed = 0;
+	int reset = 0;
+	int n = 0;
 
-	if (!tgm_hang_last_resort(late->last_resort, late->last_resort_done, done))
-		return TGM_HANG_STUCK;
-	tgm_chan_describe(late, state, sizeof(state));
+	tgm_chan_describe(stuck, state, sizeof(state));
 	tgm_engines_line(engines, sizeof(engines));
-	scnprintf(load_line, sizeof(load_line),
-		  "tegra-gm20b: GPU hang with nothing to blame: %s waited %llu ms for %s fence %u: "
-		  "every busy engine reset, nothing killed: %s; engines %s\n",
-		  who, waited_ns / 1000000, late->owner, seqno, state, engines);
+	tgm_recover_host_line(tgm_gpu.device, host, sizeof(host));
+	if (step == TGM_KERNEL_HANG_FATAL) {
+		nvxnu_panic("tegra-gm20b: hardware failure: the engines of %s's channel %u "
+			    "did not come back after a reset with no client context resident: "
+			    "%s waited %llu ms for %s fence %u, no channel completed anything "
+			    "since: %s; engines %s; %s",
+			    stuck->owner, stuck->chid, who, waited_ns / 1000000, late->owner, seqno,
+			    state, engines, host);
+	}
+	stuck->hang_deferred =
+		tgm_kernel_hang_defer(stuck->hang_deferred, tgm_recover_preempting(tgm_gpu.device));
+	if (!stuck->hang_deferred) {
+		if (step == TGM_KERNEL_HANG_ALL) {
+			n = held_clients((int)stuck->chid, clients, ARRAY_SIZE(clients));
+			killed =
+				kill_clients(stuck, "every engine of its runlist", clients, n, now);
+		}
+		tgm_ctxsw_redo_mark(stuck);
+		reset = tgm_recover_kernel(tgm_gpu.device, (int)stuck->chid,
+					   step == TGM_KERNEL_HANG_ALL);
+		stuck->hang_step = tgm_kernel_hang_did(step, n);
+		stuck->hang_step_done = done;
+		stuck->hang_step_ns = now;
+	}
+	scnprintf(
+		load_line, sizeof(load_line),
+		"tegra-gm20b: GPU hang on kernel channel: %s waited %llu ms for %s fence %u; %s's "
+		"channel %u stuck, %s %s (%d), %u client channels killed of %d resident: %s; "
+		"engines %s; %s\n",
+		who, waited_ns / 1000000, late->owner, seqno, stuck->owner, stuck->chid,
+		steps[step],
+		stuck->hang_deferred ? "put off, a preempt in flight" : "reset, its work redone",
+		reset, killed, n, state, engines, host);
 	switch_linux_log_line(load_line);
-	late->last_resort = 1;
-	late->last_resort_done = done;
-	tgm_recover_engines(tgm_gpu.device);
+	if (stuck == tgm_present.chan)
+		tgm_present_redo_kick();
 	return TGM_HANG_RECOVERING;
 }
