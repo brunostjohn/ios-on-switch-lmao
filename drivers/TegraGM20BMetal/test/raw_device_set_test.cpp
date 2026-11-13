@@ -226,6 +226,8 @@ TEST_F(DeviceSet, AnArenaFreedWithAViewAliasInTheSetLeavesNeitherItsBoNorTheAlia
     raw::Buffer a, b;
     ASSERT_TRUE(dev.arenaBuffer(next, 4096, a));
     ASSERT_TRUE(dev.arenaBuffer(next, 4096, b));
+    // A client device opens its channel at its first command buffer, and the channel's context is a set job of its own
+    ASSERT_TRUE(dev.ensureChannel()) << dev.channelError();
     const unsigned jobs = model.setJobs;
     const size_t first = model.jobs.size();
     const uint32_t seqno = copy(a, b, 4096);
