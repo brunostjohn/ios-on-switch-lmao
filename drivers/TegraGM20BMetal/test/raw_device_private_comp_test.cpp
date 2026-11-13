@@ -108,6 +108,11 @@ TEST_F(DevicePrivateComp, AChainTakesCompressedMemoryAndMovesEveryLevelToPlain)
     ASSERT_TRUE(chain.chain);
     EXPECT_EQ(chain.chain->va, chain.va);
     EXPECT_EQ(chain.cpu, nullptr) << "no CPU view of compressed memory";
+    raw::Texture level;
+    ASSERT_TRUE(raw::chainLevelImage(chain, 1, level));
+    EXPECT_TRUE(level.comptags) << "level 1 is rendered with SET_COLOR_COMPRESSION, as level 0 is";
+    ASSERT_TRUE(raw::chainLevelTarget(chain, 2, level));
+    EXPECT_TRUE(level.comptags);
     const uint64_t compressed = chain.va;
     const uint32_t tic = chain.tic;
     const raw::fx::MipChain layout = chain.chain->layout;
@@ -119,6 +124,8 @@ TEST_F(DevicePrivateComp, AChainTakesCompressedMemoryAndMovesEveryLevelToPlain)
     ASSERT_TRUE(chain.chain);
     EXPECT_EQ(chain.chain->va, chain.va);
     EXPECT_NE(chain.va, compressed);
+    ASSERT_TRUE(raw::chainLevelImage(chain, 1, level));
+    EXPECT_FALSE(level.comptags);
     const auto launched = copies(jobs);
     for (uint32_t level = 0; level < layout.levels; level++)
         EXPECT_NE(std::find(launched.begin(), launched.end(),

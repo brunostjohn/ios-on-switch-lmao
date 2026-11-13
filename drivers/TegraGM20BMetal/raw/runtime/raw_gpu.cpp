@@ -7517,6 +7517,7 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     out = Texture();
     out.storage = t.storageRange();
     out.va = d.va;
+    out.comptags = t.comptags;  // a level is rendered and filled with the chain's compression
     out.width = t.chain->layout.level[level].width;
     out.height = d.height;
     out.format = t.format;

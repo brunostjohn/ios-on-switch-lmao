@@ -7,6 +7,7 @@ import Metal
 /// the device lays out on compressed memory, made until it binds some, drawn and read whole, against the same work with
 /// compression held off. `<arm>_made` is its comptags when made, `<arm>_compressed` after the work, `<arm>_paths` the
 /// command buffers' paths; it fails where the bytes differ, the target was not compressed or the work left the raw path.
+/// The mips arm draws into level 1 after generating the levels, the 3D engine's target there a level of the chain.
 extension PrivateCompressionTest {
     struct ShapeRun {
         var bytes: [UInt8] = []
@@ -90,13 +91,14 @@ extension PrivateCompressionTest {
         /// The pattern over all of `target` (`half`: its left half, the slice's own clear colour, or `clear`'s, beside it;
         /// `slant`: a left part whose right edge crosses pixels, so their samples differ)
         func draw(
-            _ target: MTLTexture, slice: Int = 0, half: Bool = false, slant: Bool = false,
+            _ target: MTLTexture, slice: Int = 0, level: Int = 0, half: Bool = false, slant: Bool = false,
             state: MTLRenderPipelineState? = nil, clear: Int? = nil
         ) -> (MTLCommandBuffer) -> Void {
             { commands in
                 let p = MTLRenderPassDescriptor()
                 p.colorAttachments[0].texture = target
                 p.colorAttachments[0].slice = slice
+                p.colorAttachments[0].level = level
                 p.colorAttachments[0].loadAction = .clear
                 p.colorAttachments[0].clearColor = Self.sliceClears[(clear ?? slice) % Self.sliceClears.count]
                 p.colorAttachments[0].storeAction = .store
@@ -122,6 +124,7 @@ extension PrivateCompressionTest {
                     blit.generateMipmaps(for: target)
                     blit.endEncoding()
                 }.path)
+            run.paths.append(try await gpu.run(draw(target, level: 1, half: true, clear: 1)).path)
             for level in 0..<target.mipmapLevelCount {
                 run.bytes += try await gpu.read(target, bytesPerPixel: 4, level: level)
             }
