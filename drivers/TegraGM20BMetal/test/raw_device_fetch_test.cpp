@@ -38,13 +38,15 @@ raw::RuntimeRecord fetchingRecord(uint64_t key, bool storage)
 
 class DeviceFetch : public harness::DeviceTest {
 protected:
-    raw::Texture target;
+    raw::Texture target, small;
+    raw::Texture *into = &target;
     raw::Buffer indices, arguments;
 
     void SetUp() override
     {
         DeviceTest::SetUp();
         ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, target));
+        ASSERT_TRUE(dev.createTexture(32, 32, kRGBA8, small));
         ASSERT_TRUE(dev.createBuffer(4096, indices));
         ASSERT_TRUE(dev.createBuffer(256, arguments));
         const uint16_t strip[] = {0, 1, 2, 3, 0xffff, 4, 5, 6, 7};
@@ -79,7 +81,7 @@ protected:
         if (!cb)
             return d;
         raw::PassDesc pass;
-        pass.color[0].texture = &target;
+        pass.color[0].texture = into;
         pass.color[0].load = raw::ColorAttachment::Load;
         pass.count = 1;
         pass.storageMask = pl->storageBits;
@@ -173,6 +175,38 @@ TEST_F(DeviceFetch, TheBarrierFormDrawsAStripATriangleAtATime)
     EXPECT_EQ(s.interlocked, 0u);
     EXPECT_EQ(s.split, 1u);
     EXPECT_EQ(s.triangles, 8u);
+}
+
+// Rule fetch.twin (raw_twin_rule.h): a storage form's strip over a measured render area is drawn by its barrier twin a
+// triangle at a time; every shape the twin's draw would refuse, and a smaller area, stay whole inside the interlock
+TEST_F(DeviceFetch, TheTwinRuleTakesTheTwinOnlyWhereItsDrawKeepsEveryShape)
+{
+    raw::Pipeline *pl = pipeline(true), *twin = pipeline(false);
+    ASSERT_NE(pl, nullptr);
+    ASSERT_NE(twin, nullptr);
+    pl->barrierTwin = twin;
+    const std::atomic<uint64_t> &taken = dev.stats.fetch.twinRule;
+    const uint64_t before = taken;
+    const Drawn s = strip(pl);
+    EXPECT_TRUE(s.ok) << s.why;
+    EXPECT_EQ(s.interlocked, 0u);
+    EXPECT_EQ(s.split, 1u);
+    EXPECT_EQ(s.triangles, 8u);
+    EXPECT_EQ(taken - before, 1u);
+    const uint32_t args[5] = {9, 1, 0, 0, 0};
+    memcpy(static_cast<uint8_t *>(arguments.cpu) + 16, args, sizeof args);
+    for (const auto &[name, drawn] :
+         {std::pair{"restart", restart(pl)}, std::pair{"instanced", instanced(pl)}, std::pair{"indirect", indirect(pl)},
+          std::pair{"indexed indirect", indexedIndirect(pl)}}) {
+        EXPECT_TRUE(drawn.ok) << name << ": " << drawn.why;
+        EXPECT_EQ(drawn.interlocked, 1u) << name;
+        EXPECT_EQ(drawn.split, 0u) << name;
+    }
+    into = &small;
+    const Drawn below = strip(pl);
+    EXPECT_TRUE(below.ok) << below.why;
+    EXPECT_EQ(below.interlocked, 1u) << "32x32 is under the smallest area measured";
+    EXPECT_EQ(taken - before, 1u);
 }
 
 TEST_F(DeviceFetch, TheBarrierFormRefusesWhatOneTriangleADrawCannotKeep)

@@ -101,6 +101,7 @@
     d[@"fetch_rung2"] = @(fetch.fetchFree[0].load());
     d[@"fetch_rung3"] = @(fetch.fetchFree[1].load());
     d[@"fetch_blend_twin"] = @(fetch.blendTwin.load());
+    d[@"fetch_twin_rule"] = @(fetch.twinRule.load());
     for (size_t r = 1; r < raw::kFetchRefusals; r++) {
         if (const uint64_t n = fetch.refusedAtRecord[r].load())
             d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);

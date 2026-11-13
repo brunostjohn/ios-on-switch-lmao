@@ -97,6 +97,7 @@
 #include "raw_rotation.h"
 #include "raw_viewports.h"
 #include "raw_turn_copy.h"
+#include "raw_twin_rule.h"
 #include "raw_stencil_bits.h"
 #include "raw_reach.h"
 #include "raw_draw_bands.h"
@@ -513,8 +514,8 @@ struct Pipeline {
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
-    // a storage form that computes the pipeline's blend: its barrier form, placed in debug builds only and drawn only where
-    // the probe forces it (raw_fetch_rungs.h kProbeBlendTwinTriangles, kProbeBlendTwinWhole)
+    // a storage form that computes the pipeline's blend: its barrier form, which a draw takes only a triangle at a time
+    // (rule fetch.twin, raw_twin_rule.h), not where an attachment cannot be viewed as its storage images
     Pipeline *blendTwin = nullptr;
     // a state of bind-stride vertex streams: the same state with those layouts pulled in the shader (RuntimeRecord's
     // strideTwin), which a draw takes where a stream's bind stride is past SET_VERTEX_STREAM_A_FORMAT's 12 bits
@@ -1230,8 +1231,9 @@ public:
     void clearRegion(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const float rgba[4]);
 
 private:
-    // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
-    Pipeline *formFor(Pipeline *pl);
+    // `pl`, its fetch-free form where its rung's rule holds, else its barrier twin where an attachment of this pass cannot
+    // be viewed as one of its storage images or rule fetch.twin (raw_twin_rule.h) takes the draw's shape
+    Pipeline *formFor(Pipeline *pl, const FetchDraw &shape);
     Pipeline *fetchFreeFor(const Pipeline &pl);
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;

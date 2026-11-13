@@ -1119,7 +1119,7 @@ void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
 // the pipeline's blend has no barrier twin to fall back on: its barrier form leaves the blend to the ROP after a fetch
 // outside the interlock, which keeps Metal's result only drawn a triangle at a time. A pass it cannot view as its storage
 // images refuses its draws (RenderEncoder::prepare), as Metal fails a state drawn into attachments it was not made for.
-// Debug builds place that form as its blendTwin, which only the probe draws, to measure it against the storage form.
+// That form is its blendTwin, which a draw takes a triangle at a time where rule fetch.twin holds (raw_twin_rule.h).
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     Pipeline *pl = placePipeline(keyHash, form, caTransform);
@@ -1131,10 +1131,6 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     }
     if (form != PackForm::Default || !pl || !pl->storageBits)
         return pl;
-#if defined(SWITCH_DEBUG) && !SWITCH_DEBUG
-    if (pl->storageBlendBits)
-        return pl;
-#endif
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
     std::lock_guard<raw::Mutex> l(lock_);
     if (twin && twin != pl && !twin->storageBits)
@@ -1179,14 +1175,13 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
             pl = placeRecord(*rec, caTransform);
         }
         // a storage form's barrier twin, as Device::pipeline gives a state's own
-        const PackPipeline *barrier = pl && pl->storageBits && !pl->storageBlendBits
-                                          ? pack_.variantRecord(keyHash, name, PackForm::Barrier)
-                                          : nullptr;
+        const PackPipeline *barrier =
+            pl && pl->storageBits ? pack_.variantRecord(keyHash, name, PackForm::Barrier) : nullptr;
         if (usableRecord(barrier)) {
             std::lock_guard<raw::Mutex> l(lock_);
             Pipeline *twin = placeRecord(*barrier, caTransform);
             if (twin && twin != pl && !twin->storageBits)
-                pl->barrierTwin = twin;
+                (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
         }
         out.emplace_back(name, pl);
     }
@@ -5256,7 +5251,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             return draw(primitive, first, count, instances, baseInstance, why);
         });
     RAW_ENCODE_SPAN(Draw);
-    Pipeline *pl = formFor(pipeline_);
+    Pipeline *pl = formFor(pipeline_, {primitive, count, instances, false, false});
     if (!pl)
         return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
     called_ = true;
@@ -5419,11 +5414,12 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
     return free;
 }
 
-Pipeline *RenderEncoder::formFor(Pipeline *pl)
+Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
+    uint8_t forced = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (const uint8_t forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
-        pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
+    forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
+    if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
         if (Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin) {
             dev_->stats.fetch.blendTwin++;
             return twin;
@@ -5439,8 +5435,13 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl)
         return pl->barrierTwin;
 #endif
     const StorageFallback reason = storageFallback(*pl);
-    if (reason == StorageFallback::None)
-        return pl;
+    if (reason == StorageFallback::None) {
+        Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin;
+        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
+            return pl;
+        RAW_DIAGNOSTIC(dev_->stats.fetch.twinRule++);
+        return twin;
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const StorageFallback counted = pl->barrierTwin ? reason : StorageFallback::NoTwin;
     dev_->stats.fetch.storageFallback[size_t(counted)]++;
@@ -5476,7 +5477,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why);
         });
     RAW_ENCODE_SPAN(Draw);
-    Pipeline *pl = formFor(pipeline_);
+    Pipeline *pl = formFor(pipeline_, {primitive, count, instances, false, true});
     if (!pl)
         return true;
     called_ = true;
@@ -5613,7 +5614,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
-    Pipeline *form = formFor(pipeline_);
+    Pipeline *form = formFor(pipeline_, {primitive, 0, 1, true, indexed});
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {primitive, 0, 1, true});
@@ -5700,7 +5701,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_ || !x.count)
         return true;
-    Pipeline *form = formFor(pipeline_);
+    Pipeline *form = formFor(pipeline_, {x.primitive, 0, 1, true, true});
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {x.primitive, 0, 1, true});

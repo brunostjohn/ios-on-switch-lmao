@@ -16,8 +16,8 @@ constexpr bool fixedBlendProven()
 // A debug build's probe values (Device::probeFetchRung) past the rungs: a fetching state drawn by its barrier twin instead
 // of its storage form (a blended storage form's blendTwin, else its barrierTwin), which reads the colour through the
 // texture unit behind the fetch barrier and leaves any blend to the ROP: one barrier a triangle (each ordered after the
-// one before) or one for the whole draw (its triangles not ordered among themselves). No rule takes the twin until the
-// device has measured both against the storage form (HW Test gpu.raw.blend_twin).
+// one before) or one for the whole draw (its triangles not ordered among themselves). Rule fetch.twin (raw_twin_rule.h)
+// takes the first where HW Test gpu.raw.blend_twin measured it cheaper; 4 keeps the storage form.
 constexpr uint8_t kProbeBlendTwinTriangles = 5, kProbeBlendTwinWhole = 6;
 
 // Rung 2, rule fetch.blend: the ROP's blend. GM20B's blender is exact integer arithmetic on the source and source alpha

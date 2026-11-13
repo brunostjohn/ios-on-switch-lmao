@@ -233,6 +233,8 @@
 #                     texture header, and HW Test's notify words
 #   raw_fetch_order_test  raw/runtime/raw_fetch_order.h: the fetching draws refused as they are recorded (their encoder
 #                     alone goes to m2v) and those drawn a triangle at a time
+#   raw_twin_rule_test  raw/runtime/raw_twin_rule.h: the draws a storage form's barrier twin takes a triangle at a time,
+#                     none of them a shape the twin's draw refuses
 #   raw_record_liveness_test  raw/runtime/raw_record_parts.h: a fetch no program of the record reads leaves it
 #   raw_record_samplers_test  raw/runtime/raw_record.h: a record's constexpr entries index its own sampler headers whoever
 #                     made it (runtime, native seed), and the device places each header, the pack's first, once
@@ -3476,6 +3478,19 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_order.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_key_tally.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_storage_form.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_twin_rule_test",
+    srcs = [
+        "raw_twin_rule_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_order.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_key_tally.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_storage_form.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_twin_rule.h",
     ],
     cxx_std = "c++17",
 )
