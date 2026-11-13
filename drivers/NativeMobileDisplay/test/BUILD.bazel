@@ -80,6 +80,7 @@ host_test(
     srcs = [
         "vsync_phase_test.cpp",
         "//drivers/NativeMobileDisplay:VsyncPhase.h",
+        "//drivers/TegraDisplayFlip:SwitchRouteBackoff.h",
     ],
 )
 

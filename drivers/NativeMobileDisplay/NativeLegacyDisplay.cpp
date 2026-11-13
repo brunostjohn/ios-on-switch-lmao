@@ -874,9 +874,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
     // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
-    // frame. Never booted: V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after
-    // kPhaseProbeFlips latched flips with it programmed, one line and the phase is off for the boot. Once it has, a silent one
-    // panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the stats are debug only).
+    // frame. V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after VsyncPhaseProbe::kFlips
+    // latched flips with it programmed, one line and the phase is held off for the probe's run, then probed again. Once it
+    // has, a silent one panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the
+    // stats are debug only). Core Animation registers no vsync client on a J120 or a J181 (watchVsync).
     VsyncPhase phase;
     uint64_t vpulseTime = 0, vpulseContinuous = 0, deliveredFrame = ~0ULL;
     uint64_t vsyncSentAt = 0;  // the frame timeline: the last vsync sent (its stamp), and the CPU clock then
@@ -885,11 +886,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int32_t phaseCorrection = 0;  // lines, from the measured lead against the asked-for one
     uint32_t vblankLine = 0, totalLines = 0, phaseLine = 0, phaseAsked = 0, measuredLeadUs = 0;
     uint32_t deliveredSource = 0;  // the last vsync's: 0 at V_BLANK, else V_PULSE2's line
-    unsigned phaseProbe = 0, vpulseSilent = 0;
+    unsigned vpulseSilent = 0;
+    static inline VsyncPhaseProbe phaseProbe;  // static: the instance is at the 16 KiB a kalloc_type class may have
     unsigned phaseSettle =
         0;  // latched flips to wait after a new line before measuring it (it latches with the next flip)
-    bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false, phaseFailed = false;
-    static constexpr unsigned kPhaseProbeFlips = 5;
+    bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false;
     // Hardware rotation (NativeScanout.h). The CPU stops rotating: each client frame is
     // swizzled, unrotated, into the block-linear extent of the boot framebuffer and window A column-scans it. The first such
     // frame switches window A (four registers, latched at a frame boundary); the frame ends after it confirm the latch, read the
@@ -1515,7 +1516,7 @@ private:
             // Powered down for SC7: the resume's scanout restart unmasks V_BLANK for an armed tick. V_PULSE2 (r17-touch's
             // vsync phase) likewise, once programmed: a latched one from before is stale.
             if (!hwSuspended) {
-                const uint32_t bits = kVblankInt | (vpulseProgrammed && !phaseFailed ? kVpulse2Int : 0);
+                const uint32_t bits = kVblankInt | (vpulseProgrammed && phaseProbe.on() ? kVpulse2Int : 0);
                 dc[kDcIntStatus] = bits;
                 writeIntMask(0, bits);
             }
@@ -1884,15 +1885,16 @@ private:
         // r17-touch: the vsync phase: the lead in effect (0: at V_BLANK), the line, the lead V_PULSE2 gave, the last window's
         // response p99, margin and miss floor, and its misses this boot.
         const char *phaseState = "at V_BLANK";
-        if (phaseFailed) {
-            phaseState = "off";
+        if (!phaseProbe.on()) {
+            phaseState = "held off";
         } else if (phaseDelivering()) {
             phaseState = "on";
         }
-        add("; phase %s lead %u us (line %u, measured %llu/%llu us), p99 %u margin %u floor %u, misses %u", phaseState,
-            phase.lead(), phaseLine, static_cast<unsigned long long>(stPhaseLead.meanUs()),
+        add("; phase %s lead %u us (line %u, measured %llu/%llu us), p99 %u margin %u floor %u, misses %u, held %u "
+            "retried %u",
+            phaseState, phase.lead(), phaseLine, static_cast<unsigned long long>(stPhaseLead.meanUs()),
             static_cast<unsigned long long>(stPhaseLead.maxUs()), phase.lastP99(), phase.marginUs(), phase.floorUs(),
-            phase.missCount());
+            phase.missCount(), phaseProbe.hold.failures, phaseProbe.hold.retries);
         stPhaseLead = Span{};
         if (quiet)
             add("%s", "; quiet (the next quiet windows are not logged)");
@@ -1951,7 +1953,7 @@ private:
     // while a lead is in effect and nothing turned the phase off.
     bool phaseDelivering() const
     {
-        return vpulseSeen && !phaseFailed && (phase.lead() != 0u);
+        return vpulseSeen && phaseProbe.on() && (phase.lead() != 0u);
     }
 
     void vpulseNotify()
@@ -2064,7 +2066,7 @@ private:
 
     void programPhase(uint32_t leadUs)
     {
-        if (!dc || hwSuspended || phaseFailed || !totalLines || !lineNs())
+        if (!dc || hwSuspended || !phaseProbe.on() || !totalLines || !lineNs())
             return;
         const int64_t back = (static_cast<int64_t>(leadUs) * 1000 - feAfterVblankNs) / static_cast<int64_t>(lineNs());
         int64_t line = static_cast<int64_t>(vblankLine) - back - phaseCorrection;
@@ -2084,7 +2086,7 @@ private:
             if (vsyncArmed)
                 writeIntMask(0, kVpulse2Int);  // else armVsync unmasks it
             vpulseProgrammed = true;
-            phaseProbe = 0;
+            phaseProbe.programmed();
         }
     }
 
@@ -2092,8 +2094,17 @@ private:
     // never-booted check (V_PULSE2 programmed, flips latched, not one V_PULSE2).
     void notePhasePresent(uint64_t stamp, const FrameMark &mark)
     {
-        if (phaseFailed || !mark.submit || !mark.ready || !vsyncOf(mark))
+        if (!mark.submit || !mark.ready || !vsyncOf(mark))
             return;
+        const VsyncPhaseProbe::Step step = phaseProbe.flip(vpulseProgrammed, vpulseSeen);
+        if (step == VsyncPhaseProbe::kHeld)
+            return;
+        if (step == VsyncPhaseProbe::kRetry && !readPhaseTiming())
+            return;
+        if (step == VsyncPhaseProbe::kFailed) {
+            phaseOffForRun();
+            return;
+        }
         if (vsyncInterval)
             phase.setPeriod(static_cast<uint32_t>(Span::ticksToUs(vsyncInterval)));
         if (phaseSettle)
@@ -2101,19 +2112,42 @@ private:
         phase.present(Span::ticksToUs(mark.submit), Span::ticksToUs(mark.ready), Span::ticksToUs(stamp));
         if (phase.lead())
             programPhase(phase.lead());
-        if (!vpulseProgrammed || vpulseSeen || ++phaseProbe < kPhaseProbeFlips)
-            return;
-        phaseFailed = true;
+    }
+
+    // V_PULSE2 programmed and not seen in VsyncPhaseProbe::kFlips flips: unprogrammed, the vsync at V_BLANK for the
+    // probe's run; the next lead programs it again.
+    void phaseOffForRun()
+    {
         writeIntMask(kVpulse2Int, 0);
         dc[kDcIntEnable] = dc[kDcIntEnable] & ~kVpulse2Int;
+        vpulseProgrammed = false;
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
-        IOLog("SwitchDisplay: vsync phase off for this boot: V_PULSE2 never reached the CPU in %u flips (line %u; "
-              "SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s); vsync stays at V_BLANK\n",
-              phaseProbe, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+        IOLog("SwitchDisplay: V_PULSE2 never reached the CPU in %u flips (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 "
+              "%#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s): vsync phase held off for %u flips, vsync at V_BLANK\n",
+              VsyncPhaseProbe::kFlips, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
               static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
               static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
-              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic, phaseProbe.hold.run);
+    }
+
+    // The frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment). False, with one line, when DC A's
+    // timing places no V_BLANK line: the phase is held off for the probe's run and read again after it.
+    bool readPhaseTiming()
+    {
+        const auto vertical = [this](uint32_t reg) {
+            return dc[reg] >> 16 & 0x1fff;
+        };
+        vblankLine = vertical(kDcDispRefToSync) + vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) +
+                     vertical(kDcDispActive);
+        totalLines = vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) + vertical(kDcDispActive) +
+                     vertical(kDcDispFrontPorch);
+        if (vblankLine >= 64 && totalLines >= vblankLine - vertical(kDcDispRefToSync))
+            return true;
+        phaseProbe.timingUnusable();
+        IOLog("SwitchDisplay: DC A timing reads V_BLANK line %u of %u lines: vsync phase held off for %u flips\n",
+              vblankLine, totalLines, phaseProbe.hold.run);
+        return false;
     }
 
     // The compositor has no vsync client any more: it has nothing to draw until it registers again.
@@ -2177,19 +2211,7 @@ private:
         dc[kDcIntEnable] = dcEnable | kVblankInt | kFrameEndInt;
         writeIntMask(~0u, (dcMask & ~kVblankInt) | kFrameEndInt);
         intMaskLive = true;
-        // r17-touch: the frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment).
-        const auto vertical = [this](uint32_t reg) {
-            return dc[reg] >> 16 & 0x1fff;
-        };
-        vblankLine = vertical(kDcDispRefToSync) + vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) +
-                     vertical(kDcDispActive);
-        totalLines = vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) + vertical(kDcDispActive) +
-                     vertical(kDcDispFrontPorch);
-        if (vblankLine < 64 || totalLines < vblankLine - vertical(kDcDispRefToSync)) {
-            IOLog("SwitchDisplay: vsync phase off for this boot: DC A timing reads V_BLANK line %u of %u lines\n",
-                  vblankLine, totalLines);
-            phaseFailed = true;
-        }
+        readPhaseTiming();
         vblankSource->enable();
         vsyncTimer->setTimeoutMS(250);
         IOLog("SwitchDisplay: vsync from the DC A vblank interrupt (INTID %u)\n", kDisplayAInterrupt);

@@ -26,6 +26,7 @@
 // so the frames before it had nothing new to show (a client drawing at 20 Hz, r8a's clock widget), not a late compositor.
 #pragma once
 #include <stdint.h>
+#include "../TegraDisplayFlip/SwitchRouteBackoff.h"
 
 class VsyncPhase {
 public:
@@ -254,4 +255,56 @@ private:
             leadUs = leadUs - target > kStepUs ? leadUs - (half > kStepUs ? half : kStepUs) : target;
         }
     }
+};
+
+// The V_PULSE2 probe (NativeLegacyDisplay): programmed, it has to reach the CPU within kFlips flips latched with a vsync
+// client. When it does not, the phase is held off for the hold's run of such flips and then probed again; a DC A timing
+// it cannot place a line in holds it off the same way.
+class VsyncPhaseProbe {
+public:
+    static constexpr unsigned kFlips = 5;
+
+    enum Step {
+        kRun,     // the phase runs
+        kHeld,    // held off: vsync stays at V_BLANK
+        kRetry,   // the run ended: program V_PULSE2 again
+        kFailed,  // programmed, not seen in kFlips flips: unprogram it
+    };
+
+    SwitchRouteBackoff<600, 9600, 3600> hold;
+
+    // A flip latched with a vsync client.
+    Step flip(bool programmed, bool seen)
+    {
+        if (!hold.on())
+            return hold.clean() ? kRetry : kHeld;
+        if (!programmed || seen || ++flips < kFlips)
+            return kRun;
+        flips = 0;
+        hold.fail();
+        return kFailed;
+    }
+
+    void programmed()
+    {
+        flips = 0;
+    }
+
+    void timingUnusable()
+    {
+        hold.fail();
+    }
+
+    bool on() const
+    {
+        return hold.on();
+    }
+
+    unsigned probed() const
+    {
+        return flips;
+    }
+
+private:
+    unsigned flips = 0;
 };
