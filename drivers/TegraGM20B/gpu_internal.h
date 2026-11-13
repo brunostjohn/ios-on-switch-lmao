@@ -445,6 +445,9 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 /* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_RELOAD. 1 if an engine was reset under chan's context
  * load; a second stuck load with nothing completed since panics. */
 int tgm_load_recover_locked(struct tgm_chan *chan, const char *who);
+/* gpu_reload.c, tgm_live_lock held: at a hang check, the preempt a hold owed a live channel it left on its PBDMA
+ * (tgm_recover_owed), asked for before any channel is blamed. 1 if it was. */
+int tgm_owed_recover_locked(const struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns);
 int tgm_chid_unowned(int chid);
 /* gpu_reload.c, tgm_live_lock held: tgm_hang_recover's TGM_HANG_KERNEL for kernel channel `stuck`, which `late`'s wait
  * (who, seqno, waited_ns) found, moved_ns the last completion of a live channel: its cut work marked to be redone and

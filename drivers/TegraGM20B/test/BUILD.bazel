@@ -52,6 +52,12 @@
 #   gm20b_eng_reset_order_test  recover_engine.c's hold of the PBDMA's ENG_RESET over a model of an engine reset and
 #                            the interrupt pass: at every point the pass can run, the PBDMA goes on only once the engine is
 #                            back, its live channel preempted, a killed one's method dropped
+#   gm20b_bystander_test     one client's kill with other clients' work on runlist 0 (gm20b_bystander_model.h): boot 21's
+#                            reset, a bystander mid-copy, one on PBDMA0 with a method pending while another preempt is in
+#                            flight, two bystanders and every such state: no other channel killed or its work lost
+#   gm20b_owed_preempt_test  recover_engine.c's owed preempt as the kernel builds it, run with interrupts off: asked once
+#                            no preempt is in flight and while its channel is on the PBDMA, never during a hold, and no
+#                            lock, sleep or allocation
 #   gm20b_view_merge_test    TegraGM20BViewMerge.h: a CPU write lock's unlock keeps the bytes a GPU write left where the
 #                            CPU wrote none, byte by byte
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
@@ -569,6 +575,48 @@ host_test(
     name = "gm20b_eng_reset_order_test",
     srcs = [
         "gm20b_eng_reset_order_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_bystander_test",
+    srcs = [
+        "gm20b_bystander_model.h",
+        "gm20b_bystander_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    ],
+    cxx_std = "c++17",
+)
+
+# recover_engine.c's owed preempt and its locked entry as the kernel builds them, so the test runs them under
+# switch_gpu_interrupts_off_stubs.h.
+genrule(
+    name = "owed_preempt_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:recover_engine.c"],
+    outs = ["owed_preempt_source.h"],
+    cmd = """
+set -e
+awk '/^static enum tgm_owed owed_preempt\\(/ || /^int tgm_recover_owed\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
+grep -q 'nvkm_wr32(device, PFIFO_PREEMPT' $@
+grep -q spin_lock_irqsave $@
+""",
+)
+
+host_test(
+    name = "gm20b_owed_preempt_test",
+    srcs = [
+        "gm20b_owed_preempt_test.cpp",
+        "switch_gpu_interrupts_off_stubs.h",
+        ":owed_preempt_source",
         "//drivers/TegraGM20B:TegraGM20BAcquire.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BKernelHang.h",

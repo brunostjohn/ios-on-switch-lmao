@@ -224,6 +224,36 @@ static inline enum tgm_reset_pbdma tgm_reset_pbdma(uint32_t pbdma_status, int al
 	return alive ? TGM_RESET_PBDMA_LIVE : TGM_RESET_PBDMA_DEAD;
 }
 
+/* PFIFO_PREEMPT takes one preempt at a time, so a hold that finds another channel's in flight (preempt: the register at
+ * the hold) leaves the PBDMA's live channel chid on it through the reset. An engine reset under a PBDMA that is not halted
+ * raises ENG_RESET on its channel, which NVIDIA's dev_pbdma.ref calls potentially fatal for that channel; acknowledged,
+ * the PBDMA can stay on the channel's method with no engine switching to take it. A preempt of the channel takes it off
+ * the PBDMA and its next load delivers the method, so the channel is owed one: chid, else -1. */
+static inline int tgm_reset_owed(enum tgm_reset_pbdma was, uint32_t preempt, int chid)
+{
+	if (was != TGM_RESET_PBDMA_LIVE || !(preempt & PFIFO_PREEMPT_PENDING))
+		return -1;
+	return !(preempt & PFIFO_PREEMPT_TSG) && (int)PFIFO_PREEMPT_ID(preempt) == chid ? -1 : chid;
+}
+
+/* An owed preempt (tgm_reset_owed) is asked for once no preempt is in flight, while its channel is still on a PBDMA
+ * (on) and alive; one that left the PBDMA was saved out whole and is owed nothing. */
+enum tgm_owed {
+	TGM_OWED_NONE,
+	TGM_OWED_WAITS, /* another preempt still in flight */
+	TGM_OWED_ASK,
+	TGM_OWED_SETTLED, /* off the PBDMA or killed since */
+};
+
+static inline enum tgm_owed tgm_owed_step(int owed, uint32_t preempt, int on, int alive)
+{
+	if (owed < 0)
+		return TGM_OWED_NONE;
+	if (preempt & PFIFO_PREEMPT_PENDING)
+		return TGM_OWED_WAITS;
+	return on && alive ? TGM_OWED_ASK : TGM_OWED_SETTLED;
+}
+
 /* Engine resets nest (recover.c's reset of GR goes through GR's own reset): the outermost hold masks ENG_RESET and the
  * outermost release acknowledges and unmasks it. *holds is device->intr.lock's, so the interrupt pass never sees the bit
  * while a reset holds it. */
@@ -243,6 +273,12 @@ void tgm_recover_reset_hold(struct nvkm_engine *engine);
 void tgm_recover_reset_release(struct nvkm_engine *engine);
 /* recover.c's PBDMA handler: an ENG_RESET no hold masked, from a reset nvkm made without one */
 void tgm_eng_reset_intr(struct nvkm_device *device, struct nvkm_runq *runq);
+/* The preempt a hold owed the live channel it left on its PBDMA (tgm_reset_owed), asked for if tgm_owed_step says so:
+ * at the release, after nvkm_runl_rc's wait for the preempt in flight, at the end of a context-switch timeout's work and
+ * at a hang check. Returns the channel asked for, else -1. */
+int tgm_recover_owed(struct nvkm_device *device);
+/* nouveau's nvkm_runl_rc, after its wait for the preempt in flight: tgm_recover_owed */
+void tgm_recover_owed_preempt(struct nvkm_runl *runl);
 /* As nvkm_runl_rc resets an engine: runlist blocked, the engine reset under a hold, exception state cleared, runlist let
  * go. runl->mutex held, and the engine found holding hardware channel id under it. */
 void tgm_engine_reset_locked(struct nvkm_runl *runl, struct nvkm_engn *engn, int id,
