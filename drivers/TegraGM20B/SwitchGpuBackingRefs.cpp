@@ -37,10 +37,15 @@ const switch_gpu_backing_timeline_refs *switch_gpu_backing_timeline_ops(uint32_t
 		       : nullptr;
 }
 
+int switch_gpu_backing_held_status(const switch_gpu_backing_token &token, const void *handle)
+{
+	if (handle)
+		if (const auto *ops = switch_gpu_backing_timeline_ops(token.engine))
+			return ops->status(handle, &token);
+	return switch_gpu_backing_token_status(&token);
+}
+
 int switch_gpu_backing_access_status(const switch_gpu_backing_access &access)
 {
-	if (access.handle)
-		if (const auto *ops = switch_gpu_backing_timeline_ops(access.token.engine))
-			return ops->status(access.handle, &access.token);
-	return switch_gpu_backing_token_status(&access.token);
+	return switch_gpu_backing_held_status(access.token, access.handle);
 }

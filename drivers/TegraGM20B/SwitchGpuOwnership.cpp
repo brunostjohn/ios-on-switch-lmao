@@ -88,12 +88,14 @@ void switch_gpu_backing_note_failure_locked(const switch_gpu_backing *backing,
 void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
 {
 	if (backing->host_acquire.engine) {
-		const int acquired = switch_gpu_backing_token_status(&backing->host_acquire);
+		const int acquired = switch_gpu_backing_held_status(backing->host_acquire,
+								    backing->host_acquire_handle);
 		if (acquired) {
 			if (acquired == 1 && backing->host_acquire_epoch == backing->host_epoch)
 				backing->host_visible_epoch = backing->host_epoch;
 			switch_gpu_backing_drop_token(backing->host_acquire);
 			backing->host_acquire = {};
+			backing->host_acquire_handle = nullptr;
 		}
 	}
 	bool pending = false;
@@ -144,9 +146,16 @@ bool sweep_wanted(const switch_gpu_backing_use *uses, uint32_t count)
 }
 
 // An engine with timeline references takes the job's at once, after every use is checked: one for each record commit
-// adds (one it replaces is on the same timeline, and passes its reference on) and each host acquire it takes.
-int retain_completion(switch_gpu_backing_transaction *transaction, uint32_t refs)
+// adds (one it replaces is on the same timeline and passes its reference on) and each host acquire. A job that only
+// replaces records takes none and finds the timeline's handle in a record it replaces: its timeline's lock is taken when
+// it first records on a backing, never on every job.
+int retain_completion(switch_gpu_backing_transaction *transaction, uint32_t refs,
+		      const void *replaced)
 {
+	if (!refs && replaced) {
+		transaction->handle = replaced;
+		return 0;
+	}
 	const int result =
 		transaction->timeline->retain(&transaction->completion, refs, &transaction->handle);
 	if (!result)
@@ -213,6 +222,7 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 		switch_gpu_backing_retain(uses[i].backing);
 	int result = 0;
 	uint32_t matched_leases = 0, refs = 0;
+	const void *replaced = nullptr;
 	for (uint32_t i = 0; i < unique; ++i) {
 		IOLockLock(uses[i].backing->lock);
 		++transaction->locked;
@@ -254,8 +264,10 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 							     *completion) &&
 			    !switch_gpu_backing_later(*completion, backing->accesses[j].token))
 				result = -22;
-		const bool fresh =
-			access_slot(backing, *completion, uses[i].access) == backing->access_count;
+		const uint32_t slot = access_slot(backing, *completion, uses[i].access);
+		const bool fresh = slot == backing->access_count;
+		if (!fresh && !replaced)
+			replaced = backing->accesses[slot].handle;
 		if (!result && fresh)
 			result = reserve_access(backing);
 		if (!result && !transaction->timeline)
@@ -285,7 +297,7 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 	if (!result && matched_leases != lease_count)
 		result = -22;
 	if (!result && transaction->timeline)
-		result = retain_completion(transaction, refs);
+		result = retain_completion(transaction, refs, replaced);
 	if (result)
 		switch_gpu_backing_abort(transaction);
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)

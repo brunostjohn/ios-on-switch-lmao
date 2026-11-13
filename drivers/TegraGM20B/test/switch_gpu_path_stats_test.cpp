@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // SwitchGpuPathStats.cpp in a debug kernel: a SubmitJob's path counts (runJobUses' switch_gpu_path_job and four
-// switch_gpu_path_taken) cost no lock once the process has its slot, and each process still reads its own counts.
+// switch_gpu_path_taken) cost no lock and no atomic read-modify-write once the process has its slot: each CPU stores its
+// own cells with preemption off. Each process still reads its own counts, summed over the CPUs it counted on.
 #include <gtest/gtest.h>
 #include <cstdio>
 #include <string>
@@ -70,12 +71,31 @@ TEST(PathStats, AProcessWithItsSlotCountsAJobWithoutALock)
 		static_cast<unsigned long long>(first), static_cast<unsigned long long>(next));
 	EXPECT_LE(first, 1u);
 	EXPECT_EQ(next, 0u);
+	EXPECT_EQ(preemptionOff(), 0);
 	const std::string counts = line();
 	EXPECT_NE(counts.find("pid=4242 "), std::string::npos) << counts;
 	EXPECT_NE(counts.find(" submit_jobs=101 "), std::string::npos) << counts;
 	EXPECT_NE(counts.find(" shared_uses=6060 "), std::string::npos) << counts;
 	EXPECT_NE(counts.find(" ranged_uses=6060 "), std::string::npos) << counts;
 	EXPECT_NE(counts.find(" internal_jobs=101 "), std::string::npos) << counts;
+}
+
+TEST(PathStats, AProcessCountsOnEveryCpuItRunsOnAndTheWindowSumsThem)
+{
+	pid = 777;
+	char text[1024];
+	switch_gpu_path_window(text, sizeof(text));
+	for (int cpu = 0; cpu < 4; ++cpu) {
+		hostCpu() = cpu;
+		submit_job(10);
+	}
+	hostCpu() = 0;
+	EXPECT_NE(line().find(" submit_jobs=4 "), std::string::npos) << line();
+	EXPECT_NE(line().find(" shared_uses=40 "), std::string::npos) << line();
+	switch_gpu_path_window(text, sizeof(text));
+	EXPECT_NE(std::string(text).find("submit_jobs=4 "), std::string::npos) << text;
+	switch_gpu_path_window(text, sizeof(text));
+	EXPECT_NE(std::string(text).find("submit_jobs=0 "), std::string::npos) << text;
 }
 
 TEST(PathStats, EachProcessReadsItsOwnAndTheLeastRecentGivesUpItsSlot)

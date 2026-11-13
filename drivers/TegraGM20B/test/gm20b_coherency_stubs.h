@@ -54,6 +54,34 @@ inline IOLock *IOLockAlloc()
 	return new IOLock;
 }
 
+// The CPU a thread runs on (a test may move it), and its preemption level, which no IOLock may be taken under
+inline int &hostCpu()
+{
+	static thread_local int cpu;
+	return cpu;
+}
+
+inline int &preemptionOff()
+{
+	static thread_local int level;
+	return level;
+}
+
+extern "C" inline int cpu_number(void)
+{
+	return hostCpu();
+}
+
+extern "C" inline void _disable_preemption(void)
+{
+	++preemptionOff();
+}
+
+extern "C" inline void _enable_preemption(void)
+{
+	--preemptionOff();
+}
+
 inline void IOLockFree(IOLock *lock)
 {
 	delete lock;
@@ -64,6 +92,10 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
 	if (lock->owner.load(std::memory_order_relaxed) == std::this_thread::get_id()) {
 		std::fputs("IOLockLock: the thread already holds this lock\n", stderr);
+		std::abort();
+	}
+	if (preemptionOff()) {
+		std::fputs("IOLockLock: preemption is off\n", stderr);
 		std::abort();
 	}
 	lock->m.lock();

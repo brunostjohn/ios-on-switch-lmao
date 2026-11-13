@@ -197,21 +197,26 @@ protected:
 		return channels[1 + i % kApps];
 	}
 
-	// Each app draws its textures once, the GPU finishes, and the compositor composites a few frames behind the GPU.
-	void scene(uint32_t count)
+	// An app draws a texture, and the GPU finishes it.
+	void draw()
 	{
 		if (!target)
 			target = surface(4);
-		for (uint32_t i = uint32_t(textures.size()); i < count; ++i) {
-			textures.push_back(surface(16));
-			switch_gpu_backing_use use = {textures.back(), SWITCH_GPU_BACKING_WRITE, 0};
-			const switch_gpu_backing_token drawn = app(i).token(1);
-			switch_gpu_backing_transaction transaction = {};
-			ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &drawn, &transaction), 0);
-			switch_gpu_backing_commit(&transaction);
-		}
-		for (uint32_t i = 0; i < kApps; ++i)
-			app(i).fence = 1;
+		const uint32_t i = uint32_t(textures.size());
+		textures.push_back(surface(16));
+		switch_gpu_backing_use use = {textures.back(), SWITCH_GPU_BACKING_WRITE, 0};
+		const switch_gpu_backing_token drawn = app(i).token(1);
+		switch_gpu_backing_transaction transaction = {};
+		ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &drawn, &transaction), 0);
+		switch_gpu_backing_commit(&transaction);
+		app(i).fence = 1;
+	}
+
+	// The compositor composites the apps' textures a few frames behind the GPU.
+	void scene(uint32_t count)
+	{
+		while (textures.size() < count)
+			draw();
 		for (int warm = 0; warm < 4; ++warm)
 			composite();
 	}
@@ -256,6 +261,20 @@ protected:
 		return takes;
 	}
 
+	// What its uses' own locks cost a job alone: each taken and let go once
+	double own_locks_us(uint32_t jobs)
+	{
+		const auto start = std::chrono::steady_clock::now();
+		for (uint32_t i = 0; i < jobs; ++i)
+			for (auto *backing : textures) {
+				IOLockLock(backing->lock);
+				IOLockUnlock(backing->lock);
+			}
+		const std::chrono::duration<double, std::micro> spent =
+			std::chrono::steady_clock::now() - start;
+		return spent.count() / jobs;
+	}
+
 	double mean_us(uint32_t jobs)
 	{
 		const auto start = std::chrono::steady_clock::now();
@@ -267,8 +286,8 @@ protected:
 	}
 };
 
-// A scroll's 6 shared uses and a scale animation's 60 (boot 21: 55-61) cost the same global locks: the transaction's
-// one take of its timeline's references; each use costs its own backing's lock once.
+// A scroll's 6 shared uses and a scale animation's 60 (boot 21: 55-61) cost the same global locks, none once the
+// compositor has recorded on each backing; each use costs its own backing's lock once.
 TEST_F(SubmitCost, GlobalLocksAJobDoNotGrowWithItsSharedUses)
 {
 	scene(6);
@@ -280,11 +299,12 @@ TEST_F(SubmitCost, GlobalLocksAJobDoNotGrowWithItsSharedUses)
 	scene(60);
 	const Cost scale = composite();
 	std::printf(
-		"60 shared uses: %llu global IOLock takes, %llu of the uses' own, %.2f us a job\n",
+		"60 shared uses: %llu global IOLock takes, %llu of the uses' own, %.2f us a job, "
+		"%.2f us of it the uses' own locks\n",
 		static_cast<unsigned long long>(scale.global),
-		static_cast<unsigned long long>(scale.own), mean_us(200));
+		static_cast<unsigned long long>(scale.own), mean_us(200), own_locks_us(200));
 	EXPECT_EQ(scale.global, scroll.global);
-	EXPECT_LE(scale.global, 1u);
+	EXPECT_EQ(scale.global, 0u);
 	EXPECT_EQ(scroll.own, 7u);
 	EXPECT_EQ(scale.own, 61u);
 	EXPECT_EQ(scale.dependencies, 0u);
@@ -302,6 +322,16 @@ TEST_F(SubmitCost, ReplacedRecordsKeepTheTimelineReferencesLevel)
 	EXPECT_EQ(held, 1u + 61u);
 }
 
+// A texture newly in the scene costs the first job that reads it the timelines' locks twice: the reference its new record
+// holds, and the app's finished first write dropped as the texture's host acquire. No job after takes either.
+TEST_F(SubmitCost, ANewTextureCostsOnlyItsFirstJobTheTimelineLocks)
+{
+	scene(60);
+	draw();
+	EXPECT_EQ(composite().global, 2u);
+	EXPECT_EQ(composite().global, 0u);
+}
+
 // An app still drawing one texture: the job waits for that app's channel, found under the texture's own lock.
 TEST_F(SubmitCost, PendingProducerIsADependencyWithoutAGlobalLockPerUse)
 {
@@ -313,7 +343,7 @@ TEST_F(SubmitCost, PendingProducerIsADependencyWithoutAGlobalLockPerUse)
 	switch_gpu_backing_commit(&transaction);
 	Cost cost = composite();
 	EXPECT_EQ(cost.dependencies, 1u);
-	EXPECT_LE(cost.global, 2u);
+	EXPECT_EQ(cost.global, 0u);
 	app(7).fence = 2;
 	cost = composite();
 	EXPECT_EQ(cost.dependencies, 0u);

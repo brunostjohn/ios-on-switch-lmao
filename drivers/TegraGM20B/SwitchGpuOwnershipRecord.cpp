@@ -150,6 +150,7 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 		    (timeline || !switch_gpu_backing_token_retain(&transaction->completion))) {
 			used += timeline != nullptr;
 			backing->host_acquire = transaction->completion;
+			backing->host_acquire_handle = transaction->handle;
 			backing->host_acquire_epoch = backing->host_epoch;
 		}
 		const uint32_t slot = access_slot(backing, transaction->completion, access);
