@@ -234,7 +234,6 @@ void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int
 	if (chid >= SCHED_CHIDS || to >= TGM_LEVELS || READ_ONCE(level[chid]) == to)
 		return;
 	WRITE_ONCE(level[chid], to);
-	switch_gpu_busy_level(&tgm_busy, chid, to == TGM_LEVEL_HIGH);
 	if (to == TGM_LEVEL_HIGH)
 		tgm_hold_track(device, chid, 0);
 	nvkm_runl_foreach(runl, device->fifo)
@@ -254,7 +253,6 @@ void tgm_sched_forget(struct nvkm_device *device, unsigned int chid)
 		return;
 	tgm_hold_track(device, chid, 0);
 	WRITE_ONCE(level[chid], TGM_LEVEL_FOREGROUND);
-	switch_gpu_busy_level(&tgm_busy, chid, 0);
 }
 
 static enum tgm_sched_kick counted(enum tgm_sched_kick kick)

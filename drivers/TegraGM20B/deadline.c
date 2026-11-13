@@ -121,7 +121,8 @@ static u64 window_due(u64 target, u64 now)
 	if (!tgm_hold_wanted(1)) {
 		/* kept, then looked at again: a kick between the two either sees it or is seen */
 		dl.dormant_since = now;
-		__atomic_store_n(&dl.dormant, target, __ATOMIC_SEQ_CST);
+		__atomic_store_n(&dl.dormant, target, __ATOMIC_RELEASE);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
 		if (!tgm_hold_wanted(1))
 			return 0;
 	}
@@ -257,9 +258,9 @@ void tgm_deadline_kicked(int compositor, int app)
 
 /* The kicking thread, before its doorbell. No slow channel had work at the frame end, so none is on the GPU now and
  * the kicking one is not yet: the resident look reads nothing. */
-void tgm_deadline_app_kicked(void)
+int tgm_deadline_app_kicked(void)
 {
-	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_SEQ_CST);
+	const u64 dormant = __atomic_load_n(&dl.dormant, __ATOMIC_ACQUIRE);
 	u64 now = 0;
 	u64 target = 0;
 	u64 next = 0;
@@ -268,10 +269,10 @@ void tgm_deadline_app_kicked(void)
 	unsigned long flags = 0;
 
 	if (!dormant)
-		return;
+		return 0;
 	now = nvxnu_nanotime();
 	if (dormant <= now || !tgm_hold_wanted(1))
-		return;
+		return 0;
 	spin_lock_irqsave(&dl.lock, flags);
 	if (!dl.target && dl.dormant > now && !dl.suspended && drawing(now)) {
 		/* the window the frame end kept, from then: a compositor kick or present since counts */
@@ -286,10 +287,11 @@ void tgm_deadline_app_kicked(void)
 	}
 	spin_unlock_irqrestore(&dl.lock, flags);
 	if (!target)
-		return;
+		return 0;
 	if (next)
 		after(dl.hold_work, next, now);
 	after(dl.expire_work, target, now);
+	return 1;
 }
 
 /* Interrupt pass. The anchor moves on every 2^40 ns (18 minutes), keeping the rate, so the span never overflows. */

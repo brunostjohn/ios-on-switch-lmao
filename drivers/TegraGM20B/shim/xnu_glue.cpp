@@ -200,10 +200,13 @@ constexpr uint64_t kGraceNs = 50000000;    // for a wake already under way
 constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did not handle
 volatile uint32_t gIrqRuns;
 switch_gpu_wake_word gWake;
+void wakeAfterPass();
 #if DEVELOPMENT || DEBUG
-uint64_t gIrqPasses[2];                // by line: stall, nonstall
-uint64_t gIrqCpus[4], gFilterCpus[4];  // passes and nonstall filters by the CPU that ran them
-uint64_t gGlobalWakeups;               // threads woken on the global word
+uint64_t gIrqPasses[2];  // by line: stall, nonstall
+// passes and nonstall filters by the CPU that ran them: each written by the pass's work loop thread, or by the line's
+// filter, alone
+uint64_t gIrqCpus[4], gFilterCpus[4];
+uint64_t gGlobalWakeups;  // threads woken on the global word
 #endif
 volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
@@ -254,7 +257,8 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
 #if DEVELOPMENT || DEBUG
 	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&gIrqCpus[static_cast<unsigned>(cpu_number()) % 4], 1, __ATOMIC_RELAXED);
+	uint64_t *const passes = &gIrqCpus[static_cast<unsigned>(cpu_number()) % 4];
+	__atomic_store_n(passes, __atomic_load_n(passes, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED);
 #else
 	(void)source;
 #endif
@@ -273,7 +277,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	}
 	tgm_present_pass();
 	tgm_promise_pass();
-	nvxnu_wake();
+	wakeAfterPass();
 	switch_gpu_backing_completed();
 }
 
@@ -284,29 +288,91 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 bool gpuNonstallFilter(OSObject *, IOFilterInterruptEventSource *)
 {
 #if DEVELOPMENT || DEBUG
-	__atomic_fetch_add(&gFilterCpus[static_cast<unsigned>(cpu_number()) % 4], 1, __ATOMIC_RELAXED);
+	uint64_t *const filters = &gFilterCpus[static_cast<unsigned>(cpu_number()) % 4];
+	__atomic_store_n(filters, __atomic_load_n(filters, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED);
 #endif
 	tgm_present_filter();
 	return true;
 }
 
-// Mach's assert-then-check: a wake between the caller's condition test and this sleep moves the word, and one
-// after assert_wait_deadline() clears the wait, so neither is lost. Returns true if woken, false at `until`.
-bool sleepUntil(const volatile uint32_t *word, nvxnu_u32 seq, uint64_t until_ns)
+// Mach's assert-then-check: a wake between the caller's condition test and this sleep moves the sequence `current`
+// reads, and one after assert_wait_deadline() clears the wait, so neither is lost. Returns true if woken, false at
+// `until`.
+template <typename Current>
+bool sleepUntil(event_t event, Current current, nvxnu_u32 seq, uint64_t until_ns)
 {
 	const uint64_t now = nvxnu_nanotime();
 	if (until_ns <= now)
 		return false;
 	uint64_t interval = 0;
 	nanoseconds_to_absolutetime(until_ns - now, &interval);
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
-	assert_wait_deadline(reinterpret_cast<event_t>(const_cast<uint32_t *>(word)), THREAD_UNINT,
-			     mach_absolute_time() + interval);
-	if (__atomic_load_n(word, __ATOMIC_ACQUIRE) != seq) {
+	assert_wait_deadline(event, THREAD_UNINT, mach_absolute_time() + interval);
+	if (current() != seq) {
 		clear_wait(current_thread(), THREAD_AWAKENED);
 		return true;
 	}
 	return thread_block(THREAD_CONTINUE_NULL) != THREAD_TIMED_OUT;
+}
+
+// Sleeps until woken or the deadline. Every quiet second it looks at PMC: a GPU interrupt pending and enabled at two
+// checks in a row with no interrupt taken in between never reached the CPU.
+template <typename Current>
+int idleOn(event_t event, Current current, nvxnu_u32 seq, nvxnu_u64 deadline_ns)
+{
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE)) {
+		panic("tegra-gm20b: GPU wait before its interrupts are attached (INTID %u/%u)",
+		      kGpuIntids[0], kGpuIntids[1]);
+	}
+	bool pendingSeen = false;
+	uint32_t runsAtPending = 0;
+	for (;;) {
+		const uint64_t now = nvxnu_nanotime();
+		if (now >= deadline_ns)
+			return 0;
+		if (sleepUntil(event, current, seq,
+			       deadline_ns - now < kCheckNs ? deadline_ns : now + kCheckNs))
+			return 1;
+		const uint32_t runs = __atomic_load_n(&gIrqRuns, __ATOMIC_RELAXED);
+		const bool pending = pmcPending();
+		if (pending && pendingSeen && runs == runsAtPending)
+			gpuPanic("lost", "wait", seq);
+		pendingSeen = pending;
+		runsAtPending = runs;
+	}
+}
+
+template <typename Current>
+void wakeDueOn(event_t event, Current current, nvxnu_u32 seq, const char *what, nvxnu_u32 value)
+{
+	if (current() != seq || sleepUntil(event, current, seq, nvxnu_nanotime() + kGraceNs))
+		return;
+	gpuPanic("lost", what, value);
+}
+
+event_t wordEvent(const volatile nvxnu_u32 *word)
+{
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
+	return reinterpret_cast<event_t>(const_cast<uint32_t *>(word));
+}
+
+uint32_t globalSeq()
+{
+	return switch_gpu_wake_seq(&gWake);
+}
+
+void wakeGlobal()
+{
+#if DEVELOPMENT || DEBUG
+	__atomic_fetch_add(&gGlobalWakeups, 1, __ATOMIC_RELAXED);
+#endif
+	thread_wakeup(reinterpret_cast<event_t>(&gWake.pass));
+}
+
+// The pass's end: its own sequence, which no other thread writes
+void wakeAfterPass()
+{
+	if (switch_gpu_wake_pass(&gWake))
+		wakeGlobal();
 }
 }
 
@@ -322,39 +388,25 @@ extern "C" void nvxnu_word_wake(volatile nvxnu_u32 *word)
 	thread_wakeup(reinterpret_cast<event_t>(const_cast<uint32_t *>(word)));
 }
 
-// Sleeps until woken or the deadline. Every quiet second it looks at PMC: a GPU interrupt pending and enabled at two
-// checks in a row with no interrupt taken in between never reached the CPU.
 extern "C" int nvxnu_word_idle(const volatile nvxnu_u32 *word, nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 {
-	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE)) {
-		panic("tegra-gm20b: GPU wait before its interrupts are attached (INTID %u/%u)",
-		      kGpuIntids[0], kGpuIntids[1]);
-	}
-	bool pendingSeen = false;
-	uint32_t runsAtPending = 0;
-	for (;;) {
-		const uint64_t now = nvxnu_nanotime();
-		if (now >= deadline_ns)
-			return 0;
-		if (sleepUntil(word, seq,
-			       deadline_ns - now < kCheckNs ? deadline_ns : now + kCheckNs))
-			return 1;
-		const uint32_t runs = __atomic_load_n(&gIrqRuns, __ATOMIC_RELAXED);
-		const bool pending = pmcPending();
-		if (pending && pendingSeen && runs == runsAtPending)
-			gpuPanic("lost", "wait", seq);
-		pendingSeen = pending;
-		runsAtPending = runs;
-	}
+	return idleOn(
+		wordEvent(word),
+		[word] {
+			return __atomic_load_n(word, __ATOMIC_ACQUIRE);
+		},
+		seq, deadline_ns);
 }
 
 extern "C" void nvxnu_word_wake_due(const volatile nvxnu_u32 *word, nvxnu_u32 seq, const char *what,
 				    nvxnu_u32 value)
 {
-	if (__atomic_load_n(word, __ATOMIC_ACQUIRE) != seq ||
-	    sleepUntil(word, seq, nvxnu_nanotime() + kGraceNs))
-		return;
-	gpuPanic("lost", what, value);
+	wakeDueOn(
+		wordEvent(word),
+		[word] {
+			return __atomic_load_n(word, __ATOMIC_ACQUIRE);
+		},
+		seq, what, value);
 }
 
 extern "C" void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c)
@@ -389,23 +441,20 @@ extern "C" void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_
 
 extern "C" nvxnu_u32 nvxnu_wake_seq(void)
 {
-	return nvxnu_word_seq(&gWake.seq);
+	return globalSeq();
 }
 
 extern "C" void nvxnu_wake(void)
 {
-	if (!switch_gpu_wake_bump(&gWake))
-		return;
-#if DEVELOPMENT || DEBUG
-	__atomic_fetch_add(&gGlobalWakeups, 1, __ATOMIC_RELAXED);
-#endif
-	thread_wakeup(reinterpret_cast<event_t>(&gWake.seq));
+	if (switch_gpu_wake_other(&gWake))
+		wakeGlobal();
 }
 
 extern "C" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 {
 	switch_gpu_wake_sleep(&gWake, 1);
-	const int woken = nvxnu_word_idle(&gWake.seq, seq, deadline_ns);
+	const int woken =
+		idleOn(reinterpret_cast<event_t>(&gWake.pass), globalSeq, seq, deadline_ns);
 	switch_gpu_wake_sleep(&gWake, 0);
 	return woken;
 }
@@ -413,7 +462,7 @@ extern "C" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 extern "C" void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value)
 {
 	switch_gpu_wake_sleep(&gWake, 1);
-	nvxnu_word_wake_due(&gWake.seq, seq, what, value);
+	wakeDueOn(reinterpret_cast<event_t>(&gWake.pass), globalSeq, seq, what, value);
 	switch_gpu_wake_sleep(&gWake, 0);
 }
 

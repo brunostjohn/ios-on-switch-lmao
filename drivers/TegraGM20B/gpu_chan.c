@@ -118,10 +118,12 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 		chan->critical = 1;
 		/* chan_nonstall reads the job records once it sees high */
 		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
+		switch_gpu_busy_level(&tgm_busy, chan->chid, 0);
 		tgm_sched_level(tgm_gpu.device, chan->chid, TGM_LEVEL_HIGH);
 	} else {
 		WRITE_ONCE(chan->high, 0);
 		chan->critical = 0;
+		switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
 		tgm_sched_level(tgm_gpu.device, chan->chid, level);
 	}
 	if (compositor_timeslice_on())
@@ -336,6 +338,8 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		goto fail;
 	}
 	list_add_tail(&chan->live, &tgm_live_chans);
+	switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);
+	switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
 	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);
 	*pchan = chan;
@@ -427,7 +431,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 		present_watch_fenced(chan, 1);
 	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
 	idle_retire(chan, chan->submitted);
-	switch_gpu_busy_gone(&tgm_busy, chan->chid);
+	switch_gpu_busy_level(&tgm_busy, chan->chid, 0);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
 	order_forget(chan);

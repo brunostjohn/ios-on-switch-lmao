@@ -27,14 +27,19 @@ TEST(GM20BFrameCpuSource, AJobsFenceAddsNoBarrierOfItsOwn)
 	EXPECT_FALSE(fence.Has("dmb"));
 }
 
-// A pass wakes a thread on the global word only while one sleeps there.
+// A pass wakes a thread on the global word only while one sleeps there, and moves a sequence it alone writes.
 TEST(GM20BFrameCpuSource, ThePassWakesTheGlobalWordOnlyForASleeper)
 {
 	const std::string glue = unit("shim/xnu_glue.cpp");
-	const CodeText wake = Block(glue, "extern \"C\" void nvxnu_wake(void)");
-	EXPECT_TRUE(wake.Has("switch_gpu_wake_bump(&gWake)")) << "thread_wakeup on every pass";
+	EXPECT_TRUE(Block(glue, "void wakeAfterPass()")
+			    .Has("if (switch_gpu_wake_pass(&gWake)) wakeGlobal();"));
+	EXPECT_TRUE(Block(glue, "extern \"C\" void nvxnu_wake(void)")
+			    .Has("if (switch_gpu_wake_other(&gWake)) wakeGlobal();"));
 	EXPECT_TRUE(Block(glue, "extern \"C\" int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns)")
-			    .Before("switch_gpu_wake_sleep(&gWake, 1);", "nvxnu_word_idle("));
+			    .Before("switch_gpu_wake_sleep(&gWake, 1);", "idleOn("));
+	EXPECT_TRUE(
+		Block(glue, "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
+			.Has("wakeAfterPass();"));
 }
 
 // The kernel's waits on one channel's fence sleep on that channel's word, woken by the pass that moves its fence. The
@@ -59,13 +64,21 @@ TEST(GM20BFrameCpuSource, ChannelWaitsSleepOnTheirChannel)
 	EXPECT_TRUE(del.Has("tgm_waiter_idle("));
 }
 
-// A slow app's first kick into a frame whose window was kept takes its holds before the doorbell (gm20b_deadline_window_test
-// runs the holds); only a user channel's kick asks.
+// A slow app's kick into a frame whose window was kept takes its holds after the kick's barrier and before its doorbell
+// (gm20b_deadline_window_test runs the holds); only a user channel's kick looks.
 TEST(GM20BFrameCpuSource, AnAppsFirstKickIsHeldBeforeItsDoorbell)
 {
 	const CodeText fence = Block(unit("gpu_exec.c"), "static u32 chan_fence_job(");
-	EXPECT_TRUE(fence.Before(
-		"WRITE_ONCE(chan->submitted, next);",
-		"switch_gpu_busy_kicked(&tgm_busy, chan->chid) && chan->app && !chan->high"));
-	EXPECT_TRUE(fence.Before("tgm_deadline_app_kicked();", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.Before("WRITE_ONCE(chan->submitted, next);",
+				 "switch_gpu_busy_kick(&tgm_busy, chan->chid, next);"));
+	EXPECT_TRUE(fence.Before("switch_gpu_busy_kick(&tgm_busy, chan->chid, next);",
+				 "chan_doorbell(chan);"));
+	const CodeText doorbell =
+		Block(unit("gpu_exec.c"), "static void chan_doorbell(struct tgm_chan *chan)");
+	EXPECT_TRUE(
+		doorbell.Before("wmb();", "chan->app && !chan->high && tgm_deadline_app_kicked()"));
+	EXPECT_TRUE(doorbell.Before("tgm_deadline_app_kicked()",
+				    "writel_relaxed(chan->chan.gpfifo.cur,"));
+	EXPECT_EQ(doorbell.Count("wmb();"), 2u)
+		<< "the kick's one, and one after a hold's register writes";
 }

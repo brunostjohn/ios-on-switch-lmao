@@ -552,7 +552,7 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 			.Before("*pchan = NULL;", "nvxnu_word_wake(&tgm_waiter_words[waiter]);"));
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
-			    .Has("nvxnu_wake();"));
+			    .Has("wakeAfterPass();"));
 	const CodeText wait = Block(client(), "IOReturn AGXDeviceUserClient::waitFence(");
 	EXPECT_TRUE(
 		wait.Before("seq = tgm_waiter_seq(waiter);", "tgm_chan_want(chan, in->seqno);"));
@@ -1353,7 +1353,7 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 		Block(SourceText("../shim/xnu_glue.cpp"),
 		      "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)");
 	EXPECT_TRUE(pass.Before("nvxnu_poll_irqs();", "tgm_present_pass();"));
-	EXPECT_TRUE(pass.Before("tgm_present_pass();", "nvxnu_wake();"));
+	EXPECT_TRUE(pass.Before("tgm_present_pass();", "wakeAfterPass();"));
 	const CodeText deliver = Block(gpu(), "void tgm_present_pass(void)");
 	EXPECT_TRUE(deliver.Has("switch_gpu_present_watch_take_visible("));
 	// the pass's own thread: nothing may wait for a GPU interrupt
@@ -1633,7 +1633,8 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	EXPECT_FALSE(internal.Has("defer_kick"));
 	EXPECT_TRUE(internal.Before("RELEASE_SIZE, 4BYTE));", "PUSH_KICK(push);"));
 	EXPECT_TRUE(exec.Before("chan->chan.defer_kick = true;", "last = switch_gpu_job_emit("));
-	EXPECT_TRUE(fence.Before("chan->chan.defer_kick = false;", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.Before("chan->chan.defer_kick = true;", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.Before("PUSH_KICK(push);", "chan_doorbell(chan);"));
 	EXPECT_TRUE(fence.Before(
 		"job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns, !announce);",
 		"PUSH_KICK(push);"));

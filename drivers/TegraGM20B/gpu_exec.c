@@ -68,6 +68,17 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	return ret;
 }
 
+/* GP_PUT after the kick's one store barrier (chan506f.c's kick, here so a slow app's first kick into a frame whose
+ * deadline window was kept is held between the two). DSB ST lets no later instruction run before the earlier stores are
+ * complete: the kicked seqno before the look at the window, and a hold's register writes before the doorbell. */
+static void chan_doorbell(struct tgm_chan *chan)
+{
+	wmb();
+	if (chan->app && !chan->high && tgm_deadline_app_kicked())
+		wmb();
+	writel_relaxed(chan->chan.gpfifo.cur, (u8 __iomem *)chan->chan.userd.map.ptr + 0x8c);
+}
+
 /* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then nvif's GET report, then a nonstall
  * interrupt (nouveau nvc0_fence_emit32) unless the job is quiet and nobody asked for it (SwitchGpuQuiet.h), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
  * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
@@ -148,12 +159,13 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
 		nvxnu_panic("SwitchGpu: cannot arm channel completion");
 	WRITE_ONCE(chan->submitted, next);
-	if (switch_gpu_busy_kicked(&tgm_busy, chan->chid) && chan->app && !chan->high)
-		tgm_deadline_app_kicked();
+	switch_gpu_busy_kick(&tgm_busy, chan->chid, next);
 	idle_kicked(first, next);
 	switch_emc_gpu_submit();
-	chan->chan.defer_kick = false;
+	chan->chan.defer_kick = true;
 	PUSH_KICK(push);
+	chan->chan.defer_kick = false;
+	chan_doorbell(chan);
 	if (chan->high) {
 		struct tgm_sched_queued queued;
 		enum tgm_sched_kick kick = tgm_sched_kicked(tgm_gpu.device, chan->chid, &queued);

@@ -20,8 +20,8 @@ void tgm_sched_forget(struct nvkm_device *device, unsigned int chid);
 int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid);
 /* What the GPU runs: the app channel on GR, else on the PBDMA; TGM_VICTIM_SWITCHING or TGM_VICTIM_NONE. */
 int tgm_sched_resident(struct nvkm_device *device);
-/* Which channels have work in flight, and which are high (SwitchGpuBusy.h): kept by gpu_exec.c's kick, the interrupt
- * pass and the levels set here. */
+/* Which channels may have work in flight, and which live ones are below the high level (SwitchGpuBusy.h): gpu_exec.c's
+ * kick, the interrupt pass and gpu_chan.c's channel creation, level and teardown keep it. */
 extern struct switch_gpu_busy tgm_busy;
 
 enum tgm_sched_kick {
@@ -100,9 +100,10 @@ void tgm_hold_stats(char *buf, unsigned int len);
 void tgm_deadline_init(struct nvkm_device *device);
 /* gpu_exec.c: a high channel kicked (compositor: one of the compositor's, not the present's); app: it found an app on the GPU. */
 void tgm_deadline_kicked(int compositor, int app);
-/* gpu_exec.c, before the doorbell: a channel below the high level kicked with nothing of its own in flight before.
- * Lockless unless a window was kept for it; then it opens the window and takes the holds due (dl.lock, hold.lock). */
-void tgm_deadline_app_kicked(void);
+/* gpu_exec.c, an app channel's kick, between its publication barrier and its doorbell: a plain load unless the frame
+ * end kept a window for a slow app's work; then it opens the window and takes the holds due by now (dl.lock,
+ * hold.lock). 1 when it did. */
+int tgm_deadline_app_kicked(void);
 /* gpu_fenced.h, interrupt pass: a high channel's fence moved past `ns` of GPU time (tgm_gpu_span); `biased` when that is
  * timed from a kick that found an app on the GPU (the frame's time is then not learned). */
 void tgm_deadline_progress(uint64_t ns, int biased);

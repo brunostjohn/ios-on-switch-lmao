@@ -306,7 +306,8 @@ extern "C" void switch_gpu_copy_completed(void)
 static void copyUnlocked()
 {
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
-	if (__atomic_exchange_n(&queue.retireAsked, 0u, __ATOMIC_SEQ_CST))
+	if (__atomic_load_n(&queue.retireAsked, __ATOMIC_RELAXED) &&
+	    __atomic_exchange_n(&queue.retireAsked, 0u, __ATOMIC_SEQ_CST))
 		switch_gpu_backing_schedule_retirement();
 }
 

@@ -239,13 +239,13 @@ TEST_F(DeadlineWindow, AnAppKickInTheFrameIsHeldBeforeItsDoorbell)
 	EXPECT_EQ(schedules, 0u);
 	now += kPeriod / 4;
 	appWork = true;
-	tgm_deadline_app_kicked();
+	EXPECT_EQ(tgm_deadline_app_kicked(), 1);
 	EXPECT_EQ(dues, 1u) << "the holds, taken before the kick returns";
 	EXPECT_EQ(dueVblank, vblank);
 	EXPECT_EQ(lastResident, -1);
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(schedules, 1u) << "the window's expiry alone";
-	tgm_deadline_app_kicked();
+	EXPECT_EQ(tgm_deadline_app_kicked(), 0);
 	EXPECT_EQ(dues, 1u) << "a second kick finds the window open";
 }
 

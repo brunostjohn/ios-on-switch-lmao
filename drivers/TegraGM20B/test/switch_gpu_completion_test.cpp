@@ -219,12 +219,13 @@ TEST_F(Completion, MidJobEventReleaseRunsEventRetirementWithoutFenceProgress)
 	EXPECT_EQ(eventPasses, 1u);
 }
 
-// The pass that sees a channel's fence reach its newest seqno clears its bit of tgm_busy; one short of it keeps it.
-TEST_F(Completion, ThePassSettlesTheChannelsBusyBit)
+// The pass publishes how far each channel's fence got (tgm_busy's done word, written by the pass alone): one short of the
+// newest seqno kicked is work in flight, the newest none.
+TEST_F(Completion, ThePassPublishesTheChannelsDoneSeqno)
 {
 	tgm_busy = {};
-	channel.submitted = 5;
-	switch_gpu_busy_kicked(&tgm_busy, channel.chid);
+	switch_gpu_busy_level(&tgm_busy, channel.chid, 1);
+	switch_gpu_busy_kick(&tgm_busy, channel.chid, 5);
 	channel.completed = 4;
 	interrupt();
 	EXPECT_TRUE(switch_gpu_busy_chan(&tgm_busy, channel.chid));

@@ -181,9 +181,8 @@ protected:
 	void SetUp() override
 	{
 		regs.clear();
-		for (auto &word : tgm_busy.busy)
-			word = 0;
-		tgm_sched_level(&m.device, kApp, TGM_LEVEL_FOREGROUND);
+		tgm_busy = {};
+		switch_gpu_busy_level(&tgm_busy, kApp, 1);
 		reads = preempts = 0;
 	}
 
@@ -217,9 +216,8 @@ TEST_F(SchedKick, NoAppWorkReadsNoRegister)
 // An app channel's job in flight: the kick reads GR's and the PBDMA's status as before, and preempts the app on GR.
 TEST_F(SchedKick, AppWorkInFlightReadsStatusAndPreempts)
 {
-	u32 submitted = 1;
 	unsigned read = 0;
-	switch_gpu_busy_kicked(&tgm_busy, kApp);
+	switch_gpu_busy_kick(&tgm_busy, kApp, 1);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 3u);
 	regs[PFIFO_ENG_STATUS(0)] = PFIFO_ENG_BUSY | (PFIFO_ENG_CTX_VALID << 13) | kApp;
@@ -227,41 +225,38 @@ TEST_F(SchedKick, AppWorkInFlightReadsStatusAndPreempts)
 	EXPECT_EQ(read, 4u) << "GR, the PBDMA's status and channel, PFIFO_PREEMPT's pending bit";
 	EXPECT_EQ(preempts, 1u);
 	EXPECT_EQ(regs[PFIFO_PREEMPT], kApp);
-	switch_gpu_busy_settled(&tgm_busy, kApp, submitted, &submitted);
+	switch_gpu_busy_done(&tgm_busy, kApp, 1);
 	regs.clear();
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
-	EXPECT_EQ(read, 0u) << "the app's job ended and its pass settled it";
+	EXPECT_EQ(read, 0u) << "the app's job ended and its pass saw it";
 }
 
-// A quiet app job no pass has seen end keeps its bit: the kick reads status, at the cost of the reads alone.
+// A quiet app job no pass has seen end: the kick reads status, at the cost of the reads alone.
 TEST_F(SchedKick, AQuietJobNotSeenEndKeepsTheReads)
 {
-	u32 submitted = 2;
 	unsigned read = 0;
-	switch_gpu_busy_kicked(&tgm_busy, kApp);
-	switch_gpu_busy_settled(&tgm_busy, kApp, 1, &submitted);
+	switch_gpu_busy_kick(&tgm_busy, kApp, 2);
+	switch_gpu_busy_done(&tgm_busy, kApp, 1);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 3u);
-	switch_gpu_busy_settled(&tgm_busy, kApp, 2, &submitted);
+	switch_gpu_busy_done(&tgm_busy, kApp, 2);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u);
 }
 
-// A channel with work in flight whose level changes: high, it is no app the kick preempts; back below, it is again.
+// A channel with work in flight whose level changes (gpu_chan.c's tgm_chan_set_level): high, it is no app the kick
+// preempts; back below, it is again; torn down, it is gone.
 TEST_F(SchedKick, ALevelChangeWithWorkInFlight)
 {
 	unsigned read = 0;
-	switch_gpu_busy_kicked(&tgm_busy, kApp);
-	tgm_sched_level(&m.device, kApp, TGM_LEVEL_HIGH);
+	switch_gpu_busy_kick(&tgm_busy, kApp, 1);
+	switch_gpu_busy_level(&tgm_busy, kApp, 0);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u);
-	tgm_sched_level(&m.device, kApp, TGM_LEVEL_FOREGROUND);
+	switch_gpu_busy_level(&tgm_busy, kApp, 1);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 3u);
-	tgm_sched_forget(&m.device, kApp);
-	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
-	EXPECT_EQ(read, 3u) << "forgotten but still running: still an app the kick may find";
-	switch_gpu_busy_gone(&tgm_busy, kApp);
+	switch_gpu_busy_level(&tgm_busy, kApp, 0);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u) << "torn down";
 }
@@ -270,9 +265,7 @@ TEST_F(SchedKick, ALevelChangeWithWorkInFlight)
 TEST_F(SchedKick, HighWorkInFlightReadsNothing)
 {
 	unsigned read = 0;
-	switch_gpu_busy_kicked(&tgm_busy, kCompositor);
+	switch_gpu_busy_kick(&tgm_busy, kCompositor, 1);
 	EXPECT_EQ(kick(&read), TGM_KICK_CLEAR);
 	EXPECT_EQ(read, 0u);
-	u32 submitted = 1;
-	switch_gpu_busy_settled(&tgm_busy, kCompositor, 1, &submitted);
 }
