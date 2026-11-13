@@ -32,6 +32,7 @@
 #include "raw_split_cost.h"
 #include "raw_attachment_order.h"
 #include "raw_attachment_view.h"
+#include "raw_barrier_forms.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
@@ -1372,6 +1373,10 @@ private:
     Device *dev_ = nullptr;
     Push p_;
     uint32_t *start_ = nullptr;
+    // the engine of the work before it and where its opening ended: an encoder that sent nothing after its opening
+    // changed no engine, and leaves the command buffer's as it found it
+    BarrierEngine before_ = BarrierEngine::None;
+    uint32_t *opened_ = nullptr;
     static constexpr uint8_t kAccesses = 16;
     const void *read_[kAccesses] = {}, *written_[kAccesses] = {};
     uint8_t reads_ = 0, writes_ = 0;
@@ -1603,6 +1608,17 @@ private:
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
     EventPublication publication_;
+    BarrierEngine lastEngine_ = BarrierEngine::None;  // the engine of the work encoded last (raw_barrier_forms.h)
+
+    // the forms a probe forced (raw_probe_forms.h), else the rules'
+    BarrierForms barrierForms() const
+    {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        return forms_;
+#else
+        return {};
+#endif
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
     SplitProbe splitProbe_ = SplitProbe::Twin;
@@ -1620,7 +1636,6 @@ private:
     void foldCounts();
     ProbeForms forms_;
     ProbeTaken taken_;
-    ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
 #endif
 #if SWITCH_RAW_DIAGNOSTICS
     Texture glassMemImages_[kGlassMemItems];               // the image each of the probe's rows is read from

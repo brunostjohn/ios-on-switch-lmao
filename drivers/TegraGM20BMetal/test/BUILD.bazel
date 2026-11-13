@@ -73,9 +73,10 @@
 #                     where the boundary writes none of its registers (raw_pass_writes.h, checked against the emitters)
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
-#   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
-#                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
-#                     are the planner's, the 2D work copies and resolves as the 2D engine model does
+#   raw_probe_forms_test  raw/runtime/raw_barrier_forms.h, raw_probe_forms.h and raw_probe_ops.h (the encoders' opening
+#                     barriers and hw_test_app's barrier and 2D-engine probes): today's forms are the words the runtime
+#                     sent before, the rules relax only the probed changes, the relaxed forms never idle and are the
+#                     planner's, the 2D work copies and resolves as the 2D engine model does
 #   raw_private_comp_test  raw/runtime/raw_private_comp.h: which private textures bind compressed memory, and of which kind
 #   raw_constant_colour_test  raw/runtime/raw_constant_colour.h: which fills the ROP's constant colour may draw
 #   raw_fetch_free_test   raw/runtime/raw_fetch_free.h: a fetch-free form's rung and words, and the draws that take it
@@ -2744,6 +2745,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_barrier_forms.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_opening.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_probe_forms.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_probe_ops.h",
@@ -4537,6 +4539,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEncode.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_barrier_forms.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_opening.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",

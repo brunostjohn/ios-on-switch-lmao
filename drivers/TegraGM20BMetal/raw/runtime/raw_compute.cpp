@@ -157,12 +157,11 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};
     cb_.loops_.openSegment(stream());
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probeComputeOpening(p_, cb.forms_, cb.lastEngine_, cb.taken_);
-    cb.lastEngine_ = ProbeEngine::Compute;
-#else
-    computeOpening(p_);
-#endif
+    const BarrierForms forms = cb.barrierForms();
+    [[maybe_unused]] const Opened opened = computeEncoderOpening(
+        p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute), forms.entry, cb.lastEngine_);
+    cb.lastEngine_ = BarrierEngine::Compute;
+    RAW_DIAGNOSTIC(cb.taken_.count(opened));
 }
 
 void ComputeEncoder::room(uint32_t words)

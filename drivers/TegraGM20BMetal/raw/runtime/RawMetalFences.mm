@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // MTLFence: the device's own object. A fence orders encoders of one queue, and every raw command buffer of the process runs on
 // the one raw channel in commit order, its encoders in order, each opening with a drain (a render pass with
-// switch_gm20b_pass_barrier, a blit or compute encoder with WAIT_FOR_IDLE and its cache invalidates): a wait is behind its
-// update on the GPU with nothing of its own. m2v work between them is ordered by the kernel's Order (RawMetalSubmit.mm).
+// switch_gm20b_pass_barrier, a blit or compute encoder with WAIT_FOR_IDLE and its cache invalidates) or a change of engine,
+// which waits for the engine left behind (raw_barrier_forms.h): a wait is behind its update on the GPU with nothing of its
+// own. m2v work between them is ordered by the kernel's Order (RawMetalSubmit.mm).
 // Barriers made from a pass's dependencies instead of at every encoder must take each update -> wait pair as one.
 #import "RawMetalInternal.h"
 

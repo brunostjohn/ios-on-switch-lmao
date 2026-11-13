@@ -4177,12 +4177,12 @@ CommandBuffer *Device::begin()
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
     emitStartStamp(p, stamps_.va, cb.stamp);
+    cb.lastEngine_ = BarrierEngine::None;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forms_ = nextForms;
     nextForms = {};
     cb.taken_ = {};
-    cb.lastEngine_ = ProbeEngine::None;
-    if (cb.forms_.entry != EntryForm::Today) {
+    if (relaxed(cb.forms_.entry)) {
         cb.shaderInvalidate_ = probeEntry(p, cb.forms_.entry, cb.taken_);
     } else
 #endif
@@ -4477,12 +4477,13 @@ BlitEncoder *CommandBuffer::blit()
     loops_.openSegment(e.stream());
     // what the render work before wrote is complete before the copy engine reads it (NVK: a WFI on the 3D subchannel; the
     // switch to the copy subchannel then waits for the 3D engine anyway)
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probeBlitOpening(e.p_, forms_, lastEngine_, taken_);
-    lastEngine_ = ProbeEngine::Copy;
-#else
-    e.p_.m(WAIT_FOR_IDLE, 0);
-#endif
+    const BarrierForms forms = barrierForms();
+    [[maybe_unused]] const Opened opened =
+        blitOpening(e.p_, switchFormFor(forms.switchForm, lastEngine_, BarrierEngine::Copy), forms.entry, lastEngine_);
+    e.before_ = lastEngine_;
+    e.opened_ = e.p_.at;
+    lastEngine_ = BarrierEngine::Copy;
+    RAW_DIAGNOSTIC(taken_.count(opened));
     blits++;
     return &e;
 }
@@ -7733,12 +7734,10 @@ void RenderEncoder::end()
         p_.m(CT_SELECT, targetSelect(colorTargets()));
         narrowed_ = false;
     }
+    const bool flush = keepsTiledFlush(cb_->barrierForms().switchForm);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const bool flush = cb_->forms_.keepsTiledFlush();
     if (drew_ && !flush && tiledCache(d.k_.info()))
         cb_->taken_.flushes++;
-#else
-    constexpr bool flush = true;
 #endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
@@ -7772,12 +7771,13 @@ void RenderEncoder::end()
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probePassPrologue(p, cb_->forms_, cb_->lastEngine_, cb_->taken_);
-    cb_->lastEngine_ = ProbeEngine::ThreeD;
-#else
-    kit(p, switch_gm20b_pass_barrier, false);
-#endif
+    const BarrierEngine before = cb_->lastEngine_;
+    const BarrierForms forms = cb_->barrierForms();
+    const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : PassForm::Today;
+    [[maybe_unused]] const Opened opened =
+        passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD), forms.entry, before);
+    cb_->lastEngine_ = BarrierEngine::ThreeD;
+    RAW_DIAGNOSTIC(cb_->taken_.count(opened));
     for (uint8_t i = 0; i < startStampCount_; i++)
         counters::emit(p, startStamps_[i]);
     if (rot_.turned()) {
@@ -7921,6 +7921,7 @@ void RenderEncoder::end()
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
+        cb_->lastEngine_ = BarrierEngine::Copy;
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }
@@ -8302,6 +8303,8 @@ void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t 
 
 void BlitEncoder::end()
 {
+    if (p_.at == opened_)
+        cb_->lastEngine_ = before_;
     checkRoom(p_, "a blit encoder");
     cb_->loops_.closeSegment(stream());
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);

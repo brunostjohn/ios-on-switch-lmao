@@ -122,6 +122,14 @@ struct ProbeLedger {
         if batch.path != "raw" && !offPath.contains(batch.path) { offPath.append(batch.path) }
     }
 
+    /// The cells where `arm` read other texels than the control, whatever the unguarded arm read
+    func failed(_ arm: String, none: String?) -> Int {
+        cells.filter { cell in
+            tallies[cell]?[arm].map { CellVerdict.of(relaxed: $0, unguarded: none.flatMap { tallies[cell]?[$0] }) }
+                == .fails
+        }.count
+    }
+
     /// The fields for relaxed arms `relaxed` against the unguarded arm `none`, prefixed by each arm's name; the verdict
     /// is the first relaxed arm's (the planner's form).
     func finding(relaxed: [String], none: String?, control: String, takenKey: String, rule: String) -> ProbeFinding {
