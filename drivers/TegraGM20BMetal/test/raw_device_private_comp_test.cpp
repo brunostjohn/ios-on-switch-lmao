@@ -252,6 +252,17 @@ TEST_F(DevicePrivateComp, AViewKeepsCompressedMemoryAndFollowsTheMove)
     dev.destroyTexture(first);
 }
 
+// gpu.x1.blend_exact's 4096x2056 BGRA8 target (boot 19 and boot 21: "compressed memory 40960 KiB kind 0xdb not made"):
+// its compressed memory is its own comptag lines (2176 block-linear rows of 16 KiB: 272 lines, 34 MiB), not the 40 MiB
+// size class a backing would take
+TEST_F(DevicePrivateComp, APrivateTextureAsksItsOwnCompTagLines)
+{
+    raw::Texture t;
+    ASSERT_FALSE(dev.createCompressedTexture(4096, 2056, kBGRA8, raw::kCompKindC32, t)) << "none made yet: asked";
+    awaitMade();
+    EXPECT_EQ(raw::DeviceHarness::compReadyBytes(dev), (std::vector<uint64_t>{272ull << 17}));
+}
+
 // raw_comp.h storedZetaKind: a stored one-sample Depth32Float texture on ZF32_2CZ memory the compressed-memory thread
 // made, given back with the texture
 TEST_F(DevicePrivateComp, AStoredDepth32FloatTakesZF32_2CZAndGivesItBack)

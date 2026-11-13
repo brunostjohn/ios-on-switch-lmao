@@ -42,7 +42,8 @@ bool Device::takeCompressed(uint64_t bytes, uint32_t kind, Bo &bo)
     if (probePlainPrivate.load(std::memory_order_relaxed) || probePlainMemory.load(std::memory_order_relaxed))
         return false;
 #endif
-    const uint64_t need = compClassBytes(compBytes(bytes));
+    // its own whole comptag lines: a private texture's memory is its alone and never grows, as a backing's class does
+    const uint64_t need = compBytes(bytes);
     auto it = comp_.fit(need, kind);
     if (it == comp_.ready.end()) {
         compAsk({need, kind});

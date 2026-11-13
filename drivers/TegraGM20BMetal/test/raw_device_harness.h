@@ -86,6 +86,16 @@ struct DeviceHarness {
         return w;
     }
 
+    // The sizes of the compressed buffers made and not taken yet
+    static std::vector<uint64_t> compReadyBytes(Device &d)
+    {
+        std::lock_guard<raw::Mutex> l(d.lock_);
+        std::vector<uint64_t> out;
+        for (const CompBo &b : d.comp_.ready)
+            out.push_back(b.bo.bytes);
+        return out;
+    }
+
     // The GPU address of texture header `tic`
     static uint64_t ticVa(const Device &d, uint32_t tic)
     {
