@@ -104,6 +104,7 @@ struct Model {
     unsigned setRefusals = 0;    // ResourceSetCreates refused for a member
     uint64_t refusedHandle = 0;  // the last one's member
     unsigned setRepeats = 0;     // ResourceSetCreate records naming a BO an earlier record of the same call named
+    unsigned refuseSets = 0;     // ResourceSetCreates refused from now, kIOReturnNoResources (no set left to make)
     bool opened = false;         // the first IOServiceOpen took this model
     io_connect_t nextConnection = 43;
     std::map<io_connect_t, std::unique_ptr<Model>> others;                    // the later IOServiceOpens' connections
@@ -357,6 +358,10 @@ struct Model {
     {
         if (!in.count || in.count > TegraGM20BMaxSetMembers || !in.uses_address || in.set > TegraGM20BMaxResourceSets)
             return kIOReturnBadArgument;
+        if (refuseSets) {
+            refuseSets--;
+            return kIOReturnNoResources;
+        }
         auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
         constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
         std::vector<uint64_t> handles(in.count);
