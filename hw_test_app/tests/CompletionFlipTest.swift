@@ -9,8 +9,10 @@ import UIKit
 /// debug kernels): completions must have written flips, each ahead of the work loop, with the frames still paced. A
 /// watched present's and a VIC copy's flip comes earlier still, from the producer's primary interrupt filter (filter,
 /// filter_lead_us: how far ahead of its completion); filter_share is their part of window A's flips.
-/// refused is the boot's total: a unit whose window A aperture does not latch the completion's stores turns completion
-/// flips off at the first one (one SwitchDisplay line), so a FAIL with refused=1 and d_completion=0 is that verdict.
+/// refused is the boot's total: a unit whose window A aperture does not latch the completion's stores holds completion
+/// flips off for a run of frames at each one (one SwitchDisplay line each). filter_calls counts the producers' filters
+/// calling the display at all: d_filter_calls 0 says the GPU's nonstall filter never ran the display's callout (its
+/// present view not opened, or not visible there), more with d_filter 0 that it came with no flip armed.
 /// The compositor's own frames behind a writer promise (its command buffer held on a shared event) take the direct
 /// present's promise watch: kern.switch_gpu_promises' direct_* totals count them (direct_promised, direct_kept), and
 /// none may be given up (direct_given_up 0 since boot): a frame is given up only when its writer never runs.
@@ -21,6 +23,7 @@ struct CompletionFlipTest: HWTest {
 
     static let counters = [
         "completion", "gate", "lead_us", "withdrawn", "refused", "filter", "filter_lead_us", "filter_declined",
+        "filter_calls",
     ]
 
     func run(_ context: TestContext) async throws -> Outcome {

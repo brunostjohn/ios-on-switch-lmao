@@ -339,7 +339,9 @@ struct Display {
             completionFlipLock->held = false;
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
-        completionFlipsProven = completionFlipsRefused = completionFilterOff = false;
+        completionFlipsProven = completionFilterOff = false;
+        completionHold = {8, 1024, 600};
+        filterHold = {8, 1024, 600};
         ring.reset(3);
         model.general[DcModel::kHeader] = kWindowASelect;
         model.assembly[kWinbufStartAddr] = surfaceAddress(0);
