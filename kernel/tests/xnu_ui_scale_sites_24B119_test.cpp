@@ -515,10 +515,10 @@ TEST(XnuUiScaleSites24B119, TableReloadUsesEffectiveFocusAndKeepsItsResetAndDrag
     EXPECT_EQ(Word(first.patched + 20), Word(first.stock + 8));
     EXPECT_EQ(Word(first.patched + 24), Word(first.stock + 12));
     EXPECT_EQ(Word(first.patched + 28), 0x694056c8u);  // ldpsw x8, x21, [x22]
-    EXPECT_EQ(Word(first.stock + 16), 0xb98002c8u);   // ldrsw x8, [x22]
-    EXPECT_EQ(Word(second.stock), 0xb98006c8u);      // ldrsw x8, [x22, #4]
-    EXPECT_EQ(Word(second.patched), 0xf8686a60u);    // ldr x0, [x19, x8]
-    EXPECT_EQ(Word(second.patched + 8), 0xf8756a60u); // ldr x0, [x19, x21]
+    EXPECT_EQ(Word(first.stock + 16), 0xb98002c8u);    // ldrsw x8, [x22]
+    EXPECT_EQ(Word(second.stock), 0xb98006c8u);        // ldrsw x8, [x22, #4]
+    EXPECT_EQ(Word(second.patched), 0xf8686a60u);      // ldr x0, [x19, x8]
+    EXPECT_EQ(Word(second.patched + 8), 0xf8756a60u);  // ldr x0, [x19, x21]
     EXPECT_EQ(BranchTarget(AddressOf(*site, second, 4), Word(second.patched + 4)),
               BranchTarget(AddressOf(*site, first, 28), Word(first.stock + 28)));
     EXPECT_EQ(BranchTarget(AddressOf(*site, second, 4), Word(second.patched + 4)), 0x18809cbc0u);

@@ -130,9 +130,9 @@ inline void ExpectEveryEditInItsSitesChunk(const switch_us_cache &cache, const s
 // its own mapping, on a slot no other pager answers in that mapping.
 inline void ExpectEachSiteTheOneSiteOfItsSlot(const switch_us_cache &cache, const std::vector<TextMapping> &mappings)
 {
-    const unsigned slots = TextSlots(std::string(cache.build) == "24B119"
-                                         ? "../xnu-12377.121.6/osfmk/vm/vm_shared_region.c"
-                                         : "../xnu-10063.141.1/osfmk/vm/vm_shared_region.c");
+    const unsigned slots =
+        TextSlots(std::string(cache.build) == "24B119" ? "../xnu-12377.121.6/osfmk/vm/vm_shared_region.c"
+                                                       : "../xnu-10063.141.1/osfmk/vm/vm_shared_region.c");
     std::vector<unsigned> found(cache.count, 0);
     for (const TextMapping &mapping : mappings) {
         for (unsigned slot = 0; slot < slots; slot++) {
