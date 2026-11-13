@@ -181,6 +181,7 @@ const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
 bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t);
 
 constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
+constexpr uint64_t kChunkVaAlign = 0x10000;  // the GMMU big page, a multiple of kBlAlign
 
 // An import of this task's pages into the GPU VM, shared by everything over them.
 struct Import {
@@ -3095,6 +3096,7 @@ private:
     bool growing_ = false, stopping_ = false;
     raw::CondVar grow_, grown_;
     std::thread grower_;
+    bool chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<raw::Mutex> *unlocked, Chunk &ch);
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index);
     void growLoop();
     // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
