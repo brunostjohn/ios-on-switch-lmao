@@ -145,6 +145,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.blend_twin',
             'gpu.raw.zeta_colour',
             'gpu.raw.planar_constexpr',
+            'gpu.raw.strip_over_compressed',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',

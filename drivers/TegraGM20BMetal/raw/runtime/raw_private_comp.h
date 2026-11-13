@@ -38,13 +38,14 @@ constexpr uint32_t privateCompressedKind(const PrivateTextureFacts &f)
     return f.bpp == 4 ? kCompKindC32 : f.bpp == 8 ? kCompKindC64 : 0;
 }
 
-// The colour slots a draw binds as storage images where its state has no barrier form to take instead: a compressed
-// attachment there refuses the draw (raw_storage_form.h, the surface unit reads a compressible kind's raw bytes), so it
-// moves to plain memory before the range encodes. A state with a barrier form keeps the compressed attachment and draws
-// through that form.
-constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin)
+// The colour slots a draw binds as storage images where its state has no barrier form to take instead, or one that
+// cannot draw its geometry (`twinDraws`: raw_fetch_order.h barrierFormDraws; boot 21's RenderBox quads, indexed strips of
+// four): a compressed attachment there refuses the draw (raw_storage_form.h, the surface unit reads a compressible kind's
+// raw bytes), so it moves to plain memory before the range encodes. A barrier form that draws it keeps the compressed
+// attachment.
+constexpr uint8_t storageSlotsToPlain(uint8_t storageBits, bool barrierTwin, bool twinDraws)
 {
-    return barrierTwin ? 0 : storageBits;
+    return barrierTwin && twinDraws ? 0 : storageBits;
 }
 
 // What a target is made for, by its descriptor: a target of the same shape as one a storage form needed plain is made

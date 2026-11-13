@@ -11,12 +11,14 @@
 static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count, NSUInteger instances, bool indirect,
                        bool indexed)
 {
-    const raw::Pipeline *pl = e->_drawn;
+    raw::Pipeline *pl = e->_drawn;
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
         return;
+    const raw::FetchDraw shape = {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed};
+    if (const RMPass &pass = e->_cb->_passes[e->_passAt]; pass.compressed)
+        rmNoteStorageDraw(e->_cb, pass, pl, e->_drawnVariant, shape);
     const raw::FetchRefusal refusal =
-        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId,
-                          {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
+        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId, shape);
     if (refusal == raw::FetchRefusal::None)
         return;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
