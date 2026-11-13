@@ -69,13 +69,14 @@ TEST(RawPrivateComp, AnythingElseStaysPlain)
     }
 }
 
-TEST(RawPrivateComp, AFetchingStateWithNoBarrierFormDrawsAPlainTargetOnTheRawPath)
+TEST(RawPrivateComp, AFetchingStateWithNoBarrierFormDrawsItsCompressedTargetOnTheRawPath)
 {
-    // gpu.raw.fetch_blend_order strip16 (rgba8, 64x64 private RenderTarget|ShaderRead): boot 11's sto=compressed,notwin
+    // gpu.raw.fetch_blend_order strip16 (rgba8, 64x64 private RenderTarget|ShaderRead): boot 11's sto=compressed,notwin,
+    // which rule storage.compressed now draws in place
     Target strip{4, 1, true};
-    EXPECT_EQ(raw::storageViewMismatch(4, 1, strip), raw::StorageFallback::Compressed);
+    EXPECT_EQ(raw::storageViewMismatch(4, 1, strip), raw::StorageFallback::None);
     EXPECT_EQ(route(0x1, false, strip), "raw");
-    EXPECT_FALSE(strip.comptags);
+    EXPECT_TRUE(strip.comptags) << "no move to plain memory";
     // gpu.raw.pass_fusion private_color_adjacent: a clear pass and a load pass on one target, the fetch in both
     Target adjacent{4, 1, true};
     EXPECT_EQ(route(0x1, false, adjacent), "raw");
@@ -86,7 +87,7 @@ TEST(RawPrivateComp, AStateWithABarrierFormKeepsTheCompressedTarget)
 {
     Target t{4, 1, true};
     EXPECT_EQ(raw::storageSlotsToPlain(0x3, true, false), 0);
-    EXPECT_EQ(route(0x1, true, t), "twin");
+    EXPECT_EQ(route(0x1, true, t), "raw") << "rule storage.compressed: its storage form, in place";
     EXPECT_TRUE(t.comptags);
     EXPECT_EQ(raw::storageSlotsToPlain(0x6, false, false), 0x6);
 }

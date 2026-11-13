@@ -23,11 +23,15 @@ TEST(StorageForm, AnXrTargetMetalCallsCompressedTakesItsStorageView)
     EXPECT_EQ(raw::storageViewMismatch(8, 1, xr), raw::StorageFallback::None);
 }
 
-TEST(StorageForm, MemoryWithCompressionTagsTakesTheBarrierForm)
+// Rule storage.compressed: surface loads and stores go through the binding's kind, so compressed memory takes the storage
+// view; the probe's own false still names the fallback
+TEST(StorageForm, MemoryWithCompressionTagsTakesItsStorageView)
 {
     Attachment backing;
     backing.comptags = true;
-    EXPECT_EQ(raw::storageViewMismatch(8, 1, backing), raw::StorageFallback::Compressed);
+    EXPECT_TRUE(raw::storageReadsCompressed());
+    EXPECT_EQ(raw::storageViewMismatch(8, 1, backing), raw::StorageFallback::None);
+    EXPECT_EQ(raw::storageViewMismatch(8, 1, backing, false), raw::StorageFallback::Compressed);
 }
 
 TEST(StorageForm, AnotherTexelSizeOrSampleCountTakesTheBarrierForm)

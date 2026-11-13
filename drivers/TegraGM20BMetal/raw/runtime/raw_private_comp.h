@@ -4,7 +4,7 @@
 // its size is ready (Device::comp_, made off the render thread), so its full clears to a ZBC value write tags only and
 // its draws move compressed tiles. Those kinds are the ones the copy engine and the texture unit read and write as plain
 // texels on the chip (HW Test gpu.x1.ce_compressed, boot 6 stack-F-v1: BGRA8 and RGBA16Float, 0 bad of 24 repeats);
-// passes that would view it as a storage image take the state's barrier form (raw_storage_form.h).
+// passes that view it as a storage image do so in place (raw_storage_form.h rule storage.compressed).
 //
 // Nothing else may name its pages: an m2v twin aliases them through NVK's plain binding and would read compressed bytes.
 // So before a twin, a view (which copies the memory's address) or a gpuResourceID (which names the header) is taken, the
