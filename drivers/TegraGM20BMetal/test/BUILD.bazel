@@ -95,6 +95,8 @@
 #   rawpack_targets_test  the built pack (//gpu/seed:raw_pack, so the full pack build): each record holds every varying
 #                     register of the colour targets it draws, a two-plane record's alpha targets included, and no
 #                     other target's; no record holds a target's separate alpha, target 0's is the baseline's
+#   directcheck_test  the built pack too: on a fixed sample of its states (two-plane forms among them), each record the
+#                     runtime's direct compile makes is the pack's byte for byte, and each state it set aside is refused
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
 #   raw_ycbcr_store_test  raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment (an M4
