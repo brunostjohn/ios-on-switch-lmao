@@ -14,6 +14,7 @@ public enum FetchStrip {
     public struct Cell: Sendable {
         public let name, path, routes: String
         public let wrong: Int
+        public var error = ""  // what its command buffer or readback threw, "" for nothing
     }
 
     static let side = 32
@@ -31,21 +32,44 @@ public enum FetchStrip {
             for (arm, offset, count) in [("strip", 0, 4), ("strip_restart", 4, 7)] {
                 let name = "\(arm)_\(storage == .private ? "private" : "shared")"
                 out.append(
-                    try await cell(
+                    await guarded(
                         gpu, name, state, indexBuffer, offset: offset, count: count, storage: storage, culled: false))
             }
         }
         out.append(
-            try await cell(
+            await guarded(
                 gpu, "replay_scissor", state, indexBuffer, offset: 0, count: 4, storage: .private, culled: true))
-        let derivative = try gpu.render(fragment: "fetch_derivative_fragment", format: .bgra8Unorm)
         for storage in [MTLStorageMode.private, .shared] {
-            out.append(
-                try await cell(
-                    gpu, "derivative_\(storage == .private ? "private" : "shared")", derivative, indexBuffer,
-                    offset: 0, count: 4, storage: storage, culled: false, want: derivatives))
+            let name = "derivative_\(storage == .private ? "private" : "shared")"
+            do {
+                let derivative = try gpu.render(fragment: "fetch_derivative_fragment", format: .bgra8Unorm)
+                out.append(
+                    await guarded(
+                        gpu, name, derivative, indexBuffer, offset: 0, count: 4, storage: storage, culled: false,
+                        want: derivatives))
+            } catch {
+                var failed = Cell(name: name, path: "-", routes: "-", wrong: side * side)
+                failed.error = "\(error)"
+                out.append(failed)
+            }
         }
         return out
+    }
+
+    /// `cell`, an error recorded in the cell instead of thrown, so one arm's failure leaves the others' readings
+    static func guarded(
+        _ gpu: GPU, _ name: String, _ state: MTLRenderPipelineState, _ indexBuffer: MTLBuffer, offset: Int, count: Int,
+        storage: MTLStorageMode, culled: Bool, want: [UInt8] = FetchStrip.want
+    ) async -> Cell {
+        do {
+            return try await cell(
+                gpu, name, state, indexBuffer, offset: offset, count: count, storage: storage, culled: culled,
+                want: want)
+        } catch {
+            var failed = Cell(name: name, path: "-", routes: "-", wrong: side * side)
+            failed.error = "\(error)"
+            return failed
+        }
     }
 
     static func cell(

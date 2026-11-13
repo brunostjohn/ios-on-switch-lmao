@@ -14,8 +14,9 @@ import Metal
 /// `icon<pt>_*`: iconservicesagent draws Settings' icon at 27 and 68 points, scale 2, uncached (-[ISImageDescriptor
 /// setIgnoreCache:]); the small one's corners against the large one reduced to its size (`icon27_corner_beyond`), and
 /// the cached 27-point image the App Library shows (`icon27_cached_corner_beyond`, reported). FAIL: a RenderBox or
-/// strip arm off its reference or off the raw path, or the uncached small icon's corners beyond
-/// RenderBoxCorner.tolerance of the reduced large one.
+/// strip arm off its reference, off the raw path or failing (`<arm>_error=`), the uncached small icon's corners beyond
+/// RenderBoxCorner.tolerance of the reduced large one, or RenderBox's or IconServices' calls absent (`rb_api=`,
+/// `icon_api=`).
 struct IconCornersTest: HWTest {
     let id = "gpu.raw.icon_corners"
     let name = "Icon corners: RenderBox's mask and IconServices' icons at the App Library's sizes against references"
@@ -33,17 +34,25 @@ struct IconCornersTest: HWTest {
             metrics.set("\(cell.name)_path", cell.path)
             metrics.set("\(cell.name)_routes", cell.routes)
             metrics.set("\(cell.name)_wrong", cell.wrong)
+            if !cell.error.isEmpty { metrics.set("\(cell.name)_error", cell.error) }
             let offPath = cell.name != "replay_scissor" && cell.path != "raw" && cell.path != "device"
-            if cell.wrong > 0 || offPath { wrong.append(cell.name) }
+            if cell.wrong > 0 || offPath || !cell.error.isEmpty { wrong.append(cell.name) }
         }
         if RenderBoxCorner.available {
             for side in [54, 136] {
                 for storage in [MTLStorageMode.private, .shared] {
                     let before = RawFacade.counters(of: gpu.device)
-                    let cell = try await RenderBoxCorner.cell(
-                        gpu, side: side, radius: Double(side) * Self.iconRadius, storage: storage)
+                    let name = "rb\(side)_\(storage == .private ? "private" : "shared")"
+                    let cell: RenderBoxCorner.Cell
+                    do {
+                        cell = try await RenderBoxCorner.cell(
+                            gpu, side: side, radius: Double(side) * Self.iconRadius, storage: storage)
+                    } catch {
+                        metrics.set("\(name)_error", "\(error)")
+                        wrong.append(name)
+                        continue
+                    }
                     let after = RawFacade.counters(of: gpu.device)
-                    let name = "rb\(side)_\(cell.storage)"
                     metrics.set("\(name)_beyond", cell.beyond)
                     metrics.set("\(name)_max_diff", cell.maxDiff)
                     metrics.set("\(name)_partial", cell.partial)
@@ -55,7 +64,8 @@ struct IconCornersTest: HWTest {
                 }
             }
         } else {
-            metrics.set("rb", "absent")
+            metrics.set("rb_api", "absent")
+            wrong.append("rb_api")
         }
         icons(&metrics, &wrong)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
@@ -97,12 +107,14 @@ struct IconCornersTest: HWTest {
     func icons(_ metrics: inout Metrics, _ wrong: inout [String]) {
         guard let large = Self.icon(points: 68, ignoreCache: true) else {
             metrics.set("icon_api", "absent")
+            wrong.append("icon_api")
             return
         }
         metrics.set("icon68_side", large.side)
         for (name, ignoreCache) in [("icon27", true), ("icon27_cached", false)] {
             guard let small = Self.icon(points: 27, ignoreCache: ignoreCache) else {
                 metrics.set("\(name)_side", 0)
+                if name == "icon27" { wrong.append(name) }
                 continue
             }
             metrics.set("\(name)_side", small.side)

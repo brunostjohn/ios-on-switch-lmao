@@ -20,9 +20,30 @@ public enum RenderBoxCorner {
         public var beyond = 0, maxDiff = 0, partial = 0, referencePartial = 0
     }
 
+    /// The classes and selectors the cells use, all present
     public static var available: Bool {
-        ["RBDevice", "RBDrawable", "RBDisplayList", "RBShape", "RBFill"].allSatisfy { NSClassFromString($0) != nil }
+        let selectors: [(String, [String])] = [
+            ("RBDevice", ["initWithDevice:"]),
+            (
+                "RBDrawable",
+                [
+                    "initWithDevice:", "setPixelFormat:", "setTexture:", "setSize:", "setScale:",
+                    "setCompletedHandler:",
+                    "renderDisplayList:flags:", "finish",
+                ]
+            ),
+            ("RBDisplayList", ["drawShape:fill:alpha:blendMode:", "renderInContext:options:"]),
+            ("RBShape", ["setRoundedRect:cornerRadius:cornerStyle:"]),
+            ("RBFill", ["setCGColor:"]),
+        ]
+        return selectors.allSatisfy { name, methods in
+            guard let type = NSClassFromString(name) as? NSObject.Type else { return false }
+            return methods.allSatisfy { type.instancesRespond(to: NSSelectorFromString($0)) }
+        }
     }
+
+    /// How long a drawing may take to complete before the cell reports it never did
+    static let completionLimit: TimeInterval = 5
 
     /// RenderBox's own drawing of a `side`-pixel icon mask with corner radius `radius` into a texture of `storage` on
     /// `gpu`'s device, against its CPU drawing
@@ -163,14 +184,33 @@ public enum RenderBoxCorner {
         let (completed, completedSel) = try method(drawable, "setCompletedHandler:", SetObject.self)
         let (render, renderSel) = try method(drawable, "renderDisplayList:flags:", Render.self)
         let (finish, finishSel) = try method(drawable, "finish", Plain.self)
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            let handler: @convention(block) () -> Void = { done.resume() }
+        let once = Once()
+        let completedInTime = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            let handler: @convention(block) () -> Void = { if once.first() { done.resume(returning: true) } }
             completed(drawable, completedSel, handler as AnyObject)
             render(drawable, renderSel, list, 0)
             finish(drawable, finishSel)
+            DispatchQueue.global().asyncAfter(deadline: .now() + completionLimit) {
+                if once.first() { done.resume(returning: false) }
+            }
         }
+        guard completedInTime else { throw TestFailure("RenderBox's drawing never completed") }
         let bytes = try await gpu.read(target, bytesPerPixel: 4)
         return (0..<(side * side)).map { bytes[$0 * 4 + 3] }
+    }
+
+    /// True for the first caller only, whichever thread it is on
+    final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var taken = false
+
+        func first() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            let was = taken
+            taken = true
+            return !was
+        }
     }
 
     static func cpuAlpha(_ list: AnyObject, side: Int) -> [UInt8] {
