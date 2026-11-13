@@ -46,4 +46,19 @@ TEST(RawZbc, SrgbEntriesHoldTheEncodedCodes)
     EXPECT_FALSE(raw::zbcColorEntry(81, ds, e)) << "a linear value between two codes";
 }
 
+// gpu.raw.compressed_targets zbc_rgb10a2
+TEST(RawZbc, Rgb10a2EntriesPackRedLowAlphaHigh)
+{
+    TegraGM20BAbiZbc e;
+    const float codes[4] = {1.0f, 0.0f, 512 / 1023.0f, 2 / 3.0f};
+    ASSERT_TRUE(entry(90, codes, e));
+    EXPECT_EQ(e.format, raw::kZbcA2B10G10R10);
+    EXPECT_EQ(e.l2[0], 1023u | 512u << 20 | 2u << 30);
+    const float any[4] = {0.3f, 0.6f, 0.9f, 0.5f};
+    ASSERT_TRUE(entry(90, any, e)) << "raw_clear.h hands exact codes";
+    EXPECT_EQ(e.l2[0], 307u | 614u << 10 | 921u << 20 | 2u << 30);
+    uint32_t ds[4] = {raw::clear_detail::bitsOf(0.3f), 0, 0, raw::clear_detail::bitsOf(1.0f)};
+    EXPECT_FALSE(raw::zbcColorEntry(90, ds, e)) << "306.9: no code";
+}
+
 }  // namespace

@@ -23,6 +23,7 @@ enum : uint32_t {
     kZbcRf16x4 = 0x16,       // FERMI_A_ZBC_COLOR_V0_FMT_RF16_GF16_BF16_AF16
     kZbcA8R8G8B8 = 0x18,     // BGRA8Unorm's
     kZbcA8Rl8Gl8Bl8 = 0x1c,  // BGRA8Unorm_sRGB's
+    kZbcA2B10G10R10 = 0x20,  // RGB10A2Unorm's
     kZbcA8B8G8R8 = 0x28,     // RGBA8Unorm's
     kZbcA8Bl8Gl8Rl8 = 0x2c,  // RGBA8Unorm_sRGB's
     kZbcDepthFp32 = 1,    // FERMI_A_ZBC_DEPTH_V0_FMT_FP32
@@ -124,6 +125,12 @@ inline bool zbcColorEntry(uint32_t mtl, const uint32_t ds[4], TegraGM20BAbiZbc &
         if (!srgb())
             return false;
         out.l2[0] = c[2] | c[1] << 8 | c[0] << 16 | c[3] << 24;
+        return true;
+    case 90:  // RGB10A2Unorm
+        out.format = kZbcA2B10G10R10;
+        if (!unorm(1023, 1023, 1023, 3))
+            return false;
+        out.l2[0] = c[0] | c[1] << 10 | c[2] << 20 | c[3] << 30;
         return true;
     case 115:  // RGBA16Float
         out.format = kZbcRf16x4;

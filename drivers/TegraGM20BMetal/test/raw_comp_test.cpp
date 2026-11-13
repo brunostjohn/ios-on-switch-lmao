@@ -181,8 +181,6 @@ TEST(RawComp, ZbcEntriesHoldTheTexelTheRopWrites)
     EXPECT_EQ(raw::zbcHalf(bits(1e-8f)), 0u);
     EXPECT_EQ(raw::zbcHalf(bits(65520.0f)), 0x7c00u);
     EXPECT_EQ(raw::zbcHalf(bits(5.9604645e-8f)), 1u);
-    const uint32_t tenBit[4] = {bits(1.0f), bits(0.0f), bits(512 / 1023.0f), bits(2 / 3.0f)};
-    EXPECT_FALSE(raw::zbcColorEntry(90, tenBit, e));    // RGB10A2Unorm: its packing never read back
     EXPECT_FALSE(raw::zbcColorEntry(125, quarter, e));  // RGBA32Float: the boot table's 0 and 1 alone
     ASSERT_TRUE(raw::zbcDepthEntry(252, 0.5f, e));
     EXPECT_EQ(e.type, uint32_t(TegraGM20BZbcDepth));
