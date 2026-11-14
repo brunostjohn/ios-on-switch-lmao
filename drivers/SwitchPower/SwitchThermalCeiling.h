@@ -34,6 +34,7 @@ struct Report {
     bool retried, restored;
 };
 
+// NOLINTBEGIN(readability-static-accessed-through-instance): a Dfll may provide its calls as static members
 template <class Dfll> class Check {
 public:
     Check(uint32_t stepKhz, uint32_t settleMs) : stepKhz_(stepKhz), settleMs_(settleMs)
@@ -65,6 +66,7 @@ public:
         hi_ = dfll.ceiling();
         report_.ceiling = dfll.khzAt(hi_);
         *moved = false;
+        // NOLINTNEXTLINE(readability-suspicious-call-argument): khz is the measured clock, the ceiling the asked one
         if (!switch_gov_over_step(report_.khz, report_.ceiling, stepKhz_)) {
             if (dfll.appliedKhz() == report_.ceiling && dfll.landed(hi_))
                 dfll.logRestored(report_);
@@ -126,6 +128,7 @@ private:
     void decide(Dfll &dfll)
     {
         report_.again = dfll.probeKhz();
+        // NOLINTNEXTLINE(readability-suspicious-call-argument): again is the measured clock, the ceiling the asked one
         if (!report_.err && !switch_gov_over_step(report_.again, report_.ceiling, stepKhz_)) {
             dfll.applied(hi_);
             report_.restored = dfll.landed(hi_);
@@ -151,6 +154,8 @@ private:
     unsigned hi_ = 0, lower_ = 0;
     Report report_ = {};
 };
+
+// NOLINTEND(readability-static-accessed-through-instance)
 
 }  // namespace switchceiling
 
