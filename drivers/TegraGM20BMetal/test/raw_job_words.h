@@ -63,7 +63,8 @@ inline const Chunk *chunkAt(const Run &r, uint64_t va)
 }
 
 // The model's jobs of `runs` (in order, the last one's to the model's last job): one line a job, its words in hex with each
-// (high, low) address pair in a chunk as "bytes+<offset in the run>", then its uses of BOs neither coherent nor made since
+// (high, low) address pair in a chunk as "bytes+<offset in the run>" and each (low, high) one, an address as data words
+// hold it, as "bytes.le+<offset>", then its uses of BOs neither coherent nor made since
 // `mark` (handleMark)
 inline std::string words(const std::vector<Run> &runs, uint64_t mark)
 {
@@ -79,9 +80,13 @@ inline std::string words(const std::vector<Run> &runs, uint64_t mark)
             snprintf(text, sizeof text, "cb %zu job %zu %zu:", r, j - run.firstJob, w.size());
             out += text;
             for (size_t i = 0; i < w.size(); i++) {
-                const uint64_t va = i + 1 < w.size() ? uint64_t(w[i]) << 32 | w[i + 1] : 0;
-                if (const Chunk *c = w[i] ? chunkAt(run, va) : nullptr) {
-                    snprintf(text, sizeof text, " bytes+%llx", (unsigned long long)(c->at + va - c->va));
+                const uint64_t high = i + 1 < w.size() ? uint64_t(w[i]) << 32 | w[i + 1] : 0,
+                               low = i + 1 < w.size() ? uint64_t(w[i + 1]) << 32 | w[i] : 0;
+                const Chunk *c = w[i] ? chunkAt(run, high) : nullptr;
+                const Chunk *data = !c && w[i + 1 < w.size() ? i + 1 : i] ? chunkAt(run, low) : nullptr;
+                if (c || data) {
+                    snprintf(text, sizeof text, c ? " bytes+%llx" : " bytes.le+%llx",
+                             (unsigned long long)(c ? c->at + high - c->va : data->at + low - data->va));
                     out += text;
                     i++;
                     continue;
