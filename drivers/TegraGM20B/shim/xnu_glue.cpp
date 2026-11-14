@@ -5,6 +5,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOCommandGate.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
@@ -214,6 +215,7 @@ uint32_t gUnhandled;
 volatile uint8_t *gPmc;
 IOWorkLoop *gIrqLoop;
 IOInterruptEventSource *gIrqSources[2];
+IOCommandGate *gPassGate;  // nvxnu_pass_try's way to try the work loop's gate
 
 uint32_t pmc(uint32_t offset)
 {
@@ -524,6 +526,9 @@ extern "C" void nvxnu_irq_start(void)
 			      i ? "nonstall" : "stall", kGpuIntids[i]);
 		}
 	}
+	gPassGate = IOCommandGate::commandGate(gIrqLoop);
+	if (!gPassGate || gIrqLoop->addEventSource(gPassGate) != kIOReturnSuccess)
+		panic("tegra-gm20b: cannot add a command gate to the GPU interrupt work loop");
 	__atomic_store_n(&gIrqActive, 1, __ATOMIC_RELEASE);
 	for (auto *source : gIrqSources)
 		source->enable();
@@ -557,6 +562,42 @@ extern "C" void nvxnu_pass_barrier(void)
 			return kIOReturnSuccess;
 		},
 		nullptr);
+}
+
+namespace
+{
+struct PassCall {
+	void (*fn)(void *);
+	void *arg;
+};
+
+IOReturn passCall(OSObject *, void *call, void *, void *, void *)
+{
+	const auto *pass = static_cast<const PassCall *>(call);
+	pass->fn(pass->arg);
+	return kIOReturnSuccess;
+}
+}  // namespace
+
+// Before the interrupts are attached there is no pass and no channel: nothing to run beside.
+extern "C" void nvxnu_pass_run(void (*fn)(void *), void *arg)
+{
+	PassCall call{fn, arg};
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE)) {
+		fn(arg);
+		return;
+	}
+	gIrqLoop->runAction(passCall, nullptr, &call);
+}
+
+extern "C" int nvxnu_pass_try(void (*fn)(void *), void *arg)
+{
+	PassCall call{fn, arg};
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE)) {
+		fn(arg);
+		return 1;
+	}
+	return gPassGate->attemptAction(passCall, &call) == kIOReturnSuccess ? 1 : 0;
 }
 
 // After the power-up, before nvkm arms anything (as nvxnu_irq_start() at the end of M1): the PMC enables are at reset.

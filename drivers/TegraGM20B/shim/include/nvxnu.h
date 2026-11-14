@@ -202,6 +202,11 @@ void nvxnu_irq_start(void);
 void nvxnu_irq_suspend(void);
 /* Returns once no interrupt pass that began before the call is still running. Thread context, no lock the pass takes. */
 void nvxnu_pass_barrier(void);
+/* fn(arg) inside the interrupt work loop's gate, so never beside a pass or another such call; on the work loop itself at
+ * once. nvxnu_pass_run waits for the gate (thread context, no lock the pass takes); nvxnu_pass_try never waits and
+ * returns 0, fn not run, while a pass or another call holds it. */
+void nvxnu_pass_run(void (*fn)(void *), void *arg);
+int nvxnu_pass_try(void (*fn)(void *), void *arg);
 void nvxnu_irq_resume(void);
 /* A frame timeline kdebug tracepoint (SwitchFrameTimeline.h): debug kernels only, free while tracing is off. */
 void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c);
