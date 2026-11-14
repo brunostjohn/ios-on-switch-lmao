@@ -3,10 +3,10 @@ import Foundation
 import HWTestCore
 import SwitchIPIProbe
 
-/// Two threads waking each other through Mach semaphores (cpu/switch_ipi_probe.c), each waker keeping its own core busy
-/// for 50 us after its signal so the other thread wakes on another core: every wake is a cross-core IPI (ArmCpu's SGI
-/// send and acknowledge). No wake may be lost; how long each takes is reported. The kernel's per-core IPI counts for the
-/// same window are in the SwitchPower 10 s line ("; irq cpuN ... ipi").
+/// Two threads waking each other through Mach semaphores (cpu/switch_ipi_probe.c), each waker keeping its own core
+/// busy for 50 us after its signal so the other thread wakes on another core: every wake is a cross-core IPI (ArmCpu's
+/// SGI send and acknowledge). No wake may be lost; how long each takes is reported. The kernel's per-core IPI counts
+/// for the same window are in the SwitchPower 10 s line ("; irq cpuN ... ipi").
 struct CPUIPIPingPongTest: HWTest {
     let id = "cpu.ipi_pingpong"
     let name = "Cross-core wakes: two threads waking each other"
