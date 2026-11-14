@@ -34,6 +34,7 @@
 		<string>kern.switch_frame_info_shown</string>
 		<string>kern.switch_frame_info_unsent</string>
 		<string>kern.switch_joycon</string>
+		<string>kern.switch_soctherm</string>
 		<string>kern.switch_gpu_paths</string>
 		<string>kern.switch_gpu_promises</string>
 		<string>kern.a64x.images</string>

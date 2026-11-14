@@ -10,6 +10,8 @@
 #   switch_sensors_hid_source_test   the HID descriptor and IOHIDFamily vtable slots the sensors are published through
 #   switch_emc_governor_test         SwitchEMCGovernor.h: the EMC rates used, ACTMON's watermarks and the governor's moves
 #   switch_soctherm_window_test      SwitchSocThermWindow.h: SOC_THERM's one-degree LVL0 window and the groups' registers
+#   switch_soctherm_throttle_test    SwitchSocThermThrottle.h: L4T's T210B01 hardware throttle on a model of SOC_THERM,
+#                                    its state line, and the GPU clock count's thermal sample
 #   switch_thermal_shutdown_test     software shutdown below the hardware trip, its RTC record, the reset cause decoding
 #   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
 #   switch_thermal_dfll_test         SwitchThermalDfll.h against a stand-in SwitchThermal: a DFLL failure fails that
@@ -109,6 +111,23 @@ host_test(
         "//drivers/SwitchPower:SwitchSocThermWindow.h",
         "//drivers/SwitchPower:SwitchThermalLimits.h",
     ],
+)
+
+host_test(
+    name = "switch_soctherm_throttle_test",
+    srcs = [
+        "switch_soctherm_throttle_test.cpp",
+        "//drivers/SwitchPower:SwitchSocThermThrottle.h",
+        "//drivers/SwitchPower:SwitchSocThermWindow.h",
+        "//drivers/SwitchPower:SwitchThermalLimits.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+    data = [
+        "//drivers/SwitchPower:SwitchSensors.cpp",
+        "//drivers/SwitchPower:SwitchSocTherm.cpp",
+        "//drivers/TegraGM20B:gpu_stats_clock.c",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
 )
 
 host_test(
