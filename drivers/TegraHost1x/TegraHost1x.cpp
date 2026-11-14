@@ -21,6 +21,7 @@
 #include "SwitchHost1xFailureRelease.h"
 #include "SwitchHost1xIntr.h"
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../TegraSMMU/TegraSMMU.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
@@ -161,8 +162,7 @@ int bringUp()
         return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", switch_car_read(CLK_OUT_ENB_L));
     if (switch_mmio_read32(gMc, MC_SMMU_HC_ASID) & SMMU_ENABLE)
         return fail("SMMU translation is on for HC, MC 0x250", switch_mmio_read32(gMc, MC_SMMU_HC_ASID));
-    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
-        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
+    tegra_mc_hot_reset(MC_HOTRESET_CTRL, MC_HOTRESET_HC, false);
     syncConfigure();
     if (!attachInterrupt())
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);

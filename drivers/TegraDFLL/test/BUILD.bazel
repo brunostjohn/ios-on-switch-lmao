@@ -15,6 +15,7 @@ DFLL_HEADERS = [
     "tegra_dfll_fake.h",
     "//drivers/TegraDFLL:headers",
     "//drivers/TegraI2C:headers",
+    "//kits/SwitchCAR:headers",
     "//kits/SwitchLinux:headers",
     "//kits/SwitchMMIO:headers",
 ]

@@ -72,6 +72,9 @@ extern "C" void switch_car_clock_enable(unsigned)
 extern "C" void switch_car_reset_deassert(unsigned)
 {}
 
+extern "C" void tegra_mc_hot_reset(uint32_t, uint32_t, bool)
+{}
+
 // Each channel's push buffer, then its arena.
 bool switch_dma_alloc(switch_dma_buffer *out, size_t size, uint64_t, IOOptionBits)
 {
