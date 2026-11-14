@@ -8,6 +8,12 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Whether connections count their BOs: debug kernels only (TegraGM20BGpu.h TGM_STATS, expanded where it is used); a
+ * host model of a connection sets it */
+#ifndef SWITCH_GPU_OWNER_COUNTS
+#define SWITCH_GPU_OWNER_COUNTS TGM_STATS
+#endif
+
 enum SwitchGpuOwnerKind : uint8_t {
 	SWITCH_GPU_OWNER_IMPORTED,
 	SWITCH_GPU_OWNER_POOL,

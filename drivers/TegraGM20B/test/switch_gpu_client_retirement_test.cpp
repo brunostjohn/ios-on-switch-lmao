@@ -18,6 +18,7 @@
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
 #include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
+#define SWITCH_GPU_OWNER_COUNTS 1  // the debug kernel's BO counts (SwitchGpuOwnerMemory.h)
 #include "drivers/TegraGM20B/SwitchGpuOwnerMemory.h"
 #include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
 #include "gm20b_gpu_memory.h"
@@ -554,7 +555,6 @@ public:
 	}
 };
 
-#define TGM_STATS 1  // the debug kernel's release accounting (SwitchGpuOwnerMemory.h)
 #include "drivers/TegraGM20B/SwitchGpuClientRetirement.h"
 
 class ClientRetirement : public testing::Test
