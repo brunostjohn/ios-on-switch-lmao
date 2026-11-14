@@ -275,9 +275,11 @@ TEST(Vic422Model, TheDetachedLayerCopyCoversItsPlanes)
 {
     constexpr uint32_t SW = 1920, SH = 1080, SP = 2048;
     constexpr uint8_t Y = 81, CB = 90, CR = 240;
+
     struct Shape {
         uint32_t w, h, pitch;
     };
+
     const uint64_t sOff = chromaOffset(SP, SH);
     for (const Shape shape : {Shape{300, 534, 512}, Shape{720, 1280, 768}}) {
         const uint32_t DW = shape.w, DH = shape.h, DP = shape.pitch;
