@@ -69,6 +69,7 @@
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchFalcon/SwitchFalconInterrupt.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
@@ -100,9 +101,6 @@ enum : uint32_t {
 };
 
 enum : uint32_t {
-    MC_INTSTATUS = 0x0,
-    MC_ERR_STATUS = 0x8,
-    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVDEC = 1u << 5,
@@ -134,15 +132,42 @@ const char *falconState()
 
 // NVDEC's partition and memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
 // (t210/cg_regs.c t21x_nvdec_gating_registers). Partition 25 needs NVJPG's 26 on (powergate-t21x.c powers 26 first and
-// NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, with NVJPG's clock left off. A
+// NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, NVDEC's clock pulsed as the TRM's
+// NVJPG ungating does (12.2.7.10) and NVJPG's clock left off. A
 // partition the boot chain left on keeps its state; the engine is still reset so the falcon starts from scratch.
-constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock};
-const SwitchEnginePower kPower = {kPartition,         kClock,           MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
-                                  MC_HOTRESET_NVDEC,  OVRE_NVDEC_MBIST, kSlcgClocks,        1,
-                                  tegra_mc_hot_reset, tegra_smmu_read};
-const SwitchEnginePower kNvjpgPower = {kNvjpgPartition,    kNvjpgClock,      MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
-                                       MC_HOTRESET_NVJPG,  OVRE_NVDEC_MBIST, kNvjpgSlcgClocks,   1,
-                                       tegra_mc_hot_reset, tegra_smmu_read};
+constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock}, kNvjpgUngateClocks[] = {kClock};
+const SwitchEnginePower kPower = {
+    .name = "TegraNVDEC",
+    .partition = kPartition,
+    .clock = kClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL_1,
+    .hotResetStatus = MC_HOTRESET_STATUS_1,
+    .hotResetBit = MC_HOTRESET_NVDEC,
+    .lvl2Mask = OVRE_NVDEC_MBIST,
+    .slcgClocks = kSlcgClocks,
+    .slcgCount = 1,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+    .host1xModule = TEGRA_HOST1X_MODULE_NVDEC,
+    .moduleTeardown = tegra_host1x_module_teardown,
+};
+const SwitchEnginePower kNvjpgPower = {
+    .name = "TegraNVDEC (NVJPG's partition)",
+    .partition = kNvjpgPartition,
+    .clock = kNvjpgClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL_1,
+    .hotResetStatus = MC_HOTRESET_STATUS_1,
+    .hotResetBit = MC_HOTRESET_NVJPG,
+    .lvl2Mask = OVRE_NVDEC_MBIST,
+    .slcgClocks = kNvjpgSlcgClocks,
+    .slcgCount = 1,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+    .ungateClocks = kNvjpgUngateClocks,
+    .ungateCount = 1,
+    .host1xModule = TEGRA_HOST1X_MODULE_NVJPG,
+    .moduleTeardown = tegra_host1x_module_teardown,
+};
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},                      // THI_CLK_OVERRIDE
     {0x88, 0},                       // THI_SLCG_OVERRIDE_HIGH_A
@@ -156,9 +181,10 @@ bool powerUp(bool *wasOn)
 {
     const auto failed = [](unsigned partition) {
         snprintf(gLine, sizeof(gLine),
-                 "N1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x CLAMP_STATUS %#x "
-                 "CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
+                 "N1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x REMOVE_CLAMPING_CMD %#x "
+                 "CLAMP_STATUS %#x CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
                  partition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS),
+                 switch_pmc_read(switch_engine_power::kPmcRemoveClamping),
                  switch_pmc_read(switch_engine_power::kPmcClampStatus), switch_car_read(CLK_OUT_ENB_Y),
                  switch_car_read(RST_DEVICES_Y));
         return false;
@@ -280,11 +306,26 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool drain);
 
+SwitchFalconInterrupt gErrors;  // NVDEC Interrupt: global 9 (TRM ch.3, p.33)
+constexpr uint32_t kErrorIntid = 32 + 9;
+
+// The falcon's error interrupt: the cancellation runs at once (TegraNVDECCancel.cpp) and its line carries the reason;
+// one already under way clears and resets the engine anyway, so this error is only named.
+void falconFailed(const switch_falcon_error &error)
+{
+    if (switch_nvdec_jobs_falcon_failed())
+        return;
+    char why[256];
+    IOLog("TegraNVDEC: %s, during a cancellation already under way\n",
+          switch_falcon_error_describe(&error, why, sizeof(why)));
+}
+
 // Back to reset with the clock off: after a failed bring-up for the boot, after a failed reset or power-on until the
 // next decode powers it on. The engine is in reset before its swgroups go back to bypass, where an IOVA would reach the
 // physical address of the same number.
 void park()
 {
+    gErrors.off();
     switch_car_reset_assert(kClock);
     IODelay(2);
     switch_car_clock_disable(kClock);
@@ -369,6 +410,12 @@ void bringUpStages()
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
+    if (!gErrors.start("TegraNVDEC", kErrorIntid, gNvdec, falconFailed)) {
+        IOLog("TegraNVDEC: N2 FAIL no falcon error interrupt (INTID %u)\n", kErrorIntid);
+        giveUp(true);
+        return;
+    }
+    gErrors.on();
     if (!switch_nvdec_jobs_start(gSetup, id, tegra_host1x_syncpt_read(id)) || !switch_nvdec_cancel_start(id) ||
         !gGate.start({"TegraNVDEC", nullptr, gateOn, gateOff}, tegra_nvdec_power_lock())) {
         IOLog("SwitchNVDEC: completion worker or idle timer could not start\n");
@@ -432,16 +479,26 @@ bool switch_nvdec_engine_powered()
 void switch_nvdec_engine_describe(char *text, size_t size)
 {
     char falcon[400];
-    snprintf(text, size, "%s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
-             switch_falcon_stall(gNvdec, falcon, sizeof(falcon)), switch_mmio_read32(gMc, MC_INTSTATUS),
-             switch_mmio_read32(gMc, MC_ERR_STATUS), switch_mmio_read32(gMc, MC_ERR_ADR));
+    uint32_t status = 0, error = 0, address = 0;
+    const uint32_t errors = tegra_mc_error_latest(&status, &error, &address);
+    snprintf(text, size, "%s; MC errors %u, latest INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
+             switch_falcon_stall(gNvdec, falcon, sizeof(falcon)), errors, status, error, address);
 }
 
 // The memory controller stops taking NVDEC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
 // cut a transfer in half; powerUp releases the flush once the engine is out of reset again.
+bool switch_nvdec_engine_falcon_failed(char *text, size_t size)
+{
+    return gErrors.failed(text, size);
+}
+
 bool switch_nvdec_engine_reset(bool *drained)
 {
+    gErrors.lostCheckStart();
     *drained = switch_engine_power::flush(kPower);
+    gErrors.lostCheckEnd();
+    gErrors.off();
+    switch_falcon_error_clear(gNvdec);
     switch_car_reset_assert(kClock);
     IODelay(10);
     bool wasOn = false;
@@ -451,7 +508,10 @@ bool switch_nvdec_engine_reset(bool *drained)
 
 bool switch_nvdec_engine_boot()
 {
-    return bootFalcon() && proven();
+    const bool booted = bootFalcon() && proven();
+    if (booted)
+        gErrors.on();
+    return booted;
 }
 
 const char *switch_nvdec_engine_wedge()
@@ -490,6 +550,7 @@ int gateOff(void *, bool drain)
 {
     if (!switch_nvdec_jobs_park(drain))
         return SWITCH_ENGINE_GATE_BUSY;
+    gErrors.off();
     return switch_engine_power_down(kPower) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 

@@ -10,6 +10,7 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../TegraNVJPG.cpp"
+#include "../../../kits/SwitchFalcon/SwitchFalconInterrupt.cpp"
 
 // A falcon v1 image: magic, version 1, 0x200 bytes, the OS header at 0x100 naming 0x80 bytes of code and of data.
 __asm__(".section __DATA,__const\n"
@@ -28,6 +29,13 @@ namespace {
 struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
     bool flushed = false, nvdecPartitionOn = false;
+    bool requestDropped = false;             // another writer clears NVJPG's request bit after it is set
+    bool clampStatusStale = false;           // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
+    bool clampStuck = false;                 // REMOVE_CLAMPING_CMD never clears
+    bool removeSticksWhenUnclamped = false;  // a command to a partition with no clamp leaves its bit set
+    bool removePending = false;
+    bool falconErrorInDecode = false;  // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
+    std::string decodeWaitEnded;       // "falcon": the decode's wait ended on the error, not at its bound
     std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
@@ -57,7 +65,7 @@ std::vector<uint8_t> gNvjpgRegisters(0x40000), gMcRegisters(0x1000);
 uint64_t gNextPa = 0x80000000;
 IOLock gNvdecPower;
 
-constexpr unsigned kJpgClock = 195;
+constexpr unsigned kJpgClock = 195;  // NVDEC's is the driver's kNvdecClock (194)
 constexpr uint32_t kSyncpt = 163;
 }  // namespace
 
@@ -108,6 +116,37 @@ int tegra_host1x_syncpt_wait(uint32_t, uint32_t threshold, uint32_t boundUs)
 {
     gEngine.lastBoundUs = boundUs;
     return static_cast<int32_t>(gEngine.syncpt - threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT;
+}
+
+void tegra_host1x_syncpt_kick(uint32_t)
+{
+    gEngine.events.push_back("kick");
+}
+
+// A decode the falcon parks on: THI raises FALCON_INT on NVJPG's line while the job's wait sleeps.
+int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, uint32_t boundUs, const uint32_t *errors,
+                                    uint32_t seen)
+{
+    if (gEngine.falconErrorInDecode && !gEngine.reachable())
+        ADD_FAILURE() << "an error raised by an engine that is off";
+    if (gEngine.falconErrorInDecode) {
+        auto reg = [](uint32_t offset) -> uint32_t & {
+            return *reinterpret_cast<uint32_t *>(gNvjpgRegisters.data() + offset);
+        };
+        reg(SWITCH_FALCON_THI_INT_STATUS) = 1;
+        reg(SWITCH_FALCON_ERR_IRQSTAT) = 1u << 6;
+        reg(SWITCH_FALCON_ERR_IRQDEST) = 0xfff0;
+        reg(SWITCH_FALCON_ERR_MAILBOX0) = 8;
+        reg(SWITCH_FALCON_ERR_MAILBOX1) = 0x77;
+        gEngine.events.push_back("falcon error");
+        EXPECT_TRUE(IOWorkLoop::last()->fire()) << "NVJPG's line must be on during a decode";
+    }
+    if (errors && __atomic_load_n(errors, __ATOMIC_ACQUIRE) != seen) {
+        gEngine.decodeWaitEnded = "falcon";
+        return TEGRA_HOST1X_EFALCON;
+    }
+    gEngine.decodeWaitEnded = "bound";
+    return tegra_host1x_syncpt_wait(id, threshold, boundUs);
 }
 
 int tegra_host1x_syncpt_release_failed(uint32_t, uint32_t, uint32_t)
@@ -173,17 +212,31 @@ void tegra_host1x_channel_restart(uint32_t)
     gEngine.restarts++;
 }
 
+void tegra_host1x_module_teardown(uint32_t module)
+{
+    gEngine.events.push_back("module teardown " + std::to_string(module));
+}
+
 void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
 {
     EXPECT_EQ(ctrl, 0x970u);
     EXPECT_EQ(bit, 1u << 8);
-    gEngine.flushed = on;
+    gEngine.flushed = on && !gEngine.requestDropped;
     gEngine.events.push_back(on ? "flush" : "release");
+}
+
+// The client drains at once, and STATUS reads done whenever no flush is requested (TRM 18.11.1.114).
+uint32_t tegra_mc_error_latest(uint32_t *intstatus, uint32_t *status, uint32_t *address)
+{
+    *intstatus = *status = *address = 0;
+    return 0;
 }
 
 uint32_t tegra_smmu_read(uint32_t offset)
 {
-    return offset == 0x974 && gEngine.flushed ? 1u << 8 : 0;
+    if (offset == 0x970)
+        return gEngine.flushed ? 1u << 8 : 0;
+    return offset == 0x974 ? 1u << 8 : 0;
 }
 
 int tegra_smmu_attach(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, char *, size_t)
@@ -204,6 +257,8 @@ void switch_car_clock_enable(unsigned id)
         gEngine.clockOn = true;
         gEngine.events.push_back("clock on");
     }
+    if (id == kNvdecClock)
+        gEngine.events.push_back("nvdec clock on");
 }
 
 void switch_car_clock_disable(unsigned id)
@@ -213,6 +268,8 @@ void switch_car_clock_disable(unsigned id)
         gEngine.clockOn = false;
         gEngine.events.push_back("clock off");
     }
+    if (id == kNvdecClock)
+        gEngine.events.push_back("nvdec clock off");
 }
 
 bool switch_car_clock_enabled(unsigned id)
@@ -224,6 +281,8 @@ void switch_car_reset_assert(unsigned id)
 {
     gEngine.resets[id] = true;
     if (id == kJpgClock) {
+        for (uint32_t offset : {uint32_t(SWITCH_FALCON_THI_INT_STATUS), uint32_t(SWITCH_FALCON_ERR_IRQSTAT)})
+            *reinterpret_cast<uint32_t *>(gNvjpgRegisters.data() + offset) = 0;
         gEngine.inReset = true;
         gEngine.falconRunning = false;
         gEngine.events.push_back("reset");
@@ -290,13 +349,16 @@ bool switch_pmc_partition_off(unsigned partition)
 
 void switch_pmc_remove_clamping(unsigned)
 {
-    gEngine.clamped = false;
+    gEngine.removePending = gEngine.removeSticksWhenUnclamped && !gEngine.clamped;
+    gEngine.clamped = gEngine.clampStuck;
     gEngine.events.push_back("unclamp");
 }
 
 uint32_t switch_pmc_read(uint32_t offset)
 {
-    return offset == 0x2c && gEngine.clamped ? 1u << 26 : 0;
+    if (offset == 0x34)
+        return gEngine.clamped || gEngine.removePending ? 1u << 26 : 0;
+    return offset == 0x2c && (gEngine.clamped || gEngine.clampStatusStale) ? 1u << 26 : 0;
 }
 
 switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const switch_falcon_image *)
@@ -306,6 +368,8 @@ switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const swit
 
 void switch_falcon_start(volatile uint8_t *)
 {
+    EXPECT_FALSE(switch_falcon_error_pending(gNvjpgRegisters.data())) << "a falcon booted with its error pending";
+    gEngine.events.push_back("falcon start");
     gEngine.boots++;
     gEngine.falconRunning = gEngine.reachable() && !gEngine.deadAfterReset;
 }

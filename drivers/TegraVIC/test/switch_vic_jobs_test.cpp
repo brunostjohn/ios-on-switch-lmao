@@ -421,6 +421,15 @@ void switch_vic_engine_describe(char *text, size_t size)
     snprintf(text, size, "falcon CPUCTL 0");
 }
 
+std::string falconError;  // what the engine's error line took since its boot
+
+bool switch_vic_engine_falcon_failed(char *text, size_t size)
+{
+    EXPECT_TRUE(powerLock->locked);
+    snprintf(text, size, "%s", falconError.c_str());
+    return !falconError.empty();
+}
+
 bool switch_vic_engine_reset(bool *drained)
 {
     EXPECT_TRUE(powerLock->locked);
@@ -1121,6 +1130,37 @@ TEST_F(SwitchVICJobsTest, AStalledFrameIsCancelledAndTheNextFrameRuns)
     reachedInterrupts();
     EXPECT_EQ(nextFrame, 0);
     EXPECT_EQ(gQueue.count, 0u);
+}
+
+// VIC's falcon raises an error and parks (TRM 15.4.1.4): its line starts the cancellation at once, before any bound,
+// and the job in flight fails with the firmware's reason in the cancellation's one line. A second error while it is
+// under way joins it.
+TEST_F(SwitchVICJobsTest, AFalconErrorCancelsTheJobInFlightAtOnceWithItsReason)
+{
+    const auto heard = [](void *context, int status) {
+        *static_cast<int *>(context) = status;
+    };
+    int frame = 1;
+    ASSERT_EQ(submit(1, nullptr, heard, &frame), 0);
+    const uint64_t fence = gQueue.submitted;
+    falconError = "falcon error interrupt: MAILBOX0 0x3 (MSDECOS_ERROR_INVALID_METHOD) MAILBOX1 0x55";
+    EXPECT_TRUE(switch_vic_jobs_falcon_failed());
+    EXPECT_FALSE(switch_vic_jobs_falcon_failed()) << "one cancellation at a time";
+    EXPECT_THROW(submit(), std::runtime_error) << "new jobs wait for the cancellation";
+    IOLockUnlock(gLock);
+    runCancellation();
+    falconError.clear();
+    EXPECT_EQ(engineSteps, (std::vector<std::string>{"teardown", "reset", "release " + std::to_string(uint32_t(fence)),
+                                                     "restart", "boot"}));
+    reachedInterrupts();
+    EXPECT_EQ(frame, -5);
+    EXPECT_EQ(gQueue.count, 0u);
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("TegraVIC: job fence " + std::to_string(fence) +
+                                        " falcon error interrupt: MAILBOX0 0x3 (MSDECOS_ERROR_INVALID_METHOD)"),
+              std::string::npos)
+        << switch_test_log()[0];
+    EXPECT_NE(switch_test_log()[0].find("engine reset: running again"), std::string::npos);
 }
 
 // The idle gate of TegraVIC.cpp on this queue: its power-on boots the engine (the proof moves the syncpoint by two)

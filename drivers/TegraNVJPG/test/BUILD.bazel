@@ -81,12 +81,15 @@ host_shims(
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
         "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOFilterInterruptEventSource.h",
+        "IOKit/IOWorkLoop.h",
         "kern/clock.h",
         "kern/thread.h",
         "kern/thread_call.h",
         "os/log.h",
     ],
     stubs = "switch_nvjpg_gate_stubs.h",
+    deps = ["//kits/SwitchFalcon/test:switch_falcon_interrupt_stubs"],
 )
 
 # TegraNVJPG.cpp against a model of the engine: a job after the idle power-off powers the partition on, boots and
@@ -116,11 +119,17 @@ host_test(
         "//kits/SwitchEngineGate:SwitchEngineGateKernel.h",
         "//kits/SwitchEngineGate:SwitchEnginePower.h",
         "//kits/SwitchFalcon:SwitchFalcon.h",
+        "//kits/SwitchFalcon:SwitchFalconError.h",
+        "//kits/SwitchFalcon:SwitchFalconInterrupt.h",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
         "//kits/SwitchMath:SwitchMath.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
         "//kits/SwitchMMIO:SwitchMMIOKernel.h",
         "//kits/SwitchTime:SwitchTime.h",
     ],
-    additional_compiler_inputs = ["//drivers/TegraNVJPG:TegraNVJPG.cpp"],
+    additional_compiler_inputs = [
+        "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//kits/SwitchFalcon:SwitchFalconInterrupt.cpp",
+    ],
     deps = [":gate_kernel"],
 )

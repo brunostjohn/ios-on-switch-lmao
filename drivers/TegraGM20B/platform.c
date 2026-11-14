@@ -394,16 +394,15 @@ int tegra_gm20b_rail_gate(int *vdd)
 	return drained;
 }
 
-/* Linux drivers/memory/tegra/mc.h MC_INTSTATUS 0x00, MC_ERR_STATUS 0x08, MC_ERR_ADR 0x0c. Nothing else on this kernel
- * handles the MC interrupt, so the bits read are cleared again (write 1 to clear, as tegra_mc_irq does): the next read shows
- * only what the MC refused since, and an error status latched with them is free to record the next refusal. */
+/* The MC error interrupt (TegraSMMU.h) is the one owner of MC_INTSTATUS: the latest error it took, if one came since the
+ * previous call. */
 void tegra_gm20b_mc_errors(uint32_t *intstatus, uint32_t *status, uint32_t *addr)
 {
-	*intstatus = mc ? switch_mmio_read32(mc, 0x000) : 0;
-	*status = mc ? switch_mmio_read32(mc, 0x008) : 0;
-	*addr = mc ? switch_mmio_read32(mc, 0x00c) : 0;
-	if (*intstatus)
-		switch_mmio_write32_flush(mc, 0x000, *intstatus);
+	static uint32_t seen;
+	const uint32_t count = tegra_mc_error_latest(intstatus, status, addr);
+	if (count == seen)
+		*intstatus = *status = *addr = 0;
+	seen = count;
 }
 
 /* hekate bdk/mem/mc_t210.h; hekate l4t.c makes carveout 2 the GPU's WPR1 (ACR's) and saves its BOM, SIZE_128KB and CFG0 for

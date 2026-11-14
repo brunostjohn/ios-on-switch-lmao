@@ -375,6 +375,17 @@ TEST_F(Host1xSubmit, AStreamOutsideItsReservationIsRefusedAndEndsIt)
 
 // Each engine's job is built where host1x gathers it: its job path reserves arena room, writes its stream there and
 // submits it with its fence; only its one-off proof of life is copied, with its fence too.
+// MOD_TEARDOWN's other bits write as NO_ACTION (TRM 14.9.14): a module's teardown is its bit alone, no read-modify-write.
+TEST_F(Host1xSubmit, AModuleTeardownWritesThatModulesBitAlone)
+{
+    uint32_t &teardown = *reinterpret_cast<uint32_t *>(gHostRegisters + kSyncOffset + 0xb4);
+    teardown = 0xffffffffu;
+    tegra_host1x_module_teardown(TEGRA_HOST1X_MODULE_NVJPG);
+    EXPECT_EQ(teardown, 1u << 14);
+    tegra_host1x_module_teardown(TEGRA_HOST1X_MODULE_VIC);
+    EXPECT_EQ(teardown, 1u << 13);
+}
+
 TEST(Host1xSubmitShape, EveryEngineBuildsItsJobsInTheArena)
 {
     using switch_ios::test::Body;
