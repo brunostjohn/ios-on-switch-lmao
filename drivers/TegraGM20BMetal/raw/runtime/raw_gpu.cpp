@@ -4644,6 +4644,7 @@ void CommandBuffer::foldCounts()
     stats.interlockDraws += counts_.interlockDraws;
     stats.fetch.interlocked += counts_.interlocked;
     stats.fetch.interlockedBlends += counts_.interlockedBlends;
+    stats.fetch.twinRule += counts_.twinRule;
     counts_ = {};
 }
 #endif
@@ -5464,7 +5465,7 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
         Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin;
         if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
             return pl;
-        RAW_DIAGNOSTIC(dev_->stats.fetch.twinRule++);
+        RAW_DIAGNOSTIC(cb_->counts_.twinRule++);
         return twin;
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

@@ -1661,7 +1661,7 @@ private:
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {
         uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
-                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
+                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0, twinRule = 0;
     } counts_;
 
     void foldCounts();
