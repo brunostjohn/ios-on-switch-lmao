@@ -124,6 +124,7 @@ int32_t kernel(const Prepared &p, const Libraries &libraries, raw::Direct &direc
     d.computeFunction = made[0];
     d.maxTotalThreadsPerThreadgroup = p.request.kernel.maxThreads;
     d.threadGroupSizeIsMultipleOfThreadExecutionWidth = p.request.kernel.multipleOfWidth;
+    raw::applyStageIn(p.request.kernel.stageIn, d);
     const NmbDirectDispatch dispatch = p.request.kernel.dispatch();
     raw::ComputeRecord record;
     const raw::CompileOutcome outcome = direct.kernel(d, dispatch, p.packKey, record, why);

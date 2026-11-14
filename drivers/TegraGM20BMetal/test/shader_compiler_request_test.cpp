@@ -235,6 +235,59 @@ TEST(CompileRequest, AKernelIsKeyedByItsFunctionAndNamedByItsDispatch)
     EXPECT_FALSE(switch_compiler::prepare(raw::encodeRequest(other), kStack, system, p, why));
 }
 
+// Boot 21's metal.native.stage_in kernel (stage_sum): its client key names the stage input after the constants as
+// " | in a0=29:0:1:16:5:1 i=0:0", and the compiler took no request of it ('a kernel request whose key is not its
+// function's'), so the HW Test failed with 'A render pipeline could not be compiled'
+TEST(CompileRequest, AStageInKernelCarriesItsStageInputToTheCompiler)
+{
+    MTLStageInputOutputDescriptor *in = [MTLStageInputOutputDescriptor stageInputOutputDescriptor];
+    in.attributes[0].format = MTLAttributeFormatFloat2;
+    in.attributes[0].bufferIndex = 1;
+    in.layouts[1].stride = 16;
+    in.layouts[1].stepFunction = MTLStepFunctionThreadPositionInGridX;
+    const raw::StageInFields fields = raw::stageInOf(in);
+    EXPECT_EQ(raw::stageInText(fields), " | in a0=29:0:1:16:5:1 i=0:0");
+    EXPECT_EQ(raw::stageInText(raw::stageInOf(nil)), "");
+    in.layouts[1].stride = MTLBufferLayoutStrideDynamic;
+    EXPECT_EQ(raw::stageInText(raw::stageInOf(in)), " | in a0=29:0:1:4294967295:5:1 i=0:0");
+
+    raw::CompileRequest r;
+    r.stack = kStack;
+    r.kind = raw::RequestKind::Kernel;
+    r.libraries.push_back(data(made_metallib::universal({"stage_sum"}, 0x40)));
+    r.stages = {stage("k", "stage_sum")};
+    r.kernel.threads[0] = r.kernel.threads[1] = r.kernel.threads[2] = 1;
+    r.kernel.stageIn = fields;
+    raw::AirHash air;
+    air.fill(0x40);
+    const std::string compute = raw::computeKey(air, raw::stageInText(fields), 0, false, r.kernel.threads, "", "", "");
+    r.key = "kernel | " + compute;
+    raw::CompileRequest back;
+    ASSERT_TRUE(raw::decodeRequest(raw::encodeRequest(r), back));
+    EXPECT_EQ(raw::stageInText(back.kernel.stageIn), raw::stageInText(fields));
+    raw::CompileRequest plain = r;
+    plain.kernel.stageIn = {};
+    const std::string logged = raw::encodeRequest(plain);
+    constexpr size_t kStageInBytes = sizeof(raw::StageInFields::attributes) + 2 * sizeof(uint64_t);
+    ASSERT_TRUE(raw::decodeRequest(logged.substr(0, logged.size() - kStageInBytes), back));
+    EXPECT_EQ(raw::stageInText(back.kernel.stageIn), "");
+    const raw::Digest named = raw::storeName(raw::kernelCacheKey(kStack, "k"), r, {});
+    EXPECT_EQ(named, raw::storeName(raw::kernelCacheKey(kStack, "k"), plain, {}));
+
+    switch_compiler::SystemLibraries system;
+    switch_compiler::Prepared p;
+    std::string why;
+    ASSERT_TRUE(switch_compiler::prepare(raw::encodeRequest(r), kStack, system, p, why)) << why;
+    EXPECT_EQ(p.packKey, compute);
+    MTLComputePipelineDescriptor *made = [MTLComputePipelineDescriptor new];
+    raw::applyStageIn(p.request.kernel.stageIn, made);
+    EXPECT_EQ(raw::stageInText(raw::stageInOf(made.stageInputDescriptor)), raw::stageInText(fields));
+
+    raw::CompileRequest none = r;
+    none.kernel.stageIn = {};
+    EXPECT_FALSE(switch_compiler::prepare(raw::encodeRequest(none), kStack, system, p, why));
+}
+
 TEST(CompileRequest, TheCompilerRefusesWhatItCannotTrust)
 {
     switch_compiler::SystemLibraries system;

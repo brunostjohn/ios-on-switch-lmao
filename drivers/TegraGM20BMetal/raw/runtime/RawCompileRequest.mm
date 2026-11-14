@@ -105,6 +105,47 @@ void applyFields(const PipelineFields &f, MTLRenderPipelineDescriptor *d)
     d.vertexDescriptor = v;
 }
 
+StageInFields stageInOf(MTLStageInputOutputDescriptor *in)
+{
+    StageInFields f;
+    for (NSUInteger i = 0; in && i < 31; i++) {
+        MTLAttributeDescriptor *a = in.attributes[i];
+        if (a.format == MTLAttributeFormatInvalid)
+            continue;
+        MTLBufferLayoutDescriptor *l = in.layouts[a.bufferIndex < 31 ? a.bufferIndex : 0];
+        f.attributes[i] = {a.format, a.offset, a.bufferIndex, l.stride, l.stepFunction, l.stepRate};
+    }
+    if (in) {
+        f.indexType = in.indexType;
+        f.indexBuffer = in.indexBufferIndex;
+    }
+    return f;
+}
+
+void applyStageIn(const StageInFields &f, MTLComputePipelineDescriptor *d)
+{
+    MTLStageInputOutputDescriptor *in = nil;
+    for (unsigned i = 0; i < 31; i++) {
+        const AttributeFields &a = f.attributes[i];
+        if (!a.format)
+            continue;
+        if (!in)
+            in = [MTLStageInputOutputDescriptor stageInputOutputDescriptor];
+        in.attributes[i].format = MTLAttributeFormat(a.format);
+        in.attributes[i].offset = a.offset;
+        in.attributes[i].bufferIndex = a.buffer;
+        MTLBufferLayoutDescriptor *l = in.layouts[a.buffer < 31 ? a.buffer : 0];
+        l.stride = a.stride;
+        l.stepFunction = MTLStepFunction(a.step);
+        l.stepRate = a.rate;
+    }
+    if (!in)
+        return;
+    in.indexType = MTLIndexType(f.indexType);
+    in.indexBufferIndex = f.indexBuffer;
+    d.stageInputDescriptor = in;
+}
+
 std::string requestPackKey(const CompileRequest &r, bool &own)
 {
     const auto frameworkAt = [&](const RequestStage &s) {

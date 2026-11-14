@@ -53,6 +53,13 @@ struct RequestStage {
     uint32_t library = 0;
 };
 
+// A kernel's stage input descriptor: each set attribute with the layout of the buffer it reads (stride as Metal gives it,
+// MTLBufferLayoutStrideDynamic too), and its index buffer
+struct StageInFields {
+    AttributeFields attributes[31];
+    uint64_t indexType = 0, indexBuffer = 0;
+};
+
 // A kernel at one dispatch shape and its bindings (RawDirect.h KernelDispatch)
 struct KernelRequest {
     uint32_t maxThreads = 0;
@@ -61,9 +68,14 @@ struct KernelRequest {
     uint32_t memory[kRequestBindLimit] = {};
     std::vector<NmbDirectBoundTexture> textures;
     std::vector<NmbDirectBoundSampler> samplers;
+    StageInFields stageIn;
 
     NmbDirectDispatch dispatch() const;
 };
+
+// The stage input as a compute key names it after the function's constants (RawMetalComputeState.mm): "" for none, so a
+// kernel without one keys as before; a dynamic stride as UINT32_MAX, as RawPipelineKey.h's vertex layouts
+std::string stageInText(const StageInFields &in);
 
 struct CompileRequest {
     uint64_t stack = 0;

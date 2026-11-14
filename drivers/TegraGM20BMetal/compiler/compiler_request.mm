@@ -61,8 +61,9 @@ bool kernelKey(Prepared &p, const std::vector<std::map<std::string, raw::AirHash
     const raw::KernelRequest &k = r.kernel;
     char shape[64];
     snprintf(shape, sizeof shape, " | tg=%u,%u,%u | tgmem=", k.threads[0], k.threads[1], k.threads[2]);
+    const std::string constants = r.stages[0].constants + raw::stageInText(k.stageIn);
     const std::string own =
-        kKernelPrefix + raw::computeStateKey(hash, r.stages[0].constants, k.maxThreads, k.multipleOfWidth) + shape;
+        kKernelPrefix + raw::computeStateKey(hash, constants, k.maxThreads, k.multipleOfWidth) + shape;
     if (r.key.compare(0, own.size(), own))
         return why = "a kernel request whose key is not its function's", false;
     const std::string region = " | region=1";

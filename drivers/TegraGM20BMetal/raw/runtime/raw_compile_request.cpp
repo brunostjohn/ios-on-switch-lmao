@@ -5,6 +5,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace raw {
@@ -50,6 +51,16 @@ void writeKernel(Writer &w, const KernelRequest &k)
     w.list(k.samplers);
 }
 
+// After everything else, so a request logged before kernels carried it reads as one without: the store name leaves it out
+// (the key names it)
+void writeStageIn(Writer &w, const StageInFields &in)
+{
+    for (const AttributeFields &a : in.attributes)
+        w.bytes(&a, sizeof a);
+    w.value(in.indexType);
+    w.value(in.indexBuffer);
+}
+
 void readKernel(Reader &r, KernelRequest &k)
 {
     k.maxThreads = r.value<uint32_t>();
@@ -59,6 +70,14 @@ void readKernel(Reader &r, KernelRequest &k)
     r.bytes(k.memory, sizeof k.memory);
     k.textures = r.list<NmbDirectBoundTexture>();
     k.samplers = r.list<NmbDirectBoundSampler>();
+}
+
+void readStageIn(Reader &r, StageInFields &in)
+{
+    for (AttributeFields &a : in.attributes)
+        r.bytes(&a, sizeof a);
+    in.indexType = r.value<uint64_t>();
+    in.indexBuffer = r.value<uint64_t>();
 }
 
 bool knownTag(const CompileRequest &r, size_t index)
@@ -101,6 +120,26 @@ template <class T> void hashValue(CC_SHA256_CTX &c, const T &value)
 }
 
 }  // namespace
+
+std::string stageInText(const StageInFields &in)
+{
+    std::string text;
+    char b[96];
+    for (unsigned i = 0; i < 31; i++) {
+        const AttributeFields &a = in.attributes[i];
+        if (!a.format)
+            continue;
+        const uint64_t stride = a.stride == UINT64_MAX ? UINT32_MAX : a.stride;
+        snprintf(b, sizeof b, " a%u=%llu:%llu:%llu:%llu:%llu:%llu", i, (unsigned long long)a.format,
+                 (unsigned long long)a.offset, (unsigned long long)a.buffer, (unsigned long long)stride,
+                 (unsigned long long)a.step, (unsigned long long)a.rate);
+        text += b;
+    }
+    if (text.empty())
+        return text;
+    snprintf(b, sizeof b, " i=%llu:%llu", (unsigned long long)in.indexType, (unsigned long long)in.indexBuffer);
+    return " | in" + text + b;
+}
 
 NmbDirectDispatch KernelRequest::dispatch() const
 {
@@ -151,6 +190,7 @@ std::string encodeRequest(const CompileRequest &r)
     }
     w.value(r.fragmentTests);
     writeKernel(w, r.kernel);
+    writeStageIn(w, r.kernel.stageIn);
     return w.out;
 }
 
@@ -206,6 +246,8 @@ bool decodeRequest(const std::string &bytes, CompileRequest &out)
     }
     q.fragmentTests = r.value<uint8_t>();
     readKernel(r, q.kernel);
+    if (r.ok() && r.at() < bytes.size())
+        readStageIn(r, q.kernel.stageIn);
     if (!r.ok() || r.at() != bytes.size() || !sane(q))
         return false;
     out = std::move(q);

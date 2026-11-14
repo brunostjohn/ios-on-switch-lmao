@@ -15,6 +15,8 @@ MTLFunctionConstantValues *constantValuesOf(const std::string &text);
 
 PipelineFields fieldsOf(MTLRenderPipelineDescriptor *d);
 void applyFields(const PipelineFields &f, MTLRenderPipelineDescriptor *d);
+StageInFields stageInOf(MTLStageInputOutputDescriptor *in);
+void applyStageIn(const StageInFields &f, MTLComputePipelineDescriptor *d);
 
 // The pack key `r`'s stages and fields make, with its variant's suffix, and whether the state is its libraries' own (no
 // framework's default library: RawMetalStates.mm rmPipelineFor's _packable, negated)
