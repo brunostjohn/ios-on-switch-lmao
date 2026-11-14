@@ -25,6 +25,7 @@
 #include "SwitchDisplayMemoryState.h"
 #include "SwitchEMC.h"
 #include "SwitchEMCGovernor.h"
+#include "SwitchEMCHold.h"
 #include "SwitchDisplayBandwidth.h"
 #include "SwitchPower.h"
 
@@ -60,7 +61,8 @@ class SwitchEMC : public OSObject {
     unsigned count = 0, cur = 0;
     bool governing = false, refusalLogged = false;
     uint64_t hintUntil = 0;
-    uint64_t holdTicks = 0, frameTicks = 0;
+    uint64_t holdTicks = 0;
+    switch_emc_hold holdState = {};
 #if DEVELOPMENT || DEBUG
     uint64_t residency[SWITCH_EMC_MAX_RATES] = {}, since = 0;
     unsigned moves = 0;
@@ -73,7 +75,6 @@ class SwitchEMC : public OSObject {
     static void signalFired(OSObject *owner, IOInterruptEventSource *, int);
     static void holdFired(OSObject *owner, IOTimerEventSource *);
     bool held(uint64_t now);
-    void armHoldEnd(uint64_t now);
     void program();
     bool moveTo(unsigned asked, switch_emc_reason reason);
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
@@ -217,32 +218,24 @@ bool SwitchEMC::setup(char *why, size_t size)
         return false;
     }
     nanoseconds_to_absolutetime(uint64_t{SWITCH_EMC_HINT_HOLD_US} * NSEC_PER_USEC, &holdTicks);
-    nanoseconds_to_absolutetime(uint64_t{100} * NSEC_PER_MSEC, &frameTicks);
+    nanoseconds_to_absolutetime(uint64_t{100} * NSEC_PER_MSEC, &holdState.frame_ticks);
     signal->enable();
     return true;
 }
 
 bool SwitchEMC::held(uint64_t now)
 {
-    const uint64_t frame = switch_idle_last_frame();
-    return now < __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE) || ((frame != 0u) && now - frame < frameTicks);
-}
-
-void SwitchEMC::armHoldEnd(uint64_t now)
-{
-    const uint64_t frame = switch_idle_last_frame();
-    uint64_t end = __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE);
-    if (frame && frame + frameTicks > end)
-        end = frame + frameTicks;
-    if (end > now)
-        hold->wakeAtTime(end);
+    return now <
+           switch_emc_hold_end(&holdState, __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE), switch_idle_last_frame());
 }
 
 // ACTMON's watermarks for the rate now; its sample count restarts there.
 void SwitchEMC::program()
 {
     const uint64_t now = mach_absolute_time();
-    const bool keep = held(now);
+    const switch_emc_hold_step step = switch_emc_hold_program(
+        &holdState, now, __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE), switch_idle_last_frame(), false);
+    const bool keep = step.keep;
     switch_emc_wmarks w = switch_emc_watermarks(khz, count, cur, keep);
     if (cur <= memoryFloor(0))
         w.down_on = false;
@@ -256,8 +249,8 @@ void SwitchEMC::program()
                             (SWITCH_EMC_DOWN_SAMPLES - 1) << kCtrlDownNumShift | 0u << kCtrlUpNumShift |
                             (w.up_on ? kCtrlUpWmark : 0) | (w.down_on ? kCtrlDownWmark : 0));
     __atomic_store_n(&gTopHeld, cur + 1 == count && !w.down_on, __ATOMIC_RELEASE);
-    if (keep)
-        armHoldEnd(now);
+    if (step.arm_at)
+        hold->wakeAtTime(step.arm_at);
 }
 
 IOReturn SwitchEMC::displayAction(OSObject *owner, void *bytes, void *result, void *, void *)

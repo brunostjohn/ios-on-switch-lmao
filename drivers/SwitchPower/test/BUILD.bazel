@@ -16,6 +16,8 @@
 #                                    raise and the next raise runs the same path; only -ENODEV ends the DFLL mode
 #   switch_pllx_start_test           SwitchPllxStart.h: PLLX started again in the TRM's order (5.1.5: IDDQ, dividers,
 #                                    lock detection, enable, lock)
+#   switch_emc_hold_test             SwitchEMCHold.h played out over a frame burst: the EMC loop's hold-timer arms and
+#                                    wake-ups per burst, the hold's end within a tick of the frames' or the hint's
 #   switch_cpu_load_test             SwitchCpuLoad.h: a CPU's busy time from its context-switch callout, exact read
 #                                    alone, off by one interval per racing switch at most (also under TSAN)
 #   switch_perf_governor_callouts_test SwitchPerfGovernor.cpp itself over stand-ins for XNU: the locks, read-modify-
@@ -283,4 +285,12 @@ host_test(
     copts = ["-fsanitize=thread"],
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
+)
+
+host_test(
+    name = "switch_emc_hold_test",
+    srcs = [
+        "switch_emc_hold_test.cpp",
+        "//drivers/SwitchPower:SwitchEMCHold.h",
+    ],
 )
