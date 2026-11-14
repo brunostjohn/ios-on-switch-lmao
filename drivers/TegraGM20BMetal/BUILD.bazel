@@ -565,14 +565,6 @@ py_binary(
     main = "raw/test/ordercheck.py",
 )
 
-# The raw path's target check against the pack (it reads it with the pack generator's modules).
-py_binary(
-    name = "targetcheck",
-    srcs = ["raw/test/targetcheck.py"],
-    main = "raw/test/targetcheck.py",
-    deps = [":raw_pack"],
-)
-
 py_binary(
     name = "check_dyld_cache_imports",
     srcs = ["check-dyld-cache-imports.py"],

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Guards on why an MTLFence needs no push of its own on the raw path (RawMetalFences.mm), which no host model runs: every
 // encoder the raw path opens begins with a drain or an engine change, which waits for the engine left behind
-// (raw_barrier_forms.h), the raw encode emits nothing for a fence, and m2v's replay of a refused encoder gets the fence's
-// twin, never the device's own object. When an encoder opens with neither, fences need a barrier.
+// (raw_barrier_forms.h), and the raw encode emits nothing for a fence. When an encoder opens with neither, fences need a
+// barrier.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -51,13 +51,6 @@ TEST(RawMetalFenceSource, TheRawEncodeEmitsNothingForAFence)
     const std::string encode = SourceText("../raw/runtime/RawMetalRangeStep.mm");
     EXPECT_THAT(encode, Not(HasSubstr("case OpUpdateFence")));
     EXPECT_THAT(encode, Not(HasSubstr("case OpWaitFence")));
-}
-
-TEST(RawMetalFenceSource, ReplayGetsTheFencesTwin)
-{
-    const std::string replay = SourceText("../raw/runtime/RawMetalReplay.mm");
-    EXPECT_THAT(replay, HasSubstr("[enc updateFence:twinOf((__bridge id)c.obj)];"));
-    EXPECT_THAT(replay, HasSubstr("[enc waitForFence:twinOf((__bridge id)c.obj)];"));
 }
 
 }  // namespace

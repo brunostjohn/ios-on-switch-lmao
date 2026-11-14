@@ -115,7 +115,6 @@
 #                     plane formats, a Clear's plane words, raw_emit's alpha targets, and the header pair's join
 #                     (nvk_switch_xr_planes.c) giving each code's half
 #   raw_clear_test    raw/runtime/raw_clear.h: the clear values the raw path hands NVK, m2v's for every format it renders
-#                     (raw/test/targetcheck.py: its target formats against NVK's)
 #   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
 #                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
@@ -418,7 +417,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_arguments_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -714,7 +712,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_spill_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -789,7 +786,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_drawn_form_uniforms_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -864,7 +860,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_heap_use_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -939,7 +934,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_heap_purge_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -1054,7 +1048,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_recovery_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
@@ -1130,7 +1123,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_set_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -1284,7 +1276,6 @@ host_test(
         "raw_device_harness.h",
         "raw_job_methods.h",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
@@ -1521,7 +1512,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_layered_fetch_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -1596,7 +1586,6 @@ host_test(
         "raw_device_harness.h",
         "raw_job_methods.h",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BHost.h",
@@ -1672,7 +1661,6 @@ host_test(
         "raw_device_harness.h",
         "raw_job_methods.h",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
@@ -1748,7 +1736,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_loops_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
@@ -1824,7 +1811,6 @@ host_test(
         "raw_device_harness.h",
         "raw_job_methods.h",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
@@ -1970,7 +1956,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_amplification_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2043,7 +2028,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_layers_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
@@ -2116,7 +2100,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_streams_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2189,7 +2172,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_tessellation_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2262,7 +2244,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_stage_in_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2412,7 +2393,6 @@ host_test(
         "raw_job_methods.h",
         "raw_device_icb_test.cpp",
         "raw_kernel_model.h",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -2508,6 +2488,8 @@ host_test(
         "-framework",
         "CoreFoundation",
     ],
+    # m2v: Kernel::open taking NVK's connection, which goes with NVK
+    tags = ["m2v"],
 )
 
 host_test(
@@ -2854,9 +2836,10 @@ host_test(
     srcs = [
         "raw_execution_plan_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_queue.h",
     ],
     cxx_std = "c++17",
+    # m2v: the split of a command buffer into native and compatibility (m2v) ranges
+    tags = ["m2v"],
 )
 
 host_test(
@@ -3303,8 +3286,14 @@ host_test(
     srcs = ["m2v_source_test.cpp"],
     data = [
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalComputeState.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStatesLater.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawRenderKey.mm",
         "//third_party/m2v/crates/metal2vulkan-runtime:sources",
         "//third_party/mesa/src/nouveau/vulkan:nvk_cmd_buffer.h",
         "//third_party/mesa/src/nouveau/vulkan:nvk_nir_lower_descriptors.c",
@@ -3317,11 +3306,8 @@ host_test(
     name = "raw_archive_add_source_test",
     srcs = ["raw_archive_add_source_test.cpp"],
     data = [
-        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArchive.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalBinaryArchive.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalComputeState.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
     ],
 )
 
@@ -3329,16 +3315,12 @@ host_test(
     name = "raw_linked_source_test",
     srcs = ["raw_linked_source_test.cpp"],
     data = [
-        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
-        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
-        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
         "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawRenderKey.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalLibrary.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStatesLater.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
     ],
 )
@@ -3507,6 +3489,7 @@ py_test(
     name = "raw_tic_words_test",
     srcs = ["raw_tic_words_test.py"],
     data = [
+        "//kits/SwitchGM20B:caps/formats.tsv",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stencil_bits.h",
@@ -4648,7 +4631,6 @@ host_test(
         "raw_job_methods.h",
         "raw_kernel_model.h",
         "raw_surface_image_test.cpp",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
@@ -5372,7 +5354,6 @@ host_test(
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPassUses.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalRangeStep.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_barrier_forms.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pass_hazard.h",
