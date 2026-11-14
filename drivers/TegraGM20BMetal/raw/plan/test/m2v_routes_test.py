@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """raw/plan/m2v_routes.tsv is the closed list of every way work still reaches m2v.
 
-Its product rows are exactly the routes m2v_routes_scan.py reads from the plugin's sources, each with the files that raise
-it; a route with no row, a row whose route is gone and a row whose files moved all fail. The open rows of each kind are
-pinned here and may only be lowered. A row that, once m2v is gone, returns Metal's error names the refusal line it logs
-(an error line kept in release, kits/SwitchRefusal); a row main already closes must raise that line in its files.
+Its product rows are exactly the routes m2v_routes_scan.py reads from the plugin's sources, each with the files that
+raise it; a route with no row, a row whose route is gone and a row whose files moved all fail. The open rows of each
+kind are pinned here and may only be lowered. A row that, once m2v is gone, returns Metal's error names the refusal line
+it logs (an error line kept in release, kits/SwitchRefusal); a row main already closes must raise that line in its
+files.
 """
 
 import csv
 import unittest
 from collections import Counter
-from pathlib import Path
 
 from m2v_routes_scan import ROOT, Census
 
@@ -19,7 +19,7 @@ COLUMNS = ('kind', 'route', 'name', 'raised_in', 'gone', 'logs', 'owner', 'statu
 KINDS = ('product', 'test', 'tool')
 GONE = ('native', 'form', 'error', 'dead', 'none')
 # Open rows per kind: lower these as rows close, never raise them
-OPEN = {'product': 128, 'test': 0, 'tool': 0}
+OPEN = {'product': 107, 'test': 0, 'tool': 0}
 
 
 def table() -> list[dict[str, str]]:
@@ -42,7 +42,7 @@ class Routes(unittest.TestCase):
 
     def test_vocabulary(self) -> None:
         for row in self.rows:
-            where = f"{row['route']} {row['name']}"
+            where = f'{row["route"]} {row["name"]}'
             self.assertIn(row['kind'], KINDS, where)
             self.assertIn(row['gone'], GONE, where)
             status = row['status']
@@ -77,8 +77,10 @@ class Routes(unittest.TestCase):
             if row['kind'] != 'product' or row['gone'] != 'error' or row['status'] != 'main' or row['route'] == 'sel':
                 continue
             files = set(row['raised_in'].split(','))
-            self.assertTrue(tags.get(row['logs'], set()) & files,
-                            f"{row['route']} {row['name']}: closed, but {row['logs']} is not raised in {files}")
+            self.assertTrue(
+                tags.get(row['logs'], set()) & files,
+                f'{row["route"]} {row["name"]}: closed, but {row["logs"]} is not raised in {files}',
+            )
 
 
 if __name__ == '__main__':

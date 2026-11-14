@@ -1,9 +1,10 @@
 """Every way the plugin's own code reaches m2v, read from its sources (m2v_routes.tsv's product rows are this set).
 
-A route is (route, name) with the files that raise it. The m2v device comes only from rmM2V (an RMNeed) or rmM2VIfOpen,
-its objects only from that device, from a client's foreign object (a predicate) or from a twin field, and its code only
-through a bridge symbol, an NB class looked up by name, an NVK export or a header of the m2v tree, so these detectors
-close the set together with the no-m2v link lists (gpu/m2v_link): a call the sources hide behind a pointer is a link edge.
+A route is (route, name) with the files that raise it. The m2v device comes only from rmM2V (an RMNeed) or
+rmM2VIfOpen, its objects only from that device, from a client's foreign object (a predicate) or from a twin field, and
+its code only through a bridge symbol, an NB class looked up by name, an NVK export or a header of the m2v tree, so
+these detectors close the set together with the no-m2v link lists (gpu/m2v_link): a call the sources hide behind a
+pointer is a link edge.
 """
 
 import re
@@ -58,8 +59,10 @@ TAG_FORMS = (
 
 
 def strip_comments(text: str, strings: bool = True) -> str:
-    """The text with // and /* */ comments blanked (newlines kept); string and character literals left whole, or emptied
-    when `strings` is false."""
+    """Blank the // and /* */ comments of `text`, keeping its newlines.
+
+    String and character literals stay whole, or are emptied when `strings` is false.
+    """
     out, i, n = [], 0, len(text)
     while i < n:
         c = text[i]
@@ -67,7 +70,7 @@ def strip_comments(text: str, strings: bool = True) -> str:
             j = i + 1
             while j < n and text[j] != c and text[j] != '\n':
                 j += 2 if text[j] == '\\' else 1
-            out.append(text[i:j + 1] if strings else c + c)
+            out.append(text[i : j + 1] if strings else c + c)
             i = j + 1
         elif text.startswith('//', i):
             j = text.find('\n', i)
@@ -84,11 +87,11 @@ def strip_comments(text: str, strings: bool = True) -> str:
 
 
 def product_units() -> list[Path]:
-    """The plugin's own sources and the shader compiler's (never the m2v frontend or the bridge)."""
+    """List the plugin's own sources and the shader compiler's (never the m2v frontend or the bridge)."""
     units = []
     for directory in (RUNTIME, METAL / 'raw/fx', METAL / 'compiler'):
         units += [p for p in sorted(directory.iterdir()) if p.suffix in SUFFIXES]
-    return units + [METAL / 'TegraGM20BMetalPlugin.mm']
+    return [*units, METAL / 'TegraGM20BMetalPlugin.mm']
 
 
 def kernel_units() -> list[Path]:
@@ -96,14 +99,14 @@ def kernel_units() -> list[Path]:
 
 
 def enum_pairs(header: str, enum: str, table: str, skip: tuple[str, ...]) -> list[tuple[str, str]]:
-    """(enumerator, name) of `enum`, zipped with its name table `table`, without the enumerators in `skip`."""
+    """Pair each enumerator of `enum` before its count with its name in `table`, leaving out those in `skip`."""
     text = strip_comments(header)
-    body = re.search(r'enum ' + enum + r'\s*:\s*\w+\s*\{(.*?)\};', text, re.S).group(1)
-    enumerators = [e.split('=')[0].strip() for e in body.split(',') if e.strip()]
-    names = LITERAL.findall(re.search(table + r'\[[^\]]*\]\s*=\s*\{(.*?)\};', text, re.S).group(1))
-    if len(enumerators) - 1 != len(names):
-        raise ValueError(f'{enum}: {len(enumerators) - 1} enumerators before the count, {len(names)} names')
-    return [(e, n) for e, n in zip(enumerators, names) if e not in skip]
+    body = re.search(r'enum ' + enum + r'\s*:\s*\w+\s*\{(.*?)\};', text, re.DOTALL).group(1)
+    enumerators = [e.split('=')[0].strip() for e in body.split(',') if e.strip()][:-1]
+    names = LITERAL.findall(re.search(table + r'\[[^\]]*\]\s*=\s*\{(.*?)\};', text, re.DOTALL).group(1))
+    if len(enumerators) != len(names):
+        raise ValueError(f'{enum}: {len(enumerators)} enumerators before the count, {len(names)} names')
+    return [(e, n) for e, n in zip(enumerators, names, strict=True) if e not in skip]
 
 
 class Census:
@@ -112,8 +115,9 @@ class Census:
         self.texts = {p: strip_comments(t) for p, t in sources.items()}
         self.code = {p: strip_comments(t, strings=False) for p, t in sources.items()}
         self.routes: dict[tuple[str, str], set[str]] = defaultdict(set)
-        self.preds = enum_pairs((RUNTIME / 'RawMetalPredicates.h').read_text(), 'RMPred', 'kPredNames',
-                                ('PredNone', 'PredCount'))
+        self.preds = enum_pairs(
+            (RUNTIME / 'RawMetalPredicates.h').read_text(), 'RMPred', 'kPredNames', ('PredNone', 'PredCount')
+        )
         self.needs = enum_pairs((RUNTIME / 'RawMetalNeeds.h').read_text(), 'RMNeed', 'kNeedNames', ('NeedCount',))
         self._enumerators('pred', self.preds, 'RawMetalPredicates.h')
         self._enumerators('need', self.needs, 'RawMetalNeeds.h')
@@ -144,15 +148,18 @@ class Census:
         for header in INCLUDE.findall(text):
             if header.startswith('bridge/') or Path(header).name == 'NativeBridgeMetalFrontend.h':
                 self.add('include', header, file)
+        self._names(file, text)
+        for ident, pattern in M2V_IDENTS.items():
+            if re.search(pattern, code):
+                self.add('ident', ident, file)
+
+    def _names(self, file: str, text: str) -> None:
         for literal in LITERAL.findall(text):
             if NVK_NAME.match(literal):
                 self.add('nvk', literal, file)
         for call in DL_CALL.findall(text):
             for literal in LITERAL.findall(call):
                 self.add('dlsym', literal, file)
-        for ident, pattern in M2V_IDENTS.items():
-            if re.search(pattern, code):
-                self.add('ident', ident, file)
 
     def _selectors(self) -> None:
         for line in INVENTORY.read_text().splitlines():
@@ -162,8 +169,11 @@ class Census:
             self.add('sel', f'{fields[0]} {fields[2]}', INVENTORY.name)
 
     def _kernel(self) -> None:
-        texts = {p.name: strip_comments(p.read_text(errors='replace'), strings=False)
-                 for p in kernel_units() if p.name != 'TegraGM20BABI.h'}
+        texts = {
+            p.name: strip_comments(p.read_text(errors='replace'), strings=False)
+            for p in kernel_units()
+            if p.name != 'TegraGM20BABI.h'
+        }
         texts.update({p.name: t for p, t in self.code.items()})
         for method in KERNEL_LEGACY:
             word = re.compile(r'\bTegraGM20BMethod' + method + r'\b')
