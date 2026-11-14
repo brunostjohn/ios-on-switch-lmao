@@ -31,7 +31,7 @@ enum RMPred : uint8_t {
     PredPassAttLevel,   // slice, depth plane or resolve, or a level of a texture with no chain
     PredPassRTSize,     // a = renderTargetWidth << 16 | renderTargetHeight, b = attachment width << 16 | height
     PredPassDepthStencil,  // a = depth format, b = stencil format
-    PredPassOther,  // a = renderTargetArrayLength (layered) | its own sample positions << 32, b = a rasterization rate map
+    PredPassOther,  // a = its own sample positions, b = a rasterization rate map
     // states and calls
     PredStateForeign,
     PredStateNotPackable,  // a state whose functions are not this device's (neither in the pack nor made by the runtime)

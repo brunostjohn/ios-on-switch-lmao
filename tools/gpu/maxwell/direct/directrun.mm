@@ -232,8 +232,23 @@ void make(Runner &run)
         d.tessellationFactorStepFunction = MTLTessellationFactorStepFunctionPerPatch;
         d.tessellationOutputWindingOrder = MTLWindingCounterClockwise;
     });
+    run.state(@"tessellation64", @"tess_vertex", @"tess_fragment", ^(MTLRenderPipelineDescriptor *d) {
+        MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];
+        layout(v, 0, MTLVertexFormatFloat4, 0, 16, MTLVertexStepFunctionPerPatchControlPoint);
+        d.vertexDescriptor = v;
+        d.maxTessellationFactor = 64;
+        d.tessellationPartitionMode = MTLTessellationPartitionModeInteger;
+        d.tessellationFactorStepFunction = MTLTessellationFactorStepFunctionPerPatch;
+        d.tessellationOutputWindingOrder = MTLWindingCounterClockwise;
+    });
     run.state(@"amplification", @"amp_vertex", @"amp_fragment", ^(MTLRenderPipelineDescriptor *d) {
         d.maxVertexAmplificationCount = 2;
+    });
+    run.state(@"amplification8", @"amp_vertex", @"amp_fragment", ^(MTLRenderPipelineDescriptor *d) {
+        d.maxVertexAmplificationCount = 8;
+    });
+    run.state(@"interpolants", @"interpolants_vertex", @"interpolants_fragment", ^(MTLRenderPipelineDescriptor *d) {
+        d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
     });
     run.state(@"layered_fetch", @"layered_fetch_vertex", @"layered_fetch_fragment", ^(MTLRenderPipelineDescriptor *d) {
         d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
@@ -258,6 +273,12 @@ void make(Runner &run)
         s.layouts[0].stepFunction = MTLStepFunctionThreadPositionInGridX;
         d.stageInputDescriptor = s;
     });
+    run.kernel(@"wide_threadgroup", @"wide_threadgroup_kernel", 256,
+               ^(MTLComputePipelineDescriptor *){
+               });
+    run.kernel(@"past_threadgroup", @"past_threadgroup_kernel", 256,
+               ^(MTLComputePipelineDescriptor *){
+               });
     run.kernel(@"counter_resolve", @(raw::counters::kResolveFunction), raw::counters::kResolveThreads,
                ^(MTLComputePipelineDescriptor *){
                });

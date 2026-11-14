@@ -6,8 +6,9 @@ path binds it (direct_records.py) and fed the words a draw or dispatch writes fr
 word, amplification id word, pulled stride words, stage-in region word). Every expected value is the Metal source's
 arithmetic on the CPU, on inputs a zero or a stub would not pass: patch factors culled, clamped and kept, tessellation
 coordinates off the corners, amplification 1, a stage-in origin past 0, a stride past 4095 bytes, buffers across a
-4 GiB boundary, counter spans across 2^32, and a fragment quad's storage image texels in each layer of a layered pass
-(quad.py), every layer's its own.
+4 GiB boundary, counter spans across 2^32, a fragment quad's storage image texels in each layer of a layered pass
+(quad.py), every layer's its own, tessellation factors up to 64, eight amplifications, 32 float4 varyings, and a kernel
+of 48 KiB of threadgroup memory under its QMD's shared memory size.
 
 usage: direct_exec_test.py <direct_runner dir> <shader tools dir>
 """
@@ -86,9 +87,10 @@ class Tessellation(Records):
     post-tessellation vertex function at tessellation coordinates over the patch's control points.
     """
 
-    POINTS = tuple((float(k), float(2 * k + 1), float(-k), 1.0) for k in range(9))
+    NAME, TOP = 'tessellation', 16.0
+    POINTS = tuple((float(k), float(2 * k + 1), float(-k), 1.0) for k in range(12))
     # MTLTriangleTessellationFactorsHalf per patch: three edge factors and the inside one
-    FACTORS = ((2.0, 3.0, 4.0, 5.0), (40.0, 0.5, 6.0, 0.25), (0.0, 3.0, 3.0, 3.0))
+    FACTORS = ((2.0, 3.0, 4.0, 5.0), (40.0, 0.5, 6.0, 0.25), (0.0, 3.0, 3.0, 3.0), (70.0, 2.0, 3.0, 65.0))
     COORDS = ((0.25, 0.5), (0.5, 0.125), (0.0, 0.75))
 
     @staticmethod
@@ -104,7 +106,7 @@ class Tessellation(Records):
         return [max(1.0, min(top, e)) for e in edges], max(1.0, min(top, inside))
 
     def setUp(self) -> None:
-        self.record = self.state('tessellation')
+        self.record = self.state(self.NAME)
         self.assertEqual(len(self.record['tess_programs']), 2)
         self.binding = dr.Binding()
         self.binding.bind((1, 0), dr.floats(*[c for p in self.POINTS for c in p]))
@@ -131,7 +133,7 @@ class Tessellation(Records):
     def test_the_control_stage_writes_each_patchs_levels_from_its_factors(self):
         for patch, factors in enumerate(self.FACTORS):
             _, control = self.run_patch(patch)
-            outer, inner = self.levels(factors)
+            outer, inner = self.levels(factors, self.TOP)
             got = [dr.value(control.patch_outputs[a]) for a in TESS_LEVELS['outer']]
             self.assertEqual(got, outer, f'patch {patch}')
             if inner is not None:
@@ -155,6 +157,12 @@ class Tessellation(Records):
                 self.assertEqual(outputs(evaluation, ATTR_GENERIC, 4), [u, v, w, float(patch)])
 
 
+class Tessellation64(Tessellation):
+    """The same patches under maxTessellationFactor 64, the device's (GM20B's) maximum: 40 is kept, 70 is 64."""
+
+    NAME, TOP = 'tessellation64', 64.0
+
+
 class Amplification(Records):
     """A state of maxVertexAmplificationCount 2.
 
@@ -165,21 +173,24 @@ class Amplification(Records):
 
     POINTS = ((1.0, 2.0, 3.0, 1.0), (-4.0, 0.5, 0.25, 1.0), (8.0, -16.0, 0.0, 2.0))
 
+    NAME, COUNT = 'amplification', 2
+    # (layer offset, layers, viewport offset, viewports) of each amplification tested: amplification 1's layer past the
+    # pass's length renders layer 0
+    MAPPINGS = {0: (1, 2, 3, 4), 1: (5, 2, 1, 4)}
+
     def test_each_amplifications_vertices(self):
-        record = self.state('amplification')
+        record = self.state(self.NAME)
         amplification_max, id_word, count_word = record['amplification']
         layer_word, viewport_word = record['amplification_offsets']
         length_word, count_word_of_viewports = record['pass_words']
-        self.assertEqual(amplification_max, 2)
+        self.assertEqual(amplification_max, self.COUNT)
         self.assertGreater(id_word, 0)
         self.assertEqual(count_word, 0)
         for word in (layer_word, viewport_word, length_word, count_word_of_viewports):
             self.assertGreater(word, 0)
         program = record['programs'][0]
-        # (layer offset, layers, viewport offset, viewports) of each amplification: amplification 1's layer past the
-        # pass's length renders layer 0
-        mappings = {0: (1, 2, 3, 4), 1: (5, 2, 1, 4)}
-        for amplification in (0, 1):
+        mappings = self.MAPPINGS
+        for amplification in mappings:
             binding = dr.Binding()
             binding.bind((1, 0), dr.floats(*[c for p in self.POINTS for c in p]))
             push = dr.record_push(record)
@@ -197,6 +208,13 @@ class Amplification(Records):
                 self.assertEqual(outputs(environment, ATTR_GENERIC, 4), [float(amplification), float(vid), 0.0, 1.0])
                 self.assertEqual(environment.outputs[(0, ATTR_LAYER)], layer if layer < layers else 0)
                 self.assertEqual(environment.outputs[(0, ATTR_VIEWPORT)], viewport if viewport < viewports else 0)
+
+
+class Amplification8(Amplification):
+    """maxVertexAmplificationCount 8, every count the amplify macro keeps a mapping word for (SWITCH_GM20B_AMP_MAX)."""
+
+    NAME, COUNT = 'amplification8', 8
+    MAPPINGS = {0: (1, 8, 3, 16), 5: (6, 8, 15, 16), 7: (7, 8, 16, 16)}
 
 
 class LayeredFetch(Records):
@@ -361,6 +379,101 @@ class WideStride(Records):
                 dr.execute(program, environment)
                 self.assertEqual(outputs(environment, ATTR_POSITION, 4), [*positions[vid], 0.0, 1.0], f'{stride}')
                 self.assertEqual(outputs(environment, ATTR_GENERIC, 4), [0.25, 0.5, 0.75, 1.0])
+
+
+class Interpolants(Records):
+    """32 float4 varyings, GM20B's 128 interpolated components: the vertex program stores each at its generic
+    attribute, and the fragment program interpolates all of them."""
+
+    COUNT = 32
+
+    @classmethod
+    def varying(cls, i: int, vid: int) -> list[float]:
+        return [float(i), float(vid), 0.5 * i, 1.0 + i]
+
+    def test_the_vertex_program_writes_every_generic_attribute(self):
+        record = self.state('interpolants')
+        program = record['programs'][0]
+        binding = dr.Binding()
+        binding.tables(dr.root_table(dr.record_push(record), record['set_bytes']), dr.render_set(record, binding))
+        for vid in (0, 3):
+            environment = dr.stage(program, binding, attributes({ATTR_VERTEX_ID: vid, ATTR_INSTANCE_ID: 0}), {})
+            dr.execute(program, environment)
+            for i in range(self.COUNT):
+                self.assertEqual(outputs(environment, ATTR_GENERIC + 16 * i, 4), self.varying(i, vid), f'{vid} v{i}')
+
+    def test_the_fragment_program_reads_every_generic_attribute(self):
+        record = self.state('interpolants')
+        program = record['programs'][1]
+        binding = dr.Binding()
+        binding.tables(dr.root_table(dr.record_push(record), record['set_bytes']), dr.render_set(record, binding))
+        banks = dr.stage(program, binding, attributes({}), {})
+        vid = 3
+        words = {ATTR_POSITION + 4 * c: dr.f32(v) for c, v in enumerate((0.5, 0.5, 0.0, 1.0))}
+        for i in range(self.COUNT):
+            for c, v in enumerate(self.varying(i, vid)):
+                words[ATTR_GENERIC + 16 * i + 4 * c] = dr.f32(v)
+
+        def attribute(address: int) -> int:
+            if address not in words:
+                raise UnsupportedError(f'IPA {address:#x}, an input the test gave no word for')
+            return words[address]
+
+        lanes = [Inputs(attribute, banks.cbuf, lambda key: [0, 0, 0, 0]) for _ in range(4)]
+        want = [sum(self.varying(i, vid)[c] * (i + 1) for i in range(self.COUNT)) for c in range(4)]
+        for colour, killed, _ in run_quad(dr.code(program), lanes, 4):
+            self.assertFalse(killed)
+            self.assertEqual([dr.value(w) for w in colour], want)
+
+
+# QMDV01_07's SHARED_MEMORY_SIZE MW(561:544) and L1_CONFIGURATION MW(671:669), whose 3 is 48 KiB directly addressable
+# (clb1c0qmd.h)
+QMD_SHARED_MEMORY_SIZE, QMD_L1_CONFIGURATION, QMD_L1_48KB = (544, 18), (669, 3), 3
+
+
+def qmd_field(qmd: list[int], field: tuple[int, int]) -> int:
+    first, width = field
+    return sum((qmd[(first + b) // 32] >> ((first + b) % 32) & 1) << b for b in range(width))
+
+
+class ThreadgroupMemory(Records):
+    """A kernel of 48 KiB of threadgroup memory, every word of it used, under the QMD's own shared memory size."""
+
+    THREADS = 256
+
+    def test_a_kernel_of_48_kib_takes_the_whole_cta(self):
+        record = self.kernel('wide_threadgroup')
+        size = qmd_field(record['qmd'], QMD_SHARED_MEMORY_SIZE)
+        self.assertEqual(size, 48 << 10)
+        self.assertEqual(qmd_field(record['qmd'], QMD_L1_CONFIGURATION), QMD_L1_48KB)
+        binding = dr.Binding()
+        out = binding.bind((3, 0), bytes(4 * self.THREADS))
+        push = dr.record_push(record)
+        if record['region_word'] >= 0:
+            for k, v in enumerate([0, 0, 0, self.THREADS - 1, self.THREADS, 1, 1, 0]):
+                push[record['region_word'] + k] = v
+        binding.tables(dr.root_table(push, record['set_bytes'], {12: 1, 16: 1, 20: 1}), dr.kernel_set(record, binding))
+        shared = bytearray(size)
+        for tid in range(self.THREADS):
+            system = {SV_TID_X: tid, 0x22: 0, 0x23: 0, SV_COMBINED_TID: tid, SV_LANE_ID: tid % 32}
+            system.update({SV_CTAID_X: 0, 0x26: 0, 0x27: 0})
+            environment = dr.stage(record, binding, attributes({}), system)
+            environment.shared = shared
+            dr.execute(record, environment, header=False)
+        got = struct.unpack(f'<{self.THREADS}I', binding.memory.read(out, 4 * self.THREADS))
+        want = []
+        for tid in range(self.THREADS):
+            x = 0
+            for k in range(48):
+                x ^= ((tid + 256 * k) * 2654435761 + k) & 0xFFFF_FFFF
+            want.append(x)
+        self.assertEqual(list(got), want)
+
+    def test_a_kernel_past_48_kib_is_refused_naming_the_limit(self):
+        self.assertNotIn('past_threadgroup', RECORDS['kernels'])
+        why = RECORDS['refused'].get('past_threadgroup', '')
+        self.assertIn('MaxComputeSharedMemorySize', why)
+        self.assertIn('available: 49152', why)
 
 
 class Kernels(Records):
