@@ -267,6 +267,9 @@ static void wake_clock(void)
 	int ret = tgm_clk_raise(line, sizeof(line));
 	int khz = 0;
 
+#if TGM_STATS
+	tgm_rail_wake_seen(nvkm_rd32(device, GPCPLL_COEFF_R));
+#endif
 	if (!ret && sc7.idle_on)
 		ret = tgm_clock_ceiling_restore();
 	khz = nvkm_clk_read(device->clk, nv_clk_src_gpc);

@@ -641,11 +641,14 @@ int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
  * at the PL it last set; -EIO otherwise, -EBUSY before M3. */
 struct tgm_rail_look {
 	int fence; /* 0, -ETIMEDOUT or -ENODEV */
-	uint32_t fence_us, coeff, cfg, pl, expect_pl;
+	uint32_t fence_us, coeff, cfg, pl, expect_pl, wake_coeff;
 	int khz, vco_ok;
 };
 
 int tgm_rail_probe(struct tgm_rail_look *look);
+/* Debug kernels: wakes whose relock left the GPCPLL off the idle clock's VCO or maximum rate's PL, before anything put it
+ * right (gpu_rail_probe.c tgm_rail_wake_seen, from gpu_power.c's wake_clock), since boot. */
+uint32_t tgm_rail_wakes_off_rate(void);
 /* Debug kernels: one rail-gate and rail-up (TegraGM20B.cpp), and debug.switch_gpu_rail_cycle (TegraGM20BRailCycle.cpp). */
 int tgm_rail_cycle_once(void);
 void tgm_rail_cycle_register(void);

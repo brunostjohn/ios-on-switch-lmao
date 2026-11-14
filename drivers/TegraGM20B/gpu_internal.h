@@ -397,6 +397,9 @@ void tgm_engine_state(char *buf, unsigned int len);
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
 #if TGM_STATS
 u32 tgm_ramfc_read(u32 chid, u32 offset);
+/* gpu_rail_probe.c */
+void tgm_rail_wake_seen(u32 coeff);
+int tgm_probe_fence(u32 *chid, u64 *us);
 #endif
 void tgm_acquire_arm(u32 chid);
 

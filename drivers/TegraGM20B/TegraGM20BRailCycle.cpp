@@ -13,7 +13,7 @@
 namespace
 {
 constexpr int kRailCyclesMax = 16;
-char gLine[224] = "cycles=0 why=not_run";
+char gLine[288] = "cycles=0 why=not_run";
 bool gCycling;
 struct sysctl_oid gOid;
 
@@ -26,6 +26,7 @@ void cycle(int cycles)
 {
 	int downs = 0, fences = 0, plls = 0;
 	uint32_t fenceMax = 0;
+	const uint32_t offRate = tgm_rail_wakes_off_rate();
 	struct tgm_rail_look look = {};
 	const char *why = "-";
 	for (int i = 0; i < cycles; ++i) {
@@ -43,11 +44,11 @@ void cycle(int cycles)
 		fenceMax = look.fence_us > fenceMax ? look.fence_us : fenceMax;
 	}
 	snprintf(gLine, sizeof(gLine),
-		 "cycles=%d downs=%d fences=%d plls=%d fence_us_max=%u coeff=%08x cfg=%08x pl=%u "
-		 "expect_pl=%u "
-		 "khz=%d why=%s",
-		 cycles, downs, fences, plls, fenceMax, look.coeff, look.cfg, look.pl,
-		 look.expect_pl, look.khz, why);
+		 "cycles=%d downs=%d fences=%d plls=%d wakes_off_rate=%u wake_coeff=%08x "
+		 "fence_us_max=%u "
+		 "coeff=%08x cfg=%08x pl=%u expect_pl=%u khz=%d why=%s",
+		 cycles, downs, fences, plls, tgm_rail_wakes_off_rate() - offRate, look.wake_coeff,
+		 fenceMax, look.coeff, look.cfg, look.pl, look.expect_pl, look.khz, why);
 }
 
 int railCycleSysctl SYSCTL_HANDLER_ARGS
