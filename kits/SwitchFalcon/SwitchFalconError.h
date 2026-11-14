@@ -72,11 +72,16 @@ static inline void switch_falcon_error_clear(volatile uint8_t *engine)
 static inline const char *switch_falcon_error_name(uint32_t code)
 {
     static const char *const kNames[] = {
-        "MSDECOS_ERROR_NONE",          "MSDECOS_ERROR_EXECUTE_INSUFFICIENT_DATA",
-        "MSDECOS_ERROR_SEMAPHORE_INSUFFICIENT_DATA", "MSDECOS_ERROR_INVALID_METHOD",
-        "MSDECOS_ERROR_INVALID_DMA_PAGE",          "MSDECOS_ERROR_UNHANDLED_INTERRUPT",
-        "MSDECOS_ERROR_EXCEPTION",                 "MSDECOS_ERROR_INVALID_CTXSW_REQUEST",
-        "MSDECOS_ERROR_APPLICATION",               "MSDECOS_ERROR_SWBREAKPT",
+        "MSDECOS_ERROR_NONE",
+        "MSDECOS_ERROR_EXECUTE_INSUFFICIENT_DATA",
+        "MSDECOS_ERROR_SEMAPHORE_INSUFFICIENT_DATA",
+        "MSDECOS_ERROR_INVALID_METHOD",
+        "MSDECOS_ERROR_INVALID_DMA_PAGE",
+        "MSDECOS_ERROR_UNHANDLED_INTERRUPT",
+        "MSDECOS_ERROR_EXCEPTION",
+        "MSDECOS_ERROR_INVALID_CTXSW_REQUEST",
+        "MSDECOS_ERROR_APPLICATION",
+        "MSDECOS_ERROR_SWBREAKPT",
     };
     return code < sizeof(kNames) / sizeof(kNames[0]) ? kNames[code] : "an engine code";
 }

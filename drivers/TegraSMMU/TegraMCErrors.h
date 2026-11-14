@@ -41,10 +41,12 @@ inline const char *bitNames(uint32_t intstatus, char *text, size_t size)
         uint32_t bit;
         const char *name;
     } kBits[] = {
-        {1u << 6, "DECERR_EMEM"},      {1u << 8, "SECURITY_VIOLATION"}, {1u << 10, "INVALID_SMMU_PAGE"},
-        {1u << 11, "INVALID_APB_ASID_UPDATE"}, {1u << 12, "DECERR_VPR"}, {1u << 13, "SECERR_SEC"},
-        {1u << 16, "DECERR_MTS"},      {1u << 17, "DECERR_GENERALIZED_CARVEOUT"},
+        {1u << 6, "DECERR_EMEM"},        {1u << 8, "SECURITY_VIOLATION"},
+        {1u << 10, "INVALID_SMMU_PAGE"}, {1u << 11, "INVALID_APB_ASID_UPDATE"},
+        {1u << 12, "DECERR_VPR"},        {1u << 13, "SECERR_SEC"},
+        {1u << 16, "DECERR_MTS"},        {1u << 17, "DECERR_GENERALIZED_CARVEOUT"},
     };
+
     size_t used = 0;
     text[0] = 0;
     for (const auto &b : kBits) {

@@ -10,13 +10,13 @@ constexpr uint32_t kHotResetCtrl = 0x200, kHotResetCtrl1 = 0x970;
 inline const char *hotResetClient(uint32_t ctrl, uint32_t bit)
 {
     static const char *const kCtrl[32] = {
-        "AFI",   "AVPC",   "DC",   "DCB",  nullptr,  nullptr,    "HC",  "HDA",       "ISP2",      "MPCORE",   nullptr,
-        "NVENC", nullptr,  nullptr, "PPCS", "SATA",   nullptr,    "VI",  "VIC",       "XUSB_HOST", "XUSB_DEV", nullptr,
-        "TSEC",  nullptr,  nullptr, nullptr, nullptr, nullptr,    nullptr, "SDMMC1A", "SDMMC2A",   "SDMMC3A",
+        "AFI",   "AVPC",  "DC",    "DCB",   nullptr, nullptr, "HC",    "HDA",     "ISP2",      "MPCORE",   nullptr,
+        "NVENC", nullptr, nullptr, "PPCS",  "SATA",  nullptr, "VI",    "VIC",     "XUSB_HOST", "XUSB_DEV", nullptr,
+        "TSEC",  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, "SDMMC1A", "SDMMC2A",   "SDMMC3A",
     };
     static const char *const kCtrl1[32] = {
-        "SDMMC4A", "ISP2B", "GPU", nullptr, nullptr, "NVDEC", "APE", "SE", "NVJPG", nullptr, nullptr, "AXIAP", "ETR",
-        "TSECB",
+        "SDMMC4A", "ISP2B", "GPU",   nullptr, nullptr, "NVDEC", "APE",
+        "SE",      "NVJPG", nullptr, nullptr, "AXIAP", "ETR",   "TSECB",
     };
     const unsigned index = static_cast<unsigned>(__builtin_ctz(bit | 0x80000000u));
     const char *name = nullptr;
@@ -33,6 +33,7 @@ inline const char *client(uint32_t id)
         uint8_t id;
         const char *name;
     };
+
     static const Entry kClients[] = {
         {0x00, "csr_ptcr (SMMU page-table cache)"},
         {0x01, "csr_display0a (display A)"},

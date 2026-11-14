@@ -142,7 +142,7 @@ TegraVICBuffer gTailPage;
 uint64_t gTailPages[kTailPages];
 
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
-IOLock *gPowerLock;  // the gate's, which the cancellation of a stalled job holds too
+IOLock *gPowerLock;             // the gate's, which the cancellation of a stalled job holds too
 SwitchFalconInterrupt gErrors;  // VIC General Interrupt: global 72 (TRM ch.3, p.35)
 constexpr uint32_t kErrorIntid = 32 + 72;
 uint32_t gSyncpt;
@@ -383,7 +383,8 @@ void falconFailed(const switch_falcon_error &error)
     if (switch_vic_jobs_falcon_failed())
         return;
     char why[256];
-    IOLog("TegraVIC: %s, during a cancellation already under way\n", switch_falcon_error_describe(&error, why, sizeof(why)));
+    IOLog("TegraVIC: %s, during a cancellation already under way\n",
+          switch_falcon_error_describe(&error, why, sizeof(why)));
 }
 
 bool allocate()

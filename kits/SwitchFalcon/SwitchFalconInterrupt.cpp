@@ -20,8 +20,8 @@ IOLock *registering()
         IOLock *fresh = IOLockAlloc();
         // NOLINTNEXTLINE(misc-const-correctness): the compare-exchange writes it
         IOLock *expected = nullptr;
-        if (fresh && !__atomic_compare_exchange_n(&gRegistering, &expected, fresh, false, __ATOMIC_ACQ_REL,
-                                                  __ATOMIC_ACQUIRE))
+        if (fresh &&
+            !__atomic_compare_exchange_n(&gRegistering, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             IOLockFree(fresh);
     }
     return __atomic_load_n(&gRegistering, __ATOMIC_ACQUIRE);

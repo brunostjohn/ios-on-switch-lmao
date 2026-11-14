@@ -57,8 +57,7 @@ void cancel(thread_call_param_t, thread_call_param_t)
     IOLockUnlock(power);
     IOLog("TegraNVDEC: job fence %u %s (syncpoint %u at %u); %s; %s; cancelled through fence %u, memory client %s, "
           "engine reset: %s%s\n",
-          gStall.fence, reason, syncpt, reached, engine, host, through,
-          drained ? "drained" : "did not drain in 10 ms",
+          gStall.fence, reason, syncpt, reached, engine, host, through, drained ? "drained" : "did not drain in 10 ms",
           back ? "running again" : "it did not come back, the next decode powers it on again: ", why);
     switch_nvdec_jobs_recovered(back);
 }

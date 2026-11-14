@@ -59,7 +59,8 @@ TEST_F(McErrors, TheFilterTakesTheCaptureBeforeClearingAndTheActionNamesTheClien
     mc(0xc) = 0;
     ASSERT_TRUE(started()->fire());
     ASSERT_EQ(gWrites.size(), 1u);
-    EXPECT_EQ(gWrites[0], std::make_pair(0x0u, 1u << 6)) << "only the error bit is cleared, ARBITRATION_EMEM is not ours";
+    EXPECT_EQ(gWrites[0], std::make_pair(0x0u, 1u << 6))
+        << "only the error bit is cleared, ARBITRATION_EMEM is not ours";
     EXPECT_EQ(gReads, (std::vector<uint32_t>{0x0, 0x8, 0xc})) << "ERR_STATUS and ERR_ADR before the clear";
     ASSERT_EQ(switch_test_lines.size(), 1u);
     EXPECT_EQ(switch_test_lines[0], "TegraSMMU: MC error DECERR_EMEM: DECERR_EMEM (no DRAM at the address), a read by "

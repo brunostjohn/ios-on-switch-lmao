@@ -167,7 +167,8 @@ TEST_F(NVJPGGate, ACancellationWhoseFlushRequestWasDroppedSaysTheClientWasNotFlu
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
-    EXPECT_TRUE(logged("TegraNVJPG: MC hot reset request bit 0x100 of MC 0x970 reads clear while its flush was awaited"));
+    EXPECT_TRUE(
+        logged("TegraNVJPG: MC hot reset request bit 0x100 of MC 0x970 reads clear while its flush was awaited"));
     EXPECT_TRUE(logged("memory client did not drain")) << "the line must not say drained";
     EXPECT_FALSE(logged("memory client drained"));
     gEngine.stallDecodes = false;

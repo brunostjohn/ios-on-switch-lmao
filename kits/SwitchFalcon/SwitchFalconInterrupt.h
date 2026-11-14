@@ -24,18 +24,22 @@ public:
     bool start(const char *name, uint32_t intid, volatile uint8_t *engine, Failed failed);
     void on();
     void off();
+
     uint32_t taken() const
     {
         return __atomic_load_n(&taken_, __ATOMIC_ACQUIRE);
     }
+
     const uint32_t *takenWord() const
     {
         return &taken_;
     }
+
     uint32_t onAt() const
     {
         return onAt_;
     }
+
     bool failed(char *text, size_t size) const
     {
         if (taken() == onAt_)
@@ -43,6 +47,7 @@ public:
         switch_falcon_error_describe(&error_, text, size);
         return true;
     }
+
     // At a cancellation, after the channel teardown and the memory-client flush and before the reset: an error pending
     // at both checks while the filter took none since on() was never delivered: a panic naming it. A taken error
     // stays pending (the falcon is parked on it) until the cancellation clears it.

@@ -77,8 +77,9 @@ extern "C" int tegra_mc_errors_start(void)
                   ? IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &occurred, &filter, nub, 0)
                   : nullptr;
     if (!gSource || gLoop->addEventSource(gSource) != kIOReturnSuccess) {
-        IOLog("TegraSMMU: MC error interrupt (INTID %u) could not be attached: memory controller errors go unreported\n",
-              kIntid);
+        IOLog(
+            "TegraSMMU: MC error interrupt (INTID %u) could not be attached: memory controller errors go unreported\n",
+            kIntid);
         return -1;
     }
     if (switch_mc::take(gIo, &gTaken))

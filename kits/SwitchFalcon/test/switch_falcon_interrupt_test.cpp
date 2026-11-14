@@ -91,7 +91,7 @@ TEST_F(FalconInterrupt, TheCancellationClearsAsNvhostDoes)
     raise();
     switch_falcon_error_clear(gEngine);
     EXPECT_EQ(gWrites, (std::vector<std::pair<uint32_t, uint32_t>>{{SWITCH_FALCON_THI_INT_STATUS, 1},
-                                                                  {SWITCH_FALCON_ERR_IRQSCLR, 1u << 6}}));
+                                                                   {SWITCH_FALCON_ERR_IRQSCLR, 1u << 6}}));
 }
 
 TEST_F(FalconInterrupt, AnErrorPendingThroughACancellationThatTheFilterNeverTookIsAPanic)

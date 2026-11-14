@@ -29,9 +29,9 @@ namespace {
 struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
     bool flushed = false, nvdecPartitionOn = false;
-    bool requestDropped = false;  // another writer clears NVJPG's request bit after it is set
-    bool clampStatusStale = false;  // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
-    bool clampStuck = false;        // REMOVE_CLAMPING_CMD never clears
+    bool requestDropped = false;       // another writer clears NVJPG's request bit after it is set
+    bool clampStatusStale = false;     // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
+    bool clampStuck = false;           // REMOVE_CLAMPING_CMD never clears
     bool falconErrorInDecode = false;  // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
     std::string decodeWaitEnded;       // "falcon": the decode's wait ended on the error, not at its bound
     std::vector<std::string> events;

@@ -30,8 +30,8 @@ struct SwitchEnginePower {
     uint32_t (*mcRead)(uint32_t offset);                     // tegra_smmu_read
     const unsigned *ungateClocks;  // clocks besides its own the partition's ungating runs before its clamps go
     uint32_t ungateCount;
-    void (*mbist)();  // the engine's own MBIST pulse in place of the LVL2 one (VIC's needs THI SLCG overridden)
-    uint32_t host1xModule;                      // its HOST1X_SYNC_MOD_TEARDOWN bit
+    void (*mbist)();        // the engine's own MBIST pulse in place of the LVL2 one (VIC's needs THI SLCG overridden)
+    uint32_t host1xModule;  // its HOST1X_SYNC_MOD_TEARDOWN bit
     void (*moduleTeardown)(uint32_t module);  // tegra_host1x_module_teardown
 };
 

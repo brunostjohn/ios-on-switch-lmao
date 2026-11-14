@@ -19,7 +19,7 @@ constexpr uint32_t kCtrl = 0x200, kCtrl1 = 0x970;
 
 std::map<uintptr_t, uint32_t> gRegisters;
 std::map<uintptr_t, uint32_t> gStuckClear;  // bits a register will not set
-std::set<uintptr_t> gFrozen;                 // registers that ignore writes
+std::set<uintptr_t> gFrozen;                // registers that ignore writes
 std::vector<std::string> gLines;
 
 class McHotResetRequest : public testing::Test {
