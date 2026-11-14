@@ -245,10 +245,12 @@ void smmuDetach()
 }
 
 // NVJPG's partition and memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
-// (t210/cg_regs.c t21x_nvjpg_gating_registers). The MBIST workaround (LVL2 bits 9 and 31 with NVDEC's clock, NVJPG's
-// slcg clock) runs only on T210 before B01, as powergate-t21x.c's. NVDEC's partition (25) needs NVJPG's (26) on
+// (t210/cg_regs.c t21x_nvjpg_gating_registers). Ungating the partition pulses NVDEC's clock before the clamps go, as the
+// TRM's NVJPG procedure does (12.2.7.10 steps 3-4), on every revision: L4T's T210B01 code differs only in skipping the
+// slcg clocks and MBIST pulse (powergate-t21x.c __tegra1xx_unpowergate, "if (!tegra210b01)"). That MBIST workaround
+// (LVL2 bits 9 and 31 with NVDEC's clock, NVJPG's slcg clock) therefore runs only on T210 before B01. NVDEC's partition (25) needs NVJPG's (26) on
 // (powergate-t21x.c powers 26 before 25 and keeps it while 25 is on): an idle power-off leaves 26 on while 25 is.
-constexpr unsigned kSlcgClocks[] = {kNvdecClock};
+constexpr unsigned kSlcgClocks[] = {kNvdecClock}, kUngateClocks[] = {kNvdecClock};
 const SwitchEnginePower kPower = {
     .name = "TegraNVJPG",
     .partition = kPartition,
@@ -261,6 +263,8 @@ const SwitchEnginePower kPower = {
     .slcgCount = 1,
     .hotReset = tegra_mc_hot_reset,
     .mcRead = tegra_smmu_read,
+    .ungateClocks = kUngateClocks,
+    .ungateCount = 1,
 };
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},         // THI_CLK_OVERRIDE

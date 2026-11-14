@@ -134,9 +134,10 @@ const char *falconState()
 
 // NVDEC's partition and memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
 // (t210/cg_regs.c t21x_nvdec_gating_registers). Partition 25 needs NVJPG's 26 on (powergate-t21x.c powers 26 first and
-// NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, with NVJPG's clock left off. A
+// NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, NVDEC's clock pulsed as the TRM's
+// NVJPG ungating does (12.2.7.10) and NVJPG's clock left off. A
 // partition the boot chain left on keeps its state; the engine is still reset so the falcon starts from scratch.
-constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock};
+constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock}, kNvjpgUngateClocks[] = {kClock};
 const SwitchEnginePower kPower = {
     .name = "TegraNVDEC",
     .partition = kPartition,
@@ -162,6 +163,8 @@ const SwitchEnginePower kNvjpgPower = {
     .slcgCount = 1,
     .hotReset = tegra_mc_hot_reset,
     .mcRead = tegra_smmu_read,
+    .ungateClocks = kNvjpgUngateClocks,
+    .ungateCount = 1,
 };
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},                      // THI_CLK_OVERRIDE

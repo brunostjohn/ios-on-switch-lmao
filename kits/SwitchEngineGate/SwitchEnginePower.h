@@ -5,7 +5,8 @@
 // t210/cg_regs.c). Mainline's tegra_powergate_power_up/down does neither the memory-client flush nor the second reset.
 //   off: clock on; the memory client flushed and drained, and held in hot reset while the partition is off; module
 //        reset; clock off; partition off
-//   on:  partition on; clock on; module reset; clamps removed (until the partition's REMOVE_CLAMPING_CMD bit clears, the
+//   on:  partition on; clock on; module reset; a partition just ungated has the other clocks its TRM procedure starts
+//        pulsed (NVJPG's: NVDEC's, 12.2.7.10 steps 3-4, on every revision); clamps removed (until the partition's REMOVE_CLAMPING_CMD bit clears, the
 //        handshake every procedure of Tegra X1 TRM 12.2.7 polls: CLAMP_STATUS is a legacy register, 12.6.12); reset
 //        released; the client's hot reset released; on T210 before B01 only, the MBIST workaround's LVL2 pulse; the
 //        module reset again
@@ -27,6 +28,8 @@ struct SwitchEnginePower {
     uint32_t slcgCount;
     void (*hotReset)(uint32_t ctrl, uint32_t bit, bool on);  // tegra_mc_hot_reset
     uint32_t (*mcRead)(uint32_t offset);                     // tegra_smmu_read
+    const unsigned *ungateClocks;  // clocks besides its own the partition's ungating runs before its clamps go
+    uint32_t ungateCount;
 };
 
 struct SwitchEngineProd {
@@ -83,6 +86,22 @@ inline void moduleReset(const SwitchEnginePower &p)
     IODelay(2);
     switch_car_reset_deassert(p.clock);
     IODelay(kStepUs);
+}
+
+// The clocks run while the partition's modules are held in reset, then left as they were found: NVDEC part A sits in
+// NVJPG's partition, and an ungated NVJPG partition gets NVDEC's clock edges before its clamps go (TRM 12.2.7.10).
+inline void ungatePulse(const SwitchEnginePower &p)
+{
+    bool wasOn[4] = {};
+    for (uint32_t i = 0; i < p.ungateCount && i < 4; i++) {
+        wasOn[i] = switch_car_clock_enabled(p.ungateClocks[i]);
+        if (!wasOn[i])
+            switch_car_clock_enable(p.ungateClocks[i]);
+    }
+    IODelay(kStepUs);
+    for (uint32_t i = 0; i < p.ungateCount && i < 4; i++)
+        if (!wasOn[i])
+            switch_car_clock_disable(p.ungateClocks[i]);
 }
 
 inline void mbistWorkaround(const SwitchEnginePower &p)
@@ -143,6 +162,8 @@ inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
     switch_car_clock_enable(p.clock);
     switch_car_reset_assert(p.clock);
     IODelay(kStepUs);
+    if (!*wasOn)
+        ungatePulse(p);
     switch_pmc_remove_clamping(p.partition);
     bool unclamped = false;
     for (uint32_t i = 0; i < 100 && !unclamped; i++) {

@@ -60,7 +60,7 @@ std::vector<uint8_t> gNvjpgRegisters(0x40000), gMcRegisters(0x1000);
 uint64_t gNextPa = 0x80000000;
 IOLock gNvdecPower;
 
-constexpr unsigned kJpgClock = 195;
+constexpr unsigned kJpgClock = 195;  // NVDEC's is the driver's kNvdecClock (194)
 constexpr uint32_t kSyncpt = 163;
 }  // namespace
 
@@ -210,6 +210,8 @@ void switch_car_clock_enable(unsigned id)
         gEngine.clockOn = true;
         gEngine.events.push_back("clock on");
     }
+    if (id == kNvdecClock)
+        gEngine.events.push_back("nvdec clock on");
 }
 
 void switch_car_clock_disable(unsigned id)
@@ -219,6 +221,8 @@ void switch_car_clock_disable(unsigned id)
         gEngine.clockOn = false;
         gEngine.events.push_back("clock off");
     }
+    if (id == kNvdecClock)
+        gEngine.events.push_back("nvdec clock off");
 }
 
 bool switch_car_clock_enabled(unsigned id)

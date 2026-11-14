@@ -60,6 +60,32 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// The TRM's NVJPG ungating (12.2.7.10 steps 3-4) starts NVJPG's and NVDEC's clocks and stops NVDEC's before the
+// clamps go, on T210B01 as on T210: NVDEC part A sits in NVJPG's partition. A partition already on (NVDEC's keeps it
+// on) is not ungated, and NVDEC's clock is left as found.
+TEST_F(NVJPGGate, UngatingThePartitionPulsesNVDECsClockBeforeTheClampsGo)
+{
+    idle();
+    size_t from = gEngine.events.size();
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    using Steps = std::vector<std::string>;
+    EXPECT_EQ(gEngine.steps(from, {"partition on", "clock on", "nvdec clock on", "nvdec clock off", "unclamp", "lvl2"}),
+              (Steps{"partition on", "clock on", "nvdec clock on", "nvdec clock off", "unclamp"}));
+    EXPECT_FALSE(gEngine.clocks[kNvdecClock]);
+
+    gEngine.nvdecPartitionOn = true;
+    gEngine.clocks[kNvdecClock] = true;
+    idle();
+    from = gEngine.events.size();
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    EXPECT_TRUE(gEngine.steps(from, {"nvdec clock on", "nvdec clock off"}).empty());
+    EXPECT_TRUE(gEngine.clocks[kNvdecClock]) << "NVDEC's running clock is not touched";
+    gEngine.nvdecPartitionOn = false;
+    gEngine.clocks[kNvdecClock] = false;
+}
+
 // Every partition procedure of the TRM (12.2.7) waits for the partition's REMOVE_CLAMPING_CMD bit to clear; CLAMP_STATUS
 // is kept only for backward compatibility (12.6.12). A power-on whose CLAMP_STATUS reads set once the command has
 // cleared comes up, and one whose command never clears fails with both registers in its line.
