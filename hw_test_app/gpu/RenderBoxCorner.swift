@@ -111,21 +111,6 @@ public enum RenderBoxCorner {
         return out
     }
 
-    /// A CGImage's alpha, 0...1, drawn into an RGBA8 premultiplied bitmap of its size
-    public static func alpha(of image: CGImage) -> [Double] {
-        let w = image.width, h = image.height
-        var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        bytes.withUnsafeMutableBytes { raw in
-            guard
-                let context = CGContext(
-                    data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            else { return }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-        }
-        return (0..<(w * h)).map { Double(bytes[$0 * 4 + 3]) / 255 }
-    }
-
     typealias Init = @convention(c) (AnyObject, Selector) -> AnyObject
     typealias InitObject = @convention(c) (AnyObject, Selector, AnyObject) -> AnyObject
     typealias SetRoundedRect = @convention(c) (AnyObject, Selector, CGRect, Double, Int32) -> Void

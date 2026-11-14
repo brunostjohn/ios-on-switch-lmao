@@ -11,12 +11,9 @@ import Metal
 /// `strip_<storage>_*` and `strip_restart_<storage>_*`: RenderBox's draw shape alone, on the raw path; `replay_scissor_*`
 /// the same draw culled and scissored, which raw leaves to m2v, scissored there; `derivative_<storage>_*` that shape's
 /// dfdx, dfdy and fwidth in a fetching program, which RenderBox's coverage takes (HWTestGPU FetchStrip).
-/// `icon<pt>_*`: iconservicesagent draws Settings' icon at 27 and 68 points, scale 2, uncached (-[ISImageDescriptor
-/// setIgnoreCache:]); the small one's corners against the large one reduced to its size (`icon27_corner_beyond`), and
-/// the cached 27-point image the App Library shows (`icon27_cached_corner_beyond`, reported). FAIL: a RenderBox or
-/// strip arm off its reference, off the raw path or failing (`<arm>_error=`), the uncached small icon's corners beyond
-/// RenderBoxCorner.tolerance of the reduced large one, or RenderBox's or IconServices' calls absent (`rb_api=`,
-/// `icon_api=`).
+/// `icon*`: IconServices' icons and its rendered-icon cache (IconServicesCache). FAIL: a RenderBox or strip arm off its
+/// reference, off the raw path or failing (`<arm>_error=`), RenderBox's calls absent (`rb_api=`), or an IconServices
+/// arm's own failure.
 struct IconCornersTest: HWTest {
     let id = "gpu.raw.icon_corners"
     let name = "Icon corners: RenderBox's mask and IconServices' icons at the App Library's sizes against references"
@@ -67,73 +64,7 @@ struct IconCornersTest: HWTest {
             metrics.set("rb_api", "absent")
             wrong.append("rb_api")
         }
-        icons(&metrics, &wrong)
+        IconServicesCache.measure(&metrics, &wrong)
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
-    }
-
-    typealias InitSizeScale = @convention(c) (AnyObject, Selector, CGSize, CGFloat) -> AnyObject
-    typealias SetBool = @convention(c) (AnyObject, Selector, Bool) -> Void
-    typealias ImageFor = @convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<CGImage>?
-
-    /// Settings' icon as iconservicesagent draws it at `points` and scale 2: its alpha and width, nil where
-    /// IconServices lacks what this asks
-    static func icon(points: CGFloat, ignoreCache: Bool) -> (alpha: [Double], side: Int)? {
-        guard let iconType = NSClassFromString("ISIcon") as? NSObject.Type,
-            let descriptorType = NSClassFromString("ISImageDescriptor") as? NSObject.Type
-        else { return nil }
-        let initSize = NSSelectorFromString("initWithSize:scale:"), ignore = NSSelectorFromString("setIgnoreCache:")
-        let prepare = NSSelectorFromString("prepareImageForDescriptor:")
-        let cgImage = NSSelectorFromString("CGImageForDescriptor:")
-        guard descriptorType.instancesRespond(to: initSize), descriptorType.instancesRespond(to: ignore),
-            iconType.instancesRespond(to: prepare), iconType.instancesRespond(to: cgImage),
-            let made = iconType.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject,
-            let icon = made.perform(
-                NSSelectorFromString("initWithBundleIdentifier:"), with: "com.apple.Preferences")?
-                .takeUnretainedValue() as? NSObject,
-            let alloc = descriptorType.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue()
-        else { return nil }
-        let descriptor = unsafeBitCast(descriptorType.instanceMethod(for: initSize), to: InitSizeScale.self)(
-            alloc, initSize, CGSize(width: points, height: points), 2)
-        unsafeBitCast(descriptorType.instanceMethod(for: ignore), to: SetBool.self)(descriptor, ignore, ignoreCache)
-        _ = icon.perform(prepare, with: descriptor)
-        guard
-            let image = unsafeBitCast(iconType.instanceMethod(for: cgImage), to: ImageFor.self)(
-                icon, cgImage, descriptor)?
-                .takeUnretainedValue(), image.width == image.height
-        else { return nil }
-        return (RenderBoxCorner.alpha(of: image), image.width)
-    }
-
-    func icons(_ metrics: inout Metrics, _ wrong: inout [String]) {
-        guard let large = Self.icon(points: 68, ignoreCache: true) else {
-            metrics.set("icon_api", "absent")
-            wrong.append("icon_api")
-            return
-        }
-        metrics.set("icon68_side", large.side)
-        for (name, ignoreCache) in [("icon27", true), ("icon27_cached", false)] {
-            guard let small = Self.icon(points: 27, ignoreCache: ignoreCache) else {
-                metrics.set("\(name)_side", 0)
-                if name == "icon27" { wrong.append(name) }
-                continue
-            }
-            metrics.set("\(name)_side", small.side)
-            let reference = RenderBoxCorner.reduce(large.alpha, from: large.side, to: small.side)
-            let corner = Int((Double(small.side) * Self.iconRadius * 1.5).rounded(.up)) + 1
-            var beyond = 0, maxDiff = 0, partial = 0, referencePartial = 0
-            for (y, x) in RenderBoxCorner.cornerPixels(side: small.side, corner: corner) {
-                let got = Int((small.alpha[y * small.side + x] * 255).rounded())
-                let want = Int((reference[y * small.side + x] * 255).rounded())
-                maxDiff = max(maxDiff, abs(got - want))
-                if abs(got - want) > RenderBoxCorner.tolerance { beyond += 1 }
-                if (8...247).contains(got) { partial += 1 }
-                if (8...247).contains(want) { referencePartial += 1 }
-            }
-            metrics.set("\(name)_corner_beyond", beyond)
-            metrics.set("\(name)_corner_max_diff", maxDiff)
-            metrics.set("\(name)_partial", partial)
-            metrics.set("\(name)_ref_partial", referencePartial)
-            if name == "icon27", beyond > 0 { wrong.append(name) }
-        }
     }
 }
