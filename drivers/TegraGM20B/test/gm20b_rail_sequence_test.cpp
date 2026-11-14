@@ -326,7 +326,8 @@ void nvxnu_log(const char *, ...)
 }
 
 void switch_car_fuse_readable(void)
-{}
+{
+}
 
 void nvxnu_step_impl(const char *, ...)
 {
