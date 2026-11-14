@@ -105,7 +105,12 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
     gRM->submitPromised.store(quiet, std::memory_order_release);
     gRM->inflight.push({cb, cb->_seqno, writes, std::move(signals), cb->_gpuEventWaits, cb->_channelGeneration,
                         std::move(cpu), quiet, std::exchange(cb->_rangeLoopStamp, 0u), uint32_t(from), uint32_t(to)},
-                       !quiet);
+                       false);
+    // A quiet range wakes no one, unless a thread came to wait (waitUntilCompleted) after its end was decided: that
+    // waiter's own wake may have found the queue before this push. Push then load here, count then look there, each
+    // sequentially consistent: one of the two sees the other.
+    if (!quiet || gRM->completionWaiters.load(std::memory_order_seq_cst))
+        gRM->inflight.wake();
 }
 
 // Its scheduled handlers, taken: run in its queue's order on the queue's handler queue, it scheduled once they ran

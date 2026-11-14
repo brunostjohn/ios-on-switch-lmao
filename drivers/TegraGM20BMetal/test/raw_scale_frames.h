@@ -10,6 +10,30 @@
 
 namespace scale_frames {
 
+struct Opened {
+    id<MTLDevice> device;
+    id<MTLRenderPipelineState> state;
+};
+
+// The process's one raw device (a second open would replace the first's runtime state) and its BGRA8 state
+inline const Opened &opened()
+{
+    static const Opened made = [] {
+        const std::string pack = harness::writePack(harness::packKey(MTLPixelFormatBGRA8Unorm));
+        const std::string metallib = harness::writeMetallib();
+        id<MTLDevice> device = harness::open(pack);
+        if (!device)
+            return Opened{};
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
+        id<MTLRenderPipelineState> state =
+            [device newRenderPipelineStateWithDescriptor:harness::descriptor(library, MTLPixelFormatBGRA8Unorm)
+                                                   error:&error];
+        return Opened{device, state};
+    }();
+    return made;
+}
+
 struct Shape {
     int passes = 15, draws = 90, targets = 4;
     uint32_t width = 640, height = 360;
