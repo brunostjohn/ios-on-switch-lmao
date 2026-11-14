@@ -192,10 +192,23 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
     const auto dispatch =
         raw::computeDispatch({grid.width, grid.height, grid.depth}, t, perThread, _state ? _state->_threadLimit : 1024);
     const auto &groups = dispatch.groups;
-    const bool refused = dispatch.reason != raw::ComputeDispatch::Ready || threads.width > 1024 ||
+    // threads per threadgroup past the state's maxTotalThreadsPerThreadgroup (or 1024), or none on an axis: a dispatch
+    // Metal's API validation stops, which the command buffer fails with
+    const bool invalid = dispatch.reason == raw::ComputeDispatch::Edge || threads.width > 1024 ||
                          threads.height > 1024 || threads.depth > 1024;
-    if (refused)
-        [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch outside the raw grid or local-size limits"];
+    if (invalid)
+        failCommandBuffer(_cb,
+                          [NSString stringWithFormat:@"threadsPerThreadgroup %lux%lux%lu is not within the compute "
+                                                     @"pipeline state's maxTotalThreadsPerThreadgroup %u",
+                                                     (unsigned long)threads.width, (unsigned long)threads.height,
+                                                     (unsigned long)threads.depth,
+                                                     _state ? _state->_threadLimit : 1024u],
+                          MTLCommandBufferErrorInvalidResource);
+    // more threadgroups than the grid's QMD fields hold (2^31 - 1 across, 65535 down and deep) or threads past 2^32 on
+    // an axis
+    const bool refused = invalid || dispatch.reason != raw::ComputeDispatch::Ready;
+    if (refused && !invalid)
+        [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch past the grid's QMD limits"];
     bool sameShape = _shape.count == dispatch.count && _shape.multi == dispatch.multi;
     for (uint8_t i = 0; sameShape && i < dispatch.count; ++i)
         sameShape = _shape.regions[i].local == dispatch.regions[i].local;
