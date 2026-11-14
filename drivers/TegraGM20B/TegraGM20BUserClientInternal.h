@@ -525,7 +525,8 @@ class AGXDeviceUserClient : public IOUserClient
 
 	static IOReturn getInfo(TegraGM20BAbiInfo *out);
 	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
-	IOReturn boImport(const TegraGM20BAbiBoImport *in, TegraGM20BAbiBoAllocReply *out);
+	IOReturn boImportPrepare(const TegraGM20BAbiBoImport *in, Bo **out);
+	IOReturn boImportInsert(Bo *bo, TegraGM20BAbiBoAllocReply *out);
 	static void adoptWiring(Bo *bo, SharedWiring *w);
 	void publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in);
 	IOReturn boFree(const TegraGM20BAbiBoFree *in);

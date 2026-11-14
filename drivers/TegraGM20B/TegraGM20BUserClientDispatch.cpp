@@ -381,6 +381,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnSuccess;
 	}
 #endif
+	Bo *imported = nullptr;
+	if (method == TegraGM20BMethodBoImport) {
+		const IOReturn prepared =
+			boImportPrepare(static_cast<const TegraGM20BAbiBoImport *>(in), &imported);
+		if (prepared)
+			return prepared;
+	}
 	IOLockLock(lock_);
 	// A layout decision holds what it uses itself and drops lock_ while the copy engine may move the surface.
 	const bool mutation = method != TegraGM20BMethodGetInfo &&
@@ -389,6 +396,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 			      method != TegraGM20BMethodSurfaceLayoutInfo;
 	if (submitGate_.closed() || (mutation && !submitGate_.beginMutation(lock_))) {
 		IOLockUnlock(lock_);
+		if (imported)
+			releaseBo(imported);
 		return kIOReturnNotOpen;
 	}
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
@@ -404,8 +413,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 			      static_cast<TegraGM20BAbiBoAllocReply *>(out));
 		break;
 	case TegraGM20BMethodBoImport:
-		ret = boImport(static_cast<const TegraGM20BAbiBoImport *>(in),
-			       static_cast<TegraGM20BAbiBoAllocReply *>(out));
+		ret = boImportInsert(imported, static_cast<TegraGM20BAbiBoAllocReply *>(out));
+		if (ret == kIOReturnSuccess)
+			imported = nullptr;
 		break;
 	case TegraGM20BMethodNativeSurfaceView:
 		ret = nativeSurfaceView(static_cast<const TegraGM20BAbiNativeSurfaceView *>(in),
@@ -490,5 +500,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (mutation)
 		submitGate_.endMutation(lock_);
 	IOLockUnlock(lock_);
+	if (imported)
+		releaseBo(imported);
 	return ret;
 }

@@ -831,6 +831,17 @@ host_test(
     ],
 )
 
+# BoImport's wiring, page walk, nvkm memory, coherency, pin and clean before lock_ and the submit gate; only its insert
+# under them
+host_test(
+    name = "gm20b_import_lock_source_test",
+    srcs = ["gm20b_import_lock_source_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientDispatch.cpp",
+    ],
+)
+
 # NVK's side of the kernel's contracts: goes with m2v (tag m2v: .bazelrc's nom2v dry run leaves it out).
 host_test(
     name = "gm20b_nvk_source_test",

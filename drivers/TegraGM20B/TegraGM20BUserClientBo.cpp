@@ -405,13 +405,13 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	return kIOReturnSuccess;
 }
 
-IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
-				       TegraGM20BAbiBoAllocReply *out)
+// Before lock_ and the submit gate: the wiring with its zero-fill faults, the page list, nvkm's memory, the coherency
+// registration, the pin and the clean. None of it touches the connection's tables, and the BO has no handle until
+// boImportInsert, so no submission, BoFree or connection close can reach it before then.
+IOReturn AGXDeviceUserClient::boImportPrepare(const TegraGM20BAbiBoImport *in, Bo **out)
 {
 	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes)
 		return kIOReturnBadArgument;
-	if (!surfaces_.reserve() || !boIndex_.reserve())
-		return kIOReturnNoMemory;
 	const uint64_t start = statsNowNs();
 	uint64_t phase[TGM_PHASES] = {};
 	uint64_t mark = start;  // the stats: wiring, pages, nvkm, clean
@@ -527,7 +527,6 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		tgm_coherency_cleaned(bo->coh);
 	}
 	lap(3);
-	tgm_stats_import(static_cast<int64_t>(bo->bytes), bo->pas[0]);
 	tgm_stats_bo_import(bo->bytes, static_cast<int>(bo->readOnly), covered, mark - start,
 			    phase);
 	if (TGM_STATS) {
@@ -543,6 +542,17 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		cost.owner = owner_;
 		tgm_stats_import_cost(&cost);
 	}
+	*out = bo;
+	return kIOReturnSuccess;
+}
+
+// lock_ held and the submit gate closed: the prepared BO gets its handle and goes into the connection's tables. On an
+// error the caller releases it.
+IOReturn AGXDeviceUserClient::boImportInsert(Bo *bo, TegraGM20BAbiBoAllocReply *out)
+{
+	if (!surfaces_.reserve() || !boIndex_.reserve())
+		return kIOReturnNoMemory;
+	tgm_stats_import(static_cast<int64_t>(bo->bytes), bo->pas[0]);
 	tgm_vm_import_note(
 		vm_, bo->pas[0],
 		1);  // this connection may draw into what it imports (the GPU present asks)
