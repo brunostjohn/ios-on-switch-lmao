@@ -342,6 +342,16 @@ void switch_car_fuse_readable(void)
 {
 }
 
+void switch_mc_errors_resume(void)
+{
+}
+
+uint32_t tegra_mc_error_latest(uint32_t *intstatus, uint32_t *status, uint32_t *address)
+{
+	*intstatus = *status = *address = 0;
+	return 0;
+}
+
 void nvxnu_step_impl(const char *, ...)
 {
 }

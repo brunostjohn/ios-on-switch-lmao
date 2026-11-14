@@ -747,6 +747,7 @@ host_library(
         "//drivers/TegraGM20B:shim/include/nvxnu.h",
         "//drivers/TegraI2C:TegraI2C.h",
         "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraMCNames.h",
         "//drivers/TegraSMMU:TegraSMMU.cpp",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//drivers/TegraSMMU:TegraSMMUAttachments.h",
