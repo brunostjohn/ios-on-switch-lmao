@@ -68,6 +68,7 @@
 #   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
+#   tegra_display_color_publish_test    TegraDisplayColorPublish.h's writers on their own threads (and _tsan_test)
 #   switch_display_period_test          one display period counted: locks, atomic RMWs, hand-offs and work-loop passes
 #                                       of the DC A filter, the frame-end action, the kick, a direct or completion flip
 #
@@ -198,6 +199,36 @@ host_test(
         "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
         "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
     ],
+)
+
+# TegraDisplayColorPublish.h: the setters, the filter and the action on their own threads against DC A's CMU: no
+# snapshot reused under the filter, no enable under a whole-table write, no LUT word under the scan, every hold released.
+host_test(
+    name = "tegra_display_color_publish_test",
+    srcs = [
+        "tegra_display_color_publish_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "tegra_display_color_publish_tsan_test",
+    srcs = [
+        "tegra_display_color_publish_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )
 
 host_test(
@@ -1102,6 +1133,7 @@ host_library(
         "//drivers/NativeMobileDisplay:EDRDisplayFactor.h",
         "//drivers/NativeMobileDisplay:TegraDisplayColor.cpp",
         "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
         "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
         "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
         "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
